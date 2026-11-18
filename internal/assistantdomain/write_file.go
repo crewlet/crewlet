@@ -30,9 +30,8 @@ type fileRecord struct {
 // recordFile publishes one file's record on its conversation's subject, decided
 // in a snapshot that finds the conversation the call's owner's, the object's key
 // young enough to be named, and the conversation below its bound for the file's
-// origin. ADDITIVE: the id is the caller's, so a duplicate publish writes one
-// row, and two uploads never contend; the bound is decided again at the apply
-// ([applyFile]).
+// origin. Additive: the id is the caller's, so a duplicate publish writes one
+// row and two uploads never contend; [applyFile] decides the bound again.
 func (w *Writer) recordFile(ctx context.Context, c Call, r fileRecord) (statelog.Result, error) {
 	if err := c.validate(true); err != nil {
 		return statelog.Result{}, err
@@ -52,17 +51,15 @@ func (w *Writer) recordFile(ctx context.Context, c Call, r fileRecord) (statelog
 			if _, err := owned(ctx, tx, c.Owner, f.Conversation.String()); err != nil {
 				return statelog.Decision{}, err
 			}
-			// THE KEY'S AGE IS JUDGED HERE, on the deciding node's clock,
-			// for the reason objstore.RecordWithin gives: a record naming an
+			// Judged on the deciding node's clock (objstore.RecordWithin): an
 			// older key could land after a collection read it as nobody's.
 			if age := w.now().Sub(r.object.Key.Minted()); age > objstore.RecordWithin {
 				return statelog.Decision{}, invalid("the upload of %s is %s old, past "+
 					"the %s a write may name an object within: upload it again", f.ID,
 					age.Truncate(time.Second), objstore.RecordWithin)
 			}
-			// AN ID NAMES ONE FILE FOR EVER: one another conversation's
-			// file already holds would apply as nothing and read back as
-			// a file that is not there.
+			// An id names one file for ever: one another conversation holds
+			// would apply as nothing and read back as a missing file.
 			var elsewhere int
 			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM assistant_files
 				WHERE id = ?`, f.ID.String()).Scan(&elsewhere); err != nil {
@@ -116,8 +113,8 @@ func checkNewFile(f NewFile) error {
 // checkFileName refuses a name a download could not carry: empty, past
 // [FileNameMaxBytes], not UTF-8, a path, or holding a control character, a
 // quote or a semicolon, which a Content-Disposition header would read as its
-// own syntax. internal/assistant's SniffFile keeps names to the same rule
-// before they reach here; this is the domain's own floor.
+// own syntax. internal/assistant's SniffFile applies the same rule earlier;
+// this is the domain's own floor.
 func checkFileName(name string) error {
 	switch {
 	case strings.TrimSpace(name) == "":

@@ -10,32 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// NO KIND THIS BUILD WRITES PRODUCES THE ROOT SCOPE, bar the two that cannot
-// be deferred behind a gate.
-//
-// THE case for this domain. A deferred record blocks every read whose closure
-// its scope covers, so a record filed at the root freezes every suspension,
-// every revocation and every login in the company at once — on the first
-// record a node cannot decode, which is an ordinary event during a rolling
-// upgrade. Every other domain can afford a root-scoped kind because the worst
-// it costs is a stale answer; here it costs everybody their access.
-//
-// TWO KINDS ARE EXEMPT AND THE EXEMPTION IS NAMED RATHER THAN COUNTED:
-//
-//   - an EVICTION resolves to the root and INSTALLS A GATE, so it can never be
-//     filed as a deferral at all — a version this build cannot read stops the
-//     applier instead;
-//   - a GENERATION resolves to the root and pays for it, correctly: a node
-//     that cannot decode a record saying this log was reanchored cannot
-//     certify any read over it either.
-//
-// The BARRIER and the TRIMMED RECORD are exempt the other way: each resolves
-// to the framework's own scope, which intersects nothing.
+// No kind but a gate or a reanchor resolves to the root scope. A deferred
+// record blocks every read its scope covers, so a root-filed one freezes every
+// suspension, revocation and login in the company at once, on the first record
+// a node cannot decode: an ordinary event in a rolling upgrade. The exemptions
+// are named, not counted (ObjectKind.RootScoped has why): an invalidation and
+// an eviction install a gate, so are never deferred, and a generation pays
+// correctly. A barrier and a trimmed record resolve to the framework's scope,
+// which intersects nothing.
 func TestOnlyAGateOrAReanchorEverProducesTheRootScope(t *testing.T) {
 	t.Parallel()
 
-	// One representative subject per kind, and every one of them stating
-	// the scope its ordinary writer would state.
+	// One subject per kind, stating the scope its ordinary writer states.
 	subjects := map[iamdomain.ObjectKind]struct {
 		subject iamdomain.Subject
 		scope   iamdomain.ScopeSet
@@ -89,19 +75,14 @@ func TestOnlyAGateOrAReanchorEverProducesTheRootScope(t *testing.T) {
 	}
 }
 
-// THE CONTROL: a kind whose records resolve to the root and is neither a gate
-// nor a reanchor is exactly what the case above has to catch.
-//
-// It is a FIXTURE KIND rather than a mutation of the production switch, so the
-// control lives beside the assertion it controls instead of in a comment
-// telling a future reader which line to break.
+// The control: a kind resolving to the root without being a gate or a
+// reanchor is what the case above must catch. A fixture kind, not a mutation
+// of the production switch, keeps the control beside its assertion.
 func TestAKindThatResolvesToTheRootIsCaught(t *testing.T) {
 	t.Parallel()
 
-	// A kind this build has never heard of, whose scope failed to decode —
-	// which is the one path by which an ordinary record legitimately
-	// reaches the root, and the reason the widening rule is a hazard worth
-	// a test rather than a convenience.
+	// An unknown kind whose scope failed to decode: the one path by which an
+	// ordinary record legitimately reaches the root.
 	var scope iamdomain.ScopeSet
 	if err := json.Unmarshal([]byte(`{"not":"a scope"}`), &scope); err != nil {
 		t.Fatalf("an unreadable scope must not fail the decode: %v", err)
@@ -114,8 +95,7 @@ func TestAKindThatResolvesToTheRootIsCaught(t *testing.T) {
 			"whatever this build recognised is how a record stops blocking the "+
 			"reads it makes stale", paths)
 	}
-	// And the write side refuses it, so the widening only ever covers a
-	// peer's record and never this build's own laziness.
+	// The write side refuses it, so the widening covers only a peer's record.
 	if err := iamdomain.RootScope().Validate(
 		iamdomain.PersonSubject("p1")); err == nil {
 		t.Error("a person record was allowed to claim the whole estate as its " +
@@ -123,12 +103,9 @@ func TestAKindThatResolvesToTheRootIsCaught(t *testing.T) {
 	}
 }
 
-// A BUCKET IS DERIVED FROM THE ID NOTHING RENAMES, AND IS STABLE.
-//
-// A bucket derived from anything mutable would move under a deferral row that
-// had already been filed, and every later probe would search a bucket the
-// record is not in — silently, and in exactly the window the deferral was most
-// needed. An email address is the value that would have been tempting.
+// A bucket is a stable function of the id nothing renames: one derived from a
+// mutable value (an address) would move under an already-filed deferral row,
+// and every later probe would silently search the wrong bucket.
 func TestABucketIsAPureFunctionOfThePersonId(t *testing.T) {
 	t.Parallel()
 	const id = "018f3a9c-0000-7000-8000-000000000001"
@@ -144,13 +121,9 @@ func TestABucketIsAPureFunctionOfThePersonId(t *testing.T) {
 	}
 }
 
-// AND THE PARTITION IS ACTUALLY A PARTITION: every bucket is reachable.
-//
-// A hash that folded every id into one bucket would pass every other case here
-// — the paths would be valid, the scopes would resolve, the deferrals would be
-// filed — and would make the sweep one transaction over the whole estate and
-// the duplicate scan a full directory walk, which is the property the division
-// exists for and the one nothing else asserts.
+// Every bucket is reachable. A hash folding every id into one bucket passes
+// every other case, yet makes the sweep one transaction over the whole estate
+// and the duplicate scan a full directory walk.
 func TestEveryBucketIsReachable(t *testing.T) {
 	t.Parallel()
 	seen := map[iamdomain.Bucket]bool{}
@@ -179,13 +152,9 @@ func itoa(i int) string {
 	return string(b)
 }
 
-// THE SENTINEL AND THE ARRAY ENCODINGS BOTH ROUND-TRIP.
-//
-// And the case that matters is the ARRAY one: encoding/json marshals a
-// []uint8 as a BASE64 STRING, because []uint8 IS []byte to the reflect
-// package — so the obvious element type would encode every scope as the one
-// shape the decoder reads as the root sentinel, and every record in the domain
-// would silently claim the whole estate.
+// Both encodings round-trip. The array case matters: encoding/json marshals a
+// []uint8 as a base64 string, which decodes as the root sentinel, so every
+// record would silently claim the whole estate.
 func TestAScopeRoundTripsThroughItsOwnEncoding(t *testing.T) {
 	t.Parallel()
 	for name, want := range map[string]iamdomain.ScopeSet{
@@ -260,11 +229,8 @@ func TestAScopeCoveringEveryBucketCollapsesToTheRoot(t *testing.T) {
 	}
 }
 
-// EVERY BUCKET PATH IS UNDER THE DOMAIN'S OWN ROOT.
-//
-// The root term is the widest-on-unreadable answer, and an answer that covers
-// nothing is not one: a bucket path SIBLING to the root would make a record
-// whose scope this build could not parse block exactly nothing.
+// Every bucket path is under the domain's root: were it a sibling, a record
+// whose scope this build could not parse would block nothing.
 func TestEveryBucketPathIsUnderTheRoot(t *testing.T) {
 	t.Parallel()
 	root := iamdomain.RootPath()
@@ -278,20 +244,11 @@ func TestEveryBucketPathIsUnderTheRoot(t *testing.T) {
 	}
 }
 
-// AND THE PATHS SORT THE WAY THE BUCKETS DO, which is what the zero padding
-// buys and the only thing it buys.
-//
-// It is worth stating what it does NOT buy, because the obvious claim is
-// wrong: sibling paths under a fixed-depth scheme cannot contain each other
-// whatever their spelling, since the framework's containment test appends the
-// separator before comparing — `i/b/7` is not a prefix of `i/b/70` because
-// `i/b/7/` is not. So there is no correctness hazard here to guard, and a test
-// asserting one would be a test that cannot fail.
-//
-// What padding is for is the OPERATOR: a deferral listing, a stalled-log
-// report and a broker subject listing are all read in whatever order the
-// strings sort in, and sixty-four buckets spelled `0`..`63` sort `0, 1, 10,
-// 11, ... 2, 20` — which reads as a listing somebody has shuffled.
+// The paths sort in bucket order, the only thing zero padding buys: sibling
+// paths cannot contain each other whatever their spelling (containment appends
+// the separator, so `i/b/7` is no prefix of `i/b/70`), leaving no correctness
+// hazard to assert. Padding is for the operator, whose listings sort as
+// strings: `0`..`63` would read `0, 1, 10, 11, ... 2, 20`.
 func TestTheBucketPathsSortInBucketOrder(t *testing.T) {
 	t.Parallel()
 	paths := make([]string, 0, iamdomain.Buckets)
@@ -340,25 +297,17 @@ func TestValidateRefusesAScopeAWriterCouldNotHaveMeant(t *testing.T) {
 	}
 }
 
-// A DEFERRED BUCKET MAKES THAT BUCKET'S PEOPLE UNAVAILABLE AND NOBODY ELSE'S.
-//
-// THE property the flat bucketed scope buys, and the reason it is 64 rather
-// than 1. A record a node cannot decode is filed under the buckets its writer
-// declared; a read about somebody probes their own bucket. If the two did not
-// line up, one undecodable record would either block nothing — the silent
-// failure — or block everybody, which during a rolling upgrade is every login
-// in the company.
-//
-// It is a property of the PATHS rather than of the probe, so it is asserted
-// over them: the framework's containment is a prefix comparison with the
-// separator appended, and what this case says is that a bucket's path covers
-// its own closure and no other's.
+// A deferred bucket makes its own people unavailable and nobody else's, the
+// property the bucketed scope buys: a deferral is filed under the writer's
+// buckets and a read probes its person's, and were they misaligned one
+// undecodable record would block nothing, or every login in the company. It
+// is asserted over the paths, whose containment (a prefix test with the
+// separator appended) decides it.
 func TestADeferredBucketCoversItsOwnPeopleAndNobodyElses(t *testing.T) {
 	t.Parallel()
 
-	// Two people who fall in different buckets. Found rather than
-	// assumed, because which bucket an id lands in is the hash's business
-	// and pinning one here would be a second copy of it.
+	// Two people in different buckets, found rather than assumed: pinning
+	// one would copy the hash.
 	var here, elsewhere string
 	for i := range 1000 {
 		id := "018f3a9c-0000-7000-8000-" + pad(i)
@@ -398,9 +347,8 @@ func TestADeferredBucketCoversItsOwnPeopleAndNobodyElses(t *testing.T) {
 			"undecodable record would make every login in the company wait",
 			deferred, theirs)
 	}
-	// AND A READ THAT NAMES NOBODY IS COVERED BY EVERYTHING, which is the
-	// honest answer rather than a widening: a read that cannot say who it
-	// is about is one every deferred record concerns.
+	// A READ THAT NAMES NOBODY IS COVERED BY EVERYTHING: every deferred
+	// record concerns it.
 	everyone := iamdomain.ReadScope().Paths
 	if !covers(deferred, everyone) {
 		t.Errorf("a record deferred at %v does not cover the directory read "+
@@ -409,13 +357,10 @@ func TestADeferredBucketCoversItsOwnPeopleAndNobodyElses(t *testing.T) {
 	}
 }
 
-// covers is the framework's own containment, over two path sets.
-//
-// EITHER DIRECTION, which is the probe's own shape rather than a convenience:
-// a stored path INSIDE a query's closure is one the query is about, and a
-// stored path CONTAINING the query is one whose blast radius covers it. The
-// framework's deferral probe is two clauses for exactly that reason, and
-// neither finds the other's case.
+// covers is the framework's own containment over two path sets, in either
+// direction as the deferral probe's two clauses are: a stored path inside the
+// query's closure is one the query is about, and one containing the query
+// covers it.
 func covers(stored, query []string) bool {
 	for _, s := range stored {
 		for _, q := range query {

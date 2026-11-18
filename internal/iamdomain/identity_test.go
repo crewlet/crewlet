@@ -60,13 +60,11 @@ func (r identityRig) held(person string) (login, seat string) {
 
 // A REFUSED IDENTITY CHANGE MOVES NOTHING — neither the login nor the seat.
 //
-// A login and a seat move in ONE record, decided in its own snapshot, so a
-// login its holder's grammar refuses — `ops.bot` for a machine, `Jane.Doe` for
-// anybody — one somebody else holds, a login cleared, a person's seat cleared
-// or a seat that is an agent's, is refused before anything is published, and
-// whatever else the edit asked for does not move either. It used to be a
-// sequence: a seat that moved before a refused login stayed moved, and a
-// release that ran before a refused claim left a person with no login at all.
+// A login and a seat move in ONE record decided in one snapshot, so a login
+// its holder's grammar refuses (`ops.bot` for a machine, `Jane.Doe` for
+// anybody), one somebody else holds, a cleared login, a person's cleared seat
+// or an agent's seat is refused before anything is published, and nothing
+// else the edit asked for moves.
 //
 // Mutation: drop the login's grammar check, or the held-login check, from
 // SetIdentity's decide, and a refused change lands; check the seat for
@@ -137,10 +135,9 @@ func TestARefusedIdentityChangeMovesNothing(t *testing.T) {
 
 // A SEAT SOMEBODY ELSE HOLDS IS REFUSED NAMING THEM, AND A MOVE LANDS WHOLE.
 //
-// A move between seats is one record, so a seat this node's chart does not
-// hold, one somebody else is bound to, or one an open invitation is on its way
-// to, leaves the person in the seat they held — and a move to a free seat
-// binds the new one and frees the old in that same record.
+// A move is one record: a seat the chart does not hold, one somebody else is
+// bound to, or one an open invitation is on its way to leaves the person where
+// they were; a move to a free seat binds it and frees the old in that record.
 //
 // Mutation: drop the held-seat check from SetIdentity's decide, and the move
 // onto dana's seat lands; drop its open-invitation check and the move onto the
@@ -209,8 +206,8 @@ func TestASeatSomebodyElseHoldsIsRefusedNamingThem(t *testing.T) {
 // AN IDENTITY CHANGE FREES THE OLD LOGIN IN THE SAME RECORD.
 //
 // The record states the login the person holds from now on, so the old one is
-// free the moment it lands — another person takes it at the next position —
-// and the rename is ONE record on the trail, filed under the person.
+// free the moment it lands (another person takes it at the next position), and
+// the rename is ONE record on the person's trail.
 //
 // Mutation: make writeIdentity leave the old login on the row, and dana's
 // rename onto it is refused as taken.
@@ -247,9 +244,8 @@ func TestAnIdentityChangeFreesTheOldLoginInTheSameRecord(t *testing.T) {
 
 // AN IDENTITY CHANGE THAT CHANGES NOTHING PUBLISHES NOTHING.
 //
-// An edit naming the login and the seat a person already holds is the answer
-// rather than a refusal — applied, with no record, so the log does not grow by
-// a change nobody made.
+// An edit naming the login and seat a person already holds is applied with no
+// record, not refused, so the log does not grow by a change nobody made.
 //
 // Mutation: drop the nothing-to-move arm from SetIdentity's decide, and a
 // record is published.
@@ -291,12 +287,11 @@ func TestAnIdentityChangeThatChangesNothingPublishesNothing(t *testing.T) {
 
 // TWO WRITERS RACING FOR ONE LOGIN LEAVE ONE HOLDER.
 //
-// An administrator enrolling somebody under a login and another renaming a
-// colleague onto the same login, at the same instant, from two writers over
-// one publisher: both decide from a snapshot in which the login is free, and
-// both publish on the directory subject — so the broker accepts exactly one,
-// and the loser decides again from rows that hold the winner and is refused
-// naming them.
+// One administrator enrols somebody under a login while another renames a
+// colleague onto it, from two writers over one publisher: both decide from a
+// snapshot where the login is free and publish on the directory subject, so
+// the broker accepts one, and the loser decides again and is refused naming
+// the winner.
 //
 // Mutation: publish the identity record on the person's own subject instead,
 // and both land.
@@ -363,9 +358,9 @@ func TestTwoWritersRacingForOneLoginLeaveOneHolder(t *testing.T) {
 // A PERSON'S SEAT IS CHANGED, BUT NEVER CLEARED (ADR-0032).
 //
 // A person holds a human seat for as long as they are here, so an edit that
-// clears one is refused — decided on the KIND THE ROW HOLDS, never on one a
-// caller states. Their seat is MOVED, in one record that frees the old one; a
-// SERVICE ACCOUNT may be unbound, since it acts as itself.
+// clears one is refused, decided on the KIND THE ROW HOLDS, never one a caller
+// states. A seat MOVES in one record that frees the old one; a SERVICE ACCOUNT
+// may be unbound, since it acts as itself.
 //
 // Mutation: drop the person arm from SetIdentity's decide and Sarah's seat is
 // cleared; apply it to every kind the snapshot holds and the service
@@ -417,8 +412,8 @@ func TestAPersonsSeatIsChangedButNeverCleared(t *testing.T) {
 		t.Errorf("the seat sarah moved off is still held by %v", got)
 	}
 
-	// A SERVICE ACCOUNT MAY BE UNBOUND — the control the rule is about
-	// people: bound to a seat and then bound to none, both landing.
+	// A SERVICE ACCOUNT MAY BE UNBOUND, the control: bound to a seat and then
+	// to none, both landing.
 	if err := edit(iamdomain.IdentityEdit{PersonID: rig.machine,
 		Seat: seat("sarah-desk"), OpID: "op-bind-machine",
 		Reason: "acts as the desk"}); err != nil {

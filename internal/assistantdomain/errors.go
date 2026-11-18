@@ -7,8 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
 
-// The sentinels. Each is a fact a caller acts on differently, which is why they
-// are separate.
+// The sentinels, each a fact a caller acts on differently.
 var (
 	// ErrNotFound reports a conversation, turn, card or proposal that does
 	// not exist OR BELONGS TO SOMEBODY ELSE: a caller with no relation to a
@@ -29,10 +28,9 @@ var (
 	ErrTurnRunning = errors.New("assistantdomain: the conversation has a turn " +
 		"running or waiting on an approval")
 
-	// ErrTurnOpen reports a turn opened that is already open: a retry of
-	// its opening, which landed before, on this node or another. Nothing
-	// was written; the caller starts nothing, since the first opening's
-	// runner has the turn.
+	// ErrTurnOpen reports a turn opened that is already open: a retry of an
+	// opening that landed before, on any node. Nothing was written, and the
+	// caller starts nothing: the first opening's runner has the turn.
 	ErrTurnOpen = errors.New("assistantdomain: the turn is already open")
 
 	// ErrTurnMoved reports a turn move from a state the turn is no longer in:
@@ -46,20 +44,19 @@ var (
 	// carries the state it is in now.
 	ErrAlreadyDecided = errors.New("assistantdomain: the proposal was already decided")
 
-	// ErrNotDue reports a retention purge of a conversation that is no
-	// longer untouched since before the cutoff: used again since it was
-	// listed, or gone.
+	// ErrNotDue reports a retention purge of a conversation used since the
+	// cutoff (after it was listed) or gone.
 	ErrNotDue = errors.New("assistantdomain: the conversation is not past its retention")
 
 	// ErrConflict reports a write that lost its compare-and-set every round:
 	// something kept changing the object.
 	ErrConflict = errors.New("assistantdomain: the object kept changing under this write")
 
-	// ErrAuditPending reports a compliance read recorded and not yet
-	// applied on the node asked to open what it read: its owner could not
-	// see it there yet, so nothing is opened. It is also [ErrNotFound], since
-	// nothing is found until it applies; a surface tells the two apart to
-	// answer "send it again" rather than "there is no such thing".
+	// ErrAuditPending reports a compliance read recorded but not yet applied
+	// on the node asked to open what it read: its owner could not see it there
+	// yet, so nothing is opened. It is also [ErrNotFound], since nothing is
+	// found until it applies; a surface tells the two apart to answer "send it
+	// again" rather than "there is no such thing".
 	ErrAuditPending = errors.New("assistantdomain: the compliance read has not " +
 		"applied on this node")
 

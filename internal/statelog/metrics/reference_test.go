@@ -13,11 +13,8 @@ import (
 // `make metrics-doc` writes it.
 const referencePath = "docs/reference/metrics.md"
 
-// THE REFERENCE IS GENERATED AND DIFFED, the same idiom schema/ uses.
-//
-// A reference maintained by hand is one that stops matching the code, and a
-// metric whose meaning lives only in the source is one an operator cannot act
-// on. Regenerate with `make metrics-doc`.
+// THE REFERENCE IS GENERATED AND DIFFED, as schema/ is, so it cannot stop
+// matching the catalogue. Regenerate with `make metrics-doc`.
 func TestTheMetricsReferenceIsGenerated(t *testing.T) {
 	t.Parallel()
 	want := metrics.Reference()

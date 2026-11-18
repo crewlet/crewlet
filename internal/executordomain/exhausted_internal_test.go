@@ -7,8 +7,8 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 )
 
-// These cases apply an end naming a session that ran out through the shipped applier,
-// and read the head the next turn would read.
+// These cases apply, through the shipped applier, an end naming a session that
+// ran out, and read the head the next turn would read.
 
 // capturingSession is a capture of turn naming session, as a harness that keeps
 // one id across its resumes names it.

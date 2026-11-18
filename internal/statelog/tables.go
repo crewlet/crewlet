@@ -13,25 +13,17 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// tables is the SQL the FRAMEWORK owns, over its own two tables and over the
-// two a domain names.
+// tables is the framework's SQL over its own two tables and the two a domain
+// names. The domain owns those two's schema (its migration); the framework owns
+// their statements, one implementation for all domains, because they hold
+// framework facts and contract 2 writes them in the applier's transaction
+// beside the rows: the operation ledger (`Divergent`: in every snapshot, out of
+// the identity claim, since only `applied_at` differs) and the deferred-record
+// table (`Local`).
 //
-// # Why the framework writes a domain's tables
-//
-// The operation ledger is `Divergent` — it travels in every snapshot but stays
-// out of the identity claim, since only `applied_at` differs between nodes —
-// and the deferred-record table is `Local`, this node's own. Both are written
-// in the APPLIER's transaction, beside the rows, because contract 2 puts them
-// there and a transaction is one file. Their
-// contents are framework facts: an operation id and a position, a record this
-// build could not decode. So the domain owns the schema, which is in its own
-// migration, and the framework owns the statements, which are here — one
-// implementation rather than one per domain.
-//
-// The table NAMES are interpolated, and every one is checked against a strict
-// identifier pattern at construction. A table name is not a value a driver can
-// bind, and the alternative to checking is a domain that can name a table with
-// a quote in it.
+// Table NAMES are interpolated, since a driver cannot bind one, so each is
+// checked against [validIdentifier] at construction: unchecked, a domain could
+// name a table with a quote in it.
 type tables struct {
 	stream   string
 	prefix   string
@@ -39,37 +31,31 @@ type tables struct {
 	deferred string
 	scope    string
 
-	// derivation is the rule set the applier writing through these
-	// tables derives at — see [Deriver]. It is stamped on a checkpoint
-	// row the FIRST time one is written, because the rows that
-	// transaction commits are the first on this stream and this build
-	// derived every one of them. Zero wherever the writer is not an
-	// applier (a reanchor), which reads as "unknown" and costs at most
-	// one re-derivation at the next boot.
+	// derivation is the rule set this applier derives at ([Deriver]),
+	// stamped on a checkpoint row only when the row is FIRST written: this
+	// build derived every row that transaction commits. Zero where the
+	// writer is not an applier (a reanchor) reads as "unknown", costing at
+	// most one re-derivation at the next boot.
 	derivation int
 }
 
-// subjectOf is the WIRE subject an anchor is keyed on.
-//
-// ONE SPELLING, and it lives here because three callers need it and two of
-// them are on opposite sides of the same key: the applier advances the anchor
-// and the publisher reads it, so a bare path in one and a prefixed one in the
-// other is a publisher that never finds an anchor at all — every arbitrated
-// write falls through to the last-message probe, loops its whole round budget
-// and reports a conflict on an object nobody else touched.
+// subjectOf is the WIRE subject an anchor is keyed on, spelled once: the
+// applier advances the anchor and the publisher reads it, so two spellings
+// leave the publisher never finding one, and every arbitrated write exhausts
+// its rounds and reports a conflict on an object nobody else touched.
 func (t tables) subjectOf(s Subject) string { return wireSubject(t.prefix, s) }
 
-// wireSubject is a subject as the broker carries it on the log whose subject
-// prefix is prefix: the grammar's ([topics.LogSubject]), and never spelled
-// here, because the publisher, the applier's anchor and the eviction probe each
-// compose one and a second spelling is a key two of them disagree about.
+// wireSubject is a subject as the broker carries it on the log with subject
+// prefix prefix. The grammar's ([topics.LogSubject]), never spelled here: the
+// publisher, the applier's anchor and the eviction probe each compose one, and
+// a second spelling is a key two of them disagree about.
 func wireSubject(prefix string, s Subject) string {
 	return topics.LogSubject(prefix, s.Kind, s.ID)
 }
 
-// identifier is what a domain may call a table. Deliberately narrower than SQL
-// allows: these names are interpolated into statements, so the set is what is
-// unambiguous rather than what the parser tolerates.
+// validIdentifier reports whether a domain may call a table name. Narrower than
+// SQL allows: the name is interpolated, so the set is what is unambiguous, not
+// what the parser tolerates.
 func validIdentifier(name string) bool {
 	if name == "" || len(name) > 64 {
 		return false
@@ -85,9 +71,8 @@ func validIdentifier(name string) bool {
 	return true
 }
 
-// newTables is the framework's statements over domain d's tables on ONE of its
-// logs — the one spec names, whose stream keys the checkpoint and whose prefix
-// keys every anchor.
+// newTables is the framework's statements over domain d's tables on the ONE log
+// spec names, whose stream keys the checkpoint and whose prefix every anchor.
 func newTables(d Domain, spec StreamSpec) (tables, error) {
 	t, err := domainTables(d)
 	if err != nil {
@@ -100,10 +85,9 @@ func newTables(d Domain, spec StreamSpec) (tables, error) {
 	return t, nil
 }
 
-// domainTables is domain d's own table names, checked, with no log bound — for
-// what is kept per DOMAIN in a file rather than per log: the operation ledger
-// and the watermark of how far back it lost rows, which are keyed by the
-// ledger's table.
+// domainTables is domain d's own table names, checked, with no log bound: for
+// what is kept per DOMAIN rather than per log, the operation ledger and its
+// lost-rows watermark, keyed by the ledger's table.
 func domainTables(d Domain) (tables, error) {
 	t := tables{
 		ops:      d.OpsTable(),
@@ -134,21 +118,19 @@ type cursorRow struct {
 	at      Position
 	created time.Time
 
-	// storedAt is the broker's own instant for the record at the
-	// checkpoint's sequence — the one this node consumed there — and zero
-	// where there is none: a checkpoint at sequence 0, or one a reanchor
-	// placed at a sequence the log held no record at.
-	// It is what [Runner.VerifyCheckpoint] compares the log's record with.
+	// storedAt is the broker's instant for the record this node consumed
+	// at the checkpoint's sequence, which [Runner.VerifyCheckpoint]
+	// compares with the log's; zero at sequence 0, or where a reanchor
+	// placed it at a sequence holding no record.
 	storedAt time.Time
 
-	// void is the generations the reanchor that placed this checkpoint
-	// ABANDONED — see [ReanchorPlan.From].
+	// void is what the reanchor that placed this checkpoint made void.
 	void voidRange
 }
 
 // encodeInstant is a broker instant as a checkpoint column holds it: zero for
-// an unknown one, which [store.EncodeTime] would write as the year one and read
-// back as a real instant nothing could ever equal.
+// an unknown one, which [store.EncodeTime] would write as the year one, read
+// back as a real instant nothing could equal.
 func encodeInstant(t time.Time) int64 {
 	if t.IsZero() {
 		return 0
@@ -164,13 +146,12 @@ func decodeInstant(micros int64) time.Time {
 	return store.DecodeTime(micros)
 }
 
-// voidRange is what the reanchor that placed a checkpoint made VOID wherever
-// that checkpoint is followed from, in two rules: the generations strictly
-// between after and before, the ones it ABANDONED ([ReanchorPlan.From]); and,
-// for a RESTORED reanchor, every record positioned after staleAfter — the
-// generation record it appended — whose generation is below before, the one it
-// opened ([ReanchorPlan.StaleAfter]). Zero, zero and zero on every checkpoint
-// no such reanchor placed.
+// voidRange is what the reanchor that placed a checkpoint made VOID, in two
+// rules: the generations strictly between after and before, which it ABANDONED
+// ([ReanchorPlan.From]); and, for a RESTORED reanchor, every record after
+// staleAfter (the generation record it appended) in a generation below before,
+// the one it opened ([ReanchorPlan.StaleAfter]). All zero where no such
+// reanchor placed the checkpoint.
 type voidRange struct {
 	after, before uint32
 	staleAfter    uint64
@@ -210,30 +191,20 @@ func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (cursorRow, bool, er
 	}, true, nil
 }
 
-// setCursor writes the checkpoint, in the SAME transaction as the rows it
-// covers.
+// setCursor writes the checkpoint in the SAME transaction as the rows it
+// covers (package doc, "The checkpoint commits with the rows").
 //
-// That is the one contract every consumer of this framework gets for free and
-// can break invisibly. The nearest neighbour in this tree does the opposite —
-// it commits its batch and then writes its cursor in a second transaction, on
-// the stated reasoning that a crash between the two replays the batch, which
-// is free. That is true while the source can always redeliver, and FALSE for a
-// log that gets trimmed: the replay it counts on is a replay of records the
-// trim has already removed.
-//
-// storedAt is the broker's instant for the record at p — the one this
-// transaction consumed there — which is how the checkpoint NAMES its record
-// ([cursorRow.storedAt]). applied is the highest record version this
-// transaction APPLIED a record of, zero where it applied none, and it raises the
-// row's own ([tables.raiseApplied]).
+// storedAt is the broker's instant for the record this transaction consumed at
+// p, by which the checkpoint NAMES its record ([cursorRow.storedAt]). applied is
+// the highest record version this transaction applied, zero for none, and
+// raises the row's own ([tables.raiseApplied]).
 func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created, storedAt,
 	now time.Time, applied int) error {
 
-	// THE DERIVATION IS WRITTEN ON INSERT ONLY. An existing row's
-	// derivation moves in exactly one place — [tables.setDerivation], in
-	// the transaction that re-derived the rows it describes — so a
-	// checkpoint advancing over an old build's rows never claims they were
-	// derived by this one.
+	// THE DERIVATION IS WRITTEN ON INSERT ONLY: an existing row's moves
+	// only in [tables.setDerivation], beside the rows it re-derived, so a
+	// checkpoint advancing over an old build's rows never claims this
+	// build derived them.
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO statelog_cursor
 			(stream, generation, seq, stream_created_at, stored_at, updated_at,
@@ -256,18 +227,14 @@ func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created, 
 }
 
 // raiseApplied raises the highest record version this stream's rows were
-// applied from to at least v, in the transaction that applied a record of it
-// outside the checkpoint's own write — a build reprocessing what an earlier
-// one retained, which does not move the checkpoint.
+// applied from to at least v, in a transaction that applied a record without
+// moving the checkpoint: a build reprocessing what an earlier one retained.
 //
-// # Why the rows keep it at all
-//
-// A snapshot's manifest states it, and a joiner refuses an artefact whose rows
-// hold a record of a version its build cannot read: arriving past such a
-// record, it could never apply it, defer it or reprocess it. Stated as the
-// donor BUILD's version instead, the claim was false for every record version
-// nothing had published yet, and a rolling upgrade's older nodes refused every
-// upgraded donor for records that did not exist.
+// A snapshot's manifest states it, and a joiner refuses rows holding a record
+// version its build cannot read, since arriving past that record it could never
+// apply, defer or reprocess it. Not the donor BUILD's version: that names
+// versions no record carries yet, so a rolling upgrade's older nodes would
+// refuse every upgraded donor.
 func (t tables) raiseApplied(ctx context.Context, tx *sql.Tx, v int) error {
 	_, err := tx.ExecContext(ctx, `
 		UPDATE statelog_cursor SET applied_version = `+raisedApplied("?")+`
@@ -278,10 +245,9 @@ func (t tables) raiseApplied(ctx context.Context, tx *sql.Tx, v int) error {
 	return nil
 }
 
-// raisedApplied is the one expression that raises the row's applied record
-// version to at least by: the larger of the two, so a version is only ever
-// raised — a record of a lower version applied later says nothing about the
-// ones the rows already hold.
+// raisedApplied is the one expression raising the row's applied record version
+// to at least by: only ever raised, since a lower-version record applied later
+// says nothing about the ones the rows already hold.
 func raisedApplied(by string) string {
 	return `MAX(statelog_cursor.applied_version, ` + by + `)`
 }
@@ -311,32 +277,24 @@ func (t tables) setDerivation(ctx context.Context, tx *sql.Tx, v int) error {
 	return nil
 }
 
-// reanchorCursor writes the checkpoint a reanchor places — at p, keyed to
-// created, naming the log's record at p by storedAt (zero where the log holds
-// none there) — together with what it made void: every generation strictly
-// between from and p's own ([ReanchorPlan.From]), and, for a restored reanchor,
-// every lower-generation record after staleAfter, the generation record it
-// appended ([ReanchorPlan.StaleAfter]), zero when there is no such rule.
+// reanchorCursor writes the checkpoint a reanchor places at p, keyed to
+// created, naming the log's record at p by storedAt (zero where there is none),
+// with the [voidRange] it made: generations strictly between from and p's own,
+// and for a restored reanchor the lower-generation records after staleAfter
+// (zero for no such rule).
 //
-// ITS OWN STATEMENT rather than a flag on setCursor, because the two write
-// different things for a reason: the applier's checkpoint moves every batch
-// and must leave the abandoned range alone, since a node part-way through the
-// abandoned generation's records keeps voiding them after a restart; and a
-// reanchor must REPLACE it, since the range an earlier reanchor abandoned says
-// nothing about the log this one follows.
-//
-// THE DERIVATION IS NOT WRITTEN. A reanchor moves where the rows are followed
-// from and re-derives none of them, so an existing checkpoint keeps the rule
-// set its rows were derived by, and one this statement creates takes the
-// column's zero — "unknown", which costs one re-derivation at the next boot
-// ([tables.derivation]).
+// NOT A FLAG ON setCursor: the applier's checkpoint must leave the void range
+// alone, since a node part-way through an abandoned generation keeps voiding it
+// after a restart, while a reanchor must REPLACE it, since an earlier
+// reanchor's range says nothing about the log this one follows. Nor does it
+// write the derivation: it re-derives no rows, so a created row takes zero,
+// "unknown" ([tables.derivation]).
 func (t tables) reanchorCursor(ctx context.Context, tx *sql.Tx, p Position,
 	created, storedAt time.Time, from uint32, staleAfter uint64, now time.Time) error {
 
-	// A ROW THIS CREATES STARTS AT APPLIED VERSION ZERO — there is no row
-	// only where nothing was ever applied on the stream — and a row it
-	// replaces keeps its own: a reanchor moves the checkpoint and keeps
-	// every row, whatever it was applied from.
+	// A CREATED ROW STARTS AT APPLIED VERSION ZERO (no row means nothing
+	// was ever applied on the stream); a replaced row keeps its own, since
+	// a reanchor keeps every row.
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO statelog_cursor
 			(stream, generation, seq, stream_created_at, stored_at, updated_at,
@@ -363,11 +321,9 @@ func (t tables) reanchorCursor(ctx context.Context, tx *sql.Tx, p Position,
 // advanceAnchor records that this node consumed a record at p on subject,
 // WHATEVER the record then did.
 //
-// MAX rather than assignment, because a deferred record is replayed at its
-// ORIGINAL position when a build that can read it arrives — below a successor
-// this node already applied. An assignment there would move the anchor
-// backwards and hand the next writer an expectation the broker refuses for
-// ever.
+// MAX, not assignment: a deferred record is reprocessed at its ORIGINAL
+// position, below a successor already applied, and moving the anchor backwards
+// hands the next writer an expectation the broker refuses for ever.
 func (t tables) advanceAnchor(ctx context.Context, tx *sql.Tx, subject string, p Position) error {
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO statelog_anchor (stream, subject, anchor) VALUES (?, ?, ?)
@@ -392,27 +348,21 @@ func (t tables) anchor(ctx context.Context, tx *sql.Tx, subject string, gen uint
 	return Unpack(t.stream, packed), nil
 }
 
-// The anchor table's three reads, each held to the index it is written for by
-// TestEveryAnchorStatementSeeksItsKey: the pinned driver's planner, given no
-// statistics — no deployment gathers any — chooses between two indexes that
-// both lead with the stream on the stream alone.
+// The anchor table's three statements, each held to its index by
+// TestEveryAnchorStatementSeeksItsKey: with no statistics (no deployment
+// gathers any) the pinned driver's planner picks between two indexes that both
+// lead with the stream on the stream alone.
 const (
-	// anchorSQL reads ONE subject's anchor, and names its key: the table's
-	// primary key (stream, subject), whose automatic index is
-	// sqlite_autoindex_statelog_anchor_1. Unnamed, the planner took
-	// statelog_anchor_swept_idx (stream, anchor) on the stream alone and
-	// walked every anchor of the stream for the one it wanted — a scan every
-	// write's snapshot ran, on every domain, growing with every subject the
-	// log had written inside the trim's window: 4.0 ms a read at twenty
-	// thousand anchors and 84 ms at three hundred thousand, against under
-	// 0.2 ms at both by the key (BenchmarkReadingASubjectsAnchor), so each of
-	// ten thousand repository creates was slower than the last.
+	// anchorSQL reads ONE subject's anchor by the primary key (stream,
+	// subject), named because otherwise the planner takes
+	// statelog_anchor_swept_idx on the stream and walks every anchor in the
+	// trim's window on every write's snapshot, slower with each subject
+	// written (BenchmarkReadingASubjectsAnchor).
 	anchorSQL = `SELECT anchor FROM statelog_anchor INDEXED BY sqlite_autoindex_statelog_anchor_1
 		WHERE stream = ? AND subject = ?`
 
 	// sweepAnchorsSQL and anchorsBelowSQL are ranges over
-	// statelog_anchor_swept_idx (stream, anchor), the index the replicated
-	// estate's first migration shipped for exactly these two.
+	// statelog_anchor_swept_idx (stream, anchor), shipped for these two.
 	sweepAnchorsSQL = `DELETE FROM statelog_anchor WHERE rowid IN (
 		SELECT rowid FROM statelog_anchor
 		WHERE stream = ? AND anchor < ?
@@ -424,18 +374,13 @@ const (
 
 // sweepAnchors removes up to [AnchorsPerTrimmedRecord] of this stream's
 // anchors below below, LOWEST FIRST, and reports how many went — a trimmed
-// record's whole effect (ADR-0080).
+// record's whole effect (ADR-0080). The comparison is PACKED, so every anchor
+// of an earlier generation goes too; the publisher already ignores one
+// ([Snap.anchorIn]).
 //
-// A RANGE OVER `statelog_anchor_swept_idx (stream, anchor)`, the index the
-// replicated estate's first migration shipped for exactly this delete. PACKED
-// COMPARISON, so every anchor of an earlier generation goes too — the
-// publisher already ignores one ([Snap.anchorIn]).
-//
-// WHICH [AnchorsPerTrimmedRecord] go is a function of the table's contents
-// alone, so two nodes holding the same anchors remove the same rows: an anchor
-// is the position of the last record consumed on its subject, and one position
-// is one record on one subject, so no two of a stream's anchors are equal and
-// the order has no ties to break.
+// Which rows go depends on the table's contents alone, so nodes holding the
+// same anchors remove the same rows: one position is one record on one
+// subject, so no two anchors are equal and the order has no ties.
 func (t tables) sweepAnchors(ctx context.Context, tx *sql.Tx, below Position) (int, error) {
 	res, err := tx.ExecContext(ctx, sweepAnchorsSQL, t.stream, below.Packed(), AnchorsPerTrimmedRecord)
 	if err != nil {
@@ -448,9 +393,8 @@ func (t tables) sweepAnchors(ctx context.Context, tx *sql.Tx, below Position) (i
 	return int(n), nil
 }
 
-// anchorsBelow counts this stream's anchors below below, up to limit — a
-// bounded walk of the same index, because what the caller needs is how many
-// records to append, which the bound already caps.
+// anchorsBelow counts this stream's anchors below below, up to limit: the
+// caller needs how many records to append, which limit already caps.
 func (t tables) anchorsBelow(ctx context.Context, db ReadEstate, below Position, limit int) (int, error) {
 	var n int
 	err := db.Read(ctx, func(tx *sql.Tx) error {
@@ -481,38 +425,24 @@ func (t tables) writeOp(ctx context.Context, tx *sql.Tx, opID, subject string, p
 	return nil
 }
 
-// OpsPurgeBatch bounds how many rows one sweep statement deletes.
-//
-// THE APPLIER'S CONNECTION IS PINNED AND ITS COMMITS ARE THE SAME FILE'S, so a
-// statement that deleted a whole backlog would hold the writer for as long as
-// it took — and the backlog case is exactly the one that matters: a node
-// returning from a month away has a month of rows to shed on its first tick.
-// Two thousand rows of a five-column table with a TEXT primary key is a few
-// hundred KB of pages, single-digit milliseconds of writer hold, while a
-// month's overhang still clears in a few hundred statements inside one
-// maintenance tick. It is the same shape and the same reasoning as
-// [store.EventPurgeBatch], at a larger batch because these rows are a
-// hundredth the size.
+// OpsPurgeBatch bounds how many rows one sweep statement deletes. The
+// applier's connection is pinned to the same file, so one statement over a
+// backlog (a node back from a month away) would hold the writer throughout.
+// 2000 rows of a five-column, TEXT-keyed table is a few hundred KB of pages,
+// single-digit milliseconds of hold, and a month still clears in one
+// maintenance tick: [store.EventPurgeBatch]'s reasoning, at a larger batch
+// because these rows are a hundredth the size.
 const OpsPurgeBatch = 2000
 
 // purgeOps deletes operation rows applied before cutoff, reporting how many
-// went.
+// went: a range over the age, which `<domain>_ops_swept_idx` serves, in
+// [OpsPurgeBatch] batches, each its own transaction so the applier is never
+// queued behind the whole backlog.
 //
-// A RANGE DELETE OVER THE AGE, which is the shape the ops table's own index
-// was shipped for: without `<domain>_ops_swept_idx` a node returning from a
-// month away scans the whole table on every tick.
-//
-// BATCHED, AND EACH BATCH ITS OWN TRANSACTION. One transaction over the whole
-// backlog would hold the writer the applier is queued behind for the length of
-// it, which on a first tick after a long absence is the whole month.
-//
-// A BATCH THAT DELETED ANYTHING RECORDS WHAT IT FORGOT, in its own
-// transaction ([tables.markLost]): the watermark is how the publisher tells a
-// row that was never written from one that was swept ([tables.lostBefore]),
-// and one written after the delete it describes — or in another transaction —
-// could trail the rows actually gone, which is the one direction that
-// re-decides an operation that already landed. A batch that deleted nothing
-// records nothing, because nothing was forgotten.
+// A BATCH THAT DELETED ANYTHING RECORDS WHAT IT FORGOT in its own transaction
+// ([tables.markLost]): the publisher tells a never-written row from a swept one
+// by that watermark ([tables.lostBefore]), and one written apart from the
+// delete could trail the rows gone, re-deciding an operation that landed.
 func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int64, error) {
 	return t.purgeOpsWhere(ctx, db, func(tx *sql.Tx) error {
 		return t.markLost(ctx, tx, cutoff)
@@ -522,19 +452,14 @@ func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int6
 // purgeOpsOfKind deletes the operation rows on one subject KIND applied before
 // cutoff, reporting how many went.
 //
-// A RANGE OVER THE SUBJECT, which is how the ledger stores it — the stream's
-// prefix, the kind, the id — so a kind is the subjects between `<kind>.` and
-// the next character up, plus the kind itself for one with no id. It seeks on
-// a `(subject, applied_at)` index the DOMAIN ships beside its ops table: a
-// kind with a horizon of its own is one whose rows the default sweep would
-// otherwise keep for the default's length, and only a domain that declares
-// one pays for the index.
+// The ledger stores the wire subject (prefix, kind, id), so a kind is the
+// subjects between `<kind>.` and the next character up, plus the bare kind. It
+// seeks a `(subject, applied_at)` index the DOMAIN ships only when it declares
+// a kind horizon.
 //
-// ITS LOSS IS THE KIND'S, NOT THE TABLE'S ([tables.markLostKind]). Recorded
-// as the table's, an hourly sweep of one kind would tell the publisher the
-// whole ledger lost everything older than an hour, and every other kind's
-// operation minted before that would be answered `unknown` without being
-// published — see replicated migration 0041.
+// ITS LOSS IS THE KIND'S ([tables.markLostKind]): recorded as the table's, an
+// hourly sweep of one kind would make every other kind's operation older than
+// an hour answer `unknown` unpublished (replicated migration 0041).
 func (t tables) purgeOpsOfKind(ctx context.Context, db Estate, kind string,
 	cutoff time.Time) (int64, error) {
 
@@ -576,20 +501,17 @@ func (t tables) purgeOpsWhere(ctx context.Context, db Estate, mark func(*sql.Tx)
 		}
 		total += deleted
 		if deleted < OpsPurgeBatch {
-			// A SHORT BATCH IS THE END, and the loop stops on it
-			// rather than on a zero: a final batch that exactly
-			// filled the limit costs one more empty statement, and a
-			// loop that only stopped at zero would run one anyway.
+			// A SHORT BATCH IS THE END: stopping only at zero would
+			// cost an empty statement after every sweep.
 			return total, nil
 		}
 	}
 }
 
 // markLost records that the ops table may have lost rows applied before
-// before, in the caller's transaction — which must be the one that loses them.
-//
-// MONOTONE, so a later loss with an earlier instant — a sweep after a clock
-// stepped back, a shorter horizon — never un-forgets rows an earlier one lost.
+// before, in the caller's transaction, which must be the one that loses them.
+// MONOTONE, so a later loss with an earlier instant (a clock stepped back, a
+// shorter horizon) never un-forgets rows an earlier one lost.
 func (t tables) markLost(ctx context.Context, tx *sql.Tx, before time.Time) error {
 	if t.ops == "" {
 		return nil
@@ -608,10 +530,9 @@ func (t tables) markLost(ctx context.Context, tx *sql.Tx, before time.Time) erro
 }
 
 // markLostKind records that the ops table may have lost rows of one subject
-// KIND applied before before, in the caller's transaction — the one that loses
-// them — and monotone for [tables.markLost]'s reason. It is the watermark of a
-// kind whose rows a domain sweeps sooner than the rest ([OpsHorizon.Kinds]);
-// see replicated migration 0041.
+// KIND applied before before, as [tables.markLost] does for the table: the
+// watermark of a kind a domain sweeps sooner than the rest ([OpsHorizon.Kinds],
+// replicated migration 0041).
 func (t tables) markLostKind(ctx context.Context, tx *sql.Tx, kind string,
 	before time.Time) error {
 
@@ -632,12 +553,9 @@ func (t tables) markLostKind(ctx context.Context, tx *sql.Tx, kind string,
 }
 
 // lostBefore answers the instant before which the ops table may have lost
-// rows of an operation on a subject of this kind, reporting false when it has
-// lost none — see [Rows.LostBefore] and replicated migrations 0017 and 0041.
-//
-// THE LATER OF TWO WATERMARKS: the table's, which every kind shares, and the
-// kind's own where a sweep of that kind alone has run. An empty kind asks the
-// table's alone.
+// rows of an operation on a subject of this kind, false when it lost none
+// ([Rows.LostBefore]; replicated migrations 0017 and 0041): the later of the
+// table's watermark and the kind's own. An empty kind asks the table's alone.
 func (t tables) lostBefore(ctx context.Context, tx *sql.Tx, kind string) (time.Time, bool, error) {
 	if t.ops == "" {
 		return time.Time{}, false, nil
@@ -662,14 +580,12 @@ func (t tables) lostBefore(ctx context.Context, tx *sql.Tx, kind string) (time.T
 	return store.DecodeTime(ofKind.Int64), true, nil
 }
 
-// OpEntry is one row of a domain's operation ledger: an operation this node's
-// applier applied, where its record landed, and the WIRE subject it landed on
-// — the domain's prefix and the object's kind and id, as the anchor is keyed.
+// OpEntry is one row of a domain's operation ledger: where an operation this
+// node applied landed, and on which WIRE subject (as the anchor is keyed).
 //
-// THE SUBJECT IS WHAT MAKES A ROW AN ANSWER. An operation id is the caller's,
-// and one carried to a second object finds the first object's row under it —
-// so a row answers for a write only on the subject that write is to, and
-// [Publisher.heldHere] refuses the rest.
+// THE SUBJECT IS WHAT MAKES A ROW AN ANSWER: an operation id is the caller's,
+// and one reused on a second object finds the first's row, so a row answers
+// only for a write to its own subject ([Publisher.heldHere]).
 type OpEntry struct {
 	Position Position
 	Subject  string
@@ -702,15 +618,12 @@ func (t tables) op(ctx context.Context, tx *sql.Tx, opID string) (OpEntry, bool,
 }
 
 // appliedRecord answers whether this node applied the record with operation
-// opID, stored by the broker at storedAt, at position p — the one question a
-// restored reanchor asks of the ledger ([UnheldTail]).
+// opID, stored by the broker at storedAt, at position p ([UnheldTail]).
 //
-// ALL THREE MUST AGREE. The operation alone is a caller's intent, which a
-// retry after the restore carries into a second record; the position alone is
-// a sequence, which the restored log reissues to whatever was written there
-// next; the instant is the record's own, stamped by the broker on both sides —
-// the ledger row keeps the one the applier consumed, the log reports the one
-// it holds.
+// ALL THREE MUST AGREE: a retry after the restore carries the operation into a
+// second record, and the restored log reissues the position to whatever is
+// written there next. The instant is the broker's, so the ledger's (what the
+// applier consumed) and the log's (what it holds) are the record's own.
 func (t tables) appliedRecord(ctx context.Context, tx *sql.Tx, opID string, p Position,
 	storedAt time.Time) (bool, error) {
 
@@ -731,9 +644,8 @@ func (t tables) appliedRecord(ctx context.Context, tx *sql.Tx, opID string, p Po
 }
 
 // retainedRecord answers whether this node consumed and RETAINED the record at
-// position p stored by the broker at storedAt: a record this build could not
-// read is held here byte for byte, and is these rows' history as much as one
-// they applied.
+// position p stored by the broker at storedAt: a record held here unread is
+// these rows' history as much as one they applied.
 func (t tables) retainedRecord(ctx context.Context, tx *sql.Tx, p Position,
 	storedAt time.Time) (bool, error) {
 
@@ -756,30 +668,24 @@ func (t tables) retainedRecord(ctx context.Context, tx *sql.Tx, p Position,
 // retain stores a record this build cannot decode, byte for byte, with every
 // term of its scope.
 //
-// ONE TRANSACTION for the record and its scope, and the rule is not tidiness:
-// a deferral recorded without its scope is a record that makes rows stale with
-// nothing able to see that it does — so the probe passes, a writer takes the
-// retry-at-zero branch, and the deferred mutation is overwritten with nothing
-// anywhere reporting it.
+// ONE TRANSACTION for the record and its scope: a deferral without its scope
+// makes rows stale invisibly, so the probe passes, a writer retries at zero,
+// and the deferred mutation is overwritten with nothing reporting it.
 func (t tables) retain(ctx context.Context, tx *sql.Tx, rec Record, compacted bool,
 	maxVariables int) error {
-	// A COMPACTED DOMAIN KEYS ON THE SUBJECT and a strict one on the
-	// position. The stream itself keeps one message per subject there, so
-	// a positional retention would keep records the stream has already
-	// superseded — and reprocessing them would write state the broker no
-	// longer holds.
+	// A COMPACTED DOMAIN KEYS ON THE SUBJECT, a strict one on the
+	// position: its stream keeps one message per subject, so positional
+	// retention would reprocess superseded records into state the broker
+	// no longer holds.
 	key := rec.Position.Packed()
 	subject := rec.Subject.String()
 	if compacted {
-		// THE CHILD GOES FIRST, and the order is the whole statement
-		// pair. There is no foreign key here — a cascade is a delete
-		// nobody committed — so the scope rows are found through the
-		// parent's own position, and a parent deleted first leaves a
-		// subquery that matches nothing and scope rows that outlive
-		// every record. A probe then reports a deferral on a record
-		// this node no longer holds, for ever: the read barrier waits
-		// on it and the writer's step 0 refuses to publish, with
-		// nothing able to clear either.
+		// THE CHILD GOES FIRST: with no foreign key (a cascade is a
+		// delete nobody committed) the scope rows are found through the
+		// parent's position, so deleting the parent first strands them.
+		// A probe then reports a deferral this node no longer holds, for
+		// ever: the read barrier waits and the writer's step 0 refuses to
+		// publish, with nothing able to clear either.
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM `+t.scope+` WHERE position IN
 				(SELECT position FROM `+t.deferred+` WHERE subject = ?)`, subject); err != nil {
@@ -799,17 +705,13 @@ func (t tables) retain(ctx context.Context, tx *sql.Tx, rec Record, compacted bo
 		store.EncodeTime(rec.StoredAt)); err != nil {
 		return fmt.Errorf("statelog: retain the record at %s: %w", rec.Position, err)
 	}
-	// THE ONE DATA-DRIVEN COLLECTION IN THIS FILE. A record's scope is the
-	// complete set of object paths its apply may write, stated by the
-	// writer, and the paths NEST — a write that names a task's keys states
-	// the task and every key beside it (the tracker's carries up to 64
-	// terms), so this is a collection whose size is the record's, not a
-	// fixed one.
+	// THE ONE DATA-DRIVEN COLLECTION HERE: a scope is every object path
+	// the apply may write, and paths NEST (a task's keys state the task
+	// and every key beside it; the tracker's carry up to 64 terms).
 	//
-	// THE ERROR NO LONGER NAMES THE PATH, and that is the deliberate cost:
-	// a chunk carries up to a thousand of them, so naming one would be a
-	// guess that reads as a fact. The engine names the offending row in its
-	// own error, which %w carries. Nothing matched on the old text.
+	// The error names no path: a chunk carries up to a thousand, so one
+	// would be a guess; the engine's own error, carried by %w, names the
+	// offending row.
 	paths := rec.Scope.Normalised().Paths
 	if _, err := store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO `+t.scope+` (position, path) VALUES`, `(?, ?)`,
@@ -830,9 +732,8 @@ type retained struct {
 	storedAt time.Time
 }
 
-// deferredAfter reads the retained records above a position, oldest first,
-// bounded so a long-stalled upgrade's backlog is walked in pages rather than
-// loaded whole.
+// deferredAfter reads up to limit retained records above a position, oldest
+// first, so a long-stalled upgrade's backlog is paged rather than loaded whole.
 func (t tables) deferredAfter(ctx context.Context, tx *sql.Tx, after int64, limit int) ([]retained, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT position, version, payload, stored_at FROM `+t.deferred+`
@@ -858,10 +759,8 @@ func (t tables) deferredAfter(ctx context.Context, tx *sql.Tx, after int64, limi
 	return out, nil
 }
 
-// release drops a retained record and its scope index, in this transaction —
-// the child first, for the reason [tables.retain] gives about the supersede:
-// there is no foreign key, and a scope row that outlives its record is a
-// deferral this node reports and can never clear.
+// release drops a retained record and its scope index in this transaction, the
+// child first for [tables.retain]'s reason.
 func (t tables) release(ctx context.Context, tx *sql.Tx, p Position) error {
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM `+t.scope+` WHERE position = ?`, p.Packed()); err != nil {
@@ -877,26 +776,20 @@ func (t tables) release(ctx context.Context, tx *sql.Tx, p Position) error {
 // deferredIn answers whether this node holds a record it cannot decode whose
 // declared scope intersects s.
 //
-// TWO CLAUSES, because containment runs both ways and neither finds the
-// other's case. A stored path in the query's CLOSURE is one that covers
-// something the query is about — a record deferred on the container. A stored
-// path BENEATH one of the query's roots is one the query covers — a record
-// deferred on an object inside what this operation is rewriting. A probe with
-// only the first is blind to exactly the neighbour whose row a deferred record
-// left stale, and that is silent data loss rather than a wrong answer.
+// TWO CLAUSES, since containment runs both ways: a stored path in the query's
+// CLOSURE covers what the query is about (a record deferred on the container);
+// one BENEATH a query root is covered by it (a record deferred on an object
+// inside what this operation rewrites). Without the second the probe is blind
+// to the neighbour a deferred record left stale: silent data loss.
 func (t tables) deferredIn(ctx context.Context, tx *sql.Tx, s ScopeSet) (Deferral, bool, error) {
 	return t.deferredBelow(ctx, tx, s, nil)
 }
 
 // deferredBelow is [tables.deferredIn] over the retained records BELOW a
-// position only.
-//
-// It is what the reprocess asks: whether a record this build can now read is
-// still covered by one it cannot, and only a record EARLIER in the log can
-// cover it — the live loop retained it against what the table held at the
-// time, and the table held nothing above it then. A probe over the whole
-// table would let a later retained record hold an earlier one back for ever.
-// nil is the whole table.
+// position only (nil: the whole table). The reprocess asks it whether a record
+// it can now read is still covered by one it cannot; only an EARLIER one can,
+// as the live loop retained it when the table held nothing above it, and a
+// whole-table probe would let a later record hold an earlier back for ever.
 func (t tables) deferredBelow(ctx context.Context, tx *sql.Tx, s ScopeSet, below *Position) (Deferral, bool, error) {
 	closure := s.Closure()
 	roots := s.Roots()
@@ -904,33 +797,18 @@ func (t tables) deferredBelow(ctx context.Context, tx *sql.Tx, s ScopeSet, below
 		return Deferral{}, false, nil
 	}
 
-	// THE ROOTS ARE A ROW SET, NEVER A CHAIN OF `OR`s.
+	// THE ROOTS ARE A ROW SET, NEVER A CHAIN OF `OR`s: one root per object
+	// written, and a chained `OR` parses LEFT-DEEP, so Turso refuses a
+	// batch of fifty-odd objects (`Expression tree is too large (maximum
+	// depth 100)`). A `SELECT ? UNION ALL …` CTE is a compound SELECT whose
+	// depth does not grow (TestAScopeWithHundredsOfRootsIsProbedRatherThanRefused).
+	// Exact matches stay a flat `IN` list, roots included: a root is both a
+	// path the query is about and a prefix of those beneath it.
 	//
-	// A scope's roots are one per OBJECT the operation writes, so a batch
-	// carries as many as it has members. Written as
-	// `... OR s.path = ? OR s.path LIKE ? ...` that is two chained terms per
-	// root, and a chained `OR` parses LEFT-DEEP: the expression tree's depth
-	// grows with the list. Turso refuses one past a hundred with
-	// `Parse error: Expression tree is too large (maximum depth 100)`, so a
-	// batch of fifty-odd objects failed its own apply — measured, with the
-	// whole batch lost.
-	//
-	// A CTE of `SELECT ? UNION ALL …` is a compound SELECT rather than one
-	// expression, so its depth does not grow with the list: probed clean at
-	// a thousand prefixes.
-	//
-	// The EXACT match stays an `IN` list, which is flat for the same reason
-	// and which the roots join: a root is both a path the query is about and
-	// a prefix of the paths beneath it.
-	//
-	// THE BINDINGS FOLLOW THE TEXT. A `?` is positional, and the CTE that
-	// holds the prefixes is the FIRST thing in the statement — so its values
-	// are bound first, and the exact paths after them. Appended the other
-	// way round, the CTE was handed the first exact paths as its "prefixes"
-	// and the IN list ended in the real prefixes as literal strings: the
-	// descendant clause never matched a descendant at all, and the ancestor
-	// clause matched its first paths through LIKE — case-blind, and with an
-	// `_` in a path read as a wildcard.
+	// THE BINDINGS FOLLOW THE TEXT: the CTE comes first, so its prefixes
+	// bind before the exact paths; reversed, no descendant ever matches
+	// and LIKE runs case-blind with `_` as a wildcard
+	// (TestTheCoverageProbeFindsBothDirectionsAndNothingElse).
 	exact := make([]string, 0, len(closure)+len(roots))
 	exact = append(exact, closure...)
 	exact = append(exact, roots...)
@@ -1014,14 +892,10 @@ func (t tables) holdsDeferred(ctx context.Context, tx *sql.Tx) (bool, error) {
 	return true, nil
 }
 
-// oldestDeferred is the earliest record this node could not decode, which is
-// what the node's own applied-through position is derived from and what an
-// operator's "which build do I need" question is answered with.
-//
-// WITH ITS SCOPE, which is what [Deferral] promises every holder: it was read
-// without one, so every Deferral the runner handed out carried an empty scope,
-// and a caller asking whether that record was about a given object — the one
-// question a scope exists to answer — was told "no" for every object there is.
+// oldestDeferred is the earliest record this node could not decode, from which
+// its applied-through position and an operator's "which build do I need" are
+// derived. WITH ITS SCOPE, as [Deferral] promises: an empty one would answer
+// "not about this object" for every object there is.
 func (t tables) oldestDeferred(ctx context.Context, tx *sql.Tx) (Deferral, bool, error) {
 	var packed int64
 	var version int64
@@ -1060,12 +934,9 @@ func arbitrates(kinds []string, kind string) bool {
 	return slices.Contains(kinds, kind)
 }
 
-// unionOfPlaceholders is n bound values as a one-column row set.
-//
-// `SELECT ? UNION ALL SELECT ? …`, which is a COMPOUND SELECT: its depth does
-// not grow with n the way a chained `OR` or `IN (SELECT …)` expression does.
-// See [tables.deferredBelow] for the parse-depth refusal this shape exists to
-// stay under.
+// unionOfPlaceholders is n bound values as a one-column row set: a COMPOUND
+// SELECT, whose depth does not grow with n as a chained `OR` or
+// `IN (SELECT …)` does ([tables.deferredBelow]).
 func unionOfPlaceholders(n int) string {
 	if n <= 0 {
 		return ""

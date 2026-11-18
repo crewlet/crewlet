@@ -24,24 +24,13 @@ func runNodeGates(t *testing.T, new Factory) {
 // apply gate, and a domain that claims no identity has none — and that a domain
 // claiming identity reads its node gates off its log ([statelog.EvictionProbe]).
 //
-// # Why the publisher's answer rests on this
-//
-// A write flagged [statelog.Request.NodeGate] is excused three fences — the
-// passed generation, a peer's truncated rows and the gate reserve — and the
-// publisher holds the flag to this predicate, over the record it is about to
-// append. A domain whose own eviction answers false has an eviction the
-// publisher refuses, so the gesture that unpins a full log can never be made;
-// one that answers true for anything else lets that record past every fence
-// an ordinary write is held to. And a node gate that installed no apply gate
-// would be DEFERRED by a build that could not decode it, rather than stop its
-// applier — a node that goes on applying the records of a machine the fleet
-// has evicted.
-//
-// EXPORTED AND RETURNING THE VERDICT, for [Declaration]'s reason. The records
-// it reads are the candidate's: its eviction pair, and one record of every kind
-// it publishes. What it cannot see from those is a second gate — a purge —
-// answering true; [RunGates] holds that from a gating domain's own purge, and
-// [RunEvictionGates] from every other gate an eviction-only domain names.
+// On this predicate the publisher excuses a [statelog.Request.NodeGate] write
+// the passed generation, a peer's truncated rows and the gate reserve: false
+// for an eviction refuses the one that unpins a full log; true for anything
+// else lets it past every fence. A node gate installing no apply gate is
+// deferred by a build that cannot decode it, which goes on applying the evicted
+// node's records. Returns the verdict for [Declaration]'s reason; [RunGates]
+// and [RunEvictionGates] catch a second gate answering true, unseen here.
 func NodeGates(c Candidate) error {
 	name := c.Domain.Name()
 	var errs []error
@@ -117,17 +106,11 @@ func NodeGates(c Candidate) error {
 
 // GateNodeGates certifies, over a gating domain's own records, that exactly its
 // eviction and readmission are node gates — and that its create, its ordinary
-// write and its PURGE are not.
-//
-// The purge is the case [NodeGates] cannot reach: it installs an apply gate
-// too, so a predicate spelled as the apply gate's passes every other check
-// here while letting a purge flagged by mistake spend the reserve kept for an
-// eviction and pass the fences that stop every ordinary write. And the purge
-// must SAY it installs one, or the case could not tell its node-gate answer
-// from an ordinary write's.
-//
-// EXPORTED AND RETURNING THE VERDICT, so [RunGates] can bend the candidate's
-// own domain and require the bend to be reported.
+// write and its PURGE are not. The purge, which [NodeGates] cannot reach,
+// installs an apply gate too, so a node-gate predicate spelled as the apply
+// gate's would let a purge spend the eviction's reserve and pass the fences.
+// Exported and returning the verdict so [RunGates] can require its bends
+// reported.
 func GateNodeGates(c GateCandidate) error {
 	return errors.Join(judgeNodeGates(c.Domain, []judgedRecord{
 		{label: "its create", body: func() ([]byte, error) {
@@ -164,13 +147,10 @@ type judgedRecord struct {
 	installs bool
 }
 
-// judgeNodeGates is the ONE judging loop both gating families' node-gate cases
-// run — [GateNodeGates] over a domain with a deletion marker and
-// [EvictionGateNodeGates] over one whose only apply-nowhere gate is the
-// eviction — so the rule they hold a domain to is written once: the eviction
-// probe, then each record's node-gate answer, then its apply-gate answer where
-// it owes one. Written in each family, the two had already begun to differ in
-// which of those they asked.
+// judgeNodeGates is the one judging loop [GateNodeGates] and
+// [EvictionGateNodeGates] share, so the rule is written once: the eviction
+// probe, each record's node-gate answer, then its apply-gate answer where it
+// owes one.
 func judgeNodeGates(d statelog.Domain, records []judgedRecord) []error {
 	name := d.Name()
 	var errs []error
@@ -195,9 +175,9 @@ func judgeNodeGates(d statelog.Domain, records []judgedRecord) []error {
 				"%v — only a node's eviction and readmission may pass the fences "+
 				"and the reserve a node gate is excused", name, got, r.label, r.nodeGate))
 		}
-		// AN APPLY GATE THAT DOES NOT SAY SO is one a build that cannot
-		// read it defers rather than stops at, and the case could not then
-		// tell its node-gate answer from an ordinary write's.
+		// An apply gate that does not say so is deferred, not stopped at, by
+		// a build that cannot read it, and its node-gate answer could not be
+		// told from an ordinary write's.
 		if r.installs && !d.InstallsGate(env) {
 			errs = append(errs, fmt.Errorf("%s says %s installs no apply gate — a "+
 				"build that cannot decode it would defer it rather than stop",
@@ -207,16 +187,13 @@ func judgeNodeGates(d statelog.Domain, records []judgedRecord) []error {
 	return errs
 }
 
-// applyGateNodeGateLiar is the bend a domain's OTHER apply gate is what
-// catches — the one [RunEvictionGates] cannot run on a domain whose eviction is
-// its only gate, since there its apply gate and its node gate are one answer.
+// applyGateNodeGateLiar is the bend only a domain's OTHER apply gate catches,
+// so [RunEvictionGates] cannot run it: there the two answers coincide.
 const applyGateNodeGateLiar = "answers with its apply gate, so a purge is a node gate"
 
-// nodeGateLiars bend a gating candidate's own domain each way [judgeNodeGates]'s
-// answers could be written wrong — which records are node gates, and that every
-// gate it encodes says it installs one — for [RunGates] and [RunEvictionGates]
-// to require every one reported. A clause no bend reaches is one an edit can
-// drop with every suite still green.
+// nodeGateLiars bend a gating candidate's own domain each way [judgeNodeGates]
+// checks, for [RunGates] and [RunEvictionGates] to require every one reported:
+// a clause no bend reaches can be dropped with every suite green.
 var nodeGateLiars = map[string]func(statelog.Domain) statelog.Domain{
 	applyGateNodeGateLiar: func(d statelog.Domain) statelog.Domain {
 		return applyGateAsNodeGate{bent{d}}
@@ -230,9 +207,8 @@ var nodeGateLiars = map[string]func(statelog.Domain) statelog.Domain{
 }
 
 // bent is a gating domain one of whose answers a liar replaces. It forwards the
-// eviction probe of the domain it wraps, so each bend is reported for what it
-// bends rather than for having lost the probe on the way in — a wrapper that
-// dropped it would be caught by the probe check whatever else it did.
+// wrapped eviction probe, so a bend is caught for what it bends, not by the
+// probe check for a probe the wrapper lost.
 type bent struct{ statelog.Domain }
 
 func (b bent) EvictionSubject(node string) statelog.Subject {
@@ -264,8 +240,7 @@ func (noNodeGate) NodeGate(statelog.Envelope) bool { return false }
 
 // noInstallsGate says no record installs an apply gate, so a build that cannot
 // decode its eviction defers it rather than stopping. Its node-gate answers are
-// the domain's own, which leaves the apply-gate clause the only one that can
-// report it.
+// honest, so only the apply-gate clause can report it.
 type noInstallsGate struct{ bent }
 
 func (noInstallsGate) InstallsGate(statelog.Envelope) bool { return false }

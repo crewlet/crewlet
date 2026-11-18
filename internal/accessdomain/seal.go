@@ -8,11 +8,11 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// SEALING: a command's text, and what a verdict decided with its giver's
-// reason and findings, are stored as ciphertext under the fleet keyring, bound
-// to the one record they belong to. The writer seals before it publishes, the
-// applier writes the bytes through (so every node's rows are identical whatever
-// keys its ring holds), and only an administrator's audit read opens.
+// A command's text, and a verdict's decision, reason and findings, are stored
+// sealed under the fleet keyring, bound to their one record. The writer seals
+// before it publishes and the applier writes the bytes through, so every node's
+// rows are identical whatever keys its ring holds; only an administrator's
+// audit read opens them.
 
 // AAD is the associated data a command's text is sealed under, so a value moved
 // to another record does not open.
@@ -20,7 +20,7 @@ func AAD(handle, commandID string) string {
 	return "access/" + handle + "/command/" + commandID + "/command"
 }
 
-// Sealer seals and opens command text under the fleet keyring.
+// Sealer seals and opens command and verdict texts under the fleet keyring.
 type Sealer struct {
 	cipher secrets.Cipher
 	// active is the keyring key the cipher seals under.

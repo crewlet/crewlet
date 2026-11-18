@@ -21,17 +21,12 @@ import (
 // Reader answers questions about the seats' executor sessions from this node's
 // own applied rows.
 //
-// # Through the read authority, at the level the caller asks
-//
-// Every read goes through [statelog.Reader], so the refusal ladder holds (an
-// evicted node, one below the trim floor and one whose applier stopped serve
-// nothing) and a record this node could not decode is reported rather than
-// answered around. The reads a launch takes name their level: a conversation's
-// head is read at `linearizable`, because the previous turn's `end` may have
-// been published by another node and a copy that has not applied it serves an
-// older head — a launch then continues a session missing the last turn and is
-// told an older turn's ending. A read the ladder refuses is the caller's to
-// fail open on: a launch starts fresh, saying it could not read its history.
+// Every read goes through [statelog.Reader], so its refusal ladder holds and an
+// undecodable record is reported, never answered around. A launch reads its
+// conversation's head at `linearizable`: the previous turn's `end` may have been
+// published by another node, and an older head continues a session missing the
+// last turn. A refused read is the caller's to fail open on: a launch starts
+// fresh, saying it could not read its history.
 type Reader struct {
 	db  store.ReplicatedReader
 	log *statelog.Reader
@@ -86,10 +81,9 @@ type Session struct {
 	Home      string
 	Workspace string
 
-	// ContextTokens and Interrupted are the newest capture's: the whole
-	// input of its session's last request, and whether its harness was cut
-	// off ([Capture.ContextTokens], [Capture.Interrupted]). Zero on a row
-	// nothing was captured into, and on one captured by a build before them.
+	// ContextTokens and Interrupted are the newest capture's
+	// ([Capture.ContextTokens], [Capture.Interrupted]); zero on a row nothing
+	// was captured into.
 	ContextTokens int64
 	Interrupted   bool
 
@@ -103,13 +97,12 @@ type Session struct {
 	ReadThrough statelog.Position
 	Absorbs     []string
 
-	// BaseTurn is the ended turn of the conversation whose session the
-	// turn's first read froze to continue, as the turn's `begin` recorded it
-	// ([Begin]); empty where the read named none, the base had moved before
-	// the begin landed, or no begin landed. While the row is live and names
-	// no capture, it HOLDS that turn's row against every release but a
-	// retirement, which takes a session a run ran out of context in off every
-	// ended row that names it, held or not ([RetiredBy]).
+	// BaseTurn is the ended turn whose session the turn's first read froze to
+	// continue, as its `begin` recorded it ([Begin]); empty where the read
+	// named none, the base moved before the begin landed, or none landed.
+	// While the row is live and names no capture it HOLDS that turn's row
+	// against every release but a retirement (package doc, "A turn's first
+	// read holds its base").
 	BaseTurn string
 
 	// RetiredBy is the turn in which this row's session ran out of its model's
@@ -135,25 +128,16 @@ func (s Session) HasObject() bool { return !s.Object.Key.IsZero() }
 
 // Unkept is the turn's newest capture its end named as not kept
 // ([executorkeep.Ending.Unkept]), WHERE THAT STILL STANDS ON THE ROW: nil where
-// the end named none, or the turn has not ended, and nil where the capture it
-// named is no newer than the place the row keeps.
+// the end named none, the turn has not ended, or the named capture is no newer
+// than the row's place.
 //
-// DECIDED ON THE ROW'S OWN PLACE, as the end's apply decided whether to take an
-// older session off the row ([applyEnd]): an end is decided off the run's
-// record, which can name a capture as not kept whose record the log took all
-// the same — sent before the end was decided and taken before the end, a record
-// a taker handed on before its lease's window closed among them — and the row's
-// place is then that capture's, its session kept. One NEWER than the place
-// stands whether or not the row still names a session: an end stamped below
-// [wentOnVersion] took the older one off, and one stamped at or above kept it,
-// saying the turn went on past it ([Session.WentOnNote] names the capture not
-// kept beside it) — until the seat's budget releases that session, which
-// [Session.NotKept] tells apart. Every account of an end reads the unkept
-// capture through this one rule, so none tells a session the row keeps as one
-// that was not: [Session.NotKept], [Session.WentOnNote], and
-// [Session.Redacted], the one form every reader is shown a row in — the read
-// surface's, a seat's own reads and searches of its sessions, and the account
-// of the turn its conversation's next turn is told.
+// Decided on the row's own place, as [applyEnd] decides: an end is decided off
+// the run's record, which can name as unkept a capture the log took anyway
+// (sent before the end was decided), and the row's place is then that capture's.
+// One NEWER than the place stands whether or not the row still names a session:
+// an end below [wentOnVersion] took the older one off, one at or above kept it.
+// [Session.NotKept], [Session.WentOnNote] and [Session.Redacted] all read the
+// unkept capture through this one rule, so none calls a kept session unkept.
 func (s Session) Unkept() *executorkeep.Unkept {
 	if s.Ending == nil || s.Ending.Unkept == nil ||
 		!unkeptSupersedes(*s.Ending.Unkept, s.LaunchSeq, s.CaptureSeq) {
@@ -164,27 +148,17 @@ func (s Session) Unkept() *executorkeep.Unkept {
 }
 
 // endWentPast reports whether the row's end says its turn went on past THE
-// SESSION THIS ROW NAMES: the end says the turn went on
-// ([executorkeep.Ending.WentOn]), and the turn's last word it names
-// ([executorkeep.Ending.LastWord]), where it names one, is newer than the
-// place the row keeps. THE ONE READING OF WENT_ON: whether the row is read as
-// one its turn went on past ([Session.WentOn]), which note it is told in
-// ([Session.WentOnNote]), what the conversation's next turn is told of it
-// ([Session.Kept]) and the went_on every reader is shown ([Session.Redacted])
-// all decide on this, so no two of them tell one row two ways.
+// SESSION THIS ROW NAMES: [executorkeep.Ending.WentOn] is set, and its
+// [executorkeep.Ending.LastWord], where it names one, is newer than the row's
+// place. THE ONE READING OF WENT_ON: [Session.WentOn], [Session.WentOnNote],
+// [Session.Kept] and [Session.Redacted] all decide on it, so none disagree.
 //
-// HELD TO THE ROW'S OWN PLACE, as the unkept capture is ([Session.Unkept]): an
-// end is decided off the run's record, which can hold refused a capture whose
-// record the log took all the same — its taker's record handed on before a
-// wait's settle read the turn's row, and taken after it — and where that
-// capture is the turn's last word, the row's place is the last word's, and the
-// row holds all the turn did: read as any row whose final capture landed. An
-// end that names no last word went on past whatever the row names, its last
-// word never taken or not its newest capture. And read off the row's place at
-// read time, it is right whichever side of the end the late record landed on:
-// one the log took before the end is the row's place, whether the end was
-// decided before it landed or after, and one it took after the end is refused
-// by the end's tombstone, which leaves the row older than the last word.
+// Held to the row's place, as [Session.Unkept] is: the run's record can hold
+// refused a capture the log took anyway, and where that is the last word the
+// row holds all the turn did. An end naming no last word went past whatever the
+// row names. Read at read time, it is right whichever side of the end a late
+// record landed: taken before the end, it is the row's place; after, the end's
+// tombstone refused it.
 func (s Session) endWentPast() bool {
 	if s.Ending == nil || !s.Ending.WentOn {
 		return false
@@ -194,16 +168,11 @@ func (s Session) endWentPast() bool {
 }
 
 // WentOn reports a row naming a session its turn WENT ON PAST, or may have: an
-// ended row naming an object whose end said the turn went on past THAT session
-// ([Session.endWentPast]) — kept from a capture taken while its job still
-// worked, or from an earlier launch's, or beside a newer capture that was not
-// kept — or whose turn ended LOST ([executorkeep.OutcomeLost]), which no frame
-// of it saw end, so its session may not hold the last of what it did. Such a
-// row is still continued by the conversation's next turn, which is told which
-// of the two it is ([Session.Kept]), and still read as the turn's session; only
-// never as all the turn did. A row that holds the last word its end named is
-// no row its turn went on past, however the end said the turn went on, and
-// reads as one only where its turn was lost, as every lost turn's row does.
+// ended row naming an object whose end went past it ([Session.endWentPast]),
+// or whose turn ended LOST ([executorkeep.OutcomeLost]), so its session may not
+// hold the last of what it did. The next turn still continues such a row, told
+// which of the two it is ([Session.Kept]); it is only never read as all the
+// turn did. A row holding the last word its end named is one only if lost.
 func (s Session) WentOn() bool {
 	return s.HasObject() && s.Ending != nil &&
 		(s.endWentPast() || s.Ending.Outcome == executorkeep.OutcomeLost)
@@ -211,20 +180,12 @@ func (s Session) WentOn() bool {
 
 // WentOnNote is a row its turn went on past ([Session.WentOn]) in a reader's
 // words, "" of any other: that it is kept up to a session the turn went on past
-// — or, of a lost turn whose end did not say so of this row's session
-// ([Session.endWentPast]), may have — and, where its end names a newer capture
-// that was not kept, which and why. Of an end that said so, that the session
-// was taken while the turn still worked and what the turn did after is not in
-// it. The one sentence of it, for every surface that shows a row in words to
-// say.
+// (or, of a lost turn, may have), and which newer capture [Session.Unkept]
+// stands and why. The one sentence of it, for every surface that shows a row in
+// words.
 //
-// THE NOTE IS THE ROW'S OWN FIELDS IN A READER'S WORDS, and the unkept capture
-// it names is the one [Session.Unkept] stands: an end stamped [wentOnVersion]
-// or above keeps the row's session beside an unkept capture newer than its
-// place, which the note says, and one no newer than the place is the row's
-// own. SOMEBODY ELSE'S WORDS IN IT, the unkept capture's reason quoting what
-// refused it, so a reader asks it of the shown form ([Session.Redacted]),
-// whose reason is redacted, as every reader of a row is shown it.
+// It quotes somebody else's words (the unkept capture's reason), so a reader
+// asks it of the shown form ([Session.Redacted]), whose reason is redacted.
 func (s Session) WentOnNote() string {
 	if !s.WentOn() {
 		return ""
@@ -243,47 +204,31 @@ func (s Session) WentOnNote() string {
 }
 
 // InProgress reports a row naming the session of a turn that HAS NOT ENDED:
-// the newest session its runs have kept — a job's final capture as its
-// collection took it, while the turn goes on to its review or waits on a
-// person's answer, or one a loss or a stop left its box to take — which a run
-// of the turn may have gone on past, and whose last call may have no result
-// yet. Such a row is read as the turn's session, and never as an ended turn's,
-// which says how the turn left it. Whether a relaunch of the turn continues it
-// is the relaunch's own decision, never this one: a relaunch continues only the
-// newest kept capture of the job it follows, and the row's is often an earlier
-// job's (internal/sandbox's ContinuityOf, which a person's read of the row
-// asks).
+// the newest session its runs have kept, which a run may have gone on past and
+// whose last call may have no result yet. It is read as the turn's session,
+// never an ended turn's. Whether a relaunch continues it is the relaunch's own
+// decision (internal/sandbox's ContinuityOf): it continues only the newest kept
+// capture of the job it follows, often not the row's.
 //
-// READ OFF THE ROW ALONE: nothing on the log says what kind of capture landed
-// a row, and a reader of it — a person's read surface, a seat's own reads and
-// searches — reads no run record. So the sentence a reader is told of it
-// ([Session.InProgressNote]) says only what the row says, and nothing a reader
-// could not check: never that the session is saved as its run works, which
-// would be false of a harness or a seat whose runs keep nothing while they
-// work.
+// Read off the row alone: a reader reads no run record, and the log does not
+// say what kind of capture landed a row. So [Session.InProgressNote] never says
+// the session is saved as its run works, false of a harness or seat whose runs
+// keep nothing while they work.
 func (s Session) InProgress() bool { return !s.Ended() && s.HasObject() }
 
 // InProgressNote is a row in progress ([Session.InProgress]) in a reader's
-// words, "" of any other: that the turn has not ended, that this is the newest
-// session its runs have kept and when it was captured, that its run may have
-// gone on past it, and that its last call may have no result yet. The ONE
-// SENTENCE OF IT, for every surface that shows a row in words.
-//
-// THE ENGINE'S WORDS ALONE, and the row's own instant, so the row as held and
-// its shown form ([Session.Redacted]) say it alike, and a surface carries it
-// apart from what a reader is told of a row its turn went on past
-// ([Session.WentOnNote]), which quotes what refused a capture: as words nobody
-// else wrote, never fenced as theirs. The two never meet — one is of a live
-// row, the other of an ended one — and each is placed where it reads, this one
-// beside the row's not having ended.
+// words, "" of any other: the ONE SENTENCE OF IT, for every surface that shows
+// a row in words. It holds only the engine's words and the row's own instant,
+// so the held row and its shown form ([Session.Redacted]) say it alike and a
+// surface never fences it, unlike [Session.WentOnNote], which is of an ended
+// row and so never meets it.
 func (s Session) InProgressNote() string {
 	if !s.InProgress() {
 		return ""
 	}
 	note := "This turn has not ended: this is the newest session its runs have kept"
-	// NO INSTANT IS SAID WHERE THE ROW HOLDS NONE, as the conversation's next
-	// turn is told none (prompts.BuildNextTurn): a capture always records
-	// one, and the zero instant read as a date would be a capture nobody took.
+	// No instant where the row holds none, as prompts.BuildNextTurn: the zero
+	// instant read as a date would be a capture nobody took.
 	if !s.CapturedAt.IsZero() {
 		note += ", captured at " + s.CapturedAt.UTC().Format(time.RFC3339)
 	}
@@ -292,19 +237,14 @@ func (s Session) InProgressNote() string {
 
 // Kept is the row as continuing its turn's kept session reads it
 // ([executorkeep.TurnRow]): the ONE conversion of a row into the sandbox's
-// view of it, which the engine's restore and the read surface both make, so a
+// view of it, made by the engine's restore and the read surface alike, so a
 // reader of whether a relaunch would continue the session decides on the
-// fields the relaunch does — and the conversation's next turn, continuing a
-// session its turn went on past or one of a lost turn, is told which.
+// relaunch's own fields.
 //
-// THE TWO FACTS [Session.WentOn] JOINS, APART: whether the turn's end said it
-// went on past the session the row names ([Session.endWentPast], held to the
-// row's place), and whether the turn was lost. Of the first the next turn is
-// told where the session ends, which the end knew; of the second only that it
-// may not hold the last of what the turn did, which is all a lost turn's end
-// can say — and a lost turn whose end said the first is told the first. A row
-// that names the turn's last word is told neither of a turn that was not
-// lost: the next turn is told the session runs through that turn.
+// It carries the two facts [Session.WentOn] joins apart: the end went past the
+// row's session ([Session.endWentPast]), of which the next turn is told where
+// the session ends; and the turn was lost, of which it is told only that the
+// session may not hold the last of what the turn did.
 func (s Session) Kept() executorkeep.TurnRow {
 	return executorkeep.TurnRow{
 		Handle: s.Handle, Turn: s.Turn,
@@ -362,32 +302,17 @@ func (h Head) RetiredWhy() string {
 func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadLinearizable} }
 
 // NotKept is why the row names no session's object, in a reader's words, ""
-// where it names one. A row names none for one of four reasons, each the
-// domain's own and told apart off the row alone: a launch ran its session out of
-// its model's context, which retired it ([Session.RetiredBy]); nothing of the
-// turn's session was captured (yet, while the turn is live, its row its begin's);
-// the turn's newest capture was not kept, which its end said ([executorkeep.Ending.Unkept]) — and
-// no older one was, or an end stamped below [wentOnVersion] released the older one the row
-// named ([applyEnd]) — told by the unkept capture being newer than the place the row keeps,
-// which a release leaves as it was ([Session.Unkept]); or the seat's session budget released it to make room
-// ([seatPlan]), the one other release that leaves a row, and one that takes
-// only an ended turn's.
+// where it names one. Told apart off the row alone, it is one of four: a launch
+// ran the session out of context ([Session.RetiredBy]); nothing was captured
+// (yet, on a live row); the end named the newest capture unkept
+// ([Session.Unkept]) and no older one was kept, or an end below [wentOnVersion]
+// released it ([applyEnd]); or the seat's budget released it ([seatPlan]).
 //
-// A SESSION ITS END KEPT IS ONE ONLY THE BUDGET RELEASES: an end that says its
-// turn went on past the row's session ([executorkeep.Ending.WentOn]) keeps it
-// beside the newer capture it names unkept, so a row that had kept a session
-// and names none under such an end was released by the seat's budget — said
-// so, with the newer capture that was not kept — never by the capture the end
-// named, which was refused before the end and took nothing off the row. Asked
-// of the end's own went_on, which says what its apply did, and not of whether
-// the row's session went past its turn's last word ([Session.endWentPast]):
-// the two part only at a row whose place is that last word's, which stands no
-// unkept capture beside it ([Session.Unkept]), and is told as released by the
-// budget either way.
-//
-// SOMEBODY ELSE'S WORDS IN IT: the unkept capture's reason quotes what refused
-// it — an error a box or a store wrote — so a reader redacts what this
-// answers, as it redacts every text a row holds.
+// Only the budget releases a session its end kept (an end with
+// [executorkeep.Ending.WentOn] keeps it beside the unkept capture), so this
+// asks the end's went_on, not [Session.endWentPast]: they part only where the
+// row holds the last word, budget-released either way. The unkept reason
+// quotes an error a box or a store wrote, so a reader redacts this.
 func (s Session) NotKept() string {
 	unkept := s.Unkept()
 	keptByItsEnd := s.Ending != nil && s.Ending.WentOn && !s.CapturedAt.IsZero()
@@ -483,56 +408,23 @@ func scanSession(row rowScanner) (Session, error) {
 			return Session{}, fmt.Errorf("executordomain: %s's turn %s's ending: %w",
 				s.Handle, s.Turn, err)
 		}
-		// THE COLUMNS ARE THE ACCOUNT: the outcome as the row was ended
-		// with, and whether a reply went out, which a dedupe merges into
-		// the row rather than into the ending's bytes.
+		// The columns win over the ending's bytes: a dedupe merges the
+		// outcome and the delivery into the row, not into the bytes.
 		e.Outcome, e.Delivered = executorkeep.Outcome(outcome), delivered == 1
 		s.Ending = &e
 	}
 	return s, nil
 }
 
-// Head is what a conversation's next turn launches from.
-//
-// # The head is the turn that read the conversation last
-//
-// Every turn's first launch continues the head its read named, so a
-// conversation's sessions are a LINE, each continuing the one before, and the
-// newest point of it is the ended turn whose READ is newest: what every later
-// read built on. Never simply the newest END. Two turns of one conversation run
-// beside each other whenever one parks on a person's question, which frees its
-// seat — and every time for a schedule, whose next fire is never taken as that
-// question's answer — so a turn that read the conversation early can end after
-// turns that read it later and continued each other. Taken as the head for
-// ending last, it would be continued while their line, which its read never
-// saw, was told and then absorbed by the next end. So the head is, of the ended
-// turns whose rows still name a session, the one that read the conversation
-// last, the newest end among turns that read it at one position, and a turn
-// that read nothing — its read failed, so it continued nothing and absorbs
-// nothing — after every turn that read. A turn that read early and ended late
-// is told and offered beside the head, as every other ended turn is, and
-// absorbed by the next end.
-//
-// The seat's budget releases the oldest END first ([seatPlan]), so it can
-// release a head before such a turn: the head is then, of the sessions the
-// conversation still keeps, the one that read it last, and the released head's
-// ending is told as every other ending is.
-//
-// # What is left of a conversation is what no ended turn was shown
-//
-// A turn's end absorbs exactly the turns its first launch's read handed out
-// ([Head.Absorbs], carried on its captures), so every ended row a conversation
-// still holds is one no ended turn was shown: a turn that ended beside the
-// head, after it, or before it but past the bound of the read that showed the
-// head's turn the rest. So the next turn is shown ALL of them — never only the
-// ones that ended after the head, which would leave a turn that ended before
-// it, beside a turn parked on a person, shown to nobody, and then absorbed by
-// the next end as though it had been.
+// Head is what a conversation's next turn launches from: its head, the turn
+// that read it last, never simply the newest end (package doc, "The head is
+// the turn that read the conversation last"); and ALL its other ended turns,
+// never only those that ended after the head, since each is one no ended turn
+// was shown (package doc, "What a conversation still holds is what no ended
+// turn was shown").
 type Head struct {
-	// Session is the conversation's HEAD: of its ended turns whose rows
-	// still name a session, the one that read the conversation last, which
-	// the next turn continues (see above). Nil where none names one, and the
-	// launch starts fresh.
+	// Session is the conversation's HEAD, which the next turn continues; nil
+	// where no ended turn names a session, and the launch starts fresh.
 	Session *Session
 
 	// Endings are the conversation's other ended turns, session or not: how
@@ -581,12 +473,10 @@ func (h Head) Absorbs() []string {
 
 // The statements a launch's reads run.
 const (
-	// headStatement is a conversation's HEAD: of its ended turns that name a
-	// session, the one that read the conversation last — the newest end
-	// among turns that read it at one position, and a turn that read none
-	// (its read failed) after every turn that did ([Head.Session]). AN END'S
-	// POSITION IS UNIQUE among the rows that hold one, so the pair is a total
-	// order, and the conversation's line index serves it without a sort.
+	// headStatement is a conversation's HEAD ([Head.Session]); a turn that
+	// read none sorts after every turn that did. An end's position is unique
+	// among the rows holding one, so the pair is a total order, which the
+	// line index serves without a sort.
 	headStatement = `SELECT ` + sessionColumns + `
 		FROM executor_sessions INDEXED BY ` + lineIdx + `
 		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
@@ -594,9 +484,8 @@ const (
 		ORDER BY read_through DESC, end_seq DESC LIMIT 1`
 
 	// endingsStatement is a conversation's other ended turns, the newest
-	// first, and endingsCountStatement how many there are. AN END'S
-	// POSITION IS UNIQUE among the rows that hold one, so it alone orders
-	// them, and the conversation's index serves the order.
+	// first, and endingsCountStatement how many there are. An end's position
+	// is unique, so it alone orders them, served by the conversation's index.
 	endingsStatement = `SELECT ` + sessionColumns + `
 		FROM executor_sessions INDEXED BY ` + conversationIdx + `
 		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
@@ -739,18 +628,15 @@ func checkSeat(handle, conversationKey string) error {
 type SessionRead struct {
 	Session Session
 
-	// Head is the head of the row's conversation as the same read saw it —
-	// the turn whose session that conversation's next turn would continue —
-	// empty where the conversation has none, or the row has no conversation:
-	// so whether the row is its conversation's head is decided from the
-	// snapshot the row was read in, never from a second read.
+	// Head is the head turn of the row's conversation as the same read saw
+	// it, empty where there is none: decided in the row's snapshot, never by
+	// a second read.
 	Head string
 
 	// Position is the checkpoint the row was read at, and Complete the
-	// read's own word on whether a record this node could not decode may be
-	// missing from it — which a point read the ladder served never is: such
-	// a record covering the turn refuses the read instead. Carried as the
-	// read reported it rather than stated here, so the two cannot disagree.
+	// read's own word on whether an undecodable record may be missing (never
+	// for a point read the ladder served: such a record refuses it), carried
+	// as reported so the two cannot disagree.
 	Position statelog.Position
 	Complete bool
 }
@@ -759,10 +645,9 @@ type SessionRead struct {
 // read: what a relaunch of the turn reads to continue its own session, and a
 // person's view of one session. A turn with no row is [ErrNotFound].
 //
-// ITS SCOPE IS READ OFF THE ROW, inside the answer's own transaction, because
-// only the row says which conversation the turn is in; a turn this node holds
-// no row of reads over its whole seat, since a capture this node could not
-// decode is exactly a row it does not hold.
+// Its scope is read off the row, in the answer's own transaction, since only
+// the row names the turn's conversation; a turn with no row here reads over its
+// whole seat, since an undecodable capture is exactly a row this node lacks.
 func (r *Reader) Session(ctx context.Context, handle, turn string,
 	fresh statelog.Freshness) (SessionRead, error) {
 
@@ -811,9 +696,8 @@ func (r *Reader) Session(ctx context.Context, handle, turn string,
 // ([Reader.Head]'s own), or "" where the conversation has none. A row with no
 // conversation names none, and is not keyed.
 //
-// ONE SEEK PER CONVERSATION, in the caller's transaction, after its rows are
-// read: never a head chosen among the rows in hand, since the head of a
-// conversation a page shows one turn of may be on no page at all.
+// One seek per conversation, in the caller's transaction: never a head chosen
+// among the rows in hand, since a conversation's head may be on no page.
 func headsOf(ctx context.Context, tx *sql.Tx, handle string, sessions []Session) (map[string]string, error) {
 	var out map[string]string
 	for _, s := range sessions {
@@ -866,11 +750,9 @@ const pageStatement = `SELECT ` + sessionColumns + `, first_seq
 // (empty for the first page), at the level fresh asks for: the seat's sessions
 // as a read surface and a seat's own search list them.
 //
-// PAGED BY WHERE EACH ROW BEGAN, the position of the record that first wrote
-// it, which nothing moves: every other position on a row moves with its next
-// capture, its end or a release of its object, and a page cursor over one of
-// those would skip a row that moved past it between two pages and repeat one
-// that moved back.
+// Paged by where each row began, which nothing moves: every other position on a
+// row moves with a capture, its end or a release, and a cursor over one would
+// skip or repeat a row that moved between two pages.
 func (r *Reader) Sessions(ctx context.Context, handle, cursor string, limit int,
 	fresh statelog.Freshness) (Page, error) {
 
@@ -988,17 +870,14 @@ type heldTurn struct{ handle, turn string }
 
 // Expired nominates at most limit things last touched at or before cutoff, the
 // longest untouched first: turns whose row or (row-less) tombstone is that old,
-// and removed seats whose removal is. It is the retention duty's listing, and
-// reads this node's copy at `stale`: it only nominates, and every delete is
-// decided again in its own snapshot and at the apply.
+// and removed seats whose removal is. The retention duty's listing, it reads
+// at `stale`: it only nominates, and every delete is decided again in its own
+// snapshot and at the apply.
 //
-// A ROW A LIVE TURN HOLDS AS ITS BASE IS LEFT OUT, however old: its delete
+// A row a live turn holds as its base is left out, however old: its delete
 // would be refused ([expiredIn]), and listed it would fill the duty's page on
-// every pass while it holds, so the rows past it would never be reached. The
-// holds are read in the listing's own transaction, and the rows asked for as
-// many more as there are holds, so a page the held rows would fill still holds
-// limit of the rest — decided here row by row rather than by a subquery of the
-// listing's statement.
+// every pass while it holds. The holds are read in the same transaction and the
+// rows over-fetched by their count, so a page still holds limit of the rest.
 func (r *Reader) Expired(ctx context.Context, cutoff time.Time, limit int) ([]Expiry, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -1127,10 +1006,9 @@ const handlesStatement = `
 // asks for: what a seat's retirement matches the departed seat against when
 // its record has lost the seat's handle.
 //
-// AN ANSWER THAT MAY BE MISSING A SEAT IS AN ERROR ([ErrIncomplete]), never a
-// shorter list: this node holding a record it could not decode may be holding
-// exactly the departed seat's rows, and a retirement that matched against what
-// is left would remove nothing and say it was done.
+// An answer that may be missing a seat is [ErrIncomplete], never a shorter
+// list: an undecodable record may hold exactly the departed seat's rows, and a
+// retirement matched against the rest would remove nothing and say it was done.
 func (r *Reader) Handles(ctx context.Context, fresh statelog.Freshness) ([]string, error) {
 	var out []string
 	answer, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
@@ -1161,12 +1039,10 @@ func (r *Reader) Handles(ctx context.Context, fresh statelog.Freshness) ([]strin
 // SealedCount is how many sessions sit sealed under each keyring key: what a
 // keyring rotation waits out before it drops an old key.
 //
-// WAITED OUT, NEVER MOVED: a session's object is sealed once, by the capture
-// that uploaded it, and leaves only with its row — absorbed by a later turn's
-// end, released past the seat's budget, or deleted past the retention. So a
-// rotation keeps the old key on the ring until this count under it reaches
-// zero; dropped sooner, those sessions read as [ErrUnreadable] and their next
-// turns start fresh.
+// Waited out, never moved: an object is sealed once, by the capture that
+// uploaded it, and leaves only with its row. So a rotation keeps the old key
+// until its count reaches zero; dropped sooner, those sessions read as
+// [ErrUnreadable] and their next turns start fresh.
 type SealedCount struct {
 	Values secrets.KeyCounts `json:"values,omitempty"`
 }

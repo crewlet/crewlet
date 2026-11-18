@@ -24,7 +24,7 @@ import (
 // ---- the trimmed record — ADR-0080 ------------------------------------ //
 
 // trimmedEnv is the probe domain's trimmed record naming floor, written by
-// node-a — the probe's envelope IS the framework's, so this is
+// node-a: the probe's envelope is the framework's, so this is
 // [statelog.TrimmedEnvelope] verbatim.
 func trimmedEnv(floor statelog.Position) statelog.Envelope {
 	return statelog.TrimmedEnvelope(floor, "node-a")
@@ -206,9 +206,9 @@ func TestATrimmedRecordRemovesOnlyTheAnchorsBelowItsFloor(t *testing.T) {
 	}
 }
 
-// A TRIMMED RECORD REMOVES AT MOST ITS BOUND, LOWEST FIRST — so one record never
-// holds every node's only writer for a backlog's length, and which anchors one
-// removes is the same on every node holding the same table.
+// A TRIMMED RECORD REMOVES AT MOST ITS BOUND, LOWEST FIRST, so one record never
+// holds every node's only writer for a backlog's length, and every node holding
+// the same table removes the same anchors.
 func TestATrimmedRecordRemovesAtMostItsBoundLowestFirst(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -309,10 +309,10 @@ func TestATrimmedRecordThatNamesNoFloorFaults(t *testing.T) {
 	}
 }
 
-// THE UNHELD TAIL STEPS OVER A TRIMMED RECORD, as it steps over a barrier: it
-// writes no domain row and carries no operation id, so no ledger could ever
-// say these rows hold it — and a reanchor of a restored log would refuse over
-// a record that wrote nothing until an operator discarded it.
+// THE UNHELD TAIL STEPS OVER A TRIMMED RECORD, as over a barrier: it writes no
+// domain row and carries no operation id, so no ledger could say these rows
+// hold it, and a reanchor of a restored log would refuse over it until an
+// operator discarded it.
 func TestTheUnheldTailStepsOverATrimmedRecord(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
@@ -398,10 +398,9 @@ type sweepRunner struct {
 	deadlines []time.Time
 
 	// slow is how long the applier takes to reach a position it has not
-	// committed: a wait for one succeeds that long after it began, unless
-	// its context ends first — or whatever its context says, where late,
-	// an applier whose answer arrives after the wait's deadline. Zero
-	// reaches it at once.
+	// committed: a wait succeeds that long after it began unless its context
+	// ends first, or, with late, whatever its context says (an answer after
+	// the wait's deadline). Zero reaches it at once.
 	slow time.Duration
 	late bool
 }
@@ -496,9 +495,9 @@ func sweepDeps(t testing.TB, estate store.ReplicatedHandle, log *sweepLog) state
 const noBound = time.Hour
 
 // sweep counts the anchors deps' copy holds below floor and appends the
-// records they call for — the two steps the engine's trim takes — counting
-// under a context bounded by budget, as the engine counts every log under the
-// deadline their sweeps share, and appending within budget.
+// records they call for, as the engine's trim does: counting under a context
+// bounded by budget (the deadline every log's sweep shares) and appending
+// within budget.
 func sweep(t testing.TB, deps statelog.SweepDeps, floor statelog.Position,
 	budget time.Duration) (statelog.Swept, error) {
 
@@ -513,9 +512,8 @@ func sweep(t testing.TB, deps statelog.SweepDeps, floor statelog.Position,
 }
 
 // THE TRIM APPENDS ONE TRIMMED RECORD PER BOUND OF ANCHORS BELOW THE FLOOR, AT
-// MOST ITS CAP, AND NONE WHEN THERE ARE NONE — so an idle fleet's log gains
-// nothing, and a backlog drains over the ticks that follow without waiting for
-// another purge.
+// MOST ITS CAP, AND NONE WHEN THERE ARE NONE, so an idle fleet's log gains
+// nothing and a backlog drains over the following ticks without another purge.
 func TestASweepAppendsOneRecordPerBoundAndNoneWhenNothingIsBelow(t *testing.T) {
 	t.Parallel()
 	floor := statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}
@@ -760,9 +758,8 @@ func TestASweepWhoseCommitWaitFailsStopsWithWhatItAppended(t *testing.T) {
 }
 
 // A SWEEP COUNTS ONLY FROM A COPY THAT HAS APPLIED THE WHOLE LOG. Counted from a
-// copy behind the records already on the log — its own last sweep's, or the
-// last duty holder's — it would append them again, every tick it stayed
-// behind, for records that remove nothing anywhere else.
+// copy behind records already on the log (its own last sweep's, or the last
+// duty holder's), it would append them again every tick it stayed behind.
 func TestASweepFromACopyBehindTheLogAppendsNothing(t *testing.T) {
 	t.Parallel()
 	estate := sweepEstate(t)
@@ -783,10 +780,10 @@ func TestASweepFromACopyBehindTheLogAppendsNothing(t *testing.T) {
 }
 
 // EVERY WAIT THE SWEEP MAKES IS BOUNDED BY THE RESOLVE BUDGET, the bound a write
-// waits for its own applier by: the trim's tick has other logs to sweep, and a
-// node whose applier cannot reach what it just appended has a fault that
-// waiting does not fix. And by the caller's bound where that is shorter — the
-// plan's context, the sweep's budget — so no wait outlasts either.
+// waits for its own applier by: the trim's tick has other logs to sweep, and an
+// applier that cannot reach what was just appended has a fault waiting does not
+// fix. And by the caller's bound where shorter (the plan's context, the sweep's
+// budget), so no wait outlasts either.
 func TestEveryWaitASweepMakesIsBounded(t *testing.T) {
 	t.Parallel()
 	for _, budget := range []time.Duration{time.Hour, statelog.DefaultResolveBudget / 2} {
@@ -816,23 +813,15 @@ func TestEveryWaitASweepMakesIsBounded(t *testing.T) {
 }
 
 // A SWEEP STOPS APPENDING ONCE ITS BUDGET IS SPENT, and answers what it appended
-// with no error — the designed stop, whose remainder the next sweep counts.
+// with no error: the designed stop, whose remainder the next sweep counts.
 //
-// On an applier that is slow but still moving, every wait succeeds inside the
-// resolve budget, so pacing alone would hold the sweep's caller for the cap
-// times each wait: the engine's trim, on the goroutine that also evaluates the
-// holder's alarms. Here a record takes a fifth of the budget to apply and the
-// backlog is twenty records, so a sweep held to its budget appends a handful
-// and one held to its cap all twenty. EVERY WAIT ENDS AT ONE DEADLINE, the
-// sweep's, so no wait outlasts it whatever the resolve budget allows.
-//
-// THE BUDGET BOUNDS THE APPENDS ALONE: the count of five thousand anchors is
-// PlanSweep's, under the caller's context, and over before the budget begins.
-// It is still SECONDS, with a record a fifth of it, so the store work each
-// record does beside its apply — under the race detector, beside this
-// package's other parallel cases — stays a small share of a record, and a
-// stall of a scheduler's making cannot spend the budget before the first
-// record lands.
+// On a slow but moving applier every wait succeeds inside the resolve budget,
+// so pacing alone would hold the engine's trim (on the goroutine that also
+// evaluates the holder's alarms) for the cap times each wait. EVERY WAIT ENDS
+// AT ONE DEADLINE, the sweep's. THE BUDGET BOUNDS THE APPENDS ALONE: counting
+// is PlanSweep's, under the caller's context. Seconds of budget with a record
+// a fifth of it keep each record's store work (under race, beside parallel
+// cases) a small share, so scheduler stalls cannot spend the budget first.
 func TestASweepStopsAppendingOnceItsBudgetIsSpent(t *testing.T) {
 	t.Parallel()
 	const records = 20
@@ -877,10 +866,9 @@ func TestASweepStopsAppendingOnceItsBudgetIsSpent(t *testing.T) {
 }
 
 // NO RECORD IS APPENDED ONCE THE BUDGET IS SPENT, even after a wait that
-// succeeded: an applier whose answer arrives as the budget runs out has
-// committed the record before, and the next record would still begin past the
-// budget. On a log that keeps a gate reserve the admission would refuse it;
-// on one that keeps none, nothing between the wait and the append would.
+// succeeded: an applier answering as the budget runs out has committed the
+// record before, and the next would begin past the budget. A log keeping a
+// gate reserve would refuse its admission; on one keeping none, nothing would.
 func TestASweepAppendsNoRecordPastItsBudget(t *testing.T) {
 	t.Parallel()
 	for name, domain := range map[string]statelog.Domain{

@@ -16,13 +16,11 @@ import (
 
 // ---- a log that diverged from the rows -------------------------------- //
 //
-// A broker restored from an older copy keeps its stream, creation instant and
-// all. A node whose rows are newer than the copy sees its checkpoint past the
-// log's end — until anything writes the restored log past that checkpoint,
-// when the end is an ordinary end again and nothing observable about it
-// separates the log from the history the node applied. What does is the
-// RECORD at the checkpoint's sequence: the checkpoint names it, and another
-// record there is a second history these rows must never be applied on top of.
+// A broker restored from an older copy keeps its stream and creation instant;
+// once it is written past a newer node's checkpoint its end looks ordinary, and
+// only the RECORD at the checkpoint's sequence, which the checkpoint names,
+// separates it: another record there is a second history these rows must never
+// be applied on top of.
 
 // otherHistory is the broker instant of a record written to a restored log after
 // the restore — at a sequence a node had already consumed a different record at.
@@ -73,9 +71,8 @@ func TestACheckpointNamesTheRecordItStandsOn(t *testing.T) {
 		t.Fatalf("the checkpoint at 3 names the record stored at %s, want the one "+
 			"consumed there, %s", got, probeStoredAt(3))
 	}
-	// REDELIVERIES ONLY: the checkpoint does not move, and neither does the
-	// record it names — the run commits nothing past it, so what it names
-	// is still the record consumed at 3, never the run's own tail or none.
+	// REDELIVERIES ONLY: the checkpoint and the record it names stay at the
+	// one consumed at 3, never the run's own tail or none.
 	h.fetch.offer(2, env(2, "edit", "2", "op-2", 1))
 	h.fetch.offer(3, env(3, "edit", "3", "op-3", 1))
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
@@ -105,12 +102,11 @@ func TestACheckpointNamesTheRecordItStandsOn(t *testing.T) {
 
 // A RESTORED LOG WRITTEN PAST A RUNNING NODE'S CHECKPOINT IS NEVER APPLIED.
 //
-// The node saw its checkpoint past the restored log's end and refused; then a
-// node whose rows were not ahead wrote the log past it. The end reaching the
-// checkpoint again used to clear the refusal and the loop went on applying the
-// other history on top of these rows. Now the loop verifies the record at the
-// checkpoint before it applies anything past it, finds another one, and stops
-// — and the verdict does not clear on any later reading of the end.
+// The node refused its checkpoint past the restored log's end; then a peer
+// whose rows were not ahead wrote the log past it. The end reaching the
+// checkpoint again must not let that history through: the loop verifies the
+// record at the checkpoint before applying past it, stops, and no later
+// reading of the end clears the verdict.
 func TestARestoredLogWrittenPastTheCheckpointIsNeverApplied(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
@@ -118,8 +114,8 @@ func TestARestoredLogWrittenPastTheCheckpointIsNeverApplied(t *testing.T) {
 	stance := h.runner.Stance()
 
 	// ONE LOOP, RUNNING ACROSS THE RESTORE: its start verified the checkpoint
-	// against a log that was still its own history, so nothing but the
-	// reading below leaves it owing another look.
+	// against its own history, so only the reading below leaves it owing
+	// another look.
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	errs := make(chan error, 1)
@@ -171,9 +167,8 @@ func TestARestoredLogWrittenPastTheCheckpointIsNeverApplied(t *testing.T) {
 	}
 
 	// STICKY: no reading of the end clears it, and a re-run over the same
-	// rows stops at once — even one whose own reading of the log comes from
-	// a member that does not reach the checkpoint, and so could not find the
-	// divergence again for itself.
+	// rows stops at once, even reading from a member that does not reach the
+	// checkpoint and so could not find the divergence itself.
 	h.runner.ObserveEnd(stance, 10)
 	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrLogDiverged) {
 		t.Fatal("a later reading of the end cleared the divergence")
@@ -216,10 +211,10 @@ func TestAStaleEndThatCatchesUpOnTheSameRecordResumes(t *testing.T) {
 
 // A BOOT ON A LOG ALREADY WRITTEN PAST THE CHECKPOINT STOPS BEFORE APPLYING.
 //
-// The embedded broker runs in the engine's process, so bringing its store back
-// IS a restart — and a node that booted after a peer had written the restored
-// log past its rows never saw its checkpoint past any end at all. The loop's
-// start verifies the record at the checkpoint before it fetches a thing.
+// The embedded broker runs in the engine's process, so restoring its store IS
+// a restart, and a node booting after a peer wrote the restored log past its
+// rows never sees its checkpoint past any end. The loop's start verifies the
+// record at the checkpoint before it fetches.
 func TestABootOnALogAlreadyWrittenPastTheCheckpointStopsBeforeApplying(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
@@ -245,10 +240,9 @@ func TestABootOnALogAlreadyWrittenPastTheCheckpointStopsBeforeApplying(t *testin
 
 // A BOOT ON A LOG WRITTEN EXACTLY TO THE CHECKPOINT REFUSES AT ONCE.
 //
-// Nothing past the checkpoint is delivered, so a loop that waited for the first
-// record to verify before would sit idle over rows the log diverged from, and
-// every read and write would be answered from them until the heartbeat looked.
-// Its start verifies instead.
+// Nothing past the checkpoint is delivered, so a loop that verified only before
+// its first record would serve every read and write from diverged rows until
+// the heartbeat looked. Its start verifies instead.
 func TestABootOnALogWrittenExactlyToTheCheckpointRefusesAtOnce(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
@@ -269,9 +263,9 @@ func TestABootOnALogWrittenExactlyToTheCheckpointRefusesAtOnce(t *testing.T) {
 
 // A LOG WRITTEN EXACTLY TO THE CHECKPOINT IS FOUND WITHOUT A RECORD PAST IT.
 //
-// Nothing past the checkpoint means nothing for the loop to verify before, so
-// the verification the heartbeat asks every interval is what finds it — once:
-// a line written on every beat would bury the one that matters.
+// With nothing past the checkpoint for the loop to verify before, the
+// heartbeat's verification finds it, once: a line on every beat would bury the
+// one that matters.
 func TestALogWrittenExactlyToTheCheckpointIsFoundByTheHeartbeat(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
@@ -301,10 +295,9 @@ func TestALogWrittenExactlyToTheCheckpointIsFoundByTheHeartbeat(t *testing.T) {
 
 // A FETCH THAT FAILED IS FOLLOWED BY A VERIFICATION.
 //
-// A broker restored under a RUNNING node takes the node's consumer with it, so
-// the loop sees a failed fetch — and whatever it is handed past the checkpoint
-// afterwards may be the other history, whether or not any reading ever found
-// the end below the checkpoint.
+// A broker restored under a RUNNING node takes its consumer with it, so the
+// loop sees a failed fetch, and whatever follows past the checkpoint may be the
+// other history whether or not any reading found the end below it.
 func TestAFetchThatFailedIsFollowedByAVerification(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
@@ -315,9 +308,8 @@ func TestAFetchThatFailedIsFollowedByAVerification(t *testing.T) {
 	errs := make(chan error, 1)
 	fetched := h.fetch.fetchCount()
 	go func() { errs <- h.runner.Run(ctx) }()
-	// THE LOOP IS FETCHING, so its start has verified the checkpoint
-	// against the log as it was, and only the failure below can leave it
-	// owing another look.
+	// THE LOOP IS FETCHING, so its start has verified the checkpoint, and
+	// only the failure below can leave it owing another look.
 	for h.fetch.fetchCount() <= fetched && ctx.Err() == nil {
 		time.Sleep(time.Millisecond)
 	}
@@ -345,11 +337,10 @@ func TestAFetchThatFailedIsFollowedByAVerification(t *testing.T) {
 
 // A REANCHOR ENDS THE DIVERGENCE, AND A JOIN THAT REPLACED NOTHING DOES NOT.
 //
-// The reanchor's checkpoint names the log's own record, so the rows and the log
-// are one history again from there. A join that installed a donor's rows moves
-// the checkpoint and is judged again by the loop; one that installed nothing
-// leaves the rows the log diverged from — and clearing the verdict there would
-// let a write through before the loop had looked again.
+// The reanchor's checkpoint names the log's own record, so rows and log are one
+// history again. A join that installed a donor's rows moves the checkpoint and
+// the loop judges it afresh; one that installed nothing leaves the diverged
+// rows, and clearing the verdict there would let a write through first.
 func TestAReanchorEndsTheDivergenceAndAJoinThatReplacedNothingDoesNot(t *testing.T) {
 	t.Parallel()
 	live := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
@@ -415,13 +406,11 @@ func TestAReanchorEndsTheDivergenceAndAJoinThatReplacedNothingDoesNot(t *testing
 // THE VERDICT IS KEPT IN THE NODE'S OWN FILE, AND NOTHING ELSE IS ACCEPTED IN
 // ITS PLACE.
 //
-// [TestADivergenceSurvivesARestartAfterTheLogLosesItsRecord] is what the node's
-// file buys; this is what stops another file being handed as it. The
-// replicated estate reads and writes exactly as the node's file does, carries
-// none of the verdict's table, and is replaced by an adoption — at the moment
-// the verdict has to be judged against what replaced it. Its handle cannot be
-// handed at all, which the build refuses; its database answers Estate like the
-// node's, so the runner refuses that.
+// [TestADivergenceSurvivesARestartAfterTheLogLosesItsRecord] is what the
+// node's file buys; this stops the replicated estate, which lacks the verdict's
+// table and which an adoption replaces, being handed as it. Its handle fails
+// the build; its database satisfies the interface, so the runner refuses it on
+// what Estate answers.
 func TestOnlyTheNodesOwnFileIsTheRunnersNodeEstate(t *testing.T) {
 	t.Parallel()
 	node := reflect.TypeFor[statelog.NodeEstate]()
@@ -463,14 +452,11 @@ func TestOnlyTheNodesOwnFileIsTheRunnersNodeEstate(t *testing.T) {
 // A CHECKPOINT A REANCHOR PLACED WHERE THE LOG HELD NO RECORD IS COMPARED WITH
 // NOTHING — AND IS UNREACHED PAST THE LOG'S END, EXACTLY AS A NAMED ONE IS.
 //
-// A reanchor names the log's own record at the checkpoint it places, and none
-// where the log holds none there: below a rebuilt stream's first record, or at
-// a sequence it skipped. There is nothing on the log to compare such a
-// checkpoint with, so it is settled, and the first batch the node commits
-// names its own record. But a log whose end is below it is the reading the
-// loop refuses on whatever the checkpoint names, or a member that has not
-// caught up would have its records applied past a checkpoint it does not
-// reach.
+// A reanchor names no record where the log holds none (below a rebuilt
+// stream's first record, or a skipped sequence), so the checkpoint is settled
+// and the first batch committed names its own record. An end below it is
+// still refused, or a member that has not caught up would have its records
+// applied past a checkpoint it does not reach.
 func TestACheckpointThatNamesNoRecordIsComparedWithNothing(t *testing.T) {
 	t.Parallel()
 	live := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
@@ -481,9 +467,8 @@ func TestACheckpointThatNamesNoRecordIsComparedWithNothing(t *testing.T) {
 		e.Gen = at.Generation
 		h.fetch.offer(6, e)
 	}
-	// THE ROW THE REANCHOR COMMITS — naming no record, since the log holds
-	// none at its sequence — and a runner built over it, as the node that
-	// restarts after it builds one.
+	// THE ROW THE REANCHOR COMMITS, naming no record, and a runner built
+	// over it as a restarted node builds one.
 	reanchored := func(t *testing.T) *applyHarness {
 		t.Helper()
 		h := appliedThrough(t, 3)
@@ -539,7 +524,7 @@ func TestACheckpointThatNamesNoRecordIsComparedWithNothing(t *testing.T) {
 				"(at %s) — a checkpoint naming nothing is unreached there exactly "+
 				"as a named one is", h.runner.Committed())
 		}
-		// AND ONCE THE END REACHES IT, the loop goes on — over the record
+		// AND ONCE THE END REACHES IT, the loop goes on over the record
 		// redelivered, since the first run never acknowledged it.
 		h.fetch.endAt(6)
 		next(h)
@@ -548,11 +533,10 @@ func TestACheckpointThatNamesNoRecordIsComparedWithNothing(t *testing.T) {
 		}
 	})
 
-	// A REDELIVERY AT THE CHECKPOINT NAMES NOTHING: a record arriving at the
-	// reanchor's own sequence is what a broker restored from a copy that
-	// held one there redelivers, whichever history that is — and naming the
-	// checkpoint by it would adopt that history's record as the one this
-	// node consumed, so every comparison after it would read settled.
+	// A REDELIVERY AT THE CHECKPOINT NAMES NOTHING: a restored broker
+	// redelivers whichever history it holds there, and naming the checkpoint
+	// by it would adopt that record as the one this node consumed, so every
+	// later comparison would read settled.
 	t.Run("a redelivery at its sequence names nothing", func(t *testing.T) {
 		t.Parallel()
 		h := reanchored(t)
@@ -636,14 +620,10 @@ func TestAPeersTruncationIsTheRunnersWriteFenceNotItsIdentity(t *testing.T) {
 
 // A RUNNER STANDS AT ITS CHECKPOINT FROM THE MOMENT IT IS BUILT.
 //
-// A runner built at its checkpoint's generation alone stood at sequence 0
-// until its loop had loaded the row. The first heartbeat of a boot published
-// that zero to the fleet — a node past a restored log's end, or diverged from
-// it, looked to every peer like one at the very beginning — and a verification
-// of the checkpoint's record, which the heartbeat runs whether or not the loop
-// has, compared nothing, because a zero sequence names no record. Built at the
-// whole checkpoint and the record it names, it answers both before its loop
-// has run at all.
+// The heartbeat publishes its position and verifies the checkpoint's record
+// before the loop loads the row; at sequence 0 a node past a restored log's
+// end, or diverged from it, would look like one at the beginning, and the
+// verification would compare nothing, since a zero sequence names no record.
 func TestARunnerStandsAtItsCheckpointBeforeItsLoopRuns(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
@@ -681,15 +661,11 @@ func TestARunnerStandsAtItsCheckpointBeforeItsLoopRuns(t *testing.T) {
 
 // A DIVERGENCE SURVIVES A RESTART AFTER THE LOG HAS LOST THE RECORD IT WAS FOUND BY.
 //
-// The verdict was only ever in memory, and the comparison that re-derives it
-// needs the log to still hold a record at the checkpoint's sequence. Once that
-// record is gone — the node was evicted and the trim stopped counting it, a
-// stream was purged by hand, a broker restored again from an older copy — a
-// restarted node had nothing to compare, found its log replayable from its
-// checkpoint, and applied the other history on top of its rows. It is recorded
-// in the node estate when it is reached, and a runner standing at the same
-// checkpoint recalls it: the loop stops before it applies anything, and a
-// verification the boot runs — with no loop yet — refuses on it too.
+// Comparing again needs a record at the checkpoint's sequence, which an
+// eviction the trim stopped counting, a hand purge or an older restore can
+// remove. The verdict is recorded in the node estate, and a runner at the same
+// checkpoint recalls it: the loop stops before applying anything, and the
+// boot's verification, with no loop yet, refuses on it too.
 func TestADivergenceSurvivesARestartAfterTheLogLosesItsRecord(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
@@ -720,8 +696,8 @@ func TestADivergenceSurvivesARestartAfterTheLogLosesItsRecord(t *testing.T) {
 		t.Fatalf("the checkpoint moved to %s, want it held at %s", got, at)
 	}
 
-	// AND THE BOOT'S OWN VERIFICATION, before any loop has run, refuses on it:
-	// that is what stands between a write and these rows until the loop does.
+	// AND THE BOOT'S OWN VERIFICATION refuses on it: it stands between a
+	// write and these rows until the loop runs.
 	restart()
 	if established, err := h.runner.VerifyCheckpoint(t.Context()); err != nil || !established {
 		t.Fatalf("a fresh runner's VerifyCheckpoint = (%v, %v), want the recalled "+
@@ -736,11 +712,10 @@ func TestADivergenceSurvivesARestartAfterTheLogLosesItsRecord(t *testing.T) {
 
 // A CHECKPOINT MOVED BY A REANCHOR OR AN ADOPTION ENDS A RECORDED DIVERGENCE.
 //
-// The record is about the rows it was found against, and those two are what
-// replace them: a reanchor moves the checkpoint into a new generation, and an
-// adoption installs a checkpoint naming the log's own record. A runner standing
-// at such a checkpoint applies what follows it, and the record is gone — while
-// one standing at the SAME checkpoint, a join that replaced nothing, keeps it.
+// Those two replace the rows it was found against (a reanchor moves the
+// checkpoint into a new generation, an adoption installs one naming the log's
+// own record), so the runner applies what follows and the row is gone; a join
+// that replaced nothing, at the SAME checkpoint, keeps it.
 func TestAMovedCheckpointEndsARecordedDivergence(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -799,14 +774,11 @@ func TestAMovedCheckpointEndsARecordedDivergence(t *testing.T) {
 
 // A TRUNCATION READING IS JUDGED AGAINST THE ROWS IT WAS ABOUT.
 //
-// The heartbeat reads the register, the log and the runner, and its verdict
-// reaches the runner a few broker round trips later. A reading taken before a
-// reanchor, handed over after it, set the write fence of a node whose rows now
-// head a generation of their own; one taken before a join, handed over after,
-// could clear a fence the rows still needed. And a join that adopted rows into
-// another generation left a truncation about the old one refusing every write
-// until a beat judged the new — while one into the same generation keeps it,
-// since the peers and the log it compared are the ones those rows are on.
+// The heartbeat's verdict reaches the runner broker round trips after its
+// reading, so a reading from before a reanchor or a join must not set or clear
+// the fence after it. A join into another generation ends a truncation about
+// the old one; one into the same generation keeps it, since the peers and the
+// log it compared are the ones those rows are on.
 func TestATruncationReadingIsJudgedAgainstTheRowsItWasAbout(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)

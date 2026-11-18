@@ -16,18 +16,14 @@ type countingEvents struct{ n int }
 
 func (c *countingEvents) Emit(context.Context, events.Payload) { c.n++ }
 
-// A WRITE WHOSE OUTCOME IS UNKNOWN IS NOT ANNOUNCED, AND NEITHER IS ONE THAT
-// FAILED.
+// A WRITE WHOSE OUTCOME IS UNKNOWN IS NOT ANNOUNCED, NOR ONE THAT FAILED:
+// `unknown` may or may not be on the log (the applier's `iam_history` row
+// settles it), and a live row claiming a change that did not happen would be
+// the feed's one false line. `pending` IS announced: it is durable at its
+// position and every node will apply it.
 //
-// `unknown` means the record may or may not be on the log; the `iam_history`
-// row the applier writes is what settles it. A live row claiming a change that
-// did not happen would be the one false line in the feed. `pending` IS
-// announced, because a pending record is durable at its position and every node
-// will apply it.
-//
-// Internal because no broker can be made to answer `unknown` on demand, and the
-// rule is the writer's, not the broker's. Mutation: drop the outcome check and
-// the unknown case announces.
+// Internal: no broker answers `unknown` on demand, and the rule is the
+// writer's. Mutation: drop the outcome check and the unknown case announces.
 func TestOnlyALandedWriteIsAnnounced(t *testing.T) {
 	t.Parallel()
 	row := types.IAMSessionGenerationBumped{Generation: 1}
@@ -58,11 +54,10 @@ func TestOnlyALandedWriteIsAnnounced(t *testing.T) {
 }
 
 // THE DELTA IS A SET DIFFERENCE OF THE EXPANDED SETS, SORTED, so two nodes
-// describing one write describe it byte for byte — a duplicate in a stored set
-// does not make one permission into two rows, and an app an administrator
-// already held through admin is no change when a save spells it out. Taking
-// admin away removes admin and every app it carried that the new row does not
-// list. Mutation: diff the raw rows and the spelled-out app reads as added.
+// describe one write byte for byte: a stored duplicate is not two rows, an app
+// an administrator held through admin is no change when spelled out, and
+// taking admin away removes admin and every app it carried not kept. Mutation:
+// diff the raw rows and the spelled-out app reads as added.
 func TestAGrantDeltaIsSortedAndDeduplicated(t *testing.T) {
 	t.Parallel()
 	added, removed := grantDelta(
@@ -79,8 +74,8 @@ func TestAGrantDeltaIsSortedAndDeduplicated(t *testing.T) {
 		append([]iam.Grant{iam.GrantAdmin}, iam.Apps...)); a != nil || r != nil {
 		t.Errorf("spelling out the apps admin includes is %v / %v, want nothing", a, r)
 	}
-	// EVERY APP BUT THE ONE KEPT, read off the vocabulary so an app added to
-	// it is counted here with no second edit.
+	// EVERY APP BUT THE ONE KEPT, read off the vocabulary so a new app counts
+	// here with no second edit.
 	notKept := []string{string(iam.GrantAdmin)}
 	for _, app := range iam.Apps {
 		if app != iam.GrantDoclet {
