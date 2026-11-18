@@ -250,7 +250,7 @@ var rowInventory = map[string]int{
 	"agent/phase":                           611,
 	"agent/prefetch":                        3613,
 	"agent/prompts":                         14448,
-	"agent/runner":                          34252,
+	"agent/runner":                          34248,
 	"agent/runner/steersourcetest":          1172,
 	"agent/skills":                          797,
 	"agent/skillsync":                       822,

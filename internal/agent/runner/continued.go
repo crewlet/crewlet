@@ -311,9 +311,9 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	// known to hold its job's brief, which told the notes the session it
 	// continued lacked, and no record says which those were (internal/sandbox's
 	// notesHeld states none it holds). AND OF ONE WHOSE NOTES STOP BEFORE A READ
-	// MARKED UNANSWERED, every note past that, as notes it may already show
-	// ([Runner.notesHeldBy]): the session lacks that note, and holds the
-	// answered ones after it.
+	// MARKED UNANSWERED OR RESTARTED, every note past that, as notes it may
+	// already show ([Runner.notesHeldBy]): the session lacks that note, and
+	// holds the answered ones after it.
 	var unheld []string
 	if holds.lacks() {
 		after = append(after, r.toldNotes(r.readsSince(0), true, fresh)...)
@@ -1858,7 +1858,7 @@ func (r *Runner) readsSince(cursor int) []steer.Read {
 // the session may hold one of them, and the rest after it, plainly.
 //
 // WHICH IT MAY HOLD: every one of reads, where unsure says so — a session cut
-// off, or one whose notes stop before a read the record marks unanswered — and
+// off, or one whose notes stop before a read no session of its job holds — and
 // every note the run's bridge served a harness ([Resume.Served]), read since or
 // waiting still: a note is recorded served before its harness can deliver it,
 // and read only once the harness confirms it did, so a harness cut off between

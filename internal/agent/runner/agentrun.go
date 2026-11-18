@@ -238,7 +238,7 @@ type Continuation struct {
 	// calls it holds does not stand, the reads its job's brief counted
 	// without listing them ([Resume.Owed]) and the calls the round's log took
 	// late, which no copy is known to hold ([Runner.inPlaceAfter]), and the
-	// notes from a read the record marks unanswered on; and the notes
+	// notes from a read no session of its job holds on; and the notes
 	// [AgentRunRequest.Notes] carries, which no copy has read — a served one
 	// told as a note it may already show ([Runner.inPlaceNotes]). The floor of a
 	// launch that continues the copy counts all of it: beside the copy's
@@ -877,7 +877,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// not known to have ended its own run, after every note the turn has
 	// read, which such a copy may lack ([Runner.inPlaceNotes]): a copy whose
 	// harness ended its own run holds every note it read, and its brief's,
-	// but a read its record marks unanswered.
+	// but a read its record marks unanswered or restarted.
 	fresh := r.steerBrief(ctx)
 	system, user := r.executorPrompt(ctx, "", history, built, fresh)
 	// ITS TOOL SKILLS HANDED AGAIN, as every launch hands them: the box's
@@ -1594,8 +1594,8 @@ func argsUnknown(call ledger.Call) toolloop.ArgsUnknown {
 //
 // NEVER A READ MARKED UNANSWERED (steer.Reading.Unanswered): its take's write
 // landed and its answer never reached the job's harness, so the job did not read
-// it, whatever the record's read says — the turn's later phases carry it, and
-// the record of the step that never handed it over does not list it.
+// it — the turn's later phases carry it. A restarted read is listed: the job's
+// harness took the note at that step, and only a later restart dropped it.
 func runReads(reads []steer.Read, iteration int) []types.PhaseSteer {
 	var out []types.PhaseSteer
 	for _, read := range reads {
