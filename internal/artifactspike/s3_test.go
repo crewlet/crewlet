@@ -10,23 +10,15 @@ import (
 )
 
 // SPIKE S3: a 64 MiB publish streamed out of a sandbox through the engine's
-// transfer leg ([artifactupload.Service.Transfer]) into the object store.
-//
-// It reports the wall time from the intent to the last byte stored, the rate,
-// how much of the object store's own pace allowance ([objstore.PaceFor]) that
-// was, how far the heap rose while it ran, and where it stood once the
-// broker's caches had expired. The heap is the PROCESS's, and the embedded
-// broker's members run in it as they do in a node (the default deployment):
-// on the three-member arm it is three members' worth.
-//
-// The `nats` arms run on the embedded broker (one member, then three). The
-// `s3` arm runs against a real S3 endpoint named in the environment, because
-// an in-process fake measures the fake: start the reference SeaweedFS
-// (`docker compose --profile s3 up -d --wait`, then create the bucket) and set
-// CREWLET_SPIKE_S3_ENDPOINT, CREWLET_SPIKE_S3_BUCKET and, where the store
-// checks them, CREWLET_SPIKE_S3_ACCESS_KEY_ID and
-// CREWLET_SPIKE_S3_SECRET_ACCESS_KEY. Its objects are left under the
-// `crewlet-spike/` prefix.
+// transfer leg ([artifactupload.Service.Transfer]) into the object store. It
+// reports wall time, rate, its share of the object store's pace allowance
+// ([objstore.PaceFor]), the PROCESS's heap rise and where it stood once the
+// broker's caches expired. The `nats` arms run on the embedded broker (one
+// member, then three). The `s3` arm needs a real S3 endpoint, since an
+// in-process fake measures the fake: start the reference SeaweedFS (`docker
+// compose --profile s3 up -d --wait`, create the bucket) and set
+// CREWLET_SPIKE_S3_ENDPOINT, _BUCKET and, where the store checks them,
+// _ACCESS_KEY_ID and _SECRET_ACCESS_KEY.
 //
 // Run: go test -run '^$' -bench S3 -benchtime 1x ./internal/artifactspike
 

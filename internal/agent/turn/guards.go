@@ -68,11 +68,10 @@ func ArtifactHash(text string) string {
 // looping without making progress and is terminated as failed rather than
 // spending its remaining iterations re-deriving the same output.
 //
-// The threshold is a CONSTANT, not a knob. It was a field the loop's settings
-// were meant to fill and never did, so every turn ran on the fallback anyway —
-// and the value is not an operator preference: two identical rounds is the
-// earliest point at which "unchanged" is a fact rather than a single sample,
-// and the round cap already bounds how long a turn that IS changing may run.
+// The threshold is a CONSTANT, not a knob: it is no operator preference. Two
+// identical rounds is the earliest point at which "unchanged" is a fact rather
+// than a single sample, and the round cap already bounds a turn that IS
+// changing.
 type StallDetector struct {
 	history []string
 }

@@ -11,17 +11,15 @@ import (
 // NO CODE ROW ADMITS EVERYBODY, AND GITLET OPENS NOTHING BUT CODE (ADR-0110).
 //
 // Reaching a repository takes the gitlet app through every door, so every verb
-// about the company's code — the dotted route verbs, every code tool, the
-// inbox's code marks — names the app, refused at the table before any
-// repository is read, or is admin's (who read a repository, the Gitlet nodes'
-// caches), and admin includes the app. A code verb added later as
-// [authz.ClassEverybody], as all of them were before, would be the one door
-// the grant does not close; this walk names it. The verbs are found by their
-// names, `code.` and `code_`, which every one of them carries, and the walk
-// fails if it finds too few to mean anything. The other half holds the app to
-// code alone: a row outside it naming gitlet would open something else to
-// whoever is given code. Mutation: put code.git back on ClassEverybody and the
-// first half goes red; name gitlet on a Worklet row and the second does.
+// about the company's code (dotted route verbs, code tools, the inbox's code
+// marks) names the app, refused before any repository is read, or is admin's,
+// which includes the app. A code verb added as [authz.ClassEverybody] would
+// be the one door the grant does not close; this walk names it. Verbs are
+// found by their `code.` and `code_` names, and the walk fails if it finds
+// too few. The other half holds the app to code alone: a row outside it
+// naming gitlet would open something else to whoever is given code.
+// Mutation: put code.git back on ClassEverybody and the first half goes red;
+// name gitlet on a Worklet row and the second does.
 func TestNoCodeRowAdmitsEverybody(t *testing.T) {
 	t.Parallel()
 	walked := 0

@@ -1202,11 +1202,9 @@ func TestConcurrentChildrenCannotOvershootTheSlice(t *testing.T) {
 	// that window opens, because it can block.
 	//
 	// THE GATE OPENS ONCE TWO CHARGES ARE HELD AT IT, never after a sleep: the
-	// window is open only while two are, and a sleep, which this replaced,
-	// let a loaded runner bring the children to the gate after it opened, one
-	// at a time, so the case checked nothing it was written for. Two always
-	// come — the round that fits and the one that crosses the slice — and with
-	// the check apart from the record every child makes its call and comes.
+	// window is open only while two are, and a sleep lets a loaded runner
+	// bring the children one at a time. Two always come: the round that fits
+	// and the one that crosses the slice.
 	//
 	// Mutation: record the round on the slice after the parent's charge rather
 	// than with the check (sliceMeter.Spend) — both held children fit, red.
@@ -1480,14 +1478,11 @@ func TestAParentRefusalOutranksTheSlicesOwn(t *testing.T) {
 // A BATCH RUNS AT MOST MAXPARALLEL CHILDREN AT ONCE, AND THAT MANY TOGETHER.
 //
 // THE CHILDREN MEET INSIDE THEIR MODEL CALLS: each waits there until
-// MaxParallel of them are inside at once, so a cap that lets them run together
-// is seen to, whatever the runner's load. A sleep in each, which this replaced,
-// overlapped them only if the second child came through its harness run's setup
-// while the first still slept; on a loaded race runner it did not, and a cap
-// working as it should read as one that serialises. The wait is bounded by the
-// child's own task timeout, a hang guard and never a measurement: the first
-// child to reach it alone gives the meeting up for every child after it, so a
-// batch that never runs MaxParallel together fails here rather than hangs.
+// MaxParallel of them are inside at once, whatever the runner's load (a sleep
+// overlaps them only if setup is fast). The wait is bounded by the child's own
+// task timeout, a hang guard and never a measurement: the first child to reach
+// it alone gives the meeting up for every child after it, so a batch that never
+// runs MaxParallel together fails here rather than hangs.
 //
 // Mutations: MaxParallel 1, or runGraph running its wave's tasks one after
 // another — the children never meet, red.
@@ -1594,12 +1589,10 @@ func TestAChildBeyondMaxParallelSaysItNeverStarted(t *testing.T) {
 	// rather than as the race it is; twelve runs make it a fact.
 	//
 	// THE CALL IS ENDED BY THE CASE, once the first child is inside its model
-	// call, and not by a wall-clock cap. With a 20 ms cap, a loaded runner
-	// had the first child still dialling its harness session at the deadline:
-	// the dial failed on that same instant and freed the slot a moment before
-	// the context's own timer fired, so the waiting child passed the re-check
-	// and started. Ended here, the call is over strictly before the child
-	// ahead can return, which is the ordering the property is about.
+	// call, not by a wall-clock cap: a cap can fire while the first child is
+	// still dialling, whose failed dial then frees the slot before the
+	// context ends, so the waiting child starts. Ended here, the call is over
+	// strictly before the child ahead can return, the ordering under test.
 	const runs = 12
 	for range runs {
 		w := newWorld(t)
@@ -2378,13 +2371,11 @@ func TestASkipIsNotReclassifiedByADeadline(t *testing.T) {
 	// retry-unchanged failure) instead of naming the chain that broke.
 	//
 	// THE CASE ENDS THE CALL, with the cap's own cause, once the hung
-	// task's model is asked, and neither configured cap ever decides. A
-	// 50 ms cap covered the harness starting and dialling its tool session
-	// as well as the hang, and a loaded runner spent all of it before the
-	// model was reached: the dial failed with `i/o timeout`, the task was
-	// `failed` rather than `timed_out`, and a healthy build went red. The
-	// cause is what every status is read from, so ending the call with it
-	// is classified exactly as the cap's own timer firing is.
+	// task's model is asked, and neither configured cap ever decides: a short
+	// cap also covers harness start and dial, which a loaded runner can spend
+	// entirely, so the task reads `failed` rather than `timed_out`. Every
+	// status is read from the cause, so this classifies exactly as the cap's
+	// own timer firing does.
 	cfg.Limits.TaskTimeout = 10 * time.Second
 	cfg.Limits.CallTimeout = 10 * time.Second
 

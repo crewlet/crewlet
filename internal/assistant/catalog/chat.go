@@ -26,47 +26,28 @@ import (
 
 // THE COMPANY'S OWN CHAT: the reads that draw it as the chat screen does
 // ([chatReads]), and the writes a person makes in a room, each executing as
-// the chat gesture the dashboard's own controls send on the act route, so a
-// message the assistant prepared and one the person typed are one code path.
+// the chat gesture the dashboard's controls send on the act route, so one
+// code path serves a prepared message and a typed one.
 //
-// A CHAT GESTURE IS A CALL, NOT A RESOURCE. The generic change can show what a
-// call sends and nothing more: never which room an id names, who reads it,
-// whom a membership list leaves out or which words an edit replaces. So every
-// gesture whose effect turns on what the room or the message holds now is a
-// write of its own here, and its preview reads the room
-// (`GET /chatlet/channels/{channel_id}`) or the message through the turn's grant,
-// as the person (ADR-0051):
+// A CHAT GESTURE IS A CALL, NOT A RESOURCE. The generic change cannot show
+// which room an id names, who reads it, whom a membership list leaves out or
+// which words an edit replaces. So a gesture whose effect turns on what the
+// room or message holds is a write of its own, its preview reading the room
+// (`GET /chatlet/channels/{channel_id}`) or message as the person (ADR-0051).
+// The other gestures touch only what their call names, so the generic card
+// shows all of them.
+
+// A chat write names the room as people do and who will read it; binds the
+// room as shown or the message's position (NOT the room's `revision`, which
+// every message moves) so a stale approval is refused; states a membership
+// whole, refusing a removal not named in `removes` (ADR-0055); and is
+// destructive ([wire.RiskDestructive]) when it takes something away. People
+// are named by handle or seat name ([Tool.Names]); a member the chart no
+// longer lists is kept as the room holds them ([DirMember]).
 //
-//   - it names the room as people do, and who will read it once the write
-//     lands: the whole company for a room anybody may read, and its members
-//     by name for one only they may (D09);
-//   - it binds the room as the card shows it, or the message's position, so
-//     an approval after somebody changed either is refused as stale and
-//     prepared again against what is there now. NOT THE ROOM'S OWN
-//     `revision`: every message said in the room moves that, so a change
-//     bound to it would go stale whenever anybody spoke;
-//   - a membership is stated whole, which is where a member is dropped by
-//     being forgotten, and in a private room that is who may read it: the
-//     card shows who is added and who is removed, and a removal the call does
-//     not name in `removes` refuses the step (ADR-0055);
-//   - a change that takes something away (a message taken down, a member
-//     taken out of a room) is destructive ([wire.RiskDestructive]), and its
-//     summary says what goes, as the generic change's does.
-//
-// The people a write names are seats, by handle or by seat name ([Tool.Names]):
-// the turn resolves a name to its handle before the preview reads anything,
-// and a member the chart no longer lists is kept as the room holds them
-// ([DirMember]).
-//
-// The other gestures (a reaction, joining a room, making one, opening a
-// conversation before anything is said in it, marking rooms read) touch only
-// what their own call names, so the generic change's card, the call as sent
-// and titled by its tool, shows the whole of what they do.
-//
-// EVERY TEXT A CHAT CARD SHOWS PASSES redact.Secrets, as the generic change's
-// rows do: a room is where a credential gets pasted, and taking such a message
-// down is one of these writes, so its card must not copy the credential into
-// the conversation's record.
+// EVERY TEXT A CHAT CARD SHOWS PASSES redact.Secrets: a room is where a
+// credential gets pasted, and taking such a message down must not copy it
+// into the conversation's record.
 
 // The reads of one room (internal/api's named reads): the room and a thread in
 // it, which a chat write's preview reads too, and its transcript.
@@ -130,29 +111,17 @@ var chatWakes = fmt.Sprintf("Who a message wakes: an agent it names with @handle
 var chatApp = []iam.Grant{iam.GrantChatlet}
 
 // chatReads are the chat reads, each one of chat's questions carded as the
-// chat screen draws it: a room by its name, a speaker by the seat's name, a
-// message by what it says, never a room's id or the log's bookkeeping. Each
-// card opens the chat screen at its room where it is about one, and the
-// mentions and the search their own screens.
+// chat screen draws it: a room by name, a speaker by seat name, never an id.
 //
-// A ROOM IS NAMED AS PEOPLE WRITE IT. Every read about one room takes it by
-// its name ("#launch") as well as its id, which the room's questions resolve
-// by the one rule every surface reads a typed room by: the rail lists only
-// the rooms somebody is in, and a name reaches every room they may read. Its
-// step and its card's title say where the read is ([Tool.Room]): "in #launch"
-// where the call wrote the name, and where it gave an id, the room as the
-// turn reads it through the person's grant, a direct conversation by the
-// people in it ("with Ada Lovelace"), which is all one has to be named by.
-// So two conversations read by their ids are two reads to the person, never
-// one drawn twice.
+// A ROOM IS NAMED AS PEOPLE WRITE IT. A read about one room takes its name
+// ("#launch") or id, resolved by the one rule every surface reads a typed room
+// by (a name reaches every readable room, the rail only joined ones). The step
+// and card title say where the read is ([Tool.Room]): "in #launch" for a name;
+// for an id, the room as read through the person's grant, a direct
+// conversation by its people. So two conversations read by id are two reads.
 //
-// A READ IS ONE PAGE, as every read in the catalogue is (ADR-0061): the
-// newest messages or mentions, a thread from its first reply, at most a
-// limit, and the card says when more lie past it. None takes a cursor. A
-// page past the first would be a second read titled as the first, which the
-// drawer takes for the same read and keeps only once; older words are found
-// by what they say (search_chat), and the room's screen, which every card
-// about one room opens, reads all of it.
+// A READ IS ONE PAGE (ADR-0061), with no cursor: a later page would be a
+// second read titled as the first, which the drawer keeps only once.
 func chatReads() []Tool {
 	room := text("The room, by its name as people write it (#launch) or by its id.", nameBytes)
 	return []Tool{

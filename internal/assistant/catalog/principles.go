@@ -22,19 +22,14 @@ import (
 // THE COMPANY'S PRINCIPLES: its mission, vision and standing policies, the one
 // part of the company document the assistant reaches (ADR-0052's exception).
 //
-// ONE RESOURCE, ONE WRITE PATH. The read and the write are the routes Company
-// › Principles itself sends (`GET` and `PUT /config/charter`), decided by
-// verbs of their own (`config.principles.read` and `.write`), so an approved
-// change is the same request, under the same rules, refusals and step-up, as
-// the person's own Save. Nothing else of the document is named here or
-// reachable through it.
+// ONE RESOURCE, ONE WRITE PATH. The read and write are the routes Company ›
+// Principles sends (`GET` and `PUT /config/charter`), under verbs of their own
+// (`config.principles.read` and `.write`), so an approval is the person's own
+// Save. Nothing else of the document is reachable through it.
 //
-// A CHANGE IS THE WHOLE OF EACH PART IT NAMES. The call names the parts it
-// changes (the mission, the vision, the policies), each replaced whole; the
-// preview reads the principles as they are now and fills in every part the
-// call leaves out, so the request the approval sends states all three, as the
-// route requires, and keeps what the call did not mean to touch exactly as it
-// is.
+// A CHANGE IS THE WHOLE OF EACH PART IT NAMES: each named part (mission,
+// vision, policies) is replaced whole, and the preview fills in every part the
+// call leaves out from the current principles, as the route requires all three.
 
 // The principles' two routes.
 const (

@@ -2,17 +2,16 @@ package slideformat
 
 // ---- themes --------------------------------------------------------------- //
 //
-// A THEME IS A DECK'S LOOK AS DATA: the grounds, inks, accent and typefaces
-// every layout is drawn with. A deck begun from the engine's starter names its
-// theme in `deck.json` (`theme`), so a slide added later is drawn in the same
-// look as the slides it joins. The theme is only a name the index carries: the
-// slides themselves hold their styles inline, as every deck's do, so a deck
-// reads the same whether or not anything knows its theme, and a deck written
-// by hand or by an agent, which names none, is no less a deck.
+// A theme is a deck's look as data: the grounds, inks, accent and typefaces
+// every layout is drawn with. A starter deck names its theme in `deck.json`
+// (`theme`), so a later slide is drawn in the same look. The index carries only
+// the name: slides hold their styles inline, so a deck reads the same whether
+// or not anything knows its theme, and a hand- or agent-written deck naming
+// none is no less a deck.
 //
-// Every colour here is a slide's own content, painted on the 1920 by 1080
-// stage, never the dashboard's chrome: a slide sets its own background so it
-// reads the same in every theme of the product around it.
+// Every colour is a slide's own content, painted on the 1920 by 1080 stage,
+// never the dashboard's chrome: a slide sets its own background so it reads
+// the same in every theme of the product around it.
 
 // Theme is one look a starter deck is drawn in.
 type Theme struct {

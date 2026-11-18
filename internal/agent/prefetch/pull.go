@@ -13,46 +13,29 @@ import (
 
 // The PULL side of the same two searches the turn-start prefetch pushes.
 //
-// Both blocks this file exposes are the prefetch's own, re-run on demand: the
-// vector recall behind `## Similar prior work`, and the auxiliary relevance
-// filter behind `## Personal memory`. They are here rather than
-// reimplemented in a builtin because a second implementation of "which of this
-// seat's memories bear on this text" is a second answer to it, and the two
-// would drift in exactly the direction nobody looks — the tool would quietly
-// stop matching the block the model was shown at turn start.
+// Both blocks are the prefetch's own, re-run on demand (`## Similar prior work`
+// and `## Personal memory`); a second implementation would drift from the
+// block shown at turn start.
 //
 // # Why a pull exists at all
 //
-// The push happens once, against the TRIGGER, and a thin trigger — "PR #42 got
-// a comment" — is a pointer with no content: a similarity search against it
-// returns the seat's most recent work rather than its most relevant, so both
-// blocks deliberately render a hint instead. The hint tells the executor to
-// look again once recon has made the task real. Without these two methods
-// there was nothing for it to look with: `query_episodes` read recency and
-// `refresh_memory` dumped the newest notes, so the documented escape hatch for
-// the exact case the gate exists for was advertised and absent.
+// The push runs once against the trigger, and a thin one ("PR #42 got a
+// comment") is a pointer: similarity against it returns recent work, so both
+// blocks render a hint telling the executor to look again after recon. These
+// methods are what it looks with.
 
 // RecallEpisodes returns the seat's past turns most similar to text.
 //
-// NO FALLBACK TO RECENCY, matching the block: episode recall's whole claim is
-// "this resembles what you are doing now", the three most recent turns carry
-// no such claim, and an executor told they are similar work treats them as
-// precedent.
+// No fallback to recency, as in the block: recent turns read as precedent.
 //
-// THREE ANSWERS, never two: a search (no hits is "nothing that could be
-// searched resembles this"), [ErrNoSimilarity] for a company with no
-// embeddings, and an error wrapping [ErrSimilarityFailed] for a search that
-// could not run — an embedder that refused or did not answer inside
-// [EmbedBudget], or an episode store that could not be read. The last two used
-// to be one: every embed failure answered "no embeddings are configured",
-// which sent a model away from a search that would have answered on the next
-// call.
-//
-// AND WHAT IT COULD NOT SEARCH: the search counts the seat's turns with no
-// vector of the query's model ([learning.EpisodeSearch.Unsearched]) — after a
-// model change, until the holder's fill has reached them, that is most of a
-// seat's history — because "nothing similar" over a history nobody searched
-// told a seat its work was new.
+// Three answers, never two: a search (no hits means nothing searched
+// resembles this), [ErrNoSimilarity] for a company with no embeddings, and an
+// error wrapping [ErrSimilarityFailed] for a search that could not run (the
+// embedder refused or missed [EmbedBudget], or the store is unreadable);
+// conflating those sent a model away from a search that would answer next call.
+// It also counts turns with no vector of the query's model
+// ([learning.EpisodeSearch.Unsearched]): "nothing similar" over an unsearched
+// history said its work was new.
 func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) (learning.EpisodeSearch, error) {
 	if f == nil || f.src.Episodes == nil || seat == nil || seat.Handle() == "" {
 		return learning.EpisodeSearch{}, fmt.Errorf("%w: this node holds no episode store for the seat", ErrSimilarityFailed)
@@ -85,23 +68,14 @@ func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text strin
 
 // RecallMemories re-runs the personal-memory filter against a hint.
 //
-// The SAME candidate pool and the SAME filter as the block: similarity union
-// recency, judged by the auxiliary model. And the same refusal to fall back —
-// when the filter is unavailable or its answer is unparseable the result is
-// empty, because "the most recent eight" would leak a memory about one person
-// into a turn about another, which is the failure the filter exists to
-// prevent.
+// The same pool, filter and refusal to fall back as the block: a failed filter
+// gives empty, since "the most recent eight" would leak a memory about one
+// person into another's turn. With the turn's senders, which the per-subject
+// rule cannot judge "party to the task" without.
 //
-// WITH THE TURN'S SENDERS, which the block's own request carries: the filter's
-// per-subject rule — a preference about somebody not party to the task does
-// not apply — has nothing to judge "party to the task" by without them, and a
-// re-filter built without them was a filter that could not tell the person
-// asking from anybody else.
-//
-// AND WITH THE TURN'S ATTRIBUTION (aux): the filter's call is the turn's own
-// cost, spent mid-turn on its behalf, so it is filed under the turn and its
-// tally like the turn-start filter's — a re-filter attributed to nothing would
-// be refused by the seam, and the tool would find nothing it could recall.
+// With the turn's attribution (aux): the call is the turn's cost, filed under
+// the turn and its tally like the turn-start filter's; unattributed, the seam
+// refuses it and the tool recalls nothing.
 func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string,
 	senders []learning.Subject, aux auxspend.Use,
 ) ([]learning.DiaryEntry, error) {

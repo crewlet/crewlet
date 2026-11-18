@@ -28,37 +28,20 @@ import (
 // DEEP WORK (ADR-0054): a turn that hands its task to a harness running its
 // own harness, whose only way into Crewlet is this turn's own surface.
 //
-// # One step, and every call it makes is the turn's
-//
 // A run is ONE STEP of the turn: [catalog.StartDeepWorkTool], whose frame is
 // re-sent as the run progresses ([wire.StepEvent.Deep]). Every Crewlet call the
 // run makes arrives over the engine's bridge at [deepBridge], which executes
-// it through a [surface] of this very turn, so it is the person's request
-// under the turn's read grant, drawn as a step nested under the run's
-// ([wire.StepEvent.Parent]) and recorded like any other; a write becomes the
-// same proposal quick mode makes. The bridge adds nothing to what a call may
-// do: it only refuses more of them (past the run's step cap, or once a change
-// waits for the person) and keeps the turn's start_deep_work tool from the run.
-//
-// # Suspending around an approval
-//
-// A proposal cannot suspend a vendor's loop the way it suspends the engine's,
-// so the run is told its change is waiting and to end; its box and its harness
-// session are kept ([DeepWork.Keep]) and the turn parks on the run's step with
-// the box named on the parked record. The person's decision resumes the turn,
-// which continues the run in the same box and session with the decision as
-// its next message ([turn.continueDeep]), and only the run's end answers the
-// step. A turn that ends parked any other way discards the box.
-//
-// # Its limits
-//
-// A run's wall clock is its config's, never past the turn's read grant (every
-// call it makes is sent on that grant); its Crewlet calls and its harness's rounds
-// are capped by its steps, and its tokens by its token cap, all three counted
-// across the continuations of one task. Its tokens are charged to the turn's
-// meter when it ends, and a Stop of the turn kills it.
+// it through a [surface] of this very turn: the person's request under the
+// turn's read grant, drawn as a step nested under the run's
+// ([wire.StepEvent.Parent]); a write becomes the same proposal quick mode
+// makes. The bridge only refuses more (past the run's step cap, or once a
+// change waits for the person) and keeps start_deep_work from the run.
 
-// errDeepTimeout ends a run at its wall clock.
+// errDeepTimeout ends a run at its wall clock, which is its config's, never
+// past the turn's read grant (every call it makes is sent on that grant). Its
+// Crewlet calls and harness rounds are capped by its steps and its tokens by
+// its token cap, counted across a task's continuations; tokens are charged to
+// the turn's meter when it ends, and a Stop of the turn kills it.
 var errDeepTimeout = errors.New("assistant: the deep-work run reached its time limit")
 
 // DeepMinRun is the least time a run is started with: one minute, enough for a
@@ -78,6 +61,14 @@ const deepShowEvery = time.Second
 
 // deepState is a turn's deep work: what a segment hands a run, and the run in
 // flight.
+//
+// A proposal cannot suspend a vendor's loop as it suspends the engine's, so
+// the run is told its change is waiting and to end; its box and harness
+// session are kept ([DeepWork.Keep]) and the turn parks on the run's step with
+// the box named on the parked record. The person's decision resumes the turn,
+// continuing the run in the same box and session with the decision as its next
+// message ([turn.continueDeep]); only the run's end answers the step. A turn
+// that ends parked any other way discards the box.
 type deepState struct {
 	// parent is the index of the deep step whose run is in flight; every
 	// step made while it is set nests under it. Under the turn's mu.

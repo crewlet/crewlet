@@ -15,18 +15,14 @@ import (
 //
 // # Searched live, never indexed
 //
-// There is no local copy and no embedding step. The knowledge base is
-// queried at turn time, so the block always reflects what the page says
-// now — which is the whole reason procedural knowledge lives in a wiki
-// rather than in the engine. The engine's contribution is searching it on
-// the agent's behalf, so an executor sees the runbook without having to think
-// to go and look.
+// No local copy and no embedding step: the knowledge base is queried at turn
+// time, so the block reflects what the page says now, and an executor sees the
+// runbook without thinking to look.
 //
 // # An auxiliary model writes the query
 //
-// A model is a far better search-query writer than raw trigger text: it
-// distils keywords, keeps identifiers verbatim, and drops the conversational
-// filler that makes a full-text search match nothing. One call per turn.
+// A model distils keywords, keeps identifiers verbatim and drops the filler
+// that makes a full-text search match nothing. One call per turn.
 
 const (
 	// AuxTimeout bounds one auxiliary call.
@@ -208,17 +204,13 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 
 // knowledgeQuery asks the auxiliary model for a search query.
 //
-// WRITTEN FROM WHAT THE TURN WAS ASKED ([Request.Ask]), not from the brief the
-// executor is handed: the brief wraps a chat message in scaffolding that is
-// the same on every turn of that surface — the seat's handle, the collectives,
-// a role group in the triage — and a query writer handed the brief is handed
-// those as candidate search terms beside the one sentence the turn is about,
-// as it was handed the worked examples the triage carried then (a new hire
-// welcomed, a ticket opened for an engineer).
+// Written from what the turn was asked ([Request.Ask]), not the executor's
+// brief: the brief's per-surface scaffolding (the seat's handle, collectives,
+// a role group) would be handed over as candidate search terms.
 //
-// THE TASK ARRIVES FENCED, under a token minted for this call ([Ask]), rather
-// than in quotes: the query decides which pages the seat is shown, and a quote
-// is a delimiter the task can close.
+// The task arrives fenced under a token minted for this call ([Ask]), not in
+// quotes: the query decides which pages the seat is shown, and a quote is a
+// delimiter the task can close.
 func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
 	answer, ok := f.auxCall(ctx, r, types.AuxKnowledgeQuery, knowledgeQuerySystemPrompt,
 		"Task the agent is about to work on:\n"+r.Ask.For(provenance.NewBoundary())+

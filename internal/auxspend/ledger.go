@@ -93,19 +93,12 @@ type bucket struct {
 // [coalesce.FlushInterval] off the caller's path, a refused one kept sealed
 // for the next flush, up to [coalesce.MaxPending].
 //
-// FIFTEEN SECONDS, the usage domain's cadence, which is also the cadence the
-// live budget meters are pushed on, so the live rollup's auxiliary spend
-// trails the meter above it by at most one of the meter's own refreshes, and a
-// named window trails the counter by at most two cadences — this flush, and
-// the usage publisher's tick that derives the day the record landed in. A
-// turn's own buckets are flushed before its end and before its reflection
-// pass's sentinel ([Ledger.FlushTurn]), so a turn's page does not wait for the
-// timer; the timer is what the background and operator stages rely on, and the
-// safety net under a flush that was refused.
+// FIFTEEN SECONDS, the usage domain's and the live meters' cadence, so a named
+// window trails the counter by at most two. A turn's buckets are flushed before
+// its end and its reflection pass's sentinel ([Ledger.FlushTurn]).
 //
-// SAFE FOR CONCURRENT USE: every auxiliary call on the node adds to it, and a
-// flush may run on the timer, at a turn's end and at the stop at once. A
-// publish never runs under its lock, so a slow broker holds up no call.
+// SAFE FOR CONCURRENT USE: a flush may run on the timer, at a turn's end and at
+// the stop at once. A publish never runs under its lock.
 type Ledger struct {
 	l *coalesce.Ledger[key, bucket]
 }

@@ -73,18 +73,16 @@ func rounds(n int) []ledger.Iteration {
 }
 
 // A STATE PAST ITS SHARE GIVES UP ITS CLOSED ROUNDS' PAYLOADS, AND NOTHING ELSE.
-// Three closed rounds of two hundred heavy calls weigh several times a parked
-// state's share of the row; condensed, the state fits, and every call keeps
-// its name, its identity and its outcome, every round its intent and the
-// calls its record dropped, and the turn its own context — its task, and how
-// its conversation's earlier turns ended, at their bound — while an argument
-// body, and a failed call's error, are left out with the marker that says so
-// beside the identifiers that stay.
+// Three closed rounds of two hundred heavy calls weigh several times a state's
+// share; condensed, the state fits, and every call keeps its name, identity and
+// outcome, every round its intent and the calls its record dropped, and the
+// turn its task and endings, while an argument body and a failed call's error
+// are left out with the marker that says so beside the identifiers that stay.
 //
 // Mutation: condense a call's identity or its round's tally away, and a later
-// segment's call log under-counts; skip the arguments' tier, and the rounds'
-// calls are folded away for want of it; cut the turn's endings to make room,
-// and a resumed turn is told its conversation's earlier turns short.
+// call log under-counts; skip the arguments' tier, and calls are folded away
+// for want of it; cut the endings to make room, and a resumed turn is told its
+// conversation's earlier turns short.
 func TestAStatePastItsShareGivesUpItsClosedRoundsPayloads(t *testing.T) {
 	t.Parallel()
 	state := worst()
@@ -193,23 +191,17 @@ func postRounds(n int) []ledger.Iteration {
 }
 
 // A STATE WHOSE CLOSED ROUNDS' CALLS OUTGROW ITS SHARE FOLDS THEM INTO THEIR
-// TALLIES. A turn's rounds have no ceiling, and many rounds of two hundred calls
-// are past a parked state's share once every payload is gone, though the turn's
-// own context is small: so each closed round's calls are folded into its tally
-// of the calls its record does not list — by identity while that fits, so a
-// resumed call log still seeds each exactly, and by tool past that — every
-// call and every failure counted, rather than the park refused as a turn whose
-// own context is too large, which it is not. AND EVERY OUTCOME NOBODY KNOWS
-// counted apart from the failures (ledger.Elided.Unfinished): each round's
-// first call, and its last — a retry of an earlier call's very arguments — were
-// still in flight as its collection read them, and a tally that counted them as
-// failures alone would tell the next round they did nothing.
+// TALLIES. Many rounds of two hundred calls pass a state's share once every
+// payload is gone: so each round's calls are folded into its tally of unlisted
+// calls, by identity while that fits (a resumed call log still seeds each
+// exactly) and by tool past that, every call and failure counted, rather than
+// the park refused. An outcome nobody knows is counted apart from failures
+// (ledger.Elided.Unfinished): counted as failures alone, a call still in flight
+// at collection would tell the next round it did nothing.
 //
-// Mutation: refuse the state once its tallies are folded, and a turn of many
-// rounds can no longer park; drop a call rather than tally it, or its failure,
-// and a resumed call log or a delivery check counts fewer than the round made;
-// fold an unknown outcome as a failure alone, by identity or by tool, and the
-// round reads as one whose call did nothing.
+// Mutation: refuse the state once tallies are folded, drop a call or failure
+// rather than tally it, or fold an unknown outcome as a failure alone, and a
+// long turn cannot park, a log under-counts, or a round reads as doing nothing.
 func TestAStateWhoseClosedRoundsCallsOutgrowItsShareFoldsThemIntoTheirTallies(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -381,22 +373,17 @@ func tallyOf(tally []ledger.Elided, name string) (calls, failed, unfinished int,
 }
 
 // A STATE WHOSE CLOSED ROUNDS OUTGROW ITS SHARE DROPS WHOLE ROUNDS FROM THE
-// MIDDLE. A turn of four hundred rounds is past the share however far each
-// round's payloads are condensed, though its own context is small: every
-// round's intent, text and review cut to the last of their openings still
-// weighs some kilobytes. So the park keeps the first round and as many of the
-// newest as fit, and folds the rounds between into one span
-// (ledger.Iteration.Through) — as few as fit, so a share with room for two
-// more rounds folds fewer — which keeps their calls by tool, every call and
-// failure counted under its tool's name, so a reply a dropped round posted is
-// still the turn's, and the artifact hash of the last of them. Nothing of their
-// prose. The park is never refused for rounds it can drop.
+// MIDDLE. Four hundred rounds pass the share however far payloads are
+// condensed. So the park keeps the first round and as many of the newest as
+// fit, and folds those between into one span (ledger.Iteration.Through), as
+// few as fit, keeping their calls by tool (so a dropped round's reply is still
+// the turn's) and the last one's artifact hash, nothing of their prose. It is
+// never refused for rounds it can drop.
 //
-// Mutation: refuse the state past its prose, and a turn that ran long can no
-// longer park; fold the whole middle whatever fits, and the newest rounds go
-// for nothing; fold a tool's name away, and the reply is no longer a delivery;
-// keep the first round's hash on the span, and the stall guard compares the
-// round after it with a round before it.
+// Mutation: refuse the state past its prose, fold the whole middle whatever
+// fits, fold a tool's name away, or keep the first round's hash on the span,
+// and a long turn cannot park, the newest rounds go, the reply is no delivery,
+// or the stall guard compares against a round before the span.
 func TestAStateWhoseClosedRoundsOutgrowItsShareDropsWholeRoundsFromTheMiddle(t *testing.T) {
 	t.Parallel()
 	state := worst()
@@ -470,17 +457,16 @@ func encodedSpan(t *testing.T, state execstate.State, budget int) ledger.Iterati
 
 // A DROPPED SPAN COUNTS EVERY CALL ITS ROUNDS MADE, A SPAN AN EARLIER PARK MADE
 // AMONG THEM. A turn parks on every launch, so a span is carried into the next
-// park and can be folded into a wider one: the new span starts at the old one's
-// first round and counts every call the old one counted — its failures and its
-// unknown outcome apart — beside every call of the rounds folded with it, the
-// calls their work absorbed too, each under its tool's name; and the park says
-// it dropped the rounds it kept whole, never the old span's again. An earlier
-// span folded last keeps standing for every round it did.
+// park and folded into a wider one: the new span starts at the old one's first
+// round and counts every call the old one counted (failures and unknown
+// outcomes apart) beside every call of the rounds folded with it, absorbed
+// calls too, each under its tool's name; the park says it dropped only the
+// rounds it kept whole, never the old span's again.
 //
 // Mutation: count the old span's rounds as dropped again, and the park
-// over-states what it gave up; fold its tallies away, or its absorbed calls,
-// and a resumed call log under-counts; end a span at its last entry's first
-// round, and the rounds an earlier span folded last stood for drop out of it.
+// over-states what it gave up; fold its tallies or absorbed calls away, and a
+// call log under-counts; end a span at its last entry's first round, and the
+// rounds an earlier span stood for drop out of it.
 func TestADroppedSpanCountsEveryCallItsRoundsMade(t *testing.T) {
 	t.Parallel()
 	state := worst()
@@ -665,20 +651,16 @@ func saysParked(t *testing.T, what, got, parked string) {
 }
 
 // EVERY CUT A PARK MAKES SAYS WHAT ITS ROUND WAS PARKED WITH, AND IS COUNTED
-// ONCE. A payload past one tier is cut again at the next, and the marker each
-// cut ends with says how much of how much is not kept on the turn's record: of
-// the payload as its round was parked, never of what the tier before kept of
-// it — an intent of 8 KiB is never said to weigh the 4 its first cut kept. A
-// call's arguments past every tier are the marker of the arguments the call was
-// parked with, their size and their digest. And what the park says it gave up
-// counts each round, and each call, once, however many tiers cut it and however
-// often its tallies were folded.
+// ONCE. A payload past one tier is cut again at the next, and each cut's marker
+// says how much of how much is not kept: of the payload as its round was
+// parked, never of what the tier before kept (an 8 KiB intent is never said to
+// weigh the 4 its first cut kept). Arguments past every tier are the marker of
+// the arguments as parked, their size and digest. What the park says it gave up
+// counts each round and call once, however many tiers or folds touched it.
 //
-// Mutation: cut a tier from what the tier before it kept — a round's text, its
-// intent, its review, or a failed call's error and arguments — and the marker
-// states the first cut's size, or its digest, as the whole; add a tier's count
-// to the one before it, or count a round's tallies once for each fold, and the
-// park says it gave up more than it did.
+// Mutation: cut a tier from what the tier before kept, and the marker states
+// the first cut's size or digest as the whole; add a tier's count to the one
+// before, or count tallies once per fold, and the park over-states its cuts.
 func TestEveryCutAParkMakesSaysWhatItsRoundWasParkedWith(t *testing.T) {
 	t.Parallel()
 	t.Run("a round's produced text, cut twice", func(t *testing.T) {

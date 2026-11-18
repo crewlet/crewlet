@@ -9,17 +9,14 @@ import (
 
 // ledgeredTypes names the inbox trigger types the completion ledger covers.
 //
-// These are the types that RUN A TURN, which is the only work whose
-// duplication costs anything outward-facing — a second Slack reply, a second
-// comment on an issue, a second commit. The informational types are logged and
-// dropped, so recording them would be bookkeeping about nothing.
+// The types that RUN A TURN, the only work whose duplication costs anything
+// outward-facing (a second Slack reply, issue comment or commit). Informational
+// types are logged and dropped.
 //
-// The set is deliberately CLOSED rather than "everything that is not
-// informational". A type absent from it is not refused anywhere; it simply
-// contributes nothing to the work key and is never recorded, so its
-// redeliveries re-run. That is the safe direction for a type whose turn is
-// cheap and the wrong one for a type whose turn is not, which is why adding a
-// new trigger type means adding it here and not merely publishing it.
+// Deliberately CLOSED rather than "everything not informational". A type absent
+// from it is not refused; it contributes nothing to the work key and is never
+// recorded, so its redeliveries re-run: safe for a cheap turn, wrong for a
+// costly one, so a new trigger type must be added here, not merely published.
 var ledgeredTypes = map[string]bool{
 	types.TaskAssigned{}.EventType():         true,
 	types.WorkPickupType:                     true,

@@ -36,24 +36,17 @@ func bounded(t testing.TB) context.Context {
 func newest(t testing.TB) bool { return strings.HasSuffix(t.Name(), "/newest") }
 
 // THE PINS DESCRIBE EVERY METHOD THE CLIENT DECLARES — the floor's proof.
-// Each pinned Chromium's own description of its protocol, /json/protocol,
-// holds every command and event of the inventory in its domain, and every
-// field of its Go parameters and result, by JSON name and recursively through
-// named types, with a JSON type the Go type reads and writes; and what a
-// command sends — its parameters and every object they hold — has a field for
-// each property the protocol requires, never omitempty and never written as
-// null at its zero value, so no declared command is one its browser refuses to
-// read. On the newest arm nothing declared is deprecated, so the client
-// follows the protocol as it moves.
+// Each pin's /json/protocol holds every declared command and event, and every
+// field of its Go parameters and result, by JSON name, recursively, with a JSON
+// type the Go type reads and writes; what a command sends has a field for each
+// required property, never omitempty and never null at zero. On the newest arm
+// nothing declared is deprecated.
 //
-// Mutations: declare a parameter the protocol does not have
-// (createBrowserContext's proxyServerX), type CookiePartitionKey as the
-// string it once was, drop a parameter the protocol requires
-// (Fetch.continueRequest's requestId), tag a required one omitempty
-// (Target.setAutoAttach's autoAttach, or a CookieParam's value inside
-// Storage.setCookies), or declare a required list a plain slice, whose nil is
-// written as null (DOMSnapshot.captureSnapshot's computedStyles as []string),
-// and the pins disagree — red.
+// Mutations: declare a parameter the protocol lacks (createBrowserContext's
+// proxyServerX), type CookiePartitionKey as a string, drop a required
+// parameter (Fetch.continueRequest's requestId), tag a required one omitempty
+// (Target.setAutoAttach's autoAttach), or declare a required list a plain
+// slice (DOMSnapshot.captureSnapshot's computedStyles), and the pins disagree.
 func TestThePinsDescribeEveryMethodTheClientDeclares(t *testing.T) {
 	chromiumtest.Each(t, func(t *testing.T, chrome string) {
 		ep := chromiumtest.LaunchPort(t, chrome)
@@ -302,14 +295,11 @@ func TestAScreenshotSizedMessageCrossesBothTransports(t *testing.T) {
 
 // A PAGE ENDS AT MOST ITS OWN SESSION WITH A MESSAGE PAST THE READ LIMIT, on
 // both transports. Under Runtime.enable, which a binding needs, Chromium sends
-// a page's console lines and calls of the session's bindings unasked, as large
-// as the page makes them. A 40 MiB console line, which no listener can ask
-// for, is dropped: the page's session goes on — a small call of the binding
-// after it, routed after it, is delivered. A 40 MiB call of the binding, whose
-// event a listener of that session asked for, ends that session alone with
-// ErrMessageTooBig: its listener reports it, while the other tab answers and
-// a new one opens on a connection still open. On the newest arm alone: the
-// floor adds nothing to a claim about this client's reader.
+// a page's console lines and binding calls unasked, as large as the page makes
+// them. A 40 MiB console line, which no listener can ask for, is dropped and
+// the session goes on. A 40 MiB binding call a listener asked for ends that
+// session alone with ErrMessageTooBig, while the other tab answers and a new
+// one opens. Newest arm alone: the floor adds nothing for this reader.
 //
 // Mutations: end the connection at a message past ReadLimit, and the console
 // line ends it — red; end the session of an event past ReadLimit nobody asked
@@ -404,57 +394,17 @@ func site(t testing.TB, pages map[string]string, missed chan<- string) *httptest
 }
 
 // AUTO-ATTACH HOLDS EVERY NEW TARGET UNTIL IT IS SET UP, however long its
-// setup takes. A tab opened before the attacher, as a pool's is, opens a page
-// served on one site, which holds a frame of another (an out-of-process frame,
-// with a dedicated worker of its own), starts a dedicated worker, which starts
-// one of its own, a shared worker and a service worker, and opens eight
-// popups, four of the other site and four of its own: with window.open,
-// keeping its opener and with noopener, and with a link's target=_blank, with
-// no opener (a link's default) and with rel=opener. (A shared worker can start
-// no worker: neither pin defines Worker in one.) Once the attacher is on, the
-// case also opens a tab of its own on about:blank, and navigates it once its
-// Setup's answers are in. AutoAttach on the browser gives every target a
-// binding in its Setup, and every target's first statement calls the binding
-// or, had it run before its setup, fetches /missed. The case waits for exactly
-// sixteen reports, one a target, and every one is the binding's; and every
-// target the case's pages and the case started was announced held. These are
-// the kinds AutoAttach's doc says Chromium holds; the one new target it says
-// Chromium does not, a tab created with an address, the case never opens.
-//
-// It runs twice on each pin: with a quick Setup, and with a slow one, every
-// Setup but the opener's taking two seconds before it sends a command, as a
-// Setup on a loaded machine may. A quick Setup can pass with a target
-// released early, as long as its commands still arrive first; a slow one
-// cannot, so the second run is the one that holds the claim whatever the
-// Setup's speed.
-//
-// The filters are the ones a browser's attacher runs: the browser attaches
-// pages and the service and shared workers, each child its frames and
-// workers, so every target is held by one session. The opener is already
-// running when the attacher reaches it, so the attacher never resumes it: a
-// resume of the opener would release the page it is opening (AutoAttach's
-// doc), and the case drives it from its Setup on. It is on about:blank, as a
-// caller's tab never is when it opens a window, since the resume of a held tab
-// sharing its renderer could release the page it opens (AutoAttach's doc):
-// Chromium run as here gives each tab a renderer of its own. A popup with no
-// opener has no renderer while it is held, and answers its Setup's commands
-// only once resumed: every Setup sends them, waiting for none.
-//
-// Mutations: send waitForDebuggerOnStart false, and Chromium announces every
-// target unheld, so the attacher resumes none, and the page the opener opens
-// never runs — red at the case's bound; resume a child whether Chromium holds
-// it or not, and in the slow run the opener's resume releases the page it is
-// opening before its setup, and the page, its frame, the frame's worker, its
-// dedicated worker, that worker's own and the page's first popup run first —
-// red on both pins every time (TestAutoAttachNeverResumesATargetAlreadyRunning
-// holds the attacher to it in a bubble); wait for a Setup's answers before the
-// resume, and the four popups with no opener are never resumed — red at the
-// case's bound; resume a held child before its Setup, and in either run
-// targets run first — red on both pins; turn each child's own auto-attach on
-// without the hold, and the page's dedicated worker, that worker's own and the
-// frame's run before their setups — red on both pins. Resuming a child before
-// Chromium has answered its own auto-attach stayed green here, two runs a pin,
-// so TestAutoAttachResumesATargetOnlyAfterItsSetup holds that order.
+// setup takes. A pre-attacher tab opens a page with a cross-site frame, workers
+// of every kind and eight popups (window.open with and without noopener, links
+// with target=_blank, with and without rel=opener), and the case opens a tab on
+// about:blank. Every Setup adds a binding that each target's first statement
+// calls or, had it run early, fetches /missed: sixteen reports, every target
+// announced held. The slow run (two-second Setups) holds the claim; the running
+// opener is driven from its Setup and never resumed (see hold). Mutations: no
+// waitForDebuggerOnStart, resume of a child not held, wait for Setup's answers
+// before the resume, resume before Setup, or auto-attach without the hold —
+// red. TestAutoAttachResumesATargetOnlyAfterItsSetup holds the one order this
+// case missed: resume before Chromium answered the child's auto-attach.
 func TestAutoAttachHoldsEveryNewTargetUntilItIsSetUp(t *testing.T) {
 	chromiumtest.Each(t, func(t *testing.T, chrome string) {
 		for _, run := range []struct {

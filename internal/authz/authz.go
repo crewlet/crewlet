@@ -6,6 +6,11 @@
 // seat's own tool, the operator MCP and an HTTP route asking about one verb
 // get one answer, because there is one answer to get.
 //
+// A ROW NAMES A CLASS ([Class]) rather than restating its rule: there are
+// dozens of verbs and a few ways to decide one, and a table keyed on the verb
+// alone would state each rule dozens of times and drift on whichever copy was
+// edited.
+//
 // THE VOCABULARY IS ADMIN AND ONE PERMISSION PER APP — ADR-0033, whose
 // authority this package is: see "Admin, and one permission per app" below.
 //
@@ -48,11 +53,19 @@
 // read, and the repository's grant (gitlet.GrantOf, ADR-0088) decides among the
 // holders; who read a repository and the Gitlet nodes' caches stay admin's.
 // A repository and a change are Gitlet's kinds ([AppFor]), so a cross-app
-// answer shows neither to a reader without the app.
+// answer shows neither to a reader without the app. A walk
+// (TestNoCodeRowAdmitsEverybody) holds every `code.` and `code_` verb to the
+// app or to admin.
 //
 // READING THE ATLAS TAKES THE ATLAS PERMISSION: ADR-0127, whose authority this
 // package is too. Every atlas verb names [iam.GrantAtlas], refused here before
 // an entry is read, and an atlas entry is the app's kind ([AppFor]).
+//
+// A SAVED VIEW IS DECIDED TWICE ([ClassSavedView]): a save replaces a view
+// whole by id, so the payload's owner and container are only half of it, and
+// `save_work_view` asks the same verb again on the STORED view's owner and
+// container (worklet.ViewPrior), or anybody who may keep a view could
+// overwrite a project's shared tab or a colleague's personal one.
 //
 // # What it replaces, and what each of those got wrong
 //
@@ -165,8 +178,9 @@
 // exactly the arms it names, and a token holding every permission is refused
 // every such gesture about anybody but its owner.
 //
-// No TOOL A SEAT MAY TAKE asks for a proof (a walk holds that too): a seat has
-// no keyboard. A human-only tool may (code_purge_unreachable): no seat is
+// No TOOL A SEAT MAY TAKE asks for a proof (a walk holds that too, over the
+// verbs a tool asks itself once it has read a row as well as the one its gate
+// asks first): a seat has no keyboard. A human-only tool may (code_purge_unreachable): no seat is
 // offered it, every credential reaching the operator's MCP surface with nobody
 // at a keyboard is fresh by construction, and a person's dashboard session
 // pressing it is answered step_up_required, which the step-up ceremony clears.
@@ -260,6 +274,21 @@
 // somebody woke, every artifact verb it takes is decided again for the person
 // it is acting for, except the edits it makes to its own work
 // ([DecideWithin]).
+//
+// # The table is held against itself and against the tools
+//
+// A VERB WITH NO ROW IS REFUSED, never defaulted ([ReasonUnknownAction]),
+// which is how a new verb ships ungated and looking correct. Walks in this
+// package fail the build on a verb with no rule, a class no verb reaches, a
+// permission nothing asks for, and a dotted verb no non-test call site asks
+// (read off the source with go/ast, so a verb nothing asks cannot sit in the
+// table deciding nothing). They hold the table against ITSELF, which a stale
+// row satisfies perfectly, so two more in internal/agent/builtin hold it
+// against the tools this build registers: every tool has a rule and every
+// rule a tool, and each argument name a row's object is read from is one
+// of that tool's own JSON Schema, since a row naming an argument its tool
+// lacks reads an empty owner on every call and gates the tool shut for
+// everybody but an administrator.
 //
 // # Admin is host access, and the table does not pretend otherwise
 //
@@ -404,70 +433,45 @@ type Object struct {
 	// whose pins, whose priorities. Empty on everything else.
 	Owner string
 
-	// Unresolved says Owner is a name the caller TYPED that nobody has
-	// resolved to the record it addresses yet: somebody else's LOGIN,
-	// which the identity directory resolves to the record its holder acts
-	// under — a bound person's seat, or the login itself.
+	// Unresolved says Owner is a LOGIN the caller TYPED that the identity
+	// directory has not resolved to its holder's record, or that the row an
+	// object names (container, author, ask) nobody has read yet.
 	//
-	// DECIDED BEFORE THE DIRECTORY IS ASKED, which is the whole reason it
-	// exists. Asked after, the directory's answer reached callers it could
-	// never admit: a login nobody holds was refused on the name as typed
-	// while a held one this node could not resolve answered 503 carrying
-	// the seat it was bound to, so a caller with no authority over anybody
-	// learnt which logins exist and whose seat each holds from the
-	// difference. Decided first, the admin grant and the caller's own login
-	// admit as they would on the record, a class with no lead path refuses,
-	// a caller who leads nobody is refused exactly as they would be on
-	// somebody's seat they do not lead — so what the directory says is
-	// never theirs to learn — and a caller who leads somebody is answered
-	// [ErrUnresolved]: resolve the login, then decide again on the record.
-	//
-	// Read by the two personal classes, and by [ClassSubtree], where it is
-	// the same question asked about a WRITE nobody has read yet: what the
-	// body changes decides it, so the route admits whoever could lead any
-	// part of the chart and the surface decides again on each change.
-	//
-	// AND BY THE CLASSES WHOSE OBJECT IS A ROW nobody has read yet —
-	// [ClassAppOrAsked] (which open ask names the caller is on the item),
-	// [ClassTidy], [ClassContainer] and [ClassDestructive] (which project or
-	// space the row is filed in, and who wrote it), and [ClassAuthored] (who
-	// wrote the remark): an object marked unresolved there, naming no
-	// container or author, is answered [ErrUnresolved] for a caller the row
-	// could still admit — read the row, then decide again on it — so a
-	// surface offering a verb before it has read anything offers it to
-	// whoever the row might let through.
+	// DECIDED BEFORE THE DIRECTORY IS ASKED: asked after, a login nobody holds
+	// was refused as typed while a held one answered 503 carrying its seat, so
+	// a caller with no authority learnt which logins exist. Decided first, the
+	// admin grant and the caller's own login admit as on the record, a caller
+	// who leads nobody is refused as on any seat they do not lead, and one who
+	// leads somebody gets [ErrUnresolved]: read the record, then decide again.
+	// Read by the personal classes, [ClassSubtree], [ClassAppOrAsked],
+	// [ClassTidy], [ClassContainer], [ClassDestructive] and [ClassAuthored].
 	Unresolved bool
 
 	// Author is the login or seat that WROTE this, for the classes where
-	// authorship is an authority: a comment or a chat message is edited and
+	// authorship is an authority: a comment or chat message is edited and
 	// removed by whoever left it ([ClassAuthored]), and a page's creator, a
-	// work item's reporter or a room's creator tidies it — trashes,
-	// restores, renames, removes, archives — beside its container's lead
-	// ([ClassTidy]).
+	// work item's reporter or a room's creator tidies it beside its container's
+	// lead ([ClassTidy]).
 	//
 	// EMPTY MEANS "NO AUTHOR ARM", never "anybody wrote it": a tidy of a row
 	// whose creator nobody recorded is its container lead's or an
 	// administrator's alone.
 	//
-	// Separate from Owner because they are different relations and the
-	// same login in both fields is a coincidence: a comment on your own
-	// page has one author and no owner at all.
+	// Separate from Owner: different relations, and one login in both is a
+	// coincidence (a comment on your own page has an author and no owner).
 	Author string
 
-	// Asked is the seat handle an OPEN ask on this work item names — the
-	// person the item's thread is waiting on an answer from — for the one
-	// class where being asked is an authority ([ClassAppOrAsked]): somebody
-	// a colleague put a question to reads the item and answers it without
-	// the tracker app. An ask the very remark the caller is posting again
-	// already answered counts as open to that remark: the post landed, so
-	// the call made again writes nothing, and it is the answer the arm
-	// admitted.
+	// Asked is the seat handle an OPEN ask on this work item names, for the one
+	// class where being asked is an authority ([ClassAppOrAsked]): somebody a
+	// colleague put a question to reads the item and answers it without the
+	// tracker app. An ask the very remark being posted again already answered
+	// counts as open to that remark: the post landed, so the repeat writes
+	// nothing, and it is the answer the arm admitted.
 	//
 	// SET ONLY BY A CALLER THAT HAS READ THE ITEM and resolved its asks
-	// (internal/worklet's AskedOn), never from an argument: an asked arm a
-	// caller could fill in for themselves would be the tracker app handed to
-	// anybody who typed their own name. Empty means nobody is asked, or
-	// nobody has looked.
+	// (internal/worklet's AskedOn), never from an argument: a self-filled arm
+	// would hand the tracker app to anybody who typed their own name. Empty
+	// means nobody is asked, or nobody has looked.
 	Asked string
 
 	// Named are the seat handles the company document names for a
@@ -522,18 +526,16 @@ type Object struct {
 	OwnerIsAgent bool
 
 	// AgentsManageOthers is the company's `artifacts.agents_manage_others`
-	// setting, read by the surface from the company document it runs. False,
-	// the default, keeps an agent seat to `contributor` on every artifact it
-	// does not own, however it is shared and whoever it leads: it reads the
-	// artifact and writes its data, and never publishes over, renames,
-	// reshapes or reshares somebody else's work ([ReasonSeatRefused]). True
-	// lifts the cap, and the agent holds whatever its relations grant.
+	// setting, read by the surface from the company document. False, the
+	// default, keeps an agent seat to `contributor` on every artifact it does
+	// not own, however shared and whoever it leads: it reads the artifact and
+	// writes its data, and never publishes over, renames, reshapes or reshares
+	// somebody else's work ([ReasonSeatRefused]). True lifts the cap.
 	//
-	// A FACT ABOUT THE COMPANY rather than the object, carried here because
-	// [Decide] is pure over values: the alternative was a second argument
-	// every caller of every verb passes, read by one class. The zero is the
-	// closed end, so a surface that never read the setting keeps agents off
-	// other people's work rather than letting them in.
+	// A FACT ABOUT THE COMPANY carried on the object because [Decide] is pure
+	// over values, and a second argument on every verb would be read by one
+	// class. The zero is the closed end: a surface that never read the setting
+	// keeps agents off other people's work.
 	AgentsManageOthers bool
 }
 
@@ -557,30 +559,16 @@ type Decision struct {
 	Err error
 
 	// Grants are the MINIMAL permissions that would have admitted THIS
-	// principal, for THIS object: any ONE of them, added to what the
-	// principal holds, admits — and a permission already covered through
-	// [iam.Expand] by a named one is left out, so a refusal names the
-	// smallest thing to ask for. An app row names its app and never "the
-	// app or admin"; a relation refused names admin, its admin path; a lead
-	// who lacks the row's app is told the app; [ClassAnyApp] names every
-	// app of its row's set ([rule.anyOf]). Empty where no permission could
-	// have changed the answer: the self rule, which has no admin path, an
-	// object missing the field its rule reads before it consults any
-	// permission, and the refusals that are not about permission at all —
-	// an enrolment stage, a seat taking a human-only verb, a person taking
-	// a seat-only one, a principal acting as no seat taking a verb made as
-	// one, a machine token taking a verb that needs a person present, a
-	// verb with no rule, an agent kept off somebody else's artifact by the
-	// company's setting ([Object.AgentsManageOthers]), a turn's requester
-	// who could not take the verb ([DecideWithin]) and an agent decided by
-	// its role's grant ([Decision.SeatGrant] names the grant instead).
-	//
-	// ON THE DECISION rather than looked up beside it, because a refusal
-	// that names what would have admitted the caller has to name what the
-	// rule that decided actually consulted: a second function answering
-	// "what does this verb need" is a second copy of [Decide]'s switch,
-	// and it is the copy that drifts. A walk in this package's tests holds
-	// the two together over every verb, kind and grant.
+	// principal for THIS object: any ONE of them, added to what it holds,
+	// admits; one already covered through [iam.Expand] is left out. An app row
+	// names its app, never "the app or admin"; a relation refused names admin;
+	// [ClassAnyApp] names every app of its set ([rule.anyOf]). Empty where no
+	// permission could change the answer: the self rule, an object missing the
+	// field its rule reads first, and refusals not about permission (stage,
+	// human-only or seat-only verbs, presence, no rule, [Object.AgentsManageOthers],
+	// a requester's ceiling in [DecideWithin], [Decision.SeatGrant]).
+	// ON THE DECISION: a second "what does this verb need" function would copy
+	// [Decide]'s switch and drift; a test walk holds the two together.
 	Grants []iam.Grant
 
 	// Recency is the proof the deciding rule asked for, set on a

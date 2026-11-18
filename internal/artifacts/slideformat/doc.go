@@ -27,6 +27,19 @@
 // that holds the same allowlists again, so a tree this package would not have
 // produced is still never drawn as anything but text.
 //
+// ONE PARSER, CLAUDE'S BOUNDS. A slide is read once, with the HTML tokenizer,
+// into the canonical tree; the publish and the dashboard's read route both
+// take that tree, so no second parser can disagree about what a slide is.
+// The bounds (slide count, faces, drawing bytes, icon and border sizes) are
+// Claude's, so a deck sized for Claude's format publishes here unchanged.
+// An inline drawing is held by internal/artifacts/svgsafe's allowlist, the
+// one a brand logo is held to, so there is one rule for a drawing.
+//
+// EXPORTED FOR THE RENDERER. The tables the dashboard's renderer needs
+// (elements, style properties, icons) are exported from here and held equal
+// to its copies by artifactsapi's TestTheRendererDrawsTheSlideSubset, so a
+// table that moves here fails there until the renderer follows.
+//
 // PURE. It reads no store and holds no clock: the publish pipeline hands it
 // the files' bytes and a lookup of the version's other files, and the read
 // routes call it on the same bytes to answer the dashboard.

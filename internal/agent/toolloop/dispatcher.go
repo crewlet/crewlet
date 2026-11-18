@@ -19,49 +19,18 @@ import (
 
 var log = logging.Get("agent.toolloop")
 
-// The dispatcher is a phase's tools as a harness calls them, and every gate those
-// calls pass — the half of the loop that used to be `runCalls`, moved to where
-// the calls now arrive: a harness's own loop, over MCP, at a time of its choosing,
-// sometimes two at once.
-//
-// What did not move is any rule. The fence before every call, the budget
-// before every model request, a person's note entering as a user message and
-// never inside a tool's result, a phase that finishes by a call, the round
-// budget, arguments that did not parse answered rather than run, a detached
-// call left unanswered as it parks the phase: each is the same rule it
-// was, enforced at the one place every call now passes. What is new is only
-// what a harness's loop forces:
-//
-//   - THE RUN IS ENDED, NOT ASKED TO END. A state the phase reaches mid-run —
-//     finished, parked, out of rounds, a note waiting, a stop — closes
-//     [dispatcher.Done], and the backend stops its harness. Every answer the harness
-//     would act on from then is WITHHELD (held until it is stopped), so it
-//     makes no further request it would be billed for; the loop folds the
-//     real results into the conversation itself.
-//   - A RESPONSE'S CALLS ARE RUN AS ONE, AS A ROUND'S WERE. A run that must
-//     end over one of a response's calls ends once the response's other calls
-//     have reached the engine, not at the first: a harness that waits on each
-//     answer before its next call would otherwise never make the rest, and
-//     the model asked for them in the same breath — a delivery written beside
-//     its submission, a call made while a note arrived. Until then the
-//     deciding answer goes back, so the next call comes; the last answer is
-//     the one withheld, since a harness asks its model again only once every call
-//     of the response is answered.
-//   - CALLS ARRIVE TOGETHER. A harness may issue a response's calls at once, in
-//     any order. Ordinary calls run side by side; a call that ENDS the phase
-//     or PARKS it — a terminator, a detached call — runs alone, after every
-//     other call its response declared has run, so a delivery the model made
-//     beside its submission is recorded before the submission is judged.
-//   - A CALL IS THE MODEL'S, AS IT ASKED FOR IT. The engine runs a call only
-//     under a name it offers now, and only the name the model asked for: a harness
-//     that rewrites a name its list does not hold to one it does would
-//     otherwise run a tool nobody chose.
-//   - A CALL IS THE PHASE'S, NOT THE CONNECTION'S. It runs under the phase's
-//     context, so a harness that gives up on it, or dies, cancels nothing a tool
-//     is half-way through writing; its result is recorded either way.
-//   - A CALL IS ITS RUN'S. Each run's session hands its calls to that run
-//     alone ([runCalls]), and a run that is over takes none: a call that
-//     reaches it after its release is refused, never run.
+// The dispatcher is a phase's tools as a harness calls them, and every gate
+// those calls pass, enforced where every call now arrives:
+//   - THE RUN IS ENDED, NOT ASKED TO END: a mid-run state closes
+//     [dispatcher.Done], the backend stops its harness, and every answer it
+//     would act on is WITHHELD so it makes no further billed request.
+//   - A RESPONSE'S CALLS ARE RUN AS ONE: a run ending over one call ends once
+//     the response's other calls have arrived, the deciding answer going back
+//     meanwhile; the last is withheld. Ordinary calls run side by side; one
+//     that ENDS or PARKS the phase runs alone, after the rest.
+//   - A CALL IS THE MODEL'S (only a name offered now, as asked), THE PHASE'S
+//     (its context, so a harness giving up cancels nothing half-written) and
+//     ITS RUN'S (a call after the run's release is refused, never run).
 
 // dstate is where the phase stands, as the dispatcher sees it.
 type dstate int
@@ -105,15 +74,13 @@ func (s dstate) ended() bool {
 // that issued it, and a call that ends or parks the phase for the response's
 // other calls to arrive.
 //
-// The call and the record race: the record is read off the harness's stream or a
-// file it writes, and the call arrives over a socket, and either can be first
-// by milliseconds. Two seconds is three orders of magnitude over that race and
-// still short against the model's own latency; a call whose response the
-// record never shows within it is placed on the request after the last one the
-// record did show (see [dispatcher.placeLocked]) rather than held for nothing.
-// Calls a harness issues at once arrive within the same milliseconds, so the same
-// bound serves the barrier: a sibling that has not come by then is one the harness
-// will make only once this call is answered.
+// The call (a socket) and the record (a stream or file) race by milliseconds.
+// Two seconds is three orders over that race and short against the model's
+// latency; a call whose response the record never shows within it is placed on
+// the request after the last one shown (see [dispatcher.placeLocked]). Calls
+// issued at once arrive within the same milliseconds, so the bound serves the
+// barrier too: a sibling not here by then is one the harness makes only once
+// this call is answered.
 const joinWait = 2 * time.Second
 
 // parkMargin is how far ahead of a harness's own tool timeout a running call is
@@ -304,16 +271,15 @@ func (v *runCalls) Call(in toolsession.Call) toolsession.Result { return v.d.cal
 // callContext is the context one call of a run runs under: the VALUES of the
 // context the backend served the run under, and the PHASE's cancellation.
 //
-// The values, because the backend puts there what a call of ITS run needs and
-// only a call of its run may have: the harness backend lends the run's process slot
-// to a model call made inside one of its calls (a condensing pass, a judge, on
-// the seat's own entry), which without it waits for a slot only the run can
-// free — at max_concurrent 1, a deadlock. The served context descends from the
-// phase's, so the phase's own values (the turn, the seat, its span) come with
-// it, and are read from the phase where a backend served from elsewhere.
+// The values, because the backend puts there what only a call of ITS run may
+// have: the harness backend lends the run's process slot to a model call made
+// inside one of its calls (a condensing pass, a judge), which otherwise waits
+// for a slot only the run can free (a deadlock at max_concurrent 1). The served
+// context descends from the phase's, so the phase's values come with it, and
+// are read from the phase where a backend served from elsewhere.
 //
-// The phase's cancellation and never the run's: a run that ends — its harness
-// stopped, a fallback taking over — ends nothing a tool is half-way through.
+// The phase's cancellation and never the run's: a run that ends (harness
+// stopped, fallback taking over) ends nothing a tool is half-way through.
 type callContext struct {
 	served context.Context // values only: context.WithoutCancel
 	phase  context.Context
@@ -844,14 +810,12 @@ func (d *dispatcher) admit(r *run, in toolsession.Call) (*callRec, string) {
 	// reach outside the engine.
 	//
 	// NOT THE BUDGET. A call spends no model tokens, and its request was
-	// charged when the harness's record showed it — a charge the meter refused
-	// cut the run then, and none of its calls runs. A refusal that became
-	// certain since — a sibling's spend on a shared slice, or this
-	// request's own exact fill — refuses the request the harness would make
-	// NEXT, which is asked where that request is decided, as a call's
-	// answer goes back ([dispatcher.conclude]). Asked here, it cut a
-	// request's calls the meter had already paid for, and recorded a
-	// refusal of a model call nobody was about to make.
+	// charged when the harness's record showed it; a refused charge cut the
+	// run then. A refusal certain since (a sibling's spend on a shared slice,
+	// this request's exact fill) concerns the request the harness makes NEXT,
+	// asked where that is decided, as a call's answer goes back
+	// ([dispatcher.conclude]). Asked here, it would cut calls the meter had
+	// already paid for and record a refusal of a call nobody was making.
 	if d.cfg.Fence != nil {
 		if err := d.cfg.Fence(); err != nil {
 			d.cutLocked(err)

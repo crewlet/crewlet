@@ -19,12 +19,19 @@
 //     domains (the tracker, spend, agents), each answered AS THE VIEWER by the
 //     domain's existing read path (ADR-0043), so two viewers of one board see
 //     what each may read and nothing more.
-//   - `file`: a CSV or JSON file of the version, fixed with it.
+//   - `file`: a CSV or JSON file of the version, fixed with it, parsed and held
+//     to its declared columns.
 //   - `calc`: rows derived from other datasets by a few declared [Step]s
 //     (filter, group, compute, join, sort, limit), never author JavaScript,
 //     and deterministic: one input and one spec give one output on every
 //     node and in every run, so a calculation is a formula a viewer can read
 //     in the Sources rail rather than a black box.
+//
+// # Shape
+//
+// The [Catalogue] names each engine read with typed parameters and fixed
+// columns, so a widget can bind to a column before any row exists. Widgets sit
+// on a twelve-column grid and are each drawn by one uilet primitive.
 //
 // # Pure
 //

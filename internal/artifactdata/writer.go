@@ -28,27 +28,14 @@ import (
 // THE DATASTORE WRITE PATH: one record per write, published to the store's
 // subject, its verdict READ BACK from the row its apply wrote.
 //
-// # What the writer decides, and what it leaves to the applier
-//
-// A write is SEQUENCED: the writer forms no expectation and decides nothing
-// from a snapshot about the write's effect. It refuses before anything is
-// appended only what no later row can change (a name outside the grammar, a
-// batch past its bounds, a person value naming no seat the running chart
-// holds, this node's write budget spent) and what is permanent (a store its
-// artifact's purge removed). Everything else (schema, rules, guards, caps,
-// limits) is the applier's, in log order, so every data node reaches one verdict.
-//
-// A schema change is ARBITRATED: decided in a snapshot of the schema it
-// replaces, refused early when the snapshot already refuses it, and judged
-// again by the applier.
-//
-// # The authority is stamped, never decided here
-//
-// Who may write is the authority table's, decided at the API and carried in
-// [Call.Authority]: the caller's effective role on the artifact, their actor
-// kind and the limits in force. This package evaluates collection and field
-// rules against that stamp; it never evaluates the role ladder against an
-// action (one implementation of a shared rule, ADR-0008).
+// A write is SEQUENCED: the writer decides nothing from a snapshot about its
+// effect. It refuses before appending only what no later row can change (a bad
+// name, a batch past its bounds, a person naming no seat, this node's budget
+// spent) or what is permanent (a purged store); schema, rules, guards, caps and
+// limits are the applier's, in log order. A schema change is ARBITRATED.
+// THE AUTHORITY IS STAMPED, NEVER DECIDED HERE: the API carries it in
+// [Call.Authority]; this package evaluates rules against it, never the role
+// ladder (ADR-0008).
 
 // Call is one write gesture's caller context, the artifacts log's own: a
 // purge reaches this store as one of its dependents under the artifact purge's

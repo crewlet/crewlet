@@ -161,6 +161,219 @@
 // itself, derives the record's confidence from the cited tool, and lets an
 // agent remove nothing and decide no meaning (ADR-0132, atlasrecord.go).
 //
+// # The one authorizer
+//
+// One authorizer gates both catalogues (a seat's registry and the operator's),
+// built from authz.Decide over the running chart and wrapped round every tool
+// ONCE, at registration: the action IS the tool's name, so there is exactly
+// one place the check could be forgotten. A NIL AUTHORIZER REFUSES, the
+// opposite of a nil skill gate and deliberately so: a missing skill gate is a
+// company that locked nothing, a missing authority decision is a surface that
+// shipped without wiring one. Register pushes Deps.Requesters into the
+// artifacts, code and health deps as it pushes Authorize.
+//
+// What a tool is ABOUT is a table of ARGUMENT NAMES, not closures: a name can
+// be walked against the tool's own schema, a closure only called with the
+// arguments somebody thought of. A personal verb that takes no handle is about
+// the caller. The few checks that need a stored row first (re-routing a task,
+// a project's lead-only facets, archiving it, setting somebody's priorities)
+// ask the same seam from inside the tool under a dotted action. A person verb
+// that takes a name resolves it to a RECORD first and is decided on that; the
+// directory is asked only after the verb was decided on the record nobody has
+// resolved, so a caller who leads nobody is refused before any lookup, in the
+// words a seat they do not lead gets, and the directory's own words go to the
+// log, never into a refusal. That keeps the directory from being a roster.
+//
+// The gate REFUSES AN ARGUMENT A TOOL DOES NOT DECLARE ([ErrUndeclaredArgument]):
+// a builtin reads its schema's properties and nothing else, so an undeclared
+// one was dropped and the call answered as though it asked for less (a retired
+// `owner` saved as a shared tab). It derives the principal from the turn when
+// the context carries none, never over one already there. Its wrappers are
+// POINTERS: a struct holding a func is uncomparable, and the engine's
+// epoch-identity `==` over a seat's tools panicked on it.
+//
+// # The requester ceiling
+//
+// Inside a turn somebody woke, the gate binds the turn's requester ceiling to
+// the call ([bindCeiling], from Deps.Requesters: composed at most once a call,
+// and only when an action's row names an app or a family decides a relation).
+// The authorizer then decides every action of a seat's call, the gate's and
+// every one a tool asks inside itself, by authz.DecideWithinApps, so every app
+// verb of every family is held to the apps whoever woke the turn uses
+// (ADR-0109), refused in words naming the app they lack. The ceiling is
+// composed in ONE place for every family ([ceilingOf]): the seat's own voice
+// among a turn's senders is no stranger's (the outcome of its own act is its
+// own work), and any other sender with no known requester is. A requester this
+// node cannot compose is undecidable, never a turn nobody woke. A read-only
+// builtin is told its turn as a tools.TurnBound, never made seat-scoped. A
+// seat's decision no gate bound is REFUSED as undecidable, the closed end; the
+// one production caller deciding a seat's call outside any turn, the offering
+// question ([Admits], [Withheld]), says so with [OutsideAnyTurn].
+//
+// A colleague's ask carries whoever the asking turn works for ([workingForOf],
+// from the bound ceiling, never the ask's arguments), and the woken turn reads
+// it first ([WorkingForCeiling], exported for the one write the engine makes
+// for a turn after it ended, so that close and every call compose one
+// requester from one carrier): a chain of asks never widens (ADR-0109's
+// amendment). Every actor a seat's turn builds ([actorFor], [pageActor],
+// [chatActor]) states whom it writes for ([writtenForTurn]); a requester this
+// node cannot compose refuses the call unavailable ([unattributed]), and the
+// stores refuse an agent's actor that states nothing, so a new site cannot
+// forget it. Every code request carries the actor's carrier beside its ceiling,
+// stamped together by every sender, so the deciding node holds the two to each
+// other. An engine write made as a seat outside any turn says so
+// ([types.ForNobody]).
+//
+// # One operation rule for every family
+//
+// The tracker's, the artifacts' and the datastore's writes offer `op_id` on the
+// operator's MCP alone, minted for the call it names, taken back with that call
+// only, and refuse it wherever a turn or a request key already names the
+// operation, in one set of sentences ([operations]); [OperatorTools] is the one
+// place that says the surface holds its operations. Only what a turn or key
+// DERIVES stays each family's own ([opIDFor], artifactCallNamespace), each
+// namespace fixed for the life of the format: a per-family copy of the rule is
+// where a skipped check makes a second write under an `op_id` promised to make
+// nothing twice. Every keyed write, a page's and a chat gesture's included,
+// takes its key from [callOpKey]; there is no per-domain copy.
+//
+// # The artifacts and datastore tools
+//
+// One tool per authority row (artifacts*.go): each reads the stored artifact
+// and asks authz.DecideWithin itself, for the caller then for the requester
+// ceiling, sparing only edits to an agent's own work. Every byte goes through
+// internal/artifactupload; an executor's box is streamed through the box, never
+// handed a URL. A project file copied in (`from_project_file`) is decided, read
+// and refused as `read_project_file` reads it, through the one copy read
+// ([WorkDeps.copyFrom]), a missing source being `invalid` (the caller's
+// argument), its bytes read whole and held to the row's digest before any
+// moves. No tool takes `force` or shares an agent's work with the whole
+// company; a stale publish is answered with the live version, fenced. A FOLDER
+// GRANTS NOTHING: an agent files (`move_artifact`: editor on the artifact and
+// contributor on the destination, both through the ceiling) and makes
+// subfolders but never reorganises a tree; a folder resolves only among
+// folders the agent AND the requester see. The adopted brand
+// (`get_company_brand`) is everybody's under every ceiling, its voice fenced
+// under the `company` trust, and a logo reaches a version only as a
+// `from_brand` slot the pipeline copies. The datastore tools (artifactdata*.go)
+// share the head, the decision and the stamp and add a turn guardrail (1,000
+// ops a segment, a retry not charged twice): a row is answered only when the
+// requester could read it too, and a write is stamped with the lower of the
+// agent's role and the requester's. Both put a seat in the artifact's presence
+// room once the call was allowed.
+//
+// # The code tools' holds and writes
+//
+// The tools are offered only where the node serves Gitlet with the ceiling's
+// halves wired ([CodeDeps.serves]: Gitlet, Requesters, Chart), so no surface
+// reads for whoever messaged a seat what the seat itself may not. The caller is
+// named by one conversion ([CodeAskerOf]) the REST reads share. A repository is
+// resolved ONCE A TURN ([CodeDeps.repo]); every refs a call names go through
+// ONE code.resolve_ref ([CodeDeps.resolveRef], one barrier, one moment), and
+// [CodeDeps.refsOf] is the only gitlet.RefQuery in the package
+// (TestOnlyTheSeamResolvesARefForATurn). A repository at the domain's bounds is
+// answered: `code_get_repo` cuts its rules whole at the answer and pages the
+// rest, `code_list_repos` lists past a repository whose rules alone exceed an
+// answer rather than ending there. The change reads (codechanges.go) name the
+// access each tool needs in ONE table ([changeToolNeeds], held both ways to
+// [ChangeToolNames] and [ChangeWrites]); a call reads the change ONCE at the
+// seat's level and every later read floors at that position, reads by object
+// id at the floor of the records that moved the heads, decided by the code
+// domain's own rules (gitlet.RevisionDiff, ObjectFloor, PlaceFindings) so a
+// seat and a screen are shown one diff. A change's text names its writer, and
+// every page is cut whole-row at one answer by that row's own cursor, compact.
+//
+// Every code write names ONE operation by the family rule, its object bounded
+// (the repository's id, `new` for a create) so no name carries an id past
+// statelog.MaxCallerOpIDBytes. A seat's push names its run; a person writes as
+// their human seat; a token bound to nobody writes nothing
+// ([gitlet.UnboundDetail]). In a turn somebody woke each write is decided again
+// for them ([CodeDeps.writeCaller]); a colleague rides on the write as
+// gitlet.WriteCeiling, a credential acting as no seat that holds the app as
+// ceiling of nobody, and the ceiling is judged where the write is decided,
+// never here. A seat's write is built at a session floored at its own writes,
+// its turn's read and where each resolved ref last moved. A second write of a
+// call (an open's ask of its reviewers, a reply's thread mark, a merge's
+// `close_task`, apply_suggestions' resolving of findings) is a statelog.StepOpID
+// step ([stepTwo], ONE byte: the operator's longest step already holds 125 of
+// the id's 128), decided at or past the first's record, and its failure is said
+// beside the answer, never as the first write's. A merge answers every unmet
+// precondition, never the first alone; its branch deletion is the Gitlet node's
+// to decide, so the tool reads no gate. A tier below write
+// ([CodeWritesWithheld]) leaves off every write its grant cannot admit, judged
+// on the tier because a role grant is an administrator's and a unit's lead sets
+// its seats' tier. Refusals map onto classes every write surface already
+// renders ([pushClass], [changeClass], [conversationClass], [checkRefused]);
+// check rerun steps are named by the attempt they queue ([rerunStep]), never by
+// their place in the call. A person-only write ([PurgeWrites], [ImportWrites],
+// a check report) is `humanOnly` in its row and refused in the tool again;
+// `code_import_repo`'s `credential` is a variable's NAME, made the `${NAME}`
+// the record carries, never a token's value.
+//
+// # The holds on seat branches and scratch repositories
+//
+// Every resolution of a call's `repo` takes the turn's hold on a scratch
+// repository before the call's first request ([HoldRepo]), recorded once per
+// run and repository, never per work key, at the run's own derived instant
+// (a record minted at a start every ledger has swept is answered `unknown` for
+// good); the turn's lookups keep only resolutions whose hold was taken
+// (TestOnlyTheSeamResolvesARepositoryForATurn). Every seat branch a turn names
+// passes [HoldRef] before the request that reads or writes through it, a write's
+// head resolved first because a write that moves nothing orders nothing
+// (TestAChangeWriteHoldsTheSeatBranchItDependsOn,
+// TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest); a hold is CONFIRMED
+// once a turn (turnctx.Holds.Confirm). An executor's repositories are code
+// reads too: a run is given none at launch and each `code_checkout` is
+// resolved through [CodeDeps.ResolveRunRepos], the one resolution, read
+// strictly since what it names is a grant, and a refusal is the checkout's own
+// answer ([RefusedCheckout]), never a node failure. `code_search` and the check
+// readers fence every hit, log and summary `external`, naming no writer, and
+// page by a cursor naming its whole subject (a search's fingerprint and last
+// key, a check attempt), so a page never re-runs the whole read and a cursor
+// sent with other arguments is refused.
+//
+// # The health, atlas and session tools
+//
+// The health tools ([HealthTools]) JUDGE NOTHING: what is wrong is the alarm
+// table's to say (ADR-0015), so neither ranks a node, and a node that
+// evaluated no table says so rather than reading as healthy. Both page by
+// node id and a page asks only its own nodes (asking the whole fleet per page
+// cost N^2/limit answers); a seat's hot list is judged hottest first and only
+// to the list's cut. They are admin's, a seat reads them only where its role
+// carries the health grant, and [Withheld] asks [Admits] of every builtin so
+// what a seat is offered and what it is admitted are one decision, only a
+// REFUSAL withholding (a node that cannot decide offers the tool and lets the
+// call decide).
+//
+// The atlas read tools narrow every answer to the caller with atlas.For
+// (ADR-0127); the eleven atlas writes are a person's and the operator's alone,
+// each read as its caller, planned, and recorded on the version the read saw,
+// refused stale. A fact the settings, Gitlet or the engine declare is refused,
+// never written beside.
+//
+// `list_sessions` and `read_session` (ADR-0073) take no seat: each reads the
+// seat of the turn the call is bound to, so another seat's turn is answered as
+// one nobody has. Every word is fenced by provenance.ExecutorSession through
+// one door ([sessionLabel]); a page holds at most the rows that fit one 64 KiB
+// answer at their worst, and a search says how many sessions it searched, never
+// that nothing matches past them. Every call asks the switch of the node's own
+// revision ([SessionDeps.Keeps]), so a launch that pinned an earlier revision
+// stops at its next call.
+//
+// # The catalogue and what hands over words
+//
+// The catalogue files every built-in on one of ten groups and the gate its
+// authority row asks. The gate is DECLARED rather than read off authz.ClassOf,
+// which names and never decides for a caller to branch on, and a walk holds
+// every declared gate to its row both ways, so a changed row turns the walk red
+// until the catalogue agrees. Which tools hand a model somebody else's words is
+// DERIVED, never listed: the plain encoder ([jsonAnswer]) refuses an answer
+// holding a field a record declares somebody's words, [foreignRead] refuses one
+// it did not fence, and a sweep holds the set of tools whose answers carry those
+// words to `handsOverWords` in both directions. Every domain a surface writes is
+// declared once ([nativeDomains], held both ways to estate.SurfaceWriteDomains),
+// and never the executor log, whose writes are the engine's own record.
+//
 // # Whose failure a condition is
 //
 // A failed phase or turn records a condition under a kind ([ConditionKind]):
