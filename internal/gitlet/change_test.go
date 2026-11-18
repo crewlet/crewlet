@@ -93,7 +93,8 @@ func TestEveryChangeTableIsClassified(t *testing.T) {
 		}
 	}
 	slices.Sort(tables)
-	repository := []string{"code_change_authors", "code_change_bodies", "code_changes", "code_revisions"}
+	repository := []string{"code_change_authors", "code_change_bodies", "code_change_moves", "code_changes",
+		"code_revisions"}
 	// AND THE CHANGE'S OWN SUBJECT'S, its conversation: rebuilt from the
 	// records on the change's subject and compared on every node like the
 	// repository's.

@@ -139,6 +139,7 @@ type storedChange struct {
 	number, revision, version, bodyBytes, position int64
 	state, source, target, head, title, owner      string
 	ownerKind, operator, closeReason               string
+	closedBy, closedByKind                         string
 	work                                           types.WorkItem
 	turn, run                                      string
 	closed                                         bool
@@ -153,10 +154,11 @@ func (n *node) change(id string) storedChange {
 	if err := n.db.Reader().Read(n.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(n.t.Context(), `SELECT number, revision, version, body_bytes, position, state,
 			source_ref, target_ref, head_oid, title, owner, owner_kind, owner_operator_id, close_reason,
-			work_backend, work_id, work_key, work_project, created_turn, created_run, closed_at
-			FROM code_changes WHERE id = ?`, id).Scan(&c.number, &c.revision, &c.version, &c.bodyBytes,
-			&c.position, &c.state, &c.source, &c.target, &c.head, &c.title, &c.owner, &c.ownerKind, &c.operator,
-			&c.closeReason, &backend, &c.work.ID, &c.work.Key, &c.work.Project, &c.turn, &c.run, &closed)
+			work_backend, work_id, work_key, work_project, created_turn, created_run, closed_at, closed_by,
+			closed_by_kind FROM code_changes WHERE id = ?`, id).Scan(&c.number, &c.revision, &c.version,
+			&c.bodyBytes, &c.position, &c.state, &c.source, &c.target, &c.head, &c.title, &c.owner, &c.ownerKind,
+			&c.operator, &c.closeReason, &backend, &c.work.ID, &c.work.Key, &c.work.Project, &c.turn, &c.run,
+			&closed, &c.closedBy, &c.closedByKind)
 	}); err != nil {
 		n.t.Fatalf("read change %s: %v", id, err)
 	}
@@ -563,6 +565,139 @@ func TestEveryLifecycleWriteMovesItsRow(t *testing.T) {
 	}
 }
 
+// A CLOSED CHANGE NAMES WHO CLOSED IT, not its owner: a close record's
+// principal, a person by the human seat they hold, kept on the row while it is
+// closed and cleared by its reopen; and a read of the change answers it.
+//
+// Mutation: keep no closer in the close's apply, or clear none on the reopen,
+// and this fails.
+func TestAClosedChangeNamesWhoClosedIt(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	// A READ OF A CHANGE judges its readiness by the node's chart.
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	ctx := t.Context()
+	repo := changeRepo(t, n, "web")
+	opened, err := c.ProposeChange(ctx, opening(repo, featureRef, mainRef, dev))
+	requireChanged(t, opened, err)
+	id := opened.ChangeID
+
+	closed, err := c.ProposeChange(ctx, closing(repo, id, ada, opened.Version))
+	requireChanged(t, closed, err)
+	if got := n.change(id); got.state != "closed" || got.owner != "dev" || got.closedBy != "founder" ||
+		got.closedByKind != string(gitlet.PartyPerson) {
+		t.Fatalf("dev's change closed by the person holding founder is %+v, want it closed by founder, a person",
+			got)
+	}
+	answer, err := readChange(t, n, ada, "", "web", opened.Number, 0, "")
+	if err != nil {
+		t.Fatalf("read the closed change: %v", err)
+	}
+	if read := answer.Change; read == nil || read.ClosedBy != "founder" || read.ClosedByKind != gitlet.PartyPerson ||
+		read.Owner != "dev" {
+		t.Fatalf("a read of the closed change answers %+v; want it closed by founder, a person, and owned by dev",
+			read)
+	}
+
+	reopened, err := c.ProposeChange(ctx, reopening(repo, id, dev, closed.Version))
+	requireChanged(t, reopened, err)
+	if got := n.change(id); got.state != "open" || got.closedBy != "" || got.closedByKind != "" {
+		t.Fatalf("the reopened change is %+v, want it open and closed by nobody", got)
+	}
+}
+
+// A CHANGE'S MOVES ARE ITS LIFECYCLE'S HISTORY: every lifecycle write that
+// moved it is a move of its `moves` part, oldest first, naming who made it:
+// an edit's title, description and work item each a move, a draft and its
+// readying, a retarget from and to, a close with its reason, a reopen, and a
+// push that deletes the source a close named for its pusher. A page resumes
+// after the move its cursor names.
+//
+// Mutation: write no move in the lifecycle's apply, or none in a push's
+// close, or resume a page at its cursor's move, and this fails.
+func TestAChangesMovesAreItsLifecyclesHistory(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	ctx := t.Context()
+	repo := changeRepo(t, n, "web")
+	opened, err := c.ProposeChange(ctx, opening(repo, featureRef, mainRef, dev))
+	requireChanged(t, opened, err)
+	id, version := opened.ChangeID, opened.Version
+	title, body := "Retry the upload, twice", "why it retries"
+	item := types.WorkItem{Backend: types.WorkJira, ID: "10042", Key: "ENG-7", Project: "ENG"}
+	for _, step := range []struct {
+		who   gitlet.Principal
+		write func(p *gitlet.ChangeProposal)
+	}{
+		{dev, func(p *gitlet.ChangeProposal) {
+			p.Edit = &gitlet.ChangeEdit{RepoID: repo, ChangeID: id, Title: &title, Body: &body, WorkItem: &item}
+		}},
+		{dev, func(p *gitlet.ChangeProposal) { p.Draft = &gitlet.ChangeDraft{RepoID: repo, ChangeID: id, Draft: true} }},
+		{dev, func(p *gitlet.ChangeProposal) { p.Draft = &gitlet.ChangeDraft{RepoID: repo, ChangeID: id} }},
+		{dev, func(p *gitlet.ChangeProposal) {
+			p.Retarget = &gitlet.ChangeRetarget{RepoID: repo, ChangeID: id, TargetRef: releaseRef}
+		}},
+		{ada, func(p *gitlet.ChangeProposal) {
+			p.Close = &gitlet.ChangeClose{RepoID: repo, ChangeID: id, Reason: "superseded"}
+		}},
+		{dev, func(p *gitlet.ChangeProposal) { p.Reopen = &gitlet.ChangeReopen{RepoID: repo, ChangeID: id} }},
+	} {
+		res, err := c.ProposeChange(ctx, writing(step.who, version, step.write))
+		requireChanged(t, res, err)
+		version = res.Version
+	}
+	pushedBy(t, c, repo, ada, update(featureRef, oidOf("B"), gitlet.ZeroOID))
+
+	type said struct {
+		kind              gitlet.ChangeMoveKind
+		by                string
+		reason, was, then string
+	}
+	want := []said{
+		// ONE RECORD'S MOVES in their kinds' order, the table's key after the record.
+		{gitlet.MoveDescribed, "dev", "", "", ""}, {gitlet.MoveRetitled, "dev", "", "", ""},
+		{gitlet.MoveWorkItem, "dev", "", "", "ENG-7"}, {gitlet.MoveDrafted, "dev", "", "", ""},
+		{gitlet.MoveReadied, "dev", "", "", ""}, {gitlet.MoveRetargeted, "dev", "", mainRef, releaseRef},
+		{gitlet.MoveClosed, "founder", "superseded", "", ""}, {gitlet.MoveReopened, "dev", "", "", ""},
+		{gitlet.MoveClosed, "founder", gitlet.SourceDeleted, "", ""},
+	}
+	read := func(limit int, cursor string) gitlet.ReadAnswer {
+		t.Helper()
+		answer, err := n.reader.Read(ctx, gitlet.ReadQuery{Asker: ada, Kind: gitlet.ReadChange, Repo: "web",
+			Change: opened.Number, Part: gitlet.PartMoves, Limit: limit, Cursor: cursor, Fresh: stale})
+		if err != nil {
+			t.Fatalf("read the change's moves after %q: %v", cursor, err)
+		}
+		return answer
+	}
+	var got []said
+	cursor, pages := "", 0
+	for {
+		answer := read(4, cursor)
+		pages++
+		for _, m := range answer.Moves {
+			if m.Position.IsZero() || m.At.IsZero() {
+				t.Fatalf("move %+v names no record", m)
+			}
+			got = append(got, said{m.Kind, m.By, m.Reason, m.Was, m.Became})
+		}
+		if cursor = answer.Next; cursor == "" || pages > 5 {
+			break
+		}
+	}
+	if !slices.Equal(got, want) || pages != 3 {
+		t.Fatalf("the change's moves, four a page, read in %d pages as\n%+v\nwant three pages of\n%+v", pages, got,
+			want)
+	}
+	if whole := read(0, ""); len(whole.Moves) != len(want) || whole.Next != "" {
+		t.Fatalf("a first page of the default size holds %d moves and next %q, want all %d", len(whole.Moves),
+			whole.Next, len(want))
+	}
+}
+
 // A WRITE IS REFUSED FOR WHAT ITS REPOSITORY, ITS BRANCHES AND ITS CHANGE ARE,
 // each in a sentence of its own, appending nothing: an open from a branch to
 // itself, from a branch or to one that is not live, or from one at its
@@ -809,7 +944,8 @@ func TestAChangesRowsReplayIdentically(t *testing.T) {
 	closed, err := c.ProposeChange(ctx, closing(repo, opened.ChangeID, cto, edited.Version))
 	requireChanged(t, closed, err)
 	b.drain()
-	for _, table := range []string{"code_changes", "code_change_bodies", "code_change_authors", "code_revisions"} {
+	for _, table := range []string{"code_changes", "code_change_bodies", "code_change_authors", "code_revisions",
+		"code_change_moves"} {
 		if got, want := tableRows(t, b.db, table), tableRows(t, a.db, table); !slices.Equal(got, want) {
 			t.Errorf("%s replayed on another node holds\n\t%v\nwant\n\t%v", table, got, want)
 		}

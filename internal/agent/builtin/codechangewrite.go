@@ -410,6 +410,9 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal = t.deps.branch(ctx, turn, tool, c, repo, true, open.SourceRef, open.TargetRef); refusal != nil {
 		return *refusal, nil
 	}
+	if refusal = t.deps.heldByTarget(ctx, turn, tool, c, repo, open.SourceRef, open.TargetRef); refusal != nil {
+		return *refusal, nil
+	}
 	op := opIDFor(actor, tool, changeVerb, repo.ID, args)
 	open.RepoID, open.ChangeID = repo.ID, gitlet.OpenChangeID(op)
 	if turn != nil && c.asker.Kind == gitlet.PrincipalAgent {
@@ -431,6 +434,42 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		t.deps.askOpened(ctx, c, repo, op, res, reviewers, &out)
 	}
 	return newForeignRead(turn, c.asker.Seat).page(ctx, tool, out, "")
+}
+
+// heldByTarget refuses an open whose source its target already holds, as the
+// committer refuses one whose source is AT its target (no_difference): such a
+// change proposes nothing, and its home would mark it merged at once. The
+// committer's decide reads rows, which see two tips that differ, so the
+// histories are read here, one landed_in of the source's tip in the target,
+// before anything is written. A branch missing, or both at one commit, is
+// left to the decide, which refuses either in its own words.
+func (d CodeDeps) heldByTarget(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
+	repo gitlet.RepoRef, source, target string) *tools.Result {
+
+	answer, refusal := d.refsOf(ctx, turn, tool, c, repo, source, target)
+	if refusal != nil {
+		return refusal
+	}
+	if len(answer.Refs) != 2 {
+		return nil
+	}
+	src, tgt := answer.Refs[0], answer.Refs[1]
+	if src.Missing != "" || tgt.Missing != "" || src.OID == tgt.OID {
+		return nil
+	}
+	page, refusal := d.gitRead(ctx, turn, tool, c, repo, gitlet.GitQuery{Kind: gitlet.GitLandedIn,
+		RepoID: repo.ID, Fresh: gitlet.RefsFloor(d.Code.FloorOf(repo.ID), src, tgt),
+		LandedIn: &gitlet.LandedInQuery{Commit: src.OID, Target: tgt.Ref, TargetOID: tgt.OID, At: tgt.Moved}})
+	if refusal != nil {
+		return refusal
+	}
+	if page.LandedIn == nil || !page.LandedIn.Landed {
+		return nil
+	}
+	r := changeRefused(tool, gitlet.ChangeResult{Refusal: gitlet.ChangeRefusalNoDifference,
+		Detail: fmt.Sprintf("%s already holds every commit of %s, whose head %s is in its history: the source "+
+			"holds nothing its target does not", tgt.Ref, src.Ref, abbrevOID(src.OID))})
+	return &r
 }
 
 // reviewersArg is a call's reviewers to ask (seat handles, a person's being

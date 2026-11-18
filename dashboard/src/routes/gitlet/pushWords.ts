@@ -1,7 +1,9 @@
 /** A push said as a sentence: who pushed, what it did to which refs, and its day's count. */
 
+import { credentialOf } from "~/lib/attribution.ts";
 import { commandWord, omittedOf, refName } from "~/lib/code.ts";
-import { fmtCount, plural, readerDay } from "~/lib/format.ts";
+import { fmtCount, openSentence, plural, readerDay } from "~/lib/format.ts";
+import { tierATokenOf } from "~/lib/login.ts";
 import type { CodeChangeName, CodePushRow } from "~/protocol/index.ts";
 
 /** One part of a sentence: words, a ref's chip, a ref that is gone (no chip), or a change. */
@@ -105,12 +107,18 @@ export function pushWords(push: CodePushRow): PushSentence {
   }
 }
 
-/** A credential's kind in words, by the prefix its login carries. */
-export function credentialWords(login: string): string {
-  if (login.startsWith("pat:")) return "Personal access token";
-  if (login.startsWith("token:")) return "Deployment token";
-  if (login.startsWith("session:")) return "Signed-in session";
-  return "Credential";
+/**
+ * A credential as a push's tag says it: its kind in words, and the name a person gave it
+ * where it has one (a deployment token's). A personal access token's or a session's id
+ * names nothing a person knows, so it is the tag's title, never its words
+ * ([credentialOf]); a login of any other kind is its own name.
+ */
+export function credentialTag(login: string): { words: string; name: string } {
+  const named = credentialOf(login);
+  if (named) return { words: openSentence(named.kind), name: "" };
+  const token = tierATokenOf(login);
+  if (token) return { words: "Deployment token", name: token };
+  return { words: "Credential", name: login };
 }
 
 /** What `by=` asks of the history: Gitlet's pushes, or one seat's or person's. */

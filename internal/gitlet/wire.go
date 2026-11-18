@@ -1461,9 +1461,13 @@ type ReadAnswer struct {
 	Resolved  *RepoRef      `json:"resolved,omitempty"`
 	Revisions []RevisionRow `json:"revisions,omitempty"`
 	Reviewers []ReviewerRow `json:"reviewers,omitempty"`
-	Comments  []CommentRow  `json:"comments,omitempty"`
-	Reviews   []ReviewRow   `json:"reviews,omitempty"`
-	Findings  []FindingRow  `json:"findings,omitempty"`
+	// Moves is a page of a change's moves ([PartMoves]).
+	Moves []ChangeMove `json:"moves,omitempty"`
+	// QueueEntries is a page of a change's queue entries ([PartQueue]).
+	QueueEntries []ChangeQueueEntry `json:"queue_entries,omitempty"`
+	Comments     []CommentRow       `json:"comments,omitempty"`
+	Reviews      []ReviewRow        `json:"reviews,omitempty"`
+	Findings     []FindingRow       `json:"findings,omitempty"`
 	// FindingPaths is a `finding_paths` page of a change ([ReadQuery.FindingPaths]).
 	FindingPaths []FindingPathRow `json:"finding_paths,omitempty"`
 	// Viewed is a `viewed` page of a change ([ReadQuery.Viewed]): the asker's own marks.
@@ -2470,9 +2474,15 @@ type ChangeRow struct {
 	// at (MergeOID).
 	ClosedAt    time.Time `json:"closed_at,omitzero"`
 	CloseReason string    `json:"close_reason,omitempty" untrusted:"name"`
-	MergedAt    time.Time `json:"merged_at,omitzero"`
-	MergedVia   MergedVia `json:"merged_via,omitempty"`
-	MergeOID    string    `json:"merge_oid,omitempty"`
+	// ClosedBy is who closed it, while it is closed: a close record's
+	// principal, or the pusher whose push deleted its source (SourceDeleted),
+	// a seat's handle or a person's human seat, ClosedByKind which. Each ""
+	// for a push nobody made (an import's, a mirror's).
+	ClosedBy     string    `json:"closed_by,omitempty"`
+	ClosedByKind PartyKind `json:"closed_by_kind,omitempty"`
+	MergedAt     time.Time `json:"merged_at,omitzero"`
+	MergedVia    MergedVia `json:"merged_via,omitempty"`
+	MergeOID     string    `json:"merge_oid,omitempty"`
 	// MergedBy is who merged it through its gate, a merge record's principal
 	// ([Merge]): a seat's handle or a person's human seat, MergedByKind which;
 	// MergedOperatorID the credential a person used; OverrideReason a person's
@@ -2525,6 +2535,11 @@ type ChangeSummary struct {
 	// Card is what a listing's row draws beside its readiness, where
 	// [ReadQuery.Cards] asks; nil is not answered, never "nothing to say".
 	Card *ChangeCard `json:"card,omitempty"`
+	// WaitsFor is, on a needs=me listing, the half that listed the change:
+	// review (it asks the asker's review) or fix (the asker's own, awaiting
+	// their fix), which one page may hold both of; "" on every other listing.
+	// An answer field, so no versionedFields row.
+	WaitsFor Need `json:"waits_for,omitempty"`
 }
 
 // ChangeDetail is one change in detail: its summary, its description and its
@@ -2543,6 +2558,12 @@ type ChangeDetail struct {
 	// target, as its home recorded it; nil before the home merged any. One of
 	// an earlier revision or into another branch is the home's to merge again.
 	Mergeability *MergeabilityRow `json:"mergeability,omitempty"`
+	// TargetTip is its target branch's tip as the read found it, "" where no
+	// live branch holds the name: what Mergeability's TargetOID is read
+	// against, since a merge measured at an earlier tip stands until its home
+	// measures it again (home's MergeabilityRefresh), and what a fast-forward
+	// needs its head to hold. An answer field, so no versionedFields row.
+	TargetTip string `json:"target_tip,omitempty"`
 	// Participants is who takes part in its conversation (code_participants),
 	// by handle, at most MaxDetailParticipants; nil where not answered.
 	Participants *ParticipantList `json:"participants,omitempty"`
@@ -2763,7 +2784,14 @@ type RevisionRow struct {
 	PushID     string            `json:"push_id,omitempty"`
 	Position   statelog.Position `json:"position"`
 	At         time.Time         `json:"at"`
-	Facts      *RevisionFactsRow `json:"facts,omitempty"`
+	// Via is how the push that made it was built ("" for a revision no push
+	// made: an open by a tool, a reopen) and Forced whether it rewrote the
+	// source branch rather than moving it forward: a force-push, or, through
+	// the engine, a rebase of the change onto its target ([WriteRebaseChange],
+	// the engine's one write that rewrites a branch).
+	Via    PushVia           `json:"via,omitempty"`
+	Forced bool              `json:"forced,omitempty"`
+	Facts  *RevisionFactsRow `json:"facts,omitempty"`
 }
 
 // RevisionFactsRow is a revision's facts as the change's home recorded them

@@ -75,6 +75,9 @@ type gitletHost struct {
 	detail  gitlet.RepoDetail
 	listing []gitlet.RepoSummary // the repos listing; the one repository when nil
 	refs    map[string]string    // whole ref → oid
+	// held is, by whole ref, the commits behind its tip a landed_in finds in
+	// its history; a ref's own tip is always in it.
+	held map[string][]string
 	// moved is where each ref last moved (movedAt): below at, as every row
 	// a read answers is below its checkpoint.
 	moved map[string]statelog.Position
@@ -326,7 +329,9 @@ func (h *gitletHost) GitRead(_ context.Context, q gitlet.GitQuery) (gitlet.GitAn
 		out.Compare = &gitlet.CompareAnswer{Base: q.Compare.Base, Head: q.Compare.Head, Files: []gitlet.DiffFile{}}
 	case gitlet.GitLandedIn:
 		out.LandedIn = &gitlet.LandedInAnswer{Commit: q.LandedIn.Commit, Target: q.LandedIn.Target,
-			TargetOID: q.LandedIn.TargetOID, At: q.LandedIn.At, Landed: true}
+			TargetOID: q.LandedIn.TargetOID, At: q.LandedIn.At,
+			Landed: q.LandedIn.Commit == q.LandedIn.TargetOID ||
+				slices.Contains(h.held[q.LandedIn.Target], q.LandedIn.Commit)}
 	}
 	return out, nil
 }

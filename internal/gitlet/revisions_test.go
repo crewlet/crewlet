@@ -242,6 +242,45 @@ func TestAPusherBecomesAnAuthor(t *testing.T) {
 	}
 }
 
+// A REVISION SAYS HOW ITS PUSH MOVED ITS BRANCH: a git push forward is `git`
+// and not forced, an engine push that rewrote the branch (a rebase onto the
+// target, the engine's one write that does) is `engine` and forced, and the
+// revision an open by a tool made names no push at all.
+//
+// Mutation: keep no way or no force on the book's revision, or read neither
+// back, and this fails.
+func TestARevisionSaysHowItsPushMovedItsBranch(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	repo := changeRepo(t, n, "web")
+	opened, err := c.ProposeChange(t.Context(), opening(repo, featureRef, mainRef, dev))
+	requireChanged(t, opened, err)
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(featureRef, oidOf("B"), oidOf("C"))))
+	rebase := entry(uuid.Must(uuid.NewV7()).String(), set(featureRef, oidOf("C"), oidOf("D")))
+	rebase.Via, rebase.Commands[0].Forced = gitlet.ViaEngine, true
+	n.push(repo, rebase)
+
+	answer, err := readChange(t, n, ada, "", "web", opened.Number, 0, "")
+	if err != nil {
+		t.Fatalf("read the change: %v", err)
+	}
+	type how struct {
+		n      int64
+		via    gitlet.PushVia
+		forced bool
+	}
+	var got []how
+	for _, r := range answer.Revisions {
+		got = append(got, how{r.N, r.Via, r.Forced})
+	}
+	want := []how{{3, gitlet.ViaEngine, true}, {2, gitlet.ViaGit, false}, {1, "", false}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the revisions, newest first, say %+v; want %+v", got, want)
+	}
+}
+
 // DELETING THE SOURCE CLOSES THE CHANGE in the same record — reason
 // source_deleted, at the record's instant, one version more, head and
 // revisions kept — and restoring the branch reopens it at its head. A push
@@ -267,6 +306,10 @@ func TestDeletingTheSourceClosesTheChange(t *testing.T) {
 		t.Fatalf("after its source was deleted the change is %+v, want it closed, source_deleted, at version 2 "+
 			"and the deletion's record, its head and revision as they were", got)
 	}
+	if got.closedBy != "founder" || got.closedByKind != string(gitlet.PartyPerson) {
+		t.Fatalf("the change a person's push closed names %q (%s) as its closer, want founder, a person",
+			got.closedBy, got.closedByKind)
+	}
 	if revs := n.revisions(id); len(revs) != 1 {
 		t.Fatalf("deleting the source wrote a revision: %+v", revs)
 	}
@@ -277,7 +320,8 @@ func TestDeletingTheSourceClosesTheChange(t *testing.T) {
 	pushedBy(t, c, repo, ada, update(featureRef, gitlet.ZeroOID, oidOf("B")))
 	reopened, err := c.ProposeChange(ctx, reopening(repo, id, dev, got.version))
 	requireChanged(t, reopened, err)
-	if got := n.change(id); got.state != "open" || got.closed || got.closeReason != "" || got.revision != 1 {
+	if got := n.change(id); got.state != "open" || got.closed || got.closeReason != "" || got.closedBy != "" ||
+		got.revision != 1 {
 		t.Fatalf("reopened on its branch pushed back to its head, the change is %+v, want it open at revision 1",
 			got)
 	}

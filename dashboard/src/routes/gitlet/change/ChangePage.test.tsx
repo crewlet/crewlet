@@ -985,10 +985,11 @@ test("the Checks tab counts the latest checks and marks a failure or a full pass
   ];
   stubEngine(detail(), () => json({}));
   mount();
-  // THE DANGER COUNT REPLACES THE FIGURE: two failed of three, the label said to a screen reader.
+  // THE DANGER COUNT REPLACES THE FIGURE: two not passed of three, the label said to a screen
+  // reader, an errored check named apart from a failed one since it measured nothing.
   const failed = await tab();
-  expect(failed.textContent).toBe("Checks22 checks failed");
-  expect(within(failed).getByText("2 checks failed")).toBeTruthy();
+  expect(failed.textContent).toBe("Checks21 check failed and 1 errored");
+  expect(within(failed).getByText("1 check failed and 1 errored")).toBeTruthy();
   cleanup();
 
   LATEST = [check(), check({ name: "lint", state: "skipped", required: false })];
@@ -1068,6 +1069,32 @@ test("More holds where the change came from and whom it notified, and an old key
   const sections = await screen.findByRole("tablist", { name: "The change's sections" });
   const selected = await within(sections).findByRole("tab", { selected: true });
   expect(selected.textContent).toMatch(/^Conversation/);
+});
+
+// WHERE IT CAME FROM SAYS A CREDENTIAL BY ITS KIND AND AN INSTANT AS A RELATIVE TIME: a token's
+// id names nothing a reader knows, so it sits behind the copy control; a time standing alone in a
+// property row is the short form, its exact instant the title. Mutation: draw owner_operator_id as
+// written, or the instant by fmtDateTime, and this fails.
+test("More says the credential a change was opened through by its kind, and when as a relative time", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  const id = "01a1ef63-0000-7000-8000-000000000001";
+  stubEngine(detail({ owner: "jane", owner_kind: "person", owner_operator_id: `pat:${id}` }), () =>
+    json({}),
+  );
+  mount("#/gitlet/repos/web/changes/42?tab=more");
+  const card = await waitFor(() => {
+    const found = document.querySelector<HTMLElement>(".code-provenance");
+    expect(found?.textContent).toContain("through a personal access token");
+    return found!;
+  });
+  expect(card.textContent).not.toContain("pat:");
+  expect(
+    within(card).getByRole("button", { name: `Copy the personal access token's id, ${id}` }),
+  ).toBeDefined();
+  const opened = card.querySelector("time");
+  expect(opened?.textContent).toBe("1d ago");
+  expect(opened?.getAttribute("title")).toBe(fmtDateTime("2026-10-27T10:00:00Z"));
 });
 
 // THE COUNTS' FILES READ IS FILES CHANGED'S OWN FIRST QUESTION.
@@ -1379,6 +1406,111 @@ test("the timeline starts with the description and draws every record in the ord
   expect(words[3]).toMatch(/commented/);
   expect(words[4]).toMatch(/pushed revision 2/);
   expect(words[5]).toMatch(/asked .*sre for a review/);
+});
+
+// THE LIFECYCLE'S MOVES STAND IN THE TIMELINE where their records landed, each
+// naming who made it: a close with its reason under it, a reopen, a draft and
+// its readying, an edit, a work item, a retarget between two branches, and a
+// close by a branch's deletion, which says so rather than its code.
+// Mutation: leave the moves part out of the timeline, or word a source's
+// deletion as its reason, and this fails.
+test("the timeline draws each move of the change's lifecycle, by whom, where it landed", async () => {
+  const move = (seq: number, kind: string, extra = {}) => ({
+    kind,
+    by: "cto",
+    by_kind: "agent",
+    position: at(seq),
+    at: "2026-10-27T11:00:00Z",
+    ...extra,
+  });
+  stubEngine(detail(), () => json({}), {
+    "": page({ change: detail(), revisions: [revisionRow(1, 10)] }),
+    moves: page({
+      moves: [
+        move(20, "retitled"),
+        move(21, "work_item", { became: "ENG-7" }),
+        move(22, "drafted"),
+        move(23, "readied"),
+        move(24, "retargeted", { was: "refs/heads/main", became: "refs/heads/release" }),
+        move(25, "closed", { reason: "Superseded by web!43." }),
+        move(26, "reopened", { by: "dev" }),
+        move(27, "closed", { by: undefined, by_kind: undefined, reason: "source_deleted" }),
+      ],
+    }),
+  });
+  mount();
+  await waitFor(() => expect(timelineWords()).toHaveLength(10));
+  const words = timelineWords();
+  expect(words[1]).toMatch(/pushed revision 1/);
+  expect(words.slice(2)).toEqual([
+    expect.stringMatching(/^CTO edited its title/),
+    expect.stringMatching(/^CTO linked it to ENG-7/),
+    expect.stringMatching(/^CTO marked it as a draft/),
+    expect.stringMatching(/^CTO marked it ready for review/),
+    expect.stringMatching(/^CTO changed its target from main to release/),
+    expect.stringMatching(/^CTO closed it .*Superseded by web!43\.$/),
+    expect.stringMatching(/^Engineer reopened it/),
+    expect.stringMatching(/^Gitlet closed it by deleting its branch/),
+  ]);
+});
+
+// THE QUEUE'S ENTRIES STAND IN THE TIMELINE: who added the change to the queue,
+// and how each entry ended, where its record landed: an ejection with what it
+// found and named, a dequeue with why, and a landing as the queue's. A revision
+// the engine's rebase made says it was rebased onto its target, and a
+// force-push says so.
+// Mutation: leave the queue part out of the timeline, word every revision as
+// pushed, or drop an ejection's checks, and this fails.
+test("the timeline draws the change's queue entries and says which revisions were rebased", async () => {
+  const queued = (id: string, enq: number, extra = {}) => ({
+    entry_id: id,
+    target_ref: "refs/heads/main",
+    head_oid: HEAD,
+    method: "merge",
+    enqueued_by: { handle: "cto", kind: "agent" },
+    state: "waiting",
+    enqueued_position: at(enq),
+    enqueued_at: "2026-10-27T11:00:00Z",
+    ...extra,
+  });
+  const ended = (seq: number) => ({ ended_position: at(seq), ended_at: "2026-10-27T11:30:00Z" });
+  stubEngine(detail(), () => json({}), {
+    "": page({
+      change: detail(),
+      revisions: [
+        { ...revisionRow(3, 70), via: "engine", forced: true },
+        { ...revisionRow(2, 40), via: "git", forced: true },
+        { ...revisionRow(1, 10), via: "git" },
+      ],
+    }),
+    queue: page({
+      queue_entries: [
+        queued("e1", 20, {
+          state: "ejected",
+          reason: "checks_undefined",
+          checks: ["lint", "unit"],
+          ...ended(30),
+        }),
+        queued("e2", 50, { state: "dequeued", reason: "asked", ...ended(60) }),
+        queued("e3", 80, { state: "landed", commit_oid: HEAD, ...ended(90) }),
+      ],
+    }),
+  });
+  mount();
+  await waitFor(() => expect(timelineWords()).toHaveLength(10));
+  expect(timelineWords().slice(1)).toEqual([
+    expect.stringMatching(/^Engineer pushed revision 1/),
+    expect.stringMatching(/^CTO added it to the queue for main/),
+    expect.stringMatching(
+      /^Gitlet took it out of the queue: its branch's checks file defines a required check in no form that runs: lint and unit/,
+    ),
+    expect.stringMatching(/^Engineer force-pushed revision 2/),
+    expect.stringMatching(/^CTO added it to the queue for main/),
+    expect.stringMatching(/^It was taken out of the queue/),
+    expect.stringMatching(/^Engineer rebased revision 3 onto main/),
+    expect.stringMatching(/^CTO added it to the queue for main/),
+    expect.stringMatching(/^Gitlet landed it on main through the queue/),
+  ]);
 });
 
 // A REVIEW'S DISC WEARS ITS VERDICT'S TONE, the verdict said in words beside
@@ -1897,6 +2029,86 @@ test("a merged change offers no review, no ask and no close, only its revert", a
   }
 });
 
+// A CLOSED CHANGE NAMES WHO CLOSED IT, in its header and its merge box, never its
+// owner for somebody else's close; where no closer is known (a push nobody made
+// deleted its branch) the owner only proposed it, and the reason is worded.
+// Mutation: name the owner as the header's actor for every closed change, or
+// draw the reason's code, and this fails.
+test("a closed change's header and merge box name who closed it, not its owner", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T13:00:00Z"));
+  stubEngine(
+    detail({
+      state: "closed",
+      readiness: undefined,
+      closed_at: "2026-10-27T12:00:00Z",
+      closed_by: "cto",
+      closed_by_kind: "agent",
+      close_reason: "Superseded by web!43.",
+    }),
+    () => json({}),
+  );
+  mount();
+  const line = await waitFor(() => {
+    const said = document.querySelector<HTMLElement>(".code-change-byline");
+    expect(said?.textContent).toMatch(/1 hour ago/);
+    return said!;
+  });
+  expect(line.textContent).toMatch(
+    /^ClosedCTO\s*closed the proposal of retry\s*into main\s*·?1 hour ago$/,
+  );
+  const box = await screen.findByRole("article", { name: "Closed without being merged" });
+  expect(box.textContent).toMatch(
+    /CTO\s*closed it\s*1 hour ago\.\s*Superseded by web!43\. Reopen it from the page bar\.$/,
+  );
+});
+
+// A REASON WRITTEN WITHOUT ITS STOP is ended as a sentence, so "Reopen it" reads apart.
+// Mutation: say the reason as written, and it runs into the next sentence.
+test("a close's reason without a closing stop is ended before the next sentence", async () => {
+  stubEngine(
+    detail({
+      state: "closed",
+      readiness: undefined,
+      closed_at: "2026-10-27T12:00:00Z",
+      closed_by: "cto",
+      closed_by_kind: "agent",
+      close_reason: "Closed by mistake",
+    }),
+    () => json({}),
+  );
+  mount();
+  const box = await screen.findByRole("article", { name: "Closed without being merged" });
+  expect(box.textContent).toMatch(/Closed by mistake\. Reopen it from the page bar\.$/);
+});
+
+test("a change a push closed by deleting its branch names no closer, and says why in words", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T13:00:00Z"));
+  stubEngine(
+    detail({
+      state: "closed",
+      readiness: undefined,
+      closed_at: "2026-10-27T12:00:00Z",
+      close_reason: "source_deleted",
+    }),
+    () => json({}),
+  );
+  mount();
+  const line = await waitFor(() => {
+    const said = document.querySelector<HTMLElement>(".code-change-byline");
+    expect(said?.textContent).toMatch(/1 hour ago/);
+    return said!;
+  });
+  expect(line.textContent).toMatch(
+    /^ClosedEngineer\s*proposed retry\s*into main\s*, closed\s*·?1 hour ago$/,
+  );
+  const box = await screen.findByRole("article", { name: "Closed without being merged" });
+  expect(box.textContent).toBe(
+    "Closed without being mergedIts branch was deleted. Reopen it from the page bar.",
+  );
+});
+
 test("a closed change offers its reopen alone", async () => {
   const acted = stubEngine(detail({ state: "closed", readiness: undefined }), () =>
     json({ outcome: "applied" }),
@@ -2050,6 +2262,11 @@ test("More names each recipient with why they heard, in the third person", async
   const list = await screen.findByRole("list", { name: "Whom it notified" });
   expect(within(list).getByText(/asked to review/)).toBeTruthy();
   expect(within(list).queryByText(/your review/)).toBeNull();
+  // WHEN AS A RELATIVE TIME, as the rest of Gitlet says it, the instant in its title:
+  // never a clock to the second. Mutation: print the instant, and this fails.
+  const when = list.querySelector("time");
+  expect(when?.textContent).toMatch(/ago|now/);
+  expect(when?.getAttribute("title")).toMatch(/\d{4}/);
 });
 
 // EVERY WRITE IS DRAWN FOR EVERY READER, held with the reason it cannot act:
@@ -2327,6 +2544,16 @@ test.each([
     409,
     /It still waits for an approval of its latest revision\. @cto can move it forward\./,
   ],
+  [
+    "not_fast_forward",
+    {
+      error: "invalid",
+      refusal: "not_fast_forward",
+      detail: "code_merge_change: the head does not hold the target's tip.",
+    },
+    422,
+    /Its target has moved past its head, so a fast-forward cannot land it: rebase it first/,
+  ],
 ])("a %s refusal is drawn in its own words", async (_word, body, status, said) => {
   stubEngine(detail(ready()), () => json(body, status));
   mount();
@@ -2409,6 +2636,28 @@ test("Re-run failed checks runs every failed check of the change's head again", 
     tool: "code_rerun_checks",
     args: { change: "web!42", all_failed: true },
   });
+});
+
+// A REFUSED RE-RUN IS DRAWN UNDER THE SECTION'S WORDS, on a row of its own,
+// never in the end cell beside Re-run, whose width squeezed the title to a word
+// a line. Mutation: drop the section's refusal place, and the refusal is drawn
+// inside the end cell.
+test("a refused Re-run is drawn on its own row under the checks section's words", async () => {
+  LATEST = [check({ name: "e2e", state: "failed" }), check()];
+  stubEngine(detail(), () =>
+    json({ error: "invalid", detail: "the re-run was refused for this test" }, 422),
+  );
+  mount();
+  const box = await screen.findByRole("region", { name: "Merge" });
+  const section = await within(box).findByRole("article", { name: "1 of 2 checks failed" });
+  fireEvent.click(within(section).getByRole("button", { name: "Re-run failed checks" }));
+  const place = await waitFor(() => {
+    const found = section.querySelector(".code-merge-box__refusal");
+    expect(found?.textContent).toMatch(/refused/i);
+    return found!;
+  });
+  expect(place.closest(".code-merge-box__end")).toBeNull();
+  expect(section.querySelector(".code-merge-box__end")?.textContent).not.toMatch(/refused/i);
 });
 
 /** The reader, served the change's later writes as well. */
@@ -4304,6 +4553,20 @@ test("checks past their horizon say so, and a refused read says why", async () =
   expect(tab.textContent).toBe("Checks");
 });
 
+// AN ANSWER WITHOUT `checks` IS A HEAD NO CHECK RAN ON: the engine leaves an
+// empty list out, so the box and the rail say so as soon as it answers, never
+// "Reading its checks" for good. Mutation: read an absent list as not answered.
+test("a checks answer that names no list says no check has run", async () => {
+  latest = () => json({ position: POSITION, level: "session" });
+  const { box } = await mountStory();
+  expect(
+    await within(box).findByRole("article", { name: "No check has run on its head" }),
+  ).toBeTruthy();
+  const rail = screen.getByRole("region", { name: "Checks" });
+  expect(await within(rail).findByText("No check has run on its head.")).toBeTruthy();
+  expect(screen.queryByText("Reading its checks…")).toBeNull();
+});
+
 // THE FINDINGS SECTION COUNTS THE OPEN ONES BY WEIGHT, and a standing blocker
 // turns it. Mutation: call a major a blocker, and this fails.
 test("the findings section weighs the open findings, and a blocker turns it", async () => {
@@ -4420,6 +4683,76 @@ test("the details line says what the press will do", async () => {
   expect(note()).toBe(
     "main moves to its head, 0123456, and no commit is written. Its branch is deleted. ENG-415 closes once it merges.",
   );
+});
+
+// FAST-FORWARD IS HELD WHERE THE TARGET MOVED PAST THE BRANCH: the head's facts,
+// measured against the tip the read found, name another merge base, so the
+// build would refuse it; the option says why and cannot be chosen. Mutation:
+// offer it whatever the facts say, and it is chosen.
+test("Fast-forward is held, saying why, where its target has moved past the branch", async () => {
+  const behind = () => ({
+    ...storyParts(() => story({ target_tip: C71 })),
+    "": () =>
+      json({
+        position: POSITION,
+        level: "session",
+        change: story({ target_tip: C71 }),
+        revisions: [
+          {
+            n: 3,
+            head: HEAD,
+            pusher: "dev",
+            pusher_kind: "agent",
+            position: POSITION,
+            at: "2026-10-27T09:37:00Z",
+            facts: {
+              target_ref: "refs/heads/main",
+              target_oid: C71,
+              base_oid: "b".repeat(40),
+              touched: ["a.go"],
+              node: "n1",
+              measured_at: "2026-10-27T09:38:10Z",
+            },
+          },
+        ],
+      }),
+  });
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  vi.setSystemTime(new Date(STORY_NOW));
+  stubEngine(
+    () => story({ target_tip: C71 }),
+    () => json({ outcome: "applied" }),
+    behind(),
+  );
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const box = await screen.findByRole("region", { name: "Merge" });
+  const ff = await within(box).findByRole("radio", { name: "Fast-forward" });
+  await waitFor(() => expect(ff.getAttribute("aria-disabled")).toBe("true"));
+  const why = document.getElementById(ff.getAttribute("aria-describedby") ?? "");
+  expect(why?.textContent).toBe(
+    "Fast-forward is held: main has moved past this branch, so main cannot move to its head. Rebase it first, or merge it another way.",
+  );
+  fireEvent.click(ff);
+  expect(
+    within(box).getByRole("radio", { name: "Merge commit" }).getAttribute("aria-checked"),
+  ).toBe("true");
+});
+
+// A MEASUREMENT OF A TIP THE TARGET HAS MOVED PAST SAYS SO, rather than "Merges
+// cleanly ... ready" until the home measures again. Mutation: ignore target_tip.
+test("a merge measured before its target moved says the target moved since", async () => {
+  const { box } = await mountStory(() => story({ target_tip: "e".repeat(40) }));
+  const section = await within(box).findByRole("article", {
+    name: "Merged cleanly into main before it moved",
+  });
+  expect(section.textContent).toContain("Measured against main at c71d0e9, 10 minutes ago.");
+  expect(section.textContent).toContain("main has moved since, to eeeeeee");
+  expect(within(section).getByRole("button", { name: "Rebase" })).toBeTruthy();
+  cleanup();
+  const { box: current } = await mountStory(() => story({ target_tip: C71 }));
+  expect(
+    await within(current).findByRole("article", { name: "Merges cleanly into main" }),
+  ).toBeTruthy();
 });
 
 // RE-REQUEST ASKS AGAIN, IN ONE ASK, everyone whose verdict is not an approval

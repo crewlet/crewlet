@@ -272,7 +272,11 @@ export function changeOrder(f: Filters, chosen: string): ChangeOrder {
 /** The state tabs, in the order a reader looks: what is live, then what ended. */
 const STATE_TABS: readonly KnownChangeState[] = ["open", "draft", "merged", "closed"];
 
-/** What the foot says it shows, of the scope's total where only the scope narrows. */
+/**
+ * What the foot says it shows, of the scope's total where only the scope narrows. A page
+ * with more after it says it shows the first of them: the engine's page of a narrowed
+ * listing may be short and still have more to load.
+ */
 export function footWords(
   f: Filters,
   shown: number,
@@ -293,12 +297,16 @@ export function footWords(
   const match = shown === 1 ? "matches" : "match";
   const what =
     searched && filtered ? "the search and filters" : searched ? "the search" : "the filters";
-  if (filtered || searched)
-    return `Showing ${plural(shown, `${word}change`)} that ${match} ${what}`;
+  const listed = !more
+    ? plural(shown, `${word}change`)
+    : shown === 1
+      ? `the first ${word}change`
+      : `the first ${plural(shown, `${word}change`)}`;
+  if (filtered || searched) return `Showing ${listed} that ${match} ${what}`;
   if (total !== undefined && (more || total >= shown) && f.state !== EVERY_STATE) {
     return `Showing ${fmtCount(shown)} of ${plural(total, `${word}change`)}`;
   }
-  return `Showing ${plural(shown, `${word}change`)}`;
+  return `Showing ${listed}`;
 }
 
 export function Changes() {
@@ -409,7 +417,13 @@ export function Changes() {
               repo={repo !== "" && isRepoName(repo) ? repo : ""}
             />
             <div className="code-changes-head__pickers">
-              <RepoPicker size="sm" repo={repo} onChoose={setRepo} every="Every repository" />
+              <RepoPicker
+                size="sm"
+                repo={repo}
+                onChoose={setRepo}
+                every="Every repository"
+                className="code-changes-head__repo"
+              />
               <SeatPicker label="Owner" value={owner} onChange={setOwner} />
               <SeatPicker label="Reviewer" value={reviewer} onChange={setReviewer} />
               <ReadinessPicker readiness={readiness} needs={needs} />
@@ -489,6 +503,7 @@ function StateTabs({
       activateHint={null}
       size="sm"
       label="Change state"
+      className="code-changes-head__states"
       value={state}
       onValueChange={setState}
       options={options}

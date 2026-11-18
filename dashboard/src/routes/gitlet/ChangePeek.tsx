@@ -12,6 +12,7 @@
 import { EmptyState, Skeleton, Stack, VisuallyHidden } from "@crewlethq/ui";
 import { CircleAlertGlyph, CircleCheckGlyph, CircleDashedGlyph } from "@crewlethq/icons/glyphs";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
+import { SOURCE_DELETED } from "~/contract/code.ts";
 import { QueryState } from "~/components/common.tsx";
 import { changeLive, parseChangeRef, preconditionWord, refName, repoPath } from "~/lib/code.ts";
 import { plural } from "~/lib/format.ts";
@@ -151,6 +152,7 @@ function endedSentence(change: CodeChangeDetail): string {
       ? "Merged: its target came to hold its head by a push."
       : "Merged through its gate.";
   }
+  if (change.close_reason === SOURCE_DELETED) return "Closed: its branch was deleted.";
   return change.close_reason ? `Closed: ${change.close_reason}` : "Closed without being merged.";
 }
 

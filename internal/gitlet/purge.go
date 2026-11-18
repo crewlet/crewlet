@@ -182,6 +182,8 @@ const (
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
 			CROSS JOIN code_change_authors AS a WHERE a.change_id = c.id LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_change_moves AS v WHERE v.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
 			CROSS JOIN code_change_bodies AS b WHERE b.change_id = c.id LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
 			CROSS JOIN code_reviewers AS r WHERE r.change_id = c.id LIMIT ?2))

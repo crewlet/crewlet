@@ -11,10 +11,12 @@
  */
 
 import { Fragment, type ReactNode } from "react";
-import { Card, EmptyValue, Stack, Tag } from "@crewlethq/ui";
+import { Card, Copyable, EmptyValue, RelativeTime, Stack, Tag } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { href } from "~/app/router.tsx";
+import { AgoTime } from "~/components/AgoTime.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { credentialOf, credentialWords } from "~/lib/attribution.ts";
 import { codeReasonPhrase, commitPath, refName, shortOID } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime } from "~/lib/format.ts";
@@ -98,6 +100,7 @@ export function Revisions({
 
 /** Where the change came from: who opened it, from which turn and run, for which work, and how it ended. */
 export function Provenance({ change }: { change: CodeChangeDetail }) {
+  const now = useNow();
   const seatBadge = useSeatBadgeOf();
   const work = change.work_item;
   const rows: { label: string; value: ReactNode }[] = [
@@ -107,12 +110,20 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
         <>
           <Face who={change.owner} size="text" /> {seatBadge(change.owner).name}
           {change.owner_operator_id && (
-            <span className="muted mono"> via {change.owner_operator_id}</span>
+            <span className="muted">
+              {" "}
+              through <Through credential={change.owner_operator_id} />
+            </span>
           )}
         </>
       ),
     },
-    { label: "Opened", value: fmtDateTime(change.opened_at) },
+    {
+      label: "Opened",
+      value: (
+        <RelativeTime value={change.opened_at} now={now} title={fmtDateTime(change.opened_at)} />
+      ),
+    },
     {
       label: "Turn",
       value: change.created_turn ? (
@@ -161,7 +172,7 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
             label: "Merged",
             value: (
               <>
-                {change.merged_at && fmtDateTime(change.merged_at)}{" "}
+                {change.merged_at && <AgoTime value={change.merged_at} clock />}{" "}
                 {change.merged_via === "push" ? "by a push" : "through its gate"}
                 {change.merged_by && (
                   <>
@@ -185,9 +196,18 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
       ? [
           {
             label: "Closed",
-            value: `${change.closed_at ? fmtDateTime(change.closed_at) : ""}${
-              change.close_reason ? ` · ${change.close_reason}` : ""
-            }`,
+            value: (
+              <>
+                {change.closed_at && (
+                  <RelativeTime
+                    value={change.closed_at}
+                    now={now}
+                    title={fmtDateTime(change.closed_at)}
+                  />
+                )}
+                {change.close_reason && ` · ${change.close_reason}`}
+              </>
+            ),
           },
         ]
       : []),
@@ -202,9 +222,33 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
   );
 }
 
+/**
+ * The credential a person opened it through: its kind in words, the id behind a copy
+ * control ([credentialOf]), as Settings says a revision's. A token's id names nothing a
+ * reader knows, and its label is its owner's and an admin's to read, not every reader's.
+ */
+function Through({ credential }: { credential: string }) {
+  const named = credentialOf(credential);
+  if (!named) return <>{credentialWords(credential)}</>;
+  return (
+    <>
+      a{" "}
+      <Copyable
+        value={named.id}
+        display={named.kind}
+        displayWords
+        variant="inline"
+        ariaLabel={`Copy the ${named.kind}'s id, ${named.id}`}
+        title={`Copy ${named.id}`}
+      />
+    </>
+  );
+}
+
 /** Whom the change's records notified, newest first, each recipient with why. */
 export function Notified({ change }: { change: CodeChangeDetail }) {
   const seatBadge = useSeatBadgeOf();
+  const now = useNow();
   const read = useCodeQuery(
     "code_change_routing",
     { name: change.repo, change: change.number },
@@ -237,9 +281,9 @@ export function Notified({ change }: { change: CodeChangeDetail }) {
               key={r.record_id}
               label={`Notified ${fmtDateTime(r.at)}`}
               head={
-                <time className="code-byline__when" dateTime={r.at} title={fmtDateTime(r.at)}>
-                  {fmtDateTime(r.at)}
-                </time>
+                <span className="code-byline__when">
+                  <RelativeTime value={r.at} now={now} title={fmtDateTime(r.at)} />
+                </span>
               }
             >
               {r.excerpt && <p>{r.excerpt}</p>}

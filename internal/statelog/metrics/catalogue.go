@@ -887,7 +887,9 @@ func Catalogue() []Instrument {
 			Attributes: []string{"reason"},
 			Shows: "Entries a merge queue's home put out of their queue, one " +
 				"for each ejection of an eject record it appended, by " +
-				"`reason`: `check_failed`, a bisect's culprit; `conflict` and " +
+				"`reason`: `check_failed`, a bisect's culprit; " +
+				"`checks_undefined`, every entry of a train whose base's checks " +
+				"file defines a required check in no form that runs; `conflict` and " +
 				"`not_fast_forward`, a merge its chain could not build; " +
 				"`gate_unmet` and `head_moved`, an entry its landing would not " +
 				"land; `repo_mirrored`, the entries of a pull mirror's queue. " +

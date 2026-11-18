@@ -140,6 +140,12 @@ const (
 	// EjectCheckFailed is a required check that failed on what the entry was
 	// tested in.
 	EjectCheckFailed QueueEndReason = "check_failed"
+	// EjectChecksUndefined is a required check the checks file at the train's
+	// base, the target's tip, defines in no form that runs: no candidate can
+	// pass it, so the entry was tested in nothing, and is put out until the
+	// target defines it or its gate stops requiring it. Version 8
+	// ([GateChecksVersion]).
+	EjectChecksUndefined QueueEndReason = "checks_undefined"
 	// EjectConflict is the entry's merge onto what was before it in its
 	// train conflicting.
 	EjectConflict QueueEndReason = "conflict"
@@ -160,8 +166,8 @@ const (
 
 // EjectReasons is the closed set an eject record may name, in this order.
 func EjectReasons() []QueueEndReason {
-	return []QueueEndReason{EjectCheckFailed, EjectConflict, EjectGateUnmet, EjectHeadMoved, EjectNotFastForward,
-		EjectRepoMirrored}
+	return []QueueEndReason{EjectCheckFailed, EjectChecksUndefined, EjectConflict, EjectGateUnmet, EjectHeadMoved,
+		EjectNotFastForward, EjectRepoMirrored}
 }
 
 // MergedViaQueue is how a change a land record merged reached its target
@@ -509,8 +515,10 @@ func (e Eject) validate() error {
 		switch {
 		case !slices.Contains(EjectReasons(), x.Reason):
 			return badField(field+".reason", "%q is not one of %s", x.Reason, words.Or(EjectReasons()))
-		case len(x.Checks) > 0 && x.Reason != EjectCheckFailed:
-			return badField(field+".checks", "only a failed check's ejection names checks")
+		case len(x.Checks) > 0 && x.Reason != EjectCheckFailed && x.Reason != EjectChecksUndefined:
+			return badField(field+".checks", "only a failed or an undefined check's ejection names checks")
+		case len(x.Checks) == 0 && x.Reason == EjectChecksUndefined:
+			return badField(field+".checks", "an undefined check's ejection names the checks")
 		case len(x.Paths) > 0 && x.Reason != EjectConflict:
 			return badField(field+".paths", "only a conflict's ejection names paths")
 		case len(x.Checks) > MaxRequiredChecks:

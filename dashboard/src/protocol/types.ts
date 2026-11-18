@@ -56,6 +56,7 @@ import type { ToolRow } from "../contract/tools.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
 import type {
+  CHANGE_MOVE_KINDS,
   CHANGE_STATES,
   CodeSearchAnswer,
   COMMAND_OUTCOMES,
@@ -8783,6 +8784,9 @@ export interface CodeChangeRow {
   opened_position: LogPosition;
   closed_at?: string;
   close_reason?: string;
+  /** Who closed it, while it is closed; absent where a push nobody made closed it. */
+  closed_by?: string;
+  closed_by_kind?: CodePartyKind;
   merged_at?: string;
   merged_via?: string;
   merge_oid?: string;
@@ -8821,6 +8825,11 @@ export interface CodeChangeSummary extends CodeChangeRow {
   updated_at: string;
   /** Its card, where `cards=true` asks (`gitlet.ChangeSummary.Card`); absent is not answered. */
   card?: CodeChangeCard;
+  /**
+   * On a `needs=me` listing, the half that listed it: `review` (it asks the reader's
+   * review) or `fix` (the reader's own, awaiting their fix); absent on every other listing.
+   */
+  waits_for?: "review" | "fix" | (string & {});
 }
 
 /** One reviewer on a listed change's card (`gitlet.ReviewerFace`). */
@@ -8948,6 +8957,8 @@ export interface CodeChangeDetail extends CodeChangeSummary {
   conversation?: CodeConversationRow;
   /** Absent for a change its home has merged no revision of yet. */
   mergeability?: CodeMergeabilityRow;
+  /** Its target branch's tip as the read found it; absent where no live branch holds the name. */
+  target_tip?: string;
   /** Who takes part in its conversation, by handle (`gitlet.ParticipantList`); absent where not answered. */
   participants?: CodeParticipantList;
 }
@@ -8989,6 +9000,10 @@ export interface CodeRevisionRow {
   push_id?: string;
   position: LogPosition;
   at: string;
+  /** How the push that made it was built (`git`, `engine`); absent where no push made it. */
+  via?: string;
+  /** It rewrote the source branch: a force-push, or through the engine a rebase onto the target. */
+  forced?: boolean;
   /** Absent for a revision its home has recorded no facts of yet. */
   facts?: CodeRevisionFacts;
 }
@@ -9169,6 +9184,10 @@ export interface CodeChangeAnswer extends CodePage {
   change?: CodeChangeDetail;
   revisions?: CodeRevisionRow[];
   reviewers?: CodeReviewerRow[];
+  /** The `moves` part: the moves of its lifecycle, oldest first. */
+  moves?: CodeChangeMoveRow[];
+  /** The `queue` part: its queue entries, in queue order. */
+  queue_entries?: CodeChangeQueueEntryRow[];
   comments?: CodeCommentRow[];
   reviews?: CodeReviewRow[];
   findings?: CodeFindingRow[];
@@ -9187,6 +9206,46 @@ export interface CodeChangeAnswer extends CodePage {
   /** The `excerpts` part: each finding's excerpt by its id, and the context applied. */
   excerpts?: Record<string, CodeExcerpt>;
   context?: number;
+}
+
+/**
+ * One move of a change's lifecycle (`gitlet.ChangeMove`): what it did, who made
+ * it (absent for a push nobody made), a close's reason, what a retarget moved
+ * its target from (`was`) and to (`became`), and the work item key an edit set
+ * (`became`, absent where it cleared one).
+ */
+export interface CodeChangeMoveRow {
+  kind: (typeof CHANGE_MOVE_KINDS)[number] | (string & {});
+  by?: string;
+  by_kind?: CodePartyKind;
+  reason?: string;
+  was?: string;
+  became?: string;
+  position: LogPosition;
+  at: string;
+}
+
+/**
+ * One queue entry of a change (`gitlet.ChangeQueueEntry`): who added it to its
+ * target's queue and where, and for one that ended how (`reason`, absent for a
+ * landing), what an ejection named and the commit a landing made, with the
+ * positions of the records that enqueued and ended it.
+ */
+export interface CodeChangeQueueEntryRow {
+  entry_id: string;
+  target_ref: string;
+  head_oid: string;
+  method: string;
+  enqueued_by: CodeParty;
+  state: (typeof QUEUE_STATES)[number] | (string & {});
+  reason?: string;
+  checks?: string[];
+  paths?: string[];
+  commit_oid?: string;
+  enqueued_position: LogPosition;
+  enqueued_at: string;
+  ended_position?: LogPosition;
+  ended_at?: string;
 }
 
 /** One line of a finding's excerpt (`gitlet.ExcerptLine`). */

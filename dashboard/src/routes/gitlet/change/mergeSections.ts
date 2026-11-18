@@ -4,6 +4,7 @@
  */
 
 import { CHECK_HISTORY_DAYS } from "~/lib/checks.ts";
+import { refName } from "~/lib/code.ts";
 import type {
   CodeChangeDetail,
   CodePrecondition,
@@ -73,6 +74,44 @@ export function boxTone(readiness: CodeReadiness | undefined): DiscTone {
     sections.find((s) => s.state === "unmet") ?? sections.find((s) => s.state === "computing");
   if (next) return sectionTone(next);
   return readiness?.preconditions.length ? "success" : "neutral";
+}
+
+/**
+ * Whether its merge was measured at a tip its target has since moved past: the
+ * home measures a moved target again only after a while, so until then the
+ * measurement is of a branch that no longer stands.
+ */
+export function measuredBeforeMove(
+  change: Pick<CodeChangeDetail, "target_ref" | "target_tip" | "mergeability">,
+): boolean {
+  const m = change.mergeability;
+  return (
+    m !== undefined &&
+    change.target_tip !== undefined &&
+    m.target_ref === change.target_ref &&
+    m.target_oid !== change.target_tip
+  );
+}
+
+/**
+ * Why Fast-forward cannot land its head, or undefined where it may: its target
+ * moves to its head only where the head holds the target's tip. Known from the
+ * head revision's facts, measured against the tip the read found: their merge
+ * base is that tip where the head holds it, and another commit where the target
+ * has moved past the branch. Facts of an earlier tip say neither, so the build
+ * answers.
+ */
+export function fastForwardHeld(
+  change: Pick<CodeChangeDetail, "target_ref" | "target_tip" | "head" | "revision">,
+  revisions: readonly Pick<CodeRevisionRow, "n" | "facts">[],
+): string | undefined {
+  const tip = change.target_tip;
+  const facts = revisions.find((r) => r.n === change.revision)?.facts;
+  if (!tip || tip === change.head || !facts || facts.target_ref !== change.target_ref)
+    return undefined;
+  if (facts.base_oid === tip || facts.target_oid !== tip) return undefined;
+  const target = refName(change.target_ref).name;
+  return `${target} has moved past this branch, so ${target} cannot move to its head. Rebase it first, or merge it another way.`;
 }
 
 /** Whether its head's checks are still kept: pushed within the checks' horizon. */

@@ -161,6 +161,7 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 		}
 		next.state, next.closeReason = ChangeStateClosed, p.Reason
 		next.closedAt = sql.NullInt64{Int64: at.at(), Valid: true}
+		next.closedBy, next.closedByKind = p.By.party()
 	case ChangeReopen:
 		if row.state != ChangeStateClosed {
 			return changeNotApplied(ctx, at, repoID, changeID, "a reopen takes a closed change, and it is "+
@@ -170,6 +171,7 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 			return changeNotApplied(ctx, at, repoID, changeID, "who reopened it names no seat")
 		}
 		next.state, next.closeReason, next.closedAt = ChangeStateOpen, "", sql.NullInt64{}
+		next.closedBy, next.closedByKind = "", ""
 		// The source moved while closed: its head now is a revision of its
 		// own, made by the reopen.
 		if p.Head != row.head {
@@ -189,6 +191,13 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 		return 0, fmt.Errorf("gitlet: write change %s at %s: %w", changeID, at.position, err)
 	}
 	rows := 1
+	// WHAT THE RECORD DID, as the change's timeline reads it (changemoves.go).
+	if moves := lifecycleMoves(payload, row, next); len(moves) > 0 {
+		if err := writeMoves(ctx, tx, at.maxVariables, at.packed, at.at(), moves); err != nil {
+			return 0, fmt.Errorf("%w (the record at %s)", err, at.position)
+		}
+		rows += len(moves)
+	}
 	if body != nil {
 		stmt, args := setBodySQL, []any{changeID, *body}
 		if *body == "" {
@@ -310,10 +319,27 @@ func writeChanges(ctx context.Context, tx store.Execer, maxVariables int, w chan
 			return []any{r.id, r.repoID, r.number, r.title, r.bodyBytes, string(r.state), r.source, r.target,
 				r.head, r.revision, r.owner, string(r.ownerKind), r.operator, string(r.work.Backend), r.work.ID,
 				r.work.Key, r.work.Project, r.turn, r.run, r.openedAt, r.opened, r.closedAt, r.closeReason,
-				r.mergedAt, string(r.mergedVia), r.mergeOID, r.mergedBy, string(r.mergedByKind), r.mergedOperator,
-				r.overrideReason, r.version, r.position, r.updatedAt}
+				r.closedBy, string(r.closedByKind), r.mergedAt, string(r.mergedVia), r.mergeOID, r.mergedBy,
+				string(r.mergedByKind), r.mergedOperator, r.overrideReason, r.version, r.position, r.updatedAt}
 		})
 	return err
+}
+
+// writeMoves writes moves at the record's position and instant, in as few statements as the
+// parameters allow; a key already held is a skip, never an abort that would stall the log.
+func writeMoves(ctx context.Context, tx store.Execer, maxVariables int, packed, at int64, moves []moveRow) error {
+	_, err := store.InsertRows(ctx, tx, maxVariables,
+		`INSERT INTO code_change_moves (change_id, position, kind, by_handle, by_kind, reason, was, became, at)
+			VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, position, kind) DO NOTHING`, len(moves),
+		func(i int) []any {
+			m := moves[i]
+			return []any{m.change, packed, string(m.kind), m.by, string(m.byKind), m.reason, m.was, m.became, at}
+		})
+	if err != nil {
+		return fmt.Errorf("gitlet: write the changes' moves: %w", err)
+	}
+	return nil
 }
 
 // write writes what a push record's [changeBook] made of the changes it
@@ -358,13 +384,17 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 	}
 	if _, err := store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO code_revisions (change_id, n, head_oid, pusher, pusher_kind, push_id, position, at,
-			working_for) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, n) DO NOTHING`, len(w.revisions),
+			working_for, via, forced) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, n) DO NOTHING`, len(w.revisions),
 		func(i int) []any {
 			r := w.revisions[i]
-			return []any{r.change, r.n, r.head, r.pusher, string(r.kind), r.pushID, b.packed, b.at, madeFor[i]}
+			return []any{r.change, r.n, r.head, r.pusher, string(r.kind), r.pushID, b.packed, b.at, madeFor[i],
+				string(r.via), r.forced}
 		}); err != nil {
 		return 0, fmt.Errorf("gitlet: write the revisions: %w", err)
+	}
+	if err := writeMoves(ctx, tx, maxVariables, b.packed, b.at, w.moves); err != nil {
+		return 0, err
 	}
 	if _, err := store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO code_change_authors (change_id, author, author_kind, first_revision, position) VALUES `,
@@ -444,7 +474,8 @@ const (
 		revision = excluded.revision, version = excluded.version,
 		position = excluded.position, updated_at = excluded.updated_at`
 	changeStateMoved changeWrite = `ON CONFLICT (id) DO UPDATE SET state = excluded.state,
-		closed_at = excluded.closed_at, close_reason = excluded.close_reason, head_oid = excluded.head_oid,
+		closed_at = excluded.closed_at, close_reason = excluded.close_reason, closed_by = excluded.closed_by,
+		closed_by_kind = excluded.closed_by_kind, head_oid = excluded.head_oid,
 		revision = excluded.revision, version = excluded.version,
 		position = excluded.position, updated_at = excluded.updated_at`
 	changeMerged changeWrite = `ON CONFLICT (id) DO UPDATE SET state = excluded.state,
@@ -494,5 +525,6 @@ const (
 	// insertChangesSQL and changeValuesSQL are [writeChanges]' statement, a
 	// chunk each: every column [changeColumns] names, in its order.
 	insertChangesSQL = `INSERT INTO code_changes (` + changeColumns + `) VALUES `
-	changeValuesSQL  = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	changeValuesSQL  = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		?, ?)`
 )

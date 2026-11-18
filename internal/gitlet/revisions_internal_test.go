@@ -203,16 +203,17 @@ func TestAnEntryTakenBackLeavesTheBookAsItFoundIt(t *testing.T) {
 			}
 		}
 		// ALONE, the entry writes as a record of its own: the head the record
-		// moved counts again, and none of the record's writes are its. Ten
-		// rows — four changes, two revisions, two authors, and the readiness
-		// of the change it merged and the one it closed, a row each whether
-		// held or not, as the book reads no mergeability ([clearReadiness],
-		// [changeBook.rowCount]) — plus the tally row ([changeBook.decidedRows]).
+		// moved counts again, and none of the record's writes are its. Eleven
+		// rows (four changes, two revisions, two authors, the readiness of
+		// the change it merged and the one it closed, a row each whether held
+		// or not, as the book reads no mergeability ([clearReadiness],
+		// [changeBook.rowCount]), and the close's move), plus the tally row
+		// ([changeBook.decidedRows]).
 		rows, moved := book.alone(tried[0])
-		if rows != 10+tallyRows || moved != 4 {
+		if rows != 11+tallyRows || moved != 4 {
 			t.Errorf("entry %s alone writes %d rows of %d changes, want %d of 4: four changes, two revisions, "+
-				"two authors, the readiness of the two it merged and closed and the tally row their states "+
-				"move", tried[0].PushID, rows, moved, 10+tallyRows)
+				"two authors, the readiness of the two it merged and closed, the close's move and the tally "+
+				"row their states move", tried[0].PushID, rows, moved, 11+tallyRows)
 		}
 		if diff := stateOf(book).differs(before); diff != "" {
 			t.Errorf("weighing entry %s alone left the book's %s other than it found them", tried[0].PushID, diff)
@@ -289,18 +290,21 @@ func TestAPushRecordWritesTheChangesItMovesInBatches(t *testing.T) {
 				return n
 			}
 			// The moved, merged and closed changes' rows, each kind its own
-			// write, the revisions, and one statement clearing the ended
-			// changes' readiness; no authors (the pusher is one already) and
-			// no opens.
+			// write, the revisions, the closed change's move, and one
+			// statement clearing the ended changes' readiness; no authors
+			// (the pusher is one already) and no opens.
 			want := chunks(n-2, changeColumns) + chunks(1, changeColumns) + chunks(1, changeColumns) +
-				chunks(n-2, "change_id, n, head_oid, pusher, pusher_kind, push_id, position, at") + 1
+				chunks(n-2, "change_id, n, head_oid, pusher, pusher_kind, push_id, position, at, working_for, "+
+					"via, forced") +
+				chunks(1, "change_id, position, kind, by_handle, by_kind, reason, was, became, at") + 1
 			if issued != want {
 				t.Errorf("the record's changes took %d statements, want %d: a statement a chunk of each kind "+
 					"of write and of each table, and one for the ended changes' readiness", issued, want)
 			}
-			if written != counted || written != n+n-2+2 {
+			if rows := n + n - 2 + 2 + 1; written != counted || written != rows {
 				t.Errorf("the write answered %d rows, its book counted %d, want %d: every change, every "+
-					"revision and the stored readiness of each change it ended", written, counted, n+n-2+2)
+					"revision, the closed change's move and the stored readiness of each change it ended",
+					written, counted, rows)
 			}
 			for state, count := range map[string]int{"open": n - 2, "closed": 1, "merged": 1} {
 				if got := e.num(`SELECT COUNT(*) FROM code_changes WHERE repo_id = ? AND state = ?`, repo,

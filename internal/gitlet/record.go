@@ -24,7 +24,7 @@ import (
 // every push to main ships as main's image, so a later shape may meet a build
 // without it: what a record gains is a [versionedFields] row, and each version
 // past 1 is a constant below naming what it added.
-const RecordVersion = TestedInVersion
+const RecordVersion = GateChecksVersion
 
 // WorkingForVersion is the version from which a record carries whom an agent's
 // write was made for (ADR-0109; concerns.go, "Whom the actor acted for"): on a
@@ -55,6 +55,11 @@ const CheckCountsVersion = 6
 // TestedInVersion is the version from which a failed check's ejection names the train it failed on
 // (code_queue.ejected's tested_in); an ejection below it names none.
 const TestedInVersion = 7
+
+// GateChecksVersion is the version from which a person's CI's report says whether the target's gate
+// requires its check (code_checks.required of a row no queue made), and an ejection may name a
+// required check the train's base defines in no form that runs ([EjectChecksUndefined]).
+const GateChecksVersion = 8
 
 // baseRecordVersion is version 1, the base format: what every build reads, and
 // what a record carrying no versioned field is stamped at. The barrier, the
@@ -113,6 +118,12 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "tail_cut"}},
 	{Name: "Ejection.TestedIn", Since: TestedInVersion, Op: string(OpEject),
 		Path: []string{"mutation", "entries", "tested_in"}},
+	{Name: "CheckStarted.Required", Since: GateChecksVersion, Op: string(OpCheckStarted),
+		Path: []string{"mutation", "required"}},
+	{Name: "CheckFinished.Required", Since: GateChecksVersion, Op: string(OpCheckFinished),
+		Path: []string{"mutation", "required"}},
+	{Name: "Ejection.Reason checks_undefined", Since: GateChecksVersion, Op: string(OpEject),
+		Path: []string{"mutation", "entries", "reason"}, Equals: string(EjectChecksUndefined)},
 }
 
 // VersionedFields is the table, for the conformance suite.

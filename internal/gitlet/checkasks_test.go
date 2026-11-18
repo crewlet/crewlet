@@ -184,3 +184,45 @@ func TestAPrincipalsCheckWriteWeighsWhatItAsks(t *testing.T) {
 		t.Errorf("a rerun of %+v weighs %d bytes, want at least its key's", key, weight)
 	}
 }
+
+// A REPORT SAYS WHAT THE GATE REQUIRES: a person's CI's check holds no queue, which is where an
+// engine's attempt says whether its target's gate requires it, so the report's decide reads the
+// gate: lint, which main's gate requires, is required from its run reported to its ending, and
+// e2e, which it does not, is not; the record saying so is version 8.
+//
+// Mutation: record a report's required as false, as before, and lint reads "not required", red.
+func TestAReportSaysWhatTheGateRequires(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	s := suiteSettings()
+	s.Owner = gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Engineering"}
+	s.Protections[0].Gate = &gitlet.MergeGate{MergeBy: gitlet.MergeByWriters, Approvals: gitlet.ApprovalsOne,
+		Checks: []string{"lint"}, Landing: gitlet.Landing{Depth: 4, Batch: 4}, DeleteSource: gitlet.DeleteSeats}
+	repo := n.ensure("gated", s, t1).RepoID
+	w, _, _, _ := checksWriterOn(t, n)
+	lint, e2e := checkOn(repo, 1), checkOn(repo, 1)
+	lint.Name, e2e.Name = "lint", "e2e"
+
+	res, err := w.Publish(t.Context(), reporting(lint, gitlet.CheckStateRunning, ""))
+	requireChecked(t, "lint reported running", res, err)
+	if !res.Row.Required {
+		t.Fatalf("lint reported running holds %+v, want it required: main's gate requires it", res.Row)
+	}
+	if v := n.recordAt(res.Position).V; v != gitlet.GateChecksVersion {
+		t.Errorf("the report of a required check is stamped %d, want %d (GateChecksVersion)", v,
+			gitlet.GateChecksVersion)
+	}
+	res, err = w.Publish(t.Context(), reporting(lint, gitlet.CheckStateFailed, ""))
+	requireChecked(t, "lint reported failed", res, err)
+	if !res.Row.Required || res.Row.State != gitlet.CheckStateFailed {
+		t.Fatalf("lint reported failed holds %+v, want it failed and required", res.Row)
+	}
+	res, err = w.Publish(t.Context(), reporting(e2e, gitlet.CheckStatePassed, ""))
+	requireChecked(t, "e2e reported passed", res, err)
+	if res.Row.Required {
+		t.Fatalf("e2e reported passed holds %+v, want it not required: main's gate names lint alone", res.Row)
+	}
+	if v := n.recordAt(res.Position).V; v != 1 {
+		t.Errorf("the report of a check no gate requires is stamped %d, want the base format", v)
+	}
+}
