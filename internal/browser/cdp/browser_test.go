@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/browser/cdp"
 	"github.com/crewlet/crewlet/internal/browser/chromiumtest"
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -80,11 +81,11 @@ func TestThePinsDescribeEveryMethodTheClientDeclares(t *testing.T) {
 }
 
 // THE FLOOR IS READ FROM THE BROWSER: CheckVersion passes each pin, and the
-// floor's arm reads major MinMajor — the build the floor's measurement was
-// made on is the build the protocol cases drive.
+// floor's arm reads major browser.MinChromiumMajor — the build the floor names
+// is the build the floor's cases drive.
 //
-// Mutation: raise MinMajor by one, and CheckVersion refuses the floor's pin —
-// red.
+// Mutation: raise MinChromiumMajor by one, and CheckVersion refuses the
+// floor's pin — red.
 func TestTheFloorIsReadFromTheBrowser(t *testing.T) {
 	chromiumtest.Each(t, func(t *testing.T, chrome string) {
 		c, _ := chromiumtest.LaunchPipe(t, chrome)
@@ -92,11 +93,12 @@ func TestTheFloorIsReadFromTheBrowser(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !newest(t) && v.Major != cdp.MinMajor {
-			t.Fatalf("the floor's pin says it is %s, major %d, and MinMajor is %d", v.Product, v.Major, cdp.MinMajor)
+		floor := browser.MinChromiumMajor
+		if !newest(t) && v.Major != floor {
+			t.Fatalf("the floor's pin says it is %s, major %d, and MinChromiumMajor is %d", v.Product, v.Major, floor)
 		}
-		if v.Major < cdp.MinMajor {
-			t.Fatalf("the newest pin says it is %s, below MinMajor %d", v.Product, cdp.MinMajor)
+		if v.Major < floor {
+			t.Fatalf("the newest pin says it is %s, below MinChromiumMajor %d", v.Product, floor)
 		}
 	})
 }

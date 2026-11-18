@@ -1,10 +1,10 @@
 // Package chromiumtest hands a case the Chromiums the suite drives and
 // launches them: the two Chrome for Testing builds scripts/chromium-pin.env
-// pins, the newest and the floor of internal/browser/cdp ([cdp.MinMajor]), and
-// never whichever Chrome the machine has. A case that drives Chromium drives
-// both ([Each]), so what it asserts holds at both ends of what the engine
-// promises to drive — unless its doc says why the floor adds nothing to its
-// claim, and it drives the newest alone ([Newest]).
+// pins, the newest and the floor ([browser.MinChromiumMajor]), and never
+// whichever Chrome the machine has. A case that drives Chromium drives both
+// ([Each]), so what it asserts holds at both ends of what the engine accepts —
+// unless its doc says why the floor adds nothing to its claim, and it drives
+// the newest alone ([Newest]).
 //
 // # Where the builds come from
 //
@@ -15,8 +15,9 @@
 // prerequisite by internal/prereqtest's one rule: it fails the case under
 // those targets, and skips it only in a bare `go test` outside make. A
 // build that is named is held to its pin's major — the newest at or above
-// MinMajor, the floor of MinMajor exactly, since a newer build in the floor's
-// place is a floor nobody is testing — by what it answers to --version.
+// MinChromiumMajor, the floor of MinChromiumMajor exactly, since a newer build
+// in the floor's place is a floor nobody is testing — by what it answers to
+// --version.
 //
 // # How a launch runs
 //
@@ -37,8 +38,7 @@
 //     has, and what a backend on the engine host runs;
 //   - --no-sandbox: whether Chromium's own sandbox starts is a property of the
 //     host (Ubuntu from 23.10, GitHub's runners among them, restricts the
-//     unprivileged user namespaces it needs), and no protocol case asserts it
-//     — the engine's own backend holds its sandbox itself;
+//     unprivileged user namespaces it needs), and no case here asserts it;
 //   - --no-first-run and --no-default-browser-check: nothing waits on a
 //     question nobody answers;
 //   - --host-resolver-rules, mapping every host but localhost and
@@ -74,6 +74,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -81,6 +82,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/browser/cdp"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/prereqtest"
@@ -96,37 +98,52 @@ const (
 )
 
 // remedy is what makes a pin's build present, for the words of a case that
-// lacks it.
+// lacks it: its loop runs the case's own package.
 func remedy(pin string) string {
 	return fmt.Sprintf("`make chromium` fetches it and `scripts/chromium.sh %s` prints its path, which the make "+
-		"targets that run the whole suite name here; for one package, as three statements, each substitution "+
-		"its own: newest=$(scripts/chromium.sh newest) && floor=$(scripts/chromium.sh floor) && "+
-		"%s=\"$newest\" %s=\"$floor\" go test ./internal/browser/cdp/", pin, newestEnv, floorEnv)
+		"targets that run the whole suite name here; for this package alone, as three statements, each "+
+		"substitution its own: newest=$(scripts/chromium.sh newest) && floor=$(scripts/chromium.sh floor) && "+
+		"%s=\"$newest\" %s=\"$floor\" go test %s", pin, newestEnv, floorEnv, testedPackage())
 }
 
+// testedPackage is the package this test binary tests, as go test names it
+// from the module's root: a test binary's build info gives its main package
+// the tested package's path with .test after it.
+var testedPackage = sync.OnceValue(func() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "<the case's package>"
+	}
+	tested := strings.TrimSuffix(bi.Path, ".test")
+	if rel, ok := strings.CutPrefix(tested, bi.Main.Path+"/"); ok {
+		return "./" + rel + "/"
+	}
+	return tested
+})
+
 // Newest is the newest pinned Chromium, Chrome for Testing's Stable: an
-// executable at or above cdp.MinMajor.
+// executable at or above browser.MinChromiumMajor.
 func Newest(t testing.TB) string {
 	t.Helper()
-	chrome := prereqtest.Named(t, newestEnv, "the newest pinned Chromium, which every protocol case drives",
-		remedy("newest"))
-	if v := versionOf(t, newestEnv, "newest", chrome); v.major < cdp.MinMajor {
-		t.Fatalf("%s=%s is Chromium %s, below cdp.MinMajor %d, the oldest the engine drives: %s",
-			newestEnv, chrome, v.version, cdp.MinMajor, remedy("newest"))
+	chrome := prereqtest.Named(t, newestEnv, "the newest pinned Chromium, which every case that drives Chromium "+
+		"drives", remedy("newest"))
+	if v := versionOf(t, newestEnv, "newest", chrome); v.major < browser.MinChromiumMajor {
+		t.Fatalf("%s=%s is Chromium %s, below browser.MinChromiumMajor %d, the oldest the engine accepts: %s",
+			newestEnv, chrome, v.version, browser.MinChromiumMajor, remedy("newest"))
 	}
 	return chrome
 }
 
-// Floor is the floor's pinned Chromium, the newest patch of cdp.MinMajor: an
-// executable of that major exactly, since a newer one in its place is a floor
-// nobody is testing.
+// Floor is the floor's pinned Chromium, the newest patch of
+// browser.MinChromiumMajor: an executable of that major exactly, since a newer
+// one in its place is a floor nobody is testing.
 func Floor(t testing.TB) string {
 	t.Helper()
-	chrome := prereqtest.Named(t, floorEnv, "the floor's pinned Chromium, the oldest the engine drives, which the "+
-		"protocol cases drive", remedy("floor"))
-	if v := versionOf(t, floorEnv, "floor", chrome); v.major != cdp.MinMajor {
-		t.Fatalf("%s=%s is Chromium %s, and the floor is major %d (cdp.MinMajor): a floor nobody is testing — %s",
-			floorEnv, chrome, v.version, cdp.MinMajor, remedy("floor"))
+	chrome := prereqtest.Named(t, floorEnv, "the floor's pinned Chromium, the oldest the engine accepts, which every "+
+		"case that drives Chromium drives unless its doc says why the floor adds nothing to its claim", remedy("floor"))
+	if v := versionOf(t, floorEnv, "floor", chrome); v.major != browser.MinChromiumMajor {
+		t.Fatalf("%s=%s is Chromium %s, and the floor is major %d (browser.MinChromiumMajor): a floor nobody is "+
+			"testing — %s", floorEnv, chrome, v.version, browser.MinChromiumMajor, remedy("floor"))
 	}
 	return chrome
 }

@@ -3,6 +3,8 @@ package cdp
 import (
 	"errors"
 	"fmt"
+
+	"github.com/crewlet/crewlet/internal/browser"
 )
 
 // ErrClosed is how a connection ends when its transport closes — Close, the
@@ -98,7 +100,7 @@ func (e *ProtocolError) Error() string {
 // asked for Page, a tab target for Runtime — as a [*ProtocolError]'s Code.
 const MethodNotFound = -32601
 
-// VersionError refuses a browser older than [MinMajor].
+// VersionError refuses a browser older than [browser.MinChromiumMajor].
 type VersionError struct {
 	// Product is what the browser called itself (Browser.getVersion's
 	// product), and Major its major version.
@@ -107,6 +109,6 @@ type VersionError struct {
 }
 
 func (e *VersionError) Error() string {
-	return fmt.Sprintf("cdp: the browser is %s, major %d, and the oldest Chromium the engine drives is major %d: "+
-		"run a Chromium of major %d or newer", e.Product, e.Major, MinMajor, MinMajor)
+	return fmt.Sprintf("cdp: the browser is %s, major %d, and the oldest Chromium the engine accepts is major %d: "+
+		"run a Chromium of major %d or newer", e.Product, e.Major, browser.MinChromiumMajor, browser.MinChromiumMajor)
 }

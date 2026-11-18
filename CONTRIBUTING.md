@@ -113,25 +113,25 @@ when the recipe asks it its version, naming that `deb.deps`.
 two builds — `CREWLET_TEST_CHROMIUM` and `CREWLET_TEST_CHROMIUM_FLOOR`, each
 the path `scripts/chromium.sh newest` or `floor` prints (the Makefile's
 `CHROMIUM_ENV`) — and requires them, as it requires every program the suite
-needs (`CREWLET_REQUIRE_PREREQUISITES=1`). Every case of
-`internal/browser/cdp` that drives a real browser runs on both
-(`internal/browser/chromiumtest`'s `Each`), so what it asserts holds at both
-ends of what the engine promises to drive: Chrome for Testing's Stable and the
-newest patch of `cdp.MinMajor`, the oldest major the CDP client drives — unless
-its doc says why the floor adds nothing to its claim, and it runs on the newest
-alone, as `TestAScreenshotSizedMessageCrossesBothTransports` does, whose claim
-is about the client's own transports. A one-package loop names them by hand,
-as three statements, each substitution its own:
+needs (`CREWLET_REQUIRE_PREREQUISITES=1`). Every case that drives a real
+browser runs on both (`internal/browser/chromiumtest`'s `Each`), so what it
+asserts holds at both ends of what the engine accepts: Chrome for Testing's
+Stable and the newest patch of `internal/browser.MinChromiumMajor` — unless its
+doc says why the floor adds nothing to its claim, and it runs on the newest
+alone, as `TestAPageEndsAtMostItsOwnSessionWithAMessagePastTheReadLimit` does,
+whose claim is about the DevTools client's own reader. A one-package loop
+names them by hand, as three statements, each substitution its own, here for
+that case's package:
 `newest=$(scripts/chromium.sh newest) && floor=$(scripts/chromium.sh floor) && CREWLET_TEST_CHROMIUM="$newest" CREWLET_TEST_CHROMIUM_FLOOR="$floor" go test ./internal/browser/cdp/`
-— a bare `go test` without them skips those cases, saying so, and runs the
-rest. A Chromium named there is held to its pin's major by what it answers to
-`--version`: the newest at or above `cdp.MinMajor`, the floor of that major
-exactly, since a newer build in the floor's place is a floor nobody is
-testing. Never the machine's own Chrome, which has no exact version to pin
-and carries no floor, and never the Chromium Playwright installs for the
-dashboard's layout suites (below): that one is pinned to the Playwright
-release that drives it, checksummed by nothing, and fetched by npm, which the
-engine's suite does not need.
+— a bare `go test` without them skips those cases, saying so and naming that
+loop for the package it ran, and runs the rest. A Chromium named there is held
+to its pin's major by what it answers to `--version`: the newest at or above
+`MinChromiumMajor`, the floor of that major exactly, since a newer build in
+the floor's place is a floor nobody is testing. Never the machine's own
+Chrome, which has no exact version to pin and carries no floor, and never the
+Chromium Playwright installs for the dashboard's layout suites (below): that
+one is pinned to the Playwright release that drives it, checksummed by
+nothing, and fetched by npm, which the engine's suite does not need.
 
 **A current Node** (npm ships with it) for the dashboard — its build output is
 committed, so building and running the ENGINE needs neither, but changing the
@@ -1712,8 +1712,9 @@ the step that runs the key check on any diff that touches it.
 Testing builds the suite drives, each by version and the SHA-256 of its zip on
 each of the four platforms the engine is released for (`linux64`,
 `linux-arm64`, `mac-x64`, `mac-arm64`): the **newest**, Chrome for Testing's
-Stable channel, and the **floor**, the newest patch of the oldest major the
-engine's CDP client drives, `internal/browser/cdp.MinMajor`. No release
+Stable channel, and the **floor**, the newest patch of
+`internal/browser.MinChromiumMajor`'s major, the oldest the engine accepts and
+the floor `internal/browser`'s package doc argues. No release
 carries either — the engine image has no Chromium — so a bump changes what the
 suite certifies and nothing a deployment runs. The `Chromiums` leg of
 [`pins.yml`](.github/workflows/pins.yml) runs
@@ -1755,16 +1756,18 @@ was.
 (`scripts/chromium-pin-check.sh` prints them again by hand; it downloads each
 zip into `TMPDIR`, about 200 MB at a time, so point `TMPDIR` at a disk with
 that room where `/tmp` is a small tmpfs), run `make chromium` — it fetches the
-new build and refuses a zip that is not the digest — then `make check`, the
-protocol cases on it, and title the pull request as the report does:
+new build and refuses a zip that is not the digest — then `make check`, which
+drives it in every case that drives Chromium, and title the pull request as
+the report does:
 `build(deps): bump chromium from <a> to <b>` for the newest pin,
 `build(deps): bump chromium's floor from <a> to <b>` for the floor. The suite
 fetches the new build on CI until `main` saves it.
 
-**Raising the floor** is never a bump: it is a change to `cdp.MinMajor`,
-argued in `internal/browser/cdp/floor.go` with what it measured, and it moves
-the floor pin to the newest patch of the new major in the same pull request —
-`TestThePinsMeetTheFloor` fails while the pin's major and `MinMajor` disagree.
+**Raising the floor** is never a bump: it is a change to
+`internal/browser.MinChromiumMajor`, argued in `internal/browser`'s package doc
+with what it measured, and it moves the floor pin to the newest patch of the
+new major in the same pull request — `TestThePinsMeetTheFloor` fails while the
+pin's major and `MinChromiumMajor` disagree.
 
 [`scripts/chromium-pin_test.sh`](scripts/chromium-pin_test.sh) (`make
 chromium-test`, in `make check` and ci.yml's `build + vet`) is the own suite of

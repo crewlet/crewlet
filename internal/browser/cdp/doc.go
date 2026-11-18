@@ -86,12 +86,21 @@
 //
 // # The floor
 //
-// [MinMajor] is the oldest Chromium major the engine drives, and
-// [CheckVersion] refuses an older browser naming both versions. The value is
-// measured, and floor.go says how; the suite holds it on every run against
-// two pinned Chrome for Testing builds, the newest and the floor's own
-// (scripts/chromium-pin.env), reading each one's own description of the
-// protocol against every command, event and field declared here.
+// [CheckVersion] refuses a browser older than [browser.MinChromiumMajor],
+// naming both versions; internal/browser argues the value. What this package
+// declares needs no newer protocol: every command, event and field of it was
+// described by major 142, read on 2026-11-09 from the devtools-protocol
+// package's description at each major's Chrome for Testing revision, for every
+// major from 138 to 145 and a dozen older ones back to 113 — the newest of it
+// by the protocol's history then being Storage.getStorageKey (142),
+// TargetInfo's parentFrameId (141), Page.navigate's isDownload (140) and
+// Browser.downloadProgress' filePath (139). The suite holds it on every run
+// against the two pinned Chrome for Testing builds, the newest and the floor's
+// own (scripts/chromium-pin.env), reading each one's own description of the
+// protocol against every command, event and field declared here
+// (TestThePinsDescribeEveryMethodTheClientDeclares); a declaration that needs
+// a newer protocol than the floor describes fails it on the floor's arm, and
+// is a reason to raise the floor, argued in internal/browser.
 //
 // That proof is complete by construction rather than by review: [Call] and
 // [Send] send, and [Session.Listen] and [Event.Of] read, only an entry of the

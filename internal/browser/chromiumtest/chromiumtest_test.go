@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/browser/cdp"
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
@@ -52,28 +52,23 @@ func executable(t *testing.T, body string) string {
 }
 
 // A PIN IS NAMED, REQUIRED OR SKIPPED — and held to its major. Unset, a pin's
-// build is a missing prerequisite by internal/prereqtest's rule: under the
-// requirement the make targets that run the suite set it fails, naming its
-// variable and `make chromium`; unset otherwise, it skips. Named, it must be an
-// absolute path to an executable, and what it answers to --version decides: the
-// newest must be at or above cdp.MinMajor, and the floor of cdp.MinMajor
-// exactly, since a newer build in the floor's place is a floor nobody is
-// testing. A build that cannot answer at all fails saying what it printed,
-// what fetches it again, and on Linux the list of the packages it links. A
-// good build is handed back.
+// build is a missing prerequisite (internal/prereqtest): it fails under the
+// requirement the make targets set, naming its variable and `make chromium`,
+// and skips otherwise. Named, it is an absolute path to an executable whose
+// --version decides: the newest at or above browser.MinChromiumMajor, the
+// floor of it exactly. A build that cannot answer fails saying what it
+// printed, what fetches it again, and on Linux what it links; a good build is
+// handed back. Not parallel: it sets the variables the helpers read.
 //
-// Not parallel: it sets the variables the helpers read.
-//
-// Mutations: drop the floor's exact-major check, and a build of MinMajor+1
-// stands for the floor — red; drop the newest's check against MinMajor, and a
-// build of MinMajor-1 stands for the newest — red; fail a build that cannot
-// answer with its exit status alone, and the failure says neither what it
-// printed nor what to do — red.
+// Mutations: drop the floor's exact-major check (a build of the next major
+// stands for it), the newest's (one of the major below stands for it), or what
+// a build that cannot answer printed from its failure — each red.
 func TestAPinIsNamedRequiredOrSkipped(t *testing.T) {
-	floorBuild := stub(t, fmt.Sprintf("%d.0.8010.52", cdp.MinMajor))
-	newestBuild := stub(t, fmt.Sprintf("%d.0.8103.38", cdp.MinMajor+4))
-	belowTheFloor := stub(t, fmt.Sprintf("%d.0.7977.82", cdp.MinMajor-1))
-	aMajorUp := stub(t, fmt.Sprintf("%d.0.8037.92", cdp.MinMajor+1))
+	floor := browser.MinChromiumMajor
+	floorBuild := stub(t, fmt.Sprintf("%d.0.8010.52", floor))
+	newestBuild := stub(t, fmt.Sprintf("%d.0.8103.38", floor+4))
+	belowTheFloor := stub(t, fmt.Sprintf("%d.0.7977.82", floor-1))
+	aMajorUp := stub(t, fmt.Sprintf("%d.0.8037.92", floor+1))
 	notChromium := stub(t, "of no version")
 	const loader = "chrome: error while loading shared libraries: libnss3.so: cannot open shared object file"
 	cannotStart := executable(t, "echo '"+loader+"' >&2\nexit 127\n")
@@ -101,7 +96,7 @@ func TestAPinIsNamedRequiredOrSkipped(t *testing.T) {
 		{name: "no Chrome for Testing version", env: newestEnv, require: "1", value: notChromium, find: Newest,
 			fatal: "names no Chrome for Testing version"},
 		{name: "a newest below the floor", env: newestEnv, require: "1", value: belowTheFloor, find: Newest,
-			fatal: fmt.Sprintf("below cdp.MinMajor %d", cdp.MinMajor)},
+			fatal: fmt.Sprintf("below browser.MinChromiumMajor %d", floor)},
 		{name: "a floor of the next major", env: floorEnv, require: "1", value: aMajorUp, find: Floor,
 			fatal: "a floor nobody is testing"},
 		{name: "a build that cannot start", env: newestEnv, require: "1", value: cannotStart, find: Newest,
