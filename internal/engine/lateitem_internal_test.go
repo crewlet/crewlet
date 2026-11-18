@@ -237,10 +237,12 @@ func mustJSON(t *testing.T, v any) string {
 // A LATE CALL REACHES AN OPENCODE JOB AT ITS NEXT POLL, AND IS READ ON ITS
 // CONFIRMATION. The plugin's poll is answered the item as one message of its
 // own, served first, in the engine's words; the plugin admits it and confirms
-// it once OpenCode reports it delivered, which records it read by the job.
+// it once OpenCode reports it delivered, which records it read by the job and
+// the job's session as holding the call ([sandbox.RunSteer.Tellings]).
 //
 // Mutation: answer a poll a person's notes alone (poll-skips-items), and the
-// job is never handed the call.
+// job is never handed the call; confirm as a step's take
+// (confirm-not-a-confirmation), and no telling is recorded.
 func TestALateCallReachesAnOpenCodeJobAtItsNextPollAndIsReadOnItsConfirmation(t *testing.T) {
 	t.Parallel()
 	r := newLateRig(t, "run-1")
@@ -261,6 +263,10 @@ func TestALateCallReachesAnOpenCodeJobAtItsNextPollAndIsReadOnItsConfirmation(t 
 	}
 	if read := readOn(t.Context(), r.store, r.turn, item.ID); read == nil || read.Launch != r.next.LaunchID {
 		t.Errorf("the confirmed item is read %+v, want it read by the job", read)
+	}
+	if told := mustRow(t, r.store, r.turn).Steer.Tellings; len(told) != 1 || told[0].Launch != r.next.LaunchID ||
+		told[0].Appended != item.LateCall.Call.Appended || told[0].Round != item.LateCall.Round {
+		t.Errorf("the confirmation recorded tellings %+v, want the job's session holding the call", told)
 	}
 }
 

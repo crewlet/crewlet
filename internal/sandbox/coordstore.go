@@ -443,6 +443,11 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 			existing.Steer.Seat = bytes.Clone(run.Steer.Seat)
 		}
 		existing.Steer.Pulled = ""
+		// AND THE TELLINGS ARE THE ROUND'S: a new round's log numbers its calls
+		// afresh, so no telling names one of them ([RunSteer.Tellings]).
+		if !run.Continues {
+			existing.Steer.Tellings = nil
+		}
 		openNotes(&existing.Steer, run, run.LaunchID, s.clock())
 		return true
 	})
@@ -1980,6 +1985,8 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 			run.Launch.Brief = box.Brief
 			run.Launch.BriefOmitted = slices.Clone(box.BriefOmitted)
 			run.Launch.FreshOmitted = slices.Clone(box.FreshOmitted)
+			run.Launch.BriefLateOmitted = slices.Clone(box.BriefLateOmitted)
+			run.Launch.FreshLateOmitted = slices.Clone(box.FreshLateOmitted)
 			// AND WHICH LEADS ITS BRIEF TOLD, by their numbers in the run's
 			// leads part, which took the brief's own before this write
 			// ([LaunchRecord.LeadMarks]): only where the row still names the

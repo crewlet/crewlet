@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -64,6 +65,18 @@ type RunSteer struct {
 	// served before takes one too, and stamps it on that note
 	// ([RunNote.Place]), where every later read of the note is recorded.
 	Reads int `json:"reads,omitempty"`
+
+	// Tellings are the late calls a job's own session is KNOWN TO HOLD
+	// ([CallTelling]), each recorded by the write that confirmed the item that
+	// handed it over ([RunNote.LateCall]): OpenCode's confirmation of a
+	// delivered item ([NoteTake.Confirms]), or the verdict of the job's own
+	// session that its hook took it after its last restart ([HookSettle.Held]).
+	// Kept by every relaunch that carries the round on, after the item itself
+	// is gone ([openNotes]); cleared by one that starts a new round, whose log
+	// numbers its calls afresh. One a call, at its lowest place; at most
+	// [MaxCallTellings] ([withTelling]). See the package doc, "A late call its
+	// job's session took is told to no continuation of it again".
+	Tellings []CallTelling `json:"tellings,omitempty"`
 
 	// Extra is every key of the section this build does not know, kept
 	// verbatim and written back by every write of the record (wirekeys.go).
@@ -178,6 +191,58 @@ type LateCall struct {
 	// Extra is every key of the section this build does not know: see
 	// [RunSteer.Extra].
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// CallTelling is one late call a job's session is known to hold
+// ([RunSteer.Tellings]).
+//
+// A SECTION WITH AN EXTRA OF ITS OWN (wirekeys.go), as a late call is.
+type CallTelling struct {
+	// Round is the round whose log numbered the call ([LateCall.Round]), and
+	// Appended its place in that log ([BridgeCall.Appended]).
+	Round    string `json:"round"`
+	Appended int    `json:"appended"`
+
+	// Launch is the job whose session took it.
+	Launch string `json:"launch"`
+
+	// Place is the place among the reads ([RunSteer.Reads]) of the write that
+	// recorded it, never the item's own: a capture or a save whose cursor was
+	// read off the row before that write is below it.
+	Place int `json:"place"`
+
+	// Extra is every key of the section this build does not know: see
+	// [RunSteer.Extra].
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// withTelling is tellings with t recorded ([RunSteer.Tellings]): one a call, by
+// its round and its place in that round's log, at the lowest place among the
+// reads either names; ordered by that place; and held to [MaxCallTellings], the
+// lowest places going first. A list of its own: tellings is the record's.
+func withTelling(tellings []CallTelling, t CallTelling) []CallTelling {
+	out := slices.Clone(tellings)
+	if i := slices.IndexFunc(out, func(held CallTelling) bool {
+		return held.Round == t.Round && held.Appended == t.Appended
+	}); i >= 0 {
+		if out[i].Place <= t.Place {
+			return out
+		}
+		out = slices.Delete(out, i, i+1)
+	}
+	out = append(out, t)
+	slices.SortStableFunc(out, func(a, b CallTelling) int { return cmp.Compare(a.Place, b.Place) })
+	if past := len(out) - MaxCallTellings; past > 0 {
+		out = slices.Delete(out, 0, past)
+	}
+	return out
+}
+
+// tellingOf is the telling of the late call item hands its job, read by a write
+// at place, its session being known to hold it ([RunSteer.Tellings]).
+func tellingOf(item RunNote, job string, place int) CallTelling {
+	return CallTelling{Round: item.LateCall.Round, Appended: item.LateCall.Call.Appended, Launch: job,
+		Place: place}
 }
 
 // lateItemID is the id of the late-call item of the call the round's log took
@@ -629,6 +694,14 @@ type NoteTake struct {
 	// answered an error can find what the call recorded
 	// ([PendingStore.SettleTake]).
 	Read NoteRead
+
+	// Confirms says the take is its harness's own confirmation that it
+	// delivered the notes into the job's session (OpenCode's plugin, once
+	// OpenCode reports a note delivered), never a step that hands them over:
+	// such a take records a telling of every late-call item it reads
+	// ([RunSteer.Tellings]). A hook's take, recorded before its answer reaches
+	// the harness, never does. In-process, never on the wire.
+	Confirms bool
 }
 
 // NoteServe is a poll of a run's notes serving them to the run's harness
@@ -977,7 +1050,7 @@ func (s *CoordStore) TakeNotes(ctx context.Context, turnID string, take NoteTake
 		// read took the write's new place.
 		read.At = s.clock()
 		order, placed := run.Steer.Reads+1, false
-		notes := slices.Clone(run.Steer.Notes)
+		notes, tellings := slices.Clone(run.Steer.Notes), run.Steer.Tellings
 		for i, held := range notes {
 			if !held.Waiting() || !held.IsFor(take.Read.Launch) || !slices.Contains(take.IDs, held.ID) {
 				continue
@@ -986,6 +1059,11 @@ func (s *CoordStore) TakeNotes(ctx context.Context, turnID string, take NoteTake
 			if marked.Order = held.Place; marked.Order == 0 {
 				marked.Order, placed = order, true
 			}
+			// A CONFIRMATION OF A LATE CALL'S DELIVERY, told at this write's
+			// own place ([CallTelling.Place]), which the record's count moves to.
+			if take.Confirms && held.LateCall != nil {
+				tellings, placed = withTelling(tellings, tellingOf(held, take.Read.Launch, order)), true
+			}
 			held.Read = &marked
 			notes[i] = held
 			taken = append(taken, held)
@@ -993,7 +1071,7 @@ func (s *CoordStore) TakeNotes(ctx context.Context, turnID string, take NoteTake
 		if len(taken) == 0 {
 			return false
 		}
-		run.Steer.Notes = notes
+		run.Steer.Notes, run.Steer.Tellings = notes, tellings
 		if placed {
 			run.Steer.Reads = order
 		}
@@ -1225,12 +1303,18 @@ func (s *CoordStore) SettleHook(ctx context.Context, turnID string, settle HookS
 				return slices.ContainsFunc(n.Serves, func(h HookServed) bool { return h.Take == take })
 			})
 		})
-		notes := slices.Clone(run.Steer.Notes)
+		notes, tellings := slices.Clone(run.Steer.Notes), run.Steer.Tellings
 		order, placed, changed := run.Steer.Reads+1, false, false
 		for i, held := range notes {
 			next, touched, tookPlace := settledServes(held, settle, order)
 			if touched {
 				notes[i], changed, placed = next, true, placed || tookPlace
+			}
+			// A LATE CALL THE JOB'S SESSION SHOWS ITS HOOK TOOK AFTER ITS LAST
+			// RESTART, told at this write's own place, never the item's
+			// ([CallTelling.Place]); one shown taken only before it is not.
+			if held.Waiting() && next.LateCall != nil && next.Read != nil && !next.Read.Restarted {
+				tellings, placed = withTelling(tellings, tellingOf(next, settle.Launch, order)), true
 			}
 			if touched || (confirms && readByServeOf(next, settle.Launch)) {
 				answered = append(answered, next)
@@ -1239,7 +1323,7 @@ func (s *CoordStore) SettleHook(ctx context.Context, turnID string, settle HookS
 		if !changed {
 			return inFlight
 		}
-		run.Steer.Notes = notes
+		run.Steer.Notes, run.Steer.Tellings = notes, tellings
 		if placed {
 			run.Steer.Reads = order
 		}

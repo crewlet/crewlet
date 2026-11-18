@@ -57,8 +57,8 @@ const (
 	// sections ([LaunchRecord.Extra], [HeldCall.Extra], [OwedCall.Extra],
 	// [SessionCapture.Extra], [ConversationBase.Extra] and its session's and
 	// siblings', [RunSteer.Extra] and its notes', their hooks' serves', the
-	// calls those answered and an item's late call), and that this build
-	// carries without reading: STATED HERE, so the next field a
+	// calls those answered, an item's late call and the notes' tellings), and
+	// that this build carries without reading: STATED HERE, so the next field a
 	// build adds is added inside it, and the build that adds it moves its own
 	// figure out of this one rather than out of a share somebody else's
 	// arithmetic needs. The turn's read of its conversation ([PendingRun.Base])
@@ -162,6 +162,16 @@ const (
 	// row, which TestTheWholeRowFitsItsBudget holds.
 	MaxJobItems = 10
 
+	// MaxCallTellings bounds the late calls a run's row records its jobs'
+	// sessions took ([RunSteer.Tellings]). TWENTY, A JUDGMENT anchored to the
+	// tellings of the two newest jobs that took items, [MaxJobItems] each: a
+	// continuation reads the newest capture's lineage, whose jobs are those.
+	// An older telling dropped past it is a call told again, under words that
+	// say an earlier message may have told it, the safe direction. Twenty at
+	// their widest are about 3 KiB of the row, which
+	// TestTheWholeRowFitsItsBudget holds.
+	MaxCallTellings = 2 * MaxJobItems
+
 	// MaxAudienceHandles bounds the seats a parked question is put to
 	// ([PendingRun.AudienceHandles]). TWO HUNDRED AND FIFTY-SIX: a `team`
 	// audience is every person in the asking seat's unit, which nothing else
@@ -197,8 +207,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_189_246
-	measuredSpare       = 406_662
+	measuredOtherFields = 2_192_473
+	measuredSpare       = 403_435
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].

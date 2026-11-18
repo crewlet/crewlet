@@ -43,8 +43,8 @@ type savePlaces struct {
 // fleet of this version alone the point is zero (a read-placed capture is final
 // and nothing of its launch is taken after it), so the brief and
 // internal/engine's continuedFloor grow by the round, within the prior-work
-// ledger's budgets. BridgeSeq, BridgeOpen and Omitted come off the same capture
-// as the point, so an older peer is never told less.
+// ledger's budgets. BridgeSeq, BridgeOpen and both omitted sets come off the
+// same capture as the point, so an older peer is never told less.
 func (c *SessionCapture) placeAtNewest(from savePlaces) {
 	var newest *SessionCapture
 	point := 0
@@ -54,10 +54,10 @@ func (c *SessionCapture) placeAtNewest(from savePlaces) {
 		}
 	}
 	c.Through = new(point)
-	c.BridgeSeq, c.BridgeOpen, c.Omitted = 0, nil, nil
+	c.BridgeSeq, c.BridgeOpen, c.Omitted, c.LateOmitted = 0, nil, nil, nil
 	if newest != nil {
 		c.BridgeSeq, c.BridgeOpen = newest.BridgeSeq, slices.Clone(newest.BridgeOpen)
-		c.Omitted = slices.Clone(newest.Omitted)
+		c.Omitted, c.LateOmitted = slices.Clone(newest.Omitted), slices.Clone(newest.LateOmitted)
 	}
 }
 

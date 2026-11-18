@@ -462,6 +462,12 @@ type SessionBasis struct {
 	// none out, or the capture states none, an older build's.
 	Owed []int
 
+	// LateOwed is the late calls that brief counted without listing them
+	// (sandbox.SessionCapture.LateOmitted), apart from Owed: every brief tells
+	// them again, and the session, holding only that count of each, is
+	// credited no telling of one ([heldByTelling]).
+	LateOwed []int
+
 	// Interrupted says the session was captured from a harness that was cut
 	// off, so its transcript may end mid-call, and may lack the brief its job
 	// was handed and the notes its job read.
@@ -1026,8 +1032,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// round's jobs did and what became of the last, and so leaves out
 			// what the reseed leaves out; and the turn's answers it tells
 			// after the task are told again with the task ([Runner.taskAgain]).
-			briefs.kept = r.baseSession(basis, reseed.Text, sandbox.BriefTold{Omitted: freshOmitted,
-				Own: append(taskLead(state.Round, history, ""), own...)})
+			briefs.kept = r.baseSession(basis, reseed.Text, sandbox.BriefTold{Omitted: freshOmitted.reads,
+				LateOmitted: freshOmitted.late, Own: append(taskLead(state.Round, history, ""), own...)})
 		}
 	} else {
 		// A ROUND LOST A SECOND TIME CONTINUES NOTHING, but the session its
@@ -1069,9 +1075,9 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// AND WHAT EACH OPENED WITH: its own leads, and the copy's the
 			// leads of its job's brief it told again, and those it was to and
 			// could not read.
-			Told: sandbox.BriefTold{Omitted: picked.omitted, Own: own, Told: picked.told.refs,
-				ToldUnread: picked.told.unread},
-			Fresh: sandbox.BriefTold{Omitted: freshOmitted, Own: own},
+			Told: sandbox.BriefTold{Omitted: picked.omitted.reads, LateOmitted: picked.omitted.late, Own: own,
+				Told: picked.told.refs, ToldUnread: picked.told.unread},
+			Fresh: sandbox.BriefTold{Omitted: freshOmitted.reads, LateOmitted: freshOmitted.late, Own: own},
 		},
 		Session:    briefs.kept,
 		Decided:    r.sessionDecided(ctx, emit, state.Round, system, surface, caps, briefs, decided),

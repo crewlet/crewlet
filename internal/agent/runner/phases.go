@@ -338,6 +338,15 @@ type RunAsk interface {
 	Gate(submit tools.Callable) tools.Callable
 }
 
+// Telling is one late call of the round a job's session is known to hold
+// ([Resume.Tellings]): its place in the round's log
+// ([BridgedCall.Appended]), and the place among the turn's reads of the write
+// that recorded it, which a capture's note cursor is read against
+// ([SessionBasis.NoteCursor]).
+type Telling struct {
+	Appended, Place int
+}
+
 // Resume is the collection of the executor run a turn parked on.
 type Resume struct {
 	State execstate.State
@@ -386,6 +395,19 @@ type Resume struct {
 	// copy is then read as holding every call of the round its brief was to
 	// tell.
 	Owed []int
+
+	// LateOwed is the late calls that same brief counted without listing them
+	// (sandbox.LaunchRecord.LateOmittedCalls), apart from Owed: every brief
+	// tells them again, and the copy, holding only that count of each, is
+	// credited no telling of one ([heldByTelling]).
+	LateOwed []int
+
+	// Tellings are the late calls of the round's log a job's own session is
+	// known to hold, each at the place among the turn's reads of the write
+	// that recorded it (sandbox.RunSteer.Tellings, those of the log's round
+	// alone): a continuation of a session that holds one is not told the call
+	// again ([heldByTelling]). Nil where none is.
+	Tellings []Telling
 
 	// ContextTokens is what the session the box of the job State parked holds
 	// carried at its newest request the engine measured, as the job's record

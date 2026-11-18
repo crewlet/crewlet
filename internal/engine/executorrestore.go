@@ -218,6 +218,9 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		// AND THE READS AT OR BELOW IT THE SESSION HOLDS ONLY AS ITS JOB'S
 		// BRIEF'S COUNT, which the brief continuing it tells.
 		Owed: slices.Clone(captured.Omitted),
+		// AND THE LATE CALLS IT HOLDS ONLY AS THAT BRIEF'S COUNT, which it is
+		// credited no telling of.
+		LateOwed: slices.Clone(captured.LateOmitted),
 	}
 }
 

@@ -205,9 +205,9 @@ func TestAKeptSessionTheBoxStillHoldsRecordsWhatItsBriefLeftOut(t *testing.T) {
 			"continued with the brief told by the save point", got.kind, got.brief, got.exact, got.carried != nil)
 	}
 	brief, fresh := got.omitted(req)
-	if !slices.Equal(brief, toldBySavePoint.Omitted) || !slices.Equal(fresh, []int{2}) {
-		t.Errorf("the job records %v left out beside the fresh brief's %v, want %v beside [2]", brief, fresh,
-			toldBySavePoint.Omitted)
+	if !slices.Equal(brief.Omitted, toldBySavePoint.Omitted) || !slices.Equal(fresh.Omitted, []int{2}) {
+		t.Errorf("the job records %v left out beside the fresh brief's %v, want %v beside [2]", brief.Omitted,
+			fresh.Omitted, toldBySavePoint.Omitted)
 	}
 	if !slices.Equal(got.told.Own, toldBySavePoint.Own) {
 		t.Errorf("the job seals %+v as its brief's own leads, want %+v", got.told.Own, toldBySavePoint.Own)

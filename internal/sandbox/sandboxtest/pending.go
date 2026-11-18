@@ -223,6 +223,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, standbyCases...)
 	cases = append(cases, lateCases...)
 	cases = append(cases, lateItemCases...)
+	cases = append(cases, tellingCases...)
 	cases = append(cases, briefReadCases...)
 	cases = append(cases, inFlightCases...)
 	for _, tc := range cases {
@@ -882,16 +883,16 @@ func testAMeasureLandsWhereTheEndIsAlreadyRecorded(t *testing.T, s sandbox.Pendi
 // A LAUNCH RECORDS WHAT THE BRIEF IT HANDED LEFT OUT, AND EVERY WRITE OF THE
 // JOB'S RECORD KEEPS IT. The reads of the round the brief a job's run read
 // counted without listing them, and those of the fresh brief its box falls back
-// to beside a brief that continues a session, are written with the brief by the
+// to beside a brief that continues a session, each with the late calls it left
+// out apart ([sandbox.BriefTold.LateOmitted]), are written with the brief by the
 // attach that names the job's command (never by the attach before the job,
-// which names none and unsays nothing), and every write of the record after it
-// writes them back as it read them, under their own keys: a status, a lease, a
-// park, a bridged call, a claim and its release, each of which comes before the
-// relaunch that reads them. Only the next launch, which replaces the job's
-// record whole, says none again.
+// which names none), and every write of the record after it writes them back
+// under their own keys: a status, a lease, a park, a bridged call, a claim and
+// its release, each before the relaunch that reads them. Only the next launch,
+// which replaces the job's record whole, says none again.
 //
-// Mutation: drop either set from the attach, record them on the attach before
-// the job, or leave them off the wire, and a check goes red.
+// Mutation: drop any set from the attach, record them before the job, or leave
+// them off the wire, and a check goes red.
 func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	const turn = "t-omitted"
@@ -905,8 +906,8 @@ func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.Pendi
 			got.BriefOmitted, got.FreshOmitted)
 	}
 	if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-omitted", CommandID: "cmd-omitted",
-		Brief: sandbox.BriefContinued, BriefOmitted: []int{13, 14}, FreshOmitted: []int{15}},
-		sandbox.Fence{}); err != nil {
+		Brief: sandbox.BriefContinued, BriefOmitted: []int{13, 14}, FreshOmitted: []int{15},
+		BriefLateOmitted: []int{3}, FreshLateOmitted: []int{4}}, sandbox.Fence{}); err != nil {
 		t.Fatalf("the attach that names the job's command: %v", err)
 	}
 	check := func(step string) {
@@ -915,6 +916,10 @@ func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.Pendi
 		if !slices.Equal(got.BriefOmitted, []int{13, 14}) || !slices.Equal(got.FreshOmitted, []int{15}) {
 			t.Errorf("after %s the job's record says its briefs left out %v and %v, want [13 14] and [15]",
 				step, got.BriefOmitted, got.FreshOmitted)
+		}
+		if !slices.Equal(got.BriefLateOmitted, []int{3}) || !slices.Equal(got.FreshLateOmitted, []int{4}) {
+			t.Errorf("after %s the job's record says its briefs left out late calls %v and %v, want [3] and [4]",
+				step, got.BriefLateOmitted, got.FreshLateOmitted)
 		}
 	}
 	check("the attach that names the job's command")
@@ -943,9 +948,10 @@ func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.Pendi
 	park(t, s, turn)
 	check("a park on a question")
 	mustBeginLaunch(t, s, run(turn))
-	if got := mustGet(t, s, turn).Launch; len(got.BriefOmitted)+len(got.FreshOmitted) != 0 {
-		t.Errorf("the next launch's job reads %v and %v left out, the job before's, want none", got.BriefOmitted,
-			got.FreshOmitted)
+	if got := mustGet(t, s, turn).Launch; len(got.BriefOmitted)+len(got.FreshOmitted)+
+		len(got.BriefLateOmitted)+len(got.FreshLateOmitted) != 0 {
+		t.Errorf("the next launch's job reads %v, %v, %v and %v left out, the job before's, want none",
+			got.BriefOmitted, got.FreshOmitted, got.BriefLateOmitted, got.FreshLateOmitted)
 	}
 }
 

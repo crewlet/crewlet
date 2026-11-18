@@ -949,8 +949,8 @@
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,189,246
-//	to spare, measured .............. measuredSpare             406,662
+//	every other field, measured ..... measuredOtherFields     2,192,473
+//	to spare, measured .............. measuredSpare             403,435
 //
 // Every other field is the identity, status and time fields, the run its turn's
 // leads are kept for and how many leads that part has taken
@@ -4268,6 +4268,27 @@
 // before any item existed. UNSEALED, since it is the log's account, which the
 // log holds in the clear and no seal would prove anything of; the engine hands
 // it under words of its own, never as anybody's note (ADR-0067, ADR-0073).
+//
+// # A late call its job's session took is told to no continuation of it again
+//
+// Where the job's own session is KNOWN TO HOLD an item's call — OpenCode's
+// plugin confirmed it delivered ([NoteTake.Confirms]), or the job's main thread
+// shows its hook took it after its last restart ([HookSettle.Held]) — the write
+// that records the read records a TELLING of the call ([RunSteer.Tellings],
+// [CallTelling]): the round, the call's place in its log, the job, and that
+// write's OWN NEW PLACE among the reads, never the item's. So a capture or a
+// save whose cursor was read off the row before that write has a cursor below
+// it ([SessionCapture.NoteCursor] is at most [RunSteer.Reads] as read, and the
+// count only grows), and only one read after it, of the job's session or a
+// later one's, is past it. Nothing else records one: not a hook's take, whose
+// answer may never reach its harness, not the review's, not a brief. A telling
+// outlives its item, is kept by every relaunch that carries the round on, and
+// is cleared by one that starts a new round, whose log numbers its calls
+// afresh; one a call, at its lowest place, at most [MaxCallTellings]. A
+// continuation credits it only to a session not cut off or possibly a summary,
+// whose cursor is at or past it, and whose briefs counted no read of the call
+// without listing it ([BriefTold.LateOmitted]): internal/agent/runner's
+// heldByTelling, ADR-0073.
 //
 // # Stopping a seat's running work
 //

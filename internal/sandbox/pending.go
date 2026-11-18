@@ -855,14 +855,14 @@ type BridgeCall struct {
 	// carrying the round on, placed by its own read, counts it among the calls
 	// its session holds, since a save point is a prefix of the log and cannot
 	// leave one call out. So every continuation of the round built after it
-	// landed is told it, whatever its save point — again by every later
-	// continuation, under words that say it may be shown or told already and
-	// is one call — no rebuilt skill guard counts a load it made, and the
-	// round's collection never takes it for the round's submission, which is
-	// the job carrying the round on to make, nor keeps it whole as one
-	// ([MaxSubmissionArgsBytes]; internal/agent/runner's heldAt and
-	// sinceAnswer). A late call the log drops from its middle keeps no mark,
-	// and is counted instead ([BridgeLog.LateElided]).
+	// landed is told it whatever its save point, but one of a session the
+	// record says took it ([RunSteer.Tellings]), under words that say it may be
+	// shown or told already and is one call; no rebuilt skill guard counts a
+	// load it made, and the round's collection never takes it for the round's
+	// submission, which is the job carrying the round on to make, nor keeps it
+	// whole as one ([MaxSubmissionArgsBytes]; internal/agent/runner's heldAt
+	// and sinceAnswer). A late call the log drops from its middle keeps no
+	// mark, and is counted instead ([BridgeLog.LateElided]).
 	//
 	// ADDITIVE ON THE WIRE: a build that does not know it carries it in Extra
 	// through every write it makes of the log (wirekeys.go), and reads the
@@ -889,13 +889,13 @@ type BridgeCall struct {
 	// holds where its harness ended its own run — a harness ends its run once
 	// every call it made is answered or given up on (savepoint.go) — while
 	// neither holds what it returned. So every continuation of the round built
-	// after it landed is told it, whatever its save point, under the words
-	// late calls are told by, and no rebuilt skill guard counts a load it made
-	// (internal/agent/runner's heldAt); and the log's dropped middle keeps it
-	// as it keeps a late one, counting one it gives up
+	// after it landed is told it whatever its save point, but one of a session
+	// the record says took it, under the late calls' words; no skill guard
+	// counts a load it made (internal/agent/runner's heldAt); and the log's
+	// dropped middle keeps it as a late one, counting one it gives up
 	// ([BridgeLog.LateElided]). Unlike a late call it may be the round's
-	// submission: its job made it and was not replaced, and a run told of it
-	// is told to make its own, which the collection replays over it.
+	// submission: its job made it and was not replaced, and a run told of it is
+	// told to make its own, which the collection replays over it.
 	//
 	// ADDITIVE ON THE WIRE: a build that does not know it carries it in Extra
 	// (wirekeys.go), and holds the call at a save point as any call, in a
@@ -2654,10 +2654,9 @@ type PendingStore interface {
 	// a refusal (these two, [ErrCodeHoldsFull]) never does.
 	//
 	// THE TURN'S CODE HOLDS ARE UNIONED, NEVER RESET: a create writes the
-	// run's [PendingRun.CodeHolds], and a reset writes the union of what the
-	// row holds and what it is handed, each key once in the order first
-	// taken — refused [ErrCodeHoldsFull] past [MaxCodeHolds], so no launch
-	// drops a hold an earlier job's turn depends on.
+	// run's [PendingRun.CodeHolds], and a reset the union of what the row holds
+	// and what it is handed, each key once in the order first taken, refused
+	// [ErrCodeHoldsFull] past [MaxCodeHolds]: no launch drops a hold.
 	//
 	// THE JOB'S GRANTS ARE ITS OWN, so a create and a reset alike write the
 	// run's [PendingRun.Repos], [PendingRun.CodeFloor],
@@ -2687,7 +2686,8 @@ type PendingStore interface {
 	// the same write, after them, so nothing a person files can land ahead of
 	// a note the box took first. Every item of the job before is removed, and
 	// the job opened is handed every call its log's opening walked
-	// ([RunNote.LateCall]), in a write after it that never fails the launch.
+	// ([RunNote.LateCall]), in a write after it that never fails the launch;
+	// the tellings ([RunSteer.Tellings]) go only with a new round.
 	//
 	// THE TURN'S READ OF ITS CONVERSATION ([PendingRun.Base]) IS WRITTEN BY
 	// THE CREATE ALONE and kept by every reset, whatever the reset's run
@@ -3716,14 +3716,14 @@ type PendingStore interface {
 	// and serving notes".
 	FileNote(ctx context.Context, turnID string, filing NoteFiling) (NoteFiled, PendingRun, error)
 
-	// TakeNotes records the notes a take names read, where its Read says,
-	// and answers the ones THIS CALL recorded — each with its read. Pinned to
-	// the take's job, its statuses, an undecided ending and its lease
-	// ([NoteTake]); a take that fails any of them, a note no longer waiting,
-	// an item for a job its Read does not name ([RunNote.IsFor]) and a record
-	// that is gone are each nothing taken, never an error. Each read is at the
-	// take's own place among the record's reads, but a note a hook's serve
-	// placed, which is read at its own ([RunNote.Place]).
+	// TakeNotes records the notes a take names read, where its Read says, and
+	// answers the ones THIS CALL recorded, each with its read. Pinned
+	// ([NoteTake]): a failed pin, a note no longer waiting, an item for a job
+	// its Read does not name ([RunNote.IsFor]) and a gone record take nothing,
+	// never an error. Each read is at the take's own place among the reads,
+	// but a note a hook's serve placed, at its own ([RunNote.Place]). A take
+	// confirming delivery ([NoteTake.Confirms]) records a telling of each
+	// late-call item it reads at its own place ([RunSteer.Tellings]).
 	//
 	// THE READ IS THE REVIEW'S HANDOVER, never delivered twice by two takers
 	// racing, nor without a record; a hook's is a serve ([PendingStore.ServeHook]).
@@ -3774,8 +3774,11 @@ type PendingStore interface {
 	// cancel and an absent take's serve lost absent ([ServeAbsent]). It answers
 	// every note it changed, and every note read off a serve to the job where
 	// it names a take held or restarted, so a settle made again answers what it
-	// read. No pin and no fence: it states a fact about the job. See the
-	// package doc, "Filing and serving notes".
+	// read. A late-call item read off a take named held records a telling at
+	// the write's own place, which the record's count moves to, the read staying
+	// at the item's ([RunSteer.Tellings]); one restarted records none. No pin
+	// and no fence: it states a fact about the job. See the package doc,
+	// "Filing and serving notes".
 	SettleHook(ctx context.Context, turnID string, settle HookSettle) ([]RunNote, error)
 
 	// MarkPulled records that the job named has asked for its notes at least
@@ -4363,10 +4366,12 @@ type BoxRef struct {
 
 	// BriefOmitted is what that brief left out of the round the launch carries
 	// on, and FreshOmitted what the fresh one its box falls back to left out,
-	// beside a brief that continues a session ([BriefTold],
+	// beside a brief that continues a session; BriefLateOmitted and
+	// FreshLateOmitted the late calls each left out so ([BriefTold],
 	// [LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]): written with
 	// the job's command as Brief is.
-	BriefOmitted, FreshOmitted []int
+	BriefOmitted, FreshOmitted         []int
+	BriefLateOmitted, FreshLateOmitted []int
 
 	// Leads is what that brief opened with of its own and the earlier leads it
 	// told again, or was to and could not read ([BriefLeads]): taken into the
@@ -4619,6 +4624,13 @@ type LaunchRecord struct {
 	// to read a set against.
 	BriefOmitted []int `json:"brief_omitted,omitempty"`
 	FreshOmitted []int `json:"fresh_omitted,omitempty"`
+
+	// BriefLateOmitted and FreshLateOmitted are the late calls each of those
+	// briefs counted without listing them ([BriefTold.LateOmitted]), apart from
+	// the reads it owes, on the job's record for the same reason. Read through
+	// [LaunchRecord.LateOmittedCalls].
+	BriefLateOmitted []int `json:"brief_late_omitted,omitempty"`
+	FreshLateOmitted []int `json:"fresh_late_omitted,omitempty"`
 
 	// LeadMarks is the leads the brief the job's run read told, its own and
 	// every earlier one it told again or was to and could not read
@@ -4932,17 +4944,30 @@ type LaunchRecord struct {
 //
 // Nil where the brief left none out, and on a record a build before this one
 // wrote, which names none.
-func (l LaunchRecord) OmittedCalls() []int {
+func (l LaunchRecord) OmittedCalls() []int { return l.readBriefs(l.BriefOmitted, l.FreshOmitted) }
+
+// LateOmittedCalls is the late calls the brief the job's run read counted
+// without listing them ([LaunchRecord.BriefLateOmitted], [BriefTold.LateOmitted]),
+// resolved as [LaunchRecord.OmittedCalls] resolves the reads: the union where
+// the record cannot say which brief the run read, crediting the session no
+// telling of either's, the safe direction.
+func (l LaunchRecord) LateOmittedCalls() []int {
+	return l.readBriefs(l.BriefLateOmitted, l.FreshLateOmitted)
+}
+
+// readBriefs is brief's set or fresh's, as [LaunchRecord.OmittedCalls] resolves
+// which brief the job's run read, and both where the record cannot say.
+func (l LaunchRecord) readBriefs(brief, fresh []int) []int {
 	switch {
 	case l.Brief == BriefFresh:
-		return l.BriefOmitted
+		return brief
 	case l.Brief.Continues() && l.SessionStart == SessionStartContinued:
-		return l.BriefOmitted
+		return brief
 	case l.Brief.Continues() && l.SessionStart == SessionStartFresh:
-		return l.FreshOmitted
+		return fresh
 	}
-	union := slices.Clone(l.BriefOmitted)
-	for _, place := range l.FreshOmitted {
+	union := slices.Clone(brief)
+	for _, place := range fresh {
 		if !slices.Contains(union, place) {
 			union = append(union, place)
 		}

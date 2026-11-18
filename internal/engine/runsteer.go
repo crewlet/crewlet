@@ -2317,8 +2317,10 @@ func (i *runInbox) confirm(ctx context.Context, launch string, candidates []open
 	}
 	read := sandbox.NoteRead{Phase: string(types.PhaseExecute), Iteration: i.round, Round: 1,
 		Boundary: string(types.SteerBoundaryStep), Launch: launch, Take: takeName()}
+	// ITS HARNESS'S OWN WORD THAT IT DELIVERED THEM, so a late call among them
+	// is told as one the job's session holds ([sandbox.NoteTake.Confirms]).
 	taken, err := i.steers.store.TakeNotes(ctx, i.ident.turn.TurnID, sandbox.NoteTake{
-		IDs: ids, Launch: launch, Statuses: steerTakeStatuses, Read: read,
+		IDs: ids, Launch: launch, Statuses: steerTakeStatuses, Read: read, Confirms: true,
 	})
 	if err != nil {
 		settled, settleErr := i.steers.settleOnce(context.WithoutCancel(ctx), i.ident.turn.TurnID,

@@ -665,16 +665,26 @@ func worstRow(t *testing.T) PendingRun {
 			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), For: job, Read: read(),
 			LateCall: &LateCall{Round: uuid.NewString(), Call: worstItemCall(t)}})
 	}
-	// THE READS A BRIEF LEFT OUT, as a launch records them on the job's record
-	// and a capture states them: a whole log's calls ([MaxBridgeCalls]), each a
-	// place at its widest.
-	omitted := make([]int, MaxBridgeCalls)
+	// AND THE TELLINGS, as many as the row holds ([MaxCallTellings]), each of
+	// a round and a job at their widest ids, every number at its widest.
+	tellings := make([]CallTelling, MaxCallTellings)
+	for i := range tellings {
+		tellings[i] = CallTelling{Round: uuid.NewString(), Appended: math.MaxInt, Launch: uuid.NewString(),
+			Place: math.MaxInt}
+	}
+	// THE CALLS A BRIEF LEFT OUT, as a launch records them on the job's record
+	// and a capture states them: a whole log's calls ([MaxBridgeCalls]) between
+	// the reads it owes and the late calls, each a place at its widest, one of
+	// them late so that both keys are written.
+	omitted := make([]int, MaxBridgeCalls-1)
 	for i := range omitted {
 		omitted[i] = math.MaxInt
 	}
+	lateOmitted := []int{math.MaxInt}
 	capture := &SessionCapture{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64, Launch: uuid.NewString(),
 		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), Omitted: omitted,
-		BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces), NoteCursor: math.MaxInt,
+		LateOmitted: lateOmitted, BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces),
+		NoteCursor:    math.MaxInt,
 		ContextTokens: math.MaxInt64, At: worstAt, Harness: plain(32), HarnessVersion: plain(64),
 		SessionID: plain(128), ArchiveFormat: 99, RunAfter: plain(MaxMessageIDBytes),
 		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
@@ -804,10 +814,11 @@ func worstRow(t *testing.T) PendingRun {
 	}
 	launch := LaunchRecord{StartedAt: worstAt, Started: true, Model: markup(256), ProviderKey: plain(64),
 		SignInID: uuid.NewString(), FollowUp: FollowUpReason(plain(32)), Brief: BriefKind(plain(32)),
-		BriefOmitted: omitted, FreshOmitted: omitted, LeadMarks: marks,
-		FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), ResumeCarry: ResumeCarry(plain(32)),
-		Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt, CollectFailingSince: worstAt,
-		ResumeFailures: math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,
+		BriefOmitted: omitted, FreshOmitted: omitted, BriefLateOmitted: lateOmitted, FreshLateOmitted: lateOmitted,
+		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)),
+		ResumeCarry: ResumeCarry(plain(32)), Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt,
+		CollectFailingSince: worstAt,
+		ResumeFailures:      math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,
 		// THE WIDEST WINDOW A RELEASE COUNTS ONTO THE RECORD, a day's: a
 		// release writes none that is no window (BudgetWindow.Valid), and of
 		// the three periods a day spells the widest pair, written as itself.
@@ -970,7 +981,8 @@ func worstRow(t *testing.T) PendingRun {
 		Lost: &JobLoss{Cause: LossCause(plain(32)), Node: plain(64), At: worstAt}, RoundLosses: math.MaxInt,
 		Round: uuid.NewString(), AnsweredJob: uuid.NewString(),
 		HeldFor: Condition(plain(32)), HeldUntil: worstAt,
-		Steer:     RunSteer{Seat: []byte(plain(512)), Seq: math.MaxInt, Notes: notes, Pulled: uuid.NewString(), Reads: math.MaxInt},
+		Steer: RunSteer{Seat: []byte(plain(512)), Seq: math.MaxInt, Notes: notes, Pulled: uuid.NewString(),
+			Reads: math.MaxInt, Tellings: tellings},
 		CreatedAt: worstAt, UpdatedAt: worstAt,
 	}
 	return run

@@ -1553,22 +1553,23 @@ func (l continuedLaunch) decision() LaunchDecision {
 
 // omitted is what the launch req records on the job it opens of the calls of
 // the round it carries on that the brief it hands its run left out, and, where
-// that brief continues a session, the fresh one its box falls back to
-// ([LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]).
+// that brief continues a session, the fresh one its box falls back to, each of
+// both kinds ([BriefTold.Omitted], [BriefTold.LateOmitted];
+// [LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]).
 //
 // NONE FOR A LAUNCH THAT CARRIES NO ROUND ON ([LaunchRequest.Continue] nil): a
 // turn's first launch tells no round's calls, and a send-back opens a new
 // round, whose log restarts, so a set of the collected round's calls would be
 // read against another round's log. A closed round's reads past the read cap
 // are counted under the prior-work ledger's rule for them.
-func (l continuedLaunch) omitted(req LaunchRequest) (brief, fresh []int) {
+func (l continuedLaunch) omitted(req LaunchRequest) (brief, fresh BriefTold) {
 	if req.Continue == nil {
-		return nil, nil
+		return BriefTold{}, BriefTold{}
 	}
 	if l.kind.Continues() {
-		fresh = req.Continue.Fresh.Omitted
+		fresh = req.Continue.Fresh
 	}
-	return l.told.Omitted, fresh
+	return l.told, fresh
 }
 
 // freshLaunch is a launch that continues no session: what its fresh brief told
