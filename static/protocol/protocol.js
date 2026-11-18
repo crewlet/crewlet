@@ -5132,6 +5132,7 @@ function writeFailed(err) {
 		detail,
 		hint: err.hint,
 		hostRefusal: typeof err.body.refusal === "string" ? err.body.refusal : "",
+		fields: code === "invalid" && Array.isArray(err.body.fields) ? err.body.fields.filter((f) => typeof f === "string") : [],
 		grants: err.grants,
 		reason: err.reason,
 		retryable,
@@ -5225,6 +5226,42 @@ function sentenceOf(code, err, detail, retryable) {
 }
 /** What a refusal no wait clears says where the engine's answer said nothing. */
 var NO_WAIT_CLEARS = "This can't be done here, and waiting won't change that.";
+// src/protocol/refusedFields.ts
+/** What a form calls each field a person fills in, by tool and the field's name. */
+var ENTERED = {
+	code_create_repo: {
+		name: "its name",
+		owner: "its owner",
+		description: "its description"
+	},
+	code_open_change: {
+		"open.title": "its title",
+		"open.body": "its description",
+		title: "its title"
+	},
+	code_update_change: {
+		"edit.title": "its title",
+		"edit.body": "its description"
+	},
+	code_close_change: { "close.reason": "the reason" },
+	code_comment_on_change: { "comment.body": "the comment" },
+	code_review_change: {
+		"review.summary": "the review's summary",
+		"review.findings": "its findings"
+	}
+};
+/** The form's name for field on tool, an indexed field (`review.findings[2]`) by its list's. */
+function labelOf(tool, field) {
+	const named = ENTERED[tool];
+	if (!named) return void 0;
+	return named[field] ?? named[field.replace(/\[\d+\].*$/, "")];
+}
+/** The sentence of an `invalid` refusal that names the field it refused. */
+function refusedFieldSentence(tool, fields) {
+	const field = fields[0];
+	const label = labelOf(tool, field);
+	return label ? `That change was refused, and nothing was written: Gitlet did not accept ${label}. Change it, then try again.` : `That change was refused, and nothing was written: Gitlet did not accept the value this page sent as ${field}.`;
+}
 // src/protocol/act.ts
 /**
 * The dashboard's one write: a change, made as the principal this browser's
@@ -5352,8 +5389,10 @@ function refusalOf(tool, opId, err, floors) {
 		floors.written(domain, null, refreshes);
 	}
 	const { lookAgain: _lookAgain, ...refused } = failed;
+	const named = refused.code === "invalid" && refused.detail === "" && refused.fields.length > 0 ? refusedFieldSentence(tool, refused.fields) : null;
 	return {
 		...refused,
+		...named ? { sentence: named } : {},
 		tool,
 		opId
 	};
