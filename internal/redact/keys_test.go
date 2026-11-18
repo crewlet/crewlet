@@ -2080,32 +2080,40 @@ func TestHalfALineIsNeverSettled(t *testing.T) {
 	}
 }
 
-// A KEY A BLOCK TAKES NAMES NO VALUE PAST IT. A password's key on a line a
-// key's block read from its BEGIN takes — `3 password:` interrupting a body
-// `printf` wrote in pieces — is inside the block's marker by the time the
-// rules run, so it names nothing; and its value, read past the wrapping's
-// blank line to the END's own line, is that END's to read back. Claimed as
-// the password's value, `u1SU1Lf=` was no part of the key the END read, and
-// it was published — until a second pass, the key gone into the marker, read
-// it back and redacted it.
+// A BLOCK NO END CLOSES TAKES A PASSWORD'S KEY ONLY WITH ITS VALUE, and a key
+// a block takes names no value past it. Under `printf`'s pieces, the block
+// ends before `3 password:`, and the value on the END's line is redacted as
+// the password's. In a log's string, a block that takes a prompt and the
+// first line of a value run on across escaped breaks ends inside the value:
+// the key in its marker names nothing, the value's rest is the END's to read
+// back, and the key is one marker.
 //
-// Mutation: claim the value of a password whose key a block took, and the
-// END's line keeps u1SU1Lf= in clear.
-func TestAKeyABlockTakesNamesNoValuePastIt(t *testing.T) {
+// Mutation: let a block no END closes take a key without its value
+// ([claims.shortOfValues]), and the first text is redacted otherwise; claim
+// the value of a key a block took ([claims.take]), and the second shows the
+// value's rest, which a second pass then redacts.
+func TestABlockNoEndClosesTakesAPasswordsKeyOnlyWithItsValue(t *testing.T) {
 	t.Parallel()
 	key := redact.Marker + "private-key]"
-	text := "'-----BEGIN RSA PRIVATE KEY-----' '" + keyLine + "' '\n3 password:\n    32\t\n     9\u2192u1SU1Lf=-----END RSA PRIVATE KEY-----\n"
-	want := "'" + key + "\t\n     9\u2192" + key + "\n"
-	got := redact.Secrets(text)
-	if got != want {
-		t.Fatalf("Secrets:\n got %q\nwant %q", got, want)
-	}
-	if again := redact.Secrets(got); again != got {
-		t.Errorf("a second pass changed %q to %q", got, again)
-	}
-	for _, sizes := range [][]int{{1}, {5, 400}} {
-		if shown, _ := settle(text, sizes); shown != want {
-			t.Errorf("in pieces of %v: shown as it settled\n%q\nwant\n%q", sizes, shown, want)
+	for _, c := range []struct{ text, want string }{{
+		"'-----BEGIN RSA PRIVATE KEY-----' '" + keyLine + "' '\n3 password:\n    32\t\n     9\u2192u1SU1Lf=-----END RSA PRIVATE KEY-----\n",
+		"'" + key + "\n3 password:\n    32\t\n     " + redact.Marker + "password]-----END RSA PRIVATE KEY-----\n",
+	}, {
+		`{"log": "-----BEGIN RSA PRIVATE KEY-----\n` + keyLine + ` password: \nu1SU1Lf9x.Ab3x` + strings.Repeat(`\n`+keyLine[:20], 3) + `\n-----END RSA PRIVATE KEY-----\n"}` + "\n",
+		`{"log": "` + key + `\n"}` + "\n",
+	}} {
+		got := redact.Secrets(c.text)
+		if got != c.want {
+			t.Errorf("Secrets:\n got %q\nwant %q", got, c.want)
+			continue
+		}
+		if again := redact.Secrets(got); again != got {
+			t.Errorf("a second pass changed %q to %q", got, again)
+		}
+		for _, sizes := range [][]int{{1}, {5, 400}} {
+			if shown, _ := settle(c.text, sizes); shown != c.want {
+				t.Errorf("in pieces of %v: shown as it settled\n%q\nwant\n%q", sizes, shown, c.want)
+			}
 		}
 	}
 }
