@@ -606,6 +606,12 @@
   white-space: nowrap;
 }
 
+/* WHEN, KEPT WHOLE: "opened 35 minutes ago" wraps as one, never "opened" on one
+   line and its time on the next. */
+.code-change-byline__at {
+  white-space: nowrap;
+}
+
 .code-change-byline__at::before {
   content: "·";
   margin-inline-end: var(--spacing-1);
