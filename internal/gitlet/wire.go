@@ -2543,6 +2543,12 @@ type ChangeDetail struct {
 	// target, as its home recorded it; nil before the home merged any. One of
 	// an earlier revision or into another branch is the home's to merge again.
 	Mergeability *MergeabilityRow `json:"mergeability,omitempty"`
+	// TargetTip is its target branch's tip as the read found it, "" where no
+	// live branch holds the name: what Mergeability's TargetOID is read
+	// against, since a merge measured at an earlier tip stands until its home
+	// measures it again (home's MergeabilityRefresh), and what a fast-forward
+	// needs its head to hold. An answer field, so no versionedFields row.
+	TargetTip string `json:"target_tip,omitempty"`
 	// Participants is who takes part in its conversation (code_participants),
 	// by handle, at most MaxDetailParticipants; nil where not answered.
 	Participants *ParticipantList `json:"participants,omitempty"`

@@ -7234,7 +7234,11 @@ it names no asker.
 
 The change's own read carries it (`mergeability` on a change's detail): of
 its head revision into its target where its home has merged that, and of an
-earlier revision or another branch while the home's next merge is owed. Its
+earlier revision or another branch while the home's next merge is owed. Beside
+it the detail carries the target's tip as the read found it (`target_tip`), so
+a merge measured at a tip the target has since moved past reads as such until
+its home merges it again, and a fast-forward is offered only where the head
+holds that tip. Its
 conflicted paths are weighed in the change's conversation's text, as its
 revisions' facts are, so a [purge](#deletion-and-purge) weighs them by that
 one narrow row. `crewlet.code.conversation.writes` counts the records under

@@ -8948,6 +8948,8 @@ export interface CodeChangeDetail extends CodeChangeSummary {
   conversation?: CodeConversationRow;
   /** Absent for a change its home has merged no revision of yet. */
   mergeability?: CodeMergeabilityRow;
+  /** Its target branch's tip as the read found it; absent where no live branch holds the name. */
+  target_tip?: string;
   /** Who takes part in its conversation, by handle (`gitlet.ParticipantList`); absent where not answered. */
   participants?: CodeParticipantList;
 }

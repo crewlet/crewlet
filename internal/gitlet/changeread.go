@@ -644,6 +644,11 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if participantsErr != nil {
 			return participantsErr
 		}
+		tip, _, tipErr := liveRefIn(ctx, tx, row.repoID, row.target)
+		if tipErr != nil {
+			return fmt.Errorf("gitlet: read %s's target %s: %w", ChangeRef(repo.ref.Name, row.number), row.target,
+				tipErr)
+		}
 		// From the conversation row just read: the detail is a change's most
 		// re-read question, so it pays no second statement to [withConversations].
 		row.moved = max(row.updatedAt, spoken)
@@ -656,7 +661,7 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			return readinessErr
 		}
 		out.Change = &ChangeDetail{ChangeSummary: repo.summary(row), Body: body, Authors: authors,
-			Conversation: conversation, Mergeability: merge, Participants: participants}
+			Conversation: conversation, Mergeability: merge, TargetTip: tip.OID, Participants: participants}
 		out.Change.Readiness = readiness[row.id]
 		if q.DetailOnly {
 			// No revision is read, encoded or shipped ([ReadQuery.DetailOnly]).
