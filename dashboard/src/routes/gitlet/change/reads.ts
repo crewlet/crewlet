@@ -58,6 +58,7 @@ import {
   type CodeReviewRow,
   type CodeReviewerRow,
   type CodeRevisionRow,
+  type CodeViewedRow,
   type LogRefusal,
   type QueryRefusal,
 } from "~/protocol/index.ts";
@@ -79,7 +80,8 @@ export type ChangePartName =
   | "standing"
   | "files"
   | "diff"
-  | "finding_paths";
+  | "finding_paths"
+  | "viewed";
 
 /** What a part's question is asked with: the change, the part, its page's bound where it lists, and `extra`. */
 export function changePartParams(
@@ -119,6 +121,8 @@ export function changePartParams(
  */
 export function partMovedBy(change: CodeChangeDetail, part: ChangePartName | "said"): string {
   if (part === "files" || part === "diff") return String(change.version);
+  // THE READER'S OWN MARKS move with the change's state alone: an ended change keeps none.
+  if (part === "viewed") return change.state;
   const conversation = change.conversation;
   // A FINDING ROW is raised or superseded by a review and moved by an answer: each
   // speaks, and the findings counted by path move with them.
@@ -248,7 +252,7 @@ const partNext = (a: CodeChangeAnswer) => a.next ?? "";
  */
 function usePagedPart<T>(
   change: CodeChangeDetail,
-  part: "reviews" | "comments" | "findings" | "excerpts" | "reviewers" | "finding_paths",
+  part: "reviews" | "comments" | "findings" | "excerpts" | "reviewers" | "finding_paths" | "viewed",
   pick: (a: CodeChangeAnswer) => readonly T[],
   idOf: (row: T) => string,
   extra: Readonly<Record<string, string | number | undefined>>,
@@ -328,6 +332,29 @@ export function usePagedFindingPaths(
     findingPathId,
     {},
     partMovedBy(change, "finding_paths"),
+  );
+  const { more, paging, pageError, next } = paged;
+  useEffect(() => {
+    if (more && !paging && pageError === null) next();
+  }, [more, paging, pageError, next]);
+  return paged;
+}
+
+/** The engine's own page of viewed marks (`gitlet.defaultViewedLimit`). */
+const VIEWED_PAGE = 500;
+const viewedOf = (a: CodeChangeAnswer) => a.viewed ?? [];
+const viewedId = (row: CodeViewedRow) => row.path_digest;
+
+/** The reader's viewed marks on a change, followed to their last page: a partial read would
+ *  call a viewed file unviewed without saying so. */
+export function usePagedViewed(change: CodeChangeDetail): Paged<CodeViewedRow, CodeChangeAnswer> {
+  const paged = usePagedPart(
+    change,
+    "viewed",
+    viewedOf,
+    viewedId,
+    { limit: VIEWED_PAGE },
+    partMovedBy(change, "viewed"),
   );
   const { more, paging, pageError, next } = paged;
   useEffect(() => {

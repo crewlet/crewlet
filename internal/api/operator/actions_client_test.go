@@ -120,7 +120,8 @@ func actionLog(tool string) string {
 		return "pages"
 	case in(chatlet.Tools(), chatlet.OperatorOnlyTools()):
 		return "chat"
-	case in(builtin.CodeToolNames(), builtin.CodeWrites(), []string{builtin.CodeMarkInboxTool}):
+	case in(builtin.CodeToolNames(), builtin.CodeWrites(),
+		[]string{builtin.CodeMarkInboxTool, builtin.CodeMarkViewedTool}):
 		return "code"
 	case tool == builtin.ArtifactMarkInboxTool:
 		return "artifacts"

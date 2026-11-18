@@ -891,6 +891,15 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  // A FILE MARKED VIEWED (`routes/gitlet/change/Viewed.tsx`): the person's own
+  // mark of one file at the state shown, or its take-back.
+  code_mark_viewed: {
+    args: ["repo", "change", "viewed", "unviewed", "seen"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
   // COMPANY › ATLAS (`routes/atlas`): what a holder of Atlas adds, corrects and
   // decides. THE ATLAS'S LOG IS NO SESSION DOMAIN: its questions read at the
   // dashboard's level and take no floor, so each row names them as
