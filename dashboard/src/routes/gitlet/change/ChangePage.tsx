@@ -78,7 +78,8 @@ import { WriteButton } from "~/components/WriteButton.tsx";
 import { ago } from "~/lib/ago.ts";
 import { changeLive, changeRef, isRepoName, refName } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateTime, plural } from "~/lib/format.ts";
+import { notPassedWords } from "~/lib/checks.ts";
+import { fmtDateTime } from "~/lib/format.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -244,11 +245,12 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
   );
 }
 
-/** The Checks tab's marker: a count of the failed checks, or that every one passed. */
+/** The Checks tab's marker: a count of the failed and errored checks, or that every one passed. */
 export function checksMarker(rows: readonly CodeCheckRow[]): TabsMarker | undefined {
-  const failed = rows.filter((r) => r.state === "failed" || r.state === "errored").length;
-  if (failed > 0)
-    return { tone: "danger", count: failed, label: `${plural(failed, "check")} failed` };
+  const failed = rows.filter((r) => r.state === "failed").length;
+  const errored = rows.filter((r) => r.state === "errored").length;
+  if (failed + errored > 0)
+    return { tone: "danger", count: failed + errored, label: notPassedWords(failed, errored) };
   if (rows.every((r) => r.state === "passed" || r.state === "skipped")) {
     return { tone: "success", label: "Every check passed" };
   }

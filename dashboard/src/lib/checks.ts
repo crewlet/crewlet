@@ -50,6 +50,16 @@ export function checkStateWord(state: string): string {
 }
 
 /**
+ * How many checks did not pass, by how they ended: "2 checks failed", "1 check
+ * errored", "1 check failed and 2 errored". An errored check measured nothing,
+ * so it is never counted as one that failed.
+ */
+export function notPassedWords(failed: number, errored: number): string {
+  if (failed > 0 && errored > 0) return `${plural(failed, "check")} failed and ${errored} errored`;
+  return failed > 0 ? `${plural(failed, "check")} failed` : `${plural(errored, "check")} errored`;
+}
+
+/**
  * The tone a check's state wears: success for a pass, danger for a failure,
  * info for one running, and neutral for everything that measured nothing.
  */

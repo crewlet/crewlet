@@ -985,10 +985,11 @@ test("the Checks tab counts the latest checks and marks a failure or a full pass
   ];
   stubEngine(detail(), () => json({}));
   mount();
-  // THE DANGER COUNT REPLACES THE FIGURE: two failed of three, the label said to a screen reader.
+  // THE DANGER COUNT REPLACES THE FIGURE: two not passed of three, the label said to a screen
+  // reader, an errored check named apart from a failed one since it measured nothing.
   const failed = await tab();
-  expect(failed.textContent).toBe("Checks22 checks failed");
-  expect(within(failed).getByText("2 checks failed")).toBeTruthy();
+  expect(failed.textContent).toBe("Checks21 check failed and 1 errored");
+  expect(within(failed).getByText("1 check failed and 1 errored")).toBeTruthy();
   cleanup();
 
   LATEST = [check(), check({ name: "lint", state: "skipped", required: false })];

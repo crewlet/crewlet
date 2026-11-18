@@ -4161,7 +4161,17 @@ test("the Checks tab is marked by the default branch's head: a dot when it passe
     marked({ state: "failing", counts: { failed: 1, errored: 1 }, required_passed: 0 }),
   );
   mount("#/gitlet/repos/web?tab=pushes");
-  await waitFor(() => expect(checksTab().textContent).toBe("Checks22 checks on main failed"));
+  await waitFor(() =>
+    expect(checksTab().textContent).toBe("Checks21 check failed and 1 errored on main"),
+  );
+  cleanup();
+  // ERRORED ALONE is never said failed: an errored check measured nothing.
+  stubAnswering(
+    "code_commit_marks",
+    marked({ state: "failing", counts: { errored: 2 }, required_passed: 0 }),
+  );
+  mount("#/gitlet/repos/web?tab=pushes");
+  await waitFor(() => expect(checksTab().textContent).toBe("Checks22 checks errored on main"));
 
   cleanup();
   stubAnswering("code_commit_marks", marked({ state: "running", counts: { running: 2 } }));
