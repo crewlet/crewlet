@@ -836,9 +836,10 @@ func BenchmarkACollectionPassAtItsBase(b *testing.B) {
 func inABubble(t *testing.T, f func(t *testing.T)) {
 	t.Helper()
 	synctest.Test(t, func(t *testing.T) {
-		outer := collectionLargeReads
+		outer, outerTakes := collectionLargeReads, sessionTakes
 		collectionLargeReads = make(chan struct{}, CollectionLargeReadsAtOnce)
-		t.Cleanup(func() { collectionLargeReads = outer })
+		sessionTakes = make(chan struct{}, SessionTakesAtOnce)
+		t.Cleanup(func() { collectionLargeReads, sessionTakes = outer, outerTakes })
 		f(t)
 	})
 }
@@ -847,15 +848,20 @@ func inABubble(t *testing.T, f func(t *testing.T)) {
 // session, written by Claude Code 2.1.322.
 func slotTake(t *testing.T, archive []byte) sandbox.TakenSession {
 	t.Helper()
-	box := sandbox.NewFakeSandbox("box-1")
-	p := PathsFor(box)
-	box.Put(p.SessionRecord(), "id "+ctSession+"\ncontinued no\nrelease 2.1.322 (Claude Code)\n")
-	box.Put(p.SessionCapture(), string(archive))
-	taken, err := NewClaudeCode().TakeSession(t.Context(), box, sandbox.SessionTake{MaxBytes: 32 << 20})
+	taken, err := takeWithin(t.Context(), archive)
 	if err != nil || taken.Body == nil {
 		t.Fatalf("the take: %v", err)
 	}
 	return taken
+}
+
+// takeWithin is [slotTake]'s take within ctx, its error the caller's.
+func takeWithin(ctx context.Context, archive []byte) (sandbox.TakenSession, error) {
+	box := sandbox.NewFakeSandbox("box-1")
+	p := PathsFor(box)
+	box.Put(p.SessionRecord(), "id "+ctSession+"\ncontinued no\nrelease 2.1.322 (Claude Code)\n")
+	box.Put(p.SessionCapture(), string(archive))
+	return NewClaudeCode().TakeSession(ctx, box, sandbox.SessionTake{MaxBytes: 32 << 20})
 }
 
 // countedWriter counts what is written to it.
@@ -969,6 +975,65 @@ func TestATakesCloseEndsItsMetersWaitForTheSlot(t *testing.T) {
 				len(collectionLargeReads))
 		}
 		free()
+	})
+}
+
+// NO MORE TAKES SCRUB AT ONCE THAN [SessionTakesAtOnce]: with every slot held
+// by a take nothing reads, one more waits within its ctx, and takes the slot a
+// closed take gives back; one whose ctx ends while it waits is refused
+// ([errTakeWait]), holding none.
+//
+// Mutation: take no slot, and the take past the pool returns at once.
+func TestNoMoreTakesScrubAtOnceThanThePoolAllows(t *testing.T) {
+	archive := cntArchive(t, cntThread(cntUser("", "u1", `"hello"`)))
+	inABubble(t, func(t *testing.T) {
+		held := make([]sandbox.TakenSession, 0, SessionTakesAtOnce)
+		for range SessionTakesAtOnce {
+			held = append(held, slotTake(t, archive))
+		}
+		if n := len(sessionTakes); n != SessionTakesAtOnce {
+			t.Fatalf("%d takes in flight hold %d slots, want one each", SessionTakesAtOnce, n)
+		}
+		refused, cancel := context.WithCancel(t.Context())
+		gaveUp := make(chan error, 1)
+		go func() {
+			_, err := takeWithin(refused, archive)
+			gaveUp <- err
+		}()
+		type result struct {
+			taken sandbox.TakenSession
+			err   error
+		}
+		next := make(chan result, 1)
+		go func() {
+			taken, err := takeWithin(t.Context(), archive)
+			next <- result{taken, err}
+		}()
+		synctest.Wait()
+		select {
+		case r := <-next:
+			t.Fatalf("a take past the pool's %d returned (%v) while every slot was held",
+				SessionTakesAtOnce, r.err)
+		case err := <-gaveUp:
+			t.Fatalf("a take past the pool returned (%v) before its wait ended", err)
+		default:
+		}
+		cancel()
+		if err := <-gaveUp; !errors.Is(err, errTakeWait) {
+			t.Errorf("a take whose wait ended: %v, want errTakeWait", err)
+		}
+		_ = held[0].Body.Close()
+		r := <-next
+		if r.err != nil || r.taken.Body == nil {
+			t.Fatalf("the take given a slot back: %v", r.err)
+		}
+		_ = r.taken.Body.Close()
+		for _, h := range held[1:] {
+			_ = h.Body.Close()
+		}
+		if n := len(sessionTakes); n != 0 {
+			t.Errorf("once every take was closed, %d slots are held, want none", n)
+		}
 	})
 }
 

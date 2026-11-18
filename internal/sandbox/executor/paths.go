@@ -160,16 +160,17 @@
 // holding 4 MiB at most at GOGC=10 and its heap peaking at 9 MiB at the
 // default, within the arithmetic, and taking no slot.
 //
-// THE BASE TIER'S COUNT: no token holds it, so it is every read in flight at
-// once: one per seat collecting on this node, one per take, and up to the box
-// host's boxReadsHeld (64) reads for its peers. A collection's pass holds about
-// 5.1 MiB at its worst; a take, whose scrub streams each text through
-// redact's stages, each holding its window, holds 11 to 12 MiB at its base
-// (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string and a text
-// file each at the base, the line's and the string's of bytes the decode
-// triples, both readings and the meter, read as above, 0.21 s on two cores,
-// its heap peaking at 23 MiB at the default GOGC), so 768 MiB were every read
-// a take's.
+// THE BASE TIER'S COUNT: no token of this pool holds it, so it is every read in
+// flight at once: one per seat collecting on this node, one per take, and up
+// to the box host's boxReadsHeld (64) reads for its peers, each 5.1 MiB at its
+// worst, 326 MiB, while a take held no more. A take, whose scrub streams each
+// text through redact's stages, each holding its window, holds 11 to 12 MiB at
+// its base (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string and
+// a text file each at the base, the line's and the string's of bytes the
+// decode triples, both readings and the meter, read as above, 0.21 s on two
+// cores, its heap peaking at 23 MiB at the default GOGC), so every take holds
+// one of [SessionTakesAtOnce] (27), a pool of its own sized so the takes at
+// their base hold those 326 MiB at most, 324.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
 // holds the measured 109 MiB at most; a take, its meter beside it under the
