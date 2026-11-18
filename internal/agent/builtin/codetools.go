@@ -635,9 +635,9 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 	return answer, nil
 }
 
-// branch holds the refs a write names — its `branch`, a suggestions apply's
-// source branch, a change open's source and target — for turn BEFORE the
-// write is sent ([HoldRef]): THE ONE PLACE a write's branch is held, all at
+// branch holds the refs a write names (its `branch`, a suggestions apply's
+// source branch, a change open's source or target its read found missing) for
+// turn BEFORE the write is sent ([HoldRef]): THE ONE PLACE a write's branch is held, all at
 // once (one ref read, one Take, [takeRefHolds]). Held as a read is, because
 // only a write that MOVES the branch is ordered against its deletion by its
 // head compare; a refused, conflicting or no-op write appends nothing. So an

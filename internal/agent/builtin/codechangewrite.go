@@ -407,13 +407,16 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if open.TargetRef == "" {
 		open.TargetRef = branchRoot + repo.DefaultBranch
 	}
-	// THE BRANCHES' HOLDS before the open is sent ([CodeDeps.branch]): source
-	// and target, where a seat's branch, are held as a read is, and a source
-	// the resolve finds missing as a write's is, in one read and one Take.
-	if refusal = t.deps.branch(ctx, turn, tool, c, repo, true, open.SourceRef, open.TargetRef); refusal != nil {
+	// ONE READ of source and target before the open is sent: it holds each seat's branch it finds
+	// ([CodeDeps.refsOf]) and answers [CodeDeps.heldByTarget]; a missing one is held with no read.
+	tips, refusal := t.deps.refsOf(ctx, turn, tool, c, repo, open.SourceRef, open.TargetRef)
+	if refusal != nil {
 		return *refusal, nil
 	}
-	if refusal = t.deps.heldByTarget(ctx, turn, tool, c, repo, open.SourceRef, open.TargetRef); refusal != nil {
+	if refusal = t.deps.branch(ctx, turn, tool, c, repo, false, open.SourceRef, open.TargetRef); refusal != nil {
+		return *refusal, nil
+	}
+	if refusal = t.deps.heldByTarget(ctx, turn, tool, c, repo, tips); refusal != nil {
 		return *refusal, nil
 	}
 	op := opIDFor(actor, tool, changeVerb, repo.ID, args)
@@ -439,20 +442,16 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return newForeignRead(turn, c.asker.Seat).page(ctx, tool, out, "")
 }
 
-// heldByTarget refuses an open whose source tip its target already holds: it
-// proposes nothing and would be marked merged at once. The decide reads only
-// rows, so history is checked here; a missing branch or equal tips is left to it.
+// heldByTarget refuses an open whose source tip (tips.Refs[0]) its target (tips.Refs[1]) already
+// holds: it proposes nothing and would be marked merged at once. The decide reads only rows, so
+// history is checked here; a missing branch or equal tips is left to it.
 func (d CodeDeps) heldByTarget(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
-	repo gitlet.RepoRef, source, target string) *tools.Result {
+	repo gitlet.RepoRef, tips gitlet.RefAnswer) *tools.Result {
 
-	answer, refusal := d.refsOf(ctx, turn, tool, c, repo, source, target)
-	if refusal != nil {
-		return refusal
-	}
-	if len(answer.Refs) != 2 {
+	if len(tips.Refs) != 2 {
 		return nil
 	}
-	src, tgt := answer.Refs[0], answer.Refs[1]
+	src, tgt := tips.Refs[0], tips.Refs[1]
 	if src.Missing != "" || tgt.Missing != "" || src.OID == tgt.OID {
 		return nil
 	}
