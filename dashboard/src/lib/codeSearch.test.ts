@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { coverageNotes, groupHits, hitAt } from "./codeSearch.ts";
+import { coverageNotes, fileBlocks, groupHits, hitAt, matchingLines } from "./codeSearch.ts";
 
 const TIP_WEB = "a".repeat(40);
 const TIP_API = "b".repeat(40);
@@ -25,7 +25,7 @@ const quiet = () => ({
   skipped_files: 0,
   truncated: false,
 });
-const hit = (repo: string, path: string, line: number, extra: Record<string, string> = {}) => ({
+const hit = (repo: string, path: string, line: number, extra: Record<string, unknown> = {}) => ({
   repo,
   path,
   line,
@@ -139,5 +139,73 @@ describe("what a search covered", () => {
       "Left out: 1 repository (scratch), searched only when a repo: filter names them.",
       "3 files passed over for their size or as binaries.",
     ]);
+  });
+});
+
+describe("a file's blocks", () => {
+  const numbers = (blocks: ReturnType<typeof fileBlocks>) =>
+    blocks.map((b) => b.rows.map((r) => (r.hit ? `${r.line}!` : r.line)));
+
+  // Mutation: draw each hit alone, or number its before lines from the hit down.
+  test("join a hit's lines around it and near hits into one run, with gaps between", () => {
+    const blocks = fileBlocks([
+      hit("web", "a.go", 5, { before: ["three", "four"], after: ["six"] }),
+      hit("web", "a.go", 7, { after: ["eight"] }),
+      hit("web", "a.go", 20, { before: ["nineteen"] }),
+    ]);
+    expect(numbers(blocks)).toEqual([
+      [3, 4, "5!", 6, "7!", 8],
+      [19, "20!"],
+    ]);
+    expect(blocks[0]!.rows[0]!.text).toBe("three");
+    expect(blocks.map((b) => [b.first, b.last])).toEqual([
+      [3, 8],
+      [19, 20],
+    ]);
+  });
+
+  // Mutation: let a later answer replace a row, or a context row replace a hit.
+  test("keep the first answer of a line, except that a hit outranks a line around one", () => {
+    const blocks = fileBlocks([
+      hit("web", "a.go", 5, { after: ["six", "seven"] }),
+      hit("web", "a.go", 9, { before: ["other seven", "eight"] }),
+      hit("web", "a.go", 6, { text: "six, a hit" }),
+    ]);
+    expect(numbers(blocks)).toEqual([["5!", "6!", 7, 8, "9!"]]);
+    expect(blocks[0]!.rows.map((r) => r.text)).toEqual([
+      "line 5",
+      "six, a hit",
+      "seven",
+      "eight",
+      "line 9",
+    ]);
+  });
+
+  test("take the lines a reader revealed, closing the gap they fill", () => {
+    const hits = [hit("web", "a.go", 2), hit("web", "a.go", 6)];
+    expect(numbers(fileBlocks(hits))).toEqual([["2!"], ["6!"]]);
+    const revealed = new Map([
+      [3, "three"],
+      [4, "four"],
+      [5, "five"],
+    ]);
+    expect(numbers(fileBlocks(hits, revealed))).toEqual([["2!", 3, 4, 5, "6!"]]);
+  });
+});
+
+describe("a count of matching lines", () => {
+  // Mutation: count the lines answered where a total is there, or call a guess exact.
+  test("sums each file's total, else its lines answered, and says when it is a floor", () => {
+    const [group] = groupHits({
+      hits: [
+        hit("web", "a.go", 1, { file_matches: 7 }),
+        hit("web", "b.go", 2, { file_matches: 1 }),
+      ],
+    });
+    expect(matchingLines(group!.files)).toEqual({ count: 8, exact: true });
+    const [older] = groupHits({
+      hits: [hit("web", "a.go", 1, { file_matches: 7 }), hit("web", "c.go", 3)],
+    });
+    expect(matchingLines(older!.files)).toEqual({ count: 8, exact: false });
   });
 });

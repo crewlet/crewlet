@@ -1,29 +1,15 @@
 /**
- * A code search's answer as Gitlet › Search and ⌘K's Code scope draw it: its
- * lines grouped by repository and then by file, each line's address on the
- * repository's page, and what the search did NOT cover, in words.
- *
- * # A hit is read at the commit its repository was searched at
- *
- * The engine answers each repository at the commit its Gitlet node's copy held
- * for the ref the search named (`tips`), never at the branch, which may have
- * moved since. So a hit links to its file AT THAT COMMIT, by its whole id,
- * with the line picked (`lines=`): an address that says tomorrow what the
- * search said today, which the repository's page answers immutably.
- *
- * # The coverage is never hidden
- *
- * A search across the company's repositories is a scatter over its Gitlet nodes,
- * and every answer names what it left out: a node that did not answer, an
- * index still being built, a copy behind the log, a repository searched only
- * when a `repo:` filter names it. "No match" over half the company is not "no
- * match", so the coverage is said on every answer, the repositories searched
- * first — a quiet sentence where everything was, a warning where lines may be
- * missing.
+ * A code search's answer as Gitlet › Search and ⌘K's Code scope draw it: by repository and file,
+ * each line addressed at the commit its repository was searched at, and the coverage in words.
  */
 
 import type { CodeSearchAnswer } from "~/contract/code.ts";
 import { plural } from "./format.ts";
+
+/** Lines of context asked on each side of a hit: the engine's most (`gitlet.MaxSearchContext`). */
+export const SEARCH_CONTEXT = 3;
+/** Lines of one file a search answers; the rest are behind Show N more. */
+export const SEARCH_PER_FILE = 3;
 
 /** One matching line, as the engine answers it (`codesearch.Hit`). */
 export type CodeSearchHit = CodeSearchAnswer["hits"][number];
@@ -38,6 +24,8 @@ export interface FileHits {
   /** The file's object id. */
   blob: string;
   lines: CodeSearchHit[];
+  /** How many of the file's lines matched, where the engine answered it (`file_matches`). */
+  total?: number;
 }
 
 /** One repository's matching files, in path order, and the commit it was searched at. */
@@ -69,7 +57,13 @@ export function groupHits(answer: Pick<CodeSearchAnswer, "hits" | "tips">): Repo
     const fileKey = `${hit.repo}\u0000${hit.path_b64 ?? hit.path}`;
     let file = files.get(fileKey);
     if (!file) {
-      file = { path: hit.path, pathB64: hit.path_b64, blob: hit.blob, lines: [] };
+      file = {
+        path: hit.path,
+        pathB64: hit.path_b64,
+        blob: hit.blob,
+        lines: [],
+        ...(hit.file_matches !== undefined ? { total: hit.file_matches } : {}),
+      };
       files.set(fileKey, file);
       repo.files.push(file);
     }
@@ -184,4 +178,69 @@ export function coverageNotes(coverage: Coverage): CoverageNotes {
     lead: `Searched ${plural(coverage.searched, "repository", "repositories")}.`,
     notes,
   };
+}
+
+/** A path's directory with its trailing slash ("" at the root), and its last component. */
+export function dirOf(path: string): string {
+  return path.slice(0, path.lastIndexOf("/") + 1);
+}
+export function baseOf(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+
+/** How many lines matched across files: each file's total, else the lines answered (then "at least"). */
+export function matchingLines(files: readonly FileHits[]): { count: number; exact: boolean } {
+  let count = 0;
+  let exact = true;
+  for (const f of files) {
+    if (f.total === undefined) exact = false;
+    count += f.total ?? f.lines.length;
+  }
+  return { count, exact };
+}
+
+/** One drawn line of a file: a hit (with where it matched) or a line around one. */
+export interface SearchRow {
+  line: number;
+  text: string;
+  hit: boolean;
+  matches?: readonly (readonly [number, number])[];
+}
+
+/** A run of consecutive lines; the lines between two blocks are a gap. */
+export interface SearchBlock {
+  first: number;
+  last: number;
+  rows: SearchRow[];
+}
+
+/**
+ * A file's hits with their context, and any lines revealed, as blocks of consecutive lines.
+ * A hit's own line wins over the same line answered as context; otherwise the first answer wins.
+ */
+export function fileBlocks(
+  hits: readonly CodeSearchHit[],
+  revealed: ReadonlyMap<number, string> = new Map(),
+): SearchBlock[] {
+  const rows = new Map<number, SearchRow>();
+  const put = (row: SearchRow) => {
+    const had = rows.get(row.line);
+    if (!had || (row.hit && !had.hit)) rows.set(row.line, row);
+  };
+  for (const h of hits) {
+    const before = h.before ?? [];
+    before.forEach((text, i) => put({ line: h.line - before.length + i, text, hit: false }));
+    put({ line: h.line, text: h.text, hit: true, ...(h.matches ? { matches: h.matches } : {}) });
+    (h.after ?? []).forEach((text, i) => put({ line: h.line + 1 + i, text, hit: false }));
+  }
+  for (const [line, text] of revealed) put({ line, text, hit: false });
+  const blocks: SearchBlock[] = [];
+  for (const row of [...rows.values()].sort((a, b) => a.line - b.line)) {
+    const block = blocks[blocks.length - 1];
+    if (block && row.line === block.last + 1) {
+      block.rows.push(row);
+      block.last = row.line;
+    } else blocks.push({ first: row.line, last: row.line, rows: [row] });
+  }
+  return blocks;
 }

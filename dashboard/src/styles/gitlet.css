@@ -3716,8 +3716,22 @@
   font-size: var(--font-size-md);
 }
 
-/* A FILE OF RESULTS, as a code host's search draws one: a card, its path
-   across its head, its lines under it in the code face. */
+/* The commit searched, at the head's end. */
+.code-search-repo__tip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin-inline-start: auto;
+}
+
+.code-search-repo__sha {
+  padding: 0 var(--spacing-1);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+}
+
+/* A file of results: a card, its path across its head, its blocks of lines under it. */
 .code-search-file {
   display: flex;
   flex-direction: column;
@@ -3727,40 +3741,52 @@
   overflow: hidden;
 }
 
-.code-search-file__path {
+.code-search-file__head {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-3);
+  padding: var(--spacing-1) var(--spacing-2) var(--spacing-1) var(--spacing-3);
   background: var(--color-surface-subtle);
   border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-search-file__path {
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.code-search-file__count {
-  margin-inline-start: auto;
-  font-family: var(--font-family-sans);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
+/* Chrome, the heading its lines hang under: the link ink with no underline. */
+.code-search-file__link {
+  color: var(--color-text-primary);
 }
 
-/* A result's path, linking to its file: chrome, the heading its lines hang
-   under, drawn in the link ink with no underline. A link inside a sentence
-   takes .prose-link instead. */
-.code-search-file__link {
-  color: var(--color-brand-accent-ink);
+.code-search-file__dir {
+  color: var(--color-text-secondary);
+}
+
+/* Copy and Open stay at the head's end on its first line. */
+.code-search-file__acts {
+  display: flex;
+  flex: none;
+  align-self: flex-start;
+  margin-inline-start: auto;
 }
 
 .code-search-lines {
-  margin: 0;
-  padding: var(--spacing-1) 0;
-  list-style: none;
   overflow-x: auto;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-compact);
   line-height: var(--font-line-height-body);
   tab-size: 4;
+}
+
+/* As wide as its longest line, so a row's ground spans it when scrolled. */
+.code-search-block {
+  min-width: 100%;
+  width: max-content;
+  margin: 0;
+  padding: var(--spacing-1) 0;
+  list-style: none;
 }
 
 .code-search-line {
@@ -3774,11 +3800,15 @@
   background: var(--color-surface-hover);
 }
 
-/* A line's number is read (and is the link to the line), so it takes the
-   tertiary rung: the faint one is about 3:1, a mark's floor, not a word's. */
+/* A line's number is read (and a hit's links to it): the tertiary rung, a word's floor. */
 .code-search-line__number {
   text-align: end;
   color: var(--color-text-tertiary);
+}
+
+.code-search-line--hit .code-search-line__number {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
 }
 
 .code-search-line__text {

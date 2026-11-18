@@ -1,57 +1,9 @@
 /**
- * Gitlet › Search: the lines of the company's repositories that match a search,
- * by repository, then file, then line — each linking to its file at the
- * commit it was searched at, with the line picked.
- *
- * # One grammar, the engine's
- *
- * The phrase is `code_search`'s `q`, in Gitlet's one grammar
- * (`codeindex.ParseQuery`): `repo:`, `path:` and `ref:` filters first, then
- * the text. The bar's mode (`CODE_SEARCH_MODES`, held to the engine's), and
- * its repository, path and ref beside the phrase, are the question's own
- * parameters — the same filters said as controls, which the engine reads by
- * the grammar's rule (a repository or a path widens the search, a second ref
- * is refused). Every one of them is in the address
- * (`#/gitlet/search?q=&mode=&repo=&path=&ref=`), so a search is a link. A press
- * of Search PUSHES its phrase, path and ref (`nav.submit`), so the back button
- * walks a reader's searches rather than their keystrokes; the mode and the
- * repository are controls that narrow the search on screen, and replace. The
- * boxes are a draft of what the address says (`useDraft`), seeded again
- * whenever it comes to say something else — Back, or ⌘K's "See every match"
- * opening a phrase on this screen — so a box never shows one phrase over the
- * lines of another.
- *
- * # Asked when the reader presses Search, never per keystroke
- *
- * A search across the company is a scatter over every Gitlet node that holds a
- * repository the reader reads: one signed request each, and a second round
- * for what the first left unanswered. So the phrase is asked when it is
- * submitted, as Work's search is, and never as it is typed — and a reconnect
- * asks again only a search that never reached the engine
- * (`refetchOnReconnect: "unreached"`): an answer names the commit each
- * repository was searched at, so asking again only repeats the work, and a
- * rolling restart reconnecting every socket would ask every open tab's at
- * once.
- *
- * # Over REST, at no floor
- *
- * Like every code question it is asked over REST (`lib/useCodeQuery.ts`), and
- * unlike the rest it takes no session floor: it answers at the commit each
- * repository was searched at, named in `tips`, so a write this tab made has
- * nothing to wait for here (`contract/domains.ts`).
- *
- * # What was not searched is said on every answer
- *
- * See `lib/codeSearch.ts`: the coverage is a Callout above the lines, never hidden,
- * and a warning where any repository was left unanswered or the lines cut.
- *
- * # Coloured by kind, a line alone
- *
- * Each hit is tokenized on its own in its file's language; no blob is read, so a
- * hit inside a block comment may read as code.
+ * Gitlet › Search: Gitlet's one grammar (`codeindex.ParseQuery`) and the bar's filters, all in the
+ * address; asked over REST at no floor when Search is pressed, never per keystroke or on a reconnect.
  */
 
-import { memo, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import {
   Button,
   Callout,
@@ -62,18 +14,15 @@ import {
   SegmentedControl,
   Skeleton,
 } from "@crewlethq/ui";
-import { FileCodeGlyph, SearchGlyph, SquareCodeGlyph } from "@crewlethq/icons/glyphs";
-import { href, useDraft, useNavigator, useParam } from "~/app/router.tsx";
+import { SearchGlyph } from "@crewlethq/icons/glyphs";
+import { useDraft, useNavigator, useParam } from "~/app/router.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { QueryState } from "~/components/common.tsx";
 import { CODE_SEARCH_MODES } from "~/contract/code.ts";
-import { repoPath, shortOID } from "~/lib/code.ts";
-import { plural } from "~/lib/format.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
-import { repoHref } from "./paths.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
-import { Painted, tokensOf, useGrammar } from "./syntax.tsx";
-import { coverageNotes, groupHits, hitAt, type FileHits, type RepoHits } from "~/lib/codeSearch.ts";
+import { Results } from "./search/Results.tsx";
+import { coverageNotes, groupHits, SEARCH_CONTEXT, SEARCH_PER_FILE } from "~/lib/codeSearch.ts";
 import "~/styles/gitlet.css";
 
 /** Each mode, as the bar offers it. */
@@ -106,15 +55,23 @@ export function Search() {
   const [repo, setRepo] = useParam("repo", EVERY_REPO, "filter");
   const [path] = useParam("path", "", "filter");
   const [ref] = useParam("ref", "", "filter");
-  // WHAT IS TYPED IS NOT YET ASKED, and is the address's again whenever the
-  // address moves: see the file's doc.
+  // What is typed is not yet asked, and is seeded again whenever the address moves
+  // (Back, or ⌘K's "See every match" opening a phrase here).
   const [typedQ, setTypedQ] = useDraft(q);
   const [typedPath, setTypedPath] = useDraft(path);
   const [typedRef, setTypedRef] = useDraft(ref);
   const asked = q.trim() !== "";
   const answer = useCodeQuery(
     "code_search",
-    { q, mode, repo: repo || undefined, path: path || undefined, ref: ref || undefined },
+    {
+      q,
+      mode,
+      repo: repo || undefined,
+      path: path || undefined,
+      ref: ref || undefined,
+      context: SEARCH_CONTEXT,
+      per_file: SEARCH_PER_FILE,
+    },
     { enabled: asked, refetchOnReconnect: "unreached" },
   );
   const groups = useMemo(() => (answer.data ? groupHits(answer.data) : []), [answer.data]);
@@ -217,11 +174,7 @@ export function Search() {
                     description="In what was searched: the note above says what that was."
                   />
                 ) : (
-                  <div className="code-search-results">
-                    {groups.map((g) => (
-                      <RepoResult key={g.repo} group={g} />
-                    ))}
-                  </div>
+                  <Results groups={groups} />
                 )}
               </>
             )}
@@ -239,75 +192,5 @@ export function SearchCoverage({ coverage }: { coverage: Parameters<typeof cover
     <Callout variant={notes.variant} title={notes.lead}>
       <NoticeList notices={notes.notes.map((n) => ({ key: n, title: n }))} />
     </Callout>
-  );
-}
-
-/** One repository's files and their lines, named with the commit they were read at. */
-const RepoResult = memo(function RepoResult({ group }: { group: RepoHits }) {
-  return (
-    <section className="code-search-repo" aria-label={group.repo}>
-      <h3 className="code-search-repo__head">
-        <SquareCodeGlyph size="sm" className="code-glyph" />
-        <a className="mono" href={repoHref(group.repo, group.tip ? { ref: group.tip } : {})}>
-          {group.repo}
-        </a>
-        <span className="t-caption muted">
-          {plural(group.lines, "line")} in {plural(group.files.length, "file")}
-          {group.tip && (
-            <>
-              {" "}
-              at <span className="mono">{shortOID(group.tip)}</span>
-            </>
-          )}
-        </span>
-      </h3>
-      {group.files.map((f) => (
-        <FileResult key={f.pathB64 ?? f.path} repo={group.repo} tip={group.tip} file={f} />
-      ))}
-    </section>
-  );
-});
-
-/** A hit's address with no line picked: the file itself. */
-function fileOnly(at: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(Object.entries(at).filter(([key]) => key !== "lines"));
-}
-
-function FileResult({ repo, tip, file }: { repo: string; tip?: string; file: FileHits }) {
-  const first = hitAt(tip, file, file.lines[0]?.line ?? 1);
-  const grammar = useGrammar(file.path);
-  return (
-    <div className="code-search-file">
-      <div className="code-search-file__path mono">
-        <FileCodeGlyph size="sm" className="code-glyph" />
-        {first ? (
-          <a className="code-search-file__link" href={href(repoPath(repo), fileOnly(first))}>
-            {file.path}
-          </a>
-        ) : (
-          <span title="Its path is not UTF-8, so no address names it">{file.path}</span>
-        )}
-        <span className="code-search-file__count">{plural(file.lines.length, "line")}</span>
-      </div>
-      <ol className="code-search-lines">
-        {file.lines.map((hit) => {
-          const at = hitAt(tip, file, hit.line);
-          return (
-            <li key={hit.line} className="code-search-line">
-              {at ? (
-                <a className="code-search-line__number mono" href={href(repoPath(repo), at)}>
-                  {hit.line}
-                </a>
-              ) : (
-                <span className="code-search-line__number mono">{hit.line}</span>
-              )}
-              <code className="code-search-line__text">
-                <Painted text={hit.text} tokens={tokensOf(grammar, hit.text, "")} />
-              </code>
-            </li>
-          );
-        })}
-      </ol>
-    </div>
   );
 }

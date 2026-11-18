@@ -9223,11 +9223,12 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   socket, and each open search asked again would be one more request to
   every Gitlet node for an answer that already names its commits. And it takes
   no floor: it answers at the commit each repository was searched at (`tips`). The
-  lines are grouped by repository and then by file in the engine's order —
-  repository, path, line — never re-sorted, each file a card of its own as a
-  code host's search draws one, its path across its head with how many of its
-  lines matched, its lines under it in the code face, each coloured by kind on its own
-  (a hit inside a block comment may read as code); each line's number opens its file
+  lines are grouped by repository and then by file in the engine's order
+  (repository, path, line), never re-sorted. Each file is a card of its
+  matching lines with three lines of the file around each, near lines joined
+  and a gap between apart ones, each run coloured by kind from its first line;
+  its head says how many of its lines matched, with Copy the path and Open the
+  file. Each hit's number opens its file
   on the repository's Code tab AT THAT COMMIT, by its whole id, with the line
   picked (`ref=`, `path=`, `lines=`), so the link says tomorrow what the
   search said today; a path that is not UTF-8 is drawn with no link, since no
