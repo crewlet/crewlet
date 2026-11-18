@@ -225,17 +225,22 @@
 // MainThreadReadWait (15 s), so a person paging a transcript would decide how
 // a turn's relaunch is told; apart, it never does. One slot, not two: the
 // process's thread readers then hold at worst 2 x 133 + 89 = 355 MiB beside
-// the base tier, and one waiter behind one pass at its worst (2.4 s, 4.8 s
-// loaded) is through in 9.6 s, within the 15 s. A later waiter, or one behind
-// a take's piece streaming from a slow box, may not be: its read ends with
-// [errLargeWait] and reads as no reading (count unread), the safe side, as a
-// read past MainThreadReadWait already is. The wait is spent inside that
-// wait, never added to it.
+// the base tier. One waiter behind a pass over ordinary lines at the bound
+// (2.4 s, 4.8 s loaded) is through in 9.6 s, within the 15 s. Behind the
+// slot's slowest holder it is not: a pass over the slowest threads at the
+// bound, 17.8 to 18.5 s (BenchmarkTheMainThreadReadAtItsBound), holds the slot
+// until its own MainThreadReadWait cuts it. That waiter, a later one, or one
+// behind a take's piece streaming from a slow box ends with [errLargeWait] and
+// reads as no reading (count unread), the safe side, as a read past
+// MainThreadReadWait already is. The wait is spent inside that wait, never
+// added to it.
 //
-// THE LINE'S TRIGGER IS ITS LENGTH, though the layer holds a line's facts and
-// never the line: a line past the base holds at most those facts and the
-// reader's buffers, so the trigger takes the slot early for a long line of few
-// facts (a large file's Read, a document's base64), never late.
+// THE LINE'S TRIGGER IS ITS LENGTH ([lineRun]), not the facts' charge
+// ([lineMeter]) the layer bounds a line's hold by: a line past the base holds
+// at most those facts and the reader's buffers, so the trigger takes the slot
+// early for a long line of few facts (a large file's Read, a document's
+// base64), never late. Its cost is the wait above: such a line holds the slot
+// for its pass's whole read, the slowest thread at the bound among them.
 //
 // # A hook's note, confirmed off its job's main thread
 //
