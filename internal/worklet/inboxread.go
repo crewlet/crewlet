@@ -198,6 +198,10 @@ type InboxQuery struct {
 	// A surface defaults it to [inbox.SnoozeExclude], what "my inbox" means.
 	Snoozed inbox.SnoozeScope
 
+	// Record narrows the page to the one notice of that record id, sought by
+	// the table's key; every other narrowing still applies. Empty narrows nothing.
+	Record string
+
 	Limit  int
 	Cursor string
 
@@ -539,6 +543,24 @@ func inboxStatements(handle string, q InboxQuery, filter inboxFilter, limit int)
 	narrowed, narrowedArgs, selects := filter.clauses()
 	if !selects {
 		return nil, false, nil
+	}
+	if record := strings.TrimSpace(q.Record); record != "" {
+		// ONE NOTICE BY THE TABLE'S KEY: the unread term states the whole rule,
+		// so no floor is needed to keep it exact.
+		where := append([]string{"n.record_id = ?", "n.recipient = ?"}, bounds...)
+		args := append([]any{record, handle}, boundArgs...)
+		if after != 0 {
+			where = append(where, "n.log_seq > ?")
+			args = append(args, after)
+		}
+		where = append(where, narrowed...)
+		args = append(args, narrowedArgs...)
+		return []inboxStatement{{sql: inboxSelect + `
+		  FROM tracker_notifications n INDEXED BY sqlite_autoindex_tracker_notifications_1
+		  LEFT JOIN tracker_history h ON h.id = n.record_id
+		 WHERE ` + strings.Join(where, " AND ") + `
+		 ORDER BY n.log_seq DESC
+		 LIMIT ?`, args: append(args, limit+1)}}, true, nil
 	}
 	floor := filter.floor(after)
 	where := append([]string{"n.recipient = ?"}, bounds...)
