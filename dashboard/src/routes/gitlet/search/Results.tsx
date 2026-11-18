@@ -1,6 +1,6 @@
 /** Gitlet › Search's results: each repository's files as cards of blocks, a hit with the lines around it. */
 
-import { memo, useMemo } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import { IconButtonLink } from "@crewlethq/ui";
 import { ExternalLinkGlyph, FileCodeGlyph, SquareCodeGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
@@ -10,17 +10,19 @@ import {
   dirOf,
   fileBlocks,
   hitAt,
+  markedSegments,
   matchingLines,
+  matchRanges,
   type FileHits,
   type RepoHits,
   type SearchBlock,
 } from "~/lib/codeSearch.ts";
 import { plural } from "~/lib/format.ts";
 import { statesOf } from "~/lib/syntax/index.ts";
-import type { Grammar } from "~/lib/syntax/types.ts";
+import type { Grammar, Token } from "~/lib/syntax/types.ts";
 import { CopyButton } from "../change/CopyButton.tsx";
 import { commitHref, repoHref } from "../paths.ts";
-import { Painted, tokensOf, useGrammar } from "../syntax.tsx";
+import { Painted, SYNTAX_CLASS, tokensOf, useGrammar } from "../syntax.tsx";
 
 /** "9 matching lines", or "at least 9" where a file's total was not answered. */
 function linesWords({ count, exact }: { count: number; exact: boolean }): string {
@@ -164,11 +166,54 @@ function Block({
               <span className="code-search-line__number mono">{row.line}</span>
             )}
             <code className="code-search-line__text">
-              <Painted text={row.text} tokens={tokensOf(grammar, row.text, states?.[i] ?? null)} />
+              <MarkedLine
+                text={row.text}
+                tokens={tokensOf(grammar, row.text, states?.[i] ?? null)}
+                ranges={matchRanges(row.text, row.matches)}
+              />
             </code>
           </li>
         );
       })}
     </ol>
+  );
+}
+
+/** A line's tokens with each match wrapped in a mark over them; a line with no match is painted as is. */
+function MarkedLine({
+  text,
+  tokens,
+  ranges,
+}: {
+  text: string;
+  tokens: readonly Token[] | null;
+  ranges: readonly (readonly [number, number])[];
+}): ReactNode {
+  if (ranges.length === 0) return <Painted text={text} tokens={tokens} />;
+  // Consecutive pieces of one match share a mark, so a match across two tokens is one run.
+  const groups: { mark: number; start: number; pieces: ReactNode[] }[] = [];
+  let at = 0;
+  for (const seg of markedSegments(text, tokens, ranges)) {
+    const piece = text.slice(at, seg.end);
+    const drawn = seg.kind ? (
+      <span key={at} className={SYNTAX_CLASS[seg.kind]}>
+        {piece}
+      </span>
+    ) : (
+      piece
+    );
+    const last = groups[groups.length - 1];
+    if (seg.mark >= 0 && last?.mark === seg.mark) last.pieces.push(drawn);
+    else groups.push({ mark: seg.mark, start: at, pieces: [drawn] });
+    at = seg.end;
+  }
+  return groups.map((g) =>
+    g.mark < 0 ? (
+      g.pieces[0]
+    ) : (
+      <mark key={`m${g.start}`} className="code-search-match">
+        {g.pieces}
+      </mark>
+    ),
   );
 }

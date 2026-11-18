@@ -7,7 +7,15 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { coverageNotes, fileBlocks, groupHits, hitAt, matchingLines } from "./codeSearch.ts";
+import {
+  coverageNotes,
+  fileBlocks,
+  groupHits,
+  hitAt,
+  markedSegments,
+  matchingLines,
+  matchRanges,
+} from "./codeSearch.ts";
 
 const TIP_WEB = "a".repeat(40);
 const TIP_API = "b".repeat(40);
@@ -207,5 +215,71 @@ describe("a count of matching lines", () => {
       hits: [hit("web", "a.go", 1, { file_matches: 7 }), hit("web", "c.go", 3)],
     });
     expect(matchingLines(older!.files)).toEqual({ count: 8, exact: false });
+  });
+});
+
+describe("where a line matched", () => {
+  // Mutation: read the byte offsets as string indices, and the wide characters shift every mark.
+  test("is each byte pair as the characters it covers", () => {
+    expect(matchRanges("a Flush(", [[2, 8]])).toEqual([[2, 8]]);
+    // "é" is two bytes and one index; "😀" is four bytes and two indices.
+    expect(matchRanges("é Flush(", [[3, 9]])).toEqual([[2, 8]]);
+    expect(matchRanges("😀 Flush(", [[5, 11]])).toEqual([[3, 9]]);
+    expect(matchRanges("x", undefined)).toEqual([]);
+  });
+
+  // Mutation: throw on, or clamp, a pair that names no character's edge.
+  test("drops a pair past the text, inside a character, empty or overlapping", () => {
+    expect(matchRanges("é Flush(", [[1, 3]])).toEqual([]);
+    expect(matchRanges("Flush(", [[0, 99]])).toEqual([]);
+    expect(matchRanges("Flush(", [[2, 2]])).toEqual([]);
+    expect(
+      matchRanges("Flush(Flush(", [
+        [0, 6],
+        [3, 9],
+        [6, 12],
+      ]),
+    ).toEqual([
+      [0, 6],
+      [6, 12],
+    ]);
+  });
+
+  // Mutation: mark whole tokens, or lose a token's kind where a mark cuts it.
+  test("cuts the line's tokens at each match's edges", () => {
+    const tokens = [
+      { end: 4, kind: "keyword" as const },
+      { end: 5, kind: null },
+      { end: 10, kind: "function" as const },
+      { end: 11, kind: "punctuation" as const },
+    ];
+    expect(markedSegments("func Flush(", tokens, [[5, 11]])).toEqual([
+      { end: 4, kind: "keyword", mark: -1 },
+      { end: 5, kind: null, mark: -1 },
+      { end: 10, kind: "function", mark: 0 },
+      { end: 11, kind: "punctuation", mark: 0 },
+    ]);
+    expect(markedSegments("func Flush(", tokens, [[7, 9]])).toEqual([
+      { end: 4, kind: "keyword", mark: -1 },
+      { end: 5, kind: null, mark: -1 },
+      { end: 7, kind: "function", mark: -1 },
+      { end: 9, kind: "function", mark: 0 },
+      { end: 10, kind: "function", mark: -1 },
+      { end: 11, kind: "punctuation", mark: -1 },
+    ]);
+  });
+
+  test("cuts plain text at the matches alone where there are no tokens", () => {
+    expect(
+      markedSegments("ab Flush( Flush(", null, [
+        [3, 9],
+        [10, 16],
+      ]),
+    ).toEqual([
+      { end: 3, kind: null, mark: -1 },
+      { end: 9, kind: null, mark: 0 },
+      { end: 10, kind: null, mark: -1 },
+      { end: 16, kind: null, mark: 1 },
+    ]);
   });
 });

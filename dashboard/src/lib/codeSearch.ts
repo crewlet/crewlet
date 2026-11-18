@@ -5,6 +5,7 @@
 
 import type { CodeSearchAnswer } from "~/contract/code.ts";
 import { plural } from "./format.ts";
+import type { Kind, Token } from "./syntax/types.ts";
 
 /** Lines of context asked on each side of a hit: the engine's most (`gitlet.MaxSearchContext`). */
 export const SEARCH_CONTEXT = 3;
@@ -243,4 +244,70 @@ export function fileBlocks(
     } else blocks.push({ first: row.line, last: row.line, rows: [row] });
   }
   return blocks;
+}
+
+/** UTF-8 bytes of a code point; a lone surrogate is sent as U+FFFD, three bytes. */
+function utf8Length(cp: number): number {
+  return cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+}
+
+/**
+ * A hit's matches, UTF-8 byte offsets into its text, as `[from, to)` string indices.
+ * A pair off a character's boundary, past the text, empty or overlapping the one before is dropped.
+ */
+export function matchRanges(
+  text: string,
+  matches: readonly (readonly [number, number])[] | undefined,
+): [number, number][] {
+  if (!matches || matches.length === 0) return [];
+  const at = new Map<number, number>();
+  let bytes = 0;
+  let index = 0;
+  for (const ch of text) {
+    at.set(bytes, index);
+    bytes += utf8Length(ch.codePointAt(0)!);
+    index += ch.length;
+  }
+  at.set(bytes, index);
+  const out: [number, number][] = [];
+  for (const [start, end] of matches) {
+    const from = at.get(start);
+    const to = at.get(end);
+    if (from === undefined || to === undefined || to <= from) continue;
+    if (out.length > 0 && from < out[out.length - 1]![1]) continue;
+    out.push([from, to]);
+  }
+  return out;
+}
+
+/** A piece of a line: where it ends, its token's kind, and the match it falls in (-1 for none). */
+export interface Segment {
+  end: number;
+  kind: Kind | null;
+  mark: number;
+}
+
+/** A line's tokens (or its plain text where there are none) split at every match's edges. */
+export function markedSegments(
+  text: string,
+  tokens: readonly Token[] | null,
+  ranges: readonly (readonly [number, number])[],
+): Segment[] {
+  const runs: readonly Token[] = tokens && tokens.length > 0 ? tokens : [];
+  const out: Segment[] = [];
+  let from = 0;
+  let t = 0;
+  let r = 0;
+  while (from < text.length) {
+    while (t < runs.length && runs[t]!.end <= from) t++;
+    while (r < ranges.length && ranges[r]![1] <= from) r++;
+    const token = runs[t];
+    const range = ranges[r];
+    const inRange = range !== undefined && range[0] <= from;
+    let end = Math.min(token?.end ?? text.length, text.length);
+    if (range) end = Math.min(end, inRange ? range[1] : range[0]);
+    out.push({ end, kind: token?.kind ?? null, mark: inRange ? r : -1 });
+    from = end;
+  }
+  return out;
 }

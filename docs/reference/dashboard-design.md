@@ -9226,8 +9226,9 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   lines are grouped by repository and then by file in the engine's order
   (repository, path, line), never re-sorted. Each file is a card of its
   matching lines with three lines of the file around each, near lines joined
-  and a gap between apart ones, each run coloured by kind from its first line;
-  its head says how many of its lines matched, with Copy the path and Open the
+  and a gap between apart ones, each run coloured by kind from its first line
+  and each match marked in the code-match colour where the engine says it
+  matched; its head says how many of its lines matched, with Copy the path and Open the
   file. Each hit's number opens its file
   on the repository's Code tab AT THAT COMMIT, by its whole id, with the line
   picked (`ref=`, `path=`, `lines=`), so the link says tomorrow what the

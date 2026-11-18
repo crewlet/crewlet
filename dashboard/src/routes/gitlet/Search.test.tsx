@@ -297,3 +297,38 @@ test("a path that is not UTF-8 has no link, no copy and no open", async () => {
   expect(within(file).queryAllByRole("button")).toHaveLength(0);
   expect(within(file).getByTitle("Its path is not UTF-8, so no address names it")).toBeTruthy();
 });
+
+/** The marked runs of a drawn line. */
+const marksOf = (path: string, line: number) =>
+  [...codeOf(path, line).querySelectorAll("mark.code-search-match")].map((m) => m.textContent);
+
+// Mutation: use the engine's byte offsets as string indices.
+test("a match is marked where the engine says, by character after a wide one, twice on a line", async () => {
+  stub(STORY);
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  await screen.findByRole("article", { name: MW });
+  expect(marksOf(MW, 95)).toEqual(["Flush("]);
+  expect(marksOf(MW, 66)).toEqual(["Flush(", "Flush("]);
+  // A match across two tokens is one run over both, once the grammar has coloured them.
+  await within(codeOf(MW, 65)).findByText("func", { selector: ".code-syn-keyword" });
+  expect(marksOf(MW, 65)).toEqual(["Flush("]);
+  expect(codeOf(MW, 65).textContent).toBe("func (w *logWriter) Flush() {");
+});
+
+// Mutation: mark the phrase wherever a line holds it, rather than where the engine said.
+test("a hit with no matches answered draws unmarked, and a line around a hit is never marked", async () => {
+  stub({
+    hits: [
+      hit("web", "a.go", 2, "\tw.Flush()", { bare: true, before: ["\tr.Flush()"], total: 2 }),
+      hit("web", "a.go", 3, "\tw.Flush() // Flush( again", { after: ["\tq.Flush()"], total: 2 }),
+    ],
+    tips: { web: TIP },
+    coverage,
+  });
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  await screen.findByRole("article", { name: "a.go" });
+  expect(marksOf("a.go", 1)).toEqual([]);
+  expect(marksOf("a.go", 2)).toEqual([]);
+  expect(marksOf("a.go", 3)).toEqual(["Flush(", "Flush("]);
+  expect(marksOf("a.go", 4)).toEqual([]);
+});

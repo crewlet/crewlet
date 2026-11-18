@@ -3815,6 +3815,26 @@
   white-space: pre;
 }
 
+/* Where the engine says a hit matched: the code-match ground under the primary text, tokens too. */
+.code-search-match {
+  border-radius: var(--radius-xs);
+  background: var(--color-code-match);
+  color: var(--color-text-primary);
+}
+
+.code-search-match > span {
+  color: inherit;
+}
+
+/* Forced colours drop the ground; the system's own highlight pair keeps the run seen. */
+@media (forced-colors: active) {
+  .code-search-match {
+    forced-color-adjust: none;
+    background: Mark;
+    color: MarkText;
+  }
+}
+
 /* GO TO FILE in the bar's end group; a phone gives it a line of its own. */
 .code-bar-end .code-find {
   flex: 0 1 auto;
