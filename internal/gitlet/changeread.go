@@ -167,12 +167,17 @@ func walkLedBy(q ReadQuery, repoID string) changeWalk {
 // change a page of it served: what a caller keeping fewer of a page's changes
 // than it was served hands back. It is spelled by the walk the page was read
 // by ([walkOf]) — a need of a fix's owner walk, or the half of what waits on
-// the asker the page came from, the second behind [fixHalf].
+// the asker the row came from ([ChangeSummary.WaitsFor]), the second behind
+// [fixHalf].
 func (q ReadQuery) ChangesCursor(s ChangeSummary) string {
 	q = q.readying()
 	prefix := ""
 	switch q.Needs {
 	case NeedMe:
+		// A ROW OF THE FIX HALF on a page the review half began resumes in the fix half.
+		if s.WaitsFor == NeedFix && !strings.HasPrefix(q.Cursor, fixHalf) {
+			q.Cursor = fixHalf
+		}
 		half, fixes := q.halfOfMe()
 		if fixes {
 			prefix = fixHalf
@@ -392,14 +397,28 @@ func (r *Reader) changes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Ros
 	case NeedFix:
 		q = q.fixing()
 	}
-	return r.listChanges(ctx, tx, q, chart, cp, out, "")
+	return r.listChanges(ctx, tx, q, chart, cp, out, "", "")
 }
 
-// listChanges is [Reader.changes] over one walk. Where asked names a reviewer,
+// changesPage is the page a listing of changes q asks fills: its rows and the
+// bytes past which it is cut, counting in served, the rows an earlier walk of
+// the same page answered (needs=me's first half).
+func (r *Reader) changesPage(q ReadQuery, served []ChangeSummary) page {
+	pg := page{maxRows: min(limitOr(q.Limit, defaultChangeLimit), r.pageRows), maxB: r.pageBytes}
+	for _, s := range served {
+		pg.add(s.encodedBytes())
+	}
+	return pg
+}
+
+// listChanges is [Reader.changes] over one walk, appending to the rows out
+// holds and filling what is left of their page. Where asked names a reviewer,
 // a walk of changes awaiting a fix leaves out those whose ask of asked stands:
-// the first half of what waits on asked lists them.
+// the first half of what waits on asked lists them. waits is the half of
+// needs=me the walk is, which each row names ([ChangeSummary.WaitsFor]); ""
+// on every other listing.
 func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
-	out *ReadAnswer, asked string) error {
+	out *ReadAnswer, asked string, waits Need) error {
 
 	repos := map[string]listedRepo{}
 	var repoID string
@@ -417,8 +436,8 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 	}
 	walk := walkOf(q, repoID, since)
 	walk.scan = r.spokenScanned
-	limit := min(limitOr(q.Limit, defaultChangeLimit), r.pageRows)
-	scanned, next, err := walk.read(ctx, tx, q.Cursor, limit)
+	pg := r.changesPage(q, out.Changes)
+	scanned, next, err := walk.read(ctx, tx, q.Cursor, pg.left())
 	if err != nil {
 		return err
 	}
@@ -466,10 +485,9 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 			return err
 		}
 	}
-	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for _, row := range listed {
 		s := repos[row.repoID].summary(row)
-		s.Readiness, s.Card = readiness[row.id], cards[row.id]
+		s.Readiness, s.Card, s.WaitsFor = readiness[row.id], cards[row.id], waits
 		out.Changes = append(out.Changes, s)
 		if pg.add(s.encodedBytes()) {
 			out.Next = walk.cursor(row)

@@ -38,9 +38,10 @@ import (
 // open_findings counter is set ([needingFixIn]). A pushed revision answers
 // neither; an answered standing blocker waits on its raiser (S40).
 
-// needs=me is needs=review, then needs=fix, each its own index's walk, a page
-// reading one, the fix half's cursor prefixed with [fixHalf]; a change in
-// both (a person may be asked to review their own) is listed by the first.
+// needs=me is needs=review, then needs=fix, each its own index's walk, the fix
+// half's cursor prefixed with [fixHalf], a change in both listed by the first; a
+// page the review walk ends on fills from the fix walk, each row naming its half
+// ([ChangeSummary.WaitsFor]), which spells the cursor after it.
 //
 // needs=person walks code_mergeability_waits_idx (replicated 0106), the
 // STORED readiness (mergeability.go), and keeps those the read's own judgment
@@ -208,26 +209,34 @@ func (q ReadQuery) fixing() ReadQuery {
 
 // changesWaitingOnMe serves a page of needs=me: the needs=review half until
 // its walk ends, then the needs=fix half after [fixHalf]. Each half walks its
-// own index, so a page reads one half and the one ending the first may be
-// short; a change in both is listed by the first alone.
+// own index; a page whose review walk ends goes on into the fix walk with
+// what is left of its rows and bytes, so it is short only where the fix walk
+// is too. A change in both is listed by the first alone.
 func (r *Reader) changesWaitingOnMe(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster,
 	cp statelog.Position, out *ReadAnswer) error {
 
 	half, fixes := q.halfOfMe()
-	if fixes {
-		if err := r.listChanges(ctx, tx, half, chart, cp, out, q.waitedOn()); err != nil {
+	if !fixes {
+		if err := r.listChanges(ctx, tx, half, chart, cp, out, "", NeedReview); err != nil {
 			return err
 		}
 		if out.Next != "" {
-			out.Next = fixHalf + out.Next
+			return nil
 		}
-		return nil
+		// THE REVIEW WALK ENDED on this page: the fix walk, from its start, takes what is left.
+		if pg := r.changesPage(q, out.Changes); pg.full() {
+			out.Next = fixHalf
+			return nil
+		}
+		next := q
+		next.Cursor = fixHalf
+		half, _ = next.halfOfMe()
 	}
-	if err := r.listChanges(ctx, tx, half, chart, cp, out, ""); err != nil {
+	if err := r.listChanges(ctx, tx, half, chart, cp, out, q.waitedOn(), NeedFix); err != nil {
 		return err
 	}
-	if out.Next == "" {
-		out.Next = fixHalf
+	if out.Next != "" {
+		out.Next = fixHalf + out.Next
 	}
 	return nil
 }

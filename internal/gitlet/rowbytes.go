@@ -884,6 +884,9 @@ func (s ChangeSummary) encodedBytes() int {
 	if s.Card != nil {
 		n += field("card", s.Card.encodedBytes(), false)
 	}
+	if s.WaitsFor != "" {
+		n += field("waits_for", stringBytes(string(s.WaitsFor)), false)
+	}
 	return n
 }
 

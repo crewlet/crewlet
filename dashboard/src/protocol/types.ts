@@ -8825,6 +8825,11 @@ export interface CodeChangeSummary extends CodeChangeRow {
   updated_at: string;
   /** Its card, where `cards=true` asks (`gitlet.ChangeSummary.Card`); absent is not answered. */
   card?: CodeChangeCard;
+  /**
+   * On a `needs=me` listing, the half that listed it: `review` (it asks the reader's
+   * review) or `fix` (the reader's own, awaiting their fix); absent on every other listing.
+   */
+  waits_for?: "review" | "fix" | (string & {});
 }
 
 /** One reviewer on a listed change's card (`gitlet.ReviewerFace`). */

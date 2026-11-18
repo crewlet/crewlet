@@ -1915,8 +1915,11 @@ answer that holds every record the code log had committed when it was asked.
   change here.
 - **What waits on you** is `needs=me`: the changes whose ask of your review
   stands, and then your own changes waiting on your fix — one listing, read as
-  those two one after the other, a change of both listed once. It names no
-  reviewer and no owner, since it is yours.
+  those two one after the other, a change of both listed once. A page that
+  reaches the end of the first goes on into the second, so one review asked and
+  three changes to fix are four rows on one page, and each row says which of
+  the two listed it (`waits_for`: `review` or `fix`). It names no reviewer and
+  no owner, since it is yours.
 - **What waits on a person** is `needs=person`: the live changes whose
   [readiness](#merge-readiness) waits on persons alone — an approval only a
   person was asked for, a blocker a person raised and an author answered —

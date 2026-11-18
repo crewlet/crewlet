@@ -2533,6 +2533,11 @@ type ChangeSummary struct {
 	// Card is what a listing's row draws beside its readiness, where
 	// [ReadQuery.Cards] asks; nil is not answered, never "nothing to say".
 	Card *ChangeCard `json:"card,omitempty"`
+	// WaitsFor is, on a needs=me listing, the half that listed the change:
+	// review (it asks the asker's review) or fix (the asker's own, awaiting
+	// their fix), which one page may hold both of; "" on every other listing.
+	// An answer field, so no versionedFields row.
+	WaitsFor Need `json:"waits_for,omitempty"`
 }
 
 // ChangeDetail is one change in detail: its summary, its description and its
