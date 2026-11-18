@@ -13,42 +13,14 @@ import (
 // THE DIRECTORY: whether the person holding a human seat may still be reached
 // through that seat's contact identities.
 //
-// # Why the org chart alone cannot say
-//
-// A human seat's contact map — its Slack member id, its Jira account, its
-// GitHub login — is ORG-CHART content, and the registry was built from the org
-// view and nothing else. So suspending somebody changed nothing here: their
-// messages on every vendor surface went on being attributed to a colleague
-// seat, a suspended lead's Slack DM to an agent was annotated "your lead says",
-// and the only way to stop it was a configuration change rewriting the seat's
-// contact map — which is a second gesture, by a different person, that an
-// offboarding can forget.
-//
-// The identity directory is the other half of the answer: WHO holds the seat,
-// and at what stage. A seat bound to somebody who may not act routes nowhere,
-// with no configuration change at all. That is what [Directory] and [Standing]
-// carry.
-//
-// # A reading, not a live view
-//
-// A [Standing] is ONE READ of the directory, taken before a registry is built
-// and applied to it whole — the same rule the org half follows. A registry
-// never re-reads the directory itself: it answers for the org view and the
-// reading it was built from, permanently, and a directory that moved is a NEW
-// registry swapped in by the engine. A registry that patched itself from a
-// second source would answer "whose standing is this?" with "one of two".
-//
-// # Chart-only is the zero value, and it belongs to no running node
-//
-// Every node that consumes deliveries and runs seats must know who may be
-// reached, because a chart-only registry attributes a suspended person's word
-// to their seat for every delivery it wins. A DATA node runs the identity
-// domain and reads its OWN copy; a node without the data role holds no estate
-// and reads the same fact from a data node, through the estate's identity read
-// floored on the identity log (internal/estate) — one directory, two ways to
-// reach it, and this package sees neither. The zero [Standing] — exactly the
-// routing the chart declares — is what an engine with no directory at all
-// builds from, which is `crewlet validate` and a test.
+// The chart alone cannot say (its contact map ignores a suspension), so the
+// identity directory adds WHO holds the seat and at what stage: a seat bound to
+// somebody who may not act routes nowhere ([Directory], [Standing]).
+// A [Standing] is ONE READ, applied to a registry whole and never re-read: a
+// directory that moved is a NEW registry swapped in by the engine.
+// Chart-only (the zero [Standing]) belongs to no running node, since every
+// consuming node must know who may be reached (internal/estate floors a
+// non-data node's read); it serves `crewlet validate` and tests.
 
 // Holder is one seat binding, as the identity directory states it.
 //
@@ -147,22 +119,15 @@ func harder(a, b Withholding) Withholding {
 }
 
 // withholding is the rule: whether one holder's seat may still route, and why
-// not.
+// not. An ALLOWLIST of the stages that route, like internal/iam's own.
 //
-// # An ALLOWLIST of the stages that route, like internal/iam's own
+// ACTIVE routes, and so do INVITED and ENROLLING ("not yet": silencing a new
+// hire would read as a colleague who never answers). SUSPENDED and RETIRED
+// mean "no longer"; a removal is the permanent form.
 //
-// ACTIVE routes, and so do INVITED and ENROLLING: each is somebody the company
-// has put in the seat who has not finished signing up, the seat's contact map
-// names them, and silencing a new hire until they complete an enrolment would
-// read as a colleague who never answers. Those two mean "not yet"; SUSPENDED
-// and RETIRED mean "no longer", and a removal is the permanent form of the
-// second. An empty stage on a holder that is not a removal is no stage at all,
-// and withholds like any other this build cannot name.
-//
-// A STAGE THIS BUILD CANNOT NAME WITHHOLDS. It is one a newer peer wrote during
-// a rolling upgrade, and the two ways to be wrong are not symmetric: withheld,
-// a person is unreachable through the engine for the minutes the upgrade takes;
-// routed, the company's work can reach somebody a newer build had excluded.
+// A STAGE THIS BUILD CANNOT NAME WITHHOLDS (a newer peer wrote it, or none):
+// withheld, a person is unreachable for the minutes a roll takes; routed, work
+// can reach somebody a newer build had excluded.
 func withholding(h Holder) (Withholding, bool) {
 	if h.Removed {
 		return WithheldRemoved, true
@@ -224,15 +189,13 @@ func StandingOf(holders []Holder) Standing {
 //
 // # Fail closed, and only when there is nothing to carry
 //
-// An unreadable directory normally carries the last reading forward, because
-// what the node last knew is the best answer it has. The first registry a node
-// builds has no last reading — and the two answers left are not symmetric.
-// Chart-only would route every suspended, retired and removed holder's
-// accounts for as long as the directory stayed unreadable, which is the
-// direction a suspension exists to close; withholding every human seat makes
-// the company's people briefly unreachable through the engine, which is the
-// same trade a stage this build cannot name already makes. The periodic
-// re-read replaces it the moment a read lands.
+// An unreadable directory normally carries the last reading forward. The
+// first registry a node builds has none, and the two answers left are
+// asymmetric: chart-only would route every suspended, retired and removed
+// holder's accounts while the directory stays unreadable, the direction a
+// suspension exists to close; withholding every human seat only makes people
+// briefly unreachable, the trade an unnameable stage already makes. The
+// periodic re-read replaces it once a read lands.
 func Unread() Standing { return Standing{consulted: true, unread: true} }
 
 // ReadStanding reads the directory once and applies the rule.

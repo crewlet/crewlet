@@ -100,44 +100,14 @@ type Stall struct {
 // Watchdog ends the process when a watched duty stops turning past the seat
 // lease TTL.
 //
-// The failure it exists for is the one where a node neither works nor dies.
-// Its seat leases lapse, because nothing is renewing them, and peers
-// correctly take the seats over — while the process goes on existing, holding
-// whatever its stalled handler already fetched and never acked. The successor
-// owns the seat within a lease TTL and cannot see those messages, because on
-// the shared durable consumer they are still ack-pending for the corpse.
-//
-// Nothing can be signalled out of that state, because the code that would
-// handle the signal is the code that is stuck. What the watchdog CAN do
-// unilaterally is end the process, and it is worth being exact about what that
-// buys, because the answer is NOT immediate redelivery:
-//
-//   - It removes the ACTOR. A wedged node that later resumes would act on a
-//     seat it no longer owns; ending it bounds that to the fencing window
-//     rather than leaving it open indefinitely.
-//   - It lets the node come back. A process that neither works nor dies is
-//     never restarted by an orchestrator watching for liveness, so the seats
-//     it was handed stay dark until a person notices.
-//
-// What it does not buy is the held mail back. JetStream releases a
-// fetched-unacked message when its ack wait elapses (jetstream.DefaultAckWait,
-// 30 minutes), and closing the connection does not shorten
-// that: unlike a broker that returns unacked mail on session close, there is
-// no session-scoped release here. So a wedged seat's in-flight batch — bounded
-// by the batch cap, not by the seat's whole backlog, because pull consumers
-// prefetch nothing — is invisible to the successor until the ack wait expires. The
-// successor serves everything published after that point normally; it is the
-// already-fetched batch that waits.
-//
-// The threshold is deliberately NOT a config knob OF ITS OWN. It is the same
-// number the lease TTL is: past it the node is provably not the owner, and
-// letting the two drift is how a process gets to be simultaneously "not the
-// owner" and "still holding the mail". So it FOLLOWS the lease TTL — which
-// means the one this deployment is running, not the shipped constant. Built
-// from [SeatLeaseTTL] it was exactly the drift this paragraph forbids: a node
-// leasing its seats for twenty seconds went on holding their mail for
-// forty-five, and one leasing them for two minutes was killed while it still
-// provably owned them.
+// It exists for a node that neither works nor dies: its leases lapse and peers
+// take the seats while the process holds what a stalled handler fetched and
+// never acked. Nothing can be signalled out of that state, so it ends the
+// process: no ACTOR resumes on a seat it no longer owns, and an orchestrator
+// restarts it. It does NOT buy the held mail back: a fetched-unacked message
+// is released only when its ack wait elapses (jetstream.DefaultAckWait, 30
+// minutes), whatever the connection does. The threshold is NOT a config knob OF
+// ITS OWN: it FOLLOWS the running lease TTL, never [SeatLeaseTTL].
 type Watchdog struct {
 	threshold time.Duration
 	poll      time.Duration
@@ -277,21 +247,14 @@ func (w *Watchdog) Stop() {
 // again — which needs no lease TTL to establish.
 //
 // The one caller is the engine's embedded broker, whose nats-server called
-// Fatalf after its boot (internal/queue/jetstream's Death). Stock
-// nats-server exits the process there, and the reasoning that makes this
-// watchdog exit rather than drain applies to it exactly: every step that
-// would make a drain graceful — acknowledging a turn's work, publishing what
-// it did, giving a seat's lease back — rides that broker, so a drain could
-// only spend the time a turn takes on work none of which can be recorded, and
-// meanwhile answer /health as alive. A node that ends at once is restarted at
-// once, and the restart is what brings a broker back: it recovers its store
-// from what reached the disk.
+// Fatalf after its boot (internal/queue/jetstream's Death). Every step that
+// would make a drain graceful (acking, publishing, giving a lease back) rides
+// that broker, so a drain would only waste a turn's time while /health answered
+// alive; a restart recovers the broker's store from disk.
 //
-// UNCONDITIONAL, unlike a stall: armed or not, started or stopped. A watchdog
-// stands down for a drain because exiting through one abandons the seat
-// release, and a dead broker has already taken that release away; there is
-// nothing for a stand-down to protect. Once, like a stall — a node ends one
-// time, for the first reason that reached it.
+// UNCONDITIONAL, unlike a stall: armed or not, started or stopped. A stand-down
+// protects the seat release, which a dead broker has already taken away. Once,
+// like a stall: the first reason that reached it.
 func (w *Watchdog) Fail(duty string, cause error) {
 	w.mu.Lock()
 	if w.fired {
