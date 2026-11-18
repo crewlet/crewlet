@@ -498,7 +498,8 @@ change's page on its files. A seat is woken instead, told the change, why it
 hears and the tool that answers ([Who a change
 wakes](../concepts/gitlet.md#who-a-change-wakes)).
 
-**Ask for a review.** **Request review**, in the change page's **Review** menu, names
+**Ask for a review.** **Request review**, in the change page's **Review** menu or as
+**Request** at the head of its rail's Reviewers, names
 reviewers by handle, with a note; a seat or your assistant asks with
 `code_request_review`, which also withdraws an ask. An author of the change,
 anybody who reviews the repository and any person may ask, at most 32
@@ -514,9 +515,10 @@ owners](../concepts/gitlet.md#path-owners)).
 
 **Read it.** **Conversation** is the change's timeline: its description, then
 every revision, review, ask for review and thread in the order its records landed,
-then its merge box (every condition to merge with where it stands, and the merge
-controls), beside a rail of whom it asked
-for a review and where each stands; **Revisions** lists its revisions,
+then its merge box (a section per condition to merge with where it stands, and the merge
+controls) and a comment box (markdown, **Mod+Enter** sends), beside a rail of whom it
+asked for a review and where each stands, its readiness, branches, checks, participants
+and whether it notified you; **Revisions** lists its revisions,
 **Checks** the checks that judge it, and **Files changed** is every file a
 revision changes on one page, beside its tree (the head unless you pick
 another, or what changed since an earlier revision), with each finding under the lines it points at, and one whose
@@ -668,30 +670,32 @@ A live change's page (**Gitlet › Changes**, then the change) carries the same
 call in its **Conversation**'s merge box, after its timeline, each control
 made as you and never ahead of the engine's answer:
 
-- **Where its gate stands** — how many of its conditions are met, each
-  condition with where it stands, and the first one that is not, judged with
-  *you* as the merger, so a reader without the authority to merge into the
-  target is told so before pressing anything.
+- **Where its gate stands**: a section for its reviews, its checks (each check's
+  latest attempt, how long it ran and whether it is required, with **Details**),
+  its findings, its facts and whether it merges, each judged with *you* as the
+  merger, then the count and what it still waits on. **Re-request** in the reviews
+  section asks again everyone whose review is not an approval of the head.
 - **Merge**, or **Add to queue** where the target's gate requires a check, with
   how it merges (**Merge commit**, **Squash** or **Fast-forward**), **Delete
   its branch** — left unticked, the rule above decides — and **Close ENG-42
   once it merges** where the change names a work item. It sends the head the
   page shows as `expected_head`, so a push that landed since you opened the
   page is refused rather than merged unseen. While the gate is unmet the
-  button is held with the gate's own sentence.
+  button is held with the gate's own sentence, and a line beside it says what
+  the press will do.
 - **Override**, a person's alone: a dialog that asks your reason, says what
   the gate still waits on, and merges directly past it — even into a branch
   whose merges land through its queue. The reason is kept with the merge
   (the change's More tab shows it) and the override is audited.
-- **Re-run checks** — every check of the change's head whose latest attempt
-  did not pass, each at its next attempt (`code_rerun_checks` with
-  `all_failed`).
-- **Rebase**: the change's commits replayed onto its target's tip
+- **Re-run failed checks**, in the checks section where one failed: every check
+  of the change's head whose latest attempt did not pass, each at its next
+  attempt (`code_rerun_checks` with `all_failed`).
+- **Rebase**, in the merges section: the change's commits replayed onto its target's tip
   ([Rebasing a change](#rebasing-a-change)), after a confirmation that says
   its branch moves by one forced push from the head the page shows.
-- **Take out of the queue**: a queued change leaves its target's merge queue
-  and stays open (`code_dequeue_change`), after a confirmation; held while
-  the change is not queued. **Gitlet › Queue** offers the same on each entry.
+- **Take out of the queue**, in the queue's section while the change is queued:
+  it leaves its target's merge queue and stays open (`code_dequeue_change`),
+  after a confirmation. **Gitlet › Queue** offers the same on each entry.
 
 A merged change shows **Revert** in their place ([Reverting a
 change](#reverting-a-change)): a confirmation that says what it opens, with a

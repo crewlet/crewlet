@@ -178,7 +178,7 @@ export function ReadinessMeter({
 }
 
 /** "First" to "Ninth", then "#12": a place in a queue as a sentence starts it. */
-const ORDINALS = [
+export const ORDINALS = [
   "First",
   "Second",
   "Third",
