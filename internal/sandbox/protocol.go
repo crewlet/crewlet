@@ -598,6 +598,46 @@
 // its run went on past. It over-tells; it never holds a call the session did
 // not see.
 //
+// # A save taken as its job works
+//
+// Kept by save.go and saveledger.go. A save task runs its steps CHEAPEST FIRST,
+// so a save the store would refuse costs its box nothing: the box attached
+// (never woken), its job's event stream read for whether it moved since this
+// node's last landed save, then ONE READ OF THE RUN'S ROW, settled where a
+// save of the turn was left begun by a gone taker or unanswered, and held to
+// the license's pre-check; the fleet's policy, the seat's allowance, what the
+// box was handed and the taker lease; and only then the pack. The place, the
+// save point and the cursor all come from that one read, made before the
+// pack, for "The place order is the content order".
+//
+// THE BOX PHASE IS THE DUTY'S, nothing after it: the attach, the stream's read
+// and the pack end with the stint of duty the offer came under (an E2B duty
+// handed to a peer, the coordinator stopping, a drain's end), and a save cut
+// there stamps nothing and is released from its box. Past the pack the save is
+// the coordinator's, as every take is: its take context starts after the pack,
+// so the scrub has its whole budget, and the scrub's values are read after the
+// pack too, so a token the poll recorded while the pack ran is in them.
+//
+// THE SEAT'S ALLOWANCE IS CHARGED BEFORE THE STAMP'S INSTANT, never after: the
+// whole company agrees on it (one value per seat in the coordination store's
+// uploads bucket, which ages a value out with the hold it needs), written by
+// compare-and-swap, sized from the packed archive and a margin for what the
+// scrub changes, keyed by an entry id so an append asked again counts once. A
+// crash, a lost answer or a cut keep can then only over-count, which is the
+// safe direction for a bound every artifact's bucket shares, and nothing waits
+// between the stamp's instant and its reservation. A spool that seals past what
+// was counted is refused before its keep, so a landed save is never
+// under-counted. An entry is held for [saveLedgerHold]: a save's object is
+// stored within the take's life after its entry, the collector deletes a
+// superseded one within its grace and two of its passes, and the entry's end is
+// read on another node's clock, so twice the engine's assumed skew.
+//
+// A SAVE CONTINUES NOTHING ([savePlaces.continued] nil): a run's row records no
+// capture its launch continued, the saver is often not the launching process,
+// and the launch's request names what it ASKED for, which a failed restore
+// replaced with a fresh session. So a save is placed at its launch's newest
+// landed save's point, or zero, which tells more, never less.
+//
 // # A turn's session is continued in whichever box its next launch gets
 //
 // A TURN'S SESSION, CONTINUED IN WHICHEVER BOX ITS NEXT LAUNCH GETS — AND A

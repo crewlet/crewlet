@@ -1419,6 +1419,8 @@ func (r *FakeRunner) Carried() []FakeCarried {
 
 var _ SessionRestorer = (*FakeRunner)(nil)
 
+var _ SessionSaver = (*FakeRunner)(nil)
+
 // Restores answers as a runner of a harness that packs and restores does where
 // [FakeRunner.Carries] is set — a session its own harness wrote, in
 // [FakeArchiveFormat] — and restores nothing otherwise.
