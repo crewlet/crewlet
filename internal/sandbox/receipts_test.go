@@ -312,10 +312,11 @@ func TestEveryReadM1RunsInPublishesWhatItsJobsHooksRead(t *testing.T) {
 
 // A STOP AND A LOSS CONFIRM, AND DENY NOTHING: their read ends the job, so the
 // thread is asked as one its harness did not end, which proves no take absent,
+// under the release that ran the job, which D28's gate needs to confirm any;
 // and the note its session shows taken is read.
 //
-// Mutation: skip the thread at a stop or a loss, or ask it as one its harness
-// ended, and a case goes red.
+// Mutation: skip the thread at a stop or a loss, ask it as one its harness
+// ended, or skip the loss's collection of the release, and a case goes red.
 func TestAStopAndALossConfirmAndDenyNothing(t *testing.T) {
 	t.Parallel()
 	for name, read := range map[string]func(*coordRig) error{
@@ -335,12 +336,14 @@ func TestAStopAndALossConfirmAndDenyNothing(t *testing.T) {
 			serveNote(t, rig.pending, launched.LaunchID, "n1", types.SteerBoundaryFinish)
 			thread := sessionShows("take-n1")
 			rig.runner.MainThread = thread.read
+			rig.runner.EndsAs(Result{HarnessVersion: "2.1.0"})
 			if err := read(rig); err != nil {
 				t.Fatalf("the read: %v", err)
 			}
-			if asked := thread.asks(); len(asked) != 1 || asked[0].Ended || asked[0].Count {
-				t.Errorf("%s asked %+v, want one ask of a thread its harness did not end, with no count", name,
-					asked)
+			if asked := thread.asks(); len(asked) != 1 || asked[0].Ended || asked[0].Count ||
+				asked[0].Release != "2.1.0" {
+				t.Errorf("%s asked %+v, want one ask of a thread its harness did not end, under its job's "+
+					"release, with no count", name, asked)
 			}
 			if read := readOf(t, rig, "n1"); read == nil || read.Take != "take-n1" {
 				t.Errorf("%s left the note %+v, want it read off its serve", name, read)
@@ -691,5 +694,47 @@ func TestALocalVerdictSilenceIsNeverGivenUpAtAStopOrALoss(t *testing.T) {
 				t.Errorf("%s reclaimed the box its verdict is still to be read from", name)
 			}
 		})
+	}
+}
+
+// A REMOTE LOSS'S VERDICT SILENCE KEEPS ITS ENDING UNTIL ITS HOST IS GIVEN UP: a
+// host whose store did not answer the verdict says so, and the loss's ending is
+// kept with its box; where this node's own read of the row answered, the
+// silence is the host's alone, given up as a stop's is, and the loss then
+// ends; where it did not, the silence is this node's too, and is kept whatever
+// the bound.
+//
+// Mutation: drop ReadHostedBox's return of the loss read's error, and the box
+// is reclaimed at once; drop keepLostSession's give-up, and it is kept for ever.
+func TestARemoteLossesVerdictSilenceKeepsItsEndingUntilItsHostIsGivenUp(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	remoteVerdicts(t, rig)
+	launched := rig.launchedBy("t1", "node-a")
+	serveNote(t, rig.pending, launched.LaunchID, "n1", types.SteerBoundaryToolBatch)
+	rig.runner.MainThread = sessionShows("take-n1").read
+	rig.coordinator.finish(t.Context(), rig.get("t1"), ending{fence: fenceOf(launched),
+		note: &failureNote{reason: "engine_restarted", detail: "the engine that ran the job restarted"}})
+	rig.fireRetries()
+	rig.fireRetries()
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); !found {
+		t.Fatal("the loss's ending finished with its host's verdict unanswered")
+	}
+	if slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
+		t.Fatal("the loss reclaimed the box its host's verdict is still to be read from")
+	}
+
+	rig.now = rig.now.Add(24 * time.Hour)
+	if err := rig.coordinator.keepLostSession(t.Context(), rig.get("t1"), false); !errors.Is(err,
+		ErrStoreSilent) {
+		t.Fatalf("a day-old loss whose row this node's store did not answer = %v, want it kept", err)
+	}
+	rig.fireRetries()
+	rig.fireRetries()
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Error("the loss is still kept a day on, its host's store alone silent, want its host given up")
+	}
+	if !slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
+		t.Error("the loss given up did not reach its reclaim")
 	}
 }
