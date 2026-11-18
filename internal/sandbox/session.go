@@ -1826,7 +1826,7 @@ func (c *Coordinator) awaitStood(ctx context.Context, run PendingRun, standby Se
 				// wait began before its end that [standbyWindow] counts.
 				readLog = true
 				var named []SessionCapture
-				if _, found, named = c.settleGone(ctx, current, true); !found {
+				if _, found, named = c.settleGone(ctx, current, newest.sameTake, true); !found {
 					return SessionCapture{}, false, "the run's record is gone"
 				}
 				if slices.ContainsFunc(named, newest.sameTake) {
@@ -1837,7 +1837,10 @@ func (c *Coordinator) awaitStood(ctx context.Context, run PendingRun, standby Se
 			case newest.State != CaptureBegun || !newest.keeping(c.now()):
 				return *newest, true, ""
 			}
-			if _, found, _ = c.settleGone(ctx, current, false); !found {
+			// THE CAPTURE STOOD BY FOR ALONE, so a pass writes the one settle
+			// [standbyWindow] counts: a save under way beside it decides
+			// nothing here, and the end's and the relaunch's waits settle it.
+			if _, found, _ = c.settleGone(ctx, current, newest.sameTake, false); !found {
 				return SessionCapture{}, false, "the run's record is gone"
 			}
 		}
@@ -1912,7 +1915,7 @@ func (c *Coordinator) namedAtWaitsEnd(ctx context.Context, run PendingRun, stand
 	if err != nil || !found || newest == nil || !newest.standsBy(standby) || newest.State != CaptureBegun {
 		return SessionCapture{}, false
 	}
-	_, _, named := c.settleGone(pass, current, true)
+	_, _, named := c.settleGone(pass, current, newest.sameTake, true)
 	return *newest, slices.ContainsFunc(named, newest.sameTake)
 }
 
@@ -2960,8 +2963,9 @@ func (c *Coordinator) settleUnresolved(ctx context.Context, run PendingRun,
 	return run
 }
 
-// askEvery admits every stamp to an ask ([Coordinator.settleUnresolved]): the
-// turn's end asks every unanswered record of its turn before it records.
+// askEvery admits every stamp to an ask ([Coordinator.settleUnresolved]) or a
+// settle ([Coordinator.settleGone]): the turn's end asks and settles every
+// stamp of its turn before it records, and a relaunch's held read every one.
 func askEvery(SessionCapture) bool { return true }
 
 // takerStoppedWhy is why a capture whose taker stopped before its record landed
@@ -2971,17 +2975,18 @@ func takerStoppedWhy(taker string) string {
 }
 
 // settleGone settles every begun stamp of run's turn in sight (the newest
-// capture and a save under way) whose taker is gone ([Coordinator.takerGone]),
-// and, where readHeld, LANDED only, every such stamp whose taker is not read
-// gone, from ONE linearizable read of the turn's row on the executor log: LANDED
-// where the row names its place, written from the row; a gone taker's REFUSED
-// where it does not. Each only over the begun stamp it was decided from
-// ([PendingStore.SettleBegun]). It answers the row after, false where gone,
-// and the begun stamps the row named, as read, whether or not the store took
-// their settle. Reads are held to ctx; each settle write is given its own room
-// ([Coordinator.settleContext]). The package doc, "A capture whose taker
-// stopped is settled from the log, not waited out", has the argument.
-func (c *Coordinator) settleGone(ctx context.Context, run PendingRun,
+// capture and a save under way) that admits and whose taker is gone
+// ([Coordinator.takerGone]), and, where readHeld, LANDED only, every such stamp
+// whose taker is not read gone, from ONE linearizable read of the turn's row on
+// the executor log: LANDED where the row names its place, written from the
+// row; a gone taker's REFUSED where it does not. Each only over the begun stamp
+// it was decided from ([PendingStore.SettleBegun]). It answers the row after,
+// false where gone, and the begun stamps the row named, as read, whether or not
+// the store took their settle. Reads are held to ctx; each settle write is
+// given its own room ([Coordinator.settleContext]). The package doc, "A
+// capture whose taker stopped is settled from the log, not waited out", has
+// the argument.
+func (c *Coordinator) settleGone(ctx context.Context, run PendingRun, admits func(SessionCapture) bool,
 	readHeld bool) (PendingRun, bool, []SessionCapture) {
 
 	if c.restore == nil {
@@ -3000,7 +3005,7 @@ func (c *Coordinator) settleGone(ctx context.Context, run PendingRun,
 	gone := map[tenure]bool{}
 	var settle []settling
 	for _, stamp := range []*SessionCapture{run.Capture, run.savingTake()} {
-		if stamp == nil || stamp.State != CaptureBegun {
+		if stamp == nil || stamp.State != CaptureBegun || !admits(*stamp) {
 			continue
 		}
 		key := tenure{stamp.Taker, stamp.TakerEpoch}
@@ -3177,7 +3182,7 @@ func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun, within t
 				heldRead = time.Now()
 			}
 			var found bool
-			if run, found, _ = c.settleGone(wait, run, readHeld); !found {
+			if run, found, _ = c.settleGone(wait, run, askEvery, readHeld); !found {
 				return PendingRun{}, false, nil
 			}
 			if run, found = c.standDownGone(wait, run); !found {

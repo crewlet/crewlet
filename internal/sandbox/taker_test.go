@@ -292,7 +292,7 @@ func TestACaptureWhoseTakersLeaseLapsedIsSettledFromTheTurnsRow(t *testing.T) {
 				} else {
 					lapse(store)
 				}
-				settled, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), false)
+				settled, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), askEvery, false)
 				if !found {
 					t.Fatal("the run's row was read as gone")
 				}
@@ -498,7 +498,7 @@ func TestATakerLeaseHeldAtAnotherEpochIsGone(t *testing.T) {
 			t.Errorf("a capture under the epoch node-a's lease holds now reads gone = %v, %v; want it kept for", gone,
 				err)
 		}
-		if _, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), false); !found {
+		if _, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), askEvery, false); !found {
 			t.Fatal("the run's row was read as gone")
 		}
 		got := rig.get("t1")
@@ -533,7 +533,7 @@ func TestAStoreThatCannotAnswerNeverReadsATakerAsGone(t *testing.T) {
 		begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
 		lapse(store)
 		store.setDown(errors.New("coord: the lease store did not answer"))
-		if _, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), false); !found {
+		if _, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), askEvery, false); !found {
 			t.Fatal("the run's row was read as gone")
 		}
 		if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureBegun {
@@ -542,7 +542,7 @@ func TestAStoreThatCannotAnswerNeverReadsATakerAsGone(t *testing.T) {
 		if read := restore.askedFor(); len(read) != 0 {
 			t.Fatalf("the turn's row was read %v while the store could not say whether the taker was gone", read)
 		}
-		if _, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), true); !found {
+		if _, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), askEvery, true); !found {
 			t.Fatal("the run's row was read as gone")
 		}
 		if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureBegun {
@@ -554,7 +554,7 @@ func TestAStoreThatCannotAnswerNeverReadsATakerAsGone(t *testing.T) {
 				"one that holds", read)
 		}
 		store.setDown(nil)
-		if _, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), false); !found {
+		if _, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), askEvery, false); !found {
 			t.Fatal("the run's row was read as gone")
 		}
 		if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureRefused {
@@ -592,7 +592,7 @@ func TestAGoneTakersCaptureIsSettledOnlyByAnAnswerFromTheLog(t *testing.T) {
 			restore.mu.Lock()
 			restore.unreadRows = errors.New("estate: no data node answered the read")
 			restore.mu.Unlock()
-			settled, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), false)
+			settled, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), askEvery, false)
 			if !found || settled.Capture == nil || !settled.Capture.sameTake(begun) ||
 				settled.Capture.State != CaptureBegun {
 				t.Fatalf("a read that failed answered %+v (found %v), want the capture left begun", settled.Capture,
@@ -605,7 +605,7 @@ func TestAGoneTakersCaptureIsSettledOnlyByAnAnswerFromTheLog(t *testing.T) {
 			restore.mu.Lock()
 			restore.unreadRows = nil
 			restore.mu.Unlock()
-			if _, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), false); !found {
+			if _, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), askEvery, false); !found {
 				t.Fatal("the run's row was read as gone")
 			}
 			if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureLanded {
@@ -632,7 +632,7 @@ func TestAGoneTakersCaptureIsSettledOnlyByAnAnswerFromTheLog(t *testing.T) {
 			lapse(store)
 			restore := &keptRestore{rows: map[string]executorkeep.TurnRow{}, noRowFound: true}
 			rig.coordinator.restore = restore
-			if _, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), false); !found {
+			if _, found, _ := rig.coordinator.settleGone(t.Context(), rig.get("t1"), askEvery, false); !found {
 				t.Fatal("the run's row was read as gone")
 			}
 			got := rig.get("t1").Capture
@@ -1768,7 +1768,7 @@ func TestASettleLeavesWhatItsTakerStampedSince(t *testing.T) {
 		}
 		lapse(store)
 
-		settled, found, _ := rig.coordinator.settleGone(t.Context(), asRead, false)
+		settled, found, _ := rig.coordinator.settleGone(t.Context(), asRead, askEvery, false)
 		if !found {
 			t.Fatal("the run's row was read as gone")
 		}

@@ -1048,7 +1048,7 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		// Held to as long again as the relaunch's wait; its settle has its
 		// own room ([Coordinator.settleContext]).
 		held, cancel := context.WithTimeout(ctx, c.relaunchWait)
-		run, found, _ = c.settleGone(held, run, true)
+		run, found, _ = c.settleGone(held, run, askEvery, true)
 		cancel()
 	}
 	if !found {

@@ -886,13 +886,14 @@ func (a *floorArchive) Read(p []byte) (int, error) {
 // while its box's pause blocks (its keep starts once spooled), stamp within
 // [takeLife]; an unanswered takeover, within [takeOverLife]; a standby whose
 // capture's taker goes in the wait's last tick, its settle not taken, reads
-// the log, settles again, reads the row and takes over within [standbyWindow].
-// Each lands within [captureLife] where a capture's, and within a minute of its
-// figure, the life it bounds.
+// the log, settles again, reads the row and takes over within [standbyWindow],
+// a save under way beside that capture or not. Each within [captureLife] where
+// a capture's, and within a minute of its figure.
 //
 // Mutation: drop a step from a figure (a take's digest, a takeover's read back,
 // one change past a standby's wait), start a collection's keep behind its read,
-// skip the read of the log, or wait while any node reads the capture as kept.
+// skip the read of the log, wait while any node reads the capture as kept, or
+// settle the save in the standby's passes.
 func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 	t.Parallel()
 	// floor sets every fake of rig at the slowest crossing, and hands back
@@ -995,72 +996,93 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				captureLife-takeOverLife)
 		})
 	})
-	t.Run("a read standing by for a capture that never stamps", func(t *testing.T) {
-		t.Parallel()
-		inBubble(t, func(t *testing.T) {
-			store := newTakerStore()
-			// THE LEASES' CLOCK HELD STILL, so node-a's lease holds for as
-			// long as the case says rather than its TTL past its claim.
-			frozen := time.Now()
-			store.Clock = func() time.Time { return frozen }
-			rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
-			run := rig.launchKept(t, "t1")
-			lease := claimTaker(t, store, takingProcess)
-			begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
-				State: CaptureBegun, Final: true, At: rig.coordinator.now().Add(-time.Second), Taker: takingProcess,
-				TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1"}
-			if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
-				t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
-			}
-			// THE LOG NAMES NO RECORD of node-a's capture, so the wait settles
-			// it refused once its taker is gone.
-			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}, noRowFound: true}
-			f := floor(rig, writes, keep, func(ctx context.Context, read bool) {
-				if deadline, ok := ctx.Deadline(); ok && (!read || time.Until(deadline) <= captureStampBudget) {
-					time.Sleep(time.Until(deadline) - time.Second)
+	// THE STANDBY'S ROW, alone and beside a save of the same job begun under
+	// the same lease: its passes settle the capture they stand by for alone, so
+	// the save adds no change to the window.
+	for _, saving := range []bool{false, true} {
+		name := "a read standing by for a capture that never stamps"
+		if saving {
+			name += ", beside a save under way"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				store := newTakerStore()
+				// THE LEASES' CLOCK HELD STILL, so node-a's lease holds for as
+				// long as the case says rather than its TTL past its claim.
+				frozen := time.Now()
+				store.Clock = func() time.Time { return frozen }
+				rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
+				run := rig.launchKept(t, "t1")
+				lease := claimTaker(t, store, takingProcess)
+				begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
+					State: CaptureBegun, Final: true, At: rig.coordinator.now().Add(-time.Second),
+					Taker: takingProcess, TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1"}
+				if saving {
+					save := begun
+					save.Final, save.Interrupted, save.Through = false, true, new(0)
+					if took, err := rig.pending.ReserveSave(t.Context(), "t1", save); err != nil || !took {
+						t.Fatalf("reserving node-a's save = %v, %v", took, err)
+					}
+					begun.CaptureSeq = save.CaptureSeq + 1
 				}
-			}, func() { time.Sleep(objstore.PaceFor(executorkeep.SealedMaxBytes) - time.Second) },
-				func(by *time.Time) func() { return func() { time.Sleep(time.Until(*by) - time.Second) } })
-			standby, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
-				takenAs{FakeRunner: rig.runner, body: f.archive}, readCapture(BoxReadCollect, Result{}, true))
-			if standby == nil || !standby.standby {
-				t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
-			}
-			// NODE-A'S LEASE GOES while the wait's last read of the row
-			// crosses, answered a second before the wait ends: that pass
-			// settles node-a's capture in its own room past the wait, which the
-			// store does not take; the read past the wait reads the turn's row
-			// on the log, which names no record, and settles it refused in a
-			// room of its own; the wait's last read and the takeover follow,
-			// every change at its bound.
-			f.store.dropFirstSettle = true
-			waitEnds := time.Now().Add(standbyWait)
-			go func() {
-				time.Sleep(time.Until(waitEnds) - 10*time.Second)
-				if gave, err := store.Backend.Release(context.WithoutCancel(t.Context()),
-					coord.TakerResource(takingProcess), takingProcess, lease.Epoch); err != nil || !gave {
-					t.Errorf("giving node-a's taker lease back = %v, %v", gave, err)
+				if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
+					t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
 				}
-			}()
-			if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
-				t.Fatalf("the standby's keep came to %+v, want its session kept in the next place", kept)
-			}
-			from, asked := f.store.when("asked standby %d", 1)
-			dropped, droppedAny := f.store.when("dropped settle %d", 1)
-			settled, refused := f.store.when("settled %s %d", CaptureRefused, 1)
-			to, made := f.store.when("made takeover %d", 2)
-			if !asked || !droppedAny || !refused || !made {
-				t.Fatalf("the premise: the standby asked %t, the wait's settle dropped %t, node-a's capture "+
-					"settled refused %t, the takeover made %t", asked, droppedAny, refused, made)
-			}
-			if !dropped.Before(waitEnds) || !settled.After(waitEnds.Add(2*captureStampBudget-time.Minute)) {
-				t.Fatalf("the premise: the wait's settle was asked %v before the wait ended and node-a's "+
-					"capture settled %v after it, want the first inside the wait and the second past the "+
-					"settle's room and the read past the wait", waitEnds.Sub(dropped), settled.Sub(waitEnds))
-			}
-			within(t, "the standby's takeover", to.Sub(from), standbyWindow, 0)
+				if got := rig.get("t1"); saving && (got.savingTake() == nil || got.savingTake().State != CaptureBegun) {
+					t.Fatalf("the premise: the row's save under way is %+v, want node-a's save begun", got.Saving)
+				}
+				// THE LOG NAMES NO RECORD of node-a's capture, so the wait
+				// settles it refused once its taker is gone.
+				rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}, noRowFound: true}
+				f := floor(rig, writes, keep, func(ctx context.Context, read bool) {
+					if deadline, ok := ctx.Deadline(); ok && (!read || time.Until(deadline) <= captureStampBudget) {
+						time.Sleep(time.Until(deadline) - time.Second)
+					}
+				}, func() { time.Sleep(objstore.PaceFor(executorkeep.SealedMaxBytes) - time.Second) },
+					func(by *time.Time) func() { return func() { time.Sleep(time.Until(*by) - time.Second) } })
+				standby, _ := rig.coordinator.takeCapture(t.Context(), run, rig.provider.Box(run.SandboxID),
+					takenAs{FakeRunner: rig.runner, body: f.archive}, readCapture(BoxReadCollect, Result{}, true))
+				if standby == nil || !standby.standby {
+					t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
+				}
+				// NODE-A'S LEASE GOES while the wait's last read of the row
+				// crosses, answered a second before the wait ends: that pass
+				// settles node-a's capture in its own room past the wait, which
+				// the store does not take; the read past the wait reads the
+				// turn's row on the log, which names no record, and settles it
+				// refused in a room of its own; the wait's last read and the
+				// takeover follow, every change at its bound.
+				f.store.dropFirstSettle = true
+				waitEnds := time.Now().Add(standbyWait)
+				go func() {
+					time.Sleep(time.Until(waitEnds) - 10*time.Second)
+					if gave, err := store.Backend.Release(context.WithoutCancel(t.Context()),
+						coord.TakerResource(takingProcess), takingProcess, lease.Epoch); err != nil || !gave {
+						t.Errorf("giving node-a's taker lease back = %v, %v", gave, err)
+					}
+				}()
+				if kept := rig.coordinator.keepCapture(t.Context(), standby); kept == nil || kept.NotKept != "" {
+					t.Fatalf("the standby's keep came to %+v, want its session kept in the next place", kept)
+				}
+				stood := begun.CaptureSeq
+				from, asked := f.store.when("asked standby %d", stood)
+				dropped, droppedAny := f.store.when("dropped settle %d", stood)
+				settled, refused := f.store.when("settled %s %d", CaptureRefused, stood)
+				to, made := f.store.when("made takeover %d", stood+1)
+				if !asked || !droppedAny || !refused || !made {
+					t.Fatalf("the premise: the standby asked %t, the wait's settle dropped %t, node-a's "+
+						"capture settled refused %t, the takeover made %t", asked, droppedAny, refused, made)
+				}
+				if !dropped.Before(waitEnds) || !settled.After(waitEnds.Add(2*captureStampBudget-time.Minute)) {
+					t.Fatalf("the premise: the wait's settle was asked %v before the wait ended and node-a's "+
+						"capture settled %v after it, want the first inside the wait and the second past the "+
+						"settle's room and the read past the wait", waitEnds.Sub(dropped), settled.Sub(waitEnds))
+				}
+				within(t, "the standby's takeover", to.Sub(from), standbyWindow, 0)
+			})
 		})
-	})
+	}
 	t.Run("a collection's take whose box's pause blocks", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
