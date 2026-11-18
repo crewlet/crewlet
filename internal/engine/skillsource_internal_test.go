@@ -7,12 +7,10 @@ import (
 	"github.com/crewlet/crewlet/internal/confluence"
 )
 
-// WHERE A COMPANY'S SKILLS COME FROM IS DERIVED FROM THE APPLIED DOCUMENT AND
-// THE WIRING THAT IS RUNNING, and the sync loop turns a change of that answer
-// into a walk (and the previous source's retirement). What each case here
-// pins is the three fields the loop compares, plus whether this node can read
-// the source at all: a source that reports itself readable and is not would
-// walk nothing and say nothing.
+// WHERE A COMPANY'S SKILLS COME FROM FOLLOWS THE APPLIED DOCUMENT AND THE
+// RUNNING WIRING. Each case pins the three fields the sync loop compares, and
+// whether this node can read the source: one that claims readable and is not
+// would walk nothing and say nothing.
 func TestTheSkillSourceFollowsTheAppliedCompanyAndTheWiring(t *testing.T) {
 	t.Parallel()
 	wired := confluenceParts{

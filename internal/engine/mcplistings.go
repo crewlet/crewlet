@@ -20,76 +20,30 @@ import (
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
-// WHAT THIS NODE'S MCP SERVERS LIST, PUBLISHED; AND WHAT EVERY NODE'S LIST,
-// WATCHED (ADR-0074, internal/coord's mcplisting.go).
-//
-// A per-agent server's children run only on the node holding each seat, so no
-// node's registry is the company's catalogue. Each node therefore publishes,
-// per server, the union of what its own instances list, and keeps a watched
-// copy of every node's, which the tool catalogue and a server's detail are
-// read from.
-//
-// # Derived at each beat, written when it changes
-//
-// The listing is read off the bridges at every beat, as the status record's
-// MCP rows are ([Engine.mcpStatus]): an apply, a claim, a release, a restart that
-// lists differently and a seat's pass each move it, and a publisher hooked
-// into each of them would be one hook short the day a sixth appears. What
-// goes to the store is only a listing whose content moved since this node
-// last wrote it, so a quiet company writes nothing.
-//
-// # Under the presence epoch
-//
-// Each listing carries the epoch of the presence this node held when it wrote
-// it, and readers count it only while that presence holds at that epoch. A
-// lapse is the one thing that moves the epoch under a running node, and the
-// sweep may remove what was written under the old one, so a new epoch makes
-// this node forget what it believed it had written and write it all again.
-//
-// # Each definition once, and before the listing that names it
-//
-// A tool's definition, its schemas and its words whole, is stored under its
-// digest, create-only, before the listing naming the digest is written, so a
-// reader never meets a listing whose definitions were never stored, only (for
-// a moment, across a sweep) one whose definition was removed, which it answers
-// as unknown. A definition waiting for a review is kept before any other, so a
-// change is shown whole to whoever reviews it.
-//
-// # Each listing waits as long as its bytes take, on a pass of its own
-//
-// A listing is up to coord.MaxMCPListingBytes and its definitions up to
-// coord.MaxMCPListingDefinitionBytes, and on a node whose connection crosses a
-// link — a node without `data`, and every node on an external broker, data
-// nodes included — they cross it at the link's pace, which the engine allows
-// to be as slow as a mebibyte in thirty seconds: a listing at
-// its bound alone takes about 26 seconds. The beat once held every step to one
-// deadline of [coord.ReconcileInterval], fifteen seconds, so on any link below
-// about 60 KiB a second a large listing was never acknowledged, and each beat
-// sent the whole of it again while the earlier copies were still crossing.
-// So a beat's writes of its listings, and of the definitions they name, carry
-// NO deadline of the beat's: each waits as long as the coordination store's
-// rule gives its bytes (internal/coord/kv's settled writes) — the request term
-// and, across a link, their crossing at the floor for every send the client
-// may make of them — and they are made on a pass of their own
-// ([Engine.startListingPass]), one at a time, so a slow listing holds no beat:
-// the next beat reads the fleet's presence and accepts first listings on time,
-// and leaves its listings to the pass in flight, the next beat after it
-// writing whatever moved meanwhile. The beat's own steps keep their bound
-// ([mcpBeatBound]).
+// WHAT THIS NODE'S MCP SERVERS LIST, PUBLISHED, AND EVERY NODE'S, WATCHED
+// (ADR-0074, internal/coord's mcplisting.go): a per-agent server's children run
+// only where each seat is held, so each node publishes per server the union of
+// its instances' listings, and the catalogue reads the watched copy of every
+// node's. A listing is derived off the bridges at every beat, as [Engine.mcpStatus]
+// is, rather than hooked into each thing that moves it, and written only when its
+// content moved. It carries this node's presence epoch and counts only while that
+// holds; a new epoch writes everything again, since the sweep may have removed it.
+// Each definition is stored create-only under its digest before the listing naming
+// it (a reader misses one only across a sweep, answered as unknown), one awaiting
+// review first so a change is shown whole. The writes run on a pass of their own
+// with no beat deadline ([Engine.startListingPass]); the beat's keep [mcpBeatBound].
 
-// mcpListingSweepPasses is how many consecutive sweeps must find a definition
-// named by no listing before it is removed: TWO, a maintenance interval
-// apart, because a node stores a definition before the listing that names it
-// and a sweep reading the listings between the two would otherwise remove a
-// definition about to be named.
+// mcpListingSweepPasses is how many consecutive sweeps, a maintenance interval
+// apart, must find a definition named by no listing before it is removed: two,
+// since a node stores a definition before the listing naming it, and one sweep
+// reading between the two would remove a definition about to be named.
 const mcpListingSweepPasses = 2
 
-// mcpBeatBound is how long one beat's own steps may take — reading the fleet's
-// presence and the definitions a moved catalogue names, and accepting a
-// server's first listing — before the beat gives them up for the next: the
-// beat's interval, [coord.ReconcileInterval], so a beat whose broker does not
-// answer ends before the next would start. Each carries small records. The
-// listings' writes are not held to it ([Engine.startListingPass]).
+// mcpBeatBound bounds one beat's own steps (reading the fleet's presence and the
+// definitions a moved catalogue names, accepting a server's first listing), all
+// small records: the beat's interval, so a beat whose broker does not answer
+// ends before the next starts. The listings' writes are not held to it
+// ([Engine.startListingPass]).
 const mcpBeatBound = coord.ReconcileInterval
 
 // mcpListings is this node's half of the fleet's MCP listings.
@@ -224,18 +178,14 @@ func (e *Engine) stopMCPListings() {
 	<-e.listings.done
 }
 
-// removeMCPListings removes this node's own listings, once its publisher has
-// stopped: a node that is going says so rather than leaving the sweep to find
-// out.
+// removeMCPListings removes this node's own listings once its publisher has
+// stopped: a node that is going says so rather than leaving it to the sweep.
 //
-// ONE STEP OF THE STOP'S ALLOWANCE ([seat.StopStep]), never a bound of its
-// own: what falls back when it fails is the maintenance sweep, and every
-// reader stopped counting the listings when the presence they were filed
-// under went with the drain, so running out of the allowance costs no more
-// than not trying. A bound of its own was a reconcile interval on an
-// unreachable store beside the allowance, which the stop's grace does not
-// cover. AFTER THE SEATS' GIVE-BACKS, which the teardown makes first, so
-// what this spends is what they left.
+// ONE STEP OF THE STOP'S ALLOWANCE ([seat.StopStep]), never a bound of its own,
+// which the stop's grace would not cover: running out costs no more than not
+// trying, since the maintenance sweep removes them and readers stopped counting
+// them when this node's presence went with the drain. It runs AFTER THE SEATS'
+// GIVE-BACKS, so it spends what they left.
 func (e *Engine) removeMCPListings(ctx context.Context) {
 	e.listings.mu.Lock()
 	published := e.listings.published
@@ -500,20 +450,17 @@ func (e *Engine) publishMCPListings(ctx context.Context) {
 }
 
 // startListingPass starts a pass writing desired under epoch
-// ([Engine.writeMCPListings]) on a goroutine of its own, and reports whether
-// it did: a pass already in flight is left to finish, and the beat that found
-// it starts none, since the pass after it compares what it wrote with what the
-// node lists then and writes what moved.
+// ([Engine.writeMCPListings]) on a goroutine of its own, and reports whether it
+// did: a pass in flight is left to finish and this beat starts none, since the
+// next pass writes whatever moved meanwhile.
 //
 // ITS WRITES CARRY NO DEADLINE OF THE BEAT'S: ctx is the publisher's own, which
-// stopping cancels and nothing else ends, so each write waits as long as the
-// coordination store's rule gives the bytes it carries — the request term and,
-// across a link, their crossing at the floor for every send the client may
-// make of them (internal/coord/kv's settled writes). A listing at its bound is
-// about 26 seconds a send across a link at the floor, which the beat's fifteen
-// seconds could never give it; across a node's own connection, the request
-// term. ONE PASS AT A TIME, so a slow listing holds no beat and no two passes
-// write this node's listings over each other.
+// only stopping cancels, so each waits as long as the coordination store's rule
+// gives its bytes (internal/coord/kv's settled writes). Across a link at the
+// floor a listing at its bound (coord.MaxMCPListingBytes) takes about 26
+// seconds a send, which the beat's fifteen could never give it. ONE PASS AT A
+// TIME, so a slow listing holds no beat and no two passes write this node's
+// listings over each other.
 func (e *Engine) startListingPass(ctx context.Context, node string, epoch int64,
 	desired map[string]nodeListing) bool {
 
@@ -872,12 +819,11 @@ func (e *Engine) mcpListingJobs() []maintenance.Job {
 // records went.
 //
 // THE LISTINGS ARE READ BEFORE THE PRESENCE, and each is removed at the version
-// read. A listing a node writes after its presence moved is then either one
-// this pass did not read, or one the presence read after it covers; and a
-// listing rewritten since it was read is not removed, since its version moved.
-// Read the other way round, a node that claimed its presence again and wrote
-// its listings between the two reads would have them removed, with nothing
-// telling it to write them again.
+// read: a listing written after its node's presence moved is unread here or
+// covered by the later presence read, and one rewritten since keeps its new
+// version. The other order would remove the listings of a node that reclaimed
+// its presence and wrote them between the two reads, with nothing telling it
+// to write them again.
 func (e *Engine) sweepMCPListings(ctx context.Context) (int64, error) {
 	fleet := e.backends.Fleet
 	listings, err := fleet.ListMCPListings(ctx)

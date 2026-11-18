@@ -10,33 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// runPushes is the coordinator's [sandbox.RunPushes]: what a collected
-// executor pushed to Gitlet, read from the push rows it
-// wrote under its launch (code.read's `run_pushes`) — every page to the last,
-// the commands each answered ok, collapsed per (repository, ref).
+// runPushes is the coordinator's [sandbox.RunPushes]: what a collected executor
+// pushed to Gitlet, read from its launch's push rows (code.read's `run_pushes`)
+// to the last page, the ok commands collapsed per (repository, ref).
 //
-// THE FIRST PAGE LINEARIZABLE, one barrier a collected run that could push:
-// its collection is where "it pushed nothing" must never be a stale answer.
-// Every later page at session at the first page's position, so no node
-// behind the snapshot the first page read answers a later one — leaving out
-// pushes the run made before that snapshot — and no later page pays a barrier
-// of its own, nor does the read of the changes the run's branches head
-// ([runPushes.Changes]). The barrier is the seats' to pay for — the code log census's
-// seats' term counts it beside their other reads of the log, while
-// gitlet.GitReadsPerDay, the term for persons and their CI, does not (its doc
-// says so) — and the read is only asked for a run given a repository to push
-// to.
-//
-// THE REPOSITORIES ARE THE RUN'S OWN, from its row: those it was given to push
-// to, by id in the order it was given them, and named as it was given them —
-// the run could push nowhere else, and a rename since the launch does not
-// change what the run was told it worked on. Above its launch position
-// (`PendingRun.CodeLaunch`): nothing the run pushed applied below it.
-//
-// HELD TO WHAT A RESULT CAN LIST: a box chooses how many refs it moves, so the
-// reader holds at most sandbox.MaxPushedRefs of them, in the order the run
-// first pushed them, and counts the rest — its memory follows what a record
-// can carry, never what a box in a loop pushed.
+// The first page is the one linearizable barrier, asked only of a run given a
+// repository, so a collection never reads "pushed nothing" stale; later pages
+// and [runPushes.Changes] read at session floored at it, so no lagging node
+// drops a push. The code log census counts it in the seats' term, not
+// gitlet.GitReadsPerDay. The repositories are the run's own (it could push
+// nowhere else), by id in given order, named as at launch, read above
+// `PendingRun.CodeLaunch`. At most sandbox.MaxPushedRefs refs are held, in
+// first-push order, the rest counted: memory follows what a record can carry.
 type runPushes struct {
 	// code is this node's read of Gitlet, asked at each collection: a
 	// node starts and stops serving it with the company's revision, and the
@@ -46,11 +31,10 @@ type runPushes struct {
 
 var _ sandbox.RunPushes = runPushes{}
 
-// pushReader is Gitlet as a collection asks it — the estate's
-// [estate.CodeSeam]: its reads, which the reader pages through and names the
-// run's branches' changes by; a change's lifecycle write, which opens the
-// change a run asked for; and a read by object id, which titles one its ask
-// named no title for.
+// pushReader is Gitlet as a collection asks it, the estate's [estate.CodeSeam]:
+// reads to page pushes and name the run's branches' changes, a change write to
+// open one the run asked for, and a read by object id to title one its ask left
+// untitled.
 type pushReader interface {
 	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
 	Change(ctx context.Context, p gitlet.ChangeProposal) (gitlet.ChangeResult, error)
@@ -58,9 +42,9 @@ type pushReader interface {
 }
 
 // codeRunPushes is the engine's reader of what its executors pushed: over the
-// router's code seam where this node serves Gitlet, and
-// otherwise an error naming why it does not — which the collection says
-// rather than reading as "nothing pushed" (sandbox.Result.PushedUnread).
+// router's code seam where this node serves Gitlet, otherwise an error naming
+// why, which the collection says rather than reading as "nothing pushed"
+// (sandbox.Result.PushedUnread).
 func (e *Engine) codeRunPushes() runPushes {
 	return runPushes{code: func() (pushReader, error) {
 		seam, ok := OperatorCode(e)
@@ -149,10 +133,9 @@ type pushCollapse struct {
 // pushKey is a ref of a repository, by the repository's id.
 type pushKey struct{ repo, ref string }
 
-// add folds a page of the run's push rows in, in their order — names the run's
-// repositories by id. A row of a repository the run was not given to push to
-// is refused: the read names only those, so such a row is Gitlet
-// answering another read.
+// add folds a page of the run's push rows in, in order; names maps the run's
+// repository ids to names. A row of a repository the run was not given is
+// refused: the read names only those, so such a row answers another read.
 func (c *pushCollapse) add(rows []gitlet.PushRow, names map[string]string) error {
 	for _, row := range rows {
 		name, given := names[row.RepoID]

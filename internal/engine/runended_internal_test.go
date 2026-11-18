@@ -18,15 +18,13 @@ import (
 )
 
 // A RUN THAT ENDED ON ITS VENDOR'S SPENT PLAN MOVES THE TURN'S NEXT LAUNCH ON.
-// The run is its harness's own, so nothing a text call reads saw the limit; the
-// segment that collects it reads the run's own ending, sits the entry out on
-// this node, and the turn's next launch — a reviewer's send-back — takes the
-// chain's next member, announced as the hand-off it is. A run that ended any
-// other way leaves the entry in place.
+// The run is its harness's own, so no text call saw the limit: the collecting
+// segment reads the run's ending, sits the entry out on this node, and the
+// turn's next launch (a reviewer's send-back) takes the chain's next member,
+// announced as a hand-off. A run that ended any other way leaves the entry.
 //
-// THE ENDING AS COLLECTED, its terminal event included: Claude Code 2.1.312
-// says a spent plan in words no sentinel matches, and as a status on its
-// result line, which is all that reads it.
+// The ending carries its terminal event: Claude Code says a spent plan in words
+// no sentinel matches, and only its result line's status reads as one.
 //
 // Mutation: leave the event out of what noteRunEnded hands the entry, and the
 // next launch walks into the spent plan.
@@ -64,14 +62,11 @@ func TestARunThatSpentItsPlanMovesTheNextLaunchOn(t *testing.T) {
 	}
 }
 
-// A RECOLLECTED ENDING BENCHES NOTHING ITS FIRST READING DID NOT. The segment
-// that collects a job reads the job's ending every time, and a completion held
-// on a limit is collected again when its hold lifts: the ending the entry is
-// handed is dated by the job's first collection, so a report whose window is
-// over sits nothing out, and the review the hold waited for reaches the model.
-// Dated by the reading, every collection benched the entry afresh, before any
-// call could find out whether the quota was back, and held the completion
-// again for longer.
+// A RECOLLECTED ENDING BENCHES NOTHING ITS FIRST READING DID NOT. A completion
+// held on a limit is collected again when its hold lifts, so the ending is
+// dated by the job's first collection: a report whose window is over sits
+// nothing out. Dated by the reading, every collection would bench the entry
+// afresh, before any call could find the quota back, and hold it again.
 //
 // Mutation: leave At out of what noteRunEnded hands the entry, and the
 // hour-old report benches the entry again.
@@ -98,10 +93,8 @@ func TestARecollectedEndingBenchesItsEntryNoMore(t *testing.T) {
 // AN APPLY KEEPS A SPENT PLAN SPENT, AND A NEW CREDENTIAL STARTS CLEAN. Every
 // apply rebuilds every entry, and the window is the account's: an entry built
 // on the node's registry of sign-ins finds its predecessor's window whatever
-// else about its spec changed, and one whose credential was rotated under the
-// same ${VAR} is a new sign-in with nothing to sit out. The old carry keyed on
-// the spec and got both backwards: an edit to the timeout dropped a window the
-// vendor still held, and a rotated token stayed benched.
+// else in its spec changed, and a credential rotated under the same ${VAR} is
+// a new sign-in with nothing to sit out. Keyed on the spec, both go backwards.
 //
 // Mutation: build each revision without the engine's registry, and the edited
 // entry walks back into the spent plan.
@@ -145,15 +138,13 @@ func planOf(t *testing.T, c *Company) *harness.Provider {
 	return p.(*harness.Provider)
 }
 
-// A RESUME WAITS ON THE CHAIN ITS FIRST CALL TAKES. A completion's first model
-// call is its reviewer's, and an answer's is the relaunch that carries its run
-// on, so a seat whose executor sits out a spent plan while its own reviewer
-// answers has a finished run to review and deliver: its completion is resumed
-// at once, and an answer, whose relaunch would find every runner sitting out,
-// is held at the gate until the first is tried again. Spend the reviewer
-// instead and the two swap. Each is asked where it is asked: an answer at the
-// turn gate, before its claim, and a completion once its job is collected
-// (collectedRefusal), the gate admitting it to be collected first.
+// A RESUME WAITS ON THE CHAIN ITS FIRST CALL TAKES: a completion's is its
+// reviewer's, an answer's the executor relaunch. So with the executor spent and
+// the reviewer answering, a completion resumes at once and an answer is held
+// at the gate until the executor is tried again; spend the reviewer and the
+// two swap. An answer is asked at the turn gate, before its claim; a
+// completion once its job is collected (collectedRefusal), the gate admitting
+// it first.
 //
 // Mutation: ask the executor chain for both routes, and the completion of the
 // seat whose reviewer answers waits on its executor's limit.
@@ -203,12 +194,10 @@ func TestAResumeWaitsOnTheChainItsFirstCallTakes(t *testing.T) {
 	}
 }
 
-// THE NODE'S APPLY BUILDS EVERY REVISION ON ITS ONE REGISTRY OF SIGN-INS. The
-// unit case above hands buildProviders a registry itself; this one goes through
-// Engine.Apply, the path a running node takes, so an apply that built its
-// revision on no registry, or a fresh one, fails here: an edit to the entry's
-// timeout must find the window its sign-in is sitting out, and a key rotated
-// under the same ${VAR} must not.
+// THE NODE'S APPLY BUILDS EVERY REVISION ON ITS ONE REGISTRY OF SIGN-INS:
+// TestAnApplyKeepsASpentPlanSpent's case through Engine.Apply, the path a
+// running node takes, so a revision built on no registry, or a fresh one,
+// fails here.
 //
 // NOT PARALLEL: the key is read from the process environment.
 //

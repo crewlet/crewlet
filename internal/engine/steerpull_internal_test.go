@@ -20,13 +20,12 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A JOB WHOSE HARNESS ASKED FOR ITS NOTES IS RECORDED AS HAVING ASKED — by a Claude
-// Code hook's take and by an OpenCode plugin's poll alike, on the run's real
-// bridge session — and its collection says nothing; a job whose harness never asked
-// is said, at its collection, to have run no reader (steer_reader_never_ran).
-// That line tells an operator something in the box switched the harness's reading
-// off, so it must be said of exactly the job that never asked: said of every
-// job that did, it would send them hunting for a policy that is not there.
+// A JOB WHOSE HARNESS ASKED FOR ITS NOTES IS RECORDED AS HAVING ASKED, by a
+// Claude Code hook's take or an OpenCode plugin's poll on the run's real bridge
+// session; only a job that never asked is said at collection to have run no
+// reader (steer_reader_never_ran). That line tells an operator something in the
+// box switched reading off, so said of a job that asked it sends them hunting
+// for a policy that is not there.
 //
 // NOT PARALLEL: it swaps the process-wide logger.
 //
@@ -87,7 +86,7 @@ func TestAJobsHarnessAskingForItsNotesIsOnItsRecord(t *testing.T) {
 			rig := rigRuns(t, e, func(ctx context.Context, req sandbox.RunRequest) sandbox.Result {
 				if tc.ask != nil {
 					askErr = tc.ask(ctx, req)
-					// RECORDED OFF THE PATH THAT ASKED, so it lands a moment
+					// Recorded off the path that asked, so it lands a moment
 					// after the answer.
 					deadline := time.Now().Add(5 * time.Second)
 					for pulled != launch && time.Now().Before(deadline) {
@@ -132,12 +131,10 @@ func TestAJobsHarnessAskingForItsNotesIsOnItsRecord(t *testing.T) {
 	}
 }
 
-// EVERY FILING ON A RUN'S RECORD IS ANSWERED IN ITS OWN WORDS. The record's
-// answer to a filing is the store's (`full`, `spent`, `closed`), and each is a
-// different fact for the person sending the note: room for it after the turn
-// reads, nothing more this turn ever, or the turn is over. Translated wrongly, a
-// person whose turn has taken all ten notes is told to wait for a read that
-// changes nothing.
+// EVERY FILING ON A RUN'S RECORD IS ANSWERED IN ITS OWN WORDS: the store's
+// `full`, `spent` and `closed` mean room after the turn reads, nothing more this
+// turn, and the turn is over. Translated wrongly, a person whose turn has taken
+// all ten notes is told to wait for a read that changes nothing.
 //
 // Mutation: answer the store's `spent` as full, or its `full` as spent, and this
 // goes red.

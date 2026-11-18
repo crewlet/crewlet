@@ -11,30 +11,20 @@ import (
 	"github.com/crewlet/crewlet/internal/slack"
 )
 
-// The hosted chat surface, wired.
-//
-// # It has no lifecycle worth the name, and that is the difference
-//
-// The self-hosted chat backend holds one websocket per seat, because it has
-// no usable inbound webhook — so its transport reconnects, backs off and
-// backfills. Slack PUSHES: each seat's app posts to its own request URL, the
-// API edge verifies the signature and the parser reads it. So starting the
-// Slack transport is one auth.test per seat and nothing else, and there is
-// no connection for an apply to drop.
-//
-// What an apply does have to redo is the identity resolution, because that
-// is what a Slack payload names a seat by — and a seat whose id is unknown
-// cannot recognise its own messages, which is the loop this integration
-// costs the most to get wrong.
+// The hosted chat surface, wired. It has no lifecycle to speak of: unlike the
+// self-hosted backend's websocket per seat, Slack pushes each delivery to the
+// API edge, which verifies it, so starting the transport is one auth.test per
+// seat and an apply has no connection to drop. What an apply must redo is the
+// identity resolution a payload names a seat by: a seat whose id is unknown
+// cannot recognise its own messages, and answers itself in a loop.
 
 // startSlack brings up the hosted chat surface.
 func (e *Engine) startSlack(ctx context.Context, c *Company, cfg *config.Slack) (*slack.Transport, error) {
 	env := e.resolver()
 	seats := slack.SeatsFrom(c.Org, env.LookupOK)
 	if len(seats) == 0 {
-		// Configured with no installed apps is a company mid-setup, not a
-		// failure: no agent's install has been approved yet, or its token
-		// has not reached this node.
+		// No installed app is a company mid-setup, not a failure: no install
+		// approved yet, or its token has not reached this node.
 		log.InfoContext(ctx, "slack_configured_with_no_apps",
 			"detail", "no seat's integrations.slack.bot_token resolved, so "+
 				"nothing sends or receives on this surface")
@@ -64,15 +54,10 @@ func (e *Engine) startSlack(ctx context.Context, c *Company, cfg *config.Slack) 
 
 // SlackApps is the Slack app each running seat authenticates as, by handle.
 //
-// A LIVE FACT, and the only kind available: an agent's Slack app is named
-// nowhere in the company document, because the app is what issues the token
-// rather than something the token points at. The transport learns it from
-// `auth.test` when it wires the seat, so this answers for the seats that came
-// up and is empty before they do.
-//
-// Read by the setup screen, which shows an operator which of their apps each
-// agent is: the id every Slack settings page is keyed on, and the answer to
-// the question a roster of identical-looking agents raises.
+// A live fact, learned from `auth.test` as each seat is wired, so empty before
+// the seats come up: the company document never names an agent's app, since
+// the app issues the token. The setup screen shows it so an operator can tell
+// which of their apps each agent is.
 func (e *Engine) SlackApps() map[string]string {
 	e.notify.mu.Lock()
 	transport := e.notify.slack
@@ -84,21 +69,13 @@ func (e *Engine) SlackApps() map[string]string {
 }
 
 // reconcileSlack brings the hosted chat surface in line with the applied
-// revision.
+// revision. [Engine.startNotifications] assembles the parsers once, so without
+// this a Slack connected after boot, or a seat's rotated token, routes
+// nowhere (`inbound_source_unparsed`) until a restart.
 //
-// IT HAD NONE, and the gap is the one an operator meets first. The parser set
-// is assembled once in [Engine.startNotifications], so a company that
-// connected Slack after boot had every delivery verified at the webhook route
-// and turned into work for nobody: `inbound_source_unparsed` in the log,
-// `routes nowhere` on the card, and an agent that answers nothing, until the
-// process was restarted. Connecting from the dashboard is exactly that
-// sequence, and so is rotating a seat's token.
-//
-// REBUILT ON EVERY APPLY, unlike the self-hosted surface next door. What is
-// torn down here is an HTTP client and a working-indicator driver, because
-// Slack's inbound half is this engine's own API edge and there is no socket
-// to drop; [Engine.reconcileMattermost] holds one per seat and is guarded
-// accordingly.
+// Rebuilt on every apply, unlike [Engine.reconcileMattermost]'s socket per
+// seat: what is torn down is an HTTP client and a working-indicator driver,
+// since Slack's inbound half is this engine's own API edge.
 func (e *Engine) reconcileSlack(ctx context.Context, c *Company) {
 	cfg := c.Config.Integrations.Slack
 	e.notify.mu.Lock()
@@ -107,10 +84,9 @@ func (e *Engine) reconcileSlack(ctx context.Context, c *Company) {
 	if svc == nil {
 		return
 	}
-	// RETIRED when the revision no longer declares it, the same posture
-	// every other reconciler here takes: an operator who removes the block
-	// after a leak must not be left with the boot-time parser routing
-	// deliveries under the credential being revoked.
+	// Retired when the revision drops the block, as every reconciler here
+	// does: an operator who removes it after a leak must not have deliveries
+	// still routed under the credential being revoked.
 	if cfg == nil {
 		e.notify.mu.Lock()
 		e.notify.slack = nil
@@ -127,12 +103,9 @@ func (e *Engine) reconcileSlack(ctx context.Context, c *Company) {
 	}
 	transport, err := e.startSlack(ctx, c, cfg)
 	if err != nil || transport == nil {
-		// THE PREVIOUS TRANSPORT KEEPS RUNNING, the same posture as the
-		// code host's: routing by a stale credential is worse than the
-		// new one and much better than not routing at all. startSlack
-		// stores what it built before starting it, so the field is put
-		// back rather than left pointing at something that did not come
-		// up.
+		// The previous transport keeps running, as the code host's does:
+		// a stale credential beats not routing at all. startSlack stores
+		// what it built before starting it, so the field is put back.
 		e.notify.mu.Lock()
 		e.notify.slack = previous
 		e.notify.mu.Unlock()
@@ -148,21 +121,18 @@ func (e *Engine) reconcileSlack(ctx context.Context, c *Company) {
 		return
 	}
 	if previous != nil && previous != transport {
-		// AFTER the swap, so no delivery falls between the two: what
-		// Stop does here is clear working indicators the old transport
-		// raised, and one left up outlives the process visibly.
+		// After the swap, so no delivery falls between the two. Stop
+		// clears the old transport's working indicators, which would
+		// otherwise stay up visibly.
 		previous.Stop(ctx)
 	}
 	log.InfoContext(ctx, "slack_reconciled", "company", c.Config.Name)
 }
 
-// statusPhrases maps the config block onto the phrase registry's own shape.
-//
-// The MAPPING IS THE POINT and it belongs here rather than in either
-// package: config states the phases as fields because a YAML author needs
-// them named and checked, while the registry keys on the phase strings the
-// turn engine actually reports. Written as a map literal in config, a
-// misspelt phase would be silently accepted and silently ignored.
+// statusPhrases maps the config block onto the phrase registry's shape, here
+// rather than in either package: config names the phases as fields so a
+// misspelt one is refused (a map in config would silently ignore it), while
+// the registry keys on the phase strings the turn engine reports.
 func statusPhrases(p config.StatusPhrases) map[string][]string {
 	return map[string][]string{
 		"onboarding":        p.Onboarding,
@@ -173,13 +143,11 @@ func statusPhrases(p config.StatusPhrases) map[string][]string {
 }
 
 // SlackInstalls mints seats' Slack install links and finishes the installs
-// they return to, for the setup surface and the webhook landing alike: one
-// object, so a link minted on one is the link the other finishes.
-//
-// THE FLEET'S, every part of it: the state is signed under the keyring every
-// node holds, its nonce is recorded on the fleet's claim registry, and the bot
-// token is sealed into the company's secret store, because the node Slack
-// returns a browser to is rarely the node that minted the link.
+// they return to, for the setup surface and the webhook landing alike, so a
+// link minted on one is finished by the other. Every part is the fleet's (the
+// state signed under the shared keyring, its nonce on the fleet's claim
+// registry, the bot token sealed into the company's secret store), because
+// Slack rarely returns the browser to the node that minted the link.
 func (e *Engine) SlackInstalls(material runtoken.Material) (*slack.Installs, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil, errors.New("engine: this engine holds no fleet store to record " +

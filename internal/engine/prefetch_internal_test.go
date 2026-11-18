@@ -20,13 +20,10 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// What the prefetch is told ABOUT a turn, derived from its trigger.
-//
-// These are the three questions a turn's context rests on — is the trigger a
-// pointer, who spoke, and is any of them a colleague — and each has a wrong
-// answer that is silent: an ungated search on a pointer returns noise, a
-// forgotten speaker loses a profile, and a colleague keyed on a platform id
-// splits one person's profile in two.
+// What the prefetch is told ABOUT a turn, from its trigger: is it a pointer,
+// who spoke, is any a colleague. Each has a silent wrong answer: an ungated
+// search on a pointer returns noise, a forgotten speaker loses a profile, and
+// a colleague keyed on a platform id splits one profile in two.
 
 func notification(source, sender string, meta map[string]string, recon bool) *events.Event {
 	return events.New(types.ExternalNotification{
@@ -36,10 +33,8 @@ func notification(source, sender string, meta map[string]string, recon bool) *ev
 	}, events.NewTrace())
 }
 
-// A POINTER TRIGGER gates the three searches that judge relevance against
-// the trigger text. ANY constituent, not all: a coalesced trigger carrying
-// one webhook that only names a thing-that-changed is still a trigger the
-// seat has to go and look behind.
+// A POINTER TRIGGER gates the three searches judged against the trigger text,
+// and ANY pointer constituent makes the whole coalesced trigger one.
 func TestAnyPointerConstituentMakesTheWholeTriggerThin(t *testing.T) {
 	t.Parallel()
 	substantive := notification("chat", "U1", nil, false)
@@ -65,9 +60,8 @@ func TestAnyPointerConstituentMakesTheWholeTriggerThin(t *testing.T) {
 	}
 }
 
-// A turn is woken by EVENTS, and only some are notifications: a scheduled
-// fire, a sandbox completion and an agent-to-agent ask all reach a seat the
-// same way and none has a sender or a recon flag.
+// A waking event that is no notification (a scheduled fire, an agent-to-agent
+// ask) has no sender, recon flag or thread.
 func TestANonNotificationTriggerContributesNothing(t *testing.T) {
 	t.Parallel()
 	scheduled := events.New(types.TaskAssigned{TaskID: "t-1"}, events.NewTrace())
@@ -89,12 +83,8 @@ func TestANonNotificationTriggerContributesNothing(t *testing.T) {
 }
 
 // THE THREAD COMES OFF THE TRIGGER'S OWN METADATA, and only where there is
-// one to come off.
-//
-// A top-level chat message has no earlier conversation: reading a "thread"
-// rooted at it returns the triggering message, which the turn was already
-// handed — so every top-level message in the company would spend an HTTP
-// request at turn start to re-read its own trigger.
+// one: a "thread" rooted at a top-level message is the trigger itself, which
+// every such turn would spend a request to re-read.
 func TestTheThreadComesOffTheTriggersOwnMetadata(t *testing.T) {
 	t.Parallel()
 	chat := func(over map[string]string) map[string]string {
@@ -128,12 +118,8 @@ func TestTheThreadComesOffTheTriggersOwnMetadata(t *testing.T) {
 	}
 }
 
-// A COALESCED BURST IS ONE THREAD, and it is the flat metadata's.
-//
-// A chat partition is thread-grained wherever a thread exists — a direct
-// conversation partitions on the bare channel, but only for messages with no
-// thread at all — so a coalesced burst can never straddle two threads, and
-// the flat fields (which mirror the latest constituent) are the whole answer.
+// A COALESCED BURST IS ONE THREAD, the flat metadata's: a chat partition is
+// thread-grained, so a burst never straddles two (see threadOf).
 func TestACoalescedChatBurstResolvesToOneThread(t *testing.T) {
 	t.Parallel()
 	meta := map[string]string{
@@ -153,9 +139,8 @@ func TestACoalescedChatBurstResolvesToOneThread(t *testing.T) {
 	}
 }
 
-// EVERY DISTINCT SPEAKER. A coalesced trigger is several people speaking,
-// and the flat Sender field mirrors only the latest — so reading it alone
-// profiles the last speaker and forgets the other three.
+// EVERY DISTINCT SPEAKER of a coalesced trigger, not just the flat Sender,
+// which mirrors only the latest.
 func TestEverySpeakerInACoalescedTriggerIsASender(t *testing.T) {
 	t.Parallel()
 	merged := events.New(types.ExternalNotification{
@@ -179,9 +164,8 @@ func TestEverySpeakerInACoalescedTriggerIsASender(t *testing.T) {
 	}
 }
 
-// A COLLEAGUE IS KEYED ON THEIR HANDLE, so what one seat learned about them
-// on chat and what it learned on the tracker are ONE profile rather than two
-// half-profiles under two platform ids.
+// A COLLEAGUE IS KEYED ON THEIR HANDLE, so chat and the tracker build ONE
+// profile, not two under two platform ids.
 func TestAColleagueIsKeyedOnTheirHandleAcrossBackends(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
@@ -213,9 +197,8 @@ func TestAColleagueIsKeyedOnTheirHandleAcrossBackends(t *testing.T) {
 		}
 	}
 
-	// A STRANGER keeps their platform identity, which is right: an
-	// external counterparty has no handle here and their profile is
-	// legitimately per-platform.
+	// A STRANGER keeps their platform identity: no handle here, so their
+	// profile is legitimately per-platform.
 	stranger := sendersOf(reg, []*events.Event{notification("chat", "Someone",
 		map[string]string{notify.ActorField: "U-outsider"}, false)})
 	if len(stranger) != 1 || stranger[0].Handle != "" {
@@ -226,9 +209,8 @@ func TestAColleagueIsKeyedOnTheirHandleAcrossBackends(t *testing.T) {
 	}
 }
 
-// Every parser stamps the actor, but an engine-authored notification has
-// none — the sender field is then all there is, and dropping it would lose
-// the counterparty entirely.
+// An engine-authored notification stamps no actor, so the sender field is the
+// counterparty's only identity.
 func TestASenderWithNoStampedActorStillIdentifies(t *testing.T) {
 	t.Parallel()
 	got := sendersOf(nil, []*events.Event{notification("chat", "U0FOUNDER", nil, false)})
@@ -256,16 +238,10 @@ var _ = learning.Subject{}
 
 // ── the prefetch's only signal ──
 
-// EVERY BLOCK BUT TWO DEGRADES SILENTLY BY DESIGN (internal/agent/prefetch):
-// only the knowledge and chat-thread blocks say in words when their source
-// could not be read. So a seat whose diary is unreachable and one whose
-// auxiliary model is misconfigured both start their turns with no memory,
-// exactly like a seat that has never stored one, and nothing the seat then
-// does says which. Without this event an operator has no way to tell them
-// apart —
-// which is what the type spent its whole life doing: it was registered,
-// categorised and documented as "published once per turn", and nothing ever
-// published it.
+// EVERY BLOCK BUT KNOWLEDGE AND CHAT-THREAD DEGRADES SILENTLY BY DESIGN
+// (internal/agent/prefetch), so an unreachable diary, a misconfigured
+// auxiliary model and a seat that never stored a memory all start with none:
+// the summary published once per turn is the only way to tell them apart.
 func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 	t.Parallel()
 	q := memory.New()
@@ -285,10 +261,8 @@ func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	// Through prefetchFor, not the publisher directly: the wire from the
-	// turn to the event is the half that was missing, and a test that
-	// called the publisher itself would have passed for the whole time
-	// nothing did.
+	// Through prefetchFor, not the publisher: the wire from the turn to the
+	// event is under test, and calling the publisher would skip it.
 	e := &Engine{backends: &Backends{Queue: q}}
 	company := &Company{
 		Config: &config.Company{},
@@ -308,53 +282,42 @@ func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 		switch {
 		case summary.RoleName != "Tech Lead" || summary.AgentHandle != "lead":
 			t.Errorf("the summary is attributed to %+v", summary)
-		// THE RUN, so the summary sits under the same id every phase
-		// record of this turn does. Under the work key it landed on an
-		// id no phase shares — invisible to the turn view. See ADR-0017.
+		// THE RUN, the id every phase record of this turn sits under; the
+		// work key is shared by no phase, so invisible to the turn view
+		// (ADR-0017).
 		case summary.TurnID != "run-1":
 			t.Errorf("turn = %q, want the run this prefetch was assembled for",
 				summary.TurnID)
-		// A node with no store and no models renders nothing at all,
-		// which is exactly the state this event exists to make visible:
-		// a seat running with no memory must not look like a seat whose
-		// stores had nothing to say.
+		// No store and no models render nothing: a seat with no memory
+		// must not look like one whose stores had nothing to say.
 		case summary.PersonalMemoryHit || summary.EpisodeRecallHit ||
 			summary.CounterpartyHit || summary.SynthesizedSkillsHit:
 			t.Errorf("a block reported a hit with no store behind it: %+v", summary)
 		case summary.RelevantKnowledgeSelectionCount != 0:
 			t.Error("pages were reported with no knowledge backend")
-		// A WEBHOOK NAMES NO THREAD, so the seventh block reports nothing
-		// at all — not a thread it could not read, and not a read that
-		// found nothing. Those three are what tell "this seat was handed
-		// the conversation" from "it was told to go and find it" from
-		// "there was no conversation".
+		// A WEBHOOK NAMES NO THREAD, so the seventh block reports nothing:
+		// not an unread thread, not an empty read. Those tell "handed the
+		// conversation", "told to find it" and "there was none" apart.
 		case summary.ThreadContextHit || summary.ThreadContextBytes != 0 ||
 			summary.ThreadContextPosts != 0 || summary.ThreadContextRead ||
 			summary.ThreadContextStoppedShort:
 			t.Errorf("a non-chat trigger reported a thread: %+v", summary)
-		// READ OFF THE TRIGGER, not off a model: this pointer webhook is
-		// what gates three of the seven searches, and without the flag its
-		// zeroes read as empty stores.
+		// READ OFF THE TRIGGER: this pointer gates three of the seven
+		// searches, and without the flag their zeroes read as empty stores.
 		case !summary.TriggerRequiresRecon:
 			t.Error("the gate that skipped three searches was not reported")
 		}
-	// BOUNDED, not t.Context(): a summary that is never published must
-	// fail in a second rather than hanging until the package's own
-	// timeout, where it reads as an unrelated suite-wide stall.
+	// BOUNDED, not t.Context(): a summary never published fails here rather
+	// than at the package timeout, where it reads as a suite-wide stall.
 	case <-time.After(5 * time.Second):
 		t.Fatal("no prefetch summary was published")
 	}
 }
 
-// AND A CHAT THREAD REPORTS WHAT IT WAS HANDED.
-//
-// Hit, bytes, the message count and whether a backend ANSWERED are four
-// different facts, and no three of them imply the fourth: both of the block's
-// zero-message paths render a non-empty hint, so hit and bytes look identical
-// on a thread that was read and empty and on one that could not be read at
-// all. Reported as a count alone, the first was published to the dashboard as
-// the second — a healthy node claiming it could not reach its own chat
-// surface.
+// AND A CHAT THREAD REPORTS WHAT IT WAS HANDED. Hit, bytes, count and whether
+// a backend ANSWERED are four facts, none implied by the rest: both
+// zero-message paths render a non-empty hint, so a thread read empty and one
+// not read at all differ only in the read flag.
 func TestTheThreadBlockReportsWhatItWasHanded(t *testing.T) {
 	t.Parallel()
 	q := memory.New()
@@ -380,10 +343,9 @@ func TestTheThreadBlockReportsWhatItWasHanded(t *testing.T) {
 		Org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{
 			{Name: "Tech Lead", DeclaredHandle: "lead"}}},
 	}
-	// A node with no chat transport at all: ChatThreads is empty, the read
-	// reports false, and the block renders the unreadable hint. That is the
-	// maintenance-mode and unreachable-instance case, and it has to be
-	// VISIBLE rather than looking like a thread nobody wrote in.
+	// No chat transport (maintenance mode, an unreachable instance): the
+	// read reports false and the block renders the unreadable hint, VISIBLE
+	// rather than looking like a thread nobody wrote in.
 	req := Request{
 		Handle:  "lead",
 		WorkKey: "work-2",
@@ -412,15 +374,11 @@ func TestTheThreadBlockReportsWhatItWasHanded(t *testing.T) {
 	}
 }
 
-// AND A THREAD THAT WAS READ REACHES THE EVENT AS ONE.
-//
-// The block's own answer and the event's fields are two structs copied across
-// by hand, with nothing holding them together: a field left out here is a
-// block reporting correctly into a summary that does not carry it, and every
-// path above reads false — a healthy read published as a node that could not
-// reach its chat surface, and a thread truncated at the newest end published
-// as a whole one. Exercised against the mapping directly, because a node's
-// chat readers are its running transports and a fake cannot be one.
+// AND A THREAD THAT WAS READ REACHES THE EVENT AS ONE. The block's answer and
+// the event's fields are two structs copied by hand, so a field left out
+// publishes a healthy read as unreachable and a truncated thread as whole.
+// Against the mapping directly: a node's chat readers are its running
+// transports, which a fake cannot be.
 func TestTheSummaryCarriesEveryThreadFact(t *testing.T) {
 	t.Parallel()
 	q := memory.New()
@@ -467,7 +425,7 @@ func TestTheSummaryCarriesEveryThreadFact(t *testing.T) {
 			t.Error("a read that stopped short arrived as a complete one")
 		}
 		// An empty episode block after a failed embed is not "nothing
-		// similar", and the summary is the only place that says so.
+		// similar", and only the summary says so.
 		if summary.TurnEmbedding != types.EmbedFailed {
 			t.Errorf("the turn's vector arrived as %q, want the failure", summary.TurnEmbedding)
 		}
@@ -480,12 +438,9 @@ func TestTheSummaryCarriesEveryThreadFact(t *testing.T) {
 	}
 }
 
-// THE CONTEXT ASSEMBLY IS TIMED WHERE IT RUNS.
-//
-// It is the stretch between a turn announcing itself and its first phase
-// opening — a diary, a thread, a knowledge base, an auxiliary model for two of
-// them — and without its own measurement a turn's timeline had a gap there that
-// nothing on the record could explain.
+// THE CONTEXT ASSEMBLY IS TIMED WHERE IT RUNS: the stretch between a turn
+// announcing itself and its first phase, which nothing else on the record
+// measures.
 func TestPrefetchSummaryIsTimed(t *testing.T) {
 	t.Parallel()
 	q := memory.New()

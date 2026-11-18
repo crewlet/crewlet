@@ -14,9 +14,9 @@ import (
 )
 
 // A CLAUDE CODE RUN IS PINNED TO THE WINDOW OF THE MODEL IT WORKS UNDER, and one
-// on a model this build does not know to the fallback, which its launch logs.
-// A fixed window below a model's own left a fresh session too little room above
-// its first request, so compaction refilled at once and the harness stopped it.
+// on a model this build does not know to the fallback, which its launch logs. A
+// fixed window below the model's own leaves a fresh session too little room above
+// its first request: compaction refills at once and the harness stops the run.
 //
 // NOT PARALLEL: it reads the process's log, which every parallel case writes to.
 //

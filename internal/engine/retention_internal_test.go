@@ -53,13 +53,10 @@ func (p *probe) at(seq uint64) (time.Time, bool, error) {
 	return stored, held, nil
 }
 
-// TestTheAgeFloorNeverLetsTheTrimPassARecordInsideTheWindow is the invariant
-// the age term exists for: `min_age` is a FLOOR on trimming, so every record
-// younger than it must be at or above the answer.
-//
-// The inversion this protects against is the one three readers of this design
-// got backwards — reading `min_age` as a ceiling on retention, which trims
-// exactly the records it was set to keep.
+// TestTheAgeFloorNeverLetsTheTrimPassARecordInsideTheWindow: `min_age` is a
+// FLOOR on trimming, so every record younger than it is at or above the
+// answer. Read as a ceiling on retention, it trims exactly the records it was
+// set to keep.
 func TestTheAgeFloorNeverLetsTheTrimPassARecordInsideTheWindow(t *testing.T) {
 	t.Parallel()
 	base := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
@@ -75,10 +72,8 @@ func TestTheAgeFloorNeverLetsTheTrimPassARecordInsideTheWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ageFloorOf: %v", err)
 	}
-	// Record 50 sits EXACTLY on the cutoff, so its age is exactly
-	// `min_age` and it is kept: the floor is a floor, and a record whose
-	// age has only just reached it is inside the window rather than past
-	// it. Records 1..49 are strictly older and may go.
+	// Record 50 sits exactly on the cutoff: its age has just reached
+	// `min_age`, so it is inside the window and kept. 1..49 may go.
 	if got != 50 {
 		t.Fatalf("age floor = %d, want 50 — the trim would %s", got,
 			map[bool]string{true: "delete a record inside min_age",
@@ -90,22 +85,18 @@ func TestTheAgeFloorNeverLetsTheTrimPassARecordInsideTheWindow(t *testing.T) {
 				"floor %d — the floor must be the FIRST record to keep", seq, got)
 		}
 	}
-	// A BINARY SEARCH, not a walk: a hundred-record log must not cost a
-	// hundred probes, or a year-five log costs a round trip per record
-	// every quarter of an hour.
+	// A binary search, not a walk: a walk costs a broker round trip per
+	// record on every tick.
 	if len(p.asked) > 10 {
 		t.Fatalf("the search probed %d sequences over a span of 100 — it is "+
 			"walking rather than bisecting", len(p.asked))
 	}
 }
 
-// TestTheAgeFloorReadsATrimmedHoleAsOldRatherThanAsMissing protects the one
-// case a naive search gets wrong: the log the age term runs over has already
-// been purged below its own floor, so the range it bisects has holes in it.
-//
-// A hole read as "not older" stops the search early and returns a floor BELOW
-// records the term should have permitted — the trim then never advances past
-// the hole, which is a log that grows for ever with no term reporting a block.
+// TestTheAgeFloorReadsATrimmedHoleAsOldRatherThanAsMissing: a log purged below
+// its own floor has holes in the range the search bisects. A hole read as "not
+// older" stops the search inside it, so the trim never advances past the hole
+// and the log grows for ever with no term reporting a block.
 func TestTheAgeFloorReadsATrimmedHoleAsOldRatherThanAsMissing(t *testing.T) {
 	t.Parallel()
 	base := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
@@ -131,10 +122,9 @@ func TestTheAgeFloorReadsATrimmedHoleAsOldRatherThanAsMissing(t *testing.T) {
 	}
 }
 
-// TestAnEmptyLogsAgeTermPermitsEverythingRatherThanBlocking is the boundary
-// that would otherwise deadlock a fresh company: a log with no records has no
-// record older than the floor, and a term that answered zero would block the
-// trim on a log that has nothing to trim.
+// TestAnEmptyLogsAgeTermPermitsEverythingRatherThanBlocking: a log with no
+// records has none older than the floor, and a term answering zero would
+// deadlock a fresh company's trim on a log with nothing to trim.
 func TestAnEmptyLogsAgeTermPermitsEverythingRatherThanBlocking(t *testing.T) {
 	t.Parallel()
 	got, err := ageFloorOf(0, 0, 0, time.Now(), func(uint64) (time.Time, bool, error) {
@@ -182,12 +172,9 @@ func fleetFloors(ctx context.Context, fleet coord.Fleet) ([]coord.TrimFloor, err
 }
 
 // TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes is why
-// `blocked_since` is published rather than held in memory.
-//
-// The trim is a fleet singleton on a lease. A value the holder kept would
-// reset on every handover, so `trim_blocked` — the alarm that turns a trim
-// blocked past its `min_age` window into something that reaches a person —
-// would never be reached on a fleet whose lease flapped even once a week.
+// `blocked_since` is published rather than held in memory: the trim is a fleet
+// singleton on a lease, and a clock the holder kept would reset on every
+// handover, so `trim_blocked` would never fire on a fleet whose lease flaps.
 func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -211,8 +198,7 @@ func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 		t.Fatalf("blocked_since = %s, want %s", published[0].BlockedSince, first)
 	}
 
-	// THE DUTY MOVES: a different node, three hours later, reading the
-	// floor its predecessor published.
+	// THE DUTY MOVES to another node three hours later.
 	later := first.Add(3 * time.Hour)
 	peer := &retention{fleet: r.fleet, nodeID: "node-b"}
 	if err := peer.publish(ctx, "tracker", 1, blocked, 0, fleetInputs{
@@ -235,15 +221,11 @@ func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 }
 
 // A BLOCKED TRIM IS SAID WHEN IT STARTS, WHEN ITS TERM CHANGES AND WHEN IT
-// ENDS — and not on the ticks between, nor again by a holder that took the duty
-// over mid-block.
-//
-// It was a WARN on every tick of every blocked domain, and a block is a state a
-// healthy fleet lives in for weeks: a fresh deployment waiting on its first
-// backup, and a log nobody writes to for the life of the deployment. That was
-// four lines an hour per such log, for ever. Every line is a WARN, so a filter
-// that shows a block's start shows its end — including a block that started on
-// a term nobody could read and ended on one that permitted nothing yet.
+// ENDS — not on the ticks between, nor again by a holder that took the duty
+// over mid-block: a healthy fleet lives in a block for weeks (a deployment
+// awaiting its first backup, a log nobody writes to). Every line is a WARN, so
+// a filter that shows a block's start shows its end, even one that started on
+// an unreadable term and ended on one that permitted nothing yet.
 func TestABlockedTrimIsSaidWhenItStartsChangesAndEnds(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -304,9 +286,8 @@ func TestABlockedTrimIsSaidWhenItStartsChangesAndEnds(t *testing.T) {
 			"one WARN that started it", got)
 	}
 
-	// THE TERM CHANGES — a backup landed, and a node joining at position zero
-	// holds it now: said once, naming the term before, with the clock that
-	// never restarted.
+	// THE TERM CHANGES (a backup landed; a node joining at zero holds it
+	// now): said once, naming the term before, on the unrestarted clock.
 	tick(peer, t0.Add(6*statelog.TrimInterval), joining)
 	tick(peer, t0.Add(7*statelog.TrimInterval), joining)
 	got = lines()
@@ -322,8 +303,7 @@ func TestABlockedTrimIsSaidWhenItStartsChangesAndEnds(t *testing.T) {
 			"the block's first instant", changed)
 	}
 
-	// IT ENDS: once, at the level it started at although the term that
-	// ended it was one that permitted nothing yet, with how long it lasted.
+	// IT ENDS: once, at the level it started at, with how long it lasted.
 	tick(peer, t0.Add(8*statelog.TrimInterval), advancing)
 	tick(peer, t0.Add(9*statelog.TrimInterval), advancing)
 	got = lines()
@@ -340,8 +320,7 @@ func TestABlockedTrimIsSaidWhenItStartsChangesAndEnds(t *testing.T) {
 }
 
 // TestATrimThatAdvancesClearsItsBlockedClock is the other half: a stale
-// instant left on an advancing domain ages into an alarm on a healthy fleet,
-// which is the alarm nobody believes the second time.
+// instant left on an advancing domain ages into an alarm on a healthy fleet.
 func TestATrimThatAdvancesClearsItsBlockedClock(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -370,14 +349,10 @@ func TestATrimThatAdvancesClearsItsBlockedClock(t *testing.T) {
 	}
 }
 
-// TestATrimThatAdvancedAndBlockedAgainStartsANewClock is the boundary between
-// the two above. The previous tick was NOT blocked, so this is a new block: a
-// clock carried over from an older one would report a fleet as blocked for a
-// day when it has been blocked for a minute.
-//
-// There is deliberately no case for "blocked further along than last time":
-// [statelog.Trim] reports Blocked exactly when it permits removing up to zero,
-// so a blocked tick's TrimTo is always 0 and that state does not exist.
+// TestATrimThatAdvancedAndBlockedAgainStartsANewClock: after an unblocked tick
+// a block is new, and a clock carried from an older one reports a minute's
+// block as a day's. There is no "blocked further along" case: [statelog.Trim]
+// reports Blocked exactly when TrimTo is 0, so that state does not exist.
 func TestATrimThatAdvancedAndBlockedAgainStartsANewClock(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -401,9 +376,8 @@ func TestATrimThatAdvancedAndBlockedAgainStartsANewClock(t *testing.T) {
 }
 
 // TestABlockedTrimsClockSurvivesTheTermChangingUnderIt: a fleet whose blocking
-// term rotates while the trim goes nowhere has been blocked throughout, and
-// restarting the clock on each rotation hides the longest outages behind the
-// noisiest ones.
+// term rotates while the trim goes nowhere has been blocked throughout; a clock
+// restarted on each rotation hides the longest outages.
 func TestABlockedTrimsClockSurvivesTheTermChangingUnderIt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -432,14 +406,11 @@ func TestABlockedTrimsClockSurvivesTheTermChangingUnderIt(t *testing.T) {
 	}
 }
 
-// TestTheFloorNeverMovesDownWithinAGeneration is what makes the published
-// floor an upper bound on what is gone rather than a report of one tick.
-//
-// A tick's conclusion falls on every blocked tick and whenever the lowest
-// counted node is below the log, and records an earlier tick licensed removing
-// are gone all the same — so a floor that followed it down tells exactly that
-// node it holds everything that may be missing, which is the one node the
-// write fence exists to refuse.
+// TestTheFloorNeverMovesDownWithinAGeneration: the published floor bounds what
+// is gone, not one tick's conclusion. A conclusion falls on a blocked tick or
+// when the lowest counted node is below the log, yet what an earlier tick
+// licensed is gone all the same; a floor that followed it down would clear
+// exactly the node the write fence exists to refuse.
 func TestTheFloorNeverMovesDownWithinAGeneration(t *testing.T) {
 	t.Parallel()
 	at := func(gen uint32, floor uint64) coord.TrimFloor {
@@ -479,10 +450,9 @@ func TestTheFloorNeverMovesDownWithinAGeneration(t *testing.T) {
 	}
 }
 
-// TestABlockedTickPublishesTheFloorAnEarlierTickLicensed is the same
-// property through the register, where a reader actually meets it: after an
-// advance and a block, the conclusion reads zero and the floor reads what the
-// advance licensed.
+// TestABlockedTickPublishesTheFloorAnEarlierTickLicensed is the same property
+// through the register: after an advance and a block, the conclusion reads
+// zero and the floor reads what the advance licensed.
 func TestABlockedTickPublishesTheFloorAnEarlierTickLicensed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -551,8 +521,8 @@ func (f *orderFleet) PutFloor(ctx context.Context, row coord.TrimFloor) error {
 }
 
 // trimmedTracker is one node on a real embedded broker with its own trim
-// stopped, and three records on the tracker's log — so every purge and every
-// floor a case sees is the case's own, and a purge has something to remove.
+// stopped and three records on the tracker's log, so every purge and floor a
+// case sees is its own and a purge has something to remove.
 func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningLog) {
 	t.Helper()
 	b := testBootstrap(t)
@@ -574,8 +544,8 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningLog) {
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
-	// THE NODE'S OWN TRIM IS THE OTHER WRITER of both the floor and the
-	// log's first sequence; stopped, it waits out an in-flight tick.
+	// The node's own trim also writes the floor and the log's first
+	// sequence; stopping it waits out an in-flight tick.
 	e.stopRetention()
 	running := e.core.Load().log.Domain(worklet.Domain{}.Name())
 	if running == nil {
@@ -587,13 +557,10 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningLog) {
 	return e, back, running
 }
 
-// barrierOn puts one record on a domain's log that no gate drops and no
-// build refuses to decode, and answers its sequence.
-//
-// IN THE DOMAIN'S OWN ENCODING, through the engine's own [barrierEncoder]: a
-// tracker-shaped barrier on the knowledge base's log is a record that log's
-// envelope decoder need not accept, and a case would be measuring that
-// instead.
+// barrierOn puts one record on a domain's log that no gate drops and no build
+// refuses to decode, and answers its sequence. It uses the domain's own
+// encoding ([barrierEncoder]): a tracker-shaped barrier on another log need
+// not decode there, and a case would be measuring that instead.
 func barrierOn(t *testing.T, running *runningLog) uint64 {
 	t.Helper()
 	encode := barrierEncoder(running.domain)
@@ -610,9 +577,8 @@ func barrierOn(t *testing.T, running *runningLog) uint64 {
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
 	}
-	// SIGNED, as every record on the log is: an applier refuses a frame
-	// this keyring does not open, so an unsigned barrier would stop the log
-	// this case means to move.
+	// Signed: an applier refuses a frame its keyring does not open, so an
+	// unsigned barrier would stop the log.
 	seq, _, err := running.log.Append(t.Context(),
 		running.spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil,
 		running.signer.Seal(body))
@@ -622,14 +588,11 @@ func barrierOn(t *testing.T, running *runningLog) uint64 {
 	return seq
 }
 
-// TestTheFloorIsPublishedBeforeThePurgeItLicenses is the order the floor
-// theorem assumes, on a real stream.
-//
-// The write fence clears an expectation of zero against the published floor,
-// so every record the log has lost must already sit below it. Purged first,
-// the floor trails the purge by however long its write takes to succeed, and a
-// node the purge just left below the log is cleared against the old number —
-// publishing at zero over a record it never applied.
+// TestTheFloorIsPublishedBeforeThePurgeItLicenses is the order statelog's floor
+// theorem assumes, on a real stream: the write fence clears an expectation of zero against the published floor, so every
+// record the log has lost must already sit below it. Purged first, a node the
+// purge left below the log is cleared against the old floor and publishes at
+// zero over a record it never applied.
 func TestTheFloorIsPublishedBeforeThePurgeItLicenses(t *testing.T) {
 	t.Parallel()
 	_, back, running := trimmedTracker(t)
@@ -677,11 +640,9 @@ func TestTheFloorIsPublishedBeforeThePurgeItLicenses(t *testing.T) {
 	}
 }
 
-// TestAFloorThatCouldNotBePublishedPurgesNothing is the failure half of the
-// same order. Purge-then-publish did not leave a window one tick wide: a purge
-// whose publish then FAILED left the register naming the old floor for as long
-// as the register refused writes, and every write fence in the fleet cleared
-// against it.
+// TestAFloorThatCouldNotBePublishedPurgesNothing is the failure half of that
+// order: a purge whose publish failed leaves the register naming the old floor
+// for as long as it refuses writes, and every write fence clears against it.
 func TestAFloorThatCouldNotBePublishedPurgesNothing(t *testing.T) {
 	t.Parallel()
 	_, back, running := trimmedTracker(t)
@@ -707,24 +668,17 @@ func TestAFloorThatCouldNotBePublishedPurgesNothing(t *testing.T) {
 	}
 }
 
-// TestEachLogsTrimWaitsOnItsOwnWakeFeed is the feed term read against every
-// registered log's own consumer, on a real stream.
-//
-// The trim used to name the TRACKER's group on every log with a feed. On the
-// knowledge base's log that consumer never exists, so the lookup answered
-// "never opened", the term permitted nothing, and that log was blocked on
-// `feed_ack_floor` for the life of the deployment — while its own feed
-// acknowledged every record it was handed. So each log's own feed
-// acknowledges a record here, every other term is satisfied, and the tick
-// has to trim up to that record; a log with no feed must report the term
-// absent rather than borrow somebody else's.
+// TestEachLogsTrimWaitsOnItsOwnWakeFeed, on a real stream: the feed term reads
+// each log's own consumer. Another log's group never exists there, so the term
+// would permit nothing and block that log on `feed_ack_floor` for ever. Each
+// log's feed acknowledges a record, every other term is satisfied, and the
+// tick must trim to it; a log with no feed reports the term absent.
 func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	// MIN_AGE AT A NANOSECOND, so the age term permits everything already
-	// written and the tick is decided by the other five. Set on the loop
-	// rather than through validated config: the 24-hour floor exists for
-	// an operator, and this case is about a different term.
+	// min_age at a nanosecond, set on the loop past validated config's
+	// 24-hour floor, so the age term permits everything written and the
+	// other five decide.
 	r := &retention{fleet: back.Fleet, state: e.core.Load().log, nodeID: "node-a",
 		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
 	for _, name := range e.core.Load().log.held().order {
@@ -768,10 +722,9 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 			for _, f := range floors {
 				previous[f.Domain] = f
 			}
-			// EVERY OTHER TERM SATISFIED UP TO THE RECORD: this node
-			// counted at its own committed position, a verified backup
-			// covering the record, no holds, and a solo fleet's snapshot
-			// term — so a tick that still refuses is refusing on the feed.
+			// Every other term satisfied up to the record (own committed
+			// position, a verified backup covering it, no holds, a solo
+			// fleet's snapshot term), so a refusal is the feed's.
 			shared := fleetInputs{
 				at: now, readable: true, previous: previous,
 				positions: []coord.NodePositions{{
@@ -816,14 +769,10 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 	}
 }
 
-// TestTheBackupTermFollowsTheOperatorsOwnPolicy is the difference between the
-// two `backup_floor` values, and it is a difference in WHICH rows count and in
-// nothing else.
-//
-// Under `operator` the engine's own copies do not satisfy the term, because
-// the policy is "trim only what has left the host" and the engine cannot see
-// that a copy has. A build that counted them anyway would trim against a
-// backup the policy does not recognise.
+// TestTheBackupTermFollowsTheOperatorsOwnPolicy: the two `backup_floor` values
+// differ only in which rows count. Under `operator` the engine's own copies do
+// not satisfy the term: the policy is "trim only what has left the host", and
+// the engine cannot see that a copy has.
 func TestTheBackupTermFollowsTheOperatorsOwnPolicy(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
@@ -895,12 +844,9 @@ func TestABackupThatDoesNotCoverALogIsNotABackupAtZero(t *testing.T) {
 }
 
 // THE TERM READS THE NEWEST COUNTED BACKUP THAT COVERS THE LOG, not the newest
-// counted backup and then whether it covers the log.
-//
-// Under `engine` a node's newest copy can leave a log out — a node that does
-// not run it, or ran it under another build — and an older copy of another
-// node's that does cover it is still that log's backup. Taking the newest point
-// first blocked the log on a backup that was never of it.
+// counted backup and then whether it covers the log: under `engine` a node's
+// newest copy can leave a log out (a node that does not run it), and an older
+// copy of another node's that covers it is still that log's backup.
 func TestTheBackupTermReadsTheNewestBackupCoveringItsLog(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
@@ -928,16 +874,12 @@ func TestTheBackupTermReadsTheNewestBackupCoveringItsLog(t *testing.T) {
 }
 
 // A NODE'S BACKUP IS FORGOTTEN ONLY WHERE NO LOG COUNTS THE NODE ANY MORE: a
-// tombstone past the fence window on EVERY log that counts nodes, every one of
-// them read.
-//
-// One log still counting the node is a node not gone — an eviction that has
-// not reached that log, or a readmission there — and a tombstone inside the
-// window is one [statelog.CountedSet] still counts behind. Two tombstones on
-// one log are one log, or a node evicted twice there and never on the other
-// would read as gone from both. A log whose evictions were not read says
-// nothing about anybody. And the operator's acknowledgements are never a
-// node's, whatever a node is called.
+// tombstone past the fence window on EVERY log that counts nodes, every one
+// read. One log still counting it (an eviction not yet there, a readmission)
+// is a node not gone; a tombstone inside the window is one
+// [statelog.CountedSet] still counts behind; two tombstones on one log are one
+// log, or a node evicted twice there reads as gone from both; an unread log says nothing about anybody; and the operator's
+// acknowledgements are never a node's.
 func TestOnlyANodeNoLogCountsLosesItsBackup(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
@@ -982,17 +924,12 @@ func TestOnlyANodeNoLogCountsLosesItsBackup(t *testing.T) {
 
 // AN EVICTED NODE'S BACKUP IS FORGOTTEN ONCE NO LOG COUNTS IT, on real logs
 // through the gesture the route calls, by the trim's own tick — and nobody
-// else's.
-//
-// Nothing removed it: `GET /backups` listed a decommissioned node's copy for
-// the life of the fleet, and under `backup_floor: engine` a log could be
-// trimmed against the newest copy of it, on a host the operator had let go.
-// Inside the fence window the node is still counted and so is its copy; a
-// node whose evictions this node cannot read is gone from nowhere; and the
+// else's: left standing, under `backup_floor: engine` a log could be trimmed
+// against a decommissioned host's copy. Inside the fence window the node and
+// its copy are still counted, unread evictions make nobody gone, and the
 // operator's acknowledgement and a live node's copy are never touched. Driven
-// through the TICK, past the window on the loop's own clock, because a tick
-// that stopped asking would leave every point standing with the selection
-// still right.
+// through the tick on the loop's own clock, because a tick that stopped asking
+// would leave every point standing with the selection still right.
 func TestAnEvictedNodesBackupIsForgottenOnceNoLogCountsIt(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -1070,15 +1007,10 @@ func TestAnEvictedNodesBackupIsForgottenOnceNoLogCountsIt(t *testing.T) {
 	}
 }
 
-// THE RETENTION DUTY READS ONE CLOCK, ITS ALARMS' AGES INCLUDED.
-//
-// Every report, evaluation and tick of the duty reads [retention.clock], and
-// the alarm tracker it feeds was built on the wall clock: an alarm's age is the
-// tracker's clock less the instant it was raised, so on a duty whose clock a
-// case moves — and a fence window or a log's first days are only reachable
-// that way — the evaluations said one thing and the ages another. Built on the
-// duty's clock, an alarm up while the duty's clock moves five hours is five
-// hours older.
+// THE RETENTION DUTY READS ONE CLOCK, ITS ALARMS' AGES INCLUDED: every report,
+// evaluation and tick reads [retention.clock], and so must the alarm tracker,
+// or on a duty whose clock a case moves (the only way to reach a fence window
+// or a log's first days) the evaluations and the ages disagree.
 //
 // Mutation: build the tracker on the wall clock again, and the age moves by
 // the milliseconds the case takes.
@@ -1102,14 +1034,10 @@ func TestTheRetentionDutysAlarmAgesAreOnItsOwnClock(t *testing.T) {
 	}
 }
 
-// A LOG PAST ITS CENSUS NAMES ITS OWN CEILING FIELD — every log a read
-// appends a barrier to, the field read from the register's own declaration.
-//
-// The alarm's remedy was one sentence for every log, sending the operator of
-// each to re-derive the mutation log's sizing: the identity estate's ceiling is
-// `stream.iam_log_max_bytes`, sized from headcount and sign-ins, and the
-// knowledge base's is its own field again. Each log's line now names the field
-// that sizes it, and no other log's.
+// A LOG PAST ITS CENSUS NAMES ITS OWN CEILING FIELD, and no other log's —
+// every log a read appends a barrier to, the field read from the register's
+// own declaration: the identity estate's is `stream.iam_log_max_bytes`, sized
+// from headcount and sign-ins, not the mutation log's.
 func TestALogPastItsCensusNamesItsOwnCeilingField(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -1135,12 +1063,11 @@ func TestALogPastItsCensusNamesItsOwnCeilingField(t *testing.T) {
 		}
 		name := entry.Domain.Name()
 		want[name] = entry.Ceiling(config.Stream{}, 0).Field
-		// PAST TWICE THE LOG'S OWN CENSUS, which its domain declares — and
-		// past a declared zero on its first barrier. The census is the
-		// whole of it, the readers the log's own sizing counts included:
-		// the code log's git clients, a share of the ceiling its stream
-		// holds, at the min_age the duty below reads. Left out, the code
-		// log is held under its census and its line is never read.
+		// Past twice the log's own census as its domain declares it (and
+		// past a declared zero on its first barrier), with the readers its
+		// own sizing counts: the code log's git clients, a share of its
+		// stream's ceiling at the min_age the duty reads. Left out, the code
+		// log stays under its census and its line is never read.
 		census := statelog.Census{Reads: *entry.Reads, Seats: 1}
 		if clients := clientBarriers(name); clients != nil {
 			census.Clients = clients(held[name], config.TrackerRetention{}.MinAge())
@@ -1187,13 +1114,10 @@ func TestALogPastItsCensusNamesItsOwnCeilingField(t *testing.T) {
 	}
 }
 
-// THE SEARCH ALARMS' INPUTS ARE ACTUALLY FED.
-//
-// `search_scoped`, `search_degraded` and `search_slow` are each a property of
-// the answers this node gave, and the alarm table can only read them off a
-// [statelog.Reading]. Nothing recorded them for the life of the alarm table:
-// the rows existed, the conditions were right, and all three were permanently
-// silent — which is indistinguishable from a node with nothing wrong.
+// THE SEARCH ALARMS' INPUTS ARE ACTUALLY FED: `search_scoped`,
+// `search_degraded` and `search_slow` are properties of this node's answers,
+// readable only off a [statelog.Reading]; unrecorded, all three stay silent,
+// indistinguishable from a healthy node.
 func TestTheSearchAlarmsReadWhatTheAnswersActuallyCovered(t *testing.T) {
 	t.Parallel()
 	recorder, err := metrics.New()
@@ -1230,9 +1154,8 @@ func TestTheSearchAlarmsReadWhatTheAnswersActuallyCovered(t *testing.T) {
 			"has no input and cannot fire")
 	}
 
-	// AND THE ALARM TABLE ACTUALLY FIRES ON THEM, which is the half a
-	// reading alone does not prove: a field filled in and never read is
-	// the same silence with an extra step.
+	// AND THE ALARM TABLE FIRES ON THEM: a field filled in and never read
+	// is the same silence.
 	fired := map[statelog.Kind]bool{}
 	for _, alarm := range statelog.Evaluate(reading) {
 		fired[alarm.Kind] = true
@@ -1246,16 +1169,11 @@ func TestTheSearchAlarmsReadWhatTheAnswersActuallyCovered(t *testing.T) {
 	}
 }
 
-// A SLOW TURN START AND A SLOW SEARCH ARE TWO ALARMS, EACH ON ITS OWN SCANS.
-//
-// A turn's knowledge prefetch is held to statelog.PrefetchScanBudget and a
-// deliberate search to statelog.InteractiveSearchTarget, and both scans land
-// in one histogram split by path. Every scan was recorded `interactive`, so
-// `prefetch_slow` read a p95 nothing produced and could never fire on a running
-// node — and a prefetch series read into SearchP95 would have fired
-// `search_slow` for a slow turn start. Here a node whose prefetch scans run
-// past their budget while its deliberate searches are quick raises
-// `prefetch_slow` alone, and the converse raises `search_slow` alone.
+// A SLOW TURN START AND A SLOW SEARCH ARE TWO ALARMS, EACH ON ITS OWN SCANS: a
+// prefetch is held to statelog.PrefetchScanBudget and a deliberate search to
+// statelog.InteractiveSearchTarget, both in one histogram split by path. Slow
+// prefetches beside quick searches raise `prefetch_slow` alone, and the
+// converse `search_slow` alone.
 //
 // Mutation: read every scan into SearchP95 again, or record the prefetch's as
 // interactive, and the first case is silent.
@@ -1298,17 +1216,11 @@ func TestASlowTurnStartAndASlowSearchAreTwoAlarms(t *testing.T) {
 	}
 }
 
-// A PERCENTILE INSIDE ITS BUDGET FIRES NOTHING, AND ONE PAST IT FIRES. Every
-// percentile the reading holds is read off a histogram, and a histogram's
-// quantile is the upper boundary of the bucket it falls in — so an alarm whose
-// budget is not a boundary is decided at the boundary above it. Under
-// twenty-one powers of two that was 512 ms for the 500 ms budgets of
-// `prefetch_slow` and `barrier_slow`, 1 024 ms for `search_slow`'s second and
-// 128 ms for `pool_starved`'s 100 ms: each fired at a p95 just past the
-// boundary below — 256, 256, 512 and 64 ms — and said the p95 was the boundary
-// above. Here each instrument is recorded at four fifths of its budget, which
-// is past that boundary below, and then just past its budget, and the reading
-// assembled from the recorder is evaluated.
+// A PERCENTILE INSIDE ITS BUDGET FIRES NOTHING, AND ONE PAST IT FIRES. A
+// histogram's quantile is the upper boundary of its bucket, so an alarm whose
+// budget is not a boundary fires just past the boundary below it. Each
+// instrument is recorded at four fifths of its budget (past that boundary
+// under powers of two) and then just past it.
 //
 // Mutation: put back a boundary set without the budgets in it, and the four
 // fifths fire.
@@ -1365,12 +1277,9 @@ func TestAPercentileInsideItsBudgetFiresNothing(t *testing.T) {
 
 // THE PROSE NAMES THE TWO BUDGETS THE SCANS ARE HELD TO: the metrics catalogue
 // (which cannot import the alarm table) and the search guide state them in
-// words, and the guide says the prefetch's is half the interactive target, so
-// a retune of either constant fails here rather than leaving an operator
-// reading a budget no alarm uses.
-//
-// Mutation: change statelog.PrefetchScanBudget or InteractiveSearchTarget, and
-// the prose no longer says what the alarms fire at.
+// words, the guide calling the prefetch's half the interactive target, so a
+// retune of statelog.PrefetchScanBudget or InteractiveSearchTarget fails here
+// rather than leaving an operator reading a budget no alarm uses.
 func TestTheScanBudgetsAreStatedAsTheAlarmsHoldThem(t *testing.T) {
 	t.Parallel()
 	if statelog.PrefetchScanBudget != 500*time.Millisecond ||
@@ -1404,12 +1313,9 @@ func TestTheScanBudgetsAreStatedAsTheAlarmsHoldThem(t *testing.T) {
 	}
 }
 
-// A LEXICAL-ONLY COMPANY IS NOT A DEGRADED ONE.
-//
-// A company that has configured no embeddings provider runs every search
-// without a semantic half by request. Counting those as degraded would fire
-// `search_degraded` at 100% for the life of the deployment, which is an alarm
-// nobody reads and therefore an alarm that no longer reports the real thing.
+// A LEXICAL-ONLY COMPANY IS NOT A DEGRADED ONE: with no embeddings provider
+// configured every search skips its semantic half by request, and counting
+// those would hold `search_degraded` at 100% for the life of the deployment.
 func TestASearchWithNoSemanticHalfAskedForIsNotDegraded(t *testing.T) {
 	t.Parallel()
 	recorder, err := metrics.New()
@@ -1428,15 +1334,10 @@ func TestASearchWithNoSemanticHalfAskedForIsNotDegraded(t *testing.T) {
 	}
 }
 
-// THE SEARCH ROSTER IS WHO IS ALIVE, NOT WHO HELD THE LOG BACK.
-//
-// The two registers a fleet keeps differ in exactly the way that matters here:
-// a position row is held by every node the trim has to wait for, INCLUDING one
-// that has been gone for hours, while a presence lease expires. A dead node on
-// the roster is handed a bucket range nobody scans, so every search on this
-// node reports a partial answer for as long as that row survives — and an
-// operator chasing a phantom missing slice is worse off than one with no
-// report at all.
+// THE SEARCH ROSTER IS WHO IS ALIVE, NOT WHO HELD THE LOG BACK: a position row
+// outlives a node gone for hours (the trim must still wait for it), while a
+// presence lease expires. A dead node on the roster is handed a bucket range
+// nobody scans, so every search reports a partial answer while its row lasts.
 func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 	t.Parallel()
 	backend := coordmem.New()
@@ -1457,9 +1358,8 @@ func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 			t.Fatalf("register %s: %v", id, err)
 		}
 	}
-	// AND ONE THAT IS ALIVE AND HOLDS NOTHING. It has no index to scan
-	// and answers no slice, so a roster that counted it would hand it a
-	// range nobody scans on every search, exactly as a dead node would.
+	// AND ONE THAT IS ALIVE AND HOLDS NOTHING: with no index, a roster
+	// counting it hands it a range nobody scans, as for a dead node.
 	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("agent-1"),
 		coord.AcquireOptions{
 			Owner: "agent-1:1", TTL: time.Minute,
@@ -1467,8 +1367,8 @@ func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 		}); err != nil {
 		t.Fatalf("register the stateless node: %v", err)
 	}
-	// AND ONE THAT IS GONE. Its lease has expired, so it is not a
-	// participant — where the positions register would still name it.
+	// AND ONE THAT IS GONE: its lease expired, though the positions
+	// register would still name it.
 	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-dead"),
 		coord.AcquireOptions{
 			Owner: "node-dead:1", TTL: time.Nanosecond,
@@ -1495,9 +1395,8 @@ func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	// AND EVERY LATER READ IS ANSWERED FROM MEMORY: this is asked per
-	// search and per tool call, and a listing each time is an O(fleet)
-	// read of the coordination store per request.
+	// AND EVERY LATER READ IS ANSWERED FROM MEMORY: a listing per search
+	// and per tool call is an O(fleet) coordination-store read each.
 	for range 50 {
 		if _, err := e.dataRoster(t.Context()); err != nil {
 			t.Fatalf("roster: %v", err)
@@ -1524,21 +1423,16 @@ func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 	}
 }
 
-// AN ALARM THAT CANNOT GO OUT IS AN ALARM AN OPERATOR LEARNS TO IGNORE.
+// AN ALARM THAT CANNOT GO OUT IS AN ALARM AN OPERATOR LEARNS TO IGNORE. Each
+// reading here is a threshold, which latches against a counter that only
+// grows: from [metrics.Recorder.Read]'s cumulative totals one degraded search
+// lights `search_degraded` for the life of the process, and one slow
+// observation makes `search_slow` or `barrier_slow` permanent. Hence
+// [metrics.Window]: `crewlet retention status` derives its exit code from
+// these, so a latched alarm is a cron that fires for ever.
 //
-// Every reading here is a THRESHOLD, and a threshold against a counter that
-// only grows latches. `search_degraded` fires on a fraction being above zero,
-// so computed from [metrics.Recorder.Read]'s cumulative totals one degraded
-// search after boot lights it for the life of the process; `search_slow` and
-// `barrier_slow` take a maximum, so one slow observation ever is permanent.
-// [metrics.Window] exists for precisely this and had no caller at all.
-//
-// `crewlet retention status` derives its exit code from these, so an alarm
-// that cannot clear is a cron that fires for ever.
-//
-// THE ASSERTION IS THAT TIME PASSING CLEARS IT. That is the property the
-// window buys and the one no snapshot test can express, which is why the
-// clock is injected rather than waited out.
+// THE ASSERTION IS THAT TIME PASSING CLEARS IT, so the clock is injected
+// rather than waited out.
 func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
@@ -1636,16 +1530,10 @@ func coveringEvery(owner string, at time.Time, logs map[string]string) coord.Bac
 }
 
 // A COMPANY WITH NO BACKUP HANDS IN AN ABSENCE, NOT A FABRICATED AGE — on every
-// log, by name.
-//
-// The alarm has to fire — `backup_floor` refuses until a backup exists, so a
-// company that never takes one never trims — and the form this replaces bought
-// that firing by filling the reading with `backup_max_age + 1h`. The threshold
-// was then reached by a number nobody measured, and the alarm told a company
-// four seconds old that its newest verified backup was twenty-five hours old,
-// one line above the trim term reporting that no backup had been recorded at
-// all: one state, described two ways, and the louder of them invented a
-// backup.
+// log, by name. The alarm must fire (`backup_floor` refuses until a backup
+// exists, so such a company never trims), but on the absence: an age filled in
+// to reach the threshold names a backup nobody took, beside a trim term saying
+// none was recorded.
 func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -1695,13 +1583,10 @@ func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 	}
 }
 
-// THE ALARM AGES THE BACKUP THE TRIM COUNTS, under the operator's own policy.
-//
-// Under `backup_floor: operator` the trim waits on the operator's
-// acknowledgement and ignores the nodes' own copies. The report aged the newest
-// point of ANY owner, so a fleet whose nodes backed up an hour ago and whose
-// operator had never acknowledged one reported a green backup alarm one line
-// below a trim that could not move — the one state the alarm exists to name.
+// THE ALARM AGES THE BACKUP THE TRIM COUNTS, under the operator's own policy:
+// under `backup_floor: operator` the trim ignores the nodes' own copies, so an
+// alarm aging any owner's newest point shows green beside a trim that cannot
+// move — the one state the alarm exists to name.
 func TestTheBackupAlarmAgesThePointThePolicyCounts(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -1734,15 +1619,11 @@ func TestTheBackupAlarmAgesThePointThePolicyCounts(t *testing.T) {
 	}
 }
 
-// EACH LOG IS TRIMMED AND AGED BY ITS OWN ACKNOWLEDGEMENT.
-//
-// Under `backup_floor: operator` the procedure is one acknowledgement per log,
-// in turn. The register kept one operator row, so each acknowledgement replaced
-// the last: the trim's backup term — which took the newest counted point and
-// then blocked every log it did not cover — trimmed only the log acknowledged
-// last, and the alarm aged that one row and stayed green. Here every log the
-// node runs is acknowledged in turn, through the register, and every one must
-// both be trimmable at its own reach and be aged by its own instant.
+// EACH LOG IS TRIMMED AND AGED BY ITS OWN ACKNOWLEDGEMENT: under
+// `backup_floor: operator` the operator acknowledges one log at a time, so a
+// later acknowledgement must not replace an earlier one. Every log the node
+// runs is acknowledged in turn through the register, and each must be
+// trimmable at its own reach and aged by its own instant.
 func TestEachLogIsTrimmedAndAgedByItsOwnAcknowledgement(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -1818,24 +1699,17 @@ func TestEachLogIsTrimmedAndAgedByItsOwnAcknowledgement(t *testing.T) {
 }
 
 // THE REPORT SHOWS A DOMAIN'S TRIM FLOOR ONLY FROM A ROW AT THAT DOMAIN'S OWN
-// GENERATION.
-//
-// The published row is a tick's conclusion about one number space. Just after
-// a reanchor it is the OLD stream's, and the report printed its floor, its
-// terms and its blocking term beside the adopted stream's first and last
-// sequences — a floor of 918 100 000 over a log that begins at 1, and a blocked
-// trim the fleet never concluded about the stream it now runs. Every other
-// reader of the row — the write fence, readiness, the trim itself — reads a
-// row at another generation as no floor at all, and the report now does too.
+// GENERATION: the row is a conclusion about one number space, and just after a
+// reanchor it is the OLD stream's. Every other reader of the row (the write
+// fence, readiness, the trim) reads another generation's row as no floor at
+// all, and so does the report.
 func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
 	s := e.core.Load().log
-	// THE ENGINE'S OWN TRIM DUTY IS ENDED FIRST. It ticks the moment it
-	// starts, and on a loaded runner that first tick can land after the
-	// reanchor below — publishing a floor at the pages log's NEW generation,
-	// which is the one thing this asserts the report does not show, and
-	// failing the case for a reason that is not the rule under test.
+	// THE ENGINE'S OWN TRIM DUTY IS ENDED FIRST: its first tick can land
+	// after the reanchor below and publish a floor at the pages log's NEW
+	// generation, failing the case for a reason other than the rule.
 	e.stopRetention()
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a"}
 	trackerName, pagesName := worklet.Domain{}.Name(), doclet.Domain{}.Name()
@@ -1893,9 +1767,9 @@ func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 		t.Fatal("the report calls the pages trim blocked on a conclusion about " +
 			"the stream the reanchor left")
 	}
-	// AND IT SAYS SO, rather than leaving a reader to infer it from zeros:
-	// a row with no conclusion read as "floor 0 · advancing", and its null
-	// terms crashed both retention screens the moment after every reanchor.
+	// AND IT SAYS SO, rather than leaving zeros that read as "floor 0 ·
+	// advancing", and encodes no terms as an empty list: null crashed both
+	// retention screens.
 	if got.TrimFloorState != statelog.TrimFloorNoneAtGeneration {
 		t.Errorf("the reanchored pages row's floor state is %q, want %q",
 			got.TrimFloorState, statelog.TrimFloorNoneAtGeneration)
@@ -1913,14 +1787,11 @@ func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 	}
 }
 
-// A REPORT THAT COULD NOT READ A LOG'S EVICTIONS SAYS SO ON THAT LOG'S ROW.
-//
-// An unread log contributes no tombstone, which keeps the COUNTED column on the
-// trim's own conservative side — and shows every node as not evicted there,
-// which the node block cannot tell from a fact. The dashboard read that
-// absence as a readmission: an eviction it had just made was released while
-// the replicated estate was closed for an adoption's rename, and the row
-// offered "Evict…" again — a second record on every log, re-dating the first.
+// A REPORT THAT COULD NOT READ A LOG'S EVICTIONS SAYS SO ON THAT LOG'S ROW. An
+// unread log contributes no tombstone, which keeps COUNTED on the trim's
+// conservative side but shows every node as not evicted there; read as a fact,
+// that is a readmission, and the dashboard offers "Evict…" again — a second
+// record on every log, re-dating the first.
 func TestTheRetentionReportSaysWhichLogsEvictionsItCouldNotRead(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -1970,12 +1841,9 @@ func TestTheRetentionReportSaysWhichLogsEvictionsItCouldNotRead(t *testing.T) {
 	}
 }
 
-// A DOMAIN THIS NODE REFUSES SAYS SO ON THE REPORT, NAMING THE FINDING.
-//
-// The retention guide sends an operator to `crewlet retention status` to find a
-// recreated log — "shows the domain as not ready, naming the recreation" — and
-// the report carried no readiness at all: the domain row looked ordinary while
-// every read and write of it was refused.
+// A DOMAIN THIS NODE REFUSES SAYS SO ON THE REPORT, NAMING THE FINDING: the
+// retention guide sends an operator to `crewlet retention status` to find a
+// recreated log, "shows the domain as not ready, naming the recreation".
 func TestTheRetentionReportNamesARecreatedLog(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
@@ -2024,11 +1892,10 @@ func (c *countingLister) ListLive(ctx context.Context, class coord.Class) ([]coo
 	return c.Backend.ListLive(ctx, class)
 }
 
-// THE REPORT LISTS THE PRESENCE LEASES ONCE, and its counted mark is taken from
+// THE REPORT LISTS THE PRESENCE LEASES ONCE, and takes its counted mark from
 // that listing: the live data nodes are both who is live and who every log's
-// counted set counts. Listed twice — once for each question — every node's
-// every tick paid a second certified listing, a round trip after the first, and
-// the two could disagree about who is there.
+// counted set counts. A second listing costs every tick a certified round trip
+// and can disagree with the first about who is there.
 func TestTheReportListsPresenceOnce(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -2055,26 +1922,20 @@ func TestTheReportListsPresenceOnce(t *testing.T) {
 }
 
 // ONE DOMAIN'S UNREADABLE FLOOR STOPS THAT DOMAIN'S TRIM ALONE, on a real
-// node's tick.
-//
-// The trim carries each domain's floor forward from the row it reads, so a
-// domain whose row it cannot read publishes nothing and purges nothing — the
-// floor it would carry is the one the row hides. Read as one listing, that
-// row stopped the tick for EVERY log: no floor was published and no log
-// trimmed anywhere in the fleet, and every log grew toward its ceiling.
+// node's tick. The trim carries each domain's floor forward from its row, so a
+// domain whose row does not read publishes and purges nothing; read as one
+// listing, that row would stop every log's trim, and every log would grow
+// toward its ceiling.
 func TestOneDomainsUnreadableFloorStopsThatDomainsTrimAlone(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
 	unread := doclet.Domain{}.Name()
 	fleet := &oneFloorUnread{fleetRegister: back.Fleet, domain: unread}
-	// A ROW IS JUDGED BY WHO WROTE IT, NEVER BY WHEN. The node's own trim
-	// publishes every domain's floor on its boot tick, before trimmedTracker
-	// stops it, and under load that tick ends as late as the stop that waits
-	// it out. Judged by a window of rows newer than this case's start, its
-	// rows were taken for this tick's: the knowledge base failed on the boot
-	// tick's row, and every other log passed whether or not this tick
-	// published. Only this case's loop publishes under its own node id
-	// ([coord.TrimFloor.By]), so it must not be the node's.
+	// A ROW IS JUDGED BY WHO WROTE IT, NEVER BY WHEN: the node's own boot
+	// tick publishes every floor and under load ends as late as the stop
+	// that waits it out, so a time window passes its rows for this tick's.
+	// Only this loop publishes under its own node id ([coord.TrimFloor.By]),
+	// which must not be the node's.
 	r := &retention{fleet: fleet, state: e.core.Load().log, nodeID: "node-a",
 		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
 	if own := e.core.Load().log.nodeID; own == r.nodeID {

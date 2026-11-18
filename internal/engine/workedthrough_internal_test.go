@@ -13,12 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE RECORD AND THE DROP NAME A MESSAGE THE SAME WAY. A turn records what its
-// thread block showed it under the thread it read and the ids the block
-// reported; a retried message is looked up under its own metadata. If the two
-// derivations disagreed by a byte, every record would be written and no drop
-// would ever match it — a guard that cannot fire, passing every test that
-// stubs one side.
+// THE RECORD AND THE DROP NAME A MESSAGE THE SAME WAY: a turn records under
+// the thread it read and the ids its block reported, and a retry is looked up
+// under its own metadata. Differing by a byte, no drop would ever match a
+// record: a guard that cannot fire, passing every test that stubs one side.
 func TestTheWorkedThroughRecordAndTheDropAgreeOnAMessagesKey(t *testing.T) {
 	t.Parallel()
 	message := func(ts string) *events.Event {
@@ -54,16 +52,15 @@ func TestTheWorkedThroughRecordAndTheDropAgreeOnAMessagesKey(t *testing.T) {
 
 // AN EDITED MESSAGE IS RECORDED AT THE VERSION THE BLOCK SHOWED, FOR WHOM THE
 // TURN WORKED, and an edit's wake is looked up by that version alone. Bea's
-// trigger, written for ada, showed bea's earlier message at its edit e1. The
-// mark drops e1's wake made for ada and the redelivery of the message's post,
-// and nothing else: not the wake of a later edit e2, whose words no turn saw,
-// and not e1's wake made for omar, which is owed a turn worked for omar. An
-// unedited message is recorded by its id alone, and an edit's wake that
-// carries no trigger position has no key, so it runs.
+// trigger, written for ada, showed bea's earlier message at edit e1: the mark
+// drops e1's wake for ada and the post's redelivery, not a later edit e2's
+// wake (words no turn saw) nor e1's wake for omar (owed a turn for omar). An
+// unedited message is recorded by its id alone; an edit's wake with no
+// trigger position has no key, so it runs.
 //
-// Mutation: key an edit's wake by the message's key, as main did; write no
-// edit key; key the post's version for an unedited message; or leave the
-// carrier or the version out of the edit key; and a row goes red.
+// Mutation: key an edit's wake by the message's key; write no edit key; key
+// the post's version for an unedited message; or leave the carrier or the
+// version out of the edit key; and a row goes red.
 func TestAMarkDropsOnlyTheEditItsTurnWasShownForTheSameWhom(t *testing.T) {
 	t.Parallel()
 	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}

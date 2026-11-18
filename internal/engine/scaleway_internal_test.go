@@ -49,13 +49,12 @@ roles:
 `
 
 // A SCALEWAY SEAT'S KEY REACHES ITS BOX WHOLE, WITH NO LINE IN THE DOCUMENT:
-// the pass declares both the secret and the access key it seals
-// ([provision.Seat.AlsoVars]), so the run Crewlet hands them to waits on the
-// scaleway integration rather than reporting a secret somebody forgot, and once
-// both are sealed the box carries them beside the engine's own Organization,
-// default project and update switch. A seat that is off is declared nothing.
-// Mutation: drop AlsoVars from the plan, and the access key reads as a missing
-// secret.
+// the pass declares both keys it seals ([provision.Seat.AlsoVars]), so the run
+// waits on the scaleway integration rather than reporting a forgotten secret,
+// and once both are sealed the box carries them beside the engine's own
+// Organization, default project and update switch. A seat that is off is
+// declared nothing. Mutation: drop AlsoVars from the plan, and the access key
+// reads as a missing secret.
 func TestAScalewaySeatsKeyReachesItsBoxWhole(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, scalewayRunDoc)
@@ -139,10 +138,9 @@ func TestTheScalewayPassNamesWhatItLacks(t *testing.T) {
 }
 
 // AN ATLAS APPLICATION THAT CANNOT BE CONVERGED IS A FINDING, NEVER A FAILED
-// PASS: the atlas is optional reading, so Scaleway failing the engine over it
-// leaves the connection ready with one advisory, and only a pass that was
-// cancelled answers an error. A disconnect with nothing sealed for the atlas
-// calls nothing and forgets nothing.
+// PASS: the atlas is optional reading, so the connection stays ready with one
+// advisory, and only a cancelled pass answers an error. A disconnect with
+// nothing sealed for the atlas calls nothing and forgets nothing.
 //
 // Mutation: return the convergence's error from the pass, and a Scaleway
 // outage on an optional read reports every agent's access broken.

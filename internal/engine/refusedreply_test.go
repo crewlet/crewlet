@@ -15,15 +15,13 @@ import (
 )
 
 // A REFUSED REPLY IS KEPT AT THE HEAD OF THE INBOX AND RUNS NO TURN (ADR-0114).
-//
-// The coordinator found the delivery too large to be the answer its run's
-// question waits on, recorded its refusal as that question's outcome, and
-// resumes the run told so ([sandbox.AnswerRefused]). The run's row carries
-// none of the reply, so this delivery is the only copy there is. It is handed
-// back by deferral — at the HEAD, as an answer still owed is, never a Nak that
-// returns it behind the person's next message — and recorded as worked
-// nowhere: a turn that keeps the refusal spends it, and a refusal let go of
-// leaves it to come round as the ordinary message it is.
+// The coordinator found it too large to answer its run's question, recorded
+// the refusal as that question's outcome and resumed the run told so
+// ([sandbox.AnswerRefused]); the row keeps none of the reply, so this delivery
+// is its only copy. It is handed back by deferral — at the HEAD, never a Nak
+// behind the person's next message — and recorded as worked nowhere: a turn
+// that keeps the refusal spends it, and one let go of comes round as an
+// ordinary message.
 //
 // Mutation: spend it and acknowledge it as a consumed answer, and the ledger
 // drops the very reply a let-go hands back; let it fall through to the

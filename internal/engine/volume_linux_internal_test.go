@@ -8,15 +8,12 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 )
 
-// ANOTHER FILESYSTEM IS ANOTHER VOLUME, read off the machine rather than off a
-// fake: procfs, which every Linux node mounts at /proc, is a filesystem of its
-// own with no space at all, so it shares nothing with the temporary directory
-// a case writes to — and a cache whose store lives there has a volume of its
-// own, which takes seven eighths of its room.
-//
-// Linux alone, because /proc is the one directory known to be another
-// filesystem on every Linux machine; the arithmetic it reaches is
-// platform-free and held on every platform by the cases beside it.
+// ANOTHER FILESYSTEM IS ANOTHER VOLUME, read off the machine, not a fake:
+// procfs at /proc is a filesystem with no space, so it shares nothing with the
+// case's temporary directory, and a cache whose store lives there has a volume
+// of its own and takes seven eighths of its room. Linux alone, because /proc
+// is the one directory known to be another filesystem on every Linux machine;
+// the arithmetic is held on every platform by the cases beside it.
 //
 // Mutation: make sameVolume answer true whatever it reads, and both halves go
 // red.
