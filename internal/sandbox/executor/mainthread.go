@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -48,18 +47,19 @@ type threadReading interface {
 // after it.
 //
 // HELD TO A BASE, past it ONE SLOT (the package doc's "A collection's read of
-// a thread"): held for a line past [collectionBaseLineBytes] ([lineRun]) or
-// once a reading keeps more than [collectionBaseRecords] records, to the end
-// where one keeps records ([recordKeeper]; its caller releases large), for
-// the line alone otherwise. A wait its ctx ends ends the walk ([errLargeWait]).
+// a thread"): held before a line's facts charge past [collectionBaseLineCharge]
+// ([threadReader.Gate]) or once a reading keeps more than
+// [collectionBaseRecords] records, to the end where one keeps records
+// ([recordKeeper]; its caller releases large), for the line alone otherwise. A
+// wait its ctx ends ends the walk ([errLargeWait]).
 func walkThread(ctx context.Context, r io.Reader, maxBytes int64, large *passBudget, readings ...threadReading) {
 	gate := large.gate(ctx)
 	if keepsRecords(readings) {
 		gate.drop = nil
 	}
-	run := &lineRun{r: r, gate: gate}
-	defer run.done()
-	reader := newThreadReader(run, maxBytes)
+	reader := newThreadReader(r, maxBytes)
+	reader.Gate(gate)
+	defer reader.dropGate()
 	for _, reading := range readings {
 		if asker, ok := reading.(takeAsker); ok {
 			asker.ask(reader)
@@ -135,11 +135,15 @@ func keepsPastBase(readings []threadReading) bool {
 	return false
 }
 
-// collectionBaseLineBytes is the longest line a pass reads before it takes
-// the large slot: 256 KiB, four times the census's p99 line, under 2.4 MiB
-// held for it at its worst content (the package doc's "A collection's read
-// of a thread" has the derivation and the measurement).
-const collectionBaseLineBytes = 256 << 10
+// collectionBaseLineCharge is what a line's facts may charge ([lineMeter])
+// before its pass takes the large slot, its length taking nothing: 1.5 MiB.
+// The base tier counts a pass at 5.1 MiB; the chain at [collectionBaseRecords]
+// holds 2.7 MiB and the reader's buffers 280 KiB, leaving a line's facts
+// 2.1 MiB, and a charged byte holds 1.25 bytes at most (a string just past
+// 32 KiB takes whole 8 KiB pages), so the base's facts hold 1.9 MiB at most.
+// The facts of the census's lines hold 753 bytes at most. The package doc's "A
+// collection's read of a thread" has the measurement.
+const collectionBaseLineCharge = 3 << 19
 
 // collectionBaseRecords is the most records a pass's readings keep before it
 // takes the large slot: 2^13, about 2.7 MiB of the chain at End's peak, a
@@ -271,65 +275,6 @@ type pieceGate struct {
 // gate is b's gate for a reader waiting within ctx.
 func (b *passBudget) gate(ctx context.Context) pieceGate {
 	return pieceGate{hold: func() error { return b.hold(ctx) }, drop: b.drop}
-}
-
-// lineRun is a member's reader that holds gate BEFORE it hands on a byte of a
-// line past [collectionBaseLineBytes], counting the bytes since the last break,
-// and drops it at the next read once that line's break has passed: beneath a
-// bufio reader, that read comes only once the reader above has read the line
-// to its break and handed it on. Read-ahead may hold early, never late, and
-// nothing it hands on is copied. A hold's error is its own; done drops what it
-// still holds.
-type lineRun struct {
-	r    io.Reader
-	gate pieceGate
-	run  int
-	// held is whether it holds the gate; open, whether the line it holds for
-	// has not yet broken.
-	held, open bool
-}
-
-func (l *lineRun) Read(p []byte) (int, error) {
-	if l.held && !l.open && l.gate.drop != nil {
-		l.gate.drop()
-		l.held = false
-	}
-	n, err := l.r.Read(p)
-	if l.held && l.gate.drop == nil {
-		return n, err
-	}
-	for rest := p[:n]; ; {
-		brk := bytes.IndexByte(rest, '\n')
-		if brk < 0 {
-			l.run += len(rest)
-		} else {
-			l.run += brk
-		}
-		if l.run > collectionBaseLineBytes {
-			if !l.held {
-				if holdErr := l.gate.hold(); holdErr != nil {
-					return 0, holdErr
-				}
-				l.held = true
-			}
-			l.open = true
-			if l.gate.drop == nil {
-				return n, err
-			}
-		}
-		if brk < 0 {
-			return n, err
-		}
-		l.open, l.run, rest = false, 0, rest[brk+1:]
-	}
-}
-
-// done drops the gate where the run still holds it and drops at all.
-func (l *lineRun) done() {
-	if l.held && l.gate.drop != nil {
-		l.gate.drop()
-		l.held = false
-	}
 }
 
 // mainThreadHarness is a harness that reads the main thread of the session a

@@ -164,23 +164,35 @@
 // its job's copy ([ClaudeCode]'s readMainThread) and a take, its scrub and
 // its meter one pass — holds no token while what it holds stays within its
 // BASE, and holds ONE slot of a pool of its own ([CollectionLargeReadsAtOnce],
-// [passBudget]) while it holds more. Its triggers: a line past
-// [collectionBaseLineBytes] ([lineRun], beneath the line reader, so read-ahead
-// holds early and never late), and a reading keeping more than
-// [collectionBaseRecords] records ([recordKeeper], the chain). The take's
-// scrub holds its pieces to the same base: a line, a JSON document holding a
-// token past it (its decoder keeps that token's buffer to the document's end),
-// and a stretch of short lines a redaction holds ([scrubBounds]).
+// [passBudget]) while it holds more. A walk's triggers: a line whose facts
+// charge the meter past [collectionBaseLineCharge] ([threadReader.Gate]), and
+// a reading keeping more than [collectionBaseRecords] records ([recordKeeper],
+// the chain).
+//
+// THE LINE'S TRIGGER IS ITS FACTS' CHARGE ([lineMeter]), the measure the layer
+// bounds a line's hold by, never its length: what no reader reads of a line is
+// passed over unheld, so a long line of few facts (a large file's Read, a
+// document's base64, a line of blocks of an empty kind) holds the reader's
+// buffers alone and reads with no slot. The charge that passes the base waits
+// for the slot before it is counted, and an array is charged before it is
+// made, so what the facts keep past the base is kept under the slot, never
+// before it, but for one value's decode, as the meter's own bound allows. The
+// take's scrub holds each piece whole, so its trigger is a piece's length,
+// [scrubPieceBaseBytes] ([lineRun]): a line, a JSON document holding a token
+// past it (its decoder keeps that token's buffer to the document's end), and a
+// stretch of short lines a redaction holds ([scrubBounds]).
 //
 // HELD PER PIECE, KEPT ONLY WHERE A READING KEEPS RECORDS: a pass whose
-// readings keep records (the collection's chain, which may keep a long line's
-// facts) keeps the slot from its first hold to its end; every other reader,
-// the take's scrub and meter and a collection's count alone, holds it for its
-// piece past the base and drops it once done with it, the slot going back with
-// the pass's last hold. Kept to a take's end, the process's only slot would be
-// held for its whole scrub and spool, minutes, while its box's stream and every
-// take behind it waited. The scrub and the meter share one budget: with two,
-// the scrub's write would wait on the meter and the meter on the slot the
+// readings keep records (the collection's chain, which may keep a line's
+// facts) keeps the slot from its first hold to its end, so one that keeps more
+// than [collectionBaseRecords] records holds it to its end whatever its lines;
+// every other reader, the take's scrub and meter and a collection's count
+// alone, holds it for its piece past the base and drops it once done with it
+// (a walk's line, as the next line begins), the slot going back with the
+// pass's last hold. Kept to a take's end, the process's only slot would be
+// held for its whole scrub and spool, minutes, while its box's stream and
+// every take behind it waited. The scrub and the meter share one budget: with
+// two, the scrub's write would wait on the meter and the meter on the slot the
 // scrub holds. A wait its reader's context ends is [errLargeWait], a failure
 // of the read, never a reading of it. A take's Close ends both readers' waits.
 //
@@ -188,30 +200,34 @@
 // bounds: the chain at both bounds holds 43 MiB at End's peak, 344 bytes a
 // record of 2^17 ([threadChain], THE BOUNDS); and a line, read in the layer's
 // one pass, holds the reader's buffers, about 280 KiB once its values grew
-// them, and its facts, held to [threadLineMax] in sum whatever its length, the
-// most a byte where they are the smallest results: 2,450 KiB, the reader with
-// them, at a line of about 656 KiB ("A thread line is read in one scanner
-// pass, never held").
+// them ("A thread line is read in one scanner pass, never held"), and its
+// facts, whatever its length, at most 1.25 bytes a byte they charge: nothing
+// is refunded, so the charge counts every allocation they keep, and a charged
+// byte holds the most as a string just past 32 KiB, which takes whole 8 KiB
+// pages.
 //
-// THE BASE: a line of 256 KiB is four times the 61,170-byte p99 of 67,871
-// lines in 9,434 real threads (the census's longest, 2,002,134 bytes; 28
-// threads held a line past the base, each a large file read or written into
-// the thread), under 2.4 MiB at worst, the reader's buffers among it; and
-// 2^13 records, at 344 bytes 2.7 MiB, a thread of about 16 MiB at the 2,053
-// bytes a line probe P6 measured, eight times a day's session. With the
-// count's carry, a pass at its base holds about 5.1 MiB at its worst, by no
-// token, so a typical collection never waits. MEASURED on two cores
-// (BenchmarkACollectionPassAtItsBase, read off the GC trace as
-// BenchmarkAThreadChainAtItsBounds says): a main thread of 2^13 records the
-// chain files, one a user's line at the base of the smallest results, read by
-// the chain and the count in one walk, in 0.14 to 0.15 s, holding 5 MiB at
-// most at GOGC=10 and its heap peaking at 6 MiB at the default, about the
-// arithmetic, and taking no slot.
+// THE BASE: a line's facts charging 1.5 MiB hold 1.9 MiB at most, 2.2 MiB with
+// the reader's buffers, two thousand times the 753 bytes the facts of any
+// probe line hold; and 2^13 records, at 344 bytes 2.7 MiB, a thread of about
+// 16 MiB at the 2,053 bytes a line probe P6 measured, eight times a day's
+// session. With the count's carry, a pass at its base holds about 5.1 MiB at
+// its worst, by no token, so a typical collection never waits, nor one over
+// the census's longest lines (67,871 lines in 9,434 real threads, the longest
+// 2,002,134 bytes; each of the 28 threads holding a line past 256 KiB had a
+// large file read or written into it, which its facts do not keep). MEASURED
+// on a dedicated two-core slot (BenchmarkACollectionPassAtItsBase, read off
+// the GC trace as BenchmarkAThreadChainAtItsBounds says): a main thread of
+// 2^13 records the chain files, one a user's line of results under ids of
+// 32,769 bytes whose facts charge the base exactly, read by the chain and the
+// count in one walk, in 0.13 to 0.25 s, holding 5 MiB at most at GOGC=10 and
+// its heap peaking at 7 MiB at the default, within the arithmetic, and taking
+// no slot.
 //
 // THE BASE TIER'S COUNT: no token holds it, so it is every read in flight at
 // once, each about 5.1 MiB at its worst: one per seat collecting on this node,
-// one per take (its scrub's piece and its meter's line, each within the base),
-// and up to the box host's boxReadsHeld (64) reads for its peers, 326 MiB.
+// one per take (its scrub's piece within [scrubPieceBaseBytes] and its meter's
+// line within the base), and up to the box host's boxReadsHeld (64) reads for
+// its peers, 326 MiB.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
 // holds 43 MiB at most, the chain at both bounds; a take's piece at the
@@ -227,20 +243,16 @@
 // process's thread readers then hold at worst 2 x 133 + 89 = 355 MiB beside
 // the base tier. One waiter behind a pass over ordinary lines at the bound
 // (2.4 s, 4.8 s loaded) is through in 9.6 s, within the 15 s. Behind the
-// slot's slowest holder it is not: a pass over the slowest threads at the
-// bound, 17.8 to 18.5 s (BenchmarkTheMainThreadReadAtItsBound), holds the slot
-// until its own MainThreadReadWait cuts it. That waiter, a later one, or one
-// behind a take's piece streaming from a slow box ends with [errLargeWait] and
-// reads as no reading (count unread), the safe side, as a read past
-// MainThreadReadWait already is. The wait is spent inside that wait, never
-// added to it.
-//
-// THE LINE'S TRIGGER IS ITS LENGTH ([lineRun]), not the facts' charge
-// ([lineMeter]) the layer bounds a line's hold by: a line past the base holds
-// at most those facts and the reader's buffers, so the trigger takes the slot
-// early for a long line of few facts (a large file's Read, a document's
-// base64), never late. Its cost is the wait above: such a line holds the slot
-// for its pass's whole read, the slowest thread at the bound among them.
+// slot's slowest holder it is not: a pass keeping more than
+// [collectionBaseRecords] records holds the slot to its end whatever its
+// lines, so a collection whose chain keeps the records of 2^20 short lines of
+// blocks of an empty kind, at the bound (16.4 to 17.5 s with the count alone,
+// BenchmarkTheMainThreadReadAtItsBound), holds it until its own
+// MainThreadReadWait cuts it. One such line to the bound, 17.5 to 17.7 s, one
+// record of few facts, holds none. That waiter, a later one, or one behind a
+// take's piece streaming from a slow box ends with [errLargeWait] and reads as
+// no reading (count unread), the safe side, as a read past MainThreadReadWait
+// already is. The wait is spent inside that wait, never added to it.
 //
 // # A hook's note, confirmed off its job's main thread
 //

@@ -2120,15 +2120,19 @@ nothing was opened for it.
 
 **A node holds one large thread read at a time for its collections and
 takes.** A job's collection reads its main thread, and a capture's take scrubs
-and measures its session, holding no slot while each line, JSON value or
-stretch of text it holds stays within 256 KiB, four times the longest line of
-99 in 100 real threads: about 5 MiB a read at its worst. A piece past that
-waits for the node's one large-read slot (`CollectionLargeReadsAtOnce`), a pool
-apart from the transcripts' two, so a person paging a transcript never delays a
-turn's collection. A take holds it while it holds that piece, and a collection
-whose reading keeps the thread's records (its hook receipts) holds it to the
-read's end: at worst about 43 MiB for a collection and 89 MiB for a take's
-piece. The wait is spent inside the read's own: a collection whose read runs
+and measures its session, holding no slot while what it holds stays within its
+base: of each line read, the facts its readers keep, charged up to 1.5 MiB
+whatever the line's length, so a long line of few facts (a large file read into
+the thread) takes none; for a collection that keeps the thread's records (its
+hook receipts), 2^13 records; and for the take's scrub, which holds each line,
+JSON value or stretch of text whole, 256 KiB of it, four times the longest line
+of 99 in 100 real threads: about 5 MiB a read at its worst. A read past its
+base waits for the node's one large-read slot (`CollectionLargeReadsAtOnce`), a
+pool apart from the transcripts' two, so a person paging a transcript never
+delays a turn's collection. A take holds it while it holds that piece, and a
+collection whose reading keeps the thread's records holds it to the read's end:
+at worst about 43 MiB for a collection and 89 MiB for a take's piece. The wait
+is spent inside the read's own: a collection whose read runs
 past its 15 seconds counts the session unread and decides none of its hooks'
 notes, and a take past its budget is refused, its session not kept, the safe
 side each time; `executor_large_read_waited` says the slot was contended.

@@ -92,6 +92,17 @@ type threadReader struct {
 	// asked is the take tokens each line names of a hook's words
 	// ([threadReader.Asking]).
 	asked []string
+	// gate is the pass's large slot each line's facts hold before they charge
+	// past the base ([threadReader.Gate]); nil where no slot gates them.
+	gate *lineGate
+}
+
+// lineGate is a reader's way to its pass's large slot ([threadReader.Gate]):
+// held whether it holds it now, for its last line or, where drop is nil, to
+// the pass's end.
+type lineGate struct {
+	pieceGate
+	held bool
 }
 
 // newThreadReader reads r, one member, a line at a time: at most maxBytes of
@@ -125,6 +136,8 @@ func newThreadReaderSize(r io.Reader, maxBytes int64, chunk int) *threadReader {
 // r exactly as a fresh reader would, keeping only its buffers.
 func (t *threadReader) Reset(r io.Reader, maxBytes int64, maxLines int) {
 	maxBytes = max(maxBytes, 0)
+	t.dropGate()
+	t.gate = nil
 	t.r.Reset(r)
 	t.maxBytes, t.left = maxBytes, maxBytes
 	t.n, t.maxLines, t.torn, t.end, t.asked = 0, max(maxLines, 0), false, nil, nil
@@ -145,19 +158,36 @@ func (t *threadReader) Asking(tokens []string) error {
 	return nil
 }
 
-// Next is the member's next WHOLE line, one that ends in "\n", read without
-// its break in one scanner pass: io.EOF at the member's end, a last piece with
-// no break never a line ([threadReader.Torn]); a *threadLineError for a whole
-// line that is no record, the reader still usable; and, each ending the
-// reading for good, errThreadBound once the member runs past its bound (EVEN
-// RIGHT AFTER A BREAK) or holds a whole line past its lines' bound, read
-// whole first, once the pass captures a value past [threadValueMax]
-// or the facts run past [threadLineMax], or once the line's type reads a frame
-// passed over for an earlier type; the member's reader's error AS IT IS, one
-// wrapping the scrub's bound among them; and ctx's error, asked before each
-// piece the line takes. The package doc, "A thread line is read in one scanner
-// pass, never held", says why each.
+// Gate makes every line t reads from here on hold gate BEFORE its facts charge
+// past [collectionBaseLineCharge] ([lineMeter]), and drop it as the next line
+// begins or at [threadReader.dropGate]; where gate's drop is nil, it holds the
+// slot to the pass's end, for its caller to release. A line's length takes
+// nothing: what no reader reads of it is passed over unheld. Called before the
+// first [threadReader.Next]; [threadReader.Reset] clears it.
+func (t *threadReader) Gate(gate pieceGate) { t.gate = &lineGate{pieceGate: gate} }
+
+// dropGate drops the slot t holds for its last line, where its gate drops.
+func (t *threadReader) dropGate() {
+	if g := t.gate; g != nil && g.held && g.drop != nil {
+		g.drop()
+		g.held = false
+	}
+}
+
+// Next is the member's next WHOLE line, one that ends in "\n", read without its
+// break in one scanner pass: io.EOF at the member's end, a last piece with no
+// break never a line ([threadReader.Torn]); a *threadLineError for a whole line
+// that is no record, the reader still usable; and, each ending the reading for
+// good, errThreadBound once the member runs past its bound (EVEN RIGHT AFTER A
+// BREAK) or holds a whole line past its lines' bound, read whole first, once
+// the pass captures a value past [threadValueMax] or the facts run past
+// [threadLineMax], or once the line's type reads a frame passed over for an
+// earlier type; the member's reader's error AS IT IS, one wrapping the scrub's
+// bound among them; ctx's error, asked before each piece the line takes; and,
+// first, a wait for the slot ([threadReader.Gate]) that ended. The package doc,
+// "A thread line is read in one scanner pass, never held", says why each.
 func (t *threadReader) Next(ctx context.Context) (threadLine, error) {
+	t.dropGate()
 	if t.end != nil {
 		return threadLine{}, t.end
 	}
@@ -166,14 +196,21 @@ func (t *threadReader) Next(ctx context.Context) (threadLine, error) {
 	t.scan.Reset(&t.src)
 	t.dec.reset(t.valueMax, t.meterMax)
 	t.dec.asked = t.asked
+	if t.gate != nil && !t.gate.held {
+		t.dec.meter.gate = t.gate
+	}
 	scanned := t.dec.line(t.scan, facts)
 	// A FAULT STOPS THE SCANNER BEFORE THE BREAK: the rest of the line is read
 	// through the meter and the tee, holding nothing, so a refused line's
 	// size and byte facts are the whole line's.
-	if !t.src.broke && t.src.cause == nil {
+	if !t.src.broke && t.src.cause == nil && t.dec.meter.waitErr == nil {
 		t.src.drain()
 	}
 	t.src.ctx = nil
+	if err := t.dec.meter.waitErr; err != nil {
+		t.end = err
+		return threadLine{}, err
+	}
 	switch cause := t.src.cause; {
 	case errors.Is(cause, errLineMember):
 		t.end = fmt.Errorf("%w: the member runs past the %d bytes it is read within", errThreadBound, t.maxBytes)
@@ -246,6 +283,9 @@ func (t *threadReader) commit(scanned error, facts *lineFacts) (threadLine, erro
 	}
 	t.dec.meter.take(charge)
 	switch {
+	case t.dec.meter.waitErr != nil:
+		t.end = t.dec.meter.waitErr
+		return threadLine{}, t.end
 	case t.dec.over != "":
 		t.end = fmt.Errorf("%w: line %d's %s runs past the %d bytes a value is read whole within", errThreadBound,
 			t.n, t.dec.over, t.valueMax)
@@ -452,20 +492,35 @@ var recordRaws = [...]struct {
 // element's size, before it is made ([grow]). NOTHING IS REFUNDED, so the
 // meter bounds what the line's facts keep, every copy of a value counted. Not
 // charged: the facts' struct, the reader's buffers, and what the pass makes
-// and drops (a refused block's strings, a frame's error).
+// and drops (a refused block's strings, a frame's error). A charge past
+// unheld first holds gate's slot, if any ([threadReader.Gate]).
 type lineMeter struct {
 	left int
 	over bool
+	// unheld is what the facts may take before gate's slot (gate nil where
+	// none gates the line); waitErr, a wait for it that ended ([errLargeWait]),
+	// after which the meter is over and the reading ends ([threadReader.Next]).
+	unheld  int
+	gate    *lineGate
+	waitErr error
 }
 
 // take charges n bytes, reporting whether they were left: false, and the
-// meter over, where they were not, or where it was over before.
+// meter over, where they were not, or where it was over before, or where the
+// wait for the slot a charge past unheld holds first ended.
 func (m *lineMeter) take(n int) bool {
 	if m.over || n > m.left {
 		m.over = true
 		return false
 	}
-	m.left -= n
+	if g := m.gate; g != nil && !g.held && n > m.unheld {
+		if m.waitErr = g.hold(); m.waitErr != nil {
+			m.over = true
+			return false
+		}
+		g.held = true
+	}
+	m.left, m.unheld = m.left-n, m.unheld-n
 	return true
 }
 
@@ -680,7 +735,8 @@ type scannedKey struct {
 // bytes of a value and holding at most meterMax bytes of facts, its scratch
 // kept but what the line before grew past [lineScratchKeep].
 func (d *lineDecoder) reset(valueMax, meterMax int) {
-	d.valueMax, d.meter, d.object, d.over = valueMax, lineMeter{left: meterMax}, false, ""
+	d.valueMax, d.object, d.over = valueMax, false, ""
+	d.meter = lineMeter{left: meterMax, unheld: collectionBaseLineCharge}
 	for i := range d.head {
 		d.head[i] = scannedKey{raw: lineScratch(d.head[i].raw)}
 	}

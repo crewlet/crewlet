@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,11 +107,7 @@ var _ recordKeeper = (*slotReading)(nil)
 // slotUser is record n of a chain of users, each under the one before it, its
 // line pad bytes longer than a bare one.
 func slotUser(n, pad int) string {
-	parent := ""
-	if n > 1 {
-		parent = fmt.Sprintf("u%d", n-1)
-	}
-	return cntUser(parent, fmt.Sprintf("u%d", n), `"`+strings.Repeat("a", pad)+`"`)
+	return cntUser(slotParent(n), fmt.Sprintf("u%d", n), `"`+strings.Repeat("a", pad)+`"`)
 }
 
 // slotUserOf is record n with its line exactly size bytes, its break aside.
@@ -125,16 +122,92 @@ func slotChain(n int, last ...string) string {
 	return cntThread(append(lines, last...)...)
 }
 
+// slotIDBytes is the id of each full result of [resultsCharging]: just past
+// 32 KiB, so it is held in whole 8 KiB pages, the most a charged byte holds.
+const slotIDBytes = 32<<10 + 1
+
+// lineCharge is what line's facts charge the meter ([lineMeter]), read whole.
+func lineCharge(tb testing.TB, line string) int {
+	tb.Helper()
+	r := newThreadReader(strings.NewReader(line+"\n"), threadPlainMax)
+	if _, err := r.Next(context.Background()); err != nil {
+		tb.Fatalf("the line reads %v", err)
+	}
+	return r.meterMax - r.dec.meter.left
+}
+
+// resultsCharging is head, a list of results, and tail, whose facts charge the
+// meter exactly charge bytes ([lineMeter]), found by reading it: each result
+// under an id of its own of [slotIDBytes] but the last, cut to the rest.
+func resultsCharging(tb testing.TB, head, tail string, charge int) string {
+	tb.Helper()
+	line := func(full, last int) string {
+		var b strings.Builder
+		b.WriteString(head)
+		for i := range full {
+			fmt.Fprintf(&b, `{"type":"tool_result","tool_use_id":"%0*d"},`, slotIDBytes, i)
+		}
+		b.WriteString(`{"type":"tool_result","tool_use_id":"` + strings.Repeat("z", last) + `"}`)
+		b.WriteString(tail)
+		return b.String()
+	}
+	full := charge / slotIDBytes
+	for full > 0 && lineCharge(tb, line(full, 1)) > charge {
+		full--
+	}
+	got := line(full, 1+charge-lineCharge(tb, line(full, 1)))
+	if c := lineCharge(tb, got); c != charge {
+		tb.Fatalf("the line meant to charge %d bytes charges %d", charge, c)
+	}
+	return got
+}
+
+// slotUserCharging is record n of the chain of users ([slotUser]) whose facts
+// charge the meter exactly charge bytes ([resultsCharging]).
+func slotUserCharging(tb testing.TB, n, charge int) string {
+	tb.Helper()
+	head, tail, _ := strings.Cut(cntUser(slotParent(n), fmt.Sprintf("u%d", n), "[@]"), "@")
+	return resultsCharging(tb, head, tail, charge)
+}
+
+// slotSmallest is record n of the chain of users holding count of the
+// smallest results ([benchSmallest]): a line of many facts and few bytes.
+func slotSmallest(n, count int) string {
+	return cntUser(slotParent(n), fmt.Sprintf("u%d", n), "["+strings.Repeat(","+benchSmallest, count)[1:]+"]")
+}
+
+// slotParent is the parent of record n of the chain of users.
+func slotParent(n int) string {
+	if n > 1 {
+		return fmt.Sprintf("u%d", n-1)
+	}
+	return ""
+}
+
+// manyFacts is a line of the smallest results whose facts charge past
+// [collectionBaseLineCharge] and whose bytes are within [scrubPieceBaseBytes],
+// failing tb where they are not.
+func manyFacts(tb testing.TB, n int) string {
+	tb.Helper()
+	line := slotSmallest(n, 5000)
+	if c := lineCharge(tb, line); c <= collectionBaseLineCharge || len(line) >= scrubPieceBaseBytes {
+		tb.Fatalf("the line of many facts charges %d bytes in %d, want past %d in under %d", c, len(line),
+			collectionBaseLineCharge, scrubPieceBaseBytes)
+	}
+	return line
+}
+
 // A TYPICAL COLLECTION READ TAKES NO SLOT: the probe's two threads, and a
-// thread AT both bases, [collectionBaseRecords] records kept beside a line of
-// [collectionBaseLineBytes], are each walked with the large slot free
-// throughout, as seen from inside the walk at every line.
+// thread AT both bases, [collectionBaseRecords] records kept beside a line
+// whose facts charge [collectionBaseLineCharge], are each walked with the large
+// slot free throughout, as seen from inside the walk at every line.
 //
 // Mutation: escalate on every pass, or at either base (`>=` for `>`), and a
 // line is read with the slot held.
 func TestATypicalCollectionReadTakesNoSlot(t *testing.T) {
 	threads := map[string]string{
-		"at both bases": slotChain(collectionBaseRecords-1, slotUserOf(collectionBaseRecords, collectionBaseLineBytes)),
+		"at both bases": slotChain(collectionBaseRecords-1,
+			slotUserCharging(t, collectionBaseRecords, collectionBaseLineCharge)),
 	}
 	for _, file := range []string{
 		"testdata/claude/2.1.310/holdings/s1/projects/crewlet/5e55100a-0000-4000-8000-000000000106.jsonl",
@@ -165,28 +238,134 @@ func TestATypicalCollectionReadTakesNoSlot(t *testing.T) {
 			}
 		}
 	}
-	if got := len(threads["at both bases"]); got <= collectionBaseLineBytes {
-		t.Fatalf("the thread at both bases is %d bytes", got)
+}
+
+// A LONG LINE OF FEW FACTS READS WITHOUT THE SLOT: with the slot held
+// elsewhere, a walk whose reading keeps records reads to its end a prompt and
+// a line of blocks of an empty kind, each 16 times [scrubPieceBaseBytes] long,
+// since what no reader reads of a line is passed over unheld and its length
+// takes nothing.
+//
+// Mutation: hold the slot for a line by its length, as the scrub holds a
+// piece ([lineRun]), and the walk waits.
+func TestALongLineOfFewFactsReadsWithoutTheSlot(t *testing.T) {
+	long := 16 * scrubPieceBaseBytes
+	const empty = `{"type":""},`
+	blocks := cntUser("u1", "u2", "["+strings.Repeat(empty, long/len(empty))+empty[:len(empty)-1]+"]")
+	free := holdLargeSlot(t)
+	defer free()
+	for name, line := range map[string]string{"a prompt": slotUserOf(2, long), "a line of empty blocks": blocks} {
+		ctx := newSlotWait(t.Context())
+		var r slotReading
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			walkThread(ctx, strings.NewReader(cntThread(slotUser(1, 0), line, slotUser(3, 0))), threadPlainMax,
+				testPass(t), &r)
+		}()
+		select {
+		case <-ctx.waited:
+			free()
+			<-done
+			t.Fatalf("%s: a walk meeting a long line of few facts waits for the large slot", name)
+		case <-done:
+		}
+		if r.ended != nil || len(r.lines) != 3 {
+			t.Errorf("%s: the walk read %d lines and ended %v, want 3 and its end", name, len(r.lines), r.ended)
+		}
 	}
 }
 
-// A LINE OR A CHAIN PAST THE BASE WAITS FOR THE LARGE SLOT: with the slot held
-// elsewhere, a walk meeting a line one byte past [collectionBaseLineBytes]
-// waits before that line is decoded, and one whose reading keeps one record
-// past [collectionBaseRecords] waits before the next line: a reading sees no
-// later line. Freed, the walk takes the slot and reads on with it held; and a
-// walk whose context ends while it waits ends with that context's error, its
-// count unread, holding nothing.
+// A LINE TAKES THE SLOT BEFORE ITS FACTS KEEP MORE THAN THE BASE: with the
+// slot held elsewhere, a gated reader reading a line of long ids and a short
+// line of many facts, each charging past [collectionBaseLineCharge], waits
+// having charged at most the base; its context ended while it waits, that
+// Next and every one after it answer [errLargeWait] with the context's error,
+// and the reader holds nothing.
 //
-// Mutation: `>=` for `>` at either base, or escalate after the line past the
-// base is decoded, and the walk waits at another line.
+// Mutation: count a charge before its hold, or hold at the line's commit, and
+// the reader waits having charged past the base.
+func TestALineTakesTheSlotBeforeItsFactsPassTheBase(t *testing.T) {
+	for name, line := range map[string]string{
+		"long ids":   slotUserCharging(t, 1, 2*collectionBaseLineCharge),
+		"many facts": manyFacts(t, 1),
+	} {
+		free := holdLargeSlot(t)
+		leaving, leave := context.WithCancel(t.Context())
+		r := newThreadReader(strings.NewReader(line+"\n"), threadPlainMax)
+		ctx := &chargeAtWait{Context: leaving, r: r, waited: make(chan struct{})}
+		r.Gate(testPass(t).gate(ctx))
+		var err error
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, err = r.Next(leaving)
+		}()
+		select {
+		case <-ctx.waited:
+		case <-done:
+			t.Fatalf("%s: the reader read its line (%v) with the large slot held elsewhere", name, err)
+		}
+		if ctx.charged > collectionBaseLineCharge {
+			t.Errorf("%s: the reader waits for the slot having charged %d bytes, past the base's %d", name,
+				ctx.charged, collectionBaseLineCharge)
+		}
+		leave()
+		<-done
+		_, again := r.Next(t.Context())
+		for _, got := range []error{err, again} {
+			if !errors.Is(got, errLargeWait) || !errors.Is(got, context.Canceled) {
+				t.Errorf("%s: a reader whose wait its context ended answers %v, want the wait's own error", name, got)
+			}
+		}
+		r.dropGate()
+		if len(collectionLargeReads) != 1 {
+			t.Errorf("%s: once the reader's wait ended, %d large slots are held, want the case's one", name,
+				len(collectionLargeReads))
+		}
+		free()
+	}
+}
+
+// chargeAtWait is a case's context that notes, at its first Done (a wait for
+// the slot, [takeSlot], on the reader's own goroutine), what r's line had
+// charged its meter.
+type chargeAtWait struct {
+	context.Context
+	r       *threadReader
+	once    sync.Once
+	waited  chan struct{}
+	charged int
+}
+
+func (w *chargeAtWait) Done() <-chan struct{} {
+	w.once.Do(func() {
+		w.charged = w.r.meterMax - w.r.dec.meter.left
+		close(w.waited)
+	})
+	return w.Context.Done()
+}
+
+// A LINE OR A CHAIN PAST THE BASE WAITS FOR THE LARGE SLOT: with the slot held
+// elsewhere, a walk meeting a line whose facts charge one byte past
+// [collectionBaseLineCharge], or a short line of many facts past it, waits
+// before that line is handed on, and one whose reading keeps one record past
+// [collectionBaseRecords] waits before the next line: a reading sees no later
+// line. Freed, the walk takes the slot and reads on with it held; and a walk
+// whose context ends while it waits ends with the wait's error, its count
+// unread, holding nothing.
+//
+// Mutation: `>=` for `>` at either base, escalate after the line past the base
+// is handed on, or hold a line by its length, and the walk waits at another
+// line or reads the short line without the slot.
 func TestALineOrAChainPastTheBaseWaitsForTheLargeSlot(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		body   string
 		before int
 	}{
-		{"a line", cntThread(slotUser(1, 0), slotUserOf(2, collectionBaseLineBytes+1), slotUser(3, 0)), 1},
+		{"a line", cntThread(slotUser(1, 0), slotUserCharging(t, 2, collectionBaseLineCharge+1), slotUser(3, 0)), 1},
+		{"a short line of many facts", cntThread(slotUser(1, 0), manyFacts(t, 2), slotUser(3, 0)), 1},
 		{"a chain", slotChain(collectionBaseRecords + 2), collectionBaseRecords + 1},
 	} {
 		free := holdLargeSlot(t)
@@ -238,9 +417,10 @@ func TestALineOrAChainPastTheBaseWaitsForTheLargeSlot(t *testing.T) {
 		waits(t, ctx, done, tc.name)
 		leave()
 		<-done
-		if !errors.Is(cut.ended, context.Canceled) || cut.ends != 1 || len(cut.lines) != tc.before {
+		if !errors.Is(cut.ended, errLargeWait) || !errors.Is(cut.ended, context.Canceled) || cut.ends != 1 ||
+			len(cut.lines) != tc.before {
 			t.Errorf("%s: a walk whose caller left while it waited read %d lines and ended %v (%d ends), want %d "+
-				"and the caller's own error once", tc.name, len(cut.lines), cut.ended, cut.ends, tc.before)
+				"and the wait's own error once", tc.name, len(cut.lines), cut.ended, cut.ends, tc.before)
 		}
 		wantMark(t, count.count(0), sandbox.CountUnread)
 		large.release()
@@ -300,9 +480,9 @@ func (s *slotBody) Read(p []byte) (int, error) {
 }
 
 // A PASS TAKES THE LARGE SLOT ONCE AND GIVES IT BACK: a walk meeting both
-// triggers, a chain past [collectionBaseRecords] and then a line past
-// [collectionBaseLineBytes], holds one slot, never waiting for the one it
-// holds; a collection's read past the base holds the slot as it reads and none
+// triggers, a chain past [collectionBaseRecords] and then a line whose facts
+// charge past [collectionBaseLineCharge], holds one slot, never waiting for the
+// one it holds; a collection's read past the base holds the slot as it reads and none
 // once it returns, at the thread's end, at a bound and with its context ended;
 // and a take's meter, whose walk holds the slot for its line past the base,
 // holds none once it ends, however its archive ends: whole, unreadable, cut by
@@ -319,8 +499,8 @@ func TestAPassTakesTheLargeSlotOnceAndGivesItBack(t *testing.T) {
 	ctx := &selfWait{Context: leaving, cancel: leave}
 	large := testPass(t)
 	var r slotReading
-	body := slotChain(collectionBaseRecords+1, slotUserOf(collectionBaseRecords+2, collectionBaseLineBytes+1),
-		slotUser(collectionBaseRecords+3, 0))
+	body := slotChain(collectionBaseRecords+1,
+		slotUserCharging(t, collectionBaseRecords+2, collectionBaseLineCharge+1), slotUser(collectionBaseRecords+3, 0))
 	walkThread(ctx, strings.NewReader(body), threadPlainMax, large, &r)
 	if ctx.waited.Load() || r.ended != nil || len(r.lines) != collectionBaseRecords+3 {
 		t.Errorf("a pass meeting both triggers waited for its own slot %t and read %d lines, ending %v; want it "+
@@ -333,16 +513,16 @@ func TestAPassTakesTheLargeSlotOnceAndGivesItBack(t *testing.T) {
 
 	// TWICE THE BASE, so the box is read while a read that holds the slot for
 	// that line alone holds it.
-	long := slotUserOf(2, 2*collectionBaseLineBytes)
+	long := slotUserCharging(t, 2, 2*collectionBaseLineCharge)
 	// AFTER IT, more than the reader's buffer holds, so the read is still
 	// asking for lines once its context ends.
 	after := make([]string, 0, 254)
 	for k := 3; k <= 256; k++ {
 		after = append(after, slotUser(k, 1<<10))
 	}
-	// PAST A BOUND as the slot is held for it: a line as long as long whose
-	// uuid, read whole, runs past [threadValueMax].
-	bound := cntUser("u2", strings.Repeat("u", threadValueMax), `"`+strings.Repeat("a", 2*collectionBaseLineBytes)+`"`)
+	// PAST A BOUND as the slot is held for it: long with its uuid written again
+	// after its facts, read whole, past [threadValueMax].
+	bound := strings.TrimSuffix(long, "}") + `,"uuid":"` + strings.Repeat("u", threadValueMax) + `"}`
 	for _, tc := range []struct {
 		name  string
 		body  string
@@ -467,15 +647,15 @@ func heldExport(ctx context.Context, export []byte, large *passBudget, err *erro
 
 // A TYPICAL TAKE'S SCRUB TAKES NO SLOT: with the large slot held elsewhere,
 // the scrub of an archive holding the probe's two threads, a transcript's line
-// at [collectionBaseLineBytes], a document's string at it and a text that
+// at [scrubPieceBaseBytes], a document's string at it and a text that
 // holds a key's stretch below it reads to its end without waiting for it.
 //
 // Mutation: gate a piece at the base (`>=` for `>`), or every piece, and the
 // scrub waits.
 func TestATypicalTakesScrubTakesNoSlot(t *testing.T) {
 	files := map[string]string{
-		"projects/p/s.jsonl":                slotUserOf(1, collectionBaseLineBytes) + "\n",
-		"tasks/s/1.json":                    `{"text":"` + strings.Repeat("a", collectionBaseLineBytes-11) + `"}`,
+		"projects/p/s.jsonl":                slotUserOf(1, scrubPieceBaseBytes) + "\n",
+		"tasks/s/1.json":                    `{"text":"` + strings.Repeat("a", scrubPieceBaseBytes-11) + `"}`,
 		"projects/p/s/tool-results/out.txt": "-----BEGIN RSA PRIVATE KEY-----\n" + keyLine + "\n",
 	}
 	for _, file := range []string{
@@ -489,7 +669,7 @@ func TestATypicalTakesScrubTakesNoSlot(t *testing.T) {
 		files["projects/p/"+filepath.Base(file)] = string(raw)
 	}
 	// A STRING AT THE BASE: the decoder holds its opening quote with its text.
-	export := gzipOf(t, `{"text":"`+strings.Repeat("a", collectionBaseLineBytes-1)+`"}`)
+	export := gzipOf(t, `{"text":"`+strings.Repeat("a", scrubPieceBaseBytes-1)+`"}`)
 	free := holdLargeSlot(t)
 	defer free()
 	for name, scrub := range map[string]func(context.Context, *passBudget, *error) <-chan struct{}{
@@ -548,7 +728,7 @@ func (w *readAtWait) Done() <-chan struct{} {
 }
 
 // A TAKE'S PIECE PAST THE BASE WAITS FOR THE LARGE SLOT BEFORE IT IS HELD:
-// a transcript's line and a document's string twice [collectionBaseLineBytes],
+// a transcript's line and a document's string twice [scrubPieceBaseBytes],
 // and a stretch held unsettled (a key with no END) that a line within the base
 // carries one byte past it, wait for the slot held elsewhere having read at
 // most the base and one fill past where the piece began; freed, the rewrite
@@ -560,12 +740,12 @@ func (w *readAtWait) Done() <-chan struct{} {
 // Mutation: hold a line only once it is read whole, drop a piece's gate, or
 // keep a hold past the rewrite, and a case goes red.
 func TestATakesPiecePastTheBaseWaitsForTheLargeSlot(t *testing.T) {
-	long := strings.Repeat("a", 2*collectionBaseLineBytes)
+	long := strings.Repeat("a", 2*scrubPieceBaseBytes)
 	prefix := `{"text":"`
 	// HELD UNASKED: the armour and its lines are short of the first ask.
 	open := "-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat(keyLine+"\n", scrubSettleStride/2/(len(keyLine)+1))
-	stretch := open + strings.Repeat("a", collectionBaseLineBytes-len(open)) + "\n" +
-		strings.Repeat(keyLine+"\n", collectionBaseLineBytes/(len(keyLine)+1))
+	stretch := open + strings.Repeat("a", scrubPieceBaseBytes-len(open)) + "\n" +
+		strings.Repeat(keyLine+"\n", scrubPieceBaseBytes/(len(keyLine)+1))
 	type rewrite func(io.Writer, io.Reader, scrubber, scrubBounds) error
 	pieces := []struct {
 		name    string
@@ -576,7 +756,7 @@ func TestATakesPiecePastTheBaseWaitsForTheLargeSlot(t *testing.T) {
 		{"a document's string", prefix + long + `"}`, rewriteDocument},
 		{"a held stretch", stretch, rewriteText},
 	}
-	most := len(prefix) + collectionBaseLineBytes + 64<<10
+	most := len(prefix) + scrubPieceBaseBytes + 64<<10
 	for _, tc := range pieces {
 		for _, leaves := range []bool{false, true} {
 			free := holdLargeSlot(t)
@@ -635,17 +815,15 @@ func (r *heldReading) refused(*threadLineError) { r.held = append(r.held, len(co
 func (r *heldReading) end(bool, error)          {}
 
 // A WALK THAT KEEPS NO RECORDS HOLDS THE SLOT FOR ITS LINE ALONE, as a take's
-// meter and a collection's count walk: a line past [collectionBaseLineBytes]
-// is handed on with the slot held, and the lines more than a buffer after it
-// with none, and nothing is held once the walk ends.
+// meter and a collection's count walk: a line whose facts charge past
+// [collectionBaseLineCharge] is handed on with the slot held, every line after
+// it with none, and nothing is held once the walk ends.
 //
-// Mutation: keep every hold to the pass's end, and a later line is read with
-// the slot held.
+// Mutation: keep every hold to the pass's end, or drop it later than the next
+// line, and a later line is read with the slot held.
 func TestAWalkThatKeepsNoRecordsHoldsTheSlotForItsLineAlone(t *testing.T) {
-	lines := []string{slotUser(1, 0), slotUserOf(2, collectionBaseLineBytes+1)}
-	for k := 3; k <= 256; k++ {
-		lines = append(lines, slotUser(k, 1<<10))
-	}
+	lines := []string{slotUser(1, 0), slotUserCharging(t, 2, collectionBaseLineCharge+1), slotUser(3, 0),
+		slotUser(4, 1<<10)}
 	var r heldReading
 	large := new(passBudget)
 	defer large.release()
@@ -653,9 +831,8 @@ func TestAWalkThatKeepsNoRecordsHoldsTheSlotForItsLineAlone(t *testing.T) {
 	if len(r.held) != len(lines) {
 		t.Fatalf("the walk handed %d lines, want %d", len(r.held), len(lines))
 	}
-	if r.held[1] != 1 || r.held[len(r.held)-1] != 0 {
-		t.Errorf("the walk handed its long line with %d large slots held and its last with %d, want one and none",
-			r.held[1], r.held[len(r.held)-1])
+	if r.held[1] != 1 || slices.Max(r.held[2:]) != 0 {
+		t.Errorf("the walk handed its lines with %v large slots held, want one for the second alone", r.held)
 	}
 	if len(collectionLargeReads) != 0 {
 		t.Errorf("the walk ended holding %d large slots, want none", len(collectionLargeReads))
@@ -724,14 +901,14 @@ func TestAReaderWhoseSharedWaitEndsWaitsOnItsOwn(t *testing.T) {
 }
 
 // WHAT A COLLECTION'S PASS COSTS AT ITS BASE, the figures
-// [collectionBaseLineBytes] and [collectionBaseRecords] are stated by (the
+// [collectionBaseLineCharge] and [collectionBaseRecords] are stated by (the
 // package doc's "A collection's read of a thread"): a main thread of
-// [collectionBaseRecords] records, the chain filing each, one a user's line at
-// [collectionBaseLineBytes] of the smallest results, the most facts a byte a
-// line holds, and the last a reply the count anchors on; read by the chain and
-// the count in the one walk, as a collection reads it, under a pass that must
-// take no slot. What is held at most is read off the runtime's GC trace as
-// BenchmarkAThreadChainAtItsBounds says:
+// [collectionBaseRecords] records, the chain filing each, one a user's line
+// whose facts charge [collectionBaseLineCharge] exactly in the shape that holds
+// the most a charged byte ([resultsCharging]), and the last a reply the count
+// anchors on; read by the chain and the count in the one walk, as a collection
+// reads it, under a pass that must take no slot. What is held at most is read
+// off the runtime's GC trace as BenchmarkAThreadChainAtItsBounds says:
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkACollectionPassAtItsBase$' -benchtime 1x -benchmem
 func BenchmarkACollectionPassAtItsBase(b *testing.B) {
@@ -745,12 +922,9 @@ func BenchmarkACollectionPassAtItsBase(b *testing.B) {
 			t.record(benchRecord(parent, benchMain, "assistant", benchReply(fmt.Sprintf("msg_%08d", k),
 				benchCall(fmt.Sprintf("toolu_%08d", k))), k, k))
 		}
-		// AT THE BASE EXACTLY, the list's room past its results whitespace.
 		head, tail, _ := strings.Cut(benchRecord(benchOf(n-2), benchMain, "user",
 			`"message":{"role":"user","content":[@]},`, n-1, n-1), "@")
-		room := collectionBaseLineBytes - len(head) - len(tail)
-		results := strings.Repeat(","+benchSmallest, (room+1)/(len(benchSmallest)+1))[1:]
-		t.record(head + strings.Repeat(" ", room-len(results)) + results + tail)
+		t.record(resultsCharging(b, head, tail, collectionBaseLineCharge))
 		t.record(benchRecord(benchOf(n-1), benchMain, "assistant", `"message":{"id":"msg_anchor",`+
 			`"model":"claude-sonnet-4-5","usage":{`+benchUsage+`},"type":"message","role":"assistant","content":`+
 			benchCall(fmt.Sprintf("toolu_%08d", n))+`,"stop_reason":"tool_use"},`, n, n))
@@ -819,7 +993,7 @@ func (w *countedWriter) Write(p []byte) (int, error) {
 // A TAKE HOLDS THE LARGE SLOT ONLY WHILE IT HOLDS A PIECE PAST THE BASE, its
 // scrub and its meter one pass: run through [Runner.TakeSession] over a box
 // whose capture holds a main-thread line and a later member's line each past
-// [collectionBaseLineBytes]. With the slot held by the case, the body yields
+// [scrubPieceBaseBytes]. With the slot held by the case, the body yields
 // no byte and its Close returns, ending everything the take started, the case
 // still holding the slot; freed, the body reads to its end, the count reads
 // the whole thread, and nothing of the take holds the slot afterwards.
@@ -827,9 +1001,9 @@ func (w *countedWriter) Write(p []byte) (int, error) {
 // Mutation: leave the take's scrub ungated, keep its hold past a piece, or
 // let Close leave the scrub's wait, and a case goes red or deadlocks.
 func TestATakeHoldsTheLargeSlotOnlyWhileItHoldsAPiecePastTheBase(t *testing.T) {
-	long := `"` + strings.Repeat("a", 2*collectionBaseLineBytes) + `"`
+	long := `"` + strings.Repeat("a", 2*scrubPieceBaseBytes) + `"`
 	later := tarMember{h: tar.Header{Name: "projects/p/s/tool-results/out.txt", Mode: 0o600,
-		Typeflag: tar.TypeReg}, body: strings.Repeat("b", 2*collectionBaseLineBytes) + "\n"}
+		Typeflag: tar.TypeReg}, body: strings.Repeat("b", 2*scrubPieceBaseBytes) + "\n"}
 	archive := cntArchive(t, cntThread(cntUser("", "u1", long), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50)), later)
 	inABubble(t, func(t *testing.T) {
 		free := holdLargeSlot(t)
@@ -873,10 +1047,11 @@ func TestATakeHoldsTheLargeSlotOnlyWhileItHoldsAPiecePastTheBase(t *testing.T) {
 }
 
 // A TAKE'S CLOSE ENDS ITS METER'S WAIT FOR THE SLOT: a line the scrub holds
-// within the base whose kept form is past it (bytes no UTF-8 holds, each kept
-// as U+FFFD), so the meter alone waits for the slot held by the case, and the
-// scrub waits on the meter. Closed before its end, the take returns, its
-// meter ended with the count unread, the case still holding the slot.
+// within [scrubPieceBaseBytes] whose facts charge past
+// [collectionBaseLineCharge] ([manyFacts]), so the meter alone waits for the
+// slot held by the case, and the scrub waits on the meter. Closed before its
+// end, the take returns, its meter ended with the count unread, the case
+// still holding the slot.
 //
 // Mutation: wait the meter within the take's context alone, and the close
 // waits for the slot: the bubble deadlocks.
@@ -890,7 +1065,7 @@ func TestATakesCloseEndsItsMetersWaitForTheSlot(t *testing.T) {
 		return base64.StdEncoding.EncodeToString(raw)[:n]
 	}
 	// AFTER IT, lines the scrub writes past what the meter's readers buffer.
-	lines := []string{cntUser("", "u1", `"`+strings.Repeat("\xff", 100<<10)+`"`)}
+	lines := []string{manyFacts(t, 1)}
 	for k := 2; k <= 5; k++ {
 		lines = append(lines, cntUser(fmt.Sprintf("u%d", k-1), fmt.Sprintf("u%d", k), `"`+noise(128<<10)+`"`))
 	}

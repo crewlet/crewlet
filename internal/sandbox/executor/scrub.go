@@ -145,6 +145,13 @@ const scrubExpansion = 8
 // mebibytes, whatever the box wrote.
 const scrubPieceMaxBytes = 8 << 20
 
+// scrubPieceBaseBytes is the most of a piece the scrub holds whole before it
+// takes the large slot: 256 KiB, four times the census's p99 line (the package
+// doc's "A collection's read of a thread"), so an ordinary line, string or
+// stretch never waits. Held whole, a piece costs its length, where a walk's
+// line costs only its facts ([collectionBaseLineCharge]).
+const scrubPieceBaseBytes = 256 << 10
+
 // scrubSettleStride is the least a stretch held for its redaction grows by
 // before the redaction is asked again what of it has settled — and the stretch
 // grows by half of itself once that is more ([rewriteText]): asked at every
@@ -186,7 +193,7 @@ type scrubBounds struct {
 	// piece is the most it holds whole.
 	piece int
 	// gate is what the scrub holds while it holds a piece past
-	// [collectionBaseLineBytes] ([scrubBounds.gatedBy]); its hold is nil
+	// [scrubPieceBaseBytes] ([scrubBounds.gatedBy]); its hold is nil
 	// where no slot gates the scrub's pieces.
 	gate pieceGate
 }
@@ -213,6 +220,65 @@ func (b scrubBounds) pieceSource(src io.Reader) (r io.Reader, done func()) {
 	}
 	run := &lineRun{r: src, gate: b.gate}
 	return run, run.done
+}
+
+// lineRun is a scrub's member reader that holds gate BEFORE it hands on a byte
+// of a line past [scrubPieceBaseBytes], counting the bytes since the last
+// break, and drops it at the next read once that line's break has passed:
+// beneath the scrub's line reader, that read comes only once the reader above
+// has read the line to its break and handed it on. Read-ahead may hold early,
+// never late, and nothing it hands on is copied. A hold's error is its own;
+// done drops what it still holds.
+type lineRun struct {
+	r    io.Reader
+	gate pieceGate
+	run  int
+	// held is whether it holds the gate; open, whether the line it holds for
+	// has not yet broken.
+	held, open bool
+}
+
+func (l *lineRun) Read(p []byte) (int, error) {
+	if l.held && !l.open && l.gate.drop != nil {
+		l.gate.drop()
+		l.held = false
+	}
+	n, err := l.r.Read(p)
+	if l.held && l.gate.drop == nil {
+		return n, err
+	}
+	for rest := p[:n]; ; {
+		brk := bytes.IndexByte(rest, '\n')
+		if brk < 0 {
+			l.run += len(rest)
+		} else {
+			l.run += brk
+		}
+		if l.run > scrubPieceBaseBytes {
+			if !l.held {
+				if holdErr := l.gate.hold(); holdErr != nil {
+					return 0, holdErr
+				}
+				l.held = true
+			}
+			l.open = true
+			if l.gate.drop == nil {
+				return n, err
+			}
+		}
+		if brk < 0 {
+			return n, err
+		}
+		l.open, l.run, rest = false, 0, rest[brk+1:]
+	}
+}
+
+// done drops the gate where the run still holds it and drops at all.
+func (l *lineRun) done() {
+	if l.held && l.gate.drop != nil {
+		l.gate.drop()
+		l.held = false
+	}
 }
 
 // scrubber takes the engine's own values out of text.
@@ -1011,7 +1077,7 @@ type tokenBound struct {
 	run int
 	// depth is how many containers are open.
 	depth int
-	// gate is held before a run past [collectionBaseLineBytes] is handed on
+	// gate is held before a run past [scrubPieceBaseBytes] is handed on
 	// ([scrubBounds.gate]), to the document's end: the decoder keeps a buffer
 	// the size of its longest token until then. held says it holds it.
 	gate pieceGate
@@ -1059,7 +1125,7 @@ func (t *tokenBound) Read(p []byte) (int, error) {
 		if t.run > t.bound {
 			return 0, fmt.Errorf("%w: a JSON value of the session runs past %d bytes", errScrubBound, t.bound)
 		}
-		if t.run > collectionBaseLineBytes && !t.held && t.gate.hold != nil {
+		if t.run > scrubPieceBaseBytes && !t.held && t.gate.hold != nil {
 			if largeErr := t.gate.hold(); largeErr != nil {
 				return 0, largeErr
 			}
@@ -1255,7 +1321,7 @@ func rewriteText(dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error 
 		line, err := readLine(r, b.piece)
 		// A STRETCH OF SHORT LINES is a piece too: past the base, it holds the
 		// slot before it holds more, until it settles back within the base.
-		if !stretch && b.gate.hold != nil && len(held)+len(line) > collectionBaseLineBytes {
+		if !stretch && b.gate.hold != nil && len(held)+len(line) > scrubPieceBaseBytes {
 			if largeErr := b.gate.hold(); largeErr != nil {
 				return largeErr
 			}
@@ -1284,7 +1350,7 @@ func rewriteText(dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error 
 			held = append(held[:0], held[n:]...)
 			// SETTLED BACK WITHIN THE BASE, the stretch moves out of the array
 			// it grew, which it no longer holds, and lets the slot go.
-			if stretch && len(held) <= collectionBaseLineBytes {
+			if stretch && len(held) <= scrubPieceBaseBytes {
 				held = append([]byte(nil), held...)
 				b.gate.drop()
 				stretch = false
