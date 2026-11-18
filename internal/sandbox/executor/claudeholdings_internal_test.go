@@ -2223,18 +2223,15 @@ func TestAReadingStopsBetweenLinesWhenItsContextEnds(t *testing.T) {
 // HOLDINGS ARE HELD TO THEIR BOUNDS: a line holding a value it reads whole
 // past [threadValueMax], or whose facts pass [threadLineMax], ends the
 // reading, the layer's bound named, where a 9 MiB line of a value no reader
-// reads is read; a main thread that is no regular file, a link or a directory, is not
-// read, as the box restores none; an archive holding no main thread is no
-// reading, never one of a session that holds nothing; and an archive naming
-// more subagents than [holdingsMaxAgents], or a main thread holding more legs
-// of their work than [holdingsMaxLegs], its notifications among them, is no
-// reading, where one at each bound is read.
+// reads is read; a main thread that is no regular file is not read, as the
+// box restores none; an archive holding no main thread is no reading; and one
+// naming more subagents than [holdingsMaxAgents], or more legs than
+// [holdingsMaxLegs], notifications among them, is none, where one at each
+// bound is read.
 //
-// Mutation: read a main thread that is no regular file as one with no lines,
-// or an archive with no main thread as a session holding none of its calls,
-// and the reading stands; keep a notification beside the legs uncounted, and
-// the notification past the bound is read; or read a line past a bound as a
-// refused line, and the reading stands.
+// Mutation: read a main thread that is no regular file, or no main thread, as
+// a session of no calls; count no notification beside the legs; or read a line
+// past a bound as a refused line: and the reading stands.
 func TestHoldingsAreHeldToTheirBounds(t *testing.T) {
 	t.Parallel()
 	call := hsLogged("toolu_bounds", "bounds done")

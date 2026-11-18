@@ -580,19 +580,17 @@ func ctPadded(n int) string {
 }
 
 // A LINE OR A MEMBER PAST ITS BOUND ENDS THE READING: a line whose facts pass
-// [threadLineMax], a line holding a value it reads whole one byte past
+// [threadLineMax], one holding a value it reads whole one byte past
 // [threadValueMax], or a member one byte longer than its reader's bound, ends
-// it with errThreadBound, saying which of the three it ran past, and the
-// reading stays over, the record after the line never read. A member past its
-// bound is past it EVEN WHERE THE BOUND FALLS RIGHT AFTER A LINE BREAK, where a
-// member metered by io.LimitReader would end cleanly and read as whole. A
-// value or a member AT its bound reads whole, the member's bound is the take's
-// scrub's own, and a 9 MiB line of a value no reader reads is no bound's.
+// it with errThreadBound, saying which it ran past, and the reading stays
+// over. A member is past its bound EVEN WHERE THE BOUND FALLS RIGHT AFTER A
+// BREAK, where io.LimitReader would end it cleanly. A value or a member AT its
+// bound reads whole, the member's bound is the take's scrub's own, and a 9 MiB
+// line of a value no reader reads is no bound's.
 //
-// Mutation: read a line past a bound as a refused line and read on, and the
-// record after it is read; meter the member with io.LimitReader, and a member
-// past its bound by a break, a record or a line ends cleanly; swap two bounds'
-// words, and a line past one reads as past the other.
+// Mutation: read a line past a bound as a refused line, and the record after
+// it is read; meter the member with io.LimitReader, and a member past its
+// bound ends cleanly; swap two bounds' words, and one reads as the other.
 func TestALineOrAMemberPastItsBoundEndsTheReading(t *testing.T) {
 	t.Parallel()
 	if kept := boundsFor(executorkeep.SessionMaxBytes); threadPlainMax != kept.plain {
@@ -4748,7 +4746,7 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 		"blocks of a kind no reader names": {element: `{"type":"x"}`},
 		"the smallest results":             {element: `{"type":"tool_result","tool_use_id":"a"}`, own: 1, calls: true},
 	} {
-		// Half of listBytes: a line of the smallest results holds about 25,000
+		// Half of listBytes: a line of the smallest results holds 16,384
 		// calls within threadLineMax, and this one holds half of them.
 		record := []byte(ctListRecord(t, user+"[", tc.element, `]}}`, listBytes/2))
 		read := func() any {

@@ -201,10 +201,10 @@
 // automaton that answers it at any length ([textSays], [textNotice],
 // [textHandback], [textResult]). A list is read an element at a time by the
 // layer's one rule of an element, up to the first it refuses, the rest passed
-// over; an entry read by its first characters (a
-// retraction's, a kept uuid) is read one byte past them
-// ([lineDecoder.opening]), and a skill's name streams into its UTF-16 length
-// and whether its bytes were UTF-8 ([jsonscan.Scanner.InvalidUTF8]).
+// over; an entry read by its first characters (a retraction's, a kept uuid) is
+// read one byte past them ([lineDecoder.opening]), and a skill's name streams
+// into its UTF-16 length and whether its bytes were UTF-8
+// ([jsonscan.Scanner.InvalidUTF8]).
 //
 // A RECORD'S TYPE GATES ITS FRAMES ([gates]): a frame read on records of some
 // types alone is passed over where the `type` written before it names none of

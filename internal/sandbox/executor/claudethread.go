@@ -968,7 +968,7 @@ func (l threadLine) AgentAnswer() (completed bool, agent string, refused bool) {
 }
 
 // answerOf is what a leg's result record's own toolUseResult says of the leg
-// ([answerOf]), its `status`, `agentId` and `success` as written: whether
+// ([threadLine.AgentAnswer]), its `status`, `agentId` and `success` as written: whether
 // an Agent or Task call's subagent completed (`status` "completed"), the
 // subagent it names (`agentId`, "" where it names none a reading reads), and
 // whether a SendMessage was refused (`success`, the literal false).
@@ -2147,12 +2147,11 @@ func (l threadLine) AttachmentType() (string, error) {
 // flag is on there.
 //
 // HELD TO ITS SHAPES HERE, AND HERE ALONE, as a key one reader reads is:
-// `replacements` a list that is there, walked an element at a time
-// ; each element an object whose `kind` is a string and,
-// where that is "tool-result", whose `toolUseId` is a string. Anything else
-// is this accessor's error, never the line's. An entry of another kind is
-// passed over, as the harness's resume passes it over, and the preview itself
-// is never read.
+// `replacements` a list that is there, read an entry at a time, each entry an
+// object whose `kind` is a string and, where that is "tool-result", whose
+// `toolUseId` is a string. Anything else is this accessor's error, never the
+// line's. An entry of another kind is passed over, as the harness's resume
+// passes it over, and the preview itself is never read.
 //
 // Read once, in the line's one pass, an entry at a time: never a second read
 // of the line, and a reader that asks again is handed what that reading held.

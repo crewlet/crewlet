@@ -709,8 +709,8 @@ func (d *lineDecoder) passedOver(head threadHead) string {
 // settle is f, the facts of a record of head, as its accessors read them: a
 // frame its type, or on a system record its subtype, does not read emptied
 // ([gates]), so a record of another type holds nothing of it; and of a
-// message, the calls of the kind the
-// record makes alone, a user's results or an assistant's uses, in order.
+// message, the calls of the kind the record makes alone, a user's results or
+// an assistant's uses, in order.
 func settle(f *lineFacts, head threadHead) {
 	for _, g := range gates {
 		reads := slices.Contains(g.types, head.Type) &&
@@ -1065,12 +1065,12 @@ func (d *lineDecoder) blockText(scan *jsonscan.Scanner, k jsonscan.Kind) error {
 }
 
 // resultContent reads a block's `content`, whose first token, k, the scanner
-// stands at, into the block's text: one string,
-// streamed whole into its length and digests ([textResult]); a list whose
-// one element is an object whose `type` is the string "text" and whose
-// `text` is a string, that string streamed whole; no text for anything else,
-// a list of two or more elements, or one whose first is no object, among it,
-// and every element after the first passed over.
+// stands at, into the block's text: one string, streamed whole into its length
+// and digests ([textResult]); a list whose one element is an object whose
+// `type` is the string "text" and whose `text` is a string, that string
+// streamed whole; no text for anything else, a list of two or more elements,
+// or one whose first is no object, among it, and every element after the first
+// passed over.
 func (d *lineDecoder) resultContent(scan *jsonscan.Scanner, k jsonscan.Kind) error {
 	b := &d.block
 	b.text = threadResultText{}
@@ -1137,12 +1137,12 @@ func (d *lineDecoder) resultText(scan *jsonscan.Scanner) error {
 	}
 }
 
-// toolResult reads a user record's own `toolUseResult`, whose first token,
-// k, the scanner stands at, into r: of an object,
-// whether it carries a `handback` or a `handbackReport`, any value, and what
-// its `status`, `agentId` and `success`, held as written until it ends, say
-// of a subagent's leg ([answerOf]); every other key (a file's base64, a
-// command's output, a patch) passed over, and every other kind nothing.
+// toolResult reads a user record's own `toolUseResult`, whose first token, k,
+// the scanner stands at, into r: of an object, whether it carries a `handback`
+// or a `handbackReport`, any value, and what its `status`, `agentId` and
+// `success`, held as written until it ends, say of a subagent's leg
+// ([answerOf]); every other key (a file's base64, a command's output, a patch)
+// passed over, and every other kind nothing.
 func (d *lineDecoder) toolResult(scan *jsonscan.Scanner, k jsonscan.Kind, r *toolResultFacts) error {
 	if k != jsonscan.ObjectStart {
 		return scan.Skip()
@@ -1249,15 +1249,14 @@ func (d *lineDecoder) attachment(scan *jsonscan.Scanner, k jsonscan.Kind, a *att
 }
 
 // skillNames reads a skill listing's `names`, whose first token, k, the
-// scanner stands at: kept where it is a list of
-// at most [skillListingMaxNames] strings, each kept by the rule of a name
-// ([skillNameKept]), read in order and the first that is not deciding it; and
-// unmeasured instead where every name is kept but one past
-// [skillListingMaxNameUnits] held a byte that is no UTF-8, which the layer
-// cannot measure ([errSkillNameUnmeasured]). Each name streams into its
-// length in UTF-16 code units ([textUnits]) and whether its bytes as written
-// were UTF-8 ([jsonscan.Scanner.InvalidUTF8]), which its decoded text cannot
-// say.
+// scanner stands at: kept where it is a list of at most [skillListingMaxNames]
+// strings, each kept by the rule of a name ([skillNameKept]), read in order
+// and the first that is not deciding it; and unmeasured instead where every
+// name is kept but one past [skillListingMaxNameUnits] held a byte that is no
+// UTF-8, which the layer cannot measure ([errSkillNameUnmeasured]). Each name
+// streams into its length in UTF-16 code units ([textUnits]) and whether its
+// bytes as written were UTF-8 ([jsonscan.Scanner.InvalidUTF8]), which its
+// decoded text cannot say.
 func (d *lineDecoder) skillNames(scan *jsonscan.Scanner, k jsonscan.Kind) (kept, unmeasured bool, err error) {
 	count, unreadable := 0, false
 	kept = true
@@ -1321,9 +1320,9 @@ func (d *lineDecoder) withheldEntry(scan *jsonscan.Scanner, k jsonscan.Kind) (bo
 }
 
 // compacted reads a compaction's boundary's `compactMetadata`, whose first
-// token, k, the scanner stands at, into c: its kind;
-// of an object, its `preservedMessages` ([lineDecoder.preservedMessages]) and
-// its `preservedSegment` kept as written.
+// token, k, the scanner stands at, into c: its kind; of an object, its
+// `preservedMessages` ([lineDecoder.preservedMessages]) and its
+// `preservedSegment` kept as written.
 func (d *lineDecoder) compacted(scan *jsonscan.Scanner, k jsonscan.Kind, c *compactFacts) error {
 	c.kind = scannedKind(k)
 	if k != jsonscan.ObjectStart {
@@ -1414,10 +1413,10 @@ func (d *lineDecoder) preservedMessages(scan *jsonscan.Scanner, k jsonscan.Kind,
 }
 
 // retracted reads a record's `retractedMessageUuids`, whose first token, k,
-// the scanner stands at, into f: of a list, each
-// entry read by its opening into a canonical prefix or none
-// ([threadRetracted.entry]), in order, up to the first that is no string,
-// that entry's error; anything else the list's own.
+// the scanner stands at, into f: of a list, each entry read by its opening
+// into a canonical prefix or none ([threadRetracted.entry]), in order, up to
+// the first that is no string, that entry's error; anything else the list's
+// own.
 func (d *lineDecoder) retracted(scan *jsonscan.Scanner, k jsonscan.Kind, f *lineFacts) error {
 	list, err := d.elements(scan, k, func(k jsonscan.Kind) error {
 		if f.retractedErr != nil {
@@ -1489,11 +1488,11 @@ func (d *lineDecoder) replacements(scan *jsonscan.Scanner, k jsonscan.Kind, r *r
 	return err
 }
 
-// batch reads an assistant record's `batchToolUses`, whose first token, k,
-// the scanner stands at, into b: that it is there; of
-// a list, each entry's `id`, held as written until the entry ends, read by
-// the rule of an entry ([batchEntryID]), in order, up to the first it
-// refuses, that entry's error; anything else the list's own.
+// batch reads an assistant record's `batchToolUses`, whose first token, k, the
+// scanner stands at, into b: that it is there; of a list, each entry's `id`,
+// held as written until the entry ends, read by the rule of an entry
+// ([batchEntryID]), in order, up to the first it refuses, that entry's error;
+// anything else the list's own.
 func (d *lineDecoder) batch(scan *jsonscan.Scanner, k jsonscan.Kind, b *batchFacts) error {
 	b.present = true
 	list, err := d.elements(scan, k, func(k jsonscan.Kind) error {
