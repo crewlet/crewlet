@@ -8783,6 +8783,9 @@ export interface CodeChangeRow {
   opened_position: LogPosition;
   closed_at?: string;
   close_reason?: string;
+  /** Who closed it, while it is closed; absent where a push nobody made closed it. */
+  closed_by?: string;
+  closed_by_kind?: CodePartyKind;
   merged_at?: string;
   merged_via?: string;
   merge_oid?: string;

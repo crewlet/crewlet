@@ -66,6 +66,7 @@ import {
   useRefusalPlace,
   WriteButton,
 } from "~/components/WriteButton.tsx";
+import { SOURCE_DELETED } from "~/contract/code.ts";
 import {
   MERGE_CONFLICT,
   MERGE_METHODS,
@@ -555,7 +556,13 @@ export function MergeBox({ change, facts }: { change: CodeChangeDetail; facts: M
           <span className="code-merge-box__words">
             <strong className="code-merge-box__title">Closed without being merged</strong>
             <span className="code-merge-box__said">
-              {change.close_reason ?? "Nobody said why."} Reopen it from the page bar.
+              {change.closed_by && (
+                <>
+                  <Byline who={change.closed_by} verb="closed it" at={change.closed_at} now={now} />
+                  .{" "}
+                </>
+              )}
+              {closeReasonSentence(change)} Reopen it from the page bar.
             </span>
           </span>
         </article>
@@ -1160,6 +1167,12 @@ function OtherSection({ change, section }: { change: CodeChangeDetail; section: 
       said={said}
     />
   );
+}
+
+/** Why a closed change closed, in a sentence: its closer's reason, or that its branch was deleted. */
+export function closeReasonSentence(change: Pick<CodeChangeDetail, "close_reason">): string {
+  if (change.close_reason === SOURCE_DELETED) return "Its branch was deleted.";
+  return change.close_reason ?? "Nobody said why.";
 }
 
 /** How a merged change came to be merged where no record names who merged it. */

@@ -1898,6 +1898,67 @@ test("a merged change offers no review, no ask and no close, only its revert", a
   }
 });
 
+// A CLOSED CHANGE NAMES WHO CLOSED IT, in its header and its merge box, never its
+// owner for somebody else's close; where no closer is known (a push nobody made
+// deleted its branch) the owner only proposed it, and the reason is worded.
+// Mutation: name the owner as the header's actor for every closed change, or
+// draw the reason's code, and this fails.
+test("a closed change's header and merge box name who closed it, not its owner", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T13:00:00Z"));
+  stubEngine(
+    detail({
+      state: "closed",
+      readiness: undefined,
+      closed_at: "2026-10-27T12:00:00Z",
+      closed_by: "cto",
+      closed_by_kind: "agent",
+      close_reason: "Superseded by web!43.",
+    }),
+    () => json({}),
+  );
+  mount();
+  const line = await waitFor(() => {
+    const said = document.querySelector<HTMLElement>(".code-change-byline");
+    expect(said?.textContent).toMatch(/1 hour ago/);
+    return said!;
+  });
+  expect(line.textContent).toMatch(
+    /^ClosedCTO\s*closed the proposal of retry\s*into main\s*·?1 hour ago$/,
+  );
+  const box = await screen.findByRole("article", { name: "Closed without being merged" });
+  expect(box.textContent).toMatch(
+    /CTO\s*closed it\s*1 hour ago\.\s*Superseded by web!43\. Reopen it from the page bar\.$/,
+  );
+});
+
+test("a change a push closed by deleting its branch names no closer, and says why in words", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T13:00:00Z"));
+  stubEngine(
+    detail({
+      state: "closed",
+      readiness: undefined,
+      closed_at: "2026-10-27T12:00:00Z",
+      close_reason: "source_deleted",
+    }),
+    () => json({}),
+  );
+  mount();
+  const line = await waitFor(() => {
+    const said = document.querySelector<HTMLElement>(".code-change-byline");
+    expect(said?.textContent).toMatch(/1 hour ago/);
+    return said!;
+  });
+  expect(line.textContent).toMatch(
+    /^ClosedEngineer\s*proposed retry\s*into main\s*, closed\s*·?1 hour ago$/,
+  );
+  const box = await screen.findByRole("article", { name: "Closed without being merged" });
+  expect(box.textContent).toBe(
+    "Closed without being mergedIts branch was deleted. Reopen it from the page bar.",
+  );
+});
+
 test("a closed change offers its reopen alone", async () => {
   const acted = stubEngine(detail({ state: "closed", readiness: undefined }), () =>
     json({ outcome: "applied" }),

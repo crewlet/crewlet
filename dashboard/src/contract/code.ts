@@ -130,6 +130,13 @@ export const REPO_NAME_MAX_BYTES = 63;
 export const CHANGE_STATES = ["draft", "open", "closed", "merged"] as const;
 
 /**
+ * The reason a change's row gives where a push closed it by deleting its
+ * source branch (`gitlet.SourceDeleted`), worded rather than drawn as the
+ * code. Held by `internal/gitlet.TestTheDashboardKnowsWhyAPushClosedAChange`.
+ */
+export const SOURCE_DELETED = "source_deleted";
+
+/**
  * What a listing of changes can ask its changes to be waiting on, in the
  * engine's order (`gitlet.Needs`): a review the asker owes, a fix their own
  * change owes, either of the two, or a PERSON — a change whose readiness's

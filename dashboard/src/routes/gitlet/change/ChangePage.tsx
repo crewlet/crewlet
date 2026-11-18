@@ -364,7 +364,13 @@ function bylineVerb(change: CodeChangeDetail): ReactNode {
         </>
       );
     case "closed":
-      return <>closed its proposal of {branches}</>;
+      // WHO CLOSED IT, where the engine names them; a push nobody made named
+      // nobody, so the owner is said to have proposed it, never to have closed it.
+      return change.closed_by ? (
+        <>closed the proposal of {branches}</>
+      ) : (
+        <>proposed {branches}, closed</>
+      );
     case "draft":
       return (
         <>
@@ -377,6 +383,15 @@ function bylineVerb(change: CodeChangeDetail): ReactNode {
       wants to merge revision {change.revision} of {branches}
     </>
   );
+}
+
+/** Who the byline names: whoever merged or closed the change where the engine says, else its owner. */
+export function bylineActor(
+  change: Pick<CodeChangeDetail, "state" | "owner" | "merged_by" | "closed_by">,
+): string {
+  if (change.state === "merged" && change.merged_by) return change.merged_by;
+  if (change.state === "closed" && change.closed_by) return change.closed_by;
+  return change.owner;
 }
 
 /** When the byline's act happened, and the word before it on a live change. */
@@ -392,7 +407,7 @@ function bylineAt(change: CodeChangeDetail): { at: string; opened: boolean } {
  */
 function ChangeHeader({ change }: { change: CodeChangeDetail }) {
   const now = useNow();
-  const actor = change.state === "merged" && change.merged_by ? change.merged_by : change.owner;
+  const actor = bylineActor(change);
   const work = change.work_item;
   const when = bylineAt(change);
   return (

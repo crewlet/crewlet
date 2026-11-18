@@ -259,6 +259,23 @@ func TestTheDashboardKnowsEveryStateOfAChange(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD WORDS A CHANGE ITS SOURCE'S DELETION CLOSED: the merge box and
+// a change's peek say its branch was deleted where its row's close reason is
+// `SOURCE_DELETED` (`contract/code.ts`), the engine's [gitlet.SourceDeleted].
+// A reason spelled apart from the engine's is drawn as its raw code.
+//
+// Mutation: respell either side, and this fails.
+func TestTheDashboardKnowsWhyAPushClosedAChange(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Scalar(clientsource.Tree(t), "SOURCE_DELETED")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != gitlet.SourceDeleted {
+		t.Errorf("the dashboard's SOURCE_DELETED is %q, want the engine's %q", got, gitlet.SourceDeleted)
+	}
+}
+
 // THE DASHBOARD ASKS WHAT A CHANGE WAITS ON IN THE ENGINE'S WORDS, every one
 // of them: Gitlet › Changes narrows its listing by `CHANGE_NEEDS`
 // (`contract/code.ts`), and its Waiting on you box asks me, or person for a

@@ -508,6 +508,7 @@ var contract = []Entry{
 	{"REPO_NAME", ReadScalar, "internal/gitlet.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
 	{"REPO_NAME_MAX_BYTES", ReadScalar, "internal/gitlet.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
 	{"CHANGE_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfAChange"},
+	{"SOURCE_DELETED", ReadScalar, "internal/gitlet.TestTheDashboardKnowsWhyAPushClosedAChange"},
 	{"CHANGE_NEEDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryNeedOfAListingOfChanges"},
 	{"CHANGE_WINDOWS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryWindowOfAListingOfChanges"},
 	{"CHANGE_SORTS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEverySortOfAListingOfChanges"},
