@@ -7,7 +7,8 @@ import { useId } from "react";
 import { Card, DescriptionList, LimitMeters, Text, Tooltip, type LimitWindow } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtAt, fmtClock, parseUTC, relTime } from "~/lib/format.ts";
+import { ago } from "~/lib/ago.ts";
+import { fmtAt, fmtClock, parseUTC } from "~/lib/format.ts";
 import { dateTimeFormat } from "~/lib/formatters.ts";
 import { zone } from "~/lib/prefs.ts";
 import type { ModelLimit } from "~/protocol/models.ts";
@@ -79,18 +80,18 @@ export function limitWindow(l: ModelLimit, now: number): LimitWindow {
       STATE_WORDS[l.state],
       figureWords(l),
       when,
-      l.stale ? `as of ${relTime(l.seen, now)}` : "",
+      l.stale ? `as of ${ago(l.seen, now, { since: true })}` : "",
     ]
       .filter(Boolean)
       .join(", "),
   };
 }
 
-/** "as of 2h ago" for the oldest stale window, where any is stale. */
+/** "as of 2 hours ago" for the oldest stale window, where any is stale. */
 function staleCaption(limits: readonly ModelLimit[], now: number): string | undefined {
   const stale = limits.filter((l) => l.stale).map((l) => l.seen);
   if (stale.length === 0) return undefined;
-  return `as of ${relTime(stale.sort()[0], now)}`;
+  return `as of ${ago(stale.sort()[0], now, { since: true })}`;
 }
 
 /** Every window's exact figures, one line each. */
@@ -100,8 +101,7 @@ function LimitDetail({ limits, now }: { limits: readonly ModelLimit[]; now: numb
       {limits.map((l) => (
         <span key={`${l.window}/${l.model ?? ""}`}>
           <strong>{limitLabel(l)}</strong>: {usedWords(l)}
-          {whenWords(l, now, true) ? `, ${whenWords(l, now, true)}` : ""}. Heard{" "}
-          {relTime(l.seen, now)}.
+          {whenWords(l, now, true) ? `, ${whenWords(l, now, true)}` : ""}. Heard {ago(l.seen, now)}.
         </span>
       ))}
     </span>
@@ -164,7 +164,7 @@ export function UsageLimitsCard({ model }: { model: ModelView }) {
               dense
               items={limits.map((l) => [
                 limitLabel(l),
-                [usedWords(l), whenWords(l, now, true), `heard ${relTime(l.seen, now)}`]
+                [usedWords(l), whenWords(l, now, true), `heard ${ago(l.seen, now)}`]
                   .filter(Boolean)
                   .join(", "),
               ])}

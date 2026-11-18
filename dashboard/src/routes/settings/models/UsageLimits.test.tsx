@@ -86,7 +86,7 @@ test("a window that turned over since it was heard says so, and a stale one says
   );
   expect(over).toMatchObject({ figure: "OK", note: "reset at 11:30" });
   expect(over.name).toBe(
-    "Weekly limit, OK, turned over since it was last heard, reset at 11:30 UTC, as of 2h ago",
+    "Weekly limit, OK, turned over since it was last heard, reset at 11:30 UTC, as of 2 hours ago",
   );
 });
 
@@ -127,7 +127,7 @@ test("the list's Usage limits column draws a bar per window, says when one is st
   expect(within(group).getByRole("img").getAttribute("aria-label")).toBe(
     "Weekly Opus limit, reached, sitting out until 13:30 UTC",
   );
-  expect(row("stale").textContent).toContain("as of 2h ago");
+  expect(row("stale").textContent).toContain("as of 2 hours ago");
   expect(row("local").textContent).toContain("None reported");
   expect(within(row("local")).queryByRole("meter")).toBeNull();
 });
