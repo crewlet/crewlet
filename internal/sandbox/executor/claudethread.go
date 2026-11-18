@@ -351,14 +351,18 @@ const maxAskedTakes = 64
 // Asking makes every line t reads from here on name which of tokens, take
 // tokens ([claudeTakeToken]), a hook's words hold ([threadLine.HookTakes]):
 // bit i for tokens[i]. Called before the first [threadReader.Next];
-// [threadReader.Reset] clears it. Past [maxAskedTakes] tokens it panics: a
-// reading asks at most 60, so more is its caller's bug, never a thread's.
-func (t *threadReader) Asking(tokens []string) {
+// [threadReader.Reset] clears it.
+func (t *threadReader) Asking(tokens []string) { t.asked = askedTokens(tokens) }
+
+// askedTokens is tokens as a reader keeps them asked, a copy. Past
+// [maxAskedTakes] it panics: a reading asks at most 60, so more is its
+// caller's bug, never a thread's.
+func askedTokens(tokens []string) []string {
 	if len(tokens) > maxAskedTakes {
 		panic(fmt.Sprintf("executor: a thread's reading asks %d take tokens, past the %d a hook record's masks hold",
 			len(tokens), maxAskedTakes))
 	}
-	t.asked = slices.Clone(tokens)
+	return slices.Clone(tokens)
 }
 
 // threadSource is a member's reader whose every error but its end reaches

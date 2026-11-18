@@ -235,7 +235,8 @@
 // object by the layer's one rule of it ([blockCallOf]) once every key of it
 // has been met. A text its readers ask a property of STREAMS into the
 // automaton that answers it at any length ([textSays], [textNotice],
-// [textHandback], [textResult]). A list is read an element at a time by the
+// [textHandback], [textResult]), a hook's words into the asked take tokens they
+// name ([textTakes], [scanReader.Asking]). A list is read an element at a time by the
 // layer's one rule of an element, up to the first it refuses, as
 // [eachElement] hands it; an entry read by its first characters (a
 // retraction's, a kept uuid) is read one byte past them
