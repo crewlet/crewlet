@@ -644,7 +644,7 @@ export function ModelWizard({
         }
         // A NEW MODEL has no place it was opened from but the Add button:
         // its own page is where it is first seen, and takes focus (design QA M6).
-        nav.to(["settings", "models", draft.key]);
+        nav.to(["settings", "models", draft.key], { added: draft.key });
         focusWhenShown(pageHeading);
         return true;
       }
