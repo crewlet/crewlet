@@ -573,6 +573,7 @@ test("Sort lists a live state by its last move or its opening, and says the walk
     reviewer: "",
     work: "",
     window: "",
+    readiness: "",
   };
   const byMove = { send: "updated", choosable: true, shown: "updated", byDefault: "updated" };
   expect(changeOrder(none, "")).toEqual(byMove);
@@ -894,6 +895,7 @@ test("the foot says how many it shows of the scope's total, and only of it", asy
     reviewer: "",
     work: "",
     window: "",
+    readiness: "",
   };
   expect(footWords(none, 5, 5, false)).toBe("Showing 5 of 5 open changes");
   expect(footWords({ ...none, state: "merged" }, 25, 54, true)).toBe(
@@ -994,6 +996,7 @@ test("a listing's parameters are the engine's filters, and a name no repository 
     reviewer: "",
     work: "",
     window: "",
+    readiness: "",
   };
   expect(changesParams(none)).toEqual({ params: { state: "open" } });
   expect(changesParams({ ...none, state: "all", repo: "web" })).toEqual({
@@ -1091,4 +1094,141 @@ test("an owner's ask names the paths the reader owns, and says less where its fa
   expect(faces.getAttribute("aria-label")).toBe(
     "Reviewers: You were asked to review: it waits on you, as the owner of internal/server",
   );
+});
+
+/** The engine's buckets for the story: web!42 waits on review, api!17 on checks. */
+const BUCKETS: Record<string, string> = { "web!42": "approval", "api!17": "checks" };
+const API_17 = change("api", 17, { title: "api: page the orders listing by keyset" });
+
+/** The list narrowed by `readiness=` as the engine does, echoing `narrowed_to`; `echo: false` ignores the key. */
+const bucketEngine =
+  (echo = true) =>
+  (url: URL) => {
+    if (url.pathname !== "/query/code_changes") return null;
+    if (url.searchParams.has("limit")) return page([]);
+    const bucket = url.searchParams.get("readiness");
+    if (bucket === null || !echo) return page([WEB_42, API_17]);
+    return page(
+      [WEB_42, API_17].filter((c) => BUCKETS[c.ref] === bucket),
+      { narrowed_to: bucket },
+    );
+  };
+
+/** Picks a choice through the Readiness select. */
+function pickReadiness(name: string) {
+  fireEvent.click(screen.getByRole("combobox", { name: "Readiness" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name }));
+}
+
+// A BUCKET LISTS OPEN CHANGES, so choosing one from a draft listing returns to the open state.
+// Mutation: send a bucket beside draft, or keep the address's state.
+test("the Readiness filter offers where a merge stands, and a bucket is the engine's readiness on the open state", async () => {
+  const asked = stubFetch(bucketEngine());
+  mount(<Changes />, "#/gitlet?state=draft");
+  await theList();
+  fireEvent.click(screen.getByRole("combobox", { name: "Readiness" }));
+  expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+    "Readiness",
+    "Ready to merge",
+    "Waits on review",
+    "Waits on checks",
+    "Blocked by findings",
+    "Waits on a person",
+  ]);
+  fireEvent.mouseDown(screen.getByRole("option", { name: "Waits on checks" }));
+  expect(location.hash).toContain("readiness=checks");
+  expect(location.hash).not.toContain("state=");
+  const list = await within(await theList()).findByRole("link", {
+    name: "api: page the orders listing by keyset",
+  });
+  expect(list).toBeTruthy();
+  expect(
+    screen.queryByRole("link", { name: "render: stream the product page's shell" }),
+  ).toBeNull();
+  const last = listings(asked).at(-1)!;
+  expect(last.searchParams.get("state")).toBe("open");
+  expect(last.searchParams.get("readiness")).toBe("checks");
+  expect(await screen.findByText("Showing 1 open change that matches the filters")).toBeTruthy();
+});
+
+// WAITS ON A PERSON is the engine's own need, not a bucket.
+// Mutation: send readiness=person, or keep a bucket beside it.
+test("Waits on a person is the engine's needs=person", async () => {
+  const asked = stubFetch(bucketEngine());
+  mount(<Changes />, "#/gitlet?readiness=approval");
+  await theList();
+  pickReadiness("Waits on a person");
+  expect(location.hash).toContain("needs=person");
+  expect(location.hash).not.toContain("readiness=");
+  await settled(() => listings(asked).length);
+  const last = listings(asked).at(-1)!;
+  expect(last.searchParams.get("needs")).toBe("person");
+  expect(last.searchParams.has("readiness")).toBe(false);
+  // THE PICKER SAYS IT, and clearing it lifts the need.
+  expect(screen.getByRole("combobox", { name: "Readiness" }).textContent).toContain(
+    "Waits on a person",
+  );
+  pickReadiness("Readiness");
+  expect(location.hash).not.toContain("needs=");
+});
+
+// A NODE THAT DOES NOT READ readiness= lists the changes unnarrowed: drawing them would claim a filter.
+// Mutation: draw the rows of an answer without narrowed_to.
+test("a node that ignored readiness is said, and its unnarrowed rows are not drawn", async () => {
+  stubFetch(bucketEngine(false));
+  mount(<Changes />, "#/gitlet?readiness=approval");
+  expect(
+    await screen.findByText("Filtering by readiness is unavailable on this fleet yet."),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole("link", { name: "render: stream the product page's shell" }),
+  ).toBeNull();
+  expect(screen.queryByText(/^Showing/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Load more changes" })).toBeNull();
+});
+
+// A BUCKET BESIDE AN ENDED STATE, OR EVERY STATE, is refused by the engine: said in place, never sent.
+// Mutation: send readiness beside merged.
+test("readiness beside an ended state, or every state, is said in place and never asked", async () => {
+  const none = {
+    state: "open",
+    needs: "",
+    repo: "",
+    owner: "",
+    reviewer: "",
+    work: "",
+    window: "",
+    readiness: "",
+  };
+  expect(changesParams({ ...none, readiness: "checks" })).toEqual({
+    params: { state: "open", readiness: "checks" },
+  });
+  for (const state of ["draft", "merged", "closed", "all"]) {
+    expect(changesParams({ ...none, state, readiness: "ready", repo: "web" })).toEqual({
+      unasked: "Readiness lists open changes: pick Open, or clear Readiness.",
+    });
+  }
+  expect(changesParams({ ...none, readiness: "soon" })).toEqual({
+    unasked: "“soon” is not where a change's merge stands.",
+  });
+  // A BUCKET ON THE OPEN STATE keeps the reader's sort.
+  expect(changeOrder({ ...none, readiness: "checks" }, "opened").send).toBe("opened");
+  const asked = stubFetch(bucketEngine());
+  mount(<Changes />, "#/gitlet?state=merged&readiness=ready");
+  expect(
+    await screen.findByText("Readiness lists open changes: pick Open, or clear Readiness."),
+  ).toBeTruthy();
+  await settled(() => asked.length);
+  expect(listings(asked)).toHaveLength(0);
+});
+
+// Mutation: say a bucket's empty listing as "No open changes".
+test("an empty bucket says where no open change stands", async () => {
+  stubFetch((url) =>
+    url.pathname !== "/query/code_changes"
+      ? null
+      : page([], url.searchParams.has("limit") ? {} : { narrowed_to: "blockers" }),
+  );
+  mount(<Changes />, "#/gitlet?readiness=blockers");
+  expect(await screen.findByText("No open change is blocked by findings")).toBeTruthy();
 });

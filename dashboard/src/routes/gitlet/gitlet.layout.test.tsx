@@ -13,7 +13,7 @@ import { eventually } from "~/test/settle.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import type { CodeChangeSummary } from "~/protocol/index.ts";
+import type { CodeChangeCounts, CodeChangeSummary } from "~/protocol/index.ts";
 import { ChangeRows, ChangeStateTag } from "./ChangeRow.tsx";
 import { Changes } from "./Changes.tsx";
 import { BranchChip } from "./ui.tsx";
@@ -67,6 +67,8 @@ const MOVED = [
 /** The changes Gitlet › Changes lists and the repositories its pickers offer, where a case sets them. */
 let listed: CodeChangeSummary[] | null = null;
 let repos: string[] | null = null;
+/** The state tabs' figures, where a case answers `code_counts`. */
+let counted: CodeChangeCounts | null = null;
 
 /** The engine, for one repository's comparison of feature into main, and one file. */
 function answer(url: URL): Response {
@@ -78,6 +80,9 @@ function answer(url: URL): Response {
         position: POSITION,
         level: "session",
       });
+    case "/query/code_counts":
+      if (!counted) break;
+      return json({ counts: { changes: counted }, position: POSITION, level: "session" });
     case "/query/code_repos":
       if (!repos) break;
       return json({ repos: repos.map((name) => ({ name })), position: POSITION, level: "session" });
@@ -212,6 +217,7 @@ afterEach(() => {
   host = null;
   listed = null;
   repos = null;
+  counted = null;
   forgetTrees();
   forgetTreeChoice();
   vi.unstubAllGlobals();
@@ -1302,6 +1308,28 @@ test("a change row folds by its own width in a 370 px card at 1440 px", async ()
   for (const { row, body, facts } of boxes) {
     expect(facts.top).toBeGreaterThanOrEqual(body.bottom - 1);
     expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
+  }
+});
+
+// THE HEAD'S PICKERS SHARE THE COUNTED STATE TABS' ROW at 1440, drawn as their words.
+// Mutation: draw the pickers boxed, and their floors wrap them under the tabs.
+test("the changes' head keeps its pickers on the state tabs' row at 1440 px", async () => {
+  await page.viewport(1440, 900);
+  listed = [carded(42)];
+  counted = { live: 5, open: 4, draft: 1, merged: 54, closed: 3 };
+  location.hash = "#/gitlet";
+  mount(<Changes />, 1150);
+  await eventually(() =>
+    expect(document.querySelector(".code-changes-head")?.textContent).toContain("54"),
+  );
+  const tabs = document
+    .querySelector<HTMLElement>('.code-changes-head [aria-label="Change state"]')!
+    .getBoundingClientRect();
+  const pickers = document.querySelector<HTMLElement>(".code-changes-head__pickers")!.children;
+  expect(pickers.length).toBe(6);
+  for (const picker of pickers) {
+    const at = picker.getBoundingClientRect();
+    expect(at.top, picker.textContent ?? "").toBeLessThan(tabs.bottom);
   }
 });
 
