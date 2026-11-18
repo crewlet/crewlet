@@ -1155,7 +1155,8 @@ type FakeSession struct {
 
 	// Streaming, where set, runs with the take's context as the archive is
 	// first read (its place reserved, spooling), so a case can spend the
-	// take's time where a stream at its bound does.
+	// take's time where a stream at its bound does. Held until that context
+	// ends, the read fails, as a stalled stream's does.
 	Streaming func(ctx context.Context)
 
 	// Keeping, where set, runs with the digest's context just before the
@@ -1221,13 +1222,13 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	if session.Count != nil {
 		count = func() *ResumedCount { counted := *session.Count; return &counted }
 	}
-	body := io.Reader(bytes.NewReader(raw))
+	body := &takenFake{Reader: bytes.NewReader(raw), take: ctx}
 	if session.Streaming != nil {
-		body = &firstRead{Reader: body, first: func() { session.Streaming(ctx) }}
+		body.stall = func() { session.Streaming(ctx) }
 	}
 	return TakenSession{
 		Archive: archive,
-		Body:    io.NopCloser(body),
+		Body:    body,
 		Context: func() int64 { return session.ContextTokens },
 		Count:   count,
 		Keep: func(ctx context.Context) error {
@@ -1243,16 +1244,34 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	}, nil
 }
 
-// firstRead is a reader that runs first once, as it is first read.
-type firstRead struct {
+// takenFake is a fake take's body. Its reads fail once it is closed, as the
+// executor's do, so a spool its context cut keeps nothing; and a first read
+// stall (Streaming) held until the take's context ended fails, as the box's
+// stream the spool closes at that same end does ([Coordinator.spool]).
+type takenFake struct {
 	io.Reader
-	first func()
-	once  sync.Once
+	take   context.Context
+	stall  func()
+	once   sync.Once
+	closed atomic.Bool
 }
 
-func (r *firstRead) Read(p []byte) (int, error) {
-	r.once.Do(r.first)
-	return r.Reader.Read(p)
+func (b *takenFake) Read(p []byte) (int, error) {
+	if b.stall != nil {
+		b.once.Do(b.stall)
+		if err := b.take.Err(); err != nil {
+			return 0, fmt.Errorf("fake: the take's stream stalled past its context: %w", err)
+		}
+	}
+	if b.closed.Load() {
+		return 0, io.ErrClosedPipe
+	}
+	return b.Reader.Read(p)
+}
+
+func (b *takenFake) Close() error {
+	b.closed.Store(true)
+	return nil
 }
 
 // Takes is every capture asked of this runner, in order.
