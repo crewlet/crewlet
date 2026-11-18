@@ -17,7 +17,7 @@ import (
 )
 
 // A LATE CALL: one the round's log took after its job was replaced by a
-// relaunch carrying the round on (runner.BridgedCall.Late), so after that
+// relaunch carrying the round on (ledger.Call.Late), so after that
 // relaunch's brief was built. No brief of the round told it, the session of
 // the job that made it may not hold it, and no save point holds it.
 
@@ -98,7 +98,7 @@ func TestNoGuardCountsALoadTheLogTookLate(t *testing.T) {
 			ActiveTools: []string{"slack_post", toolname.LoadToolSkill},
 		}, []runner.BridgedCall{
 			{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "chat-conventions"},
-				Result: "Always thread your reply."}, Seq: 1, Appended: 1, Late: true},
+				Result: "Always thread your reply.", Late: true}, Seq: 1, Appended: 1},
 		}, nil, nil, nil, runner.Bridged{}, false)
 		if err != nil {
 			t.Fatalf("ReopenAgentRun: %v", err)
@@ -128,7 +128,7 @@ func TestALateSubmissionIsNeverTheRounds(t *testing.T) {
 	lost := &runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
 	submitted := func(late bool) []runner.BridgedCall {
 		return []runner.BridgedCall{{Call: ledger.Call{Name: runner.SubmitWorkTool,
-			Args: map[string]any{"outcome": "delivered", "summary": "posted it"}}, Seq: 1, Appended: 1, Late: late}}
+			Args: map[string]any{"outcome": "delivered", "summary": "posted it"}, Late: late}, Seq: 1, Appended: 1}}
 	}
 	if !(runner.Resume{Lost: lost, Bridged: submitted(true)}).CarriesOn() {
 		t.Error("a lost round whose only submission its log took late is collected on it, want it carried on")
@@ -203,7 +203,7 @@ func TestALateSubmissionIsToldAsNoneOfTheRounds(t *testing.T) {
 	for _, failed := range []bool{false, true} {
 		late := runner.BridgedCall{Call: ledger.Call{Name: runner.SubmitWorkTool,
 			Args:   map[string]any{"outcome": "delivered", "summary": "posted it"},
-			Result: "submitted", Failed: failed}, Seq: 2, Appended: 2, Late: true}
+			Result: "submitted", Failed: failed, Late: true}, Seq: 2, Appended: 2}
 		brief := afterSaveBrief(t, 1, []runner.BridgedCall{
 			numbered("slack_post", map[string]any{"text": "posted"}, 1, 1), late}, nil)
 		if !strings.Contains(brief, "posted it") {
@@ -235,7 +235,7 @@ func TestARunCarriedOnInItsBoxIsToldTheCallsTheLogTookLate(t *testing.T) {
 	late.Late = true
 	submitted := runner.BridgedCall{Call: ledger.Call{Name: runner.SubmitWorkTool,
 		Args:   map[string]any{"outcome": "delivered", "summary": "an earlier job's late submission"},
-		Result: "submitted"}, Seq: 3, Appended: 4, Late: true}
+		Result: "submitted", Late: true}, Seq: 3, Appended: 4}
 	// A NOTE THE TURN HAS READ, which a copy whose harness ended its own run
 	// holds, and one cut off is told again.
 	read := steer.Read{Note: steer.Note{ID: "read", Text: "a note the job read", By: "founder"},
@@ -318,7 +318,7 @@ func TestALateSubmissionIsToldOnceUnderItsOwnWords(t *testing.T) {
 	)
 	late := runner.BridgedCall{Call: ledger.Call{Name: runner.SubmitWorkTool,
 		Args:   map[string]any{"outcome": "delivered", "summary": "the late submission"},
-		Result: "submitted"}, Seq: 3, Appended: 3, Late: true}
+		Result: "submitted", Late: true}, Seq: 3, Appended: 3}
 	brief := afterSaveBrief(t, 1, []runner.BridgedCall{
 		numbered("slack_post", map[string]any{"text": "held by the session"}, 1, 1),
 		numbered("jira_create", map[string]any{"summary": "the call after the save"}, 2, 2),

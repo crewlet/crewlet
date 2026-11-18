@@ -896,3 +896,54 @@ func TestAResumedRunMayCiteADeliveryAClosedRoundMade(t *testing.T) {
 		t.Errorf("outcome = %s, want a citation of a comment nobody made refused", w.Outcome)
 	}
 }
+
+// A COLLECTED RUN MAY CITE A DELIVERY A LATE CALL MADE. The citation check reads
+// the turn's record, a late call included (ledger.Call.Late): its delivery is
+// the turn's, as a closed round's is, and turn.Check counts it after the
+// review, so a check narrowed to the round's own calls would refuse here what
+// that one accepts. Only the reviewer's reading tells the late call apart.
+//
+// Mutation: skip late calls in citations, and the submission is refused.
+func TestAResumedRunMayCiteADeliveryALateCallMade(t *testing.T) {
+	t.Parallel()
+	tracker := func(t *testing.T, reg *tools.Registry) {
+		t.Helper()
+		if err := reg.RegisterWith(stubTool{name: "comment_on_work_item", out: "commented"},
+			tools.OriginBuiltin, tools.Annotations{}, tools.DeliversTo("work")); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(`{"outcome":"delivered","summary":"collected the run",`+
+		`"deliveries":["comment_on_work_item"]}`), &args); err != nil {
+		t.Fatal(err)
+	}
+	submission := runner.BridgedCall{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: args}, Seq: 2, Appended: 2}
+	collect := func(t *testing.T, bridged ...runner.BridgedCall) turn.Work {
+		t.Helper()
+		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+			buildOpts{reply: turn.ToolReply("work"), register: tracker,
+				resume: &runner.Resume{
+					State:   execstate.State{Version: execstate.Version, Round: 2},
+					Answer:  "done",
+					Bridged: bridged,
+				}})
+		w, _, err := r.Resume(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		return w
+	}
+
+	late := runner.BridgedCall{Call: ledger.Call{Name: "comment_on_work_item", Result: "commented", Late: true},
+		Seq: 1, Appended: 1}
+	if w := collect(t, late, submission); w.Rescued || w.Outcome != turn.OutcomeDelivered {
+		t.Errorf("outcome = %s (rescued %v), want the citation of the late call's comment accepted",
+			w.Outcome, w.Rescued)
+	}
+	// The counterfactual: with no late call the same citation names a comment
+	// nobody made, and is refused.
+	if w := collect(t, submission); !w.Rescued {
+		t.Errorf("outcome = %s, want a citation of a comment nobody made refused", w.Outcome)
+	}
+}

@@ -289,7 +289,7 @@ type Continuation struct {
 	// BriefRead is how many calls the round's log had taken at the read
 	// every brief of the launch was built from ([Resume.BridgedRead]): the
 	// launch's opening of the job's log marks every call of the round the log
-	// took after it late ([BridgedCall.Late]) — calls of the job before that
+	// took after it late ([ledger.Call.Late]) — calls of the job before that
 	// landed while the relaunch was readied, which no brief told — but the
 	// call a person approved, which the lead tells. NIL marks none: a launch
 	// built from no such read.
@@ -1779,7 +1779,7 @@ const runRound = 1
 // its question as well as before it. A call with no place (zero) is not after
 // any answer.
 //
-// AND NEVER A LATE CALL ([BridgedCall.Late]): the log took it after its job
+// AND NEVER A LATE CALL ([ledger.Call.Late]): the log took it after its job
 // was replaced, so after the cut was taken — its place, which its own job's
 // session gave it, can fall past the cut though it was made before the answer
 // — and after the brief of the job carrying the round on was built. That job

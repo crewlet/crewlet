@@ -200,6 +200,24 @@ func TestACallWhoseRecordedArgumentsDoNotReadBackIsMarkedSo(t *testing.T) {
 	}
 }
 
+// A ROUND'S RECORD MARKS THE CALLS ITS LOG TOOK LATE. The mark rides the
+// call's ledger.Call, the part the runner's record of the round keeps
+// (turn.Work.Calls, a parked turn's closed rounds), so the round's reviewer
+// reads a late call as an earlier run's (ledger.Call.Late).
+//
+// Mutation: leave Late out of bridgedCalls' ledger.Call, and the record reads
+// the late call as the round's own.
+func TestARoundsRecordMarksTheCallsItsLogTookLate(t *testing.T) {
+	t.Parallel()
+	got := bridgedCalls([]sandbox.BridgeCall{
+		{Name: "slack_post", Args: `{"text":"from the job replaced"}`, Output: "posted", Seq: 1, Appended: 2, Late: true},
+		{Name: "slack_post", Args: `{"text":"from the job working"}`, Output: "posted", Seq: 2, Appended: 1},
+	})
+	if len(got) != 2 || !got[0].Call.Late || got[1].Call.Late {
+		t.Errorf("the round's record reads %+v, want the first call marked late and the second not", got)
+	}
+}
+
 // WHAT THE LOG KEPT OF A CALL IS WHAT THE RESUMED TURN READS: its identity, the
 // sizes of its whole arguments and output where the log kept less (the
 // collection's replay decides by them), the calls the log dropped as a tally by

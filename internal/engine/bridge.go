@@ -52,10 +52,10 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 				// held call or an approved one.
 				Withheld:   call.Withheld(),
 				ArgsUnread: unread,
+				Late:       call.Late,
 			},
 			Seq:         call.Seq,
 			Appended:    call.Appended,
-			Late:        call.Late,
 			Abandoned:   call.Abandoned,
 			StartedAt:   call.StartedAt,
 			Duration:    time.Duration(call.DurationMS) * time.Millisecond,
