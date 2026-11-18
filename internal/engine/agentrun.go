@@ -881,9 +881,9 @@ func (l *agentLauncher) refusedIn() []sandbox.BudgetWindow {
 // keptFloor is the floor of a launch that continues s, the session it was asked
 // to continue in any box ([runner.AgentRunRequest.Session]): the turn's kept
 // capture, in the longest of its briefs (its two, and the two told by a
-// reading of what it holds where it carries them,
-// [runner.SessionContinuation.Exact], since which box the launch gets, and
-// which release that box's harness answers, are the launch's to learn), or the
+// reading, [runner.SessionContinuation.Exact], and for a box whose release the
+// resume was not read in, [runner.SessionContinuation.Unheld], where it carries
+// them, since which box and release the launch gets are its to learn), or the
 // session its conversation's last turn left, in its one; static where s names
 // neither.
 func keptFloor(static launchFloor, s *runner.SessionContinuation) launchFloor {
@@ -892,6 +892,9 @@ func keptFloor(static launchFloor, s *runner.SessionContinuation) launchFloor {
 		brief := max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced))
 		if x := s.Exact; x != nil {
 			brief = max(brief, harness.EstimateTokens(x.Brief), harness.EstimateTokens(x.Replaced))
+		}
+		if u := s.Unheld; u != nil {
+			brief = max(brief, harness.EstimateTokens(u.Brief), harness.EstimateTokens(u.Replaced))
 		}
 		return static.continuing(s.Basis.ContextTokens, brief)
 	case s.Basis.ContinuesBase():

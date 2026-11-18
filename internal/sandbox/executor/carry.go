@@ -327,10 +327,10 @@ func (r *Runner) OpenCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.
 // one login-shell exec of its `--version`, the box's own bin directory first
 // on its PATH as the run's wrapper puts it ([withBoxBin]), held against the
 // harness that wrote the session, the archive's format and the harness's own floors
-// ([carrier.Continues]). The release it read is returned either way: the
-// launch hands a brief told by a reading of what the session holds only where
-// it is exactly the release that reading was read for, the writer's
-// ([sandbox.ExactTelling]).
+// ([carrier.Continues]). The release it read is returned either way, with
+// whether its resume was read ([claudeResumeRead], [sandbox.UnheldTelling]):
+// a brief told by a reading goes only to the release it was read for, the
+// writer's ([sandbox.ExactTelling]).
 //
 // THREE ANSWERS, as a lease's are: it can, it cannot (and why), and the box
 // could not be asked — an error, never read as either.
@@ -351,6 +351,7 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 			r.harness.Name(), carries.VersionCommand(), res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))}, nil
 	}
 	check := sandbox.CarryCheck{Version: releaseOf(res.Stdout)}
+	check.ResumeRead = r.harness.Name() == sandbox.ClaudeCodeHarness && claudeResumeRead(check.Version)
 	if restores, why := r.Restores(archive); !restores {
 		check.Why = why
 		return check, nil

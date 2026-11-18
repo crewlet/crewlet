@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -80,10 +81,10 @@ import (
 //     has read, as notes it may already show ([prompts.NotesReadAgain]): its
 //     job's last take of them was recorded read before its harness had them,
 //     and it is not known to hold its job's brief, which told the notes the
-//     session it continued lacked; or, of one whose notes stop before a read
-//     the record marks unanswered — a take whose answer never reached its
-//     harness — every note past that, as notes it may already show
-//     ([Runner.notesHeldBy]); and then the ones this brief is the first to
+//     session it continued lacked; or, of one whose notes stop before a read no
+//     session of its job holds — an unanswered take's, or one before its last
+//     restart — every note past that, as notes it may already show
+//     ([Runner.firstUnheld]); and then the ones this brief is the first to
 //     read — under the same header, up to the last of them the run's bridge
 //     served a harness, which may have delivered it unconfirmed, and any read
 //     one so served likewise ([Runner.toldNotes]).
@@ -118,9 +119,9 @@ import (
 // it holds only as a count, as every continuation of the round built after
 // they landed is told them, and before them that a successful submission among
 // the calls it holds is none of the round's
-// ([prompts.AfterSave.HeldSubmission]) — and every note from the first read
-// the record marks unanswered on, as notes it may already show, since it lacks
-// that one.
+// ([prompts.AfterSave.HeldSubmission]) — and every note from the first read no
+// session of its job holds on ([Runner.firstUnheld]), as notes it may already
+// show.
 //
 // A SESSION HOLDS WHAT ITS BRIEFS TOLD, NEVER WHAT THEIR BUDGETS LEFT OUT. A
 // brief tells a round's calls within the prior-work ledger's budgets, and the
@@ -313,14 +314,21 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	// MARKED UNANSWERED, every note past that, as notes it may already show
 	// ([Runner.notesHeldBy]): the session lacks that note, and holds the
 	// answered ones after it.
+	var unheld []string
 	if holds.lacks() {
 		after = append(after, r.toldNotes(r.readsSince(0), true, fresh)...)
 	} else {
-		held, unsure := r.notesHeldBy(basis.NoteCursor)
+		held, unsure := r.notesHeldBy(basis.NoteCursor, false)
+		// AND, WHERE THE CURSOR COUNTS A READ AT A HOOK'S STEP, THE TELLING
+		// FOR A BOX WHOSE RELEASE THE RESUME WAS NOT READ IN, which holds no
+		// such read ([UnheldTelling]).
+		if strict, _ := r.notesHeldBy(basis.NoteCursor, true); strict < held {
+			unheld = append(slices.Clone(after), r.toldNotes(r.readsSince(strict), true, fresh)...)
+		}
 		after = append(after, r.toldNotes(r.readsSince(held), unsure, fresh)...)
 	}
-	return &keptBrief{basis: basis, after: after, omitted: omitted, told: again.refs, toldUnread: again.unread,
-		readHeld: readHeld, newBox: prompts.BoxReplaced(provenance.Neutralise(b, branch),
+	return &keptBrief{basis: basis, after: after, unheld: unheld, omitted: omitted, told: again.refs,
+		toldUnread: again.unread, readHeld: readHeld, newBox: prompts.BoxReplaced(provenance.Neutralise(b, branch),
 			provenance.Neutralise(b, basis.Home), r.checkoutName())}
 }
 
@@ -474,9 +482,9 @@ func leadsHeld(carry carried, round int) []toldHeld {
 // known to have ended its own run, every note the turn has read, as notes it
 // may already show — a copy not known to hold its job's brief lacks the notes
 // that brief told, and no record says which those were; where it did, every
-// note from the first read the record marks unanswered on, the same way — that
-// take's answer never reached the harness, so the copy lacks its notes, and
-// holds the answered ones after it and every one before ([Runner.notesHeldBy]);
+// note from the first read no session of its job holds on, the same way — an
+// unanswered take's or one before its last restart, which the copy lacks, and
+// it holds the reads after it and every one before ([Runner.firstUnheld]);
 // and then the notes fresh holds, the ones the brief is the first to read, the
 // served among them told as notes it may already show ([Runner.toldNotes]).
 //
@@ -490,7 +498,7 @@ func (r *Runner) inPlaceNotes(carry carried, fresh []steer.Note, holds sessionHo
 	case holds.lacks():
 		return r.toldNotes(r.readsSince(0), true, fresh)
 	}
-	if first := r.firstUnanswered(); first > 0 {
+	if first := r.firstUnheld(false); first > 0 {
 		return r.toldNotes(r.readsSince(first-1), true, fresh)
 	}
 	return r.toldNotes(nil, false, fresh)
@@ -505,8 +513,11 @@ func (r *Runner) inPlaceNotes(carry carried, fresh []steer.Note, holds sessionHo
 // it was told by no reading), and what a box other than the one it was last
 // worked in changes.
 type keptBrief struct {
-	basis      SessionBasis
-	after      []string
+	basis SessionBasis
+	after []string
+	// unheld is after with the notes told as [UnheldTelling] tells them, nil
+	// where the cursor counts no read at a hook's step.
+	unheld     []string
 	omitted    []int
 	told       []sandbox.LeadRef
 	toldUnread []int
@@ -523,11 +534,19 @@ func (k *keptBrief) led(lead string, own []sandbox.Lead) *SessionContinuation {
 	if k == nil {
 		return nil
 	}
-	parts := append([]string{strings.TrimSpace(lead)}, k.after...)
-	parts = slices.DeleteFunc(parts, func(p string) bool { return strings.TrimSpace(p) == "" })
-	brief := strings.Join(parts, "\n\n")
-	return &SessionContinuation{Basis: k.basis, Brief: brief, Replaced: brief + "\n\n" + k.newBox,
+	joined := func(after []string) string {
+		parts := append([]string{strings.TrimSpace(lead)}, after...)
+		parts = slices.DeleteFunc(parts, func(p string) bool { return strings.TrimSpace(p) == "" })
+		return strings.Join(parts, "\n\n")
+	}
+	brief := joined(k.after)
+	out := &SessionContinuation{Basis: k.basis, Brief: brief, Replaced: brief + "\n\n" + k.newBox,
 		Told: sandbox.BriefTold{Omitted: k.omitted, Own: own, Told: k.told, ToldUnread: k.toldUnread}}
+	if k.unheld != nil {
+		unheld := joined(k.unheld)
+		out.Unheld = &UnheldTelling{Brief: unheld, Replaced: unheld + "\n\n" + k.newBox}
+	}
+	return out
 }
 
 // heldReading is a reading of what a cut-off kept session holds
@@ -1933,39 +1952,44 @@ func (r *Runner) inReadOrder(reads []steer.Read, fresh []steer.Note) ([]steer.Re
 
 // notesHeldBy is the last read a session saved holding the notes read through
 // cursor (sandbox.SessionCapture.NoteCursor) holds as far as the turn's carried
-// reads say, and whether it may hold a read after that one too.
-//
-// STOPPED BEFORE THE FIRST READ MARKED UNANSWERED (steer.Reading.Unanswered)
-// that the cursor reaches: its take's answer never reached the harness, so the
-// session lacks that note, while it holds the answered reads after it — so
-// every note past the stop is told, as notes it may already show. The capture's
-// own cursor already stops there wherever the mark landed before the capture
-// was stamped (internal/sandbox's notesHeld); read again here, because a mark is
-// made off the take's frame and can land after the stamp, and the carried reads
-// are the record as this segment found it. A read marked unanswered that the
-// cursor neither counts nor stopped right before was made after the session was
-// saved, and is told as every read after it is.
-func (r *Runner) notesHeldBy(cursor int) (held int, unsure bool) {
-	first := r.firstUnanswered()
+// reads say, and whether it may hold a read after that one too: stopped before
+// the first read the cursor reaches that no session of its job holds
+// ([Runner.firstUnheld]), every note past the stop told, as notes it may
+// already show. Read again here although the capture's cursor already stops
+// there (internal/sandbox's notesHeld), because a mark is made off the take's
+// frame and can land after the stamp. Read only where the path holds its brief
+// ([sessionHolds.lacks]): a path that lacks it is told every note.
+func (r *Runner) notesHeldBy(cursor int, hooks bool) (held int, unsure bool) {
+	first := r.firstUnheld(hooks)
 	if first == 0 || first > cursor+1 {
 		return cursor, false
 	}
 	return first - 1, true
 }
 
-// firstUnanswered is the place among the record's reads of the earliest read
-// the turn carries that the record marks unanswered (steer.Reading.Unanswered),
-// zero for none.
-func (r *Runner) firstUnanswered() int {
+// firstUnheld is the place among the record's reads of the earliest read the
+// turn carries that no session of its job holds: one the record marks
+// unanswered (steer.Reading.Unanswered), its take's answer lost, or taken
+// before the session's last restart (steer.Reading.Restarted); and, where
+// hooks, any read at a hook's step, which a box whose release the resume was
+// not read in holds none of ([UnheldTelling]). Zero for none.
+func (r *Runner) firstUnheld(hooks bool) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	first := 0
 	for _, read := range r.steered {
-		if read.Unanswered && read.Order > 0 && (first == 0 || read.Order < first) {
+		unheld := read.Unanswered || read.Restarted || (hooks && hookStep(read.Boundary))
+		if unheld && read.Order > 0 && (first == 0 || read.Order < first) {
 			first = read.Order
 		}
 	}
 	return first
+}
+
+// hookStep reports whether boundary is a step a Claude Code hook answers: the
+// two a hook's serve reads at, which only its job's session confirms.
+func hookStep(boundary types.SteerBoundary) bool {
+	return boundary == types.SteerBoundaryToolBatch || boundary == types.SteerBoundaryFinish
 }
 
 // sendBackLead is what carries a send-back's session on: the review's notes and

@@ -134,7 +134,7 @@ type AgentRunRequest struct {
 	// ([Runner.retold]). EVERY BRIEF THE LAUNCH MAY HAND ITS RUN TELLS EACH OF
 	// THEM AGAIN: the fresh one among every note the turn has read, and a
 	// continued session's, its job's own copy's included, from the first such
-	// read on ([Runner.notesHeldBy], [Runner.inPlaceNotes]). So the launch
+	// read on ([Runner.firstUnheld], [Runner.inPlaceNotes]). So the launch
 	// records each read by the job it opens, told again, at its take's own
 	// place among the reads (sandbox.NoteRead.Retold), and the turn's ending
 	// says it was delivered there where the job started. None of them is
@@ -346,6 +346,23 @@ type SessionContinuation struct {
 	// to every other box, and drops it alone where the seat's budget cannot
 	// carry it but carries the rest (internal/engine's continuedFloor).
 	Exact *ExactTelling
+
+	// Unheld is the briefs for a box whose release the resume was not read
+	// in, beside Brief and Replaced; nil where they would tell the same
+	// ([UnheldTelling]). The launch hands one of them only to such a box.
+	Unheld *UnheldTelling
+}
+
+// UnheldTelling is a relaunch's briefs for a box whose harness answers a
+// release whose resume this build did not read (internal/sandbox/executor's
+// claudeResumeRead): a read at a hook's step is confirmed by what the job's
+// session showed, as a release the reading was read for resumes it, so such a
+// box holds none of them. Told as [SessionContinuation]'s briefs are, but the
+// notes from the first read at a hook's step on, as notes the session may
+// already show ([Runner.firstUnheld]). Built only where the capture's cursor
+// counts such a read; the calls they tell are Brief's, so Told is its.
+type UnheldTelling struct {
+	Brief, Replaced string
 }
 
 // ExactTelling is a relaunch's briefs told by a reading of what the kept
@@ -414,9 +431,9 @@ type SessionBasis struct {
 	// record says it holds (sandbox.SessionCapture.NoteCursor), read only where
 	// its harness ended its own run: a session cut off is told every note the
 	// turn has read ([Runner.keptSession]). The cursor stops before the first
-	// read the record marks unanswered, and is stopped there again by the
-	// turn's carried reads where that mark landed after the capture was
-	// stamped ([Runner.notesHeldBy]). Zero holds none of the round's calls.
+	// read no session of its job holds, marked unanswered or restarted, and is
+	// stopped there again by the turn's carried reads where that mark landed
+	// after the capture was stamped ([Runner.notesHeldBy]). Zero holds no call.
 	// Through is what the record says the session holds, the one test by the
 	// save point ([heldAt]); of a session cut off, a reading of its archive
 	// may find it holding more, by each call's own key ([HoldingsAsker]), and

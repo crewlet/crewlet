@@ -710,6 +710,10 @@ type FakeRunner struct {
 	// [CarryCheck.Version]), "" for an answer this build cannot read. Set it
 	// before the launch that asks.
 	CarryVersion string
+	// CarryResumeUnread makes every box's harness answer a release whose
+	// resume this build did not read ([CarryCheck.ResumeRead]); unset, it
+	// answers one it did. Set it before the launch that asks.
+	CarryResumeUnread bool
 	// carried is every archive a job was started with, read whole as a
 	// runner writes it into its box.
 	carried []FakeCarried
@@ -1290,11 +1294,11 @@ func (r *FakeRunner) CheckCarry(_ context.Context, _ Sandbox, archive SessionArc
 	defer r.mu.Unlock()
 	switch {
 	case !ok:
-		return CarryCheck{Version: r.CarryVersion, Why: why}, nil
+		return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Why: why}, nil
 	case r.CarryWhy != "":
-		return CarryCheck{Version: r.CarryVersion, Why: r.CarryWhy}, nil
+		return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Why: r.CarryWhy}, nil
 	}
-	return CarryCheck{Version: r.CarryVersion, Continues: true}, nil
+	return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Continues: true}, nil
 }
 
 var _ HoldingsReader = (*FakeRunner)(nil)

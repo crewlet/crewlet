@@ -226,27 +226,36 @@ func (e *TooLongError) Error() string {
 // Reading is where a turn read a note: the phase, iteration and round, on the
 // phase's own one-based scale, the kind of step ([types.SteerBoundary]) and, for
 // an executor's read, the launch that read it; At is when.
-//
-// Order is the place of the write that recorded the read among the run's
-// record's reads (sandbox.NoteRead.Order) — what tells a read a saved session
-// accounts for from one made after it (sandbox.SessionCapture.NoteCursor) —
-// and zero for a read this segment made, which the record places after every
-// session its run was saved with before the segment began.
-//
-// Unanswered says the record marks the read as one whose take's answer was
-// lost (sandbox.NoteRead.Unanswered): the executor's harness named by Launch
-// was never handed the note at that step, though the turn carries it as read —
-// so no session of that job holds it from there, and a launch that continues
-// one is told it again.
 type Reading struct {
-	Phase      types.Phase
-	Iteration  int
-	Round      int
-	Boundary   types.SteerBoundary
-	Launch     string
-	At         time.Time
-	Order      int
+	Phase     types.Phase
+	Iteration int
+	Round     int
+	Boundary  types.SteerBoundary
+	Launch    string
+	At        time.Time
+
+	// Order is the place of the write that recorded the read among the run's
+	// record's reads (sandbox.NoteRead.Order) — what tells a read a saved
+	// session accounts for from one made after it
+	// (sandbox.SessionCapture.NoteCursor) — and zero for a read this segment
+	// made, which the record places after every session its run was saved
+	// with before the segment began.
+	Order int
+
+	// Unanswered says the record marks the read as one whose take's answer was
+	// lost (sandbox.NoteRead.Unanswered): the executor's harness named by
+	// Launch was never handed the note at that step, though the turn carries
+	// it as read — so no session of that job holds it from there, and a launch
+	// that continues one is told it again.
 	Unanswered bool
+
+	// Restarted says the record holds the read as a hook's serve its job's
+	// session showed taken before the session's last restart
+	// (sandbox.NoteRead.Restarted): the harness took the note, and a resume of
+	// that session rebuilds its conversation from the restart on, which is not
+	// known to hold it — so a launch that continues one tells it again, as a
+	// note it may already show.
+	Restarted bool
 }
 
 // Briefing is what a launch's brief takes of a turn's notes: Notes, the ones it

@@ -639,7 +639,7 @@ func readOf(at steer.Reading) sandbox.NoteRead {
 func readingOf(read sandbox.NoteRead) steer.Reading {
 	return steer.Reading{Phase: types.Phase(read.Phase), Iteration: read.Iteration, Round: read.Round,
 		Boundary: types.SteerBoundary(read.Boundary), Launch: read.Launch, At: read.At, Order: read.Order,
-		Unanswered: read.Unanswered}
+		Unanswered: read.Unanswered, Restarted: read.Restarted}
 }
 
 // takeName names one take of a run's notes ([sandbox.NoteRead.Take]): fresh for
