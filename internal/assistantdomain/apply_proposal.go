@@ -11,20 +11,15 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE PROPOSAL'S MOVES, AS RECORDS.
+// moveTargets binds each op to the states it may move a proposal to, so the op
+// an operator reads in the log and the row's state never disagree.
 //
-// Which moves are legal is internal/assistant/proposal's state machine
-// (ADR-0051), and this package does not hold a second copy of it. What it holds
-// is the record's half: each move names the state it was decided FROM and the
-// state it moves TO, the broker arbitrates it on the proposal's subject, and the
-// apply writes it only while the proposal is still in the state it names. Two
-// approvals decided from `proposed` on two nodes are two records at one
-// expectation: the broker accepts one, and the other's writer, deciding again,
-// finds the proposal decided ([AlreadyDecided]).
-//
-// moveTargets binds each op to the states it may move a proposal to, so a
-// record's op and its target never disagree: the op is what an operator reads
-// in the log, the target is what the row says.
+// Legal moves are internal/assistant/proposal's state machine (ADR-0051); this
+// package holds only the record's half: a move names its FROM and TO states,
+// the broker arbitrates it on the proposal's subject, and the apply writes it
+// only while the proposal is still in FROM. Of two approvals decided from
+// `proposed`, the broker accepts one and the other's writer finds the proposal
+// decided ([AlreadyDecided]).
 var moveTargets = map[OpKind][]wire.ProposalState{
 	OpProposalApproved:  {wire.ProposalApproved},
 	OpProposalExecuting: {wire.ProposalExecuting},

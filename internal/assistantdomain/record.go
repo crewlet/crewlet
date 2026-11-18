@@ -13,13 +13,10 @@ import (
 )
 
 // RecordVersion is the record shape THIS BUILD can decode, never the version it
-// stamps on what it writes.
-//
-// A record above it is RETAINED rather than skipped (the framework's deferral
-// contract), which is what makes a rolling upgrade a period of reduced coverage
-// rather than an outage. What a writer stamps is the LOWEST version that reads
-// the record, computed by [Encode] from [versionedFields]. It moves ONLY with
-// that table, and exactly to its highest version.
+// stamps: a writer stamps the LOWEST version that reads the record ([Encode],
+// from [versionedFields]). A record above it is RETAINED, not skipped (the
+// framework's deferral contract), so a rolling upgrade reduces coverage rather
+// than causing an outage. It moves ONLY with that table, to its highest version.
 //
 // # What each version added
 //
@@ -73,11 +70,10 @@ const (
 	// Additive: two reads never contend.
 	OpConversationAuditRead OpKind = "conversation_audit_read"
 
-	// OpFileStored records a file kept for a conversation (an image its
-	// owner attached, or a file a deep-work run delivered), ON THE
-	// CONVERSATION'S SUBJECT, because an attachment exists before the turn
-	// it is sent with. Additive under an id the caller mints: a duplicate
-	// publish writes one row, and two uploads never contend.
+	// OpFileStored records a file kept for a conversation (an attachment, or
+	// a file a deep-work run delivered), ON THE CONVERSATION'S SUBJECT: an
+	// attachment exists before its turn. Additive under an id the caller
+	// mints: a duplicate publish writes one row; two uploads never contend.
 	OpFileStored OpKind = "file_stored"
 
 	// OpTurnOpened opens a turn, ON THE CONVERSATION'S SUBJECT, so two
@@ -153,10 +149,9 @@ func (o OpKind) installsGate() bool { return o == OpConversationPurged || o == O
 
 // RecordEnvelope decodes at EVERY version, BEFORE V is consulted.
 //
-// Its EIGHT keys are reserved at the top level of the format for its life: a
-// later version may add fields beside them and may never repurpose one. They
-// are internal/doclet's and internal/artifactsdomain's eight, so an operator
-// reading two logs reads one shape.
+// Its EIGHT top-level keys are reserved for the format's life: a later version
+// may add fields beside them, never repurpose one. They are internal/doclet's
+// and internal/artifactsdomain's eight, so an operator reads one shape.
 type RecordEnvelope struct {
 	// V is the record version.
 	V int `json:"v"`
@@ -172,9 +167,8 @@ type RecordEnvelope struct {
 	// Op is what the record does.
 	Op OpKind `json:"op"`
 
-	// CreatedAt is the writer's own clock. It rides the record for an
-	// operator reading the log and is NEVER written to a row: every instant
-	// a row records of its own is the broker's.
+	// CreatedAt is the writer's own clock, for an operator reading the log,
+	// and is NEVER written to a row: a row's own instants are the broker's.
 	CreatedAt time.Time `json:"created_at,omitzero"`
 
 	// Gen is the generation the writer published in.
@@ -196,8 +190,8 @@ func (e RecordEnvelope) InstallsGate() bool {
 
 // readByEveryBuild reports a record every build must read: a gate, the
 // barrier, the trim's trimmed record and a reanchor's generation. None may
-// carry a versioned field. An older node retains what it cannot read, and a
-// trimmed record it retained is every anchor it names kept on that node.
+// carry a versioned field: an older node retains what it cannot read, and a
+// retained trimmed record keeps every anchor it names on that node.
 func (e RecordEnvelope) readByEveryBuild() bool {
 	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpTrimmed ||
 		e.Op == OpGeneration
@@ -257,8 +251,8 @@ func DecodeEnvelope(payload []byte) (RecordEnvelope, error) {
 }
 
 // Decode is the SECOND pass, and it may refuse on version. It returns the
-// envelope alongside the error whenever the envelope itself decoded, because
-// that is the case the applier retains.
+// envelope with the error whenever the envelope decoded: the applier retains
+// that record.
 func Decode(payload []byte) (MutationRecord, error) {
 	env, err := DecodeEnvelope(payload)
 	if err != nil {
@@ -330,6 +324,6 @@ func encodeWith(rec MutationRecord, fields statelog.RecordFields) ([]byte, error
 }
 
 // recordFields is every top-level name this build writes, read off the
-// struct's own tags so a name missing here is not decoded into the struct AND
-// carried as unknown.
+// struct's tags so no name is both decoded into the struct and carried as
+// unknown.
 var recordFields = jsoncarry.Names(MutationRecord{})

@@ -9,46 +9,17 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// SEALING: what a conversation says is stored as ciphertext, bound to the one
-// record it belongs to.
+// SEALING: what a conversation says is stored as ciphertext under the fleet
+// keyring (package doc, "Sealed, bounded, and gone in thirty days"), never a
+// second key hierarchy.
 //
-// # Why every value is sealed
-//
-// The replicated estate is not encrypted at rest, and it rides every snapshot,
-// every catch-up and every backup of every data node. What a person read
-// through the assistant (a message, a card's rows, a proposal's body, a parked
-// turn) is a copy of data they were entitled to see, so in the clear it would
-// be a second way to read it for anybody holding a node's disk or a backup.
-// Every such value is sealed under the FLEET KEYRING (internal/secrets'
-// AES-256-GCM), the one every node already holds for the identity estate's
-// sealed values: one envelope format and one rotation story, never a second
-// key hierarchy.
-//
-// # Why the associated data names the record
-//
-// Under one keyring every envelope opens under every key id the ring holds, so
-// a value lifted out of one row and pasted into another would open there. The
-// associated data is `assistant/<conversation>/<kind>/<record>/<column>`, so a
-// value opens only as the one column of the one record of the one conversation
-// it was sealed for ([AAD]): moved to another conversation, another record or
-// another column, it does not open at all.
-//
-// # The writer seals and the applier never opens
-//
-// Every value is sealed by the [Writer] before it is published and written
-// through by the [Applier] as the bytes the record carries, so every node
-// writes identical rows whatever keys its ring holds, and the identity claim
-// holds across them. Only the [Reader] opens a value, on the node serving the
-// person's request.
-//
-// # Rotation
-//
-// A value sealed under a key opens for as long as the ring holds that key, and
-// leaves with its conversation. So a key may be retired from the ring once no
-// value is sealed under it any more, which [Reader.SealedKeys] counts and the
-// secret store's listing reports (`assistant_values`); a key dropped sooner
-// leaves the values still sealed under it unreadable, which a read reports
-// ([ErrUnreadable]) rather than hides.
+// The associated data ([AAD]) names conversation, record kind, record and
+// column, because every envelope opens under every key the ring holds: a value
+// pasted into another row must not open there. The [Writer] seals and the
+// [Applier] writes the bytes through unopened, so every node writes identical
+// rows; only the [Reader] opens. A key may leave the ring once
+// [Reader.SealedKeys] counts nothing under it (the secret store's listing
+// reports `assistant_values`); dropped sooner, a read reports [ErrUnreadable].
 
 // RecordKind names what a sealed value belongs to in its associated data.
 type RecordKind string
@@ -103,12 +74,9 @@ type Sealer struct {
 	cipher secrets.Cipher
 }
 
-// NewSealer builds one over the fleet keyring.
-//
-// A NIL CIPHER IS REFUSED rather than read as "seal nothing": a sealer that
-// passed values through would write what people asked and were shown in the
-// clear into the log, every node's database, every snapshot and every backup,
-// and no node runs without a keyring, so a nil here is a wiring mistake.
+// NewSealer builds one over the fleet keyring. A nil cipher is refused, never
+// read as "seal nothing": no node runs without a keyring, so nil is a wiring
+// mistake that would write conversations in the clear.
 func NewSealer(cipher secrets.Cipher) (*Sealer, error) {
 	if cipher == nil {
 		return nil, errors.New("assistantdomain: a sealer with no keyring would " +
@@ -121,8 +89,8 @@ func NewSealer(cipher secrets.Cipher) (*Sealer, error) {
 	return &Sealer{cipher: cipher}, nil
 }
 
-// Seal seals plain under aad. AN EMPTY VALUE STAYS EMPTY, so an absent title
-// or page chip costs no envelope; every other value is an envelope.
+// Seal seals plain under aad. An empty value stays empty, so an absent title
+// or page chip costs no envelope.
 func (s *Sealer) Seal(plain []byte, aad string) (string, error) {
 	if len(plain) == 0 {
 		return "", nil

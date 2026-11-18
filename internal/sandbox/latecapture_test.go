@@ -120,8 +120,8 @@ func (a *appliedLog) ended() []EndRecord {
 // recordedLate is the run store whose first settle of a begun capture lets land
 // go next: a record the taker handed on before its lease's window closed, which
 // the log takes only after the settle read the turn's row and stamped the
-// capture refused, the one order the fence cannot rule out (session.go, "WHAT
-// THE FENCE CANNOT REACH").
+// capture refused, the one order the fence cannot rule out (the package doc,
+// "WHAT THE FENCE CANNOT REACH").
 type recordedLate struct {
 	PendingStore
 	land func(context.Context) (LogAnswer, error)

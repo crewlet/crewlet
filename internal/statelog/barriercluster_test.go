@@ -17,17 +17,10 @@ import (
 
 // AN ISOLATED FORMER LEADER MUST NOT SERVE A LINEARIZABLE READ.
 //
-// This is why the read index is an APPEND and not a leader check. Asking the
-// broker for its cluster leader answers from the member's own in-memory state
-// with no peer contacted, so the dangerous case — a member that has been cut
-// off and does not know it — answers with a NONEMPTY leader name and its own
-// stale last sequence, for as long as it takes the rest of the cluster to
-// notice.
-//
-// A barrier cannot lie about it: the server proposes rather than stores, the
-// commit returns false until the acknowledgements reach a quorum, and the
-// acknowledgement is written from the apply path. A member with no quorum
-// therefore gets no sequence at all.
+// Why the read index is an APPEND, not a leader check ([statelog.ReadIndex]):
+// a cut-off member's own view names a nonempty leader and a stale last
+// sequence until the cluster notices, while a barrier commits only with a
+// quorum, so a member without one gets no sequence at all.
 func TestLinearizableRefusesWhenTheOldLeaderIsIsolated(t *testing.T) {
 	t.Parallel()
 	c := jetstreamtest.StartPartitionableCluster(t, 3, js.Config{})
@@ -43,8 +36,7 @@ func TestLinearizableRefusesWhenTheOldLeaderIsIsolated(t *testing.T) {
 		t.Fatalf("provision the log: %v", err)
 	}
 
-	// The isolated member's own client, so the read index it drives is the
-	// one on the wrong side of the cut.
+	// The isolated member's own client: its read index is on the wrong side.
 	isolated := c.Client(t, 2)
 	log, err := isolated.DomainLog(t.Context(), spec.Name)
 	if err != nil {
@@ -55,22 +47,18 @@ func TestLinearizableRefusesWhenTheOldLeaderIsIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
-	// It works while the member is connected, which is what makes the
-	// refusal below a statement about the partition rather than about the
-	// wiring.
+	// It works while connected, so the refusal below is the partition's,
+	// not the wiring's.
 	if _, err := idx.Read(t.Context()); err != nil {
 		t.Fatalf("a barrier from a connected member: %v", err)
 	}
 
 	c.Partition(t, 2)
 
-	// EVERY ATTEMPT FOR TWENTY SECONDS, and the number is the point. The
-	// design this replaces refused on the broker's reported leader, and
-	// an isolated former leader was measured answering with its own name
-	// and its own stale last sequence for 15.4, 13.1 and 15.4 seconds
-	// after the majority had committed a newer write. A window shorter
-	// than that would pass against the very check this level exists to
-	// replace.
+	// EVERY ATTEMPT FOR TWENTY SECONDS: an isolated former leader was
+	// measured reporting itself leader, with a stale last sequence, for up
+	// to 15.4 s, so a shorter window would pass the leader check this level
+	// replaces.
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -85,10 +73,8 @@ func TestLinearizableRefusesWhenTheOldLeaderIsIsolated(t *testing.T) {
 	}
 }
 
-// AND THE MAJORITY GOES ON SERVING THEM.
-//
-// A test that only proved the isolated member refuses would be satisfied by a
-// read index that never works at all.
+// AND THE MAJORITY GOES ON SERVING THEM: proving only the isolated member's
+// refusal would pass a read index that never works.
 func TestLinearizableKeepsWorkingOnTheSurvivingMajority(t *testing.T) {
 	t.Parallel()
 	c := jetstreamtest.StartPartitionableCluster(t, 3, js.Config{})
@@ -108,8 +94,7 @@ func TestLinearizableKeepsWorkingOnTheSurvivingMajority(t *testing.T) {
 		t.Fatalf("open the log: %v", err)
 	}
 	// THE COUNT AN UNCONFIRMED BARRIER IS JUDGED BY is the stream's own,
-	// read at open: three here, so one the cut leaves without a majority is
-	// a missed quorum and never a member's stalled write.
+	// read at open: three, so a cut is a missed quorum, never a stalled write.
 	if got := log.Members(); got != 3 {
 		t.Fatalf("the log of a three-member cluster is stored by %d members, want 3", got)
 	}
@@ -121,9 +106,8 @@ func TestLinearizableKeepsWorkingOnTheSurvivingMajority(t *testing.T) {
 
 	c.Partition(t, 2)
 
-	// Two of three is a quorum, so the read index must come back — after
-	// the surviving pair elects, which is NATS's own timeout rather than
-	// anything this engine sets.
+	// Two of three is a quorum, so the read index must come back once the
+	// pair elects, on NATS's own timeout.
 	var last error
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
@@ -144,22 +128,15 @@ func TestLinearizableKeepsWorkingOnTheSurvivingMajority(t *testing.T) {
 		"here has lost more than the member that was cut", last)
 }
 
-// THE STREAM'S OWN INFO IS NOT ON THE READ PATH, and this is a static walk
-// because the temptation is permanent.
-//
-// A cluster's reported leader is the member's own in-memory value, read under
-// its own lock with no peer contacted — so it is nonempty and wrong in exactly
-// the case a linearizable read exists to refuse. Reaching for it is the
-// obvious optimisation the moment somebody notices the barrier costs a round
-// trip, and the check it appears to be is one that cannot fire.
+// THE STREAM'S OWN INFO IS NOT ON THE READ PATH, held by a static walk because
+// the temptation is permanent: a cluster's reported leader is the member's own
+// in-memory value, nonempty and wrong in exactly the case a linearizable read
+// refuses, and the obvious saving on the barrier's round trip.
 func TestStreamInfoIsNotOnTheReadPath(t *testing.T) {
 	t.Parallel()
-	// ONE PARSE PER FILE rather than go/parser's ParseDir, which is
-	// deprecated for a limitation this walk would inherit: it groups files
-	// into packages without reading their build tags. Nor go/packages,
-	// which answers that properly by loading and type-checking the world —
-	// this is a walk over SELECTOR NAMES, and it needs neither types nor
-	// package structure to see one.
+	// ONE PARSE PER FILE: ParseDir is deprecated for grouping files without
+	// their build tags, and go/packages type-checks the world, which a walk
+	// over SELECTOR NAMES does not need.
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("list the package directory: %v", err)

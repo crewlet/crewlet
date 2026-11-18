@@ -90,9 +90,9 @@ func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 		b.WriteString("\n**What they wrote:**\n" + n.Body + "\n")
 	}
 	if quote := meta[MetaQuote]; quote != "" {
-		// THE PAGE'S WORDS, which nobody the record names wrote: fenced here
-		// under the wake's token as an artifact's file, as the body is by the
-		// spine (ADR-0040).
+		// The page's words, which nobody the record names wrote: fenced as
+		// an artifact's file under the wake's token, as the spine fences the
+		// body (ADR-0040).
 		label := provenance.LabelForHosted(meta[notify.RecipientField], provenance.SourceArtifactFile, nil, false)
 		b.WriteString("\n**What it quotes from the page:**\n" + label.Fence(n.Fence, quote) + "\n")
 	}

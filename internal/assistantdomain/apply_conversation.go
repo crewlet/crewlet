@@ -73,13 +73,10 @@ func applyCreated(ctx context.Context, tx *sql.Tx, c applyContext, id string,
 	return affected(res), nil
 }
 
-// applyPurged removes a conversation for good.
-//
-// A RETENTION PURGE IS DECIDED AGAIN HERE: the conversation's activity moves on
-// its turns' subjects, which its own arbitration does not see, so a message
-// recorded after the reaper decided and before this record would otherwise be
-// purged with a conversation that was in use. Such a purge writes nothing, and
-// the reaper's next pass finds the conversation no longer due.
+// applyPurged removes a conversation for good. A RETENTION PURGE IS DECIDED
+// AGAIN HERE: activity moves on the turns' subjects, which the conversation's
+// arbitration does not see, so purging a conversation used since the reaper
+// decided writes nothing, and the reaper's next pass finds it no longer due.
 func applyPurged(ctx context.Context, tx *sql.Tx, c applyContext, id string,
 	p ConversationPurged) (int, error) {
 
@@ -121,9 +118,9 @@ func applyAuditRead(ctx context.Context, tx *sql.Tx, c applyContext, id string,
 }
 
 // applyTurnOpened opens a turn: its row, and the conversation's count and open
-// turn. The writer decided it from a conversation with no open turn and this
-// turn's number, and the broker's arbitration on the conversation holds both;
-// a record that finds either moved writes nothing.
+// turn. The writer decided it from no open turn and this turn's number, which
+// the conversation's arbitration holds; a record finding either moved writes
+// nothing.
 func applyTurnOpened(ctx context.Context, tx *sql.Tx, c applyContext, id string,
 	p TurnOpened) (int, error) {
 

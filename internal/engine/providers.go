@@ -1644,6 +1644,15 @@
 // session may already show ([servedNotes]), the marks a brief tells again
 // ([unansweredNotes]), the record of a note delivered ([runSteers.delivered])
 // and the ending ([sandbox.PendingRun.EndedNotes]).
+//
+// # A continued session's floor
+//
+// A launch's floor for a session it may continue is that session's own
+// context with the brief that continues it: the turn's kept capture as that
+// capture measured it (runner's SessionBasis.ContextTokens), never its job's
+// newest capture's, and the job's own copy in its box as its newest capture
+// measured it, kept or not (SessionBasis.CopyContext), or its record where
+// larger.
 package engine
 
 import (

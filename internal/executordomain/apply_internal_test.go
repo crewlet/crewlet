@@ -85,18 +85,16 @@ func TestAnEndedTurnTakesNoFurtherCapture(t *testing.T) {
 }
 
 // AN END ABSORBS EXACTLY WHAT ITS TURN'S FIRST READ HANDED OUT: the turns its
-// captures carry as absorbed go, each only where it ended at or before that
-// read; a turn the read left out (past its bound) stays for the next turn to be
-// shown, and so does a turn named in error that ended after the read, which the
-// read could not have shown — and a live turn named in error whose begin wrote
-// its row, which no absorption takes, ended rows alone being absorbed.
+// captures carry as absorbed go, each only if it ended at or before that read.
+// A turn the read left out (past its bound) stays for the next turn, as do a
+// turn named in error that ended after the read and a live turn named in error
+// whose begin wrote its row: only ended rows are absorbed.
 //
-// Mutation: absorb every ended row at or below the read, as the rule once was,
-// and the turn the read left out is absorbed although nobody was shown it; drop
-// the end_seq bound from absorbStatement and the turn that ended after the
-// read goes; and absorb a named row whether or not it ended — no end_seq term
-// at all, or a missing end read as one at the log's start — and the live
-// turn's begun row goes with it.
+// Mutation: absorb every ended row at or below the read and the turn the read
+// left out goes unshown; drop the end_seq bound from absorbStatement and the
+// turn that ended after the read goes; absorb a named row whether or not it
+// ended (no end_seq term, or a missing end read as one at the log's start) and
+// the live turn's begun row goes.
 func TestAnEndAbsorbsExactlyWhatItsFirstReadHandedOut(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -164,10 +162,8 @@ func TestATurnWithNoConversationAbsorbsNothing(t *testing.T) {
 // older attempt at the same unit of work goes whether its captures carried the
 // key or only its end did, and the surviving row says the work's reply went out
 // if any attempt delivered it; two turns that share no work key leave each
-// other alone.
-//
-// THE END IS AUTHORITATIVE FOR THE KEY: an attempt whose captures carried none
-// takes its end's, which is what a later attempt's dedupe finds it by.
+// other alone. THE END IS AUTHORITATIVE FOR THE KEY: an attempt whose captures
+// carried none takes its end's, which a later attempt's dedupe finds it by.
 //
 // Mutation: leave the end's work key off endRowStatement and the first
 // attempt, whose capture carried no key, survives its retry; drop the
@@ -269,12 +265,11 @@ func TestACaptureKeepsItsTurnsFirstReadAndWork(t *testing.T) {
 }
 
 // A CAPTURE NAMING WHAT NO READER CAN PARSE WRITES NOTHING: an object key the
-// store does not spell, a digest that is not one, and a list of absorbed turns
-// no read hands out. Each would be a row that fails the collector, its audit,
-// the backup and every read of the seat on every node, for as long as it stays.
-// Nor does one whose session's context is below nothing, which no request
-// carries and whose writer refuses it: a launch would size its budget floor on
-// it.
+// store does not spell, a digest that is not one, or a list of absorbed turns
+// no read hands out: each would fail the collector, its audit, the backup and
+// every read of the seat on every node while it stays. Nor does one whose
+// session's context is below zero, which its writer refuses: a launch would
+// size its budget floor on it.
 //
 // Mutation: drop nameable from applyCapture and the malformed key is recorded;
 // drop the context's floor from it and a record that skipped its writer puts
@@ -334,21 +329,17 @@ func TestAnEndWithNothingCapturedKeepsTheEndingAlone(t *testing.T) {
 }
 
 // AN END WHOSE TURN'S NEWEST CAPTURE WAS NOT KEPT TAKES THE OLDER ONE OFF THE
-// ROW — BY THE RULE OF AN END STAMPED BELOW VERSION 4, one that says nothing of
-// the turn going on past the session its row names, as every end a build
-// before version 4 wrote: the rule such an end is applied by on every copy, so
-// this build applies it so too ([wentOnVersion];
-// TestAnEndStampedBelowFourIsAppliedByTheRuleItWasWrittenUnder holds the
-// branch, and TestAnEndWhoseTurnWentOnPastItsSessionKeepsIt the rule version 4
-// brought). The turn's row names launch 1's session; launch 2's capture was
-// refused, so that session does not hold what launch 2 did: the end releases
-// it and keeps the ending, which says why. Where the capture the end names as
-// unkept landed after all — its record was out when the end was decided, and
-// the row's place is that capture's — the session stays.
+// ROW, by the rule of an end stamped below [wentOnVersion], silent on the turn
+// going on past its row's session (an end applies by its own stamp's rule;
+// TestAnEndStampedBelowFourIsAppliedByTheRuleItWasWrittenUnder holds that
+// branch, TestAnEndWhoseTurnWentOnPastItsSessionKeepsIt the newer one). Launch
+// 2's capture was refused, so launch 1's session, which the row names, lacks
+// what launch 2 did: the end releases it, keeping the ending (which says why),
+// unless the unkept capture landed after all (the row's place is its).
 //
-// Mutation: drop the release from applyEnd's rule for an end stamped below
-// version 4, or decide it on anything but the row's own place, and the stale
-// session stays named, or the landed one goes.
+// Mutation: drop the release from applyEnd's below-4 rule, or decide it on
+// anything but the row's own place, and the stale session stays or the landed
+// one goes.
 func TestAnEndWhoseNewestCaptureWasNotKeptReleasesTheOlderOne(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -393,22 +384,16 @@ func TestAnEndWhoseNewestCaptureWasNotKeptReleasesTheOlderOne(t *testing.T) {
 }
 
 // THE SEAT'S BUDGET RELEASES THE OLDEST ENDED SESSIONS FIRST, keeping their
-// endings, and never a live turn's: and a capture that cannot fit even with
-// every ended session released writes nothing and releases nothing. What that
-// order leaves a conversation whose head it releases first,
-// TestAHeadReleasedBeforeAStaleSiblingHandsTheNextTurnTheSibling holds.
+// endings, and never a live turn's; a capture that cannot fit even with every
+// ended session released writes nothing and releases nothing. A begun row needs
+// no case: it names no object, so the budget can neither count nor take it.
+// TestAHeadReleasedBeforeAStaleSiblingHandsTheNextTurnTheSibling holds what
+// this order does to a head; TestNoReleaseTakesAHeldBase and
+// TestTheHoldLiftsAtTheHoldersFirstCapture, the base a begin holds.
 //
-// A row a turn's begin wrote needs no case here: it names no object, so the
-// budget, which counts and releases only rows that name one, can neither count
-// nor take it, and releasing it would change nothing a reader sees. What a
-// begin does change for the budget is the base it holds, which
-// TestNoReleaseTakesAHeldBase and TestTheHoldLiftsAtTheHoldersFirstCapture
-// hold.
-//
-// Mutation: order the release by end_seq DESC and the newer ending's session
-// goes first; release before checking the plan fits and the oversized capture
-// strips every ended session for nothing; release live turns' sessions too and
-// the live one goes.
+// Mutation: release by end_seq DESC and the newer ending's session goes first;
+// release before checking the plan fits and an oversized capture strips every
+// ended session for nothing; release live sessions too and the live one goes.
 func TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -445,20 +430,17 @@ func TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst(t *testing.T) {
 }
 
 // A HEAD RELEASED BEFORE A STALE SIBLING HANDS THE NEXT TURN THE SIBLING, and
-// tells it how the released head ended. A turn parked on a person's question
-// read the conversation first and ended last — a STALE SIBLING; the turn that
-// read it after the parked one is the head, and ended first. The budget walks
-// the seat's ended sessions oldest END first, as the applier on every data node
-// does ([seatPlan]), so under pressure it takes the head and leaves the stale
-// sibling its session: the next read hands out, of the sessions the
-// conversation still keeps, the one that read it last, the sibling's, which the
-// next turn's begin holds as the base it continues, tells the released head's
-// ending beside it and hands both out, and the next end absorbs both.
+// tells it how the released head ended. A STALE SIBLING (a turn parked on a
+// person's question) read the conversation first and ended last; the head read
+// it after and ended first. The budget releases the oldest END first
+// ([seatPlan]), so it takes the head and keeps the sibling's session, which
+// the next read hands out and the next begin holds as its base, beside the
+// head's ending; the next end absorbs both.
 //
-// Mutation: release in the head's line order, the oldest read first, and the
-// stale sibling goes while the head keeps its session; read the head among rows
-// that name no session, and the next turn is handed one nobody keeps; leave a
-// released row out of the endings, and the head's ending is told to nobody.
+// Mutation: release in the head's line order (oldest read first) and the
+// sibling goes while the head stays; read the head among rows naming no
+// session and the next turn is handed one nobody keeps; leave a released row
+// out of the endings and the head's ending is told to nobody.
 func TestAHeadReleasedBeforeAStaleSiblingHandsTheNextTurnTheSibling(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -567,12 +549,11 @@ func TestARetentionDeleteTakesATurnThatNeverEnded(t *testing.T) {
 }
 
 // A REMOVED SEAT STAYS REMOVED: its rows go, its live turns are tombstoned,
-// and a capture, a begin or an end decided before the removal and landing after
-// it writes nothing — the turn that had a row by its tombstone, and the turn
-// that had none (no tombstone could name it) by the removal's position, which
-// every capture, begin and end carries the one its decide saw. A capture or a
-// begin of the seat's next tenure, decided once the removal was applied,
-// lands; and the removal's record goes with the retention.
+// and a capture, begin or end decided before the removal and landing after it
+// writes nothing: a turn with a row by its tombstone, one without by the
+// removal position its decide saw, which every capture, begin and end carries.
+// A capture or begin of the seat's next tenure, decided once the removal was
+// applied, lands; the removal's record goes with the retention.
 //
 // Mutation: drop the removal check from applyCapture, applyBegin (or applyEnd)
 // and the turn that had no row comes back for a removed seat; drop the

@@ -259,13 +259,14 @@ type Continuation struct {
 	RequestRefused bool
 
 	// ContextTokens is what the last request of that session carried: the
-	// larger of its newest capture's measure ([SessionBasis.ContextTokens])
-	// and the job's record's, which the read that collected the job took off
-	// its run's own account of its requests, or carried along the copy's
-	// lineage where the job made none ([Resume.ContextTokens]). What the
-	// relaunch sends again before Brief where it continues the session in its
-	// box, which its floor is made of. Zero where neither measured it, which
-	// holds the launch to the static floor with Brief beside it.
+	// larger of its newest capture's measure, kept or not
+	// ([SessionBasis.CopyContext]), and the job's record's, which the read
+	// that collected the job took off its run's own account of its requests,
+	// or carried along the copy's lineage where the job made none
+	// ([Resume.ContextTokens]). What the relaunch sends again before Brief
+	// where it continues the session in its box, which its floor is made of.
+	// Zero where neither measured it, which holds the launch to the static
+	// floor with Brief beside it.
 	ContextTokens int64
 
 	// BriefRead is how many calls the round's log had taken at the read
@@ -467,18 +468,48 @@ type SessionBasis struct {
 	// was handed and the notes its job read.
 	Interrupted bool
 
+	// WentOn says the kept capture the basis continues was taken while its
+	// job still worked (sandbox.SessionCapture.Final unset): its job's harness
+	// went on in its box past it, so the session ends where it was saved, not
+	// where its run stopped, and CapturedAt is when it was saved
+	// (sandbox.SessionCapture.At), zero where the capture states none. Told so
+	// in place of the cut-off words ([prompts.SavedSession], [Runner.keptSession]):
+	// told only that it was cut off, the run takes the session's end for where
+	// its work stopped. Such a capture is always cut off as well (Interrupted),
+	// so how its calls, leads and notes are told does not move. The names and
+	// shape of [BaseBasis.WentOn] and CapturedAt, so both bases say "the run
+	// went on past the session above" alike; false and zero, which say
+	// nothing, on a basis that continues no kept capture of the turn's.
+	WentOn     bool
+	CapturedAt time.Time
+
 	// Home is where the session was last worked: absolute paths in its
 	// transcript are under it.
 	Home string
 
-	// ContextTokens is what the last request of the session of the job the
-	// relaunch follows carried, as that job's newest capture measured it —
-	// kept or not, so set where the relaunch continues no kept capture too:
-	// what a launch that continues that session sends first, in a box it is
-	// restored into or the job's own, which the launch's floor is made of, in
-	// the job's own box beside what the job's record measured
-	// ([Continuation.ContextTokens]). Zero where no capture measured any.
+	// ContextTokens is what the last request of the kept capture the basis
+	// continues carried, as that capture measured it
+	// (sandbox.SessionCapture.ContextTokens): what a launch that restores it
+	// sends first, in whatever box it gets, which the floor of the session it
+	// was asked to continue in any box is made of (internal/engine's
+	// keptFloor). The capture's OWN, as Count, Owed and Interrupted are, and
+	// as [BaseBasis.ContextTokens] is the base's: a session restored from a
+	// capture sends what that capture holds, never what its job's copy went
+	// on to carry past it ([SessionBasis.CopyContext]). Zero where the basis
+	// continues no capture of the turn's, or the capture measured none.
 	ContextTokens int64
+
+	// CopyContext is what the last request of the session of the job the
+	// relaunch follows carried, as that job's newest capture measured it,
+	// KEPT OR NOT, so set where the basis continues no kept capture too: the
+	// job's own copy in its box, which went as far as that newest capture
+	// and maybe further, and which a launch that carries the round on in that
+	// box sends first. Read only for the floor of that in-place session,
+	// beside what the job's record measured ([Continuation.ContextTokens]);
+	// never for a kept capture's, which is its own
+	// ([SessionBasis.ContextTokens]). Zero where no capture of that job
+	// measured any.
+	CopyContext int64
 
 	// Count is what Claude Code counts the kept capture's session at before
 	// its next request, as the take read its archive's main thread whole
@@ -1057,7 +1088,10 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// it whether the turn kept it or not, or as the read that
 			// collected its job found its newest request carried, the larger
 			// of the two: the floor of a launch that continues it in its box.
-			ContextTokens: max(basis.ContextTokens, r.cfg.Resume.ContextTokens),
+			// THE COPY'S FIGURE, never the kept capture's own: the copy went
+			// as far as its job's newest capture, kept or not, and a kept
+			// capture is held to what it holds itself.
+			ContextTokens: max(basis.CopyContext, r.cfg.Resume.ContextTokens),
 			// AND THE READ EVERY BRIEF ABOVE WAS BUILT FROM, so the job's
 			// opening marks late what the log took after it: the job before's
 			// calls that landed while this relaunch was readied, the call a

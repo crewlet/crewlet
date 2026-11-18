@@ -51,14 +51,13 @@ func standOn(t *testing.T, h *harness, node string, evicts bool) uint64 {
 }
 
 // landCopy lands, straight on the log, writer's copy of opID on subject a
-// WITHOUT this node's applier reaching it — the copy of an operation another
-// node published while this node was behind — and answers where it landed.
+// WITHOUT this node's applier reaching it (the copy of an operation another
+// node published while this node was behind) and answers where it landed.
 //
 // THE ANCHOR IS PINNED AT THE COPY, so this node's append is arbitrated
-// against it and collapsed onto it at once. Left to the rows, the append
-// formed its expectation below the copy, lost the race, and waited for this
-// node to apply the copy before deciding again — which is the one thing a
-// case about a node that has not applied it must not do.
+// against it and collapsed onto it at once; left to the rows, the append
+// would lose the race and wait for this node to apply the copy, which a case
+// about a node that has not applied it must not do.
 func landCopy(t *testing.T, h *harness, writer, opID string) statelog.Position {
 	t.Helper()
 	h.applier.mu.Lock()
@@ -76,31 +75,18 @@ func landCopy(t *testing.T, h *harness, writer, opID string) statelog.Position {
 	return at
 }
 
-// A COLLAPSED WRITE IS PENDING ONLY WHERE THE COPY'S WRITER STILL STANDS.
+// A COLLAPSED WRITE IS PENDING ONLY WHERE THE COPY'S WRITER STILL STANDS:
+// pending promises every node applies it ([statelog.OutcomePending]), and a
+// copy whose writer was evicted in flight applies nowhere. Both answers given
+// before this node applied the copy ([statelog.Request.NoWait], a wait run
+// out) judge its writer at the copy, by this node's rows where they reach it
+// and else by the last record on its eviction subject: a healthy peer's copy
+// (router failover) stays pending; a held writer, or an unreadable standing,
+// is unknown with no position, and a retry meets the writer's gate. This
+// node's own copy is vouched by the fence it cleared first.
 //
-// Pending promises that every other node will apply the record
-// ([statelog.OutcomePending]). A write the broker collapses onto a copy of its
-// operation is durable at that copy — and the copy applies nowhere if its
-// writer was evicted while it was in flight: the eviction lands below it, and
-// every applier drops it. Answered pending without asking whose copy it is,
-// the caller was told a write had succeeded that no node would ever apply.
-//
-// So both answers that come back before this node has applied the copy — the
-// one nothing waited for ([statelog.Request.NoWait]) and the one whose wait ran
-// out — read the copy's writer off the record and judge its standing at the
-// copy: through this node's rows (the applier's own gates), and through the
-// last record on the writer's eviction subject where the rows have not reached
-// it. A healthy peer's copy, the router-failover case, stays pending; a copy
-// whose writer is held, or whose standing at the copy cannot be read, is
-// unknown with no position, and the same operation id retried meets the
-// writer's gate once this node applies that far. This node's own copy, from an
-// earlier attempt, is vouched by the fence this call cleared before appending,
-// and nobody's standing is asked about it.
-//
-// Mutations, each checked red: answer every copy pending (the held cases fail);
-// drop the rows' gate (the rows' eviction fails); drop the log's standing (the
-// log's evictions fail); read a readmission below the copy as unvouched (it
-// fails); and judge this node's own copy too (it asks the gates).
+// Mutations, each red: answer every copy pending; drop the rows' gate or the
+// log's standing; read a readmission below as unvouched; judge its own copy.
 func TestACollapsedWriteIsPendingOnlyWhereTheCopysWriterStands(t *testing.T) {
 	t.Parallel()
 	type arm struct {
@@ -193,13 +179,10 @@ func TestACollapsedWriteIsPendingOnlyWhereTheCopysWriterStands(t *testing.T) {
 	}
 }
 
-// A STANDING THE ROWS ALREADY HOLD IS THE ROWS' TO ANSWER.
-//
-// The log's last word on a writer is read only for what the rows have not
-// applied. A node past a peer's later eviction holds it in its rows — and an
-// eviction ABOVE the copy holds nothing at the copy — so the rows' answer is
-// complete there and the copy is pending. Read as a standing nobody can place,
-// a node that was merely current answered a healthy collapse unknown.
+// A STANDING THE ROWS ALREADY HOLD IS THE ROWS' TO ANSWER: the log's last word
+// on a writer is read only for what the rows have not applied. A node past a
+// peer's later eviction holds it in its rows, and an eviction ABOVE the copy
+// holds nothing at the copy, so the copy is pending, not unknown.
 //
 // Mutation: drop the rows' coverage from the judgement, and the copy is
 // answered unknown.
@@ -221,15 +204,11 @@ func TestAStandingTheRowsHoldIsAnsweredByTheRows(t *testing.T) {
 	}
 }
 
-// A NODE THAT HAS APPLIED THE COPY ANSWERS IT FROM ITS ROWS.
-//
-// A read past a wait this node cleared can fail — its store busy or closed —
-// and the copy is then judged by what is known of it. The rows are past the
-// copy, so the gates answer at the copy's position from everything below it,
-// and a standing the writer took ABOVE the copy holds nothing there: the copy
-// applies on every node. Read as a standing nobody could place against rows
-// that had not reached the copy, it was answered unknown, and a write every
-// node applies cost its caller a retry.
+// A NODE THAT HAS APPLIED THE COPY ANSWERS IT FROM ITS ROWS. When a read past
+// a cleared wait fails (store busy or closed), the copy is judged by what is
+// known of it: rows past the copy answer at its position from everything
+// below it, and a standing taken ABOVE the copy holds nothing there, so a
+// write every node applies stays pending rather than costing a retry.
 //
 // Mutation: drop the arm that answers from rows at or past the copy, and the
 // eviction above it reads as unvouched.
@@ -263,12 +242,10 @@ func TestACopyThisNodeHasAppliedIsAnsweredByItsRows(t *testing.T) {
 }
 
 // THE REPLICATION GUIDE SAYS WHAT THE UNVOUCHED-COPY LINE CARRIES.
-//
 // `statelog_resolve_copy_unvouched` is the only witness of why a collapsed
-// write was answered `unknown` rather than `pending`, and the copy's writer it
-// names is not the node that logged it — so the guide's row is held to every
-// key the line carries, or an operator reading the line has a field nobody
-// explained.
+// write was answered `unknown` rather than `pending`, and the writer it names
+// is not the node that logged it, so the guide's row is held to every key the
+// line carries.
 func TestTheReplicationGuideSaysWhatTheUnvouchedCopyLineCarries(t *testing.T) {
 	t.Parallel()
 	logs := &lockedBuffer{}
@@ -296,19 +273,13 @@ func TestTheReplicationGuideSaysWhatTheUnvouchedCopyLineCarries(t *testing.T) {
 	}
 }
 
-// A FAILED READ OF A COLLAPSED COPY IS A READ PAST THE ACKNOWLEDGEMENT.
-//
-// The broker said the record at the position carries this operation, so a
-// read of it that fails after the wait is a read past the acknowledgement like
-// every other one, and is answered by what is known of the record — which reads
-// it again and, when that read answers, judges the copy's writer — rather than
-// by the failure. It answered `unknown` with no position on the spot, the one
-// post-acknowledgement read that did, so a fault that had already cleared
-// turned a write every node applies into one its caller had to retry.
-//
-// On a domain with no ledger, where a copy this node applied with no gate
-// dropping it is the whole answer, a transient fault on that read now leaves
-// the copy pending at its position.
+// A FAILED READ OF A COLLAPSED COPY IS A READ PAST THE ACKNOWLEDGEMENT: the
+// broker said the record at the position carries this operation, so the
+// failure is answered by what is known of the record (read again and, when
+// that answers, judge the copy's writer), never `unknown` on the spot, which
+// would make a write every node applies one its caller must retry. On a
+// domain with no ledger, a copy this node applied with no gate dropping it
+// stays pending at its position.
 //
 // Mutation: answer the failed read on the spot, as the found record's is, and
 // the copy is unknown.

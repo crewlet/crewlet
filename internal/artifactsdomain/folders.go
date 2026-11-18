@@ -21,24 +21,12 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE FOLDER TREE (ADR-0047: an artifact lives in one folder, and a folder
-// grants nothing).
-//
-// One tree per company, on ONE subject ([FolderSubject]). Each artifact is
-// filed in at most one folder ([Head.Folder], '' for the top level), and
-// filing it never widens or narrows who may open it: an artifact's access is
-// still its owner and its own shares (ADR-0034). A folder's OWN visibility is
-// its top-level folder's owner and shares, decided as a relation exactly as an
-// artifact's is (authz.KindArtifactFolder), so every ancestor of a folder a
-// reader sees is one they see too, and sibling names never disclose a folder
-// the reader cannot see.
-//
-// Filing asks two decisions, both the API's: editor on the artifact (with the
-// artifacts app) and contributor on the destination folder, each through the
-// requester ceiling. The folder's owner, the owner's lead and an administrator
-// may rename, move, remove and unfile anything they can see. Removing a folder
-// moves everything in it up one level; nothing is trashed and nobody loses
-// access.
+// THE FOLDER TREE: package doc, "An artifact lives in one folder, and a folder
+// grants nothing". [Head.Folder] is '' for the top level. Filing asks two
+// decisions, both the API's: editor on the artifact (with the artifacts app)
+// and contributor on the destination folder, each through the requester
+// ceiling. The folder's owner, the owner's lead and an administrator may
+// rename, move, remove and unfile anything they can see.
 
 // FolderNamespace scopes the derivation of a folder's id from its creating
 // operation and its place in the chain. FIXED for the life of the format: a new
@@ -64,9 +52,8 @@ const (
 	// lead, for an agent's) alone sees it.
 	FolderPrivate FolderVisibility = "private"
 
-	// FolderCustom is a top-level folder whose shares are neither preset:
-	// granted through the share machinery a later surface offers. Answered,
-	// never asked for.
+	// FolderCustom is a top-level folder whose shares match neither preset:
+	// answered, never asked for.
 	FolderCustom FolderVisibility = "custom"
 )
 
@@ -203,12 +190,10 @@ type FolderCreated struct {
 // FolderObject is the authority table's object for SEEING a folder and
 // FILING INTO it ([authz.ActionArtifactRead] through authz.Visible, and
 // [authz.ActionArtifactFolderFile]): its top-level folder's owner and shares,
-// so a whole tree is seen, and filed into, alike. The one builder every
-// surface decides a folder's visibility on, the API's routes and the agents'
-// tools alike, so the two cannot disagree about who sees a folder.
-//
-// agentsManageOthers is the company's `artifacts.agents_manage_others`, read
-// by the surface, exactly as an artifact's object carries it.
+// so a whole tree is seen, and filed into, alike. Every surface builds it
+// here, so the API and the agents' tools cannot disagree about who sees a
+// folder. agentsManageOthers is the company's
+// `artifacts.agents_manage_others`, as an artifact's object carries it.
 func FolderObject(f Folder, agentsManageOthers bool) authz.Object {
 	return authz.Object{
 		Kind: authz.KindArtifactFolder, ID: f.ID, Owner: f.RootOwner, Shares: f.Shares,
@@ -232,9 +217,8 @@ func FolderManagerObject(f Folder, agentsManageOthers bool) authz.Object {
 // ---- the writer's folder operations --------------------------------------- //
 
 // The verbs a folder write's operation id is derived under: distinct from an
-// artifact's own, so one operation key sent to a folder create and to an
-// artifact create is two operations rather than the second answered as the
-// first.
+// artifact's, so one operation key sent to a folder create and an artifact
+// create is two operations, not the second answered as the first.
 const (
 	verbFolderCreate = "folder_create"
 	verbFolderRename = "folder_rename"
@@ -256,13 +240,9 @@ var treeScope = ScopeSet{Subject: true}
 //
 // THE CHAIN'S IDS ARE THE OPERATION'S ([FolderIDOf]), so a retry names the
 // folders its first attempt made. A create that finds every name already in
-// place (Parents) publishes nothing and answers the chain with Created 0.
-//
-// TWO DOMAIN RULES the writer holds, beside the tree's own: an agent creates
-// subfolders only (a person decides what the company's top level holds, and a
-// company-wide top-level folder is a company-wide audience an agent never
-// grants), and a top-level folder states its visibility while a subfolder
-// states none (its top-level folder decides it).
+// place (Parents) publishes nothing and answers Created 0. Only a person
+// creates a top-level folder, which states its visibility; a subfolder states
+// none ([checkFolderCreate]).
 func (w *Writer) CreateFolders(ctx context.Context, c Call, in FolderCreateInput) (FolderCreated, error) {
 	if err := validCall(c); err != nil {
 		return FolderCreated{}, err
@@ -551,12 +531,10 @@ func (w *Writer) RenameFolder(ctx context.Context, c Call, id, name string) (Wri
 // for the top level). A move to where it already is publishes nothing.
 //
 // WHO SEES THE TREE IS ITS TOP-LEVEL FOLDER'S, so a move under another
-// top-level folder changes who sees the folder and everything beneath it to
-// that tree's audience, and a move to the top level keeps the shares it had
-// (the record carries its old top-level folder's shares) under its own owner,
-// who becomes the new tree's (ADR-0047 names the one case that narrows). Whether
-// a move widens is the surface's question to put to the person before it calls
-// this.
+// top-level folder gives the folder and everything beneath it that tree's
+// audience, and a move to the top level keeps the shares it had (the record
+// carries them) under its own owner (ADR-0047 names the one case that
+// narrows). Whether a move widens is the surface's to ask the person first.
 func (w *Writer) MoveFolder(ctx context.Context, c Call, id, parent string) (Written, error) {
 	if err := validCall(c); err != nil {
 		return Written{}, err
@@ -640,11 +618,10 @@ func planFolderMove(tree *folderTree, c Call, id, parent string, at time.Time) (
 
 // RemoveFolder removes one folder, moving its child folders and every artifact
 // in it (live and trashed) up to its parent in the same apply. NEVER REFUSED
-// FOR WHAT IT HOLDS: a "not empty" refusal on a folder that looks empty to its
-// remover would say a folder they cannot see is inside it, and moving work up
-// takes nothing from anybody. The one refusal the contents can cause is a
-// child whose name its new place already holds, which the remover sees both
-// of and renames.
+// FOR WHAT IT HOLDS: "not empty" on a folder that looks empty to its remover
+// would disclose a folder they cannot see, and moving work up takes nothing
+// from anybody. The one refusal the contents cause is a child whose name its
+// new place already holds, both of which the remover sees and can rename.
 func (w *Writer) RemoveFolder(ctx context.Context, c Call, id string) (Written, error) {
 	if err := validCall(c); err != nil {
 		return Written{}, err

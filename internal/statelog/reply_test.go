@@ -14,18 +14,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// replyMargin is the margin these cases mark a request with, and askerSlack
-// what each request's asker leaves the serving node beyond it — so a wait the
-// margin bounds ends askerSlack in, and one it does not runs on to the deadline
-// a whole margin later.
+// replyMargin is the margin these cases mark a request with, and askerSlack what
+// each asker leaves beyond it: a wait the margin bounds ends askerSlack in, one
+// it does not runs a whole margin later, to the deadline.
 const (
 	replyMargin = time.Second
 	askerSlack  = 400 * time.Millisecond
 )
 
 // asked is a request its asker waits for across a wire, until margin and slack
-// from now ([statelog.WithReplyMargin]), and the deadline it stops listening
-// at.
+// from now ([statelog.WithReplyMargin]), and the deadline it stops listening at.
 func asked(t *testing.T) (context.Context, time.Time) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), replyMargin+askerSlack)
@@ -58,19 +56,11 @@ func (w *armedWaits) all() []time.Time {
 	return slices.Clone(w.ats)
 }
 
-// armedToAnswerBy fails a case whose request made no wait, or made one not
-// armed to end at the instant its asker must be answered by: a reply's margin
-// before the asker stops listening. Such a wait is answered while its asker
-// listens however late the machine wakes the case. A wait armed to run to the
-// deadline answers nobody, and one armed as what was left of the margin at a
-// clock reading ends late by every stall between the reading and the arming.
-//
-// The instant is held exactly, and the clock is never read. The instant is
-// the asker's deadline less the margin, so a correct node meets it on any
-// machine. The wall-clock check this replaces failed a correct node: it wanted
-// half a margin left when the answer came back, and a runner that lost that
-// much to scheduling between the wait's end and the check failed it
-// (crewlet/crewlet#734).
+// armedToAnswerBy fails a case whose request made no wait, or one not armed to
+// end exactly a reply's margin before its asker stops listening. A wait armed to
+// the deadline answers nobody, and one armed as what was left of the margin at a
+// clock reading ends late by every stall before the arming. The instant is held
+// exactly and the clock never read, so a correct node passes on any machine.
 func armedToAnswerBy(t *testing.T, what string, armed []time.Time, deadline time.Time) {
 	t.Helper()
 	if len(armed) == 0 {
@@ -86,12 +76,10 @@ func armedToAnswerBy(t *testing.T, what string, armed []time.Time, deadline time
 	}
 }
 
-// answeredAt fails a bubbled case whose answer came at any instant but the one
-// its asker must be answered by: a reply's margin before it stops listening.
-// In a synctest bubble the clock moves only while every goroutine of the case
-// waits, so the instant is the wait's own end, exactly, and nothing about how
-// late a loaded runner woke the case. A wait the case cannot see from a fake
-// (a read's own wait on its barrier) is held to its end this way.
+// answeredAt fails a bubbled case whose answer came at any instant but a reply's
+// margin before its asker stops listening. In a synctest bubble the clock moves
+// only while every goroutine waits, so the instant is the wait's own end, exactly.
+// It holds a wait no fake sees (a read's own wait on its barrier).
 func answeredAt(t *testing.T, what string, deadline time.Time) {
 	t.Helper()
 	if left := time.Until(deadline); left != replyMargin {
@@ -101,9 +89,9 @@ func answeredAt(t *testing.T, what string, deadline time.Time) {
 }
 
 // unreadStore is an estate a case's read must never reach: a read whose barrier
-// never commits is refused before it opens a transaction. It holds no
-// database, so a bubbled case opens none: a store's own goroutines would sit
-// in the bubble, and its I/O never waits durably.
+// never commits is refused before it opens a transaction. It holds no database,
+// since a store's goroutines would sit in a bubble and its I/O never waits
+// durably.
 type unreadStore struct{ t *testing.T }
 
 func (s unreadStore) Read(context.Context, func(*sql.Tx) error) error {
@@ -170,12 +158,9 @@ func heldIndex(t *testing.T, held heldAppender, members func() int) *statelog.Re
 }
 
 // A READ ASKED ACROSS A WIRE SAYS IT IS BEHIND WHILE ITS ASKER IS STILL
-// LISTENING. The node never reaches the position the read waits for, and the
-// asker stops listening long before the read's own budget (statelog.ReadBudget)
-// would end the wait: run to the deadline, the wait ended with the caller's
-// context and nobody heard the node say anything, which an asker reads as a
-// node that is gone. It ends a margin short of the deadline instead, refused
-// `behind` and saying it ran out of what the asker left.
+// LISTENING. The node never reaches the read's position and the asker stops
+// listening long before statelog.ReadBudget; the wait ends a margin short of the
+// deadline, refused `behind` and saying it ran out of what the asker left.
 func TestAServedReadSaysItIsBehindWhileItsAskerListens(t *testing.T) {
 	t.Parallel()
 	if replyMargin+askerSlack >= statelog.ReadBudget {
@@ -202,15 +187,13 @@ func TestAServedReadSaysItIsBehindWhileItsAskerListens(t *testing.T) {
 }
 
 // A LINEARIZABLE READ'S BARRIER ENDS WHERE ITS ASKER'S ATTEMPT DOES, less the
-// margin. The barrier's append is held — a broker that does not answer — and
-// the barrier's own budget (statelog.DefaultBarrierBudget) outlasts the
-// asker: waited out, the read was refused after its asker had stopped
-// listening. It is refused `no_quorum` — the log is three members' — a margin
-// short of the deadline instead, saying the asker's time is what ran out.
+// margin. The barrier's append is held (a broker that does not answer) and
+// statelog.DefaultBarrierBudget outlasts the asker; the read is refused
+// `no_quorum` (the log is three members') a margin short of the deadline, saying
+// the asker's time is what ran out.
 //
-// IN A SYNCTEST BUBBLE: the read's wait on its barrier is its own, so no fake
-// sees the instant it was armed to end at, and the bubble holds the answer to
-// that instant instead ([answeredAt]).
+// IN A SYNCTEST BUBBLE: no fake sees the barrier wait's end, so the bubble holds
+// the answer to that instant ([answeredAt]).
 func TestAServedReadsBarrierEndsWhileItsAskerListens(t *testing.T) {
 	t.Parallel()
 	if replyMargin+askerSlack >= statelog.DefaultBarrierBudget {
@@ -281,12 +264,11 @@ func TestAReaderThatHangsUpDuringItsBarrierIsToldItsOwnEnding(t *testing.T) {
 }
 
 // A WRITE ASKED ACROSS A WIRE ANSWERS WHILE ITS ASKER IS STILL LISTENING, in
-// each of the three waits it may make for this node's applier: its own record's
-// resolution answers `pending`, and its wait for the caller's session and for a
-// peer's record ahead of it refuse `behind`. Every one of them is given a
-// budget of the publisher's that outlasts the asker (the default five seconds),
-// so what ends each is the asker's attempt, a margin short of its deadline —
-// and each answer that names its bound says so.
+// each of its three waits for this node's applier: its own record's resolution
+// answers `pending`, and its waits for the caller's session and for a peer's
+// record ahead refuse `behind`. Each has the publisher's default budget, which
+// outlasts the asker, so the asker's attempt ends each a margin short of its
+// deadline, and each answer that names its bound says so.
 func TestAServedWriteAnswersWhileItsAskerListens(t *testing.T) {
 	t.Parallel()
 	if replyMargin+askerSlack >= statelog.DefaultResolveBudget {
@@ -429,14 +411,10 @@ func TestAWaitIsBoundedByTheRequestItBelongsToAndNoOther(t *testing.T) {
 }
 
 // A WAIT ENDS WHERE THE CLOCK'S READING PUT IT, HOWEVER LATE IT IS ARMED. The
-// clock the bound is taken from is read a whole stall before the wait is armed
-// — a goroutine stopped between the two, as a stop of the world or a starved
-// runner stops one — and the wait still ends at the instant its asker must be
-// answered by, where that comes first, and at its own budget past the reading
-// where the budget does, ahead of the asker's instant; and the bound names the
-// wait it made, from the reading to that end. Armed as what was left of it,
-// either bound ran on by the stall: the first to its asker's own deadline, a
-// margin late, and the second past the instant it was chosen ahead of.
+// clock is read a whole stall before the wait is armed, and the wait still ends
+// at its asker's answer-by instant where that comes first, and at its budget past
+// the reading where that does; the bound names the wait from the reading to that
+// end. Armed as what was left, either bound ran on by the stall.
 //
 // IN A SYNCTEST BUBBLE, where a timer fires at exactly its time, so the end is
 // held to the instant and to nothing about how late the machine wakes the case.

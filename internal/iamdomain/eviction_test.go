@@ -11,19 +11,14 @@ import (
 )
 
 // A NODE'S EVICTION IS WRITTEN ON THIS LOG, BY THE DEPLOYMENT, AT ITS OWN
-// POSITION — and a retry of it after a readmission is refused rather than
-// answered as though it still held.
-//
-// Nothing wrote one: this log had an applier, a fence and a table for the gate
-// and no writer, so the engine's eviction lifted the tracker's pin on its trim
-// and left this one's where it was. And the record, when there was one to
-// write, stated the positions it took effect at as FIELDS — which a writer
-// cannot know, since only the broker says where a record lands.
+// POSITION, and a retry of it after a readmission is refused rather than
+// answered as though it still held. The position is the record's own, never a
+// field: only the broker says where a record lands.
 //
 // Mutation: take admin off [iamdomain.Writer.mayOperate] and the app user's
-// eviction lands; state the boundary from anything but the
-// record's own position and the row names another; drop the standing and the
-// stale retry answers applied.
+// eviction lands; state the boundary from anything but the record's own
+// position and the row names another; drop the standing and the stale retry
+// answers applied.
 func TestANodeGateIsTheDeploymentsAndLandsAtItsOwnPosition(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -128,21 +123,11 @@ func evictedOnLog(t *testing.T, rig *writeRig, node string) (bool, bool) {
 }
 
 // A GENERATION RECORD NAMES WHO MOVED THIS LOG AS THE PRINCIPAL THEY ARE, AND
-// CARRIES THE STAMP OF THE GENERATION IT OPENS.
-//
-// The record is the identity estate's [statelog.GenerationEncoder] half, and
-// nothing wrote one: this log had an applier for it and no encoder, so a
-// reanchor could not name it at all. Two things about it are easy to get
-// wrong and silent when they are. The stamp — the generation it opens and the
-// node that wrote it — is what the eviction gate and a reader of the log's
-// openers read. And the author's kind is this domain's PRINCIPAL kind, read
-// back from the kind the reanchor verb states: an operator acting under their
-// own login is an unbound person or a machine, and which one is the login's
-// shape — every operator recorded as a machine made an administrator outside
-// the org chart read as a service account.
-//
-// A record that names nobody is the node's, recorded as the node's own writer
-// records itself: under its id, as the engine.
+// CARRIES THE STAMP OF THE GENERATION IT OPENS, which the eviction gate and a
+// reader of the log's openers read. An operator under their own login is an
+// unbound person or a machine by the login's shape, so an administrator
+// outside the org chart never reads as a service account; nobody named is the
+// node, under its id, as the engine.
 //
 // Mutation: drop the login-shape split and the administrator is a machine;
 // record the nobody-named arm as a machine and both its rows fail; stamp the
@@ -186,16 +171,14 @@ func TestAGenerationRecordNamesItsAuthorAndCarriesItsStamp(t *testing.T) {
 			facts: statelog.GenerationFacts{By: "token:ops"},
 			actor: "token:ops", kind: iam.KindMachine,
 		},
-		// NOBODY NAMED IS THE NODE, as its own writer records itself —
-		// the engine, never an empty author column and never a machine
-		// named after the node.
+		// NOBODY NAMED IS THE NODE, as its own writer records itself: the
+		// engine, never an empty author or a machine named after the node.
 		"nobody named": {
 			facts: statelog.GenerationFacts{},
 			actor: "node-a", kind: iam.KindEngine,
 		},
-		// AND A NAME OF SPACES NAMES NOBODY, as it does on every other
-		// log's generation record ([statelog.GenerationFacts.Author]):
-		// this one read it as a person called "  ".
+		// AND A NAME OF SPACES NAMES NOBODY, as on every other log's
+		// generation record ([statelog.GenerationFacts.Author]).
 		"a name of spaces": {
 			facts: statelog.GenerationFacts{By: "  ", ByKind: iam.ActorHuman},
 			actor: "node-a", kind: iam.KindEngine,

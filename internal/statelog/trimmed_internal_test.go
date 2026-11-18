@@ -14,33 +14,17 @@ import (
 )
 
 // BenchmarkATrimmedRecordsSweep is ONE trimmed record's removal of
-// [AnchorsPerTrimmedRecord] anchors, in a committed write transaction of its
-// own on the pinned driver under the store's own pragmas — the number
-// [AnchorsPerTrimmedRecord] is set against [ApplyTxTimeBudget], and
-// re-measurable on an operator's own disk:
+// [AnchorsPerTrimmedRecord] anchors in its own committed transaction on the
+// pinned driver and the store's pragmas, what that constant is set against
+// [ApplyTxTimeBudget] by; re-measure it on an operator's own disk with:
 //
 //	go test ./internal/statelog -run '^$' -bench BenchmarkATrimmedRecordsSweep -benchtime 200x
 //
-// AT THREE TABLE SIZES, each the anchors on the swept log — twenty thousand, a
-// young company's; three hundred thousand; and a million, twice the half
-// million Gitlet's model holds on one log alone (about seventy thousand
-// subjects a day, kept the seven days of the default `min_age`).
-//
-// LAID OUT AS PRODUCTION LAYS IT OUT, because a delete's cost is which pages it
-// touches. Every row goes in through [tables.advanceAnchor], the applier's own
-// upsert, in creation order — so a subject keeps the rowid of its first record
-// — and every subject is then advanced again in a random order, as its last
-// record lands whenever somebody last touched it: the order the sweep removes
-// anchors in is unrelated to the order the table stores them in, and each
-// record's [AnchorsPerTrimmedRecord] it removes are scattered across the whole
-// table. A second log's anchors are interleaved with the first's, as the
-// tracker's and the knowledge base's share the one table. Subjects are
-// uuid-shaped, so the primary key's pages are random too.
-//
-// THE TAIL IS REPORTED BESIDE THE MEAN (`p50-ms`, `p99-ms`, `max-ms`), because
-// what the budget bounds is the slowest transaction a waiter sits behind, and a
-// mean hides exactly that. Run enough iterations for a p99 to mean something;
-// the command above does.
+// Tables of 20k, 300k and 1M anchors (twice Gitlet's modelled week on one log)
+// are laid out as production lays them, since a delete's cost is the pages it
+// touches: rows through [tables.advanceAnchor] in creation order, then each
+// re-advanced in random order, uuid-shaped, with another log's interleaved. It
+// reports p50, p99 and max, since the budget bounds the slowest transaction.
 func BenchmarkATrimmedRecordsSweep(b *testing.B) {
 	for _, anchors := range []int{20_000, 300_000, 1_000_000} {
 		b.Run(fmt.Sprintf("anchors=%d", anchors), func(b *testing.B) {
@@ -63,10 +47,9 @@ func benchmarkSweep(b *testing.B, anchors int) {
 	swept := tables{stream: stream, prefix: "crewlet.bench.log"}
 	beside := tables{stream: other, prefix: "crewlet.bench.other"}
 
-	// seed writes one generation's anchors on the swept log — and, the
-	// first time, the other log's beside them — in transactions of a
-	// bounded size, and answers the packed floor above all of the swept
-	// log's.
+	// seed writes one generation's anchors on the swept log (and, if
+	// interleave, the other log's beside them) in bounded transactions, and
+	// answers the floor above all of the swept log's.
 	rng := rand.New(rand.NewPCG(0x7472696d, 0x6d6564))
 	uuid := func() string {
 		hi, lo := rng.Uint64(), rng.Uint64()

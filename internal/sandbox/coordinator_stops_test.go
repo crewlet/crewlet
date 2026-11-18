@@ -1359,6 +1359,13 @@ func (s *refusingStore) SettleBegun(ctx context.Context, turnID string, capture 
 	return s.inner.SettleBegun(ctx, turnID, capture)
 }
 
+func (s *refusingStore) ReserveSave(ctx context.Context, turnID string, save SessionCapture) (bool, error) {
+	if s.called("ReserveSave") {
+		return false, errRefusedCall
+	}
+	return s.inner.ReserveSave(ctx, turnID, save)
+}
+
 func (s *refusingStore) StandBy(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
 	if s.called("StandBy") {
 		return false, errRefusedCall

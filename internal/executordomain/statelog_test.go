@@ -30,13 +30,10 @@ func TestTheExecutorDomainIsACertifiedDomain(t *testing.T) {
 			// Migrate is nil: these tables ship in the replicated estate's
 			// own migration (0073), so a fresh store already has them.
 			Encode: encodeSuiteRecord,
-			// THE VERSIONED-FIELD TABLE, and a record carrying each of its
-			// fields alone: a turn's begin, and a capture's context and its
-			// cut-off, each stamped at version 2; an end's sessions that ran
-			// out of context, at 3; and an end saying its turn went on past
-			// its row's session, and one naming the turn's last word, at 4 —
-			// each of which a build reading the version below retains rather
-			// than applies.
+			// THE VERSIONED-FIELD TABLE, and a record carrying each field alone: a
+			// begin, a capture's context and cut-off (version 2); an end's sessions that
+			// ran out of context (3); an end's went_on and last word (4). A build reading
+			// a lower version retains each rather than applies it.
 			Fields:     executordomain.VersionedFields(),
 			Carrying:   carryingSuiteRecord,
 			Kinds:      kindNames(),
@@ -141,11 +138,7 @@ func seatScope(handle string) executordomain.ScopeSet {
 }
 
 // encodeSuiteRecord builds one valid record of each kind about id at any
-// version.
-//
-// THE FIRST THREE KINDS ARE A REAL SEQUENCE: a turn's capture writes a row, its
-// seat's removal deletes the row and tombstones the live turn, and a node's
-// eviction writes the gate's row.
+// version. The first three kinds are a real sequence ([executordomain.ObjectKinds]).
 func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 	subject, op, scope, payload := suitePayload(executordomain.ObjectKind(kind), id)
 	body, err := json.Marshal(payload)
@@ -217,10 +210,9 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		payload = executordomain.End{V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
 			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeStopped, WentOn: true}}
 	case "End.Ending.LastWord":
-		// A TURN'S LAST WORD ALONE, without the went_on every end this build
-		// writes names it beside: carrying exactly the one field, the record
-		// is stamped by its own path, which a path that missed would leave at
-		// a version a build reading 3 applies.
+		// A TURN'S LAST WORD ALONE, without the went_on every end this build writes
+		// names beside it, so the record is stamped by its own path: one that missed
+		// would leave it at a version a build reading 3 applies.
 		op, scope = executordomain.OpEnd, executordomain.ScopeSet{Subject: true}
 		payload = executordomain.End{V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
 			Ending: executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
@@ -292,11 +284,10 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 		evictionOf(node, readmit))
 }
 
-// suiteWrite is one write through the domain's own production writer, which is
-// where the framework's stamp is kept or lost: a turn's end, which needs no
-// object uploaded first — one that says its turn's newest capture was not kept,
-// so the field the end's apply decides on is written, stamped and applied by
-// the framework the conformance suite certifies.
+// suiteWrite is one write through the domain's production writer, where the
+// framework's stamp is kept or lost: a turn's end (no upload needed) saying its
+// newest capture was not kept, so the field the end's apply decides on is
+// written, stamped and applied by the certified framework.
 func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	w, err := executordomain.NewWriter(executordomain.WriterDeps{Publisher: pub, DB: db})
 	if err != nil {

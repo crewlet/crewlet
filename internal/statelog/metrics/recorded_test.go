@@ -17,33 +17,20 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A DECLARED INSTRUMENT WITH NO WRITER IS A DOCUMENTED ZERO.
+// A DECLARED INSTRUMENT WITH NO WRITER IS A DOCUMENTED ZERO: published in
+// docs/reference/metrics.md, it exports no series, and every alarm and panel
+// an operator built from the page reads its absence as a healthy fleet.
 //
-// The recorder refuses a name it has no instrument for, so a typo at a WRITE
-// site fails immediately. The opposite has no symptom at all: an instrument
-// declared in the catalogue, published in docs/reference/metrics.md and
-// recorded by nobody exports a series that never appears, and every surface
-// downstream reads its absence as "nothing to report". Eleven of them shipped
-// that way — including the three the capacity alarms fire on and the one the
-// backup alarm is named after — and each looked exactly like a healthy fleet.
-//
-// It is worse than an ordinary missing feature because the catalogue is a
-// PROMISE: an operator builds a dashboard panel and an alert rule from the
-// reference page, and both are silent for ever.
-//
-// So the rule is that every catalogued instrument is named somewhere outside
-// this package by code that is not a test. That is not proof it is recorded
-// correctly — nothing structural can be — but it is proof that the
-// declaration and the engine are connected at all, which is the half that
-// failed.
+// So every catalogued instrument must be named by non-test code outside this
+// package. That does not prove it is recorded correctly, only that the
+// declaration and the engine are connected at all.
 func TestEveryCatalogedInstrumentHasARecordingSite(t *testing.T) {
 	t.Parallel()
 
 	byValue := instrumentIdentifiers(t)
 	used := identifiersReferencedInTheTree(t)
 
-	// THE MATCHER, ON INPUT WHOSE VERDICT IS KNOWN. A guard asserting a
-	// presence passes identically when everything is present and when the
+	// Controls with a known verdict: a presence guard also passes when the
 	// walk found no files at all.
 	if !used["StatelogApplyRecords"] {
 		t.Fatal("control: the applier's own record counter was not found, so " +
@@ -75,11 +62,8 @@ func TestEveryCatalogedInstrumentHasARecordingSite(t *testing.T) {
 }
 
 // instrumentIdentifiers maps each instrument's wire name to the Go constant
-// that holds it, read out of names.go itself.
-//
-// FROM THE SOURCE rather than from a table written here, because a second copy
-// of the mapping is a second thing to keep in step — and this test's whole
-// subject is two declarations that stopped agreeing.
+// that holds it, read out of names.go itself rather than a second copy of the
+// mapping that could stop agreeing with it.
 func instrumentIdentifiers(t *testing.T) map[string]string {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -113,21 +97,14 @@ func instrumentIdentifiers(t *testing.T) map[string]string {
 }
 
 // selector matches a reference to one of this package's exported identifiers.
-//
-// A REGEX RATHER THAN A TYPE-CHECKED WALK. Loading the whole module with
-// go/packages to resolve one selector per instrument costs more than the
-// question is worth, and the false positives a regex can produce here are all
-// harmless: it can only make a name look USED, and a name that is used is
-// exactly what this asserts.
+// A regex rather than type-checking the whole module, which costs more than
+// the question is worth; a false positive can only make a name look used.
 var selector = regexp.MustCompile(`\bmetrics\.([A-Z]\w*)\b`)
 
-// selectorNeeds is what a reference cannot be written without. The pattern
-// opens with `\b`, which leaves the regexp package no prefix to jump to, so
-// over every non-test file it ran at the race detector's megabyte a second;
-// a file without `metrics.` holds no reference and is not handed to it (see
-// [regexlit.Required]). A prefilter that skipped a file holding one would
-// fail this gate rather than pass it — an instrument would read as unused —
-// so the gate's own verdict covers it.
+// selectorNeeds skips a file without `metrics.`: the pattern opens with `\b`,
+// leaving the regexp package no prefix to jump to, so it is slow over every
+// file ([regexlit.Required]). A prefilter skipping a file holding a reference
+// would fail this gate, not pass it, so the gate's verdict covers it.
 var selectorNeeds = regexlit.Required(selector)
 
 // identifiersReferencedInTheTree is every metrics identifier named by
@@ -135,10 +112,9 @@ var selectorNeeds = regexlit.Required(selector)
 func identifiersReferencedInTheTree(t *testing.T) map[string]bool {
 	t.Helper()
 	root := sourcetree.Root(t)
-	// Named from the root the walk starts at rather than from the working
-	// directory, so the two cannot disagree about which tree this is. A
-	// package that moved would make the exclusion below match nothing and
-	// the test unable to fail, so its absence is fatal.
+	// From the walk's root, not the working directory, so the two agree. A
+	// moved package would make the exclusion match nothing and the test
+	// unable to fail, so its absence is fatal.
 	self := filepath.Join(root, "internal", "statelog", "metrics")
 	if _, err := os.Stat(filepath.Join(self, "catalogue.go")); err != nil {
 		t.Fatalf("this package is not at %s, so the walk cannot exclude it: %v", self, err)
@@ -151,10 +127,8 @@ func identifiersReferencedInTheTree(t *testing.T) map[string]bool {
 		if d.IsDir() {
 			switch {
 			case path == self:
-				// THIS PACKAGE IS EXCLUDED, and it has to be: the
-				// catalogue names every instrument, so a walk that
-				// included it would report all of them as used and
-				// this test would be unable to fail.
+				// Excluded: the catalogue names every instrument,
+				// so including it would make the test unable to fail.
 				return fs.SkipDir
 			case d.Name() == "dist" || d.Name() == "static":
 				return fs.SkipDir

@@ -10,9 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A RECORD'S SCOPE: the complete set of objects its apply may write, stated by
-// the writer and readable at every version. The paths nest where the rows do,
-// so a seat-wide record covers every record of the seat:
+// A record's scope, every object its apply may write, is stated by its writer
+// and readable at every version. The paths nest where the rows do, so a
+// seat-wide record covers every record of the seat:
 //
 //	ac                          the whole domain: a gate, an expiry, or an unreadable scope
 //	ac/s/<handle>               one seat and every record of it

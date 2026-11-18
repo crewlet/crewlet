@@ -11,122 +11,63 @@ import (
 // LogEnds is both ends of a domain's log as ONE read of the stream reports
 // them: the first sequence it still holds and the last one it wrote.
 //
-// ONE VALUE rather than two readers, because a first sequence from before a
-// purge paired with a last sequence from after it describes a window the log
-// never had — and because the zero fence asks both questions of the one read
-// the write already pays for.
+// One value rather than two reads, because a first from before a purge paired
+// with a last from after it describes a window the log never had, and the zero
+// fence asks both of the one read the write already pays for.
 type LogEnds struct {
 	First uint64
 	Last  uint64
 }
 
 // ZeroFence is [Fence.ClearForZero] written ONCE, for every domain whose writes
-// can reach an expectation of zero.
+// can reach an expectation of zero: a domain supplies the four reads, and each
+// refusal is an [*Unavailable] under its own reason, never [ErrConflict]. The
+// floor is compared with the DECISION's checkpoint (the cursor), the log's ends
+// with the NODE's ([ZeroFence.Committed]): each the conservative one.
 //
-// # Why one implementation
-//
-// The tracker's fence and the pages fence were two copies of this check, and
-// the copies had already agreed on the wrong answer twice: both refused an
-// evicted node with [ErrConflict], which a caller reads as a colleague editing
-// the same object and a model is told to re-read and retry; and both refused a
-// node below the floor by wrapping [ErrUnavailable] in prose, so the reasons
-// [ReasonBelowFloor] and [ReasonFloorUnknown] were declared, documented and
-// produced by nothing — the refusal counter recorded every one of them as
-// `error`. A domain supplies the four reads; the refusals are decided here.
-//
-// # Two positions, because two questions are asked
-//
-// The DECISION's checkpoint — the cursor the caller passes, [Snap.Checkpoint] —
-// is what the floor theorem is about: its conclusion is that a trimmed record
-// on this subject is already in the rows the decision read, so it is compared
-// with the floor at its own generation, and a later position would be the
-// permissive answer. The NODE's checkpoint — [ZeroFence.Committed], read here
-// immediately before the log — is what the other two comparisons are about,
-// because both are properties of where this node's applier stands rather than
-// of one decision: whether what it appends lands at a sequence its applier has
-// already passed, and whether what it lacks is still on the log for it to
-// replay. Each position is the conservative one for the question it answers: a
-// decision only trails its node, so the floor refuses more against it; the
-// node only leads its decision, so the end refuses more against it.
-//
-// # What it refuses, each with its own reason
-//
-//   - `evicted`: this node's own eviction row says so, or cannot be read —
-//     the one sentence fence 0 refuses with, because it is the same finding.
-//   - `floor_unknown`: the published floor or the log's ends could not be
-//     read. Either is half of the bound F the floor theorem is stated over, so
-//     either unread leaves F unknown — and A READ THAT ANSWERS UNKNOWN MUST
-//     REFUSE: failing open here is a lost update, which nothing recovers.
-//   - `wrong_stream`: this node's checkpoint is past the log's end, so it is a
-//     position in a history the log does not hold ([ErrAheadOfLog]). Asked
-//     BEFORE the floor, because the floor comparison is between sequences in
-//     one space and this is the finding that there is not one.
-//   - `below_floor`: [Replayable] fails against the higher of the floor and
-//     the log's first sequence, so an absent anchor may be a record trimmed
-//     beneath this node rather than an object never written — AND the record
-//     this node's applier needs next is gone from the log itself, so no replay
-//     can supply it and the node adopts a peer's snapshot.
-//   - `behind`: the same comparison fails, and the log still holds every
-//     record this node lacks — it is REPLAYING up to the floor, the state
-//     [FloorReplaying] names, or it has already applied past a decision that
-//     was taken below it. The write is refused all the same, because the floor
-//     theorem holds only once the decision's rows reach the floor; but it
-//     clears on its own, which is what `behind` says on the write path and on
-//     the read path alike, and `below_floor` would send the caller away and an
-//     operator to a snapshot this node does not need.
-//
-// Every refusal is an [*Unavailable], so errors.Is(err, ErrUnavailable) holds
-// and none of them is [ErrConflict]: each says this node cannot make this write
-// now, and none says somebody else did.
+// It refuses `evicted` ([evictionRefusal]); `floor_unknown` when the floor or
+// the ends are unread, since failing open is a lost update nothing recovers;
+// `wrong_stream` when the node is past the log's end ([ErrAheadOfLog]), asked
+// before the floor; and, when [Replayable] fails, `below_floor` (adopt a
+// snapshot) if the log no longer holds what the node lacks, else `behind`,
+// which clears on its own (package doc, "THE FLOOR THEOREM").
 type ZeroFence struct {
 	// Evicted is this node's own eviction, read from its own applied rows —
 	// the domain's [Fence.Evicted].
 	Evicted func(context.Context) (bool, error)
 
-	// Floor is the fleet's published trim floor for this domain, at the
-	// generation named — the cursor's own, because a floor is a sequence in
-	// its generation's number space and says nothing about a cursor on
-	// another.
+	// Floor is the fleet's published trim floor for this domain at the named
+	// generation, the cursor's own: a floor is a sequence in its generation's
+	// number space.
 	Floor func(ctx context.Context, generation uint32) (uint64, error)
 
-	// Ends is the log's two ends, read live. It is the one read of the log
-	// an expectation of zero takes, which is why the end is checked here
-	// rather than by a second round trip.
+	// Ends is the log's two ends, read live: the one read of the log a write
+	// at zero takes, so the end is checked here rather than by a second trip.
 	Ends func(context.Context) (LogEnds, error)
 
-	// Committed is this node's applier's committed checkpoint, live — the
-	// runner's own [Runner.Committed]. Read immediately BEFORE Ends, which
-	// is the only order in which comparing it with the end is sound: on a
-	// healthy log a checkpoint read first can never exceed an end read after
-	// it, while one read after can, whenever a record lands and is applied
-	// between the two reads.
+	// Committed is this node's applier's committed checkpoint, live
+	// ([Runner.Committed]). Read immediately BEFORE Ends: on a healthy log a
+	// checkpoint read first never exceeds an end read after it, while one read
+	// after can, when a record lands and is applied between the two reads.
 	Committed func() Position
 }
 
-// ClearForZero verifies, freshly and within the call, that publishing at an
+// ClearForZero verifies, freshly within the call, that publishing at an
 // expectation of zero is safe from this node, for a write whose snapshot was
-// taken at cursor — see [ZeroFence] for which comparison each position is
-// asked.
+// taken at cursor.
 //
-// THE FLOOR AND THE LOG ARE READ AT ONCE. Each is a round trip to a different
-// leader — the floor to the coordination bucket's, the ends to the log's — and
-// a write at an expectation of zero waits on the fence, so read one after the
-// other they cost the write their sum, and on a loaded fleet each is the slow
-// one in turn. Nothing orders them against each other: the floor theorem asks
-// only that the floor be read AFTER the write's own read of its subject, which
-// both are, and the bound is the HIGHER of the floor and the log's first
-// sequence, so a floor read on either side of the ends bounds every record
-// those ends show gone — the trim publishes a floor before the purge it
-// licenses. What is ordered stays ordered: the checkpoint is read immediately
-// before the ends, inside the same read. The eviction is still read first,
-// because it is the one answer that makes the other two moot.
+// The floor and the log's ends are read AT ONCE: each is a round trip to a
+// different leader, and in turn they would cost the write their sum. Nothing
+// orders them: the floor theorem asks only that the floor follow the write's
+// own read of its subject, and as the bound is the higher of the floor and the
+// first sequence, a floor read either side of the ends bounds every record they
+// show gone (the trim publishes a floor before its purge). The
+// checkpoint stays immediately before the ends; the eviction is read first,
+// because it makes the other two moot.
 func (z ZeroFence) ClearForZero(ctx context.Context, cursor Position) error {
 	if z.Evicted == nil || z.Floor == nil || z.Ends == nil || z.Committed == nil {
-		// A WIRING MISTAKE, not a state of the fleet, so it is an error
-		// rather than a reason: a fence that cannot read one of its four
-		// inputs cannot establish that an absent anchor means an empty
-		// subject rather than a record trimmed beneath it, and clearing on
-		// the inputs it has is the shape that cleared a node below the log
+		// A wiring mistake, not a fleet state, so an error rather than a
+		// reason: clearing on the reads it has would clear a node below the log
 		// whenever the trim was blocked.
 		return fmt.Errorf("statelog: the zero fence for %s is missing a read "+
 			"(eviction %t, floor %t, log ends %t, checkpoint %t) — it cannot "+
@@ -138,9 +79,8 @@ func (z ZeroFence) ClearForZero(ctx context.Context, cursor Position) error {
 	if refusal := evictionRefusal(ctx, evicted, err); refusal != nil {
 		return refusal
 	}
-	// THE FLOOR BESIDE THE LOG, never before it. Its read runs on a
-	// goroutine of its own and is always waited for, so nothing it starts
-	// outlives the call.
+	// The floor beside the log, on a goroutine always waited for, so
+	// nothing it starts outlives the call.
 	var (
 		floor    uint64
 		floorErr error
@@ -150,14 +90,12 @@ func (z ZeroFence) ClearForZero(ctx context.Context, cursor Position) error {
 		defer close(read)
 		floor, floorErr = z.Floor(ctx, cursor.Generation)
 	}()
-	// THE NODE'S CHECKPOINT BEFORE THE LOG, and immediately before it —
-	// see [ZeroFence.Committed].
+	// The node's checkpoint immediately before the log ([ZeroFence.Committed]).
 	at := z.Committed()
 	ends, err := z.Ends(ctx)
 	<-read
-	// The floor's refusal before the log's, the order the two were judged
-	// in when they were read in turn: either unread leaves the bound
-	// unknown, and one refusal names one of them.
+	// The floor's refusal first: either unread leaves the bound unknown,
+	// and one refusal names one of them.
 	if floorErr != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -184,40 +122,28 @@ func (z ZeroFence) ClearForZero(ctx context.Context, cursor Position) error {
 			Cause: err,
 		}
 	}
-	// A CHECKPOINT PAST THE END FIRST. Every term below is a sequence, and
-	// comparing them is meaningful only while this node and the log are in
-	// one sequence space — which this is the finding that they are not. It
-	// is the only branch here that sees it: a checkpoint past the end clears
-	// every bound below BECAUSE it is past all of them, so without this
-	// check the fence waved a retry at zero onto a log that will append it
-	// at a sequence this node has already passed.
-	//
-	// THE NODE'S, NOT THE DECISION'S. Where the record lands against where
-	// the applier stands is what makes it unanswerable, and the applier only
-	// leads the decision: judged on the snapshot's checkpoint instead, a
-	// node that applied past a restored log's end after deciding would
-	// clear.
+	// A checkpoint past the end FIRST: every comparison below assumes the
+	// node and the log share one sequence space, and such a checkpoint clears
+	// every bound because it is past them all, so a retry at zero would land at
+	// a sequence this node has already passed. Judged on the NODE's checkpoint:
+	// the applier only leads the decision, so on the decision's a node that
+	// applied past a restored log's end after deciding would clear.
 	if pastEnd(at.Seq, ends.Last) {
 		cause := aheadOfLog{at: at, last: ends.Last}.err(cursor.Stream)
 		return &Unavailable{Reason: ReasonWrongStream, Detail: cause.Error(), Cause: cause}
 	}
-	// EVERYTHING BELOW THE HIGHER OF THE TWO MAY BE GONE, so a decision
-	// whose rows hold everything through the one before it has seen
-	// everything that may be gone. Compared against the cursor itself the
-	// check refused a node ONE BELOW that bound although it holds everything
-	// it needs — which is where a node that has just adopted a snapshot
-	// sits, since the snapshot term licenses trimming through the artefact's
-	// own position — and [Replayable] is the one place that boundary is
-	// written.
+	// Everything below the higher of the two may be gone, so a decision whose
+	// rows hold through the one before it has seen all of it; [Replayable] is
+	// the one place that boundary is written (a node fresh from a snapshot sits
+	// exactly one below it).
 	held := max(floor, ends.First)
 	if Replayable(cursor.Seq, held) {
 		return nil
 	}
-	// AND WHICH REFUSAL is asked of the NODE against the log's first
-	// sequence alone — the split [Health.Established] and readiness make,
-	// so a node the read path calls replaying is never one the write path
-	// sends to adopt. The floor is published before the purge it licenses,
-	// so the log may still hold everything the node lacks.
+	// WHICH refusal is asked of the NODE against the log's first sequence
+	// alone, the split [Health.Established] and readiness make, so a node the
+	// read path calls replaying is never one the write path sends to adopt: the
+	// floor is published before its purge, so the log may still hold the rest.
 	if !Replayable(at.Seq, ends.First) {
 		return &Unavailable{
 			Reason: ReasonBelowFloor,
@@ -245,18 +171,13 @@ func (z ZeroFence) ClearForZero(ctx context.Context, cursor Position) error {
 	}
 }
 
-// floorClears is what clears a refusal over a floor that could not be read, by
-// what kept it from being read — the clause the refusal ends with.
-//
-// BY CLASS, because the two causes clear in opposite ways
-// ([coord.ErrFloorUnreadable]): a store that does not answer clears by itself
-// when it answers again, while a row that does not read as its domain's floor
-// stays until somebody removes it, and the error carrying it names the key and
-// the command. Told "it clears when coordination answers" over such a row, a
-// refused write gave its reader two remedies in one sentence, and the one in
-// the fence's own words was the wrong one. A cause neither of those — a floor
-// published at a generation this decision's cursor is not on — is stated by
-// its own error and given no remedy here, rather than either of the wrong ones.
+// floorClears is the clause a refusal over an unread floor ends with, by what
+// kept it from being read: the two causes clear in opposite ways
+// ([coord.ErrFloorUnreadable]). A store that does not answer clears when it
+// answers; a row that does not read as its domain's floor stays until somebody
+// removes it, so naming coordination there gives the wrong remedy. Any other
+// cause (a floor at a generation the cursor is not on) states itself and gets
+// no remedy here.
 func floorClears(err error) string {
 	switch {
 	case errors.Is(err, coord.ErrFloorUnreadable):
@@ -271,23 +192,15 @@ func floorClears(err error) string {
 }
 
 // evictionRefusal is what a reading of this node's own eviction refuses with,
-// or nil when it permits the write — the ONE sentence fence 0 and the zero fence
+// or nil when it permits the write: the ONE sentence fence 0 and the zero fence
 // both answer with, because it is one finding reached twice.
 //
-// THE THIRD VALUE BLOCKS. An eviction that cannot be read is not an eviction
-// that did not happen, and publishing under it produces durable records every
-// node drops — but it is not an eviction either, and the reason says which:
-// [ReasonEvictionUnknown] clears when the state is read again, so a caller is
-// told to come back rather than to give up on this node. A cancelled caller is
-// the exception, and only because it is not a reading at all: it is the caller
-// leaving, and naming it a refusal would put a shutdown on the refusal counter
-// as a fleet event.
-//
-// AND THE STORE'S OWN WORDS GO TO THE LOG, never onto the detail: every
-// surface sends a refusal's detail to the caller, and the read's error is a
-// driver's message or a database path — see [Reader.scopeUnread]. The error
-// still travels as the refusal's Cause, for a caller in this process that
-// recognises it.
+// An unread eviction BLOCKS, since publishing under it makes records every node
+// drops, as [ReasonEvictionUnknown], which clears when the state reads again so
+// the caller comes back rather than give up on this node. A cancelled caller
+// gets its context's error: a refusal would count a shutdown as a fleet event.
+// The store's own words go to the log, never the detail every surface sends
+// the caller ([Reader.scopeUnread]); the error still travels as Cause.
 func evictionRefusal(ctx context.Context, evicted bool, err error) error {
 	switch {
 	case err != nil && ctx.Err() != nil:

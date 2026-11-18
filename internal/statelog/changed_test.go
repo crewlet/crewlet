@@ -7,13 +7,12 @@ import (
 // THE ROWS CHANGE WITH EVERY RECORD BUT A BARRIER, and nothing else moves where
 // they last did ([statelog.Runner.Changed]).
 //
-// A barrier is every linearizable read in the fleet, applied by every data
-// node, and it writes no row: a reading of where this node's rows last changed
-// that moved with it — as the reached position and the committed checkpoint
-// both do — retires a cache keyed on it at every read. A barrier this node
-// RETAINS is a row of the deferral index, though, and a write is a write. And
-// a load of the rows — a restart over the same file, which reprocesses what an
-// earlier build retained and moves no position — is a reading of its own.
+// Every linearizable read in the fleet is a barrier every data node applies,
+// and it writes no row, so a reading that moved with it (as the reached
+// position and the committed checkpoint do) would retire a cache keyed on it
+// at every read. A barrier this node RETAINS is a row of the deferral index,
+// so it counts; and a load of the rows (a restart that reprocesses what was
+// retained and moves no position) is a change of its own.
 func TestTheRowsChangeWithEveryRecordButABarrier(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})

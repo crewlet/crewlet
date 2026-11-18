@@ -10,13 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE PERSON'S OWN SUBJECT, and the four ops that arbitrate on it.
-//
-// Everything about somebody that is not unique contends here — their content,
-// their stage and their revocation epoch, and a password change that moves the
-// first and the last at once — so two administrators editing one
-// person contend and two editing two people never do. A person's row is
-// created and removed on the directory ([Applier.applyDirectory]), never here.
+// THE PERSON'S OWN SUBJECT, and the four ops that arbitrate on it: everything
+// about somebody that is not unique (content, stage, revocation epoch, and a
+// password change moving content and epoch at once), so editing one person
+// contends and editing two never does. The row is created and removed on the
+// directory ([Applier.applyDirectory]), never here.
 
 // applyPerson dispatches the ops on [KindPerson].
 func (a *Applier) applyPerson(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
@@ -38,14 +36,12 @@ func (a *Applier) applyPerson(ctx context.Context, tx *sql.Tx, at applyContext) 
 // writePerson writes the person's own document and their credentials, as FULL
 // POST-STATE, onto the row the directory created.
 //
-// ONE RECORD, TWO TABLES, and the credential rows are REPLACED rather than
-// merged: the payload is the complete set, so a credential absent from it is
-// one the writer removed. A merge would make deleting a credential impossible
-// to express and would leave a revoked machine token live for ever.
+// The credential rows are REPLACED, not merged: the payload is the complete
+// set, and a merge could not express deleting a credential, leaving a revoked
+// machine token live for ever.
 //
-// AN UPDATE AND NEVER AN INSERT: a content record never creates a person —
-// the directory does — so one for an id with no row writes nothing, rather
-// than a row holding no login, no address and no seat that nothing enrolled.
+// AN UPDATE, NEVER AN INSERT: only the directory creates a person, so a record
+// for an id with no row writes nothing.
 func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 	id string) (int, error) {
 
@@ -57,10 +53,9 @@ func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 	return a.writeDocument(ctx, tx, at, id, person)
 }
 
-// writePassword writes a password change: the person's document, exactly as a
-// content record writes it, and the epoch the record states, exactly as a
-// revocation bumps it — two writes one record makes, so a node holds both or
-// neither.
+// writePassword writes a password change: the person's document, as a content
+// record writes it, and the stated epoch, as a revocation bumps it, from one
+// record so a node holds both or neither.
 func (a *Applier) writePassword(ctx context.Context, tx *sql.Tx, at applyContext,
 	id string) (int, error) {
 
@@ -77,9 +72,8 @@ func (a *Applier) writePassword(ctx context.Context, tx *sql.Tx, at applyContext
 	return written + bumped, err
 }
 
-// writeDocument writes one person's document and their credentials onto the
-// row the directory created — the half of a content record and a password
-// change that is the same.
+// writeDocument writes one person's document and credentials onto the row the
+// directory created: what a content record and a password change share.
 func (a *Applier) writeDocument(ctx context.Context, tx *sql.Tx, at applyContext,
 	id string, person Person) (int, error) {
 
@@ -89,14 +83,12 @@ func (a *Applier) writeDocument(ctx context.Context, tx *sql.Tx, at applyContext
 			at.position, err)
 	}
 
-	// THE VERSION GUARD IS A SKIP, not an error: a redelivered record is
-	// ordinary traffic, and a constraint violation inside this transaction
-	// would abort it identically on every data node and stall the fleet's log.
+	// THE VERSION GUARD IS A SKIP, not an error: a redelivery is ordinary
+	// traffic, and a constraint violation would abort this transaction
+	// identically on every data node and stall the log.
 	//
-	// THE UNIQUE COLUMNS ARE THE DIRECTORY'S, and this statement leaves
-	// them out: a content record that wrote one would be a record
-	// overwriting a decision the directory made, in a domain where the
-	// columns are somebody's identity.
+	// The directory's unique columns are left out: they are somebody's
+	// identity, a decision only the directory makes.
 	result, err := tx.ExecContext(ctx, writePersonStatement,
 		string(person.Kind), string(person.Stage),
 		[]byte(person.NameSealed), []byte(person.EmailSealed),
@@ -106,23 +98,20 @@ func (a *Applier) writeDocument(ctx context.Context, tx *sql.Tx, at applyContext
 	}
 	written, _ := result.RowsAffected()
 	if written == 0 {
-		// NOBODY TO WRITE, or a record this row is already past — the
-		// skip every guard here is, and the credentials below belong to a
-		// state that is not current.
+		// NOBODY TO WRITE, or a record this row is already past: skip, as
+		// the credentials below belong to a state that is not current.
 		return 0, nil
 	}
-	// A CONTENT RECORD STATES A STAGE, so a person's standing may have
-	// moved with it.
+	// A CONTENT RECORD STATES A STAGE, so the person's standing may have moved.
 	a.moved.Seats = true
 
 	credentials, err := a.writeCredentials(ctx, tx, at, id, person.Credentials)
 	if err != nil {
 		return int(written) + credentials, err
 	}
-	// AND EVERY CREDENTIAL ACTING FOR THEM is to be decided again: the
-	// grants a session or a machine token carries are this row's, and a
-	// machine token this record revoked or dropped from the set is one it
-	// ended — named by its owner, whose row it is.
+	// Every credential acting for them is decided again: a session's or
+	// machine token's grants are this row's, and a token this record revoked
+	// or dropped is ended, named by its owner.
 	if err := a.movedPerson(ctx, tx, id); err != nil {
 		return int(written) + credentials, err
 	}
@@ -145,30 +134,27 @@ const personVersionStatement = `SELECT version FROM iam_people WHERE id = ?`
 func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 	at applyContext, id string, credentials []Credential) (int, error) {
 
-	// THE DELETE IS GUARDED BY THE VERSION TOO, through the person's row:
-	// a redelivered record that skipped the upsert above must not then
-	// delete the credentials a newer record wrote. Reading the person's
-	// committed version back is what makes the pair one decision.
+	// THE DELETE IS GUARDED BY THE VERSION TOO, read back from the person's
+	// row, so a redelivered record whose update was skipped cannot delete the
+	// credentials a newer record wrote.
 	var live int64
 	err := tx.QueryRowContext(ctx, personVersionStatement, id).Scan(&live)
 	switch {
 	case err != nil && !errorsIsNoRows(err):
 		return 0, fmt.Errorf("iamdomain: read person %s's version: %w", id, err)
 	case errorsIsNoRows(err):
-		// NO PERSON ROW MEANS THE UPSERT WAS SKIPPED BY THE GUARD OR THE
-		// person was removed between the two statements. Either way this
-		// record's credentials belong to a state that is not current.
+		// No person row: this record's credentials belong to a state that is
+		// not current.
 		return 0, nil
 	case live > at.packed:
 		return 0, nil
 	}
 
-	// A CREDENTIAL KEEPS THE INSTANT IT WAS CREATED. Every record about a
-	// person restates all of their credentials, and the document holds no
-	// creation time, so a credential's is its row's: one the set already
-	// held keeps it, and only a new one is stamped with this record's. It
-	// was every row restamped, so each change to a person — a revocation
-	// included — read as having created every credential they held.
+	// A CREDENTIAL KEEPS THE INSTANT IT WAS CREATED: every record restates all
+	// of a person's credentials and the document holds no creation time, so one
+	// the set already held keeps its row's and only a new one takes this
+	// record's. Restamping all would make every change to a person read as
+	// creating every credential they hold.
 	created, err := credentialsCreated(ctx, tx, id)
 	if err != nil {
 		return 0, err
@@ -248,25 +234,16 @@ const (
 
 // writeStage moves a person between enrolment stages.
 //
-// ITS OWN OP AND ITS OWN NARROW WRITE, so suspending somebody does not carry
-// their whole document — which matters because the op an operator reads the
-// log for is this one, and a full post-state would make every suspension look
-// like an edit.
+// ITS OWN OP AND NARROW WRITE, so a suspension does not carry the whole
+// document and does not read as an edit in the log.
 //
-// # The stage lives in two places on the row, and this moves BOTH
-//
-// The `stage` column is what every predicate reads — the stage index, the
-// seat-holder checks, the directory listing — and the document is the full
-// post-state a content record authors and a read-modify-write re-reads. This
-// op used to move the column alone, so the document went on saying `active`
-// after a suspension: every reader that decided from the document signed the
-// suspended person in and validated their sessions, and the next edit of their
-// grants re-published the document's `active` and quietly reactivated them.
-// One fact in two places is only safe while every writer moves both.
-//
-// The document is re-derived from the row this transaction reads and the stage
-// the record states, which is still a pure function of the log: every data
-// node holds the same row at this position and writes the same bytes.
+// It moves BOTH places the stage lives: the `stage` column every predicate
+// reads (the stage index, seat-holder checks, the directory listing) and the
+// document a read-modify-write re-reads. A document left saying `active`
+// signs a suspended person in, and the next grant edit re-publishes it,
+// reactivating them. The document is re-derived from the row this
+// transaction reads and the stated stage, so it stays a pure function of the
+// log.
 func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 	id string) (int, error) {
 
@@ -280,9 +257,8 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 		id, at.packed).Scan(&document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// NOBODY TO MOVE, or a record this row is already past — a
-		// redelivery, or a status a later content record superseded. The
-		// guard is a SKIP, for the reason every guard here is.
+		// NOBODY TO MOVE, or a record this row is already past (a redelivery,
+		// or a status a later content record superseded): skip.
 		return 0, nil
 	case err != nil:
 		return 0, fmt.Errorf("iamdomain: read person %s to move their stage: %w",
@@ -290,11 +266,9 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	restaged, err := restage(document, change.Stage)
 	if err != nil {
-		// A DOCUMENT THIS BUILD CANNOT OPEN IS LEFT AS IT IS and the
-		// column still moves. Failing here would stall the log on every
-		// node holding the same bytes, over a stage the column already
-		// states — and the column is what every reader decides from, and
-		// what [heldPerson] hands a read-modify-write, so the stale copy
+		// A DOCUMENT THIS BUILD CANNOT OPEN IS LEFT AS IT IS while the column
+		// moves: failing would stall the log on every node, and the column is
+		// what every reader and [heldPerson] decide from, so the stale copy
 		// can neither admit the person nor be re-published over them.
 		restaged = document
 	}
@@ -305,8 +279,8 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	written, _ := result.RowsAffected()
 	if written > 0 {
-		// A STAGE THAT IS NOT `active` refuses every credential acting for
-		// them, and one that is admits them again.
+		// A stage other than `active` refuses every credential acting for
+		// them; `active` admits them again.
 		a.moved.Seats = true
 		if err = a.movedPerson(ctx, tx, id); err != nil {
 			return int(written), err
@@ -315,8 +289,8 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 	if change.Epoch == 0 {
 		return int(written), nil
 	}
-	// AND ENDS THEM, whether or not the stage was this record's to write:
-	// an epoch only ever moves forward, so a bump is never stale.
+	// AND ENDS THEM whether or not the stage was this record's to write: an
+	// epoch only moves forward, so a bump is never stale.
 	bumped, err := a.bumpEpoch(ctx, tx, at, id, change.Epoch)
 	return int(written) + bumped, err
 }
@@ -334,10 +308,9 @@ func restage(document []byte, stage iam.Stage) ([]byte, error) {
 // writeRevocation bumps a person's revocation epoch, which ends every session
 // they hold, everywhere, at once.
 //
-// THE NEW EPOCH IS STATED, never incremented here. An applier that did `epoch
-// + 1` would be folding over an arrival order, and two nodes at one checkpoint
-// have seen the same set in a different order — so the one write in this
-// domain that must be identical everywhere would be the one that is not.
+// THE NEW EPOCH IS STATED, never incremented here: `epoch + 1` would fold over
+// arrival order, which differs between nodes at one checkpoint, so the write
+// that must be identical everywhere would not be.
 func (a *Applier) writeRevocation(ctx context.Context, tx *sql.Tx,
 	at applyContext, id string) (int, error) {
 
@@ -349,23 +322,21 @@ func (a *Applier) writeRevocation(ctx context.Context, tx *sql.Tx,
 	return a.bumpEpoch(ctx, tx, at, id, revocation.Epoch)
 }
 
-// bumpEpoch moves one person's revocation epoch to the value a record states —
-// the half of a revocation and a password change that is the same.
+// bumpEpoch moves one person's revocation epoch to the value a record states:
+// what a revocation and a password change share.
 func (a *Applier) bumpEpoch(ctx context.Context, tx *sql.Tx, at applyContext,
 	id string, epoch uint64) (int, error) {
 
-	// THE EPOCH THIS MOVE LEAVES, read before it is replaced: a session at
-	// it or above is one this move ends, and one below it an earlier move
-	// had already ended.
+	// THE EPOCH THIS MOVE LEAVES, read before it is replaced: a session at or
+	// above it is one this move ends; one below, an earlier move ended.
 	previous, err := epochOf(ctx, tx, id)
 	if err != nil {
 		return 0, err
 	}
-	// THE GUARD IS THE EPOCH ITSELF AND NOT THE VERSION, which is the one
-	// place this domain guards on a payload value. An epoch is MONOTONE by
-	// its own meaning — it only ever ends more sessions — so a redelivered
-	// or reordered lower epoch must not take effect, and comparing versions
-	// would let one that arrived later win.
+	// THE GUARD IS THE EPOCH, NOT THE VERSION (this domain's one guard on a
+	// payload value): an epoch is monotone, only ever ending more sessions, so
+	// a redelivered or reordered lower epoch must not take effect, which a
+	// version comparison would allow.
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO iam_revocation_epochs
 			(person_id, epoch, reason, bumped_at, bucket, version)
@@ -385,27 +356,21 @@ func (a *Applier) bumpEpoch(ctx context.Context, tx *sql.Tx, at applyContext,
 	if written == 0 {
 		return 0, nil
 	}
-	// EVERY SESSION AND MACHINE TOKEN THEY HOLD is over, which is the whole
-	// of what an epoch bump is for.
+	// Every session and machine token they hold is over.
 	if err = a.movedPerson(ctx, tx, id); err != nil {
 		return int(written), err
 	}
-	// AND EACH SESSION IT ENDED SAYS SO ON ITS OWN ROW, with this record's
-	// reason and instant. The epoch's row keeps only its LAST move, so a
-	// listing that derived the why from it re-described every session an
-	// earlier move had ended — a suspension, then a reset link, then an
-	// administrator ending them all, each listed as the last. Written HERE,
-	// once, it is the reason of the move that actually ended the session,
-	// and no later move rewrites it: the guard is `ended_at = 0`, as a
-	// sign-out's is.
+	// EACH SESSION IT ENDED SAYS SO ON ITS OWN ROW, with this record's reason
+	// and instant: the epoch's row keeps only its LAST move, so deriving the
+	// why from it would describe every session an earlier move ended as the
+	// last. The guard `ended_at = 0`, as a sign-out's, keeps a later move
+	// from rewriting it.
 	//
-	// ONLY ON A SESSION LIVE AT THIS MOVE — at the epoch it leaves — because
-	// `ended_at = 0` alone also holds for a session an earlier move ended
-	// without writing it: a start decided before that move whose record
-	// landed after it, and every row an estate held before moves wrote
-	// their reasons. Stamped here, the next move would re-describe it as its
-	// own for good. Those, and a session the company's generation already
-	// ended, are left to say what the counters can ([Reader.Sessions]).
+	// ONLY ON A SESSION LIVE AT THIS MOVE (at or above the epoch it leaves):
+	// `ended_at = 0` also holds for a session an earlier move ended without
+	// stamping, such as a start decided before that move whose record landed
+	// after it, which this move would claim for good. Those, and sessions the
+	// company's generation ended, say what the counters can ([Reader.Sessions]).
 	ended, err := tx.ExecContext(ctx, `
 		UPDATE iam_sessions
 		SET ended_at = ?, ended_reason = ?, version = ?
@@ -425,11 +390,9 @@ func (a *Applier) bumpEpoch(ctx context.Context, tx *sql.Tx, at applyContext,
 // sites read as the question they are asking.
 func errorsIsNoRows(err error) bool { return errors.Is(err, sql.ErrNoRows) }
 
-// millis is an instant as this estate stores it: ZERO for an unset time,
-// rather than the epoch's own milliseconds, so "no deadline" and "1 January
-// 1970" are different values in a column a predicate ranges over — which
-// matters because every expiry predicate here is a range, and an unset
-// deadline read as 1970 is a row that expired before it was written.
+// millis is an instant as this estate stores it: ZERO for an unset time, not
+// the epoch's milliseconds, because every expiry predicate is a range and an
+// unset deadline read as 1970 would have expired before it was written.
 func millis(t time.Time) int64 {
 	if t.IsZero() {
 		return 0
