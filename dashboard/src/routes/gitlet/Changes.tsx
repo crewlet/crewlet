@@ -29,15 +29,10 @@
  * Sort is `CHANGE_SORTS`, chosen only where the walk can order by it (a live
  * state that no reviewer or need leads), and said in place everywhere else.
  *
- * # The query bar
+ * # The query bar and Readiness
  *
- * The address's filters as qualifier chips, and words the engine searches in titles and
- * descriptions (`text=`); an answer without `changes_text` ignored the words, and is said.
- *
- * # Readiness
- *
- * The open changes by where their merge stands (`readiness=`), or those waiting on a person
- * (`needs=person`); a node that answers no `narrowed_to` ignored the key, and is said, not drawn.
+ * Qualifier chips, words searched in titles and descriptions (`text=`), and the open changes by
+ * where their merge stands (`readiness=`, `needs=person`); a node that ignored a key is said.
  *
  * # Waiting on you
  *

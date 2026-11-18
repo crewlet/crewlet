@@ -1,6 +1,4 @@
-<div align="center">
-<img src="assets/crewlet-icon.svg" alt="Crewlet" width="88">
-</div>
+<div align="center"><img src="assets/crewlet-icon.svg" alt="Crewlet" width="88"></div>
 
 # Crewlet Documentation
 

@@ -560,7 +560,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-tag__label",
-    why: "uilet's Tag writes it on a chip's words, and ChipField draws its chips as Tags with no monospace option. styles/gitlet.css sets Gitlet › Changes' query bar chips (`.code-query__field`) in the mono face, since each is a qualifier the reader types. Another rule about OUR composition of the package's component.",
+    why: "uilet's Tag writes it on a chip's words, and ChipField draws its chips as Tags with no monospace option. styles/frame.css sets Gitlet › Changes' query bar chips (`.code-query__field`) in the mono face, since each is a qualifier the reader types; the shell's sheet, since a lazy one may carry no kit rule. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

@@ -1035,20 +1035,18 @@ The dashboard's Gitlet workspace draws both in sections of their own, each over
 the same questions a seat's tools ask.
 
 **Gitlet › Queue** (`#/gitlet/queue`) is the merge queues of your gated branches:
-a band per repository and branch, its entries in the order the queue lands
-them — the place, the change, who enqueued it and where it stands (`waiting`
-for a candidate, or `testing` in one). Choose a repository (`?repo=web`) and
-each entry also shows the **train base** it is tested on, a meter of the
-**required checks** of what it is tested in, each at its latest attempt —
-passed, failed and running, the rest not yet a verdict — and how long it has
-been queued against the slowest of those checks' declared `timeout_seconds`,
-since the queue waits for its slowest required check. Under each of its
-bands, in the danger tone, is what the queue **put out in the last day**: the
-change, why (`a required check failed`, `its merge conflicted`, `it no longer
-met the branch's gate`, `its head moved`, `the branch moved under the queue`)
-and the required checks that
-failed on what it was tested in or the paths its merge conflicted on. A branch
-with nothing queued and nothing put out lately draws no band, and a company
+a box per repository and branch with its train base and its entries in landing
+order, each with its change's title, who enqueued it, where it stands and a
+meter of its train's **required checks** with how long they have run against
+the slowest declared `timeout_seconds`, since the queue waits for its slowest
+required check. Under each box, in the danger tone, is what the queue **put
+out in the last day**: the change, why (`a required check failed`, `its merge
+conflicted`, `it no longer met the branch's gate`, `its head moved`, `the
+branch moved under the queue`) and the required checks that failed on what it
+was tested in or the paths its merge conflicted on. **View the run** opens the
+check that failed on the train, and **Re-queue** adds the change again as it
+was to land. A branch
+with nothing queued and nothing put out lately draws no box, and a company
 with nothing queued says so. The queues are read fifty entries at a time;
 **Load more** reads the next fifty.
 
@@ -1166,10 +1164,14 @@ that fill the answer, not every one — so narrow the search with `repo:` or
 
 **Searching from the dashboard.** **Gitlet › Search** (`#/gitlet/search`) takes
 the search as written above, with its mode, a repository, a path and a ref
-as controls beside it, and draws the lines by repository and file, each line
-opening its file at the commit it was searched at; what was not searched is
-said above them on every answer. In ⌘K, the **Code** tab searches the same
-way and lists the first eight lines.
+as controls beside it, and draws each file's matching lines with the lines
+around them, the matches marked, by repository and file, each line opening its
+file at the commit it was searched at; facets narrow it by repository or
+directory, and **Show N more** reads the rest of a file's matching lines. What
+was not searched is said above them on every answer. A repository searched
+only with git grep is named with `repo:` to search it, as the line above the
+results says. In ⌘K, the **Code** tab searches the same way and lists the
+first eight lines.
 
 **Searching from a script.** The same search is the question `code_search`,
 on [`GET /gitlet/search`](../reference/api-endpoints.md#get-gitletsearch):
