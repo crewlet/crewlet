@@ -191,7 +191,8 @@ before it, and the sentence beside it says what they are doing.
 **A reviewer's face in a change's row wears the kit's verdict corner** in place of a status:
 a check on the success fill for an approval, a mark on the danger fill for changes requested,
 each said in its title too. It is held to Gitlet's rows (`SeatAvatar.test.tsx`); a verdict
-elsewhere stays words, but for a review's disc on a change's timeline (`change/timeline.test.ts`).
+elsewhere stays words, but for a review's disc on a change's timeline and a reviewer's mark on
+its rail (`change/timeline.test.ts`).
 
 | Status (pill tone) | `activity` | Label |
 |---|---|---|
@@ -1472,7 +1473,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/gitlet/repos/{name}` | **A repository**, laid out as a code host lays one out: its header (its owner's path and its name, its marks: its state where it is not active, scratch, a pull mirror, who reads it, a push mirror; and its description) and tabs **Code**, where it lands (the files at a revision: at a directory the latest commit that touched it across the head of a card of its entries, each with its glyph and its last commit, and at the root its README and LICENSE as tabs of one card and its rail beside them: **About** as sentences, **Open changes**, **Who pushes here**, **Pushes** over 14 days, its **Mirror** and its newest **Tag**; at a file its lines beside the repository's tree, the lines picked tinted, switched to its **Blame**, with **Raw** and **Download**, its **History** and a **Permalink** at the commit the revision resolved to; the branches and tags beside the revision picker at the root, **Go to file** (`t`), and **Code**, its clone address, command and ZIP), **Changes** (the changes proposed to it, in Gitlet's change row, by state), **Commits** (the history at a revision, of a path or of every path, as a timeline of the reader's days, each commit with who wrote it, how it reached its branch, its checks, the change it landed with and its tags, its id with its copy and its files), **Branches** (its branches by when each moved, with who moved it, checks, drift and change, and its tags by date), **Pushes** (its push history), **Checks** (every attempt it keeps, newest ended first, each opening in the check pane) and **Settings** (its settings, rules, merge gates and path owners, a card each, shown and never edited here where the repository is declared: those lead to Settings › Configuration) *(hidden where the company hosts no code)*. A name no repository can have is said in place. Its page bar's **Compare** opens a comparison | `tab=code\|changes\|commits\|branches\|pushes\|checks\|settings` (`code` is never spelled: it is the landing) · on Code and Commits, `ref=` (a branch, a tag's whole ref or a commit; none is the default branch) and `path=` (from the root) · on Code, `lens=blame`, `lines=` (`12`, or `12-20`) and `doc=license` · on Commits, `by=` (a seat), `when=` (`today\|7d\|30d\|90d`) and `q=` (words in a message) · on Changes, `state=` · on Branches, `view=active\|stale\|all\|tags` and `q=` (a find) |
 | `#/gitlet/repos/{name}/commits/{sha}` | **A commit**, by its whole id: its header (subject, short id, repository, author, when it was authored and committed, its parents), who pushed it — the seat or the credential, when and how, and the turn, executor and work item behind a seat's push, as the engine recorded them — the changes it belongs to (those it merged, and those whose revision it heads), and what it changed against its first parent (a root commit's from git's empty tree) in the one `DiffView` *(hidden where the company hosts no code)*. An abbreviated id is Not Found | `file=` (a path) · `line=` (as on a comparison) · `layout=unified\|split` |
 | `#/gitlet/repos/{name}/compare` | **A comparison** of two revisions: how they relate (ahead, behind, their merge base), what merging the compared into the base would do (merges cleanly, or conflicts in which paths), what it changed since the two parted in the one `DiffView`, and the page bar's **Open change**, which proposes the compared branch into the base branch, prefilled with its head's subject and the work item its push was charged to *(hidden where the company hosts no code)* | `base=` (none is the default branch) · `head=` (none asks for it) · `file=` · `line=` (a line of `file=`'s newer side, marked and scrolled to, the patch read on to the page holding it; opening another file drops it; a failed check links one) · `layout=unified\|split` |
-| `#/gitlet/repos/{name}/changes/{n}` | **A change**, `web!42` in full, laid out as a code host lays one out: its header (reference and title beside a live change's readiness meter, and one sentence: its state pill, who wants to merge which revision of which branch into which, or merged or closed it, with the branch's copy, when it was opened, merged or closed, and its work item) and the page bar's **Close change** and **Review** (a menu of the three verdicts and Request review) on a live change, a draft's **Ready for review**, **Reopen** alone on a closed one and nothing on a merged one; tabs, each with its glyph, the head's diffstat at the row's end: **Conversation** (one timeline in the order its records landed: its description, a card its owner opened with Edit, Copy link and Quote; each revision pushed, each review with its disc in its verdict's tone and the verdict in words, each ask for review that stands and each thread; then the merge box, on a live change every condition to merge with where it stands and the merge controls (**Merge** or **Add to queue** with its method, **Delete its branch** and **Close** its work item, **Override**, **Re-run checks**, **Rebase** and **Take out of the queue**), on a merged one into what, by whom and how, with **Revert**; a comment of the reader's own; and beside them a rail of whom it asked for a review and where each stands, its owner, authors, work item, branches, head and whether it merges), **Revisions** (its revisions as cards, each with its facts and the way to its files and to what it changed), **Checks** (the attempts that judge it: its head's, checked for its target, each opening in the check pane), **Files changed** (every file of the revision as one stack, each under a head that sticks below the files' toolbar in its own `DiffView`, beside the files' tree in its own scroller, every finding and thread under the line it is on as a card, the outdated ones under a Disclosure, a finding drafted on picked lines and sent with a review, and **Apply suggestion** on an open finding of the head) and **More** (where it came from: who opened it, from which turn and executor, for which work item, and how it ended; and whom each record about it reached, and why) *(hidden where the company hosts no code)*. A number that is not a whole number from 1 is Not Found | `tab=conversation\|revisions\|checks\|files\|more` · on Files changed, `rev=` (a revision; none is the head), `since=` (an earlier revision, to read what changed since it), `file=` (a path, scrolled to), `layout=unified\|split`, `q=` (words a path holds) · `ext=` (extensions shown) · `only=findings`, `thread=` (a thread on a line, opening its file and its revision) |
+| `#/gitlet/repos/{name}/changes/{n}` | **A change**, `web!42` in full, laid out as a code host lays one out: its header (reference and title, and one sentence: its state pill, who wants to merge which revision of which branch into which, or merged or closed it, with the branch's copy, when it was opened, merged or closed, and its work item) and the page bar's **Close change** and **Review** (a menu of the three verdicts and Request review) on a live change, a draft's **Ready for review**, **Reopen** alone on a closed one and nothing on a merged one; tabs, each with its glyph, the head's diffstat at the row's end: **Conversation** (one timeline in the order its records landed: its description, a card its owner opened with Edit, Copy link and Quote; each revision pushed, each review with its disc in its verdict's tone and the verdict in words, each ask for review that stands and each thread; then the merge box on the timeline's spine, on a live change a section per condition to merge, each on a disc in where it stands, its latest checks with how long each ran and whether it is required, and the merge controls (**Merge** or **Add to queue** with its method, **Delete its branch** and **Close** its work item, **Override** and a line saying what the press will do, **Re-request**, **Re-run failed checks**, **Rebase** and **Take out of the queue** in their sections), on a merged one into what, by whom and how, with **Revert**; a comment of the reader's own in the markdown editor; and beside them a rail of whom it asked for a review with Request and re-request, its readiness meter, work item, owner, branches with the target's protected tag, head, checks, participants, reference and whether it notified the reader), **Revisions** (its revisions as cards, each with its facts and the way to its files and to what it changed), **Checks** (the attempts that judge it: its head's, checked for its target, each opening in the check pane), **Files changed** (every file of the revision as one stack, each under a head that sticks below the files' toolbar in its own `DiffView`, beside the files' tree in its own scroller, every finding and thread under the line it is on as a card, the outdated ones under a Disclosure, a finding drafted on picked lines and sent with a review, and **Apply suggestion** on an open finding of the head) and **More** (where it came from: who opened it, from which turn and executor, for which work item, and how it ended; and whom each record about it reached, and why) *(hidden where the company hosts no code)*. A number that is not a whole number from 1 is Not Found | `tab=conversation\|revisions\|checks\|files\|more` · on Files changed, `rev=` (a revision; none is the head), `since=` (an earlier revision, to read what changed since it), `file=` (a path, scrolled to), `layout=unified\|split`, `q=` (words a path holds) · `ext=` (extensions shown) · `only=findings`, `thread=` (a thread on a line, opening its file and its revision) |
 | `#/gitlet/search` | **Gitlet › Search**: the lines of the repositories the reader reads that match a search, by repository and then file, each file a card of its path and its lines, each line opening its file at the commit it was searched at with the line picked, under a Callout of what was not searched — asked when the reader presses Search | `q=` (the search, in Gitlet's grammar), `mode=literal\|regex\|word`, `repo=`, `path=`, `ref=` |
 | `#/gitlet/pushes` | **Gitlet › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of its refs (five at most, its refusals first, the rest counted, every ref one press away; each a branch's or a tag's glyph, its name, the word for what became of it and the commits it moved between, a moved ref's the way to the comparison of what the push changed on it), the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
 | `#/gitlet/queue` | **Gitlet › Queue**: the merge queues of gated branches, a band per repository and branch, its entries in queue order — the place, the change, who enqueued it and its state — and, once a repository is named, each entry's train base, a `SegmentedMeter` of the required checks of what it is tested in, its time queued against the slowest of their declared timeouts, and what the queue put out in the last day, in the danger tone with the reason and the checks or paths the engine found | `repo=` (a repository's name; without one, every repository's live entries) |
@@ -8744,29 +8745,34 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   the one before (`since=`). Each review is a row whose disc wears its verdict's tone
   (changes requested in the danger state's, an approval in the success state's, a
   comment neutral), the verdict said in words beside it, and its summary and findings
-  in a box under it; with a change row's verdict corner, the only places a verdict takes a
-  hue; everywhere else it stays words.
+  in a box under it; with a change row's verdict corner and a rail reviewer's mark, the
+  only places a verdict takes a hue; everywhere else it stays words.
   Each finding is a card (`change/Finding.tsx`, the one Files changed draws too) with
   the lines around it as its revision's diff marks them (`part=excerpts`, read again
   only when somebody reviews), its own lines marked, and a suggestion as a small diff. Each ask for review that stands is a row
   where it was made: by whom, of whom and when, a path owner's with the paths it owns
   ("earlier" past the notices' horizon), and a withdrawn ask says so. Each thread is a
   card beside its writer's face, with its replies, a one-line reply growing as it is
-  written and **Resolve conversation**. After a break stands the MERGE BOX: across
-  its head a check where every
-  condition is met (in the success state's ink, the one state it wears) and a
-  dashed ring while one is not, with the count and what it waits on; then
-  every condition, the peek's checklist; then the merge controls. A merged
+  written and **Resolve conversation**. After a break stands the MERGE BOX, its disc on
+  the timeline's spine: a section for each question its gate asks (its reviews, its
+  checks, its findings, its facts with when they were measured, and whether it merges,
+  then any condition none of those holds), each on a disc in where it stands as the
+  readiness meter tones it; each check's latest attempt of the head (`code_checks` with
+  `latest`), how long it took or has run and whether it is required, opening the check
+  pane; **Re-request**, **Re-run failed checks**, **Rebase** and **Take out of the
+  queue** each in the section it acts on; then the method, **Delete its branch** and
+  **Close** its work item, the count and what it still waits on, **Merge** or **Add to
+  queue**, **Override**, and a line saying what the press will do. A merged
   change's box says into what, by whom and how (`merged_via`), with Revert; a
-  closed one's why. Then the reader's own comment, beside their face. Beside
+  closed one's why. Then a comment of the reader's own in the kit's markdown
+  editor, Write and Preview, sent on Mod+Enter, its face on the spine. Beside
   them stands the RAIL:
   whom the change asked for a review (`part=reviewers`, one read with the
-  timeline's asks, asked again as the change or its conversation moves, and paged), each with their latest verdict
-  among the reviews loaded or that they are asked and have not answered, and
-  a reviewer nobody asked listed by their review; its owner, its authors, its
-  work item, its branches as chips, its head, and whether its latest
-  revision merges into its target as its home recorded it — cleanly, in the
-  success state's tone, or conflicting, in the danger state's, with the paths. The engine pages reviews, comments, asks,
+  timeline's asks, paged), each with **Request** and a re-request and their standing
+  verdict (the participants', else the reviews loaded) marked in its tone beside it in
+  words; its readiness, the meter and what it waits on; its work item, owner, branches
+  with the target's protected tag (`code_refs` in detail), head, checks, participants,
+  reference, and whether its newest records notified the reader. The engine pages reviews, comments, asks,
   findings and their excerpts oldest first, so what one page leaves out is the newest: **Load more** under the
   timeline asks each part's page after the cursor its last one ended at, and
   the timeline is built over every page loaded, so a reply on a later page
@@ -8839,9 +8845,9 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   Disputed, an author's answers, which leave a blocker standing for whoever
   raised it, or Dismiss, its raiser's, a maintainer's or a person's, with a
   note; the form says that a dismissal clears the finding for good, and the
-  engine says who may give which. In the merge box, beside the merge controls, **Rebase**
+  engine says who may give which. In the merge box, **Rebase**
   (`code_rebase_change`, from the head on screen) and **Take out of the
-  queue** (`code_dequeue_change`, held unless the change is queued) are each
+  queue** (`code_dequeue_change`, while the change is queued) are each
   confirmed in the page, saying that a rebase moves the branch by one forced
   push and that a change taken out loses its place and stays open; a merged
   change offers **Revert** in their place (`code_revert_change`), confirmed
@@ -13341,7 +13347,8 @@ to.
    ring round the neutral badge, meaning *selected* — is for the one badge that
    IS the reader, in the sidebar's own account row (unless it wears a `mark`,
    whose notch is cut from the outline the ring would follow), and the reader's own
-   face among a change row's reviewers (where a verdict corner takes its place), and for nothing else in
+   face among a change row's reviewers (where a verdict corner takes its place), and the reader's
+   face among a change's merge-box reviewers, rail reviewers and participants, and for nothing else in
    the dashboard (the kit's `CharacterPicker` wears it on the chosen
    character, which is the same word: selected). What a seat is DOING is its
    `status` (`statusOf`), the kit's corner glyph, never a ring and never a

@@ -46,8 +46,6 @@ import { useId, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   EmptyState,
-  FormField,
-  IconButton,
   Menu,
   Skeleton,
   Stack,
@@ -56,12 +54,9 @@ import {
   type TabsMarker,
   Textarea,
   tabId,
-  useClipboard,
 } from "@crewlethq/ui";
 import {
-  CheckGlyph,
   ChevronDownGlyph,
-  CopyGlyph,
   EllipsisGlyph,
   FileDiffGlyph,
   GitCommitVerticalGlyph,
@@ -84,7 +79,6 @@ import { ago } from "~/lib/ago.ts";
 import { changeLive, changeRef, isRepoName, refName } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
-import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -94,13 +88,14 @@ import type {
   CodeRevisionRow,
   CodeVerdict,
 } from "~/protocol/index.ts";
-import { ChangeStateTag, ReadinessMeter } from "../ChangeRow.tsx";
+import { ChangeStateTag } from "../ChangeRow.tsx";
 import { Diffstat } from "../Diffstat.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
-import { ReviewerPicker } from "../ReviewerPicker.tsx";
 import { CHANGE_TABS, changesHref, repoHref, type ChangeTab } from "../paths.ts";
 import { BranchChip, Byline } from "../ui.tsx";
+import { AskDialog } from "./AskDialog.tsx";
 import { Checks } from "./Checks.tsx";
+import { CopyButton } from "./CopyButton.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { Files } from "./Files.tsx";
 import { Notified, Provenance, Revisions } from "./Facts.tsx";
@@ -222,7 +217,9 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
         aria-labelledby={tabId(panelId, tab)}
         tabIndex={0}
       >
-        {tab === "conversation" && <Conversation change={change} revisions={revisions} />}
+        {tab === "conversation" && (
+          <Conversation change={change} revisions={revisions} checks={checks} />
+        )}
         {tab === "revisions" && <Revisions change={change} revisions={revisions} />}
         {tab === "checks" && <Checks change={change} />}
         {tab === "files" && <Files change={change} revisions={revisions} />}
@@ -339,26 +336,6 @@ function ChangeDraft({ boxes, change }: { boxes: DraftBoxes; change: CodeChangeD
   return null;
 }
 
-/** A branch's name copied by one press, the control saying it landed. */
-function CopyBranch({ name }: { name: string }) {
-  const { state, copy } = useClipboard({ failedResetMs: null });
-  return (
-    <IconButton
-      label={
-        state === "copied"
-          ? `Copied ${name}`
-          : state === "failed"
-            ? "The browser refused the clipboard"
-            : "Copy the branch name"
-      }
-      icon={state === "copied" ? <CheckGlyph /> : <CopyGlyph />}
-      size="sm"
-      variant="ghost"
-      onClick={() => void copy(name)}
-    />
-  );
-}
-
 /**
  * What the change's byline says it does, as a code host's does: who wants to
  * merge which revision of which branch into which — or merged it, or closed
@@ -372,7 +349,7 @@ function bylineVerb(change: CodeChangeDetail): ReactNode {
     <>
       <span className="code-change-byline__source">
         <BranchChip name={source} href={repoHref(change.repo, { ref: source })} />
-        <CopyBranch name={source} />
+        <CopyButton text={source} label="Copy the branch name" />
       </span>{" "}
       into <BranchChip name={target} href={repoHref(change.repo)} />
     </>
@@ -408,13 +385,11 @@ function bylineAt(change: CodeChangeDetail): { at: string; opened: boolean } {
 }
 
 /**
- * The change's header: its reference, title and a live change's readiness,
- * then one sentence: its state pill, who wants to merge which revision of
+ * The change's header: its reference and title, then one sentence: its state pill, who wants to merge which revision of
  * which branch into which, when, and its work item.
  */
 function ChangeHeader({ change }: { change: CodeChangeDetail }) {
   const now = useNow();
-  const seatBadge = useSeatBadgeOf();
   const actor = change.state === "merged" && change.merged_by ? change.merged_by : change.owner;
   const work = change.work_item;
   const when = bylineAt(change);
@@ -424,11 +399,6 @@ function ChangeHeader({ change }: { change: CodeChangeDetail }) {
       icon="diff"
       identifier={change.ref}
       title={change.title}
-      status={
-        changeLive(change.state) && change.readiness ? (
-          <ReadinessMeter change={change} nameOf={(h) => seatBadge(h).name} />
-        ) : undefined
-      }
       description={
         <span className="code-change-byline">
           <span className="code-change-byline__state">
@@ -554,75 +524,6 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
       {asking && <AskDialog change={change} onClose={() => setAsking(false)} />}
       {closing && <CloseDialog change={change} reopen={false} onClose={() => setClosing(false)} />}
     </>
-  );
-}
-
-/**
- * Ask reviewers, picked from the chart (`ReviewerPicker`), with a note. The
- * change's authors are never offered: an author's review counts for nothing,
- * and the engine refuses asking one.
- */
-function AskDialog({ change, onClose }: { change: CodeChangeDetail; onClose: () => void }) {
-  const write = useAct("code_request_review");
-  const [reviewers, setReviewers] = useState<string[]>([]);
-  const [note, setNote] = useState("");
-  const authors = useMemo(() => change.authors.map((a) => a.author), [change.authors]);
-  const submit = async () => {
-    const result = await write.run(
-      { change: change.ref, reviewers, ...(note.trim() ? { note } : {}) },
-      { done: `Asked for a review of ${change.ref}` },
-    );
-    if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
-  };
-  return (
-    <Modal
-      open
-      size="sm"
-      title={`Request review of ${change.ref}`}
-      onClose={onClose}
-      onSubmit={() => void submit()}
-      dismissable={!write.busy}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={write.busy}>
-            Cancel
-          </Button>
-          <WriteButton
-            write={write}
-            variant="primary"
-            blocked={reviewers.length === 0 ? "Pick a reviewer to ask." : undefined}
-            onPress={() => void submit()}
-          >
-            Ask
-          </WriteButton>
-        </>
-      }
-    >
-      <Stack gap={3}>
-        <FormField label="Reviewers">
-          {(field) => (
-            <ReviewerPicker
-              id={field.id}
-              describedBy={field.describedBy}
-              value={reviewers}
-              onChange={setReviewers}
-              exclude={authors}
-            />
-          )}
-        </FormField>
-        <FormField label="Note" optional helper="What to look at.">
-          {(field) => (
-            <Textarea
-              id={field.id}
-              aria-describedby={field.describedBy}
-              value={note}
-              rows={3}
-              onChange={(event) => setNote(event.target.value)}
-            />
-          )}
-        </FormField>
-      </Stack>
-    </Modal>
   );
 }
 
