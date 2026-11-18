@@ -653,3 +653,43 @@ func TestTheVerdictIsGivenItsRowsCrossing(t *testing.T) {
 		}
 	})
 }
+
+// A LOCAL VERDICT SILENCE IS NEVER GIVEN UP, AT A STOP OR A LOSS: where this node
+// hosts the box, a verdict the store did not answer is this node's own store's
+// silence, whatever its read of the row answered, so the ending is kept, and
+// its box, however old the stop or the loss, never ended with nothing read.
+//
+// Mutation: drop the hosts check from readStopped's or keepLostSession's
+// give-up, and a day-old ending is given up with its note unconfirmed.
+func TestALocalVerdictSilenceIsNeverGivenUpAtAStopOrALoss(t *testing.T) {
+	t.Parallel()
+	for name, end := range map[string]func(*testing.T, *coordRig) PendingRun{
+		"a stop": func(t *testing.T, rig *coordRig) PendingRun {
+			launched := rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			serveNote(t, rig.pending, launched.LaunchID, "n1", types.SteerBoundaryToolBatch)
+			rig.runner.MainThread = sessionShows("take-n1").read
+			rig.stop(t)
+			return launched
+		},
+		"a loss": lostWithServe,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			silentVerdicts(rig.coordinator)
+			launched := end(t, rig)
+			rig.fireRetries()
+			rig.now = rig.now.Add(24 * time.Hour)
+			rig.fireRetries()
+			rig.fireRetries()
+			if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || !found {
+				t.Errorf("%s whose verdict this node's own store did not answer was ended a day on (found %v, "+
+					"%v), want it kept", name, found, err)
+			}
+			if slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
+				t.Errorf("%s reclaimed the box its verdict is still to be read from", name)
+			}
+		})
+	}
+}

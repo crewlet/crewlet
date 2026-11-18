@@ -2467,18 +2467,17 @@ func (c *Coordinator) overBudget(ctx context.Context, run PendingRun, size, budg
 // host ([BoxReadLoss]). ATTACHED, NEVER CONNECTED: a box about to be reclaimed
 // is not woken. Made by the ending's own retry ([Coordinator.finishEnding]).
 //
-// A STEP THE STORE DID NOT ANSWER ([ErrStoreSilent]) is returned, and the
-// ending kept: where rowRead says this node's store answered, only until the
-// host is given up as a stop's is ([Coordinator.hostGivenUp]), past which the
-// loss ends with its served notes unconfirmed and says so. Every other failure
-// is logged and answers nil.
+// A STEP THE STORE DID NOT ANSWER ([ErrStoreSilent]) is returned and the
+// ending kept; only the host's alone (another node's host, rowRead answered)
+// is given up as a stop's is ([Coordinator.hostGivenUp]), the loss then ending
+// with its notes unconfirmed. Every other failure is logged and answers nil.
 func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRead bool) error {
 	if !c.capturesLoss(run) {
 		return nil
 	}
-	asked := c.now()
+	asked, local := c.now(), c.hosts(run)
 	var err error
-	if c.hosts(run) {
+	if local {
 		var spooled *spooledCapture
 		spooled, _, err = c.readLost(ctx, run)
 		c.keepLater(ctx, spooled)
@@ -2502,7 +2501,7 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRe
 			"detail", "the lost run's box is on another node's host, which did not read it before "+
 				"its ending reclaims it")
 		return nil
-	case rowRead && c.hostGivenUp(run, c.hostSilence(run, asked, err)):
+	case rowRead && !local && c.hostGivenUp(run, c.hostSilence(run, asked, err)):
 		log.WarnContext(ctx, "steer_receipt_unsettled", "turn_id", run.TurnID, "launch_id", run.LaunchID,
 			"point", string(BoxReadLoss), "given_up", true, "error", err.Error(),
 			"detail", "the coordination store did not answer the lost job's read for the box timeout by "+

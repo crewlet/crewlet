@@ -270,8 +270,8 @@ func (c *Coordinator) sayStopUnread(ctx context.Context, run PendingRun, unread 
 // clock ([Coordinator.hostSilence]) or a stop that timeout plus twice
 // [objstore.AssumedClockSkew] old; nor for a store's silence on the row's read
 // or its served notes' verdict ([ErrStoreSilent]), bounded where the host's
-// alone (rowRead) and kept where this node's too. See the package doc,
-// "Stopping a seat's running work".
+// alone (another node's box, rowRead) and kept where this node's, a box on its
+// own host above all. See the package doc, "Stopping a seat's running work".
 func (c *Coordinator) readStopped(ctx context.Context, run PendingRun, rowRead bool) (Result, bool, stopUnread,
 	error) {
 	if run.SandboxID == "" || run.CommandID == "" {
@@ -288,11 +288,11 @@ func (c *Coordinator) readStopped(ctx context.Context, run PendingRun, rowRead b
 	switch {
 	case err == nil:
 		return stoppedResult(c.fitText(ctx, run, result)), true, stopUnread{}, nil
-	case unsettled && !rowRead:
+	case unsettled && (!rowRead || c.hosts(run)):
 		log.InfoContext(ctx, "sandbox_stop_read_waits", "turn_id", run.TurnID,
 			"sandbox_id", run.SandboxID, "node", run.LaunchNode, "waits_for", "store", "shared", true,
-			"error", err.Error(), "detail", "the coordination store did not answer the host's read of "+
-				"the stopped run's row, or the verdict on its served notes, nor this node's own read; "+
+			"error", err.Error(), "detail", "the coordination store did not answer this node: its read of "+
+				"the stopped run's row, or of the verdict on the served notes of a box on its own host; "+
 				"the stop is kept, with its session closed, "+
 				"and its box asked again until the store answers, whatever the box timeout says")
 		return Result{}, false, stopUnread{}, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
