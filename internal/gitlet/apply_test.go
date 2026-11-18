@@ -21,9 +21,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// THE APPLIER, CASE BY CASE: records built here, applied in writer
-// transactions at positions on the code log's first generation, and the rows
-// read back — what every node's copy is made of, without a broker between.
+// THE APPLIER, CASE BY CASE: records applied in writer transactions at
+// positions on the code log's first generation and the rows read back, with
+// no broker between.
 
 // applyClock is the broker instant every record here is stored at, unless a
 // case says otherwise.
@@ -79,8 +79,8 @@ func rec(t testing.TB, subject Subject, op OpKind, scope Scope, payload any) bui
 func (b built) at(storedAt time.Time) built { b.storedAt = storedAt; return b }
 
 // apply runs Gated then Apply for each record in its own writer transaction,
-// at the next positions — the framework's loop, without the ledger and the
-// checkpoint, which are the framework's and not under test here.
+// at the next positions: the framework's loop without its ledger and
+// checkpoint, which are not under test here.
 func (e *estate) apply(records ...built) {
 	e.t.Helper()
 	for _, b := range records {
@@ -232,10 +232,9 @@ func oid(s string) string {
 }
 
 // settingsFor are a declared repository's settings with one rule per pattern:
-// a project's, as every declaration is ([KindOf]), and settings
-// [RepoSettings.Validate] takes — so a record a case applies carries what a
-// committer would, and a benchmark that validates its repository's settings
-// before seeding it measures one.
+// a project's, as every declaration is ([KindOf]), that [RepoSettings.Validate]
+// takes, so a case's record carries what a committer's would and a benchmark
+// that validates them before seeding measures one.
 func settingsFor(description string, patterns ...string) RepoSettings {
 	s := RepoSettings{
 		Kind: RepoProject, ManagedBy: ManagedConfig, Owner: Owner{Kind: OwnerUnit, Ref: "ENG"},
@@ -289,13 +288,11 @@ func move(ref, old, new string) Command {
 }
 
 // A REF ROW NAMES THE SEAT THAT SET IT IN ITS NAMESPACE, and nobody else: a
-// seat's push — its box's, or an engine write in its turn — that sets a ref
-// inside refs/heads/seats/<its handle>/ writes the seat on the ref's row, and
-// every other write leaves it empty — the same seat's push to main, a person's
-// push of the seat's branch, a deletion, and a person whose principal names
-// their own human seat pushing under that seat's namespace. A record judges
-// each ref by the entry that set it LAST in the record's order, as its target
-// is the last one set.
+// seat's push (its box's, or an engine write) setting a ref inside
+// refs/heads/seats/<its handle>/ writes the seat on the row; every other write
+// leaves it empty: its push to main, a person's push of its branch, a
+// deletion, a person pushing under their own human seat's namespace. The entry
+// that set a ref LAST in the record's order decides, as it does the target.
 //
 // Mutations: drop the namespace test from seatOf → main names the seat, red;
 // key on the principal's seat rather than its kind → the person's own-seat
@@ -411,11 +408,10 @@ func TestAPushAppliesEachEntryInOrder(t *testing.T) {
 	}
 }
 
-// A REPOSITORY COUNTS THE OBJECTS ITS LIVE PACKS HOLD, moved beside its
-// bytes from each pack row's own count: a push adds its pack's, and a purge
-// part subtracts those of the live packs it removes. It is the bound Gitlet
-// holds a spooled fetch request to — a want names one object — read from
-// the row admission already holds rather than summed per fetch.
+// A REPOSITORY COUNTS THE OBJECTS ITS LIVE PACKS HOLD, from each pack row's
+// count: a push adds its pack's, a purge part subtracts those of the live
+// packs it removes. It bounds a spooled fetch request (a want names one
+// object), read from the row admission already holds, not summed per fetch.
 func TestARepositoryCountsTheObjectsItsLivePacksHold(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -455,7 +451,7 @@ func (e *estate) counters(id string) [4]int64 {
 	}
 }
 
-// AN APPLIED PUSH NEVER APPLIES TWICE — a redelivery or a failover's second
+// AN APPLIED PUSH NEVER APPLIES TWICE: a redelivery or a failover's second
 // record carrying it at a LATER position, past the version guard, changes no
 // row and no counter.
 func TestAnAppliedPushNeverAppliesTwice(t *testing.T) {
@@ -529,13 +525,12 @@ func TestADeleteLeavesATombstone(t *testing.T) {
 	}
 }
 
-// THE COUNTERS ARE THE ROWS: what code_repos counts of a repository's refs —
-// live refs, the branches and tags among them, and tombstones — equals a COUNT
-// of its code_refs rows after every kind of move: a create, an update, a
-// delete, a recreate of a tombstone, a delete of a ref the repository has no
-// row for, a ref moved twice in one record, and a purge part. A read serves
-// the counters rather than counting, so a counter that drifts is a number
-// every surface shows wrong for ever.
+// THE COUNTERS ARE THE ROWS: code_repos' counts of a repository's refs (live,
+// branches and tags among them, tombstones) equal a COUNT of its code_refs
+// rows after every kind of move: create, update, delete, recreate of a
+// tombstone, delete of a ref with no row, a ref moved twice in one record, and
+// a purge part. Reads serve the counters, so a drifting one is wrong on every
+// surface for ever.
 func TestTheCountersAreTheRows(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -568,9 +563,9 @@ func TestTheCountersAreTheRows(t *testing.T) {
 
 	e.apply(rec(t, RepoSubject("repo-a"), OpDelete, Scope{RepoPath("repo-a")},
 		LifecycleRecord{RepoID: "repo-a", ConfigEpoch: 1}))
-	// THE PART'S BUDGET REACHES EIGHT REFS past the repository's pushes — in
-	// ref order, branches and the tombstone of `never` among them — and leaves
-	// the rest, so what it subtracts is measured against a partial set.
+	// THE PART'S BUDGET REACHES EIGHT REFS past the repository's pushes (in
+	// ref order, branches and `never`'s tombstone among them) and leaves the
+	// rest, so what it subtracts is measured against a partial set.
 	e.seed("repo-a", PurgePartRows-5-8, 10, 0)
 	e.apply(partOf(t, "repo-a", 1))
 	if left := e.num(`SELECT COUNT(*) FROM code_refs WHERE repo_id = 'repo-a'`); left != 6+10-8 {
@@ -613,9 +608,8 @@ func TestSettingsReplaceProtectionsWhole(t *testing.T) {
 }
 
 // A RESTORE BRINGS BACK THE SETTINGS IT CARRIES AND THE REFS THE DELETE NEVER
-// TOUCHED — the visibility among them, which the repository was created
-// without: a restore that kept the row's own would reopen a unit repository to
-// every seat.
+// TOUCHED, the visibility among them, which the create lacked: a restore that
+// kept the row's own would reopen a unit repository to every seat.
 func TestARestoreBringsBackSettingsAndRefs(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -642,15 +636,14 @@ func TestARestoreBringsBackSettingsAndRefs(t *testing.T) {
 }
 
 // A REPOSITORY'S ROW DIGESTS WHAT EVERY RECORD WRITES BESIDE IT: a create, a
-// settings change and a restore each leave the row's owners_digest and
-// human_paths_digest the digests of the path owners and of the rules' human
-// paths that record wrote — what the merge gate, a revise's decide and the
-// home's due listing read in place of the rows ([rowDigests]) — and a delete,
-// which keeps the rules and the owners, keeps both.
+// settings change and a restore each leave owners_digest and
+// human_paths_digest the digests of the path owners and rules' human paths
+// that record wrote, which the merge gate, a revise's decide and the home's
+// due listing read in place of the rows ([rowDigests]); a delete, keeping
+// rules and owners, keeps both.
 //
-// Mutation: leave the digests out of restoreRepoSQL — the restored row keeps
-// the digests of the settings before its delete, red; out of settingsSQL or
-// the create's insert, likewise.
+// Mutation: leave the digests out of restoreRepoSQL (the restored row keeps
+// the pre-delete digests), settingsSQL or the create's insert: red.
 func TestARepositorysRowDigestsWhatEveryRecordWritesBesideIt(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -724,11 +717,10 @@ func (e *estate) seed(id string, pushes, refs, packs int) {
 	e.recountActivity(id)
 }
 
-// seedPacks writes n live packs of a repository straight into the estate, the
-// from-th of them first ([idOf], [sumOf]) — each a one-object pack of ten
-// bytes added at the log's first position, its content dated from there as a
-// push's is — and moves the live-pack counters by them, as a push's apply
-// would.
+// seedPacks writes n live one-object packs of ten bytes of a repository
+// straight into the estate, the from-th first ([idOf], [sumOf]), added and
+// dated at the log's first position as a push's are, and moves the live-pack
+// counters as a push's apply would.
 func (e *estate) seedPacks(id string, from, n int) {
 	e.t.Helper()
 	ctx := context.Background()
@@ -750,8 +742,8 @@ func (e *estate) seedPacks(id string, from, n int) {
 }
 
 // seedWeighed writes n push rows of a repository, each weighing width bytes
-// by its row_bytes, stamped at the epoch and oldest first — rows a purge or
-// the history horizon has to weigh, without carrying their bytes.
+// by its row_bytes, stamped at the epoch and oldest first: rows a purge or the
+// history horizon weighs, without carrying their bytes.
 func (e *estate) seedWeighed(id string, n, width int) {
 	e.t.Helper()
 	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
@@ -762,7 +754,7 @@ func (e *estate) seedWeighed(id string, n, width int) {
 	e.recountActivity(id)
 }
 
-// exec runs one statement in a writer transaction — a case's hand-built row,
+// exec runs one statement in a writer transaction: a case's hand-built row,
 // never the applier's.
 func (e *estate) exec(query string, args ...any) {
 	e.t.Helper()
@@ -780,21 +772,17 @@ func partOf(t testing.TB, id string, n int) built {
 }
 
 // THE REMAINING COUNT WALKS A REPOSITORY'S FIRST CHANGES ALONE: every term of
-// the purge decide's bounded count that counts a change's dependents — its
-// revisions, authors, body and conversation, the tables most changes hold no
-// row of among them — is driven from the repository's first ?2 changes in
-// number order (firstChanges), never from every change it holds, so a
-// repository of many changes nobody discussed is counted by a walk of
-// PurgePartRows + 1 changes a term rather than all of them, every pass. And
-// the count still answers the decide exactly: a repository of PurgePartRows+1
-// changes nobody discussed forms a part on the changes' own term — and the
-// body of a change past them is never walked to, so it is not counted — and a
-// repository of a few changes is counted whole, every dependent row of them.
+// the purge decide's bounded count that counts a change's dependents
+// (revisions, authors, body, conversation; most changes hold none) is driven
+// from the first ?2 changes in number order (firstChanges), so a repository of
+// many undiscussed changes costs a walk of PurgePartRows + 1 changes a term,
+// not all of them, every pass. It still answers the decide exactly:
+// PurgePartRows+1 undiscussed changes form a part on the changes' own term, a
+// body past them is never walked to, and a few changes are counted whole.
 //
-// Mutation: drive a term from every change of the repository again, its
-// LIMIT bounding the rows it finds and not the changes it walks → the
-// statement check names it; drop firstChanges' LIMIT, and every term walks
-// every change again → the body past the first PurgePartRows + 1 is counted.
+// Mutation: drive a term from every change, its LIMIT bounding the rows found
+// rather than the changes walked → the statement check names it; drop
+// firstChanges' LIMIT → the body past the first PurgePartRows + 1 is counted.
 func TestTheRemainingCountWalksTheFirstChangesAlone(t *testing.T) {
 	t.Parallel()
 	terms := strings.Split(remainingSQL, "CROSS JOIN")
@@ -879,13 +867,12 @@ func TestAPurgePartIsBoundedAndIdempotent(t *testing.T) {
 	}
 }
 
-// A PURGE PART IS BOUNDED BY WHAT ITS PUSHES WEIGH, not only by how many
-// there are: push rows go oldest first until their widths reach
-// PurgePartBytes — at most one row past it — and a part whose pushes were cut
-// there deletes nothing else, so the refs wait for a part of their own. A
-// push row is the domain's widest row and deleting one frees its overflow
-// pages, so a part of PurgePartRows wide rows held every node's write lane
-// for seconds.
+// A PURGE PART IS BOUNDED BY WHAT ITS PUSHES WEIGH, not only their count:
+// push rows go oldest first until their widths reach PurgePartBytes (at most
+// one row past it), and a part whose pushes were cut there deletes nothing
+// else, so the refs wait for a part of their own. A push row is the domain's
+// widest and deleting one frees its overflow pages: PurgePartRows wide rows
+// would hold every node's write lane for seconds.
 func TestAPurgePartIsBoundedByWhatItsPushesWeigh(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -919,10 +906,9 @@ func TestAPurgePartIsBoundedByWhatItsPushesWeigh(t *testing.T) {
 }
 
 // seedWeighedChanges writes n changes of a repository, numbered from 1, each
-// with a revision, an author and a body its change says weighs width bytes —
-// changes a purge part has to weigh, without carrying their bytes, as
-// seedWeighed's pushes are: a part reads a body's width from its change and
-// never reads the body.
+// with a revision, an author and a body its change says weighs width bytes,
+// without carrying them: a part reads a body's width from its change, never
+// the body.
 func (e *estate) seedWeighedChanges(id string, n, width int) {
 	e.t.Helper()
 	e.seedChangeRows(id, n, 1, 1, 1)
@@ -930,15 +916,12 @@ func (e *estate) seedWeighedChanges(id string, n, width int) {
 }
 
 // A PURGE PART WEIGHS ITS CHANGES' BODIES IN ONE BUDGET WITH ITS PUSHES: after
-// its push rows and its narrow rows, a part takes whole changes in number
-// order only while what its wide rows weigh — the pushes it took, then each
-// body — is under PurgePartBytes: the first change whenever the pushes left
-// room, and so at most one change past the bound, and none once the pushes
-// reached it. A walk the bytes stopped cuts nothing, so the change after the
-// last it took keeps every row. A change's body is the one wide value it
-// keeps, and deleting it frees its overflow pages, which a count of rows does
-// not see: by rows alone a part took every change here, on top of whatever
-// its pushes weighed.
+// its push rows and narrow rows, a part takes whole changes in number order
+// while its wide rows (the pushes it took, then each body) weigh under
+// PurgePartBytes: the first change whenever the pushes left room, so at most
+// one past the bound, and none once the pushes reached it. A walk the bytes
+// stopped cuts nothing. A body is a change's one wide value, freeing overflow
+// pages a count of rows does not see.
 //
 // Mutation: take the changes by their rows alone, and the bodies alone go in
 // one part; weigh them apart from the pushes, and the parts after the pushes
@@ -1001,9 +984,9 @@ func TestAPurgePartIsBoundedByWhatItsChangesWeigh(t *testing.T) {
 
 // THE PUSH HISTORY'S HORIZON IS BOUNDED BY WHAT ITS ROWS WEIGH: a push record
 // removes expired push rows oldest first until their widths reach
-// HorizonBytesPerRecord, which is the most a record can add, so a wide
-// history keeps pace without the record that removes it holding the write
-// lane for tens of milliseconds more.
+// HorizonBytesPerRecord, the most a record can add, so a wide history keeps
+// pace without the removing record holding the write lane tens of
+// milliseconds longer.
 func TestTheHistoryHorizonIsBoundedByWhatItsRowsWeigh(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -1022,15 +1005,14 @@ func TestTheHistoryHorizonIsBoundedByWhatItsRowsWeigh(t *testing.T) {
 	}
 }
 
-// A PUSH ROW RECORDS WHAT IT WEIGHS: row_bytes is the bytes of the commands,
-// the introduced ids and, for a seat's push, the run the row stores — a coding
-// box's run and harness among it — and whom the push was made for, what
-// deleting it costs, and what the horizon and a purge part are bounded by.
+// A PUSH ROW RECORDS WHAT IT WEIGHS: row_bytes is the bytes of its commands,
+// introduced ids, a seat's run (a box's run and harness among it) and whom the
+// push was made for: what deleting it costs, and what the horizon and a purge
+// part are bounded by.
 //
-// Mutations: weigh a row by its commands and introduced ids alone
-// (pushRowBytes dropping the run) — the seat's row weighs less than it holds;
-// weigh it without the executor (pushRowBytes dropping RunID) — the box's
-// does; weigh it without its carrier — the seat's does.
+// Mutations: pushRowBytes dropping the run → the seat's row weighs less than
+// it holds; dropping RunID → the box's does; dropping the carrier → the
+// seat's does.
 func TestAPushRowRecordsWhatItWeighs(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -1078,10 +1060,10 @@ func TestAPushRowRecordsWhatItWeighs(t *testing.T) {
 	}
 }
 
-// A PURGE LEAVES ONLY ITS MARKER: every row of the repository goes — its
-// published chain and the parts of every layer among them — its name returns,
-// and the marker drops every later record about it — counted — while the
-// purge's own record, redelivered, changes nothing.
+// A PURGE LEAVES ONLY ITS MARKER: every row of the repository goes, its
+// published chain and every layer's parts among them; its name returns; the
+// marker drops, and counts, every later record about it; and the purge's own
+// record, redelivered, changes nothing.
 //
 // Mutation: drop the chain's two statements from the purge, and its layer and
 // its part outlive the repository; or drop its branches' rows of tip work from
@@ -1146,12 +1128,10 @@ func TestAPurgeLeavesOnlyItsMarker(t *testing.T) {
 }
 
 // A CHANGE'S RECORD IS GATED BY THE REPOSITORY ITS SCOPE NAMES: the deletion
-// gate reads the repository off the envelope the framework decoded — the
-// record's scope — and never decodes the payload, so a record whose payload
-// is no record at all is still dropped by the marker of the repository its
-// scope names; and the apply holds the payload's repository to the scope's,
-// refusing a record no writer forms whose two disagree — the gate judged it by
-// a repository it is not about.
+// gate reads it off the decoded envelope's scope, never the payload, so even a
+// record whose payload decodes to nothing is dropped by that repository's
+// marker; and the apply refuses a record whose payload names another
+// repository than its scope, which no writer forms and the gate misjudged.
 //
 // Mutation: read the gated repository off the payload again, and the record
 // whose payload decodes to nothing escapes the marker; drop the apply's
@@ -1207,34 +1187,18 @@ func TestAPurgeReleasesOnlyItsOwnNameClaim(t *testing.T) {
 	}
 }
 
-// A CODE ROW KEEPS WHOM ITS WRITE WAS MADE FOR (ADR-0109, the replicated
-// migration a_code_row_keeps_whom_an_agents_write_was_made_for), identically
-// on every node: an open made for pat keeps pat on its first
-// revision's row; a seat's push moving the change's head made for pat, on the
-// revision it adds and on its push row; a reopen made for pat of a change
-// whose source moved while it was closed, on the revision the reopen adds; a
-// seat's push opening a change from its options made for pat, on that change's
-// first revision; a merge made for pat, on the push row
-// it lands; and an enqueue, on its entry's row. A LANDING'S RECORD CARRIES
-// NOBODY, and the push row it lands for each entry keeps what that entry's
-// row holds, read in the landing's own apply — pat for the entry enqueued for
-// pat, the credential for the one enqueued for it, nobody for the one
-// enqueued for nobody. A write made for nobody keeps NULL, and so does a
-// record stamped below the carrier's version whatever it carries, which a
-// build before the carrier applies with no field to read. Replayed from zero
-// on a second node, every one of these rows is the same. And an entry whose
-// row holds what this build cannot read — a fragment, or JSON's null — lands
-// as a stranger's, who holds no app: the closed end.
+// A CODE ROW KEEPS WHOM ITS WRITE WAS MADE FOR (ADR-0109, migration
+// a_code_row_keeps_whom_an_agents_write_was_made_for), identically on every
+// node and on a replay from zero: an open's first revision, a seat's push's
+// revision and push row, a reopen's revision where the source moved, a
+// push-opened change's first revision, a merge's push row, an enqueue's entry.
+// A LANDING'S RECORD CARRIES NOBODY: each push row it lands keeps its entry
+// row's, read in its apply. A write for nobody keeps NULL, as does a record
+// below WorkingForVersion (an older build has no field to read); an unreadable
+// entry row (a fragment, JSON null) lands as a stranger's, with no app: closed.
 //
-// Mutations: the open's revision kept without its carrier — revision 1 keeps
-// NULL, red; a push's row kept without it — the seat's push row, red; a
-// merge's push row — red; a landing's push rows — red; an enqueue's entry
-// row — red; the entry scan reading no carrier — the landing's push rows keep
-// NULL, red; the version arm dropped — the open stamped below keeps pat, red;
-// an unreadable entry read as nobody — its landing's push row keeps NULL, red;
-// the reopen's revision kept without its carrier — the reopen made for pat
-// keeps NULL, red; the first revision of a change a push opens kept without
-// it — red.
+// Mutations: drop the carrier from any of those rows, the entry scan or the
+// version arm, or read an unreadable entry as nobody: its row below goes red.
 func TestACodeRowKeepsWhomItsWriteWasMadeFor(t *testing.T) {
 	t.Parallel()
 	const repo, main = "repo-a", "refs/heads/main"

@@ -9,26 +9,23 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A WINDOW LISTS EACH CHANGE ONCE, AT ITS LAST MOVE: the later of the last
-// record on its repository's subject that changed its row and the last one
-// somebody wrote about it on its own — newest move first, a page at a time,
-// whatever the page's size. A change opened three days ago and commented on
-// today is in today's window, at the comment; one opened three days ago and
-// left alone is in the week's and not the day's. A live state beside the
-// window leads its own walk instead, newest opening first, with the window
-// tested on each row.
+// A WINDOW LISTS EACH CHANGE ONCE, AT ITS LAST MOVE: the later of its row's
+// last move and the last record somebody wrote about it, newest first, whatever
+// the page size. A change opened three days ago and commented on today is in
+// today's window, at the comment; one left alone is in the week's, not the
+// day's. A live state beside the window leads its own walk, newest opening
+// first, the window tested on each row.
 //
 // Mutation: keep a change from the conversation's index where its lifecycle
-// moved it as late — or from the lifecycle's where somebody spoke of it later
-// — and the commented change is listed twice; date a change by its
-// lifecycle alone, and the comment moves nothing; let the window lead a live
-// state, and the open changes in the week come newest move first.
+// moved it as late, or from the lifecycle's where somebody spoke of it later,
+// and the commented change is listed twice; date a change by its lifecycle
+// alone, and the comment moves nothing; let the window lead a live state, and
+// the week's open changes come newest move first.
 func TestAWindowListsEachChangeOnceAtItsLastMove(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	n.chart = testChart()
-	// EVERY RECORD A MINUTE AFTER THE ONE BEFORE, from an instant the test
-	// moves: what the code log's broker would have stamped.
+	// EVERY RECORD A MINUTE AFTER THE ONE BEFORE, from an instant the test moves.
 	var days atomic.Int64
 	n.storedAt = func(seq uint64, _ time.Time) time.Time {
 		return harnessAt.Add(time.Duration(days.Load())*24*time.Hour + time.Duration(seq)*time.Minute)
@@ -58,16 +55,13 @@ func TestAWindowListsEachChangeOnceAtItsLastMove(t *testing.T) {
 	}{
 		// THE DAY: the change spoken of today alone.
 		{gitlet.WindowDay, "", []string{"web!1"}},
-		// THE WEEK: every one, the one spoken of today first, then the
-		// rest by when they were opened, newest first.
+		// THE WEEK: every one, the one spoken of today first, then newest opened.
 		{gitlet.WindowWeek, "", []string{"web!1", "web!3", "web!2"}},
 		// A LIVE STATE BESIDE THE WINDOW leads its own walk, newest opening
-		// first, and the window is tested on each row it read: web!2 and
-		// web!3 are open and outside the day.
+		// first, the window tested on each row: web!2 and web!3 are outside the day.
 		{gitlet.WindowWeek, gitlet.ChangeStateOpen, []string{"web!3", "web!2", "web!1"}},
 		{gitlet.WindowDay, gitlet.ChangeStateOpen, []string{"web!1"}},
-		// A TERMINAL STATE BESIDE THE WINDOW is tested on the rows the
-		// window's walk read, and keeps its order.
+		// A TERMINAL STATE BESIDE THE WINDOW is tested on the window walk's rows.
 		{gitlet.WindowWeek, gitlet.ChangeStateClosed, nil},
 	} {
 		for _, limit := range []int{1, 2, 50} {
@@ -98,12 +92,10 @@ func TestAWindowListsEachChangeOnceAtItsLastMove(t *testing.T) {
 		t.Errorf("web!2 was last moved at %s, want its open at %s: nothing moved it since", last.UpdatedAt,
 			last.OpenedAt)
 	}
-	// A CHANGE READ SAYS THE SAME INSTANT as the listing, from the one
-	// conversation row its detail reads, and that row says when somebody
-	// last wrote on the change.
-	//
-	// Mutation: date the detail by its lifecycle alone, or leave the
-	// conversation's instant unread, and web!1's detail says its open.
+	// A CHANGE READ SAYS THE SAME INSTANT as the listing, from its conversation
+	// row, which says when somebody last wrote on the change. Mutation: date the
+	// detail by its lifecycle alone, or leave the conversation's instant
+	// unread, and web!1's detail says its open.
 	for _, s := range answer.Changes {
 		got, err := readChange(t, n, ada, "", "web", s.Number, 0, "")
 		if err != nil || got.Change == nil {
@@ -119,22 +111,18 @@ func TestAWindowListsEachChangeOnceAtItsLastMove(t *testing.T) {
 				got.Change.Conversation, spoken.UpdatedAt)
 		}
 	}
-	// A REPOSITORY BESIDE THE WINDOW leads its own walk, and the window is
-	// tested on the rows it read.
+	// A REPOSITORY BESIDE THE WINDOW leads its own walk, the window tested on its rows.
 	if got, _ := listChanges(t, n, gitlet.ReadQuery{Asker: ada, Repo: "web", Window: gitlet.WindowDay}, 1); !slices.Equal(
 		got, []string{"web!1"}) {
 		t.Errorf("web's changes in the day: listed %v, want [web!1]", got)
 	}
 
-	// A PAGE THE STATE EMPTIED STILL GOES ON where the walk of an index
-	// stopped: with web!2 closed and web!3 spoken of after it, a page of one
-	// of the closed changes in the week reads web!2 from the lifecycle's
-	// index and web!3 from the conversation's, keeps web!3 alone — past
-	// web!2, which the next page reads — and the state drops it. Its cursor
-	// is where the walk stopped, never the end of the listing.
-	//
-	// Mutation: end a page that filled none of its rows where the rows it
-	// kept end, and the closed changes in the week are listed as none.
+	// A PAGE THE STATE EMPTIED STILL GOES ON where an index's walk stopped:
+	// with web!2 closed and web!3 spoken of after it, a page of one of the
+	// week's closed changes reads both, keeps web!3 alone (web!2 is the next
+	// page's) and the state drops it; its cursor is where the walk stopped.
+	// Mutation: end a page that kept none of its rows where its kept rows end,
+	// and the week's closed changes are listed as none.
 	closed, err := c.ProposeChange(ctx, closing(web, opened[1].ChangeID, dev, opened[1].Version))
 	requireChanged(t, closed, err)
 	said, err = w.Converse(ctx, saying(web, opened[2].ChangeID, ada, "", "Still on it?"))
@@ -158,14 +146,12 @@ func TestAWindowListsEachChangeOnceAtItsLastMove(t *testing.T) {
 	}
 }
 
-// A LISTING SAYS HOW MANY OF EACH CHANGE'S FINDINGS STAND OPEN — none of its
-// authors has answered them — read from its conversation in the listing's own
-// transaction: a review raising two is two, an author's answer to one leaves
-// one, and a change nobody has reviewed is none.
-//
-// Mutation: answer the listing's rows without their conversation's count, and
-// every change lists none; answer a change read's without it, and web!1's
-// detail says none.
+// A LISTING SAYS HOW MANY OF EACH CHANGE'S FINDINGS STAND OPEN (unanswered by
+// its authors), read from its conversation in the listing's own transaction: a
+// review raising two is two, an author's answer to one leaves one, a change
+// nobody reviewed none. Mutation: drop the conversation's count from the
+// listing's rows, and every change lists none; from a change read's, and
+// web!1's detail says none.
 func TestAListingSaysHowManyOfEachChangesFindingsStandOpen(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -195,8 +181,7 @@ func TestAListingSaysHowManyOfEachChangesFindingsStandOpen(t *testing.T) {
 	if got := open(); got["web!1"] != 2 || got["web!2"] != 0 {
 		t.Errorf("open findings after a review raising two on web!1: %v, want web!1 2 and web!2 0", got)
 	}
-	// A CHANGE READ SAYS THE SAME COUNT, from the conversation row its
-	// detail reads.
+	// A CHANGE READ SAYS THE SAME COUNT, from its conversation row.
 	if got, err := readChange(t, n, ada, "", "web", 1, 0, ""); err != nil || got.Change == nil ||
 		got.Change.OpenFindings != 2 {
 		t.Errorf("web!1's detail after a review raising two = %+v, %v; want 2 open findings", got.Change, err)

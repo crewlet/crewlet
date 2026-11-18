@@ -12,10 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE OBJECTS A PUSH LEFT, case by case on the applier: a forced update or a
-// deletion records the object it moved its ref off (code_ref_drops), and a
-// push record forgets its repository's drops past PruneGrace with what its
-// row budget leaves once the tombstones have had theirs.
+// THE OBJECTS A PUSH LEFT, on the applier: a forced update or a deletion
+// records the object it moved its ref off (code_ref_drops), and a push record
+// forgets its repository's drops past PruneGrace with the row budget the
+// tombstones leave.
 
 // refDropRow is one code_ref_drops row as a case reads it back.
 type refDropRow struct {
@@ -79,13 +79,11 @@ func forced(ref, old, new string) Command {
 }
 
 // A FORCED OR DELETING COMMAND RECORDS THE OBJECT IT LEFT, and nothing else
-// does: of one record's commands, a forced update, a branch's deletion and a
-// tag's each write a drop row naming the ref and the object it held, at the
-// record's own position and broker instant — and a fast-forward, a create, a
-// refused command and a redelivered push's write none. A ref the record's
-// entries move in turn leaves each object it is moved off, so three forced
-// turns of one ref through X, Y and back are two rows, X once; and the rows
-// count in what the record reports it touched.
+// does: a forced update and a branch's or tag's deletion each write a row of
+// the ref and its old object at the record's position and broker instant; a
+// fast-forward, a create, a refused command and a redelivered push write
+// none. Three forced turns of one ref through X, Y and back are two rows, X
+// once, and the rows count in what the record reports it touched.
 //
 // Mutation: record every update with an old object, and the fast-forward is a
 // drop; record only forced updates, and the deletions leave none; key the rows
@@ -140,8 +138,8 @@ func TestAForcedOrDeletingCommandRecordsTheObjectItLeft(t *testing.T) {
 			"command or the redelivered push", got, want)
 	}
 	// SIX REFS (ff, forced, gone, v1, new, turns), the three new entries'
-	// packs and push rows, the five drops and the counters — and no horizon
-	// due, the tombstones being fresh; and the pushes' day row and pusher day.
+	// packs and push rows, the five drops, the counters, the day row and
+	// pusher day; no horizon due, the tombstones being fresh.
 	if wantTouched := 6 + 3 + 3 + len(want) + 1 + pushDayRows + pusherDayRows; touched != wantTouched {
 		t.Fatalf("the record reports %d rows touched, want %d: its drops count in what it wrote",
 			touched, wantTouched)
@@ -151,11 +149,10 @@ func TestAForcedOrDeletingCommandRecordsTheObjectItLeft(t *testing.T) {
 	}
 }
 
-// A REF DROP OUTLIVES ITS GRACE AND NO MORE: a push record of the repository
-// stored exactly PruneGrace after the drop keeps it, one stored a microsecond
-// later — the resolution the instant is stored at — removes it, and a drop
-// inside the grace stays beside it; another repository's drop as old as the
-// first is its own repository's to forget, at its next push.
+// A REF DROP OUTLIVES ITS GRACE AND NO MORE: a push record stored exactly
+// PruneGrace after the drop keeps it, one a microsecond later (the stored
+// resolution) removes it, a drop inside the grace stays, and another
+// repository's equally old drop waits for that repository's next push.
 //
 // Mutation: remove a drop at its grace (`at <= ?`), and the push at the grace
 // takes it; judge no grace, and the push past it keeps it; drop the
@@ -200,12 +197,10 @@ func TestARefDropOutlivesItsGraceAndNoMore(t *testing.T) {
 }
 
 // THE REF DROPS TAKE WHAT THE TOMBSTONES LEAVE: with more expired tombstones
-// waiting than one record may sweep and expired drops beside them, a push
-// record sweeps a whole budget of tombstones and forgets no drop; the next,
-// with fewer tombstones due than its budget, sweeps them and forgets drops
-// with the rest — every row of the budget touched by the first, and never one
-// past it by either. A drop forgotten late costs a row; a tombstone's room
-// taken costs every Gitlet node a full read.
+// than one record may sweep, a push record sweeps a whole budget of them and
+// forgets no drop; the next sweeps the rest and forgets drops with what is
+// left, neither ever past its budget. A drop forgotten late costs a row; a
+// tombstone's room taken costs every Gitlet node a full read.
 //
 // Mutation: forget the drops before the sweep, and the first record forgets
 // them all and leaves the tombstones a thousand rows short.
@@ -248,13 +243,11 @@ func TestTheRefDropsTakeWhatTheTombstonesLeave(t *testing.T) {
 }
 
 // BEHIND DELETIONS WHOSE TOMBSTONES COME DUE IN TURN, THE EXPIRY HAS WHAT THE
-// SWEEP LEAVES: at a repository whose older deletions' tombstones are due as
-// fast as it makes new ones — one deleting refs in bulk, steadily — a
-// record's sweep takes a row for each first, so the expiry has 996 rows for
-// the thousand drops of one maximal push of deletions and 64 for the 1 310 of
-// the committer's fullest record of them: four and 1 246 short of what the
-// record writes, as expireRefDrops' doc and doc.go say. Every row of the
-// record's budget is touched either way.
+// SWEEP LEAVES: where older tombstones fall due as fast as new ones are made
+// (steady bulk deletion), the sweep takes its rows first, so the expiry has
+// 996 rows for one maximal push's thousand drops and 64 for the 1 310 of the
+// committer's fullest record: four and 1 246 short, as doc.go's "Five
+// horizons" says. Every row of the budget is touched either way.
 //
 // Mutation: forget the drops before the sweep, and each record forgets as
 // many as its whole budget holds, the tombstones' room with them.
@@ -284,9 +277,9 @@ func TestTheRefDropExpiryHasWhatTheSweepLeavesBehindDeletions(t *testing.T) {
 			for _, p := range tc.pushes {
 				deletions += len(p.Commands)
 			}
-			// THE REFS IT DELETES, as many older tombstones due — past
-			// RefTombstoneHorizon — and more drops past their grace than one
-			// record can forget.
+			// THE REFS IT DELETES, as many older tombstones past
+			// RefTombstoneHorizon, and more drops past grace than one record
+			// can forget.
 			e.seed("repo-a", 0, deletions, 0)
 			e.seedTombstones("repo-a", deletions, time.Unix(0, 0))
 			e.seedDrops("repo-a", 1, time.Unix(0, 0), MaxRecordRows)
@@ -310,15 +303,12 @@ func TestTheRefDropExpiryHasWhatTheSweepLeavesBehindDeletions(t *testing.T) {
 	}
 }
 
-// THE DROPS' EXPIRY KEEPS PACE WITH ONE BULK FORCED PUSH A RECORD: a
-// repository whose every record carries one push force-moving a thousand
-// branches — a mirror pushed with --force, a tool rewriting its branches —
-// holds, once each push is past the grace of the one two before it, only the
-// drops of the last two: each record forgets the thousand that came due with
-// what its rows leave, 1 997. A fixed share of MaxRecordRows/8, five hundred a
-// record, fell behind it by five hundred a record for as long as such pushes
-// come. Two such pushes sharing a record are another shape, which the expiry
-// falls behind (TestTheRefDropBacklogDrainsAsTheRecordsLeaveRoom).
+// THE DROPS' EXPIRY KEEPS PACE WITH ONE BULK FORCED PUSH A RECORD: where every
+// record force-moves a thousand branches (a mirror pushed with --force), once
+// each push is past the grace of the one two before, only the last two
+// pushes' drops remain, each record forgetting the thousand due
+// with the 1 997 rows it leaves. Two such pushes in one record fall behind
+// (TestTheRefDropBacklogDrainsAsTheRecordsLeaveRoom).
 //
 // Mutation: cap the expiry at MaxRecordRows/8, and the drops grow by five
 // hundred a round.
@@ -353,14 +343,11 @@ func TestTheRefDropExpiryKeepsPaceWithOneBulkForcedPushARecord(t *testing.T) {
 }
 
 // THE DROPS' EXPIRY FALLS BEHIND A RECORD FULL OF FORCED UPDATES, AND THE
-// BACKLOG DRAINS AS LATER RECORDS LEAVE ROOM: the committer's fullest record
-// of forced updates, 1 963 in two pushes each counted two rows, writes as
-// many drops and leaves their expiry the 69 rows its own leave of
-// MaxRecordRows, so once such records come past the grace of the ones before
-// them, the drops past it grow by 1 894 a record. They are only late: a
-// one-command push forgets MaxRecordRows-4 of them, oldest first, and the
-// pushes after it the rest, down to exactly the drops still inside their
-// grace, none of which is forgotten.
+// BACKLOG DRAINS AS LATER RECORDS LEAVE ROOM: the committer's fullest such
+// record (1 963 updates in two pushes, two rows each) leaves its expiry 69
+// rows, so drops past grace grow by 1 894 a record. They are only late: a
+// one-command push forgets MaxRecordRows-4, oldest first, and later pushes
+// the rest, down to exactly the drops still inside their grace.
 //
 // Mutation: cap the expiry at MaxRecordRows/8, and the first one-command push
 // forgets five hundred rather than 3 996; forget drops only behind a record
@@ -388,9 +375,9 @@ func TestTheRefDropBacklogDrainsAsTheRecordsLeaveRoom(t *testing.T) {
 		made = append(made, pushEntry(fmt.Sprint("make-", p), creates...))
 		drops += len(push.Commands)
 	}
-	// ITS SHAPE, as expireRefDrops' doc and doc.go state it: what it writes —
-	// a ref and a drop a forced update, a pack and a push row a push, and the
-	// counters — and what that leaves its expiry.
+	// ITS SHAPE, as doc.go's "Five horizons" states it: a ref and a drop per forced
+	// update, a pack and a push row per push, the counters, and what that
+	// leaves its expiry.
 	room := MaxRecordRows - (2*drops + 2*len(made) + 1)
 	if drops != 1_963 || room != 69 {
 		t.Fatalf("the committer's fullest record of forced updates carries %d of them and leaves its "+
@@ -431,10 +418,9 @@ func TestTheRefDropBacklogDrainsAsTheRecordsLeaveRoom(t *testing.T) {
 		t.Fatalf("the premise: %d drops past their grace after %d rounds, want %d", backlog, rounds, want)
 	}
 
-	// THE DRAIN, an hour after the last round: one-command pushes, each of
-	// four rows of its own — its ref, its pack, its push row and the counters
-	// — forgetting the oldest drops past their grace with the rest of its
-	// budget, until none is left.
+	// THE DRAIN, an hour after the last round: one-command pushes of four
+	// rows (ref, pack, push row, counters), each forgetting the oldest drops
+	// past grace with the rest of its budget, until none is left.
 	at = at.Add(time.Hour)
 	for i := 0; backlog > 0; i++ {
 		forgotten := min(backlog, MaxRecordRows-4)

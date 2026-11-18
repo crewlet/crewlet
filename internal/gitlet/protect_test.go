@@ -12,11 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A BRANCH'S MERGE GATE THROUGH A PROTECT REQUEST: the change the deciding node
-// resolves against the rule its snapshot holds, and who may make it — a seat
-// tightens a gate field by field and only a person loosens one, the path
-// owners included where the gate makes them gating — through the whole path, a
-// real broker, the shipped applier and the store's own reads back.
+// A BRANCH'S MERGE GATE THROUGH A PROTECT REQUEST, over a real broker, the
+// shipped applier and the store's own reads: the deciding node resolves the
+// change against its snapshot's rule, a seat only tightens a gate field by
+// field, and only a person loosens one (path owners too, under owners_approve).
 
 // tightGate is a gate holding a merge to something in every field a seat
 // could lower.
@@ -100,19 +99,16 @@ func sameGate(t *testing.T, stage string, got, want *gitlet.MergeGate) {
 	}
 }
 
-// A GATE CHANGE IS RESOLVED INSIDE THE DECIDE: a protect request names the
-// gate fields it changes, and the deciding node puts them in the gate the
-// pattern's rule carries in its own snapshot — so two requests changing two
-// fields of one gate, in either order, leave both changes, where a caller that
-// sent the gate whole as it had read it would undo the other's. A rule with no
-// gate takes the defaults beside the fields named; a request naming no gate
-// field keeps the gate. And a change whose gate, with what it kept, weighs
-// past what a record may carry is refused ErrInvalid naming protect.gate, for
-// whoever asks, and nothing is written — which only the decide can judge,
-// since only it reads what the change kept.
+// A GATE CHANGE IS RESOLVED INSIDE THE DECIDE, against the gate the deciding
+// node's snapshot holds: two requests changing two fields, in either order,
+// keep both, where a gate sent whole as read would undo the other's. A rule
+// with no gate takes the defaults beside the named fields; naming no gate field
+// keeps the gate. A change whose resulting gate weighs past what a record may
+// carry is refused ErrInvalid naming protect.gate, for anyone, writing nothing:
+// only the decide sees what the change kept.
 //
-// Mutation: resolve a change against the default gate rather than the rule's
-// — the second request's change drops the first's, red.
+// Mutation: resolve against the default gate rather than the rule's — the
+// second request's change drops the first's, red.
 func TestAGateChangeIsResolvedInsideTheDecide(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -134,10 +130,9 @@ func TestAGateChangeIsResolvedInsideTheDecide(t *testing.T) {
 		sameGate(t, "after a request naming no gate field", gateOf(t, got, main), &want)
 	}
 
-	// PAST WHAT A RECORD MAY CARRY with what the change keeps: a gate of
-	// human paths JSON spells long (an & is six bytes) lands under the bound,
-	// and a change requiring thirty-two checks beside them is refused — the
-	// change alone a record could carry.
+	// PAST WHAT A RECORD MAY CARRY only with what the change keeps: human paths
+	// JSON spells long (an & is six bytes) land under the bound; thirty-two long
+	// checks beside them are refused, though the change alone would fit.
 	id := n.made(lcPerson, "heavy", unitOwned("eng"))
 	paths := make([]gitlet.HumanPath, 12)
 	for i := range paths {
@@ -162,15 +157,11 @@ func TestAGateChangeIsResolvedInsideTheDecide(t *testing.T) {
 	}
 }
 
-// AN AGENT CANNOT LOOSEN A GATE (ADR-0088, field by field): the unit's lead at
-// full_access, which maintains the repository, asks a protect request that
-// loosens main's merge gate in one field — each in turn: merge_by or approvals
-// lowered, a class added to approvals_unless, a human path dropped or its
-// unless widened, a required check dropped, owners_approve turned off,
-// agents_edit_checks turned on, or the gate removed. Each is refused not_permitted, the sentence
-// naming the pattern and what the change opens by its field, and nothing is
-// written: the gate a person set stands. A change that tightens one field and
-// opens another is refused for the one it opens, and names that one alone.
+// AN AGENT CANNOT LOOSEN A GATE (ADR-0088), field by field: the unit's lead,
+// which maintains the repository, is refused not_permitted for each of
+// gateLoosenings, the sentence naming the pattern and what the change opens,
+// and nothing is written. A change tightening one field and opening another is
+// refused naming only the one it opens.
 //
 // Mutation: treat agents_edit_checks turned on as neutral in LoosenedBy — the
 // lead turns it on, red.
@@ -211,18 +202,14 @@ func TestAnAgentCannotLoosenAGate(t *testing.T) {
 	sameGate(t, "after the lead's refused loosenings", gateAmong(n.gatesOf("gated"), main), &tight)
 }
 
-// AN AGENT MAY TIGHTEN A GATE: the unit's lead adds a gate to a rule that had
-// none — the defaults, and the one field it names — and tightens a person's
-// loose gate field by field: merge_by and approvals raised, a class taken from
-// approvals_unless, a human path's unless narrowed and a human path added, a
-// check required more, owners_approve turned on and agents_edit_checks off —
-// each landing — and moves the
-// neutral fields, landing.depth, landing.batch and delete_source, either way.
-// A request naming no gate field tightens direct_push and keeps the gate, which
-// ends as every change left it.
+// AN AGENT MAY TIGHTEN A GATE: the unit's lead adds a gate where the rule had
+// none (the defaults plus the field named), tightens a person's loose gate in
+// every field, and moves the neutral fields (landing.depth, landing.batch,
+// delete_source) either way, each landing; a request naming no gate field
+// tightens direct_push and keeps the gate.
 //
-// Mutation: judge the gate whole again in loosenings, any field changed a
-// loosening — the lead's first tightening is refused, red.
+// Mutation: judge the gate whole in loosenings, any changed field a loosening
+// — the lead's first tightening is refused, red.
 func TestAnAgentMayTightenAGate(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -236,8 +223,7 @@ func TestAnAgentMayTightenAGate(t *testing.T) {
 		Landing: gitlet.Landing{Depth: 4, Batch: 4}, DeleteSource: gitlet.DeleteSeats, AgentsEditChecks: true}
 	n.lands(lcGate(lcPerson, id, main, persons, gateTo(loose)))
 
-	// A GATE ADDED where the rule had none: the defaults, and the one field
-	// the lead names.
+	// A GATE ADDED where the rule had none: the defaults plus the field named.
 	n.lands(lcProtect(cto, id, release, persons))
 	got := n.lands(lcGate(cto, id, release, persons, addChecks("unit")))
 	sameGate(t, "a gate the lead added", gateOf(t, got, release), &gitlet.MergeGate{
@@ -311,16 +297,13 @@ func TestAPersonMayLoosenAGate(t *testing.T) {
 	sameGate(t, "removed by a person", gateOf(t, got, main), nil)
 }
 
-// AN AGENT CANNOT REMOVE A PATH OWNER UNDER owners_approve: where a rule's
-// merge gate sets it, a repository's path owners are whom a merge waits for, so
-// a seat that maintains the repository — the unit's lead — is refused a
-// settings change taking a glob from one, an owner whole, or a glob beside one
-// it gives, not_permitted with the sentence naming path_owners, what it takes
-// and the rule; nothing is written. A glob no owner holds, taken, takes
-// nothing and is answered from the row; giving a path owner globs only asks a
-// merge for more, and lands. On a repository whose gate sets no
-// owners_approve the same removals land, the path owners a review's alone; and
-// a person takes them under owners_approve.
+// AN AGENT CANNOT REMOVE A PATH OWNER UNDER owners_approve, where a merge
+// waits for the path owners: the unit's lead is refused not_permitted taking a
+// glob, an owner whole, or a glob beside one it gives, the sentence naming
+// path_owners, what it takes and the rule, and nothing is written. Taking a
+// glob no owner holds is answered from the row; giving globs only asks more of
+// a merge, and lands. Without owners_approve the same removals land; a person
+// takes them under it.
 //
 // Mutation: judge the path owners neutral — drop the settings arm of
 // lifecycleRefusal's loosening branch — the lead's removals land, red.
@@ -384,18 +367,15 @@ func TestAnAgentCannotRemoveAPathOwnerUnderOwnersApprove(t *testing.T) {
 	}
 }
 
-// A PROTECT REQUEST'S ANSWER NAMES ITS RULE WHOLE: the repository's row never
-// carries a merge gate (gitlet.RepoRef.Protections are PushRule values), so the
-// answer names the protected pattern's rule beside it, its gate as the
-// deciding node resolved it (gitlet.LifecycleResult.Rule) — read back with the
-// row where the request's record applied, read back where a repeat of the
-// operation collapsed onto the record before it, and as the decide held it
-// where the request needed no record. A rule the request removed, and every
-// other kind's answer, names none.
+// A PROTECT REQUEST'S ANSWER NAMES ITS RULE WHOLE (gitlet.LifecycleResult.Rule),
+// since the row carries no merge gate (RepoRef.Protections are PushRule
+// values): read back with the row when the record applied or a repeat
+// collapsed onto the one before, and as the decide held it when no record was
+// needed. A removed rule, and every other kind's answer, names none.
 //
 // Mutations: read the row back without the pattern's rule — the applied
-// answer names no rule, red; answer a request that needed no record with no
-// rule — the repeated gate names none, red.
+// answer names none, red; answer a request needing no record with no rule —
+// the repeated gate names none, red.
 func TestAProtectAnswerNamesItsRuleWhole(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -437,14 +417,11 @@ func TestAProtectAnswerNamesItsRuleWhole(t *testing.T) {
 }
 
 // A PROTECT CHANGE KEEPS THE PUSH CONTROLS IT DOES NOT NAME, as the deciding
-// node's snapshot holds them for the pattern: a change naming only its gate —
-// the commonest, requiring a check — leaves a branch a person froze at
-// direct_push none frozen and its allow_force on, for a person, whom nothing
-// refuses, and for the unit's lead, whose change tightens and lands rather
-// than being refused a loosening of direct_push it never named. A change
-// naming one control changes that control alone. A pattern no rule held takes
-// each control's least where the change names none — persons, off, off — and
-// no gate.
+// node's snapshot holds them: a gate-only change leaves a branch frozen at
+// direct_push none with allow_force on, for a person and for the unit's lead,
+// whose change tightens rather than being refused a direct_push loosening it
+// never named. Naming one control changes that one alone. A new pattern takes
+// each unnamed control's least (persons, off, off) and no gate.
 //
 // Mutation: start every resolved rule from its least, keeping only the held
 // gate — the person's gate-only change sends main back to direct pushes, red.
@@ -490,17 +467,15 @@ func lcControls(actor gitlet.Principal, id, pattern string, change gitlet.Protec
 	return req
 }
 
-// A GATE'S LIST CHANGE KEEPS WHAT ANOTHER CHANGE ADDED: a list's change adds
-// and removes items, applied by the deciding node to the list its own snapshot
-// holds, so two requests each adding a check — formed by callers that read the
-// same gate, in either order — leave both checks, where a list sent whole as
-// each had read it would drop the other's; for the unit's lead neither is
-// refused, since neither drops anything. The same holds a gate's human paths,
-// keyed by glob; and a person removing one check and exempting one more class
-// keeps every other.
+// A GATE'S LIST CHANGE KEEPS WHAT ANOTHER CHANGE ADDED: the deciding node
+// applies its adds and removes to the list its snapshot holds, so two requests
+// each adding a check, in either order, keep both, where lists sent whole as
+// read would drop one; the lead is refused neither, as neither drops anything.
+// Human paths, keyed by glob, hold the same; a person removing one check and
+// exempting one class keeps the rest.
 //
-// Mutation: replace a list with what its change adds rather than adding to it
-// — the second request drops the first's check, red.
+// Mutation: replace a list with what its change adds — the second request
+// drops the first's check, red.
 func TestAGateListChangeKeepsWhatAnotherChangeAdded(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

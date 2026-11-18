@@ -17,40 +17,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A TARGET'S QUEUE, ITS LANDINGS AND ITS GREEN, READ — four reads over the
-// rows a repository's queue records write (queue.go), three of them kinds of
-// [ReadQuery] and the fourth a read of its own:
+// A TARGET'S QUEUE, ITS LANDINGS AND ITS GREEN, read over the rows queue.go writes:
+//   - `queue` ([ReadQueue]): the live entries of a repository, a target or every
+//     repository the asker reads, in queue order, held to the asker's grant as a
+//     listing of changes is, beside a named repository's (or, where
+//     [ReadQuery.Trains] asks, every one's) trains and recent ejections.
+//   - `landings` ([ReadLandings]): a target's landings above its green; `green`
+//     ([ReadGreen]): each protected target's newest commit whose checks passed.
+//   - the due queue ([Reader.QueueDue]): the engine's own read, which no principal
+//     makes and never a [ReadQuery] kind, because its home carries what it reads
+//     into its next records, so its answer is read whole or refused ([QueueDueAnswer]).
 //
-//   - `queue` ([ReadQueue]) lists the LIVE entries of every queue — of one
-//     repository, of one of its targets, or of every repository the asker
-//     reads — in queue order, each with its place and its change's number,
-//     title and source branch, beside the trains testing a named repository's
-//     (code_queue_live_idx, code_candidates_train_idx) and the entries its
-//     queues put out in the last [QueueEjectionsShown] (code_queue_ejected_idx),
-//     held to the asker's grant as a listing of changes is. Every
-//     repository's trains and ejections are answered where [ReadQuery.Trains]
-//     asks (code_queue_ejected_recent_idx).
-//   - `landings` ([ReadLandings]) is one target's landings ABOVE ITS GREEN, in
-//     the order they landed, beside the green itself: what its tip checks have
-//     not yet judged.
-//   - `green` ([ReadGreen]) is one repository's green rows: each protected
-//     target's newest commit whose required checks passed.
-//   - the DUE QUEUE ([Reader.QueueDue], internal/estate's code.queue_due) is
-//     the home's: the ACTIVE repositories holding a live entry, then those
-//     holding a given-up train's attempt, then those owing a landed change's
-//     work item its close, by id — an archived or deleted one's queue is
-//     nobody's work until it is active again — or one repository's queue
-//     work, a target a page ([QueueDue], queuework.go), its first page with
-//     the given-up trains' attempts it cancels ([AbandonedCheck]) and the
-//     closes it owes: the engine's own read, which no principal makes. A
-//     READ OF ITS OWN, never a kind of [ReadQuery], because its home carries
-//     every entry it reads into the record it asks next — a landing, an
-//     ejection, a close and its settle — so its answer crosses read whole or
-//     refused ([QueueDueAnswer]), where a [ReadAnswer], which a caller only
-//     shows, is read for what its build declares.
-//
-// EVERY LISTING IS A KEYSET over its index's own order, its cursor the last
-// row's place in it.
+// Every listing is a keyset over its index's order, its cursor the last row's place.
 
 // QueueRow is one live entry of a target's queue as a read answers it.
 type QueueRow struct {
@@ -110,18 +88,13 @@ type CandidateRow struct {
 	Position    statelog.Position `json:"position"`
 }
 
-// EjectedRow is one entry a queue put out, as a `queue` read of its
-// repository answers it beside the live ones: the change it was, its title and
-// source branch, the head it was enqueued at, who enqueued it, how it was to
-// land, why the queue put it out
-// ([QueueEndReason]: check_failed, conflict, gate_unmet, head_moved,
-// not_fast_forward) and what of it a person reads first — the required checks
-// that failed on what it was tested in, or the paths its merge conflicted on —
-// and when, and the train its checks failed on.
+// EjectedRow is one entry a queue put out, answered by a `queue` read of its
+// repository beside the live ones: why ([QueueEndReason]), what a person reads
+// first (the required checks that failed, or the paths its merge conflicted on),
+// when, and the train its checks failed on.
 //
-// AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row. The
-// domain landed on main with it ([RecordVersion]), so every build that answers
-// a `queue` read answers its ejections.
+// An answer's row, not a record's, so it takes no versionedFields row: every
+// build that answers a `queue` read answers its ejections ([RecordVersion]).
 type EjectedRow struct {
 	RepoID    string `json:"repo_id"`
 	Repo      string `json:"repo"`
@@ -150,20 +123,15 @@ type EjectedRow struct {
 	TestedIn *EjectionTrain `json:"tested_in,omitempty"`
 }
 
-// QueueEjectionsShown is how far back a `queue` read of a repository answers
-// the entries its queues put out: a DAY. An ejection is a person's or a
-// seat's to act on — fix the change and enqueue it again — and its own wake
-// (`dequeued`, `checks_failed`) reaches whoever must; the Queue section shows
-// it beside the queue it left so a reader watching that queue sees why it
-// shrank. A day covers a reader who looks once a working day; older ones are
-// the change's own history, on its page.
+// QueueEjectionsShown is how far back a `queue` read answers a repository's
+// ejections: a day, covering a reader who looks once a working day. The
+// ejection's own wake (`dequeued`, `checks_failed`) reaches whoever must act;
+// older ones are the change's history, on its page.
 const QueueEjectionsShown = 24 * time.Hour
 
 // MaxEjectionsShown is the most ejections one `queue` read answers, newest
-// first: 50, the queue listing's own page (defaultQueueLimit) — a band of a
-// page's height under a queue's live entries. A queue that ejected more in a
-// day is broken, not busy, and its fifty newest say why as well as all of
-// them.
+// first: the queue listing's own page (defaultQueueLimit). A queue that ejects
+// more in a day is broken, not busy, and its newest fifty say why.
 const MaxEjectionsShown = defaultQueueLimit
 
 // EjectedTotal is how many entries the asker's queues put out in the last
@@ -179,15 +147,11 @@ type EjectedTotal struct {
 // under MaxPageBytes: 200 rows, 200 targets' trains of MaxQueueDepth and 50 ejections, about 2.6 MiB.
 const MaxQueueCounted = MaxSnapshotItems
 
-// ejections files into out what repository repo's queues put out in the last
-// [QueueEjectionsShown] — its target's alone, where target names one — newest
-// first, at most [MaxEjectionsShown]: one seek of an index partial on the
-// ejections alone (replicated 0132), the repository's or the target's, from
-// the newest down to the horizon, so the read touches the rows it answers and
-// never the entries the queue LANDED meanwhile — which a healthy queue ends
-// thousands of a day, and an index of every ended entry walked to find a
-// handful of ejections on every poll of the Queue section. Where total asks,
-// it also counts them, within [MaxQueueCounted] ([ReadAnswer.EjectedTotal]).
+// ejections files into out what repo's queues (its target's, where target names
+// one) put out in the last [QueueEjectionsShown], newest first, at most
+// [MaxEjectionsShown], and where total asks their count within [MaxQueueCounted].
+// It seeks an index partial on the ejections alone (replicated 0132), never one
+// of every ended entry: a healthy queue lands thousands a day.
 func (r *Reader) ejections(ctx context.Context, tx *sql.Tx, repo RepoRef, target string, total bool,
 	out *ReadAnswer) error {
 
@@ -369,12 +333,10 @@ func ejectedRow(e queueEntry, repo string, label changeLabel, detail string) (Ej
 	return row, nil
 }
 
-// LandingRow is one landing on a protected target: the record that landed it
-// and its place in that record, what kind of landing it was, what landed —
-// the change and its entry, "" for a push that landed none — the target before
-// and after, who, and whether a bisect of the target's tip checks found it
-// broken. Every landing it lists lies above the green row and so is not green:
-// a landing is green by its position, at or below that row.
+// LandingRow is one landing on a protected target: the record and its ordinal
+// in it, its kind, the change and entry it landed ("" for a push), the target
+// before and after, who, and whether a bisect of the tip checks found it broken.
+// A landing is green by position, at or below the green row, so none listed is.
 type LandingRow struct {
 	RepoID     string            `json:"repo_id"`
 	TargetRef  string            `json:"target_ref"`
@@ -405,56 +367,42 @@ type GreenRow struct {
 // ([Reader.QueueDue]): a page of the repositories owing any, where it names no
 // repository, or one repository's, by id, a target a page.
 //
-// AN ESTATE REQUEST, NOT A RECORD, so it takes no versionedFields row: a data
-// node of a build that predates the read answers its operation unserved, as
-// one it does not know, and the home's queue waits for a node that serves it,
-// stepping on nothing meanwhile.
+// An estate request, not a record, so it takes no versionedFields row: an older
+// data node answers it unserved, and the home's queue waits for one that serves it.
 type QueueDueQuery struct {
 	RepoID string `json:"repo_id,omitempty"`
-	// EnqueuedSince, beside a RepoID, asks each page's target's enqueues at
-	// or after it counted ([QueueDue.Enqueued]): the home's queue worker
-	// states now less [MergeRateWindow], the window its merge rate is
-	// measured over. Zero counts none.
+	// EnqueuedSince, beside a RepoID, has each page's target's enqueues since
+	// it counted ([QueueDue.Enqueued]): the home states now less
+	// [MergeRateWindow]. Zero counts none.
 	EnqueuedSince time.Time `json:"enqueued_since,omitzero"`
-	// Cursor is "" for a first page, and the Next a page answered for the
-	// page after it: a listing's last repository, marked by the walk it ended
-	// in, or one repository's last target.
+	// Cursor is "" for a first page, else the Next the page before answered: a
+	// listing's last repository, marked by the walk it ended in, or one
+	// repository's last target.
 	Cursor string `json:"cursor,omitempty"`
-	// Fresh is the level the page is read at, by every code read's one rule
-	// ([checkFreshness]): the home states the position its nudge or its own
-	// record landed at as a session floor, and a read naming no level is read
-	// stale, as a duty listing is.
+	// Fresh is the level the page is read at ([checkFreshness]): the home states
+	// the position its nudge or record landed at as a session floor; none is stale.
 	Fresh statelog.Freshness `json:"fresh"`
 }
 
 // QueueDueAnswer is a [QueueDueQuery]'s page: a listing's repositories
-// (DueRepos), or one repository's — one target's queue work (DueQueue), and
-// on its first page the given-up trains' attempts its home cancels
-// (QueueAbandoned) and the closes it owes (QueueOwedCloses) — beside the
-// cursor of the page after it, "" past the last, and the position the page
-// was read at.
+// (DueRepos), or one target's queue work (DueQueue) with, on a repository's
+// first page, the attempts its home cancels and the closes it owes; the next
+// page's cursor, "" past the last; and the position the page was read at.
 //
-// READ WHOLE OR REFUSED (internal/estate's code.queue_due): the home carries
-// what it reads into the records it asks next, landing, ejecting and settling
-// each entry as the entry it read, closing its change's work item as its
-// enqueuer, and stating the page's position as what it saw. A member a newer
-// data node puts in the answer that this build does not declare refuses the
-// whole page — the turn fails, and the queue waits until its home runs a
-// build that declares it — and is never dropped while the rest is carried on.
+// Read whole or refused (internal/estate's code.queue_due): the home carries
+// what it reads into the records it asks next, so a member this build does not
+// declare fails the turn, and the queue waits for a home that declares it,
+// rather than being dropped while the rest is carried on.
 type QueueDueAnswer struct {
 	// DueRepos is a listing's page of repositories, by id, at most
-	// MaxSnapshotItems: those holding a live entry, then those holding a
-	// given-up train's attempt, then those owing a landed change's work item
-	// its close — a repository in several walks listed in each, and worked
-	// once by its home.
+	// MaxSnapshotItems, in [Reader.dueQueueRepos]'s walk order.
 	DueRepos []string `json:"due_repos,omitempty"`
 	// DueQueue is one repository's page: one target's queue work
 	// ([QueueDue]), the target the next page's cursor; nil past the last.
 	DueQueue *QueueDue `json:"due_queue,omitempty"`
-	// QueueAbandoned is, on one repository's first page, the attempts its
-	// queues queued that have not ended, on commits no train of their target
-	// tests or landed ([AbandonedCheck]): what its home cancels once its
-	// targets have taken their steps.
+	// QueueAbandoned is, on a repository's first page, its queues' unended
+	// attempts on commits no train of their target tests or landed
+	// ([AbandonedCheck]): what its home cancels once its targets have stepped.
 	QueueAbandoned []AbandonedCheck `json:"queue_abandoned,omitempty"`
 	// QueueOwedCloses is, on the same first page, the repository's landed
 	// entries still owing their change's work item its close (M5-D27,
@@ -499,11 +447,9 @@ func (q ReadQuery) validateQueueRead() error {
 	return nil
 }
 
-// validate refuses a due-queue read its home cannot have meant: a repository,
-// where it names one, by id in its canonical spelling, and enqueues counted
-// beside that repository alone, never of the listing. Nothing else is asked
-// of it: it names no asker, since no principal makes it, and every member its
-// request may carry is one of these.
+// validate refuses a due-queue read its home cannot have meant: a repository id
+// not in its canonical spelling, or enqueues counted of the listing. It names
+// no asker, since no principal makes it.
 func (q QueueDueQuery) validate() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
@@ -544,14 +490,10 @@ func cutQueueCursor(s string) (repoID, target string, seq int64, ok bool) {
 	return parts[0], parts[1], seq, err == nil && seq > 0 && parts[0] != "" && parts[1] != ""
 }
 
-// queueListing serves one page of a `queue` read: the live entries of the repository
-// q names — of its target, where it names one — or, naming none, of every
-// repository the asker reads, in queue order; each with its place and its
-// change's number, title and source branch; and, for a named repository or
-// where q asks for [ReadQuery.Trains], the candidates of every train of the
-// targets the page reaches and, on its first page, what its queues — its
-// target's, where it names one — put out lately ([Reader.ejections],
-// [Reader.ejectionsEverywhere]).
+// queueListing serves one page of a `queue` read: the live entries q names, in
+// queue order, and, for a named repository or where q asks [ReadQuery.Trains],
+// the trains of the targets the page reaches and, on a first page, the recent
+// ejections ([Reader.ejections], [Reader.ejectionsEverywhere]).
 func (r *Reader) queueListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	limit := min(limitOr(q.Limit, defaultQueueLimit), r.pageRows)
 	repos := map[string]listedRepo{}
@@ -667,16 +609,14 @@ func (r *Reader) queueListing(ctx context.Context, tx *sql.Tx, q ReadQuery, char
 	return nil
 }
 
-// QueueDue answers one page of the queue work a repository's HOME Gitlet node
-// owes ([QueueDueQuery]): with no repository, the active repositories its home
-// owes queue work, by id ([Reader.dueQueueRepos]); with one, its next target's
-// queue work after the cursor, one target a page ([dueQueue]).
+// QueueDue answers one page of the queue work a repository's home Gitlet node
+// owes ([QueueDueQuery]): with no repository, the active repositories owing any
+// ([Reader.dueQueueRepos]); with one, its next target's work ([dueQueue]).
 //
-// A SET READ, of the domain or of the one repository, as `changes_due`'s:
-// every record the home asks after it is decided again by the repository's
-// committer from its own snapshot. Read at the level the query names, by every
-// code read's one rule ([checkFreshness]), and stale where it names none, as a
-// duty listing is; and at no grant, since no principal asks it.
+// A set read, as `changes_due`'s: the committer decides every record the home
+// asks after it again from its own snapshot. Read at the query's level
+// ([checkFreshness]), stale where it names none, and at no grant, since no
+// principal asks it.
 func (r *Reader) QueueDue(ctx context.Context, q QueueDueQuery) (QueueDueAnswer, error) {
 	if err := q.validate(); err != nil {
 		return QueueDueAnswer{}, err
@@ -705,18 +645,17 @@ func (r *Reader) QueueDue(ctx context.Context, q QueueDueQuery) (QueueDueAnswer,
 	return out, nil
 }
 
-// dueQueueRepos files one page of the due-queue listing after cursor into
-// out: the active repositories its home owes queue work, by id,
-// MaxSnapshotItems a page — those holding a live entry, then those holding a
-// given-up train's attempt (queuework.go), then those owing a landed change's
-// work item its close (code_queue.close_op), three walks of their own
-// indexes, the second's cursor marked [abandonedCursor] and the third's
-// [closeOwedCursor]. A repository in several walks is listed in each, and its
-// home works it once.
+// dueQueueRepos files one page of the due-queue listing after cursor into out:
+// the active repositories owing queue work, by id, MaxSnapshotItems a page,
+// across three walks of their own indexes — a live entry, a given-up train's
+// attempt (queuework.go, cursor marked [abandonedCursor]), a landed change's
+// owed close (code_queue.close_op, [closeOwedCursor]). An archived or deleted
+// repository's queue is nobody's work until it is active again. A repository in several walks is listed
+// in each, and its home works it once.
 func (r *Reader) dueQueueRepos(ctx context.Context, tx *sql.Tx, cursor string, out *QueueDueAnswer) error {
-	// THE WALKS IN ORDER, each resumed from its own cursor mark, the page
-	// filled across them. Each walk names its statement at its call, a
-	// constant, so the read-index gate reads which statement it runs.
+	// The walks run in order, each resumed from its own cursor mark, filling
+	// one page. Each names its statement, a constant, at its call, so the
+	// read-index gate reads which statement it runs.
 	after, owed := strings.CutPrefix(cursor, closeOwedCursor)
 	after, abandoned := strings.CutPrefix(after, abandonedCursor)
 	walk := func(mark, what string, list func(after string, room int) ([]string, error)) (bool, error) {
@@ -755,11 +694,9 @@ func (r *Reader) dueQueueRepos(ctx context.Context, tx *sql.Tx, cursor string, o
 	return err
 }
 
-// abandonedCursor and closeOwedCursor mark a due-queue listing's cursor as
-// one of its second walk, the repositories holding a given-up train's
-// attempt, or of its third, those owing a landed change's work item its
-// close: the id after it is that walk's last. No repository's id — a UUID in
-// its canonical spelling — begins with either.
+// abandonedCursor and closeOwedCursor mark a due-queue cursor as one of the
+// second or third walk ([Reader.dueQueueRepos]), the id after it that walk's
+// last. No repository id, a canonical UUID, begins with either.
 const (
 	abandonedCursor = "abandoned:"
 	closeOwedCursor = "close:"
@@ -784,8 +721,8 @@ func dueRepoIDs(ctx context.Context, tx *sql.Tx, stmt, cursor string, limit int)
 }
 
 // landings serves one page of a `landings` read: the target's green, where it
-// has one, and its landings above it, in the order they landed, after the
-// cursor — a landing's position and its ordinal in its record.
+// has one, and its landings above it in landing order, after the cursor (a
+// landing's position and its ordinal in its record).
 func (r *Reader) landings(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	named, err := readableIn(ctx, tx, q.Repo, q.Asker, q.CeilingSeat, chart)
 	if err != nil {
@@ -795,9 +732,8 @@ func (r *Reader) landings(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Ro
 	if err != nil {
 		return err
 	}
-	// ABOVE ITS GREEN: every landing of a record after the one its green row
-	// names — a record's every landing is green with its tip — so the first
-	// page starts past that record's every ordinal.
+	// Every landing of the green row's record is green with its tip, so the
+	// first page starts past that record's every ordinal.
 	from, ordinal := int64(0), -1
 	if found {
 		out.Green = []GreenRow{green}
@@ -1023,19 +959,11 @@ func (e queueEntry) row(repo string, label changeLabel, place int) QueueRow {
 }
 
 // The queue's reads, each registered in plan_test.go so the pinned driver's
-// planner is held to the index each is written for, and to reading in its
-// order: a target's live entries after a seq; a repository's in (target,
-// seq) order, from the top and after a place, with the >= beside the OR that
-// keeps the range seek (planner.go); every repository's the same way; the
-// repositories holding one, grouped on the index's leading column; a target's
-// trains by code_candidates_train_idx; its landings above a place by their
-// key; its green row, and a repository's, by theirs; and a repository's
-// ejections, or one target's, newest first by the index partial on them
-// (replicated 0132), and counted by the same indexes; every repository's
-// ejections, counted by repository and read newest first, by the index partial
-// on them that leads with the ending; the live entries counted, a repository's
-// and every repository's; and the labels of a page's changes by the changes'
-// key. Every read of code_queue by a partial index repeats its predicate verbatim.
+// planner is held to the index each names and to reading in its order. A
+// resumed keyset keeps the >= beside the OR so the range seek holds
+// (planner.go); the ejection reads seek the indexes partial on ejections
+// (replicated 0132), every repository's the one that leads with the ending.
+// Every read of code_queue by a partial index repeats its predicate verbatim.
 const (
 	queueOfTargetSQL = `SELECT ` + entryColumns + ` FROM code_queue INDEXED BY code_queue_live_idx
 		WHERE repo_id = ? AND target_ref = ? AND state IN ('waiting', 'testing') AND seq > ?

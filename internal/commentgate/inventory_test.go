@@ -120,7 +120,7 @@ var excessInventory = map[string]int{
 	"internal/flock":                                10,
 	"internal/github":                               622,
 	"internal/gitlab":                               303,
-	"internal/gitlet":                               8591,
+	"internal/gitlet":                               90,
 	"internal/gitlet/cache":                         5339,
 	"internal/gitlet/checkrun":                      100,
 	"internal/gitlet/compact":                       759,

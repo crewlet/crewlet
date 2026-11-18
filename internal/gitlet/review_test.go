@@ -16,10 +16,8 @@ import (
 )
 
 // A CHANGE'S REVIEWS AND THE FINDINGS THEY RAISE, through the change writer on
-// a real embedded broker: who may review, a review with all its findings as
-// one record, a later revision's review superseding what its reviewer does
-// not carry, and S40 — who clears a blocker — each read back from the rows
-// the shipped applier wrote.
+// a real embedded broker, each read back from the rows the shipped applier
+// wrote.
 
 // reviewing is a review of revision of change by asker with verdict, carrying
 // carries and raising findings, under an operation id of its own.
@@ -71,8 +69,7 @@ func (n *node) revise(repo, old, new string) {
 	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(featureRef, oidOf(old), oidOf(new))))
 }
 
-// findingStates is the state of every finding of change n's rows hold, by
-// id.
+// findingStates is the state of every finding of change n's rows hold, by id.
 func (n *node) findingStates(change string) map[string]gitlet.FindingState {
 	n.t.Helper()
 	out := map[string]gitlet.FindingState{}
@@ -97,8 +94,7 @@ func (n *node) findingStates(change string) map[string]gitlet.FindingState {
 	return out
 }
 
-// counters is a change's conversation's review counters as its row holds
-// them.
+// counters is a change's conversation's review counters as its row holds them.
 type counters struct {
 	reviews, openFindings, openBlockers, changesRequested int
 }
@@ -130,17 +126,16 @@ func requireStates(t *testing.T, n *node, change string, want map[string]gitlet.
 }
 
 // A BLOCKER CLEARS ONLY BY ITS DISMISSAL OR ITS RAISER'S LATER REVIEW (S40):
-// an author's answer — resolved, won't fix, disputed — leaves a blocker
-// STANDING, still counted among the change's standing blockers, for its raiser
-// to judge; its raiser, a principal that maintains the repository or a person
-// dismisses one, and nobody else — an author who writes the repository is
-// refused not_raiser; an answer is an author's to give (not_author); a finding
-// no longer standing is answered nothing again (finding_gone); and the
-// raiser's review of a later revision clears what it does not carry.
+// an author's answer (resolved, won't fix, disputed) leaves a blocker standing
+// and counted, for its raiser to judge; only its raiser, a maintainer of the
+// repository or a person dismisses one (an author who writes it is refused
+// not_raiser); only an author answers (not_author); a finding no longer
+// standing is answered nothing again (finding_gone); and the raiser's review
+// of a later revision clears what it does not carry.
 //
-// Mutation: let wont_fix clear a blocker — FindingState.Stands false for it,
-// or the apply counting a won't-fix blocker off the standing ones — and the
-// change's standing blockers drop with an author's answer.
+// Mutation: let wont_fix clear a blocker (FindingState.Stands false for it, or
+// the apply counting it off the standing ones), and the standing blockers drop
+// with an author's answer.
 func TestABlockerClearsOnlyByDismissalOrTheRaisersLaterReview(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -222,12 +217,11 @@ func TestABlockerClearsOnlyByDismissalOrTheRaisersLaterReview(t *testing.T) {
 }
 
 // A LATER REVIEW SUPERSEDES EVERY STANDING FINDING IT DOES NOT CARRY (rule
-// D22): its reviewer's review of a later revision carries the findings of
-// theirs that still stand and supersedes every other one they raised on an
-// earlier revision — open or answered alike — naming the raiser and the
-// review's record as its last answer; another raiser's findings stay theirs;
-// and what a review carries is its reviewer's own (not_raiser) and still
-// standing (finding_gone).
+// D22): a reviewer's review of a later revision supersedes every finding they
+// raised on an earlier one that it does not carry, open or answered alike,
+// naming the raiser and the review's record as its last answer; another
+// raiser's findings stay theirs; and a review carries only its reviewer's own
+// (not_raiser) still-standing findings (finding_gone).
 //
 // Mutation: supersede only the open findings, and the resolved one the later
 // review left out still stands.
@@ -289,14 +283,13 @@ func TestALaterReviewSupersedesEveryStandingFindingItDoesNotCarry(t *testing.T) 
 	requireConversationRefused(t, n, before, res, err, gitlet.ConversationRefusalFindingGone, "is superseded")
 }
 
-// A SAME-REVISION REVIEW SUPERSEDES NOTHING: a reviewer's second review of the
-// revision their findings were raised on — one reviewer's two passes over one
-// revision — leaves every one of them standing, carried or not, and so does a
-// review of an earlier revision than theirs; only a later revision's review
-// supersedes.
+// A SAME-REVISION REVIEW SUPERSEDES NOTHING: a reviewer's second pass over the
+// revision their findings were raised on, or a review of an earlier one,
+// leaves every finding standing, carried or not; only a later revision's
+// review supersedes.
 //
-// Mutation: supersede the findings of the revision a review judges as well
-// (`<=` for `<` in supersededBy), and the second pass supersedes the first's.
+// Mutation: `<=` for `<` in supersededBy, and the second pass supersedes the
+// first's.
 func TestASameRevisionReviewSupersedesNothing(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -328,12 +321,10 @@ func TestASameRevisionReviewSupersedesNothing(t *testing.T) {
 
 // AN AUTHOR CANNOT REVIEW (rule D21): the change's owner, a seat whose push
 // made it an author and a person whose push did are each refused own_change,
-// a code of its own so the person who meets it is told the change is theirs
-// rather than that it is not (an author's review of their own change, its
-// approval above all, counts for nothing, so none is taken); and a seat below
-// review on the repository is refused not_permitted, naming what it holds and
-// what would admit it; a seat that reviews the repository, and a person who
-// did not write the change, review it.
+// a code of its own so they are told the change is theirs (an author's review,
+// its approval above all, counts for nothing); a seat below review on the
+// repository is refused not_permitted, naming what it holds and what would
+// admit it; a reviewing seat and a person who did not write the change review.
 //
 // Mutation: drop the author check, and the owner's approval of their own
 // change lands; refuse it not_permitted again, and the authors' rows go red.
@@ -382,18 +373,16 @@ func TestAnAuthorCannotReview(t *testing.T) {
 }
 
 // A SEAT THAT LOST THE REPOSITORY WRITES NOTHING OF ITS CONVERSATION: an
-// author's answer to a finding, a raiser's dismissal of its own, a thread's
-// starter's resolution and an author's ask for review — or its withdrawal —
-// admit a writer by what it did on the change, and a seat the deciding chart
-// no longer lets read the repository holds none of them: one that left the
-// chart, and one whose unit a `visibility: unit` repository no longer reaches
-// once the chart moved it. Each such write is refused not_permitted in the
-// grant's own sentence and appends nothing, while a person — who maintains
-// every repository — and a seat the chart still lets maintain it write on.
+// author's answer, a raiser's dismissal, a thread starter's resolution and an
+// author's ask for review (or its withdrawal) admit a writer by what it did on
+// the change, yet a seat the deciding chart no longer lets read the repository
+// (it left the chart, or a `visibility: unit` repository no longer reaches its
+// moved unit) is refused not_permitted in the grant's own sentence and appends
+// nothing; a person (who maintains every repository) and a seat still
+// maintaining the repository write on.
 //
-// Mutation: drop the grant check that precedes the relation rules, and the
-// author's answer, the raiser's dismissal, the starter's resolution and the
-// author's withdrawal each land.
+// Mutation: drop the grant check that precedes the relation rules, and each of
+// those writes lands.
 func TestASeatThatLostTheRepositoryWritesNothingOfItsConversation(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -485,15 +474,14 @@ func TestASeatThatLostTheRepositoryWritesNothingOfItsConversation(t *testing.T) 
 	}
 }
 
-// A REVIEW WITH ALL ITS FINDINGS IS ONE RECORD: a review raising findings —
-// one suggesting the lines to put in their place — lands as ONE record on the
-// change's subject, the review's id and every finding's derived from its
-// operation id and answered with it; its rows are written whole — the review,
-// each finding and its text — and the conversation's counters and what its
-// text weighs move by all of it; asked again under its own operation id it is
-// the review that landed, appending nothing; and a review past what one write
-// of a conversation may carry is refused before anything is read, saying to
-// split it into two reviews of the same revision.
+// A REVIEW WITH ALL ITS FINDINGS IS ONE RECORD: a review raising findings (one
+// with a suggestion) lands as ONE record on the change's subject, its id and
+// every finding's derived from its operation id and answered with it; its rows
+// are written whole, and the conversation's counters and text weight move by
+// all of it; asked again under its operation id it answers the review that
+// landed, appending nothing; and a review past one conversation write's cap is
+// refused before anything is read, saying to split it into two reviews of the
+// same revision.
 //
 // Mutation: publish a review's findings as records of their own, and the
 // review takes four records.
@@ -594,14 +582,12 @@ func TestAReviewWithAllItsFindingsIsOneRecord(t *testing.T) {
 	}
 }
 
-// THE WIDEST REVIEW ONE WRITE TAKES IS ONE RECORD: a review of
-// MaxFindingsPerReview findings whose suggestions bring it to the last bytes
-// ConversationWrite.Validate admits — MaxConversationBytes, the record less
-// the room it keeps for whom the change concerns — lands as one record and is
-// applied whole, and its record still leaves MaxRoutingBytes of
-// MaxRecordBytes free: the text a write carries never takes the room a
-// change's record keeps for the wakes it causes, and no review its asker was
-// told to send is lost to the record's own cap.
+// THE WIDEST REVIEW ONE WRITE TAKES IS ONE RECORD: MaxFindingsPerReview
+// findings whose suggestions reach the last byte ConversationWrite.Validate
+// admits (MaxConversationBytes: the record less the room it keeps for whom the
+// change concerns) land as one record applied whole, still leaving
+// MaxRoutingBytes of MaxRecordBytes free for the wakes it causes, so no review
+// its asker was told to send is lost to the record's own cap.
 //
 // Mutation: bound a write by MaxRecordBytes, and the widest review admitted
 // leaves its record no room for whom the change concerns.
@@ -656,11 +642,9 @@ func TestTheWidestReviewOneWriteTakesIsOneRecord(t *testing.T) {
 }
 
 // A REQUEST FOR CHANGES STANDS UNTIL ITS REVIEWER JUDGES AGAIN: a reviewer's
-// standing verdict is the latest of their reviews that judges — approve or
-// request_changes — kept on their participant row; a review that comments
-// judges nothing and leaves it as it was; and the change counts the reviewers
-// whose standing verdict asks for changes, one a reviewer however many times
-// they asked.
+// standing verdict, kept on their participant row, is their latest approve or
+// request_changes; a comment leaves it as it was; and the change counts each
+// reviewer whose standing verdict asks for changes once, however often asked.
 //
 // Mutation: move the standing verdict on a review that comments, and the
 // comment withdraws the request for changes it followed.
@@ -711,9 +695,8 @@ func TestARequestForChangesStandsUntilItsReviewerJudgesAgain(t *testing.T) {
 }
 
 // A REPLY TO A FINDING IS IN THE FINDING'S THREAD: a comment naming a finding
-// of the change joins the thread the finding names — whatever state the
-// finding is in — and is answered there, while a finding of another change,
-// or none, is no thread to reply to (thread_gone); and a finding's thread is
+// of the change joins its thread, whatever the finding's state; a finding of
+// another change, or none, is refused thread_gone; and a finding's thread is
 // answered by the finding's own answer, never resolved as a comment's is.
 //
 // Mutation: let a reply to a reply in a finding's thread through, and a
@@ -767,12 +750,11 @@ func TestAReplyToAFindingIsInTheFindingsThread(t *testing.T) {
 }
 
 // A WRITE OF A REVIEW OR AN ANSWER NO WRITER COULD DECIDE IS REFUSED BEFORE
-// ANYTHING IS READ, as every write of a conversation is
-// (TestAConversationWriteIsRefusedBeforeAnythingIsRead), naming its field:
-// the ids the writer stamps sent by an asker, a review of no revision or that
-// judges and says nothing, a finding its bounds refuse, carried or answered
-// ids that are no finding's or are named twice, an answer no write gives, a
-// reply to a root and a finding both.
+// ANYTHING IS READ (as TestAConversationWriteIsRefusedBeforeAnythingIsRead),
+// naming its field: writer-stamped ids sent by an asker, a review of no
+// revision or that judges and says nothing, a finding its bounds refuse,
+// carried or answered ids that are no finding's or named twice, an answer no
+// write gives, a reply to a root and a finding both.
 //
 // Mutations: let a finding's line run backwards, and it is decided; let one
 // run past gitlet.MaxAnchorLine, and it is decided.
@@ -874,10 +856,10 @@ func TestAReviewAndAnAnswerAreRefusedBeforeAnythingIsRead(t *testing.T) {
 	}
 }
 
-// THE STANDING STATES THE DECIDE SEEKS ARE THE ONES THAT STAND: the list a
-// raiser's standing findings are read by, one seek a state, is exactly the
-// states FindingState.Stands names, so a review never supersedes past a
-// finding it did not read, nor counts one that no longer stands.
+// THE STANDING STATES THE DECIDE SEEKS ARE THE ONES THAT STAND: StandingStates,
+// one seek a state, is exactly the states FindingState.Stands names, so a
+// review never supersedes past a finding it did not read, nor counts one that
+// no longer stands.
 func TestTheStandingStatesAreTheOnesThatStand(t *testing.T) {
 	t.Parallel()
 	var want []string

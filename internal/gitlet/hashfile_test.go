@@ -15,13 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// oneSlot is a read lane of one slot, as a Gitlet node's read lane is to a hash
-// (gitproc.Pool.HoldRead): hold takes the slot, and the function it answers
-// gives it back. It keeps the bytes read in each hold (a reader through it
-// counts them, read), counts a hold asked while the slot is still held — a
-// hash that held two at once, or never gave one back — and, where set,
-// answers the n-th hold with refuse's error or calls taken as the n-th is
-// taken.
+// oneSlot is a read lane of one slot (as gitproc.Pool.HoldRead is to a hash):
+// hold takes it, and its answer gives it back. It keeps the bytes read in each
+// hold (counted by read), counts a hold asked while the slot is held (two at
+// once, or one never given back), and where set answers the n-th hold with
+// refuse's error or calls taken as it is taken.
 type oneSlot struct {
 	refuse func(n int) error
 	taken  func(n int)
@@ -74,9 +72,8 @@ func (l *oneSlot) state() (held bool, twice int, pieces []int64) {
 	return l.held, l.twice, slices.Clone(l.pieces)
 }
 
-// slotted is a file read through a lane: every read counted to the hold the
-// slot is in as it is made, and the offset of every read made with none kept
-// apart.
+// slotted is a file read through a lane: each read counted to the slot's
+// current hold, and the offset of each read made with none kept apart.
 type slotted struct {
 	r    *bytes.Reader
 	lane *oneSlot
@@ -105,24 +102,18 @@ func sealed(body []byte, h hash.Hash) []byte {
 	return h.Sum(slices.Clone(body))
 }
 
-// A HASH OF GIT'S TRAILER READS A PIECE A SLOT AND STOPS WITH ITS CALLER — the
-// one rule every hashfile a Gitlet node holds is checked by, a layer's and the
-// cache's alike. A file of a thousand bytes and its trailer, hashed through a
-// buffer of seven in pieces of 64 under a lane of one slot, is sound by the
-// trailer it holds, every byte before the trailer read inside a slot and no
-// more than a piece in one, each slot given back before the next and the
-// last before the hash returns, and only the trailer read with none; a byte
-// changed is a file that is not sound, and no error; a context ended as a
-// slot is taken reads nothing more and answers its cause; a lane that
-// refuses a slot is answered as it refused; a file that ends before its size
-// is io.ErrUnexpectedEOF, inside its bytes and inside its trailer; a hold
-// over pieces of nothing is refused before it is asked. The same rule holds a
-// SHA-256 trailer (a provenance run's), and a hash with no hold reads the
-// file in one pass.
+// A HASH OF GIT'S TRAILER READS A PIECE A SLOT AND STOPS WITH ITS CALLER. A
+// 1000-byte file and its trailer, hashed through a 7-byte buffer in 64-byte
+// pieces under one slot, is sound: every body byte read in a slot, at most a
+// piece per slot, each slot given back before the next and before return, and
+// only the trailer read with none. A changed byte is unsound with no error; a
+// context ended at a hold reads no more and answers its cause; a refused slot
+// is answered as refused; a file short in its body or trailer is
+// io.ErrUnexpectedEOF; a hold over empty pieces is refused unasked. A SHA-256
+// trailer holds alike, and no hold reads the file in one pass.
 //
-// Mutations: no context check before a read (the ended context's case reads
-// its piece — red); the whole file read in one hold (the pieces — red); the
-// slot given back only once the hash ends (two holds at once — red).
+// Mutations, each red: no ctx check before a read; the whole file in one
+// hold; the slot given back only once the hash ends.
 func TestAHashOfGitsTrailerReadsAPieceASlotAndStopsWithItsCaller(t *testing.T) {
 	t.Parallel()
 	body := make([]byte, 1000)

@@ -10,11 +10,10 @@ import (
 // whose path holds the typed characters in order. An estate request, never a
 // record, so it moves no RecordVersion.
 
-// THE FINDER'S BOUNDS.
 const (
-	// MaxFindQueryBytes is the longest query a find takes: what a person
-	// types into a finder, past any file's path a person would type, and the
-	// bound of the matcher's work on each path, which is linear in it.
+	// MaxFindQueryBytes is the longest query a find takes: past any path a
+	// person would type, and the bound of the matcher's per-path work, linear
+	// in it.
 	MaxFindQueryBytes = 256
 	// MaxFindLimit is the most files one find answers, and DefaultFindLimit how many
 	// one naming none answers: a list a person scrolls, narrowed by typing on.

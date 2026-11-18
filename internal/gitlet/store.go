@@ -18,18 +18,16 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE LIFECYCLE STORE: the writes a repository's life is made of, other than
-// its pushes — created, settled and restored by the configuration's reconcile,
-// deleted when it leaves code.repos, purged by the code-retention pass — plus
-// a node's eviction from this log.
+// THE LIFECYCLE STORE: a repository's writes other than its pushes — created,
+// settled and restored by the configuration's reconcile, deleted when it leaves
+// code.repos, purged by the code-retention pass — plus a node's eviction.
 //
-// Every write is ONE record through the domain's publisher, decided inside the
-// publisher's snapshot from rows read there, under a FRESH operation id per
-// call: a reconcile decides from rows, so the next call finds its own value
-// already there and writes nothing. Every decide resets its out-variables at
-// the top of every round, because a round that decided to write and lost the
-// broker's arbitration is followed by one that finds the winner's value, and
-// only the last round says what the call did.
+// Every write is ONE record through the domain's publisher, decided inside its
+// snapshot from rows read there, under a FRESH operation id per call: the next
+// call finds its own value already there and writes nothing. Every decide
+// resets its out-variables each round: a round that lost the broker's
+// arbitration is followed by one that finds the winner's value, and only the
+// last round says what the call did.
 
 // Publisher is the domain's write authority as this package calls it;
 // *statelog.Publisher satisfies it.
@@ -51,31 +49,30 @@ type StoreOptions struct {
 	// retention judgement read; nil takes the wall clock in UTC.
 	Now func() time.Time
 
-	// THE THREE A TOOL'S LIFECYCLE REQUEST IS DECIDED BY ([Store.Lifecycle]),
-	// none of them required: the code log's eviction gate builds a store that
-	// decides only evictions, and a store missing SeatRules or Policy answers
-	// every lifecycle request [ErrNotServing] — "this node's code store
-	// decides no lifecycle request", so the router asks the next data node —
-	// and never judges one by a nil chart.
+	// The fields below decide a tool's lifecycle request ([Store.Lifecycle])
+	// and none is required: the eviction gate's store decides only evictions.
+	// A store missing SeatRules or Policy answers every lifecycle request
+	// [ErrNotServing], so the router asks the next data node, rather than
+	// judging one by a nil chart.
 
-	// SeatRules is the DECIDING node's epoch's chart (the committer's own,
-	// [CommitterOptions.SeatRules]), read once a request: who may ask what
-	// is judged by it — a seat's grant, a create's owner — and false (no
-	// epoch installed yet) answers every request [ErrNotServing].
+	// SeatRules is the DECIDING node's epoch's chart
+	// ([CommitterOptions.SeatRules]), read once a request: a seat's grant and
+	// a create's owner are judged by it, and false (no epoch installed yet)
+	// answers every request [ErrNotServing].
 	SeatRules func() (SeatRules, bool)
 	// Current is whether this node serves the company's configuration
-	// (Reconciler.Admits): false — confirmed behind it, shed or stuck —
-	// answers EVERY request [ErrNotServing], since every kind's "who may"
-	// reads the chart, a person's create included. Nil is current.
+	// (Reconciler.Admits): false answers EVERY request [ErrNotServing], a
+	// person's create included, since every kind's "who may" reads the chart.
+	// Nil is current.
 	Current func() bool
 	// Policy is the epoch's code.scratch and the repository bound
 	// ([ScratchOf]), read once a create.
 	Policy func() LifecyclePolicy
-	// People answers who holds a human seat and with which apps ([People]):
-	// what a create or a settings change that sets a push mirror pushing as
-	// a person's seat is judged by, since the mirror publishes only what that
-	// seat reads and a person reads only through Gitlet (ADR-0110). A store
-	// without it answers such a request [ErrNotServing].
+	// People answers who holds a human seat and with which apps: what a
+	// create or settings change setting a push mirror that pushes as a
+	// person's seat is judged by, since the mirror publishes only what that
+	// seat reads and a person reads only through Gitlet (ADR-0110). Without it
+	// such a request answers [ErrNotServing].
 	People People
 }
 
@@ -121,11 +118,10 @@ type Activation struct {
 	// epoch is the activation (configplane.ActivationStamp).
 	epoch int64
 
-	// at is the position of the fence record this node's own append landed
-	// at, or zero when the fence was already at this activation in the
-	// snapshot Activate decided from. Every later decide waits for this node
-	// to apply it first (the request's session floor), which is what puts
-	// every decision of this activation after its fence.
+	// at is the position of this node's own fence record, or zero when
+	// Activate's snapshot already held the fence. Every later decide waits for
+	// this node to apply it (the request's session floor): that puts every
+	// decision of this activation after its fence.
 	at statelog.Position
 }
 
@@ -133,14 +129,13 @@ type Activation struct {
 func (a Activation) Epoch() int64 { return a.epoch }
 
 // Activate raises the code log's ACTIVATION FENCE to the configuration
-// activated at activatedAt — the first write of every reconcile of code.repos,
-// before any repository is decided.
+// activated at activatedAt: the first write of every reconcile of code.repos
+// (doc.go, "The activation fence").
 //
-// ONE RECORD AN ACTIVATION, fleet-wide: every data node's reconcile asks, the
-// company subject arbitrates them, and a node whose snapshot already holds the
-// fence at this activation writes nothing. An activation OLDER than the fence
-// is [ErrSuperseded]: a later configuration owns the declared repositories,
-// and every decision this one made would be refused on every node.
+// ONE RECORD AN ACTIVATION, fleet-wide: the company subject arbitrates every
+// data node's call, and a snapshot already fenced at this activation writes
+// nothing. An activation OLDER than the fence is [ErrSuperseded]: a later
+// configuration owns the declared repositories.
 func (s *Store) Activate(ctx context.Context, activatedAt time.Time) (Activation, error) {
 	if activatedAt.IsZero() {
 		return Activation{}, ErrNoActivation
@@ -165,9 +160,8 @@ func (s *Store) Activate(ctx context.Context, activatedAt time.Time) (Activation
 				superseded = true
 				return statelog.Decision{}, nil
 			case fence == epoch:
-				// ALREADY FENCED AT THIS ACTIVATION, by this node's
-				// earlier call or a peer's: the snapshot holds it, so
-				// every later decide here is after it.
+				// Already fenced here, by this node or a peer: every
+				// later decide is after it.
 				return statelog.Decision{}, nil
 			}
 			return recordFor(stamp, subject, OpActivate, scope, opID,
@@ -194,11 +188,10 @@ type Declared struct {
 	// ManagedConfig; ConfigEpoch is ignored — EnsureRepo sets the
 	// activation's.
 	Settings RepoSettings
-	// Import is the declaration's import ([CreateRepo.Import]): what a create
-	// fills the repository from, and NOTHING to a repository that exists —
-	// an import is read by the create alone, so EnsureRepo settles an
-	// existing repository's settings and passes its import by, which the
-	// engine's reconcile says once a run (code_import_ignored).
+	// Import is the declaration's import ([CreateRepo.Import]), read by a
+	// create alone: for an existing repository EnsureRepo settles the
+	// settings and passes the import by (the engine's reconcile reports
+	// code_import_ignored).
 	Import *ImportSource
 }
 
@@ -214,28 +207,17 @@ type Ensured struct {
 }
 
 // EnsureRepo makes the repository a declaration names exist with the declared
-// settings, at the activation a: it creates it, settles a settings change, or
-// restores a deleted one.
-//
-// # One record when something changed, none when nothing did
+// settings at the activation a: it creates it, settles a settings change, or
+// restores a deleted one. A whole declaration set takes [Store.EnsureRepos].
 //
 // An unchanged declaration writes NOTHING, whatever activation last stamped
-// the row: the activation fence ([Store.Activate]) is what keeps an older
-// activation from walking a newer one back, so the row needs no re-stamp to be
-// protected, and an activation over ten thousand unchanged repositories costs
-// its one fence record rather than ten thousand settings records. A reconcile
-// of a whole declaration set takes [Store.EnsureRepos], which also reads the
-// unchanged ones once rather than publishing twice for each.
+// the row: the activation fence ([Store.Activate]) keeps an older activation
+// from walking a newer one back, so the row needs no re-stamp.
 //
-// A deleted repository is restored only by an activation LATER than the one
-// that deleted it, so a node applying the deleting activation's predecessor
-// late cannot bring it back. One being purged answers [ErrPurging]: its name
-// returns when the purge completes. A repository its configuration does not
-// manage answers [ErrNotConfigManaged].
-//
-// A record a LATER activation's fence refused is [ErrSuperseded] — decided
-// here from a snapshot where a later fence already stood, or read back after
-// an applied record that left the repository below this activation.
+// A deleted repository is restored only by an activation LATER than its
+// deletion's, so an older one applied late cannot bring it back. A purging one answers [ErrPurging], one the configuration does
+// not manage [ErrNotConfigManaged], and a record a later fence refused
+// (decided or read back) [ErrSuperseded].
 func (s *Store) EnsureRepo(ctx context.Context, a Activation, d Declared) (Ensured, error) {
 	if a.epoch == 0 {
 		return Ensured{}, ErrNoActivation
@@ -257,11 +239,9 @@ func (s *Store) EnsureRepo(ctx context.Context, a Activation, d Declared) (Ensur
 }
 
 // Validate refuses a declaration no activation can ensure: a name that is no
-// PROJECT's — a declared repository is never a seat's scratch repository,
-// whose dotted name only that seat's tool creates — and settings that are no
-// configuration's, judged as the reconcile records them (settingsAt): the
-// declaration states no kind and no epoch, which the domain stamps, and one
-// stating a kind other than a project's is refused.
+// PROJECT's (a seat's dotted scratch name only that seat's tool creates), and
+// settings that are no configuration's as the reconcile records them
+// (settingsAt), including a kind other than a project's.
 func (d Declared) Validate() error {
 	switch {
 	case !gitref.ValidProjectName(d.Name):
@@ -283,9 +263,8 @@ func (d Declared) Validate() error {
 	return nil
 }
 
-// settingsAt is what the declaration says, stamped with the activation a — THE
-// ONE PLACE every settings a reconcile records is formed, so every one is a
-// PROJECT's: a configuration declares nothing else.
+// settingsAt is the declaration's settings stamped with the activation a: THE
+// ONE PLACE a reconcile's settings are formed, so every one is a PROJECT's.
 func (d Declared) settingsAt(a Activation) RepoSettings {
 	settings := d.Settings
 	settings.Kind = RepoProject
@@ -300,73 +279,18 @@ type EnsureResult struct {
 	Err error
 }
 
-// EnsureRepos is [Store.EnsureRepo] over every repository a declaration set
-// names, at the activation a — the reconcile's form — and answers, in the
-// order given, what EnsureRepo answers for each.
+// EnsureRepos is [Store.EnsureRepo] over a declaration set at the activation
+// a (the reconcile's form), answering in the order given what EnsureRepo would.
 //
-// # One read for what has not changed
-//
-// An activation of an unchanged configuration changes nothing, and EnsureRepo
-// spends two publishes a repository finding that out — each one its own
-// eviction read, session wait and snapshot of the deferred scope, the anchor,
-// the ledger and the rows — measured at 1.7–2.0 ms a repository: seventeen to
-// twenty seconds of reads on every data node that runs the reconcile, at the
-// ten thousand repositories a configuration may declare, for an activation
-// whose log cost is one fence record. Read once, the ten thousand take
-// 0.47–0.59 s (doc.go's measured section). So the set is read ONCE
-// ([Store.unchanged]): one publish on the fence's own subject, scoped to the
-// whole domain, whose decide reads every declared name's claim, its
-// repository's row and its rules in ONE transaction and decides nothing. A
-// declaration whose repository is live and declared as it is, or deleted at
-// this activation or a later one, is answered from that read; every other — a
-// name nobody holds, settings that differ, a restore, a purge, a repository
-// the configuration does not manage or a later activation wrote — goes
-// through EnsureRepo and is decided on its own subjects as before.
-//
-// THE SAME VERDICT AN EMPTY DECISION GIVES, because it is one: the batch
-// publish passes the fences, the session wait and the deferred-scope probe
-// every per-repository publish passes, and the probe over the whole domain is
-// at least as strict as one over a repository's paths — a record this node
-// cannot decode anywhere on the code log refuses the batch, and every
-// declaration then goes through EnsureRepo, where each is refused or decided
-// on its own scope.
-//
-// # What changed is decided side by side
-//
-// The declarations EnsureRepo decides are decided [reconcileInFlight] at a
-// time ([decideEach]), because each is its own subjects — a name's claim and
-// its repository's — so no two contend, and because one at a time a changed
-// activation was bound by the round trip of one write: a create is a publish,
-// an append and a wait for this node to apply it, 6.7 ms each, so the last of
-// the ten thousand repositories a document may declare existed a minute and
-// more after the first activation that declared them. In flight together,
-// their records reach the applier together, which commits them as one batch
-// rather than one transaction a record: 16–19 s (doc.go's measured section).
-//
-// # One answer for what every declaration shares
-//
-// The deferred refusal is the only one a narrower scope can answer
-// differently. Any other the batch meets — the node's own fences (its
-// eviction, the log's identity), the activation's session floor not reached
-// in the budget, a later activation's fence, the estate or the context
-// failing — every per-repository publish meets too, each after a wait of its
-// own: on a node whose applier stalled below the fence, ten thousand
-// declarations would each wait out the write budget
-// ([statelog.DefaultResolveBudget], five seconds) — fourteen hours — for the
-// refusal the first publish already had. And a failure of that kind met while
-// the changed declarations are decided ([sharedFailure]: a later fence, this
-// node's own refusal, the context) is one every declaration after it would
-// meet: the decisions in flight are ended and no more are begun.
-//
-// So such a failure is the CALL's error, and it is also the answer of every
-// declaration it left undecided or ENDED — one in flight that failed once the
-// run had ended, whatever its own error says, since an append its context
-// ended mid-flight is answered unknown and says nothing of the context
-// ([decideEach]) — the same error value, so a caller that reports the call's
-// failure once can pass over each of them. Each declaration decided before it
-// keeps its own answer, a declaration that is not one ([ErrInvalid]) its own
-// refusal; and the call never returns with a decision still in flight. An
-// activation that is none ([ErrNoActivation]) answers nothing.
+// The set is read ONCE ([Store.unchanged]), not two publishes a repository
+// (doc.go, "Measured"), passing every gate a per-repository publish does: a
+// live repository declared as it is, or one deleted at this activation or
+// later, is answered from that read. The rest go through EnsureRepo,
+// [reconcileInFlight] at a time ([decideEach]), each on its own subjects so
+// none contend. A failure all would meet ([sharedFailure]) is the call's error
+// and the same value answers each declaration left undecided or ended; those
+// decided before, or invalid ([ErrInvalid]), keep their own, and nothing is in
+// flight on return.
 func (s *Store) EnsureRepos(ctx context.Context, a Activation, declared []Declared) ([]EnsureResult, error) {
 	if a.epoch == 0 {
 		return nil, ErrNoActivation
@@ -383,23 +307,16 @@ func (s *Store) EnsureRepos(ctx context.Context, a Activation, declared []Declar
 	switch {
 	case err == nil:
 	case errors.As(err, &refused) && refused.Reason == statelog.ReasonDeferred:
-		// THE ONE REFUSAL A NARROWER SCOPE ANSWERS DIFFERENTLY: the
-		// batch's probe covers the whole domain and a repository's only
-		// its own paths, so every declaration is decided on its own and
-		// is refused there only where the record covers it.
+		// THE ONE REFUSAL A NARROWER SCOPE ANSWERS DIFFERENTLY: the batch
+		// probes the whole domain, a repository only its own paths, so each
+		// is decided on its own.
 		unchanged = nil
 	default:
-		// EVERY OTHER FAILURE IS EVERY DECLARATION'S ANSWER, because each
-		// per-repository publish would meet it too. The node's fences and
-		// the session floor are the activation's; the only record the
-		// batch's own subject can be behind is a LATER activation's fence
-		// (one fence an activation, rising), which every decide of this
-		// one must see before it decides; an applied later fence
-		// supersedes every one of them; an estate that cannot be read
-		// cannot be read for any of them; and a context that ended ends
-		// them all. Sent through EnsureRepo, each would wait out the same
-		// budget for the same answer — hours, at ten thousand
-		// declarations on a node whose applier stalled.
+		// EVERY OTHER FAILURE IS EVERY DECLARATION'S ANSWER: the node's
+		// fences, the session floor, a later fence (the one record this
+		// subject can be behind, which every decide sees first), the estate,
+		// the context. Through EnsureRepo each would wait out the same budget
+		// for it: hours, at ten thousand declarations on a stalled applier.
 		for i := range out {
 			if out[i].Err == nil {
 				out[i].Err = err
@@ -439,20 +356,14 @@ type DeleteResult struct {
 	Err     error
 }
 
-// DeleteRepos is [Store.DeleteRepo] over every repository ids names, at the
-// activation a — the reconcile's form, for the configuration-managed
-// repositories a document no longer declares — and answers, in the order
-// given, what DeleteRepo answers for each.
+// DeleteRepos is [Store.DeleteRepo] over every repository ids names at the
+// activation a (the reconcile's form, for configuration-managed repositories a
+// document no longer declares), answering in the order given.
 //
-// SIDE BY SIDE, [reconcileInFlight] at a time, for [Store.EnsureRepos]'
-// reason: each repository is its own subject, so no two contend, and one at
-// a time the removal of ten thousand repositories spent 7 ms a repository, a
-// minute and more before the last was deleted.
-//
-// A failure every repository after it would meet ([sharedFailure]) ends the
-// call as it ends EnsureRepos': it is the call's error and the answer of
-// every repository it left undecided or ended, the same value, and nothing is
-// in flight when the call returns.
+// Decided [reconcileInFlight] at a time, for [Store.EnsureRepos]' reason, and
+// a [sharedFailure] ends the call as it ends EnsureRepos': the call's error is
+// the answer of every repository left undecided or ended, and nothing is in
+// flight on return.
 func (s *Store) DeleteRepos(ctx context.Context, a Activation, ids []string) ([]DeleteResult, error) {
 	if a.epoch == 0 {
 		return nil, ErrNoActivation
@@ -471,73 +382,39 @@ func (s *Store) DeleteRepos(ctx context.Context, a Activation, ids []string) ([]
 }
 
 // reconcileInFlight is how many repositories a reconcile decides at once
-// ([Store.EnsureRepos], [Store.DeleteRepos]): as many as one apply
-// transaction holds of the widest record a reconcile writes — FIFTEEN.
+// ([Store.EnsureRepos], [Store.DeleteRepos]): as many of the widest record a
+// reconcile writes as one apply transaction holds, fifteen.
 //
-// ENOUGH TO HIDE A DECISION'S ROUND TRIP, by Little's law: in flight = the
-// rate the node can apply them × how long each takes from its publish to its
-// apply. On one node (doc.go's measured section) the rate is about 550 a
-// second whatever the width — this node's applier and the snapshots of the
-// decisions themselves are the floor — and a decision's round trip alone is
-// 6.7 ms, so under four in flight reach it: every width from 8 to 128 decided
-// ten thousand in the same 16–21 s, where 4 took 23–25 s, 2 took 34–35 s, 1
-// took 67–70 s. In a fleet each append also waits for its stream's quorum, so
-// the round trip grows by the members' round trips while the rate does not;
-// fifteen keeps the floor's rate up to a round trip of about 27 ms, four
-// times one node's, with a quorum's round trip inside a region beside it.
-//
-// AND NO WIDER, because the decisions in flight append together, and the
-// applier commits them as one batch only while their rows fit its row budget
-// (statelog.ApplyTxRowBudget, 4 000): past it the batch splits into two
-// transactions or more, and a write appended behind the reconcile — a push
-// whose person's git waits on its row — waits on each. The widest record a
-// reconcile writes is a settings change or a restore that replaces every rule
-// and every path owner of a repository holding its bound of each
-// ([reconcileRecordRows], 261 rows), so fifteen are 3 915 rows
-// (TestAReconcileInFlightFitsOneApplyTransaction measures the three records a
-// reconcile writes a repository's settings with, and holds the product). It
-// was thirty-two while the widest was taken to be a create of 66 rows, when a
-// settings record already wrote 129 — thirty-two of those were 4 128 — and
-// the path owners' rows then doubled them.
+// Enough to hide a decision's round trip (Little's law): one node applies
+// ~550 a second and a round trip is 6.7 ms, so four reach that floor (doc.go,
+// "Measured"); fifteen keep it up to a ~27 ms round trip, room for a quorum
+// within a region. No wider: past statelog.ApplyTxRowBudget (4 000; fifteen of
+// [reconcileRecordRows] are 3 915) the applier splits the batch, and a push
+// appended behind the reconcile waits on each part
+// (TestAReconcileInFlightFitsOneApplyTransaction holds the product).
 const reconcileInFlight = statelog.ApplyTxRowBudget / reconcileRecordRows
 
-// reconcileRecordRows is the most rows one record a reconcile writes touches,
-// as the applier counts them: a settings change or a restore deletes a
-// repository's rules and its path owners and writes the new ones — at most
-// [MaxProtectionsPerRepo] and [MaxPathOwners] rows each way — and moves the
-// repository's row, which carries the digests of both in the same statement
-// ([rowDigests]), the two tally rows a change of its owner or visibility
-// moves its changes' counts between (apply_counts.go), and the two repository
-// tally rows it moves the repository between (apply_repotallies.go). A create
-// writes at most 132, its claim, its row, its kind's count and its repository
-// tally row beside the rules and owners, and a deletion three, its row and its
-// two tally rows.
+// reconcileRecordRows is the most rows one reconcile record touches as the
+// applier counts them: a settings change or restore deletes and rewrites a
+// repository's rules and path owners (at most [MaxProtectionsPerRepo] and
+// [MaxPathOwners] each), moves its row (which carries both digests,
+// [rowDigests]), the two change tally rows an owner or visibility change moves
+// counts between (apply_counts.go) and its two repository tally rows
+// (apply_repotallies.go). A create writes at most 132, a deletion three.
 const reconcileRecordRows = 2*(MaxProtectionsPerRepo+MaxPathOwners) + 1 + tallyMoveRows + repoTallyMoveRows
 
 // decideEach runs decide for every k in [0, n), up to [reconcileInFlight] at
-// once, as a CLOSED LOOP — a decision begins only when one in flight has
-// ended — and answers the run's ENDING: the failure that ended it, and for
-// each k whether that failure is decision k's answer.
+// once as a CLOSED LOOP (one begins only when one ends), and answers the run's
+// ending (nil if none): the failure that ended it, and for each k whether it
+// is k's answer.
 //
-// A run ends at the first [sharedFailure] a decision meets, or when ctx ends
-// — and then the failure is ctx's own error, whatever the decision that met
-// it said, so a reconcile ended on purpose answers as its context rather than
-// as one repository's message. The decisions in flight are cancelled, none is
-// begun after it, and decideEach returns only once every decision it began has
-// returned — so its caller never leaves one in flight. A run that ends with
-// nothing undecided and nothing failed has no ending: nil.
-//
-// The ending is the answer of every decision it ENDED: each one never begun,
-// each one that met it, and each one that FAILED once the run had ended,
-// whatever its error says. A failure met on a dead context is the context's
-// doing, and it does not always say so: statelog answers an append whose
-// context ended mid-flight OutcomeUnknown with NO error, because the probe
-// that would classify the cancelled append runs on that same context — so
-// read as the decision's own, every decision in flight when a newer
-// activation ended a reconcile was reported as a repository it could not
-// apply. A decision that SUCCEEDED once the run had ended keeps its answer —
-// it decided its repository — and so does a failure met before the end, which
-// is its own and ends nothing.
+// A run ends at the first [sharedFailure] or when ctx ends, and then the
+// failure is ctx's own error, so a reconcile ended on purpose answers as its
+// context. Decisions in flight are cancelled, none begins after, and
+// decideEach returns only once every one it began has. The ending answers each
+// decision never begun, each that met it, and each that FAILED after the end
+// whatever its error says ([unknownOutcome] has why); a success after the end,
+// or a failure before it, keeps its own answer.
 func decideEach(ctx context.Context, n int, decide func(ctx context.Context, k int) error) (ended []bool, err error) {
 	ended = make([]bool, n)
 	if n == 0 {
@@ -578,10 +455,8 @@ func decideEach(ctx context.Context, n int, decide func(ctx context.Context, k i
 		next++
 		return k, true
 	}
-	// settle files decision k's failure err: the ending's where it is one
-	// every decision shares, or where the run had already ended when the
-	// decision returned (afterEnd) — by an ending recorded, or by ctx before
-	// any decision noticed.
+	// settle files decision k's failure err as the ending where it is shared,
+	// or where the run had already ended when it returned (afterEnd).
 	settle := func(k int, err error, afterEnd bool) {
 		if err == nil || (!afterEnd && !sharedFailure(err)) {
 			return
@@ -614,23 +489,15 @@ func decideEach(ctx context.Context, n int, decide func(ctx context.Context, k i
 }
 
 // sharedFailure reports whether err, met deciding one repository of a
-// reconcile, is one every other repository of it meets too — which ends the
-// reconcile ([decideEach]) rather than being reported once a repository:
-//
-//   - the context ended;
-//   - a LATER activation's fence ([ErrSuperseded]), since a fence only rises
-//     and every decide reads it first;
-//   - a refusal of THIS NODE by the code log — its eviction or an eviction
-//     state it cannot read, a floor it is below or cannot read, a log whose
-//     usage it cannot read, a log that is full, skewed, truncated or not the
-//     one its rows came from — since every publish this node makes meets it.
-//
-// Every other failure is the repository's own: a purge it waits for, a
-// manager that is not the configuration, a record this node cannot decode
-// covering its paths (a narrower scope than the next repository's), a marker
-// or a voided record on its subject, a lost race, an outcome the broker did
-// not answer for that one append while its context was live — one whose
-// context had ended says so ([unknownOutcome]), and is the first case.
+// reconcile, is one every other repository meets too, which ends the
+// reconcile ([decideEach]): the context ended; a LATER activation's fence
+// ([ErrSuperseded]), which only rises and every decide reads first; or the
+// code log refusing THIS NODE (its eviction or an unreadable eviction state, a
+// floor it is below or cannot read, unreadable usage, a full, skewed,
+// truncated or foreign log). Every other failure is the repository's own: a
+// purge, a manager other than the configuration, an undecodable record on its
+// paths, a marker or voided record on its subject, a lost race, an unknown
+// outcome while its context was live.
 func sharedFailure(err error) bool {
 	if err == nil {
 		return false
@@ -645,9 +512,8 @@ func sharedFailure(err error) bool {
 	}
 	switch refused.Reason {
 	case statelog.ReasonEvicted:
-		// THIS NODE'S, unless the record the refusal names is another
-		// node's copy of the operation, which says nothing about this
-		// node (statelog.Unavailable.CopyWriter).
+		// THIS NODE'S, unless the refusal names another node's copy of the
+		// operation (statelog.Unavailable.CopyWriter).
 		return refused.CopyWriter == ""
 	case statelog.ReasonEvictionUnknown, statelog.ReasonBelowFloor, statelog.ReasonFloorUnknown,
 		statelog.ReasonUsageUnknown, statelog.ReasonLogFull, statelog.ReasonSkew,
@@ -658,16 +524,11 @@ func sharedFailure(err error) bool {
 }
 
 // unknownOutcome is the error of a write whose outcome this node could not
-// establish — the next attempt decides it again — and it WRAPS ctx's end
-// where ctx has ended.
-//
-// statelog answers an append whose context ended while it was in flight
-// OutcomeUnknown with NO error: the cancelled append is classified by a probe
-// on that same context, which cannot answer either. The unknown is then the
-// ending's doing, and a caller that ended the write on purpose — a reconcile a
-// newer activation superseded or the engine stopped, a retention pass that
-// stopped — must read it as that ending ([sharedFailure], errors.Is) rather
-// than as a write of its own that failed.
+// establish (the next attempt decides it again), WRAPPING ctx's end where ctx
+// has ended: statelog answers an append whose context ended mid-flight
+// OutcomeUnknown with NO error, since the probe that would classify it runs on
+// that same context. A caller that ended the write on purpose must read it as
+// that ending ([sharedFailure], errors.Is), not as a failed write of its own.
 func unknownOutcome(ctx context.Context, format string, args ...any) error {
 	err := fmt.Errorf(format, args...)
 	if ended := ctx.Err(); ended != nil {
@@ -676,16 +537,11 @@ func unknownOutcome(ctx context.Context, format string, args ...any) error {
 	return err
 }
 
-// unchanged reads, in ONE publish whose decide writes nothing, which of the
-// declarations need no record at the activation a, and answers what
-// EnsureRepo would answer for each of them — see [Store.EnsureRepos].
-//
-// ON THE FENCE'S SUBJECT, after the fence's session floor, because the
-// question is one about the activation: the snapshot is the one every
-// decision of a reads from, and a fence a later activation raised since is
-// [ErrSuperseded] for every declaration at once — every per-repository
-// decide reads that same fence before anything of its own, and a fence only
-// rises.
+// unchanged reads, in ONE publish that writes nothing, which declarations
+// need no record at the activation a, answering what EnsureRepo would for
+// each ([Store.EnsureRepos]). It runs on the fence's subject after the fence's
+// session floor, so its snapshot is the one every decision of a reads from,
+// and a later fence is [ErrSuperseded] for every declaration at once.
 func (s *Store) unchanged(ctx context.Context, a Activation, declared []Declared) (map[string]Ensured, error) {
 	if len(declared) == 0 {
 		return nil, nil
@@ -720,12 +576,10 @@ func (s *Store) unchanged(ctx context.Context, a Activation, declared []Declared
 	return found, nil
 }
 
-// unchangedIn is [Store.unchanged]'s read, in tx: every declared name's claim,
-// the rows of the repositories they name, those repositories' rules and their
-// path owners — four statements, each driven from its list and seeking a
-// primary key once an element (planner.go) — and the declarations EnsureRepo's
-// two decides would both write nothing for, with what EnsureRepo answers for
-// each.
+// unchangedIn is [Store.unchanged]'s read in tx: the declared names' claims
+// and their repositories' rows, rules and path owners (each statement driven
+// from its list, seeking a primary key an element, planner.go), answering the
+// declarations both of EnsureRepo's decides would write nothing for.
 func unchangedIn(ctx context.Context, tx *sql.Tx, a Activation, declared []Declared) (map[string]Ensured, error) {
 	tokens := make([]string, len(declared))
 	for i, d := range declared {
@@ -856,8 +710,8 @@ func reposIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoRow,
 	if err := rules.Err(); err != nil {
 		return nil, fmt.Errorf("gitlet: read the declared repositories' protections: %w", err)
 	}
-	// AND THE PATH OWNERS, in one statement too, put in the order a
-	// declaration's settings carry them in.
+	// The path owners in one statement too, sorted below into a declaration's
+	// order.
 	if err := pathOwnersOf(ctx, tx, list, func(id string, po PathOwner) {
 		if row, ok := out[id]; ok {
 			row.PathOwners = append(row.PathOwners, po)
@@ -1006,11 +860,9 @@ func (s *Store) settle(ctx context.Context, a Activation, id string,
 				return statelog.Decision{}, nil
 			}
 			out.Status = row.Status
-			// AN IMPORT STILL TO BE DONE IS NEVER ARCHIVED: the status that
-			// says the repository is importing is the one an archive would
-			// take, and an archived repository takes nothing an import
-			// lands — so a declaration archiving it is refused as written
-			// until the import is done, at the first activation after.
+			// AN IMPORT STILL TO BE DONE IS NEVER ARCHIVED: its importing
+			// status is the one an archive would take, and an archived
+			// repository takes nothing an import lands.
 			pending := row.Status == RepoStatusImporting ||
 				(row.Status == RepoStatusDeleted && row.Remotes.importPending)
 			if pending && settings.Archived && !row.settings().equal(settings) {
@@ -1279,8 +1131,7 @@ func pathOwnersIn(ctx context.Context, tx *sql.Tx, id string) ([]PathOwner, erro
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("gitlet: read %s's path owners: %w", id, err)
 	}
-	// THE STATEMENT ORDERS BY THE KEY, and this states it again as a property
-	// the comparison relies on rather than a property of a plan.
+	// Sorted again: the comparison relies on the order, not on a plan.
 	slices.SortFunc(out, comparePathOwners)
 	return out, nil
 }
@@ -1312,8 +1163,7 @@ func protectionsIn(ctx context.Context, tx *sql.Tx, id string) ([]Protection, er
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("gitlet: read %s's protections: %w", id, err)
 	}
-	// THE STATEMENT ORDERS BY PATTERN, and this states it again as a
-	// property the comparison relies on rather than a property of a plan.
+	// Sorted again: the comparison relies on the order, not on a plan.
 	slices.SortFunc(out, func(a, b Protection) int { return strings.Compare(a.Pattern, b.Pattern) })
 	return out, nil
 }
@@ -1343,17 +1193,12 @@ func ruleIn(ctx context.Context, tx *sql.Tx, id, pattern string) (*Protection, e
 }
 
 // pushRulesIn reads a repository's rules as a PUSH is judged by them
-// ([PushRule]): each pattern and what it lets a push do, and NO GATE, whose
-// column it never selects — a push is held to its rule's flags and its direct
-// push, and a merge gate holds the merges a change makes. The rules of every
-// read of a repository's row ([repoViewIn]) and of every round of the push
-// decide, which reads them in the snapshot that holds a reader connection —
-// so none reads what it decides nothing by: a repository's gates are up to
-// [MaxProtectionsPerRepo] of [MaxGateBytes] of JSON each, which every git
-// request's admission and every page of a Gitlet node's sync would decode, ship
-// and keep for nothing, and every round would decode while every other
-// replicated read on the node waited for the connection — the cost
-// [verdicts.formBefore] keeps out of the snapshot.
+// ([PushRule]), WITHOUT the gate column: a push is held to its rule's flags and
+// direct push, and a gate holds only a change's merges. Every read of a
+// repository's row ([repoViewIn]) and every round of the push decide reads
+// these in a snapshot holding a reader connection, and a repository's gates
+// are up to [MaxProtectionsPerRepo] of [MaxGateBytes] of JSON each, decoded
+// for nothing while other replicated reads wait ([verdicts.formBefore]).
 func pushRulesIn(ctx context.Context, tx *sql.Tx, id string) ([]PushRule, error) {
 	rows, err := tx.QueryContext(ctx, pushRulesSQL, id)
 	if err != nil {
@@ -1373,8 +1218,7 @@ func pushRulesIn(ctx context.Context, tx *sql.Tx, id string) ([]PushRule, error)
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("gitlet: read %s's protections: %w", id, err)
 	}
-	// THE STATEMENT ORDERS BY PATTERN, and this states it again as a
-	// property the comparison relies on rather than a property of a plan.
+	// Sorted again: the comparison relies on the order, not on a plan.
 	slices.SortFunc(out, func(a, b PushRule) int { return strings.Compare(a.Pattern, b.Pattern) })
 	return out, nil
 }
@@ -1407,22 +1251,18 @@ func gatesIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("gitlet: read %s's merge gates: %w", id, err)
 	}
-	// THE STATEMENT ORDERS BY PATTERN, stated again as a property its reader
-	// relies on — a gate is found beside its rule by walking both in order.
+	// Sorted again: a gate is found beside its rule by walking both in order.
 	slices.SortFunc(out, func(a, b RuleGate) int { return strings.Compare(a.Pattern, b.Pattern) })
 	return out, nil
 }
 
-// ruleDetailsIn reads a repository's rules as its detail answers a read that
-// asks for its gates ([ReadQuery.Gates]): the merge gate of each rule that
-// carries one ([RuleGate], as [gatesIn] reads them) and who set every rule
-// and when ([RuleSource]), each in pattern order and nil where there is none.
+// ruleDetailsIn reads a repository's rules as its detail answers a read
+// asking for its gates ([ReadQuery.Gates]): each gated rule's [RuleGate] and
+// who set every rule and when ([RuleSource]), in pattern order, nil where none.
 //
-// ONE SEEK OF THE RULES FOR BOTH, never one an answer: they are the same
-// rows, read in the same transaction, so a statement each was a second seek
-// of the rules the first had just walked, for the reason [detailRowIn] reads
-// its row once. [gatesIn] stays its own for the changes falling due, which
-// read the gates and nothing of who set them.
+// ONE SEEK of the rules for both, since they are the same rows in the same
+// transaction (as [detailRowIn] reads its row once); [gatesIn] stays separate
+// for the changes falling due, which read nothing of who set the rules.
 func ruleDetailsIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, []RuleSource, error) {
 	rows, err := tx.QueryContext(ctx, ruleDetailsSQL, id)
 	if err != nil {
@@ -1460,9 +1300,8 @@ func ruleDetailsIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, []Ru
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("gitlet: read %s's rules: %w", id, err)
 	}
-	// THE STATEMENT ORDERS BY PATTERN, stated again as a property its readers
-	// rely on: a gate and a source are found beside their rule by walking
-	// them in order.
+	// Sorted again: a gate and a source are found beside their rule by
+	// walking them in order.
 	slices.SortFunc(gates, func(a, b RuleGate) int { return strings.Compare(a.Pattern, b.Pattern) })
 	slices.SortFunc(sources, func(a, b RuleSource) int { return strings.Compare(a.Pattern, b.Pattern) })
 	return gates, sources, nil

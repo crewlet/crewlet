@@ -12,47 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A CHANGE OPENED BY A PUSH: `git push -o change` opens a change on the one
-// branch the push sets, IN THE PUSH'S OWN RECORD. The push entry carries the
-// change its decide opens ([PushEntry.Change]) and the record's apply writes
-// the change's rows beside the refs the push moves (revisions.go), so the
-// change and the commit it proposes land together or not at all, on every
-// data node, and no second record is ever half of it.
+// A change opened by a push, in the push's own record: the package doc's "A
+// change is rows on its repository's subject" has the model.
 //
-// # Where the options come from
-//
-// git hands its proc-receive hook the options the client sent (`-o`, or
-// push.pushOption), each one line, after the ref updates: what receive-pack
-// read and acted on, never the client's own bytes beside it. So the relay
-// reads them there (internal/gitlet/host's session) and hands them to the
-// push's landing, which reads a change from them here ([ParseChangeOptions]).
-// The CHANGE NAMESPACE is Gitlet's: `change`, which asks for one, and
-// the `change.<key>` options, which shape it and do nothing without it, so a
-// target a person keeps in their push.pushOption configuration opens nothing
-// until a push asks. Every other option is a forge's or a CI's (GitLab's
-// ci.skip) and read by nobody here.
-//
-// # A change's options never fail its push
-//
-// A push lands or not by its commands alone: options that are no change's, a
-// push that does not single out one branch, and a change its decide refuses —
-// no live target, the source at its target's commit — leave the push to land as
-// one that asked for nothing, and its pusher is told in one line what became of
-// the change ([ChangeAnswer]). A push refused for a typo in an option would
-// send its pusher to push the same commits again, and an executor's push
+// The options are read where git hands them to the proc-receive hook, after
+// the ref updates (internal/gitlet/host's session): what receive-pack acted
+// on, never the client's own bytes. `change` asks for a change and the
+// `change.<key>` options shape it and do nothing without it, so a target kept
+// in push.pushOption opens nothing until a push asks; every other option
+// (GitLab's ci.skip) is read by nobody. A change's options NEVER FAIL ITS
+// PUSH ([ChangeAnswer] says what became of it): a push refused for a typo
+// would make its pusher push the same commits again, and an executor's push
 // refused for its change would lose the work it delivers.
-//
-// # Open it, or name the change the push moves
-//
-// A push's change is opened from its ONE branch command ([ChangeSource]) —
-// one push, one proposal — at the head that command set, into the target the
-// options name or the repository's default branch, by its pusher, who is its
-// owner and first author, and the push itself is its first revision. A
-// branch heads one live change at a time, so a push to a branch heading one
-// already NAMES that change — its own move revised it, as every push to its
-// source does — and opens none; options shape only a change a push opens. Who
-// may open one is whoever may push its source, which the push's own command,
-// decided ok under the same grant, has already shown.
 
 // The keys of the change namespace, as a person spells them after -o.
 const (
@@ -63,56 +34,44 @@ const (
 	pushOptionDraft       = "change.draft"
 )
 
-// ChangeOptionKeys is every option of the change namespace, as a push spells
-// it — `change`, which asks for a change, and the four that shape it — in the
-// order the guide lists them.
+// ChangeOptionKeys is every option of the change namespace as a push spells
+// it, in the order the guide lists them (TestTheGuideNamesEveryChangeOption).
 func ChangeOptionKeys() []string {
 	return []string{pushOptionChange, pushOptionTarget + "=<branch>", pushOptionTitle + "=<title>",
 		pushOptionDescription + "=<text>", pushOptionDraft}
 }
 
-// ChangeOption is the change a push's options ask for: what its receiver
-// proposes beside the push ([Proposal.Change]) and what an entry whose decide
-// opens it carries into the record ([PushEntry.Change]).
-//
-// BASE FORMAT, as [PushEntry.Change] is: every field below rides that one
-// field and takes no row of its own.
+// ChangeOption is the change a push's options ask for: proposed beside the
+// push ([Proposal.Change]) and carried by the entry that opens it
+// ([PushEntry.Change]). BASE FORMAT, as that field is: every field rides it
+// and takes no row of its own.
 type ChangeOption struct {
-	// Target is the branch the change proposes its source into, as a ref
-	// (refs/heads/main). A proposal leaves it empty to ask for the
-	// repository's default branch, which its decide stamps from the snapshot
-	// it decides in, so an entry always names it.
+	// Target is the branch the change proposes into, as a ref. A proposal
+	// leaves it empty for the repository's default branch, which its decide
+	// stamps, so an entry always names it.
 	Target string `json:"target,omitempty"`
-	// Title is one line, at most [MaxChangeTitleBytes]: the option's, or the
-	// subject of the commit the push set its source to, which the receiver
-	// fills in where the options name none.
+	// Title is one line, at most [MaxChangeTitleBytes]: the option's, else
+	// the source commit's subject, which the receiver fills in.
 	Title string `json:"title" untrusted:"name"`
-	// Body is the change's description, at most [MaxChangeBodyBytes] — one
-	// line, since git takes no line break in a push option.
+	// Body is the description, at most [MaxChangeBodyBytes]; one line, since
+	// git takes no line break in a push option.
 	Body string `json:"body,omitempty" untrusted:"fence"`
 	// Draft opens it as a draft, not yet asking to be merged.
 	Draft bool `json:"draft,omitempty"`
 }
 
-// ParseChangeOptions reads the change a push's options ask for, the options
-// as git handed them to the push's hook, in their order. It answers nil and
-// no error for a push that asks for none — no `change` option, whatever else
-// of the namespace it carries — and an error, whose words are its pusher's
-// to read, for options that are no change's: a key of the namespace this
-// engine does not read, a key given twice, `change` or `change.draft` given a
-// value, or a value its field refuses — a target that is no branch a change
-// may name, a title that is empty or past [MaxChangeTitleBytes], a
-// description past [MaxChangeBodyBytes]. The change it answers has no Title
-// where the options named none, which its receiver fills in, and no Target
-// where they named none, which its decide does.
+// ParseChangeOptions reads the change a push's options ask for, in the order
+// git handed them to the push's hook: nil and no error where no `change`
+// option asks for one, and an error worded for the pusher for options that
+// are no change's — a key of the namespace it does not read, a key given
+// twice, a value on `change` or `change.draft`, or a value its field refuses.
+// Where the options name none, Title is left to the receiver and Target to
+// the decide.
 //
-// NO BOUND OF ITS OWN ON THE OPTIONS: every key at most once and every value
-// held to its field's bound make a change's options at most five, of 33 343
-// bytes at their longest, so a count or a size checked here would refuse
-// nothing these rules do not; and what a push's options can make a node hold
-// at all is bounded where receive-pack reads them, by the command section's
-// bound (internal/gitlet/host's MaxCommandSectionBytes), before any process
-// holds one.
+// It sets no count or size bound of its own: one of each key, each held to
+// its field's bound, caps the options at five and 33 343 bytes, and what they
+// can make a node hold is bounded earlier, where receive-pack reads them
+// (internal/gitlet/host's MaxCommandSectionBytes).
 func ParseChangeOptions(options []string) (*ChangeOption, error) {
 	type option struct {
 		key, value string
@@ -184,12 +143,11 @@ func ParseChangeOptions(options []string) (*ChangeOption, error) {
 	return opt, nil
 }
 
-// optionName is an option's key as an answer names it: whole up to 64 bytes —
-// every key the namespace reads is under 20 — and past that cut with a
-// marker, so a key a client spelled a mebibyte long is not echoed back whole;
-// and QUOTED, escapes and all, where it holds anything but printable text,
-// since the answer is a line on the pusher's terminal, and a key carrying
-// a terminal's escape sequence would otherwise be written to it raw.
+// optionName is an option's key as an answer names it: cut past 64 bytes
+// (every key the namespace reads is under 20), so a mebibyte-long key is not
+// echoed whole, and QUOTED where it holds anything but printable text, since
+// the answer is a line on the pusher's terminal and an escape sequence would
+// otherwise reach it raw.
 func optionName(key string) string {
 	key = textcut.Within(key, 64)
 	if !utf8.ValidString(key) || strings.ContainsFunc(key, func(r rune) bool { return !unicode.IsGraphic(r) }) {
@@ -199,9 +157,8 @@ func optionName(key string) string {
 }
 
 // validFields holds a proposal's change to what its receiver may propose
-// ([Proposal.Validate]): a target that is a branch a change may name, or
-// none; a title, which the receiver fills in where the options name none;
-// and a description within its bound.
+// ([Proposal.Validate]): a nameable branch or no target, a title (the
+// receiver's to fill in), and a description within its bound.
 func (o *ChangeOption) validFields() error {
 	if o.Target != "" {
 		if why := branchProblem(o.Target); why != "" {
@@ -218,20 +175,16 @@ func (o *ChangeOption) validFields() error {
 	return nil
 }
 
-// measured is o as an entry carrying it is measured before its decide has
-// stamped it ([entryBound]): its target at its longest spelling where the
-// decide is to fill in the repository's default branch — a branch's ref of
-// [MaxRefNameBytes], every byte one JSON spells in six — and its title at
-// its longest where its receiver is yet to fill it in — [MaxChangeTitleBytes]
-// of the same — and nil for none.
+// measured is o as [entryBound] measures it before its decide stamps it, nil
+// for none: a target left to the decide at a branch ref's longest
+// ([MaxRefNameBytes]), and a title left to the receiver at
+// [MaxChangeTitleBytes], every byte counted as the six JSON may spell it in.
 //
-// AN UNTITLED CHANGE IS MEASURED, never refused: the receiver of a push asks
-// [Proposal.ValidateCommands] whether its record has room for the change
-// before it has read the title it fills in where the options named none (the
-// subject of the source's commit, read beside the push's upload, so no push
-// waits on a git process before its bytes start for the object store), and
-// the title it then fills in is at most what this measured. Every other
-// check — [Proposal.Validate] and the ones it is made of — holds the title to
+// AN UNTITLED CHANGE IS MEASURED, never refused: the receiver asks
+// [Proposal.ValidateCommands] for room before it reads the source commit's
+// subject it titles the change with (read beside the upload, so no push waits
+// on a git process before its bytes start for the object store), and that
+// title is at most what this measured. Every other check holds the title to
 // [ChangeOption.validFields] first, which refuses an empty one.
 func (o *ChangeOption) measured() *ChangeOption {
 	if o == nil {
@@ -247,14 +200,12 @@ func (o *ChangeOption) measured() *ChangeOption {
 	return &m
 }
 
-// ChangeSource is the one command of cmds a push's change is opened from —
-// the push's one command that SETS A BRANCH, a create or an update under
-// refs/heads/, whatever became of it — or, where there is no such one, the
-// refusal and its sentence: no_source for a push that sets no branch,
-// ambiguous_source for one that sets several. Every command the push sent
-// counts, the ones its receiver or its decide refused among them: which
-// branch a change proposes is its asker's to say by what they push, never
-// what survived the push's checks.
+// ChangeSource is the index of the one command of cmds a push's change is
+// opened from, the one that SETS A BRANCH (a create or update under
+// refs/heads/), or -1 with the refusal and its sentence: no_source for none,
+// ambiguous_source for several. Refused commands count too: which branch a
+// change proposes is said by what its asker pushes, never by what survived
+// the push's checks.
 func ChangeSource(cmds []Command) (int, ChangeRefusal, string) {
 	source := -1
 	var branches []string
@@ -277,30 +228,18 @@ func ChangeSource(cmds []Command) (int, ChangeRefusal, string) {
 		"proposes one: push the change's branch alone with -o change", len(branches), named)
 }
 
-// pushOpen decides what p's change comes to, its commands as this round
-// decided them (cmds), over the working state the batch's entries before it
-// left (w) and the changes its own entry's moves leave (book): the change its
-// entry carries — its target stamped — where it opens one, and its answer.
-// Pure over what it is handed. In this order:
-//
-//  1. its source — the push's one branch command ([ChangeSource]), which its
-//     receiver judged — moved its branch: else no_source, since a change
-//     proposes a branch its push set;
-//  2. the source heads no live change once the entry's moves are made: else
-//     the push NAMES the one it heads, which its own move revised, and opens
-//     none — a branch heads one live change at a time;
-//  3. its target — the branch its options name, else the repository's
-//     default branch — is another branch than its source (same_ref), live
-//     once the entry has applied (no_target), and at another commit than the
-//     source's new head (no_difference): the rules an open of a change's
-//     lifecycle is held to ([decideOpen]), in its order, on the state this
-//     push leaves.
-//
-// WHO MAY OPEN IT is whoever may push its source — what an open is held to,
-// a fast-forward of the branch ([Grant.RefRule]) — which the source's own
-// command, found ok under the same grant this round (the decide's rule 2b),
-// has already shown: a fast-forward of a branch needs no more than a create
-// or an update of it does.
+// pushOpen decides what p's change comes to, from cmds as this round decided
+// them, the working state w earlier entries left and the book of changes this
+// entry's moves leave: the change its entry carries, target stamped, and its
+// answer. Pure. In order: (1) its source ([ChangeSource]) moved its branch,
+// else no_source; (2) the source heads no live change, else the push NAMES
+// that one, which its move revised, and opens none, since a branch heads one
+// live change at a time; (3) its target, the options' or the default branch,
+// is not the source (same_ref), is live (no_target) and is at another commit
+// (no_difference): [decideOpen]'s rules in its order, on the state this push
+// leaves. WHO MAY OPEN IT, whoever may fast-forward the source ([Grant.RefRule]),
+// the source's own command already showed, ok under the same grant this round
+// (the decide's rule 2b): a fast-forward needs no more than a create or update.
 func pushOpen(p Proposal, cmds []Command, w *working, book *changeBook, repo pushRepo) (*ChangeOption,
 	*ChangeAnswer) {
 
@@ -309,9 +248,8 @@ func pushOpen(p Proposal, cmds []Command, w *working, book *changeBook, repo pus
 	}
 	i, r, why := ChangeSource(cmds)
 	if r != "" {
-		// A PROPOSAL VALIDATE REFUSES — its receiver answers a push of no
-		// branch or of several itself — answered as that receiver answers
-		// it, never a decide's panic on an index.
+		// Validate refuses such a proposal and its receiver answers it;
+		// answered the same here, never a panic on the index.
 		return refuse(r, why)
 	}
 	source := cmds[i]
@@ -347,34 +285,28 @@ func pushOpen(p Proposal, cmds []Command, w *working, book *changeBook, repo pus
 	return &opened, &ChangeAnswer{ChangeID: PushChangeID(p.PushID), Opened: true}
 }
 
-// PushChangeID is the id of the change push pushID opens from its options:
-// DERIVED from the push's id (statelog.DeriveOpID, at the instant that id was
-// minted), as [OpenChangeID] derives an open's from its operation id — so the
-// apply of the push's record names the same change on every data node, and an
-// answer that finds a change of that id on the repository knows this push
-// opened it, whichever round of its batch decided the record. Its identity
-// carries "push" beside the push's id, so no open of a change's lifecycle,
-// whose operation id is its asker's, derives the same one.
+// PushChangeID is the id of the change push pushID opens, DERIVED from the
+// push's id at its minting instant (statelog.DeriveOpID), as [OpenChangeID]
+// derives an open's: every data node's apply names the same change, and an
+// answer finding a change of that id knows this push opened it, whichever
+// round decided the record. "push" in its identity keeps it from colliding
+// with an open's, whose operation id is its asker's.
 func PushChangeID(pushID string) string {
 	at, _ := statelog.OpMintedAt(pushID)
 	return statelog.DeriveOpID(at, "", "code.change", "push", pushID)
 }
 
-// ChangeAnswer is what a push's change came to, beside the push's commands
-// ([PushAnswer.Change]): the change it opened, the live change its source
-// already headed — which the push's own move revised — or why it opened none.
-// Never a refusal of the push.
+// ChangeAnswer is what a push's change came to ([PushAnswer.Change]): the
+// change it opened, the live change its source already headed (which its
+// move revised), or why it opened none. Never a refusal of the push.
 type ChangeAnswer struct {
-	// ChangeID is the change the push opened or named, "" where it did
-	// neither.
+	// ChangeID is the change the push opened or named, "" for neither.
 	ChangeID string `json:"change_id,omitempty"`
-	// Number is that change's number on its repository: read from its row
-	// once the push's record applied, and for a pending or unknown push the
-	// number of a change it named that existed before it — 0 where no row
-	// has said it yet.
+	// Number is that change's number, read from its row: 0 where no row has
+	// said it yet, as for a change a pending or unknown push opened.
 	Number int64 `json:"number,omitempty"`
 	// Opened is a change the push opened; false beside a ChangeID, the live
-	// change its source branch already headed.
+	// change its source already headed.
 	Opened bool `json:"opened,omitempty"`
 	// Refusal is why the push opened none, one of [PushChangeRefusals], and
 	// Detail its sentence.
@@ -383,10 +315,8 @@ type ChangeAnswer struct {
 }
 
 // PushChangeRefusals is every code a push's change can come to
-// ([ChangeAnswer.Refusal]), in the order a push meets them: its receiver's —
-// options that are no change's, a push of no branch or of several — and then
-// its decide's, over the rows: a source that did not move, a target that is
-// the source, no live target, a source at its target's commit.
+// ([ChangeAnswer.Refusal]), in the order a push meets them: its receiver's,
+// then its decide's over the rows.
 func PushChangeRefusals() []ChangeRefusal {
 	return []ChangeRefusal{ChangeRefusalBadOption, ChangeRefusalNoSource, ChangeRefusalAmbiguousSource,
 		ChangeRefusalSameRef, ChangeRefusalNoTarget, ChangeRefusalNoDifference}

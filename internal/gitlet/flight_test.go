@@ -10,15 +10,12 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A WRITER'S WAITING WRITES ARE BOUNDED: the checks writer and the change
-// writer each take one write of a key at a time, the others of the key waiting
-// their turn — and each answers a write past its key's bound, past the node's
-// count across every key or past the bytes those weigh, busy AT ONCE,
-// undecided, rather than holding the estate answer slot it arrived on while it
-// waits (flight.go). The change writer's three bounds are held by
+// A WRITER'S WAITING WRITES ARE BOUNDED (flight.go): a write past its key's
+// bound, the node's count or the bytes is answered busy AT ONCE, undecided. The
+// change writer's three bounds are held by
 // TestABurstPastTheWritersBoundsIsRefusedAtOnce, the checks writer's key bound
-// alone by TestABurstOfOneRepositorysCheckWritesIsRefusedAtOnce; this file
-// holds the checks writer's node count beside its key's.
+// by TestABurstOfOneRepositorysCheckWritesIsRefusedAtOnce; this file holds the
+// checks writer's node count beside its key's.
 
 // answerOf is a write's answer, delivered on a channel by the goroutine that
 // asked it.

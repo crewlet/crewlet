@@ -28,16 +28,14 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// layerFixture is a repository's published chain as git itself writes it, by
-// the publisher's own commands: two packs — every object of three commits,
-// then of the two commits after — a base layer over the first and a tip over
-// the second, each an incremental multi-pack-index with its bitmap written
-// with --stdin-packs --no-write-chain-file over a chain file naming exactly
-// its base, and a commit-graph layer each with changed-path filters version 2
-// (--stdin-packs --split=no-merge --changed-paths); and, in a second
-// repository holding the same packs, the whole multi-pack-index a node writes
-// in own mode, at version 2 (midx.version). Beside each file, what git itself
-// said of it.
+// layerFixture is a repository's published chain as git writes it with the
+// publisher's own commands: two packs (three commits, then the two after), a
+// base layer over the first and a tip over the second — each an incremental
+// multi-pack-index with its bitmap (--stdin-packs --no-write-chain-file over a
+// chain naming exactly its base) and a commit-graph layer with version 2
+// changed-path filters — plus, in a second repository over the same packs,
+// the whole version 2 multi-pack-index own mode writes. Beside each file, what
+// git said of it.
 type layerFixture struct {
 	base, tip, whole wroteLayer
 	// packs are the two packs' checksums, and objects what show-index counts
@@ -94,10 +92,9 @@ func writeLayersWith(t testing.TB, git string) layerFixture {
 	g.packs[1] = gittest.Pack(t, c, bare, work, fifth, "^"+third)
 	traces := t.TempDir()
 
-	// THE CHAIN, as the publisher writes it: each layer in a repository whose
-	// chain file names exactly its base, its refs at the commits its packs
-	// close over, so the bitmap's walk finds every object it needs inside the
-	// layer and the layers below it.
+	// THE CHAIN, as the publisher writes it: each layer over a chain file naming
+	// exactly its base, its refs at the commits its packs close over, so the
+	// bitmap's walk finds every object inside the layer and those below it.
 	layers := filepath.Join(bare, "objects", "pack", "multi-pack-index.d")
 	layer := func(name, pack, base, at string) wroteLayer {
 		t.Helper()
@@ -160,7 +157,7 @@ func writeLayersWith(t testing.TB, git string) layerFixture {
 		if err != nil {
 			t.Fatalf("git show-index: %v\n%s", err, stderr)
 		}
-		// A line an object: its offset, its id and its CRC.
+		// One line an object.
 		g.objects[i] = int64(strings.Count(out, "\n"))
 	}
 
@@ -265,22 +262,14 @@ func parseFile[I any](t *testing.T, path string,
 }
 
 // THE READERS READ WHAT GIT WROTE, AND SAY WHAT GIT SAYS OF IT. Real git, by
-// the publisher's own commands, writes a base and a tip layer, each a
-// bitmapped multi-pack-index layer and a commit-graph layer with changed-path
-// filters, and the whole multi-pack-index own mode writes, at version 2; git
-// accepts every one of them (multi-pack-index verify, rev-list --test-bitmap,
-// commit-graph verify). Each reader answers what git itself says of the same
-// files: the packs it was handed, the objects show-index and count-objects
-// count, the id it printed, named a bitmap by or listed in its chain, the
-// commits its bitmap writer selected and rev-list counts, the base the tip was
-// written over, and the filters' version it was asked to write. LayLayer
-// states the same of a layer's files, as a row's byte fields.
-//
-// ON BOTH ENDS OF WHAT A NODE RUNS: the node pin, and the node floor's own
-// build (gittest.NodeFloor, in gitproc.NodeMinVersion's series), since a
-// maintainer on the floor publishes what every node installs, and a format the
-// floor's git writes and this reader refused would cost every node its
-// bitmap.
+// the publisher's own commands, writes a base and a tip layer (each a bitmapped
+// multi-pack-index and a commit-graph layer with changed-path filters) and own
+// mode's whole version 2 multi-pack-index, and verifies them all. Each reader,
+// and LayLayer as a row's byte fields, answers what git says of the same files.
+// Both the node pin and the node floor (gittest.NodeFloor, in
+// gitproc.NodeMinVersion's series) write them: a maintainer on the floor
+// publishes what every node installs, so a format the floor writes and this
+// reader refused would cost every node its bitmap.
 //
 // Mutation: ParseMidx reads the pack names from the OIDF chunk rather than
 // PNAM — red.
@@ -432,9 +421,8 @@ func withParts(row gitlet.LayerRef) gitlet.LayerRef {
 	return row
 }
 
-// reseal is b with its trailer the SHA-1 of the bytes before it, as git's
-// hashfile writes one: a file a case damaged in its body, reading past the
-// trailer it would otherwise fail first.
+// reseal is b with its trailer recomputed as git's hashfile writes it, so a
+// body a case damaged is read past the trailer it would otherwise fail first.
 func reseal(b []byte) []byte {
 	out := slices.Clone(b)
 	if len(out) < sha1.Size {
@@ -449,17 +437,15 @@ func reseal(b []byte) []byte {
 func trailerHex(b []byte) string { return hex.EncodeToString(b[len(b)-sha1.Size:]) }
 
 // A CHECK REFUSES EVERY WAY A LAYER'S FILES ARE NOT ITS ROW'S, each refusal
-// ErrBadLayer naming the field it differs in, and passes the layer git wrote:
-// the tip of the chain, whose commit-graph layer names the base's — so the
-// base a commit-graph layer is written over is checked too. LayLayer, the
-// publisher's reading, refuses the builds whose files no node would install
-// the same way before a byte of them is stored, a commit-graph layer written
-// over a wrong base, or over one the chain lacks, among them.
+// ErrBadLayer naming the field, and passes the tip git wrote — whose
+// commit-graph layer names the base's, so that base is checked too. LayLayer
+// refuses the same builds before a byte is stored, a commit-graph layer over a
+// wrong base or one the chain lacks among them.
 //
-// Mutations: CheckLayer skips the PNAM comparison, and the row naming a pack
-// the multi-pack-index does not is red; LayLayer holds the commit-graph layer
-// to no base, and its wrong-base builds are red; the bitmap's hash cache or
-// its pseudo-merge table is held to no room, and their rows are red.
+// Mutations: CheckLayer skips the PNAM comparison (the row naming an extra
+// pack is red); LayLayer holds the commit-graph layer to no base (its
+// wrong-base builds are red); the bitmap's hash cache or pseudo-merge table is
+// held to no room (their rows are red).
 func TestACheckRefusesEveryMismatch(t *testing.T) {
 	t.Parallel()
 	g := writeLayers(t)
@@ -506,13 +492,12 @@ func TestACheckRefusesEveryMismatch(t *testing.T) {
 	crowded := slices.Clone(tip[1])
 	binary.BigEndian.PutUint32(crowded[8:12], 1<<20)
 	crowded = reseal(crowded)
-	// Bitmaps of the tip's header naming in their options one table with no
-	// room for it — each arm of git's header check alone — resealed: a hash
-	// cache (BITMAP_OPT_HASH_CACHE, four bytes an object of the
-	// multi-pack-index) in a file of nothing but the header and the trailer;
-	// and a pseudo-merge table (BITMAP_OPT_PSEUDO_MERGES) with no room for its
-	// 24-byte end, then one whose end sizes it past the room the file has,
-	// then one counting more merges than it holds the offsets of.
+	// Bitmaps of the tip's header whose options name one table with no room
+	// for it, each arm of git's header check alone, resealed: a hash cache
+	// (BITMAP_OPT_HASH_CACHE, four bytes an object) in a file of only header
+	// and trailer; a pseudo-merge table (BITMAP_OPT_PSEUDO_MERGES) with no room
+	// for its 24-byte end, one whose end sizes it past the file, and one
+	// counting more merges than it holds offsets for.
 	optioned := func(options uint16, between []byte) []byte {
 		b := slices.Concat(tip[1][:32], between, make([]byte, sha1.Size))
 		binary.BigEndian.PutUint16(b[6:8], options)
@@ -597,10 +582,9 @@ func TestACheckRefusesEveryMismatch(t *testing.T) {
 	if err := (layerBytes{tip[0], tip[1], nil}).check(t.Context(), noGraph, nil); err != nil {
 		t.Errorf("a layer of no commit-graph layer, checked with none: %v", err)
 	}
-	// LayLayer refuses a build whose files no node would install — a
-	// commit-graph layer over another base among them, since its files alone
-	// are git's and sound: the base it was written over is the build's own
-	// mistake, which every node's check would refuse once it was stored.
+	// LayLayer refuses a build no node would install, a sound commit-graph
+	// layer written over the wrong base among them: every node's check would
+	// refuse it once stored.
 	dir := t.TempDir()
 	otherBitmap, v1Graph := filepath.Join(dir, "bitmap"), filepath.Join(dir, "graph")
 	for path, body := range map[string][]byte{otherBitmap: base[1], v1Graph: v1} {
@@ -624,19 +608,14 @@ func TestACheckRefusesEveryMismatch(t *testing.T) {
 	}
 }
 
-// A FILE THAT CANNOT BE READ IS NOT A BAD LAYER, WHEREVER THE READ FAILS. A
-// disk that fails a read says nothing about the bytes, and a refusal the
-// installer would never retry would cost the node the layer until the
-// maintainer published it again — and a bad sector inside a 2.6 GB root layer
-// fails a read in the middle of its trailer's hash, not its first. So each of
-// the tip's three files is checked with its k-th read failing, for every k
-// until a check makes no k-th read, its trailer hashed through a buffer of 64
-// bytes: each check answers that read's own failure, never ErrBadLayer, and
-// the reads failed are every place a check reads a file at — its size's two
-// reads, its header, its table of contents, each chunk a count is read from
-// (the multi-pack-index's fanout and pack names; the commit-graph layer's
-// fanout, its filters' version, its last filter's end and its bases), the
-// first read of its trailer's hash and a later one, and its trailer.
+// A FILE THAT CANNOT BE READ IS NOT A BAD LAYER, WHEREVER THE READ FAILS: a
+// failed read says nothing of the bytes, and a refusal the installer never
+// retries would cost the node the layer until it is published again — and a
+// bad sector in a 2.6 GB root layer fails mid-hash, not on the first read.
+// Each of the tip's three files is checked with its k-th read failing, for
+// every k until the check makes no k-th read (hashing through 64 bytes): each
+// answers that read's failure, never ErrBadLayer, and the reads failed cover
+// every place a check reads (sites).
 //
 // Mutation: answer a failed read of a header, a table or a chunk, or of the
 // hash, as a refusal of the bytes — red.
@@ -729,18 +708,14 @@ func (f *failingRead) ReadAt(p []byte, off int64) (int, error) {
 	return f.r.ReadAt(p, off)
 }
 
-// A LAYER'S CHECK HASHES ITS FILES A PIECE A SLOT AND STOPS WITH ITS CALLER. A
-// Gitlet node's installer reads every byte of a layer for its trailers —
-// gigabytes for the largest repository's root — on a node whose read lane
-// every request waits in, so the tip's three files, checked through a lane of
-// one slot in pieces of 64 bytes, pass with every byte before each file's
-// trailer read inside a slot and no other byte (a header, a table of contents
-// and the chunks a count is read from are read with none), in as many slots
-// as those bytes make pieces, file by file, each slot given back before the
-// next is asked. A context that ended — before the check, or as its first
-// slot is taken — is answered as its cause, and a slot the lane refused as
-// the lane refused it, never ErrBadLayer: neither says anything of the bytes.
-// LayLayer, the publisher's reading, stops with its context the same way.
+// A LAYER'S CHECK HASHES ITS FILES A PIECE A SLOT AND STOPS WITH ITS CALLER.
+// The installer reads every byte of a layer (gigabytes for a large root) on a
+// node whose read lane every request waits in, so through a one-slot lane in
+// 64-byte pieces every byte before each trailer is read inside a slot and no
+// other (headers, tables and counted chunks take none), one piece a slot, file
+// by file, each slot given back before the next is asked. A context ended
+// before the check or as its first slot is taken answers its cause, and a
+// refused slot the lane's refusal, never ErrBadLayer; LayLayer stops likewise.
 //
 // Mutation: CheckLayer hashes each file in one pass holding nothing, whatever
 // its caller hands it — red.
@@ -819,14 +794,13 @@ func TestALayersCheckIsHashedAPieceASlotAndStopsWithItsCaller(t *testing.T) {
 	}
 }
 
-// THE CUT IS ONE RULE BOTH WAYS: part i of a layer begins i parts of the
-// shipped LayerPartBytes into it, holds a whole part but the last, which holds
-// what remains, and lies where those bytes lie in the three files back to
-// back — the multi-pack-index, then its bitmap, then the commit-graph layer, a
-// part ending inside one file and the next beginning there — so every byte of
-// every file is in exactly one part, and a part past the layer's end is none.
+// THE CUT IS ONE RULE BOTH WAYS: part i begins i LayerPartBytes into the
+// layer, is a whole part but the last (what remains), and lies where those
+// bytes lie in the three files back to back (midx, bitmap, commit-graph
+// layer), a part ending inside one file and the next beginning there — so
+// every byte is in exactly one part, and a part past the end is none.
 // StoreLayer and FetchLayerPart both take a part's start, size and runs from
-// this one cut, by its index.
+// LayerCut.
 //
 // Mutations: a run's offset counted from the layer's start rather than its
 // file's — red; every part's start the layer's first byte — red.
@@ -870,12 +844,11 @@ func TestALayerIsCutTheSameWayBothWays(t *testing.T) {
 }
 
 // atOnce is a Putter that holds every Put until all of a layer's parts have
-// begun, so parts uploaded one after another never get past the first and
-// the case fails by the putter's own deadline rather than hanging; it reads
-// one byte of each part — the case marks every part's first byte — to learn
-// which part it was handed, and answers it stored whole, its bytes unread
-// past that one. With fail set, the part whose first byte it is answers err
-// once all have begun, and the others wait to be cancelled.
+// begun, so sequential uploads fail by its own deadline rather than hang. It
+// reads each part's first byte (the case marks them) to tell the parts apart
+// and answers it stored whole, unread past that byte. With fail set, the part
+// with that first byte answers err once all have begun, and the others wait to
+// be cancelled.
 type atOnce struct {
 	want int
 	fail byte
@@ -952,24 +925,17 @@ func (p *atOnce) Put(ctx context.Context, r io.Reader, limit int64, m objstore.P
 }
 
 // EVERY PART OF A LAYER IS UPLOADED AT ONCE, each key minted as its upload
-// begins, so the last of a layer of LayerPartBytes parts at the store's
-// pacing floor lands while every key is still within RecordWithin: a layer of
-// three parts at the shipped LayerPartBytes — sparse files, whose bytes the
-// putter never reads past each part's first — has all three Puts begun before
-// any returns, each limited at its part, typed as a layer's part and bounded
-// by UploadDeadline of its size, the hit asked at each part's own start in
-// the layer, and the parts answered in byte order whatever order they
-// finished. One failing part cancels the others, and its error is the
-// answer, with no part named.
+// begins, so the last part lands at the store's pacing floor while every key
+// is within RecordWithin. Three sparse parts at the shipped LayerPartBytes all
+// begin before any returns, each limited at its part, typed as a layer's
+// part, bounded by UploadDeadline of its size, the hit asked at its start in
+// the layer, and answered in byte order. One failing part cancels the others,
+// and its error is the answer, with no part named. In a synctest bubble — a
+// reading upload is never durably blocked, and the putter holds all three —
+// each deadline is exactly the call's start plus its bound.
 //
-// The layer is stored IN A BUBBLE, whose clock moves only while every
-// goroutine of it is durably blocked — a part's upload reading its files
-// never is, and the putter holds every part until all three have begun — so
-// each part's deadline is the instant the call began plus its bound, exactly.
-//
-// Mutation: upload the parts one after another — red, by the putter's own
-// deadline; bound a part a second short of its own UploadDeadline — red at
-// its deadline.
+// Mutation: sequential uploads — red, by the putter's deadline; a bound a
+// second short of UploadDeadline — red at its deadline.
 func TestStoreLayerUploadsEveryPartAtOnce(t *testing.T) {
 	t.Parallel()
 	const p = gitlet.LayerPartBytes
@@ -1064,16 +1030,14 @@ func TestStoreLayerUploadsEveryPartAtOnce(t *testing.T) {
 }
 
 // A LAYER IS STORED AS ITS THREE FILES BACK TO BACK AND LAID BACK WHERE IT CAME
-// FROM: the tip git wrote, stored in its one part through a store over
-// memory — handed to the store exactly the three files' bytes, limited at the
-// layer's size, the hit asked before every read the store makes at the bytes
-// handed over — and read back through the store's verified read into three
-// fresh files, through a buffer smaller than any of them, is the three files
-// again, byte for byte, and passes CheckLayer under its row. A part the store
-// damaged is objstore.ErrCorrupt, one it lost objstore.ErrNotFound, both
-// through errors.Is, and this node's disk failing a write is its own failure,
-// "on this node"; a file not the size of its section, or a layer past what
-// MaxLayerParts parts hold, is refused before any byte is stored.
+// FROM: the tip, stored in one part through a memory store (handed exactly the
+// files' bytes, limited at the layer's size, the hit asked before each of the
+// store's reads), then fetched through the verified read into fresh files with
+// a buffer smaller than any, is byte for byte the same and passes CheckLayer.
+// A part the store damaged is objstore.ErrCorrupt, one it lost
+// objstore.ErrNotFound, and this node's disk failing a write its own failure,
+// "on this node"; a file not its section's size, or a layer past MaxLayerParts
+// parts, is refused before any byte is stored.
 //
 // Mutation: lay a run back at its offset in the layer rather than in its file
 // — red.
@@ -1188,17 +1152,13 @@ type failingWriterAt struct{ err error }
 
 func (f failingWriterAt) WriteAt([]byte, int64) (int, error) { return 0, f.err }
 
-// EVERY PART OF A LAYER IS LAID BACK AT ITS OWN PLACE, the parts past the
-// first among them — every layer over LayerPartBytes, the root layer of
-// every large repository, is those. A layer of three parts at the shipped
-// LayerPartBytes, its files p + 100, p − 50 and 1 000 bytes, is fetched part
-// by part, the LAST FIRST, through a store that streams each part's bytes as
-// a pattern of their places in the layer — zeros, but for a mark at each
-// part's ends, each file's ends and inside them, each mark's byte its own —
-// into three files that hold every write to the bytes the pattern has at
-// the place it lands: every byte of every file lands exactly once, and where
-// its place in the layer says. No gibibyte is held: the pattern is made as it
-// is read and checked as it is written.
+// EVERY PART OF A LAYER IS LAID BACK AT ITS OWN PLACE, parts past the first
+// included (every layer over LayerPartBytes has them). Three parts over files
+// of p + 100, p − 50 and 1 000 bytes are fetched LAST FIRST from a store
+// streaming a pattern of each byte's place (patterned) into files that check
+// every write against it (laidBack): every byte lands exactly once, where its
+// place says. The pattern is made as read and checked as written, so no
+// gibibyte is held.
 //
 // Mutation: FetchLayerPart lays every part back as part 0 — red.
 func TestEveryPartOfALayerIsLaidBackAtItsPlace(t *testing.T) {
@@ -1260,10 +1220,9 @@ func TestEveryPartOfALayerIsLaidBackAtItsPlace(t *testing.T) {
 	}
 }
 
-// patterned is a layer's bytes, made as they are read: every byte zero but
-// for a mark at each place marks names (sorted), whose byte is its index
-// there plus one — so a byte laid back at another place than its own is seen
-// — and the store's read of each part (Open), by where it starts.
+// patterned is a layer's bytes, made as they are read: zero but at each
+// sorted mark, whose byte is its index plus one, so a byte laid back out of
+// place is seen. Open reads a part from its start in starts.
 type patterned struct {
 	marks  []int64
 	starts map[objstore.Key]int64
@@ -1324,13 +1283,11 @@ func (f *laidBack) WriteAt(b []byte, off int64) (int, error) {
 	return len(b), nil
 }
 
-// allocated is how many bytes f allocated on the heap: runtime.ReadMemStats's
-// TotalAlloc either side of it, which stops the world, so it counts every
-// allocation made meanwhile — f's alone while nothing else runs, as when a
-// fuzz target does: go test runs every seed corpus after the package's tests
-// have ended, and -fuzz runs nothing else in its workers. A stray allocation
-// of another goroutine's is not f's, so a bound is judged over three
-// measurements and only one past it every time is f's.
+// allocated is how many bytes f allocated on the heap, by TotalAlloc either
+// side of it. That counts every goroutine's allocations — f's alone only while
+// nothing else runs, as for a fuzz target (seed corpora run after the
+// package's tests; -fuzz workers run nothing else) — so boundedAlloc judges
+// over three measurements.
 func allocated(f func()) uint64 {
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
@@ -1340,13 +1297,10 @@ func allocated(f func()) uint64 {
 }
 
 // allocBound is the most a reader may allocate reading an n-byte file: LINEAR
-// IN n — each byte it reads is held a few times at most (the table of
-// contents, the pack names and their strings, the chunk list, a hash buffer
-// never larger than the file) — plus a slack for the reader's own state and
-// its refusal's sentence. A count read from a file that sized an allocation
-// before it was held to the bytes would be the count's, not the file's: a
-// million packs claimed by a file that names one is sixteen megabytes of
-// string headers alone.
+// IN n (each byte held a few times at most) plus slack for its own state and
+// its refusal's sentence. An allocation sized by a count read from the file
+// before the bytes bear it out is the count's, not the file's: a million packs
+// claimed by a file naming one is 16 MB of string headers alone.
 func allocBound(n int) uint64 { return 16*uint64(n) + 64<<10 }
 
 // boundedAlloc fails t unless parse allocates within allocBound of the n bytes
@@ -1365,14 +1319,12 @@ func boundedAlloc(t *testing.T, n int, parse func()) {
 		allocBound(n))
 }
 
-// FuzzParseMidx: whatever a multi-pack-index file holds, ParseMidx never
-// panics and allocates no more than the file's own size bounds (allocBound),
-// and what it accepts is what its bytes say — its version, a name for every
-// pack its header counts, each a cache's name for a pack, in ascending order
-// in a version 1 file, its objects inside the file, its trailer. Seeded with
-// git's own files (writeLayers), each also resealed after the fuzzer's damage
-// so a damaged body is read past the trailer it would fail first, and with a
-// file of git's whose header counts a million packs.
+// FuzzParseMidx: whatever a multi-pack-index holds, ParseMidx never panics,
+// allocates within allocBound, and accepts only what its bytes say — its
+// version, a cache's pack name for every pack its header counts (ascending in
+// version 1), objects that fit the file, its trailer. Every input is also read
+// resealed; seeded with git's files (writeLayers) and one of git's whose
+// header counts a million packs.
 //
 // Mutation: size the pack names' slice by the header's count before the PNAM
 // chunk is held to it — red, by the allocation bound.
@@ -1418,11 +1370,10 @@ func FuzzParseMidx(f *testing.F) {
 	})
 }
 
-// FuzzParseBitmap: whatever a bitmap file holds, ParseBitmap never panics and
-// allocates no more than its size bounds, and what it accepts is what its
-// header and trailer say. Seeded with git's own bitmaps, resealed after a
-// damage as FuzzParseMidx's are, and one whose header counts a million
-// selected commits.
+// FuzzParseBitmap: whatever a bitmap file holds, ParseBitmap never panics,
+// allocates within allocBound, and accepts only what its header and trailer
+// say. Seeded as FuzzParseMidx is, the huge one counting a million selected
+// commits.
 //
 // Mutation: read the multi-pack-index's checksum from the wrong bytes of the
 // header — red.
@@ -1461,16 +1412,11 @@ func FuzzParseBitmap(f *testing.F) {
 	})
 }
 
-// FuzzParseGraph: whatever a commit-graph file holds, ParseGraph never panics
-// and allocates no more than its size bounds, and what it accepts is what its
-// bytes say, each read back from where the file's own table of contents puts
-// it (gittest.ChunkOf) — a base for every base its header counts, the BASE
-// chunk's ids in turn and no BASE chunk where it counts none; its commits,
-// its fanout's last count, inside the file; its filters' version, the BDAT
-// chunk's first four bytes, or 0 with no BDAT; and its trailer. Seeded with
-// git's own layers — the tip's names the base's in its BASE chunk — resealed
-// after a damage as FuzzParseMidx's are, and one whose fanout counts a
-// million commits.
+// FuzzParseGraph: whatever a commit-graph file holds, ParseGraph never panics,
+// allocates within allocBound, and accepts only what its bytes say where its
+// own table of contents puts them (holdsItsBytes), commits that fit the file
+// and its trailer. Seeded as FuzzParseMidx is — the tip's BASE chunk names the
+// base's — the huge one's fanout counting a million commits.
 //
 // Mutations: read the base graphs' ids from the commit data chunk — red, on
 // the tip's seed; size a slice by the commit count before OIDL is held to it

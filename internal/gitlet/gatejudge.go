@@ -14,103 +14,21 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE MERGE GATE, JUDGED: whether a live change meets the gate of the branch
-// it targets ([MergeGate]) — answered as the same [Readiness] M4's readiness
-// is, from the rows ONE snapshot holds and the chart ONE epoch holds, by ONE
-// pure function, [JudgeGate], which every reader and every decide of a
-// change's merge calls (ADR-0008): the change read and each row of a listing,
-// the readiness a mergeability record stamps, and the decides that queue a
-// change for its target's landing. Never a workflow somebody has to remember
-// to run, and never a decision of the tracker's: what it counts is the
-// change's own reviews, findings and checks.
-//
-// # The gate a target is held to
-//
-// Every rule of the repository whose pattern matches the target holds it, as
-// every rule matching a ref holds a push to it ([ProtectionRefusal]), so the
-// gate is the rules' COMBINATION, the strictest of each term ([GateRulesOf]):
-// merge_by the strictest of the rules' — a rule with no gate reading as
-// writers — and of code.merge_by_floor, on a protected target alone; an
-// approval where any gate asks one, exempted only by a class every gate
-// asking one exempts; every gate's human paths and required checks — a gate
-// requiring checks naming ChecksDirGlob among its human paths unless it sets
-// agents_edit_checks, so a change to the checks a target is measured with
-// waits for a person (U44), the default added here and never stored; path
-// owners gating where any gate makes them so; the smallest queue depth and
-// batch of the gates requiring checks. A branch no rule matches has no gate:
-// a change into it merges on M4's preconditions and its merger's right to
-// push the branch.
-//
-// # What it judges, beside M4's preconditions
-//
-// M4's draft, facts, blocker and mergeable always ([ReadinessOf]); its
-// approval only where the gate asks one — the gate decides whether a merge
-// waits for an approval, and a branch no gate asks one of merges on none —
-// and then exempted where every path the head revision touches is of a class
-// approvals_unless names. Then the gate's own, each where the gate imposes it:
-//
-//   - HUMAN_APPROVAL, where it names human paths: a change touching a path one
-//     of them matches — unless every path that entry matched is of a class its
-//     unless names — waits for a PERSON'S counted approval. Which entries hold
-//     the head revision is its RECORDED match ([Revise.HumanPaths]), made by
-//     its home as the owners' is (humanpaths.go): up to MaxTargetHumanPaths
-//     globs against MaxTouchedPaths paths is the same cost on every round, and
-//     NO HUMAN PATH'S GLOB IS MATCHED HERE either. A snapshot whose repository
-//     row digests its rules' human paths to another digest than the match
-//     recorded leaves the term COMPUTING until the home matches again, which
-//     the change is due at once.
-//   - OWNERS_APPROVAL, where it sets owners_approve: ONE counted approval from
-//     somebody eligible for EVERY path owner the head revision touches —
-//     a unit owner's effective lead and every lead above it, a seat owner and
-//     its unit's lead chain, and any person (PLAN's "the owners' common lead
-//     chain or a person"). The touched owners are the head revision's
-//     RECORDED match ([Revise.RequestedOwners]): its home matched the globs,
-//     and NO GLOB IS MATCHED HERE — up to MaxPathOwners × MaxPathOwnerPaths
-//     globs against MaxTouchedPaths paths on every judgment would put the
-//     home's work on every decide's round. A snapshot whose repository row
-//     digests its owners to another digest than the match recorded is owners
-//     the home has not matched yet, and leaves the term COMPUTING until its
-//     next revise — which the change is due at once ([ReadChangesDue]).
-//     Its sentence names each touched owner with the first glob of its the
-//     revision touched, which the facts keep beside it, and at most eight owners.
-//   - CHECK, where it requires checks: every required check passed — or
-//     skipped, its paths untouched — on the head commit, by its latest
-//     attempt whatever ran it.
-//   - MERGE_AUTHORITY, where a merger is named ([GateFacts.Merger]): the
-//     asker of a read, the principal of a decide. A person always holds it;
-//     a seat and a credential the gate's merge_by on a protected target, and
-//     a fast-forward of the branch on one no rule protects.
-//   - QUEUE, where the target's merge queue holds the change (queue.go):
-//     COMPUTING, waiting on nobody, its place named — the queue lands it. A
-//     change waiting in a queue is not READY to merge: it is merging.
-//
-// Every approval these count is counted by M4's one rule ([approvalTally]):
-// an eligible reviewer's standing verdict, never an author's, on the head
-// revision or carried to it unchanged — so an approval of an earlier revision
-// whose code moved since counts for none of them.
-//
-// # Read in one snapshot, and only as far as the gate reaches
-//
-// [GateFacts] is what one snapshot holds of a change and its repository —
-// M4's rows, the repository's rules, and what of the head revision's facts,
-// its owners' digest and its checks the gate reaches — read for a whole page of
-// changes a kind of row at a time ([gateFactsIn]), and for one change by a
-// decide ([LoadGateFacts]). What a target's gate does not reach is not read:
-// the head revision's recorded matches and classes only for a gate naming
-// human paths, exempting classes or making path owners gating — and never its
-// touched list, up to MaxTouchedBytes a change, which no judgment reads —
-// the digests its matches are held to only for one naming human paths or
-// making path owners gating, the check rows only for one requiring checks. And
-// a target's gate is combined from its rules once a page, every change into
-// it sharing it ([GateFacts.Gate]).
-//
-// The gate is a set of PRECONDITIONS judged on one snapshot, and the race
-// between that snapshot and the record that moves the branch is the
-// deliberate one: a record judges again from its own.
+// THE MERGE GATE, JUDGED: whether a live change meets its target's gate
+// ([MergeGate]), as a [Readiness] answered by ONE pure function, [JudgeGate],
+// from one snapshot's rows and one epoch's chart — called by every read and
+// every decide of a merge (ADR-0008), never a workflow somebody must run. It
+// counts the change's own reviews, findings and checks, never a tracker
+// decision (TestTheGateReadsNoDecision). The gate is the strictest
+// combination of every matching rule ([GateRulesOf]); a branch no rule
+// matches has none, and merges on M4's preconditions and the merger's right
+// to push it. The gate is PRECONDITIONS judged on one snapshot: the race with
+// the record that moves the branch is deliberate, since that record judges
+// again from its own.
 
 // GateRules is the merge gate a change's target is held to: every rule of its
 // repository whose pattern matches the target, combined term by term into
-// the strictest of them ([GateRulesOf]) — see the file's head.
+// the strictest of them ([GateRulesOf]).
 type GateRules struct {
 	// Target is the branch the gate holds, refs/heads/<name>.
 	Target string
@@ -118,58 +36,52 @@ type GateRules struct {
 	// those of them carrying a merge gate.
 	Patterns []string
 	Gated    []string
-	// MergeBy is who may merge into Target: the strictest merge_by of the
-	// rules matching it — a rule with no gate reading as writers — and of
-	// code.merge_by_floor; "" for a target no rule matches, which the floor
-	// never reaches (a merge into it takes its merger's right to push it).
+	// MergeBy is the strictest merge_by of the rules matching Target (a rule
+	// with no gate reading as writers) and of code.merge_by_floor; "" for a
+	// target no rule matches, which the floor never reaches (a merge into it
+	// takes its merger's right to push it).
 	MergeBy MergeBy
 	// Approvals is one where any gate asks one, and none otherwise;
 	// ApprovalsUnless the path classes EVERY gate asking one exempts.
 	Approvals       Approvals
 	ApprovalsUnless []ChangeClass
-	// HumanPaths is every gate's human paths, each entry as its gate wrote
-	// it, by glob — and, for every gate requiring checks that does not set
-	// agents_edit_checks, ChecksDirGlob, which no record stores (U44);
+	// HumanPaths is every gate's human paths as its gate wrote them, by glob,
+	// with the ChecksDirGlob default no record stores ([humanPathsOf]);
 	// Checks every gate's required checks, sorted and each once.
 	HumanPaths []HumanPath
 	Checks     []string
 	// QueueDepth and QueueBatch are how many candidates the target's queue
 	// tests at once and how many changes one candidate takes: the SMALLEST
-	// of each over the gates requiring checks — throughput, never what is
-	// tested (M5-D3), so the smallest is the one that keeps every matching
-	// rule's bound — and zero where no such gate matches.
+	// over the gates requiring checks, since they bound throughput, never what
+	// is tested (M5-D3); zero where no such gate matches.
 	QueueDepth int
 	QueueBatch int
 	// OwnersApprove is whether any gate makes path owners gating.
 	OwnersApprove bool
 	// KeepsSource is whether any gate matching Target keeps a seat's source
-	// branch when a change merges (delete_source: none): a merge whose caller
-	// said nothing deletes a source in a seat's namespace unless it is so,
-	// and keeps every other source (Q4), decided by the Gitlet node that judges
-	// the merge (internal/gitlet/host's deletesSource) — a gate that keeps it
-	// wins over one that deletes it, since a deleted branch is the one of the
-	// two no later write undoes.
+	// branch on merge (delete_source: none), winning over a gate that deletes
+	// it since a deletion is what no later write undoes. A merge whose caller
+	// said nothing deletes a source in a seat's namespace unless it is so, and
+	// keeps every other (Q4; internal/gitlet/host's deletesSource).
 	KeepsSource bool
 }
 
-// GateRulesOf is the gate target is held to by rules — a repository's rules,
-// each with its gate — and floor, code.merge_by_floor on the judging epoch
-// ("" reads as no floor beyond the rules'): the strictest of each term over
-// every rule matching target (the file's head). A rule whose pattern this
-// build cannot read is refused, never read as a rule matching nothing: every
-// stored rule passed validation before a record carried it, and a gate read as
-// absent is a protected branch merged on nothing. A value of a term this
-// build does not know reads as its strictest, FAIL CLOSED, as a loosening is
-// judged ([MergeGate.LoosenedBy]).
+// GateRulesOf is the gate target is held to by rules and floor
+// (code.merge_by_floor; "" is none beyond the rules'): the strictest of each
+// term over every rule matching target, as every rule matching a ref holds a
+// push to it ([ProtectionRefusal]). A pattern this build cannot read is
+// refused, never read as matching nothing: every stored rule passed
+// validation, and a gate read as absent merges a protected branch on nothing.
+// A term's value this build does not know reads as its strictest, FAIL
+// CLOSED, as a loosening is judged ([MergeGate.LoosenedBy]).
 func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, error) {
 	out := GateRules{Target: target, Approvals: ApprovalsNone}
 	var (
 		asked  int
 		unless []ChangeClass
 	)
-	// THE FIRST MATCHING RULE SETS MERGE_BY and every later one can only
-	// tighten it — never "" as a start, which ranks as a value this build does
-	// not know (MergeBy.Rank) and so past every one it does.
+	// THE FIRST MATCHING RULE SETS MERGE_BY, later ones only tighten it: ""
+	// as a start would rank past every known value (MergeBy.Rank).
 	hold := func(by MergeBy) {
 		if len(out.Patterns) == 1 {
 			out.MergeBy = by
@@ -177,10 +89,9 @@ func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, e
 		}
 		out.MergeBy = out.MergeBy.Stricter(by)
 	}
-	// EACH HUMAN PATH AND EACH CHECK ONCE, BY A SET: the union of every
-	// matching rule's is up to MaxProtectionsPerRepo × MaxHumanPaths entries,
-	// which a scan of the list for each would make some four million
-	// comparisons.
+	// EACH HUMAN PATH AND EACH CHECK ONCE, BY A SET: the union is up to
+	// MaxProtectionsPerRepo × MaxHumanPaths entries, some four million
+	// comparisons by a scan of the list for each.
 	var (
 		humanSeen = map[string]bool{}
 		checkSeen = map[string]bool{}
@@ -242,22 +153,19 @@ func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, e
 	if len(unless) > 0 {
 		out.ApprovalsUnless = unless
 	}
-	// SORTED WHOLLY, by glob and then by the classes it waives, so the list is
-	// a function of the rules' human paths and never of the rules' order.
+	// SORTED WHOLLY, by glob then the classes it waives, so the list depends
+	// on the rules' human paths, never on their order.
 	slices.SortFunc(out.HumanPaths, compareHumanPaths)
 	slices.Sort(out.Checks)
 	return out, nil
 }
 
 // humanPathsOf is the human paths gate g holds a target to: those it names
-// and, for a gate requiring checks that does not set agents_edit_checks,
-// ChecksDirGlob.
-//
-// A RULE REQUIRING CHECKS HOLDS ITS CHECKS TO A PERSON (U44): ChecksDirGlob is
-// a human path of its gate unless it sets agents_edit_checks — added here,
-// where every reader and every decide takes its gate from, and never stored,
-// so the rule's record says what its writer wrote and the default reaches
-// every rule without a record rewriting one.
+// and, for a gate requiring checks without agents_edit_checks, ChecksDirGlob,
+// so a change to the checks a target is measured with waits for a person
+// (U44). The default is added here, where every read and decide takes its
+// gate, and never stored: the rule's record says what its writer wrote, and
+// the default reaches every rule with no record rewritten.
 func humanPathsOf(g *MergeGate) []HumanPath {
 	if len(g.Checks) == 0 || g.AgentsEditChecks {
 		return g.HumanPaths
@@ -300,10 +208,8 @@ func smallest(held, next int) int {
 func (r GateRules) Protected() bool { return len(r.Patterns) > 0 }
 
 // QueueTarget reports a target whose merges land through its QUEUE: a gated
-// one requiring a check (M5-D9), its queue testing each change merged on it
-// before it lands. Every other merge is a direct one. Its required checks
-// are what hold a change's head ([JudgeGate]'s check term), so a target is a
-// queue's exactly where they do.
+// one requiring a check (M5-D9), since its required checks are what hold a
+// change's head ([JudgeGate]'s check term). Every other merge is direct.
 func (r GateRules) QueueTarget() bool { return len(r.Checks) > 0 }
 
 // readsPaths reports a gate that judges the paths a change touches: one naming
@@ -324,17 +230,15 @@ type GateFacts struct {
 	// Head is what the gate reads of the head revision's facts beyond M4's —
 	// read only where the target's gate judges paths or path owners.
 	Head HeadFacts
-	// OwnerRowsDigest is the digest of the repository's path owners as this
-	// snapshot's row of it carries it ([OwnersDigest];
-	// code_repos.owners_digest) — read only where the target's gate makes
-	// path owners gating — against which the head revision's recorded match
-	// is current or not.
+	// OwnerRowsDigest is this snapshot's digest of the repository's path
+	// owners ([OwnersDigest]; code_repos.owners_digest), read only where the
+	// gate makes path owners gating: whether the head revision's recorded
+	// match of them is current.
 	OwnerRowsDigest string
-	// HumanPathsDigest is the digest of the repository's rules' human paths
-	// as this snapshot's row of it carries it ([HumanPathsDigest];
-	// code_repos.human_paths_digest) — read only where the target's gate
-	// names human paths — against which the head revision's recorded match
-	// of them is current or not.
+	// HumanPathsDigest is this snapshot's digest of the repository's rules'
+	// human paths ([HumanPathsDigest]; code_repos.human_paths_digest), read
+	// only where the gate names human paths: whether the head revision's
+	// recorded match of them is current.
 	HumanPathsDigest string
 	// Checks is the latest attempt of each check the target's gate requires
 	// on the head commit, by name — none for a check no attempt of which is
@@ -346,20 +250,17 @@ type GateFacts struct {
 	// Floor is code.merge_by_floor on the judging epoch.
 	Floor MergeBy
 	// Merger is who would merge the change — a read's asker, a decide's
-	// principal — whose authority the gate judges ([PreconditionMergeAuthority]);
-	// the zero Principal names nobody, and the term is not judged: what a
-	// change's stored readiness says is whether it is ready, for whoever
-	// merges it.
+	// principal ([PreconditionMergeAuthority]). The zero Principal leaves the
+	// term unjudged, so a stored readiness says whether the change is ready
+	// for whoever merges it.
 	Merger Principal
 	// Queue is the change's LIVE entry in its target's merge queue and its
 	// place there, nil for none ([PreconditionQueue]).
 	Queue *QueuedFacts
 
-	// gate is the gate the change's target is held to under no floor, as the
-	// read that gathered these facts combined it — once a (repository,
-	// target) of the page, every change into it sharing it — for
-	// [GateFacts.Gate] to apply the floor to rather than combine the rules
-	// again; nil where nothing combined it.
+	// gate is the target's gate under no floor as the gathering read combined
+	// it, once per (repository, target) of a page, for [GateFacts.Gate] to
+	// apply the floor to rather than combine again; nil where none was.
 	gate *GateRules
 }
 
@@ -373,16 +274,12 @@ type QueuedFacts struct {
 	Place     int        `json:"place"`
 }
 
-// HeadFacts is what a change's merge gate reads of its head revision's
-// recorded facts beside M4's: whether they are recorded against the change's
-// CURRENT target at all; how many paths the revision touches — never the
-// paths, up to MaxTouchedBytes a change, which no judgment reads — or that it
-// touches all, and their classes; the path owners its home matched them to,
-// each with the first of its globs they touch and how many more
-// ([TouchedOwner]), never the list, with the digest of the owner rows it
-// matched against; and which of its target's human paths its home found
-// holding it or waived, with the digest of the rules' human paths it matched
-// against ([Revise]).
+// HeadFacts is what a merge gate reads of the head revision's recorded facts
+// beyond M4's: whether they are recorded against the change's CURRENT
+// target; how many paths it touches, or all, and their classes — never the
+// paths (up to MaxTouchedBytes), which no judgment reads; the path owners its
+// home matched ([TouchedOwner]) and the human paths it found holding or
+// waiving it, each with the digest of the rows it matched against ([Revise]).
 type HeadFacts struct {
 	Recorded         bool
 	TouchedCount     int
@@ -416,13 +313,11 @@ type GateCheck struct {
 	Placement CheckPlacement
 }
 
-// Gate is the gate f's change's target is held to, by f's rules and floor
-// ([GateRulesOf]) — the combination the read that gathered f made, the floor
-// applied to it as GateRulesOf applies it, where that read combined the
-// change's current target's; the rules combined again otherwise. A
-// combination parses up to MaxProtectionsPerRepo rules' patterns and gathers
-// up to MaxTargetHumanPaths entries, which a page of changes into one target
-// made twice a change.
+// Gate is the gate f's change's target is held to ([GateRulesOf]): the
+// gathering read's combination with the floor applied, where it was made for
+// the change's current target; the rules combined again otherwise. Reuse
+// spares a page of changes into one target a combination each, which parses
+// up to MaxProtectionsPerRepo patterns and gathers up to MaxTargetHumanPaths.
 func (f GateFacts) Gate() (GateRules, error) {
 	if f.gate == nil || f.gate.Target != f.Rows.Change.TargetRef {
 		return GateRulesOf(f.Rules, f.Rows.Change.TargetRef, f.Floor)
@@ -457,18 +352,14 @@ func LoadGateFacts(ctx context.Context, tx *sql.Tx, repoID, changeID string) (Ga
 	return facts[0], true, nil
 }
 
-// gateFactsIn reads what each change of subjects' merge gate judges, in tx —
-// ONE snapshot — a kind of row at a time over every change at once, as M4's
-// readiness rows are ([readinessRowsIn]): those rows; the rules of every
-// repository the changes are of, in one statement; and then only what each
-// change's gate reaches — its head revision's classes and its recorded owner
-// and human-path matches, driven from the list of (change, head revision)
-// pairs whose gate judges paths or path owners; the digests those matches are
-// held to of every repository one of whose changes' gates names human paths
-// or makes path owners gating, in one statement; and every attempt
-// of a required check on a head commit checked for the change's target, driven
-// from the list of (repository, commit, target, check) keys, of which the
-// latest is kept. The answer is subjects' order.
+// gateFactsIn reads what each of subjects' merge gates judges, in tx — ONE
+// snapshot — a kind of row at a time over every change, as
+// [readinessRowsIn] does, in subjects' order. Beyond M4's rows and the
+// repositories' rules it reads only what each change's gate reaches: the
+// head revision's classes and recorded matches where the gate judges paths
+// or owners, the digests those are held to where it names human paths or
+// makes owners gating, and attempts of required checks where it requires
+// them. The touched list, up to MaxTouchedBytes, is never read.
 func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) ([]GateFacts, error) {
 	rows, err := readinessRowsIn(ctx, tx, subjects)
 	if err != nil {
@@ -491,8 +382,8 @@ func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) (
 	asked := map[[4]string]bool{}
 	required := make([][]string, len(subjects))
 	byHead := map[[3]string][]int{}
-	// EACH (REPOSITORY, TARGET)'S GATE COMBINED ONCE, every change of the
-	// page into it sharing it, and handed on with the facts (GateFacts.Gate).
+	// EACH (REPOSITORY, TARGET)'S GATE COMBINED ONCE a page, handed on with
+	// the facts (GateFacts.Gate).
 	gates := map[[2]string]*GateRules{}
 	digested := map[string]bool{}
 	for i, s := range subjects {
@@ -520,13 +411,10 @@ func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) (
 		if !gate.QueueTarget() {
 			continue
 		}
-		// EACH (REPOSITORY, COMMIT, TARGET, CHECK) ASKED ONCE, whichever
-		// changes into that target share the commit. An attempt checks a
-		// commit FOR A BRANCH, under that branch's checks file, and is keyed
-		// by it (CheckKey.Target): two changes of one head into two branches
-		// are judged by two sets of attempts, each its own target's, never
-		// by the attempts another branch's file defined — and each keeps the
-		// checks its OWN target requires.
+		// EACH (REPOSITORY, COMMIT, TARGET, CHECK) ASKED ONCE. An attempt
+		// checks a commit FOR A BRANCH, under its checks file
+		// (CheckKey.Target): one head into two branches is judged by each
+		// target's own attempts and required checks.
 		required[i] = gate.Checks
 		head := [3]string{s.repo.ID, s.row.head, s.row.target}
 		byHead[head] = append(byHead[head], i)
@@ -547,12 +435,9 @@ func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) (
 	if err = gateChecksIn(ctx, tx, checks, byHead, required, out); err != nil {
 		return nil, err
 	}
-	// EACH CHANGE'S LIVE QUEUE ENTRY, of every change at once, and the place
-	// of each a queue holds — ONE WALK A (REPOSITORY, TARGET) the page's
-	// entries are queued on ([placesIn]), never a count a change: a page of
-	// MaxChangesPerPage changes queued on one busy target counted each one's
-	// place over the target's live entries before it, MaxChangesPerPage
-	// statements and as many walks of up to MaxQueueEntries.
+	// EVERY CHANGE'S LIVE QUEUE ENTRY at once, and places by ONE WALK a
+	// (repository, target) ([placesIn]), never a count a change: that is up
+	// to MaxChangesPerPage statements, each walking up to MaxQueueEntries.
 	ids := make([]string, len(subjects))
 	for i, s := range subjects {
 		ids[i] = s.row.id
@@ -618,8 +503,8 @@ func rulesOfRepos(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("gitlet: read the rules a merge gate judges: %w", err)
 	}
-	// THE STATEMENT ORDERS BY PATTERN, stated again as the property a
-	// combination's sentences rely on.
+	// SORTED BY PATTERN though the statement orders so: a combination's
+	// sentences rely on it.
 	for id := range out {
 		slices.SortFunc(out[id], func(a, b Protection) int { return strings.Compare(a.Pattern, b.Pattern) })
 	}
@@ -686,16 +571,12 @@ func headFactsIn(ctx context.Context, tx *sql.Tx, heads [][2]any, at map[string]
 	return rows.Err()
 }
 
-// matchDigestsOf sets the digests each repository of owned's row carries of
-// what its revisions' touched paths are matched against — its path owners
-// ([OwnersDigest]; code_repos.owners_digest) and its rules' human paths
-// ([HumanPathsDigest]; code_repos.human_paths_digest) — on every change of it
-// in out: one statement over the repositories, one seek of each one's row,
-// each digest written beside the rows it digests by every record that writes
-// them, never those rows read and hashed again. A page of changes of
-// repositories at their bound of owners read and hashed up to a quarter of a
-// mebibyte of owner rows a repository, and an enqueue's and a mergeability's
-// decide as much on every round.
+// matchDigestsOf sets on every change in out of a repository in owned that
+// row's digests of what touched paths are matched against: its path owners
+// ([OwnersDigest]) and its rules' human paths ([HumanPathsDigest]). Every
+// record writing those rows writes the digest beside them, so one seek a
+// repository reads it; hashing the rows here would read up to a quarter
+// mebibyte of owners a repository on every decide's round.
 func matchDigestsOf(ctx context.Context, tx *sql.Tx, owned []string, subjects []readinessSubject,
 	out []GateFacts) error {
 
@@ -780,16 +661,17 @@ func gateChecksIn(ctx context.Context, tx *sql.Tx, keys [][4]any, byHead map[[3]
 	return rows.Err()
 }
 
-// JudgeGate is a change's readiness under its target's merge gate — see the
-// file's head — judged over f, one snapshot's rows, the chart and the floor
-// of one epoch and the merger, and r, the gate f's change's target is held to
-// ([GateFacts.Gate]): PURE, reading nothing else, so a decide and a read that
-// hold the same facts answer the same readiness. Its preconditions are listed
-// in [PreconditionKinds]' order: M4's draft, facts, blocker and mergeable
+// JudgeGate is a change's readiness under r, its target's merge gate
+// ([GateFacts.Gate]), judged over f alone: PURE, so a decide and a read
+// holding the same facts answer the same. Its preconditions are in
+// [PreconditionKinds]' order: M4's draft, facts, blocker and mergeable
 // always, and each other only where it holds the change — the approval where
 // the gate asks one, a person's where it names human paths, the owners' where
 // it makes them gating, the checks where it requires them, the merge
-// authority where f names a merger.
+// authority where f names a merger, the queue where one holds the change.
+// Every approval is counted by M4's one rule ([approvalTally]): an eligible
+// non-author's standing verdict on the head revision or carried to it
+// unchanged, so one on code that moved since counts for none.
 func JudgeGate(f GateFacts, r GateRules) Readiness {
 	j := newReadinessJudge(f.Rows, f.Roster)
 	g := gateJudge{readinessJudge: j, f: f, rules: r, tally: j.tally()}
@@ -818,8 +700,9 @@ func JudgeGate(f GateFacts, r GateRules) Readiness {
 }
 
 // queued is the queue precondition of a change its target's merge queue holds:
-// COMPUTING, waiting on nobody — the queue lands it — its place and its state
-// named, and its entry carried whole ([Precondition.Queue]).
+// COMPUTING, waiting on nobody since the queue lands it — a queued change is
+// merging, not READY — its place and state named and its entry carried whole
+// ([Precondition.Queue]).
 func (g gateJudge) queued() Precondition {
 	q := *g.f.Queue
 	doing := "waits"
@@ -866,12 +749,14 @@ func (g gateJudge) approval() Precondition {
 }
 
 // humanApproval is the human_approval precondition: met where no human path
-// holds the head revision — none matches a path it touches, or every path an
-// entry matched is of a class its unless waives — or a PERSON'S approval
-// counts; computing until the head revision's facts against its target are
-// recorded, and while the rules' human paths this snapshot's repository row
-// digests are not the ones its home matched them against; unmet otherwise,
-// waiting on the persons asked to review it, or on its owner to ask one.
+// holds the head revision (none matches a touched path, or its unless waives
+// every path it matched) or a PERSON'S approval counts; computing until the
+// head revision's facts against its target are recorded, and while this
+// snapshot's human-paths digest is not the one its home matched against (the
+// change is due at once, [ReadChangesDue]); unmet otherwise, waiting on the
+// persons asked or on its owner to ask one. No glob is matched here: the
+// home's recorded match ([Revise.HumanPaths]; humanpaths.go) keeps
+// MaxTargetHumanPaths globs × MaxTouchedPaths paths off every judgment.
 func (g gateJudge) humanApproval() Precondition {
 	p := Precondition{Kind: PreconditionHumanApproval}
 	n, target := g.rows.Change.Revision, g.rows.Change.TargetRef
@@ -885,7 +770,7 @@ func (g gateJudge) humanApproval() Precondition {
 	if !current {
 		// THE HOME MATCHED OTHER RULES than this snapshot's: judged on the
 		// stale match, a removed human path would still hold the change and
-		// an added one never — and no glob is matched here (humanpaths.go).
+		// an added one never.
 		p.State = PreconditionComputing
 		p.Detail = fmt.Sprintf("%s's human paths changed since revision %d's facts matched its paths to them: its "+
 			"home matches them again", g.rows.Repo.Name, n)
@@ -925,14 +810,12 @@ func (g gateJudge) humanApproval() Precondition {
 	return p
 }
 
-// humanPathsHolding is the globs of the gate's human paths that hold the head
+// humanPathsHolding is the globs of the gate's human paths holding the head
 // revision to a person and those its unless waived, as its home matched them
-// ([HeadFacts.HumanPaths]; humanpaths.go), each glob once — a glob some entry
-// holds is held, whichever other entry of it was waived — and whether that
-// match is CURRENT: made against the human paths this snapshot's repository
-// row digests, every place it names one of the gate's. A match of other rules
-// names its entries by places in a list that is not the gate's, which no
-// place may be read against.
+// ([HeadFacts.HumanPaths]), each once — a glob some entry holds is held,
+// whichever other entry of it was waived — and whether the match is CURRENT:
+// made against this snapshot's digest, every place in the gate's list. A
+// match of other rules names places in another list, never to be read here.
 func (g gateJudge) humanPathsHolding() (held, waived []string, current bool) {
 	h := g.f.Head
 	if h.HumanPathsDigest != g.f.HumanPathsDigest {
@@ -958,16 +841,14 @@ func (g gateJudge) humanPathsHolding() (held, waived []string, current bool) {
 
 // everyPathOf reports a head revision every path of which is of one of
 // classes, and the classes its paths are: its facts touch a list, not all,
-// classified COMPLETELY — an incomplete classification leaves paths no lexer
-// reached, which no list names — and every path classed by one of them, a
-// whitespace_only change being a comment_only one too.
+// classified COMPLETELY (an incomplete one leaves paths no lexer reached),
+// a whitespace_only change being a comment_only one too.
 //
-// BY COUNTING, NEVER BY THE PATHS: each touched path is listed under its
-// narrowest class alone, each once and each a place of the list
-// ([classesProblem], which every record passed), so every path is classed
-// exactly where the two lists together are as long as the touched list — and
-// the gate reads its length (code_revision_facts.touched_count), never the
-// list of up to MaxTouchedBytes.
+// BY COUNTING, NEVER BY THE PATHS: each touched path is listed once, under
+// its narrowest class ([classesProblem], which every record passed), so every
+// path is classed exactly where the two lists sum to
+// code_revision_facts.touched_count; the list, up to MaxTouchedBytes, is
+// never read.
 func (g gateJudge) everyPathOf(classes []ChangeClass) ([]ChangeClass, bool) {
 	h := g.f.Head
 	if h.TouchesAll || !h.Classes.Complete {
@@ -995,13 +876,15 @@ func (g gateJudge) everyPathOf(classes []ChangeClass) ([]ChangeClass, bool) {
 
 // ownersApproval is the owners_approval precondition: met where the head
 // revision touches no owned path, or ONE counted approval comes from somebody
-// eligible for every path owner it touches — a person, or a seat on every one
-// of their lead chains ([gateJudge.commonEligible]); computing until the head
-// revision's facts against its target are recorded, and while the owners this
-// snapshot's repository row digests are not the ones its home matched them
-// against; unmet
-// otherwise, waiting on the common seats that may review it and the persons
-// asked, or on its owner to ask one.
+// eligible for every path owner it touches — a person, or a seat on all their
+// lead chains ([gateJudge.commonEligible]); computing until the head
+// revision's facts against its target are recorded, and while this
+// snapshot's owners digest is not the one its home matched against (the
+// change is due at once, [ReadChangesDue]); unmet otherwise, waiting on the
+// common seats and the persons asked, or on its owner to ask one. No glob is
+// matched here: the recorded match ([Revise.RequestedOwners]) keeps
+// MaxPathOwners × MaxPathOwnerPaths globs × MaxTouchedPaths paths off every
+// decide's round.
 func (g gateJudge) ownersApproval() Precondition {
 	p := Precondition{Kind: PreconditionOwnersApproval}
 	n, target := g.rows.Change.Revision, g.rows.Change.TargetRef
@@ -1014,7 +897,7 @@ func (g gateJudge) ownersApproval() Precondition {
 	case h.OwnersDigest != g.f.OwnerRowsDigest:
 		// THE HOME MATCHED OTHER OWNERS than this snapshot's: judged on
 		// the stale match, a removed owner would still hold the change and
-		// an added one never — and no glob is matched here (the file's head).
+		// an added one never.
 		p.State = PreconditionComputing
 		p.Detail = fmt.Sprintf("%s's path owners changed since revision %d's facts matched its paths to them: its "+
 			"home matches them again", g.rows.Repo.Name, n)
@@ -1153,21 +1036,18 @@ func (g gateJudge) mergeAuthority() Precondition {
 	return MergeAuthority(g.f.Merger, g.rows.Repo, g.rows.Change.TargetRef, g.rules, g.roster)
 }
 
-// MergeAuthority is the merge_authority precondition of m, merging into
-// target of repo under rules — the gate target is held to, combined with
-// code.merge_by_floor ([GateRulesOf]) — judged on roster: a person always
-// holds it; on a target no rule protects, whoever may push the branch — a
-// fast-forward of it ([Grant.RefRule]); on a protected one, the standing the
-// gate's merge_by and the company's floor ask — writers write the repository,
-// maintainers maintain it, persons are persons. Unmet, it waits on the seat
-// that maintains the repository where one may merge; a merge only a person
-// makes names nobody, since any person may.
+// MergeAuthority is the merge_authority precondition of m merging into target
+// of repo under rules (floor included, [GateRulesOf]), judged on roster: a
+// person always holds it; on a target no rule protects, whoever may
+// fast-forward the branch ([Grant.RefRule]); on a protected one, the standing
+// merge_by asks — writers write, maintainers maintain, persons are persons.
+// Unmet, it waits on the repository's maintaining seat where one may merge,
+// and on nobody where only a person may, since any person may.
 //
-// PURE OVER VALUES, AND THE ONE RULE OF THE TERM: a readiness judges it for
-// its merger, and the Gitlet node judges it for the colleague a seat's merge is
-// made for (internal/gitlet/host's mergeCeiling) from the chart, the row and
-// the gate it already holds, with no read of the change made again as that
-// colleague. Neither restates it.
+// PURE OVER VALUES, THE TERM'S ONE RULE: a readiness judges it for its
+// merger, and the Gitlet node for the colleague a seat's merge is made for
+// (internal/gitlet/host's mergeCeiling) from what it already holds, with no
+// read made again as that colleague. Neither restates it.
 func MergeAuthority(m Principal, repo RepoRef, target string, rules GateRules, roster Roster) Precondition {
 	p := Precondition{Kind: PreconditionMergeAuthority}
 	who := "this credential, bound to nobody,"
@@ -1191,12 +1071,11 @@ func MergeAuthority(m Principal, repo RepoRef, target string, rules GateRules, r
 		p.Detail = fmt.Sprintf("%s merges into %s, which no rule protects, as it may push it", who, target)
 		return p
 	}
-	// Declared by its type, never as need := AccessMaintain: AccessMaintain
-	// repeats the specification before it (const ( AccessNone Access = iota;
-	// … )), a constant internal/sourcetree/decltype cannot type, and the
-	// cache's writers gate (TestNothingButSyncWritesACache) refuses a value
-	// it cannot type handed to a call it cannot type either, fmt.Sprintf
-	// among them, since it cannot tell it from a gitproc.Cmd.
+	// Declared by its type, never need := AccessMaintain: AccessMaintain
+	// repeats the iota spec before it, which internal/sourcetree/decltype
+	// cannot type, and TestNothingButSyncWritesACache refuses an untyped value
+	// handed to a call it cannot type (fmt.Sprintf among them), which it
+	// cannot tell from a gitproc.Cmd.
 	var need Access
 	switch rules.MergeBy {
 	case MergeByWriters:
@@ -1302,17 +1181,12 @@ func appendOnce[T comparable](list []T, v T) []T {
 	return append(list, v)
 }
 
-// The merge gate's reads, each registered in plan_test.go — beside M4's
-// readiness rows and the repositories' rules, read by their own statements:
-// the head revisions' facts the gate reaches, driven from the list of
-// (change, revision) pairs, one seek of their key a pair; what a list of
-// repositories' matches are held to, one seek of each one's key; and every
-// attempt of
-// a required check on a head commit checked for the change's target, driven
-// from the list of (repository, commit, target, check) keys, one seek of the
-// checks' key a key — the key NAMED, since code_checks_finished_idx leads with
-// the repository too and the planner takes it for the repository alone
-// (planner.go).
+// The merge gate's own reads, each registered in plan_test.go: the head
+// revisions' facts, one seek a (change, revision) pair; the repositories'
+// match digests, one seek a repository; and required checks' attempts, one
+// seek a (repository, commit, target, check) key — that index NAMED, since
+// code_checks_finished_idx also leads with the repository and the planner
+// takes it for the repository alone (planner.go).
 const (
 	gateHeadsSQL = `SELECT f.change_id, f.target_ref, f.touches_all, f.touched_count, f.classes, f.owners,
 			f.skipped, f.owners_digest, f.human_paths_digest, f.human_paths

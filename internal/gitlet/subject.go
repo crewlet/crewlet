@@ -12,33 +12,27 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// ObjectKind is what an object on the code log is.
-//
-// A NAMED STRING TYPE whose Valid is false for a kind this build has never
-// heard of — and the literal is RETAINED either way, for the reason the
-// tracker's kind gives: a newer peer publishes a kind this build does not know,
-// and the deferral this build files it under is formed from that literal.
+// ObjectKind is what an object on the code log is. Valid is false for a kind
+// this build does not know, and the literal is kept either way: a newer peer
+// publishes kinds this build lacks, and the deferral it files them under is
+// formed from that literal.
 type ObjectKind string
 
-// The ten kinds.
-//
-// EXPORTED AND ENUMERATED because the readers that compare against them cannot
-// see each other: the publisher builds the subject, the applier's dispatch
-// switches on it, and the domain's own declaration must classify every one.
+// The ten kinds, exported because their readers cannot see each other: the
+// publisher builds the subject, the applier's dispatch switches on it, and the
+// domain's declaration must classify every one.
 const (
 	// KindName is a repository NAME's claim, and the subject a create
 	// arbitrates on: two reconciles creating "web" must contend, and two
 	// fresh repository ids never would. Its id is [NameToken] of the name.
 	KindName ObjectKind = "name"
 
-	// KindRepo is one repository, by its id — the subject every record that
-	// moves its refs or its pack set, or governs them, arbitrates on. ONE
-	// SUBJECT A REPOSITORY rather than one a ref, because every write on a
-	// repository updates the repository row too, so a per-ref subject would
-	// never narrow a write's contention; and two pushes to one repository
-	// meet at the broker, where exactly one record lands per round. It also
-	// carries the key its persons' viewed marks are digested under
-	// ([OpViewedKey]).
+	// KindRepo is one repository, by its id: the subject of every record that
+	// moves or governs its refs or pack set. ONE SUBJECT A REPOSITORY, not a
+	// ref, because every write updates the repository row too, so a per-ref
+	// subject would never narrow contention; two pushes to it meet at the
+	// broker, one landing per round. It also carries the key its persons'
+	// viewed marks are digested under ([OpViewedKey]).
 	KindRepo ObjectKind = "repo"
 
 	// KindEviction is a node's eviction from THIS log, or its readmission:
@@ -50,11 +44,10 @@ const (
 	// of zero on the generation's own number.
 	KindGeneration ObjectKind = "generation"
 
-	// KindCompany is the company's own state on this log, and its one
-	// object is the ACTIVATION FENCE ([CompanySubject]): the configuration
-	// activation the repositories code.repos declares were last reconciled
-	// from, which refuses every older activation's decision about them. A
-	// gate, by its kind — see [ObjectKind.InstallsGate].
+	// KindCompany is the company's own state on this log; its one object is
+	// the ACTIVATION FENCE ([CompanySubject]): the activation code.repos'
+	// repositories were last reconciled from, which refuses every older
+	// activation's decision about them. A gate by kind ([ObjectKind.InstallsGate]).
 	KindCompany ObjectKind = "company"
 
 	// KindBarrier is the read index's payload-free append, on ONE subject
@@ -67,73 +60,50 @@ const (
 	// transaction that applies it; this domain writes nothing for it.
 	KindTrimmed ObjectKind = statelog.TrimmedKind
 
-	// KindChange is one change (web!42), by its id — the subject what is said
-	// ABOUT a change is written on: who is asked to review it, its comments
-	// and the threads they form, its reviews and the answers to their
-	// findings ([ConversationOps]). ITS OWN SUBJECT, NEVER
-	// ITS REPOSITORY'S: a change's lifecycle is on the repository's subject,
-	// in the committer's one queue beside the pushes that move its branches,
-	// and a comment decided there would wait behind a push's batch and
-	// contend with every push to the repository over rows it never writes.
-	// ARBITRATED, and published only by the repository's committing data
-	// node ([ChangeWriter]), which takes one change's writes one at a time.
-	// A table is written by the records of ONE subject: the repository's
-	// keep code_changes, its authors, revisions and body, and this one the
-	// conversation's tables.
+	// KindChange is one change (web!42), by its id: the subject of what is said
+	// ABOUT it — reviewers, comments and their threads, reviews and the answers
+	// to their findings ([ConversationOps]). ITS OWN SUBJECT, NEVER ITS
+	// REPOSITORY'S: the lifecycle is on that one, in the committer's queue
+	// beside the pushes, and a comment decided there would wait behind a push's
+	// batch and contend over rows it never writes. ARBITRATED, published only by the
+	// repository's committing data node ([ChangeWriter]), one change's writes at
+	// a time. A table is written by ONE subject's records: the repository's keep
+	// code_changes, its authors, revisions and body; this one the conversation's.
 	//
-	// BASE FORMAT ([RecordVersion]): the domain landed on main with this
-	// kind, so every build that meets a record on a change's subject reads
-	// it. It is no gate.
+	// BASE FORMAT ([RecordVersion]): every build that meets a record on a
+	// change's subject reads it. It is no gate.
 	KindChange ObjectKind = "change"
 
-	// KindChecks is a repository's CHECKS, by the repository's id
-	// (checks.<repo>): the subject what became of each of its checks — queued,
-	// claimed, ended — is written on (checks.go). ITS OWN SUBJECT, NEVER
-	// THE REPOSITORY'S, for the conversation's reason: a check's records share
-	// nothing with the repository's pushes and would wait behind their
-	// batches in its committer's queue. ADDITIVE: its records carry no
-	// expectation, and commute because every apply on it is a join
-	// ([joinCheck]). A table is written by the records of ONE subject:
-	// code_checks and code_check_logs by this one's.
+	// KindChecks is a repository's CHECKS, by its id (checks.<repo>): the
+	// subject each check's fate — queued, claimed, ended — is written on
+	// (checks.go). ITS OWN SUBJECT, NEVER THE REPOSITORY'S, for [KindChange]'s
+	// reason. ADDITIVE: its records carry no expectation and commute, every
+	// apply a join ([joinCheck]). Its records alone write code_checks and
+	// code_check_logs.
 	//
 	// BASE FORMAT, as the checks subject is (checks.go). It is no gate.
 	KindChecks ObjectKind = "checks"
 
-	// KindPerson is one PERSON'S CODE INBOX, by the human seat they hold
-	// (person.<handle>): the subject the marks they lay over their code
-	// notices are written on ([OpMarks], marks.go) — how far they have read
-	// on this log, what they marked out of order, what they put off and
-	// which reasons are theirs to act on; and the files of a change they
-	// marked viewed ([OpViewed], viewed.go). ITS OWN SUBJECT, NEVER A
-	// CHANGE'S OR A REPOSITORY'S: a mark is about the person's own
-	// bookkeeping across every change that reached them, and decided on a
-	// change's subject it would contend with that change's conversation
-	// over rows it never writes. ARBITRATED, so two screens marking two
-	// notices at once both land — each gesture resolved against the record
-	// its own decide reads (internal/inbox's Gesture) — and published by
-	// whichever data node a mark is asked of ([Marks]): the marks are the
-	// person's, kept beside the notices they mark on THIS log, because a
-	// position is a coordinate on one stream and a person's tracker marks
-	// count in another (internal/inbox's package doc). A table is written
-	// by the records of ONE subject: code_person_marks and
-	// code_viewed_files by this one's.
+	// KindPerson is one PERSON'S CODE INBOX, by their human seat (person.<handle>):
+	// the subject of the marks over their code notices ([OpMarks], marks.go) and
+	// the files of a change they marked viewed ([OpViewed], viewed.go). ITS OWN
+	// SUBJECT: a mark spans every change that reached them, and on a change's
+	// subject would contend with its conversation over rows it never writes.
+	// ARBITRATED, so two screens marking at once both land, each gesture resolved
+	// against the record its decide read (internal/inbox's Gesture); published by
+	// whichever data node is asked ([Marks]), on THIS log beside the notices, as a
+	// position is a coordinate on one stream (internal/inbox's package doc). Its
+	// records alone write code_person_marks and code_viewed_files.
 	//
-	// BASE FORMAT, as [KindChange] is: the kind is, and its viewed op is
-	// versioned ([ViewedVersion]). It is no gate.
+	// BASE FORMAT, as [KindChange]; the viewed op is versioned ([ViewedVersion]). No gate.
 	KindPerson ObjectKind = "person"
 )
 
-// ObjectKinds are the ten, and THE ORDER IS LOAD-BEARING.
-//
-// [statelogtest] publishes the FIRST THREE a domain declares, twice each, in
-// order — so the declaration decides what the framework's own suite certifies.
-// These three are a real sequence: a create on a name, whose payload makes the
-// repository; a push on that repository; and an eviction. A push on a
-// repository no create made is a malformed record under a strict replay, so
-// the repository before its name would certify a failure. A kind added later
-// is APPENDED, so the three never move: a change's subject, a repository's
-// checks and a person's code inbox are last, and a record on any of them needs
-// what no record of the suite's opens.
+// ObjectKinds are the ten, and THE ORDER IS LOAD-BEARING: [statelogtest]
+// publishes the FIRST THREE a domain declares, twice each, in order. They are a
+// real sequence — a create on a name, which makes the repository; a push on it;
+// an eviction — and a push on a repository no create made is malformed under a
+// strict replay. A later kind is APPENDED, so the three never move.
 var ObjectKinds = []ObjectKind{
 	KindName, KindRepo, KindEviction, KindGeneration, KindCompany,
 	KindBarrier, KindTrimmed, KindChange, KindChecks, KindPerson,
@@ -143,30 +113,22 @@ var ObjectKinds = []ObjectKind{
 func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 
 // Arbitrated reports whether writes on this kind carry a per-subject
-// expectation.
-//
-// SEVEN OF TEN DO. The barrier shares one subject across the whole domain, so
-// an expectation there would serialise every linearizable read behind every
-// other one; a trimmed record REMOVES anchors, so an anchor of its own would
-// be the one row it exists not to leave behind (ADR-0080); and a repository's
-// checks are ADDITIVE — its records commute, every apply a join (checks.go) —
-// so an expectation would put every runner's claim and ending behind every
-// other's for nothing.
+// expectation. Three do not: the barrier shares one subject across the domain,
+// so an expectation would serialise every linearizable read behind every other;
+// a trimmed record REMOVES anchors, so an anchor of its own is the row it exists
+// not to leave (ADR-0080); and checks are ADDITIVE (checks.go), so an
+// expectation would queue every runner's claim and ending for nothing.
 func (k ObjectKind) Arbitrated() bool {
 	return k != KindBarrier && k != KindTrimmed && k != KindChecks
 }
 
 // InstallsGate reports a kind whose unknown version must STOP the applier
-// rather than be filed for later, because the record installs a rule under
-// which later records produce no rows on any node.
-//
-// TWO KINDS ARE GATES BY KIND. An eviction drops a node's records; the
-// company's activation fence drops every older activation's decision about a
-// repository. A deferred gate does not postpone one record's effect on one
-// node: it silently licenses every record above it — a node that deferred a
-// fence would apply an older activation's settings every peer refused, and
-// its copy would differ from theirs for ever. The purge is the third gate, by
-// its OP on an ordinary repository ([RecordEnvelope.InstallsGate]).
+// rather than be filed for later: the record installs a rule under which later
+// records produce no rows on any node. An eviction drops a node's records; the
+// activation fence drops every older activation's decision. A deferred gate
+// licenses every record above it — a node that deferred a fence would apply
+// settings every peer refused, and differ from them for ever. The purge is the
+// third gate, by its OP ([RecordEnvelope.InstallsGate]).
 func (k ObjectKind) InstallsGate() bool { return k == KindEviction || k == KindCompany }
 
 // Subject is the object a record arbitrates over.
@@ -179,18 +141,13 @@ type Subject struct {
 const activationID = "activation"
 
 // NameToken is the address a repository name is arbitrated on: the first
-// sixteen bytes of SHA-256 over the name, in lower-case hex.
-//
-// # Why a token rather than the name
-//
-// ARBITRATION NEEDS ONLY EQUALITY — two writers claiming one name must land on
-// one subject, and nothing reads the name back out of a subject. A 32-byte
-// token is a BOUNDED key in the broker's per-subject index on every member for
-// the life of the deployment, and it stays one when a later grammar admits a
-// name the broker's subject alphabet cannot carry. Nothing is lost: the
-// record's payload carries the name, and the applier recomputes the token from
-// it and REFUSES a record that arbitrated one name and claims another. A name
-// is canonical by its grammar ([ValidName]), so there is nothing to normalise.
+// sixteen bytes of SHA-256 over the name, in lower-case hex. Arbitration needs
+// only equality, and a 32-byte token is a BOUNDED key in the broker's
+// per-subject index on every member for the deployment's life, even once a
+// grammar admits a name the subject alphabet cannot carry. The payload carries
+// the name; the applier recomputes the token and REFUSES a record that
+// arbitrated one name and claims another. A name is canonical by its grammar
+// ([ValidName]), so nothing is normalised.
 func NameToken(name string) string {
 	sum := sha256.Sum256([]byte(name))
 	return hex.EncodeToString(sum[:16])
@@ -257,12 +214,10 @@ func (s Subject) statelog() statelog.Subject {
 	return statelog.Subject{Kind: string(s.Kind), ID: s.ID}
 }
 
-// Validate refuses a subject that cannot address an object.
-//
-// A KIND THIS BUILD DOES NOT KNOW IS NOT REFUSED HERE. It is refused where a
-// record is WRITTEN and accepted where one is READ — the asymmetry the
-// two-pass decode exists for: this build must hold a newer peer's record under
-// its own subject without being able to act on it.
+// Validate refuses a subject that cannot address an object. An unknown kind
+// is NOT refused here: it is refused where a record is WRITTEN and accepted
+// where one is READ (the two-pass decode), so this build holds a newer peer's
+// record under its own subject without acting on it.
 func (s Subject) Validate() error {
 	if s.Kind == "" {
 		return fmt.Errorf("gitlet: a subject with no kind addresses the log's " +

@@ -15,18 +15,12 @@ import (
 )
 
 // THE REF LIFECYCLE'S RULE KEEPS EVERY BRANCH THAT IS NO LONGER IDLE, each
-// with its own sentence, in the order it asks — an earlier push of the batch,
-// a hold recorded past the page, the default branch, a live change's source
-// (naming the change) and its target, a writer
-// that is not the seat, the window — and lets an idle branch go. A hold
-// recorded AT the page's position was taken before it, and the pass's own read
-// of the holds answered it: it keeps nothing here.
+// with its own sentence, in the order it asks, and lets an idle branch go. A
+// hold recorded AT the page's position predates it and keeps nothing.
 //
-// Mutations: drop the held term → the held row is deleted, red; compare it
-// with >= → the row held at the page is kept, red; drop the default term → the
-// default is deleted, red; judge the window by the deciding node's clock
-// rather than the proposal's — the case's `now` is the pass's — and the window
-// rows flip, red.
+// Mutations: drop the held term, or compare it with >=, or drop the default
+// term → red; judge the window by the deciding node's clock rather than the
+// proposal's → the window rows flip, red.
 func TestExpiryRuleKeepsWhatIsNoLongerIdle(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
@@ -56,8 +50,8 @@ func TestExpiryRuleKeepsWhatIsNoLongerIdle(t *testing.T) {
 		{"set within the window", with(func(r *ExpiryRow) { r.At = now.Add(-RefExpiry + time.Hour) }), false,
 			expiryKeptRecent},
 		{"set at the window's edge", with(func(r *ExpiryRow) { r.At = now.Add(-RefExpiry) }), false, ""},
-		// THE FIRST REASON WINS, so a sentence says the one that matters
-		// most: a branch somebody else set and a turn holds is held.
+		// THE FIRST REASON WINS: a branch somebody else set and a turn
+		// holds is held.
 		{"held and set by somebody else", with(func(r *ExpiryRow) { r.Held, r.Seat = through+1, "" }), false,
 			expiryKeptHeld},
 		// ...and a branch that is one live change's source and another's
@@ -75,11 +69,8 @@ func TestExpiryRuleKeepsWhatIsNoLongerIdle(t *testing.T) {
 	}
 }
 
-// EVERY SENTENCE THE RULE KEEPS A BRANCH WITH FITS A COMMAND'S DETAIL — the
-// receiver-details test's bound, which a committer's answer is held to as
-// well.
-//
-// The one sentence that carries a name is held at its longest: the longest
+// EVERY SENTENCE THE RULE KEEPS A BRANCH WITH FITS A COMMAND'S DETAIL
+// (maxDetailBytes), the one carrying a name at its longest: the longest
 // repository name and the largest change number.
 //
 // Mutation: lengthen one past maxDetailBytes → red.
@@ -95,10 +86,9 @@ func TestEveryExpirySentenceFitsADetail(t *testing.T) {
 }
 
 // AN EXPIRY IS CUT TO WHAT ITS ENTRY HOLDS, as well as to MaxCommandsPerPush:
-// a page of plain refs is one push, and a page of the longest refs JSON
-// spells six bytes a character is cut where the next deletion would not fit —
-// each push passing Proposal.Validate, the next deletion past it refused
-// TooWideError — so no expiry is refused every pass for its width.
+// a page of plain refs is one push; a page of the longest refs, six JSON bytes
+// a character, is cut where the next deletion would be TooWideError, so no
+// expiry is refused every pass for its width.
 //
 // Mutation: cut by MaxCommandsPerPush alone → the wide page is one push,
 // refused, red.

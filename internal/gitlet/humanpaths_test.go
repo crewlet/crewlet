@@ -7,18 +7,14 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// THE HUMAN PATHS DIGEST IS OF WHAT HOLDS A TARGET: the digest a revision's
-// recorded human-path match is held to is a function of the human paths the
-// repository's rules hold a target to and nothing else — the same in any
-// order of the rules, the same whatever a rule's merge_by, and another once a
-// rule names another glob or unless, matches another pattern, or stops
-// holding the checks' own directory by setting agents_edit_checks. And the
-// home's match names each entry by its place in the target's human paths, its
-// digest the rules'.
+// THE HUMAN PATHS DIGEST IS OF WHAT HOLDS A TARGET, and nothing else: the
+// same in any rule order and whatever a rule's merge_by, another once a rule
+// names another glob or unless, matches another pattern, or sets
+// agents_edit_checks. The home's match names each entry by its place in the
+// target's human paths, beside the rules' digest.
 //
-// Mutation: digest a rule's own human paths alone, leaving out the checks'
-// directory a rule requiring checks holds — agents_edit_checks digests alike,
-// red.
+// Mutation: digest a rule's own human paths without the checks' directory
+// (agents_edit_checks digests alike, red).
 func TestTheHumanPathsDigestIsOfWhatHoldsATarget(t *testing.T) {
 	t.Parallel()
 	deploy := bareGate()

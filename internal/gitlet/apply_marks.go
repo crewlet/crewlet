@@ -9,11 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/inbox"
 )
 
-// A PERSON'S MARKS, APPLIED: a marks record's gesture laid over the row the
-// person's last record left — the applier's write of code_person_marks, and
-// no other code's (the replicated estate is written by its log's applier
-// alone). marks.go has the record, its decide and why the apply reads no
-// notice.
+// A person's marks, applied: a marks record's gesture laid over the row the
+// person's last record left. marks.go has the record, its decide and why the
+// apply reads no notice.
 
 // applyMarks applies one marks record: the gesture it carries, with the
 // positions its decide found, to the row the person's last record left, at the
@@ -37,9 +35,9 @@ func (a *Applier) applyMarks(ctx context.Context, tx *sql.Tx, at applyContext) (
 		return 0, err
 	}
 	if err := inbox.Apply(&marks, p.Gesture.Gesture(), p.Positions, at.brokerAt); err != nil {
-		// THE SAME ON EVERY NODE: the rules, the row before and the instant
-		// are each node's alike, so a refusal here is every node's, and the
-		// record writes nothing anywhere rather than stopping an applier.
+		// The rules, the prior row and the instant are every node's alike,
+		// so the refusal is too: the record writes nothing rather than stop
+		// an applier.
 		return 0, nil //nolint:nilerr // a gesture the rules refuse at the apply writes no row on any node
 	}
 	if err := writeMarks(ctx, tx, p.Handle, marks, at.packed); err != nil {

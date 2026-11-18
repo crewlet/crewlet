@@ -12,12 +12,10 @@ import (
 // Prompt is what a code wake asks of the seat it reached: the change, why the
 // seat hears about it, and the tool that answers it.
 //
-// It NAMES ITS TOOLS, as the tracker's and the knowledge base's do: they ship
-// with this build under names this build chose, and every seat a code wake
-// reaches is offered the code tools that read a change. The names are read
-// from internal/toolname, because internal/agent/builtin, which registers
-// them, imports this package; TestThePromptNamesOnlyRegisteredChangeTools
-// holds the two together.
+// It names its tools, which ship with this build and are offered to every
+// seat a code wake reaches. They come from internal/toolname because
+// internal/agent/builtin, which registers them, imports this package;
+// TestThePromptNamesOnlyRegisteredChangeTools holds the two together.
 type Prompt struct{}
 
 var _ notify.Prompt = Prompt{}
@@ -25,11 +23,9 @@ var _ notify.Prompt = Prompt{}
 // Source implements [notify.Prompt]: [Source].
 func (Prompt) Source() string { return Source }
 
-// RequiresRecon implements [notify.Prompt]: ALWAYS. A code wake is a pointer
-// at a change — its diff, its findings, its revisions — and even a comment or
-// a review's summary reads against a diff the wake does not carry, so a seat
-// filtering its context against the wake alone would filter against the least
-// of what it is about.
+// RequiresRecon implements [notify.Prompt]: always. A code wake points at a
+// change, and even a comment reads against a diff the wake does not carry, so
+// filtering context against the wake alone would miss most of what it is about.
 func (Prompt) RequiresRecon(notify.Inbound) bool { return true }
 
 // SubjectIsLabel implements [notify.Prompt]: never — the subject is the
@@ -37,26 +33,21 @@ func (Prompt) RequiresRecon(notify.Inbound) bool { return true }
 func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
 
 // Addressed implements [notify.Prompt]: the reasons that ask something of
-// whoever hears them ([Reason.Addressed]) — a mention, an ask to review or to
-// look again, a request for changes, a failed check, a broken target, a
-// conflict, a removal from the queue, a reply to a finding, a change ready to
-// merge. Everything else is news a seat may absorb in silence.
+// whoever hears them ([Reason.Addressed]); everything else is news a seat may
+// absorb in silence.
 func (Prompt) Addressed(n notify.Inbound) bool { return Reason(n.Metadata[MetaVia]).Addressed() }
 
 // PartitionKey implements [notify.Prompt]: the change, by its id.
 //
-// THE ID, never the reference: a change's number never moves, but its
-// repository's name does (a rename), and a conversation keyed on `web!42`
-// would split in two at the rename, each half looking ordinary.
+// The id, never the reference: a repository rename would split a
+// conversation keyed on `web!42` in two, each half looking ordinary.
 func (p Prompt) PartitionKey(metadata map[string]string, subject string) string {
 	return p.ConversationIdentity(metadata, subject)
 }
 
-// ConversationIdentity implements [notify.Prompt]: `change:<id>`, the same
-// key as the partition. A change is both the merge unit and the durable
-// thread — a review, a comment and a merge are activity ON the change — so
-// the two coincide. Empty for a wake that names no change, which no parser
-// writes and which then merges with nothing.
+// ConversationIdentity implements [notify.Prompt]: `change:<id>`, the
+// partition key too, since a change is both the merge unit and the durable
+// thread. Empty for a wake naming no change, which no parser writes.
 func (Prompt) ConversationIdentity(metadata map[string]string, _ string) string {
 	if id := metadata[MetaChangeID]; id != "" {
 		return string(KindChange) + ":" + id
@@ -76,24 +67,21 @@ func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 		Key: metadata[MetaWorkKey], Project: metadata[MetaWorkProject]}, true
 }
 
-// WakesActor implements [notify.Prompt]: only a check's ending, whose one
-// reason is a failed check of a change's head — news to the head's pusher,
-// its actor, above all ([Reason.WakesActor]). No other code record is news to
-// whoever made the change — a reviewer knows their review, a pusher their
-// merge — which the routing already holds to ([Concern.Hears]).
+// WakesActor implements [notify.Prompt]: only a check's ending, a failed
+// check of a change's head, which is news to its pusher above all
+// ([Reason.WakesActor]); no other code record is news to its actor
+// ([Concern.Hears]).
 func (Prompt) WakesActor(n notify.Inbound) bool { return n.EventType == string(OpCheckFinished) }
 
-// Provenance implements [notify.Prompt]: the change text the wake carries, on
-// Gitlet, by the writer its record names (stamped by
-// inboundOf); a wake whose stamp this build does not know reads as a remark in
-// the change's thread.
+// Provenance implements [notify.Prompt]: the change text the wake carries, by
+// the writer its record names (stamped by inboundOf); an unknown stamp reads
+// as a remark in the change's thread.
 func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
 	return notify.StatedHosted(n, parties, provenance.SourceChangeComment)
 }
 
-// DigestBody implements [notify.Prompt]: what somebody SAID keeps its text —
-// a comment, a review's summary, an ask's note, a description, a close's
-// reason — and a record that says nothing of its own collapses to its lead.
+// DigestBody implements [notify.Prompt]: what somebody said keeps its text,
+// and a record that says nothing of its own collapses to its lead.
 func (Prompt) DigestBody(_, body string) string { return body }
 
 // Build implements [notify.Prompt].
@@ -147,14 +135,13 @@ func wakeOpener(reason Reason, meta map[string]string) string {
 	case ReasonFindingReplied:
 		return "Somebody answered a finding you raised on change " + ref + "."
 	case ReasonReadyToMerge:
-		// NOT "your change": the wake reaches the authors who may merge it,
-		// and where none may, the lead of the repository's owner, whose change
-		// it is not.
+		// Not "your change": where no author may merge it, the wake reaches
+		// the owning unit's lead.
 		return "Change " + ref + " is ready to merge: every precondition its target's gate asks is met."
 	case ReasonMerged:
 		if why := meta[MetaNotClosed]; why != "" {
-			// THE QUEUE'S STEP TWO LEFT UNDONE (M5-D27): the change landed,
-			// and the work item its enqueue asked closed was not.
+			// The queue's step two left undone (M5-D27): the change landed, and
+			// the work item its enqueue asked closed was not.
 			return "Change " + ref + " was merged through its queue, and its work item was not closed: " +
 				strings.TrimSuffix(why, ".") + ". Close it where it lives, or say on it why it stays open."
 		}
@@ -177,9 +164,8 @@ func wakeOpener(reason Reason, meta map[string]string) string {
 }
 
 // wakeHandling is what a code wake asks of its seat, by why it hears: the tool
-// that answers, and where an answer goes — on the change, beside what it
-// answers. That an addressed wake may not end in silence is the executor's
-// contract, so it is not restated.
+// that answers, and that the answer goes on the change. That an addressed wake
+// may not end in silence is the executor's contract, not restated here.
 func wakeHandling(reason Reason) string {
 	switch reason {
 	case ReasonReviewRequested, ReasonReReview:
@@ -211,10 +197,8 @@ func wakeHandling(reason Reason) string {
 		return "Answer on the change with `" + toolname.CodeCommentOnChange + "`, in the thread you are answering, " +
 			"so the answer sits beside the question."
 	case ReasonReadyToMerge:
-		// THE WAKE REACHES WHOEVER MAY MERGE IT (M5-D26): its authors whom the
-		// gate lets merge it, else the owning unit's lead — so it offers the
-		// merge, and the lead's way out where the gate or the lead says the
-		// merge is somebody else's.
+		// The wake reaches whoever may merge it, else the owning unit's lead
+		// (M5-D26), so it offers the merge and a way to hand it on.
 		return "You hear it because you may merge it, or — where none of its authors may — because you " +
 			"lead the unit that owns the repository. Merge it with `" + toolname.CodeMergeChange + "` from the head you " +
 			"read (`expected_head`): on a target whose gate requires a check that puts it in the queue, " +
@@ -228,10 +212,9 @@ func wakeHandling(reason Reason) string {
 		"where that work is tracked."
 }
 
-// wakeSender renders who made the change as a colleague, by handle — the actor on
-// a code wake is a handle, or nobody for the home's records but a revision's
-// facts and a landing, which name its pusher and the pusher of the push that
-// brought the change's head into its target.
+// wakeSender renders the wake's actor as a colleague: a handle, or nobody for
+// the home's own records but a revision's facts and a landing, which name the
+// pusher.
 func wakeSender(n notify.Inbound, parties notify.Parties) string {
 	actor := n.Metadata[notify.ActorField]
 	if actor == "" {

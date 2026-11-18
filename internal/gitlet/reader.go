@@ -24,30 +24,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Reader answers questions about Gitlet from this node's own applied
-// rows.
+// Reader answers questions about Gitlet from this node's own applied rows.
 //
-// EVERY READ GOES THROUGH [statelog.Reader], which is what makes a level a
-// property of the answer: the refusal ladder (an evicted node, one below the
-// trim floor, one whose applier has stopped serves nothing), the coverage
-// probe over what the read is ABOUT, then the freshness target — and only then
-// the rows, in ONE transaction.
+// EVERY READ GOES THROUGH [statelog.Reader], so a level is a property of the
+// answer: the refusal ladder, the coverage probe over what the read is ABOUT,
+// the freshness target, then the rows in ONE transaction.
 //
-// AND THE POSITION IS THE ROWS' OWN. A snapshot's delta floor, its
-// full-or-delta decision and its stream identity, a later page's floor, a
-// resolved ref's position are claims about the rows, so every read here is
-// stamped with the checkpoint the framework hands its transaction
-// ([statelog.Reader.ReadThrough]): the code log's checkpoint row as that
-// transaction reads it, carried over the barriers this node had reached when
-// the read was released. Neither half alone describes the rows. The release
-// position is read before the transaction opens and the applier can commit in
-// between, so rows can be NEWER than it. And the checkpoint row LAGS every
-// barrier this node has decoded and not yet committed, so a node that has
-// committed them stamps the same rows higher: stamped with the row alone, a
-// linearizable read was answered below one another node had answered before
-// it — a cache took that for its log gone back, and a snapshot's next page,
-// read on another node at the floor its last page set, issued a cursor read
-// below where it began.
+// AND THE POSITION IS THE ROWS' OWN: every read is stamped with the checkpoint
+// [statelog.Reader.ReadThrough] hands its transaction — the checkpoint row
+// carried over the barriers reached at release. The release position alone can
+// be OLDER than the rows; the row alone LAGS decoded, uncommitted barriers, so a
+// linearizable read could stamp below another node's earlier answer, which a
+// cache takes for its log gone back.
 type Reader struct {
 	log    *statelog.Reader
 	limits func() Limits
@@ -94,17 +82,13 @@ type ReaderOptions struct {
 
 	// Roster is the SERVING node's current epoch's chart (the engine's
 	// codeRoster), read once a read: an agent asker is judged by it
-	// ([GrantOf]). Nil — or a roster that answers nil, a node with no epoch
-	// installed yet — refuses every agent's read [ErrNotServing], a refusal
-	// about THIS reader, so the estate asks a node that holds a chart: never
-	// "every seat reads", and never "this seat reads nothing" either, which
-	// only a chart may answer. A person's read asks nothing of it, since no
-	// chart decides a person's standing.
+	// ([GrantOf]). Nil, or a roster answering nil, refuses every agent's read
+	// [ErrNotServing] so the estate asks a node holding a chart
+	// ([Reader.chartFor]). A person's read asks nothing of it.
 	Roster func() Roster
 
 	// Now is the serving node's clock, which a change's routing is dated by
-	// ([RoutedPage.RetainedFrom]): whether its notices are still kept is a
-	// question of how old they are NOW, on the node whose sweeps keep them.
+	// ([RoutedPage.RetainedFrom]): its notices are kept by THIS node's sweeps.
 	// Nil reads the wall clock.
 	Now func() time.Time
 
@@ -137,23 +121,16 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 }
 
 // chartFor is the roster a read by asker is judged by: the serving node's
-// current chart for a seat's read and for every read that judges a change's
-// readiness (readiness: [ReadQuery.judgesReadiness]), read ONCE a read so
-// every row of a listing is judged by one chart, and none for anything else.
+// current chart for a seat's read and for every read judging a change's
+// readiness ([ReadQuery.judgesReadiness]), read ONCE a read so a listing is
+// judged by one chart, and none for anything else.
 //
-// A SEAT ASKING A READER THAT HOLDS NO CHART IS REFUSED ABOUT THE READER —
-// [ErrNotServing], before any row is read — and never judged. A node holds no
-// chart between the start of its code reader and the install of its first
-// epoch: at every boot, and at a first apply whose reconcile of code.repos
-// runs before the epoch is installed. Judged there, every seat stood nowhere
-// ([GrantOf] with no roster): a definite "not permitted", or a listing with
-// every repository left out — an ANSWER, which ends the estate's walk with
-// what every peer holding a chart would contradict. Refused about itself,
-// the reader is a node that ran nothing (estate's ranNothing), and the walk
-// asks the next data node. A chart that DENIES the seat is still the answer.
-// A READ OF CHANGES IS REFUSED SO WHOEVER ASKS, for the same reason: judged
-// with no chart, no seat's approval would count and no seat would maintain
-// the repository, a readiness every peer holding a chart would contradict.
+// A READER HOLDING NO CHART (from boot until its first epoch installs) REFUSES
+// such a read [ErrNotServing] before any row, never judges it: judged with no
+// roster every seat stands nowhere and no approval counts, an ANSWER that ends
+// the estate's walk with what every peer holding a chart would contradict.
+// Refused, the node ran nothing (estate's ranNothing) and the walk asks the
+// next data node. A chart that DENIES the seat is still the answer.
 func (r *Reader) chartFor(asker Principal, readiness bool) (Roster, error) {
 	if asker.Kind != PrincipalAgent && !readiness {
 		return nil, nil
@@ -192,12 +169,10 @@ type inTx struct{ tx *sql.Tx }
 
 func (t inTx) Read(_ context.Context, fn func(*sql.Tx) error) error { return fn(t.tx) }
 
-// checkpointIn is the code log's checkpoint row in tx: the position the rows
-// read in tx were committed through, and the stream they are keyed to — what
-// a WRITE's decision and a node's read-back of its own rows stamp, neither of
-// which the read authority serves. A read through the authority is handed its
-// stamp instead ([statelog.Reader.ReadThrough]), because this row lags the
-// barriers the read was released past ([Reader]).
+// checkpointIn is the code log's checkpoint row in tx, for a WRITE's decision
+// and a node's read-back of its own rows, which the read authority does not
+// serve. A read through the authority uses its handed stamp instead: this row
+// lags the barriers the read was released past ([Reader]).
 func checkpointIn(ctx context.Context, tx *sql.Tx) (statelog.Checkpoint, error) {
 	cp, _, err := statelog.CheckpointOf(ctx, inTx{tx}, topics.CodeLogStream)
 	return cp, err
@@ -212,15 +187,12 @@ func unpacked(packed int64) statelog.Position {
 	}
 }
 
-// checkFreshness is EVERY code read's one rule for the freshness it is asked
-// at, a point read's and a listing's alike: any level, refusing an EMPTY one —
-// a code read states its freshness, because a cache's sync and a git request
-// each need a specific one, and [ReadQuery.freshness] states the REST read
-// path's for a principal's read that named none — and a session read naming no
-// position on the code log, which would wait for nothing. A floor on ANOTHER
-// log is the request's mistake, refused first and as the framework's reader
-// refuses it ([statelog.ErrForeignPosition]), so a session read naming only
-// such a floor is told which floor is misplaced rather than that it named none.
+// checkFreshness is EVERY code read's one rule for its freshness: any level
+// but an EMPTY one (a cache's sync and a git request each need a specific one;
+// [ReadQuery.freshness] fills the REST path's), and no session read naming no
+// code-log position, which would wait for nothing. A floor on ANOTHER log is
+// refused first ([statelog.ErrForeignPosition]), so a session read naming only
+// such a floor is told which floor is misplaced.
 func checkFreshness(f statelog.Freshness) error {
 	switch {
 	case f.Level == "":
@@ -324,11 +296,8 @@ func namedIn(ctx context.Context, tx *sql.Tx, name string, cp statelog.Position)
 }
 
 // repoViewIn reads one repository and its rules as a push is judged by them
-// ([pushRulesIn]: no gate) in tx, at the checkpoint cp — the row every git
-// request's admission ([Reader.Resolve]), every page of a Gitlet node's sync
-// ([Reader.Snapshot]), every resolution of a ref and of a repository's detail,
-// and the lifecycle decides read. A decide that rewrites the rules reads them
-// whole beside it ([protectionsIn]), as it reads the path owners.
+// ([pushRulesIn]: no gate) in tx, at the checkpoint cp. A decide that rewrites
+// the rules reads them whole beside it ([protectionsIn]).
 func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position) (repoView, bool, error) {
 	var (
 		v                                                 repoView
@@ -362,19 +331,14 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 }
 
 // Resolve answers the repository a name names, deleted and purging ones
-// included — the caller decides what such a repository answers, and answers
-// it with [RepoGone]'s sentence for its state, built from the ref's Status and
-// DeletedAt and the deciding epoch's code.deleted_retention_days: a deleted
-// one is told when its purge MAY BEGIN, and a purging one that nothing brings
-// it back. Never a "restorable until" deadline, which would promise an
-// instant nothing holds the purge to, and which a purge already begun does not
-// have at all.
+// included: the caller answers such a one with [RepoGone]'s sentence (when its
+// purge MAY BEGIN, or that nothing brings it back), never a "restorable until"
+// deadline nothing holds the purge to.
 //
 // AN OLD NAME a rename left redirecting answers the repository it redirects
-// to, with [RepoRef.Redirect] naming its current name — Gitlet
-// serves a clone or a fetch of it and refuses a push naming the new name, and
-// a tool given the old name says so — for as long as the old name's row
-// lasts, which its release ends.
+// to, with [RepoRef.Redirect] naming its current name (a clone or fetch is
+// served, a push refused naming the new name), until the old name's row is
+// released.
 func (r *Reader) Resolve(ctx context.Context, q ResolveQuery) (RepoRef, error) {
 	if err := checkFreshness(q.Fresh); err != nil {
 		return RepoRef{}, err
@@ -401,10 +365,10 @@ func (r *Reader) Resolve(ctx context.Context, q ResolveQuery) (RepoRef, error) {
 	return out, nil
 }
 
-// page is one page's budget as it fills: at least one row, and it is full at
-// its row limit or once its rows' JSON reaches its byte budget — so a page
-// never carries more than its budget and one row. A row's size is its own
-// computed length (rowbytes.go), never an encoding made to be measured.
+// page is one page's budget as it fills: at least one row, full at its row
+// limit or once its rows' JSON reaches its byte budget, so it never carries
+// more than its budget and one row. A row's size is its computed length
+// (rowbytes.go).
 type page struct {
 	rows, bytes   int
 	maxRows, maxB int
@@ -427,79 +391,18 @@ func (p *page) full() bool { return p.rows >= p.maxRows || p.bytes >= p.maxB }
 // left is how many rows the page may still take.
 func (p *page) left() int { return p.maxRows - p.rows }
 
-// Snapshot answers one page of a repository's refs and packs: in full — every
-// pack and every live ref — or as a delta from q.Since — the packs added, the
-// refs moved (tombstones included) and the packs retired above it. Page 1
-// decides which ([choose]): a delta only from a position on this generation
-// of the log, at or past the repository's tombstone mark and its retired
-// mark, and carrying no more rows than the full answer would — the
-// retirements each would serve counted on its own side, so those both would
-// serve cancel.
-//
-// # Retirements
-//
-// A pack a record retires leaves code_packs for code_packs_retired, so a cache
-// holding its file learns of it only from a RETIRED phase, served after the
-// refs (and a delta's pushes): every retirement in (the phase's floor, page
-// 1's checkpoint], in (position, pack id, part) order. A delta's floor is its
-// own Since. A full answer's is q.RetiredSince, the caller's own position —
-// what the full answer stands in for a delta from — so a cache reading the
-// whole of a repository, as every Gitlet node does at its first round after a
-// restart, can still tell a pack file a compaction retired from one no row
-// accounts for, and keep what a merge leaves whole (its commit-graph) rather
-// than drop it for every repository compacted while the node was down. A
-// full answer serves them only when it can serve EVERY one ([choose]), and
-// RetiredFrom says whether it did.
-//
-// # Published layers
-//
-// The repository's published chain is the FIRST phase, served WHOLE on page 1
-// alone, read in page 1's own transaction: on every full answer, an empty
-// chain included, and on a delta exactly when a record changed the chain above
-// its floor (the repository's layers_position), and LayersServed says which.
-// It is never continued, so no cursor names it and a later page serves none:
-// the widest chain the bounds admit is MaxPublishedLayers rows and at most
-// MaxPacksPerRepo checksums across them, well under a page, and charged to
-// page 1's budget, so the packs after it get what is left. Read at page 1's
-// checkpoint it is consistent with the packs the snapshot serves — every pack
-// a layer names is live there, because nothing retires a published pack but
-// the record that replaces its layer — and a publication after it is the next
-// delta's to serve, as a retirement after it is.
-//
-// # One monotone history across pages
-//
-// A snapshot of more than one page is read in several transactions, possibly
-// on several nodes, while the repository is pushed to. Four rules keep its
-// pages one history:
-//
-//   - A ref a later page serves may name a commit whose pack was added after
-//     the packs phase passed its key (a push received earlier can commit
-//     later), so a snapshot of more than one page ends with a TAIL: every
-//     pack added after page 1's checkpoint. A pack served twice is harmless —
-//     a cache's target is a set keyed by pack.
-//   - Every later page reads at session, floored at the highest checkpoint
-//     any earlier page was read at (the cursor's Seen), so whichever node
-//     answers has applied at least what every earlier page was read at, or
-//     refuses `behind` and the router asks another — and the tail's last read
-//     is at or past every refs read.
-//   - The retired phase has NO TAIL: it stops at page 1's checkpoint, and a
-//     pack retired after it is the next delta's to serve, from a floor that
-//     checkpoint names. A later page that no longer finds such a pack among
-//     the packs costs no ref an object, because the record that retired it
-//     added the packs holding its objects (a merge drops none), after the
-//     checkpoint, which the tail serves.
-//   - A later page re-checks, in its own transaction, that the history did
-//     not move under the snapshot: the same stream, the same generation, for
-//     a delta no tombstone above its floor swept, no retirement above the
-//     retired phase's floor swept, and the same drop epoch — pages spanning
-//     an expunge's begin would serve, live, the packs it rewrote beside a row
-//     carrying its epoch, and a push checked against that copy would carry
-//     an epoch its objects were not read at ([Proposal.DropEpoch]). Any
-//     failure is [ErrSnapshotMoved], and the consumer reads the snapshot
-//     again from its first page, which decides full or delta afresh.
-//
-// The answer's Position is ALWAYS page 1's checkpoint — the position the whole
-// snapshot is complete as of, which a cache records once it applied every page.
+// Snapshot answers one page of a repository's refs and packs, in full or as a
+// delta from q.Since; page 1 decides which ([choose]). Phases: the published
+// chain FIRST, whole on page 1 alone (a full answer, or a delta whose floor is
+// below layers_position), its packs live as only the record replacing a layer
+// retires them; packs; refs; a delta's pushes; RETIRED packs in (floor, page
+// 1's checkpoint], from Since or, on a full answer, q.RetiredSince so a
+// restarted cache can tell a retired file from an unaccounted one; then a
+// multi-page TAIL of packs added after page 1 (a pack served twice is
+// harmless), since a later ref may name one. Later pages read at session
+// floored at the cursor's Seen and re-check stream, generation, sweeps and drop
+// epoch ([Proposal.DropEpoch]), else [ErrSnapshotMoved]. Retirements have no
+// tail: the retiring record added its objects' packs. Position is page 1's.
 func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, error) {
 	if q.RepoID == "" {
 		return RepoSnapshot{}, fmt.Errorf("%w: repo_id: a snapshot names its repository", ErrInvalid)
@@ -570,50 +473,17 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 }
 
 // choose is page 1's choice between a delta from q.Since and the full answer,
-// with the floor the answer's retired phase serves from: Since on a delta,
-// and on a full answer q.RetiredSince where it can serve every retirement
-// above it, else zero.
+// with the floor the retired phase serves from: Since on a delta; on a full
+// answer q.RetiredSince where it can serve EVERY retirement above it, else zero.
 //
-// A DELTA ONLY FROM A FLOOR WHOSE HISTORY IS WHOLE: a position on this
-// generation of the code log — one from another number space compares as
-// nothing in this one — and at or past both of the repository's marks, since
-// below the one a sweep removed the tombstones that told of deletions above
-// the floor, and below the other the retired rows that told of retirements.
-// Short of that the full answer is the only complete one.
-//
-// A FULL ANSWER SERVES ITS CALLER'S RETIREMENTS ONLY WHEN IT CAN SERVE EVERY
-// ONE: RetiredSince on this generation, at or past the retired mark for the
-// same reason, and at most [MaxFullRetirements] of them above it — one page,
-// whatever the repository's own rows, which say nothing of what serving none
-// costs ([MaxFullRetirements] says why). Short of any of them it serves none
-// rather than some, so a RetiredFrom it answers always names a floor its
-// retirements are COMPLETE above: a cache handed none treats every file no
-// row names as one no row accounts for, which is correct and only dearer.
-//
-// THEN THE TWO ANSWERS ARE WEIGHED LIKE WITH LIKE ([deltaOutweighs]): the
-// delta's refs, packs and retirements against the full answer's refs, packs
-// and the retirements it would serve. A caller asking from the position it
-// holds — what a full answer stands in for a delta from, and a Gitlet node's
-// cache's own — has a full answer that would serve the very retirements the
-// delta carries: they sit on both sides and cancel, and the delta is answered
-// full only where its refs and packs outweigh the full answer's. Counted on
-// the delta's side alone, they would replace a delta by a full answer
-// carrying them all over again beside every row the repository holds — more
-// rows, and a round that sweeps the cache's whole directory and rewrites its
-// refs where the delta was applied in place. Only those the full answer
-// would not serve — past the bound, or where its caller asked for none —
-// weigh against the delta alone: a cache a thousand compactions behind reads
-// the fifty packs its repository holds rather than some sixteen thousand
-// retirements ([MaxFullRetirements]), and gives up only telling a retired
-// pack file from one no row accounts for.
-//
-// EACH FLOOR'S RETIREMENTS ARE COUNTED ONCE, in one bounded statement over the
-// index the retired phase reads, deep enough for every question asked of
-// them: from a RetiredSince that is not the delta's floor, one past the bound
-// (whether the full answer serves them); from the delta's floor, one past the
-// larger of the bound and the full answer's rows where the full answer's
-// floor is the same (whether it serves them, and else whether they alone
-// outweigh it), and otherwise one past what the full answer would carry.
+// A delta needs a floor whose history is whole: on this generation of the log
+// and at or past both the tombstone and the retired marks, below which a sweep
+// removed rows telling of deletions or retirements. A full answer serves its
+// caller's retirements only all or none (this generation, past the retired
+// mark, at most [MaxFullRetirements]), so a RetiredFrom always names a COMPLETE
+// floor. The answers are weighed like with like ([deltaOutweighs]): retirements
+// both would serve cancel, so a cache asking from its own position is not sent
+// a full answer for retirements it would get anyway. Each floor is counted once.
 func choose(ctx context.Context, tx *sql.Tx, q StateQuery, at statelog.Position, v repoView) (
 	bool, statelog.Position, error) {
 
@@ -675,69 +545,18 @@ func retiredAbove(ctx context.Context, tx *sql.Tx, repoID string, floor statelog
 	return n, nil
 }
 
-// deltaOutweighs reports whether a delta from since — its refs moved and packs
-// added, and retired retirements — would carry more rows than the full answer
-// it stands in for — the repository's whole rows, refs and live packs, and
-// the served retirements it would carry ([choose]): then the full answer is
-// served, which is always correct and here the smaller.
-//
-// # Why a delta can outweigh the full answer
-//
-// A delta carries every ref row that moved above its floor, TOMBSTONES
-// INCLUDED, and a full answer only the live refs. A repository holds up to
-// MaxTombstonesPerRepo tombstones beside its live refs, so a cache synced
-// before a clean-up that deleted more refs than the repository keeps — sixty
-// thousand deleted, forty thousand left — would be handed a delta of sixty
-// thousand rows where the full answer is forty, on every Gitlet node holding the
-// repository, and a cache holds a whole snapshot in memory before it writes
-// any of it. Answered here, NO DELTA IS EVER MORE ROWS THAN THE FULL ANSWER,
-// so by rows the largest answer the reader serves is what it was before
-// tombstones were bounded apart — a full snapshot of a full repository — and
-// the retirements a full answer serves beside its rows, at most one page
-// ([MaxFullRetirements]).
-//
-// # Every row each answer carries, packs included
-//
-// A delta's packs are those added above its floor and a full answer's every
-// pack the repository holds, so the packs only ever favour the delta: a
-// repository of many packs keeps its delta past a clean-up a repository of
-// few would not, which a comparison of the refs alone would answer in full
-// for a fraction of the rows. The full answer's size is the repository's own
-// counters, kept as the rows move (live_packs is every pack row: a retired
-// pack leaves code_packs for code_packs_retired), and the retirements it
-// would serve; the delta's refs and packs are COUNTED, each table at most one
-// row past the room its retirements leave beside the full answer, over the
-// index the delta's pages read (code_refs_changed_idx, code_packs_added_idx)
-// — so the usual delta after a push reads a handful of index entries, and the
-// count never reads more of either index than the larger answer would. A tie
-// is a delta: a cache applies a delta in place, where a full answer sweeps
-// its directory to the snapshot's image.
-//
-// # Retirements, like with like
-//
-// A delta carries every pack retired above its floor, and a full answer the
-// retirements above its caller's RetiredSince where it can serve every one —
-// the very ones the delta carries when, as a cache always does, the caller
-// asks from the delta's own floor. Each side is weighed with what it would
-// carry, so retirements both would serve cancel, and only those the full
-// answer would not serve weigh against the delta alone ([choose] counts them,
-// and says why).
-//
-// # Rows, and what that leaves in bytes
-//
-// It compares ROWS because a row is what both indexes count in a bounded
-// read; an answer's bytes are the JSON its names spell, which only a read of
-// every name the full answer carries could sum. So in bytes the rule holds an
-// answer at its widest, not each answer to its own full answer — a delta of
-// long deleted names beside short live ones may be wider than the full answer
-// it replaces — and at its widest, a delta passes the full answer of a
-// repository of as many refs and packs only by tombstones carried in place of
-// packs, at most a tombstone less a pack row a pack: nothing for names JSON
-// writes as themselves, 1 108 bytes a pack for names it spells longest
-// ([MaxTombstonesPerRepo] gives the arithmetic). Weighing each pack as a
-// fraction of the widest ref row would close that, and answer a repository of
-// many packs in full for every delta of ordinary names, whose tombstones are
-// narrower than a pack row rather than wider.
+// deltaOutweighs reports whether a delta from since (its refs moved, packs
+// added and retired retirements) would carry more ROWS than the full answer
+// (whole: live refs and packs, plus the served retirements, [choose]); then
+// the full answer is served. A delta carries TOMBSTONES and a full answer only
+// live refs, so without this a cache behind a mass ref deletion would be handed
+// more rows than the repository holds, and a cache holds a snapshot in memory.
+// Packs only favour the delta. The delta's rows are counted at most one past
+// the room left, over code_refs_changed_idx and code_packs_added_idx. A tie is
+// a delta: applied in place rather than sweeping the cache's directory. Rows,
+// not bytes: only reading every name could sum bytes, so a delta of long
+// deleted names may be wider than its full answer, by at most what
+// [MaxTombstonesPerRepo] computes.
 func deltaOutweighs(ctx context.Context, tx *sql.Tx, repoID string, since, retired, whole, served int64) (
 	bool, error) {
 
@@ -812,18 +631,17 @@ func (r *Reader) fill(ctx context.Context, tx *sql.Tx, repoID string, out *RepoS
 		case (cur.Phase == phaseRefs || cur.Phase == phasePushes || cur.Phase == phaseRetired) && !first:
 			cur.Phase, cur.After = phaseTail, ""
 		default:
-			// THE LAST PHASE COMPLETED — and on page 1 there is no tail,
-			// because a snapshot read in one transaction is one history
-			// already.
+			// THE LAST PHASE COMPLETED; page 1 has no tail, being one
+			// transaction's history already.
 			return nil, nil
 		}
 	}
 }
 
 // layersPhase serves the repository's whole published chain onto page 1, its
-// parts joined to their layers, and charges every row to the page — whole
-// whatever the page has left, since the phase never resumes, and the widest
-// chain the bounds admit is far under a page (TestTheLayersPhaseFitsPageOne).
+// parts joined to their layers, charging every row to the page: whole, since
+// the phase never resumes and the widest chain is far under a page
+// (TestTheLayersPhaseFitsPageOne).
 func (r *Reader) layersPhase(ctx context.Context, tx *sql.Tx, repoID string, out *RepoSnapshot,
 	pg *page) error {
 
@@ -1036,19 +854,12 @@ func (r *Reader) refs(ctx context.Context, tx *sql.Tx, repoID string, out *RepoS
 	return served < asked, nil
 }
 
-// pushesPhase serves a delta's pushes phase: every push of the repository
-// applied in (Since, From] — above the cache's synced position and at or below
-// page 1's checkpoint — in log order, keyset after the last one served.
-//
-// BOUNDED ABOVE BY PAGE 1'S CHECKPOINT, never by the page's own: the snapshot
-// is complete as of From, which the cache records as its position, so a push
-// applied after it is the NEXT delta's — served here too, it would be folded
-// into the cache's index twice, once by each round. And bounded BELOW
-// exclusively, for the same reason: a push at Since is the round before's.
-//
-// EACH PUSH COSTS THE PAGE WHAT IT READS where that is more than what it
-// sends ([scanIntroduced]): its row stores every command its client sent, and
-// the phase sends only the refs it landed.
+// pushesPhase serves every push applied in (Since, From], in log order,
+// keyset after the last one served. ABOVE BY PAGE 1'S CHECKPOINT, never the
+// page's own: the cache records From as its position, so a later push is the
+// next delta's and would otherwise be folded in twice; below exclusively, as a
+// push at Since is the round before's. Each push costs the page what it READS
+// ([scanIntroduced]).
 func (r *Reader) pushesPhase(ctx context.Context, tx *sql.Tx, repoID string, out *RepoSnapshot,
 	cur *StateCursor, pg *page) (bool, error) {
 
@@ -1088,18 +899,10 @@ func (r *Reader) pushesPhase(ctx context.Context, tx *sql.Tx, repoID string, out
 	return served < asked, nil
 }
 
-// retiredPhase serves the retired phase: every pack a record retired in
-// (RetiredFrom, From] — above the phase's floor and at or below page 1's
-// checkpoint — in (position, pack id, part) order, the order of
-// code_packs_retired_repo_idx, keyset after the last one served.
-//
-// BOUNDED ABOVE BY PAGE 1'S CHECKPOINT, never by the page's own, for the
-// pushes phase's reason: the snapshot is complete as of From, which the cache
-// records as its position, so a pack retired after it is the NEXT delta's to
-// serve, from that position — served here too, it would be served twice, and
-// as of a position at which the rows still named it live. And bounded BELOW
-// exclusively: a retirement at the floor is one the round that synced to it
-// already took.
+// retiredPhase serves every pack a record retired in (RetiredFrom, From], in
+// code_packs_retired_repo_idx's (position, pack id, part) order, keyset after
+// the last one served. Bounded as [Reader.pushesPhase] is: a retirement after
+// From is the next delta's, and one at the floor the last round's.
 func (r *Reader) retiredPhase(ctx context.Context, tx *sql.Tx, repoID string, out *RepoSnapshot,
 	cur *StateCursor, pg *page) (bool, error) {
 
@@ -1259,17 +1062,13 @@ func pushIn(ctx context.Context, tx *sql.Tx, pushID string) (PushRow, bool, erro
 type scanner interface{ Scan(dest ...any) error }
 
 // scanPush reads a push row in pushColumns' order, and answers the length of
-// its stored commands — encoding/json's encoding of the list it decodes to,
-// which is what the row's own encoding carries, so a page measures it without
-// encoding it again. A row a NEWER build applied may store a field this build
-// does not decode; its stored length is then the longer, and a page counted
-// by it ends early rather than late.
+// its stored commands, so a page measures it without encoding it again. A row
+// a NEWER build applied may store a field this build does not decode; its
+// length is then the longer, and a page ends early rather than late.
 //
-// A ROW NAMING NO WAY THIS BUILD KNOWS IS REFUSED ([ErrInvalid], naming the
-// push), never read as one: its column's default is the empty string rather
-// than a way (replicated 0091), so an apply that forgot to write it is a
-// failed read here, where a default naming a way would have answered every
-// push the engine built as one a client's git sent.
+// A ROW NAMING NO WAY THIS BUILD KNOWS IS REFUSED ([ErrInvalid]): the column's
+// default is the empty string (replicated 0091), so an apply that forgot it
+// fails here rather than reading as a client's push.
 func scanPush(s scanner) (PushRow, int, error) {
 	var (
 		row                       PushRow
@@ -1297,23 +1096,15 @@ func scanPush(s scanner) (PushRow, int, error) {
 }
 
 // scanIntroduced reads a push row as the index of which push introduced each
-// commit is built from it ([introducedOf]), and answers what serving it costs
-// a page: the larger of the row it SENDS and the commands it READ.
+// commit ([introducedOf]), and answers what serving it costs a page: the
+// larger of the row it SENDS and the commands it READ.
 //
-// A PAGE OF CONDENSED PUSHES IS HELD TO WHAT IT READS, not only to what it
-// sends. A push row stores every command its client sent, a refused one too
-// ([RecordedRef]), and the condensed row only the refs the push landed — so
-// a push of one branch beside 999 refused refs at MaxRefNameBytes, a mirror
-// push refused everywhere but one branch or a crafted client's, is 656 bytes
-// sent and 403 KB read and decoded. Counted by what it sends, a page took
-// 6 393 of them and decoded 2.6 GB of commands to send four mebibytes: past
-// any estate read's attempt, and again on every retry, so a backfill or a
-// delta sync that met a run of them never got past it. Nothing else a push
-// row holds is wider than what it sends — its introduced ids are sent whole,
-// as are its id, its position and its principal, and the rest is a few
-// fixed columns — so a page reads at most its byte budget and one row of
-// commands beside the rows it sends: the history listing's bound, which
-// sends the commands themselves.
+// A page of condensed pushes is held to what it reads: a row stores every
+// command its client sent, refused ones too ([RecordedRef]), while the
+// condensed row sends only the landed refs, so a push of one branch beside 999
+// refused long refs sends 656 bytes but reads 403 KB. Charged by what it sent,
+// a page decoded gigabytes, past any estate read's attempt, on every retry.
+// Nothing else in the row is wider than what it sends.
 func scanIntroduced(rows *sql.Rows) (IntroducedRow, int, error) {
 	pushed, commands, err := scanPush(rows)
 	if err != nil {
@@ -1324,74 +1115,17 @@ func scanIntroduced(rows *sql.Rows) (IntroducedRow, int, error) {
 }
 
 // The read limits, past which a query is refused naming the bound rather than
-// clamped.
-//
-// A page's BYTES are held to MaxPageBytes whatever its count — measured with
-// every row's rules and commands, and where a page sends its pushes condensed
-// (the `introduced` read, a snapshot's pushes phase) with the commands it read
-// to condense them ([scanIntroduced]) — so these bound what one request READS
-// and are sized to what a surface shows of it:
-//
-//   - a listing of repositories: 100 by default, a screen of them, and 500
-//     at most, which with every repository at MaxProtectionsPerRepo rules is
-//     32 000 rule rows for the page's one protections statement, and ten
-//     thousand repositories in twenty pages;
-//   - a push history: 50 by default, a screen of it, and 200 at most, which
-//     at a typical push row (1–2 KB: a few commands and the commits they
-//     introduced) is under half a megabyte, while a page of maximal pushes
-//     ends at the byte budget after its tenth (about 460 KB each:
-//     MaxCommandsPerPush commands at the longest ref and MaxIntroduced ids)
-//     — after its third where every byte of every ref is one JSON writes as
-//     six (`<`, `>`, `&`, which a ref may hold: 1.7 MB a row);
-//   - a refs listing: 200 by default, a screen of branches, and 1 000 at
-//     most, which at the longest ref (MaxRefNameBytes) and its oid is about
-//     385 KB, under a megabyte for names JSON writes as themselves — and
-//     ends at the byte budget like every page where it spells them longer;
-//   - a listing of changes: 50 by default, a screen of them, and 200 at
-//     most, a push history's bounds for the same reader — a person's screen
-//     or a seat's tool — over rows of 0.6–0.9 KB (a person's change with a
-//     short title, and a seat's naming the turn, the run and the work item
-//     it was opened for), so under 200 KB, while a page of the widest
-//     (titles, refs and close reasons every byte of which JSON writes as six)
-//     ends at the byte budget first. The bound is on the rows a page READS,
-//     whatever its filters keep of them, so a page a seat reads little of
-//     costs what a full one does and no more;
-//   - a change's revisions: 200 by default and 1 000 at most, a refs
-//     listing's bounds, for rows as narrow as a ref's — an oid, a handle, a
-//     push id, a position and an instant, about 250 bytes — so a page of
-//     1 000 is about 250 KB, and a change pushed two hundred times is one
-//     page;
-//   - a change's reviewers: a revision's bounds, for rows as narrow — two
-//     handles, a reason, a state, a position, and a note most asks leave
-//     empty — so a change's every ask, MaxReviewersPerChange at once and
-//     the withdrawn ones beside them, is one page, and one of notes at
-//     their 1 KiB ends at the byte budget first;
-//   - a change's comments: a listing of changes' bounds, 50 a screen of a
-//     timeline and 200 at most, over rows of a few hundred bytes to
-//     MaxCommentBytes — 200 one-line comments are under 100 KB, and a page
-//     of long ones ends at the byte budget first;
-//   - a change's reviews and its findings: a comment's bounds, for rows of
-//     the same width — a review's summary up to MaxReviewSummaryBytes, a
-//     finding's narrow row of about 600 bytes beside a title, a body up to
-//     MaxFindingBodyBytes and a suggestion up to MaxSuggestionBytes — so a
-//     review of MaxFindingsPerReview findings is one page of them where
-//     they say what a reviewer's finding usually says, and a page of
-//     findings with long suggestions ends at the byte budget first;
-//   - a listing of checks: a listing of changes' bounds, 50 a screen and
-//     200 at most, over rows of about 700 bytes — a key, a state, a target,
-//     a runner and five instants and positions — beside a summary of up to
-//     CheckSummaryBytes, so 200 attempts summarised in a line are under
-//     200 KB, and a page of summaries at their 4 KiB ends near 950 KB, under
-//     the byte budget; the bound is on the rows a page READS, so a window a
-//     seat reads little of costs what a full page does and no more. A
-//     listing of each check's LATEST attempt ([CheckQuery.Latest]) takes
-//     latestCheckLimit by default: MaxChecksPerFile, every check one checks
-//     file declares for a branch, so a change's head's or a queue tip's
-//     checks for its branch are one page and a reader asks once — at their
-//     4 KiB summaries and 2 KiB links about 440 KB, under the byte budget.
-//
-// The maxima are exported for a client that pages: the most a page may ask
-// for of each, which a page past them is refused naming.
+// clamped. A page's BYTES are held to MaxPageBytes whatever its count,
+// measured with the commands it read to condense pushes ([scanIntroduced]),
+// so these bound what one request READS and are sized to a screen: a default
+// that fills one, and a maximum whose typical rows stay well under the byte
+// budget (500 repositories at MaxProtectionsPerRepo is 32 000 rule rows for
+// one statement; 200 typical pushes under 500 KB; 1 000 longest refs about
+// 385 KB; revisions and reviewers as narrow as a ref; changes, comments,
+// reviews, findings and checks a push history's) while a page of the widest
+// rows ends at the byte budget first. latestCheckLimit is MaxChecksPerFile,
+// so a branch's latest checks are one page. The maxima are exported for a
+// client that pages.
 const (
 	defaultRepoLimit     = 100
 	MaxReposPerPage      = 500
@@ -1409,14 +1143,11 @@ const (
 )
 
 // BriefCommands is how many of a push's commands a row of its history read
-// IN BRIEF carries ([ReadQuery.Brief]): FIVE, the lines a screen gives one
-// push before its row stands taller than the one-line rows around it. A push
-// of a branch or a handful of them — a person's, a seat's, an engine write's,
-// which is one ref — is whole in five, with nothing left out; a mirror's or
-// an import's push of up to MaxCommandsPerPush refs is five lines and the
-// count of the rest ([PushRow.Omitted]) — 140 to 190 kilobytes of commands
-// fewer on a row a poll sends again every minute, before its introduced ids —
-// and the whole of it one read of the push away ([ReadQuery.Push]).
+// IN BRIEF carries ([ReadQuery.Brief]): the lines a screen gives one push.
+// A person's, seat's or engine write's push is whole in five; a mirror's of
+// up to MaxCommandsPerPush refs is five and a count ([PushRow.Omitted]),
+// sparing 140-190 KB on a row a poll resends every minute, the rest one read
+// away ([ReadQuery.Push]).
 const BriefCommands = 5
 
 // Read answers a person's, a seat's or a surface's read — a listing of
@@ -1436,12 +1167,9 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	if levelErr != nil {
 		return ReadAnswer{}, levelErr
 	}
-	// THE ONE CHART every row of this answer is judged by, read before the
-	// transaction: a listing judged row by row against a chart an apply
-	// swapped mid-page would answer a page no epoch ever held. And read
-	// before any row: a seat asking a reader that holds none is refused
-	// about the reader ([Reader.chartFor]), and so is every read of changes,
-	// whose readiness the chart judges.
+	// THE ONE CHART every row is judged by, read before the transaction (a
+	// listing judged against a chart swapped mid-page answers a page no epoch
+	// held) and before any row ([Reader.chartFor]).
 	chart, chartErr := r.chartFor(q.Asker, q.judgesReadiness())
 	if chartErr != nil {
 		return ReadAnswer{}, chartErr
@@ -1467,11 +1195,9 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		query = fresh.Resolved(resolver(q.Repo), true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.pushes(ctx, tx, q, chart, &out) }
 	case ReadRunPushes:
-		// A POINT READ OF EVERY REPOSITORY THE RUN WAS GIVEN: a record this
-		// node deferred on one of them may carry a push of the run's its rows
-		// do not hold, and an answer past it would say the run delivered less
-		// than it did — so such a read refuses, and the engine asks another
-		// node, rather than answer a run's pushes with some of them missing.
+		// A POINT READ OF EVERY REPOSITORY THE RUN WAS GIVEN: past a deferred
+		// record it would say the run delivered less than it did, so it
+		// refuses and the engine asks another node.
 		paths := make([]string, len(q.RunPushes.Repos))
 		for i, id := range q.RunPushes.Repos {
 			paths[i] = RepoPath(id)
@@ -1479,19 +1205,13 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		query = fresh.Query(statelog.ScopeSet{Paths: paths}, false)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.runPushes(ctx, tx, q, &out) }
 	case ReadRefs:
-		// A FIRST PAGE IS READ AS THE DETAIL IT CARRIES: a point read, which
-		// a record this node deferred on the repository refuses, as kind
-		// repo is refused, rather than detail a repository around it; every
-		// later page is the listing's, a set.
+		// A FIRST PAGE IS A POINT READ, as it carries the repository's detail;
+		// a later page is the listing's, a set.
 		query = fresh.Resolved(resolver(q.Repo), q.Cursor != "")
 		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.refsListing(ctx, tx, q, chart, cp, &out) }
 	case ReadChanges:
-		// A SET READ: of the repository it names, resolved by its name as
-		// a push history is, or of the domain, as a listing of
-		// repositories is — a change a deferred record holds back is
-		// listed as its rows stand.
-		// One that resolves its repository is a point read of it, as a
-		// `repo` read is ([ReadQuery.Resolve]).
+		// A SET READ of the named repository or of the domain; one that
+		// resolves its repository is a point read of it ([ReadQuery.Resolve]).
 		if q.Repo != "" {
 			query = fresh.Resolved(resolver(q.Repo), !q.Resolve)
 		} else {
@@ -1499,88 +1219,68 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		}
 		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.changes(ctx, tx, q, chart, cp, &out) }
 	case ReadChange:
-		// A FIRST PAGE IS READ AS THE DETAIL IT CARRIES, a point read of the
-		// repository whose records write the change, as a first page of
-		// refs is; a later page is a page of revisions, a set, and so is
-		// every page of a part of its conversation — whose records name the
-		// repository's path in their scope too, so the repository's
-		// deferrals order them — unless it resolves the repository, a point
-		// read of it whatever its page, as a `repo` read is
+		// A FIRST PAGE IS A POINT READ of the repository, carrying the detail;
+		// a later page or a conversation part is a set (its records scope the
+		// repository's path too), unless it resolves the repository
 		// ([ReadQuery.Resolve]).
 		query = fresh.Resolved(resolver(q.Repo), !q.Resolve && (q.Cursor != "" || !q.pagesDetail()))
 		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.change(ctx, tx, q, chart, cp, &out) }
 	case ReadChangeRouting:
-		// A SET READ of the repository whose records write the change, as a
-		// page of a part of its conversation is: every record about a change
-		// names the repository's path in its scope, so the repository's
-		// deferrals order its notices too.
+		// A SET READ of the repository: every record about a change scopes its
+		// path, so the repository's deferrals order its notices too.
 		query = fresh.Resolved(resolver(q.Repo), true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.changeRouting(ctx, tx, q, chart, &out) }
 	case ReadReviews:
 		// A SET READ OF THE DOMAIN, as a listing of changes across
-		// repositories is: a review a deferred record holds back is listed as
-		// its rows stand.
+		// repositories is.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.reviewsGiven(ctx, tx, q, chart, &out) }
 	case ReadCommit:
-		// A POINT READ, as a read of one repository is: its detail is the
-		// answer's first part, and a change a deferred record holds back
-		// would be a commit's page naming less than it belongs to. Its gates'
-		// checks and approvals, on other paths, are read as their rows stand.
+		// A POINT READ: past a deferred record a commit's page would name less
+		// than it belongs to. Its gates' checks and approvals, on other paths,
+		// are read as their rows stand.
 		query = fresh.Resolved(resolver(q.Repo), false)
 		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.commit(ctx, tx, q, chart, cp, &out) }
 	case ReadIntroduced:
-		// A POINT READ OF THE REPOSITORY, as a snapshot is: an index built
-		// past a record this node deferred on the repository would miss the
-		// pushes it carried and say nothing, so such a read refuses and the
-		// backfill asks again.
+		// A POINT READ OF THE REPOSITORY: an index built past a deferred record
+		// would silently miss its pushes, so it refuses and the backfill asks
+		// again.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.Introduced.RepoID)}}, false)
 		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.introduced(ctx, tx, q, cp, &out) }
 	case ReadCompactionDue:
-		// A SET READ OF THE DOMAIN, as a listing of repositories is: a
-		// repository a deferred record holds back is listed as its rows
-		// stand, and the compaction that follows is decided again from
-		// the committer's own snapshot, which holds every input to them.
+		// A SET READ OF THE DOMAIN: the compaction that follows is decided
+		// again from the committer's own snapshot. So are the duty listings
+		// below.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.compactionDue(ctx, tx, q, &out) }
 	case ReadPublicationDue:
-		// A SET READ OF THE DOMAIN, as the compaction's listing is, for the
-		// same reason: the publication that follows is decided again from
-		// the committer's own snapshot.
+		// A SET READ OF THE DOMAIN, as the compaction's listing is.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.publicationDue(ctx, tx, q, &out) }
 	case ReadExpungeDue:
-		// A SET READ OF THE DOMAIN, as the compaction's listing is, for the
-		// same reason: every expunge record that follows is decided again
-		// from the committer's own snapshot.
+		// A SET READ OF THE DOMAIN, as the compaction's listing is.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.expungeDue(ctx, tx, q, &out) }
 	case ReadImportsDue:
-		// A SET READ OF THE DOMAIN, as the compaction's listing is, for the
-		// same reason: every chunk and end its home lands is decided again
-		// from the committer's own snapshot.
+		// A SET READ OF THE DOMAIN, as the compaction's listing is.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.importsDue(ctx, tx, q, &out) }
 	case ReadMirrorsDue:
-		// A SET READ OF THE DOMAIN, for the same reason: every sync is
-		// decided again from the committer's own snapshot.
+		// A SET READ OF THE DOMAIN, as the compaction's listing is.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.mirrorsDue(ctx, tx, q, &out) }
 	case ReadChangesDue:
-		// A SET READ, of the domain or of the one repository
-		// (changesdue.go): every record the home asks after it is decided
-		// again from its writer's own snapshot.
+		// A SET READ, of the domain or one repository (changesdue.go).
 		query = q.changesDueQuery(fresh)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.changesDue(ctx, tx, q, &out) }
 	case ReadIndexed:
-		// A SET READ OF THE DOMAIN, as the compaction's listing is: the
-		// indexer reads each repository it lists from its own copy, and a
-		// mode a deferred record changed is read again at the next poll.
+		// A SET READ OF THE DOMAIN: the indexer reads each repository from its
+		// own copy, and a deferred mode change is read at the next poll.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.indexed(ctx, tx, q, &out) }
 	case ReadDefaultTips:
-		// A SET READ OF THE DOMAIN, as the indexer's listing is: the scan
-		// reads each tip it lists again from the repository's own rows.
+		// A SET READ OF THE DOMAIN: the scan rereads each tip from the
+		// repository's own rows.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.defaultTips(ctx, tx, q, &out) }
 	case ReadChecks:
@@ -1589,31 +1289,26 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		query = q.checksQuery(fresh)
 		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.checks(ctx, tx, q, chart, cp, &out) }
 	case ReadCheck:
-		// A POINT READ of the repository's checks, as a change's detail is
-		// one of the repository's rows.
+		// A POINT READ of the repository's checks.
 		query = q.checksQuery(fresh)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.check(ctx, tx, q, chart, &out) }
 	case ReadChecksDue:
-		// A SET READ, of the domain or of the one repository, as
-		// changes_due's: the dispatch that follows is decided again by the
-		// repository's checks writer from its own snapshot.
+		// A SET READ, as changes_due's: the checks writer decides the dispatch
+		// again.
 		query = q.checksQuery(fresh)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.dueCheckWork(ctx, tx, q, &out) }
 	case ReadCheckBox:
-		// A POINT READ of the repository's checks, as a `check` read is: a
-		// box is never admitted by an attempt read around a record this node
-		// deferred on them.
+		// A POINT READ: a box is never admitted by an attempt read around a
+		// deferred record.
 		query = q.checksQuery(fresh)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.checkBox(ctx, tx, q, &out) }
 	case ReadChecksQueued:
-		// A SET READ OF THE DOMAIN, as a duty listing is: each claim it leads
-		// to is decided again by the repository's checks writer from its own
-		// snapshot, which refuses one another runner holds.
+		// A SET READ OF THE DOMAIN: the checks writer decides each claim again,
+		// refusing one another runner holds.
 		query = q.checksQuery(fresh)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.queuedChecks(ctx, tx, q, &out) }
 	case ReadChecksRunning:
-		// A SET READ, of the domain or of the one repository's checks: each
-		// ending the sweep asks is decided again by the checks writer.
+		// A SET READ: the checks writer decides each ending again.
 		query = q.checksQuery(fresh)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.runningChecks(ctx, tx, q, &out) }
 	case ReadQueue, ReadLandings, ReadGreen:
@@ -1630,11 +1325,8 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 			return r.queueListing(ctx, tx, q, chart, &out)
 		}
 	case ReadInbox:
-		// A SET READ OF THE DOMAIN, as a listing of changes across
-		// repositories is: the notices are written by the records of every
-		// change's subject and the marks by the person's own, so a record a
-		// deferral holds back of either is read as the rows stand
-		// (inboxread.go).
+		// A SET READ OF THE DOMAIN: notices come from every change's subject
+		// and marks from the person's own (inboxread.go).
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.inbox(ctx, tx, q, chart, &out) }
 	case ReadNoticeCards:
@@ -1656,27 +1348,20 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		}
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.counts(ctx, tx, q, chart, &out) }
 	case ReadExpungeTips:
-		// A POINT READ OF THE REPOSITORY, as an `introduced` read is: a
-		// record this node deferred on the repository may carry a drop the
-		// answer would leave out, and an expunge that read past it would
-		// leave dropping an object the drop's grace keeps — so such a read
-		// refuses, and the maintainer asks another node.
+		// A POINT READ OF THE REPOSITORY: past a deferred drop an expunge
+		// would drop an object the drop's grace keeps, so it refuses.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.ExpungeTips.RepoID)}}, false)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.expungeTips(ctx, tx, q, &out) }
 	case ReadMirrorPush:
-		// A POINT READ OF THE REPOSITORY, as an `expunge_tips` read is: a
-		// record this node deferred on it may move a green row or the push
-		// mirror itself, and an answer past it would publish a commit its
-		// checks never passed, or to a target the repository no longer
-		// names — so such a read refuses, and the home asks another node.
+		// A POINT READ OF THE REPOSITORY: past a deferred record it could
+		// publish a commit its checks never passed, or to a target no longer
+		// named, so it refuses.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.MirrorPush.RepoID)}}, false)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.mirrorPush(ctx, tx, q, &out) }
 	case ReadBranchChanges:
-		// A POINT READ OF EVERY REPOSITORY IT NAMES, as a `run_pushes` read
-		// is: a record this node deferred on one of them may open or close a
-		// change on one of the branches, and an answer past it would name a
-		// delivered ref by a change it no longer heads — or by none — so such
-		// a read refuses, and the engine asks another node.
+		// A POINT READ OF EVERY REPOSITORY IT NAMES: past a deferred record it
+		// could name a delivered ref by a change it no longer heads, so it
+		// refuses.
 		paths := make([]string, len(q.BranchChanges.Repos))
 		for i, repo := range q.BranchChanges.Repos {
 			paths[i] = RepoPath(repo.RepoID)
@@ -1695,17 +1380,9 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	return out, nil
 }
 
-// validate refuses a query naming no kind this build reads, no asker or one no
-// principal can be, a repository that cannot be one, a limit past its bound —
-// refused naming it, never clamped — or a field outside the kind that reads
-// it: a status filter outside a listing of repositories, a prefix outside a
-// refs listing, one push outside a push history, a brief outside a push
-// history and a change's first page, a resolution outside a read that judges
-// a repository it names by name, a change's number
-// or a part of it outside a change read, a state, an owner, a work item, a
-// reviewer or a need outside a listing of changes, a range outside an
-// `introduced` read, a run outside a `run_pushes` read, a floor of live packs
-// outside a `compaction_due` read.
+// validate refuses a query naming no kind this build reads, no valid asker, a
+// repository that cannot be one, a limit past its bound (never clamped), or a
+// field outside the kind that reads it, so no field is answered ignored.
 func (q ReadQuery) validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, q.Kind, words.Or(ReadKinds()))
@@ -1716,11 +1393,9 @@ func (q ReadQuery) validate() error {
 		return fmt.Errorf("%w: resolve: only a change read, or a listing of one repository's changes or "+
 			"checks, resolves the repository it names", ErrInvalid)
 	}
-	// A FIELD ONE PRINCIPAL'S KIND READS ALONE is refused on every other
-	// kind here, before any kind's own rules, for the resolution's reason:
-	// the engine's own reads below validate against lists of their own,
-	// which a field added after them is missing from, and were answered
-	// with it ignored.
+	// A FIELD ONE PRINCIPAL'S KIND READS ALONE is refused on every other kind
+	// here, before any kind's own lists, which a field added later is missing
+	// from.
 	if err := q.kindOwnedField(); err != nil {
 		return err
 	}
@@ -1760,9 +1435,8 @@ func (q ReadQuery) validate() error {
 	case ReadChecksRunning:
 		return q.validateChecksRunning()
 	}
-	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the
-	// asker's grant, and an absent asker would be judged as somebody nobody
-	// named.
+	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the asker's
+	// grant.
 	if why := q.Asker.invalid(); why != "" {
 		return fmt.Errorf("%w: asker: %s", ErrInvalid, why)
 	}
@@ -1982,11 +1656,7 @@ func (q ReadQuery) validate() error {
 	return nil
 }
 
-// kindOwnedField refuses a field that one kind a principal reads alone reads
-// (a commit, a queue read's trains, an inbox, an inbox page's cards, a history page's commits, the
-// narrowing of a listing of repositories to the ones a rule protects, the
-// parts a counts read names, a repository's facts, a listing of changes'
-// order, a listing of changes' words, a change's findings by path, a change's viewed files) on a read of
+// kindOwnedField refuses a field only one principal's kind reads on a read of
 // any other kind, the engine's own reads included ([ReadQuery.validate]).
 func (q ReadQuery) kindOwnedField() error {
 	switch {
@@ -2042,10 +1712,9 @@ func (q ReadQuery) kindOwnedField() error {
 }
 
 // validateIntroduced is [ReadQuery.validate] for an `introduced` read: the
-// engine's own, so it names NO asker — one there would be judged by nothing,
-// and a read that looked held to a grant while it was not is worse than one
-// that says it is nobody's — and its repository by id in its range, which
-// runs one way: (After, Through] ascending, or below Before descending.
+// engine's own, so it names NO asker (one would look held to a grant that
+// judges nothing), and its repository by id in a range running one way:
+// (After, Through] ascending, or below Before descending.
 func (q ReadQuery) validateIntroduced() error {
 	in := q.Introduced
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
@@ -2136,16 +1805,12 @@ func (q ReadQuery) validateIntroduced() error {
 	return nil
 }
 
-// validateRunPushes is [ReadQuery.validate] for a `run_pushes` read: the
-// engine's own — the record of what an executor delivered, read when the run
-// is collected — so it names NO asker, for an `introduced` read's reason, and
-// no seat it reads for; it names the run by the launch id its pushes' rows
-// carry, the repositories the run was given by id — one to MaxRunRepos, each
-// once — and the position the run was launched at on the code log, never
-// zero: a read from the log's start would scan its repositories' whole
-// history for pushes no run made before its launch. Nothing else a listing
-// names, and a limit of the pushes a page reads, at most MaxSnapshotItems as
-// an `introduced` read's ([Reader.runPushes] says why).
+// validateRunPushes is [ReadQuery.validate] for a `run_pushes` read, the
+// engine's own when a run is collected: NO asker or ceiling seat (an
+// `introduced` read's reason); the run's launch id; its repositories by id,
+// one to MaxRunRepos, each once; and its launch position on the code log,
+// never zero, which would scan whole histories for pushes no run made. A
+// page's limit is at most MaxSnapshotItems ([Reader.runPushes]).
 func (q ReadQuery) validateRunPushes() error {
 	in := q.RunPushes
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
@@ -2215,14 +1880,10 @@ func (q ReadQuery) validateRunPushes() error {
 	return nil
 }
 
-// validateCompactionDue is [ReadQuery.validate] for a `compaction_due` read:
-// the engine's own — a Gitlet node's compactor polling for the repositories a
-// compaction may be due in — so it names NO asker, as an `introduced` read
-// does: a principal's read of the duty listing would be held to nothing,
-// and every surface a principal reads Gitlet through names its asker,
-// so the one place they all meet refuses it here. It names its floor of live
-// packs, at least one, and nothing else: no repository, no filter, no range
-// and no limit, since a page is MaxSnapshotItems repositories.
+// validateCompactionDue is [ReadQuery.validate] for a `compaction_due` read,
+// the compactor's own poll: NO asker (a principal's read of a duty listing
+// would be held to nothing), its floor of live packs, at least one, and
+// nothing else; a page is MaxSnapshotItems repositories.
 func (q ReadQuery) validateCompactionDue() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	if q.Asker != (Principal{}) {
@@ -2260,12 +1921,9 @@ func (q ReadQuery) validateCompactionDue() error {
 	return nil
 }
 
-// validatePublicationDue is [ReadQuery.validate] for a `publication_due` read:
-// the engine's own — a Gitlet node's publisher polling for the repositories a
-// publication may be due in — so it names NO asker, for the `compaction_due`
-// read's reason, and nothing else at all: no repository, no filter, no range,
-// no floor and no limit, since its partial index holds exactly the
-// repositories it lists and a page is MaxSnapshotItems of them.
+// validatePublicationDue is [ReadQuery.validate] for a `publication_due` read,
+// the publisher's own poll: NO asker (`compaction_due`'s reason) and nothing
+// else, since its partial index holds exactly what it lists.
 func (q ReadQuery) validatePublicationDue() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	if q.Asker != (Principal{}) {
@@ -2299,13 +1957,9 @@ func (q ReadQuery) validatePublicationDue() error {
 	return nil
 }
 
-// validateExpungeDue is [ReadQuery.validate] for an `expunge_due` read: the
-// engine's own — a repository's maintainer polling for the expunges it owes —
-// so it names NO asker, for the `compaction_due` read's reason, and nothing
-// but its cursor and the instant its weekly arm lists from
-// ([ReadQuery.ScannedBefore]): no repository, no filter, no range, no floor
-// and no limit, since its two partial indexes hold exactly the repositories
-// it lists and a page is MaxSnapshotItems of them.
+// validateExpungeDue is [ReadQuery.validate] for an `expunge_due` read, the
+// maintainer's own poll: a bare listing ([ReadQuery.validateBareListing]) but
+// for the instant its weekly arm lists from ([ReadQuery.ScannedBefore]).
 func (q ReadQuery) validateExpungeDue() error {
 	bare := q
 	bare.ScannedBefore = time.Time{}
@@ -2313,12 +1967,10 @@ func (q ReadQuery) validateExpungeDue() error {
 		"purge requested, then every one last judged before its scanned_before")
 }
 
-// validateBareListing is [ReadQuery.validate] for a duty listing that names
-// nothing but its page — `expunge_due`, `imports_due`, `mirrors_due`: the
-// engine's own, so NO asker, and no repository, filter, range, floor or
-// limit, since its partial index holds exactly the repositories it lists and
-// a page is MaxSnapshotItems of them. lists is the sentence a refusal says
-// what it lists in.
+// validateBareListing is [ReadQuery.validate] for a duty listing naming
+// nothing but its cursor: the engine's own, so NO asker, and no limit, since
+// its partial index holds exactly what it lists and a page is MaxSnapshotItems.
+// lists is the sentence a refusal says what it lists in.
 func (q ReadQuery) validateBareListing(lists string) error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	if q.Asker != (Principal{}) {
@@ -2371,11 +2023,8 @@ func (q ReadQuery) validateDefaultTips() error {
 	return nil
 }
 
-// validateIndexed is [ReadQuery.validate] for an `indexed` read: the
-// engine's own — a Gitlet node's indexer listing the repositories it may keep
-// an index of — so it names NO asker, for an `introduced` read's reason, and
-// nothing but its cursor: exactly what an `expunge_due` read names, whose
-// rule it is held to.
+// validateIndexed is [ReadQuery.validate] for an `indexed` read, the
+// indexer's own listing: held to an `expunge_due` read's rule.
 func (q ReadQuery) validateIndexed() error {
 	if err := q.validateExpungeDue(); err != nil {
 		return fmt.Errorf("%w (an indexed read is held to the same: it lists the repositories searched "+
@@ -2384,13 +2033,10 @@ func (q ReadQuery) validateIndexed() error {
 	return nil
 }
 
-// validateExpungeTips is [ReadQuery.validate] for an `expunge_tips` read: the
-// engine's own — a repository's maintainer reading what an expunge keeps
-// beside the refs — so it names NO asker, for an `introduced` read's reason;
-// it names its repository by id and the instant its drops are listed from,
-// never zero (an expunge always keeps a grace's worth or none, counted back
-// from its scan), and nothing else — no filter, no range and no limit, since
-// a page is MaxSnapshotItems drops.
+// validateExpungeTips is [ReadQuery.validate] for an `expunge_tips` read, the
+// maintainer's own: NO asker, its repository by id and the instant its drops
+// are listed from, never zero (the scan's less the grace kept), and nothing
+// else; a page is MaxSnapshotItems drops.
 func (q ReadQuery) validateExpungeTips() error {
 	in := q.ExpungeTips
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
@@ -2432,12 +2078,10 @@ func (q ReadQuery) validateExpungeTips() error {
 	return nil
 }
 
-// validateMirrorPush is [ReadQuery.validate] for a `mirror_push` read: the
-// engine's own — a repository's home reading the push mirror it pushes and
-// the green rows it publishes — so it names NO asker, for an `expunge_tips`
-// read's reason; it names its repository by id and nothing else: no cursor
-// and no limit, since a repository holds one push mirror and at most one
-// green row a protected branch.
+// validateMirrorPush is [ReadQuery.validate] for a `mirror_push` read, the
+// home's own: NO asker, its repository by id and nothing else, no cursor or
+// limit, since a repository holds one push mirror and one green row a
+// protected branch.
 func (q ReadQuery) validateMirrorPush() error {
 	in := q.MirrorPush
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
@@ -2478,10 +2122,8 @@ func (q ReadQuery) validateMirrorPush() error {
 }
 
 // mirrorPush serves a `mirror_push` read ([ReadMirrorPush]): the repository's
-// push mirror as its row holds it — none where it has none, or where the
-// repository is gone — and every green row of it, from one snapshot. Each a
-// seek of a primary key, through statements other reads already run
-// (remotesSQL, repoNameSQL, greensSQL): a home asks it once an attempt.
+// push mirror (none where it has none or is gone) and every green row, from
+// one snapshot, each a primary-key seek: a home asks it once an attempt.
 func (r *Reader) mirrorPush(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	id := q.MirrorPush.RepoID
 	remotes, err := remotesIn(ctx, tx, id)
@@ -2500,14 +2142,11 @@ func (r *Reader) mirrorPush(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	return nil
 }
 
-// validateBranchChanges is [ReadQuery.validate] for a `branch_changes` read:
-// the engine's own — what it names a collected executor's delivered refs by
-// — so it names NO asker, for a `run_pushes` read's reason; it names one to
-// [MaxRunRepos] repositories — a run's, which it is given no more of — each
-// by id and once, each with at least one branch, each a whole ref under
-// refs/heads/ and once, [MaxRefsPerQuery] in all, and nothing else: no
-// filter, no cursor and no limit, since one page answers every branch it
-// names, each one change at most.
+// validateBranchChanges is [ReadQuery.validate] for a `branch_changes` read,
+// the engine's own for a collected run's delivered refs: NO asker; one to
+// [MaxRunRepos] repositories by id, once each, each with branches under
+// refs/heads/ once each, [MaxRefsPerQuery] in all; and nothing else, since one
+// page answers every branch, each one change at most.
 func (q ReadQuery) validateBranchChanges() error {
 	in := q.BranchChanges
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
@@ -2577,13 +2216,9 @@ func (q ReadQuery) validateBranchChanges() error {
 }
 
 // branchChanges serves a `branch_changes` read ([ReadBranchChanges]): the live
-// change each branch the query names heads, in the query's order of
-// repositories and branches — one seek of code_changes_open_idx a branch,
-// through the statement a push's decide and apply read the changes its
-// branches head by (liveBySourceSQL), driven from each repository's list of
-// branches a chunk at a time, every repository in the one transaction. NOT
-// HELD TO A GRANT, for a `run_pushes` read's reason: the engine names its own
-// run's refs, of repositories the run was given.
+// change each named branch heads, in the query's order, one seek of
+// code_changes_open_idx a branch (liveBySourceSQL), in one transaction. NOT
+// HELD TO A GRANT: the engine names its own run's refs.
 func (r *Reader) branchChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	for _, repo := range q.BranchChanges.Repos {
 		var heads []BranchChange
@@ -2619,30 +2254,14 @@ func (r *Reader) branchChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out
 	return nil
 }
 
-// freshness is the level a read is served at: EVERY LEVEL, by every code
-// read's one rule ([checkFreshness]) — `session` only beside a position on the
-// code log, which is the position it waits for, and a floor on any other log
-// refused as the request's mistake. Where none is named, a principal's read and
-// a duty listing are read stale — the REST read path's level, and what a poll
-// of the duty listings needs — and the engine's own `introduced`,
-// `run_pushes`, `expunge_tips` and `branch_changes` are refused, since whoever
-// builds an index names the level its pages must be read at, and whoever
-// reads what a run delivered the level its "nothing" may be said at: a run's
-// pushes read stale would answer none for a push another node has already
-// applied, and its branches' changes none for a change another node opened.
-//
-// # Why a principal's read serves `session`
-//
-// It refused the level, because a surface reading Gitlet held no
-// position of its own on the code log to wait for. A screen does now: a write
-// it makes to the code log answers with where its record landed, and the
-// dashboard reads its own writes back by asking every question of that log at
-// `session` with the position as `min_position` (its SESSION_QUERIES), so the
-// list it just changed never comes back from a node that has not applied the
-// change. Refused, every such read was a `400` the screen could only answer by
-// reading `stale` — rows from before the press. A bare `session` stays
-// refused: it would wait for the zero position and label this node's prefix
-// `session`, the wrong label the level exists to make impossible.
+// freshness is the level a read is served at: any level [checkFreshness]
+// admits, so a screen reads its own writes back at `session` from the
+// position its write answered (the dashboard's SESSION_QUERIES). Where none is
+// named, a principal's read and a duty listing are read stale, the REST path's
+// level; the engine's own `introduced`, `run_pushes`, `expunge_tips` and
+// `branch_changes` are refused, since their caller must name the level its
+// "nothing" may be said at: read stale, a run's pushes would answer none for a
+// push another node already applied.
 func (q ReadQuery) freshness() (statelog.Freshness, error) {
 	fresh := q.Fresh
 	if fresh.Level == "" && q.Kind != ReadIntroduced && q.Kind != ReadRunPushes && q.Kind != ReadExpungeTips &&
@@ -2661,11 +2280,9 @@ func validRefPrefix(prefix string) bool {
 		strings.HasSuffix(prefix, "/") && ValidRef(prefix+"x")
 }
 
-// validRepoPrefix reports a prefix a repositories listing may name: a
-// repository name whole, or the opening of one — which a "0" completes,
-// since a digit may end either label of a name and follow its hyphen or its
-// dot. A prefix no name could begin with is refused rather than answered
-// empty, as a refs listing's is.
+// validRepoPrefix reports a prefix a repositories listing may name: a name
+// whole, or the opening of one, which a "0" completes since a digit may end a
+// label and follow a hyphen or dot. Any other is refused, not answered empty.
 func validRepoPrefix(prefix string) bool {
 	return ValidName(prefix) || ValidName(prefix+"0")
 }
@@ -2687,24 +2304,19 @@ func limitOr(limit, fallback int) int {
 }
 
 // repos serves a listing of repositories, by name or by last push
-// ([reposListed]), of those the asker may read and, where it reads for a seat
-// its turn is acting for, that seat may read too ([JudgeRead]), each carrying
-// the asker's access to it.
+// ([reposListed]), of those the asker and its ceiling may read ([JudgeRead]),
+// each carrying the asker's access.
 //
-// THE PAGE IS WHAT WAS SCANNED, NOT WHAT WAS KEPT: a repository the asker may
-// not read, or its ceiling may not, is left out, and the cursor is still the
-// last row the statement scanned — so a page can be shorter than its limit,
-// or empty with a Next, and a caller pages until no Next comes back. Cut at
-// the kept rows instead, a page of repositories the asker may not read would
-// end the listing early, or a filter run until the page filled would scan
-// without bound for a seat that reads little.
+// THE PAGE IS WHAT WAS SCANNED, NOT WHAT WAS KEPT: the cursor is the last row
+// scanned, so a page may be short or empty with a Next and a caller pages
+// until no Next. Cut at kept rows, a page of unreadable repositories would
+// end the listing early, or filling a page would scan without bound.
 func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
 	out *ReadAnswer) error {
 	statuses := q.Status
 	if len(statuses) == 0 {
-		// THE REPOSITORIES IN USE: one being imported is listed beside the
-		// active and the archived — it is fetched, and fills as its import
-		// lands — and only the deleted and the purging wait to be asked for.
+		// THE REPOSITORIES IN USE, importing ones included (fetched, filling as
+		// the import lands); deleted and purging ones are asked for.
 		statuses = []RepoStatus{RepoStatusImporting, RepoStatusActive, RepoStatusArchived}
 	}
 	names := make([]string, len(statuses))
@@ -2767,14 +2379,11 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 			out.Repos[i].Spark = days[out.Repos[i].ID]
 		}
 	}
-	// MEASURED WITH THEIR RULES, which are read in one statement for the
-	// whole page and are most of a row's bytes when a repository has many:
-	// counted before them, a page of 500 repositories at 64 long rules each
-	// was ten megabytes past a budget it believed it kept. The page is cut at
-	// the row that fills it, and the cursor is that row's; a page cut at no
-	// kept row is full when the statement filled its limit, and its cursor the
-	// last row scanned. EACH ROW'S CARD is read as the page fills, the push
-	// rows it walks charged to the page, so a row past the cut reads none.
+	// MEASURED WITH THEIR RULES, most of a row's bytes when a repository has
+	// many. The page is cut at the row that fills it, its cursor that row's;
+	// otherwise full when the statement filled its limit, its cursor the last
+	// row scanned. EACH ROW'S CARD is read as the page fills, its push rows
+	// charged to the page, so a row past the cut reads none.
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for i := range out.Repos {
 		if q.RepoFacts {
@@ -2795,9 +2404,8 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 }
 
 // protectionsOf fills a page of repositories' rules in ONE statement, each as
-// a push is judged by it ([PushRule]): a listing answers no merge gate, which
-// one repository's detail answers a read that asks ([ReadQuery.Gates]) — so a
-// page decodes none, and its rows weigh what it sends of them.
+// a push is judged by it ([PushRule]): a listing answers no merge gate
+// ([ReadQuery.Gates]), so its rows weigh what it sends.
 func protectionsOf(ctx context.Context, tx *sql.Tx, ids []string, repos []RepoSummary) error {
 	if len(ids) == 0 {
 		return nil
@@ -2829,14 +2437,10 @@ func protectionsOf(ctx context.Context, tx *sql.Tx, ids []string, repos []RepoSu
 }
 
 // repo serves q's repository in detail, and the record that last moved it, to
-// an asker that may read it — and, where it reads for the seat its turn is
-// acting for, that seat may read it too ([JudgeRead]).
-//
-// A REPOSITORY THE ASKER MAY NOT READ IS [ErrNotPermitted], and one its
-// ceiling may not [ErrAboveCeiling], each judged after its row is read, and
-// one that does not exist is still [ErrRepoNotFound]: that a `visibility:
-// unit` repository exists is no secret — its name is in the company's
-// document — and what it holds is.
+// an asker and ceiling that may read it ([JudgeRead]): else [ErrNotPermitted]
+// or [ErrAboveCeiling], judged after the row is read. A missing one is
+// [ErrRepoNotFound]: a `visibility: unit` repository's existence is no secret
+// (the company's document names it), only its contents are.
 func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster,
 	cp statelog.Position, out *ReadAnswer) error {
 	name := q.Repo
@@ -2856,29 +2460,23 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 	if err != nil {
 		return fmt.Errorf("gitlet: read %s's head: %w", name, err)
 	}
-	// THE COUNTS ARE THE ROW'S, kept by the applier as it moves the refs:
-	// counted here they were a walk of every ref the namespace holds,
-	// tombstones included, on every detail read.
+	// THE COUNTS ARE THE ROW'S, kept by the applier, never a walk of every ref
+	// on every detail read.
 	summary := v.summary(head.OID)
 	summary.Access = g.Access.String()
 	out.Repo = &RepoDetail{RepoSummary: summary,
 		Branches: v.branches, Tags: v.tags, Tombstones: v.tombstones,
 		CreatedAt: store.DecodeTime(v.createdAt), Limits: r.limits()}
-	// THE PATH OWNERS ONLY TO A READ THAT ASKS ([ReadQuery.PathOwners]): a
-	// refs listing's first page and every resolution of a repository read
-	// this detail for its row, and at their bound the path owners are a
-	// quarter of a mebibyte of JSON each of them would carry and drop.
+	// THE PATH OWNERS ONLY TO A READ THAT ASKS ([ReadQuery.PathOwners]): at
+	// their bound a quarter MiB that every resolution would carry and drop.
 	if q.PathOwners {
 		if out.Repo.PathOwners, err = pathOwnersIn(ctx, tx, id); err != nil {
 			return err
 		}
 	}
-	// AND THE GATES ONLY TO A READ THAT ASKS ([ReadQuery.Gates]), for the
-	// path owners' reason: read in the same transaction as the rules the row
-	// carries, so every gate names a rule of the row.
-	// WITH WHO SET EACH RULE AND WHEN, every rule's: the rules in detail, as
-	// a person reading a repository's protection asks for them — both in one
-	// seek of the rules ([ruleDetailsIn]).
+	// AND THE GATES ONLY TO A READ THAT ASKS ([ReadQuery.Gates]), with who
+	// set each rule and when, in one seek of the rules ([ruleDetailsIn]) in
+	// the transaction the row's rules came from, so every gate names one.
 	if q.Gates {
 		if out.Repo.Gates, out.Repo.RuleSources, err = ruleDetailsIn(ctx, tx, id); err != nil {
 			return err
@@ -2904,26 +2502,17 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 			return err
 		}
 	}
-	// AND WHERE ITS EXPUNGES STAND AND WHERE IT STANDS WITH OTHER HOSTS, in
-	// one seek of its row ([detailRowIn]): a person who asked for a purge
-	// reads its progress here — the request open until its maintainer serves
-	// it, and what the last commit dropped — and one who imported it, or set
-	// a mirror, the import's progress and the mirror's last sync.
+	// AND ITS EXPUNGES' AND OTHER HOSTS' PROGRESS (a purge, an import, a
+	// mirror's last sync), in one seek of its row ([detailRowIn]).
 	out.Repo.Expunge, out.Repo.Remotes, out.Repo.Version, err = detailRowIn(ctx, tx, id)
 	return err
 }
 
 // detailRowIn reads what a repository's detail serves of its row beyond its
-// summary — its expunges ([expungeState.view]) and its other hosts
-// ([RemoteState]), and the record that last moved it — in ONE statement by its
-// primary key, in tx.
-//
-// ONE SEEK, NEVER ONE A PART: every resolution of a repository reads this
-// detail (a git read at HEAD or no branch, a search's repo: filter, a merge,
-// code_get_repo), so a statement a part was a second seek of the row the
-// first had just read, on every one of them. The applier's and the decide's
-// narrower reads ([expungeStateSQL], [remotesSQL]) stay their own: they read
-// what a record needs and nothing of the progress a person reads here.
+// summary (its expunges [expungeState.view], its other hosts [RemoteState]
+// and the record that last moved it) in ONE primary-key statement, since
+// every resolution of a repository reads this detail. The applier's and the
+// decide's narrower reads ([expungeStateSQL], [remotesSQL]) stay their own.
 func detailRowIn(ctx context.Context, tx *sql.Tx, id string) (ExpungeState, RemoteState, statelog.Position,
 	error) {
 	var (
@@ -2970,17 +2559,12 @@ const detailRowSQL = `SELECT drop_epoch, expunge_id, expunge_request, expunge_re
 	expunged_at, expunge_dropped_objects, expunge_dropped_bytes, mirror_from, mirror_to, import_source,
 	import_seq, imported_at, import_error, mirror_synced_at, version FROM code_repos WHERE id = ?`
 
-// pushes serves one repository's push history, newest first IN LOG ORDER —
-// the order the pushes landed in — keyset-paged by (position, push_id): the
-// push id because group commit puts up to 64 pushes in one record, sharing its
-// position and its instant, so a cursor without it skips or repeats the
-// pushes of a record a page boundary splits. Never by the record's instant,
-// which is the broker's and steps back across a stream leader's change, so it
-// only approximates the order (replicated 0084). The history is the
-// repository's contents, so an asker that may not read the repository is
-// answered [ErrNotPermitted], and one whose ceiling may not [ErrAboveCeiling],
-// as [Reader.repo] answers them. Each row names the change its record merged
-// ([PushRow.Change]); a narrowed history is [Reader.pushesNarrowed]'s.
+// pushes serves one repository's push history, newest first IN LOG ORDER,
+// keyset-paged by (position, push_id): group commit puts up to 64 pushes in
+// one record sharing its position, and the broker's instant steps back across
+// a leader change (replicated 0084). The history is the repository's contents,
+// refused as [Reader.repo] refuses. Each row names the change its record
+// merged ([PushRow.Change]); a narrowed history is [Reader.pushesNarrowed]'s.
 func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	repo, err := readableIn(ctx, tx, q.Repo, q.Asker, q.CeilingSeat, chart)
 	if err != nil {
@@ -2988,10 +2572,8 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	}
 	id := repo.ref.ID
 	if q.Push != "" {
-		// ONE PUSH, WHOLE, by its key — and only one this repository's
-		// history holds: another repository's push, or one past
-		// PushHistory, is no row of this history, which is an answer with
-		// none.
+		// ONE PUSH, WHOLE, by its key, and only one this history holds;
+		// another repository's is an answer with none.
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		row, found, err := pushIn(ctx, tx, q.Push)
 		if err != nil {
@@ -3048,13 +2630,9 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			return fmt.Errorf("gitlet: read %s's pushes: %w", q.Repo, err)
 		}
 		named.add(len(out.Pushes), row)
-		// A ROW IN BRIEF IS CHARGED THE ROW IT READ — every command and
-		// every introduced id, read and decoded whole to be cut and counted —
-		// or what it sends where that is the larger: a page held to what it
-		// sends alone would read a run of maximal pushes for a few hundred
-		// bytes each, and so without bound, the rule a condensed page keeps
-		// ([scanIntroduced]). So a brief page READS what a whole one does
-		// and sends a fraction of it.
+		// A ROW IN BRIEF IS CHARGED THE ROW IT READ, or what it sends if
+		// larger: charged by what it sends alone, a page of maximal pushes
+		// would read without bound ([scanIntroduced]).
 		charge := row.encodedBytes(commands)
 		if q.Brief {
 			row = row.brief()
@@ -3087,22 +2665,15 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 
 // refsListing serves one page of a repository's LIVE refs under a prefix, by
 // name or as a [RefListingQuery] orders them, keyset after the last ref
-// served, to an asker that may read the repository, and whose ceiling may
-// ([JudgeRead]) — and on the first page the repository in detail too, read as
-// kind repo reads it in the same transaction, so what a seat asks first of a
-// repository — what it is, and its branches — is one read and one barrier.
+// served, to an asker and ceiling that may read it ([JudgeRead]); the first
+// page carries the repository's detail too, in the same transaction, so a
+// seat's first question is one read. The detail rides in the half of the
+// estate reply MaxPageBytes leaves free.
 //
-// OVER THE LIVE REFS' INDEX (code_refs_live_idx, replicated 0082, its
-// predicate repeated verbatim), never code_refs' key: a range of the key
-// holds every tombstone under the prefix as well, kept RefTombstoneHorizon
-// so a delta learns of a deletion — up to MaxTombstonesPerRepo of them, each
-// a row the page steps over, with a lookup apiece, before it fills — where
-// the partial index holds the live refs alone. The names under a directory
-// are, in byte order, every name between dir + "/" and dir + "0", the range
-// the push decide asks of the same index.
-//
-// The detail rides beside the page's rows in the half of the estate reply
-// MaxPageBytes leaves free, as a snapshot page's repository row does.
+// OVER code_refs_live_idx (replicated 0082, its predicate repeated verbatim),
+// never code_refs' key, whose range also holds up to MaxTombstonesPerRepo
+// tombstones to step over. A directory's names lie between dir + "/" and
+// dir + "0", the push decide's range.
 func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster,
 	cp statelog.Position, out *ReadAnswer) error {
 
@@ -3137,26 +2708,16 @@ func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 
 // introduced serves one page of a repository's pushes in LOG ORDER for a Gitlet
 // node's index of which push introduced each commit: (After, Through]
-// ascending — Through zero meaning this read's own checkpoint — or below
-// Before descending, newest first, down to the oldest push the rows keep;
-// keyset after the last push served, `<packed position>/<push id>`, since
-// group commit puts up to 64 pushes at one position. A page ends at its row
-// limit or once its rows reach MaxPageBytes, each counted by what it sends or
-// by the commands it read, whichever is more ([scanIntroduced]), and always
-// serves one. A repository with no row — purged — is [ErrRepoNotFound], which
-// drops the index that asked.
+// ascending (Through zero: this read's checkpoint) or below Before descending;
+// keyset `<packed position>/<push id>`, since group commit puts up to 64 pushes
+// at one position. A page serves at least one push and ends at its row limit
+// or MaxPageBytes, charged as [scanIntroduced] says. A purged repository is
+// [ErrRepoNotFound], which drops the index that asked.
 //
-// ITS ROW LIMIT IS MaxSnapshotItems, a snapshot page's, and never the history
-// listing's MaxPushesPerPage: that is a screen of history a person reads,
-// and this is the engine's own read, whose cost its bytes bound — what a
-// page sends and what it reads — whatever its count. So the row limit need
-// only stop a page of the narrowest pushes about where its bytes would, and
-// it does: a seat's deletion of a one-letter branch, with no commit to
-// introduce, is 345 bytes sent, so ten thousand of them are 3.45 MB of a
-// page's 4 MiB, while a page of pushes of three commits each ends at its
-// bytes first, at about 7 500 (internal/gitlet/cache's measured section). Two
-// hundred a page would read a monorepo's 18 million pushes of 181 days back
-// in 90 000 pages rather than 2 400.
+// ITS ROW LIMIT IS MaxSnapshotItems, never MaxPushesPerPage (a person's
+// screen): its bytes bound its cost, and the narrowest pushes (345 bytes) fill
+// about the same 4 MiB (internal/gitlet/cache's measured section), where 200 a
+// page would read a monorepo's 181 days in 90 000 pages rather than 2 400.
 func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp statelog.Position,
 	out *ReadAnswer) error {
 
@@ -3209,69 +2770,23 @@ func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp sta
 }
 
 // runPushes serves one page of an executor's pushes ([ReadRunPushes]): each
-// repository the query names, in its order, and its pushes above the run's
-// launch position in LOG ORDER — the position, then the push id, since group
-// commit lands up to 64 pushes at one position — answering the rows that name
-// the run; keyset after the last push the page READ, `<repository
-// index>/<packed position>/<push id>`, whether or not that push was the run's.
-// A repository's pushes running out moves the page on to the next
-// repository's.
+// named repository in order, its pushes above the launch position in LOG
+// ORDER, answering those naming the run; keyset after the last push READ,
+// `<repository index>/<packed position>/<push id>`, the run's or not. NOT HELD
+// TO A GRANT: the run was given only repositories its seat could read.
 //
-// NOT HELD TO A GRANT: the engine reads its own run's record for the seat that
-// launched the run, and the run was given only repositories that seat could
-// read at its launch. A repository with no rows — purged since the run pushed
-// to it — answers no push of the run's, which is what the rows say of it.
-//
-// A PAGE IS HELD TO WHAT IT READS, NOT ONLY TO WHAT IT ANSWERS. The run's
-// pushes are a few among every push its repositories took while it ran —
-// other seats', people's, other runs' — and code_pushes_repo_idx carries no
-// run (replicated 0098 says why), so finding them reads each of those rows to
-// test the run it names: its whole record, the overflow pages of a wide one
-// included. Held only to what it answered, a page read every push between
-// one of the run's and the next, however many and however wide — a week of
-// the large model's busiest repository in one page where the run pushed once
-// in it, and 80 MB where 200 pushes of 400 KB stood between two of the run's,
-// with nothing about a run bounding its length. So a page READS at most its
-// row limit of its repositories' pushes — MaxSnapshotItems unless the query
-// asks fewer, an engine read's, as [Reader.introduced]'s, because what bounds
-// its cost is its bytes — and stops once those WEIGH MaxPageBytes, each by
-// the row_bytes the index carries beside its key, so a row past the page's
-// bytes is never looked up at all: always one, so a page always advances, and
-// so at most one row past the bound ([pushesWithin]'s rule, the history
-// horizon's and a purge part's). What it answers is held to MaxPageBytes
-// apart, each push it keeps by what it sends. A page that reads its bound
-// ends there whether or not it kept a push — none, and a cursor, which the
-// engine reads on past — so no request costs more than a page's reads,
-// whatever the run's length and whoever else pushed beside it.
-//
-// THE WINDOW IS WEIGHED WHERE IT LIES ([runSpanOf]): what the pushes the page
-// has rows left for weigh, summed by one aggregate of the index's widths, and
-// the last one's place read off the same range — both covering seeks, which
-// look up no row and hand Go none — and only where they weigh more than the
-// page's bytes left are their weights walked, to the one that fills it. Then
-// the run's own rows in exactly that window: one ranged seek of the same
-// index, each row it reaches looked up to test the run. Weighing every push
-// in Go instead, each handed across the driver with its place and its weight,
-// made a week's read five times as long (2.5 s).
-//
-// MEASURED (BenchmarkRunPushes, one run of each arm on two E-cores of a Core
-// Ultra 7 265U): an hour of a run in the large model's busiest repository, 70
-// pushes a minute, reads its 4 200 pushes in one page of 4.0 ms; a week of it,
-// 705 600 pushes, in 71 pages of at most 9.9 ms, 0.49 s in all — where, held
-// only to what it answered, one page had read the whole week wherever the run
-// pushed once in it; that hour with 200 of the others' pushes at 403 KB, 80 MB
-// of rows, in 19 pages of at most 4.3 ms; MaxRunRepos such repositories' hour,
-// 33 600 pushes, in 4 pages of at most 7.8 ms; and a quiet repository's hour in
-// 0.8 ms. Every page is under a tenth of statelog.ReadBudget and the week's
-// read under twice it — the rule the benchmark decides by — so a page's row
-// bound stays an engine read's MaxSnapshotItems.
+// A PAGE IS HELD TO WHAT IT READS: code_pushes_repo_idx carries no run
+// (replicated 0098), so every push beside the run's is read to test it. A
+// page reads at most MaxSnapshotItems pushes, stopping once their row_bytes
+// WEIGH MaxPageBytes ([pushesWithin]'s rule), weighed by covering seeks
+// ([runSpanOf]), never in Go; it may end with none kept and a cursor.
+// BenchmarkRunPushes holds every page under a tenth of statelog.ReadBudget.
 func (r *Reader) runPushes(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	in := q.RunPushes
 	after := in.After.Packed()
-	// A PAGE READS AFTER A PLACE: its cursor's push, or — on the first page
-	// of a repository — (after+1, ""), the place before every push at a
-	// position past the launch, since positions are whole numbers and no
-	// push's id is empty; so one statement of each kind serves both.
+	// A PAGE READS AFTER A PLACE: its cursor's push, or on a repository's
+	// first page (after+1, ""), before every push past the launch, since no
+	// push's id is empty.
 	start, position, pushID := 0, after+1, ""
 	if q.Cursor != "" {
 		var keyed bool
@@ -3423,23 +2938,15 @@ func cutRunPushCursor(s string) (repo int, position int64, pushID string, ok boo
 }
 
 // compactionDue serves one page of a `compaction_due` read: the active and
-// archived repositories holding at least q.MinPacks live packs, MOST LIVE PACKS
-// FIRST and then by id, each with the version its row holds — one ranged walk
-// of code_repos_packs_idx (replicated 0088) from its top, keyset on (live
-// packs, id) after a cursor, the index's partial predicate repeated verbatim
-// so the planner may use it at all.
+// archived repositories holding at least q.MinPacks live packs, with their
+// row's version, one ranged walk of code_repos_packs_idx (replicated 0088,
+// its predicate repeated verbatim), keyset on (live packs, id).
 //
-// MOST FIRST, because a compactor takes them in this order: a repository near
-// MaxPacksPerRepo, whose pushes are about to be refused compaction_behind, must
-// never wait behind a thousand barely due. ACTIVE AND ARCHIVED, because an
-// archived repository is still read, and every cold sync of it pays a GET for
-// every pack it holds. THE VERSION, because it is what a compactor keys its
-// memory of a plan found not due by, so a repository whose row has not moved
-// since costs it a lookup, never a sync.
-//
-// A FULL LISTING, never a delta from the last poll's: a delta would need an
-// index on code_repos.version, which every record about a repository rewrites,
-// where this index moves only with a repository's live packs.
+// MOST LIVE PACKS FIRST, so one near MaxPacksPerRepo (about to refuse pushes
+// compaction_behind) never waits. ARCHIVED too: it is still read, each cold
+// sync a GET a pack. THE VERSION keys the compactor's memory of a plan found
+// not due. A FULL LISTING, never a delta, which would need an index on
+// code_repos.version, rewritten by every record.
 func (r *Reader) compactionDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	var (
 		rows *sql.Rows
@@ -3496,39 +3003,17 @@ func cutDueCursor(s string) (int64, string, bool) {
 }
 
 // publicationDue serves one page of a `publication_due` read: the active and
-// archived repositories whose live packs are past their published ones —
-// every one holding a live pack no published layer covers — LEAST RECENTLY
-// PUBLISHED FIRST, one never published before every other, then by id, each
-// with what a publication's due rule reads and the version its row was read
-// at.
+// archived repositories holding a live pack no published layer covers, LEAST
+// RECENTLY PUBLISHED FIRST (never published first), then by id, with what the
+// due rule reads and the row's version: ONE WALK of code_repos_unpublished_idx
+// (replicated 0090, its predicate repeated verbatim), a full listing. The
+// published counts are the last publication's recount, so a listed repository
+// may have nothing to publish, which only a plan can tell
+// ([PublicationCandidate]).
 //
-// THE PUBLISHED COUNTS ARE THE LAST PUBLICATION'S RECOUNT, and a push moves
-// only the live ones: a pack pushed since that is byte-identical to a
-// published one — its git checksum one a layer names — counts in the tail
-// until the next publication recounts it, so the listing can name a
-// repository with nothing to publish — which only a plan over its packs can
-// tell, answering it not due ([PublicationCandidate]; replicated 0090 says
-// why no push recounts).
-//
-// ONE WALK of code_repos_unpublished_idx (replicated 0090), its partial
-// predicate repeated verbatim, which holds exactly the repositories it lists:
-// a repository whose every pack its last recount found covered, and none
-// added since, costs the listing nothing, however many there are. LEAST
-// RECENTLY PUBLISHED FIRST, so the repository that has waited longest is
-// planned first, and a page cut at MaxSnapshotItems ends at the most recently
-// published. A FULL LISTING, never a delta from the last poll's, for the
-// compaction's listing's reason.
-//
-// AND NONE WITH AN EXPUNGE OPEN: rule 6g refuses every publication between an
-// expunge's begin and its commit (publication.go), so a repository mid-expunge
-// is left out — however many of its packs no layer covers, the kept packs its
-// begin wrote among them, since a begin that drops layers recounts the
-// published ones down — and listed again once its commit lands. Listed, it
-// would have its publisher plan and build a layer for the committer to refuse
-// stale, at every poll until the commit: where the begin dropped the chain's
-// root, a whole base layer with its bitmap, the costliest build a Gitlet node
-// makes. A residual predicate on the same walk, over the row the listing reads
-// for its columns anyway: the expunges open are a handful in any fleet.
+// NONE WITH AN EXPUNGE OPEN: rule 6g refuses those publications
+// (publication.go), and listed, its publisher would build a layer (perhaps a
+// whole base) for the committer to refuse at every poll.
 func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	var (
 		rows *sql.Rows
@@ -3575,33 +3060,18 @@ func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, ou
 	return rows.Err()
 }
 
-// expungeDue serves one page of an `expunge_due` read, in two ARMS, the
-// first served whole before the second:
+// expungeDue serves one page of an `expunge_due` read in two ARMS, the first
+// whole before the second, each a full listing with its partial predicate
+// repeated verbatim:
 //
-//  1. OPEN: the active and archived repositories with an expunge open or a
-//     purge requested and not served, BY ID — ONE WALK of
-//     code_repos_expunging_idx (replicated 0092), its partial predicate
-//     repeated verbatim, which holds exactly those repositories, a handful in
-//     a fleet of any size, every one of which its maintainer finishes or
-//     serves before it plans anything else — keyset on the id after a cursor;
-//  2. WEEKLY, asked by [ReadQuery.ScannedBefore]: every OTHER active or
-//     archived repository — every kind, a scratch one as much as a project,
-//     since a push is refused repo_size on live bytes whoever's they are —
-//     last JUDGED at or before the instant, or never — an expunge committed
-//     in it or a scan of it found clean ([ExpungeScan]), expunge_scanned_at
-//     — LEAST RECENTLY JUDGED FIRST — ONE SEEK of code_repos_expunge_due_idx
-//     (replicated 0139), its partial predicate repeated verbatim, bounded
-//     above by the instant, keyset on (expunge_scanned_at, id) after a
-//     cursor. A repository judged within the interval is in no page, so a
-//     steady fleet's listing holds only the repositories owed a scan, on
-//     every node, whoever judged them. A repository the first arm listed is
-//     left out of the second, so each is listed once.
+//  1. OPEN: active and archived repositories with an expunge open or a purge
+//     requested, BY ID, one walk of code_repos_expunging_idx (replicated 0092);
+//  2. WEEKLY ([ReadQuery.ScannedBefore]): every OTHER active or archived
+//     repository of any kind (repo_size counts every live byte) last JUDGED
+//     ([ExpungeScan]) at or before the instant or never, LEAST RECENTLY FIRST,
+//     one seek of code_repos_expunge_due_idx (replicated 0139).
 //
-// Each with the expunge, the request and its position, when the repository
-// was last expunged, its live packs, bytes and objects, and the version its
-// row was read at. A deleted or purging repository's stays out of both: its
-// open expunge waits for its restore, or goes with its purge. A FULL LISTING,
-// never a delta from the last poll's, for the compaction's listing's reason.
+// Deleted or purging: in neither (its expunge awaits a restore, or the purge).
 func (r *Reader) expungeDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	weekly, after, ok := cutExpungeCursor(q.Cursor)
 	if !ok || (weekly && q.ScannedBefore.IsZero()) {
@@ -3706,11 +3176,9 @@ func cutExpungeCursor(cursor string) (weekly bool, after *expungeAfter, ok bool)
 }
 
 // indexed serves one page of an `indexed` read ([ReadIndexed]): the active
-// and archived repositories searched by index, by name after the cursor —
-// ONE SEEK of code_repos_search_idx (replicated 0107), its partial predicate
-// repeated verbatim, which holds exactly the repositories a Gitlet node's
-// indexer may keep an index of. A FULL LISTING, never a delta from the last
-// poll's, for the compaction's listing's reason.
+// and archived repositories searched by index, by name after the cursor, one
+// seek of code_repos_search_idx (replicated 0107, its predicate repeated
+// verbatim). A FULL LISTING, as [Reader.compactionDue]'s.
 func (r *Reader) indexed(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	// THE CURSOR IS THE LAST NAME SERVED, and "" before the first: a name
 	// is never empty, so one statement serves every page.
@@ -3739,8 +3207,7 @@ func (r *Reader) indexed(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Read
 
 // defaultTips serves one page of a `default_tips` read ([ReadDefaultTips]):
 // the active project repositories by name after the cursor, each with its
-// default branch's tip, one walk of code_repos_name_idx. A FULL LISTING,
-// never a delta, for the compaction's listing's reason.
+// default branch's tip, one walk of code_repos_name_idx; a full listing.
 func (r *Reader) defaultTips(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	if q.Cursor != "" && !ValidName(q.Cursor) {
 		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
@@ -3776,12 +3243,9 @@ func (r *Reader) defaultTips(ctx context.Context, tx *sql.Tx, q ReadQuery, out *
 }
 
 // importsDue serves one page of an `imports_due` read: the repositories being
-// imported, BY ID, each with its source, how many of its chunks have landed
-// and the version its row was read at — ONE WALK of code_repos_importing_idx
-// (replicated 0123), its partial predicate repeated verbatim, which holds
-// exactly the repositories being imported, keyset on the id after a cursor.
-// A FULL LISTING, never a delta from the last poll's, for the compaction's
-// listing's reason.
+// imported, BY ID, with their source, chunks landed and row version, one walk
+// of code_repos_importing_idx (replicated 0123, its predicate repeated
+// verbatim); a full listing.
 func (r *Reader) importsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	if q.Cursor != "" && validRepoID("cursor", q.Cursor) != nil {
 		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
@@ -3801,10 +3265,8 @@ func (r *Reader) importsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 		if err := rows.Scan(&c.ID, &c.Name, &source, &c.Seq, &version); err != nil {
 			return fmt.Errorf("gitlet: list the repositories being imported: %w", err)
 		}
-		// AN IMPORTING REPOSITORY NAMES ITS SOURCE: its create's import or
-		// its pull mirror's, fixed at the create. One that names none is a
-		// row no apply of this build writes, listed with none, which its
-		// home ends rather than fetching from nowhere.
+		// AN IMPORTING REPOSITORY NAMES ITS SOURCE, fixed at the create; one
+		// naming none is listed with none, and its home ends it.
 		if src, err := remoteOf[ImportSource](source); err != nil {
 			return fmt.Errorf("gitlet: list the repositories being imported: %s: %w", c.ID, err)
 		} else if src != nil {
@@ -3820,14 +3282,11 @@ func (r *Reader) importsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	return rows.Err()
 }
 
-// mirrorsDue serves one page of a `mirrors_due` read: every push mirror BY ID —
-// one walk of code_repos_mirror_to_idx, the repositories still live — then
-// every active pull mirror LEAST RECENTLY SYNCED FIRST, by its last sync's
-// instant and then its id — one walk of code_repos_mirrored_idx (replicated
-// 0123) — each partial predicate repeated verbatim, keyset after a cursor that
-// names its arm: `t:<id>` in the push mirrors', `f:<instant>:<id>` in the
-// pull mirrors'. A page that ends the push arm with room left goes on into
-// the pull arm's first rows.
+// mirrorsDue serves one page of a `mirrors_due` read: every live push mirror
+// BY ID (code_repos_mirror_to_idx), then every active pull mirror LEAST
+// RECENTLY SYNCED FIRST (code_repos_mirrored_idx, replicated 0123), each
+// predicate repeated verbatim; the cursor names its arm ([cutMirrorsCursor]),
+// and a page ending the push arm goes on into the pull arm.
 func (r *Reader) mirrorsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	arm, after, at, ok := cutMirrorsCursor(q.Cursor)
 	if !ok {
@@ -3926,37 +3385,15 @@ func cutMirrorsCursor(cursor string) (arm, after string, at int64, ok bool) {
 }
 
 // expungeTips serves one page of an `expunge_tips` read ([ReadExpungeTips]):
-// the objects an expunge of the repository keeps beside its refs (M6-D2), in
-// five phases, each ONE SEEK of a named index in its order, keyset after the
-// last row the page read:
-//
-//  1. DROPS: the object each of the repository's ref drops left whose
-//     record's broker instant is at or after the query's — code_ref_drops'
-//     key, a covering seek (replicated 0089 led it with the instant for this
-//     read).
-//  2. REVISIONS: the head of every revision of every DRAFT OR OPEN change —
-//     code_changes_open_idx, then each change's revisions by their key — the
-//     force-pushed-away heads a reviewer still compares (an interdiff of
-//     revision 1 and 2 reads both).
-//  3. QUEUE: the head of every LIVE queue entry, waiting or testing —
-//     code_queue_live_idx, partial on exactly those.
-//  4. CANDIDATES: the tip of every candidate — code_candidates_train_idx; a
-//     candidate is rows and a pack, never a ref (M5-D12), and its tip reaches
-//     every commit its train built, the one a landing moves the target onto.
-//  5. GREEN: every protected target's green row — the table's key — what a
-//     mirror and a deploy follow.
-//
-// The phases after the first are what rows hold IN FLIGHT, kept whatever the
-// query's instant: a purge, which keeps no drop, still keeps them, or it would
-// drop the tip a pending landing moves its target onto, or the revisions an
-// open change's reviewers compare. A closed or merged change's revisions, an
-// ended entry and a landed train's candidates are history, and nothing is kept
-// for them. Each object is answered once a page: one many rows name is one tip,
-// and a later page naming it again costs its reader a map lookup. A repository
-// with no row — purged — is [ErrRepoNotFound].
-//
-// NEVER HELD TO A GRANT: the engine reads what its own expunge keeps, and the
-// objects leave this node only to the maintainer that keeps them.
+// the objects an expunge keeps beside the refs (M6-D2), in the phases
+// [tipsPhase] lists, each ONE SEEK of its index, keyset after the last row
+// read. Drops are those at or after the query's instant (code_ref_drops' key,
+// led by the instant, replicated 0089). The rest are IN FLIGHT and kept even
+// by a purge: revision heads of draft or open changes (an interdiff reads
+// force-pushed heads), live queue entries, candidates (rows and a pack, never
+// a ref, M5-D12) and green rows; closed history keeps nothing. Each object is
+// answered once a page. A purged repository is [ErrRepoNotFound]. NEVER HELD
+// TO A GRANT: the objects go only to the maintainer.
 func (r *Reader) expungeTips(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	in := q.ExpungeTips
 	var name string
@@ -3995,11 +3432,10 @@ func (r *Reader) expungeTips(ctx context.Context, tx *sql.Tx, q ReadQuery, out *
 	return nil
 }
 
-// tipsOf reads one phase of an `expunge_tips` page into out — from its start,
-// or after the row after names — counting every row read against pg, whether
-// or not its object was answered already on the page, since the page is held
-// to what it reads as well as to what it sends. full reports a page that took
-// its last row, its cursor that row's place.
+// tipsOf reads one phase of an `expunge_tips` page into out, from its start or
+// after the row after names, counting every row read against pg
+// ([tipAnswered]). full reports a page that took its last row, its cursor
+// that row's place.
 func (r *Reader) tipsOf(ctx context.Context, tx *sql.Tx, phase tipsPhase, repoID string, since int64,
 	after *tipsCursor, pg *page, answered map[string]bool, out *ReadAnswer) (full bool, err error) {
 
@@ -4064,19 +3500,12 @@ func (r *Reader) tipsOf(ctx context.Context, tx *sql.Tx, phase tipsPhase, repoID
 }
 
 // revisionTips is the revisions phase of an `expunge_tips` page
-// ([Reader.tipsOf]): the live changes in their source branch's order over
-// code_changes_open_idx, a page's worth at a time, then each one's revisions
-// by their key — TWO SEEKS RATHER THAN ONE JOIN, because the store's planner
-// sorts a join's rows by an inner table's column however its indexes order
-// them, and a page would sort every live revision of the repository. A branch
-// heads one live change at a time (decideOpen's change_exists), so the source
-// branch orders the changes and the revision a change's rows; the cursor
-// names the change too, because the branch may head ANOTHER change by the
-// next page — the one it named closed and a new one opened on the branch
-// between two pages. The cursor's change is read again from the revision
-// after its own, and every other one, a new change on the cursor's branch
-// included, from its first: resuming a new change at the number its
-// predecessor reached would skip its first revisions.
+// ([Reader.tipsOf]): live changes by source branch over code_changes_open_idx,
+// then each one's revisions by key. TWO SEEKS, NOT A JOIN: the planner would
+// sort every live revision by an inner column. A branch heads one live change
+// (decideOpen's change_exists), but the cursor names the change too, since a
+// new change may replace it between pages: only the cursor's own change
+// resumes after its revision; any other starts from its first.
 func (r *Reader) revisionTips(ctx context.Context, tx *sql.Tx, repoID string, after *tipsCursor, pg *page,
 	answered map[string]bool, out *ReadAnswer) (full bool, err error) {
 
@@ -4152,9 +3581,8 @@ func (r *Reader) changeRevisionTips(ctx context.Context, tx *sql.Tx, ch liveChan
 }
 
 // tipAnswered answers oid into out unless the page answered it already, and
-// counts its row against pg whether or not it did — the page is held to what
-// it reads as well as to what it sends — reporting a page that took its last
-// row, its cursor c.
+// counts its row against pg either way (a page is held to what it reads),
+// reporting a page that took its last row, its cursor c.
 func tipAnswered(c tipsCursor, oid string, pg *page, answered map[string]bool, out *ReadAnswer) bool {
 	size := 0
 	if !answered[oid] {
@@ -4192,21 +3620,13 @@ func tipsPhases() []tipsPhase {
 }
 
 // tipsCursor is one row's place in its phase's index order, and an
-// `expunge_tips` page's cursor, "<phase>:" then the phase's key:
-//
-//   - drops "<at>:<position>:<old>:<ref>" — the instant as the column stores
-//     it, the record's position, the object and the ref;
-//   - revisions "<n>:<change>:<source_ref>", the revision, the live change's
-//     id and its source;
-//   - queue "<seq>:<target_ref>", a live entry's target and its place;
-//   - candidates "<ordinal>:<train>:<target_ref>";
-//   - green "<target_ref>".
-//
-// The ref LAST in each, since a ref may hold every character but a colon
-// (git's ref rules), which the integers, the object ids, a change's id and a
-// train's id hold none of. position is a drop's record position, a revision's
-// number, an entry's seq or a candidate's ordinal; ref the ref each phase is
-// keyed by; id a revision's change or a candidate's train.
+// `expunge_tips` page's cursor, "<phase>:" then: drops
+// "<at>:<position>:<old>:<ref>", revisions "<n>:<change>:<source_ref>", queue
+// "<seq>:<target_ref>", candidates "<ordinal>:<train>:<target_ref>", green
+// "<target_ref>". The ref is LAST, since it may hold every character but a
+// colon (git's ref rules). position is a drop's record position, a revision's
+// number, an entry's seq or a candidate's ordinal; id a revision's change or
+// a candidate's train.
 type tipsCursor struct {
 	phase        tipsPhase
 	at, position int64
@@ -4283,20 +3703,14 @@ func cutPublishCursor(s string) (int64, string, bool) {
 	return published, id, true
 }
 
-// ResolveRef answers the refs of one repository a query names, at the level it
-// names, to an asker that may read the repository — in ONE transaction: the
-// name's claim; the repository, a deleted or purging one answered
-// [ErrRepoNotFound] in [RepoGone]'s sentence for its state, which
-// Gitlet's admission says too; the asker's grant ([ErrNotPermitted]) and its
-// ceiling's ([ErrAboveCeiling], [JudgeRead]); then each ref — a whole ref as
-// itself, a short name as a branch and then as a tag, and [HeadRef] as the
-// branch the repository's row names its default, the row this transaction
-// read — with the position of the record that last moved it
-// ([ResolvedRef.Moved]), its row's own, read in the same lookup. A deleted ref
-// is absent, and a name none of its refs
-// holds is answered so ([ResolvedRef.Missing]) beside the names that
-// resolved, never failing them: whether a call can go on without it is its
-// caller's to say. Its scope is the name's, as [Reader.Resolve]'s is.
+// ResolveRef answers the refs of one repository a query names, at its level,
+// to an asker and ceiling that may read it ([JudgeRead]), in ONE transaction:
+// a deleted or purging repository is [ErrRepoNotFound] in [RepoGone]'s
+// sentence. Each ref resolves whole, a short name as a branch then a tag, and
+// [HeadRef] as the default branch this transaction's row names, with the
+// position that last moved it ([ResolvedRef.Moved]). A name that resolves to
+// nothing is answered [ResolvedRef.Missing] beside the others, never failing
+// them: whether a call goes on is its caller's to say.
 func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) {
 	if err := checkFreshness(q.Fresh); err != nil {
 		return RefAnswer{}, err
@@ -4424,10 +3838,9 @@ func refNames(ref string) ([]string, error) {
 }
 
 // liveRefIn is repository id's live ref by its whole name, read in tx: the
-// object it names, the position of the record that last moved it — its row's,
-// which every move of the ref writes (apply_push.go) — that record's broker
-// instant and the seat that set it in its own namespace ([seatOf]), all in one
-// lookup of the ref's key; or false where no live ref has the name.
+// object, the position and broker instant of the record that last moved it
+// (apply_push.go writes them), and the seat that set it in its own namespace
+// ([seatOf]), in one key lookup; or false where no live ref has the name.
 func liveRefIn(ctx context.Context, tx *sql.Tx, id, ref string) (ResolvedRef, bool, error) {
 	var (
 		out       = ResolvedRef{Ref: ref}
@@ -4476,13 +3889,9 @@ func grantRefIn(ctx context.Context, tx *sql.Tx, id string) (RepoRef, error) {
 	return ref, nil
 }
 
-// logCursor is "<packed position>/<id>": a row's place in log order — a
-// push's, by the position of the record that carried it and its push id, the
-// keyset of the push listing and of the `introduced` read alike; and a
-// change's, by the position of the record that opened it and its id, the
-// keyset of a listing of changes across repositories. The id is part of the
-// place because one record holds several of either: up to 64 pushes, each
-// opening a change of its own.
+// logCursor is "<packed position>/<id>": a push's or a change's place in log
+// order, by its record's position and its id, since one record holds up to 64
+// pushes, each opening a change of its own.
 func logCursor(packed int64, id string) string {
 	return strconv.FormatInt(packed, 10) + "/" + id
 }
@@ -4510,29 +3919,21 @@ type RepoLife struct {
 	ManagedBy ManagedBy
 }
 
-// lifePage is how many repositories one page of [Reader.WalkLives] reads: a
-// thousand rows of four short columns — an id, a name of at most 63 bytes,
-// two words — about 150 KB, one statement seeking the name index, so the ten
-// thousand repositories a document may declare are ten statements, each
-// holding one connection of the estate's reader pool for a few milliseconds
-// rather than the whole walk.
+// lifePage is how many repositories one page of [Reader.WalkLives] reads:
+// a thousand rows of four short columns, about 150 KB, so the ten thousand a
+// document may declare are ten statements, each holding a reader-pool
+// connection for milliseconds rather than the whole walk.
 const lifePage = 1_000
 
-// WalkLives hands visit every repository a reconcile of code.repos acts on —
-// importing, active, archived or deleted; a purge's is the code-retention
-// duty's — in name order, a page of [lifePage] at a time, each page one STALE
-// read of this node's rows. A visit's error ends the walk with it.
+// WalkLives hands visit every repository a reconcile of code.repos acts on
+// (importing, active, archived or deleted; a purge is the code-retention
+// duty's) in name order, a page of [lifePage] at a time, each one STALE read.
+// A visit's error ends the walk.
 //
-// THE RECONCILE'S OWN READ, because the listing a surface reads is the wrong
-// shape for it: [Reader.Read]'s repositories carry the head (a join of
-// code_refs a row), every protection rule of the page, the description and
-// the counters, all of them measured against the page's byte budget — 529 ms
-// and 51 MB allocated over ten thousand repositories of one short rule, and
-// 1.97 s and 352 MB over two thousand at validation's maxima, where a reconcile
-// reads an id, a name, a status and a manager. STALE IS ENOUGH: every
-// decision the reconcile takes from it is taken again inside its own snapshot
-// after the activation's fence, so a row the walk missed is caught at the
-// next apply and one it showed wrongly is decided away.
+// ITS OWN READ: [Reader.Read]'s listing joins the head, the rules and the
+// counters a reconcile never uses, at hundreds of ms and MB over a full
+// document. STALE IS ENOUGH: every decision is taken again in the reconcile's
+// own snapshot after the activation's fence.
 func (r *Reader) WalkLives(ctx context.Context, visit func(RepoLife) error) error {
 	query := statelog.Freshness{Level: statelog.ReadStale}.Query(
 		statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
@@ -4574,9 +3975,8 @@ func (r *Reader) WalkLives(ctx context.Context, visit func(RepoLife) error) erro
 	}
 }
 
-// dueRepo is one repository the code-retention pass steps: what the pass
-// needs of it and nothing more — its id to step, its name to report and hand
-// on — and where it sits in the listing's order.
+// dueRepo is one repository the code-retention pass steps: its id, its name
+// to report, and its place in the listing's order.
 type dueRepo struct {
 	id, name string
 
@@ -4602,22 +4002,15 @@ type dueQuery struct {
 	limit int
 }
 
-// due lists one page of what the code-retention pass steps, in the order it
-// steps them: every PURGING repository first, whatever the retention — a
-// purge once begun is always finished, since its rows are partly gone and
-// nothing restores it — and then every DELETED repository whose deletion is
-// at or before the cutoff; each phase oldest deletion first, and the page
-// resuming after q.after.
+// due lists one page of what the code-retention pass steps, in its order:
+// every PURGING repository first, whatever the retention (a begun purge is
+// always finished: nothing restores partly gone rows), then every DELETED one
+// at or before the cutoff; each phase oldest deletion first, resuming after
+// q.after.
 //
-// A STALE READ of this node's rows, in one transaction, of the three columns
-// the pass uses: every step decides again in its own snapshot, so a
-// repository that moved on since the listing is answered there. Each phase
-// is ONE statement over its own partial index (replicated 0080), so a page
-// reads the rows it lists — never the repositories deleted inside the
-// retention, nor a repository's settings and rules the pass has no use for:
-// read whole, a listing of ten thousand due repositories was two statements
-// a repository and every protection rule each holds, re-read at every pass
-// however few of them the pass could step.
+// A STALE READ of the three columns the pass uses, since every step decides
+// again in its own snapshot; each phase ONE statement over its own partial
+// index (replicated 0080), so a page reads only the rows it lists.
 func (r *Reader) due(ctx context.Context, q dueQuery) ([]dueRepo, error) {
 	if q.limit <= 0 {
 		return nil, fmt.Errorf("%w: a page of the repositories due lists at least one", ErrInvalid)
@@ -4678,13 +4071,10 @@ func dueIn(ctx context.Context, tx *sql.Tx, out []dueRepo, purging bool, query s
 	return out, rows.Err()
 }
 
-// purgedAt reports whether this node's rows hold repository id PURGED — its
-// row gone and its deletion marker written — read at the session floor at,
-// the position of the purge's last record: a node that has not applied it
-// waits for it, for the read's budget, and refuses `behind` past that rather
-// than answering from before it. False is a definite answer: at that
-// position this node's copy still holds the repository's row, so the record
-// there removed nothing here.
+// purgedAt reports whether this node's rows hold repository id PURGED (row
+// gone, deletion marker written), read at session floored at the purge's last
+// record, so a node behind it refuses `behind` rather than answering early.
+// False is definite: the record there removed nothing here.
 func (r *Reader) purgedAt(ctx context.Context, id string, at statelog.Position) (bool, error) {
 	if at.IsZero() {
 		return false, fmt.Errorf("%w: at: a purge is confirmed at its last record's position", ErrInvalid)
@@ -4731,10 +4121,7 @@ const (
 	refsDeltaAfterSQL = `SELECT ref, target, position FROM code_refs WHERE repo_id = ?
 		AND position >= ? AND (position > ? OR ref > ?) ORDER BY position, ref LIMIT ?`
 	// retiredAboveSQL is a BOUNDED COUNT of a repository's retirements above
-	// ?2, at most ?3 deep over the index the retired phase reads: what page
-	// 1's choice knows of the retirements a full answer would serve above its
-	// caller's RetiredSince and a delta carries above its floor, counted once
-	// a floor (choose).
+	// ?2, at most ?3 deep over the retired phase's index ([choose]).
 	retiredAboveSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_packs_retired
 		INDEXED BY code_packs_retired_repo_idx WHERE repo_id = ?1 AND retired_position > ?2 LIMIT ?3)`
 	// deltaRowsSQL is a BOUNDED COUNT of the refs a delta from ?2 moves and
@@ -4769,12 +4156,10 @@ const (
 		r.live_bytes, r.live_objects, r.drop_epoch, r.pushes, r.last_push_at, h.target`
 	reposHead = ` LEFT JOIN code_refs h INDEXED BY ` + refsKey + `
 			ON h.repo_id = r.id AND h.ref = 'refs/heads/' || r.default_branch AND h.target != ''`
-	// reposFrom is a listing's rows, by name, and protectedReposFrom those
-	// of the repositories a rule protects ([ReadQuery.Protected]), walked by
-	// [protectedReposKey] — NAMED, since code_repos_name_idx serves the same
-	// order and the planner may take either — with its predicate repeated
-	// verbatim, so the planner may use the partial index at all. Each ends
-	// at the range of names a page reads, which the statements below spell.
+	// reposFrom is a listing's rows, by name, and protectedReposFrom those a
+	// rule protects ([ReadQuery.Protected]), walked by [protectedReposKey],
+	// NAMED since code_repos_name_idx serves the same order, its predicate
+	// repeated verbatim. Each ends at the name range the statements below spell.
 	reposFrom = reposColumns + `
 		FROM code_repos r` + reposHead + `
 		WHERE r.status IN (SELECT value FROM json_each(?)) AND `
@@ -4785,13 +4170,10 @@ const (
 	// protectedReposSQL a page of the protected ones.
 	reposSQL          = reposFrom + `r.name > ? ORDER BY r.name LIMIT ?`
 	protectedReposSQL = protectedReposFrom + `r.name > ? ORDER BY r.name LIMIT ?`
-	// THE NAMES A PREFIX BEGINS ([ReadQuery.Prefix]), in the one range of
-	// the index below the prefix's end ([prefixEnd]): FROM the prefix itself
-	// on a first page, since a name may be the prefix whole, and PAST the
-	// cursor after one. Two statements, and not one beside both lower
-	// bounds, which would leave the planner to choose the bound it seeks by
-	// and filter by the other — and a first page sought by its empty cursor
-	// walks every name below the prefix.
+	// THE NAMES A PREFIX BEGINS ([ReadQuery.Prefix]), below [prefixEnd]: FROM
+	// the prefix on a first page (a name may be it whole), PAST the cursor
+	// after. Two statements, since with both lower bounds the planner may seek
+	// by the empty cursor and walk every name below the prefix.
 	reposUnderFirstSQL          = reposFrom + `r.name >= ? AND r.name < ? ORDER BY r.name LIMIT ?`
 	reposUnderAfterSQL          = reposFrom + `r.name > ? AND r.name < ? ORDER BY r.name LIMIT ?`
 	protectedReposUnderFirstSQL = protectedReposFrom + `r.name >= ? AND r.name < ? ORDER BY r.name LIMIT ?`
@@ -4815,11 +4197,9 @@ const (
 	// (refsListing).
 	refsUnderSQL = `SELECT ref, target, position, at FROM code_refs INDEXED BY ` + liveRefsKey + `
 		WHERE repo_id = ? AND ref > ? AND ref < ? AND target != '' ORDER BY ref LIMIT ?`
-	// THE PUSHES IN LOG ORDER, over code_pushes_repo_idx as replicated 0084
-	// orders it: those in (?2, ?3] oldest first — an `introduced` read
-	// ascending and a delta's pushes phase — first and after a cursor
-	// (?3 the upper bound, ?4 and ?5 the cursor), and those below ?2 newest
-	// first, whose keyset page is the history listing's own pushesAfterSQL.
+	// THE PUSHES IN LOG ORDER over code_pushes_repo_idx (replicated 0084):
+	// (?2, ?3] oldest first, first and after a cursor (?4, ?5), and below ?2
+	// newest first, paged by the history's own pushesAfterSQL.
 	pushesAboveSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
 		AND position > ? AND position <= ? ORDER BY position, push_id LIMIT ?`
 	pushesAboveAfterSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
@@ -4827,18 +4207,13 @@ const (
 		ORDER BY position, push_id LIMIT ?`
 	pushesBelowSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
 		AND position < ? ORDER BY position DESC, push_id DESC LIMIT ?`
-	// AN EXECUTOR'S PUSHES TO ONE REPOSITORY, over code_pushes_repo_idx in
-	// log order, each after a PLACE — ?2 a position and ?3 a push id, the >=
-	// beside the OR keeping the range seek (runPushes says what the place of
-	// a repository's first page is). The WINDOW a page may read, weighed:
-	// the next ?4 pushes' count and what their rows weigh (runWeighSQL), the
-	// weights one by one where those fill the page (runWeightsSQL), and the
-	// place of the window's last push, ?4 pushes past its first
-	// (runLastSQL) — all of it in the index, so each is a covering seek that
-	// looks up no row. Then the RUN'S OWN in exactly that window
-	// (runPushesInSQL): after the place ?3, ?4 and up to its last push ?5, ?6
-	// inclusive, each row the seek reaches looked up to test the run (?2),
-	// which the index does not carry.
+	// AN EXECUTOR'S PUSHES TO ONE REPOSITORY over code_pushes_repo_idx, after
+	// a PLACE (?2 position, ?3 push id; the >= beside the OR keeps the range
+	// seek). The window is weighed by covering seeks: the next ?4 pushes'
+	// count and weight (runWeighSQL), each weight (runWeightsSQL), the last
+	// one's place (runLastSQL). Then the RUN'S OWN in that window
+	// (runPushesInSQL, ?5/?6 its last push inclusive), each row looked up to
+	// test the run, which the index does not carry.
 	runWeighSQL = `SELECT COUNT(*), COALESCE(SUM(row_bytes), 0) FROM (SELECT row_bytes FROM code_pushes
 		WHERE repo_id = ?1 AND position >= ?2 AND (position > ?2 OR push_id > ?3)
 		ORDER BY position, push_id LIMIT ?4)`
@@ -4850,9 +4225,8 @@ const (
 		AND position >= ?3 AND (position > ?3 OR push_id > ?4) AND position <= ?5
 		AND (position < ?5 OR push_id <= ?6) ORDER BY position, push_id`
 	// THE RETENTION PASS'S TWO PHASES, each on its own partial index, the
-	// predicate repeated verbatim, and keyset on (deleted_at, id): the >=
-	// beside the OR is what keeps the index's range seek, which a bare OR of
-	// the two terms would give up.
+	// predicate repeated verbatim, keyset on (deleted_at, id): the >= beside
+	// the OR keeps the range seek a bare OR gives up.
 	livesSQL = `SELECT id, name, status, managed_by FROM code_repos
 		WHERE name > ? AND status IN ('importing', 'active', 'archived', 'deleted')
 		ORDER BY name LIMIT ?`
@@ -4865,10 +4239,9 @@ const (
 	purgeStateSQL = `SELECT
 		(SELECT COUNT(*) FROM code_repos WHERE id = ?),
 		(SELECT COUNT(*) FROM code_deletions WHERE repo_id = ?)`
-	// THE COMPACTOR'S DUE LISTING, most live packs first and then by id, over
-	// code_repos_packs_idx walked from its top — its partial predicate
-	// repeated verbatim — and after a cursor with the <= beside the OR that
-	// keeps the range seek (planner.go).
+	// THE COMPACTOR'S DUE LISTING over code_repos_packs_idx from its top, its
+	// predicate repeated verbatim, the <= beside the OR keeping the range seek
+	// (planner.go).
 	compactionDueFirstSQL = `SELECT id, name, live_packs, live_objects, version FROM code_repos
 		INDEXED BY code_repos_packs_idx
 		WHERE status IN ('active', 'archived') AND live_packs >= ?
@@ -4878,13 +4251,10 @@ const (
 		WHERE status IN ('active', 'archived') AND live_packs >= ? AND live_packs <= ?
 			AND (live_packs < ? OR id < ?)
 		ORDER BY live_packs DESC, id DESC LIMIT ?`
-	// THE PUBLISHER'S DUE LISTING, least recently published first and then by
-	// id, over code_repos_unpublished_idx — its partial predicate repeated
-	// verbatim — from the index's start, the column's floor (0, a repository
-	// never published: no row holds less), and after a cursor with the >=
-	// beside the OR that keeps the range seek (planner.go). No repository with
-	// an expunge open, whose publication rule 6g refuses: a residual predicate
-	// on the same walk, over the row the listing reads anyway.
+	// THE PUBLISHER'S DUE LISTING over code_repos_unpublished_idx, its
+	// predicate repeated verbatim, from the column's floor 0 (never published)
+	// and after a cursor (planner.go). expunge_id = '' is a residual predicate
+	// ([Reader.publicationDue]).
 	publicationDueColumns = `id, name, live_packs, published_packs, live_objects, published_objects,
 		last_push_at, published_at, publish_took_ms, version`
 	publicationDueFirstSQL = `SELECT ` + publicationDueColumns + ` FROM code_repos
@@ -4902,11 +4272,9 @@ const (
 	expungeDueSQL = `SELECT ` + expungeDueColumns + ` FROM code_repos INDEXED BY code_repos_expunging_idx
 		WHERE (expunge_id != '' OR expunge_request != '') AND status IN ('active', 'archived') AND id > ?
 		ORDER BY id LIMIT ?`
-	// THE EXPUNGES THE WEEKLY ARM ASKS ABOUT, least recently judged first
-	// over code_repos_expunge_due_idx — its partial predicate repeated
-	// verbatim — up to the instant, from its start or after the cursor's
-	// (expunge_scanned_at, id); the repositories the open arm lists are left
-	// out.
+	// THE EXPUNGES THE WEEKLY ARM ASKS ABOUT over code_repos_expunge_due_idx,
+	// its predicate repeated verbatim, up to the instant; the open arm's are
+	// left out.
 	expungeWeeklySQL = `SELECT ` + expungeDueColumns + ` FROM code_repos INDEXED BY code_repos_expunge_due_idx
 		WHERE status IN ('active', 'archived') AND expunge_scanned_at <= ? AND expunge_id = ''
 			AND expunge_request = ''
@@ -4934,9 +4302,8 @@ const (
 	// predicate repeated verbatim — after the cursor, "" from its start.
 	importsDueSQL = `SELECT id, name, import_source, import_seq, version FROM code_repos
 		INDEXED BY code_repos_importing_idx WHERE status = 'importing' AND id > ? ORDER BY id LIMIT ?`
-	// THE PUSH MIRRORS, by id over code_repos_mirror_to_idx, the live
-	// repositories among them — an importing one has nothing to push yet,
-	// and a deleted one is going.
+	// THE PUSH MIRRORS, by id over code_repos_mirror_to_idx, live ones only:
+	// an importing one has nothing to push, a deleted one is going.
 	pushMirrorsSQL = `SELECT id, name, mirror_to FROM code_repos INDEXED BY code_repos_mirror_to_idx
 		WHERE mirror_to != '' AND status IN ('active', 'archived') AND id > ? ORDER BY id LIMIT ?`
 	// THE PULL MIRRORS, least recently synced first over
@@ -4955,17 +4322,9 @@ const (
 		WHERE repo_id = ?1 AND at >= ?2
 		AND (at > ?2 OR position > ?3 OR (position = ?3 AND (ref > ?4 OR (ref = ?4 AND old > ?5))))
 		ORDER BY at, position, ref, old LIMIT ?6`
-	// AN EXPUNGE'S IN-FLIGHT TIPS (M6-D2), each phase from its start and
-	// after a place, in its index's order: every revision head of a live
-	// change, the changes over code_changes_open_idx and each one's revisions
-	// by their key; every live entry's head over code_queue_live_idx, partial on the
-	// live states; every candidate's tip over code_candidates_train_idx; and
-	// every green row by its key.
-	//
-	// A live change's revisions are TWO seeks, never a join (revisionTips
-	// says why): the live changes from the repository's first, from the
-	// cursor's branch, or after a batch's last, then one change's revisions
-	// after a number, by their key.
+	// AN EXPUNGE'S IN-FLIGHT TIPS (M6-D2), each phase from its start and after
+	// a place, in its index's order ([Reader.expungeTips]); a live change's
+	// revisions are TWO seeks, never a join ([Reader.revisionTips]).
 	liveChangeTipsSQL = `SELECT id, source_ref FROM code_changes INDEXED BY code_changes_open_idx
 		WHERE repo_id = ?1 AND ` + liveChanges + ` ORDER BY source_ref LIMIT ?2`
 	liveChangeTipsFromSQL = `SELECT id, source_ref FROM code_changes INDEXED BY code_changes_open_idx

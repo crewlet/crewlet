@@ -16,251 +16,29 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE PUSH DECIDE: one round of a batch's decision, taken from the rows ONE
-// snapshot holds — re-run whole on every compare-and-set round, so it reads
-// nothing outside tx and keeps nothing between rounds but the protection
-// verdicts ([verdicts]), each a pure function of a command and rules the
-// round's own snapshot holds.
-//
-// # Every proposal, in order, against what the ones before it did
-//
-// A batch is decided in the order its proposals were queued, and each one is
-// judged against the repository's rows WITH the effects of every push before
-// it in the batch applied: two pushes that each move main from where they
-// last saw it are one that lands and one that is stale, exactly as two records
-// would be. Each command meets the first rule that fires, in order:
-//
-//  1. a command the receiver already refused stays refused;
-//  2. the rules no state decides ([StatelessRefusal]);
-//     2b. a command the principal's GRANT does not cover ([Grant.RefRule],
-//     not_permitted) — a seat's judged from the deciding epoch's chart
-//     ([SeatRules]), a person's and a token's from rules that need none;
-//  3. the ref already at the new value is a noop;
-//  4. the ref not at the old value is stale;
-//     4b. a command of an EXPIRY entry ([ViaExpiry]) whose ref is no longer
-//     its seat's idle branch ([ExpiryRule]) is stale — pushed since it was
-//     listed, held by a live turn since, the repository's default branch, a
-//     live change's source (named) or target, or last set by somebody else;
-//  5. a protection ([ProtectionRefusal]), every matching rule consulted —
-//     and a rule that takes a person's push alone refuses everybody else's;
-//     5b. a deletion of the repository's default branch, whoever pushes it
-//     (default_branch, [DefaultBranchRefusal]), after the protections, so a
-//     protected default branch is refused by the rule that names it;
-//  6. a create beside a live ref above it or with a live ref below it
-//     (ref_conflict, [working.beside]);
-//  7. a create past MaxRefsPerRepo live refs (repo_refs) — past HALF of them
-//     for a seat outside the repository's owners ([OutsideSeatShare]) — this
-//     and 6 judged after every other command of its push, so the push's own
-//     deletions free their room and their names whatever order git sent
-//     them in;
-//  8. otherwise ok.
-//
-// Then over the push's ok commands, a pack named longer ago than a write may
-// still name it is refused upload_expired, and one that takes the repository
-// past code.limits.repo_max_bytes — past half of it, for a seat outside the
-// repository's owners — repo_size; and an --atomic push with any refusal is
-// refused whole ([Atomic]). A push with an ok command left is an entry of the
-// record — unless a seat's day's quota or the pack bound refuses it whole
-// (below); one with none is answered here, and is an entry only as an ATTEMPT
-// ([Attempted]): a push git received every command of which is refused, one by
-// a rule on who may move which ref, recorded moving nothing and storing no
-// pack, so its history says who tried, and counted against a seat's day; any
-// other writes nothing. A push checked at another drop epoch than the
-// repository's meets none of these rules: it is refused whole before them
-// (below).
-//
-// # A seat's push is held to its grant, recorded, and to its day, not
-//
-// A grant's refusal is RECORDED on its command (not_permitted, rule 2b): who
-// tried to move what past their grant is an audit fact, kept beside the
-// commands that land or, where none does, as an attempt. The receiving node's
-// own check of the grant before the bytes moved makes this rule's own refusal
-// rare: it arises only where the chart moved between the two. The day's quota
-// is NOT ([RefusalPushQuota]): a seat whose pushes this company day (every
-// repository together, [Limits.PushesPerSeatDay]) reach the bound has its
-// push refused WHOLE, no entry of the record, the batch's other entries going
-// on, because a recorded refusal would cost the log a record a push of a
-// seat pushing in a loop, the very cost the quota bounds. The quota is judged
-// on a push that would otherwise be an entry: after every rule of the push's
-// own, so a stale, protected, oversized or --atomic push is told the reason
-// running it again tomorrow would not change (an attempt counts, and one past
-// the bound is told its own refusals and recorded nowhere), and before the
-// pack bound, so a push past both is told the bound that lasts a day rather
-// than sent to run again in a minute.
-//
-// THE COUNT IS ONE ROW A SEAT AND DAY (code_seat_days), read once a round for
-// every seat the batch names, which the push apply keeps from the day this
-// decide stamps on every seat's entry ([PushEntry.Day]) — never a count over
-// the push history, whose index would cost every seat's push an entry for the
-// 181 days the history keeps, on every data node, to answer a question about
-// one day. Nor the usage domain's days: they count no push, and each is one
-// node's own derivation that a read joins later, which no decide can be held
-// to; the counter is the applier's, a function of this log alone, so every
-// data node's decide reads the same count.
-//
-// It counts across REPOSITORIES, and a repository's committer does not see the
-// seat's pushes that other repositories' committers decided and this node has
-// not applied, so a seat may land past its bound by at most (C − 1) × min(the
-// room left, its entries in one batch, at most MaxPushesPerRecord) for C
-// committers deciding its pushes in one instant — never more than its pushes
-// in flight at once less one, since a turn's tool calls run one after another,
-// and never cumulative: once its count of a day passes the bound, every later
-// batch deciding on that day refuses it, on a committer whose clock is still
-// on the day before another's as on any — the push apply keeps a seat's two
-// newest days ([countSeatDays]) — as long as no two committers' clocks stand
-// a day apart, which clock_skew reports long before, at an hour off the
-// fleet's. ACCEPTED as the product's call: an exact count would make every
-// repository's decide of one seat arbitrate on one subject, putting the
-// pushes of a seat working in many repositories behind one another to bound
-// an overshoot that is a few pushes on a bound of a thousand.
-//
-// # A push checked before an expunge began is refused whole, before any rule
-//
-// An expunge's begin leaves dropping what no ref reached at its scan, and its
-// commit retires those packs but for the rescue its builder read off the refs
-// at a sync of its own ([ExpungeBegin], [ExpungeCommit]); the commit's decide
-// reads no ref, so a ref landed onto a dropping object after that sync names
-// an object the commit retires. A receiver checks a push's objects against
-// its synced copy, and a copy synced before the begin holds those packs'
-// objects live, so a command of a push checked against it may move a ref onto
-// one of them. The copy's drop epoch rides the proposal ([Proposal.DropEpoch]),
-// and a push carrying another than the row's is refused WHOLE, expunging,
-// every command the receiver did not refuse under one sentence
-// ([ExpungingDetail]): it is no entry, nothing of it is decided, and it lands
-// when it is run again against a copy synced past the begin. Judged once the
-// repository's status admits pushes — an archived or gone repository refuses
-// the push whatever copy checked it — and BEFORE every rule of the push's
-// own, because those would judge commands checked against objects the
-// repository no longer offers a push; a deletion relies on no object, but
-// the refusal is of the copy, not of a command, and a push is one answer. A
-// begin is rare — one an expunge, and a second waits for the first's commit —
-// so a retry meets it again only past another whole expunge.
-//
-// # The pack bound refuses a push whole, and decides nothing of it
-//
-// A repository's pushes outrun its compaction only so far: a push that would
-// be an entry and CARRIES A PACK, into a repository holding MaxPacksPerRepo
-// live packs or more — its batch's earlier entries' packs counted in
-// ([working.behind]) — is refused WHOLE, compaction_behind, every command the
-// receiver did not refuse under one sentence ([BehindDetail]), the ones this
-// decide found ok among them; it is no entry, nothing of it is decided, and it
-// lands when it is run again once a compaction has merged the packs. Judged
-// LAST, after every rule of the push's own: a push refused for a reason of its
-// own — stale, a protection, its pack's size — is told that reason, which
-// running it again would not change, and adds no pack, so it counts for
-// nothing; and a push carrying no pack adds none, so a deletion, or a ref
-// moved onto a commit the repository already holds, is decided as ever, at the
-// bound or past it. The receiver refuses the same push before it uploads the
-// push's bundle, from its own synced row read again (internal/gitlet/host's
-// precheck), which spares every refused retry an upload; this decide, from the
-// rows of its one snapshot, is the authority.
-//
-// # A push's changes are counted, and one that does not fit leads the next
-//
-// A push record writes the rows of the live changes its pushes move — a
-// revision, an author, a merge, a close (revisions.go) — and of the change a
-// push opens from its options, decided on the state the push leaves
-// (pushchange.go: its row, its owner as its first author, the push as its
-// first revision, its description), beside its entries' own, so the decide
-// counts them as it admits each entry: the live changes the
-// batch's branch commands can move, and the authors its pushers already are of
-// them, read ONCE a round into one model ([changeBook]), moved by every entry
-// it admits as the apply will move it, and the record held to [MaxRecordRows]
-// with what that model writes. Each entry is tried on the model itself and
-// taken back where the record cannot hold it ([bookTrial]), so an entry costs
-// the round what its own commands reach, never what the batch's do. The
-// batcher cannot count them — they are what the repository holds, which only
-// a snapshot reads — so a push whose changes' rows would take the record past
-// its bound beside the entries before it is CARRIED: the round decides
-// nothing of it or of any push after it, and the committer runs them, in the
-// order they arrived, as its next batch, the carried push first
-// ([Committer.commit]). There its rows are the record's first; a push whose
-// changes' rows would take even a record of its own past the bound — weighed
-// against the changes as the entries before it leave them, since those land
-// first — is refused WHOLE, too_many_changes ([RefusalTooManyChanges]),
-// nothing of it decided. Judged after the pack bound, so a push past both is
-// told the bound that clears in a minute.
-//
-// # A push that already landed is answered from its row
-//
-// A push id the repository's history already holds is a push that applied —
-// a proposal forwarded twice, or one a failed-over node decided again — and
-// it is answered from its row and contributes nothing. Read BEFORE the
-// repository's status, because a push that landed has landed whatever became
-// of the repository since: told repo_archived, its client would push again
-// what is already there.
-//
-// # Two reads for the batch, never one a command
-//
-// The decide runs inside the publisher's snapshot — ONE read transaction, on a
-// connection of the replicated estate's reader pool, on the repository's one
-// committer goroutine — and is re-run whole on every round a peer's record
-// forces, so a per-command cost is paid commands times rounds, all of it
-// holding that connection and that goroutine: the push ids every proposal
-// names are read in ONE statement, and the refs every command names in ONE
-// more, each over its primary key (planner.go) — never a point read a
-// command, which a full batch makes nearly four thousand of. (It holds no write
-// lane; the APPLY does, and reads the same way for that reason,
-// apply_push.go.) A batch that may CREATE a ref reads two statements more —
-// the directories its creates would make, and the refs under each create —
-// and one that creates none reads neither; a batch carrying a SEAT'S push
-// reads one more, every seat's count of the day over the counter's key, and
-// one of persons' pushes alone reads none; a batch whose commands name a
-// branch reads up to three more, each driven from its list — the live changes
-// its branches head, the ones whose targets it sets to their heads, and the
-// authors its pushers are of the changes whose heads they move (revisions.go);
-// and a batch whose pushes ask for a change reads one more, the branches their
-// changes propose into that no command of it names (pushchange.go).
-//
-// # A ref is never beside a directory of its name
-//
-// Every client keeps a ref as a file — refs/remotes/origin/feature — so
-// refs/heads/feature and refs/heads/feature/x can never both be live: a clone
-// holding one cannot fetch the other ("cannot lock ref"). git's receive-pack
-// refuses the pair in its ref transaction, and here it runs none — every
-// command goes to the hook — so the decide refuses it instead, and it is the
-// only place that can: the pair is a fact about two refs, which one snapshot
-// holds and no receiver sees whole. A create is refused ref_conflict when a
-// ref it would make a directory of is live (refs/heads/feature, under
-// refs/heads/feature/x) or a live ref sits under its name. Both are judged
-// against the working state, so the batch decides as its records would one by
-// one: the push's own deletions free a name — git's own transaction takes a
-// deletion of feature beside a create of feature/v2 — an earlier push's create
-// takes one, and a deleted ref (a tombstone) is in nobody's way, since no
-// client holds it.
-//
-// The cost follows what the batch's creates spell, never what the
-// repository holds: one primary-key seek for every directory a create would
-// make (a ref of n components below its namespace makes n−1, the deepest a
-// ref may spell about 120) and one ranged seek under each create, past the
-// refs the batch itself names, which the working state answers instead.
-//
-// # The protections are asked once a batch, before its publish
-//
-// Asking every rule about every command is the decide's one cost that grows
-// with what a founder writes rather than with the rows: a rule of gitref's
-// costliest shape costs a 255-byte ref 11–12 µs, so a record's worth of
-// such refs (2 567) against [MaxProtectionsPerRepo] such rules is about two
-// seconds of a core, where a team's rules cost about what the reads do
-// (doc.go's measured section). A command's verdict is a pure function of the
-// command and the rules, so it is formed ONCE a batch and kept across the
-// rounds of its one publish ([verdicts]) — and formed BEFORE the publish, on
-// the committer goroutine, from the rules one short read of this node's rows
-// holds ([verdicts.formBefore]), because it is CPU alone, and inside the
-// snapshot it would hold one of the reader pool's few connections for all of
-// its length. Every round compares its own snapshot's rules, whole, with those
-// the verdicts were formed under, and forms them again inside the snapshot
-// only when they differ — a record changing THIS repository's protections,
-// an activation's settings or a tool's protect request, landing between the
-// read and the round or between two rounds. Every other round, the first
-// included, pays the reads alone. The rules a round reads are what a push is
-// judged by and nothing more ([PushRule]): a rule's merge gate holds merges,
-// so neither read selects one ([pushRulesIn]).
+// THE PUSH DECIDE: one round of a batch's decision from the rows ONE snapshot
+// holds, re-run whole every compare-and-set round, so it reads nothing outside
+// tx and keeps only the protection [verdicts] between rounds. Proposals are
+// judged in queue order, each against the rows with every earlier entry
+// applied, and a command meets the first rule that fires: 1 refused by the
+// receiver; 2 [StatelessRefusal]; 2b outside its principal's grant
+// ([Grant.RefRule], not_permitted); 3 noop; 4 stale; 4b an expiry's branch no
+// longer idle ([ExpiryRule]); 5 a protection ([ProtectionRefusal]); 5b
+// default_branch ([DefaultBranchRefusal]); 6 ref_conflict ([working.beside]);
+// 7 repo_refs; 8 ok. Then upload_expired, repo_size and --atomic over the push
+// ([working.decide]), and the refusals of a push whole ([decideBatch]).
 
-// verdicts are one batch's protection verdicts, formed before its publish
-// ([verdicts.formBefore]) and kept across the rounds of that one publish
-// while every round's snapshot holds the rules they were formed under. The
-// zero value holds none.
+// verdicts are one batch's protection verdicts, kept across the rounds of its
+// one publish while each round's snapshot holds the rules they were formed
+// under ([verdicts.under]); the zero value holds none. A verdict is a pure
+// function of the command and the rules, and asking every rule about every
+// command is the one decide cost that grows with what a founder writes: at
+// gitref's costliest rule shape, a record of 255-byte refs against
+// [MaxProtectionsPerRepo] rules is about two seconds of a core (doc.go's
+// measured section). So they are formed once, before the publish
+// ([verdicts.formBefore]), and again inside a round only when a record changed
+// the rules in between. Only a rule's push half is read ([pushRulesIn]): its
+// merge gate holds merges.
 type verdicts struct {
 	// set is whether stored and rules are a round's: the zero value has
 	// read no rules, which is not the same as a repository with none.
@@ -269,9 +47,8 @@ type verdicts struct {
 	// snapshot held them, and rules the same parsed.
 	stored []PushRule
 	rules  Protections
-	// of is each command's verdict, by its proposal's place in the batch
-	// and its own in the proposal: a batch is the same proposals in every
-	// round of its publish.
+	// of is each command's verdict, keyed by (proposal index, command index): a
+	// batch is the same proposals in every round of its publish.
 	of map[[2]int]verdict
 	// formed counts the verdicts formed, which is the work the rounds
 	// share — before the publish, or inside a round whose rules differ.
@@ -285,9 +62,9 @@ type verdict struct {
 	detail  string
 }
 
-// under makes stored the rules the verdicts answer from: the verdicts kept
-// from the batch's earlier rounds when stored are the rules those read, field
-// by field and in order, and none otherwise.
+// under makes stored the rules the verdicts answer from, keeping those already
+// formed only when stored equals the rules they were formed under, field by
+// field and in order.
 func (v *verdicts) under(stored []PushRule) error {
 	if v.set && slices.Equal(v.stored, stored) {
 		return nil
@@ -300,10 +77,9 @@ func (v *verdicts) under(stored []PushRule) error {
 	return nil
 }
 
-// verdict is command (the place of c in the proposal at push) under the
-// rules, for a push its principal of kind by makes, formed the first time a
-// round asks and kept for the rest — KEYED BY THE PUSH, unchanged by the kind,
-// since a push has one principal and is the same proposal in every round.
+// verdict is the verdict on c, command of the proposal at push, for a push by a
+// principal of kind by: formed on first ask and kept. Keyed by place, never by
+// kind, since a push has one principal and is the same proposal in every round.
 func (v *verdicts) verdict(push, command int, c Command, by PrincipalKind) (Refusal, string) {
 	key := [2]int{push, command}
 	if got, ok := v.of[key]; ok {
@@ -318,36 +94,17 @@ func (v *verdicts) verdict(push, command int, c Command, by PrincipalKind) (Refu
 	return got.refusal, got.detail
 }
 
-// formBefore forms, before the batch's publish, the verdict of every command
-// of batch a round can ask about, under repoID's rules as this node's rows
-// hold them now — read in a transaction of their own, one statement over the
-// primary key.
-//
-// # Outside the snapshot, because forming them needs no connection
-//
-// Forming the verdicts is CPU alone — about two seconds of a core at the
-// costliest rules a repository can carry — and the publisher's snapshot is a
-// read transaction holding a connection of the replicated estate's reader
-// pool, which has four by default. Formed inside it, a batch's first round
-// held that connection for the whole formation and needed it for 13–22 ms of
-// reads (doc.go's measured section), so four repositories at those rules
-// taking maximal batches at once held every reader the node has: every
-// replicated read on the node waited behind them — the dashboard's, a peer
-// router's, every other repository's decide — and the longer round widened
-// the window in which a peer's push stales its expectation, so more rounds
-// followed. Formed here, every round on the common path holds its reader for
-// the reads alone.
-//
-// # The snapshot still decides
-//
-// These rules are this node's rows a moment before the publish takes its
-// snapshot, and only the snapshot's rules count: every round compares its own
-// with these, whole ([verdicts.under]), and a round that holds others forms
-// the verdicts again inside the snapshot. So a read or a parse that fails
-// here forms nothing and is not reported: the round reads the same rows and
-// answers for what it finds — a parse that fails there fails the batch —
-// because forming the verdicts here moves when the work is done and never
-// what is decided.
+// formBefore forms, before the batch's publish, the verdict of every command a
+// round can ask about, under repoID's rules as this node's rows hold them now.
+// Outside the snapshot because forming is CPU alone: inside it, the formation
+// would hold one of the reader pool's few connections (four by default) for its
+// whole length, so a few repositories at costly rules would starve every
+// replicated read on the node and widen the window in which a peer's push
+// stales the round. Only the snapshot's rules count: every round compares its
+// own with these ([verdicts.under]) and forms again on a difference. So a read
+// or parse failing here is not reported: the round reads the same rows and
+// answers for them, since this moves when the work is done, never what is
+// decided.
 func (v *verdicts) formBefore(ctx context.Context, db store.ReplicatedReader, repoID string,
 	batch []Proposal) {
 
@@ -362,13 +119,10 @@ func (v *verdicts) formBefore(ctx context.Context, db store.ReplicatedReader, re
 	if err := v.under(stored); err != nil {
 		return
 	}
-	// EVERY COMMAND A ROUND MAY ASK ABOUT: the first proposal of each push
-	// id — a later one is answered as its first and never decided — and of
-	// it each command the receiver did not refuse and no stateless rule
-	// refuses, in the place a round keeps its verdict under. A round asks
-	// about fewer, since a noop or a stale command never reaches the rules;
-	// forming theirs costs what the round would have paid had they moved,
-	// and only here, outside every snapshot.
+	// Every command a round may ask about: of the first proposal of each push id
+	// (a later one is answered as its first), each command neither the receiver
+	// nor a stateless rule refused. A round asks about fewer, as a noop or stale
+	// command never reaches the rules; forming those costs only here.
 	first := make(map[string]bool, len(batch))
 	for push, p := range batch {
 		if ctx.Err() != nil {
@@ -401,9 +155,9 @@ type decided struct {
 	refused Refusal
 	detail  string
 	// carried is a push this round decided nothing of, which leads the
-	// committer's next batch: the first whose changes' rows would take the
-	// record past its bound beside the entries before it, and every push
-	// after it, so the batch's pushes still land in the order they arrived.
+	// committer's next batch ([Committer.commit]): the first whose changes' rows
+	// would take the record past [MaxRecordRows] beside the entries before it, and
+	// every push after it, so the batch still lands in arrival order.
 	carried bool
 	// err is a proposal no rule decides: its push id names a push to
 	// another repository.
@@ -429,28 +183,28 @@ type batchMoves struct {
 	ejected []string
 }
 
-// decideBatch is one round's decision over the rows tx holds, for the batch in
-// order: the entries of the record, every proposal's answer, what the
-// record's apply will do to the live changes its entries move ([batchMoves]),
-// and the version the decision read. Pure over (the rows, the
-// batch, limits, retention, seats, now): retention is
-// code.deleted_retention_days on the deciding node's epoch, from which a
-// deleted repository's refusal names when its purge may begin; seats is that
-// epoch's chart and calendar, which a seat's push is judged by and which a
-// batch carrying none may leave unset; v is the protection verdicts the
-// batch's earlier rounds formed, which this round reads only where its own
-// snapshot holds the rules they were formed under.
+// decideBatch is one round's decision over the rows tx holds: the record's
+// entries, every proposal's answer, what the apply will do to the live changes
+// ([batchMoves]) and the version read. Pure over (rows, batch, limits,
+// retention, seats, now): retention is the deciding epoch's
+// code.deleted_retention_days, which dates a deleted repository's purge in its
+// refusal; seats is that epoch's chart and calendar, unset only for a batch with
+// no seat's push; v's verdicts are reused only under the same rules.
 //
-// A SEAT'S PUSH IS DECIDED ONLY WITH A CHART. The committer hands every one on
-// to the repository's next committer before a batch with no chart is decided
-// ([Committer.commit]), so a seat's push reaching here with none is the
-// caller's bug, refused as one — never a refusal recorded that no chart made,
-// and never a push let through by the grant nobody judged ([GrantOf] answers
-// an agent nothing on a nil roster).
+// A SEAT'S PUSH IS DECIDED ONLY WITH A CHART: the committer hands such pushes to
+// the next committer when it has none ([Committer.commit]), so one here is the
+// caller's bug, refused as one: never a refusal no chart made, nor a push let
+// through by a grant nobody judged ([GrantOf] answers nothing on a nil roster).
 func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposal,
 	limits Limits, retention time.Duration, seats SeatRules, now time.Time, v *verdicts) (entries []PushEntry,
 	answers []decided, moves batchMoves, version int64, err error) {
 
+	// EVERY READ IS ONE STATEMENT OVER A LIST, never a point read a command
+	// (planner.go): the decide holds a reader connection and the committer
+	// goroutine and is re-run every round, so a per-command read costs commands ×
+	// rounds, nearly four thousand point reads a full batch. A read only some
+	// batches need is made only by them ([working.readAround], [newSeatQuota],
+	// [readChangeBook], [working.readTargets]).
 	answers = make([]decided, len(batch))
 	ids := make([]string, 0, len(batch))
 	first := make(map[string]int, len(batch))
@@ -463,6 +217,9 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		first[p.PushID] = i
 		ids = append(ids, p.PushID)
 	}
+	// A PUSH ID ALREADY IN THE HISTORY applied (forwarded twice, or decided again
+	// after a failover) and is answered from its row, read BEFORE the repository's
+	// status: told repo_archived, its client would push again what already landed.
 	landed, err := pushRowsIn(ctx, tx, ids)
 	if err != nil {
 		return nil, nil, batchMoves{}, 0, err
@@ -512,9 +269,14 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		}
 		return nil, answers, batchMoves{}, repo.version, nil
 	}
-	// THE DROP EPOCH, before every rule of the push's own: a push checked
-	// against a copy at another epoch is refused whole, and the rest of the
-	// round reads nothing of it.
+	// THE DROP EPOCH, after the status (an archived or gone repository refuses
+	// whatever copy checked the push) and before every rule of the push's own: a
+	// receiver checks objects against its synced copy, and one synced before an
+	// expunge's begin holds live the objects its commit retires ([ExpungeBegin],
+	// [ExpungeCommit]), which that commit's decide, reading no ref, cannot catch.
+	// A push checked at another epoch ([Proposal.DropEpoch]) is refused WHOLE,
+	// expunging, decided nothing of, its deletions too, since the refusal is of
+	// the copy, not a command; run against a copy synced past the begin, it lands.
 	open = slices.DeleteFunc(open, func(i int) bool {
 		p := batch[i]
 		if p.DropEpoch == repo.dropEpoch {
@@ -555,11 +317,10 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	if err != nil {
 		return nil, nil, batchMoves{}, 0, err
 	}
-	// THE LIVE CHANGES THE BATCH'S BRANCHES CAN MOVE, and the authors its
-	// pushers are of them, read once a round — for every command the
-	// receiver did not refuse, a superset of the ones this round finds ok —
-	// so the record's change rows are counted as its apply will write them,
-	// entry by entry ([changeBook]).
+	// THE LIVE CHANGES THE BATCH'S BRANCHES CAN MOVE and its pushers' authorship
+	// of them, read once a round for every command the receiver did not refuse (a
+	// superset of this round's ok ones), so the record's change rows are counted
+	// as its apply writes them ([changeBook]).
 	proposed := make([]PushEntry, 0, len(open))
 	for _, i := range open {
 		proposed = append(proposed, PushEntry{Principal: batch[i].Principal, Commands: batch[i].Commands})
@@ -590,8 +351,10 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		p := batch[i]
 		cmds := w.decide(i, p, v, limits, GrantOf(p.Principal, ref, seats.Roster))
 		answers[i].commands = cmds
-		// AN ATTEMPT is an entry that moves nothing and names no pack or change: a pack its
-		// receiver stored is named by no row, and the collector takes it.
+		// AN ATTEMPT ([Attempted]): a git push every command of which a rule on who may
+		// move which ref refused, recorded moving nothing and naming no pack or change
+		// (the collector takes its stored pack), so its history says who tried; it
+		// counts against a seat's day. Any other push with no ok command writes nothing.
 		attempt := !slices.ContainsFunc(cmds, isOK)
 		if attempt && (p.Via != ViaGit || !Attempted(cmds)) {
 			continue
@@ -619,13 +382,13 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			answers[i].commands = refuseEvery(p.Commands, RefusalCompactionBehind, detail)
 			continue
 		}
-		// AND THE CHANGES IT MOVES, counted as the record's apply will write
-		// them, after the entries before it: a push whose changes' rows take
-		// the record past its bound is decided nothing of — refused whole,
-		// too_many_changes, where even a record of its own could never hold
-		// them, and carried to lead the next batch where one could. TRIED ON
-		// THE BOOK ITSELF and taken back where it does not fit ([bookTrial]):
-		// what an entry costs is what its own commands reach.
+		// AND THE CHANGES IT MOVES, counted as the record's apply will write them,
+		// after the entries before it: a push whose changes' rows take the record past
+		// its bound is decided nothing of, refused whole (too_many_changes) where even a
+		// record of its own could not hold them, and carried to lead the next batch
+		// where one could. After the pack bound, so a push past both is told the bound
+		// that clears in a minute. TRIED ON THE BOOK ITSELF and taken back where it does
+		// not fit ([bookTrial]): an entry costs what its own commands reach.
 		entry := p.entryWith(cmds, quota.day.Label)
 		// AND THE LANDINGS IT MAKES on a protected branch — a person's own
 		// push, their recorded override — stamped from this snapshot's rules,
@@ -695,11 +458,16 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	return entries, answers, batchMoves{rows: book.decidedRows(), ejected: ejected}, repo.version, nil
 }
 
-// seatQuota is one round's count of each seat's pushes on the deciding
-// company day ([Limits.PushesPerSeatDay]): what the counter holds for every
-// seat the round's open proposals name — code_seat_days, read ONCE a round
-// inside its snapshot, for a round carrying a seat's push at all — and the
-// entries of each seat the round's record carries so far.
+// seatQuota is one round's count of each seat's pushes on the deciding company
+// day ([Limits.PushesPerSeatDay]): the counter's rows for every seat the open
+// proposals name, and each seat's entries the record carries so far. Unlike a
+// grant's refusal (rule 2b, recorded as an audit fact), the quota refuses a
+// push WHOLE and unrecorded ([RefusalPushQuota]): recording it would cost the
+// log a record for every push of a seat pushing in a loop, the very cost the
+// quota bounds. Judged after every rule of the push's own, so a push is told a
+// reason a retry tomorrow would not change (an attempt counts, and one past the
+// bound is recorded nowhere), and before the pack bound, so a push past both is
+// told the bound that lasts a day.
 type seatQuota struct {
 	// day is the company day the round counts against, on the deciding
 	// node's clock in the company's zone; its zero value for a round that
@@ -713,10 +481,15 @@ type seatQuota struct {
 	held, carried map[string]int
 }
 
-// newSeatQuota reads the counts of the day now falls on, on the calendar of
-// zone, for every seat whose push is among the open proposals of batch, in ONE
-// statement over the counter's key — none at all for a round of persons'
-// pushes alone.
+// newSeatQuota reads the counts of the day now falls on in zone, for every seat
+// with a push among the open proposals, in ONE statement over the counter's key
+// (none for persons' pushes alone). The counter (code_seat_days) is one row a
+// seat and day, kept by the push apply from the day this decide stamps on each
+// entry ([PushEntry.Day]): never a count over the push history, whose index
+// would cost every seat's push a row for the history's 181 days on every data
+// node, nor the usage domain's days, which count no push and are each one
+// node's own derivation. The applier's counter is a function of this log alone,
+// so every data node's decide reads the same count.
 func newSeatQuota(ctx context.Context, tx *sql.Tx, batch []Proposal, open []int, zone *time.Location,
 	now time.Time, limit int) (seatQuota, error) {
 
@@ -760,10 +533,18 @@ func newSeatQuota(ctx context.Context, tx *sql.Tx, batch []Proposal, open []int,
 	return q, nil
 }
 
-// over reports a SEAT'S push its day's count refuses, with the sentence: the
-// seat's pushes this day as the counter holds them, its entries this round's
-// record carries ahead of p, at the bound or past it. A push by anybody else
-// is never counted.
+// over reports, with its sentence, a SEAT'S push its day's count refuses: the
+// counter's pushes plus the entries this record carries ahead of p, at the
+// bound or past it. Nobody else's push is counted.
+//
+// ACCEPTED as inexact across repositories: a committer does not see a seat's
+// pushes other repositories' committers decided and this node has not applied,
+// so C committers deciding at once may land it past the bound by (C − 1) ×
+// min(room left, its entries in one batch, MaxPushesPerRecord), never more than
+// its pushes in flight less one and never cumulatively, while no two
+// committers' clocks stand a day apart (clock_skew reports at an hour; the apply
+// keeps two days, [countSeatDays]). An exact count would queue a seat's pushes
+// in every repository behind one subject to bound a few pushes in a thousand.
 func (q seatQuota) over(p Proposal) (string, bool) {
 	if p.Principal.Kind != PrincipalAgent {
 		return "", false
@@ -782,10 +563,10 @@ func (q seatQuota) count(p Proposal) {
 	}
 }
 
-// quotaDetail is the sentence of a seat's push refused push_quota: who, how
-// many pushes it has made since its company day began (attempts a rule
-// refused among them), the bound, and the instant the count starts again:
-// the day's end on the company's calendar, in its zone. Formed by the push decide alone, the one judge of the count.
+// quotaDetail is the sentence of a seat's push refused push_quota: who, its
+// pushes since its company day began (refused attempts among them), the bound,
+// and the day's end in the company's zone, when the count starts again. Formed
+// by the push decide alone, the one judge of the count.
 func quotaDetail(seat string, pushed, limit int, day period.Window) string {
 	return fmt.Sprintf("seat %s has made %s, refused attempts included, since %s began on the company's calendar, "+
 		"and code.limits.pushes_per_seat_day lets a seat make %s a day: nothing was decided; the count starts "+
@@ -893,13 +674,10 @@ func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, err
 	return r, true, nil
 }
 
-// deletionIn reads the deletion marker of a repository the push decide found
-// no row of: its name, and true where the marker exists — a repository whose
-// purge completed, which the marker records for ever — and false for an id no
-// repository on this log had. Read only on a refusal's path, one point read
-// over the marker's primary key: that one, and the committer's answer to a
-// batch the marker's gate refused ([Committer.purgedDetail]), which names the
-// repository by the same row.
+// deletionIn reads the deletion marker of a repository with no row: its name,
+// and true where the marker exists (a purged repository, recorded for ever),
+// false for an id this log never had. Read only on a refusal's path, here and
+// by [Committer.purgedDetail], over the marker's primary key.
 func deletionIn(ctx context.Context, tx *sql.Tx, id string) (string, bool, error) {
 	var name string
 	err := tx.QueryRowContext(ctx, decideDeletionSQL, id).Scan(&name)
@@ -944,17 +722,13 @@ func pushRowsIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]PushR
 // working is the repository as the batch's earlier pushes leave it: the refs
 // the batch names, and the counts the bounds are judged on.
 //
-// # The live refs are the one count a create is judged on
-//
-// MaxRefsPerRepo bounds LIVE refs, and only they: a ref the repository has no
-// row for and one it holds as a tombstone both read as ZeroOID ([current]),
-// so a create of either is one more live ref and nothing else, and a deletion
-// one fewer — in the push that makes it too ([working.decide]). The deleted
-// refs a repository still keeps as tombstones are bounded apart, by the
-// applier ([MaxTombstonesPerRepo]), which forgets the oldest — or writes a
-// record's deletions as removals — rather than refuse anybody; judged here
-// with the live refs, a repository that deleted its stale branches refused
-// every new one until their deletions aged out two days later.
+// MaxRefsPerRepo bounds LIVE refs only: no row and a tombstone both read as
+// ZeroOID ([working.current]), so a create of either is one more live ref and a
+// deletion one fewer, in the push that makes it too ([working.decide]).
+// Tombstones are bounded apart by the applier ([MaxTombstonesPerRepo]), which
+// forgets the oldest or writes deletions as removals rather than refuse
+// anybody; counted here, deleting stale branches would refuse every new one
+// until the deletions aged out.
 type working struct {
 	name string
 	now  time.Time
@@ -1097,20 +871,17 @@ const expiryRefsSQL = `SELECT r.ref, r.target, r.seat, r.at, r.held_position,
 	FROM json_each(?2) AS j CROSS JOIN code_refs AS r
 	WHERE r.repo_id = ?1 AND r.ref = CAST(j.value AS TEXT)`
 
-// readAround reads what is around every ref the batch may create, so
-// [working.beside] can judge each create against it: the rows of the
-// directories a create would make and of its bound, into targets, what the
-// working state can hold live, into watched, and for each create the first
-// live ref under it that the snapshot holds and the working state does not
-// answer, into occupied. seen is every ref the batch names, which it extends
-// by the directories and the bounds; deleted, every ref a command of it
-// deletes.
-//
-// A ref the batch MAY create is one a command gives a value, that no rule
-// without state refuses, over no live value in the snapshot — or over one a
-// command of the batch deletes, after which a later command creates it again.
-// Every other command is an update, a deletion or a refusal, and moves no
-// name, so a batch of updates reads nothing here.
+// readAround reads what is around every ref the batch may create, for
+// [working.beside]: into targets the rows of each directory a create would make
+// and of its bound, into watched what the working state can hold live, and into
+// occupied each create's first live ref under it the working state does not
+// answer. seen (every ref the batch names) gains the directories and bounds;
+// deleted is every ref a command deletes. A ref the batch MAY create is one a
+// command gives a value, that no stateless rule refuses, over no live value or
+// over one a command of the batch deletes; a batch of updates reads nothing
+// here. The cost follows what the creates spell, never what the repository
+// holds: a primary-key seek per directory (a ref of n components below its
+// namespace makes n−1, at most about 120) and a ranged seek per gap ([liveIn]).
 func (w *working) readAround(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposal, open []int,
 	seen, deleted map[string]bool) error {
 
@@ -1187,26 +958,16 @@ func (w *working) readAround(ctx context.Context, tx *sql.Tx, repoID string, bat
 		}
 	}
 
-	// THE GAPS: every create's range (ref + "/", ref + "0") cut at the
-	// bounds of every create and at every name with a live row, each gap
-	// asked ONCE for the first live ref in it — a live name being the working
-	// state's to answer, since the batch may delete it, and anything else
-	// live there in the way whatever the batch does. A create's first such
-	// ref is the first answer among the gaps inside its range. Ranges of
-	// refs nest or are apart, so a gap lies inside a range or outside it;
-	// and one gap serves every create whose range holds it, so the gaps are
-	// at most the creates' bounds and the live names — where asking each
-	// create for the gaps between the names under it asked a nested chain of
-	// creates over everything named below it once a create: 3.4–4.5 s a round
-	// and some 600 MB of statements for a record of 118 nested creates over
-	// 2 492 more under the deepest (BenchmarkDecideABatch, fanned).
-	//
-	// ONE SORTED SWEEP over the cuts makes the gaps and, for each create, the
-	// run of them inside its range: its range opens at its lower bound and
-	// closes at its upper, so the gaps made between the two are its own and
-	// those of every create inside it. A lower bound, ending in '/', is no
-	// ref and no other bound; an upper bound, ending in '0', may be a live
-	// name too, and is one cut.
+	// THE GAPS: every create's range (ref + "/", ref + "0") cut at every create's
+	// bounds and every name with a live row, each gap asked ONCE for its first
+	// live ref (a live name is the working state's to answer, since the batch may
+	// delete it). Ranges nest or are apart, so one gap serves every create whose
+	// range holds it, and the gaps number at most the bounds plus the live names;
+	// asked per create, a nested chain of creates re-read everything below it
+	// (BenchmarkDecideABatch, fanned). ONE SORTED SWEEP over the cuts makes the
+	// gaps and each create's run of them: its range opens at its lower bound and
+	// closes at its upper. A lower bound, ending in '/', is no ref and no other
+	// bound; an upper, ending in '0', may be a live name too, and is one cut.
 	type cut struct {
 		at     string
 		create int // the create whose bound it is; -1 for a live name
@@ -1263,12 +1024,11 @@ func (w *working) readAround(ctx context.Context, tx *sql.Tx, repoID string, bat
 }
 
 // namesPerStatement is the most names one statement of the decide's lists
-// carries: every ref is at most MaxRefNameBytes, so a list is at most about a
-// mebibyte however deep the refs a batch creates — the directories of a
-// record's worth of the deepest refs are some three hundred thousand, and in
-// one statement they cost several hundred megabytes of encoding (measured,
-// BenchmarkDecideABatch's deepest arm) where in parts they cost the same time
-// and a part's memory.
+// carries, so a list is at most about a mebibyte (refs are at most
+// MaxRefNameBytes) however deep a batch's creates: a record's worth of the
+// deepest refs makes some three hundred thousand directories, whose one
+// statement costs several hundred megabytes of encoding where parts cost the
+// same time (BenchmarkDecideABatch's deepest arm).
 const namesPerStatement = 4096
 
 // inChunks calls f with list in consecutive parts of at most
@@ -1362,10 +1122,16 @@ func (w *working) watchedUnder(ref string) []string {
 }
 
 // beside is the live ref in the way of creating ref, as the working state and
-// the push being decided leave things — made its creates judged ok so far,
-// gone its deletions judged ok — and whether there is one: a directory ref
-// would make that is a live ref, a live ref under ref the batch names
-// nowhere, or a watched one under it that is live by now.
+// the push being decided leave things (made: its creates ok so far; gone: its
+// deletions ok), and whether there is one: a directory ref would make that is
+// live, a live ref under ref the batch names nowhere, or a watched one under it
+// live by now. A client keeps refs as files, so refs/heads/feature and
+// refs/heads/feature/x can never both be live ("cannot lock ref"). git's
+// receive-pack refuses the pair in its ref transaction, which here never runs
+// (every command goes to the hook), and only the snapshot sees both refs, so
+// the decide refuses it (ref_conflict). The push's own deletions free a name
+// (git takes deleting feature beside creating feature/v2), an earlier push's
+// create takes one, and a tombstone is in nobody's way.
 func (w *working) beside(ref string, made, gone map[string]bool) (string, bool) {
 	live := func(r string) bool {
 		switch {
@@ -1416,16 +1182,11 @@ func directoriesOf(ref string) []string {
 	return out
 }
 
-// liveIn is, for each gap (lo, hi) — both exclusive — the first live ref of
-// repoID between them in byte order, or "" for none.
-//
-// TWO STATEMENTS, the second only for a gap that holds one: whether a gap holds
-// a live ref ([gapsHoldingSQL], one ranged seek of the live refs' index a gap,
-// stopping at its first row), then which ref it is ([firstLiveInSQL]). Asked
-// as one statement — the first live ref of every gap — it cost about twice as
-// much (9.5 µs a gap against 5.4, three thousand gaps measured over the
-// primary key), and the gap that holds a live ref is the create that is
-// refused, which nearly none is.
+// liveIn is, for each gap (lo, hi), both exclusive, the first live ref of
+// repoID between them in byte order, or "" for none. Two statements, the
+// second only for a gap that holds one: whether it does ([gapsHoldingSQL]),
+// then which ([firstLiveInSQL]). As one statement it costs about twice as much
+// a gap, and a gap holding a live ref is a refused create, which nearly none is.
 func liveIn(ctx context.Context, tx *sql.Tx, repoID string, gaps [][2]string) ([]string, error) {
 	out := make([]string, len(gaps))
 	var held []int
@@ -1546,8 +1307,8 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits, g Gra
 			refuse(c, r, statelessDetail(*c, r))
 			continue
 		}
-		// 2b THE GRANT, before any state of the ref is read: a command the
-		// principal may not make is refused for that, whatever the ref holds.
+		// 2b THE GRANT, before any state of the ref is read. Rare, since the receiver
+		// checked the grant before the bytes moved: only where the chart moved since.
 		if r, why := g.RefRule(*c); r != "" {
 			refuse(c, r, why)
 			continue
@@ -1575,7 +1336,8 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits, g Gra
 			refuse(c, r, detail)
 			continue
 		}
-		// 5b THE DEFAULT BRANCH, which no push deletes, whoever sends it.
+		// 5b THE DEFAULT BRANCH, which no push deletes whoever sends it: after the
+		// protections, so a protected default branch is refused by the rule naming it.
 		if r, why := DefaultBranchRefusal(*c, w.name, w.defaultBranch); r != "" {
 			refuse(c, r, why)
 			continue
@@ -1726,15 +1488,16 @@ func (w *working) apply(p Proposal, cmds []Command) {
 	}
 }
 
-// behind is the pack bound over p, a push with an ok command left — an entry
-// of the record unless this refuses it: true, with the sentence of its
-// refusal, when p carries a pack and the repository holds MaxPacksPerRepo live
-// packs or more with the batch's earlier entries' packs counted in. Asked
-// LAST, so a push refused for a reason of its own is told that reason and
-// counts no pack; and only of a push carrying a pack, since one carrying
-// none adds none — a deletion, or a ref moved onto a commit the repository
-// already holds, is decided at the bound and past it as ever. A push it
-// refuses is never applied, so its pack is counted for no later push.
+// behind is the pack bound over p, a push with an ok command left: true, with
+// its sentence, when p carries a pack and the repository holds MaxPacksPerRepo
+// live packs or more, the batch's earlier entries' counted in. It refuses the
+// push WHOLE, compaction_behind, until a compaction merges the packs. Asked
+// LAST, so a push refused for a reason of its own is told that reason; and only
+// of a push carrying a pack, so a deletion or a move onto a commit already held
+// is decided at the bound as ever. A refused push is never applied, so its pack
+// counts for no later push. The receiver refuses the same push before uploading
+// its bundle, from its own synced row (internal/gitlet/host's precheck); this
+// decide is the authority.
 func (w *working) behind(p Proposal) (string, bool) {
 	if p.Pack == nil || w.packs < MaxPacksPerRepo {
 		return "", false
@@ -1789,19 +1552,16 @@ func statelessDetail(c Command, r Refusal) string {
 }
 
 // ProtectionDetail names the rule that refused a command and the flag it
-// refused it by — the rule [ProtectionRefusal] answered with its refusal, so
-// naming it asks no rule about the ref a second time. ONE SPELLING for the
-// decide and Gitlet, which refuses a protected update before it
-// uploads anything (ADR-0008).
+// refused it by: the rule [ProtectionRefusal] answered, so no rule is asked
+// about the ref again. ONE SPELLING for the decide and Gitlet, which refuses a
+// protected update before it uploads anything (ADR-0008).
 //
-// IT NAMES NO REF: git prints the ref beside the reason, and Gitlet
-// carries this sentence in a proposal, whose every Detail is bounded
-// (maxDetailBytes) — a ref and a pattern of MaxRefNameBytes each could never
-// fit there beside the words, and a push whose sentence did not fit was
-// refused whole as the receiver's own bug. So each sentence is its pattern
-// and at most 64 bytes of words, the persons rule's included, which says what
-// the rule takes rather than why a seat's change reaches the ref only through
-// a person: that is Gitlet's "What git prints" row.
+// IT NAMES NO REF: git prints the ref beside the reason, and the sentence rides
+// a proposal whose every Detail is bounded (maxDetailBytes), where a ref and a
+// pattern of MaxRefNameBytes each could not fit beside the words and the push
+// would be refused whole as the receiver's bug. So each sentence is its pattern
+// and at most 64 bytes of words; why a seat's change reaches a persons-rule ref
+// only through a person is Gitlet's "What git prints" row.
 func ProtectionDetail(rule PushRule, r Refusal) string {
 	switch {
 	case r == RefusalProtectedDirect && rule.DirectPush == DirectPersons:
@@ -1846,17 +1606,14 @@ const (
 		WHERE s.seat = CAST(j.value AS TEXT) AND s.day = ?1`
 	pushesNamedSQL = `SELECT ` + pushColumns + ` FROM code_pushes
 		WHERE push_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
-	// gapsHoldingSQL is the place of each [lo, hi] gap of its list that
-	// holds a live ref, and firstLiveInSQL the first such ref of each gap:
-	// both driven from the list, each gap one ranged seek of the LIVE refs'
-	// index ([liveRefsKey]) that stops at its first row — a subquery, so a gap
-	// answers one row however many refs lie in it, where a join would answer
-	// every one. The live refs' index, never the key: a gap's range holds the
-	// tombstones under a create too, and over the key the seek stepped over
-	// each of them before its first live row, so a deep chain of creates over
-	// a repository's tombstones read every one once a create (planner.go).
-	// `r.target != ''` is the index's own predicate, repeated so the planner
-	// may use it.
+	// gapsHoldingSQL is the place of each [lo, hi] gap of its list that holds a
+	// live ref, and firstLiveInSQL the first such ref of each gap: driven from the
+	// list, each gap one ranged seek of the LIVE refs' index ([liveRefsKey])
+	// stopping at its first row, as a subquery, so a gap answers one row where a
+	// join answers every ref in it. Never the key: a gap's range holds the
+	// tombstones under a create too, which a seek over the key steps over one by
+	// one (planner.go). `r.target != ''` repeats the index's own predicate so the
+	// planner may use it.
 	gapsHoldingSQL = `SELECT CAST(j.key AS INTEGER) FROM json_each(?2) AS j
 		WHERE EXISTS (SELECT 1 FROM code_refs AS r INDEXED BY ` + liveRefsKey + `
 			WHERE r.repo_id = ?1 AND r.ref > CAST(j.value ->> 0 AS TEXT) AND r.ref < CAST(j.value ->> 1 AS TEXT)

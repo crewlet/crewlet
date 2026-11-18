@@ -5,20 +5,14 @@ import (
 	"math"
 )
 
-// WHERE ANCHORED LINES ARE NOW. A finding or a comment is written against a
-// range of lines of one blob; when the change moves on, the same lines are
-// found in the new blob by the diff between the two — git's zero-context
-// hunks, which name exactly the lines each change replaced — and never by
-// searching for the lines' text, which repeats in any file of size and would
-// place a finding on another copy of its line. (Not a log's reanchor,
-// statelog.Reanchor, which moves a state log to its next generation.)
+// WHERE ANCHORED LINES ARE NOW. A finding's or comment's lines are found in a
+// later blob by git's zero-context hunks between the two, never by searching
+// for their text, which repeats in any file of size and would place a finding
+// on another copy of its line. (Not statelog.Reanchor, a log's next generation.)
 //
-// ONE RULE, read wherever lines are placed: Gitlet's re-anchoring read
-// (internal/gitlet/query) for a finding shown on a later revision, and an
-// apply_suggestions' build (internal/gitlet/host) for a finding's suggestion at
-// the head it applies to, so a suggestion is spliced exactly where a reader
-// was shown its finding — the build feeding it one hunk at a time
-// ([Placing]), as a diff streams by.
+// ONE RULE for every placing: internal/gitlet/query's re-anchoring read and
+// internal/gitlet/host's apply_suggestions build (streaming through [Placing]),
+// so a suggestion is spliced exactly where its finding was shown.
 
 // Hunk is one hunk of a unified diff as its header gives it: the OldLines
 // lines from OldStart that it replaces, and the NewLines lines from NewStart
@@ -35,10 +29,8 @@ type Hunk struct {
 // @@`, a count left out for one line as git writes it, and whatever git
 // writes after the closing `@@` — or false where line is no such header.
 //
-// IT READS THE BYTES AS THEY CAME AND ALLOCATES NOTHING: a diff of two large
-// files is millions of headers, and a reader that streams them — a
-// re-anchoring's, a suggestion's — would otherwise make a string of every one
-// it is handed, garbage that grows with the diff it keeps none of.
+// IT ALLOCATES NOTHING: a diff of two large files is millions of headers, and
+// a streaming reader would otherwise make garbage that grows with the diff.
 func ParseHunk(line []byte) (Hunk, bool) {
 	rest, ok := bytes.CutPrefix(line, []byte("@@ -"))
 	if !ok {
@@ -95,17 +87,15 @@ func hunkNumber(s []byte) (int, bool) {
 
 // Reanchor is where lines start to end (1-based, inclusive) of a file are in
 // the file a diff makes of it, hunks being that diff's — git's zero-context
-// hunks, in their order, none overlapping another — and whether they are
-// still the lines they were.
+// hunks, in order, none overlapping — and whether they are still the lines
+// they were.
 //
-// A hunk wholly above the range moves it by the lines it added less the lines
-// it removed, and one wholly below it leaves it be: then the range is the
-// same lines, true. A hunk that replaces or deletes any of its lines, or
-// inserts lines between two of them, changed what the range holds: false,
-// OUTDATED, with start and end where the range would begin and end had only
-// the hunks above it moved it — a place to show the old finding near, never a
-// claim that its lines are there. An insertion right above the range or right
-// below it touches none of its lines.
+// A hunk wholly above the range shifts it by the lines it added less those it
+// removed; hunks wholly above or below keep it the same lines, true. One that
+// replaces, deletes or inserts between any of its lines makes it OUTDATED,
+// false, placed where only the hunks above would have moved it: a place to
+// show the old finding near, never a claim its lines are there. An insertion
+// right above or right below the range touches none of its lines.
 func Reanchor(hunks []Hunk, start, end int) (int, int, bool) {
 	p := PlaceLines(start, end)
 	for _, h := range hunks {
@@ -116,12 +106,10 @@ func Reanchor(hunks []Hunk, start, end int) (int, int, bool) {
 	return p.Placed()
 }
 
-// Placing is [Reanchor] fed one hunk at a time, IN THE DIFF'S ORDER: the one
-// rule for a reader that streams a diff's hunks and keeps none of them, so
-// what it holds is a placing an anchor, never a hunk a line of the diff — a
-// diff of two large files is millions of hunks, and an anchor is settled by
-// the first hunk at or below it. Reanchor is this over a slice, so the two
-// can never place lines apart.
+// Placing is [Reanchor] fed one hunk at a time, IN THE DIFF'S ORDER, for a
+// reader that streams a diff's millions of hunks and keeps none: an anchor is
+// settled by the first hunk at or below it. Reanchor is this over a slice, so
+// the two can never place lines apart.
 type Placing struct {
 	start, end, shift int
 	settled, kept     bool
@@ -131,12 +119,10 @@ type Placing struct {
 // in the file a diff makes of it.
 func PlaceLines(start, end int) Placing { return Placing{start: start, end: end, kept: true} }
 
-// Hunk moves the placing by the diff's next hunk, and reports whether it is
-// settled: a hunk wholly above the range moves it by the lines it added less
-// the lines it removed and leaves it open; one wholly below it settles it
-// where it is, the same lines; and one that replaces, deletes or inserts
-// between any of its lines settles it OUTDATED. A settled placing moves no
-// further, whatever hunks follow.
+// Hunk moves the placing by the diff's next hunk and reports whether it is
+// settled, by [Reanchor]'s rule: a hunk above moves it and leaves it open, one
+// below settles it kept, one touching its lines settles it OUTDATED. A settled
+// placing moves no further.
 func (p *Placing) Hunk(h Hunk) bool {
 	if p.settled {
 		return true
@@ -167,8 +153,7 @@ func (p *Placing) Hunk(h Hunk) bool {
 	return p.settled
 }
 
-// Placed is where the lines are now, and whether they are still the lines
-// they were — Reanchor's answer, over the hunks fed so far: once the diff has
+// Placed is Reanchor's answer over the hunks fed so far: once the diff has
 // ended, a placing no hunk settled is the same lines, moved by every hunk
 // above them.
 func (p Placing) Placed() (int, int, bool) { return p.start + p.shift, p.end + p.shift, p.kept }

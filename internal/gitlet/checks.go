@@ -15,135 +15,56 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A REPOSITORY'S CHECKS ARE ROWS ON A SUBJECT OF THEIR OWN: checks.<repo>.
+// A repository's checks are rows on their own subject, checks.<repo>
+// ([KindChecks]; doc.go's "A repository's checks are rows on their own
+// subject"): code_checks and code_check_logs, which no other subject's record
+// writes. The subject is additive (statelog.PatternAdditive), so runners'
+// writes never queue behind each other, and every apply is a join
+// ([joinCheck], [endsBefore]) leaving one row, byte for byte, in either order.
+// REJECTED: first in log order wins — a runner and a failover's second writer
+// cannot choose their order.
 //
-// What became of a check — queued on a commit, claimed by a runner, ended — is
-// state on the code log like everything a repository holds, written by
-// records on its repository's CHECKS subject ([KindChecks], checks.<repo>) and
-// by nothing on the repository's own. A check's records share nothing with
-// the repository's pushes and its changes' lifecycles, and decided in the
-// committer's one queue they would wait behind its batches; and a table is
-// written by the records of ONE subject: these keep code_checks and
-// code_check_logs, which no other subject's record writes — the repository's
-// purge removes them with the repository, as it removes a change's
-// conversation.
-//
-// # Additive, so every apply is a join
-//
-// A check's records carry no expectation (statelog.PatternAdditive): many
-// runners claim, end and report about one repository's checks at once, and an
-// arbitrated subject would put every one of them behind every other — one
-// record a round, and sixteen lost rounds a refusal — over rows two of them
-// seldom share. PatternAdditive is correct only where records COMMUTE
-// (statelog/publish.go), so every apply here is a JOIN over the row its
-// record is about ([joinCheck]), and two records in either order leave one
-// row, byte for byte:
-//
-//   - its STATE only rises — queued, then running, then an ending — because it
-//     is derived from what the row holds: an ending once one arrived, running
-//     once a claim did, queued otherwise;
-//   - its QUEUE — the purpose, the definition, what it measures — is the
-//     queuing record's with the lowest position: one dispatch's, whichever of
-//     two a failover published lands first;
-//   - its RUN — the runner, its placement, its start — is the claim with the
-//     lower (StartedAt, Runner): two claims of one attempt converge on one
-//     runner wherever each landed. The box is that claim's, set once by its
-//     holder's later record, which repeats the claim's StartedAt and Runner;
-//   - its ENDING is the measurement over infrastructure's — passed and failed
-//     over errored, cancelled and skipped, since a run that measured the
-//     commit says more of it than one that did not run — then the earlier
-//     (FinishedAt, reporter), then the lower position; and its log is that
-//     ending's.
-//
-// A field arrives with the record that carries it, so a record about a row no
-// record has made yet makes it with what it carries, and the rest arrives with
-// the rest. REJECTED: the first record in log order wins. The rows would then
-// be whatever the apply order made them, and the writers of two records about
-// one check — a runner and a failover's second one — cannot choose their
-// order.
-//
-// # The horizon
-//
-// A check's rows are kept [CheckHistory]: every ending record removes its own
-// repository's rows that ended before its broker instant less the history,
-// oldest first, at most [CheckHorizonRows] rows and [CheckHorizonBytes] bytes
-// of them, so the history keeps pace with the checks that end; and the
-// code-retention duty's checks_sweep does the same for a repository whose
-// checks have STOPPED ending — an idle one, whose rows nothing would ever
-// remove otherwise ([Store.ChecksSweep]). The duty tells it by its rows: a
-// repository holding a row that outlived the history by [CheckSweepGrace] is
-// one no ending of its own has reached for that long — or one whose endings'
-// bounded horizons fell that far behind — and it sweeps such a repository
-// whole, back to the history. A repository whose checks keep ending is never
-// listed, and none of its rows is removed twice.
-//
-// # Base format
-//
-// Every op, kind and field here is in the base format ([RecordVersion]): the
-// domain landed on main with them, so every build that meets a record on a
-// checks subject reads it. None is a gate.
-// An ending's test counts and its output's lines are version 6
-// ([CheckCountsVersion]); an ending that carries neither is base format.
+// Every op, kind and field here is in the base format ([RecordVersion]); none
+// is a gate. An ending's test counts and output lines are version 6
+// ([CheckCountsVersion]); an ending carrying neither is base format.
 
 // CheckHistory is how long a check's rows are kept once it has ended: thirty
-// days. Past it a check is one nobody reads — a change merged weeks ago, a tip
-// the branch has long moved past — and a page that cites a check cites one
-// still held.
+// days, past which a check is one nobody reads (a change merged weeks ago, a
+// tip long moved past).
 const CheckHistory = 30 * 24 * time.Hour
 
 // CheckSweepGrace is how long past [CheckHistory] a repository's check rows
-// outlive it before the code-retention duty sweeps them: a day. The duty lists
-// only a repository holding a row that ended before its clock less the history
-// less this grace, and sweeps it back to the history; a repository whose
-// checks keep ending removes its own rows with each ending, so its rows never
-// outlive the history by the grace, and the duty never appends a record that
-// one of its endings would have made anyway.
+// may outlive it before the code-retention duty sweeps them back to the
+// history ([Store.ChecksSweep]): a day. A repository whose checks keep ending
+// removes its own rows with each ending and is never listed, so the duty
+// appends no record an ending would have made anyway.
 //
-// A DAY, because it bounds both of what it trades:
-//   - what the duty appends: a sweep leaves a repository no row past the
-//     history, so its next row to outlive it by the grace does so a grace
-//     later at the soonest — a repository is swept at most once a grace (a
-//     step more for every CheckHorizonRows rows past the first), so
-//     CodeMaxRepos repositories make at most CodeMaxRepos sweeps a day, about
-//     104 a pass at RetentionInterval (limits.go's RetentionPassBudget prices
-//     them). Listed at the history itself, a repository was swept whenever a
-//     row of it had crossed the history since its last ending: at
-//     Gitlet's design point, one push an hour a repository, a large share of
-//     CodeMaxRepos every pass — thousands of records, each of which the
-//     repository's next ending would have made anyway, every data node
-//     applying all of them, ahead of the purges on one budget;
-//   - what an idle repository keeps: rows at most the grace past the
-//     history, a thirtieth of it more, which no reader notices.
-//
-// So a repository whose checks end more often than once a day — a change's
-// head checked on every push, say — keeps its history by itself and is never
-// listed, and one checked less often is swept at most once a day.
+// A DAY bounds both sides: a repository is swept at most once a grace (a step
+// more per CheckHorizonRows rows), so at most CodeMaxRepos sweeps a day,
+// about 104 a pass at RetentionInterval (limits.go's RetentionPassBudget
+// prices them), where listing at the history itself swept a large share of
+// CodeMaxRepos every pass; and an idle repository keeps at most a thirtieth
+// more history, which no reader notices.
 const CheckSweepGrace = 24 * time.Hour
 
-// CheckBoxGrace is how long a check's box, and the token it fetches with
-// (internal/gitlet/host's CheckTokens), outlive the check's own timeout:
-// sandbox.DefaultSetupTimeout, ten minutes — the budget one setup command of
-// a box is given, since a box is set up (its tools, its clone) before its
-// check's command starts and the timeout runs only from there. A token valid
-// for the timeout alone expired under a check that spent its setup cloning and
-// then ran the whole of its timeout, failing its last fetch; one valid much
-// longer outlives every box it was minted for. The token is the BACKSTOP and
-// the attempt's row the authority: a box whose attempt has ended is refused at
-// once, whatever its token's expiry.
+// CheckBoxGrace is how long a check's box, and its fetch token
+// (internal/gitlet/host's CheckTokens), outlive the check's timeout:
+// sandbox.DefaultSetupTimeout, ten minutes, one setup command's budget, since
+// the timeout runs only once setup (tools, clone) is done. A token valid for
+// the timeout alone expires under a check that spent its setup cloning; one
+// much longer outlives its box. The token is the BACKSTOP and the attempt's
+// row the authority: a box whose attempt has ended is refused at once.
 const CheckBoxGrace = sandbox.DefaultSetupTimeout
 
 // CheckUser is the HTTP Basic user name a check's box presents on the box
 // routes, its password its check's token: beside internal/gitlet/host's
-// BoxUser, the second of the two a box route reads, and what tells a check's
-// box from an executor's before either is verified.
+// BoxUser, what tells a check's box from an executor's before either is
+// verified.
 //
-// SPELLED HERE, ONCE, for its two sides: the check runner (internal/gitlet/
-// checkrun), which hands it to the box's git, and Gitlet, which admits
-// a check's box only under it. Each kept its own copy before, and nothing
-// held the two together — the runner's suites run on fake boxes, the host's
-// never import the runner — so a rename on either side would have refused
-// every real check box's fetch with nothing short of a live run to show it.
-// Both import this package, and neither imports the other.
+// Spelled here, once, for both sides — the check runner
+// (internal/gitlet/checkrun), which hands it to the box's git, and Gitlet,
+// which admits a check's box only under it — since neither side's suites
+// reach the other's, and a rename on one would refuse every real box's fetch.
 const CheckUser = "check"
 
 // The record's bounds. Each is the payload's own, refused by its Validate
@@ -152,17 +73,14 @@ const CheckUser = "check"
 // (TestTheLargestCheckRecordsFitARecord).
 const (
 	// MaxCheckAttempts is the most attempts one check of one commit makes:
-	// ten, a reader of the attempts sees every rerun anybody asked for of a
-	// flaky check and still one row a rerun.
+	// ten, room for every rerun of a flaky check at one row a rerun.
 	MaxCheckAttempts = 10
 
 	// AutoRequeueAttempts is the most attempts the home's own requeue takes a
-	// check of a commit to — three: an attempt its INFRASTRUCTURE ended (its
-	// runner lost, its box or its setup failed: [CheckReason.Requeued]) is
-	// queued again by the home while the attempt that ended is below it, so a
-	// dead runner's check runs at most three attempts. Past it the engine
-	// stops spending boxes on a check its cells keep failing, and only a
-	// rerun somebody asks for runs it again, up to MaxCheckAttempts.
+	// check of a commit to: three. An attempt its INFRASTRUCTURE ended
+	// ([CheckReason.Requeued]) is queued again while below it; past it the
+	// engine stops spending boxes on a check its cells keep failing, and only
+	// a rerun somebody asks for runs it again, up to MaxCheckAttempts.
 	AutoRequeueAttempts = 3
 
 	// CheckSummaryBytes is the longest summary an ending carries: 4 KiB, a
@@ -196,28 +114,20 @@ const (
 	MaxCheckURLBytes = 2 << 10
 
 	// CheckHorizonRows is the most check rows one record's horizon removes:
-	// an eighth of MaxRecordRows, so a record's own rows and its horizon's —
-	// each check row with its log's, two rows at most — stay a quarter of
-	// what one record may touch. ITS ROWS, NOT ITS TIME, BIND IT: measured,
-	// the widest ending removing this many narrow rows and their logs holds
-	// the write lane 14 ms, against 4.8 ms with nothing to remove
-	// (BenchmarkApplyACheckRecord, doc.go's measured section) — a sixth of the
-	// third of statelog.ApplyTxTimeBudget a purge part is sized to, where the
-	// push rows' horizon had to be cut to HorizonDeletesPerRecord because its
-	// rows are the domain's widest.
+	// an eighth of MaxRecordRows, so with each check row's log row the
+	// horizon stays a quarter of what one record may touch. Rows, not time,
+	// bind it: the widest ending removing this many narrow rows holds the
+	// write lane 14 ms against 4.8 ms with none (BenchmarkApplyACheckRecord,
+	// doc.go's "Measured"), a sixth of the third of
+	// statelog.ApplyTxTimeBudget a purge part is sized to.
 	CheckHorizonRows = MaxRecordRows / 8
 
 	// CheckHorizonBytes is the most bytes of check rows one record's horizon
-	// removes — each row weighed by its row_bytes, the first whatever it
-	// weighs: MaxRecordBytes, at least what one record adds, since a check
-	// record writes one row of at most its own bytes; so the history's
-	// removal keeps pace with its growth in bytes as in rows. The widest rows
-	// are some 290 KB — a definition of escaped text, some 200 KB, beside a
-	// failed run's summary, tail, failures and link — so a horizon of them
-	// removes four, a mebibyte of overflow pages: measured, 2 ms beside the
-	// ending's own 4.8, the five secondary indexes a check row carries
-	// included (BenchmarkApplyACheckRecord), about the 2.4 ms a megabyte the
-	// push rows' deletion measured.
+	// removes, each row weighed by its row_bytes and the first whatever it
+	// weighs: MaxRecordBytes, at least what one check record adds, so removal
+	// keeps pace with growth in bytes as in rows. The widest rows, some
+	// 290 KB, make that four rows: 2 ms beside the ending's own 4.8
+	// (BenchmarkApplyACheckRecord).
 	CheckHorizonBytes = MaxRecordBytes
 )
 
@@ -393,13 +303,11 @@ func (r CheckReason) Requeued() bool {
 	return r == CheckReasonRunnerLost || r == CheckReasonBoxFailed || r == CheckReasonSetupFailed
 }
 
-// GivenUp reports a cancellation a merge queue's home made of a train it gave
-// up — a change of it dequeued, or the train abandoned otherwise — which
-// measured nothing of the commit and judged nothing of it: a chain built again
-// from the same rows is the same commits byte for byte (gitlet/host's
-// BuildChain), so a train built after the cancellation may test that commit
-// again, and its home queues the check again, below MaxCheckAttempts — never
-// AutoRequeueAttempts, since no cell failed it.
+// GivenUp reports a cancellation of a merge queue's train given up (a change
+// dequeued or the train abandoned), which judged nothing of the commit: a
+// chain rebuilt from the same rows is the same commits byte for byte
+// (gitlet/host's BuildChain), so its home may queue the check again, below
+// MaxCheckAttempts and never AutoRequeueAttempts, since no cell failed it.
 func (r CheckReason) GivenUp() bool {
 	return r == CheckReasonDequeued || r == CheckReasonAbandoned
 }
@@ -413,12 +321,11 @@ func requeuedAfter(state CheckState, reason CheckReason) bool {
 		(state == CheckStateCancelled && reason.GivenUp())
 }
 
-// CheckRefusal is why a repository's checks writer decided nothing of a write
-// of its checks ([ChecksRequest]) — a code its asker reads as "<code>:
-// <sentence>", the sentence the decide's ([ChecksResult.Detail]). A named
-// string, so a code this build does not know is a value rather than a panic.
-// NONE IS EVER RECORDED: a refused write appends nothing, so no record of the
-// code log carries one and none takes a versionedFields row.
+// CheckRefusal is why a repository's checks writer decided nothing of a
+// [ChecksRequest], read as "<code>: <sentence>" with [ChecksResult.Detail]'s
+// sentence. A named string, so an unknown code is a value rather than a
+// panic. None is ever recorded (a refused write appends nothing), so none
+// takes a versionedFields row.
 type CheckRefusal string
 
 // The codes, in the order the decide's rules reach them (checkswriter.go) and
@@ -516,17 +423,12 @@ func (r CheckReason) Ends(s CheckState) bool {
 // CheckKey names one attempt of one check of one commit FOR ONE TARGET BRANCH
 // — a check row's key.
 //
-// THE TARGET IS THE KEY'S: what a check of a commit measures is the
-// definition its target's checks file gives it — the file read at the
-// target's tip, never the commit's own, so no change narrows the checks that
-// judge it — and its target's protection is what requires it. One commit is
-// checked for two targets as two checks: a head another change into another
-// branch shares, a tip of one branch that a change into another names as its
-// head. Keyed by the commit alone, the second target's dispatch found the
-// first's attempts and queued nothing — its own file's definition never ran,
-// and its change's checks read empty — and a change into a branch whose file
-// defined a check trivially could pass, for every change sharing its head,
-// the check a stricter branch requires.
+// The target is the key's because the definition measured is the target's
+// checks file at its tip (never the commit's own, so no change narrows the
+// checks that judge it) and the target's protection requires it. Keyed by the
+// commit alone, a commit checked for two targets ran only the first's
+// definition, and a lax branch's pass could meet a stricter one's required
+// check.
 type CheckKey struct {
 	RepoID string `json:"repo_id"`
 	// OID is the commit checked, in 40 hex digits.
@@ -542,10 +444,9 @@ type CheckKey struct {
 // Validate refuses a key no attempt is named by ([ErrInvalid], naming the
 // field): a repository id that is not a UUID in its canonical spelling, a
 // commit that is not one's whole id, a target that is not a branch's ref, a
-// name no check takes, an attempt outside 1 to [MaxCheckAttempts]. EXPORTED
-// for the one key read off the
-// wire outside a record: the one a check's box's token names
-// (internal/gitlet/host's CheckTokens), held to the rule every record's key is.
+// name no check takes, an attempt outside 1 to [MaxCheckAttempts]. Exported
+// for the one key read off the wire outside a record: the one a check box's
+// token names (internal/gitlet/host's CheckTokens).
 func (k CheckKey) Validate() error { return k.validateAs("") }
 
 // validateAs is [CheckKey.Validate] with each field named under prefix — a
@@ -607,14 +508,10 @@ type CheckQueued struct {
 	// touched none of its paths ([CheckReasonPaths]).
 	Skipped bool `json:"skipped,omitempty"`
 	// Invalid records the attempt ERRORED at its dispatch rather than queued
-	// — a check the target's gate requires, which its checks file defines
-	// in no form that runs ([CheckReasonDefsInvalid]), at a change's head
-	// or at a protected target's tip (ADR-0098): the file unparsable,
-	// or something at its path that is no file — and says why, at most
-	// CheckSummaryBytes, which the row keeps as its summary. Such an attempt
-	// carries no definition, there being none that runs.
-	//
-	// BASE FORMAT, as this file's head says.
+	// ([CheckReasonDefsInvalid]): a required check its target's checks file
+	// defines in no form that runs, at a change's head or a protected tip
+	// (ADR-0098). It says why, at most CheckSummaryBytes, kept as the row's
+	// summary; such an attempt carries no Def.
 	Invalid string `json:"invalid,omitempty"`
 	// QueuedAt is the queuing node's instant.
 	QueuedAt time.Time `json:"queued_at"`
@@ -682,13 +579,6 @@ func (q CheckQueued) Validate() error {
 // record repeating its claim's StartedAt and Runner, names the box it made —
 // on the repository's checks subject ([OpCheckStarted]). Every field is in
 // the base format, as this file's head says.
-//
-// NO `borrowed` FLAG: it named a box given its node's cache to read from, a
-// borrow no engine path launches (crewlet/crewlet#496 would measure one
-// against the fetch before any box takes it), so nothing ever set it and
-// every row held it false. It went before the domain landed on main, so no
-// record a build of main wrote carries it, and its removal takes no
-// versionedFields row.
 type CheckStarted struct {
 	CheckKey
 	// Runner is the claiming node's id; empty for an attempt a person's CI

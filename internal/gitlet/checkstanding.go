@@ -49,9 +49,8 @@ type StandingCounts struct {
 // pinned driver (BenchmarkTheStandingCountsAtTheirBound), near the 50 ms line a first page keeps.
 const MaxStandingCounted = 128
 
-// validateStanding is [ReadQuery.validateChecks] for a listing asked where each check stands:
-// of a repository or of every repository, within a window that ends now, never one change's or
-// commit's, never an attempt, and narrowed by a name and any of the seven states.
+// validateStanding is [ReadQuery.validateChecks] for a listing asked where each check stands: of
+// a repository or of every repository, in a window that ends now, narrowed by a name and a state.
 func (q ReadQuery) validateStanding() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	c := q.Checks
@@ -304,11 +303,11 @@ type standingEntry struct {
 }
 
 // verdicts judges each of places: held to the grant (the window's by its repositories, as
-// [Reader.narrowedWindow] holds its places), then by its facts and the subject they name. A
-// head's is the live change into its branch at its commit, whichever change's dispatch queued it,
-// as a merge gate reads one; a candidate's is its queue entry, its change's newest and still
-// tested by that candidate, of a live change still into the candidate's branch; a tip's its branch. Each kind is read in one statement over the
-// places' list, never a statement a place.
+// [Reader.narrowedWindow] holds its places), then by its facts and the subject they name. A head's
+// is the live change into its branch at its commit, whichever change's dispatch queued it, as a
+// merge gate reads one; a candidate's is its queue entry, its change's newest and still tested by
+// that candidate, of a live change still into the candidate's branch; a tip's is its branch. Each
+// kind is one statement over the places' list, never one a place.
 func (sc standingScope) verdicts(ctx context.Context, tx *sql.Tx, places []standingPlace) ([]standingVerdict,
 	error) {
 

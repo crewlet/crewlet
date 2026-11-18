@@ -8,76 +8,22 @@ import (
 	"time"
 )
 
-// A PRINCIPAL'S CHECK WRITES: a rerun a seat or a person asks for, and a
-// person's own CI reporting a check of a commit — the two writes of a
-// repository's checks somebody other than the engine asks for, each decided by
-// the repository's checks writer ([ChecksWriter]) beside the engine's own, in
-// the same single flight and from one snapshot, and each judged by its
-// asker's standing there, from the deciding node's chart.
-//
-// # A rerun runs the definition its latest attempt ran under, again
-//
-// A rerun queues the attempt after the latest its asker read ([CheckRerun]:
-// expected attempt + 1), copying that attempt's queue — its purpose, its
-// change, its definition, whether it is required — so it runs what the latest
-// ran and nothing a later checks file says: the home's dispatch reads the
-// target's file for a NEW head, and a rerun is the same check of the same
-// commit again. Decided by the attempt arithmetic every queue is (one attempt
-// at a time, none past [MaxCheckAttempts], the attempt queued already
-// answered from its row), and by WHO ASKS:
-//
-//   - A SEAT reruns only an attempt its infrastructure or a stop ended,
-//     `errored` or `cancelled` (M5-D23, "meant for an infrastructure error")
-//     — a measurement, `passed` or `failed`, is refused `rerun_genuine`: an
-//     agent re-rolling a red check until it goes green is how a flaky test
-//     reaches a protected branch — and only on a repository its grant may
-//     write ([AccessWrite]) or for a change it is an author of: whoever may
-//     move the branch, or whose change the check judges. In a turn somebody
-//     woke, whoever that is is held at read on the repository — the least
-//     access at which this decide may admit a rerun, an author's, as every
-//     change write's requester is held ([WriteCeiling.changeRefusal]) — and a
-//     turn that works for nobody reruns only a check of a change the seat
-//     wrote, or of a repository it owns.
-//   - A PERSON reruns any ended attempt: a person maintains every
-//     repository (ADR-0085), and the person is who judges a flake.
-//   - A credential bound to nobody writes nothing: it reads only (contract
-//     §1.8).
-//
-// A check a person's CI reports is no rerun's: that CI runs it again and
-// reports the attempt after ([CheckRefusalNativeCheck]).
-//
-// # A report is the attempt's claim or its ending, by a person
-//
-// A person's own CI reports a check of a commit for a target onto the same
-// rows the engine's runners write ([CheckReported]) — `running` as the
-// attempt's claim, placement `external`; an ending as its ending, reason
-// `reported`, naming the person — and the join inserts the row where none is
-// held, as the subject's apply states: a report QUEUES NOTHING, since no
-// runner of the engine's claims it. Only a person reports — through a
-// credential bound to their human seat; a seat runs no CI of its own, and a
-// credential bound to nobody reads only — and never a check the engine has
-// queued at that commit for that target ([CheckRefusalNativeCheck]): a check
-// of a commit is one runner's or one CI's, so a report cannot overwrite what a
-// runner measured, nor a runner what a CI said — the home's dispatch queuing
-// nothing of a name the commit already holds an attempt of, a CI's included.
-//
-// The attempt a report names is its CI's run: the latest attempt while that
-// one runs, the next once it ended — so a CI that runs a check again
-// reports it as a new attempt, and the latest attempt's own ending, sent
-// again, is answered from the row.
-//
-// # Record format
-//
-// Neither arm is a record of its own: each decides one of the subject's
-// existing records (check_queued, check_started, check_finished), whose
-// fields are in the base format but an ending's counts ([CheckCountsVersion]),
-// as the checks subject is (checks.go). The requests are estate requests, and
-// take no versionedFields row.
+// A PRINCIPAL'S CHECK WRITES — a rerun a seat or a person asks for
+// ([CheckRerun]) and a person's CI reporting a check of a commit
+// ([CheckReported]) — are decided by the repository's checks writer
+// ([ChecksWriter]) beside the engine's own, in the same single flight and
+// snapshot, each judged by its asker's standing on the deciding node's chart.
+// Neither is a record of its own: each decides one of the checks subject's
+// records (check_queued, check_started, check_finished; checks.go), in the
+// base format but an ending's counts ([CheckCountsVersion]). The requests are
+// estate requests and take no versionedFields row.
 
 // CheckRerun asks for the attempt after the latest its asker read of a check
 // of a commit for its target — the key's Attempt is the one queued, the
 // latest it read plus one — on behalf of its request's asker
-// ([ChecksRequest.Asker]).
+// ([ChecksRequest.Asker]). It copies that attempt's queue (purpose, change,
+// definition, whether required), so it runs what the latest ran and nothing a
+// later checks file says: the home's dispatch reads the file for a NEW head.
 type CheckRerun struct {
 	CheckKey
 	// Ceiling is whoever the seat's turn works for, which the rerun is held
@@ -116,7 +62,10 @@ func (r CheckRerun) validate(asker Principal) error {
 }
 
 // CheckReported is a person's CI reporting one attempt of a check of a commit
-// for its target: State `running`, or the ending it reached.
+// for its target: State `running` (the attempt's claim, placement `external`)
+// or the ending it reached (reason `reported`, naming the person). It joins
+// the rows the engine's runners write, inserting one where none is held, and
+// QUEUES NOTHING, since no runner of the engine's claims it.
 type CheckReported struct {
 	CheckKey
 	// State is running, passed, failed, errored or cancelled.
@@ -181,8 +130,18 @@ func (r CheckReported) validate(reporter Principal) error {
 	return nil
 }
 
-// decideRerun is a rerun's decide — see the file's doc — over the snapshot
-// tx, for repository repo, at instant now.
+// decideRerun is a rerun's decide over the snapshot tx, for repository repo,
+// at instant now: one attempt at a time, none past [MaxCheckAttempts], one
+// queued already answered from its row, and by who asks. A SEAT reruns only an
+// attempt ended `errored` or `cancelled` (M5-D23); `passed` or `failed` is a
+// measurement, refused `rerun_genuine`, since an agent re-rolling a red check
+// is how a flaky test reaches a protected branch. It needs write access
+// ([AccessWrite]) or authorship of the change checked; a woken turn holds its
+// waker at read, an author's least ([WriteCeiling.changeRefusal]), and a
+// turn for nobody reruns only its own change's or repository's check. A
+// PERSON reruns any ended attempt: a person maintains every repository
+// (ADR-0085) and judges a flake. A credential bound to nobody only reads
+// (contract §1.8); a check a person's CI reports, its CI reruns ([CheckRefusalNativeCheck]).
 func decideRerun(ctx context.Context, tx *sql.Tx, r CheckRerun, asker Principal, repo pushRepo, seats SeatRules,
 	d checksDecision, named func(CheckKey) string, now time.Time) (checksDecision, error) {
 
@@ -281,8 +240,13 @@ func decideRerun(ctx context.Context, tx *sql.Tx, r CheckRerun, asker Principal,
 	return d, nil
 }
 
-// decideReport is a report's decide — see the file's doc — over the snapshot
-// tx, at instant now.
+// decideReport is a report's decide over the snapshot tx, at instant now. A
+// check of a commit is one runner's or one CI's, so a report of one the engine
+// queued at that commit for that target is refused [CheckRefusalNativeCheck]
+// (and the home's dispatch queues nothing of a name the commit holds a CI's
+// attempt of). The attempt a report names is its CI's run: the latest while it
+// runs, the next once it ended; the latest's ending sent again is answered
+// from its row.
 func decideReport(ctx context.Context, tx *sql.Tx, r CheckReported, reporter Principal, d checksDecision,
 	named func(CheckKey) string, now time.Time) (checksDecision, error) {
 

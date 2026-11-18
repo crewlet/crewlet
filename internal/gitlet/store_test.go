@@ -167,14 +167,11 @@ func (n *node) settingsOf(name string) gitlet.RepoSettings {
 }
 
 // EVERY FIELD A DECLARATION CARRIES REACHES THE LOG WHEN IT CHANGES. Under the
-// activation fence the settings comparison is the ONLY thing that decides
-// whether a declared change is written — an unchanged declaration writes
-// nothing whatever activation stamped the row — so a field the comparison
-// skips is a change dropped on every activation, silently, for good: the
-// reconcile sees "unchanged" and nothing ever re-sends it. Each change is
-// declared at the activation the repository was created at, then reverted at
-// a later one; each must write exactly one settings record (the later one
-// beside its fence), and the rows must then hold what was declared.
+// activation fence the settings comparison ALONE decides whether a declared
+// change is written, so a field it skips is a change silently dropped for good.
+// Each change is declared at the repository's creating activation, then
+// reverted at a later one; each must write exactly one settings record (the
+// later beside its fence), and the rows must then hold what was declared.
 func TestEveryDeclaredSettingsChangeWritesOneRecord(t *testing.T) {
 	t.Parallel()
 	rules := func(ps ...gitlet.Protection) gitlet.RepoSettings {
@@ -297,10 +294,9 @@ func TestAnEmptyRuleListIsNoChange(t *testing.T) {
 }
 
 // AN UNCHANGED DECLARATION AT A LATER ACTIVATION WRITES NOTHING BUT THE FENCE:
-// the activation fence is what keeps an older activation from walking the
-// rows back, so a row needs no re-stamp to be protected — and an activation
-// over every repository the company has costs its one fence record rather than
-// one settings record a repository.
+// the fence keeps an older activation from walking the rows back, so a row
+// needs no re-stamp, and an activation costs one fence record rather than one
+// settings record a repository.
 func TestAnActivationThatChangesNothingWritesOneRecord(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -372,13 +368,11 @@ func (n *node) mustID(name string) string {
 }
 
 // A RECORD AN OLDER ACTIVATION DECIDED AND APPENDED PAST THE FENCE IS REFUSED
-// ON EVERY NODE — the case the fence exists for. A reconcile's decide reads
-// the fence and publishes; the broker arbitrates only its own subject, so a
-// settings, a delete or a create decided under an older activation can land
-// after a newer one has raised the fence and settled the repository. Every
-// node's applier then reads the fence in the record's own transaction and
-// writes nothing, so no node walks the repository back and no two nodes
-// disagree.
+// ON EVERY NODE — the case the fence exists for. The broker arbitrates only the
+// record's own subject, so a settings, delete or create decided under an older
+// activation can land after a newer one raised the fence; every applier reads
+// the fence in the record's transaction and writes nothing, so no node walks
+// the repository back and no two disagree.
 func TestAnOlderActivationsRecordPastTheFenceIsRefusedOnEveryNode(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)
@@ -569,8 +563,8 @@ func TestTwoEnsuresOfOneNameCreateOneRepository(t *testing.T) {
 }
 
 // seedRows writes rows of a repository's history straight into a node's
-// estate — the bulk a purge has to clear, which publishing push by push would
-// spend minutes on and assert nothing more by.
+// estate: the bulk a purge has to clear, which publishing push by push would
+// take minutes over and prove nothing more by.
 func (n *node) seedRows(repoID string, pushes, refs, packs int) {
 	n.t.Helper()
 	ctx := n.t.Context()

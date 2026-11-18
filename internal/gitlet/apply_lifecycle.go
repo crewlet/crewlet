@@ -9,26 +9,20 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The applies of the tools' lifecycle records that are neither a create nor a
-// settings, delete or restore record (apply.go): a rename and the release of a
-// renamed repository's old name, each on a NAME's subject, and a live turn's
-// hold, on the repository's. Each is a pure function of the record, its broker
-// instant and the rows a strict replay has already written, as every apply is.
+// The lifecycle applies besides apply.go's create, settings, delete and
+// restore: a rename and the release of a renamed repository's old name, each
+// on a NAME's subject, and a live turn's hold, on the repository's.
 
-// applyRename moves a repository to the name its record claimed, leaving the
-// old one redirecting to it until the record's own instant plus
-// [RedirectWindow] — IN ONE TRANSACTION, and whole or not at all:
+// applyRename moves a repository to the name its record claimed, the old one
+// redirecting until the record's instant plus [RedirectWindow], whole or not
+// at all:
 //
-//  1. the repository's row must still be under From, active or archived, and
-//     a tool's — else NOTHING: two renames of one repository arbitrate on two
-//     name subjects and both land, so the second applies as nothing and its
-//     read-back answers stale; and a repository the configuration manages is
-//     never a tool's to rename;
-//  2. To's claim must be free — then it is claimed — or the repository's own
-//     redirecting old name, which is taken back; anything else and the WHOLE
-//     record applies as nothing (steps 3 and 4 do not run): read step by step,
-//     a rename to a name another repository holds would rename the row and
-//     redirect the old name to a name the repository does not hold;
+//  1. the row must still be under From, active or archived, and a tool's,
+//     else NOTHING: two renames of one repository on two name subjects both
+//     land, and a configuration-managed repository is never a tool's;
+//  2. To's claim must be free, or the repository's own redirecting old name
+//     (taken back), else the WHOLE record applies as nothing, lest the old
+//     name redirect to a name the repository does not hold;
 //  3. From redirects until the record's instant plus RedirectWindow;
 //  4. the row takes the name, and its idle clock and version move.
 func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
@@ -118,25 +112,18 @@ func (a *Applier) applyReleaseName(ctx context.Context, tx *sql.Tx, at applyCont
 	return int(n), nil
 }
 
-// applyHold applies a live turn's hold, and moves NOTHING that says the
-// repository or the branch was used: never an idle clock, nor a last push — a
-// hold is not activity, and the idle clock the scratch expiry reads stays the
+// applyHold applies a live turn's hold, and moves no idle clock or last push:
+// a hold is not activity, so the scratch expiry's idle clock stays the
 // repository's pushes, renames, settings changes and restores.
 //
-//   - A HOLD ON THE SCRATCH REPOSITORY moves an active scratch repository's
-//     version to the hold's position: what the version buys is the order, an
-//     expiry that listed the repository before this record refusing it
-//     ([Store.ExpireScratch]). A row gone, archived or not active applies as
-//     nothing.
-//   - A HOLD ON A SEAT'S BRANCH moves the ref's held_position to the hold's
-//     position — the per-ref mark a deletion listed before it is ordered by —
-//     and the repository's version, which every record on its subject moves
-//     (the replay guard reads it), active or archived alike. Never the ref's
-//     `at` (its idle clock), its `position` (the cursor every cache's delta
-//     reads: a hold changes no ref a cache holds), its seat or its target. A
-//     ref row gone, a tombstone or seat-less is left as it is, and a deleted
-//     or purging repository moves nothing: the decide refused each, and a
-//     record only a newer build forms is applied as safely.
+//   - On the scratch repository: an active scratch row's version moves to the
+//     hold's position, so an expiry that listed it before refuses it
+//     ([Store.ExpireScratch]); any other row, nothing.
+//   - On a seat's branch: the ref's held_position (what a deletion listed
+//     before it is ordered by) and the repository's version (the replay
+//     guard's), active or archived; never the ref's `at`, `position` (a cache's
+//     delta cursor), seat or target. A gone, tombstoned or seat-less ref, or a
+//     deleted or purging repository, moves nothing (the decide refused each).
 func (a *Applier) applyHold(ctx context.Context, tx *sql.Tx, at applyContext, p Hold) (int, error) {
 	if p.Ref == "" {
 		res, err := tx.ExecContext(ctx, holdSQL, at.packed, p.RepoID)
