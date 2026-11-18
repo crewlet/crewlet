@@ -1,7 +1,9 @@
 package executor_test
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -85,6 +87,37 @@ func TestTheMemoryReadRunsUnderAPlainShell(t *testing.T) {
 	}
 	if m := sandbox.ParseMemoryDomain(string(out)); !m.Known() {
 		t.Errorf("the memory read on this machine said nothing of it: %q", out)
+	}
+}
+
+// WHAT A DOMAIN HOLDS IS ITS USAGE LESS THE PAGE CACHE ITS STAT COUNTS, PLUS
+// THE SHARED MEMORY THAT CACHE COUNTS: the bytes its kernel cannot reclaim
+// before it kills, which a save's room is the limit less. v2's stat names that
+// cache file, v1's cache; a usage that is no count holds nothing read.
+//
+// Mutation: hold the whole usage, leave the shared memory out, or read the
+// other version's key, and a row goes red.
+func TestWhatADomainHoldsIsItsUsageLessItsReclaimableCache(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ usage, key, stat, held string }{
+		"cgroup v2": {usage: "1000000", key: "file", stat: "anon 550000\nfile 400000\nshmem 50000\n",
+			held: "held=650000"},
+		"cgroup v1": {usage: "1000000", key: "cache", stat: "cache 300000\nrss 680000\nshmem 20000\n" +
+			"mapped_file 999\n", held: "held=720000"},
+		"no usage read": {usage: "", key: "file", stat: "file 400000\n", held: ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			stat := filepath.Join(t.TempDir(), "memory.stat")
+			if err := os.WriteFile(stat, []byte(tc.stat), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out, err := exec.Command("sh", "-c", sandbox.MemoryDomainScript+"\ncrewlet_held \"$1\" \"$2\" \"$3\"",
+				"sh", tc.usage, tc.key, stat).CombinedOutput()
+			if err != nil || strings.TrimSpace(string(out)) != tc.held {
+				t.Errorf("crewlet_held = %q, %v; want %q", out, err, tc.held)
+			}
+		})
 	}
 }
 
