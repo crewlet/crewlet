@@ -920,8 +920,9 @@ func pinnedOf(p executor.Paths, file string) string {
 // --settings, so a repository could move the compaction point the wrapper
 // pinned. Each file written has a pinned copy with the same settings and an
 // `env` of exactly the pin: the model's window, the two overrides blank (read
-// as none) and the resume's two switches blank (the next case's). The file
-// itself holds no `env`, since a release below the pin's floor is handed it.
+// as none), the resume's two switches blank (the next case's) and
+// DISABLE_AUTOUPDATER 1. The file itself holds no `env`, since a release below
+// the pin's floor is handed it.
 //
 // Mutation: drop or change a pinned copy's block, leave a name out rather than
 // blank, or write the block into the file itself, and this goes red.
@@ -940,6 +941,7 @@ func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *test
 		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
 		"CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "",
 		"CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP": "",
+		"DISABLE_AUTOUPDATER":                 "1",
 	}
 	read := func(file string) map[string]any {
 		raw, err := b.ReadFile(t.Context(), file)
