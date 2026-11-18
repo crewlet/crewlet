@@ -189,6 +189,11 @@ const ACCENT_RULES: SheetSite[] = [
     why: "A branch on the kit's code-ref chip, the accent's soft step and ink, beside its glyph: a kind in Gitlet's code, never an action.",
   },
   {
+    file: "gitlet.css",
+    selector: ".code-gap",
+    why: "A diff's gap row on the diff family's hunk row, as the kit's DiffView draws its skipped lines: a place in a diff, never an action.",
+  },
+  {
     file: "gitlet-code.css",
     selector: ".code-syn-keyword",
     why: "A keyword in code read in Gitlet, in the accent's ink beside its own word: a kind of word, never an action.",

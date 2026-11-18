@@ -2108,6 +2108,7 @@ type Fleet interface {
 	GrantRequests
 	AccessReviews
 	AtlasWakes
+	AdvisorRecords
 	ConversationHolds
 	BoxReadings
 	Mailboxes

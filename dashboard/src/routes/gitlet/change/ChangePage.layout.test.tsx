@@ -4,6 +4,7 @@
  * nothing sideways at a phone's width.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { page } from "vitest/browser";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { InertWebSocket, LayoutClient, overflowing, sidewaysScrollers } from "~/test/layout.tsx";
@@ -161,9 +162,50 @@ const json = (payload: unknown) =>
     headers: { "Content-Type": "application/json" },
   });
 
+/** Files changed's five files, each of `n` added lines, for the stack's cases. */
+const STACK = [
+  "internal/render/page.go",
+  "internal/render/stream.go",
+  "internal/server/routes.go",
+  `web/src/product/${"deeply/nested/".repeat(6)}Page.tsx`,
+  "web/src/product/Shell.tsx",
+].map(
+  (path): { path: string; status: string; added: number; deleted: number; old_path?: string } => ({
+    path,
+    status: "A",
+    added: 40,
+    deleted: 0,
+  }),
+);
+// THE LAST FILE IS A RENAME from a long path, for the heads' phone case.
+STACK[4] = {
+  ...STACK[4]!,
+  old_path: `web/src/product/${"legacy/".repeat(4)}Shell.tsx`,
+  status: "R",
+};
+
+const added = (n: number) =>
+  `@@ -0,0 +1,${n} @@\n${Array.from({ length: n }, (_, i) => `+line ${i + 1}`).join("\n")}\n`;
+
 function answer(url: URL): Response {
   if (url.pathname !== "/query/code_change") return json(PAGE);
-  return json({ ...PAGE, ...(PARTS[url.searchParams.get("part") ?? ""] as object) });
+  const part = url.searchParams.get("part") ?? "";
+  if (part === "files" && location.hash.includes("tab=files")) {
+    return json({
+      ...PAGE,
+      revision: 2,
+      diff: { base: HEAD, head: HEAD, files: STACK, total: 5, added: 200, deleted: 0 },
+    });
+  }
+  if (part === "diff") {
+    const patches = STACK.map((f, file) => ({ file, path: f.path, status: "A", patch: added(40) }));
+    return json({
+      ...PAGE,
+      revision: 2,
+      diff: { base: HEAD, head: HEAD, files: [], total: 5, added: 200, deleted: 0, patches },
+    });
+  }
+  return json({ ...PAGE, ...(PARTS[part] as object) });
 }
 
 let root: Root | null = null;
@@ -186,13 +228,17 @@ afterEach(() => {
   location.hash = "";
 });
 
-function mount(width: number) {
-  location.hash = "#/gitlet/repos/web/changes/42";
+function mount(width: number, hash = "#/gitlet/repos/web/changes/42", height = 0) {
+  location.hash = hash;
   host = document.createElement("div");
   host.className = "app";
-  host.innerHTML = `<div class="crewlet-app-shell__content" style="display:flex;flex-direction:column;width:${width}px"></div>`;
+  const content = `<div class="crewlet-app-shell__content" style="display:flex;flex-direction:column;width:${width}px"></div>`;
+  // A SCROLLER OF `height` where a case scrolls, as the shell's main is.
+  host.innerHTML = height
+    ? `<main class="crewlet-app-shell__main" style="display:block;block-size:${height}px;overflow-y:auto">${content}</main>`
+    : content;
   document.body.append(host);
-  root = createRoot(host.firstElementChild!);
+  root = createRoot(host.querySelector(".crewlet-app-shell__content")!);
   flushSync(() =>
     root!.render(
       <LayoutClient answers={{}} org={ORG}>
@@ -255,4 +301,111 @@ test("a change's conversation holds its width at 390 px, a long line inside its 
   expect(excerpt.textContent).toContain(LONG_LINE.trim());
   const card = page.querySelector<HTMLElement>(".code-finding")!;
   expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
+});
+
+const FILES = "#/gitlet/repos/web/changes/42?tab=files";
+
+/** Files changed once every file of the stack is drawn. */
+async function stacked(): Promise<HTMLElement> {
+  return eventually(() => {
+    const sections = host!.querySelectorAll(".code-stack > .code-file");
+    expect(sections.length).toBe(5);
+    for (const s of sections) expect(s.querySelector(".code-file__diff")).not.toBeNull();
+    return host!.querySelector<HTMLElement>(".crewlet-app-shell__content")!;
+  });
+}
+
+// A FILE'S HEAD STAYS BELOW THE FILES' TOOLBAR as the stack scrolls under it.
+// Mutation: `top: 0` on the head, and it slides under the toolbar.
+test("a file's head stays below the files' toolbar as the stack scrolls, at 1440 px", async () => {
+  await page.viewport(1440, 700);
+  mount(1150, FILES, 700);
+  await stacked();
+  const main = host!.querySelector<HTMLElement>("main")!;
+  const second = host!.querySelectorAll<HTMLElement>(".code-stack > .code-file")[1]!;
+  main.scrollTop = second.offsetTop + 300;
+  await eventually(() => {
+    const bar = host!.querySelector(".code-files-bar")!.getBoundingClientRect();
+    const box = second.getBoundingClientRect();
+    expect(box.top).toBeLessThan(bar.bottom);
+    expect(box.bottom).toBeGreaterThan(bar.bottom + 40);
+    const head = second.querySelector(".code-file__head")!.getBoundingClientRect();
+    expect(head.top).toBeGreaterThanOrEqual(bar.bottom - 0.5);
+    expect(Math.abs(head.top - bar.bottom)).toBeLessThan(1);
+  });
+});
+
+// THE TREE SCROLLS ALONE BESIDE THE STACK, stuck in the page's scroller.
+// Mutation: drop the pane's `position: sticky`, and it scrolls away with the page.
+test("the files' tree stays beside the stack as the page scrolls, at 1440 px", async () => {
+  await page.viewport(1440, 700);
+  mount(1150, FILES, 700);
+  await stacked();
+  const main = host!.querySelector<HTMLElement>("main")!;
+  const pane = host!.querySelector<HTMLElement>(".code-files__pane")!;
+  main.scrollTop = 1500;
+  await eventually(() => {
+    const bar = host!.querySelector(".code-files-bar")!.getBoundingClientRect();
+    const box = pane.getBoundingClientRect();
+    expect(box.top).toBeGreaterThanOrEqual(bar.bottom - 0.5);
+    expect(box.bottom).toBeLessThanOrEqual(main.getBoundingClientRect().bottom + 0.5);
+  });
+});
+
+// NOTHING SIDEWAYS ON A PHONE but the diffs' own boxes, Finish review in view, and
+// a long path wrapped in its head. Mutation: `white-space: nowrap` on the path.
+test("the Files changed tab holds its width at 390 px", async () => {
+  await page.viewport(390, 800);
+  mount(390, FILES);
+  const content = await stacked();
+  const panel = content.querySelector('[role="tabpanel"]')!;
+  expect(overflowing(panel)).toEqual([]);
+  expect(sidewaysScrollers(panel)).toEqual([]);
+  const finish = [...panel.querySelectorAll("button")].find((b) =>
+    b.textContent?.startsWith("Finish review"),
+  )!;
+  const box = finish.getBoundingClientRect();
+  expect(box.right).toBeLessThanOrEqual(390 + 0.5);
+  const head = panel.querySelectorAll(".code-file__head")[3]!;
+  expect(head.scrollWidth).toBeLessThanOrEqual(head.clientWidth);
+});
+
+/** The middle of an element's first line box, and of its last. */
+const lineMiddles = (el: Element) => {
+  const lines = [...el.getClientRects()];
+  const mid = (r: DOMRect) => r.top + r.height / 2;
+  return { first: mid(lines[0]!), last: mid(lines.at(-1)!), lines: lines.length };
+};
+const middle = (el: Element) => {
+  const r = el.getBoundingClientRect();
+  return r.top + r.height / 2;
+};
+
+// A HEAD KEEPS ITS COUNTS AND MENU AT ITS FIRST LINE'S END, however long its
+// path wraps. Mutation: let the head wrap as one row, and the counts drop below.
+test("a file's head keeps its counts on its first line with a long path, at 820 px", async () => {
+  await page.viewport(820, 800);
+  mount(820, FILES);
+  const content = await stacked();
+  const head = content.querySelectorAll(".code-file__head")[3]!;
+  const path = lineMiddles(head.querySelector("h3")!);
+  expect(path.lines).toBeGreaterThan(1);
+  const counts = head.querySelector(".code-diffstat")!;
+  expect(Math.abs(middle(counts) - path.first)).toBeLessThan(6);
+});
+
+// ON A PHONE A RENAME'S HEAD STARTS WITH ITS PATH beside the fold, and its copy
+// follows the path's last word. Mutation: make the lead a wrapping row, and the
+// fold stands alone on the first line.
+test("a renamed file's head keeps its fold and copy beside its path, at 390 px", async () => {
+  await page.viewport(390, 800);
+  mount(390, FILES);
+  const content = await stacked();
+  const head = content.querySelectorAll(".code-file__head")[4]!;
+  const path = lineMiddles(head.querySelector("h3")!);
+  expect(Math.abs(middle(head.querySelector(".code-file__fold")!) - path.first)).toBeLessThan(6);
+  const copy = [...head.querySelectorAll("button")].find((b) =>
+    b.getAttribute("aria-label")?.startsWith("Copy"),
+  )!;
+  expect(Math.abs(middle(copy) - path.last)).toBeLessThan(6);
 });

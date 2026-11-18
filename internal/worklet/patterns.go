@@ -24,6 +24,8 @@ type PatternsQuery struct {
 	QuietSince time.Time
 	// People are the persons whose notices in the window are counted.
 	People []string
+	// Agents are the agent seats whose open work is read as work an agent holds.
+	Agents []string
 }
 
 // NoticeLoad is how many notices one person was sent in the window, and how
@@ -82,6 +84,8 @@ type WorkPatterns struct {
 	// Settled are the changes tasks waited on that settled in the window,
 	// by where the engine learned it ([ChangeSettlement.Source]).
 	Settled []ChangeSettles `json:"settled"`
+	// Open is where the company's open work sits now.
+	Open OpenWork `json:"open"`
 }
 
 // DecisionTally is one person's choices on one agent's decisions.
@@ -136,6 +140,9 @@ func (r *Reader) WorkPatterns(ctx context.Context, q PatternsQuery) (WorkPattern
 			return err
 		}
 		if err := readChangeSettles(ctx, tx, since, until, &out); err != nil {
+			return err
+		}
+		if err := readOpenWork(ctx, tx, q.Agents, q.People, &out.Open); err != nil {
 			return err
 		}
 		return readNoticeLoads(ctx, tx, q.People, since, until, &out)

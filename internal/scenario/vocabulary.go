@@ -80,7 +80,7 @@ type Vocabulary func(path []string, value string, key bool) bool
 // timelineKeys is every object key a timeline file has.
 var timelineKeys = []string{"name", "pattern", "seats", "steps", "handle", "kind", "at",
 	"actor", "verb", "item", "say", "mentions", "ask", "asks", "answers", "assignee", "status",
-	"watcher", "expect", "woken", "recommend", "choose"}
+	"watcher", "expect", "woken", "recommend", "choose", "on"}
 
 // TimelineVocabulary admits a timeline's own words and nothing else. A name is
 // a pattern, optionally numbered, so a file name carries no words either.

@@ -380,8 +380,9 @@ var nodeEstatePlacements = []placement{
 	},
 	{
 		Table: "change_index_state",
-		Why: "How far THIS node has walked the changes and the newest snapshot of them its index was " +
-			"decided from, which a read compares with its own; a fact about one node's progress.",
+		Why: "How far THIS node has walked the changes, where its first build began and how far back it " +
+			"has reached, and the newest snapshot of them its index was decided from, which a read " +
+			"compares with its own; a fact about one node's progress.",
 	},
 	{
 		Table: "kb_docs",

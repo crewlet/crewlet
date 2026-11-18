@@ -57,6 +57,8 @@ export interface AdvisorFix {
   url?: string;
   /** The dashboard page an `open_page` fix is taken on (`ADVISOR_PAGES`). */
   page?: AdvisorPage | (string & {});
+  /** What that page opens on: an item's key, a seat's handle. */
+  target?: string;
   /** The question a `draft_with_assistant` fix asks Ask Crewlet. */
   prompt?: string;
   /** The atlas tool call an `atlas_act` fix sends, once per entry the finding names. */
@@ -85,11 +87,26 @@ export interface AdvisorAtlasEntry {
 
 /** The one thing a finding is about. */
 export interface AdvisorSubject {
-  kind: "company" | "seat" | "schedule" | "integration" | "alarm" | "atlas" | (string & {});
+  kind:
+    | "company"
+    | "seat"
+    | "schedule"
+    | "integration"
+    | "repository"
+    | "alarm"
+    | "atlas"
+    | (string & {});
   seat?: string;
   unit?: string;
   schedule?: string;
   name?: string;
+}
+
+/** One record behind a finding: a work item by key, a turn by id, a change by its address or
+ *  Gitlet reference (`web!42`), or a comment by id. */
+export interface AdvisorRecord {
+  kind: "item" | "turn" | "change" | "comment" | (string & {});
+  id: string;
 }
 
 /** One thing about the company's setup worth acting on. */
@@ -97,7 +114,7 @@ export interface AdvisorFinding {
   class: string;
   severity: AdvisorSeverity;
   actor: AdvisorActor;
-  source: "static" | "evidence" | "reconcile" | "atlas";
+  source: "static" | "evidence" | "reconcile" | "atlas" | "analyst";
   area: string;
   subject: AdvisorSubject;
   title: string;
@@ -108,6 +125,8 @@ export interface AdvisorFinding {
   item?: string;
   /** The seats it is about, by name, where one finding speaks for several. */
   names?: string[];
+  /** At most five records behind its evidence. */
+  records?: AdvisorRecord[];
   /** At most five atlas entries the finding is about; absent for a reader without the atlas app. */
   entries?: AdvisorAtlasEntry[];
   fix: AdvisorFix;
@@ -144,10 +163,58 @@ export interface AdvisorAnswer {
   notices?: AdvisorNotice[];
   /**
    * What the answer could not read (`integrations`, `work`, `ledger`, `pauses`, `runs`, `alarms`,
-   * `atlas`, `atlas_sources`),
+   * `budget_stops`, `merges`, `atlas`, `atlas_sources`),
    * so a short list never reads as all clear.
    */
   unread: string[];
+}
+
+/** How an analyst run ended, or that it is running. */
+export type AnalysisStatus = "running" | "done" | "ceiling" | "refused" | "failed" | (string & {});
+
+/** How a person answered an analyst finding. */
+export type AnalystVerdict = "useful" | "wrong" | "known";
+
+/** One analyst run, as the fleet keeps the last one (ADR-0157). */
+export interface AdvisorAnalysis {
+  id: string;
+  status: AnalysisStatus;
+  started: string;
+  ended?: string;
+  /** `schedule` or `person`, and the person who pressed Run now. */
+  trigger: string;
+  by?: string;
+  /** The providers.llm entry it ran on, and its token ceiling. */
+  model: string;
+  ceiling: number;
+  input_tokens: number;
+  output_tokens: number;
+  /** How many submitted findings were not listed, by why. */
+  dropped: Record<string, number>;
+  unread: string[];
+  reason?: string;
+}
+
+/** One listed analyst finding, with the fingerprint an answer names. */
+export interface AnalystFinding extends AdvisorFinding {
+  fingerprint: string;
+  answer?: AnalystVerdict;
+}
+
+/** `GET /advisor/analysis`: whether the analyst is on, its last run and that run's findings. */
+export interface AdvisorAnalysisAnswer {
+  on: boolean;
+  model?: string;
+  cadence: "daily" | "weekly" | "off" | (string & {});
+  hour: number;
+  ceiling: number;
+  /** The entry to turn it on with, where it is off. */
+  suggest?: string;
+  last?: AdvisorAnalysis;
+  stale: boolean;
+  findings: AnalystFinding[];
+  /** The last run's findings people answered wrong or already known. */
+  set_aside: number;
 }
 
 /** `GET /advisor/access`: the change that grants an agent one access it asked for. */

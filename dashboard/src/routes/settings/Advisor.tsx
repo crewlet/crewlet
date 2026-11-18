@@ -29,13 +29,19 @@ import {
 } from "@crewlethq/ui";
 import { FixDialog } from "~/components/advisorFix.tsx";
 import { GoLiveReview } from "./GoLiveReview.tsx";
+import { AdvisorAnalyst } from "./AdvisorAnalyst.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useAssistantControl, type AssistantControl } from "~/app/assistant/control.ts";
 import { ChunkRegion, lazyScreen } from "~/app/lazyScreen.ts";
 import { href } from "~/app/router.tsx";
 import { unreadSentences } from "~/lib/advisorUnread.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import type { AdvisorFinding, AdvisorPage, AdvisorSeverity } from "~/protocol/advisor.ts";
+import type {
+  AdvisorFinding,
+  AdvisorPage,
+  AdvisorRecord,
+  AdvisorSeverity,
+} from "~/protocol/advisor.ts";
 import { marked } from "~/ui/Problems.tsx";
 import { TAKE_BACKUP } from "~/lib/backups.ts";
 import { plural } from "~/lib/format.ts";
@@ -113,6 +119,7 @@ export function Advisor() {
           />
         )}
       </QueryState>
+      <AdvisorAnalyst />
       {open?.fix.kind === "atlas_act" && (
         <ChunkRegion resetKey={open.class + open.path}>
           <Suspense fallback={null}>
@@ -150,7 +157,10 @@ const GO_LIVE_LABELS = { done: "Done", waiting: "To do", pending: "Can't say yet
  * a source the answer could not read leaves its step unsaid rather than done.
  */
 function GoLiveCheck({ owner, unread }: { owner: AdvisorFinding[]; unread: string[] }) {
-  const count = (severity: AdvisorSeverity) => owner.filter((f) => f.severity === severity).length;
+  // ROWS, NOT FINDINGS: a class raised for nine seats is one thing to do.
+  const rows = grouped(owner);
+  const count = (severity: AdvisorSeverity) =>
+    rows.filter((g) => g[0]!.severity === severity).length;
   const blocks = count("blocks");
   const costs = count("costs");
   const notes = count("note");
@@ -187,17 +197,80 @@ function GoLiveCheck({ owner, unread }: { owner: AdvisorFinding[]; unread: strin
   );
 }
 
+/** Where an `open_page` fix is taken, from its page and target. */
+type PageFix = { path: string[]; query?: Record<string, string>; action: string };
+
 /**
- * Where an `open_page` fix is taken, by the page the engine names: the one
- * gesture there, opened on arrival, so the row's action is the step rather
- * than a page to look for it on. The pages are the contract's
- * (`ADVISOR_PAGES`), held to the engine's.
+ * Where an `open_page` fix is taken, by the page the engine names and what it opens on: the one
+ * gesture there, opened on arrival, so the row's action is the step rather than a page to look for
+ * it on. The pages are the contract's (`ADVISOR_PAGES`), held to the engine's.
  */
-const PAGE_FIXES: Readonly<
-  Record<AdvisorPage, { path: string[]; query?: Record<string, string>; action: string }>
-> = {
-  backups: { path: ["settings", "backups"], query: { take: TAKE_BACKUP }, action: "Take a backup" },
+const PAGE_FIXES: Readonly<Record<AdvisorPage, (target: string) => PageFix | null>> = {
+  backups: () => ({
+    path: ["settings", "backups"],
+    query: { take: TAKE_BACKUP },
+    action: "Take a backup",
+  }),
+  item: (key) => (key ? { path: ["worklet", key], action: `Open ${key}` } : null),
+  seat: (handle) =>
+    handle ? { path: ["company", "org", "seats", handle], action: "Open the agent" } : null,
 };
+
+/** A record's page and how a list names it; null for one that has no page. */
+export function recordLink(
+  r: AdvisorRecord,
+): { href: string; label: string; external?: boolean } | null {
+  switch (r.kind) {
+    case "item":
+      return { href: href(["worklet", r.id]), label: r.id };
+    case "turn":
+      return { href: href(["live", "turns", r.id]), label: `turn ${r.id.slice(0, 8)}` };
+    case "change": {
+      const pull = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(r.id);
+      if (pull) return { href: r.id, label: `${pull[1]}#${pull[2]}`, external: true };
+      const cut = r.id.lastIndexOf("!");
+      if (cut <= 0) return null;
+      return {
+        href: href(["gitlet", "repos", r.id.slice(0, cut), "changes", r.id.slice(cut + 1)]),
+        label: r.id,
+      };
+    }
+  }
+  return null;
+}
+
+/** The records behind a row's findings, each once, as links; the rest counted. */
+function RecordLinks({ findings }: { findings: readonly AdvisorFinding[] }) {
+  const seen = new Set<string>();
+  const records = findings
+    .flatMap((f) => f.records ?? [])
+    .filter((r) => {
+      const key = `${r.kind}\u0000${r.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  if (records.length === 0) return null;
+  const links = records.flatMap((r) => {
+    const link = recordLink(r);
+    return link ? [{ ...link, key: `${r.kind}\u0000${r.id}` }] : [];
+  });
+  const others = records.length - links.length;
+  return (
+    <Text as="p" tone="secondary">
+      Records:{" "}
+      {links.map((l, i) => (
+        <span key={l.key}>
+          {i > 0 && ", "}
+          <Link href={l.href} external={l.external} size="caption">
+            {l.label}
+          </Link>
+        </span>
+      ))}
+      {others > 0 && `${links.length > 0 ? ", and " : ""}${plural(others, "comment")}`}
+    </Text>
+  );
+}
 
 /**
  * A finding's quieter line under its title.
@@ -215,18 +288,25 @@ export function findingMeta(f: AdvisorFinding): string | undefined {
 }
 
 /**
- * Findings that say the same thing (one class, one title, one why, one kind of
- * fix) are one row, in the order the first of each came.
+ * Findings that say the same thing (one class, one title, one why, one cost,
+ * one kind of fix) are one row, in the order the first of each came.
  */
 export function grouped(findings: readonly AdvisorFinding[]): AdvisorFinding[][] {
   const groups = new Map<string, AdvisorFinding[]>();
   for (const f of findings) {
-    const key = [f.class, f.title, f.why, f.fix.kind].join("\u0000");
+    const key = [f.class, f.title, f.why, f.severity, f.fix.kind].join("\u0000");
     const group = groups.get(key);
     if (group) group.push(f);
     else groups.set(key, [f]);
   }
   return [...groups.values()];
+}
+
+/** How many subjects of a kind a row is about, in words. */
+function subjectCount(kind: AdvisorFinding["subject"]["kind"], n: number): string {
+  if (kind === "repository") return plural(n, "repository", "repositories");
+  if (kind === "schedule") return plural(n, "schedule");
+  return plural(n, "agent");
 }
 
 /**
@@ -240,7 +320,7 @@ function groupItem(
   assistant: AssistantControl | null,
 ): AttentionItem {
   const first = group[0]!;
-  const item = findingItem(first, review && (() => review(first)), assistant);
+  const item = findingItem(first, review && (() => review(first)), assistant, group);
   const names = group.flatMap((f) => f.names ?? []);
   if (group.length === 1 && names.length === 0 && !first.item) return item;
   // TWO SEATS SHARING A NAME stay two, told apart by their handles.
@@ -261,7 +341,7 @@ function groupItem(
         title: item.title,
       }));
     }),
-    { count: (s) => plural(s.length, "agent") },
+    { count: (s) => subjectCount(first.subject.kind, s.length) },
   )[0]!;
   // THE META NAMES THE SUBJECT on a lone finding; with the subject before the title it would say it twice.
   const said =
@@ -276,10 +356,11 @@ function groupItem(
 }
 
 /** One finding as a row of the list: what is wrong, why, and its one action. */
-function findingItem(
+export function findingItem(
   f: AdvisorFinding,
   review: (() => void) | null,
   assistant: AssistantControl | null,
+  group: readonly AdvisorFinding[] = [f],
 ): AttentionItem {
   const subject = f.subject.name ?? "";
   const meta = findingMeta(f);
@@ -316,8 +397,8 @@ function findingItem(
       </Link>
     );
   } else if (review && f.fix.kind === "open_page" && f.fix.page && f.fix.page in PAGE_FIXES) {
-    const page = PAGE_FIXES[f.fix.page as AdvisorPage];
-    action = (
+    const page = PAGE_FIXES[f.fix.page as AdvisorPage](f.fix.target ?? "");
+    action = page && (
       <Link href={href(page.path, page.query)} size="caption">
         {page.action}
       </Link>
@@ -355,6 +436,7 @@ function findingItem(
             The setting: <InlineCode>{f.fix.setting}</InlineCode>
           </Text>
         )}
+        <RecordLinks findings={group} />
       </div>
     ),
   };
