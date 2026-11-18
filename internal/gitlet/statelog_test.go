@@ -142,6 +142,21 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		}
 		op, payload = gitlet.OpCheckFinished, ended
 		subject, scope = gitlet.ChecksSubject(repo), gitlet.Scope{gitlet.ChecksPath(repo)}
+	case "CheckStarted.Required":
+		op, payload = gitlet.OpCheckStarted, gitlet.CheckStarted{CheckKey: gitlet.CheckKey{RepoID: repo,
+			OID: oidOf("B"), Target: mainRef, Name: "lint", Attempt: 1}, Placement: gitlet.PlacementExternal,
+			StartedAt: suiteAt, Required: true}
+		subject, scope = gitlet.ChecksSubject(repo), gitlet.Scope{gitlet.ChecksPath(repo)}
+	case "CheckFinished.Required":
+		op, payload = gitlet.OpCheckFinished, gitlet.CheckFinished{CheckKey: gitlet.CheckKey{RepoID: repo,
+			OID: oidOf("B"), Target: mainRef, Name: "lint", Attempt: 1}, State: gitlet.CheckStatePassed,
+			Reason: gitlet.CheckReasonReported, Reporter: &ada, Required: true,
+			FinishedAt: suiteAt}
+		subject, scope = gitlet.ChecksSubject(repo), gitlet.Scope{gitlet.ChecksPath(repo)}
+	case "Ejection.Reason checks_undefined":
+		op, payload = gitlet.OpEject, gitlet.Eject{RepoID: repo, Entries: []gitlet.Ejection{{
+			EntryID: "0190f3c4-0000-7000-8000-0000000000e1", Reason: gitlet.EjectChecksUndefined,
+			Checks: []string{"e2e"}}}}
 	case "Ejection.TestedIn":
 		op, payload = gitlet.OpEject, gitlet.Eject{RepoID: repo, Entries: []gitlet.Ejection{{
 			EntryID: "0190f3c4-0000-7000-8000-0000000000e1", Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},

@@ -578,7 +578,7 @@ func (q CheckQueued) Validate() error {
 // CheckStarted claims an attempt for a runner — and, as the holder's later
 // record repeating its claim's StartedAt and Runner, names the box it made —
 // on the repository's checks subject ([OpCheckStarted]). Every field is in
-// the base format, as this file's head says.
+// the base format but Required ([GateChecksVersion]), as this file's head says.
 type CheckStarted struct {
 	CheckKey
 	// Runner is the claiming node's id; empty for an attempt a person's CI
@@ -591,6 +591,11 @@ type CheckStarted struct {
 	// StartedAt is the claiming node's instant: the claim's key, with
 	// Runner, so two claims of one attempt converge on the lower.
 	StartedAt time.Time `json:"started_at"`
+	// Required is, on a person's CI's report, whether the target's gate
+	// requires the check, as the report's decide read it: a report records
+	// no queue, which is where an engine's attempt says so
+	// ([CheckQueued.Required]). Version 8 ([GateChecksVersion]).
+	Required bool `json:"required,omitempty"`
 }
 
 // Validate refuses a claim no writer forms.
@@ -609,6 +614,8 @@ func (s CheckStarted) Validate() error {
 		return checkField("box", "a person's CI runs no box of the engine's")
 	case s.StartedAt.IsZero():
 		return checkField("started_at", "a claim names the instant it was made")
+	case s.Required && s.Placement != PlacementExternal:
+		return checkField("required", "a runner's claim says nothing of the gate: its queue says it")
 	}
 	return nil
 }
@@ -649,8 +656,8 @@ type CheckTests struct {
 // CheckFinished ends an attempt, on the repository's checks subject
 // ([OpCheckFinished]): what it measured — or why it measured nothing — what
 // it said, and its log where a failed run kept one. Every field is in the
-// base format but Tests, LogLines and TailCut ([CheckCountsVersion]), as this
-// file's head says.
+// base format but Tests, LogLines and TailCut ([CheckCountsVersion]) and
+// Required ([GateChecksVersion]), as this file's head says.
 type CheckFinished struct {
 	CheckKey
 	State  CheckState  `json:"state"`
@@ -682,6 +689,9 @@ type CheckFinished struct {
 	Reporter *Principal `json:"reporter,omitempty"`
 	// URL is the reported run's own page, at most MaxCheckURLBytes.
 	URL string `json:"url,omitempty"`
+	// Required is, on a reported ending, whether the target's gate requires
+	// the check ([CheckStarted.Required]). Version 8 ([GateChecksVersion]).
+	Required bool `json:"required,omitempty"`
 	// FinishedAt is the instant the attempt ended, by its runner's clock or
 	// its reporter's writer's.
 	FinishedAt time.Time `json:"finished_at"`
@@ -786,6 +796,8 @@ func (f CheckFinished) Validate() error {
 	case (f.Reporter != nil) != (f.Reason == CheckReasonReported):
 		return checkField("reporter", "a reported ending names the person who reported it, and no other "+
 			"ending names one")
+	case f.Required && f.Reason != CheckReasonReported:
+		return checkField("required", "a runner's ending says nothing of the gate: its queue says it")
 	case f.Reporter != nil && (f.Reporter.Kind != PrincipalOperator || f.Reporter.Seat == ""):
 		return checkField("reporter", "a check is reported by a person: a credential bound to the human "+
 			"seat they hold")

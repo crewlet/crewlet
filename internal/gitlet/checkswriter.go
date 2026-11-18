@@ -251,7 +251,7 @@ func (r ChecksRequest) op() OpKind {
 	case r.Rerun != nil:
 		return OpCheckQueued
 	case r.Report != nil:
-		op, _ := r.Report.record(r.Asker, time.Time{})
+		op, _ := r.Report.record(r.Asker, time.Time{}, false)
 		return op
 	}
 	op, _ := r.record()

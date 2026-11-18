@@ -2821,8 +2821,10 @@ all its repositories, or past about 60 MiB of them — so:
   engine never runs reads beside the engine's own. A report records no queue —
   which is how the writer tells a CI's check from the engine's: a name the
   engine queued at that commit is refused `native_check`, one check being one
-  runner's or one CI's and never both — and an ending sent again is answered
-  from the row. A seat's report, a token bound to nobody's, and one through a
+  runner's or one CI's and never both — so it says itself whether the
+  branch's gate requires the check, as the writer read the gate, which a
+  queued attempt's queue says (`required`, from record version 8); and an
+  ending sent again is answered from the row. A seat's report, a token bound to nobody's, and one through a
   credential without the Gitlet permission are refused before it is asked
   ([External CI](../guides/gitlet.md#external-ci)).
 
@@ -7508,8 +7510,9 @@ change as whoever enqueued it.
 - An **eject** puts live entries of one branch out — `check_failed` (naming
   the checks, and for a bisected culprit the train they failed on: its
   candidate, the commit it was merged onto and the commit they ran on, kept on
-  the entry since the train's rows go with it), `conflict` (naming up to 100
-  paths), `gate_unmet`,
+  the entry since the train's rows go with it), `checks_undefined` (naming the
+  required checks the branch's checks file defines in no form that runs, so
+  nothing was tested), `conflict` (naming up to 100 paths), `gate_unmet`,
   `head_moved`, `not_fast_forward` or `repo_mirrored` (the repository is a
   [pull mirror](#mirrors-and-imports), which nothing merges into: its home
   ejects every live entry rather than build a train) — and abandons the train
@@ -7646,7 +7649,9 @@ holds.
   the check it is measured by — and an attempt its runner's infrastructure
   ended is queued again. Where the base's file defines a required check in no
   form that runs, no candidate can ever pass it, and every entry the train
-  tests is ejected `check_failed` naming it.
+  tests is ejected `checks_undefined` naming it, never `check_failed`, since
+  nothing ran: a gate requiring a check only a person's CI reports takes no
+  change through its queue until the branch's checks file defines it.
 - **Land.** The **longest green prefix** lands in ONE `land` record: every
   candidate up to the last whose tip passed every required check, with no
   candidate before it failed — a candidate's tip holds every change before

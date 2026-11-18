@@ -599,11 +599,11 @@ type CodeQueueEjected struct {
 	Number   int64  `json:"number"`
 	Target   string `json:"target"`
 
-	// Reason is why (internal/gitlet's EjectReasons: check_failed, conflict,
-	// gate_unmet, head_moved, not_fast_forward, repo_mirrored); Checks the
-	// required checks
-	// that failed, for check_failed, and Paths the conflicted paths, for
-	// conflict.
+	// Reason is why (internal/gitlet's EjectReasons: check_failed,
+	// checks_undefined, conflict, gate_unmet, head_moved, not_fast_forward,
+	// repo_mirrored); Checks the required checks that failed, for
+	// check_failed, or that no checks file defines in a form that runs, for
+	// checks_undefined; and Paths the conflicted paths, for conflict.
 	Reason string   `json:"reason"`
 	Checks []string `json:"checks,omitempty"`
 	Paths  []string `json:"paths,omitempty"`

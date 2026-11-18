@@ -694,9 +694,10 @@ review_submitted           # a review of a change was given: the change and
 code_queue_ejected         # a merge queue put an entry OUT: repository
                            # by id and name, the entry, its change and
                            # number, the branch, why (check_failed,
-                           # conflict, gate_unmet, head_moved,
-                           # not_fast_forward, repo_mirrored), the failed
-                           # checks or the conflicted paths, who enqueued
+                           # checks_undefined, conflict, gate_unmet,
+                           # head_moved, not_fast_forward, repo_mirrored),
+                           # the failed or undefined checks or the
+                           # conflicted paths, who enqueued
                            # it, and the
                            # change's owner with `owner_agent_id`, whose
                            # seat day counts it once by its entry as
