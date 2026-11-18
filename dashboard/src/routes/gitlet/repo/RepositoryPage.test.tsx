@@ -861,6 +861,7 @@ test("j and k walk a directory's entries and Enter opens one", async () => {
   const table = await screen.findByRole("table", { name: "Files in main" });
   const src = await within(table).findByRole("link", { name: "src" });
   const readme = within(table).getByRole("link", { name: "README.md" });
+  await afterMicrotasks();
   fireEvent.keyDown(window, { key: "j" });
   expect(document.activeElement).toBe(src);
   fireEvent.keyDown(window, { key: "j" });
@@ -2444,6 +2445,7 @@ test("j opens the history's commits from the keyboard", async () => {
   mount("#/gitlet/repos/web?tab=commits");
   const history = await screen.findByRole("group", { name: /History of/ });
   await within(history).findByText("Start the storefront");
+  await afterMicrotasks();
   fireEvent.keyDown(window, { key: "j" });
   const link = within(history).getByRole("link", { name: "Start the storefront" });
   expect(document.activeElement).toBe(link);
@@ -3137,6 +3139,7 @@ test("j walks a box's branches", async () => {
   stubEngine();
   mount("#/gitlet/repos/web?tab=branches&view=all");
   const all = await screen.findByRole("table", { name: /^All branches/ });
+  await afterMicrotasks();
   fireEvent.keyDown(window, { key: "j" });
   const link = within(all).getByRole("link", { name: "feature" });
   expect(document.activeElement).toBe(link);
