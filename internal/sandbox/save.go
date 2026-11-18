@@ -155,14 +155,10 @@ const (
 	saveRaced saveClass = "raced"
 )
 
-// saveJob is what one save task is handed: the run as its offer found it, the
-// stint of duty that offer came under, and what this node's memory says of the
-// run's saves.
+// saveJob is what one save task is handed beside its stint: the run as its
+// offer found it, and what this node's memory says of the run's saves.
 type saveJob struct {
 	run PendingRun
-	// stint ends the task's box phase once done: the duty the offer came
-	// under. Nil ends it with the coordinator alone.
-	stint context.Context
 	// drainEnd is a drain save's end, bounding its box phase and its take;
 	// zero for a periodic save, the only kind paced.
 	drainEnd time.Time
@@ -229,8 +225,10 @@ type saveTaken struct {
 // counted it in c.inflight; it is counted there exactly once until its keep
 // starts, and with the keeps from then on, so a stop that comes first cuts it
 // within the stop's grace and one that comes after gives its keep the keeps'
-// drain. It writes nothing to memory: its outcome is its spawner's.
-func (c *Coordinator) saveTask(job saveJob) saveOutcome {
+// drain. stint ends its box phase once done: the duty the offer came under,
+// or the coordinator's own lifetime for a drain's save. It writes nothing to
+// memory: its outcome is its spawner's.
+func (c *Coordinator) saveTask(stint context.Context, job saveJob) saveOutcome {
 	inflight := sync.OnceFunc(c.inflight.Done)
 	defer inflight()
 	passed := sync.OnceFunc(func() {
@@ -243,9 +241,7 @@ func (c *Coordinator) saveTask(job saveJob) saveOutcome {
 	point := job.point()
 	duty, endDuty := context.WithCancel(c.life)
 	defer endDuty()
-	if job.stint != nil {
-		defer context.AfterFunc(job.stint, endDuty)()
-	}
+	defer context.AfterFunc(stint, endDuty)()
 	if !job.drainEnd.IsZero() {
 		var endDrain context.CancelFunc
 		duty, endDrain = context.WithDeadline(duty, job.drainEnd)
@@ -620,21 +616,21 @@ func (c *Coordinator) offerSave(stint context.Context, run PendingRun, runner Ru
 	}
 	running := &saveRun{taken: make(chan struct{}), ended: make(chan struct{})}
 	memo.running = running
-	job := saveJob{run: run, stint: stint, due: due, mark: memo.mark, interval: interval, last: memo.last,
+	job := saveJob{run: run, due: due, mark: memo.mark, interval: interval, last: memo.last,
 		counted: memo.counted, taken: running.taken}
 	c.saves.mu.Unlock()
-	return c.spawnSave(job, memo, running)
+	return c.spawnSave(stint, job, memo, running)
 }
 
-// spawnSave starts job's task, counted in c.inflight, unless the coordinator
-// has stopped: then it gives back the slot its caller took and clears memo's
-// task, and answers nil.
-func (c *Coordinator) spawnSave(job saveJob, memo *saveMemo, running *saveRun) *saveRun {
+// spawnSave starts job's task under stint, counted in c.inflight, unless the
+// coordinator has stopped: then it gives back the slot its caller took and
+// clears memo's task, and answers nil.
+func (c *Coordinator) spawnSave(stint context.Context, job saveJob, memo *saveMemo, running *saveRun) *saveRun {
 	c.mu.Lock()
 	closed := c.closed
 	if !closed {
 		c.inflight.Add(1)
-		go c.runSave(job, memo, running)
+		go c.runSave(stint, job, memo, running)
 	}
 	c.mu.Unlock()
 	if closed {
@@ -770,15 +766,15 @@ func (c *Coordinator) drainSave(wait context.Context, run PendingRun, begun, dra
 	job := saveJob{run: run, drainEnd: drainEnd, due: begun, mark: memo.mark, interval: interval, last: memo.last,
 		counted: memo.counted, taken: running.taken}
 	c.saves.mu.Unlock()
-	return c.spawnSave(job, memo, running)
+	return c.spawnSave(c.life, job, memo, running)
 }
 
 // runSave runs one save task its offer spawned, then writes what came of it
 // to memo, gives its slot back once its keep has ended, and logs a failure no
 // stamp's line names.
-func (c *Coordinator) runSave(job saveJob, memo *saveMemo, running *saveRun) {
+func (c *Coordinator) runSave(stint context.Context, job saveJob, memo *saveMemo, running *saveRun) {
 	start := c.now()
-	out := c.saveTask(job)
+	out := c.saveTask(stint, job)
 	c.saves.mu.Lock()
 	memo.running = nil
 	if out.counted > 0 {

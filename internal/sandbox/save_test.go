@@ -38,15 +38,20 @@ func savingRig(t *testing.T, ledger SaveLedgers, takers *takerStore) (*coordRig,
 
 // saveOf runs one save task of turnID's job to its end as its spawner does,
 // counted in the coordinator's inflight: due now, never saved on this node,
-// pacing from now, as edit leaves it.
+// pacing from now, as edit leaves it, under the coordinator's own lifetime.
 func saveOf(rig *coordRig, turnID string, edit func(*saveJob)) saveOutcome {
+	return saveUnder(rig.coordinator.life, rig, turnID, edit)
+}
+
+// saveUnder is [saveOf] under stint, the duty an offer came under.
+func saveUnder(stint context.Context, rig *coordRig, turnID string, edit func(*saveJob)) saveOutcome {
 	now := rig.coordinator.now()
 	job := saveJob{run: rig.get(turnID), due: now, mark: -1, interval: 10 * time.Minute, last: now}
 	if edit != nil {
 		edit(&job)
 	}
 	rig.coordinator.inflight.Add(1)
-	return rig.coordinator.saveTask(job)
+	return rig.coordinator.saveTask(stint, job)
 }
 
 // ledgerOf is seat's save ledger in ledger as it stands, empty for none.
@@ -528,7 +533,7 @@ func TestAStandDownCancelsAnE2BSavesPackAndNeverItsTake(t *testing.T) {
 				standDown()
 				synctest.Wait()
 			}
-			out := saveOf(rig, "t1", func(j *saveJob) { j.stint = stint })
+			out := saveUnder(stint, rig, "t1", nil)
 			if out.class != saveStoodDown {
 				t.Errorf("the save came to %+v, want it stood down", out)
 			}
@@ -559,7 +564,7 @@ func TestAStandDownCancelsAnE2BSavesPackAndNeverItsTake(t *testing.T) {
 					t.Errorf("the save was taken on a context already done (%v), want the coordinator's", err)
 				}
 			}
-			out := saveOf(rig, "t1", func(j *saveJob) { j.stint = stint })
+			out := saveUnder(stint, rig, "t1", nil)
 			if row := rig.get("t1"); out.class != saveLanded || row.Kept == nil {
 				t.Errorf("the save came to %+v keeping %+v, want it landed", out, row.Kept)
 			}
