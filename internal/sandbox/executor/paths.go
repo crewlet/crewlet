@@ -196,6 +196,10 @@
 // a turn of its own. A pair the resume does not hand (a withdrawn record, a
 // parent naming no record) is neither, and is evidence its take arrived.
 //
+// No walk is made for takes on a release whose resume was not read, where
+// none can be held and so none absent, nor for more than 64, which a hook
+// record's masks cannot name ([unreadTakes]): each is undecided.
+//
 // ABSENT only where the thread proves it: its harness ended its own run, it
 // was read to its end with no refused line and no torn last piece, it never
 // restarts, another asked take at the same event is held (each event writes

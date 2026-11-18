@@ -267,14 +267,47 @@ func TestAPairIsHeldOnlyOnAThreadEverySizePathReadsAlike(t *testing.T) {
 
 // NO TAKE IS HELD FOR A RELEASE THE RESUME WAS NOT READ IN (D28): the chain
 // models 2.1.310's and 2.1.322's resume alone, so a job another release ran
-// confirms nothing, and so denies nothing.
+// confirms nothing, and so denies nothing, and a read of its takes alone
+// opens no thread for them.
 //
-// Mutation: drop the release gate, and both releases' takes read as held.
+// Mutation: drop the release gate, or walk for takes it refuses, and a case
+// goes red.
 func TestNoTakeIsHeldForAReleaseTheResumeWasNotReadIn(t *testing.T) {
 	t.Parallel()
 	for _, release := range []string{"2.1.300", "2.1.323", ""} {
-		rhWant(t, "release "+release, rhRead(t, release, true, rhBase(), rhAskBatch, rhAskStop, rhAskUntaken), nil,
-			nil, nil)
+		fake, paths := cntBox(cntThread(rhBase()...), nil)
+		box := &rhOpens{FakeSandbox: fake}
+		got := ClaudeCode{}.readMainThread(t.Context(), box, paths, sandbox.MainThreadAsk{Session: ctSession,
+			Release: release, Takes: []sandbox.AskedTake{rhAskBatch, rhAskStop, rhAskUntaken}, Ended: true})
+		rhWant(t, "release "+release, got.Receipts, nil, nil, nil)
+		if box.opens != 0 || got.Receipts.Why == "" {
+			t.Errorf("release %q: %d opens, why %q; want none, and why", release, box.opens, got.Receipts.Why)
+		}
+	}
+}
+
+// A READ ASKED MORE TAKES THAN A HOOK RECORD NAMES ANSWERS, AND COUNTS: past
+// the 64 a record's masks hold, every take is undecided with why, and the
+// count is read as the count alone reads it, never a panic that answers
+// nothing on every retry.
+//
+// Mutation: hand the walk every take asked, and this goes red.
+func TestAReadAskedMoreTakesThanAHookRecordNamesAnswers(t *testing.T) {
+	t.Parallel()
+	raw := cntThread(rhBase()...)
+	var alone resumedReading
+	walkThread(t.Context(), strings.NewReader(raw), threadPlainMax, testPass(t), &alone)
+	takes := []sandbox.AskedTake{rhAskBatch, rhAskStop}
+	for i := len(takes); i <= maxAskedTakes; i++ {
+		takes = append(takes, sandbox.AskedTake{Take: rcUUID(500 + i), Event: rhBatch})
+	}
+	box, paths := cntBox(raw, nil)
+	got := ClaudeCode{}.readMainThread(t.Context(), box, paths, sandbox.MainThreadAsk{Session: ctSession,
+		Release: "2.1.322", Count: true, Takes: takes, Ended: true})
+	rhWant(t, fmt.Sprintf("%d takes", len(takes)), got.Receipts, nil, nil, nil)
+	if got.Receipts.Why == "" || !reflect.DeepEqual(got.Count, alone.count(0)) {
+		t.Errorf("%d takes: why %q, count %+v; want why, and the count %+v", len(takes), got.Receipts.Why,
+			got.Count, alone.count(0))
 	}
 }
 

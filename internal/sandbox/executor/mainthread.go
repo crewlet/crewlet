@@ -22,8 +22,8 @@ import (
 // internal/sandbox's MainThreadReadWait, cheapest check first: a session id
 // naming no file is unread; a release below [claudeCountFloor], or none, is
 // [sandbox.CountRelease]; a saved compaction found by its size
-// ([claudePrecompact]) is [sandbox.CountPrecompact]; each marks the count
-// alone, and the walk runs where the count or takes are asked ([hookReading]).
+// ([claudePrecompact]) is [sandbox.CountPrecompact], each marking the count
+// alone; the walk runs for the count, or takes it can decide ([unreadTakes]).
 
 // threadReading is one reader's account of a Claude Code thread, composed into
 // the one walk ([walkThread]) and never reading the thread itself, so a thread
@@ -357,12 +357,17 @@ var _ mainThreadHarness = ClaudeCode{}
 // readMainThread is Claude Code's read of the main thread of ask's session in
 // box, in the order the file comment states. The release and the saved
 // compaction mark the count alone: takes asked are read in the walk all the
-// same, the chain first on each line.
+// same, the chain first on each line, unless no walk could decide one
+// ([unreadTakes]).
 func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
 	var reading sandbox.MainThreadReading
-	if !ask.Count && len(ask.Takes) == 0 {
+	takes := ask.Takes
+	if why := unreadTakes(ask); why != "" {
+		reading.Receipts, takes = sandbox.HookReceipts{Why: why}, nil
+	}
+	if !ask.Count && len(takes) == 0 {
 		return reading
 	}
 	marked := func(mark sandbox.CountMark) {
@@ -372,7 +377,7 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 	}
 	unread := func(why string) sandbox.MainThreadReading {
 		marked(sandbox.CountUnread)
-		if len(ask.Takes) > 0 {
+		if len(takes) > 0 {
 			reading.Receipts = sandbox.HookReceipts{Why: why}
 		}
 		return reading
@@ -400,7 +405,7 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 		}
 	}
 	counts := ask.Count && reading.Count == nil
-	if !counts && len(ask.Takes) == 0 {
+	if !counts && len(takes) == 0 {
 		return reading
 	}
 	body, err := box.OpenFile(ctx, paths.ClaudeConfigDir()+"/"+thread)
@@ -415,9 +420,9 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 		count    resumedReading
 		hooks    *hookReading
 	)
-	if len(ask.Takes) > 0 {
+	if len(takes) > 0 {
 		chain := &chainReading{c: newThreadChain("")}
-		hooks = newHookReading(chain, ask.Takes)
+		hooks = newHookReading(chain, takes)
 		readings = append(readings, chain)
 	}
 	if counts {
