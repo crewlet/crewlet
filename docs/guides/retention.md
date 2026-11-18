@@ -2315,7 +2315,11 @@ shown (one that ended beside it, or one past the sixteen endings a launch is
 told) stays, and the next turn is shown it. Past a seat's
 `turn_engine.conversation_session.max_bytes_per_seat` (64 MiB by default) a
 capture releases the seat's oldest ended sessions, keeping how each turn ended
-and dropping only its object. The trash reaper deletes a row untouched for the
+and dropping only its object. The same figure is the allowance of the seat's
+saves of its running sessions, whose replaced objects the
+[object collector](../concepts/object-store.md#collection-and-audit) deletes a
+day and more later, so a seat's objects reach up to twice it
+([saved as it works](../concepts/code-sandbox.md#a-running-jobs-session-saved-as-it-works)). The trash reaper deletes a row untouched for the
 company's `turn_engine.conversation_session.retention_days`, 30 days by
 default, ended or not, never while its turn's run is live — and takes the
 row's tombstone with it, since no record decided before the delete can land

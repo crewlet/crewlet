@@ -169,7 +169,18 @@ turn_engine:                            # optional — executor/reviewer turn co
                                         #   sessions may hold (33 MiB..64 GiB); past it a
                                         #   capture releases the seat's oldest ENDED
                                         #   turns' sessions, keeping how each ended, never
-                                        #   one a live turn was handed to continue
+                                        #   one a live turn was handed to continue; also
+                                        #   the allowance of the seat's saves of running
+                                        #   sessions, which the store keeps a day once
+                                        #   replaced, so a seat holds up to twice it:
+                                        #   twenty seats or more belong on S3
+    save_interval_seconds: 600          # shortest time between saves of a running
+                                        #   Claude Code job's session (300..3600; 0 takes
+                                        #   600, anything else refused): a run lost with
+                                        #   its box redoes about this plus one save's
+                                        #   take, longer where a seat's saves are paced
+                                        #   by size, about 27 min per sealed MiB past
+                                        #   0.4 MiB (see concepts/code-sandbox.md)
 
 learning:                               # optional — agent-learning subsystem
                                         #   Every pass here calls the seat's auxiliary

@@ -440,6 +440,20 @@
 // ends is scrubbed of it (internal/sandbox's handed.go). Never logged, never
 // returned: the lines name the seat, the path and the expiry.
 //
+// # A running executor's session, saved as it works
+//
+// The sandbox coordinator saves a running Claude Code job's session as it
+// works (internal/sandbox's "A save is offered by the poll, from memory"), and
+// this package wires it: both waiters offer it every box their poll finds
+// running ([Engine.sandboxWaiterOptions]), each save is charged to the fleet
+// store's ledger of its seat's saves ([Engine.coordinatorOptions]), and the
+// interval is read off the revision this node runs
+// ([executorKeep.SaveInterval]), since a cadence binds only the node driving
+// the box. A drain saves each Direct job this node launched beside its wait
+// for turns, since such a job goes with whatever stops this process, and
+// joins those saves before it returns ([Engine.Drain],
+// [sandbox.Coordinator.SaveHosted]), saying so while it waits.
+//
 // # MCP servers
 //
 // The company's MCP servers are put in front of its agents here (mcp.go,
