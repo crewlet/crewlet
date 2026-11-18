@@ -219,6 +219,59 @@ func TestAPermissionRequestNobodyCouldGrantIsRefused(t *testing.T) {
 	}
 }
 
+// oneChangeDesk is newGrantDesk with a permission granted for one change.
+func oneChangeDesk() *fakeGrantDesk {
+	d := newGrantDesk()
+	d.opts.Grants = append(d.opts.Grants, seataccess.GrantEntry{ID: "Bucket Write", Name: "Bucket Settings: Edit",
+		ScopeKind: "zone", Write: true, MaxHours: 4, Note: "It also changes lifecycle rules, which can delete objects."})
+	return d
+}
+
+// A PERMISSION GRANTED FOR ONE CHANGE IS ASKED FOR ITS TARGET ALONE, for an hour
+// by default, saying what else it allows and offering no permanent grant.
+// Mutation: keep the permanent option and the person can approve it for good.
+func TestAOneChangePermissionIsAskedForItsTargetAlone(t *testing.T) {
+	t.Parallel()
+	trk, desk := newFakeTracker(), oneChangeDesk()
+	why := "Make bucket user-uploads private: its listing is public."
+	got := requestOf(t, trk, desk, map[string]any{"permission": "Bucket Write", "target": "user-uploads", "why": why})
+	if got.Failed {
+		t.Fatalf("the request failed: %s", got.Output)
+	}
+	if len(desk.filed) != 1 || desk.filed[0].Hours != 1 || desk.filed[0].Target != "user-uploads" {
+		t.Fatalf("filed = %+v, want one request for one hour naming its target", desk.filed)
+	}
+	id := desk.filed[0].ID
+	d := trk.patched[0].Comment.Decision
+	if len(d.Options) != 2 || d.Options[0].ID != seataccess.GrantOptionTemporary(id) || d.Options[1].ID != "decline" {
+		t.Fatalf("options = %+v, want the hour's grant and not now, never a permanent one", d.Options)
+	}
+	if !strings.Contains(d.Question, "for one change to user-uploads") || d.Rationale != why {
+		t.Errorf("question %q and rationale %q, want the target asked and the agent's change", d.Question, d.Rationale)
+	}
+	if !strings.Contains(d.Options[0].Detail, "lifecycle rules, which can delete objects") ||
+		!strings.Contains(d.Options[0].Label, "expires in 1 hour)") {
+		t.Errorf("the grant option %+v does not say what else it allows for its hour", d.Options[0])
+	}
+	for name, c := range map[string]struct {
+		args map[string]any
+		says string
+	}{
+		"no target":  {map[string]any{"permission": "Bucket Write"}, "`target`"},
+		"a sentence": {map[string]any{"permission": "Bucket Write", "target": "the uploads bucket"}, "`target`"},
+		"past bound": {map[string]any{"permission": "Bucket Write", "target": "user-uploads", "hours": 5}, "at most 4 hours"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk, desk := newFakeTracker(), oneChangeDesk()
+			got := requestOf(t, trk, desk, c.args)
+			if !got.Failed || len(desk.filed) != 0 || !strings.Contains(got.Output, c.says) {
+				t.Errorf("result %q (filed %d), want a refusal saying %q", got.Output, len(desk.filed), c.says)
+			}
+		})
+	}
+}
+
 // A REQUEST'S GRANT IS ANSWERED ONLY ONCE ITS AGENT HOLDS IT, whoever sends the
 // answer, and "Not now" settles the request it answered. Mutation: skip the
 // check for a request's option and the agent is told yes with nothing saved.

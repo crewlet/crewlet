@@ -190,7 +190,18 @@ type GrantEntry struct {
 	Unavailable string   `json:"unavailable,omitempty"`
 	Missing     []string `json:"missing,omitempty"`
 	ActionURL   string   `json:"action_url,omitempty"`
+
+	// Note is what granting it allows beyond its name, which the picker and
+	// a request's decision show; empty where its name says it all.
+	Note string `json:"note,omitempty"`
+
+	// MaxHours, where set, makes it a grant for one change: it lasts at most
+	// that long, [MinGrantHours] unless asked otherwise, and never for good.
+	MaxHours int `json:"max_hours,omitempty"`
 }
+
+// OneChange reports a permission granted for one change at a time.
+func (e GrantEntry) OneChange() bool { return e.MaxHours > 0 }
 
 // Grantable is the catalogue entry for a permission, or false where the
 // lane's catalogue does not offer it.
@@ -211,8 +222,9 @@ func (o Options) GrantReaches(entry string) bool {
 
 // CheckGrant is why one grant cannot be saved on lane as the catalogue offers
 // it now, or nil: a permission the catalogue does not list, one it cannot
-// grant yet, one the seat's level already holds, or a scope outside what a
-// grant may name or one an account permission takes at all.
+// grant yet, one the seat's level already holds, a scope outside what a grant
+// may name or one an account permission takes at all, or a grant for one
+// change that is permanent or outlasts its bound.
 func CheckGrant(opts Options, level string, g Grant) error {
 	entry, ok := opts.Grantable(g.Permission)
 	switch {
@@ -224,6 +236,12 @@ func CheckGrant(opts Options, level string, g Grant) error {
 		return fmt.Errorf("%s is already in this agent's level", entry.Name)
 	case entry.ScopeKind == GrantScopeAccount && len(g.Scope) > 0:
 		return fmt.Errorf("%s is granted on the whole account and takes no scope", entry.Name)
+	case entry.OneChange() && g.ExpiresAt.IsZero():
+		return fmt.Errorf("%s is granted for one change, for at most %d hours, never permanently",
+			entry.Name, entry.MaxHours)
+	case entry.OneChange() && !g.GrantedAt.IsZero() &&
+		g.ExpiresAt.After(g.GrantedAt.Add(time.Duration(entry.MaxHours)*time.Hour)):
+		return fmt.Errorf("%s is granted for one change, for at most %d hours", entry.Name, entry.MaxHours)
 	}
 	for _, s := range g.Scope {
 		if !opts.GrantReaches(s) {
@@ -243,7 +261,8 @@ func heldByLevel(opts Options, inLevel, level string) bool {
 
 // CheckGrants is why after's grants cannot be saved over before's on lane:
 // more than [MaxGrants] live, or a grant added or changed that [CheckGrant]
-// refuses, or one that lapses already or later than [MaxGrantHours] from now.
+// refuses, names a target no request gave it, or lapses already or later than
+// [MaxGrantHours] (or a one-change bound) from now.
 // A grant kept as it was is not judged again, so a catalogue change never
 // stops a seat's other edits; the sync reports it instead.
 func CheckGrants(opts Options, before, after Desired, now time.Time) error {
@@ -255,12 +274,19 @@ func CheckGrants(opts Options, before, after Desired, now time.Time) error {
 		if slices.ContainsFunc(before.Grants, func(h Grant) bool { return sameStored(h, g) }) {
 			continue
 		}
+		if g.Target != "" && g.Request == "" {
+			return fmt.Errorf("%s names a target, which only an agent's request gives a grant", g.Permission)
+		}
 		if !g.ExpiresAt.IsZero() {
 			switch {
 			case !g.Live(now.Add(LapseLead)):
 				return fmt.Errorf("%s lapses before it could be applied", g.Permission)
 			case g.ExpiresAt.After(now.Add(MaxGrantHours * time.Hour)):
 				return fmt.Errorf("%s lasts past %d hours; make it permanent or shorter", g.Permission, MaxGrantHours)
+			}
+			if entry, ok := opts.Grantable(g.Permission); ok && entry.OneChange() &&
+				g.ExpiresAt.After(now.Add(time.Duration(entry.MaxHours)*time.Hour)) {
+				return fmt.Errorf("%s is granted for one change, for at most %d hours", entry.Name, entry.MaxHours)
 			}
 		}
 		if err := CheckGrant(opts, after.Level, g); err != nil {
@@ -350,7 +376,7 @@ func StampGrants(before, after Desired, by string, now time.Time) (Desired, erro
 func sameGrant(a, b Grant) bool {
 	return a.ID == b.ID && a.Permission == b.Permission && slices.Equal(normalSet(a.Scope), normalSet(b.Scope)) &&
 		a.ExpiresAt.Equal(b.ExpiresAt) && a.GrantedBy == b.GrantedBy && a.GrantedAt.Equal(b.GrantedAt) &&
-		a.Reason == b.Reason && a.Request == b.Request
+		a.Reason == b.Reason && a.Request == b.Request && a.Target == b.Target
 }
 
 // SameStoredGrants reports two lists holding the same stored grants, field for

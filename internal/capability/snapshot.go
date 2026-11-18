@@ -366,8 +366,8 @@ func integrationOf(c *config.Company, handle string, lane seataccess.Lane, want 
 }
 
 // grantLines is each grant the credential holds (have), with when the stored
-// grant giving it (want) lapses: what the seat can use now, never what is
-// stored and not applied yet.
+// grant giving it (want) lapses and what one change it was asked for: what the
+// seat can use now, never what is stored and not applied yet.
 func grantLines(want, have []seataccess.Grant) []string {
 	var out []string
 	for _, g := range seataccess.NormalGrants(have) {
@@ -375,7 +375,7 @@ func grantLines(want, have []seataccess.Grant) []string {
 		if len(g.Scope) > 0 {
 			line += " on " + strings.Join(g.Scope, ", ")
 		}
-		lapse, permanent := time.Time{}, false
+		lapse, permanent, target := time.Time{}, false, ""
 		for _, w := range want {
 			if seataccess.GrantKey(w) != seataccess.GrantKey(g) {
 				continue
@@ -383,11 +383,14 @@ func grantLines(want, have []seataccess.Grant) []string {
 			if w.ExpiresAt.IsZero() {
 				permanent = true
 			} else if w.ExpiresAt.After(lapse) {
-				lapse = w.ExpiresAt
+				lapse, target = w.ExpiresAt, w.Target
 			}
 		}
 		if !permanent && !lapse.IsZero() {
 			line += " until " + lapse.UTC().Format("2006-01-02 15:04 UTC")
+		}
+		if !permanent && target != "" {
+			line += ", for one change to " + target
 		}
 		out = append(out, line)
 	}
