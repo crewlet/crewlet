@@ -734,7 +734,8 @@ func TestAReadStandingByTakesTheNextPlaceOnceItsOwnWaitOutlastsTheCapture(t *tes
 // made. loseTakeOver makes a takeover and loses its answer, as a store whose
 // answer never reached its asker does. dropFirstSettle spends every attempt at
 // the first settle of a begun stamp ([PendingStore.SettleBegun]) and takes
-// none, as a store too slow for a write's room does.
+// none, as a store too slow for a write's room does. A read asked once its
+// context has ended answers that end, as a store across a link does.
 type atTheFloor struct {
 	PendingStore
 	last            func(ctx context.Context, read bool)
@@ -828,6 +829,9 @@ func (s *atTheFloor) StandDown(ctx context.Context, turnID string, standby Sessi
 
 func (s *atTheFloor) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
 	s.last(ctx, true)
+	if err := ctx.Err(); err != nil {
+		return PendingRun{}, false, err
+	}
 	return s.PendingStore.Get(ctx, turnID)
 }
 
@@ -1072,7 +1076,7 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				go func() {
 					time.Sleep(time.Until(waitEnds) - 10*time.Second)
 					if row.pastBudget {
-						past.Store(int64(begun.At.Add(SessionCaptureBudget).Sub(time.Now()) + time.Second))
+						past.Store(int64(time.Until(begun.At.Add(SessionCaptureBudget)) + time.Second))
 					}
 					if gave, err := store.Backend.Release(context.WithoutCancel(t.Context()),
 						coord.TakerResource(takingProcess), takingProcess, lease.Epoch); err != nil || !gave {
