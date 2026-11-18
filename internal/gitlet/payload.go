@@ -583,46 +583,46 @@ type RepoSettings struct {
 func (s RepoSettings) Validate() error {
 	switch {
 	case !s.ManagedBy.Valid():
-		return fmt.Errorf("%w: managed_by: %q is not one of %s", ErrInvalid, s.ManagedBy, words.Or(ManagedBys()))
+		return refusedf("%w: managed_by: %q is not one of %s", ErrInvalid, s.ManagedBy, words.Or(ManagedBys()))
 	case !s.Kind.Valid():
-		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, s.Kind, words.Or(RepoKinds()))
+		return refusedf("%w: kind: %q is not one of %s", ErrInvalid, s.Kind, words.Or(RepoKinds()))
 	case s.ManagedBy == ManagedTools && s.ConfigEpoch != 0:
-		return fmt.Errorf("%w: config_epoch: a tool's repository comes from no configuration "+
+		return refusedf("%w: config_epoch: a tool's repository comes from no configuration "+
 			"activation, so its settings name none", ErrInvalid)
 	case s.ManagedBy == ManagedConfig && s.Kind != RepoProject:
-		return fmt.Errorf("%w: kind: a repository code.repos declares is a project", ErrInvalid)
+		return refusedf("%w: kind: a repository code.repos declares is a project", ErrInvalid)
 	case s.Kind == RepoScratch && s.Owner.Kind != OwnerSeat:
-		return fmt.Errorf("%w: owner: a scratch repository belongs to the seat whose handle it carries",
+		return refusedf("%w: owner: a scratch repository belongs to the seat whose handle it carries",
 			ErrInvalid)
 	case s.Kind == RepoScratch && len(s.Protections) > 0:
-		return fmt.Errorf("%w: protections: a scratch repository takes no protections — it is its "+
+		return refusedf("%w: protections: a scratch repository takes no protections — it is its "+
 			"seat's own", ErrInvalid)
 	case s.Kind == RepoScratch && len(s.PathOwners) > 0:
-		return fmt.Errorf("%w: path_owners: a scratch repository takes no path owners — it is its "+
+		return refusedf("%w: path_owners: a scratch repository takes no path owners — it is its "+
 			"seat's own", ErrInvalid)
 	case !s.Owner.Kind.Valid():
-		return fmt.Errorf("%w: owner.kind: %q is not one of %s", ErrInvalid, s.Owner.Kind, words.Or(OwnerKinds()))
+		return refusedf("%w: owner.kind: %q is not one of %s", ErrInvalid, s.Owner.Kind, words.Or(OwnerKinds()))
 	case strings.TrimSpace(s.Owner.Ref) == "":
-		return fmt.Errorf("%w: owner.ref: a repository's owner names a unit or a seat", ErrInvalid)
+		return refusedf("%w: owner.ref: a repository's owner names a unit or a seat", ErrInvalid)
 	case !s.Visibility.Valid():
-		return fmt.Errorf("%w: visibility: %q is not one of %s", ErrInvalid, s.Visibility, words.Or(Visibilities()))
+		return refusedf("%w: visibility: %q is not one of %s", ErrInvalid, s.Visibility, words.Or(Visibilities()))
 	case !s.Search.Valid():
-		return fmt.Errorf("%w: search: %q is not one of %s", ErrInvalid, s.Search, words.Or(SearchModes()))
+		return refusedf("%w: search: %q is not one of %s", ErrInvalid, s.Search, words.Or(SearchModes()))
 	case s.Kind == RepoScratch && s.Search == SearchIndexed:
-		return fmt.Errorf("%w: search: a scratch repository is searched with %s — it is its seat's own "+
+		return refusedf("%w: search: a scratch repository is searched with %s — it is its seat's own "+
 			"experiment, and no index is kept for one", ErrInvalid, SearchGrep)
 	case !gitref.ValidBranch(s.DefaultBranch):
-		return fmt.Errorf("%w: default_branch: %q is not a branch name", ErrInvalid, s.DefaultBranch)
+		return refusedf("%w: default_branch: %q is not a branch name", ErrInvalid, s.DefaultBranch)
 	case gitref.ReservedSeatBranch(s.DefaultBranch):
-		return fmt.Errorf("%w: default_branch: %q is reserved: refs/heads/seats holds only each seat's "+
+		return refusedf("%w: default_branch: %q is reserved: refs/heads/seats holds only each seat's "+
 			"own namespace, and no push creates it", ErrInvalid, s.DefaultBranch)
 	case len(s.Description) > MaxDescriptionBytes:
-		return fmt.Errorf("%w: description: %d bytes, past the %d-byte cap", ErrInvalid,
+		return refusedf("%w: description: %d bytes, past the %d-byte cap", ErrInvalid,
 			len(s.Description), MaxDescriptionBytes)
 	case !utf8.ValidString(s.Description):
-		return fmt.Errorf("%w: description: not valid UTF-8", ErrInvalid)
+		return refusedf("%w: description: not valid UTF-8", ErrInvalid)
 	case len(s.Protections) > MaxProtectionsPerRepo:
-		return fmt.Errorf("%w: protections: %d rules, past the cap of %d", ErrInvalid,
+		return refusedf("%w: protections: %d rules, past the cap of %d", ErrInvalid,
 			len(s.Protections), MaxProtectionsPerRepo)
 	}
 	for i, p := range s.Protections {
@@ -643,9 +643,9 @@ func (s RepoSettings) Validate() error {
 	// mirror: it takes no sync, so its source would never move it.
 	switch {
 	case s.Kind == RepoScratch && (s.MirrorFrom != nil || s.MirrorTo != nil):
-		return fmt.Errorf("%w: mirror: a scratch repository takes no mirror — it is its seat's own", ErrInvalid)
+		return refusedf("%w: mirror: a scratch repository takes no mirror — it is its seat's own", ErrInvalid)
 	case s.MirrorFrom != nil && s.Archived:
-		return fmt.Errorf("%w: mirror_from: an archived repository takes no sync, so a pull mirror is "+
+		return refusedf("%w: mirror_from: an archived repository takes no sync, so a pull mirror is "+
 			"never archived — remove mirror_from to keep it as it stands", ErrInvalid)
 	}
 	if s.MirrorFrom != nil {

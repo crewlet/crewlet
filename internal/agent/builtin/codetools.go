@@ -431,12 +431,12 @@ type codeRepoKey struct {
 func repoArg(tool string, args map[string]any) (string, *tools.Result) {
 	name := strings.TrimSpace(argString(args, "repo"))
 	if name == "" {
-		r := failed(fmt.Sprintf("%s needs a `repo`: a repository's name, as %s lists it.", tool,
+		r := failedArg("repo", fmt.Sprintf("%s needs a `repo`: a repository's name, as %s lists it.", tool,
 			CodeListReposTool))
 		return "", &r
 	}
 	if !gitlet.ValidName(name) {
-		r := failed(fmt.Sprintf("%s: %q is not a repository's name — a name is lowercase letters, "+
+		r := failedArg("repo", fmt.Sprintf("%s: %q is not a repository's name — a name is lowercase letters, "+
 			"digits and hyphens, as %s lists it.", tool, clip(name), CodeListReposTool))
 		return "", &r
 	}
@@ -758,7 +758,7 @@ type resolvedRev struct {
 func revArg(tool, arg string, args map[string]any) (string, *tools.Result) {
 	rev := strings.TrimSpace(argString(args, arg))
 	if rev == "" {
-		r := failed(fmt.Sprintf("%s needs `%s`: a commit id — whole, or its first 7 or more hex digits — "+
+		r := failedArg(arg, fmt.Sprintf("%s needs `%s`: a commit id — whole, or its first 7 or more hex digits — "+
 			"or a branch, a tag, a whole ref, or %s for the default branch.", tool, arg, headRev))
 		return "", &r
 	}

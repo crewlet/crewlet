@@ -677,17 +677,17 @@ type MergePreviewQuery struct {
 // floor on another log than the code log.
 func (q MergePreviewQuery) Validate() error {
 	if !canonicalUUID(q.RepoID) {
-		return fmt.Errorf("%w: repo_id: %q is not a repository's id", ErrInvalid, q.RepoID)
+		return refusedf("%w: repo_id: %q is not a repository's id", ErrInvalid, q.RepoID)
 	}
 	if why := q.Asker.invalid(); why != "" {
-		return fmt.Errorf("%w: asker: %s", ErrInvalid, why)
+		return refusedf("%w: asker: %s", ErrInvalid, why)
 	}
 	if why := ceilingInvalid(q.Asker, q.CeilingSeat); why != "" {
 		return fmt.Errorf("%w: %s", ErrInvalid, why)
 	}
 	for _, id := range []struct{ field, id string }{{"base", q.Base}, {"head", q.Head}} {
 		if !gitref.ValidOID(id.id) || id.id == ZeroOID {
-			return fmt.Errorf("%w: %s: %q is not a whole commit id", ErrInvalid, id.field, id.id)
+			return refusedf("%w: %s: %q is not a whole commit id", ErrInvalid, id.field, id.id)
 		}
 	}
 	if err := q.Fresh.OnlyOn(topics.CodeLogStream); err != nil {

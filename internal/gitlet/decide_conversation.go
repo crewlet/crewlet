@@ -87,7 +87,7 @@ func (w ConversationWrite) measure() (int, error) {
 		if w.Review != nil {
 			why += ": split it into two reviews of the same revision, which supersede nothing of each other"
 		}
-		return 0, fmt.Errorf("%w: %s: %s", ErrInvalidProposal, op, why)
+		return 0, refusedf("%w: %s: %s", ErrInvalidProposal, op, why)
 	}
 	return stamped, nil
 }
@@ -237,7 +237,7 @@ func (w ConversationWrite) validFields() error {
 				"are the repository's home Gitlet node's own, which no principal asks")
 		}
 	case why != "":
-		return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)
+		return refusedf("%w: asker: %s", ErrInvalidProposal, why)
 	case !w.Asker.Run.IsZero():
 		return badField("asker.run", "a comment keeps the turn that said it in its own field, and an asker "+
 			"names no run")

@@ -882,7 +882,7 @@ func (s *factsScan) row() (*RevisionFactsRow, error) {
 // is in a live state and names whom it waits on or is the asker seat's own; a
 // bucket ([ReadQuery.Readiness]) is of the open state, empty read as open.
 func (q ReadQuery) validateChanges() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.Repo == "" && q.Work == "" && q.State == "" && q.Reviewer == "" && q.Needs == "" && q.Window == "" &&
 		q.Readiness == "" && q.Text == "":

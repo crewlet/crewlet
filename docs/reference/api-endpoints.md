@@ -8018,6 +8018,14 @@ refusals only it can word for a person — `gate_unmet`, `source_refused`,
 `repo_size` and `not_permitted`. A refusal that is not
 Gitlet's carries no `refusal`.
 
+A `422 invalid` refusal that one field decided also names that field in
+**`fields`**, as the request spells it: a Gitlet write's (`close.reason`,
+`review.findings[2]`, `owner`) or a code tool's argument. Its sentence is
+written for whoever built the request, so it never travels; a client says
+which value was refused in its own words, and the dashboard names a field a
+person fills in by what its form calls it and any other as the value the page
+sent. A refusal no one field decided carries no `fields`.
+
 Every `503` carries a `Retry-After` where waiting can clear it and **none**
 where it cannot — an evicted node, a full log, a record this node cannot
 decode: ask another node, or an operator. A call interrupted before the tool

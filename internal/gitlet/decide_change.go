@@ -61,7 +61,7 @@ func (p ChangeProposal) measure() (int, error) {
 		return 0, fmt.Errorf("%w: %s: encode it: %w", ErrInvalidProposal, op, err)
 	}
 	if bytes := len(encoded) + MaxRoutingBytes; bytes > EntryRoom {
-		return 0, fmt.Errorf("%w: %s: %d bytes with its routing's room, past the %d one proposal may take of "+
+		return 0, refusedf("%w: %s: %d bytes with its routing's room, past the %d one proposal may take of "+
 			"its record", ErrInvalidProposal, op, bytes, EntryRoom)
 	}
 	return len(encoded) + MaxRoutingBytes, nil
@@ -245,7 +245,7 @@ func (p ChangeProposal) validFields() error {
 			return badField("asker", "a landing is the repository's home Gitlet node's own, which no principal asks")
 		}
 	case why != "":
-		return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)
+		return refusedf("%w: asker: %s", ErrInvalidProposal, why)
 	case !p.Asker.Run.IsZero():
 		return badField("asker.run", "a change keeps the turn and the run that opened it in its own fields, "+
 			"and its asker names none")

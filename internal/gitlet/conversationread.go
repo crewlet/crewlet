@@ -605,7 +605,7 @@ func ValidFindingID(id string) bool {
 // findings' ids, each a UUIDv7 in its canonical spelling, each once.
 func validateFindingIDs(ids []string) error {
 	if len(ids) > MaxFindingsPerReview {
-		return fmt.Errorf("%w: finding_ids: %d findings, past the %d one read names (MaxFindingsPerReview)",
+		return refusedf("%w: finding_ids: %d findings, past the %d one read names (MaxFindingsPerReview)",
 			ErrInvalid, len(ids), MaxFindingsPerReview)
 	}
 	for i, id := range ids {
@@ -988,10 +988,10 @@ func (r *Reader) reviewsGiven(ctx context.Context, tx *sql.Tx, q ReadQuery, char
 func (q ReadQuery) validateReviews() error {
 	switch {
 	case q.Reviewer == "":
-		return fmt.Errorf("%w: reviewer: a listing of reviews lists one reviewer's, by the seat's handle or "+
+		return refusedf("%w: reviewer: a listing of reviews lists one reviewer's, by the seat's handle or "+
 			"the human seat a person holds", ErrInvalid)
 	case !org.ValidHandle(q.Reviewer):
-		return fmt.Errorf("%w: reviewer: %q is not a seat's handle: a reviewer is a seat, or the human seat a "+
+		return refusedf("%w: reviewer: %q is not a seat's handle: a reviewer is a seat, or the human seat a "+
 			"person holds", ErrInvalid, q.Reviewer)
 	}
 	return nil
