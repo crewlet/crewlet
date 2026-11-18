@@ -345,6 +345,10 @@
 // sandbox.NextRequest.At), and the last request's input only where neither
 // does: never the larger of the two, since past a compaction no request has
 // followed, the last request's input is the compacted-away conversation's.
+// Both are the continued session's own: a kept capture's its stamp's
+// (runner.SessionBasis.NextRequest), never a newer capture's of its job that
+// the relaunch continued past, and the job's copy in its box its job's
+// record's, else its newest capture's (runner.SessionBasis.CopyNextRequest).
 //
 // WHICH SESSION A LAUNCH CONTINUES is answered for ANY MEMBER OF THE CHAIN,
 // never one picked by the probe (agentLauncher.ProbeSession): the launch picks
@@ -1663,6 +1667,15 @@
 // session may already show ([servedNotes]), the marks a brief tells again
 // ([unansweredNotes]), the record of a note delivered ([runSteers.delivered])
 // and the ending ([sandbox.PendingRun.EndedNotes]).
+//
+// # A continued session's floor
+//
+// A launch's floor for a session it may continue is that session's own
+// context with the brief that continues it: the turn's kept capture as that
+// capture measured it (runner's SessionBasis.ContextTokens), never its job's
+// newest capture's, and the job's own copy in its box as its newest capture
+// measured it, kept or not (SessionBasis.CopyContext), or its record where
+// larger.
 package engine
 
 import (

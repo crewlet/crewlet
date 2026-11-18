@@ -19,11 +19,10 @@ import (
 
 // ANOTHER PERSON'S CONVERSATION IS NOT FOUND, at the store, on every read.
 //
-// A caller with no relation to a conversation is told it does not exist,
-// never that it is forbidden (ADR-0053): every read is keyed on the owner, so
-// a conversation, its transcript, its turn, its card and its proposal are each
-// not found to anybody else, and a listing shows them nothing. Mutation: drop
-// the owner clause from any one read and its case here goes red.
+// Never forbidden (ADR-0053): every read is keyed on the owner, so a
+// conversation, its transcript, turn, card and proposal are each not found to
+// anybody else, and a listing shows them nothing. Mutation: drop the owner
+// clause from any one read and its case here goes red.
 func TestAnotherPersonsConversationIsNotFound(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -125,12 +124,11 @@ func TestATranscriptReadsBackWhatWasRecorded(t *testing.T) {
 }
 
 // A LISTING IS ORDERED BY ITS LAST ACTIVITY AND SAYS IT, so the time a client
-// shows beside each conversation reads down the list in order. A new title
-// moves the record's updated_at and not its activity, so a conversation used
-// first and retitled last stays below the one used after it, and its
-// summary's last_activity_at is the instant the order was decided by.
-// Mutation: leave LastActivityAt out of Summary, or order by updated_at, and
-// this fails.
+// shows beside each conversation reads down the list in order. A retitle moves
+// updated_at, not activity: a conversation used first and retitled last stays
+// below the one used after it, and its last_activity_at is what the order was
+// decided by. Mutation: leave LastActivityAt out of Summary, or order by
+// updated_at, and this fails.
 func TestAListingIsOrderedByTheActivityItShows(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -181,10 +179,8 @@ func TestAListingIsOrderedByTheActivityItShows(t *testing.T) {
 // A PAGE TITLE THE WIRE TAKES IS ONE A TURN AND ITS MESSAGE STORE.
 //
 // The page chip is the page context's title, which the wire takes at
-// wire.PageTitleMaxRunes characters: three bytes each for a Japanese title,
-// four for a row of emoji. Held to a conversation title's 256 bytes, the turn
-// refused the chip of every question asked on a page whose title ran past 85
-// Japanese characters, after the wire had validated that page. Each title here
+// wire.PageTitleMaxRunes characters (three bytes each in Japanese, four in
+// emoji), well past a conversation title's TitleMaxBytes. Each title here
 // validates, opens its turn, records its message and reads back whole, and one
 // byte past the wire's bound is refused. Mutation: hold the chip's title to
 // TitleMaxBytes, and the Japanese title's turn is refused.
@@ -724,14 +720,13 @@ func TestNothingSaidIsStoredInTheClear(t *testing.T) {
 }
 
 // A STORED CARD IN A SHAPE TODAY'S CONTRACT REFUSES IS READ AS A NOTICE, never
-// as its body: the brief cards an engine recorded before ADR-0062 (a
-// summary, a recommendation and a neutral row, and no about line) come back as
-// one notice on every read the transcript, the card and the model's history
-// share, while a card in today's shape and a kind this build does not know
-// are read as they were written. Mutation: drop the check and the earlier
-// brief reads as a brief with no about line, which the dashboard draws empty;
-// replace an unknown kind too and a newer peer's card is lost; drop the log or
-// the count and the case goes red.
+// as its body: a pre-ADR-0062 brief (summary, recommendation, neutral row, no
+// about line) comes back as one notice on every read the transcript, the card
+// and the model's history share, while a card in today's shape and a kind this
+// build does not know read as written. Mutation: drop the check and the brief
+// reads with no about line, which the dashboard draws empty; replace an
+// unknown kind too and a newer peer's card is lost; drop the log or the count
+// and the case goes red.
 func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)

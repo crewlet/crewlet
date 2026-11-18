@@ -82,10 +82,10 @@ func (n *node) count(query string, args ...any) int {
 }
 
 // A CHAIN IS CREATED IN ONE RECORD, AND A RETRY NAMES THE SAME FOLDERS: a path
-// with its missing parents is one record whose ids its operation derives, so
-// the retry an unknown outcome asks for answers the folders the first attempt
-// made rather than making more; a path already in place publishes nothing; and
-// one name is refused where its place already holds it, whatever its case.
+// with its missing parents is one record whose ids its operation derives, so a
+// retry after an unknown outcome answers the first attempt's folders; a path
+// already in place publishes nothing; a name its place holds in any case is
+// refused.
 //
 // Mutation: mint folder ids freshly (uuid.New) and the retry answers other
 // folders; fold no case into the key and "marketing" is created beside
@@ -142,10 +142,9 @@ func TestAFolderChainIsOneRecordAndARetryNamesTheSameFolders(t *testing.T) {
 	}
 }
 
-// TOP-LEVEL NAMES HAVE TWO NAMESPACES, so a name is never an oracle: each
-// owner's own top-level names are unique among their own, the company's among
-// the company's, and a private folder may share a company folder's name, which
-// a path naming both then refuses naming each rather than guessing.
+// TOP-LEVEL NAMES HAVE TWO NAMESPACES, so a name is never an oracle (topLevel):
+// a private folder may share a company folder's name, and a path naming both is
+// refused naming each rather than guessed.
 func TestTopLevelNamesHaveTwoNamespaces(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -181,9 +180,9 @@ func TestTopLevelNamesHaveTwoNamespaces(t *testing.T) {
 
 // AN AGENT CREATES SUBFOLDERS ONLY, AND A TOP-LEVEL FOLDER STATES WHO SEES IT:
 // a company-wide top-level folder is a company-wide audience, which an agent
-// never grants (as it never shares an artifact with the company), and a
-// subfolder is seen by its tree, so it states nothing. An unbound machine
-// login is held to the same rule: a top-level folder is a person's.
+// never grants, and a subfolder is seen by its tree, so it states nothing. An
+// unbound machine login is held to the same rule: a top-level folder is a
+// person's.
 //
 // Mutation: drop the person rule from checkFolderCreate and the agent's
 // top-level company folder is written; narrow it to agents and the machine
@@ -335,11 +334,10 @@ func TestARenameIsHeldToItsSiblings(t *testing.T) {
 }
 
 // FILING NEVER MOVES THE ACCESS EPOCH: a move changes where the artifact is
-// filed and nothing about who may open it (its shares, its epoch, which every
-// view ticket carries), and leaves its `updated_at` alone (a move is not an
-// edit). It is told to listeners as a folder movement, which narrows nothing;
-// a move to where it already is writes nothing, and a trashed artifact is
-// filed nowhere.
+// filed, not who may open it (its shares, or the epoch every view ticket
+// carries), nor its `updated_at` (a move is not an edit). Listeners hear a
+// folder movement, which narrows nothing; a move to where it is writes
+// nothing; a trashed artifact is filed nowhere.
 //
 // Mutation: touch the head in applyMove and the epoch or the instant moves.
 func TestFilingNeverMovesTheAccessEpoch(t *testing.T) {
@@ -427,11 +425,10 @@ func TestAMoveRowNamesNoFolder(t *testing.T) {
 
 // REMOVING A FOLDER MOVES WHAT IT HOLDS UP, in one record: its child folders
 // and every artifact in it, live and trashed, move to its parent, the folder
-// becomes a tombstone, its own history row counts what moved, and no
-// artifact's history gains a row (nothing about any of them changed but where
-// it is filed). A child whose name its new place already holds is refused
-// first; a top-level folder's children become top-level folders keeping its
-// audience.
+// becomes a tombstone whose history row counts what moved, and no artifact's
+// history gains a row (only its filing changed). A child whose name its new
+// place holds is refused first; a top-level folder's children become top-level
+// folders keeping its audience.
 //
 // Mutation: cascade the removal to the artifacts (trash them) and the live one
 // is trashed; skip the re-parent of child folders and Week 1 hangs under a
@@ -545,10 +542,9 @@ func TestAMovedFolderIsSeenByTheTreeItJoins(t *testing.T) {
 }
 
 // A RECORD INTO A FOLDER REMOVED SINCE ITS DECIDE IS REFUSED WHERE IT
-// APPLIES: a create into the folder and a move into it, each on its
-// artifact's subject and so not arbitrated against the tree, are refused
-// `folder_gone` at their position, on every node alike; the writer refuses
-// both from its snapshot first.
+// APPLIES: a create or move into it, on its artifact's subject and so not
+// arbitrated against the tree, is refused `folder_gone` at its position on
+// every node; the writer refuses both from its snapshot first.
 //
 // Mutation: drop the liveness check in applyCreate and the artifact is filed
 // in a tombstone, in no tree any reader sees.

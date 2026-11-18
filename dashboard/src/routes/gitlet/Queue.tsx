@@ -14,13 +14,15 @@ import { queueBands, type QueueBand, type QueuePlace } from "~/lib/checks.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useLatestChecks } from "~/lib/useLatestChecks.ts";
 import { usePaged } from "~/lib/usePaged.ts";
-import type { CodeQueueAnswer, CodeRuleGate } from "~/protocol/index.ts";
+import type { QueryResult } from "~/lib/useQuery.ts";
+import type { CodeCountsAnswer, CodeQueueAnswer, CodeRuleGate } from "~/protocol/index.ts";
 import { useBranchDetail } from "./branchDetail.ts";
 import { DequeueButton } from "./change/ChangeWrites.tsx";
 import { CHECKS_POLL_MS } from "./checks/CheckList.tsx";
 import { CodeList, type CodeListGroup } from "./CodeList.tsx";
 import { REPO_PARAM, changeObject } from "./paths.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { useGitletSectionCounts } from "./sectionCounts.ts";
 import {
   BaseRow,
   BoxHead,
@@ -63,6 +65,7 @@ function useHeld<V>(
 type Rules<T> = { value: T } | { refused: string };
 
 export function Queue() {
+  const section = useGitletSectionCounts({ pollMs: QUEUE_POLL_MS });
   const [repo, setRepo] = useParam(REPO_PARAM, "", "filter");
   const named = repo !== "" && isRepoName(repo);
   const params = useMemo(
@@ -172,6 +175,7 @@ export function Queue() {
           <QueueSummary
             repo={named ? repo : ""}
             out={read.error ? null : (read.data?.ejected_total ?? null)}
+            section={section}
           />
         )}
       </PageToolbar>
@@ -274,17 +278,25 @@ export function Queue() {
   );
 }
 
-/** "2 changes queued · 1 taken out in the last day": each half drawn only where answered. */
+/**
+ * "2 changes queued · 1 taken out in the last day": each half drawn only where answered. The
+ * company's queued count is the section counts' answer; a named repository asks its own.
+ */
 function QueueSummary({
   repo,
   out,
+  section,
 }: {
   repo: string;
   out: { total: number; more?: boolean } | null;
+  section: QueryResult<CodeCountsAnswer>;
 }) {
-  const counts = useCodeQuery("code_counts", repo ? { parts: "queue", repo } : { parts: "queue" }, {
-    pollMs: QUEUE_POLL_MS,
-  });
+  const own = useCodeQuery(
+    "code_counts",
+    { parts: "queue", repo },
+    { pollMs: QUEUE_POLL_MS, enabled: repo !== "" },
+  );
+  const counts = repo ? own : section;
   const queued = counts.error ? null : (counts.data?.counts?.queue ?? null);
   const halves = summaryWords(queued, out, repo);
   if (halves.length === 0) return null;

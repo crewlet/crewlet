@@ -18,48 +18,24 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A CONVERSATION'S FILES: the images a person attaches to a question and the
-// files a deep-work run delivers, kept beside the conversation and gone with it.
-//
-// # A row names the object, and the object is sealed
-//
-// A file is up to wire.FileMaxBytes, and the replicated estate is copied whole
-// onto every data node, so its bytes go to the fleet's object store (ADR-0026)
-// and a row of `assistant_files` names the object, as a tracker file's row
-// does. THE OBJECT IS SEALED: its bytes are the keyring envelope of the file's
-// content, under the fleet keyring with associated data naming the conversation
-// and the file ([AAD], [ColumnContent]), because the object store may be a
-// bucket somebody else runs and a conversation is a copy of what one person
-// was shown (ADR-0053). Moved under another file's row, an object does not
-// open. The row records the key the content is sealed under, so a rotation
-// counts it without fetching a byte ([Reader.SealedKeys]).
-//
-// # The object first, then the row
-//
-// [FileStore.Store] uploads the sealed object BEFORE it publishes the record
-// naming it, so no reader is ever told of a file whose bytes are nowhere; an
-// object whose record never lands is named by no row and the collector
-// deletes it a day later. The table is declared in
-// internal/objstore/references ([FileObjectReferences]), so the collector
-// keeps every object a row names and deletes it once a purge or an erasure has
-// removed the row with the rest of the conversation.
-//
-// # Owner-keyed, with one audited exception
-//
-// Every read is keyed on the owner AND the conversation: another person's file,
-// or one of another conversation, is [ErrNotFound]. An administrator's
-// compliance read opens one file only for the receipt of a compliance read
-// recorded beside the conversation ([FileStore.AuditOpen]), as
-// [Reader.AuditTranscript] opens a transcript.
+// A CONVERSATION'S FILES (package doc, "Files"). A file's bytes, up to
+// wire.FileMaxBytes, go to the object store (ADR-0026) because the estate is
+// copied whole onto every data node, sealed ([AAD], [ColumnContent]) because
+// the bucket may be somebody else's (ADR-0053); moved under another row, an
+// object does not open. The row records the content's key, so a rotation
+// counts it without a fetch ([Reader.SealedKeys]). The object is uploaded
+// before its record, so no reader learns of a file whose bytes are nowhere;
+// one whose record never lands is named by no row and collected a day later.
+// Reads are keyed on owner and conversation ([ErrNotFound] otherwise), except
+// [FileStore.AuditOpen].
 
 // FileObjectReferences is the table whose rows keep a conversation's files'
 // objects alive: the declaration internal/objstore/references collects.
 //
-// REQUIRED (ADR-0081): a kept file is an image a person attached or a file a
-// run delivered to them, bytes nothing builds again, so its objects are
-// audited and every backup carries them until a purge or an erasure removes
-// the row. The declaration therefore names the log a restore replays and how
-// one record of it names the table's rows (ADR-0082).
+// REQUIRED (ADR-0081): a kept file's bytes are nothing builds again, so its
+// objects are audited and every backup carries them until a purge or an
+// erasure removes the row; hence the declaration names the log a restore
+// replays and how one record names the table's rows (ADR-0082).
 var FileObjectReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "assistant_files",
 	Key: "object", Hash: "hash", Size: "object_size",
@@ -70,28 +46,17 @@ var FileObjectReferences = objstore.ReferenceTable{
 	Records:  fileRecordReferences,
 }
 
-// fileRecordReferences answers the assistant_files row one record of the
-// assistant's log writes, and the object it names once the record applies:
-// [objstore.ReferenceTable.Records] for [FileObjectReferences].
+// fileRecordReferences is [objstore.ReferenceTable.Records] for
+// [FileObjectReferences]: the row one record writes, and the object it names.
 //
-// A RECORD THIS BUILD READS is answered by the applier's own decoder: only a
-// file kept on a conversation ([OpFileStored]) writes the table, through
-// [applyFile], so every other record answers none. The file is answered
-// whether or not this node's applier would admit it (the conversation's bound
-// on files is decided again at the apply): a backup reads a superset of what a
-// restore's rows name, never a subset. A purge or an erasure REMOVES rows the
-// record does not list, so it answers none, and a backup carrying an object
-// such a record later removed carries one object more than a restore names,
-// which the collector deletes, never one fewer.
-//
-// A RECORD THIS BUILD CANNOT READ is answered from what EVERY build reads of
-// it ([mayWriteFiles]): one that may write a file row is
-// [objstore.ErrRecordUnreadable].
-//
-// THE ROW IS SPELLED AS [FileObjectReferences] LISTS ITS OWNER, the
-// conversation and then the file, through [objstore.JoinOwner], as the walk of
-// the table spells it; the declaration itself is not read here, which would be
-// an initialisation cycle.
+// Only [OpFileStored] writes the table ([applyFile]); its file is answered
+// whether or not this node's apply admits it (the bound is decided again
+// there): a backup reads a superset of what a restore's rows name, never a
+// subset. A purge or an erasure removes rows, so it answers none, costing at
+// most an object the collector deletes. An unreadable record is
+// [objstore.ErrRecordUnreadable] when [mayWriteFiles]. The owner is spelled
+// conversation then file ([objstore.JoinOwner]), as [FileObjectReferences]
+// lists it, without reading the declaration (an initialisation cycle).
 func fileRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 	env, err := DecodeEnvelope(payload)
 	if err != nil {
@@ -134,14 +99,10 @@ func fileRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 }
 
 // mayWriteFiles reports whether a record this build cannot read may write an
-// assistant_files row, from what every build reads of it: its kind and the
-// scope its WRITER stated as the complete set of objects its apply may write.
-//
-// AN UNKNOWN KIND MAY: this build cannot place what a kind it has never heard
-// of names. A KNOWN KIND may when any path of its scope reaches a
-// conversation, the domain or a path this build cannot interpret, and may not
-// when every path is the framework's own: a file row lives under its
-// conversation, so only the barrier and the trimmed record name none.
+// assistant_files row, from its kind and the scope its writer stated. An
+// unknown kind may, since this build cannot place what it names; a known kind
+// may unless every path of its scope is the framework's own (a file row lives
+// under its conversation, so only the barrier and trimmed records name none).
 func mayWriteFiles(env RecordEnvelope) bool {
 	if !env.Subject.Kind.Valid() {
 		return true
@@ -219,15 +180,12 @@ func NewFileStore(w *Writer, r *Reader, objects *objstore.Store) (*FileStore, er
 
 // Store keeps one file for the call's owner and answers its record.
 //
-// Refused before a byte is uploaded: a file the domain could not keep
-// ([ErrInvalid]), a conversation that is not the owner's ([ErrNotFound]) and
-// one already holding [FilesPerConversation] of the file's origin
-// ([ErrTooManyFiles]). A file already recorded under the id (a retried upload
-// whose first attempt landed) answers that record with a zero result and
-// uploads nothing. Otherwise the content is sealed and uploaded, and the record
-// naming it published; the result is the record's, and an `applied` one is
-// read back, so a record the apply refused at the bound is [ErrTooManyFiles]
-// rather than a file nobody can read.
+// Refused before any upload: an invalid file ([ErrInvalid]), another owner's
+// conversation ([ErrNotFound]), and one already holding
+// [FilesPerConversation] of the file's origin ([ErrTooManyFiles]). An id
+// already recorded (a retried upload) answers that record with a zero result
+// and uploads nothing. An `applied` result is read back, so a record the apply
+// refused at the bound is [ErrTooManyFiles] rather than a file nobody can read.
 func (s *FileStore) Store(ctx context.Context, c Call, f NewFile) (File, statelog.Result, error) {
 	if err := c.validate(true); err != nil {
 		return File{}, statelog.Result{}, err
@@ -318,10 +276,9 @@ func (s *FileStore) AuditOpen(ctx context.Context, receipt AuditReceipt, file uu
 	return f, content, err
 }
 
-// content fetches a file's sealed object, checked byte for byte against its
-// row by the object store, and opens it under the file's own associated data.
-// The read of the estate is closed before the object store is asked, so no
-// read is held open across a fetch of up to seven mebibytes.
+// content fetches a file's sealed object, checked against its row by the
+// object store, and opens it under the file's own associated data. Called after
+// the estate read closes, so none is held open across a fetch of up to 7 MiB.
 func (s *FileStore) content(ctx context.Context, f File) ([]byte, error) {
 	body, err := s.objects.Open(ctx, f.object)
 	if err != nil {

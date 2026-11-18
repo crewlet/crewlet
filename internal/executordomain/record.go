@@ -13,46 +13,26 @@ import (
 )
 
 // RecordVersion is the record shape THIS BUILD can decode, never the version it
-// stamps on what it writes.
-//
-// A record above it is RETAINED rather than skipped (the framework's deferral
-// contract), which is what makes a rolling upgrade a period of reduced coverage
-// rather than an outage. What a writer stamps is the LOWEST version that reads
-// the record, computed by [Encode] from [versionedFields]. It moves ONLY with
-// that table, and exactly to its highest version.
-//
-// # What each version added
-//
-//   - 1: the base format: a capture, an end, a retention delete, a seat's
-//     removal, the trim's trimmed record, and the framework's eviction,
-//     generation and barrier.
-//   - 2: a turn's `begin` ([Begin]: its first read of its conversation and the
-//     base that read froze, which the row then holds), and a capture's
-//     context and cut-off ([Capture.ContextTokens], [Capture.Interrupted]).
-//   - 3: an end's sessions that ran out of context
-//     ([executorkeep.Ending.Exhausted]), which its apply retires.
-//   - 4: an end that says its turn went on past the session its row names
-//     ([executorkeep.Ending.WentOn]) and, beside it, the turn's last word
-//     where that was its newest capture ([executorkeep.Ending.LastWord]),
-//     which a reader holds the row's place to; and the rule an end stamped 4
-//     or above is applied by: it never takes the row's session off for an
-//     unkept attempt ([wentOnVersion]).
+// stamps: [Encode] stamps the LOWEST version that reads the record, from
+// [versionedFields], which says what each version added. It moves ONLY with
+// that table, exactly to its highest version; version 4 also changed how an
+// end applies ([wentOnVersion]). A record above it is RETAINED rather than
+// skipped (the framework's deferral contract), so a rolling upgrade reduces
+// coverage rather than causing an outage.
 const RecordVersion = 4
 
 // baseRecordVersion is version 1, the base format.
 const baseRecordVersion = 1
 
-// wentOnVersion is the version an end that says its turn went on past its
-// row's session is stamped at, and the version from which an end is APPLIED
-// BY THE RULE THAT CAME WITH IT ([applyEnd]): the row keeps its session
-// whatever unkept attempt the end names beside it, and the end absorbs and
-// dedupes as any turn that landed a capture does. An end stamped below it
-// keeps the rule it was written under — the row's older session released for
-// an unkept attempt newer than it, and nothing absorbed — because a record's
-// meaning is fixed by its stamp: a node of the build before reads every end it
-// can at its own rule, so a node of this build applying those ends by another
-// would hold rows no other copy holds. That is no reading of an older build's
-// data; it keeps the estate a pure function of the log.
+// wentOnVersion stamps an end that says its turn went on past its row's
+// session, and from it an end is APPLIED BY THE RULE THAT CAME WITH IT
+// ([applyEnd]): the row keeps its session whatever unkept attempt the end
+// names, and the end absorbs and dedupes like any turn that landed a capture.
+// An end stamped below keeps its older rule (the row's older session released
+// for a newer unkept attempt, nothing absorbed), because a record's meaning is
+// fixed by its stamp: the build before applies every end it reads by its own
+// rule, so another rule here would hold rows no other copy holds. That keeps
+// the estate a pure function of the log; it reads no older build's data.
 const wentOnVersion = 4
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
@@ -65,27 +45,13 @@ const GateRecordVersion = 1
 // Adding one is a row here, [RecordVersion] moved to its version, and a
 // conformance candidate that carries it (statelog_test.go's carrying).
 //
-// A FIELD NO TAG HAS SHIPPED STILL GETS ITS ROW: two builds of a rolling
-// upgrade disagree about it all the same. A build at version 1 has no applier
-// for a `begin` — its dispatch would fault on the (conversation, begin) pair —
-// and no column for a capture's context or cut-off, which it would decode
-// around, apply without, and so hold rows that differ from every upgraded
-// node's for as long as the turn's row lives. With the rows it retains both,
-// and applies them once it can.
-//
-// A NEW OP IS A VALUE of a key every record has carried since the base format,
-// so its row names the key and the value: a row naming `op` alone would stamp
-// every record the domain writes. A capture's two fields are omitted at their
-// zero, so a capture that recorded neither stays readable by every build. An end
-// names exhausted sessions only where one ran out, and a build that applied it
-// without reading them would keep rows no other node keeps. And an end says its
-// turn went on past its row's session only where it did, which a build applying
-// it without reading it would answer by releasing that session where every
-// node of this build keeps it. It names the turn's last word only beside that,
-// so the last word stamps no end above where went_on already stamps it; its row
-// is its own all the same, because a field's version is the field's, whatever
-// rides beside it: a build reading 3 that applied an end carrying it would keep
-// an ending without it, which no copy of this build keeps.
+// A FIELD NO TAG HAS SHIPPED STILL GETS ITS ROW: an older build in a rolling
+// upgrade would fault on it or apply around it, holding rows no upgraded node
+// holds; with the row it retains the record until it can apply it. A field's
+// row is its own whatever rides beside it (LastWord rides only beside WentOn).
+// A NEW OP IS A VALUE of a key every record carries, so its row names the key
+// and the value: `op` alone would stamp every record. Each field is omitted at
+// its zero, so a record that sets none stays readable by every build.
 var versionedFields = statelog.RecordFields{
 	{Name: "RecordEnvelope.Op begin", Since: 2, Path: []string{"op"}, Equals: string(OpBegin)},
 	{Name: "Capture.ContextTokens", Since: 2, Op: string(OpCapture), Path: []string{"mutation", "context_tokens"}},

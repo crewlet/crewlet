@@ -13,17 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE IDENTITY ESTATE IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE, and it is the
-// FOURTH domain to run it — the third STRICT one.
-//
-// What the three before it could not exercise is the case this one is: a domain
-// whose ROWS ARE CIPHERTEXT. The suite's determinism half compares table
-// CONTENT rather than counting rows, which it has to here — two nodes writing
-// different ciphertext for one record would pass a count and fail the claim
-// that their tables are byte-identical. That the comparison holds at all is
-// what says the sealing happens at the WRITER rather than on each node, which
-// is what keeps a name, an address and a seed ciphertext on the log and in
-// every data node's rows alike.
+// THE IDENTITY ESTATE IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE, as a domain
+// whose ROWS ARE CIPHERTEXT: the determinism half compares table CONTENT, so
+// it holds only because sealing happens at the WRITER, not on each node,
+// which keeps names, addresses and seeds ciphertext on the log too.
 func TestTheIdentityDomainIsACertifiedDomain(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
@@ -31,39 +24,29 @@ func TestTheIdentityDomainIsACertifiedDomain(t *testing.T) {
 			Domain: iamdomain.Domain{},
 			// NO DIRECTORY SIGNAL: nothing here rebuilds a registry.
 			Applier: iamdomain.NewApplier("suite-node", nil),
-			// Migrate is nil: these tables ship in the replicated
-			// estate's own migrations, so a fresh store already has
-			// them. A domain that created its tables from test code
-			// would be a schema the suite proved and the migration did
-			// not.
+			// Migrate is nil: the tables ship in the replicated estate's
+			// migrations, so the suite proves the schema they create.
 			Encode: encodeSuiteRecord,
-			// THE PRODUCTION TABLE, which is empty: the base format is
-			// every field this build writes. A row added to it needs a
-			// Carrying here that builds a record carrying the field
-			// through the writer's own encoder, and the suite refuses
-			// a table without one.
+			// THE PRODUCTION TABLE, which is empty. A row added to it
+			// needs a Carrying here, built through the writer's own
+			// encoder; the suite refuses a table without one.
 			Fields: iamdomain.VersionedFields(),
 			Kinds:  suiteKinds(),
 			Rows:   iamdomain.NewRows,
 			Write:  suiteWrite,
-			// THE PRODUCTION ENCODER the engine hands the trim, so this
-			// log's anchors below the floor are removed by the same record
-			// every log that writes anchors takes (ADR-0080).
+			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0080).
 			EncodeTrimmed: iamdomain.EncodeTrimmed,
-			// AND OF ITS READ INDEX'S BARRIER, which the engine registers
-			// for this log: certified to write no row.
+			// AND OF ITS READ INDEX'S BARRIER: certified to write no row.
 			EncodeBarrier: iamdomain.EncodeBarrier,
-			// THE GATE RECORD, which this domain had an applier, a fence
-			// and a table for and no writer — so the trim never learned
-			// an evicted node had left this log.
+			// THE GATE RECORD, through a peer's writer, so the trim learns
+			// an evicted node has left this log.
 			EncodeGate: encodeSuiteGate,
 		}
 	})
 }
 
-// suiteWrite is one write through the identity estate's own [iamdomain.Writer]
-// — the builder every write path in the domain shares, [iamdomain.Writer.request],
-// which is where the framework's stamp is kept or lost.
+// suiteWrite is one write through [iamdomain.Writer]'s shared builder,
+// [iamdomain.Writer.request], where the framework's stamp is kept or lost.
 func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	w, err := iamdomain.NewWriter(iamdomain.WriterDeps{
 		Publisher: pub, DB: db, Actor: "suite", ActorKind: iam.KindMachine,
@@ -77,7 +60,7 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 }
 
 // encodeSuiteGate is the eviction record a peer's writer publishes onto this
-// log — or, with readmit, the inverse commit that takes the node back.
+// log, or with readmit the inverse commit that takes the node back.
 func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 	opID := "suite-evict-" + node
 	if readmit {
@@ -89,14 +72,9 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 }
 
 // THE IDENTITY ESTATE'S GATE READER KEEPS THE RULE EVERY READER SHARES,
-// certified by the same family as the tracker's and the knowledge base's.
-//
-// This reader answered the eviction before the removal, in two reads, until it
-// took the shared shape — and nothing noticed, because it was tested only
-// against its own idea of the rule. Its removal gate is keyed on the PERSON,
-// so the kind it is asked about is the person's own subject: a record whose
-// person is in its payload is one this reader is never handed
-// ([iamdomain.Gates]).
+// certified by the same family as every other domain's. Its removal gate is
+// keyed on the PERSON, so it is asked about the person's own subject; a record
+// whose person is in its payload never reaches it ([iamdomain.Gates]).
 func TestTheIdentityGateReaderKeepsTheSharedRule(t *testing.T) {
 	t.Parallel()
 	statelogtest.RunGates(t, func(t *testing.T) statelogtest.GateCandidate {
@@ -108,16 +86,14 @@ func TestTheIdentityGateReaderKeepsTheSharedRule(t *testing.T) {
 				Kinds:   suiteKinds(),
 			},
 			Reader: func(db store.ReplicatedReader) statelog.Gates { return iamdomain.NewGates(db) },
-			// A PERSON, which is what a removal takes out of the estate for
-			// ever: its tombstone is this log's deletion marker.
+			// A PERSON: a removal's tombstone is this log's deletion marker.
 			Kind: string(iamdomain.KindPerson),
-			// EVERY KIND, the applier asked rather than told which ones the
-			// tombstone covers: a directory record names its person in the
-			// payload alone, so the marker reaches it through the body,
-			// and a session about somebody else must be left alone by both.
+			// EVERY KIND, so the applier is asked which the tombstone
+			// covers: a directory record names its person in the payload
+			// alone, and a session about somebody else is left alone.
 			SubjectKinds: suiteKinds(),
-			// AN ENROLMENT, on the directory: the record that brings a
-			// person into the estate names them in its payload alone.
+			// AN ENROLMENT, on the directory, names the person in its
+			// payload alone.
 			Create: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(iamdomain.DirectorySubject(), iamdomain.OpEnrol,
 					id, writer, opID, iamdomain.PeopleScope(id), iamdomain.Enrolled{
@@ -130,9 +106,8 @@ func TestTheIdentityGateReaderKeepsTheSharedRule(t *testing.T) {
 					id, writer, opID, iamdomain.PeopleScope(id),
 					gateSuitePerson([]iam.Grant{iam.GrantWorklet}))
 			},
-			// A REMOVAL IS THE PURGE: the one record here with no inverse,
-			// and the one that writes the tombstone every later record
-			// about the person is dropped by.
+			// A REMOVAL IS THE PURGE: no inverse, and its tombstone drops
+			// every later record about the person.
 			Purge: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(iamdomain.DirectorySubject(), iamdomain.OpRemove,
 					id, writer, opID, iamdomain.PeopleScope(id),
@@ -149,9 +124,8 @@ func TestTheIdentityGateReaderKeepsTheSharedRule(t *testing.T) {
 					iamdomain.Eviction{V: iamdomain.GateRecordVersion, Readmit: true,
 						By: "suite"})
 			},
-			// AN IDENTITY CHANGE: it arbitrates on the directory, and the
-			// person it moves is in its payload — the record whose removal
-			// gate only the body can name.
+			// AN IDENTITY CHANGE arbitrates on the directory with its
+			// person in the payload: only the body names its removal gate.
 			About: func(id, writer, opID string) (statelog.Subject, []byte, error) {
 				subject := iamdomain.DirectorySubject()
 				body, err := gateSuiteRecord(subject, iamdomain.OpIdentity, id, writer,
@@ -231,21 +205,12 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 	return iamdomain.Encode(rec)
 }
 
-// suitePerson is the person a session, a status change and a sweep are
-// about.
+// suitePerson is the person a session, a status change and a sweep are about.
 const suitePerson = "018f3a9c-0000-7000-8000-00000000f00d"
 
-// suitePayload is one valid (op, person, payload, scope) per kind.
-//
-// # Why the directory and the person are the first two kinds
-//
-// The suite publishes the FIRST THREE kinds a candidate declares, twice each,
-// in order, each pair about the ids it hands over. So the declaration order
-// decides what gets certified — and this domain's first two are a real
-// sequence: the directory enrols a person under the id, and the person's own
-// subject then changes their document. A person record about somebody nobody
-// enrolled writes no row, so the other order would certify a no-op rather
-// than a domain.
+// suitePayload is one valid (op, person, payload, scope) per kind: the
+// directory enrols a person under the id and the person kind then changes
+// their document, the sequence [iamdomain.ObjectKinds]' order certifies.
 func suitePayload(kind iamdomain.ObjectKind, id string) (
 	iamdomain.OpKind, string, any, iamdomain.ScopeSet) {
 

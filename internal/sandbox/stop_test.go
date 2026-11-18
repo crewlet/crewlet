@@ -715,13 +715,14 @@ func (s *silentFromDecision) CollectStop(ctx context.Context, turnID string, c S
 }
 
 // A STOP WHOSE NODE SHARES ITS HOST'S STORE SILENCE IS KEPT, AND NEVER SAID
-// ENDED, past the box timeout too. The staged attempt's own read of the row is
-// the first step this node's store does not answer, after the retry decided the
-// ending again.
+// ENDED, past the box timeout too, nor counted toward the host's silence. The
+// staged attempt's own read of the row is the first step this node's store does
+// not answer, after the retry decided the ending again.
 //
 // Mutation: bound the host's silence whatever the attempt's own row read met
 // (readStopped), or hand readStopped a read that answered (finishEnding), and
-// the stop is kept only by its record's write failing.
+// the stop is kept only by its record's write failing; count the shared silence
+// (readStopped), and it is given up once this node's store alone answers.
 // ([TestAStopIsSaidEndedUnreadOnlyOnceItsRecordSaysSo] holds the saying.)
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
@@ -759,8 +760,16 @@ func TestAStopWhoseNodeSharesItsHostsStoreSilenceIsKeptAndNeverSaidEnded(t *test
 		t.Fatalf("nothing said the stop waits on a store silent to both nodes: %q", line)
 	}
 
-	hostStore.answer()
+	rig.now = rig.now.Add(DefaultBoxTimeout)
 	ownStore.answer()
+	rig.fireRetries()
+	if kept := rig.get("t1"); kept.Stop == nil || kept.Stop.Collected || rig.accountant.asked() != 0 {
+		t.Fatalf("a box timeout into a silence both nodes shared, the stop whose host's store alone is "+
+			"silent now reads stop %+v, charged %t; want it kept, its host's silence counted from now",
+			kept.Stop, rig.accountant.asked() != 0)
+	}
+
+	hostStore.answer()
 	rig.fireRetries()
 	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
 		t.Fatal("the stop was not finished once both stores answered")

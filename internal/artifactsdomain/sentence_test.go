@@ -11,14 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 )
 
-// A REFUSAL ABOUT THE ARTIFACT ITSELF IS TOLD WITHOUT ITS ID, AND LOGGED WITH IT.
-//
-// Not there, in the trash, being purged, purged and moved past a publish's
-// base each name the artifact by id in their error, which is the log's; a
-// person read "the artifact was purged: 0192f…" and "artifact 0192f… is at
-// version 4 and this publish was based on an older one" on the screen of the
-// artifact they meant. What else such a refusal says stays — a version that
-// is not kept is named by its number. Mutations: drop a sentinel from
+// A REFUSAL ABOUT THE ARTIFACT ITSELF IS TOLD WITHOUT ITS ID, AND LOGGED WITH IT:
+// not there, in the trash, being purged, purged and moved past a publish's base
+// name the artifact by id in the error, for the log, while the person is
+// already on that artifact's screen. Mutations: drop a sentinel from
 // aboutTheArtifact, or answer the moved head's Error, and its row goes red;
 // cut the id from the error itself and the log rows do.
 func TestARefusalAboutTheArtifactIsToldWithoutItsID(t *testing.T) {
@@ -60,17 +56,13 @@ func TestARefusalAboutTheArtifactIsToldWithoutItsID(t *testing.T) {
 }
 
 // A REFUSAL THAT SAYS MORE THAN ITS SENTINEL IS TOLD AS WHAT IT SAYS, AND
-// NEVER BY THE ARTIFACT'S ID.
-//
-// A version the artifact does not keep, an asset it does not hold and a
-// restore of an artifact that is not in the trash each read "artifact 0192f…
-// keeps no version 9" and the like to the person on that artifact's screen,
-// and the first two under "no such artifact", which the sentence contradicts.
-// Each now names the artifact by id right after its sentinel for the log and
-// is told as its own sentence. Walked through the real reader and writer.
-// Mutations: name the artifact in the sentence again, or keep the sentinel's
-// words before it, and that row goes red; cut the id from the error itself
-// and the log check does.
+// NEVER BY THE ARTIFACT'S ID: a version not kept, an asset not held, a restore
+// of a live artifact and the asset store's caps name the artifact by id after
+// their sentinel for the log, and are told as their own sentence, never under
+// the sentinel's words ("no such artifact" would contradict it). Walked
+// through the real reader and writer. Mutations: name the artifact in the
+// sentence, or keep the sentinel's words before it, and that row goes red; cut
+// the id from the error itself and the log check does.
 func TestARefusalSayingMoreIsToldWithoutTheArtifactsID(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -80,19 +72,16 @@ func TestARefusalSayingMoreIsToldWithoutTheArtifactsID(t *testing.T) {
 	asset := uuid.New()
 	_, notHeld := n.writer.RemoveAsset(t.Context(), jane, id, asset)
 	// THE APPLIER'S VERDICT on a restore that met a live artifact: the
-	// writer's decide makes nothing of one it can see is live already.
+	// writer's decide treats one it sees is live as nothing to do.
 	notTrashed := artifactsdomain.RefusalError(t.Context(), &artifactsdomain.Writer{},
 		id.String(), artifactsdomain.RefusedLive, artifactsdomain.HistorySummary{}, 0)
-	// AND ITS VERDICT ON A LABEL FOR A VERSION THE ARTIFACT NO LONGER KEEPS,
-	// which a record meets when the version goes between its decide and its
-	// apply: told as the decide tells the same fact, never as "no such
-	// artifact" about the artifact the person is looking at.
+	// AND ITS VERDICT ON A LABEL FOR A VERSION GONE between the decide and
+	// the apply: told as the decide tells it, never as "no such artifact".
 	labelGone := artifactsdomain.RefusalError(t.Context(), &artifactsdomain.Writer{},
 		id.String(), artifactsdomain.RefusedVersionNotFound, artifactsdomain.HistorySummary{}, 7)
-	// THE ASSET STORE AT ITS CAPS, seeded in the rows a real writer then
-	// decides on: one artifact holding its count of assets, another its
-	// bytes. And an upload another file already names, whose object key the
-	// store minted and nobody reading the refusal chose.
+	// THE ASSET STORE AT ITS CAPS (one artifact at its count, another at its
+	// bytes), seeded in the rows a real writer decides on; and an upload
+	// another file names, whose store-minted object key the sentence omits.
 	full := n.create(jane, "Full", upload(t, "index.html", "<p>full</p>")).Artifact
 	heavy := n.create(jane, "Heavy", upload(t, "index.html", "<p>heavy</p>")).Artifact
 	n.seedAssets(full, artifacts.MaxAssetsPerArtifact, 1)

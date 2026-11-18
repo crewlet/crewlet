@@ -50,6 +50,19 @@
 // VALID one stays here, in the decoders below, because that belongs to the
 // phase doing the asking.
 //
+// # A continued session's words and measure
+//
+// A relaunch that continues a kept capture taken while its job still worked
+// ([SessionBasis.WentOn]) tells the session it was saved then, when
+// ([SessionBasis.CapturedAt]), and that its run went on past it
+// (prompts.SavedSession), in place of the words that say only that it was cut
+// off: told those, the run takes the session's end for where its work stopped.
+// And each session a relaunch may continue is held to its own measure: a kept
+// session to what its own capture measured ([SessionBasis.ContextTokens]),
+// never the copy's, and the job's copy in its own box to its newest capture's
+// measure, kept or not ([SessionBasis.CopyContext]), or its record's where
+// larger. One figure for both would hold one session to what the other sends.
+//
 // # The order a continuation tells a person's notes in
 //
 // A continuation tells a session the notes a person sent the turn

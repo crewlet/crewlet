@@ -126,17 +126,17 @@ func storedSession(row executorkeep.TurnRow) executordomain.Session {
 }
 
 // ProbeSession answers which session a launch of the turn continues
-// ([runner.SessionProber]): on the turn's FIRST launch, the head its dispatch
-// read and the turn will freeze, from that read alone ([conversationRead.basis]);
-// on a relaunch, the kept capture of the job it follows, else the base the
-// first launch froze where the turn kept nothing, as
-// [sandbox.Coordinator.ContinuedCapture] decides it for the seat's chain, or
-// why it continues none (logged, but for a conversation's first turn); and
-// either way what the job before's session's last request carried and what
-// its harness estimates its next one at, which the in-place floor is made of.
-// For ANY MEMBER OF THE CHAIN, never one picked here
-// ([runner.SessionBasis.Harness], [agentLauncher.continuedFloor]): the
-// package doc's "Executor launch floor" says why.
+// ([runner.SessionProber]): on the FIRST launch, the head its dispatch read
+// ([conversationRead.basis]); on a relaunch, as
+// [sandbox.Coordinator.ContinuedCapture] decides for the seat's chain, or why
+// none (logged, but for a conversation's first turn). EACH SESSION'S CONTEXT
+// IS ITS OWN: a kept capture's own measure and next-request estimate
+// ([runner.SessionBasis.ContextTokens], NextRequest) for the floor in any box,
+// its job's newest capture's, either way, for its copy in place (CopyContext,
+// CopyNextRequest), since one figure would hold a session to what another
+// carried. ANY MEMBER OF THE CHAIN, never one picked here: the launch picks
+// once as it launches, and hands the briefs on only where its member runs the
+// session's harness ([agentLauncher.continuedFloor]).
 func (l *agentLauncher) ProbeSession(ctx context.Context) runner.SessionBasis {
 	basis := l.probeSession(ctx)
 	// AND THE WINDOW EVERY PATH'S FIRST REQUEST IS JUDGED UNDER, on every basis
@@ -177,16 +177,16 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 	if base := continued.Base; base != nil {
 		// A TURN THAT HAS KEPT NOTHING, relaunched: the base its first launch
 		// froze, which its row still holds.
-		basis := baseBasis(*base, continued.Context)
-		basis.KeptTurn, basis.NextRequest = continued.KeptTurn, continued.NextRequest
+		basis := baseBasis(*base, continued.CopyContext)
+		basis.KeptTurn, basis.CopyNextRequest = continued.KeptTurn, continued.CopyNextRequest
 		return basis
 	}
 	if why != "" {
 		// THE SESSION THE TURN KEEPS, or else the base it froze, where the
 		// relaunch continues neither: a run that starts a session of its own
 		// beside it is told it may read it.
-		return runner.SessionBasis{Why: why, ContextTokens: continued.Context,
-			NextRequest: continued.NextRequest, KeptTurn: continued.KeptTurn}
+		return runner.SessionBasis{Why: why, CopyContext: continued.CopyContext,
+			CopyNextRequest: continued.CopyNextRequest, KeptTurn: continued.KeptTurn}
 	}
 	captured := continued.Capture
 	// ITS SAVE POINT, which every capture a relaunch continues states: one
@@ -202,8 +202,18 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		// resumes it, its own box not yet acquired.
 		Release: continued.Row.HarnessVersion,
 		Through: through, NoteCursor: captured.NoteCursor,
-		Interrupted: captured.Interrupted, Home: captured.Home, ContextTokens: continued.Context,
-		NextRequest: continued.NextRequest, KeptTurn: continued.KeptTurn,
+		Interrupted: captured.Interrupted, Home: captured.Home,
+		// AND WHETHER ITS JOB WENT ON PAST IT, and when it was taken: a
+		// capture that is not final was taken while its job still worked, so
+		// the run continuing it is told the session ends where it was saved,
+		// not where its job stopped.
+		WentOn: !captured.Final, CapturedAt: captured.At,
+		// WHAT THE CAPTURE ITSELF CARRIED AND ITS HARNESS PUT ITS NEXT REQUEST
+		// AT, the kept path's floor, and the same of the job's copy in its
+		// box, the in-place path's.
+		ContextTokens: captured.ContextTokens, NextRequest: captured.NextRequest(),
+		CopyContext: continued.CopyContext, CopyNextRequest: continued.CopyNextRequest,
+		KeptTurn: continued.KeptTurn,
 		// AND WHAT ITS HARNESS COUNTS THE CAPTURE'S SESSION AT, as its take
 		// read its archive whole, with the provider an OpenCode count's reply
 		// was answered by: what the kept path's first request is judged by.

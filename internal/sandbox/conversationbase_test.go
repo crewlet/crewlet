@@ -246,7 +246,13 @@ func (l *conversationLog) capturesOf(turn string) []CaptureRecord {
 
 // Session answers a turn's row at the level a relaunch reads (the engine's
 // adapter's), so an end another node published is seen.
-func (l *conversationLog) Session(_ context.Context, handle, turn string) (executorkeep.TurnRow, error) {
+func (l *conversationLog) Session(ctx context.Context, handle, turn string) (executorkeep.TurnRow, error) {
+	// A READ UNDER A CONTEXT THAT ENDED IS NOT ANSWERED, as the estate
+	// router's is not: a fake that answered it settled what a wait whose
+	// time had run out could not have read.
+	if err := ctx.Err(); err != nil {
+		return executorkeep.TurnRow{}, err
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	row, ok := l.rows[turn]

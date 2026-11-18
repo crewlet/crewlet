@@ -41,11 +41,11 @@ func invalid(format string, args ...any) error {
 }
 
 // Sentence is a refusal of this domain worded for whoever reads it: a person's
-// write surface, a seat's tool, the assistant. The state log's own refusals are
-// said in the framework's words for a person ([statelog.Sentence]), and every
-// other loses the package and class words it opens with, which are for a log
-// and say nothing about what to change, the vocabulary's included. No refusal
-// here repeats a value, so nothing is cut from what follows them.
+// write surface, a seat's tool, the assistant. The state log's own refusals take
+// the framework's words for a person ([statelog.Sentence]); every other loses
+// the package and class words it opens with, the vocabulary's included, which
+// say nothing about what to change. No refusal here repeats a value, so the cut
+// never reaches one.
 func Sentence(err error) string {
 	if said, ok := statelog.Sentence(err); ok {
 		return said

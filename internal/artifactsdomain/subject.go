@@ -15,44 +15,23 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ARTIFACTS LOG'S SUBJECTS: what a record arbitrates over.
-//
-// Every change is one RECORD published to the subject of the object it
-// contends for and conditioned on that object's last sequence there. The
-// subject is the ARBITRATION UNIT, so the choice of subject per operation is
-// the concurrency design:
-//
-//   - Every op that adds or removes an object reference (a publish, a
-//     rollback, a retention prune, a purge) is on the ARTIFACT's own subject,
-//     so the broker orders every carry against every removal and the applier's
-//     carry check never fires for a well-behaved writer.
-//   - The republish-in-place address is a SOURCE subject, create-only, because
-//     two writers publishing the same source for the first time must contend
-//     there: two fresh artifact ids never would.
-//   - An asset rides a subject of its own beneath its artifact, because an
-//     asset is never carried and an upload storm must not push publishes into
-//     compare-and-set rounds.
-//   - A reader's pins and opened marks ride the READER's subject, because they
-//     are one person's state and contend with nothing else.
-//   - The company's folder tree is ONE subject (`folder`, no id), because
-//     every folder write reads the whole tree: sibling names, the ancestor
-//     chain a move must not close into a cycle, the depth stamp, the live
-//     count. One subject makes the writer's snapshot the one the broker
-//     arbitrates, as the identity directory's one subject does. An
-//     artifact's MOVE rides the artifact's own subject, ordered against its
-//     publishes, and names the folders it reads in its scope.
-//   - The company's adopted brand is ONE subject (`brand`, no id): two
-//     administrators adopting at once contend there, and the later one is
-//     decided against the earlier one's adoption.
-//   - A comment thread rides a subject of its own beneath its artifact
-//     (ADR-0154), never contending with a publish; the deletion gate covers it.
+// THE ARTIFACTS LOG'S SUBJECTS: a record is conditioned on its subject's last
+// sequence, so the subject is the arbitration unit and the concurrency design.
+//   - Every op adding or removing an object reference rides the ARTIFACT's
+//     subject, so the broker orders every carry against every removal.
+//   - A republish-in-place address is a create-only SOURCE subject: two first
+//     publishes of one source must contend, and two fresh artifact ids never do.
+//   - An asset (never carried) and a comment thread (ADR-0154) ride subjects
+//     under the artifact: uploads never push publishes into compare-and-set.
+//   - A READER's pins and opened marks are one person's: their own subject.
+//   - The folder tree and the brand are ONE subject each, with no id: every
+//     folder write reads the whole tree, and two adoptions must contend. A
+//     MOVE rides its artifact's subject, naming its folders in scope.
 
 // ObjectKind is what an object on the artifacts log is.
 //
-// A NAMED STRING TYPE whose Valid is false for a kind this build has never
-// heard of, and the literal is RETAINED either way: a newer peer publishes a
-// kind this build does not know, and the deferral this build files it under
-// forms a scope term out of that literal.
+// Valid is false for a kind this build has never heard of, but the literal is
+// RETAINED: the deferral of a newer peer's record forms a scope term from it.
 type ObjectKind string
 
 const (
@@ -77,8 +56,7 @@ const (
 	KindSource ObjectKind = "source"
 
 	// KindEviction is a node's eviction from THIS log, or its readmission.
-	// One of the two kinds that install a gate, which is why its version is
-	// pinned for ever.
+	// It installs a gate, so its version is pinned for ever.
 	KindEviction ObjectKind = "eviction"
 
 	// KindGeneration is a reanchor's record, create-only at an expectation
@@ -86,15 +64,14 @@ const (
 	KindGeneration ObjectKind = "generation"
 
 	// KindBarrier is the read index's payload-free append, on ONE subject
-	// for the whole domain. One of the two kinds that write no row of this
-	// domain's on any node; the other is [KindTrimmed].
+	// for the whole domain. Like [KindTrimmed], it writes no row of this
+	// domain's on any node.
 	KindBarrier ObjectKind = "barrier"
 
-	// KindTrimmed is the trim's record that removes the arbitration anchors
-	// below what the log no longer holds — [statelog.TrimmedKind], ADR-0080
-	// — on one subject per floor, which the subject's id names. The
-	// framework removes the anchors in the transaction that applies it; this
-	// domain writes nothing for it, and has the case that says so.
+	// KindTrimmed is the trim's record removing the arbitration anchors below
+	// what the log still holds ([statelog.TrimmedKind], ADR-0080), on one
+	// subject per floor, which its id names. The framework removes the anchors
+	// as it applies it; this domain writes nothing for it.
 	KindTrimmed ObjectKind = statelog.TrimmedKind
 
 	// KindFolder is the company's folder tree, ONE subject with no id:
@@ -110,18 +87,13 @@ const (
 	KindComment ObjectKind = "comment"
 )
 
-// ObjectKinds are the eleven, and THE ORDER IS LOAD-BEARING.
-//
-// The framework's conformance suite publishes the FIRST THREE a domain
-// declares, twice each, in order, so the declaration decides what the suite
-// certifies. These three are a real sequence: an artifact's create, an asset
-// added to it, and a reader pinning it. An asset or a pin of an artifact no
-// create wrote is a record the applier refuses, so any other order would
-// certify a refusal.
-//
-// A KIND ADDED LATER IS APPENDED, never inserted: the folder tree, the brand
-// and comment threads came after the base format, so a build predating them
-// retains their records ([versionedFields] stamps each kind at its version).
+// ObjectKinds are the eleven, and THE ORDER IS LOAD-BEARING: the framework's
+// conformance suite publishes the FIRST THREE a domain declares, twice each,
+// in order. They are a real sequence (an artifact's create, an asset added to
+// it, a reader pinning it); in any other order the applier refuses an asset or
+// pin of an artifact no create wrote, and the suite certifies a refusal. A kind
+// added later is APPENDED, never inserted, and [versionedFields] stamps it at
+// its version so an older build retains its records.
 var ObjectKinds = []ObjectKind{
 	KindArtifact, KindAsset, KindReader, KindSource, KindEviction, KindGeneration,
 	KindBarrier, KindTrimmed, KindFolder, KindBrand, KindComment,
@@ -133,19 +105,17 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation, and so whether the framework keeps an anchor for it.
 //
-// NINE OF ELEVEN DO. The barrier shares one subject across the whole domain, so
-// an expectation there would serialise every linearizable read behind every
-// other one. A trimmed record REMOVES anchors, and identical ones are each
-// meant to land, so an expectation would refuse every one after the first and
-// an anchor of its own would be the one row it exists not to leave behind. A
-// reader's `opened` and `read_elevated` are additive writes on an arbitrated
-// kind: they carry no expectation of their own, and they move the anchor a pin
-// is arbitrated against, which costs a pin at most one round.
+// NINE OF ELEVEN DO. The barrier's one domain-wide subject would serialise
+// every linearizable read behind every other. A trimmed record REMOVES anchors
+// and identical ones must each land, so an expectation would refuse all but the
+// first, and its own anchor would be the row it exists not to leave. A reader's
+// `opened` and `read_elevated` carry no expectation but move the anchor a pin
+// is arbitrated against, costing a pin at most one round.
 func (k ObjectKind) Arbitrated() bool { return k != KindBarrier && k != KindTrimmed }
 
 // InstallsGate reports a kind whose unknown version must STOP the applier
-// rather than be filed for later. A purge is this log's other gate, and it is
-// one by its OP on an ordinary artifact subject ([RecordEnvelope.InstallsGate]).
+// rather than be filed for later. A purge, the other gate, is one by its OP
+// ([RecordEnvelope.InstallsGate]).
 func (k ObjectKind) InstallsGate() bool { return k == KindEviction }
 
 // Subject is the object a record arbitrates over.
@@ -161,9 +131,9 @@ func ArtifactSubject(id artifacts.ID) Subject {
 
 // AssetSubject names one asset of one artifact.
 //
-// THE ARTIFACT LEADS, before a dot, so the deletion gate reads the artifact
-// from the subject without decoding a payload: the publisher's side of the gate
-// is asked about another node's record with no body at all ([Gates.GatedAt]).
+// THE ARTIFACT LEADS, before a dot, so the deletion gate reads it from the
+// subject: the publisher's side is asked about another node's record with no
+// body at all ([Gates.GatedAt]).
 func AssetSubject(artifact artifacts.ID, asset string) Subject {
 	return Subject{Kind: KindAsset, ID: artifact.String() + "." + asset}
 }
@@ -172,16 +142,11 @@ func AssetSubject(artifact artifacts.ID, asset string) Subject {
 // (iam.RecordOwner).
 func ReaderSubject(record string) Subject { return Subject{Kind: KindReader, ID: record} }
 
-// SourceSubject names an owner's hold on one republish-in-place address.
-//
-// # Why the address is a TOKEN
-//
-// A source key is a caller's own string (a path, a URL, a slug), and a subject
-// is a broker path that may carry no space, dot or wildcard. So the address is
-// arbitrated on a fixed-width digest of the key ([SourceToken]); the record's
-// payload carries the owner and the key themselves, and the applier recomputes
-// the subject from them and refuses a record that arbitrated on one address
-// while claiming another.
+// SourceSubject names an owner's hold on one republish-in-place address. A
+// source key is a caller's string and a subject may carry no space, dot or
+// wildcard, so the address is the key's digest ([SourceToken]). The payload
+// carries the owner and the key, and the applier refuses a record whose
+// subject they do not recompute to.
 func SourceSubject(owner, sourceKey string) Subject {
 	return Subject{Kind: KindSource, ID: owner + "." + SourceToken(sourceKey)}
 }
@@ -189,17 +154,16 @@ func SourceSubject(owner, sourceKey string) Subject {
 // SourceToken is the address a source key is arbitrated on: the first sixteen
 // bytes of SHA-256 over the key, in lowercase hex.
 //
-// THE KEY IS NOT NORMALISED: a source is an exact string a caller repeats (a
-// file path, a project slug), and folding case would make two distinct
-// sources one address.
+// THE KEY IS NOT NORMALISED: a source is an exact string a caller repeats, and
+// folding case would make two distinct sources one address.
 func SourceToken(sourceKey string) string {
 	sum := sha256.Sum256([]byte(sourceKey))
 	return hex.EncodeToString(sum[:16])
 }
 
 // SplitSourceID takes a source subject's id apart into the owner and the
-// token. The token is fixed-width hex with no dot, so the cut is at the LAST
-// dot and an owner that itself carries one still reads back whole.
+// token. The token has no dot, so the cut is at the LAST dot and an owner
+// carrying one reads back whole.
 func SplitSourceID(id string) (owner, token string, err error) {
 	cut := strings.LastIndex(id, ".")
 	if cut <= 0 || cut == len(id)-1 {
@@ -290,9 +254,9 @@ func (s Subject) framework() statelog.Subject {
 
 // Validate refuses a subject that cannot address an object.
 //
-// A KIND THIS BUILD DOES NOT KNOW IS NOT REFUSED HERE. It is refused where a
-// record is WRITTEN ([Subject.writable]) and accepted where one is READ, which
-// is the asymmetry the two-pass decode exists for.
+// A KIND THIS BUILD DOES NOT KNOW IS NOT REFUSED HERE: it is refused where a
+// record is WRITTEN ([Subject.writable]) and accepted where one is READ, the
+// asymmetry the two-pass decode exists for.
 func (s Subject) Validate() error {
 	if s.Kind == "" {
 		return fmt.Errorf("artifactsdomain: a subject with no kind addresses the " +
@@ -344,14 +308,12 @@ func ParseSubject(wire string) (Subject, bool) {
 // gatedArtifact is the artifact whose deletion marker gates a record on subj,
 // and false for a subject no artifact's marker covers.
 //
-// THE SUBJECT ALONE DECIDES, for the reason [Gates.GatedAt] gives: the
-// publisher's side is asked about another node's record with no body. An
-// artifact subject names its artifact, and an asset's and a comment thread's
-// lead with it; a
-// source subject and a reader subject name one only in their payloads, so they
-// are gated on nothing and their applies refuse an artifact the marker holds
-// instead. ONE FUNCTION, asked by [Applier.Gated] and [Gates.GatedAt] alike,
-// because the framework holds the two to one answer.
+// THE SUBJECT ALONE DECIDES, for [Gates.GatedAt]'s reason. An artifact
+// subject names its artifact, and an asset's and a comment thread's lead with
+// it; a source or reader subject names one only in its payload, so it is gated
+// on nothing and its apply refuses an artifact the marker holds instead. ONE
+// FUNCTION for [Applier.Gated] and [Gates.GatedAt]: the framework holds the two
+// to one answer.
 func gatedArtifact(kind, id string) (string, bool) {
 	switch ObjectKind(kind) {
 	case KindArtifact:

@@ -9,17 +9,16 @@ import (
 
 // A SEALED SEED IS THE ONLY FORM OF IT ANY ROW HOLDS.
 //
-// A second factor's seed is the one credential this estate keeps as a secret,
-// and every row it touches — the credential's own, the person's document, the
-// trail entry the write leaves — is replicated to every data node,
-// snapshotted, backed up and donated. Sealed by the writer under the fleet keyring, the
-// applier writes it through as bytes it cannot read, so none of the three holds
-// the seed; and the credential's row opens back to it as that credential.
+// A second factor's seed is the one secret this estate keeps, and every row
+// it touches (the credential's, the person's document, the trail entry) is
+// replicated, snapshotted, backed up and donated. The writer seals it under
+// the fleet keyring and the applier writes bytes it cannot read, so none of
+// the three holds the seed, and the credential's row opens back to it.
 //
-// The CONTROL is the same write with the seed in the clear, which the same
-// scan finds in all three — so a clean scan says the seed was sealed, not that
-// the scan read the wrong rows. Mutation: store the seed in the clear in the
-// first half and it fails the way the control does.
+// The CONTROL writes the seed in the clear, which the same scan finds in all
+// three, so a clean scan means sealed, not that it read the wrong rows.
+// Mutation: store the seed in the clear in the first half; it fails like the
+// control.
 func TestASealedSeedIsTheOnlyFormOfItAnyRowHolds(t *testing.T) {
 	t.Parallel()
 	const seed = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"

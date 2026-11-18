@@ -25,18 +25,14 @@ import (
 
 // Reader answers questions about artifacts from this node's own applied rows.
 //
-// EVERY READ GOES THROUGH [statelog.Reader], which turns a level from a word
-// into a property of the answer: the refusal ladder first (an evicted node, one
-// below the trim floor, one whose applier has stopped serves nothing), then the
-// coverage probe over what the read is ABOUT, then the freshness target, and
-// only then the rows, all in ONE transaction.
+// Every read goes through [statelog.Reader], so a level is a property of the
+// answer: the refusal ladder, the coverage probe over what the read is about,
+// the freshness target, then the rows, in one transaction.
 //
-// A READ THAT NAMES NO FRESHNESS is served at `stale`: whatever this node holds,
-// with its coverage on the answer. Every such question is either one a caller
-// asks after a point read that did name a floor (the versions of an artifact it
-// just read) or one whose answer is re-decided where it is used (the carry
-// plan, which the apply checks again; the trash reaper's list, which the purge
-// re-decides).
+// A read that names no freshness is served at `stale` ([staleFresh]), with its
+// coverage on the answer: each such question follows a point read that named a
+// floor, or is re-decided where it is used (the carry plan by the apply, the
+// trash reaper's list by the purge).
 type Reader struct {
 	db  store.ReplicatedReader
 	log *statelog.Reader
@@ -78,10 +74,10 @@ type Head struct {
 	SourceKey   string          `json:"source_key,omitempty"`
 
 	// Folder is the folder the artifact is filed in, empty at the top
-	// level. A folder grants nothing: who may open the artifact is still
-	// its owner and its own shares. A listing names it only to a viewer who
-	// sees the folder, and a surface answering one artifact does the same
-	// (artifactsapi's shownFolder); the raw value is what a decision reads.
+	// level. It grants nothing (package doc, "An artifact lives in one
+	// folder, and a folder grants nothing"). A surface names it only to a
+	// viewer who sees the folder (artifactsapi's shownFolder); a decision
+	// reads the raw value.
 	Folder string `json:"folder,omitempty"`
 
 	HeadNumber   int                    `json:"head_number"`
@@ -285,10 +281,10 @@ const ListDelimiter = "/"
 // ListQuery narrows a listing. A zero Scope is [ScopeAll], a zero Sort
 // [SortUpdated], a zero Status [StatusLive], and a zero Fresh `stale`.
 //
-// THE FOLDER HALF SPEAKS S3's ListObjectsV2 (Prefix, Delimiter,
-// ContinuationToken, MaxKeys), so anybody who knows S3 reads it at once. A
-// folder is still a row (ADR-0047), never part of an artifact's key: the
-// prefix is resolved to a folder id once, and the token carries the id.
+// Its folder half speaks S3's ListObjectsV2 (Prefix, Delimiter,
+// ContinuationToken, MaxKeys). A folder is still a row (ADR-0047), never part
+// of an artifact's key: the prefix resolves to a folder id once, and the token
+// carries the id.
 type ListQuery struct {
 	Scope  ListScope
 	Kind   artifacts.Kind
@@ -308,21 +304,19 @@ type ListQuery struct {
 	// panel lists. Empty narrows nothing.
 	WorkItem string
 
-	// Prefix is the folder the listing is about: the path of folder names
-	// from the top level, each followed by [ListDelimiter]
-	// ("Marketing/Q4/"). Empty is the top level. It resolves among the
-	// folders the viewer (and the Requester, where one is named) can see,
-	// and a prefix that resolves to none is ErrFolderNotFound, never an
-	// empty page. A name holds no "/" and siblings are unique, so below
-	// the top level a path names at most one folder; at the top level a
-	// private folder may share a company folder's name, and a prefix
-	// naming both is a *FolderAmbiguous naming each.
+	// Prefix is the folder the listing is about: folder names from the top
+	// level, each followed by [ListDelimiter] ("Marketing/Q4/"); empty is
+	// the top level. It resolves among the folders the viewer (and any
+	// Requester) can see; one resolving to none is ErrFolderNotFound, never
+	// an empty page. Below the top level a path names at most one folder
+	// (no "/" in a name, unique siblings); at the top level a private
+	// folder may share a company folder's name, and a prefix naming both
+	// is a *FolderAmbiguous naming each.
 	Prefix string
 
-	// Folder is the folder the listing is about by its id, in place of
-	// Prefix: the rename-proof address a client that keeps folder ids (the
-	// dashboard's folder pages) lists by, which no two folders share. It
-	// resolves among the same folders a prefix does.
+	// Folder is the listed folder's id, in place of Prefix: a rename-proof
+	// address no two folders share (the dashboard's folder pages list by
+	// it). It resolves among the same folders a prefix does.
 	Folder string
 
 	// Delimiter is empty or [ListDelimiter]. With it the page is ONE level:
@@ -333,12 +327,11 @@ type ListQuery struct {
 	// which with no prefix is every artifact the viewer can see.
 	Delimiter string
 
-	// Requester is the person an agent's tool acts for. Where it is named,
-	// it narrows EVERYTHING the page discloses as the viewer does: the
-	// prefix resolves only among folders BOTH can see, the rows, the total
-	// and the counts hold only what both can see, and a row names its
-	// folder's path, and a common prefix its folder, only where both see
-	// it (the requester ceiling, applied to the listing's own filter).
+	// Requester is the person an agent's tool acts for. Where named, it
+	// narrows everything the page discloses as the viewer does (the
+	// requester ceiling): the prefix resolves among folders both see, and
+	// the rows, total, counts, folder paths and common prefixes hold only
+	// what both see.
 	Requester *Viewer
 
 	Sort ListSort
@@ -526,10 +519,9 @@ func scanHead(row rowScanner, extra ...any) (Head, error) {
 
 // decodeCapabilities reads a stored capability array.
 //
-// NONE IS AN EMPTY SET, NEVER AN ABSENT ONE: a head or a version that
-// declares no capability answers `"capabilities": []`, so a reader tells a
-// version whose capabilities were stripped from one that never said, and
-// nothing falls back to another version's set on a missing field.
+// None is an empty set, never an absent one (`"capabilities": []`), so a
+// reader tells stripped capabilities from never-declared ones, and nothing
+// falls back to another version's set on a missing field.
 func decodeCapabilities(raw string) ([]artifacts.Capability, error) {
 	var names []string
 	if err := json.Unmarshal([]byte(raw), &names); err != nil {
@@ -933,18 +925,15 @@ type trailCursor struct {
 	Artifact string `json:"a"`
 }
 
-// Trail answers a page of THE COMPANY TRAIL: every artifact's history rows
-// across the company, newest first in the log's own order (position, then
-// artifact), private artifacts included. It is the administrators' record of
-// what happened to every artifact, the elevated reads above all (D09): an
-// override recorded only in an artifact's own history is one nobody finds when
-// its owner has left or never looks. The caller decides who may ask
-// (`audit.read`); this read answers whoever it is asked for.
+// Trail answers a page of the company trail: every artifact's history rows,
+// private artifacts included, newest first in the log's order (position, then
+// artifact). It is the administrators' record, the elevated reads above all
+// (D09): an override only in its artifact's own history goes unfound once the
+// owner has left. The caller decides who may ask (`audit.read`).
 func (r *Reader) Trail(ctx context.Context, q TrailQuery) (TrailPage, error) {
-	// HELD TO THE HISTORY'S OPS, not to every op the log carries: a pin or
-	// an opened mark writes no history row, so narrowing to one answers an
-	// empty trail forever, and an asset's rows are filed under the asset's
-	// own op ([HistoryOps]).
+	// Held to [HistoryOps], not every op the log carries: a pin or an opened
+	// mark writes no history row and an asset's rows file under the asset's
+	// own op, so narrowing to another op would answer an empty trail forever.
 	if q.Op != "" && !slices.Contains(HistoryOps, q.Op) {
 		return TrailPage{}, fmt.Errorf("%w: %q is not an op an artifact's history records, "+
 			"which are %s", ErrInvalid, q.Op, words.And(HistoryOps))
@@ -1028,9 +1017,10 @@ func prefixed(prefix, columns string) string {
 }
 
 // HeldObjects answers which of the digests asked about THIS artifact already
-// names, each with the object that holds it: the carry plan's one question,
-// and nothing wider (a carry never crosses an artifact). Where two of the
-// artifact's objects hold one digest, the lowest key answers, on every data node.
+// names, each with the object holding it: the carry plan's one question, and
+// nothing wider (package doc, "The carry rule, and why the collector needs no
+// lock"). Where two of its objects hold one digest, the lowest key answers, on
+// every data node.
 func (r *Reader) HeldObjects(ctx context.Context, id artifacts.ID, hashes []objstore.Hash) (
 	map[objstore.Hash]objstore.Object, error) {
 
@@ -1208,22 +1198,16 @@ func trashIDs(ctx context.Context, tx *sql.Tx, q string, args ...any) ([]artifac
 }
 
 // List answers one page of the artifacts the viewer can see, filtered by the
-// query. A viewer who is no admin sees an artifact they own, one shared with
-// their seat, a unit they sit in or the company, and one an agent they lead
-// owns (the lead arm, D12, which reaches only an agent owner's artifacts).
-// The authority table still decides each row where the answer is served; this
-// is the filter that keeps the page from holding rows nobody may see.
+// query. A non-admin sees what they own, what is shared with their seat, a
+// unit they sit in or the company, and what an agent they lead owns (the lead
+// arm, D12). This filter keeps rows nobody may see off the page; the
+// authority table still decides each row where the answer is served.
 //
-// # Folders, in S3's terms
-//
-// The page is placed in the folder tree as the viewer (and the requester,
-// where one is named) sees it: the prefix or the folder id resolves among the
-// folders they can see, and an unknown or invisible one is [ErrFolderNotFound],
-// never an empty page. With [ListDelimiter] the page is one level, whose child
-// folders are answered as [ListPage.CommonPrefixes] on the first page; an
-// artifact filed in a folder the viewer cannot see is at THEIR top level, so a
-// folder never hides an artifact its reader may open. Every row names its
-// folder's path only where the viewer sees that folder.
+// The page sits in the folder tree its viewers (the viewer and any requester)
+// see: an unknown or invisible prefix or folder id is [ErrFolderNotFound],
+// never an empty page. An artifact filed in a folder the viewer cannot see is
+// at their top level, so a folder never hides an artifact its reader may open,
+// and a row names only a folder path the viewer sees.
 func (r *Reader) List(ctx context.Context, v Viewer, q ListQuery) (ListPage, error) {
 	spec, err := listSpecFor(v, q)
 	if err != nil {
@@ -1264,12 +1248,11 @@ type listSpec struct {
 
 // listCursor is where a listing page ends, and the folder it lists.
 //
-// THE KEY IS TEXT for every order, an instant written as its decimal micros:
-// JSON numbers decode as floats, and a float cannot carry every micro.
-//
-// THE FOLDER IS ITS ID, NEVER ITS PATH, so a rename between two pages does not
-// move the next one, and a token is held to the delimiter it was minted under,
-// so a recursive page never continues as a one-level one.
+// The key is text for every order, an instant as its decimal micros: JSON
+// numbers decode as floats, which cannot carry every micro. The folder is its
+// id, never its path, so a rename between pages does not move the next one;
+// a token is held to the delimiter it was minted under, so a recursive page
+// never continues as a one-level one.
 type listCursor struct {
 	Sort ListSort `json:"s"`
 	Key  string   `json:"k"`
@@ -1336,18 +1319,16 @@ func listSpecFor(v Viewer, q ListQuery) (listSpec, error) {
 		s.args = append(s.args, v.Record)
 	}
 	if item := strings.TrimSpace(q.WorkItem); item != "" {
-		// THE ARTIFACT'S OWN HISTORY NAMES THE ITEM, read through the
-		// (work_item, artifact_id) index: one probe per artifact the page
-		// considers, never a scan of the history.
-		// AN APPLIED ROW ONLY: a write the log refused (a link to an
-		// artifact trashed before it applied, a publish over a moved head)
-		// made nothing for the item, and its row says so.
+		// Through the (work_item, artifact_id) index: one probe per
+		// artifact, never a history scan. Applied rows only: a refused
+		// write (a link to an artifact trashed first, a publish over a
+		// moved head) made nothing for the item.
 		s.where = append(s.where, `EXISTS (SELECT 1 FROM artifact_history h
 			WHERE h.work_item = ? AND h.artifact_id = a.id AND h.outcome = ?)`)
 		s.args = append(s.args, item, string(OutcomeApplied))
 	}
-	// THE ONE VISIBILITY PREDICATE, the total's and every folder count's
-	// too ([visibleClause]), for the viewer and the requester alike.
+	// The one visibility predicate ([visibleClause]), shared with the total
+	// and every folder count, for the viewer and the requester alike.
 	visible, visibleArgs := everyClause(s.viewers, visibleClause)
 	s.where = append(s.where, visible)
 	s.args = append(s.args, visibleArgs...)
@@ -1398,13 +1379,11 @@ type placed struct {
 func (s listSpec) place(tree *folderTree) (placed, error) {
 	ref := s.folder
 	if s.after != nil {
-		// A LATER PAGE LISTS THE TOKEN'S FOLDER, by id, whatever its path
-		// has become; it is still one the viewer must see now. A query that
-		// names ANOTHER folder beside the token is refused rather than
-		// answered with the token's folder under the query's words: by id,
-		// or by a path that names a folder now. A path that names none is
-		// the token's folder renamed since the first page, which the token
-		// governs.
+		// A later page lists the token's folder by id, whatever its path
+		// has become, and the viewer must still see it. A query naming
+		// another folder (by id, or by a path resolving now) is refused,
+		// not answered with the token's folder; a path naming none is the
+		// token's folder renamed since, which the token governs.
 		named := s.folder
 		if named == "" && s.prefix != "" {
 			if found, err := tree.resolvePath(s.prefix); err == nil && len(found) == 1 {
@@ -1519,7 +1498,7 @@ func (s listSpec) run(ctx context.Context, tx *sql.Tx) (ListPage, error) {
 	conds, condArgs := append([]string(nil), s.where...), append([]any(nil), s.args...)
 	switch {
 	case s.delimited && at.folder == "":
-		// THE VIEWER'S TOP LEVEL: filed in no folder, or in one they cannot
+		// The viewer's top level: filed in no folder, or in one they cannot
 		// see, so a folder never hides an artifact its reader may open.
 		conds = append(conds, `(a.folder_id = '' OR a.folder_id NOT IN (SELECT value FROM json_each(?)))`)
 		condArgs = append(condArgs, jsonIDs(tree.ids()))
@@ -1570,10 +1549,9 @@ func (s listSpec) run(ctx context.Context, tx *sql.Tx) (ListPage, error) {
 		if opened > 0 {
 			item.OpenedAt = store.DecodeTime(opened)
 		}
-		// A FOLDER THE VIEWER CANNOT SEE IS NEVER NAMED, by its path or by
-		// its id: the row reads as at the top level they see, where the
-		// listing places it, and two rows sharing an id would otherwise say
-		// they sit together somewhere hidden.
+		// A folder the viewer cannot see is never named, by path or id: the
+		// row reads as at their top level, where the listing places it; a
+		// shared id would say two rows sit together somewhere hidden.
 		if tree.live(head.Folder) != nil {
 			item.FolderPath = tree.path(head.Folder)
 		} else {

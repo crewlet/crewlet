@@ -93,13 +93,12 @@ func storedBytes(t *testing.T, backend *memobj.Backend, name string) []byte {
 }
 
 // A SESSION IS SEALED AT REST AND OPENS ONLY WHERE ITS ROW NAMES IT: the stored
-// bytes carry nothing of the archive in the clear, the session reads back
-// under its own seat and turn, and the same object named by another turn or
-// another seat is ErrUnreadable — the associated data binds the object to
-// `executor/<seat>/<turn>/<object key>`.
+// bytes hold nothing of the archive in the clear, and the object named by
+// another turn, seat or object key is ErrUnreadable, since the associated data
+// binds it to `executor/<seat>/<turn>/<object key>`.
 //
-// Mutation: seal under an associated data that leaves the turn out of AAD and
-// the object opens under another turn's row.
+// Mutation: leave the turn out of the associated data and the object opens
+// under another turn's row.
 func TestASessionOpensOnlyWhereItsRowNamesIt(t *testing.T) {
 	t.Parallel()
 	store, backend := sessionStore(t, "k1")
@@ -121,9 +120,8 @@ func TestASessionOpensOnlyWhereItsRowNamesIt(t *testing.T) {
 	if err != nil || !bytes.Equal(got, plain) {
 		t.Fatalf("the session read back (%d bytes, %v), want the archive", len(got), err)
 	}
-	// THE SAME BYTES UNDER ANOTHER KEY: what a row naming another capture's
-	// object of the very same seat and turn would open, were the object's
-	// own key not bound in.
+	// THE SAME BYTES UNDER ANOTHER KEY: what a row naming another capture of the
+	// same seat and turn would open, were the object's own key not bound in.
 	moved := objstore.KeyAt(time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC))
 	if err := backend.Put(t.Context(), moved.Name(), bytes.NewReader(stored), objstore.PutMeta{}); err != nil {
 		t.Fatal(err)
@@ -289,14 +287,13 @@ func TestTheSeatBudgetFloorHoldsOneSessionAtItsBound(t *testing.T) {
 }
 
 // A SESSION SEALED TO A SPOOL UPLOADS AS THE OBJECT ITS SEAL MINTED, AND READS
-// BACK AS THE ARCHIVE: the spool — what rests on a node's disk between a take
-// and its keep — holds nothing of the archive in the clear; its size is what
-// the upload stores, under the key the seal minted and bound in; the object
-// opens under the seat and turn it was sealed for and under no other; and an
-// archive past its bound is refused at the seal, before anything is uploaded.
+// BACK AS THE ARCHIVE: the spool on a node's disk holds nothing in the clear,
+// the upload stores its size under the key the seal minted and bound in, the
+// object opens only under its own seat and turn, and an archive past its bound
+// is refused at the seal, before any upload.
 //
-// Mutation: spool the archive in the clear, mint the upload's key anew, or let
-// the seal pass an archive past its bound, and a check here goes red.
+// Mutation: spool in the clear, mint the upload's key anew, or let the seal pass
+// an oversized archive, and a check goes red.
 func TestASessionSealedToASpoolUploadsAsTheObjectItsSealMinted(t *testing.T) {
 	t.Parallel()
 	store, backend := sessionStore(t, "k1")
@@ -339,13 +336,11 @@ func TestASessionSealedToASpoolUploadsAsTheObjectItsSealMinted(t *testing.T) {
 	}
 }
 
-// A SPOOLED SESSION OPENS ONLY FOR THE ROW IT WAS FETCHED FOR: a restore fetches
-// the turn's object sealed onto its node's disk, checked against the row by the
-// object store, and opens the spool against the row's own associated data — so
-// the spool reads back as the archive under its own seat and turn, and is
-// ErrUnreadable named by another turn's row, another seat's, or a row naming
-// another object, whatever bytes the spool holds. A row naming an object the
-// store no longer holds fetches nothing and is ErrUnreadable at once.
+// A SPOOLED SESSION OPENS ONLY FOR THE ROW IT WAS FETCHED FOR: Fetch checks the
+// object against the row, and the spool opens under the row's own associated
+// data, so it is ErrUnreadable for another turn's, seat's or object's row,
+// whatever bytes it holds. A row naming an object the store no longer holds
+// fetches nothing and is ErrUnreadable at once.
 //
 // Mutation: open the spool under an associated data that leaves the turn or the
 // seat out, or skip the object store's check in Fetch, and a row goes red.

@@ -104,9 +104,8 @@ func newTransferHarnessWith(t *testing.T, bytes, maxTransfers int) *transferHarn
 	served := make(chan struct{})
 	go func() { defer close(served); _ = donor.Serve(ctx) }()
 	t.Cleanup(func() { cancel(); <-served })
-	// The donor's subscriptions have to exist before the first request, or
-	// the request lands on nothing and the case measures the race rather
-	// than the protocol.
+	// The donor's subscriptions must exist before the first request, or the
+	// case measures the race rather than the protocol.
 	waitForSubject(t, nc, statelog.SubjectOffer)
 	return h
 }
@@ -119,12 +118,10 @@ const harnessDonor = "donor"
 // A COLLECTION ENDS ONCE EVERY DONOR IT EXPECTS HAS ANSWERED, AND A DECLINE IS
 // AN ANSWER.
 //
-// A node below the floor refuses every read and write while it collects, and
-// it collected for the whole window because a donor holding nothing stayed
-// silent — its own donor first among them, which every data node runs. Now a
-// donor holding nothing declines, a joiner names the donors it expects, and
-// the collection stops on the last of their answers. The decline is counted
-// and never handed back as an offer.
+// A node below the floor refuses every read and write while it collects, so a
+// joiner names the donors it expects and stops on the last answer; a donor
+// holding nothing declines rather than stays silent. A decline is counted,
+// never handed back as an offer.
 func TestACollectionEndsOnceEveryExpectedDonorHasAnswered(t *testing.T) {
 	t.Parallel()
 	h := newTransferHarness(t, 4096)
@@ -152,9 +149,8 @@ func TestACollectionEndsOnceEveryExpectedDonorHasAnswered(t *testing.T) {
 
 // AN EXPECTED DONOR THAT NEVER ANSWERS COSTS THE WINDOW, AND NO MORE.
 //
-// A live data node whose donor is not up yet, or is gone, is named and silent;
-// the joiner then waits exactly what it waited before it named anybody, and
-// still takes the answers it did hear.
+// A named donor not up yet, or gone, is silent: the joiner waits the window,
+// as with nobody named, and still takes the answers it heard.
 func TestAnExpectedDonorThatNeverAnswersCostsTheWindow(t *testing.T) {
 	t.Parallel()
 	h := newTransferHarness(t, 4096)
@@ -178,10 +174,9 @@ func TestAnExpectedDonorThatNeverAnswersCostsTheWindow(t *testing.T) {
 // A DONOR SAYS WHETHER IT IS SERVING, and is not before Serve listens or after
 // it returns.
 //
-// A join on the donor's own node names that node among the donors it waits
-// for only while its donor answers: the boot's join runs before any donor
-// starts, and a node that named itself there waited the whole offer window for
-// an answer that could not come.
+// A join on the donor's own node names that node only while its donor answers:
+// the boot's join runs before any donor starts, and naming a donor that cannot
+// answer costs the whole offer window.
 func TestADonorSaysWhetherItIsServing(t *testing.T) {
 	t.Parallel()
 	h := newTransferHarness(t, 4096)
@@ -220,13 +215,10 @@ func TestADonorSaysWhetherItIsServing(t *testing.T) {
 //
 // A subscription is registered when its interest reaches the server, not when
 // Subscribe returns, and a join on the donor's own node asks on ANOTHER
-// connection — so a donor that said it was serving the moment it subscribed
-// could be named by a join whose ask then reached nobody, and that join waited
-// out its whole offer window. Here everything the donor's connection writes
-// after it has connected is held short of the server, as a slow link holds
-// it: an ask on another connection finds nobody listening, and the donor does
-// not say it serves. Once the held bytes arrive it does, and an ask made the
-// moment it says so is answered.
+// connection: a donor serving from Subscribe could be named by a join whose ask
+// reached nobody, costing the whole offer window. Here the donor's writes are
+// held short of the server, as a slow link holds them: it does not say it
+// serves until they arrive, and an ask made the moment it does is answered.
 func TestADonorSaysItIsServingOnlyOnceTheServerWillRouteAnAskToIt(t *testing.T) {
 	t.Parallel()
 	ns := coreBroker(t)
@@ -296,11 +288,10 @@ func TestADonorSaysItIsServingOnlyOnceTheServerWillRouteAnAskToIt(t *testing.T) 
 
 // A DONOR WHOSE CONFIRMATION FAILED IS CONFIRMED AGAIN, AND SERVES.
 //
-// A confirmation the client gave up on — here the connection drops while the
-// ping is in flight, which fails it at once — is not a subscription the server
-// refused: the connection sends both again when it reconnects. A donor that
-// ended there would be gone for the node's whole life, since nothing starts a
-// donor twice, over a link that dropped once at the wrong moment.
+// A confirmation the client gave up on (here the link drops with the ping in
+// flight) is not a refused subscription: the connection resends both on
+// reconnect. Nothing starts a donor twice, so one that ended there would be
+// gone for the node's life.
 func TestADonorWhoseConfirmationFailedIsConfirmedAgain(t *testing.T) {
 	t.Parallel()
 	ns := coreBroker(t)
@@ -367,15 +358,13 @@ func TestADonorWhoseConfirmationFailedIsConfirmedAgain(t *testing.T) {
 
 // A DONOR WHOSE CONNECTION CLOSED FOR GOOD ENDS, AND SAYS WHY.
 //
-// The one failure a confirmation is not asked again after: a closed connection
-// sends nothing again, so every later attempt would fail at once, and a loop
-// that went on asking would spin for the node's whole life on a donor that
-// answers nobody. And it is a CLOSE ([statelog.ErrDonorConnectionClosed]),
-// not a failed dial: the donor had subscribed, so the connection was closed
-// under it, which its owner answers by dialling again at once.
+// A closed connection resends nothing, so asking again would spin for the
+// node's life. The error is a CLOSE ([statelog.ErrDonorConnectionClosed]), not
+// a failed dial: the connection was closed under a subscribed donor, which its
+// owner answers by dialling again at once.
 //
 // Mutation: answer the close with an error that does not wrap the sentinel,
-// as the confirmation did, and the first check goes red.
+// and the first check goes red.
 func TestADonorWhoseConnectionClosedEnds(t *testing.T) {
 	t.Parallel()
 	ns := coreBroker(t)
@@ -596,9 +585,8 @@ func serveEmptyDonor(t *testing.T, q *js.Queue, id string) string {
 	return ""
 }
 
-// waitForSubject waits until somebody answers an offer request, which is what
-// makes a request-response case about the protocol rather than about startup
-// order.
+// waitForSubject waits until somebody answers an offer request, so a case
+// measures the protocol rather than startup order.
 func waitForSubject(t *testing.T, nc *nats.Conn, subject string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -614,11 +602,9 @@ func waitForSubject(t *testing.T, nc *nats.Conn, subject string) {
 
 // AN ARTEFACT ARRIVES BYTE FOR BYTE, ACROSS A CREDIT WINDOW.
 //
-// The transfer is tuned for a network rather than reused verbatim from this
-// tree's in-process one: that one is strict stop-and-wait at 128 KiB because
-// it runs over an in-memory connection, and across two broker hops that is one
-// chunk per round trip. What is asserted here is what the window is FOR — that
-// many chunks in flight still arrive in order and whole.
+// The transfer keeps many chunks in flight, since stop-and-wait across two
+// broker hops is one chunk per round trip; what the window must keep is order
+// and wholeness.
 func TestAnArtefactArrivesByteForByte(t *testing.T) {
 	t.Parallel()
 	// Several times the window, so the donor genuinely blocks on credits
@@ -652,9 +638,8 @@ func TestAnArtefactArrivesByteForByte(t *testing.T) {
 			"transfer that reorders or drops a chunk arrives looking exactly "+
 			"like one that did not", got, h.manifest.SHA256)
 	}
-	// AND THE CHECKSUM THE TRANSFER TOOK AS IT WROTE IS THE FILE'S, which is
-	// what lets a joiner compare it with the manifest without reading the
-	// whole artefact back.
+	// AND THE CHECKSUM THE TRANSFER TOOK AS IT WROTE IS THE FILE'S, so a
+	// joiner compares it with the manifest without reading the file back.
 	if fetched.SHA256 != got {
 		t.Fatalf("the transfer hashed what it wrote to %s and the file hashes to "+
 			"%s — a joiner would accept or refuse an artefact for bytes it does "+
@@ -664,14 +649,10 @@ func TestAnArtefactArrivesByteForByte(t *testing.T) {
 
 // A TRANSFER SAYS HOW FAR IT HAS GOT, AS IT GOES.
 //
-// At boot a join is inside the node's recovery, which a deployment bounds with
-// a startup probe sized partly by how long a join takes. A transfer that said
-// nothing between its start and the adoption gave that sizing nothing to
-// measure, and an operator watching a node that would not come up nothing to
-// tell a slow transfer from a stuck one by. So it names the donor, the size
-// and the projection when it starts, and every report interval after that the
-// bytes received, the total, the elapsed time and the rate — with the bytes
-// only ever growing.
+// A boot's join runs inside recovery, which a startup probe bounds; its sizing
+// and an operator telling slow from stuck need progress. So the transfer names
+// the donor, size and projection at its start, then every report interval the
+// bytes received (only ever growing), the total, the elapsed time and the rate.
 func TestATransferSaysHowFarItHasGot(t *testing.T) {
 	t.Parallel()
 	h := newTransferHarness(t, statelog.SnapshotChunkBytes*statelog.SnapshotTransferWindow*4)
@@ -722,11 +703,8 @@ func TestATransferSaysHowFarItHasGot(t *testing.T) {
 
 // A JOINER TOLD TO STOP STOPS ASKING.
 //
-// Collecting offers waits out a window for donors to answer, and it waited out
-// the whole of it whatever its caller said: a node shutting down while it
-// looked for a snapshot sat in the collection until the window closed, and
-// then reported the offers as though nothing had happened. A cancelled caller
-// is answered at once, with the cancellation.
+// A cancelled caller is answered at once, with the cancellation, not after the
+// offer window with whatever offers arrived.
 func TestCollectingOffersStopsWhenItsCallerDoes(t *testing.T) {
 	t.Parallel()
 	h := newTransferHarness(t, 4096)
@@ -750,9 +728,8 @@ func TestCollectingOffersStopsWhenItsCallerDoes(t *testing.T) {
 // A DONOR THAT GIVES UP SAYS SO IN THE TERMINATOR, and a truncated file is
 // never reported as a snapshot.
 //
-// Every failure arrives looking exactly like a normal end of stream, so the
-// verdict in the terminator's header is the only thing between that and an
-// adopted artefact with a hole in it.
+// Every failure looks like a normal end of stream, so the terminator's verdict
+// is all that stands between it and an adopted artefact with a hole in it.
 func TestAnAbandonedTransferIsNeverReportedAsASnapshot(t *testing.T) {
 	t.Parallel()
 	h := newTransferHarness(t, 4096)
@@ -780,9 +757,8 @@ func TestAnAbandonedTransferIsNeverReportedAsASnapshot(t *testing.T) {
 
 // AN OFFER IS REFUSED FROM ITS MANIFEST, BEFORE ANY BYTES MOVE.
 //
-// A gigabyte-scale transfer that ends in a refusal is a gigabyte-scale
-// transfer nobody needed, and every one of these is answerable from the
-// manifest alone.
+// Each refusal here is answerable from the manifest alone, so a transfer that
+// ends in one is a transfer nobody needed.
 func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 	t.Parallel()
 	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Spec: specOf(probeDomain{})}}
@@ -858,8 +834,8 @@ func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 			breaks: func(o *statelog.Offer) { o.Manifest.V = 99 },
 			names:  "version 99",
 		},
-		// THE SCHEMA, from the list the manifest carries: fetched whole, the
-		// file was refused for the same migration once it had arrived.
+		// THE SCHEMA, from the manifest's list, not after fetching the
+		// file whole.
 		"a migration this binary does not have": {
 			breaks: func(o *statelog.Offer) {
 				o.Manifest.Migrations = append(o.Manifest.Migrations,
@@ -884,9 +860,8 @@ func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 
 // NEWER IS STRICTLY BETTER, and an older offer is never preferable on age.
 //
-// The only thing an older artefact buys is a longer replay, so a joiner that
-// took the first reply would be choosing the fastest peer rather than the best
-// artefact.
+// An older artefact only buys a longer replay; taking the first reply would
+// choose the fastest peer over the best artefact.
 func TestOffersAreRankedNewestFirst(t *testing.T) {
 	t.Parallel()
 	at := func(seq uint64) statelog.Offer {
@@ -906,12 +881,9 @@ func TestOffersAreRankedNewestFirst(t *testing.T) {
 // TestNothingBelowTheFloorOutranksAnythingAboveIt, and among equals the choice
 // is this joiner's own.
 //
-// Ordering by the artefact alone makes every joiner in a fleet rank the same
-// offers the same way, so a fleet that restarts together sends every one of
-// them at whichever node happens to hold the newest artefact. That node then
-// refuses all but a few, and the rest spend a collection window asking again.
-// Shuffling the EQUALS before the ordering keeps "best artefact first" exact
-// and makes the choice among the best differ per joiner.
+// Ranking by the artefact alone sends a fleet restarting together at one node,
+// which refuses all but a few. Shuffling the EQUALS before ordering keeps "best
+// artefact first" exact and spreads the choice among the best per joiner.
 func TestNothingBelowTheFloorOutranksAnythingAboveIt(t *testing.T) {
 	t.Parallel()
 	offer := func(node string, seq uint64) statelog.Offer {
@@ -944,16 +916,13 @@ func TestNothingBelowTheFloorOutranksAnythingAboveIt(t *testing.T) {
 
 // TestADonorAdmitsAtMostNTransfers, and tells the rest so at once.
 //
-// Every fetch is a goroutine holding an open file and a credit window of chunks
-// in flight, on a subject every joiner in the fleet can reach. Unbounded, a
-// fleet that restarts together spawns one per joiner on whichever node answered
-// first — and since the offers were ranked identically everywhere, that is one
-// node.
+// Every fetch holds a goroutine, an open file and a credit window in flight;
+// unbounded, a fleet restarting together piles them onto the one node every
+// joiner ranked first.
 //
-// WHAT IS OVER THE BOUND IS TERMINATED WITH A REASON rather than queued. A
-// joiner told no immediately asks the next donor; one left waiting on a queue
-// it cannot see spends its whole collection window on a node that was never
-// going to answer it.
+// WHAT IS OVER THE BOUND IS TERMINATED WITH A REASON rather than queued: a
+// joiner told no asks the next donor at once, while one queued out of sight
+// spends its whole collection window there.
 func TestADonorAdmitsAtMostNTransfers(t *testing.T) {
 	t.Parallel()
 	// One admission, against an artefact big enough that a transfer is
@@ -1013,22 +982,17 @@ func TestADonorAdmitsAtMostNTransfers(t *testing.T) {
 }
 
 // openSilentFleet is a broker with ONE listener on the offer subject that
-// never answers — a fleet whose donors hold nothing — and a wait that returns
-// once the joiner is COLLECTING: the listener has heard its ask, and the flush
-// that follows the ask has had time to complete.
+// never answers (a fleet whose donors hold nothing), and a wait that returns
+// once the joiner is COLLECTING: the listener heard its ask, and the flush
+// after the ask has had time to complete.
 //
-// SILENT RATHER THAN ABSENT, because an absent fleet is answered by the broker:
-// with nothing subscribed it reports "no responders" and a collection ends at
-// once, which is exactly how a case about a collection that ENDS EARLY passes
-// for the wrong reason.
-//
-// AND SETTLED PAST THE FLUSH, for the same reason one step later. The listener
-// hears the ask before the broker's answer to the joiner's flush has arrived,
-// and an interruption landing inside that flush ends it there — correctly, so
-// every assertion here holds on that path too, but a case whose interruption
-// lands in the flush says nothing about the collection loop, and a mutation
-// that broke only the loop went green on it. A broker in this process answers
-// a flush in microseconds, so the settle is two orders of magnitude of room.
+// SILENT RATHER THAN ABSENT: with nothing subscribed the broker reports "no
+// responders" and a collection ends at once, passing a case about a collection
+// that ENDS EARLY for the wrong reason. SETTLED PAST THE FLUSH: an interruption
+// landing inside the flush ends it there, correctly, but says nothing about the
+// collection loop, so a mutation breaking only the loop would go green. An
+// in-process broker answers a flush in microseconds; the settle is two orders
+// of magnitude of room.
 func openSilentFleet(t *testing.T) (*js.Queue, func()) {
 	t.Helper()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
@@ -1072,13 +1036,10 @@ func openSilentFleet(t *testing.T) (*js.Queue, func()) {
 
 // A JOINER WHOSE CALLER GIVES UP STOPS COLLECTING, and says why.
 //
-// The window is the joiner's patience, not a promise to wait it out: a boot
-// interrupted by a signal and a running node being stopped mid-rejoin both
-// cancel the context they asked under. A collection that ignored it held each
-// for the rest of the window — the rejoin's for the whole of the state log's
-// Stop, which waits for it — and then answered "nobody offered anything",
-// which a boot reads as "come up on what you have" and logs as a fleet with
-// nothing to donate.
+// A boot interrupted by a signal and a node stopped mid-rejoin both cancel
+// the context they asked under. Waiting out the window instead holds the
+// rejoin (and the state log's Stop, which waits for it), then answers "nobody
+// offered anything", which a boot reads as "come up on what you have".
 func TestACancelledJoinerStopsCollecting(t *testing.T) {
 	t.Parallel()
 	q, asked := openSilentFleet(t)
@@ -1115,13 +1076,11 @@ func TestACancelledJoinerStopsCollecting(t *testing.T) {
 
 // A JOINER WHOSE CALLER HAS ALREADY GIVEN UP ASKS NOBODY.
 //
-// An ask is not free to the fleet: every donor answers it, with a manifest
-// and a fetch subject, for a joiner that will never read either.
-//
-// "Nothing was published" is observed with a SENTINEL rather than a wait: the
-// sentinel goes out on the joiner's own connection afterwards, and a broker
-// delivers one connection's messages in order, so the listener's first
-// message is the sentinel exactly when nothing preceded it.
+// Every donor answers an ask, with a manifest and a fetch subject nobody will
+// read. "Nothing was published" is observed with a SENTINEL, not a wait: it
+// goes out afterwards on the joiner's own connection, which the broker
+// delivers in order, so the listener hears it first exactly when nothing
+// preceded it.
 func TestAJoinerWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
 	t.Parallel()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
@@ -1170,11 +1129,9 @@ func TestAJoinerWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
 
 // A JOINER THAT CAN NO LONGER HEAR IS NOT TOLD THAT NOBODY ANSWERED.
 //
-// "Nobody offered anything" is a statement about the FLEET, and the callers
-// act on it — a boot comes up on the history it has, a rejoin backs off. A
-// connection that closed mid-window has heard nothing from a fleet that may
-// be offering, so reporting its silence as the fleet's is the same lie a
-// cancelled caller must not be told, from the other side.
+// "Nobody offered anything" is a statement about the FLEET, which a boot acts
+// on by coming up on its history and a rejoin by backing off. A connection
+// closed mid-window heard nothing from a fleet that may be offering.
 func TestAJoinerThatCannotHearIsNotToldNobodyAnswered(t *testing.T) {
 	t.Parallel()
 	q, asked := openSilentFleet(t)
@@ -1212,12 +1169,10 @@ func TestAJoinerThatCannotHearIsNotToldNobodyAnswered(t *testing.T) {
 
 // A CALLER'S OWN DEADLINE IS NOT BLAMED ON THE DONOR.
 //
-// The wait for each chunk is a child of the caller's context, so a caller
-// whose deadline passes sees the same DeadlineExceeded a stalled donor
-// produces. Reading only that, the transfer reported a donor that "stopped
-// sending (no chunk for 30s)" a fraction of a second in, and wrapped nothing a
-// caller could test — so the caller's own end was indistinguishable from a
-// peer's fault.
+// The wait for each chunk is a child of the caller's context, so a caller's
+// passed deadline and a stalled donor both surface as DeadlineExceeded. The
+// error must wrap the caller's own end, not report a donor that stopped
+// sending.
 func TestACallersDeadlineIsNotBlamedOnTheDonor(t *testing.T) {
 	t.Parallel()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
@@ -1252,14 +1207,12 @@ func TestACallersDeadlineIsNotBlamedOnTheDonor(t *testing.T) {
 
 // A FETCH WHOSE CALLER HAS ALREADY GIVEN UP ASKS NO DONOR TO SEND.
 //
-// The fetch is the expensive half of a join: the request sets a donor sending
-// up to a full credit window of chunks into an inbox nobody will read, and ties
-// up a goroutine, an open artefact and a credit subscription on it until the
-// chunk wait runs out. A joiner being stopped between choosing an offer and
-// fetching it must not start that, so the request is never published — which
-// is only observable from the donor's side, hence the sentinel: the listener
-// hears whatever reached the subject, in order, and the first thing it hears
-// must be the probe this case sent after the fetch returned.
+// A fetch sets a donor sending up to a credit window of chunks into an inbox
+// nobody reads, tying up a goroutine, an open artefact and a credit
+// subscription until the chunk wait runs out. That the request is never
+// published shows only from the donor's side: the listener hears the subject
+// in order, and must first hear the probe this case sent after the fetch
+// returned.
 func TestAFetchWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
 	t.Parallel()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
@@ -1310,16 +1263,12 @@ func TestAFetchWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
 
 // A DONOR WHOSE CONNECTION IS CLOSED UNDER IT SAYS SO.
 //
-// The NATS client closes a connection for good on an error it does not retry,
-// and the donor's is the connection carrying the largest messages a node
-// sends. Serve used to wait on its context and nothing else, so a donor whose
-// connection was gone sat subscribed to nothing for the rest of the node's
-// life, advertising an artefact it could no longer stream. It returns now,
-// naming the close, which is what lets its owner dial again — and only its
-// owner can, because a donor's loss is not the node's.
-//
-// The case closes the connection the donor dialled, from outside the donor,
-// which is what the client does when it gives up on one.
+// The NATS client closes a connection for good on an error it does not retry.
+// A donor waiting on its context alone would sit subscribed to nothing for the
+// node's life, advertising an artefact it cannot stream. Serve returns naming
+// the close, so its owner (only its owner: a donor's loss is not the node's)
+// dials again. The case closes the donor's connection from outside, as the
+// client does when it gives up on one.
 //
 // Mutation: wait on the context alone in Serve and the donor never returns.
 func TestADonorWhoseConnectionIsClosedUnderItReturns(t *testing.T) {
@@ -1373,18 +1322,15 @@ func TestADonorWhoseConnectionIsClosedUnderItReturns(t *testing.T) {
 // A DONOR HANDED A CONNECTION ALREADY CLOSED HAD NOTHING TO SERVE OVER, AND
 // SAYS SO AS A FAILED DIAL.
 //
-// [statelog.ErrDonorConnectionClosed] tells the caller the donor HAD been
-// serving, and the engine's loop answers it as a new outage: it redials from
-// its base, a second later, and logs the stop every time. A connection that was
-// closed before Serve could subscribe on it is the opposite — the dial failed,
-// as a refused one does — and called a close, one that arrived closed on every
-// redial would be redialled once a second, with an ERROR line each time, for as
-// long as it went on. The close is staged where it cannot be raced: the dial
-// itself hands back a connection it has closed.
+// [statelog.ErrDonorConnectionClosed] says the donor HAD been serving, and the
+// engine's loop answers it as a new outage: redial from its base a second
+// later, logging the stop. A connection closed before Serve subscribed is a
+// failed dial; called a close, one arriving closed on every redial would log
+// an ERROR every second. The dial itself hands back a closed connection, so
+// the close cannot be raced.
 //
-// Mutation: check the connection for a close before subscribing and answer
-// ErrDonorConnectionClosed, as Serve did, and both checks go red; ignore the
-// subscription's refusal and wait as though serving, and the case times out.
+// Mutation: answer ErrDonorConnectionClosed on a close found before subscribing
+// and both checks go red; ignore the subscription's refusal and it times out.
 func TestADonorHandedAClosedConnectionReportsAFailedDial(t *testing.T) {
 	t.Parallel()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
@@ -1428,11 +1374,10 @@ func TestADonorHandedAClosedConnectionReportsAFailedDial(t *testing.T) {
 
 // AN ARTEFACT NAMING A LOG THIS BUILD DOES NOT REGISTER IS REFUSED.
 //
-// A recipient installs the file whole, so an artefact naming a log no applier
-// here keeps is a copy of rows this node would believe it holds for a history
-// it does not run. It is refused from the manifest alone, before any byte
-// moves — the other half of the rule, a registered log the artefact does not
-// name, is [TestAnUnusableOfferIsRefusedBeforeTheTransfer]'s.
+// A recipient installs the file whole, so it would believe it holds rows for a
+// history it does not run. Refused from the manifest, before any byte moves;
+// a registered log the artefact does not name is
+// [TestAnUnusableOfferIsRefusedBeforeTheTransfer]'s.
 func TestAnArtefactNamingALogThisBuildDoesNotRegisterIsRefused(t *testing.T) {
 	t.Parallel()
 	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Spec: specOf(probeDomain{})}}
@@ -1459,11 +1404,9 @@ func TestAnArtefactNamingALogThisBuildDoesNotRegisterIsRefused(t *testing.T) {
 
 // A FETCH THAT NAMES NO ARTEFACT IS REFUSED BEFORE IT STREAMS.
 //
-// The joiner chose an artefact from an offer, and the name is how the donor
-// streams that copy rather than whatever it holds by the time the fetch
-// arrives. A fetch naming none chose nothing, so streaming the newest would be
-// the very race the name closes — and the joiner would learn it only from a
-// checksum it could never match, after the whole transfer.
+// The name pins the copy the joiner chose from an offer; streaming the newest
+// instead is the race the name closes, found only after the whole transfer by
+// a checksum that cannot match.
 func TestAFetchThatNamesNoArtefactIsRefused(t *testing.T) {
 	t.Parallel()
 	h := newTransferHarness(t, 4096)
@@ -1483,10 +1426,9 @@ func TestAFetchThatNamesNoArtefactIsRefused(t *testing.T) {
 
 // A FETCH STREAMS THE ARTEFACT THE JOINER CHOSE, OR NONE.
 //
-// A joiner accepts an offer from its manifest, so the donor streams exactly
-// that artefact: one replaced by a newer take since the offer is refused at
-// once, naming what replaced it, rather than streamed and refused only after
-// the transfer by a checksum it could never match.
+// An artefact replaced by a newer take since the offer is refused at once,
+// naming its replacement, rather than streamed and refused after the transfer
+// by a checksum it could never match.
 func TestAFetchOfAReplacedArtefactIsRefusedBeforeItStreams(t *testing.T) {
 	t.Parallel()
 	h := newTransferHarness(t, 4096)

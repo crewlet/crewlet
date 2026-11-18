@@ -41,12 +41,8 @@ func sealed(attempt int) []coord.MaintenanceAck {
 }
 
 // TestNoPhaseReachesConfirmedWithoutSealEvidence is the property the whole
-// transition table exists for.
-//
-// The failure it replaces is a recovery paragraph reading "applied leads to
-// confirm and clear" — written before the seal existed and left in place
-// after. A recovery following it would bypass the protection on exactly the
-// path that crashed, which is the one path that needed it.
+// transition table exists for: a recovery that went from applied to confirmed
+// would bypass the protection on exactly the path that crashed.
 func TestNoPhaseReachesConfirmedWithoutSealEvidence(t *testing.T) {
 	t.Parallel()
 	// EVERY PHASE against evidence that establishes everything EXCEPT a
@@ -201,11 +197,9 @@ func TestAnUnknownPhaseIsNotAdvancedPast(t *testing.T) {
 }
 
 // TestASameAttemptRecordBlocksTheSeal is the schedule the journal exists for:
-// two coordinators working ONE attempt of one operation. Coordinator A wrote a
-// record, lost its lease, and B resumed — both are attempt 1.
-//
-// A predicate that refused only on records from an EARLIER attempt exempts A's
-// record, which is exactly the request it was built to catch.
+// two coordinators working ONE attempt of one operation (A wrote a record and
+// lost its lease, B resumed). A predicate refusing only an EARLIER attempt's
+// records would exempt A's.
 func TestASameAttemptRecordBlocksTheSeal(t *testing.T) {
 	t.Parallel()
 	op := operation(coord.PhaseSealing)
@@ -403,12 +397,9 @@ func TestAnExcludedParticipantIsTheOnlyWaiver(t *testing.T) {
 	}
 }
 
-// TestAMismatchStartsANumberedAttemptFromTheWritableMode.
-//
-// Every node is in seal mode, which refuses configuration writes, and phases
-// advance only forwards — so a retry that tried to re-apply in place would be
-// refused by the very prohibition the barrier depends on. A numbered attempt
-// is what makes the promised retry executable.
+// TestAMismatchStartsANumberedAttemptFromTheWritableMode: a re-apply in place
+// would be refused by the seal mode the barrier depends on
+// (statelog.NextAttempt).
 func TestAMismatchStartsANumberedAttemptFromTheWritableMode(t *testing.T) {
 	t.Parallel()
 	op := operation(coord.PhaseSealed)
@@ -523,10 +514,8 @@ func TestAbandonFromOpenedClearsWithoutASeal(t *testing.T) {
 	}
 }
 
-// TestAnUnknownDeleteIsResolvedByReadingNotByAssuming, in its three arms.
-//
-// A conditional delete whose response was lost MAY have committed, so neither
-// "the record is unchanged" nor its opposite is safe to assume.
+// TestAnUnknownDeleteIsResolvedByReadingNotByAssuming, in its three arms: a
+// delete whose response was lost may or may not have committed.
 func TestAnUnknownDeleteIsResolvedByReadingNotByAssuming(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

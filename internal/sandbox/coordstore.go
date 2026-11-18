@@ -748,12 +748,46 @@ func (s *CoordStore) SettleBegun(ctx context.Context, turnID string, capture Ses
 	return s.stampCapture(ctx, turnID, capture, stillBegun)
 }
 
-// stillBegun reports whether run's newest capture is capture's own take, still
-// standing begun: the stamp a settle decided from it may be written over
-// ([PendingStore.SettleBegun]).
+// stillBegun reports whether run's newest capture, or its save under way
+// ([PendingRun.Saving]), is capture's own take, still standing begun: the stamp
+// a settle decided from it may be written over ([PendingStore.SettleBegun]). A
+// save a final take overtook is settled in its own section, where the row keeps
+// it in sight.
 func stillBegun(run PendingRun, capture SessionCapture) bool {
-	newest := run.Capture
-	return newest != nil && capture.sameTake(*newest) && newest.State == CaptureBegun
+	begun := func(section *SessionCapture) bool {
+		return section != nil && capture.sameTake(*section) && section.State == CaptureBegun
+	}
+	return begun(run.Capture) || begun(run.Saving)
+}
+
+// ReserveSave reserves a save's place on the turn's row. See the contract on
+// [PendingStore].
+//
+// ONE READ-DECIDE-WRITE OF THE ROW AS IT STANDS ([CoordStore.writeFound]),
+// fenced by nothing: any node may take a save's place, and the license is the
+// row's own state ([licensesSave]), decided on the clock of the node making
+// the write. Taken, the save holds the newest place by the row's own rule
+// ([stampOnto]) and its save under way beside it.
+func (s *CoordStore) ReserveSave(ctx context.Context, turnID string, save SessionCapture) (bool, error) {
+	if err := reservable(turnID, save); err != nil {
+		return false, err
+	}
+	// SET ON EVERY ASK OF decide, as a stamp's is ([CoordStore.stampCapture]).
+	var held bool
+	_, won, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		held = holdsSave(*run, save)
+		if held || licensesSave(*run, save, s.clock()) != "" {
+			return false
+		}
+		stampOnto(run, save)
+		reserved := save
+		run.Saving = &reserved
+		return true
+	})
+	if err != nil {
+		return false, err
+	}
+	return won || (found && held), nil
 }
 
 // StandBy records capture's take as the read standing by for the row's newest

@@ -61,6 +61,8 @@ const (
 	// collecting node's store answered ([hostUnsettled]): its box is there,
 	// but only that node can read it, and it could not. Recorded by the
 	// collection that found it so, on its own claim ([Coordinator.loseWithHost]).
+	// A capture that node was keeping stays begun under its held taker lease,
+	// so the relaunch reads the turn's row for it ([Coordinator.ContinuedCapture]).
 	// A build that does not know it reads it as a cause it does not know,
 	// which leaves no box to read and is said in general terms.
 	LossLaunchNodeStoreSilent LossCause = "launch_node_store_silent"
@@ -215,16 +217,41 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 		BoxKept: loss.Cause.leavesBox() && run.SandboxID != "",
 		Losses:  run.RoundLosses + 1, Limit: MaxRoundLosses,
 	}
-	log.WarnContext(ctx, "sandbox_run_lost_carried_on", "turn_id", run.TurnID,
+	line := []any{"turn_id", run.TurnID,
 		"agent", run.AgentHandle, "launch_id", run.LaunchID, "cause", string(loss.Cause),
-		"node", loss.Node, "round_losses", outcome.Lost.Losses, "read", read,
+		"node", loss.Node, "round_losses", outcome.Lost.Losses, "read", read}
+	line = append(line, lossSpans(run, loss.At)...)
+	log.WarnContext(ctx, "sandbox_run_lost_carried_on", append(line,
 		"detail", "the run's job was lost before it finished: "+loss.Cause.Why()+
-			"; its turn resumes to carry the round on")
+			"; its turn resumes to carry the round on")...)
 	// THE REPORT, for a round its job had already submitted: the turn
 	// collects that round from its calls rather than carrying it on, and
 	// files this as the run's account of itself ([ResumeRequest.Lost]) —
 	// cut off, as the result above was, whether or not its box was read.
 	return &lostCarry{run: run, report: runReport(run, result), outcome: outcome}, nil
+}
+
+// lossSpans is what the line that carries a lost job's round on says of the
+// time the loss cost, in whole seconds to at, when the loss was found
+// ([JobLoss.At]): how long the job ran (ran_s, from [LaunchRecord.StartedAt])
+// and since the newest kept capture of its own launch (since_save_s,
+// [launchKept]), the work a relaunch continuing it does again. Each is left
+// out where its instant is unknown. Three clocks (the finder's, the
+// launcher's, the taker's) make each an estimate within twice
+// objstore.AssumedClockSkew, which the clock_skew alarm holds; a figure below
+// zero, those clocks' doing or the loss's own final take, is zero.
+func lossSpans(run PendingRun, at time.Time) []any {
+	if at.IsZero() {
+		return nil
+	}
+	var spans []any
+	if start := run.Launch.StartedAt; !start.IsZero() {
+		spans = append(spans, "ran_s", max(0, int(at.Sub(start).Seconds())))
+	}
+	if kept := launchKept(run); kept != nil && !kept.At.IsZero() {
+		spans = append(spans, "since_save_s", max(0, int(at.Sub(kept.At).Seconds())))
+	}
+	return spans
 }
 
 // lostCarry is what a lost job's round is carried on with: the claimed run as

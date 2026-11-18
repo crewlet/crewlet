@@ -14,18 +14,11 @@ import (
 
 // THE SCOPE INDEX IS THE SAME ROWS AT EVERY CHUNK WIDTH.
 //
-// [tables.retain] writes one row per term of a record's scope, and a record's
-// scope is data-driven: the paths NEST, and a write that names a task's keys
-// states the task and every key beside it. It was one statement per path until
-// [store.InsertRows] existed.
-//
-// The hazard chunking introduces is not the count, it is COLLISION INSIDE ONE
-// STATEMENT: two identical paths in one record used to arrive as two separate
-// inserts, where the second hit `ON CONFLICT (position, path) DO NOTHING` on a
-// row the first had already committed. Batched, they land in the same
-// statement. So the assertion is that the rows are byte-identical across
-// widths that split the collection differently — including a width of 1, which
-// is the pre-conversion shape, so the old behaviour is the control.
+// [tables.retain] writes one row per scope term through [store.InsertRows], and
+// chunking's hazard is COLLISION INSIDE ONE STATEMENT: duplicate paths of one
+// record land together under `ON CONFLICT (position, path) DO NOTHING`. So the
+// rows must be byte-identical at widths that split the collection differently,
+// one row per statement being the control.
 func TestTheDeferredScopeIsTheSameRowsAtEveryChunkWidth(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -34,8 +27,8 @@ func TestTheDeferredScopeIsTheSameRowsAtEveryChunkWidth(t *testing.T) {
 	for i := range 40 {
 		paths = append(paths, fmt.Sprintf("project/ENG/task/%03d", i))
 	}
-	// A DUPLICATE AND AN ANCESTOR, because both are what a real scope
-	// carries and both are what the conflict clause is there for.
+	// A DUPLICATE AND AN ANCESTOR: a real scope carries both, and the
+	// conflict clause is there for them.
 	paths = append(paths, "project/ENG", "project/ENG/task/000", "project/ENG")
 
 	rec := Record{
@@ -49,12 +42,10 @@ func TestTheDeferredScopeIsTheSameRowsAtEveryChunkWidth(t *testing.T) {
 		StoredAt: time.Unix(1_700_000_000, 0).UTC(),
 	}
 
-	// Each limit splits the 41 normalised paths differently. 0 is the unset
-	// field — RowsPerInsert reads it as one row per statement, which is
-	// exactly the pre-conversion shape and therefore the control; 2 and 4
-	// and 14 straddle the collection at one, two and seven rows a
-	// statement; 2000 is wide enough to take all 41 in one, as the probed
-	// limit (32 766) is.
+	// Each limit splits the 41 normalised paths differently: 0, unset,
+	// RowsPerInsert reads as one row per statement (the control); 2, 4 and
+	// 14 give one, two and seven rows a statement; 2000 takes all 41 in
+	// one, as the probed limit (32 766) does.
 	want := map[int][]string{}
 	for _, limit := range []int{0, 2, 4, 14, 2000} {
 		got := scopeRowsAt(ctx, t, rec, limit)
@@ -64,11 +55,9 @@ func TestTheDeferredScopeIsTheSameRowsAtEveryChunkWidth(t *testing.T) {
 		}
 		want[limit] = got
 	}
-	// AN ABSOLUTE EXPECTATION AS WELL AS A RELATIVE ONE. Comparing the
-	// widths against each other cannot catch a bug that is uniform across
-	// them — binding every row's path from paths[0] writes one row at every
-	// limit and agrees with itself — so the rows are also compared against
-	// the record's own normalised scope.
+	// AN ABSOLUTE EXPECTATION TOO: comparing widths misses a bug uniform
+	// across them (binding every row from paths[0] agrees with itself), so
+	// the rows are also held to the record's normalised scope.
 	expect := slices.Clone(rec.Scope.Normalised().Paths)
 	slices.Sort(expect)
 	if got := want[2000]; !slices.Equal(got, expect) {
@@ -152,27 +141,12 @@ func scopeRowsAt(ctx context.Context, t *testing.T, rec Record, limit int) []str
 
 // A SCOPE WITH HUNDREDS OF ROOTS IS PROBED, NOT REFUSED.
 //
-// # The refusal this replaced
-//
-// The probe used to state each root as two chained terms —
-// `... OR s.path = ? OR s.path LIKE ? ...` — and a chained `OR` parses
-// LEFT-DEEP, so the expression tree's depth grew with the list. Turso refuses
-// one past a hundred with `Parse error: Expression tree is too large (maximum
-// depth 100)`.
-//
-// A scope's roots are one per OBJECT an operation writes, so an import carries
-// as many as its batch has members. That put the ceiling at about fifty
-// objects — measured as a sixty-object batch failing its own apply, the whole
-// batch lost. It is the worst shape a limit can have: invisible on every
-// fixture small enough to write by hand, and reached by the first real
-// company.
-//
-// # What this asserts
-//
-// Five hundred roots and a thousand, each far past the fifty a chained `OR`
-// held. Both have to return
-// an ANSWER rather than an error — the answer itself is what the cases above
-// are about.
+// A scope has one root per object an operation writes, so an import carries as
+// many as its batch has members, and a probe whose depth grows with the roots
+// hits Turso's `Expression tree is too large (maximum depth 100)` near fifty
+// ([tables.deferredBelow]), losing the whole batch. Five hundred and a thousand
+// roots must each return an answer rather than an error; what the answer is
+// belongs to the other cases.
 func TestAScopeWithHundredsOfRootsIsProbedRatherThanRefused(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -217,18 +191,11 @@ func TestAScopeWithHundredsOfRootsIsProbedRatherThanRefused(t *testing.T) {
 
 // THE COVERAGE PROBE ANSWERS IN BOTH DIRECTIONS, EXACTLY.
 //
-// A retained record is about an object; a probe asks about another. They
-// intersect when one CONTAINS the other, whichever way round — a record
-// deferred on a task beneath the project a write is rewriting, and a record
-// deferred on the project above the task a write is editing — and only then.
-//
-// The statement binds its prefixes in a CTE that comes FIRST in its text, and
-// the values were appended after the exact paths, so every `?` was off by the
-// number of roots: the CTE's LIKE patterns were the first exact paths and the
-// real prefixes sat in the IN list as literals. The descendant direction —
-// the one the package calls silent data loss when it is missing — never
-// matched anything, and the paths that did reach a LIKE matched case-blind and
-// read an `_` as a wildcard. Each probe below was wrong under that binding.
+// A retained record and a probe intersect when one CONTAINS the other, either
+// way round (a record on a task beneath the project a write rewrites, or on the
+// project above the task a write edits), and only then. Each probe below fails
+// when the bindings do not follow the statement's text ([tables.deferredBelow]):
+// no descendant matches, and LIKE runs case-blind with `_` as a wildcard.
 func TestTheCoverageProbeFindsBothDirectionsAndNothingElse(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -298,9 +265,8 @@ func TestTheCoverageProbeFindsBothDirectionsAndNothingElse(t *testing.T) {
 	}
 }
 
-// openProbeEstate is a fresh node with its replicated estate open, which is
-// where a domain's deferral tables live — the probe tables these cases create
-// are made there for that reason.
+// openProbeEstate is a fresh node with its replicated estate open, where a
+// domain's deferral tables live, so the probe tables are made there.
 func openProbeEstate(ctx context.Context, t *testing.T) store.ReplicatedHandle {
 	t.Helper()
 	db, err := store.OpenNode(ctx, filepath.Join(t.TempDir(), "probe.db"), store.Options{})

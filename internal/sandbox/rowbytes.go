@@ -52,18 +52,18 @@ const (
 	// what a later build adds.
 	RestBytes = RowBytes - ExecuteStateBytes
 
-	// ExtraRowBytes is the room, inside RestBytes, for keys a later build
-	// adds to the row, at its top ([PendingRun.Extra]) or in one of its
-	// sections ([LaunchRecord.Extra], [HeldCall.Extra], [OwedCall.Extra],
-	// [SessionCapture.Extra], [ConversationBase.Extra] and its session's and
-	// siblings', [RunSteer.Extra] and its notes', their hooks' serves' and
-	// the calls those answered), and that this build
-	// carries without reading: STATED HERE, so the next field a
-	// build adds is added inside it, and the build that adds it moves its own
-	// figure out of this one rather than out of a share somebody else's
-	// arithmetic needs. The turn's read of its conversation ([PendingRun.Base])
-	// has its own place, at [ConversationBaseMaxBytes], and takes none of this
-	// room: all of it is still a later build's.
+	// ExtraRowBytes is the room, inside RestBytes, for keys a later build adds
+	// to the row, at its top ([PendingRun.Extra]) or in one of its sections
+	// ([LaunchRecord.Extra], [HeldCall.Extra], [OwedCall.Extra],
+	// [SessionCapture.Extra] in each capture section, [ConversationBase.Extra]
+	// and its session's and siblings', [RunSteer.Extra] and its notes', their
+	// hooks' serves' and the calls those answered), and that this build carries
+	// without reading: STATED HERE, so the next field a build adds is added
+	// inside it, and the build that adds it moves its own figure out of this
+	// one rather than out of a share somebody else's arithmetic needs. The
+	// turn's read of its conversation ([PendingRun.Base]) has its own place, at
+	// [ConversationBaseMaxBytes], and takes none of this room: all of it is
+	// still a later build's.
 	ExtraRowBytes = 256 << 10
 
 	// MaxAnswerBytes bounds a recorded answer as the row holds it — its seal
@@ -196,8 +196,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_283_461
-	measuredSpare       = 312_447
+	measuredOtherFields = 2_309_376
+	measuredSpare       = 286_532
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].

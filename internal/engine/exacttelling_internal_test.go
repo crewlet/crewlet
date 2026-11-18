@@ -80,7 +80,7 @@ func TestARelaunchReadsItsSessionThroughTheMemberThatWroteIt(t *testing.T) {
 	c, seat := chainCompany(t,
 		chainMember{key: "oc", agent: "opencode", model: "anthropic/claude-sonnet-5"},
 		chainMember{key: "api", agent: "claude-code", model: "claude-golden"})
-	k := newKeptLaunchOn(t, c, seat, 40000, 0, 0, nil, true)
+	k := newKeptLaunchOn(t, c, seat, 40000, 0, 0, nil, keptCutOff)
 	reading := scriptedReading(map[string]sandbox.CallRecords{"toolu_01": heldByReading("ok")}, nil)
 	k.runners["claude-code"].Holdings = reading
 	k.runners["opencode"].Holdings = reading

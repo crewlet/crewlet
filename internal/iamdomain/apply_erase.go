@@ -11,59 +11,30 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// WHAT A REMOVAL ERASES BEYOND THE PERSON'S OWN ROWS.
+// WHAT A REMOVAL ERASES BEYOND THE PERSON'S OWN ROWS, which
+// [Applier.writeRemoval] deletes. Two kinds of row outlive the removal on
+// purpose and hold their sealed values: an INVITATION addressed to them (until
+// the sweep, so who invited whom stays visible) holds their address; the
+// AUTHENTICATION TRAIL's rows carry the records that changed them, holding
+// their name, address and seeds. The apply clears every sealed value there and
+// keeps every other column: ids, blinds, logins, actors, ops and instants are
+// what the trail is for, and none opens to anything personal.
 //
-// The person, their credentials, their sessions and their revocation epoch go
-// with the rows [Applier.writeRemoval] deletes. Two tables keep a copy of their
-// sealed values under rows that are not theirs, and both outlive the removal
-// on purpose:
+// A sealed value is found by its SHAPE ([secrets.IsEnvelope]): every envelope
+// here is somebody's personal value, and a table of which payload field is
+// sealed would be a second list the next sealed field is missing from.
+
+// The rows to clear sit in the bucket of the address the removal releases (an
+// invitation and its trail rows are filed under the address), the only one a
+// person ever holds: a redemption binds its invitation's address, and nothing
+// moves it later. So the removal's WRITER declares that bucket in its scope, or
+// a node that deferred an invitation to it would apply the removal first and
+// keep a copy nobody erased. Trail rows are found by the address, so they are
+// erased even once the sweep collected the invitation.
 //
-//   - an INVITATION addressed to them keeps its row until the sweep collects
-//     it, so an operator can still see who invited whom — and it holds their
-//     address, sealed;
-//   - the AUTHENTICATION TRAIL keeps a row per record that changed them, for
-//     the audit a removal must never erase — and each row carries the record
-//     it was written by, whose payload holds their name, their address and any
-//     seed they enrolled, sealed.
-//
-// So the removal's own apply CLEARS every sealed value those rows hold of
-// theirs, and leaves every other column as it was: the ids, the blinds, the
-// logins, the actors, the ops and the instants are what the trail is FOR, and
-// none of them opens to anything personal. Afterwards no row on any node holds
-// a value of theirs that opens under any keyring.
-//
-// # A sealed value is recognised by its SHAPE
-//
-// Every value this estate seals is a keyring envelope ([secrets.IsEnvelope])
-// and every envelope it holds is somebody's personal value — nothing else here
-// is encrypted — so the trail's documents are cleared by walking them and
-// emptying every envelope, rather than by a table of which payload carries
-// which field. A table would be a second list of the sealed fields that the
-// next field added to a payload is missing from; the shape is the one fact
-// every sealed value shares.
-//
-// # Which address is theirs, and why the removal's SCOPE names it
-//
-// An invitation is filed under its ADDRESS's bucket, not a person's — it has no
-// person until it is redeemed — and so is the trail row its record wrote. So
-// the rows this erasure clears sit in the bucket of the address the removal
-// releases, which is the only address a person ever holds: a redemption binds
-// the address its invitation was sent to, and no record moves a person's
-// address after their enrolment. The removal's WRITER therefore declares that
-// bucket beside the person's — or a node that deferred an invitation to that
-// address applied the removal ahead of it and was left with a copy of the
-// address nobody erased — and the apply clears every invitation and every
-// issue's trail row the address holds. An issue's trail row is found by the
-// ADDRESS rather than by its invitation ([Applier.applyDirectory]), so it is
-// erased even once the sweep has collected the invitation itself.
-//
-// # Deterministic, because every data node does it
-//
-// The walk re-encodes a document it changed with encoding/json, which writes
-// object keys in sorted order and numbers as they were read ([json.Number]),
-// so every node that applies the removal to the same rows writes the same
-// bytes — the identity claim holds across the erasure as it does across every
-// other apply. A document with nothing to clear is left byte for byte.
+// DETERMINISTIC: a changed document is re-encoded by encoding/json, keys sorted
+// and numbers as read ([json.Number]), so every node writes the same bytes; a
+// document with nothing to clear is left byte for byte.
 
 // eraseSealed clears every sealed value of one removed person's that a row not
 // their own still holds, reporting how many rows it rewrote.
@@ -98,19 +69,14 @@ func erasedInvitationsStatement(among string) string {
 }
 
 // erasedTrailStatement selects the trail rows a removal erases: every row
-// about the removed person, and every row filed under the address the removal
-// releases — an invitation's issue and its cancellation, which name no person
-// ([Applier.applyDirectory]) — each arm a seek of its own index.
+// about the removed person, and every row filed under the address it releases
+// (an invitation's issue and cancellation, [Applier.applyDirectory]), each arm
+// a seek of its own index.
 //
-// THE ADDRESS ARM DOES NOT ALSO ASK THAT THE ROW NAME NOBODY. It used to, and
-// that one term was what the planner sought on: every trail row that names no
-// person, read through the person index, for a removal that wanted the few
-// filed under one address — while the index on the object, which is exactly
-// that address, was reached by no statement at all. Nothing is lost by leaving
-// it out: only the invitation's two records are filed under an address, and
-// neither names a person, so every row the arm selects is one it selected
-// before; and an address is held by one person at a time, so a row under it
-// that named somebody would be about the person being removed.
+// THE ADDRESS ARM DOES NOT ASK THAT THE ROW NAME NOBODY: given that term, the
+// planner seeks every unnamed row through the person index rather than the
+// object index. It loses nothing: only those two records are filed under
+// an address, neither names a person, and an address has one holder at a time.
 func erasedTrailStatement(among string) string {
 	return `
 		SELECT id, document FROM iam_history
@@ -144,8 +110,8 @@ func inList(values []string) (string, []any) {
 // value, clearing it — and, for a table that keeps the same value in a column
 // beside the document, that column too, which the update statement names.
 //
-// READ WHOLE, THEN WRITTEN: the rows are collected before the first update so
-// no statement writes a table while a cursor over it is open.
+// READ WHOLE, THEN WRITTEN, so no statement writes a table while a cursor over
+// it is open.
 func eraseIn(ctx context.Context, tx *sql.Tx, table, query, update string,
 	args ...any) (int, error) {
 
@@ -180,10 +146,8 @@ func eraseIn(ctx context.Context, tx *sql.Tx, table, query, update string,
 				row.id, err)
 		}
 		if !changed {
-			// NOTHING SEALED IN IT, which for an invitation means its
-			// column holds nothing either: the two are written from the
-			// one sealed value, so a document with none left is a row
-			// an earlier erasure already reached.
+			// NOTHING SEALED: an invitation's column and document are written
+			// from one sealed value, so this is a row an earlier erasure reached.
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, update, cleared, row.id); err != nil {

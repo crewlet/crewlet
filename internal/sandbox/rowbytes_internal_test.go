@@ -628,6 +628,15 @@ func worstRow(t *testing.T) PendingRun {
 	if err := capture.Bounded(); err != nil {
 		t.Fatalf("the worst capture is past what the row carries: %v", err)
 	}
+	// THE SAVE UNDER WAY ([PendingRun.Saving]) is a third capture at the same
+	// bounds, but for what a save never is: final, holding a note, or stood by
+	// for (zeroInTheWorstRow says why).
+	save := *capture
+	save.Final, save.NoteCursor = false, 0
+	save.StandbyTaker, save.StandbyTakerEpoch, save.StandbyAt = "", 0, time.Time{}
+	if err := save.Bounded(); err != nil {
+		t.Fatalf("the worst save is past what the row carries: %v", err)
+	}
 	// THE DECISION THE HELD CALL CARRIES OUT ([HeldAct]), each field at the
 	// widest its source admits: the question, which for one asked in words is
 	// the question comment's whole body, at most internal/worklet's
@@ -876,7 +885,7 @@ func worstRow(t *testing.T) PendingRun {
 		// THE RUN ITS TURN'S LEADS ARE KEPT FOR, a launch id as the create
 		// writes it, and how many leads that part has taken, at its widest.
 		LeadsRun: uuid.NewString(), LeadsAppended: math.MaxInt,
-		BoxSince: worstAt, Capture: capture, Kept: capture, Base: &base,
+		BoxSince: worstAt, Capture: capture, Kept: capture, Saving: &save, Base: &base,
 		ExhaustedSessions: slices.Repeat([]string{plain(executorkeep.SessionIDMaxBytes)},
 			executorkeep.ExhaustedMaxSessions),
 		OwedEnd: end, EndRecorded: true,
@@ -1088,9 +1097,19 @@ var zeroInTheWorstRow = func() map[string]string {
 	// WHERE A CAPTURE'S RUN BEGAN is one of two (RunStart): a run that began its
 	// session names no message it began after, and the worst capture names one at
 	// its bound, the wider of the two (RunAfter).
-	for _, capture := range []string{"Capture", "Kept"} {
+	for _, capture := range []string{"Capture", "Kept", "Saving"} {
 		zero[capture+".RunBegan"] = "a run that began its session names no message it began after, which the " +
 			"worst capture names at its bound, the wider of the two (RunStart, keptRunStart)"
+	}
+	// WHAT A SAVE NEVER IS ([PendingRun.Saving]): the store reserves none that
+	// says otherwise (reservable), and no read stands by for one.
+	zero["Saving.Final"] = "a save is of a job still working, and its reservation refuses a final one (reservable)"
+	zero["Saving.NoteCursor"] = "a save is cut off and holds no note, and its reservation refuses one that " +
+		"says otherwise (reservable)"
+	for _, field := range []string{"StandbyTaker", "StandbyTakerEpoch", "StandbyAt"} {
+		zero["Saving."+field] = "the section names no read standing by: the reservation that writes it " +
+			"refuses a save naming one (reservable), and the save's later stamps are kept there without one " +
+			"(stampOnto, savingAfter)"
 	}
 	// THE CALL A PERSON APPROVED, on the held call and owed to the log
 	// ([OwedCall]), as approvedCall keeps it from a call with every field set

@@ -14,10 +14,9 @@ import (
 )
 
 // EVERY SEALED VALUE A CONVERSATION HOLDS IS COUNTED BY ITS KEY, none of them
-// opened: the count is the assistant's line in a keyring rotation's "is
-// anything still under the old key", so a key is never retired while a live
-// conversation is still sealed under it. Mutation: drop a table from the
-// counted columns and the messages or the proposal go uncounted.
+// opened, so a rotation never retires a key a live conversation is sealed
+// under. Mutation: drop a table from the counted columns and the messages or
+// the proposal go uncounted.
 func TestSealedValuesAreCountedByTheirKey(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -32,8 +31,7 @@ func TestSealedValuesAreCountedByTheirKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SealedKeys: %v", err)
 	}
-	// The title, the turn's page title, the message's text, and the
-	// proposal's body and card: five, each counted once.
+	// Title, turn page title, message text, proposal body and card.
 	if got.Values["k1"] != 5 || len(got.Values) != 1 {
 		t.Fatalf("the sealed values count %v, want every one under k1", got.Values)
 	}
@@ -43,11 +41,10 @@ func TestSealedValuesAreCountedByTheirKey(t *testing.T) {
 	}
 }
 
-// EVERY SEALED COLUMN THE SCHEMA DECLARES IS ONE THE COUNT READS: a column
-// named `*_sealed` on an assistant table is a keyring envelope, and one the
-// count missed would let a rotation retire a key that still opens it.
-// Mutation: add a sealed column to a migration without counting it, or drop
-// one from the counted list, and the sets differ.
+// EVERY SEALED COLUMN THE SCHEMA DECLARES IS ONE THE COUNT READS: a
+// `*_sealed` column the count missed would let a rotation retire a key that
+// still opens it. Mutation: add a sealed column to a migration without
+// counting it, or drop one from the counted list, and the sets differ.
 func TestEverySealedColumnIsCounted(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob(filepath.Join("..", "store", "schema", "replicated", "*.sql"))

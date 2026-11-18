@@ -21,36 +21,16 @@ import (
 
 // THE EXECUTOR WRITE PATH: one record per begin, capture, end or delete,
 // published to the subject of the conversation (or the seat) it contends for,
-// decided inside one snapshot of this node's own rows.
-//
-// # Every write is the engine's
-//
-// Nobody asks for a session to be captured or a turn to be ended: the engine
-// records what its runs did. So a [Call] names the engine's own actor, and the
-// operation id it carries is DERIVED PER EXECUTION, never from the work key: a
-// begin's from the turn ([BeginOpID]), a capture's from the turn, the launch
-// and its ordinal ([CaptureOpID]), an end's from the turn ([EndOpID]), a
-// retention delete's from the turn and the
-// reaper's slot (the trash reaper's), a seat's removal from the seat and the
-// instant the retirement removing it was marked ([SeatDeleteOpID]). Derived
-// from the work key, a re-run's capture would be answered from the ledger as
-// the first run's and never applied.
-//
-// EVERY INSTANT AN ID IS MINTED AT IS ONE THE LEDGER CAN STILL VOUCH FOR: a
-// turn's, through statelog.MintAt like every derived id of a turn, and a
-// retirement's and a reaper's, because each is the instant of the attempt
-// that writes under it. An id minted further back than statelog.MintHorizon
-// is answered `unknown` on every node for good and never published.
-//
-// # What a write answers
-//
-// Every write answers its whole [statelog.Result] and never a bare position,
-// because a position cannot tell `applied` and `pending` from `unknown`; and a
-// capture the rows refused at the apply (an end, a newer capture, another
-// conversation's capture that took the budget, or another turn's begin that
-// came to hold a base the budget would have released, between the decide and
-// the apply) answers the refusal its own row says, read back, as a begin says
-// whether its row holds the base it named.
+// decided inside one snapshot of this node's own rows. Every write is the
+// engine's own record of what its runs did, under an operation id DERIVED PER
+// EXECUTION ([BeginOpID], [CaptureOpID], [EndOpID], [SeatDeleteOpID], the
+// trash reaper's slot), never from the work key, which would answer a re-run's
+// capture from the ledger as the first run's. Each is minted at an instant the
+// ledger still vouches for (statelog.MintAt): one past statelog.MintHorizon is
+// `unknown` on every node for good, never published. A write answers its whole
+// [statelog.Result], never a bare position, which cannot tell `applied` and
+// `pending` from `unknown`; a capture or begin reads its row back, since the
+// apply may refuse what the decide allowed.
 
 // Call is one write's caller: who is writing and under which operation.
 type Call struct {
@@ -78,34 +58,29 @@ func (c Call) validate() error {
 }
 
 // CaptureOpID is the operation a capture is published under: the seat, the
-// turn, the launch it was taken from and its ordinal within that launch. One
-// capture, one operation, however often it is retried; the next capture of
-// the same launch, another.
+// turn, the launch and the capture's ordinal within it, so a capture's retries
+// share one and the launch's next capture gets another.
 //
-// minted is the instant the turn's derived operations are minted at: its
-// work's start, or the instant a turn rebased onto once that start was past
-// statelog.MintHorizon of the attempt's own clock (statelog.MintAt, recorded in
-// coord.Rebases), as every derived id a turn writes is. NEVER THE LAUNCH'S
-// START TAKEN AS IT IS: a launch parked on a person's answer can resume and
-// capture a month after it started, and an id minted that far back is one no
-// node's ledger vouches for, answered `unknown` and never published.
+// minted is the turn's mint instant, as for every id a turn derives
+// (statelog.MintAt: its work's start, or its rebase recorded in coord.Rebases).
+// NEVER THE LAUNCH'S START: a launch parked on a person's answer can capture a
+// month later, past statelog.MintHorizon, where the id is `unknown` and never
+// published.
 func CaptureOpID(minted time.Time, handle, turn, launch string, captureSeq int64) string {
 	return statelog.DeriveOpID(minted, "executor-capture", "crewlet.executor",
 		handle, turn, launch, fmt.Sprint(captureSeq))
 }
 
 // BeginOpID is the operation a turn's begin is published under: the seat and
-// the turn, at the instant the turn's derived operations are minted at — the
-// same minted [CaptureOpID] takes. A turn begins once, however often its first
-// launch asks.
+// the turn, minted as for [CaptureOpID]. A turn begins once, however often its
+// first launch asks.
 func BeginOpID(minted time.Time, handle, turn string) string {
 	return statelog.DeriveOpID(minted, "executor-begin", "crewlet.executor", handle, turn)
 }
 
 // EndOpID is the operation a turn's end is published under: the seat and the
-// turn, at the instant the turn's derived operations are minted at — the same
-// minted [CaptureOpID] takes, past statelog.MintAt's rebase. A turn ends once,
-// however many paths try to say so.
+// turn, minted as for [CaptureOpID]. A turn ends once, however many paths try
+// to say so.
 func EndOpID(minted time.Time, handle, turn string) string {
 	return statelog.DeriveOpID(minted, "executor-end", "crewlet.executor", handle, turn)
 }
@@ -113,14 +88,12 @@ func EndOpID(minted time.Time, handle, turn string) string {
 // SeatDeleteOpID is the operation a removed seat's rows are deleted under: the
 // seat, at the instant the retirement removing it was marked.
 //
-// THE RETIREMENT'S OWN INSTANT, NEVER THE ABSENCE'S. A retirement runs late
-// whenever it has to (a node still holding the seat, runs that cannot be ended
-// yet, no duty holder), and an id minted at the instant the absence was first
-// seen would be past statelog.MintHorizon for one held back a month: answered
-// `unknown` on every node and never published, so the retirement would fail
-// on every later tick. Each attempt is marked anew, so a retried retirement
-// derives a new operation and publishes the removal again, which applies
-// idempotently ([SeatDelete]); the attempt's own retries share one.
+// NEVER THE INSTANT THE ABSENCE WAS FIRST SEEN: a retirement can run a month
+// late (a node still holding the seat, runs not yet endable, no duty holder),
+// past statelog.MintHorizon, where the id is `unknown` and the retirement fails
+// on every tick. Each attempt is marked anew, so a retried retirement publishes
+// again under a new operation, which applies idempotently ([SeatDelete]); one
+// attempt's own retries share one.
 func SeatDeleteOpID(retiring time.Time, handle string) string {
 	return statelog.DeriveOpID(retiring, "executor-seat-delete", "crewlet.executor",
 		handle, retiring.UTC().Format(time.RFC3339Nano))
@@ -241,11 +214,10 @@ type NewCapture struct {
 	Home      string
 	Workspace string
 
-	// ContextTokens is the whole input of the session's last request, as its
-	// transcript recorded it, and Interrupted that its harness was cut off
-	// ([Capture.ContextTokens], [Capture.Interrupted]): the run's stamp of
-	// the capture, which a launch continuing the session after its turn
-	// ended reads off the row.
+	// ContextTokens is the session's last request's whole input, as its
+	// transcript recorded it, and Interrupted that its harness was cut off:
+	// read off the row by a launch continuing the session after its turn
+	// ended ([Capture.ContextTokens], [Capture.Interrupted]).
 	ContextTokens int64
 	Interrupted   bool
 
@@ -323,9 +295,9 @@ func (n NewCapture) validate() error {
 }
 
 // ContentKeyMaxBytes is the longest content key a capture names: a keyring
-// key id a sealed stream's header can carry. Exported for the readers that
-// carry a row's content key on in a record of their own and state that
-// record's bound from the log's (internal/sandbox's ConversationBaseMaxBytes).
+// key id a sealed stream's header can carry. Exported for records elsewhere
+// that carry a row's content key and bound it by this (internal/sandbox's
+// ConversationBaseMaxBytes).
 const ContentKeyMaxBytes = 255
 
 // checkTurn refuses the identity every record about a turn carries: a seat's
@@ -354,10 +326,9 @@ type CaptureResult struct {
 
 	// Recorded is true when the row was read back naming this capture's
 	// object. False on an applied result means the apply refused it (an
-	// end, a newer capture, a removal of the seat, another conversation's
-	// capture that took the budget, or another turn's begin that came to
-	// hold a base the budget would have released got there first), and on a
-	// pending or unknown one that this node has not seen it apply yet.
+	// end, a newer capture or the seat's removal landed first, or another
+	// conversation's capture or another turn's held base took the budget),
+	// and on a pending or unknown one that this node has not seen it apply.
 	Recorded bool
 }
 
@@ -438,12 +409,10 @@ func (w *Writer) Capture(ctx context.Context, c Call, n NewCapture) (CaptureResu
 // removed, and nil for one that has not: what every decide about a turn
 // refuses a closed one by.
 //
-// THE TOMBSTONE ALONE DECIDES IT, never the row's own end. An end writes the
-// turn's tombstone in the very apply that ends its row ([applyEnd]), and only
-// the retention removes a tombstone, together with its row ([removeTurn]), so
-// no ended row is without one; and a turn whose row a later turn's end
-// absorbed, or its seat's removal deleted, has the tombstone alone — which a
-// test of the row would let through as a turn with no row yet.
+// THE TOMBSTONE ALONE DECIDES IT, never the row's end: every ended row has one
+// ([applyEnd] writes it, only [removeTurn] removes it, with the row), and a
+// turn whose row was absorbed or removed with its seat has the tombstone
+// alone, which a test of the row would pass as a turn with no row yet.
 func turnEnded(ctx context.Context, tx *sql.Tx, handle, turn string) error {
 	_, tombed, err := readTomb(ctx, tx, handle, turn)
 	switch {
@@ -459,9 +428,8 @@ func turnEnded(ctx context.Context, tx *sql.Tx, handle, turn string) error {
 // seat: every refusal [Writer.Capture] names. It answers the seat's removal the
 // snapshot holds, which the record carries ([Capture.SeenRemoval]).
 //
-// NOTHING IS REFUSED FOR BEING MINTED IN THE FUTURE. A key that a fast clock
-// minted ahead of this one protects itself: the collector deletes nothing
-// whose minting instant is inside its grace.
+// NOTHING IS REFUSED FOR BEING MINTED IN THE FUTURE: a key a fast clock minted
+// protects itself, since the collector deletes nothing minted inside its grace.
 func decideCapture(ctx context.Context, tx *sql.Tx, n NewCapture, at time.Time) (int64, error) {
 	if age := at.Sub(n.Object.Key.Minted()); age > objstore.RecordWithin {
 		return 0, fmt.Errorf("%w: object %s was minted %s ago and a capture names an "+
@@ -554,9 +522,8 @@ func (n NewBegin) validate() error {
 		return nil
 	}
 	// THE BASE IS ONE OF THE TURNS THE READ HANDED OUT, which absorbsOf has
-	// just held to canonical turn ids other than this turn's own: so a base
-	// among them is a turn in its one spelling and never the turn itself,
-	// and neither needs a test of its own.
+	// just held to canonical ids other than this turn's, so the base needs
+	// no test of its spelling or of being the turn itself.
 	if !slices.Contains(n.Absorbs, n.BaseTurn) {
 		return invalid("the base turn %q is not among the turns the read handed out, and a "+
 			"read's head always is", n.BaseTurn)
@@ -607,11 +574,10 @@ func (w *Writer) Begin(ctx context.Context, c Call, n NewBegin) (BeginResult, er
 		p.BaseObject, p.BaseHash = n.BaseObject.Key.String(), string(n.BaseObject.Hash)
 	}
 	subject := ConversationSubject(n.Handle, n.ConversationKey, n.Turn)
-	// THE CONVERSATION, NOT THE SEAT: a begin writes its own turn's row and
-	// reads only rows of its own conversation. A capture of another
-	// conversation is not arbitrated against it, and need not be: its apply
-	// asks about the hold in log order, and its seat-wide scope contains this
-	// one, so a node that defers either defers the other.
+	// THE CONVERSATION, NOT THE SEAT: a begin writes its own row and reads only
+	// its conversation's. Another conversation's capture needs no arbitration
+	// against it: its apply asks about the hold in log order, and its seat-wide
+	// scope contains this one, so a node that defers either defers the other.
 	scope := ScopeSet{Subject: true}
 	res, err := publish(ctx, w.publisher, request(subject, scope, c.OpID,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
@@ -791,22 +757,19 @@ func decideEnd(ctx context.Context, tx *sql.Tx, n NewEnd) (int64, error) {
 	return removal, nil
 }
 
-// lostFailure is the account an end the retention duty records for a turn
-// whose own end was lost carries ([Writer.EndLost]). It is kept in the
-// replicated ending and told to the conversation's next turn, so it names the
-// turn's LAST RECORD rather than its last capture: a turn whose begin wrote
-// its row may have captured nothing at all.
+// lostFailure is the failure [Writer.EndLost] records, told to the
+// conversation's next turn. It names the turn's LAST RECORD, not its last
+// capture: a turn whose begin wrote its row may have captured nothing.
 const lostFailure = "no end was recorded for this turn, and no run of it was live a day " +
 	"after its last record: its end was lost"
 
-// EndLost records a turn whose end was lost as ended `lost`, as the retention
-// duty, under the operation the duty derived: a turn that never ended, whose
-// last record — its newest capture, or the begin of a turn that captured
-// nothing — was at or before before, and which the duty found no live run of
-// ([LostAfter]). Its session is kept as any ended turn's is — the next turn on
-// the conversation continues it — and what the end releases is the seat's
-// budget, which never releases a live turn's session, and the base the turn
-// held, if it captured nothing. A turn that ended, or was captured, since the
+// EndLost records, as the retention duty under the operation it derived, a
+// turn whose end was lost as ended `lost`: one that never ended, whose last
+// record (its newest capture, or its begin if it captured nothing) was at or
+// before before, and of which the duty found no live run ([LostAfter]). Its
+// session is kept for the conversation's next turn; the end only lets the
+// seat's budget release it, as it never releases a live turn's, and frees the
+// base the turn held if it captured nothing. A turn ended or captured since the
 // duty listed it is refused [ErrTurnEnded] or [ErrNotDue].
 func (w *Writer) EndLost(ctx context.Context, c Call, handle, conversationKey, turn string,
 	before time.Time) (statelog.Result, error) {
@@ -948,13 +911,12 @@ const removalAtStatement = `
 // DeleteSeat removes every row a seat the company removed holds, as the
 // mailbox retirement, under [SeatDeleteOpID], and records where it did.
 //
-// ALWAYS PUBLISHED, whatever this node's copy holds: the record removes, in log
-// order on every node, every row any record before it wrote — including rows
-// this node has not applied yet — and its position is what refuses a capture or
-// an end decided before it and landing after ([Capture.SeenRemoval]). Decided
-// from this node's rows, a copy behind the log would answer "nothing to remove"
-// for a seat that holds sessions, and a retirement would end believing they
-// were gone. Its apply is idempotent, so a second removal costs one record.
+// ALWAYS PUBLISHED, whatever this node's copy holds: applied in log order on
+// every node, it removes every row an earlier record wrote, applied here yet
+// or not, and its position refuses a capture or end decided before it that
+// lands after ([Capture.SeenRemoval]). Decided from a copy behind the log, it
+// would answer "nothing to remove" and end the retirement with sessions left.
+// Its apply is idempotent, so a second removal costs one record.
 func (w *Writer) DeleteSeat(ctx context.Context, c Call, handle string) (statelog.Result, error) {
 	if err := c.validate(); err != nil {
 		return statelog.Result{}, err

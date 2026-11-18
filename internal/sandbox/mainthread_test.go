@@ -639,7 +639,7 @@ func TestTheNextRequestRidesWhereTheCountDoes(t *testing.T) {
 				t.Fatalf("the capture is stamped %+v, want the next request %+v beside the context 30,000",
 					run.Capture, estimate)
 			}
-			if got := followedNextRequest(run); got != estimate {
+			if got := copyNextRequest(run); got != estimate {
 				t.Errorf("a relaunch following the job reads the next request %+v, want %+v", got, estimate)
 			}
 		})

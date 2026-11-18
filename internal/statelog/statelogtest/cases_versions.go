@@ -5,44 +5,28 @@ import (
 	"testing"
 )
 
-// Stamping is every contract a domain can break in the VERSION it stamps on
+// Stamping is every contract a domain can break in the version it stamps on
 // what it writes, checked by encoding records and reading their envelopes
-// back.
+// back. An older build applies a record at or below the version it reads and
+// retains one above, so the stamp is a promise to the previous build, checkable
+// only from the record's bytes. Both failures are silent until a rolling
+// upgrade: a new field stamped too low is dropped by an older node, whose rows
+// then diverge for good; a record stamped too high is retained by every older
+// node, with everything its scope meets.
 //
-// # Why the stamp is certified here rather than in each domain
-//
-// The version a record carries is what an OLDER build decides by: at or below
-// what it reads, it decodes the record and applies what it understands; above,
-// it retains the record whole and applies it after its upgrade. So the stamp
-// is a promise to a build that does not exist yet in this tree — the previous
-// one — and the only place that promise can be checked is from the record's
-// own bytes. Two failures, both silent until a rolling upgrade:
-//
-//   - A record carrying a new field stamped too LOW is applied by an older node
-//     with the field dropped, and that node's rows for the object differ from
-//     its peers' for good.
-//   - A record carrying nothing new stamped too HIGH is retained by every older
-//     node, and so is everything its scope meets, for the whole upgrade.
-//
-// EXPORTED AND RETURNING ERRORS for [Declaration]'s reason: the suite's own
-// tests hand it a domain that stamps wrongly and read the verdict back.
+// Exported and returning errors for [Declaration]'s reason.
 func Stamping(c Candidate) []error {
 	var out []error
 	out = append(out, stampsBaseRecords(c)...)
 	return append(out, stampsCarriedFields(c)...)
 }
 
-// stampsBaseRecords: a record carrying no versioned field is readable by every
-// build there is — and a record whose KIND a row introduced carries that row
-// and nothing more, so it is stamped at the kind's version.
-//
-// THE KIND'S OWN ROW IS THE ONE EXCEPTION, and the table says so rather than
-// the suite: a kind added after the base format is a value of a field every
-// record has carried since it ([statelog.VersionedField.Equals]), so the
-// suite's ordinary record of that kind carries that one versioned field
-// whatever it is. Expecting version one there would demand that the kind be
-// readable by the builds that have no applier for it, which is the fault the
-// row exists to prevent.
+// stampsBaseRecords: a record carrying no versioned field is stamped at
+// version one, readable by every build. The exception is a kind added after
+// the base format, a value of a field every record carries
+// ([statelog.VersionedField.Equals]): its record carries that row and is
+// stamped at the kind's version, since version one would hand it to builds
+// with no applier for the kind. The field table decides this, not the suite.
 func stampsBaseRecords(c Candidate) []error {
 	name := c.Domain.Name()
 	var out []error
@@ -80,9 +64,9 @@ func stampsBaseRecords(c Candidate) []error {
 	return out
 }
 
-// stampsCarriedFields: a record carrying a versioned field is stamped at that
-// field's version, exactly — held back by every build that predates the field
-// and applied by this one.
+// stampsCarriedFields: a record carrying a versioned field is stamped at
+// exactly that field's version: retained by every build that predates the
+// field, applied by this one.
 func stampsCarriedFields(c Candidate) []error {
 	name := c.Domain.Name()
 	var out []error

@@ -231,8 +231,8 @@ func applyCard(ctx context.Context, tx *sql.Tx, c applyContext, conversation, tu
 	return affected(res), nil
 }
 
-// canonicalApps is a card's or a message's apps sorted and unique, never nil, so two nodes
-// write one encoding.
+// canonicalApps is a card's or a message's apps sorted, unique and never nil,
+// so every node writes one encoding.
 func canonicalApps(apps []string) []string {
 	out := slices.Clone(apps)
 	slices.Sort(out)

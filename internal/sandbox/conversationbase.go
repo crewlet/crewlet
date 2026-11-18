@@ -230,9 +230,9 @@ func (s BaseSession) namedBy(row executorkeep.TurnRow) string {
 //
 // A BASE IS CONTINUED ONLY WHILE THE TURN HAS KEPT NOTHING: once any capture of
 // its own landed, that session holds the base and everything after, and which
-// session of the turn's own a relaunch continues — the newest of the job it
-// follows, kept, or none — is [ContinuityOf]'s alone — so the base's hold lifts
-// there, and the base may go. AND ONLY WHILE THE TURN'S ROW HOLDS IT: a row that
+// session of the turn's own a relaunch continues (the newest capture the job
+// it follows kept, or none) is [ContinuityOf]'s alone, so the base's hold
+// lifts there, and the base may go. AND ONLY WHILE THE TURN'S ROW HOLDS IT: a row that
 // names another base, or that landed a capture, holds nothing the log keeps
 // from a sibling's end or the seat's budget. Either refusal says only why the
 // base is not continued, never which session the launch continues instead,

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,147 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// A TURN'S SESSION, CONTINUED IN WHICHEVER BOX ITS NEXT LAUNCH GETS — AND A
-// CONVERSATION'S, BY ITS NEXT TURN.
-//
-// Every launch of a turn keeps its harness's session in the object store
-// (session.go), named by the turn's row on the executor log. So a relaunch of
-// the turn — a reviewer's send-back, a person's answer to a run that parked, a
-// job lost with its engine whose box was left behind, a sign-in replaced while
-// it ran — continues the session of THE JOB BEFORE IT, as that job's kept
-// capture holds it, in whatever box and cell the relaunch gets: the box the
-// session was last worked in, its own copy kept, or any other, the archive
-// restored there before its harness takes the session up ([RunRequest.Carried]).
-// And a conversation's NEXT TURN continues the session its last turn left — the
-// conversation's head, read once at the turn's dispatch and frozen by its first
-// launch (conversationbase.go) — in a box of its own.
-//
-// # Which session: the job before's own, the conversation's, or none
-//
-// A relaunch follows one job — the one its reviewer collected, the one whose
-// question was answered, the one lost or refused — and only that job's session
-// holds everything the turn's jobs were told: the round's task or the review
-// that sent the round back, a person's answer, and the job's own work. A
-// capture an EARLIER job took holds none of what the jobs after it were told,
-// and the calls a continuation lists after it would be numbered in another
-// round's order where a send-back began one. So a relaunch whose job before
-// left no kept capture — its box went with its host, its take or its keep was
-// refused, its record was never answered — continues none of the turn's own:
-// it starts a session of its own, told what the jobs before it did. And only
-// that job's NEWEST capture: a later one that was not kept is a session that
-// went further than the kept one, and a run continued from the older would
-// believe it knew everything it did. And only one whose stamp states its SAVE
-// POINT ([SessionCapture.Through]), a count of the round's calls the session is
-// known to hold — the run's log as the capture read it once its job was over,
-// where its harness ended its own run, and else the newest point its launch
-// was known to hold (savepoint.go) — which is what the continuation is told the
-// calls after by: one an older build stamped states only the places it read
-// the log at, which cannot say which calls came after it.
-//
-// EXCEPT WHILE THE TURN HAS KEPT NOTHING AT ALL: its first job lost with its
-// box before any capture of it landed, its captures refused or unanswered. Then
-// the relaunch continues the session the turn's first launch froze — the one
-// the conversation's last turn left — told where this turn begins and then
-// handed its own fresh brief or reseed, which say what the turn's jobs did:
-// otherwise a first job lost with its box would end the conversation's session
-// line for good. The turn's row on the log HOLDS that base while the turn is
-// live and has kept nothing (its `begin`), so a sibling's end, the seat's
-// budget and the retention pass it over; and once the turn keeps any session
-// of its own, that one holds the base and everything after, and only the rule
-// above applies. A base is continued ONLY IN A BOX OF ITS OWN: a box the turn's
-// earlier job ran in holds that job's working tree and session, which are the
-// rule above's to continue in place.
-//
-// ONE DECISION EACH, [ContinuityOf] and [BaseContinuityOf]. The first: the turn
-// live and not ending, the job before's newest capture kept, stating its save
-// point and named by the turn's row on the executor log, in a format and by a
-// release a runner restores ([ArchiveRestorer]). The second: a base the turn
-// froze — or, before its first launch, the head its dispatch read — the turn
-// live, not ending and having kept nothing, its row holding that base, and a
-// runner that restores it. The launch's caller asks it before it builds the
-// run's surface and briefs ([Coordinator.ContinuedCapture], and
-// internal/engine's probe of a first launch), of every member of the seat's
-// chain, since which of them takes the launch is the launch's to pick; the
-// launch asks it again of the record as it opened the job, of the runner of the
-// member it picked; and the read surface asks it of each row of a seat's
-// sessions (internal/api/queries' `continuable`) through [ReadContinuityOf] —
-// of a live turn's row, by a relaunch, of the same two records read as a
-// relaunch reads them; of an ended turn's row that is its conversation's head,
-// by that conversation's next turn, [BaseContinuityOf] as that turn's first
-// launch asks it — each of the member the node holding the seat would launch it
-// on now ([RelaunchTarget]), with the half a person's answer takes beside the
-// first, carrying a parked run on in the box it parked in where the kept
-// capture is not continued, by the launch's own tests of a box it continues in
-// ([PriorBox.ContinuesIn], [Coordinator.hostsPrior]). What only a launch can
-// know is the launch's alone, and no reader states it: whether the box it got
-// runs a harness that takes the session up ([SessionRestorer.CheckCarry]),
-// whether that box is one of its own, and whether the seat's budget can carry
-// the session's context beside the brief it hands the run (internal/engine's
-// launch floor).
-//
-// # The job before's capture, still being kept
-//
-// The job's capture is taken by the read that collected it, and its upload and
-// record — the keep — are made off that read ([Coordinator.keepCapture]), while
-// a relaunch can follow at once: a lost job's round is carried on by the very
-// frame that read its box. So the relaunch waits for the keep, but only for
-// as long as an ordinary keep takes ([relaunchCaptureWait]): the frame that
-// waits holds the seat and a slot of the node's admission, and a keep that has
-// not landed by then is one a slow store or a stopped node is holding, which a
-// relaunch does not wait out on that frame. A keep still under way is then no
-// kept capture, and the relaunch goes as one whose job's keep was refused does
-// ([Coordinator.continuedWithout]): it continues the base the turn's first
-// launch froze, where the turn has kept nothing and its row still holds that
-// base — a base holds everything a session of its own would, and the
-// conversation besides — and otherwise starts a session of its own, saying
-// so, or carries its run on in the session its job's box holds, where it
-// relaunches in that box. Should the capture land after the relaunch read the
-// row, the relaunch's first landed capture supersedes it, as any newer
-// capture does: what that job did is lost to the relaunch whichever session
-// it starts in.
-//
-// WITHIN THE SAME WAIT, WHAT IS UNSETTLED IS SETTLED BEFORE THE DECISION: a
-// capture whose taker is gone — its taker lease lapsed or held at another
-// epoch ([Coordinator.settleGoneTaker], session.go) — is settled from the
-// turn's row on the log, so a relaunch that follows its taker's crash or
-// restart continues a capture whose record the log took before that read
-// rather than starting fresh beside it; and a capture whose record was sent
-// and never answered is asked again under its own operation, as the turn's end
-// asks it ([Coordinator.settleUnresolved]): one that lands is continued. Each
-// settle the wait decides is written in its own room past the wait, as this
-// node's own write ([Coordinator.awaitCapture]); an ask that leaves the record
-// unanswered writes nothing. A
-// record the log takes only after the settle's read — one its taker had handed
-// on before its lease's window closed — lands beside a stamp that says refused
-// (session.go, "WHAT THE FENCE CANNOT REACH"): the log keeps it, and the
-// relaunch starts without it, told with the row in hand as a capture the log
-// keeps, and its run named the turn's own as a session it may read
-// ([namedThoughRefused], [ContinuedSession.KeptTurn]).
-//
-// SO A READER IS TOLD NEITHER AS DECIDED: while a capture is still being kept,
-// or its record awaits the log's answer, which the relaunch asks again
-// ([captureAwaitsAnswer]), what the relaunch continues cannot be said, and a
-// reader is told that rather than a no ([ReadContinuityOf]).
-//
-// # Never a session that ran out of context
-//
-// Another launch of it fails the same way, so its collection records it on the run's
-// record ([PendingRun.ExhaustedSessions]) and refuses its capture, and each way a
-// later launch could take it up refuses it: [ContinuityOf], [BaseContinuityOf] and
-// [Coordinator.continueSession]. The turn's end retires it for later turns.
-//
-// # Never a failed launch
-//
-// An object the store no longer holds or whose seal does not open
-// (executordomain.ErrUnreadable), a log that does not answer, a box whose
-// harness cannot take the session up: each starts the run on a session of its
-// own, handed the brief written for one — or, where the launch reuses the box
-// the job before ran in, the session that box holds — and is logged with its
-// reason once what the launch continues instead is decided, naming that
-// (`executor_session_not_continued`). The session is fetched SEALED onto this
-// node's disk and opened whole once before a byte of it reaches the box
-// (executordomain.SessionStore.Fetch), so the decision is made before the
-// brief is, never part way through writing the archive into the box.
+// A turn's session is continued here in whichever box its next launch gets,
+// and a conversation's by its next turn. The argument is the package doc's,
+// from "A turn's session is continued in whichever box its next launch gets"
+// to "Never a failed launch".
 
 // SessionRestore is what continuing a turn's kept session needs of the engine:
 // the turn's row on the executor log, read through the ESTATE ROUTER'S reads
@@ -217,34 +81,17 @@ type ArchiveRestorer interface {
 }
 
 // ContinuityOf is THE decision whether a relaunch that follows the job at
-// launch follows ([PendingRun.LaunchSeq]) can continue the turn's kept session
-// — see the file comment: the turn live and not ending, the newest capture of
-// that job kept and stating its save point ([followedCapture]), the turn's row
-// on the executor log naming it, that session not one a job of the turn ran out
-// of context in, and the runner the launch would take it up with restoring it
-// ([ArchiveRestorer]: its harness, its archive's format, a release whose
-// sessions another box continues). row is the turn's row on the executor log;
-// run the turn's run record as the caller read it, nil where the turn has none
-// — its run is over; restorer nil where no runner of this build restores the
-// row's harness's sessions.
-//
-// A TURN WHOSE END IS DECIDED IS ENDED HERE, whatever its row on the log says
-// yet ([PendingRun.endDecided]): its run's ending is decided, which every
-// launch refuses, or its end is owed on its run's record, or recorded already
-// and its record not yet gone, and no relaunch of it follows. Read as live, a
-// reader would say its session continues for the moments between the ending's
-// decision and the log's taking the end — moments a stop's read or a store's
-// bad moment can stretch to minutes.
-//
-// A CAPTURE THE LOG KEEPS WHERE THE RUN'S RECORD STAMPS IT REFUSED is not
-// continued either, and the reason says the log keeps it
-// ([namedThoughRefused]): the row is in hand here, as it is not where the
-// record is answered alone ([followedCapture]), whose "was not kept" would
-// tell a reader of the row the session it shows kept was lost.
-//
-// What the box a launch gets says of its harness's own release, and what the
-// seat's budget and the window of the model it runs say of the session's
-// context, are the launch's to ask, and this decides none of them.
+// launch follows can continue the turn's kept session: the turn live and not
+// ending ([PendingRun.endDecided], since every launch refuses a decided
+// ending), the newest capture that job kept stating its save point
+// ([followedCapture]), the turn's row on the executor log naming it, no job
+// having run out of context in it, and restorer restoring it
+// ([ArchiveRestorer]). run is nil where the turn's run is over. A capture the
+// log keeps where the record stamps it refused is not continued, and the reason
+// says the log keeps it ([namedThoughRefused]); nor is an older one kept beside
+// it, since a relaunch restores only the object the row names. The box's
+// release and the seat's budget are the launch's to ask. The package doc's "A
+// turn's session is continued" has the argument.
 func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 	restorer ArchiveRestorer) SessionContinuity {
 
@@ -271,6 +118,17 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 	case !row.HasObject():
 		return SessionContinuity{Why: "the turn's row on the executor log names no kept session"}
 	case row.LaunchSeq != kept.LaunchSeq || row.CaptureSeq != kept.CaptureSeq:
+		if namedThoughRefused(*run, row, follows) {
+			// AN OLDER KEPT CAPTURE BESIDE A NEWER ONE THE LOG KEEPS: the
+			// record keeps the older, the row names the newer, and neither
+			// is continued, which "the log names another" would leave a
+			// reader to guess.
+			newest := *run.Capture
+			return SessionContinuity{Why: fmt.Sprintf("the run's record stamps the newest capture of the job "+
+				"the relaunch follows (launch %d, capture %d) %s; %s, nor the older capture of it the record "+
+				"keeps (launch %d, capture %d), which the turn's row does not name", newest.LaunchSeq,
+				newest.CaptureSeq, unkeptWhy(newest), keptThoughRefused, kept.LaunchSeq, kept.CaptureSeq)}
+		}
 		return SessionContinuity{Why: fmt.Sprintf("the executor log names the turn's capture (launch %d, "+
 			"capture %d), and its run's record keeps (launch %d, capture %d)", row.LaunchSeq, row.CaptureSeq,
 			kept.LaunchSeq, kept.CaptureSeq)}
@@ -287,18 +145,16 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 }
 
 // followedCapture is the capture a relaunch that follows the job at launch
-// follows continues — that job's newest capture, kept, stating its save point —
-// or why there is none, in words for the log: the half of [ContinuityOf] the
-// run's record answers alone, asked before the executor log is read.
-//
-// A KEPT CAPTURE THAT STATES NO SAVE POINT ([SessionCapture.Through]) IS NOT
-// CONTINUED: an older build stamped it, placing it by the places it read the
-// log at, which this build does not read — a long round's dropped middle hides
-// a call in flight from them — so which of the round's calls came after it
-// cannot be stated, as a session whose place cannot be stated is not kept. The
-// relaunch starts a session of its own, told what the turn's jobs did; one
-// that continues in the box its job parked in continues that box's own copy,
-// which needs no stamp ([PriorBox]).
+// follows continues, or why there is none, in words for the log: the half of
+// [ContinuityOf] the run's record answers alone. THE NEWEST KEPT, whatever a
+// newer one of that job is (refused, unfinished, unanswered or still being
+// kept): the continuation is told every call after its save point and that
+// its run went on, so it counts none of the newer one's calls held. One that
+// may still land is the relaunch's to wait for ([Coordinator.ContinuedCapture])
+// and the launch's own check refuses a choice it moves
+// ([Coordinator.continueKept]). A kept capture stating no save point
+// ([SessionCapture.Through]) is not continued: an older build stamped it, and
+// which calls came after it cannot be stated.
 func followedCapture(run PendingRun, follows int64) (SessionCapture, string) {
 	kept, newest := run.Kept, run.Capture
 	switch {
@@ -311,9 +167,10 @@ func followedCapture(run PendingRun, follows int64) (SessionCapture, string) {
 		return SessionCapture{}, fmt.Sprintf("the job the relaunch follows (launch %d) has left no capture "+
 			"of its session, and an earlier job's (launch %d) holds none of what the jobs after it were told",
 			follows, newest.LaunchSeq)
-	case kept == nil || newest.newerThan(*kept):
+	case kept == nil || kept.LaunchSeq != follows:
 		return SessionCapture{}, fmt.Sprintf("the newest capture of the job the relaunch follows (launch %d, "+
-			"capture %d) was not kept: %s", newest.LaunchSeq, newest.CaptureSeq, unkeptWhy(*newest))
+			"capture %d) was not kept: %s, and the job kept none before it", newest.LaunchSeq,
+			newest.CaptureSeq, unkeptWhy(*newest))
 	}
 	if _, placed := kept.SavePoint(); !placed {
 		return SessionCapture{}, fmt.Sprintf("the kept capture of the job the relaunch follows (launch %d, "+
@@ -325,26 +182,15 @@ func followedCapture(run PendingRun, follows int64) (SessionCapture, string) {
 }
 
 // namedThoughRefused reports whether the turn's row on the executor log names
-// the newest capture of the job at follows where run's record stamps that
-// capture REFUSED: a stamp decided with its record's landing out of its sight
-// — a record its taker had already handed on before its lease's window closed,
-// which the log took only after another node's settle had read the row
-// (session.go, "WHAT THE FENCE CANNOT REACH"). One sent and never answered is
-// no such stamp: its ask goes to the log whatever its object's age
-// ([Coordinator.settleCapture]), and is stamped landed where the log holds it.
-// The row's place is that capture's: the log takes a turn's captures only in
-// the order of their places, and the record holds one take at each
-// ([stampOnto]).
-//
-// THE LOG KEEPS IT, AND NO RELAUNCH OF THAT JOB CONTINUES IT. A relaunch
-// continues only a capture its run's record keeps, and the record keeps no
-// place it holds refused, whatever a later write says ([stampOnto]), so every
-// attempt at the relaunch that follows the job — the one whose wait settled
-// it, and one asked again after the record landed — decides as the stamp
-// does. That is ADR-0073's decision for this order, which records no refusal
-// of the settle's on the log, where the applier would refuse the late capture
-// and lose a session; and a decision told with the row in hand says the log
-// keeps it, never that it was not kept.
+// the newest capture of the job at follows where run's record stamps it
+// REFUSED: a record its taker handed on before its lease's window closed, which
+// the log took only after another node's settle read the row (the package doc,
+// "WHAT THE FENCE CANNOT REACH"). An unanswered one is no such stamp: its ask
+// stamps it landed. The log keeps it, and no relaunch of that job continues it
+// or an older capture beside it: the record keeps no place it holds refused
+// ([stampOnto]), and ADR-0073 records no refusal on the log, where the applier
+// would refuse the late capture and lose a session. A decision told with the
+// row in hand says the log keeps it, never that it was not kept.
 func namedThoughRefused(run PendingRun, row executorkeep.TurnRow, follows int64) bool {
 	newest := run.Capture
 	return stampedRefused(run, follows) &&
@@ -381,16 +227,19 @@ const (
 	// ContinuesInAnyBox is a session continued in whichever box the launch
 	// gets: a live turn's kept capture, by a relaunch of the turn, restored
 	// into another box or as its own copy in the box it was last worked in
-	// ([ContinuityOf] says it continues); or an ended turn's that is its
-	// conversation's head, by the conversation's next turn, restored into a
-	// box of that turn's own ([BaseContinuityOf] says it continues).
+	// ([ContinuityOf] says it continues), though in the box its job parked
+	// in, where that capture was taken while the job still worked, as the
+	// copy that box holds, which went on past it ([copyWentPast]); or an
+	// ended turn's that is its conversation's head, by the conversation's
+	// next turn, restored into a box of that turn's own ([BaseContinuityOf]
+	// says it continues).
 	ContinuesInAnyBox ContinuesIn = "any_box"
 
 	// ContinuesInParkedBox is the session the box the turn's job parked in
 	// holds, continued IN THAT BOX AND NOWHERE ELSE: what a person's answer
 	// carries a parked run on in where the turn's kept capture is not
-	// continued — the job's capture not kept, or of a release no other box
-	// continues — for as long as the run's box is held. A pause past its
+	// continued (no capture of the job kept, or the kept one of a release no
+	// other box continues) for as long as the run's box is held. A pause past its
 	// time-to-live reclaims the box, and the answer's relaunch then starts a
 	// session of its own.
 	ContinuesInParkedBox ContinuesIn = "parked_box"
@@ -578,9 +427,9 @@ type ReadContinuity struct {
 //     whether a relaunch in a box of its own would continue instead the session
 //     the turn's first launch was handed, the turn having kept none of its own
 //     ([relaunchedBase]). row is read at the level a relaunch reads it
-//     (executordomain.RelaunchRead) wherever the decision reaches it ([RereadsRow]): a copy
-//     of the log behind the run's record reads a capture the relaunch would
-//     continue as one the log no longer names.
+//     (executordomain.RelaunchRead) wherever the decision reaches it
+//     ([RereadsRow]): a copy of the log behind the run's record reads a capture
+//     the relaunch would continue as one the log no longer names.
 //   - AN ENDED TURN'S, BY ITS CONVERSATION'S NEXT TURN: [BaseContinuityOf], the
 //     decision that turn's first launch takes of the head its dispatch reads,
 //     of row where it is its conversation's head — head is the turn the read
@@ -601,21 +450,21 @@ type ReadContinuity struct {
 // UNDECIDED WHERE THE LAUNCH WOULD NOT DECIDE NOW EITHER, never a no: the job a
 // relaunch would follow still working, or being collected — whose session is
 // taken by the read that collects it, and kept off that read; the capture of
-// that job still being kept, which a relaunch waits for ([relaunchCaptureWait]),
-// or its record sent and never answered, which a relaunch asks the log for
-// again ([captureAwaitsAnswer]);
-// what the launch would be launched on not to be said now
-// ([RelaunchTarget.Undecided]); a relaunch that only the resume of the job's
-// collection decides, as it reads how the job ended, until its turn begins and
-// says what it does with the round ([LaunchRecord.ResumeCarry]) — whether a
-// round lost a second time is carried on in a session of its own or reviewed
-// from the work it submitted, and whether a box whose sign-in was replaced
-// carries its round on; and an ended row whose conversation's head the read did
-// not name beside it. Once the turn has said, the row is decided on what it
-// said, its review included. now is the reader's clock, against which a begun
-// capture is in flight ([captureInFlight]) and an unanswered one's object
-// within the window a record may name it in as any node's clock may read it
-// ([pastRecordWithin]).
+// that job, or a save under way beside it, still being kept, which a relaunch
+// waits for ([relaunchCaptureWait]), or its record unanswered, which a relaunch
+// asks again ([captureAwaitsAnswer]); an earlier job's capture still being kept
+// while the turn has kept none ([relaunchDependsOn]); what the launch would be
+// launched on not to be said now ([RelaunchTarget.Undecided]); a relaunch that
+// only the resume of the job's collection decides, as it reads how the job
+// ended, until its turn begins and says what it does with the round
+// ([LaunchRecord.ResumeCarry]) — whether a round lost a second time is carried
+// on in a session of its own or reviewed from the work it submitted, and
+// whether a box whose sign-in was replaced carries its round on; and an ended
+// row whose conversation's head the read did not name beside it. Once the turn
+// has said, the row is decided on what it said, its review included. now is the
+// reader's clock, against which a begun capture is in flight
+// ([relaunchWaitsOn]) and an unanswered one's object within the window a record
+// may name it in as any node's clock may read it ([pastRecordWithin]).
 //
 // As far as the engine can know before a box is chosen: whether the box a
 // launch gets runs a harness release that takes the session up, and whether
@@ -720,34 +569,41 @@ func endingContinuity(row executorkeep.TurnRow, run *PendingRun, later laterLaun
 
 // relaunchContinuity is [ReadContinuityOf] of a live turn's row whose run is
 // neither over nor ending: whether a relaunch of the turn would continue its
-// session — later naming the turn's base, where a relaunch would continue that
-// instead, as its conversation names its turns.
-//
-// UNDECIDED WHILE THE CAPTURE OF THE JOB IT FOLLOWS AWAITS ITS RECORD'S ANSWER
-// ([captureAwaitsAnswer]), as while that capture is still being kept: the
-// relaunch asks the log for that record again before it decides, and
-// continues the capture where it landed ([Coordinator.ContinuedCapture]), so
-// "not continued, its record was never answered" would be a no the relaunch
-// itself may not give. Not in a company that keeps no session, whose relaunch
-// asks nothing of a kept capture ([RelaunchTarget.NoKept]).
+// session, naming the turn's base where a relaunch would continue that instead.
+// UNDECIDED while a capture or save the relaunch waits for is still being kept
+// ([relaunchWaitsOn]) or its record awaits its answer ([captureAwaitsAnswer]),
+// each named by its own place, beside an older kept capture as beside none:
+// the relaunch waits for the one and asks again for the other, and continues
+// whichever lands (not where the company keeps no session,
+// [RelaunchTarget.NoKept]). A newer one that never will land leaves the
+// decision to [ContinuityOf], which continues the older.
 func relaunchContinuity(row executorkeep.TurnRow, run PendingRun, target RelaunchTarget,
 	later laterLaunch, now time.Time) ReadContinuity {
 
-	switch {
-	case jobWorking(run):
+	if jobWorking(run) {
 		return ReadContinuity{Why: fmt.Sprintf("the job a relaunch would follow (launch %d) is still "+
 			"working or being collected, and its session is taken and kept by the read that collects it",
 			run.LaunchSeq)}
-	case captureInFlight(run, now):
+	}
+	if waits := relaunchWaitsOn(run, now); waits != nil {
+		if waits.LaunchSeq != run.LaunchSeq {
+			return ReadContinuity{Why: fmt.Sprintf("a capture of an earlier job of the turn (launch %d, "+
+				"capture %d) is still being kept, and the turn has kept none: once one lands, a relaunch "+
+				"continues no session the turn's first launch was handed", waits.LaunchSeq, waits.CaptureSeq)}
+		}
 		return ReadContinuity{Why: fmt.Sprintf("the capture of the job a relaunch would follow (launch %d, "+
-			"capture %d) is still being kept", run.Capture.LaunchSeq, run.Capture.CaptureSeq)}
-	case target.Undecided:
+			"capture %d) is still being kept", waits.LaunchSeq, waits.CaptureSeq)}
+	}
+	if target.Undecided {
 		return ReadContinuity{Why: target.Why}
-	case target.NoKept == "" && captureAwaitsAnswer(run, now):
-		return ReadContinuity{Why: fmt.Sprintf("the record of the capture of the job a relaunch would "+
-			"follow (launch %d, capture %d) was sent and never answered, and a relaunch asks the executor "+
-			"log for it again before it decides, continuing that capture where it landed",
-			run.Capture.LaunchSeq, run.Capture.CaptureSeq)}
+	}
+	if target.NoKept == "" {
+		if asks := captureAwaitsAnswer(run, now); asks != nil {
+			return ReadContinuity{Why: fmt.Sprintf("the record of the capture of the job a relaunch would "+
+				"follow (launch %d, capture %d) was sent and never answered, and a relaunch asks the executor "+
+				"log for it again before it decides, continuing that capture where it landed",
+				asks.LaunchSeq, asks.CaptureSeq)}
+		}
 	}
 	kept := ContinuityOf(row, &run, run.LaunchSeq, target.restorer())
 	if target.NoKept != "" {
@@ -858,29 +714,37 @@ func TargetAsk(row executorkeep.TurnRow, head string, run *PendingRun) (Relaunch
 }
 
 // RereadsRow reports whether a reader that read row below the level a relaunch
-// reads it (executordomain.RelaunchRead) must read it again there before deciding its
-// continuity: only where the decision reaches the row — the turn live and not
-// ending, its job neither working nor its capture still being kept nor
-// awaiting its record's answer ([captureAwaitsAnswer]) — and the
-// row names another capture than the one run's record keeps, or the record
-// keeps none: whether a relaunch of a turn that has kept nothing continues the
-// session its first launch was handed is decided on the row's hold as the
-// relaunch reads it ([relaunchedBase]).
-//
-// A ROW THAT NAMES THE RECORD'S KEPT CAPTURE DECIDES AS ONE READ AT THE
-// RELAUNCH'S LEVEL DOES: a newer capture is stamped on the run's record before
-// a byte of it moves, so a record that keeps this one has seen no newer land.
-// Read again everywhere else, every look at a seat's sessions — a dashboard
-// asks every minute — appended a barrier to the executor log for each live row
-// (statelog's linearizable read), one after another, for an answer the row it
-// held already gave.
+// reads it (executordomain.RelaunchRead) must read it again there before
+// deciding: only where the decision reaches the row (the turn live, not ending,
+// nothing it waits on in flight or awaiting an answer) and the row names
+// another capture than run's record keeps, or the record keeps none, or holds a
+// newer capture of the followed job it does not keep ([unkeptNewer]), which the
+// log may have taken unseen by its stamp. A row naming the kept capture beside
+// nothing newer decides as a read at that level would, since a newer capture
+// is stamped before a byte of it moves; read again there too, every look at a
+// seat's sessions would append a barrier to the log for each live row.
 func RereadsRow(row executorkeep.TurnRow, run *PendingRun, now time.Time) bool {
-	if run == nil || row.Ended || run.endDecided() || jobWorking(*run) || captureInFlight(*run, now) ||
-		captureAwaitsAnswer(*run, now) {
+	if run == nil || row.Ended || run.endDecided() || jobWorking(*run) || relaunchWaitsOn(*run, now) != nil ||
+		captureAwaitsAnswer(*run, now) != nil {
 		return false
 	}
 	kept := run.Kept
-	return kept == nil || row.LaunchSeq != kept.LaunchSeq || row.CaptureSeq != kept.CaptureSeq
+	return kept == nil || row.LaunchSeq != kept.LaunchSeq || row.CaptureSeq != kept.CaptureSeq ||
+		unkeptNewer(*run)
+}
+
+// unkeptNewer reports whether run's record holds a capture of the job a
+// relaunch would follow newer than the one it keeps, in any state: its newest
+// capture, else its save under way ([PendingRun.savingTake]). One the record
+// keeps is no such capture, and a reader that holds a row naming it reads it
+// again only for one of these ([RereadsRow]).
+func unkeptNewer(run PendingRun) bool {
+	for _, stamp := range []*SessionCapture{run.Capture, run.savingTake()} {
+		if stamp != nil && stamp.LaunchSeq == run.LaunchSeq && (run.Kept == nil || stamp.newerThan(*run.Kept)) {
+			return true
+		}
+	}
+	return false
 }
 
 // jobWorking reports whether run's job is still working or being collected, so
@@ -912,20 +776,71 @@ func jobWorking(run PendingRun) bool {
 	return false
 }
 
-// captureAwaitsAnswer reports whether run's newest capture is one of the job a
-// relaunch would follow whose record was sent and never answered, which an ask
-// may still land: its object not past objstore.RecordWithin and twice
-// objstore.AssumedClockSkew ([pastRecordWithin]), past which no node's clock
-// can read the record as one the log may still take. A relaunch asks
-// that record again under its own operation before it decides what it
-// continues ([Coordinator.settleUnresolved]) and continues the capture where
-// it landed ([Coordinator.ContinuedCapture]), so until then no reader can say
-// what that relaunch continues. An earlier job's capture is no such question:
-// a relaunch continues only the newest of the job it follows ([followedCapture]).
-func captureAwaitsAnswer(run PendingRun, now time.Time) bool {
-	c := run.Capture
-	return c != nil && c.State == CaptureUnresolved && c.LaunchSeq == run.LaunchSeq &&
-		!pastRecordWithin(c.Object, now)
+// captureAwaitsAnswer is the stamp of the job a relaunch would follow whose
+// record was sent and never answered and may still land
+// ([SessionCapture.unresolvedWithin]): run's newest capture, else its save
+// under way ([PendingRun.saving]), which beside a refused final take is the
+// job's newest session once its ask lands it; nil where neither is. A
+// relaunch asks it again before it decides ([Coordinator.settleUnresolved]),
+// so until then no reader can say what that relaunch continues. An earlier
+// job's stamp is no such question: a relaunch continues only a capture of the
+// job it follows.
+func captureAwaitsAnswer(run PendingRun, now time.Time) *SessionCapture {
+	for _, stamp := range []*SessionCapture{run.Capture, run.saving(now)} {
+		if stamp != nil && stamp.LaunchSeq == run.LaunchSeq && stamp.unresolvedWithin(now) {
+			return stamp
+		}
+	}
+	return nil
+}
+
+// relaunchWaitsOn is the stamp a relaunch of run's turn waits for before it
+// decides ([Coordinator.ContinuedCapture]), and a reader waits on rather than
+// decide ([relaunchContinuity], [RereadsRow]); nil for none: a stamp the end
+// waits for ([stampInFlight]) that the relaunch's decision depends on
+// ([relaunchDependsOn]), answered as itself so that a reason names it by its
+// own place. Only those, since the waiting frame holds the seat and an
+// admission slot, and a keep that changes nothing the relaunch decides buys
+// nothing.
+func relaunchWaitsOn(run PendingRun, now time.Time) *SessionCapture {
+	return stampInFlight(run, now, func(stamp SessionCapture) bool { return relaunchDependsOn(run, stamp) })
+}
+
+// relaunchDependsOn reports whether what a relaunch of run's turn continues
+// can turn on whether stamp lands: a stamp of the job the relaunch follows
+// (run.LaunchSeq), whose capture is the one it continues; or a stamp of any
+// job while the turn has kept nothing, since once a capture of the turn is
+// kept a relaunch no longer continues the session the turn's first launch was
+// handed ([frozenBase]). An earlier job's stamp beside a capture the turn kept
+// is neither: a relaunch continues only a capture of the job it follows
+// ([followedCapture]), and the turn has already kept one, so its landing
+// changes no relaunch's decision.
+func relaunchDependsOn(run PendingRun, stamp SessionCapture) bool {
+	return stamp.LaunchSeq == run.LaunchSeq || run.Kept == nil
+}
+
+// relaunchWaits is [relaunchWaitsOn] as the rule a relaunch's wait reads
+// ([Coordinator.awaitCapture]): whether it still waits.
+func relaunchWaits(run PendingRun, now time.Time) bool { return relaunchWaitsOn(run, now) != nil }
+
+// followedBegunUnderTaker reports whether run has a stamp of the job its
+// relaunch follows still begun under a taker it names: its newest capture, or
+// its save under way ([PendingRun.savingTake]), still being kept or not. A
+// relaunch reads the turn's row once past its wait for such a stamp
+// ([Coordinator.ContinuedCapture]), WHATEVER ITS AGE: a host whose
+// coordination store answers its leases and not its runs holds its taker
+// lease for as long as that silence lasts, and the job lost with it is found
+// only once the silence has lasted the box's timeout, so a keep under way
+// when the silence began can be past a capture's budget by the time its
+// relaunch reads it, and the log's all the same. A stamp that names no taker
+// is read by its age alone, as [beganUnderTaker] has a wait read it.
+func followedBegunUnderTaker(run PendingRun) bool {
+	for _, stamp := range []*SessionCapture{run.Capture, run.savingTake()} {
+		if stamp != nil && stamp.State == CaptureBegun && stamp.Taker != "" && stamp.LaunchSeq == run.LaunchSeq {
+			return true
+		}
+	}
+	return false
 }
 
 // boxCarry is whether a relaunch carrying a run's round on in the box its job
@@ -1036,6 +951,10 @@ func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget
 // kept none, the session its conversation's last turn left, as its first
 // launch froze it (Base).
 type ContinuedSession struct {
+	// Capture is the kept capture continued, as the run's record stamps it:
+	// its own ContextTokens is what a launch that restores it sends first,
+	// which the floor of that launch is made of, never
+	// [ContinuedSession.CopyContext].
 	Capture SessionCapture
 	Row     executorkeep.TurnRow
 
@@ -1044,20 +963,22 @@ type ContinuedSession struct {
 	// where it continues none, or a kept capture.
 	Base *BaseSession
 
-	// Context is what the last request of the session of the job the
+	// CopyContext is what the last request of the session of the job the
 	// relaunch follows carried, as that job's newest capture measured it,
-	// KEPT OR NOT: what a launch that continues that session sends again
-	// before its brief, restored from the capture or as the job's own box
-	// holds it ([LaunchRequest.Continue]). Set whether or not the capture is
-	// continued; zero where no capture of the job measured any.
-	Context int64
+	// KEPT OR NOT: what a launch that continues that job's own copy in its
+	// box sends again before its brief ([LaunchRequest.Continue]), the copy
+	// having gone as far as that capture. Set whether or not a capture is
+	// continued; zero where no capture of the job measured any. A kept
+	// capture continued is held to its own measure (Capture.ContextTokens).
+	CopyContext int64
 
-	// NextRequest is the harness's own estimate of that session's next
-	// request, as the same capture's take read it, kept or not
+	// CopyNextRequest is the harness's own estimate of that session's next
+	// request, as the same newest capture's take read it, kept or not
 	// ([SessionCapture.NextRequest]): what that launch is held to with its
-	// brief where it holds a figure, Context where it holds none. Set beside
-	// Context, whether or not the capture is continued.
-	NextRequest NextRequest
+	// brief where it holds a figure, CopyContext where it holds none. Set
+	// beside CopyContext. A kept capture continued is held to its own
+	// (Capture.NextRequest), never this one, a passed-over newer capture's.
+	CopyNextRequest NextRequest
 
 	// KeptTurn is the turn whose kept session the relaunch's read found,
 	// continued or not: the turn's own where its run's record says a capture of
@@ -1076,55 +997,30 @@ type ContinuedSession struct {
 	KeptTurn string
 }
 
-// relaunchCaptureWait bounds how long a relaunch waits for the capture of the
-// job it follows to be kept, on the frame that relaunches: see the file
-// comment.
-//
-// FIFTEEN SECONDS, from what an ordinary keep is: the turn's operations minted
-// and the seat's live sessions listed (reads of the coordination store), an
-// upload of an ordinary session — a mebibyte or two — and its record, which a
-// log answers in milliseconds and a publish its serving node has not yet
-// applied within the publisher's five-second wait
-// (statelog.DefaultResolveBudget). Three times that is room for a store having
-// a slow moment; a keep past it is one a slow upload of a large session, an
-// outage or a stopped node is holding, whose own life runs past an hour at the
-// floor ([captureLife]) — which the frame does not wait out.
+// relaunchCaptureWait bounds how long a relaunch waits, on the frame that
+// relaunches, for a stamp its decision depends on ([relaunchWaitsOn]); past it
+// the relaunch continues the newest capture its job kept before it, if any.
+// FIFTEEN SECONDS: an ordinary keep (a few coordination reads, a mebibyte or
+// two of upload and a record the log answers within the publisher's
+// five-second wait, statelog.DefaultResolveBudget) three times over; a keep
+// past it is one a slow upload, an outage or a stopped node holds, whose life
+// runs past an hour ([captureLife]). As long again bounds the one read past it
+// ([Coordinator.ContinuedCapture]), a lease read and a log read each answered
+// in milliseconds; its settle has its own room ([Coordinator.settleContext]).
 const relaunchCaptureWait = 15 * time.Second
 
-// ContinuedCapture is the session a relaunch of turnID continues — the kept
-// capture of the job the relaunch follows, as [ContinuityOf] decides for
-// restorer, read once that job's capture is no longer being kept, for at most
-// [relaunchCaptureWait]; else, where that job left no kept capture — one still
-// being kept past that wait among them — and the turn has kept none at all,
-// the session its conversation's last turn left as its first launch froze it,
-// as [BaseContinuityOf] decides of the turn's own row ([ContinuedSession.Base],
-// [Coordinator.continuedWithout]) — or why there is none, in words for the
-// log; and either way what that job's session's last request carried and
-// what its harness estimates its next one at (both on [ContinuedSession]).
-//
-// WHAT IS UNSETTLED IS SETTLED FIRST, within that same wait — see the file
-// comment: a capture whose taker is gone, from the turn's row on the log, as
-// every wait for a capture settles it ([Coordinator.awaitCapture]); and the
-// followed job's capture whose record was never answered, asked again under
-// its own operation ([Coordinator.settleUnresolved]) — asked by the turn's end
-// alone, it left a relaunch reading a record the log had taken as one never
-// answered, and starting a session of its own beside it. THE WAIT BOUNDS THE
-// WAITING, AND THE READS AND THE ASK IT MAKES, never the settles it decides:
-// each is this node's own write to the run's record, given its own room past
-// the wait, a record's budget and this node's crossing of the row
-// ([Coordinator.settleContext]). Cut where the wait ended, a settle decided in
-// its last seconds was not applied, and a capture whose taker was gone read as
-// one still being kept, or one the ask had landed went unstamped on the row.
-// So a relaunch may spend that room past its fifteen seconds, and only where
-// the store is that slow to take a write.
-//
-// ASKED BY THE LAUNCH'S CALLER before it builds the run's surface and briefs,
-// so what the run is offered and told is the session's; the launch takes up
-// exactly the session this answered ([SessionContinuation]), or none, as the
-// runner of the member it picks restores it. Never an error: every reason a
-// session cannot be continued is a launch that starts one of its own. NEVER A
-// READ OF THE CONVERSATION'S HEAD: the base is the one the turn froze, however
-// the conversation moved since.
+// ContinuedCapture is the session a relaunch of turnID continues: the newest
+// capture the followed job kept, as [ContinuityOf] decides for restorer, once
+// a newer one is no longer being kept or [relaunchCaptureWait] has run out
+// (passed over and logged, [Coordinator.passedOver]); else, where the turn
+// has kept none, its frozen base ([Coordinator.continuedWithout]); or why
+// none, and what that job's copy last carried and is estimated to send next.
+// Within the wait, what is unsettled is settled first: a gone taker's capture
+// from the log, an unanswered one asked again, a save as the newest; past it,
+// one read of its own settles landed a held taker's capture the log names.
+// Settles are this node's own writes in their own room past the wait. Asked
+// before the run's surface and briefs are built; never an error, never a read
+// of the conversation's head. The package doc's "The job before's capture".
 func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	restorer ArchiveRestorer) (ContinuedSession, string) {
 
@@ -1138,17 +1034,36 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	case !found:
 		return ContinuedSession{}, "the turn has no run record"
 	}
-	// ONE WAIT FOR ALL OF IT, on the frame that relaunches: what the wait
-	// below leaves of it is what an ask of an unanswered record gets. The
+	// ONE WAIT FOR ALL OF IT, on the frame that relaunches: the asks of an
+	// unanswered record and the wait for a keep under way share it. The
 	// settles it decides are this node's own writes, each in its own room
 	// past it.
 	settleBy := time.Now().Add(c.relaunchWait)
-	run, found, err = c.awaitCapture(ctx, run, c.relaunchWait)
+	// THE FOLLOWED JOB'S UNANSWERED RECORDS ASKED FIRST, whatever else is in
+	// flight: past the wait, the relaunch continues the newest capture that
+	// job kept beside a newer one still being kept, so an ask that lands a
+	// record (a save's, behind a final take still being kept) is what gives
+	// it the newer of the two to continue, and asked only once the wait ran
+	// out it would have no time left.
+	run = c.askFollowed(ctx, settleBy, run)
+	run, found, err = c.awaitCapture(ctx, run, time.Until(settleBy), relaunchWaits)
+	if found && err == nil && followedBegunUnderTaker(run) {
+		// THE ONE READ PAST THE WAIT, for a capture of the followed job still
+		// begun under a taker it names whose lease holds or cannot be read:
+		// the log may hold it although no stamp of it reached the row, as
+		// where its taker's host answers its leases and not its runs. Settled
+		// landed where the turn's row names its place, it is continued.
+		// Held to as long again as the relaunch's wait; its settle has its
+		// own room ([Coordinator.settleContext]).
+		held, cancel := context.WithTimeout(ctx, c.relaunchWait)
+		run, found, _ = c.settleGone(held, run, askEvery, true)
+		cancel()
+	}
 	if !found {
 		return ContinuedSession{}, "the turn's run record was gone before the capture of the job " +
 			"the relaunch follows settled"
 	}
-	answer := ContinuedSession{Context: followedContext(run), NextRequest: followedNextRequest(run)}
+	answer := ContinuedSession{CopyContext: copyContext(run), CopyNextRequest: copyNextRequest(run)}
 	if err != nil {
 		// NO ANSWER IS NO KEPT CAPTURE: the row the wait could not read again
 		// may hold a capture since kept, or refused, and a relaunch never
@@ -1159,18 +1074,31 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		return answer, fmt.Sprintf("what came of the capture of the job the relaunch follows "+
 			"could not be read: %v", err)
 	}
+	if time.Now().Before(settleBy) {
+		// AND AGAIN WHAT THE WAIT LEFT UNANSWERED, where it ended early: a keep
+		// whose record went unanswered while the relaunch waited for it.
+		run = c.askFollowed(ctx, settleBy, run)
+	}
 	var why string
-	if captureInFlight(run, c.now()) {
+	waits := relaunchWaitsOn(run, c.now())
+	switch keptOfJob := run.Kept != nil && run.Kept.LaunchSeq == run.LaunchSeq; {
+	case waits != nil && waits.LaunchSeq != run.LaunchSeq:
+		// AN EARLIER JOB'S, waited on only while the turn has kept nothing:
+		// the job the relaunch follows kept nothing either, and what it
+		// continues instead turns on that capture's landing.
+		_, why = followedCapture(run, run.LaunchSeq)
+		why += fmt.Sprintf("; a capture of an earlier job of the turn (launch %d, capture %d) was still "+
+			"being kept %s after the relaunch asked for it, which the relaunch does not wait out",
+			waits.LaunchSeq, waits.CaptureSeq, c.relaunchWait)
+	case waits != nil && !keptOfJob:
+		// THE FOLLOWED JOB'S, beside nothing that job kept: a keep still under
+		// way is no kept capture.
 		why = fmt.Sprintf("the capture of the job the relaunch follows (launch %d, capture %d) "+
 			"was still being kept %s after the relaunch asked for it, which the relaunch does not wait out",
-			run.Capture.LaunchSeq, run.Capture.CaptureSeq, c.relaunchWait)
-	} else {
-		if newest := run.Capture; newest != nil && newest.State == CaptureUnresolved &&
-			newest.LaunchSeq == run.LaunchSeq {
-			ask, cancel := context.WithDeadline(ctx, settleBy)
-			run = c.settleUnresolved(ask, run)
-			cancel()
-		}
+			waits.LaunchSeq, waits.CaptureSeq, c.relaunchWait)
+	default:
+		// THE NEWEST CAPTURE THAT JOB KEPT, past a newer one of it that will
+		// not be kept, or that the wait has run out on ([followedCapture]).
 		_, why = followedCapture(run, run.LaunchSeq)
 	}
 	// THE TURN'S OWN WHERE ITS RECORD KEEPS A CAPTURE OF IT, read after the
@@ -1192,40 +1120,86 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	if continuity := ContinuityOf(row, &run, run.LaunchSeq, restorer); !continuity.Continues {
 		return answer, continuity.Why
 	}
+	c.passedOver(ctx, run, *run.Kept)
 	answer.Capture, answer.Row = *run.Kept, row
 	return answer, ""
 }
 
+// askFollowed asks again, never past by, the unanswered records of the job
+// run's relaunch follows ([Coordinator.settleUnresolved]): its newest
+// capture's and a save's beside it, whatever its key's age, the log deciding
+// whether the window a record may name it in has passed. The stamp of what an
+// ask settled is this node's own write, in its own room past by
+// ([Coordinator.settleContext]).
+func (c *Coordinator) askFollowed(ctx context.Context, by time.Time, run PendingRun) PendingRun {
+	follows := run.LaunchSeq
+	ask, cancel := context.WithDeadline(ctx, by)
+	defer cancel()
+	return c.settleUnresolved(ask, run, func(stamp SessionCapture) bool { return stamp.LaunchSeq == follows })
+}
+
+// passedOver logs each capture of the job run's relaunch follows that is
+// newer than kept, the capture the relaunch continues: its newest capture,
+// and its save under way where that is another take
+// (`executor_session_not_continued`, once per decision). Each is named as one
+// that was not kept and why, or as one that may still be kept and how, which
+// the relaunch did not wait out. Without it, a relaunch from an older kept
+// capture said nothing of the newer one it rolled the session back past.
+func (c *Coordinator) passedOver(ctx context.Context, run PendingRun, kept SessionCapture) {
+	now := c.now()
+	var passed []string
+	for _, stamp := range []struct {
+		what    string
+		capture *SessionCapture
+	}{
+		{what: "the newest capture of the job the relaunch follows", capture: run.Capture},
+		{what: "its save under way", capture: run.savingTake()},
+	} {
+		newer := stamp.capture
+		if newer == nil || newer.LaunchSeq != run.LaunchSeq || !newer.newerThan(kept) {
+			continue
+		}
+		named := fmt.Sprintf("%s (launch %d, capture %d) ", stamp.what, newer.LaunchSeq, newer.CaptureSeq)
+		if how := landingHow(*newer, now); how != "" {
+			named += fmt.Sprintf("may still be kept: %s, and the relaunch did not wait past %s for it", how,
+				c.relaunchWait)
+		} else {
+			named += "was not kept: " + unkeptWhy(*newer)
+		}
+		passed = append(passed, named)
+	}
+	if len(passed) == 0 {
+		return
+	}
+	log.InfoContext(ctx, "executor_session_not_continued", "turn_id", run.TurnID, "agent", run.AgentHandle,
+		"detail", redact.Secrets(strings.Join(passed, "; ")),
+		"outcome", fmt.Sprintf("the relaunch continues the newest capture that job kept (launch %d, capture "+
+			"%d), and is told what came after it", kept.LaunchSeq, kept.CaptureSeq))
+}
+
+// landingHow is how c may still become a kept capture as of now
+// ([SessionCapture.mayLand]), in words for the log; "" where it cannot.
+func landingHow(c SessionCapture, now time.Time) string {
+	switch {
+	case c.keeping(now):
+		return "it is still being kept"
+	case c.standing(now):
+		return "a read stands by to keep it in the next place"
+	case c.unresolvedWithin(now):
+		return "its record was sent and not yet answered"
+	}
+	return ""
+}
+
 // continuedWithout is what a relaunch continues where the job it follows left
-// no kept capture — one still being kept past [relaunchCaptureWait], or one
-// not kept, why saying which as the run's record tells it: the base the turn
-// froze, where it has kept nothing and its row still holds that base
-// ([frozenBase]); else nothing, why going on to say why not.
-//
-// A KEEP STILL UNDER WAY IS NO KEPT CAPTURE, and goes the same way: the
-// relaunch that will not wait it out starts from what the turn is known to
-// hold, as one whose job's keep was refused does — the base, while the turn's
-// row holds it, since it holds everything a session of its own would and the
-// conversation besides. Should the capture land after the row was read, the
-// relaunch's first landed capture supersedes it as any newer capture does,
-// and what that job did is lost to the relaunch either way; read before, the
-// row holds the base no longer, and the relaunch continues none.
-//
-// THE TURN'S ROW IS READ ONCE, and only where something asks it: the base,
-// and a newest capture of the job the run's record stamps REFUSED, which the
-// row may name all the same ([namedThoughRefused]) — a record its taker had
-// handed on before its lease's window closed and the log took only after
-// another node's settle had read the row. There the stamp still decides, and
-// no relaunch of that job continues the capture; but the reason says the log
-// keeps it, after the record's own account of it, "not kept", and before why
-// no base is continued, which would otherwise read as a row that landed
-// another capture.
-//
-// AND WHAT THE ROW SAYS IS WHAT THE RUN IS TOLD IT MAY READ, where it was
-// read ([ContinuedSession.KeptTurn]): a capture of the turn's own that it
-// names is there to read whatever the run's record stamps it — refused as
-// above, or still begun where its keep reached the log ahead of its stamp —
-// and a row that names none has none to read.
+// no kept capture (one still being kept past [relaunchCaptureWait] with none
+// before it, or one not kept): the base the turn froze while it has kept
+// nothing and its row still holds it ([frozenBase]), since the base holds all
+// a session of its own would and the conversation besides; else nothing, why
+// saying why not. The turn's row is read once, only where something asks it:
+// the base, and a refused newest capture the row may name all the same
+// ([namedThoughRefused]), whose reason then says the log keeps it. What the row
+// names is what the run is told it may read ([ContinuedSession.KeptTurn]).
 func (c *Coordinator) continuedWithout(ctx context.Context, run PendingRun, restorer ArchiveRestorer,
 	answer ContinuedSession, why string) (ContinuedSession, string) {
 
@@ -1317,21 +1291,23 @@ const NoKeptSession = "the company keeps no executor session (turn_engine.conver
 	"is false), so a relaunch continues at most the session its own box holds, and a conversation's next " +
 	"turn, or a schedule's next fire, continues none"
 
-// followedContext is what the last request of the session of run's current
-// job carried, as that job's newest capture measured it, kept or not; zero
-// where it left none, or none that measured any.
-func followedContext(run PendingRun) int64 {
+// copyContext is what the last request of the session of run's current job
+// carried, as that job's newest capture measured it, kept or not: the measure
+// of that job's own copy in its box, which went at least as far
+// ([ContinuedSession.CopyContext]); zero where it left none, or none that
+// measured any.
+func copyContext(run PendingRun) int64 {
 	if newest := run.Capture; newest != nil && newest.LaunchSeq == run.LaunchSeq {
 		return newest.ContextTokens
 	}
 	return 0
 }
 
-// followedNextRequest is the harness's own estimate of the next request of the
+// copyNextRequest is the harness's own estimate of the next request of the
 // session of run's current job, as that job's newest capture's take read it,
-// kept or not ([followedContext]); zero where it left none, or none that
+// kept or not ([copyContext]); zero where it left none, or none that
 // estimated one.
-func followedNextRequest(run PendingRun) NextRequest {
+func copyNextRequest(run PendingRun) NextRequest {
 	if newest := run.Capture; newest != nil && newest.LaunchSeq == run.LaunchSeq {
 		return newest.NextRequest()
 	}
@@ -1357,7 +1333,9 @@ func unkeptWhy(c SessionCapture) string {
 type SessionContinuation struct {
 	// LaunchSeq and CaptureSeq are the capture's place: the launch takes up
 	// exactly that capture, which the run's record must still keep as the
-	// newest of the job this launch follows, or none.
+	// newest capture the job this launch follows kept, or none. A newer one
+	// of that job still being kept does not count against it until it lands
+	// ([Coordinator.continueKept]).
 	LaunchSeq, CaptureSeq int64
 
 	// Base says the session is the one the turn's conversation's last turn
@@ -1625,28 +1603,26 @@ func freshLaunch(req LaunchRequest) continuedLaunch {
 	return launch
 }
 
-// continueSession is how the launch req continues its turn's session in box —
-// see the file comment — given the run's record as the launch opened it,
-// whether box is the one the job before used (reused), and whether this
-// launch's own begin was read back holding the base its read froze (begun,
-// [Coordinator.recordBegin]).
-//
-// IN THIS ORDER: the session its caller chose ([LaunchRequest.Session]) — the
-// turn's kept capture, in any box, or the session its conversation's last turn
-// left, in a box of its own ([Coordinator.continueBase]); else, where the box is
-// the job before's own, that job's session as the box holds it
-// ([Continuation.SessionID]), as a run always could, unless that job ran out of
-// context in it; else a session of its own.
-//
-// EACH SESSION IT DOES NOT CONTINUE IS LOGGED ONCE THE ONE IT FALLS TO IS
-// DECIDED ([Coordinator.notContinued]), naming that one: the box's copy where
-// a refused choice still leaves it, else a session of its own. Said as each
-// was refused, the line told an operator the run started fresh where it went
-// on in the box's copy.
+// continueSession is how the launch req continues its turn's session in box,
+// given the run's record as the launch opened it, whether box is the job
+// before's (reused), and whether this launch's begin was read back holding the
+// base (begun, [Coordinator.recordBegin]). In order: the session its caller
+// chose ([LaunchRequest.Session]), the kept capture over no copy that went on
+// past it ([copyWentPast]) or the conversation's base in a box of its own;
+// else the job before's copy in its own box, unless that job ran out of
+// context in it; else a session of its own. Each session not continued is
+// logged once the one it falls to is decided ([Coordinator.notContinued]),
+// naming it, and a reading of a capture passed over for the copy is said
+// unused ([Coordinator.exactUnused]).
 func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, opened PendingRun,
 	box Sandbox, runner Runner, reused, begun bool, sources RunSources) continuedLaunch {
 
-	var refused []string
+	var (
+		refused []string
+		// readPassedOver says the kept capture passed over for the box's
+		// copy ([copyWentPast]) came with a brief told by a reading of it.
+		readPassedOver bool
+	)
 	if want := req.Session; want != nil {
 		var (
 			launch continuedLaunch
@@ -1654,8 +1630,10 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 		)
 		if want.Base {
 			launch, why = c.continueBase(ctx, req, opened, box, runner, reused, begun, *want)
-		} else {
+		} else if why = copyWentPast(req, opened, reused, *want); why == "" {
 			launch, why = c.continueKept(ctx, req, opened, box, runner, reused, *want, sources)
+		} else {
+			readPassedOver = want.Exact != nil
 		}
 		if why == "" {
 			// WHAT ITS BRIEFS TOLD, what they left out of the round and what
@@ -1713,7 +1691,42 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 	for _, why := range refused {
 		c.notContinued(ctx, req, why, outcome)
 	}
+	if readPassedOver && outcome == continuesBoxCopy {
+		c.exactUnused(ctx, req, copyWentPastUnused)
+	}
 	return launch
+}
+
+// copyWentPastUnused is why a launch that continues its job's own box's copy in
+// place of the kept capture that copy went past ([copyWentPast]) hands none of
+// the brief told by a reading of that capture ([Coordinator.exactUnused]).
+const copyWentPastUnused = "the launch continues the copy of the session its job's own box holds, which went " +
+	"on past the capture the reading was read of"
+
+// copyWentPast is why the launch req, in the box the job it follows ran in
+// (reused), does not restore the turn's kept capture want over that box's own
+// copy of the session; "" where nothing keeps it from trying. A capture taken
+// while its job still worked (not [SessionCapture.Final]) is a point the
+// session passed through: the box's copy holds all of it and all the job did
+// after, so restoring it there would roll the session back. Where the launch
+// is offered that copy ([Continuation.SessionID]) and it is the capture's own
+// session, the copy is continued instead. A final capture is restored as ever;
+// finality is the fact read, never age or place. A capture the record does not
+// keep is [Coordinator.continueKept]'s to refuse, and a launch offered no copy
+// tries the capture whatever session its stamp names.
+func copyWentPast(req LaunchRequest, opened PendingRun, reused bool, want SessionContinuation) string {
+	kept, offered := opened.Kept, req.Continue
+	switch {
+	case !reused || offered == nil || offered.SessionID == "":
+		return ""
+	case kept == nil || kept.LaunchSeq != want.LaunchSeq || kept.CaptureSeq != want.CaptureSeq:
+		return ""
+	case kept.Final || kept.SessionID != offered.SessionID:
+		return ""
+	}
+	return fmt.Sprintf("the box this launch reuses holds the job it follows' own copy of the session, which "+
+		"went on past the kept capture (launch %d, capture %d): that capture was taken while the job still "+
+		"worked, so it is not restored over the copy", kept.LaunchSeq, kept.CaptureSeq)
 }
 
 // continueKept continues the turn's kept capture want in box, or says why it
@@ -1747,9 +1760,13 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 		return continuedLaunch{}, fmt.Sprintf("the turn's row on the executor log could not be read: %v", err)
 	}
 	// ASKED AGAIN of the record as this launch opened it, which numbers this
-	// job one past the job it follows: a capture of that job that began or
-	// landed since its caller asked is one the chosen capture no longer is
-	// the newest beside.
+	// job one past the job it follows: a capture of that job that LANDED
+	// since its caller asked, kept on the record (refused above) or named by
+	// the turn's row ([ContinuityOf]), refuses the chosen capture, whose
+	// briefs were built for it; the launch then starts a session of its own,
+	// or continues its box's copy, never the newer capture. One that only
+	// began since, or is still being kept, does not: the chosen capture is
+	// still the newest that job kept.
 	if continuity := ContinuityOf(row, &opened, opened.LaunchSeq-1, restorer); !continuity.Continues {
 		return continuedLaunch{}, continuity.Why
 	}
@@ -1915,9 +1932,12 @@ func exactFor(exact *ExactTelling, check CarryCheck, reused bool) (brief, why st
 	return brief, ""
 }
 
-// exactUnused logs why a launch that continues the turn's kept session hands
-// it the brief told by the save point rather than the one told by a reading of
-// what it holds ([exactFor]), keyed as [Coordinator.notContinued]'s line.
+// exactUnused logs why a launch that continues the turn's session hands it a
+// brief other than the one told by a reading of what its kept capture holds:
+// the kept capture, told by its save point ([exactFor]), or the copy its job's
+// own box holds, which went on past that capture, told by the brief that
+// continues the copy there ([copyWentPast]). Keyed as
+// [Coordinator.notContinued]'s line. The one place the launch says so.
 func (c *Coordinator) exactUnused(ctx context.Context, req LaunchRequest, why string) {
 	log.InfoContext(ctx, "executor_session_holdings_unused", "turn_id", req.Turn.TurnID,
 		"agent", req.Turn.AgentHandle, "detail", redact.Secrets(why), "outcome", exactUnusedOutcome)

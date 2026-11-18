@@ -5,10 +5,9 @@ import "time"
 // THE BOUNDS ON WHAT IS STORED, held by the writer before a record is published
 // so the log never refuses one as too large after the fact.
 const (
-	// SnapshotMaxBytes bounds a told record's snapshot: a seat at every
-	// integration with its scopes, its tool servers, the company's policies
-	// cut to their first 300 characters and its setup steps fit in a few KiB,
-	// so 64 KiB is a seat's whole surface many times over.
+	// SnapshotMaxBytes bounds a told record's snapshot. A seat's whole surface
+	// (every integration with its scopes, tool servers, policies cut to 300
+	// characters, setup steps) fits in a few KiB; 64 KiB is many times that.
 	SnapshotMaxBytes = 64 << 10
 
 	// ChangesMaxBytes bounds a told record's change list, every change kept

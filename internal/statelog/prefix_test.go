@@ -8,19 +8,12 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE CHECKPOINT PASSES A RETAINED RECORD, AND THE APPLIED PREFIX DOES NOT.
-//
-// A node that retains a record — a version this build cannot read — moves its
-// checkpoint past it and goes on applying what the retained record does not
-// cover. Asked "have you applied everything up to here?" it must say no: a
-// reader deciding from an absent row (nobody owns this key, this session has
-// ended) would otherwise read the retained record's rows as rows no record
-// wrote. So the prefix a snapshot reports is settled at the checkpoint and
-// APPLIED only below the earliest record retained.
-//
-// And coverage is a question about EVERY retained record's scope, not the
-// earliest one's: the earliest here is about `object/b`, and a later one about
-// `object/d` must still be found by a probe over `object/d`.
+// THE CHECKPOINT PASSES A RETAINED RECORD, AND THE APPLIED PREFIX DOES NOT: it
+// is APPLIED only below the earliest retained record, or a reader deciding
+// from an absent row reads a retained record's rows as rows no record wrote.
+// Coverage asks EVERY retained record's scope: the earliest here is about
+// `object/b`, and a later one about `object/d` must still be found by a probe
+// over `object/d`.
 func TestAPrefixIsAppliedOnlyBelowTheEarliestRetainedRecord(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})

@@ -16,15 +16,13 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// heldBudget bounds every wait a case below makes on a loop it holds a commit
-// under. Thirty seconds, [wiredOpBudget]: what a held commit leaves the loop
-// doing takes milliseconds, so a case that runs this out is a loop that
-// stopped, not a slow one.
+// heldBudget bounds every wait on a loop holding a commit: [wiredOpBudget],
+// since what a held commit leaves the loop doing takes milliseconds, so
+// running it out means the loop stopped, not that it is slow.
 const heldBudget = wiredOpBudget
 
-// barrierEnv is the barrier a read index appends, as the probe log carries it:
-// the framework's own envelope ([statelog.ReadIndex.Read]), no writer, no
-// operation id.
+// barrierEnv is the barrier a read index appends ([statelog.ReadIndex.Read]):
+// the framework's envelope, no writer, no operation id.
 func barrierEnv() statelog.Envelope {
 	return statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
@@ -33,8 +31,8 @@ func barrierEnv() statelog.Envelope {
 	}
 }
 
-// batches is how many transactions the probe applier has seen commit: the
-// framework tells it once per committed transaction ([statelog.Applier.Committed]).
+// batches is how many transactions the probe applier has seen commit
+// ([statelog.Applier.Committed]).
 func (a *probeApplier) batches() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -43,19 +41,16 @@ func (a *probeApplier) batches() int {
 
 // runningLoop is an applier a case runs beside it.
 type runningLoop struct {
-	// cancel ends the loop's context, and returns at once: the loop is ending
-	// from that instant, whatever it is waiting for.
+	// cancel ends the loop's context and returns at once.
 	cancel func()
 
-	// stop cancels the loop and waits for it to return, answering how it
-	// ended if that was not by being asked to. Once, however often it is
-	// called.
+	// stop cancels the loop, waits for it, and answers how it ended if not
+	// by cancellation; it runs once however often called.
 	stop func() error
 }
 
-// looping runs h's applier until the loop is stopped, which the case's cleanup
-// does too. A case holding a commit releases it before it stops the loop: the
-// loop waits for its transaction beside it.
+// looping runs h's applier until stopped, or the case's cleanup. A case holding
+// a commit releases it first: the loop waits for its transaction beside it.
 func (h *applyHarness) looping(t *testing.T) *runningLoop {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
@@ -92,14 +87,10 @@ func until(t *testing.T, what string, cond func() bool) {
 
 // ONE CHECKPOINT TRANSACTION IS IN FLIGHT, BESIDE THE LOOP.
 //
-// A run of barriers writes no row, so its transaction is the checkpoint and an
-// fsync. Held at its commit — the disk's fsync stalling — the loop goes on
-// decoding, and reaches every barrier behind it; nothing else begins on the
-// writer meanwhile; the next transaction carries everything decoded since; a
-// run with rows waits for the one in flight rather than committing beside it;
-// and nothing is acknowledged before the commit that checkpointed it. A loop
-// that committed each run of barriers inline sat in that commit with every
-// barrier behind it undecoded, and every read resting on one waited too.
+// With a run of barriers' commit held (a stalled fsync), the loop keeps
+// decoding and reaches every barrier behind it; nothing else begins on the
+// writer; the next transaction carries all decoded since; a run with rows
+// waits for the one in flight; and nothing is acknowledged before its commit.
 func TestOneCheckpointTransactionIsInFlight(t *testing.T) {
 	t.Parallel()
 	hold := storetest.HoldCommits(t)
@@ -110,8 +101,8 @@ func TestOneCheckpointTransactionIsInFlight(t *testing.T) {
 	before := h.applier.batches()
 
 	hold.Arm()
-	// RELEASED ON EVERY WAY OUT, before the loop is stopped: the loop waits
-	// for the transaction beside it, which would wait on the hold for ever.
+	// RELEASED ON EVERY WAY OUT, before the loop stops: it waits for the
+	// transaction beside it, which would wait on the hold for ever.
 	defer hold.Release()
 	h.fetch.offer(2, barrierEnv())
 	if err := hold.AwaitHeld(t.Context(), 1); err != nil {
@@ -161,8 +152,8 @@ func TestOneCheckpointTransactionIsInFlight(t *testing.T) {
 		pending, _ := h.fetch.Pending(t.Context())
 		return pending == 0
 	})
-	// A WHILE, to give a loop that did not wait the chance to begin: the one
-	// that waits shows nothing at all.
+	// A WHILE, for a loop that did not wait to begin: one that waits shows
+	// nothing.
 	time.Sleep(50 * time.Millisecond)
 	if slices.Contains(h.applier.seen(), statelog.Position{Stream: probeStream, Generation: 1, Seq: 6}) {
 		t.Errorf("the write at 6 was applied while the checkpoint before it was held — " +
@@ -191,14 +182,12 @@ func TestOneCheckpointTransactionIsInFlight(t *testing.T) {
 
 // A CRASH PAST THE COMMITTED CHECKPOINT LOSES NOTHING.
 //
-// The reached position runs ahead of the checkpoint over barriers whose commit
-// has not returned, and nothing durable may read it: a node that stops there —
-// the commit never landing — restarts at the committed checkpoint, is handed
-// the barriers again because none was acknowledged, and ends up with exactly
-// the rows a node that never stopped holds. And the position it published
-// meanwhile ([statelog.Runner.Stance], what the heartbeat publishes and the
-// trim counts) never passed the checkpoint: a trim that had counted the
-// reached position could have purged the barriers this restart needs.
+// The reached position runs ahead of the checkpoint over uncommitted barriers,
+// and nothing durable may read it: a node stopping there restarts at the
+// checkpoint, is handed the unacknowledged barriers again, and ends with the
+// rows of a node that never stopped. Its stance ([statelog.Runner.Stance],
+// which the heartbeat publishes and the trim counts) never passes the
+// checkpoint, or a trim could purge the barriers the restart needs.
 func TestACrashPastTheCommittedCheckpointLosesNothing(t *testing.T) {
 	t.Parallel()
 	offerAll := func(h *applyHarness, from, to uint64) {
@@ -239,9 +228,8 @@ func TestACrashPastTheCommittedCheckpointLosesNothing(t *testing.T) {
 			"restart does not resume at", stance.At, durable.At)
 	}
 
-	// THE CRASH: the loop ends, and the commit it waits for never lands.
-	// CANCELLED FIRST, so the failed commit reaches a loop that is ending and
-	// is never retried — the process that would retry it is the one that died.
+	// THE CRASH: the loop ends and its commit never lands. CANCELLED FIRST,
+	// so the failed commit is never retried: the process that would is dead.
 	loop.cancel()
 	hold.ReleaseFailing(errors.New("the process died before the commit returned"))
 	if err := loop.stop(); err != nil {
@@ -271,14 +259,11 @@ func TestACrashPastTheCommittedCheckpointLosesNothing(t *testing.T) {
 
 // A NODE THAT RETAINS A RECORD REACHES ONLY WHAT IT COMMITS.
 //
-// A barrier's scope meets the scope of a barrier this node retained — every
-// barrier declares the framework's one scope — and a record whose scope meets a
-// retained one's is retained too, which is a row. So while this node retains
-// anything the reached position moves only with commits: here a barrier signed
-// under a key this node lacks is retained, and the barrier after it, which the
-// node can read, is retained behind it in a transaction held at its commit. A
-// reached position that passed it at its decode released its readers over a
-// row that had not committed.
+// Every barrier declares the framework's one scope, so a barrier meets any
+// retained barrier's scope and is retained too, which is a row: while this node
+// retains anything its reached position moves only with commits. Here a
+// barrier under a lacked key is retained, and the readable one after it is
+// retained behind it in a transaction held at its commit.
 func TestANodeThatRetainsARecordReachesOnlyWhatItCommits(t *testing.T) {
 	t.Parallel()
 	hold := storetest.HoldCommits(t)
@@ -315,17 +300,12 @@ func TestANodeThatRetainsARecordReachesOnlyWhatItCommits(t *testing.T) {
 
 // NO READ WAITS ON A COMMIT THAT WRITES NO ROW.
 //
-// Three linearizable reads back to back while the checkpoint of the first
-// read's barrier is held at its commit, on a real broker and a real store: the
-// first waits for nothing but the rows already committed; the second's barrier
-// follows the first's, whose commit is the one held; the third's follows a
-// barrier that arrived while that commit was held. Each is served with every
-// row, and none waits on the held commit — which before reads waited on the
-// reached position held the first read (its own barrier's commit), the second
-// (the barrier before it) and the third (a barrier decoded only after the held
-// commit returned), each `behind` at [statelog.ReadBudget]. The checkpoint
-// itself stays behind while the commit is held, and catches up with all three
-// barriers once it returns.
+// Three linearizable reads back to back on a real broker and store, while the
+// checkpoint of the first read's barrier is held at its commit: the second's
+// barrier follows the first's, the third's one that arrived during the hold.
+// Each is served with every row and none waits on the held commit, which would
+// leave it `behind` at [statelog.ReadBudget]; the checkpoint stays behind, and
+// catches up with all three once it returns.
 func TestNoReadWaitsOnACommitThatWritesNoRow(t *testing.T) {
 	t.Parallel()
 	hold := storetest.HoldCommits(t)
@@ -344,8 +324,8 @@ func TestNoReadWaitsOnACommitThatWritesNoRow(t *testing.T) {
 	}
 
 	hold.Arm()
-	// RELEASED ON EVERY WAY OUT, before the node's own cleanup stops an applier
-	// that would otherwise wait on the held commit for ever.
+	// RELEASED ON EVERY WAY OUT, before the node's cleanup stops an applier
+	// that would wait on the held commit for ever.
 	defer hold.Release()
 	reader := n.reader(t, n.runner)
 	for i := range 3 {
@@ -402,12 +382,9 @@ func TestNoReadWaitsOnACommitThatWritesNoRow(t *testing.T) {
 // A READ PAST ANOTHER NODE'S BARRIER IS SERVED.
 //
 // Every data node applies every node's barriers, so the record before a read's
-// own barrier is often another node's: here node B appends two barriers while
-// node A's checkpoint of the first is held at its commit, and A's read — whose
-// barrier follows B's second — is served with the row A holds. A rule that
-// passed only the barriers a node appended itself would leave A waiting for its
-// commit of B's, which is the same fsync this rule exists to keep from in
-// front of a read.
+// barrier is often another node's: node B appends two while node A's
+// checkpoint of the first is held, and A's read, its barrier after B's second,
+// is served. Passing only a node's own barriers would leave A on that fsync.
 func TestAReadPastAnotherNodesBarrierIsServed(t *testing.T) {
 	t.Parallel()
 	q := soloBroker(t, js.Config{SyncAlways: true})

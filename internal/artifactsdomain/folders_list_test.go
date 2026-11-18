@@ -82,10 +82,8 @@ func sortedIDs(ids ...artifacts.ID) []artifacts.ID {
 
 // THE TOP LEVEL, ONE LEVEL AT A TIME: what is filed in no folder, or in one
 // the reader cannot see (bob is shown jane's Drafts' artifact at his top level,
-// never hidden by a folder he cannot see, and never told its folder, by its
-// path or by its id), and the
-// child folders as common prefixes, each counting only what the reader may
-// open.
+// never told its folder by path or id), and the child folders as common
+// prefixes, each counting only what the reader may open.
 //
 // Mutation: count a folder's artifacts without the visibility predicate and
 // bob's Marketing counts jane's hidden artifact; place an artifact in an
@@ -201,8 +199,7 @@ func TestATokenBindsTheFolderNotItsPath(t *testing.T) {
 		t.Errorf("a recursive token continuing a one-level listing: %v", err)
 	}
 	// A TOKEN NEVER LISTS ITS FOLDER UNDER ANOTHER FOLDER'S WORDS: a query
-	// naming a different folder beside it, by id or by a path that names
-	// one now, is refused rather than answered as the token's folder.
+	// naming a different folder by id or path is refused.
 	other := q
 	other.Delimiter = ""
 	other.Prefix, other.Folder = "", g.drafts.ID
@@ -245,8 +242,7 @@ func TestTheRequesterNarrowsEveryFolderAndRow(t *testing.T) {
 // A FOLDER GRANTS NOTHING TO ITS CONTENTS: jane's unshared artifact filed in
 // the company's Marketing is not shown to bob, however he reaches Marketing
 // (its listing, everything beneath it, its count), and an artifact shared with
-// bob filed in jane's own Drafts is still his to open, at his top level. Who
-// may open an artifact is its owner and its own shares, and nothing else.
+// bob filed in jane's own Drafts is still his to open, at his top level.
 //
 // Mutation: admit an artifact by its folder's audience in the listing's
 // predicate and bob is shown jane's hidden artifact in Marketing.
@@ -268,11 +264,10 @@ func TestAFolderGrantsNothingToItsContents(t *testing.T) {
 	}
 }
 
-// A BREADCRUMB NEVER NAMES A HIDDEN ANCESTOR: a folder is seen through its
-// top-level folder, so every folder a reader is answered comes after its
-// parent, every one of its ancestors is answered too, and every path a row or
-// a prefix names is the whole path from the top level. Bob is answered none of
-// jane's own tree, whatever he owns under the company's.
+// A BREADCRUMB NEVER NAMES A HIDDEN ANCESTOR: every folder a reader is
+// answered comes after its parent, all its ancestors are answered too, and
+// every path a row or prefix names starts at the top level. Bob is answered
+// none of jane's own tree, whatever he owns under the company's.
 //
 // Mutation: decide a subfolder's visibility on its own owner and bob, who owns
 // a folder moved into jane's own tree, is answered it under a parent he is
@@ -309,8 +304,7 @@ func TestABreadcrumbNeverNamesAHiddenAncestor(t *testing.T) {
 
 // A FOLDER'S COUNT HOLDS ONLY WHAT THE READER MAY SEE: the tree read counts
 // only what bob may open, by the listing's own predicate, and puts inDrafts
-// among the artifacts in no folder he sees; jane is answered her own tree and
-// her own count.
+// among the artifacts in no folder he sees; jane gets her own tree and count.
 //
 // Mutation: count a folder's artifacts from the rows alone and bob's
 // Marketing counts the hidden artifact.
@@ -374,8 +368,7 @@ func TestTheTotalEqualsTheRowsTheViewerMaySee(t *testing.T) {
 	led := n.createIn(scribe, "Scribe's", "")
 	unknown := n.createIn(jane, "At a role from the future", "")
 	// A SHARE A NEWER PEER WROTE, at a role this build does not know: the
-	// writer refuses to form one, so it is written straight into the
-	// estate, as an applier of that newer build would have.
+	// writer refuses to form one, so it goes straight into the estate.
 	if err := n.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO artifact_shares (artifact_id, audience_kind, audience_id, role, granted_by,

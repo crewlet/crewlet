@@ -10,24 +10,10 @@ import (
 
 // A RECORD'S BROKER INSTANT REACHES THE APPLIER AS ONE VALUE, WHETHER IT WAS
 // APPLIED AS IT ARRIVED OR HELD BACK AND APPLIED LATER, AND IN WHATEVER ZONE
-// THE NODE RUNS.
-//
-// The broker client reports a record's instant at nanoseconds in the node's
-// own zone, and the deferred table keeps it in the store's encoding — UTC at a
-// microsecond. An applier writes the instant into its documents as it is
-// handed it, and a document encodes the precision and the zone, so the two
-// shapes are two different documents for one record on two nodes: the
-// difference the identity claim says there is none of. So the loop hands every
-// applier the store's encoding on both paths, and this case reads what the
-// applier was handed: two records stamped in two zones east and west of UTC
-// with a sub-microsecond remainder, applied live, and one held back under a key
-// the node lacked and reprocessed once it arrived. Each must be the instant in
-// UTC at a microsecond, on the record and in the options alike, encoded to the
-// same bytes a document would hold.
-//
-// The expected value is spelled out here rather than computed through the
-// framework's helper, so a helper that drifted from the store's encoding is
-// caught rather than agreed with.
+// THE NODE RUNS: UTC at a microsecond on both paths (package doc, "A record's
+// broker instant is one value, however the record arrived"). The expected
+// value is spelled out, not computed by the framework's helper, so a helper
+// drifting from the store's encoding is caught rather than agreed with.
 //
 // Mutations: hand the live record the broker's instant as it arrived, and both
 // live records differ from what the held-back one was handed (the zone and the
