@@ -86,8 +86,8 @@ const ClaudeCodeName = sandbox.ClaudeCodeHarness
 //
 // A RELEASE OLDER THAN 2.1.163 IS STARTED WITHOUT THE HOOKS ([claudeNotesFloor]),
 // on the settings every run has: it runs them, and drops what a Stop hook
-// answers, so a note taken as the run finishes would be recorded read by a run
-// that never saw it. What switches the hooks off otherwise — a managed policy
+// answers, so a note served as the run finishes would be handed to a run that
+// never sees it. What switches the hooks off otherwise — a managed policy
 // that allows only managed hooks (allowManagedHooksOnly,
 // strictPluginOnlyCustomization) or disables every hook (disableAllHooks) —
 // leaves, like that older release, a run that succeeded without asking once,

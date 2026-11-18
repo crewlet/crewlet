@@ -91,9 +91,10 @@ type RunNote struct {
 	// At is when the turn took it, on the clock of the node that filed it.
 	At time.Time `json:"at"`
 
-	// Read is where the turn read it, nil while it WAITS. Recorded by the
-	// write that hands the note over, so a note is never handed over and
-	// left waiting, nor recorded read and never handed over.
+	// Read is where the turn read it, nil while it WAITS: recorded by the
+	// write that hands the note over, or, for one a hook or a poll served
+	// ([RunNote.Served]), once its harness is shown to have taken it, so a
+	// note is never recorded read and never handed over.
 	Read *NoteRead `json:"read,omitempty"`
 
 	// Served is the job the run's bridge last served the note to while it

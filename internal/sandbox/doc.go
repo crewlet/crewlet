@@ -4108,19 +4108,15 @@
 // AN ITEM FOR ONE JOB ([RunNote.For]) stops nothing: whatever its read, a
 // continuation is told the turn's notes, and an item is no person's note.
 //
-// NONE, NOT THE NOTES BEFORE THE JOB'S LAST SERVE. A hook's serve is recorded
-// in the write that answers the harness's ask, before the answer is handed
-// back (internal/engine's note hooks), so a harness cut off between the two
-// never had its last serve's notes; but neither is such a session known to hold its
-// job's brief, the message that told the notes the session it continued lacked,
-// an earlier job's among them: no probe has measured whether Claude Code
-// 2.1.310 writes the message a continued session is handed before it answers a
-// call, and no record says which notes that brief told. A cursor stopped before
-// the job's last take said the session held the notes that brief told, which
-// may never have reached it. A launch that continues a session cut off tells it
-// every note the turn has read, as notes it may already show, whatever its
-// cursor (internal/agent/runner's keptSession); an older build, which tells it
-// every note past its cursor, tells it every one.
+// NONE FOR A SESSION CUT OFF: it is not known to hold its job's brief, the
+// message that told the notes the session it continued lacked, an earlier job's
+// among them. No probe has measured whether Claude Code 2.1.310 writes the
+// message a continued session is handed before it answers a call, and no record
+// says which notes that brief told, so any cursor but none says the session
+// holds notes that may never have reached it. A launch that continues a session
+// cut off tells it every note the turn has read, as notes it may already show,
+// whatever its cursor (internal/agent/runner's keptSession); an older build,
+// which tells it every note past its cursor, tells it every one.
 //
 // # Filing and serving notes
 //

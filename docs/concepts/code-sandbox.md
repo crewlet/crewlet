@@ -1505,8 +1505,8 @@ run's setting, two hooks and the setting that keeps them on, nothing else:
   the harness ignores a settings file it cannot validate, without a word. What
   2.1.163 added is what the harness reads of a hook's answer: from it, a `Stop`
   hook's additional context reaches the model. An older release runs both
-  hooks and drops what the `Stop` hook answers, so a note taken as the run
-  finished would be recorded as read by a run that never saw it. The run's
+  hooks and drops what the `Stop` hook answers, so a note served as the run
+  finished would be handed to a run that never sees it. The run's
   script therefore reads `claude --version` first and starts an older release
   on the settings every run has, without the hooks, and with its standing
   instructions as they stand — never told of notes it cannot read — saying so
