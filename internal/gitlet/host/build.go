@@ -105,8 +105,8 @@ func (wr *writing) check(ctx context.Context) (judgement, writeVerdict, error) {
 	if j.parent == "" {
 		j.parent = w.Base
 	}
-	creates := w.Kind == gitlet.WriteCreateBranch || w.Kind == gitlet.WriteRevertChange ||
-		(w.Kind == gitlet.WriteCommitFiles && w.ExpectedHead == "")
+	creates := w.Kind == gitlet.WriteCreateBranch || w.Kind == gitlet.WriteCreateTag ||
+		w.Kind == gitlet.WriteRevertChange || (w.Kind == gitlet.WriteCommitFiles && w.ExpectedHead == "")
 	if (creates && head != "") || (!creates && head != w.ExpectedHead) {
 		return j, writeVerdict{reason: gitlet.RefusalStale, detail: wr.headSentence(head), stale: true}, nil
 	}
@@ -152,7 +152,8 @@ func (wr *writing) check(ctx context.Context) (judgement, writeVerdict, error) {
 // refs/heads/<name> and the like when no ref of exactly that name exists and
 // so would refuse a create as stale for good. for-each-ref also lists refs
 // beneath the name, so only the exact line is read. A branch naming anything
-// but a commit is gitlet.ErrInvalid: no engine write moves one.
+// but a commit is gitlet.ErrInvalid: no engine write moves one. A tag names
+// any object, an annotated tag's own first.
 func (wr *writing) head(ctx context.Context) (string, error) { return wr.headOf(ctx, wr.w.Ref) }
 
 // headOf is [writing.head] for any branch, a rebase's target among them.
@@ -179,7 +180,7 @@ func (wr *writing) headOf(ctx context.Context, branch string) (string, error) {
 	if err = wr.failed(ctx, "read of the branch", res, err); err != nil {
 		return "", err
 	}
-	if head != "" && kind != "commit" {
+	if head != "" && kind != "commit" && !strings.HasPrefix(branch, "refs/tags/") {
 		return "", fmt.Errorf("%w: ref: %s names a %s, not a commit, which no engine write moves", gitlet.ErrInvalid,
 			branch, kind)
 	}
@@ -451,6 +452,8 @@ func (wr *writing) build(ctx context.Context, sc *cache.Scratch, j judgement) (b
 		commit, res, done, err = b.rebase(ctx)
 	case gitlet.WriteRevertChange:
 		commit, res, done, err = b.revertChange(ctx)
+	case gitlet.WriteCreateTag:
+		commit, err = b.tag(ctx)
 	default:
 		commit, res, done, err = b.pick(ctx)
 	}
@@ -967,6 +970,37 @@ func (b *building) commitOf(ctx context.Context, tree string, parents []string, 
 		return "", fmt.Errorf("host: commit-tree answered %q, which is no commit id", commit)
 	}
 	return commit, nil
+}
+
+// tag is an annotated create_tag's tag object: ONE `mktag` of the object git
+// tag -a would write, its tagger the write's author (the acting principal, as
+// a commit's author is: ADR-0092) at the operation's second, so a retry
+// builds the same object. mktag runs git's own fsck of it.
+func (b *building) tag(ctx context.Context) (string, error) {
+	wr := b.wr
+	left, err := wr.budget()
+	if err != nil {
+		return "", err
+	}
+	message := wr.w.Message
+	if !strings.HasSuffix(message, "\n") {
+		message += "\n"
+	}
+	at := wr.w.Instant().UTC()
+	body := fmt.Sprintf("object %s\ntype commit\ntag %s\ntagger %s <%s> %d +0000\n\n%s", wr.w.Commit,
+		strings.TrimPrefix(wr.w.Ref, "refs/tags/"), wr.sig.AuthorName, wr.sig.AuthorEmail, at.Unix(), message)
+	res, err := wr.s.runGit(ctx, gitproc.Cmd{
+		Dir: b.sc.Dir, Alternate: b.sc.Alternate, Args: []string{"mktag"}, Stdin: strings.NewReader(body),
+		Class: gitproc.ClassRead, Deadline: left,
+	})
+	if err = wr.failed(ctx, "tag object of the write", res, err); err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(string(res.Stdout))
+	if !gitref.ValidOID(id) {
+		return "", fmt.Errorf("host: mktag answered %q, which is no object id", id)
+	}
+	return id, nil
 }
 
 // commitDates are an engine-built commit's dates (U18 c; ADR-0092): AUTHOR the
