@@ -66,11 +66,11 @@ func TestAHarnessKilledForMemoryEndedAtItsCeiling(t *testing.T) {
 }
 
 // THE SCRIPT'S MEMORY READ RUNS UNDER A PLAIN SH and prints only what the
-// collection parses: whatever the machine, it never fails the job, and where it
-// reads a domain it says something of it.
+// collection parses or a save's room reads: whatever the machine, it never
+// fails the job, and where it reads a domain it says something of it.
 //
-// Mutation: break the function's syntax, or print a line the parser does not
-// read, and this goes red.
+// Mutation: break the function's syntax, or print a line nothing reads, and
+// this goes red.
 func TestTheMemoryReadRunsUnderAPlainShell(t *testing.T) {
 	t.Parallel()
 	out, err := exec.Command("sh", "-c", sandbox.MemoryDomainScript+"\ncrewlet_memory").CombinedOutput()
@@ -79,8 +79,8 @@ func TestTheMemoryReadRunsUnderAPlainShell(t *testing.T) {
 	}
 	for line := range strings.Lines(string(out)) {
 		key, _, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if !ok || !strings.Contains(" oom_kill limit total_kb total ", " "+key+" ") {
-			t.Errorf("the memory read printed %q, which nothing parses", line)
+		if !ok || !strings.Contains(" oom_kill limit total_kb total held avail_kb ", " "+key+" ") {
+			t.Errorf("the memory read printed %q, which nothing reads", line)
 		}
 	}
 	if m := sandbox.ParseMemoryDomain(string(out)); !m.Known() {

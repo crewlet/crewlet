@@ -14,13 +14,19 @@ import (
 // the caller's memory domain as `key=value` lines: oom_kill (the kernel's count
 // of processes it killed for memory), limit (bytes, or `max`) and the
 // machine's total (total_kb from /proc/meminfo, total in bytes from sysctl).
+// For a save's room it also prints held, the bytes the domain's kernel cannot
+// reclaim (its usage less its page cache, plus the shared memory that cache
+// counts), and avail_kb, /proc/meminfo's MemAvailable; [ParseMemoryDomain]
+// reads neither.
 const MemoryDomainScript = `crewlet_memory() {
 d=""; c=$(sed -n 's/^0::\(.*\)$/\1/p' /proc/self/cgroup 2>/dev/null)
 for x in "/sys/fs/cgroup${c%/}" /sys/fs/cgroup; do if [ -r "$x/memory.events" ]; then d=$x; break; fi; done
 if [ -n "$d" ]; then awk '$1=="oom_kill"{print "oom_kill=" $2}' "$d/memory.events"; [ -r "$d/memory.max" ] && echo "limit=$(cat "$d/memory.max")"
+awk -v u="$(cat "$d/memory.current" 2>/dev/null)" '$1=="file"{f=$2} $1=="shmem"{s=$2} END{if (u ~ /^[0-9]+$/) printf "held=%.0f\n", u-f+s}' "$d/memory.stat" 2>/dev/null
 elif [ -r /sys/fs/cgroup/memory/memory.oom_control ]; then awk '$1=="oom_kill"{print "oom_kill=" $2}' /sys/fs/cgroup/memory/memory.oom_control; echo "limit=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null)"
+awk -v u="$(cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null)" '$1=="cache"{f=$2} $1=="shmem"{s=$2} END{if (u ~ /^[0-9]+$/) printf "held=%.0f\n", u-f+s}' /sys/fs/cgroup/memory/memory.stat 2>/dev/null
 elif [ -r /proc/vmstat ]; then awk '$1=="oom_kill"{print "oom_kill=" $2}' /proc/vmstat; fi
-if [ -r /proc/meminfo ]; then awk '$1=="MemTotal:"{print "total_kb=" $2}' /proc/meminfo; elif command -v sysctl >/dev/null 2>&1; then echo "total=$(sysctl -n hw.memsize 2>/dev/null)"; fi
+if [ -r /proc/meminfo ]; then awk '$1=="MemTotal:"{print "total_kb=" $2} $1=="MemAvailable:"{print "avail_kb=" $2}' /proc/meminfo; elif command -v sysctl >/dev/null 2>&1; then echo "total=$(sysctl -n hw.memsize 2>/dev/null)"; fi
 }`
 
 // MemoryDomain is a memory domain as [MemoryDomainScript] printed it.

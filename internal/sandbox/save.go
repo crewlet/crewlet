@@ -30,12 +30,18 @@ type SessionSaver interface {
 	// Streamed is how far the event stream of box's job has run, in bytes.
 	Streamed(ctx context.Context, box Sandbox) (int64, error)
 	// PackSave packs a save of box's session for taker, at a path of its
-	// own; a zero archive where the box holds no session yet.
+	// own; a zero archive where the box holds no session yet, and an error
+	// wrapping [ErrSaveNoRoom] where the box lacks the memory to pack it.
 	PackSave(ctx context.Context, box Sandbox, taker string) (SessionArchive, error)
 	// ReleaseSave removes the save at path from box; a path that is no save
 	// is refused.
 	ReleaseSave(ctx context.Context, box Sandbox, path string) error
 }
+
+// ErrSaveNoRoom is a pack a box refused because its memory domain lacks the
+// room the pack is estimated to take: the save waits, never doubled, and is
+// due again at one interval, since the room is the box's now, not the save's.
+var ErrSaveNoRoom = errors.New("the box lacks the memory to pack its session now")
 
 // The points a save is taken at, as its stamp's lines name them.
 const (
@@ -138,7 +144,8 @@ const (
 	// task before its reservation, or the coordinator stopped before its keep.
 	saveStoodDown saveClass = "stood_down"
 	// saveNotYet: something the save needs is not there now (the box, the
-	// license, the policy, the ledger, the taker, the place).
+	// license, the policy, the ledger, the taker, the box's room for its
+	// pack, the place).
 	saveNotYet saveClass = "not_yet"
 	// savePaced: the seat's allowance holds it back.
 	savePaced saveClass = "paced"
@@ -201,8 +208,9 @@ type saveOutcome struct {
 	// pacedUntil is where a paced save is due again.
 	pacedUntil time.Time
 	// unplaced names the step a failure came at before the save's place was
-	// asked ("handed", "pack", "scrub", "take"), or "ledger" for a seat whose
-	// save ledger a newer build owns, which takes no save until it is gone:
+	// asked ("handed", "pack", "scrub", "take"), "ledger" for a seat whose
+	// save ledger a newer build owns, which takes no save until it is gone,
+	// or "room" for a box that lacked the room to pack ([ErrSaveNoRoom]):
 	// what no stamp's line logs. "" for every other outcome.
 	unplaced string
 }
@@ -365,6 +373,9 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 	archive, err := saver.PackSave(duty, box, hold.holder)
 	give()
 	switch {
+	case errors.Is(err, ErrSaveNoRoom):
+		out.unplaced = "room"
+		return end(saveNotYet, fmt.Sprintf("the box's session was not packed: %v", err))
 	case err != nil:
 		out.unplaced = "pack"
 		return end(saveFailed, fmt.Sprintf("the box's session could not be packed: %v", err))
