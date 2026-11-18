@@ -305,18 +305,18 @@ const (
 	// thirds is at the least of that range: such a code log fills in 1.00 of the mutation log's
 	// time at the least and 0.58 at the most.
 
-	// DerivedCodeLogNumerator and DerivedCodeLogDenominator: an unset CodeLogMaxBytes is TWO
-	// THIRDS of the mutation log's ceiling, set or derived.
-	//
-	// THE SHARE IS A RESERVATION EVERY NODE MAKES, codeless companies included: a node sizes its
+	// DerivedCodeLogNumerator and DerivedCodeLogDenominator: an unset CodeLogMaxBytes is TWO THIRDS of
+	// the mutation log's ceiling, set or derived. THE SHARE IS A RESERVATION EVERY NODE MAKES, codeless companies included: a node sizes its
 	// logs on its first boot, before the company says whether it hosts code, so the share is
 	// weighed against what it costs the logs beside it. Below about 653 GiB free it is room the
 	// other logs give up in the fit (docs/guides/replication.md; internal/engine's
 	// TestThePagesPrintTheCeilingsAFirstBootCreates computes it): two thirds makes a first boot's
 	// mutation log about a fifth shorter, and a year-five re-embedding still fits the vector
 	// changelog at 100 GiB free with 13 % of it to spare. At the code log's byte rate every
-	// company would pay far more: twice the mutation log's ceiling shortens that log about 40 %
-	// (TestAShareAtTheCodeLogsByteRateCostsEveryCompanyFarMore).
+	// company would pay far more (TestAShareAtTheCodeLogsByteRateCostsEveryCompanyFarMore): at
+	// twice the mutation log's ceiling a first boot on 100 GiB free creates the mutation log
+	// about 40 % shorter than without the code log, and at three times about 50 % shorter, and
+	// the vector changelog beside it too small for a year-five re-embedding.
 	DerivedCodeLogNumerator   = 2
 	DerivedCodeLogDenominator = 3
 
