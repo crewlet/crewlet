@@ -193,3 +193,62 @@ func TestATellingNeverCountsALoad(t *testing.T) {
 			bridged[0].Result)
 	}
 }
+
+// A HOOK'S TELLING IS TOLD AGAIN IN A BOX WHOSE RELEASE THE RESUME WAS NOT
+// READ IN. A late call a Claude Code hook took is held as the job's session
+// showed it, which only a release whose resume this build read rebuilds: the
+// briefs for a box of that release do not tell it, and the ones for any other
+// box (runner.SessionContinuation.Unheld) do, recording what they left out of
+// their own telling. A telling no hook recorded, an OpenCode confirmation's,
+// is credited to every box, and no such briefs are built for it.
+//
+// Mutation: credit a hook's telling in the briefs for such a box
+// (unheld-credits-hooks), or record what the other briefs left out on them
+// (unheld-told-of-held), and a check goes red.
+func TestAHooksTellingIsToldAgainInABoxWhoseReleaseTheResumeWasNotReadIn(t *testing.T) {
+	t.Parallel()
+	t.Run("told again", func(t *testing.T) {
+		t.Parallel()
+		took := tookLate()
+		took.Tellings[0].Hook = true
+		session := lostRelaunch(t, keptAt(5), took).Session
+		if strings.Contains(session.Brief, "jira_create") {
+			t.Errorf("the brief for a box whose release was read tells the late call its hook took:\n%s",
+				session.Brief)
+		}
+		if session.Unheld == nil {
+			t.Fatal("the continuation carries no brief for a box whose release the resume was not read in")
+		}
+		for _, brief := range []string{session.Unheld.Brief, session.Unheld.Replaced} {
+			if !strings.Contains(brief, "the late one") {
+				t.Errorf("the brief for a box whose release was not read is not told the late call:\n%s", brief)
+			}
+		}
+	})
+	t.Run("what it left out", func(t *testing.T) {
+		t.Parallel()
+		reads := readsOf(1, ledger.MaxReadCalls+2)
+		took := runner.Resume{Bridged: reads}
+		for i := range reads {
+			reads[i].Late = true
+			took.Tellings = append(took.Tellings, runner.Telling{Appended: i + 1, Place: 5, Hook: true})
+		}
+		basis := keptAt(5)
+		basis.Through = len(reads)
+		session := lostRelaunch(t, basis, took).Session
+		if len(session.Told.LateOmitted) != 0 || session.Unheld == nil {
+			t.Fatalf("the premise: the brief left out late calls %v, and carries unheld briefs %v",
+				session.Told.LateOmitted, session.Unheld != nil)
+		}
+		if got, want := session.Unheld.Told.LateOmitted, []int{ledger.MaxReadCalls + 1,
+			ledger.MaxReadCalls + 2}; !slices.Equal(got, want) {
+			t.Errorf("the unheld briefs record late calls %v left out, want %v", got, want)
+		}
+	})
+	t.Run("a confirmation's", func(t *testing.T) {
+		t.Parallel()
+		if session := lostRelaunch(t, keptAt(5), tookLate()).Session; session.Unheld != nil {
+			t.Errorf("a continuation crediting no hook's telling carries unheld briefs:\n%s", session.Unheld.Brief)
+		}
+	})
+}

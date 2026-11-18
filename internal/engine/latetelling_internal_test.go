@@ -22,17 +22,20 @@ import (
 // hold one of the round before, which names no call of this log; and a log that
 // names no round names no telling's.
 //
-// Mutation: hand every telling on the row (tellings-any-round), and the one of
-// the round before reaches the runner.
+// And a telling a hook's step recorded reaches the runner as one
+// ([runner.Telling.Hook]).
+//
+// Mutation: hand every telling on the row (tellings-any-round), or drop the
+// hook's mark (telling-hook-dropped), and the runner is handed another.
 func TestTheResumeHandsOnlyTheTellingsOfItsLogsRound(t *testing.T) {
 	t.Parallel()
 	run := sandbox.PendingRun{Steer: sandbox.RunSteer{Tellings: []sandbox.CallTelling{
 		{Round: "job-0", Appended: 3, Launch: "job-0", Place: 1},
-		{Round: "job-1", Appended: 2, Launch: "job-2", Place: 4},
+		{Round: "job-1", Appended: 2, Launch: "job-2", Place: 4, Hook: true},
 	}}}
 	got := runnerResume(resumeInput{Run: run, Bridged: sandbox.BridgeLog{Round: "job-1"}}, nil, nil, nil).Tellings
-	if want := []runner.Telling{{Appended: 2, Place: 4}}; !slices.Equal(got, want) {
-		t.Errorf("the resume hands tellings %+v, want the log's round's alone, %+v", got, want)
+	if want := []runner.Telling{{Appended: 2, Place: 4, Hook: true}}; !slices.Equal(got, want) {
+		t.Errorf("the resume hands tellings %+v, want the log's round's alone, a hook's as one, %+v", got, want)
 	}
 	if got := runnerResume(resumeInput{Run: run}, nil, nil, nil).Tellings; len(got) != 0 {
 		t.Errorf("a resume of a log naming no round hands tellings %+v, want none", got)

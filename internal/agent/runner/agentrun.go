@@ -367,8 +367,8 @@ type SessionContinuation struct {
 // session showed, as a release the reading was read for resumes it, so such a
 // box holds none of them. Told as [SessionContinuation]'s briefs are, but the
 // notes from the first read at a hook's step on, as notes the session may
-// already show ([Runner.firstUnheld]). Built only where the capture's cursor
-// counts such a read.
+// already show ([Runner.firstUnheld]), and every late call a hook took, which
+// they credit no telling of ([Telling.Hook]). Built only where they differ.
 type UnheldTelling struct {
 	Brief, Replaced string
 

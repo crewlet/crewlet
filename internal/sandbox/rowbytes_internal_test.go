@@ -666,11 +666,12 @@ func worstRow(t *testing.T) PendingRun {
 			LateCall: &LateCall{Round: uuid.NewString(), Call: worstItemCall(t)}})
 	}
 	// AND THE TELLINGS, as many as the row holds ([MaxCallTellings]), each of
-	// a round and a job at their widest ids, every number at its widest.
+	// a round and a job at their widest ids, every number at its widest, a
+	// hook's.
 	tellings := make([]CallTelling, MaxCallTellings)
 	for i := range tellings {
 		tellings[i] = CallTelling{Round: uuid.NewString(), Appended: math.MaxInt, Launch: uuid.NewString(),
-			Place: math.MaxInt}
+			Place: math.MaxInt, Hook: true}
 	}
 	// THE CALLS A BRIEF LEFT OUT, as a launch records them on the job's record
 	// and a capture states them: a whole log's calls ([MaxBridgeCalls]) between

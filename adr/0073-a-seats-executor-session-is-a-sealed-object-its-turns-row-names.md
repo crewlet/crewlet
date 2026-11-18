@@ -3891,9 +3891,12 @@ brief. A telling outlives its item, goes with its round, and is held to
 it (`runner.heldByTelling`) only to a session not cut off, not restarted in its
 job and not a possible summary, whose capture's note cursor, as stamped, is at
 or past the telling's place, and whose briefs counted no read of the call
-without listing it; the copy in a job's box whose harness ended its own run
-credits every telling of the log's round on the record; a fresh run credits
-none. Credited, the call is held as a call at the save point is. Sound because:
+without listing it, and never one a hook's step recorded
+(`sandbox.CallTelling.Hook`) to a box whose release's resume this build did not
+read, which may not rebuild what the hook handed the session (the briefs for
+such a box, `runner.UnheldTelling`, are built wherever that tells more); the
+copy in a job's box whose harness ended its own run credits every telling of
+the log's round on the record; a fresh run credits none. Credited, the call is held as a call at the save point is. Sound because:
 
 1. A telling is written only where the job's own session is known to hold the
    call.
@@ -3917,7 +3920,8 @@ among the owed reads, a dropped late call was counted twice in one brief, as an
 owed read dropped and as a late call dropped. Every other continuation tells the
 call, under words that say an earlier message may have told it: a cursor
 stopped lower, a session cut off or possibly compacting, a telling past the
-bound, a fleet mid-upgrade.
+bound, a hook's telling in a box whose release's resume was not read, a fleet
+mid-upgrade.
 
 **What it does not reach.** A Claude Code job finishing as a call lands is not
 handed it, so its report may say a call failed that ran, which its reviewer

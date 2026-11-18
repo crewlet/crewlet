@@ -1390,8 +1390,9 @@ type SessionContinuation struct {
 // not read the resume of: a read at a hook's step is held only as the job's
 // session showed it, which such a box's resume may not rebuild, so these tell
 // the notes from the first such read on again, as notes the session may
-// already show; or, where its harness may compact the session before it reads
-// them, they are the briefs told as a session that may be a summary.
+// already show, and every late call a hook took ([CallTelling.Hook]); or,
+// where its harness may compact the session before it reads them, they are
+// the briefs told as a session that may be a summary.
 type UnheldTelling struct {
 	Brief, Replaced string
 

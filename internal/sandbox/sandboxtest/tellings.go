@@ -83,10 +83,11 @@ func mustLate(t *testing.T, s sandbox.PendingStore, turnID, first, round, name s
 // job's plugin confirms a late-call item once OpenCode reports it delivered into
 // the job's session: the write that reads it records a telling of its call (the
 // round, its place in the log, the job) at the write's own new place among the
-// reads, and the record's count moves there with the item's read.
+// reads, and the record's count moves there with the item's read. No hook's
+// step read it ([sandbox.CallTelling.Hook]).
 //
-// Mutation: record no telling at a confirmation (telling-never-confirmed), and
-// the record holds none.
+// Mutation: record no telling at a confirmation (telling-never-confirmed), or
+// mark it a hook's (telling-confirmed-as-hook), and a check goes red.
 func testAConfirmationOfAnItemRecordsItsTellingAtItsOwnPlace(t *testing.T, s sandbox.PendingStore) {
 	const turn = "t-telling-confirmed"
 	first, round, next := lateRound(t, s, turn)
@@ -96,6 +97,9 @@ func testAConfirmationOfAnItemRecordsItsTellingAtItsOwnPlace(t *testing.T, s san
 	if got, want := tellingsOf(t, s, turn), []string{telling(round, 1, next, reads+1)}; !slices.Equal(got, want) {
 		t.Errorf("the record holds tellings %v, want %v: the confirmed call, at the confirmation's own place", got,
 			want)
+	}
+	if told := mustGet(t, s, turn).Steer.Tellings; len(told) == 1 && told[0].Hook {
+		t.Error("a confirmation's telling is marked as read at a hook's step")
 	}
 	if got := mustGet(t, s, turn).Steer.Reads; got != reads+1 {
 		t.Errorf("the record counts %d places, want the confirmation's %d", got, reads+1)
@@ -130,11 +134,13 @@ func testAHooksTakeRecordsNoTelling(t *testing.T, s sandbox.PendingStore) {
 // another only before it: the first is read at its own place, its first
 // serve's, and its call is told at the verdict's own new place, which the
 // record's count moves to; a capture whose cursor was read off the record
-// before the verdict is below it. The second is read marked restarted, and a
-// resume of the session is not known to hold it, so nothing is told of it.
+// before the verdict is below it, and it is a hook's ([sandbox.CallTelling.Hook]).
+// The second is read marked restarted, and a resume of the session is not
+// known to hold it, so nothing is told of it.
 //
 // Mutation: record the telling at the item's own place (telling-at-item-place),
-// or on a restarted take too (telling-on-restarted), and a check goes red.
+// on a restarted take too (telling-on-restarted), or not as a hook's
+// (telling-hook-unmarked), and a check goes red.
 func testAHeldVerdictRecordsATellingAtItsOwnPlaceAndARestartedOneNone(t *testing.T, s sandbox.PendingStore) {
 	const turn = "t-telling-verdict"
 	first, round, next := lateRound(t, s, turn)
@@ -153,6 +159,9 @@ func testAHeldVerdictRecordsATellingAtItsOwnPlaceAndARestartedOneNone(t *testing
 	if got, want := tellingsOf(t, s, turn), []string{telling(round, 1, next, reads+1)}; !slices.Equal(got, want) {
 		t.Errorf("the record holds tellings %v, want %v: the held call alone, at the verdict's own place", got,
 			want)
+	}
+	if told := mustGet(t, s, turn).Steer.Tellings; len(told) == 1 && !told[0].Hook {
+		t.Error("a hook's telling is not marked as read at a hook's step")
 	}
 	if got := mustGet(t, s, turn).Steer.Reads; got != reads+1 {
 		t.Errorf("the record counts %d places, want the verdict's %d", got, reads+1)

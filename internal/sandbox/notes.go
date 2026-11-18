@@ -211,6 +211,12 @@ type CallTelling struct {
 	// read off the row before that write is below it.
 	Place int `json:"place"`
 
+	// Hook says a hook's step read the call ([HookSettle.Held]): held as the
+	// job's session showed it, which a box whose release the resume was not
+	// read in may not rebuild ([UnheldTelling]), so such a box is not
+	// credited it.
+	Hook bool `json:"hook,omitempty"`
+
 	// Extra is every key of the section this build does not know: see
 	// [RunSteer.Extra].
 	Extra map[string]json.RawMessage `json:"-"`
@@ -222,17 +228,20 @@ type CallTelling struct {
 // lowest places going first. A list of its own: tellings is the record's.
 //
 // The highest, since a session that took the call only there holds it from
-// there alone, and the lower credits a capture of it between the two. No write
-// hands one call to two jobs (the package doc's ordering), so it is the safe
-// side of a case that does not arise.
+// there alone, and the lower credits a capture of it between the two; and a
+// hook's, where either is ([CallTelling.Hook]). No write hands one call to two
+// jobs (the package doc's ordering), so it is the safe side of a case that
+// does not arise.
 func withTelling(tellings []CallTelling, t CallTelling) []CallTelling {
 	out := slices.Clone(tellings)
 	if i := slices.IndexFunc(out, func(held CallTelling) bool {
 		return held.Round == t.Round && held.Appended == t.Appended
 	}); i >= 0 {
 		if out[i].Place >= t.Place {
+			out[i].Hook = out[i].Hook || t.Hook
 			return out
 		}
+		t.Hook = t.Hook || out[i].Hook
 		out = slices.Delete(out, i, i+1)
 	}
 	out = append(out, t)
@@ -244,10 +253,11 @@ func withTelling(tellings []CallTelling, t CallTelling) []CallTelling {
 }
 
 // tellingOf is the telling of the late call item hands its job, read by a write
-// at place, its session being known to hold it ([RunSteer.Tellings]).
-func tellingOf(item RunNote, job string, place int) CallTelling {
+// at place, its session being known to hold it ([RunSteer.Tellings]), by a
+// hook's step where hook.
+func tellingOf(item RunNote, job string, place int, hook bool) CallTelling {
 	return CallTelling{Round: item.LateCall.Round, Appended: item.LateCall.Call.Appended, Launch: job,
-		Place: place}
+		Place: place, Hook: hook}
 }
 
 // lateItemID is the id of the late-call item of the call the round's log took
@@ -1067,7 +1077,7 @@ func (s *CoordStore) TakeNotes(ctx context.Context, turnID string, take NoteTake
 			// A CONFIRMATION OF A LATE CALL'S DELIVERY, told at this write's
 			// own place ([CallTelling.Place]), which the record's count moves to.
 			if take.Confirms && held.LateCall != nil {
-				tellings, placed = withTelling(tellings, tellingOf(held, take.Read.Launch, order)), true
+				tellings, placed = withTelling(tellings, tellingOf(held, take.Read.Launch, order, false)), true
 			}
 			held.Read = &marked
 			notes[i] = held
@@ -1319,7 +1329,7 @@ func (s *CoordStore) SettleHook(ctx context.Context, turnID string, settle HookS
 			// RESTART, told at this write's own place, never the item's
 			// ([CallTelling.Place]); one shown taken only before it is not.
 			if held.Waiting() && next.LateCall != nil && next.Read != nil && !next.Read.Restarted {
-				tellings, placed = withTelling(tellings, tellingOf(next, settle.Launch, order)), true
+				tellings, placed = withTelling(tellings, tellingOf(next, settle.Launch, order, true)), true
 			}
 			if touched || (confirms && readByServeOf(next, settle.Launch)) {
 				answered = append(answered, next)

@@ -1804,7 +1804,7 @@ func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle stri
 func roundTellings(bridged sandbox.BridgeLog, tellings []sandbox.CallTelling) []runner.Telling {
 	var out []runner.Telling
 	for _, t := range bridged.Told(tellings) {
-		out = append(out, runner.Telling{Appended: t.Appended, Place: t.Place})
+		out = append(out, runner.Telling{Appended: t.Appended, Place: t.Place, Hook: t.Hook})
 	}
 	return out
 }

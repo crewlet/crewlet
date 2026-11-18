@@ -345,6 +345,11 @@ type RunAsk interface {
 // ([SessionBasis.NoteCursor]).
 type Telling struct {
 	Appended, Place int
+
+	// Hook says a hook's step read the call (sandbox.CallTelling.Hook): held as
+	// the job's session showed it, which a box whose release the resume was
+	// not read in may not rebuild ([UnheldTelling]).
+	Hook bool
 }
 
 // Resume is the collection of the executor run a turn parked on.

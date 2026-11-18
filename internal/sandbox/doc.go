@@ -949,8 +949,8 @@
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,192,473
-//	to spare, measured .............. measuredSpare             403,435
+//	every other field, measured ..... measuredOtherFields     2,192,713
+//	to spare, measured .............. measuredSpare             403,195
 //
 // Every other field is the identity, status and time fields, the run its turn's
 // leads are kept for and how many leads that part has taken
@@ -4288,6 +4288,10 @@
 // to a session not cut off or possibly a summary, whose cursor is at or past
 // it, and whose briefs counted no read of the call without listing it
 // ([BriefTold.LateOmitted]): internal/agent/runner's heldByTelling, ADR-0073.
+// And never one a hook's step recorded ([CallTelling.Hook]) to a box whose
+// release's resume this build did not read: such a box holds no read at a
+// hook's step as the job's session showed it, and the briefs for it
+// ([UnheldTelling]) tell the call.
 //
 // ONE JOB A CALL, BY THE ORDER OF THE WRITES: an item is filed only by the
 // write that appends its call or opens a job's log, for a job launching or

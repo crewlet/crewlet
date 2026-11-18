@@ -300,12 +300,22 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	as := toldAs{mayShow: mayShow, leads: withHeld(leadHeld, again), rendered: history[:again.rendered],
 		summed: holds.closedSummarized(), read: read}
 	// AND A LATE CALL ITS SESSION TOOK, by the capture's cursor as stamped
-	// ([heldByTelling]), where the session lacks nothing it was told.
+	// ([heldByTelling]), where the session lacks nothing it was told; and
+	// apart, the calls told to a box whose release the resume was not read
+	// in, which credit no telling a hook's step recorded ([UnheldTelling]).
 	if !holds.lacks() {
 		as.point, as.lateOwed = &basis.NoteCursor, basis.LateOwed
 	}
 	called, omitted, readHeld := r.calledAfter(ctx, round, from, owed, history, as, surface, b)
-	after = append(after, prompts.CalledAfter(called))
+	calls := prompts.CalledAfter(called)
+	unheldCalls, unheldOmitted := calls, omitted
+	if as.point != nil && slices.ContainsFunc(r.tellings(), func(t Telling) bool { return t.Hook }) {
+		as.unheld = true
+		told, left, _ := r.calledAfter(ctx, round, from, owed, history, as, surface, b)
+		unheldCalls, unheldOmitted = prompts.CalledAfter(told), left
+	}
+	before := slices.Clone(after)
+	after = append(after, calls)
 	// THEN THE NOTES IT HAS NOT READ, past its cursor, and the ones fresh holds,
 	// a note the run's bridge served a harness among either told as one it may
 	// already show ([Runner.toldNotes]); of a session cut off,
@@ -322,17 +332,18 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 		after = append(after, r.toldNotes(r.readsSince(0), true, fresh)...)
 	} else {
 		held, unsure := r.notesHeldBy(basis.NoteCursor, false)
-		// AND, WHERE THE CURSOR COUNTS A READ AT A HOOK'S STEP, THE TELLING
-		// FOR A BOX WHOSE RELEASE THE RESUME WAS NOT READ IN, which holds no
-		// such read ([UnheldTelling]).
-		if strict, _ := r.notesHeldBy(basis.NoteCursor, true); strict < held {
-			unheld = append(slices.Clone(after), r.toldNotes(r.readsSince(strict), true, fresh)...)
+		// AND, WHERE THE CURSOR COUNTS A READ AT A HOOK'S STEP OR A HOOK'S
+		// TELLING IS CREDITED, THE TELLING FOR A BOX WHOSE RELEASE THE RESUME
+		// WAS NOT READ IN, which holds no such read ([UnheldTelling]).
+		if strict, strictUnsure := r.notesHeldBy(basis.NoteCursor, true); strict < held || unheldCalls != calls {
+			unheld = append(append(before, unheldCalls), r.toldNotes(r.readsSince(strict), strictUnsure, fresh)...)
 		}
 		after = append(after, r.toldNotes(r.readsSince(held), unsure, fresh)...)
 	}
-	return &keptBrief{basis: basis, after: after, unheld: unheld, omitted: omitted, told: again.refs,
-		toldUnread: again.unread, readHeld: readHeld, newBox: prompts.BoxReplaced(provenance.Neutralise(b, branch),
-			provenance.Neutralise(b, basis.Home), r.checkoutName())}
+	return &keptBrief{basis: basis, after: after, unheld: unheld, omitted: omitted, unheldOmitted: unheldOmitted,
+		told: again.refs, toldUnread: again.unread, readHeld: readHeld,
+		newBox: prompts.BoxReplaced(provenance.Neutralise(b, branch), provenance.Neutralise(b, basis.Home),
+			r.checkoutName())}
 }
 
 // inPlaceAfter is what a relaunch carrying the round on in its job's own box
@@ -520,14 +531,15 @@ func (r *Runner) inPlaceNotes(carry carried, fresh []steer.Note, holds sessionHo
 type keptBrief struct {
 	basis SessionBasis
 	after []string
-	// unheld is after with the notes told as [UnheldTelling] tells them, nil
-	// where the cursor counts no read at a hook's step.
-	unheld     []string
-	omitted    omittedReads
-	told       []sandbox.LeadRef
-	toldUnread []int
-	readHeld   []BridgedCall
-	newBox     string
+	// unheld is after with the calls and notes told as [UnheldTelling] tells
+	// them, nil where they tell the same; unheldOmitted what it left out.
+	unheld        []string
+	omitted       omittedReads
+	unheldOmitted omittedReads
+	told          []sandbox.LeadRef
+	toldUnread    []int
+	readHeld      []BridgedCall
+	newBox        string
 }
 
 // led is k's continuation led by lead, what carries the session on, which the
@@ -549,8 +561,9 @@ func (k *keptBrief) led(lead string, own []sandbox.Lead) *SessionContinuation {
 		Told: sandbox.BriefTold{Omitted: k.omitted.reads, LateOmitted: k.omitted.late, Own: own, Told: k.told,
 			ToldUnread: k.toldUnread}}
 	if k.unheld != nil {
-		unheld := joined(k.unheld)
-		out.Unheld = &UnheldTelling{Brief: unheld, Replaced: unheld + "\n\n" + k.newBox, Told: out.Told}
+		unheld, told := joined(k.unheld), out.Told
+		told.Omitted, told.LateOmitted = k.unheldOmitted.reads, k.unheldOmitted.late
+		out.Unheld = &UnheldTelling{Brief: unheld, Replaced: unheld + "\n\n" + k.newBox, Told: told}
 	}
 	return out
 }
@@ -1066,7 +1079,7 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		}
 		// A LATE CALL THE SESSION TOOK, by a telling it is credited
 		// ([heldByTelling]): held, as a call at the point is.
-		if heldByTelling(call, as.point, as.lateOwed, r.tellings()) {
+		if heldByTelling(call, as.point, as.lateOwed, as.credited(r.tellings())) {
 			held = append(held, call)
 			out.HeldSubmission = out.HeldSubmission || (call.Name == SubmitWorkTool && !call.Failed)
 			continue
@@ -1675,6 +1688,18 @@ type toldAs struct {
 	// credited no telling of.
 	point    *int
 	lateOwed []int
+	// unheld is the telling for a box whose release the resume was not read
+	// in, which credits no telling a hook's step recorded ([UnheldTelling]).
+	unheld bool
+}
+
+// credited is what of tellings as credits: every one, but a hook's where as is
+// the telling for a box whose release the resume was not read in.
+func (as toldAs) credited(tellings []Telling) []Telling {
+	if !as.unheld {
+		return tellings
+	}
+	return slices.DeleteFunc(slices.Clone(tellings), func(t Telling) bool { return t.Hook })
 }
 
 // leftOut is the calls of group a render left out, shown being the calls of it

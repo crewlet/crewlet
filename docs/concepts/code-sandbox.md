@@ -1438,7 +1438,9 @@ write (its note cursor at or past the place), and none of its briefs having
 counted the call without listing it. Every other continuation still tells it,
 under words that say an earlier message may have told it: a session cut off
 or compacting, a cursor stopped lower by a person's unread note, a telling
-past the twenty, a hook's take not yet shown, a fleet mid-upgrade. An OpenCode
+past the twenty, a hook's take not yet shown, a call a hook took told to a box
+whose Claude Code release's resume the engine has not read (which may not
+rebuild what the hook handed the session), a fleet mid-upgrade. An OpenCode
 session that compacts holds an item as it holds every call (its compaction is
 not judged yet, above). **What this does not reach**: a Claude Code job finishing as the call
 lands is not handed it, so its report may say a call failed that ran, which its
