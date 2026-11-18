@@ -3201,6 +3201,107 @@
   color: var(--color-text-tertiary);
 }
 
+/* THE BOXES: each group a card, its heading the head band, its rows on a spine through the leads. */
+.code-list--boxes {
+  --code-list-spine: var(--spacing-7);
+}
+
+.code-list--boxes .code-list__group {
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.code-list__band {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
+  padding: var(--spacing-2) var(--row-inline);
+}
+
+.code-list__band > .code-list__heading {
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: var(--font-size-md);
+  color: var(--color-text-primary);
+}
+
+.code-list__band > .code-list__aside {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-list__band + * {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-list--boxes .code-list__rows {
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.code-list--boxes .code-list__first,
+.code-list--boxes .code-list__row {
+  position: relative;
+}
+
+.code-list--boxes .code-list__first {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+  padding: var(--spacing-2) var(--row-inline);
+  background: var(--color-surface-inset);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-list--boxes .code-list__lead {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  align-self: center;
+  min-inline-size: var(--code-list-spine);
+}
+
+/* THE SPINE, a segment a part, so it runs through every lead's centre however tall a row grows. */
+.code-list--boxes .code-list__first:has(+ .code-list__rows)::before,
+.code-list--boxes .code-list__row::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: calc(var(--row-inline) + var(--code-list-spine) / 2 - 1px);
+  border-inline-start: 2px solid var(--color-border-strong);
+}
+
+.code-list--boxes .code-list__first::before,
+.code-list--boxes .code-list__band + .code-list__rows > .code-list__row:first-child::before {
+  inset-block-start: 50%;
+}
+
+.code-list--boxes .code-list__row:last-child::before {
+  inset-block-end: 50%;
+}
+
+.code-list--boxes .code-list__first > * {
+  position: relative;
+  z-index: 1;
+}
+
+.code-list--boxes .code-list__last {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--row-inline);
+}
+
+.code-list--boxes .code-list__rows + .code-list__last {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
 /* THE PHONE, BY THE LIST'S OWN WIDTH: the facts under the words, the timeline's track given back. */
 @container code-list (width < 640px) {
   .code-list__row {

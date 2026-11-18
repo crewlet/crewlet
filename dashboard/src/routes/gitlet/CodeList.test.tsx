@@ -640,6 +640,53 @@ describe("roles", () => {
     expect(screen.getByRole("list", { name: "Changes" })).toBeTruthy();
   });
 
+  // Mutation: drop an empty group, draw `last` before the rows, or the aside inside the heading.
+  test("a boxed list draws each group as a card with its first and last parts, and keeps j and k across groups", () => {
+    const { container } = mount(
+      <CodeList<Row>
+        look="boxes"
+        groups={[
+          {
+            key: "web",
+            heading: "web into main",
+            aside: <button type="button">More on web</button>,
+            first: <span>Train base of web</span>,
+            last: <span>How web lands</span>,
+            rows: ROWS.slice(0, 2),
+          },
+          { key: "docs", heading: "docs into main", last: <span>Nothing queued</span>, rows: [] },
+          { key: "api", heading: "api into main", rows: ROWS.slice(2, 3) },
+        ]}
+        rowKey={(r) => r.id}
+        rowHref={(r) => `#/x/${r.id}`}
+        aria-label="Merge queues"
+        lead={(r) => r.id}
+        title={(r) => r.title}
+      />,
+    );
+    expect(container.querySelector(".code-list--boxes")).not.toBeNull();
+    const boxes = [...container.querySelectorAll<HTMLElement>(".code-list__group")];
+    expect(boxes.map((b) => b.querySelector(".code-list__heading")?.textContent)).toEqual([
+      "web into main",
+      "docs into main",
+      "api into main",
+    ]);
+    expect([...boxes[0]!.children].map((el) => el.className)).toEqual([
+      "code-list__band",
+      "code-list__first",
+      "code-list__rows",
+      "code-list__last",
+    ]);
+    expect(boxes[0]!.querySelector(".code-list__band > .code-list__aside button")).not.toBeNull();
+    expect(boxes[0]!.querySelector(".code-list__heading button")).toBeNull();
+    expect(within(boxes[1]!).getByText("Nothing queued")).toBeTruthy();
+    expect(within(boxes[1]!).queryByRole("list")).toBeNull();
+    expect(screen.getByRole("list", { name: "web into main" })).toBeTruthy();
+    act(() => link("Row 2").focus());
+    press("j");
+    expect(document.activeElement).toBe(link("Row 3"));
+  });
+
   // Mutation: draw something for a call with neither rows nor groups.
   test("a list handed both rows and groups, or neither, is a programming error", () => {
     expect(() =>
