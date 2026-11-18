@@ -728,9 +728,9 @@ func TestALocalVerdictSilenceIsNeverGivenUpAtAStopOrALoss(t *testing.T) {
 // A REMOTE LOSS'S VERDICT SILENCE KEEPS ITS ENDING UNTIL ITS HOST IS GIVEN UP: a
 // host whose store did not answer the verdict says so, and the loss's ending is
 // kept with its box; where this node's own read of the row answered, the
-// silence is the host's alone, given up as a stop's is, and the loss then
-// ends; where it did not, the silence is this node's too, and is kept whatever
-// the bound.
+// silence is the host's alone, given up as a stop's is, and the loss then ends,
+// its box left to its host's reclaim (reclaimBox); where it did not, the
+// silence is this node's too, and is kept whatever the bound.
 //
 // Mutation: drop ReadHostedBox's return of the loss read's error, and the box
 // is reclaimed at once; drop keepLostSession's give-up, and it is kept for ever.
@@ -738,7 +738,14 @@ func TestARemoteLossesVerdictSilenceKeepsItsEndingUntilItsHostIsGivenUp(t *testi
 	t.Parallel()
 	rig := newCoordRig(t)
 	remoteVerdicts(t, rig)
+	told := &nudges{}
+	rig.coordinator.nudge = told.send
 	launched := rig.launchedBy("t1", "node-a")
+	reclaimed := func() bool {
+		return slices.ContainsFunc(told.all(), func(n Nudge) bool {
+			return n.Why == NudgeReleased && n.LaunchID == launched.LaunchID
+		})
+	}
 	serveNote(t, rig.pending, launched.LaunchID, "n1", types.SteerBoundaryToolBatch)
 	rig.runner.MainThread = sessionShows("take-n1").read
 	rig.coordinator.finish(t.Context(), rig.get("t1"), ending{fence: fenceOf(launched),
@@ -748,7 +755,7 @@ func TestARemoteLossesVerdictSilenceKeepsItsEndingUntilItsHostIsGivenUp(t *testi
 	if _, found, _ := rig.pending.Get(t.Context(), "t1"); !found {
 		t.Fatal("the loss's ending finished with its host's verdict unanswered")
 	}
-	if slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
+	if reclaimed() || slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
 		t.Fatal("the loss reclaimed the box its host's verdict is still to be read from")
 	}
 
@@ -762,8 +769,11 @@ func TestARemoteLossesVerdictSilenceKeepsItsEndingUntilItsHostIsGivenUp(t *testi
 	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
 		t.Error("the loss is still kept a day on, its host's store alone silent, want its host given up")
 	}
-	if !slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
-		t.Error("the loss given up did not reach its reclaim")
+	if !reclaimed() {
+		t.Error("the loss given up did not reach its reclaim: node-a's host was not told its box is released")
+	}
+	if slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
+		t.Error("node-b killed a box on node-a's host, which only that host reclaims")
 	}
 }
 
