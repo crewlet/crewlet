@@ -40,9 +40,9 @@ export const STEER_BOUNDARIES = ["round", "brief", "tool_batch", "finish", "step
  * `retold`, where a launch's brief told it after a step that took it never
  * handed it over); `expired`, the turn ended before anything read it; `missed`,
  * a step took it for its reader, which never had it (a review's take whose
- * answer was lost, or a hook's serve its harness gave up or its job's session
- * never showed), and no later launch told it; `unconfirmed`, the executor was
- * handed it and never confirmed reading it.
+ * answer was lost, or a hook's serve its harness gave up or its job's whole
+ * session proves it never took), and no later launch told it; `unconfirmed`,
+ * the executor was handed it and never confirmed reading it.
  * The trace says each in words, and every one but an expiry at the step it
  * names. HELD AGAINST `types.SteerOutcomes` by
  * `internal/events/types.TestTheDashboardNamesEverySteerOutcome`: an outcome

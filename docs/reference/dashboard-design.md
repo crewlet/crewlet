@@ -8400,11 +8400,13 @@ that can.
   step that never handed it over*. The other ends, each tagged with its word:
   *expired*, *the turn finished before it read the note*; *missed*, *taken for
   the executor in Execute, after a tool batch, but it never reached it* (a
-  hook's serve its job's session never showed; *taken at round 2 of Review but
-  never handed over* for a review's), drawn at that step, its badge *Your note
-  was taken here and never reached its reader*; *unconfirmed*, *handed to the executor in Execute, at its next step,
-  which never confirmed reading it (its session may hold it)*, on the launch's
-  bar, the bar's badge saying each end at its step; and an end a newer build
+  hook's serve its harness gave up or its job's whole session proves it never
+  took; *taken at round 2 of Review but never handed over* for a review's take
+  whose answer was lost), drawn at that step, its badge *Your note was taken
+  here and never reached its reader*; *unconfirmed*,
+  *handed to the executor in Execute, at its next step, which never confirmed
+  reading it (its session may hold it)*, on the launch's bar, the bar's badge
+  saying each end at its step; and an end a newer build
   names and this one does not, *this version of the dashboard cannot say what
   became of it*, drawn nowhere. *Pause* is the seat's
   (with *Also stop the current turn*), *Open task* its item — by the task's

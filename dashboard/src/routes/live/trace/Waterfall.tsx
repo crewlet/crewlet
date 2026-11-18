@@ -118,10 +118,10 @@ function outcomeOf(raw: unknown): SteerOutcome | "unknown" {
 
 /**
  * What the bar's badge says of each outcome that names a step: the note was
- * read there, taken there and never reached its reader (a hook's serve its
- * job's session never showed, or a review's take whose answer was lost), or
- * handed over there and never confirmed. An expired note names no step, so no
- * bar carries it.
+ * read there, taken there and never reached its reader (a review's take whose
+ * answer was lost, or a hook's serve its harness gave up or its job's whole
+ * session proves it never took), or handed over there and never confirmed. An
+ * expired note names no step, so no bar carries it.
  */
 const MARKED_AT: Record<Exclude<SteerOutcome, "expired">, string> = {
   delivered: "Your note was read here",
@@ -544,9 +544,11 @@ function readAt(m: SteerMark): string {
  * Where a missed note was taken, in words: at a round of a phase, for the
  * executor at a step of its own, or, for a step this build cannot name, by the
  * turn in that phase; and that its reader never had it. The executor's is said
- * as never reaching it, since a hook's serve was handed over and its job's
- * session never showed it; a round's and an unknown step's keep "never handed
- * over", a review's take whose answer was lost being one.
+ * as never reaching it: a hook's serve was answered, and its harness gave it
+ * up or its job's whole session proves it never took it; a serve its session
+ * was not shown to hold is unconfirmed ([handedTo]). A round's and an unknown
+ * step's keep "never handed over", a review's take whose answer was lost being
+ * one.
  */
 function takenAt(m: SteerMark): string {
   const phase = phaseOf(m);

@@ -580,13 +580,13 @@ describe("a person's note", () => {
 
   // EVERY END THE RECORD KNOWS, said as it is and drawn at its step: a note a
   // step took for a reader that never had it is MISSED there, said as never
-  // reaching its reader and, for a review's round, as never handed over; one handed to the
-  // executor that never confirmed it is UNCONFIRMED at that job, its session
-  // maybe holding it; one a later launch's brief told again is DELIVERED at
-  // that brief, said as told again after a step that never handed it over;
-  // and an outcome this build cannot name is said as that, drawn nowhere,
-  // never as expired, which said the turn finished before reading a note a
-  // newer step may have read. No end says more than its record does.
+  // reaching its reader and, for a review's round, as never handed over; one
+  // handed to the executor that never confirmed it is UNCONFIRMED at that job,
+  // its session maybe holding it; one a later launch's brief told again is
+  // DELIVERED at that brief, said as told again after a step that never handed
+  // it over; and an outcome this build cannot name is said as that, drawn
+  // nowhere, never as expired, which said the turn finished before reading a
+  // note a newer step may have read. No end says more than its record does.
   test("a missed, an unconfirmed, a retold and an unknown end are each said as what the record knows", async () => {
     const end = (note_id: string, ms: number, fields: Record<string, unknown>) =>
       event("agent_turn_steered", ms, { note_id, note: `note ${note_id}`, ...fields });
@@ -667,12 +667,12 @@ describe("a person's note", () => {
     );
   });
 
-  // A HOOK'S SERVE ITS JOB'S SESSION NEVER SHOWED IS MISSED AT ITS TOOL BATCH:
-  // the hook was handed the note, so it was handed over, and the model it was
-  // for never had it. The badge and the line say that it never reached its
-  // reader, never that it was not handed over, which said the hook's answer
-  // carried nothing.
-  test("a hook's serve its session never showed is said as never reaching its reader", async () => {
+  // A HOOK'S SERVE ITS JOB'S WHOLE SESSION PROVES IT NEVER TOOK IS MISSED AT
+  // ITS TOOL BATCH: the hook's answer carried the note, so it was handed over,
+  // and the model it was for never had it. The badge and the line say that it
+  // never reached its reader, never that it was not handed over, which said
+  // the hook's answer carried nothing.
+  test("a hook's serve its job's whole session proves it never took is said as never reaching its reader", async () => {
     const events = [
       ...PARKED,
       event("agent_turn_steered", 2_000, {
