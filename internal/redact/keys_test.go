@@ -2081,12 +2081,12 @@ func TestHalfALineIsNeverSettled(t *testing.T) {
 }
 
 // A BLOCK NO END CLOSES TAKES A PASSWORD'S KEY ONLY WITH ITS VALUE, and a key
-// a block takes names no value past it. Under `printf`'s pieces, the block
-// ends before `3 password:`, and the value on the END's line is redacted as
-// the password's. In a log's string, a block that takes a prompt and the
-// first line of a value run on across escaped breaks ends inside the value:
-// the key in its marker names nothing, the value's rest is the END's to read
-// back, and the key is one marker.
+// a block takes names no value past it. Where a key's pieces are quoted words
+// on one line, the block ends before the prompt below them, and the value on
+// the END's line is redacted as the password's. In a log's string, a block
+// that takes a prompt and the first line of a value run on across escaped
+// breaks ends inside the value: the key in its marker names nothing, the
+// value's rest is the END's to read back, and the key is one marker.
 //
 // Mutation: let a block no END closes take a key without its value
 // ([claims.shortOfValues]), and the first text is redacted otherwise; claim

@@ -49,8 +49,9 @@ type armourEnd struct {
 	further bool
 }
 
-// armourEndDefault is the probe's shape: `Password: "`, a piece of 56 bytes, an
-// RSA key's END ending the line, and a word on the line below.
+// armourEndDefault is the probe's shape: a password's key and a quote, a piece
+// of 56 bytes and an RSA key's END ending the line, and a word on the line
+// below.
 var armourEndDefault = armourEnd{
 	key: "Password", sep: ": ", quote: `"`, piece: 56, label: "RSA PRIVATE KEY",
 	word: "plainvalue", pairs: 1,

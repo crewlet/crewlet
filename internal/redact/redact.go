@@ -161,8 +161,12 @@
 // line that ends in a key's END, with a run longer than the lag straight after
 // its value's line, which one such key is enough for; many password's keys
 // between an armour and a run longer than the lag; or armours among long
-// tokens each with a password's key after it. None is a credential's format. A window decided early that read no claim otherwise decided what
-// the whole text does.
+// tokens each with a password's key after it. None is a credential's format.
+// Held below its own hold, a stream refuses more: a step that writes a key's
+// block waits on the claims too, so at a hold of 256 KiB it refuses some
+// texts that hold a value a few hundred KiB long beside a block; at its own
+// hold it refuses none of them. A window decided early that read no claim
+// otherwise decided what the whole text does.
 //
 // # A key's block beside a password
 //
@@ -176,51 +180,45 @@
 // them. A value read on a line below its key ([readValue]) has between the two
 // the wrapping's suffix on the key's line, its blank lines and the gutter of
 // the value's line, which the wrapping writes alike on every line and the rule
-// never replaces. Claimed as one stretch from the key to the value's end, a
-// key's piece in it was none on the key's line where the same piece on the
-// value's line, past the stretch, was one: under a key whose quote, a piece
-// and an END end its line, over a word and the same quote, piece and END, the
-// blocks ended the two lines unalike, the rule found the key line's suffix on
-// no line below, took the quote for the value and published the word, and a
-// second pass read the piece beside the key as a key's and redacted it. A
-// stream's reader claims each value so too, decided or read open
-// ([claimSource.valued]); a window decided early still checks a claim as the
-// one stretch from its key to its value's end ([keyStage.handed]), so it
-// refuses the texts it refused when a claim was that stretch.
+// never replaces. Claimed as one stretch, a key's piece in it is none on the
+// key's line where the same piece on the value's line, past the stretch, is
+// one, so the blocks end the two lines unalike, the rule reads another value
+// than the claims and publishes the value, and a second pass reads the piece
+// beside the key as a key's and redacts it. A stream's reader claims each
+// value so too, decided or read open ([claimSource.valued]); a window decided
+// early still checks a claim as the one stretch from its key to its value's
+// end ([keyStage.handed]).
 //
 // A KEY'S BLOCK IS WRITTEN APART FROM THE GUTTER of a password key's line it
 // holds ([claims.apart]). The rule reads a value below its key past the
 // stretch of the key's line the value's line spells too, its gutter
 // ([gutterLen]), and reads that line in the text the blocks leave. A block
 // that runs across the break before the key's line, or begins on it at or
-// before the gutter's end, wrote the gutter into its marker, and the key's
-// line then opened, to the rule, with whatever the block's first line had
-// before the block: under an echo's quote, a log's timestamps, a quote's `>`,
-// a table's cells or a gutter of base64 on every line, the wrapping's own word
-// was read as the value and the value after it published, and where that
-// value was a key's piece before an END, a second pass redacted it, so
-// redacting twice was not redacting once. The read says where on the key's
-// line the gutter ends ([aValue]), the claim carries it, and the block is
-// written as two markers around the line break and the gutter, or from past
-// the gutter where it begins on the key's line, unless the line it begins on
-// opens, before it, with text shaped as the gutter ([claims.opensAlike]):
-// written whole, the key's line opens so still, which is how a block read
-// under a log's timestamp on every line stays one marker. A key's line whose
-// value's line spells none of it has no gutter to write a block apart from,
-// and its block is written whole ([valueRead.gutterOf]): the rule then reads
-// the value past the opening of the block's first line where the value's
-// line opens alike, and the word the claims, reading the key's line as
-// written, take for the value is the wrapping's, and shown. So a gutter the
-// value's line repeats letter for letter is the wrapping's, and is shown,
-// though it be a run of base64, even a key's last run where the line below
-// its END repeats it.
+// before the gutter's end, writes the gutter into its marker, and the key's
+// line then opens, to the rule, with whatever the block's first line has
+// before the block: under a wrapping that writes a word on every line, the
+// rule reads that word as the value and publishes the value after it. So the
+// read says where on the key's line the gutter ends ([aValue]), the claim
+// carries it, and the block is written as two markers around the line break
+// and the gutter, or from past the gutter where it begins on the key's line,
+// unless the line it begins on opens, before it, with text shaped as the
+// gutter ([claims.opensAlike]): written whole, the key's line opens so still,
+// which is how a block under a log's timestamp on every line stays one
+// marker. A key's line whose value's line spells none of it has no gutter to
+// write a block apart from, and its block is written whole
+// ([valueRead.gutterOf]): the rule then reads the value past the opening of
+// the block's first line where the value's line opens alike, and the word the
+// claims, reading the key's line as written, take for the value is the
+// wrapping's, and shown. So a gutter the value's line repeats letter for
+// letter is the wrapping's, and is shown, though it be a run of base64, even a
+// key's last run where the line below its END repeats it.
 //
 // A BLOCK NO END CLOSES TAKES A PASSWORD'S KEY ONLY WITH ITS VALUE
 // ([claims.shortOfValues]). Ended by the lines it reads, a block read forward
-// from a BEGIN took a prompt and stopped inside its value's line, the key then
-// in its marker, naming nothing ([claims.take]), and the value below
-// published; it ends before such a key instead, at the key's line's last run
-// of base64 or before that line, whatever the value reads like. A block an END
+// from a BEGIN can take a prompt and stop inside its value's line, the key
+// then in its marker, naming nothing ([claims.take]), and the value below
+// shown; it ends before such a key instead, at the key's line's last run of
+// base64 or before that line, whatever the value reads like. A block an END
 // closes still takes a prompt with whatever its value is ([promptAt]), and a
 // block that takes the start of a value, one that runs on past the block
 // across escaped breaks, takes its key: a key a block takes names no value
@@ -285,8 +283,7 @@
 //   - the part of a value after an escaped break inside it when that part is
 //     punctuation alone (`pwd=abc\n!!`), which reads as the string's;
 //   - under a wrapping's suffix, a value whose line ends in a run of base64
-//     that an END on the next line reads back as the key's (`"Password:\n" +`
-//     over `"hunter2x9 <a key's piece>\n" +` over an END): the key's block
+//     that an END on the next line reads back as the key's: the key's block
 //     takes the run and the suffix, so the rule reads the value's line as
 //     ending in a marker and takes the wrapping's closing for the value;
 //   - a key's piece below a key's line that spells none of the piece's line,
@@ -298,8 +295,7 @@
 //     from reading it back; a second pass reads it as a key's and redacts it,
 //     and there redacting twice is not redacting once;
 //   - and a value below a key on a table's row that holds a key's END before
-//     the key (`| <a key's line> -----END RSA PRIVATE KEY----- pwd= |` over
-//     the value): the key's marker hides the row's opening from the key's
+//     the key: the key's marker hides the row's opening from the key's
 //     label, so the row's closing is read as the value; where the value is a
 //     key's piece before an END, a second pass reads it as a key's and redacts
 //     it, and there redacting twice is not redacting once.
@@ -2061,8 +2057,8 @@ func lineEndUnnamed(text string, from int) (int, bool) {
 	}
 }
 
-// gutterLen is how much of content — a trimmed line that may hold a password's
-// value — is the wrapping's gutter, and at where in prefix, the key's line
+// gutterLen is how much of content, a trimmed line that may hold a password's
+// value, is the wrapping's gutter, and at where in prefix, the key's line
 // before its key ([valueRead.gutter]), the stretch it spells ends: the longest
 // start of the line SHAPED LIKE the start of prefix ([gutterShapeAt]) that
 // ends where a word of both does, and after it the quote the key's line has.
@@ -4556,8 +4552,8 @@ func fragment(run string) bool {
 
 // claims is what the rules REPLACE in a text a key is read in, and what NAMES
 // what they replace: every token a rule matches, and a password's key and the
-// separator after it, and apart from them the value they name — as ranges of
-// the text in order, those that overlap made one — read the first time a run
+// separator after it, and apart from them the value they name, as ranges of
+// the text in order, those that overlap made one, read the first time a run
 // asks, since a text holding a key's armour seldom holds either. A line of a
 // key's body holds nothing that names ([wrapping.bodyLine]), and a piece of a
 // key nothing they replace ([claims.piece]).
@@ -4877,7 +4873,7 @@ func (c *claims) opensAlike(start, seg, gutterEnd int, known [][2]int) bool {
 // at or before start that no END closes, moved back to before the first
 // password's key in [start, end) whose value runs past end, and the blanks
 // before that key: A BLOCK TAKES A PASSWORD'S KEY ONLY WITH ITS VALUE (the
-// package doc's "A key's block and a password's gutter").
+// package doc's "A key's block beside a password").
 func (c *claims) shortOfValues(start, end int) int {
 	c.load()
 	c.asked(start, end+1)

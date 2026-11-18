@@ -199,8 +199,9 @@ func TestAStreamCutsABlockAsTheWholeTextDoesWhereverItsWindowsEnd(t *testing.T) 
 // of 1, 28 and 103 bytes, each redacted as far as Settled says, shows what
 // Secrets shows of the whole.
 //
-// Mutation: let [settle] hold no block for the line its cut is decided by,
-// and a shape here is shown cut as its key's line alone decides it.
+// Mutation: leave the claims in the order the rules read them, an AWS
+// secret's before the passwords ([claims.build]), and the shape with an AWS
+// secret's key after is shown otherwise.
 func TestAKeyLinesOpeningIsShownAsItSettlesAsTheWholeTextHasIt(t *testing.T) {
 	t.Parallel()
 	for _, c := range gutterShapes() {
