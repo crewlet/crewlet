@@ -1136,6 +1136,77 @@ func lostTakes(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids ..
 	return launch
 }
 
+// settleKind is one kind of settle a run's loop holds, for the stop window's
+// cases to run over each: a review's take ([runSteers.settleUnanswered]), and
+// a job's hook settle of a serve answered nothing or of a cancelled call
+// ([runSteers.settleHook]), whose own last-round mark is its loop's other half.
+type settleKind struct {
+	name string
+	// lose records a loss of each of ids on run-1 and answers its job.
+	lose func(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids ...string) string
+	// settle hands run-1's loop the loss of note id.
+	settle func(ctx context.Context, runs *runSteers, launch, id string)
+	// settled reports whether the loss of note id is settled on the record.
+	settled func(t *testing.T, store sandbox.PendingStore, id string) bool
+}
+
+// settleKinds is every kind of settle a run's loop holds.
+func settleKinds() []settleKind {
+	hook := func(name string, settle func(launch, id string) sandbox.HookSettle,
+		settled func(sandbox.RunNote) bool) settleKind {
+		return settleKind{name: name, lose: servedHooks,
+			settle: func(ctx context.Context, runs *runSteers, launch, id string) {
+				runs.settleHook(ctx, "run-1", settle(launch, id))
+			},
+			settled: func(t *testing.T, store sandbox.PendingStore, id string) bool {
+				return settled(noteOn(t, store, "run-1", id))
+			}}
+	}
+	return []settleKind{
+		{name: "a review's take", lose: lostTakes,
+			settle: func(ctx context.Context, runs *runSteers, _, id string) {
+				runs.settleUnanswered(ctx, "run-1", "take-"+id)
+			},
+			settled: func(t *testing.T, store sandbox.PendingStore, id string) bool {
+				read := readOn(t.Context(), store, "run-1", id)
+				return read != nil && read.Unanswered
+			}},
+		hook("a hook's serve answered nothing", func(launch, id string) sandbox.HookSettle {
+			return sandbox.HookSettle{Launch: launch, Unanswered: []string{"take-" + id}}
+		}, func(n sandbox.RunNote) bool { return n.Waiting() && len(n.Serves) == 0 }),
+		hook("a hook's call cancelled", func(launch, id string) sandbox.HookSettle {
+			return sandbox.HookSettle{Launch: launch, Cancelled: []sandbox.NoteCall{servedCall(id)}}
+		}, func(n sandbox.RunNote) bool {
+			return slices.ContainsFunc(n.Serves, func(h sandbox.HookServed) bool {
+				return h.Lost == sandbox.ServeCancelled
+			})
+		}),
+	}
+}
+
+// servedCall is the call a hook served note id by in [servedHooks].
+func servedCall(id string) sandbox.NoteCall {
+	return sandbox.NoteCall{Session: "mcp-session-1", ID: `"` + id + `"`}
+}
+
+// servedHooks is a working run-1 whose notes a hook's takes served to its job,
+// one take a note, each named after its note and answering the note's call
+// ([servedCall]). It answers the run's job.
+func servedHooks(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids ...string) string {
+	t.Helper()
+	launch := workingRun(t, store, runs, "run-1")
+	for _, id := range ids {
+		fileSealed(t, runs, "run-1", steer.Note{ID: id, Text: "the note " + id, By: "founder"})
+		call := servedCall(id)
+		if _, err := store.ServeHook(t.Context(), "run-1", sandbox.HookServe{IDs: []string{id}, Launch: launch,
+			Statuses: steerTakeStatuses, Serve: sandbox.HookServed{Take: "take-" + id,
+				Boundary: string(types.SteerBoundaryToolBatch), Call: &call}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return launch
+}
+
 // A SETTLE ASKS UNTIL ITS STORE ANSWERS, AND NO LONGER THAN ITS NODE. A settle a
 // clock gave up on would leave the record saying the run read notes its reader
 // was never handed, while the store that did not answer in time answers once it
@@ -1159,10 +1230,10 @@ func lostTakes(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids ..
 // Mutation: give the settle up at its patience, end it with the context of the
 // take that lost it, ask on past the node's stop, start a loop for every take,
 // say unsettled a round that met no error, sleep through the node's stop, make
-// no last attempt, leave a take joining the last round unasked, make the last
-// attempts on the stop's allowance or hold them to no window, or start a loop
-// once the teardown waited them out, and a case goes red — the panic one a
-// crash of the test binary, as it would end the node.
+// no last attempt or ask one twice (a hook settle's loop then never ends, so
+// the binary times out), leave a settle joining the last round unasked, make
+// the last attempts on the stop's allowance or hold them to no window, or start
+// a loop once the teardown waited them out, for any kind: a case goes red.
 func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 	t.Parallel()
 	t.Run("its store answering a minute after", func(t *testing.T) {
@@ -1185,90 +1256,114 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 			}
 		})
 	})
-	t.Run("its node stopping first", func(t *testing.T) {
-		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			store := sandbox.NewCoordStore(coordmem.NewFleet())
-			settles := &gatedSettles{PendingStore: store, unavailable: func() bool { return true }}
-			runs, _ := steersOver(t, steerRing, settles)
-			e := &Engine{}
-			runs.stopWith(e)
-			lostTakes(t, store, runs, "n-1")
-			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
-			time.Sleep(20 * time.Second)
-			synctest.Wait()
-			before, _ := settles.counts()
-			e.tearingDown()
-			runs.waitSettles()
-			if asked, _ := settles.counts(); asked != before+1 {
-				t.Errorf("the settle was asked %d times as its node stopped, want once more", asked-before)
-			}
-			time.Sleep(time.Minute)
-			synctest.Wait()
-			if asked, _ := settles.counts(); asked != before+1 {
-				t.Errorf("the settle was asked %d times after its last attempt", asked-before-1)
-			}
-			if read := readOn(t.Context(), store, "run-1", "n-1"); read == nil || read.Unanswered {
-				t.Errorf("the note is read %+v, want it read and unmarked: nothing settled it", read)
-			}
-		})
-	})
-	t.Run("its store back as its node stops, a take joining its last round", func(t *testing.T) {
-		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			store := sandbox.NewCoordStore(coordmem.NewFleet())
-			var back, joined atomic.Bool
-			var runs *runSteers
-			settles := &gatedSettles{PendingStore: store,
-				unavailable: func() bool { return !back.Load() },
-				// A SEGMENT THE TEARDOWN ENDED, handing off a take of its own
-				// while the loop's last round is asked.
-				answering: func() {
-					if joined.CompareAndSwap(false, true) {
-						runs.settleUnanswered(t.Context(), "run-1", "take-n-2")
-					}
-				}}
-			runs, _ = steersOver(t, steerRing, settles)
-			e := &Engine{}
-			runs.stopWith(e)
-			lostTakes(t, store, runs, "n-1", "n-2")
-			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
-			time.Sleep(10 * time.Second)
-			synctest.Wait()
-			// THE STORE IS BACK WHILE THE LOOP SLEEPS BETWEEN ROUNDS, and the
-			// node stops before the loop's next round.
-			back.Store(true)
-			e.tearingDown()
-			synctest.Wait()
-			for _, id := range []string{"n-1", "n-2"} {
-				if read := readOn(t.Context(), store, "run-1", id); read == nil || !read.Unanswered {
-					t.Errorf("note %s is read %+v as its node stops, want it marked by the settle's last attempt",
-						id, read)
+	for _, kind := range settleKinds() {
+		t.Run("its node stopping first, "+kind.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				store := sandbox.NewCoordStore(coordmem.NewFleet())
+				settles := &gatedSettles{PendingStore: store, unavailable: func() bool { return true }}
+				runs, _ := steersOver(t, steerRing, settles)
+				e := &Engine{}
+				runs.stopWith(e)
+				launch := kind.lose(t, store, runs, "n-1")
+				kind.settle(t.Context(), runs, launch, "n-1")
+				time.Sleep(20 * time.Second)
+				synctest.Wait()
+				before, _ := settles.counts()
+				e.tearingDown()
+				runs.waitSettles()
+				if asked, _ := settles.counts(); asked != before+1 {
+					t.Errorf("the settle was asked %d times as its node stopped, want once more", asked-before)
 				}
-			}
-			runs.waitSettles()
+				time.Sleep(time.Minute)
+				synctest.Wait()
+				if asked, _ := settles.counts(); asked != before+1 {
+					t.Errorf("the settle was asked %d times after its last attempt", asked-before-1)
+				}
+				if kind.settled(t, store, "n-1") {
+					t.Error("the note's loss is settled, want it as it was: nothing settled it")
+				}
+			})
 		})
-	})
-	t.Run("a take handed off once its node stopped", func(t *testing.T) {
-		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			store := sandbox.NewCoordStore(coordmem.NewFleet())
-			settles := &gatedSettles{PendingStore: store}
-			runs, _ := steersOver(t, steerRing, settles)
-			e := &Engine{}
-			runs.stopWith(e)
-			lostTakes(t, store, runs, "n-1")
-			e.tearingDown()
-			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
-			runs.waitSettles()
-			if asked, _ := settles.counts(); asked != 1 {
-				t.Errorf("a take handed off once its node stopped was asked %d times, want once", asked)
-			}
-			if read := readOn(t.Context(), store, "run-1", "n-1"); read == nil || !read.Unanswered {
-				t.Errorf("the note is read %+v, want it marked by the take's one attempt", read)
-			}
+		t.Run("its store back as its node stops, a settle joining its last round, "+kind.name,
+			func(t *testing.T) {
+				t.Parallel()
+				synctest.Test(t, func(t *testing.T) {
+					store := sandbox.NewCoordStore(coordmem.NewFleet())
+					var back, joined atomic.Bool
+					var runs *runSteers
+					var launch string
+					settles := &gatedSettles{PendingStore: store,
+						unavailable: func() bool { return !back.Load() },
+						// A SEGMENT OR AN INBOX THE TEARDOWN ENDED, handing off
+						// a settle of its own while the loop's last round is
+						// asked.
+						answering: func() {
+							if joined.CompareAndSwap(false, true) {
+								kind.settle(t.Context(), runs, launch, "n-2")
+							}
+						}}
+					runs, _ = steersOver(t, steerRing, settles)
+					e := &Engine{}
+					runs.stopWith(e)
+					launch = kind.lose(t, store, runs, "n-1", "n-2")
+					kind.settle(t.Context(), runs, launch, "n-1")
+					time.Sleep(10 * time.Second)
+					synctest.Wait()
+					// THE STORE IS BACK WHILE THE LOOP SLEEPS BETWEEN ROUNDS,
+					// and the node stops before the loop's next round.
+					back.Store(true)
+					e.tearingDown()
+					synctest.Wait()
+					for _, id := range []string{"n-1", "n-2"} {
+						if !kind.settled(t, store, id) {
+							t.Errorf("note %s is unsettled as its node stops, want it settled by the "+
+								"settle's last attempt", id)
+						}
+					}
+					runs.waitSettles()
+				})
+			})
+		t.Run("a settle handed off once its node stopped, "+kind.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				store := sandbox.NewCoordStore(coordmem.NewFleet())
+				settles := &gatedSettles{PendingStore: store}
+				runs, _ := steersOver(t, steerRing, settles)
+				e := &Engine{}
+				runs.stopWith(e)
+				launch := kind.lose(t, store, runs, "n-1")
+				e.tearingDown()
+				kind.settle(t.Context(), runs, launch, "n-1")
+				runs.waitSettles()
+				if asked, _ := settles.counts(); asked != 1 {
+					t.Errorf("a settle handed off once its node stopped was asked %d times, want once", asked)
+				}
+				if !kind.settled(t, store, "n-1") {
+					t.Error("the note's loss is unsettled, want it settled by the settle's one attempt")
+				}
+			})
 		})
-	})
+		t.Run("a settle asked once its node waited its settles out, "+kind.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				store := sandbox.NewCoordStore(coordmem.NewFleet())
+				settles := &gatedSettles{PendingStore: store}
+				runs, _ := steersOver(t, steerRing, settles)
+				e := &Engine{}
+				runs.stopWith(e)
+				launch := kind.lose(t, store, runs, "n-1")
+				e.tearingDown()
+				runs.waitSettles()
+				kind.settle(t.Context(), runs, launch, "n-1")
+				synctest.Wait()
+				if asked, _ := settles.counts(); asked != 0 {
+					t.Errorf("a settle asked once its node waited its settles out was asked %d times, want none",
+						asked)
+				}
+			})
+		})
+	}
 	t.Run("its last attempts in a window of their own, beside the stop's allowance", func(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
@@ -1310,24 +1405,6 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 			if deadline, ok := step.Deadline(); !ok || time.Until(deadline) != allowance {
 				t.Errorf("a give-back after the settles is handed %v, want the whole allowance of %v: the "+
 					"settles spent the rest", time.Until(deadline), allowance)
-			}
-		})
-	})
-	t.Run("a take lost once its node waited its settles out", func(t *testing.T) {
-		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			store := sandbox.NewCoordStore(coordmem.NewFleet())
-			settles := &gatedSettles{PendingStore: store}
-			runs, _ := steersOver(t, steerRing, settles)
-			e := &Engine{}
-			runs.stopWith(e)
-			lostTakes(t, store, runs, "n-1")
-			e.tearingDown()
-			runs.waitSettles()
-			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
-			synctest.Wait()
-			if asked, _ := settles.counts(); asked != 0 {
-				t.Errorf("a take lost once its node waited its settles out was asked %d times, want none", asked)
 			}
 		})
 	})
