@@ -5792,6 +5792,7 @@ a tool arrives in it with the control that sends it. The controls
 | Add a path owner · Edit · Remove (an owner) | A repository's Settings tab | `code_update_repo{repo, path_owners: {add?, remove?}}`: an owner's globs given and taken by name; Remove takes every glob it holds, after a confirmation |
 | Protect a branch · Edit · Remove (a rule) | A repository's Settings tab, and Protect on the row of a branch no rule names | `code_protect_branch{repo, pattern, …}`: only the fields moved, every list of its gate item by item and its landing a field at a time; `remove` after a confirmation |
 | New branch · Delete (a branch) | A repository's Branches tab | `code_create_branch{repo, branch, at}` · `code_delete_branch{repo, branch, expected_head}` after a confirmation, at the head the row shows |
+| New tag · Delete (a tag) · Tag | A repository's Branches tab, its Tags view; Tag on a commit's page | `code_create_tag{repo, tag, at, message?}`, annotated where a message is given · `code_delete_tag{repo, tag, expected_target}` after a confirmation, at the value the row shows |
 | Edit · Delete file · New file · Add a file | A repository's Code tab, on a branch: a file's card and a directory's bar; Add a file on an empty repository | `code_commit_files{repo, branch, expected_head, message, files}`: one commit of one file (`put` or `delete`) at the commit the page read; an empty repository's first file sends no `expected_head`, a root commit that makes its default branch |
 | Revert · Cherry-pick | A commit's page | `code_revert` / `code_cherry_pick{repo, branch, expected_head, commit, message?}`: one new commit on the branch chosen |
 | Rebase · Take out of the queue · Revert | A change's page, beside its merge controls; Take out on a row of Gitlet › Queue | `code_rebase_change{change, expected_head}` · `code_dequeue_change{change}` · `code_revert_change{change, merge?}`, each after a confirmation |
@@ -9081,7 +9082,13 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   (`default_branch`), and it is let go by making another branch the default
   on Settings first. Delete is held with the engine's own sentence where the
   rules refuse it. Its tags are listed newest first by their own date,
-  each opening its code at its whole ref. A new branch takes
+  each opening its code at its whole ref, with **New tag**
+  (`code_create_tag`: a name, where it points, the default branch when left
+  empty, and a message that makes it annotated) and each tag's **Delete**
+  (`code_delete_tag`), confirmed and sent with the value the row shows as
+  `expected_target`; the confirmation reads the tag in detail and holds its
+  delete with the engine's own sentence where a protection rule keeps it. A
+  new tag takes write and a delete maintain, held as a branch's are. A new branch takes
   write and a delete maintain, and
   a repository that is archived, deleted, importing or a pull mirror takes
   neither, each held with that sentence; New branch is held only for a
@@ -9222,7 +9229,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   the person chooses from the repository's branches, with the head that
   listing showed as `expected_head` and git's own message unless one is
   typed; the dialog says that nothing is rewritten and that a conflict
-  commits nothing. Both are held as a commit to a branch is.
+  commits nothing. Both are held as a commit to a branch is. **Tag** tags
+  this commit (`code_create_tag`), held as a new tag is.
 - **A comparison**, `#/gitlet/repos/{name}/compare`, compares `head=` with
   `base=` (none is the default branch), each named as a revision on the
   repository's page; with no head it asks for one. `code_compare` resolves

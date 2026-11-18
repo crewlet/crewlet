@@ -61,6 +61,7 @@ import { moverOf } from "../movers.ts";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
 import { BranchChip, CheckRollupMark, Face, useWhoName } from "../ui.tsx";
 import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
+import { DeleteTagButton, NewTagButton } from "./TagWrites.tsx";
 import { useCommitMarks } from "./marks.ts";
 import { ProtectButton } from "./Protect.tsx";
 import "~/styles/gitlet.css";
@@ -124,7 +125,7 @@ export function Branches({ repo }: { repo: CodeRepoDetail }) {
         />
         <span className="spacer" />
         {view !== "tags" && <FindBranch q={q} onQ={setQ} />}
-        <NewBranchButton repo={repo} />
+        {view === "tags" ? <NewTagButton repo={repo} /> : <NewBranchButton repo={repo} />}
       </PageToolbar>
       <div className="code-refs-boxes">
         {view === "tags" ? (
@@ -976,7 +977,7 @@ function TagDate({ tag, now }: { tag: CodeTagRow; now: number }) {
   return <span title={TAG_UNDATED_TITLE}>{TAG_UNDATED}</span>;
 }
 
-/** One tag: its name opening its files at its whole ref, the commit it names and when, and its controls. */
+/** One tag: its name opening its files at its whole ref, the commit it names and when, and its controls, Delete among them. */
 function TagRow({
   repo,
   tag,
@@ -1047,6 +1048,7 @@ function TagRow({
           >
             Compare
           </ButtonLink>
+          <DeleteTagButton repo={repo} tag={tag} />
         </span>
       </td>
     </tr>

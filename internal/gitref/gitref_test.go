@@ -185,6 +185,46 @@ func TestValidBranchAgreesWithGitBranchRules(t *testing.T) {
 	}
 }
 
+// TestValidTagAgreesWithGitTag holds ValidTag to `git tag` itself, which names
+// its own rule (no check-ref-format mode reads a tag): a refused name dies 128.
+//
+// Mutation: drop the HEAD or the leading '-' clause, red.
+func TestValidTagAgreesWithGitTag(t *testing.T) {
+	c := gittest.NewClient(t)
+	dir := c.Init(t)
+	c.Commit(t, dir, map[string]string{"a": "a\n"}, "one")
+	for _, tc := range []struct {
+		tag       string
+		git, ours bool
+		why       string
+	}{
+		{"v1.2.0", true, true, ""},
+		{"release/2026-11", true, true, ""},
+		{"x/HEAD", true, true, ""},
+		{"ünïcode", true, true, ""},
+		{"HEAD", false, false, ""},
+		{"-v1", false, false, ""},
+		{"v1..2", false, false, ""},
+		{"v1.lock", false, false, ""},
+		{"v 1", false, false, ""},
+		{"v1^", false, false, ""},
+		{"v1/", false, false, ""},
+		{"", false, false, ""},
+		{"@", true, false, "@ alone is HEAD in every revision expression"},
+	} {
+		if (tc.why != "") != (tc.git != tc.ours) {
+			t.Errorf("%q: git %v, ours %v, why %q: a row says why exactly when the two differ", tc.tag, tc.git, tc.ours, tc.why)
+		}
+		_, stderr, err := c.Try(t, dir, nil, "tag", "--", tc.tag)
+		if got := gitVerdict(t, tc.tag, err, stderr, 128); got != tc.git {
+			t.Errorf("git tag %q is %v, the table says %v", tc.tag, got, tc.git)
+		}
+		if got := gitref.ValidTag(tc.tag); got != tc.ours {
+			t.Errorf("ValidTag(%q) = %v, want %v (git: %v; %s)", tc.tag, got, tc.ours, tc.git, tc.why)
+		}
+	}
+}
+
 // THE TWO BRANCHES UNDER seats THAT ARE NOBODY'S are seats itself and one
 // component below it — the root and one seat's namespace, as branches — and
 // nothing else: a branch inside a namespace is the seat's own, and a name that

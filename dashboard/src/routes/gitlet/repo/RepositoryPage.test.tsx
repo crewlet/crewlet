@@ -2646,6 +2646,8 @@ const MAINTAINER = {
     "code_protect_branch",
     "code_create_branch",
     "code_delete_branch",
+    "code_create_tag",
+    "code_delete_tag",
     "code_commit_files",
     "code_update_repo",
     "code_purge_unreachable",
@@ -2759,6 +2761,95 @@ test("a branch is deleted at the head its row showed, after a confirmation", asy
   expect(acted[0]).toEqual({
     tool: "code_delete_branch",
     args: { repo: "web", branch: "feature", expected_head: OTHER },
+  });
+});
+
+// A TAG IS MADE AT A REVISION, the default branch when none is typed, and is
+// annotated only where a message is given. Mutation: send an empty message, or
+// send with no name, and this fails.
+test("a tag is made from the Tags view, annotated where a message is given", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?tab=branches&view=tags", "web", MAINTAINER);
+
+  const add = await screen.findByRole("button", { name: "New tag" });
+  await waitFor(() => expect(add.getAttribute("title")).toBeNull());
+  expect(screen.queryByRole("button", { name: "New branch" })).toBeNull();
+  fireEvent.click(add);
+  const dialog = await screen.findByRole("dialog", { name: "New tag of web" });
+  const create = within(dialog).getByRole("button", { name: "Create tag" });
+  fireEvent.click(create);
+  expect(acted).toHaveLength(0);
+  fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: "v4" } });
+  fireEvent.click(create);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_create_tag",
+    args: { repo: "web", tag: "v4", at: "main" },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "New tag" }));
+  const again = await screen.findByRole("dialog", { name: "New tag of web" });
+  fireEvent.change(within(again).getByLabelText(/^Name/), { target: { value: "v5" } });
+  fireEvent.change(within(again).getByLabelText(/^Points at/), { target: { value: "feature" } });
+  fireEvent.change(within(again).getByLabelText(/^Message/), { target: { value: "Five" } });
+  fireEvent.click(within(again).getByRole("button", { name: "Create tag" }));
+  await waitFor(() => expect(acted).toHaveLength(2));
+  expect(acted[1]).toEqual({
+    tool: "code_create_tag",
+    args: { repo: "web", tag: "v5", at: "feature", message: "Five" },
+  });
+});
+
+// A TAG IS DELETED AT THE VALUE ITS ROW SHOWS (an annotated tag's own object),
+// and a tag a rule keeps is held in the confirmation with the engine's own
+// sentence. Mutation: send the peeled commit, or skip the detail read, and
+// this fails.
+test("a tag is deleted at the value its row shows, held where a rule keeps it", async () => {
+  const acted: Acted[] = [];
+  const kept = "refs/tags/v3 is protected: the rule refs/tags/v* allows no delete";
+  stubListing(
+    (p) =>
+      json({
+        refs_detail:
+          p.get("prefix") === "refs/tags/"
+            ? [
+                { ref: "refs/tags/v2", oid: OTHER, position: POSITION, may_delete: true },
+                {
+                  ref: "refs/tags/v3",
+                  oid: HEAD,
+                  position: POSITION,
+                  delete_refusal: "protected_delete",
+                  delete_detail: kept,
+                },
+              ].filter((r) => r.ref.endsWith(p.get("contains") ?? ""))
+            : [],
+        position: POSITION,
+        level: "session",
+      }),
+    detail({ managed_by: "tools" }),
+    acted,
+  );
+  mount("#/gitlet/repos/web?tab=branches&view=tags", "web", MAINTAINER);
+
+  const v3 = await screen.findByRole("button", { name: "Delete the tag v3" });
+  await waitFor(() => expect(v3.getAttribute("title")).toBeNull());
+  fireEvent.click(v3);
+  const keptDialog = await screen.findByRole("dialog", { name: "Delete the tag v3?" });
+  const held = within(keptDialog).getByRole("button", { name: "Delete tag" });
+  await waitFor(() => expect(held.getAttribute("title")).toBe(kept));
+  fireEvent.click(held);
+  fireEvent.click(within(keptDialog).getByRole("button", { name: "Keep it" }));
+  expect(acted).toHaveLength(0);
+
+  fireEvent.click(screen.getByRole("button", { name: "Delete the tag v2" }));
+  const dialog = await screen.findByRole("dialog", { name: "Delete the tag v2?" });
+  const send = within(dialog).getByRole("button", { name: "Delete tag" });
+  await waitFor(() => expect(send.getAttribute("title")).toBeNull());
+  fireEvent.click(send);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_delete_tag",
+    args: { repo: "web", tag: "v2", expected_target: OTHER },
   });
 });
 
