@@ -52,9 +52,9 @@ func unansweredRig(t *testing.T, with func(*CoordinatorOptions)) (*coordRig, *un
 // the same coordinator, with the write arm picks armed just before, and then
 // breaks, as a review's send-back that fails; then it runs the retries that
 // owed, as the frame's return asks for them. It answers the rig, the job
-// before, the relaunch's error and whom Recorded told.
+// before, whom Recorded told and the relaunch's error.
 func sendBack(t *testing.T, arm func(*unansweredRuns) *atomic.Bool) (rig *coordRig, before PendingRun,
-	launchErr error, recorded string) {
+	recorded string, launchErr error) {
 	t.Helper()
 	var runs *unansweredRuns
 	rig, runs = unansweredRig(t, func(o *CoordinatorOptions) {
@@ -72,7 +72,7 @@ func sendBack(t *testing.T, arm func(*unansweredRuns) *atomic.Bool) (rig *coordR
 	payload, ev := rig.completion("t1")
 	_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
 	rig.fireRetries()
-	return rig, before, launchErr, recorded
+	return rig, before, recorded, launchErr
 }
 
 // A LAUNCH THAT WROTE ITS ROW AND OPENED NO LOG ENDS ITS RUN. The row names the
@@ -86,7 +86,7 @@ func TestALaunchThatWroteItsRowAndOpenedNoLogEndsItsRun(t *testing.T) {
 	t.Parallel()
 	t.Run("a send-back", func(t *testing.T) {
 		t.Parallel()
-		rig, before, launchErr, recorded := sendBack(t, func(r *unansweredRuns) *atomic.Bool { return &r.log })
+		rig, before, recorded, launchErr := sendBack(t, func(r *unansweredRuns) *atomic.Bool { return &r.log })
 		unopened, ok := errors.AsType[*UnopenedLaunchError](launchErr)
 		if !ok {
 			t.Fatalf("the relaunch = %v, want it naming the job its row may hold", launchErr)
@@ -138,7 +138,7 @@ func TestALaunchThatWroteItsRowAndOpenedNoLogEndsItsRun(t *testing.T) {
 // and the claimed job's row is ended.
 func TestALaunchWhoseResetNeverLandedLeavesTheClaimToItsHandBack(t *testing.T) {
 	t.Parallel()
-	rig, before, launchErr, recorded := sendBack(t, func(r *unansweredRuns) *atomic.Bool { return &r.row })
+	rig, before, recorded, launchErr := sendBack(t, func(r *unansweredRuns) *atomic.Bool { return &r.row })
 	if _, ok := errors.AsType[*UnopenedLaunchError](launchErr); !ok || !errors.Is(launchErr, errUnanswered) {
 		t.Fatalf("the relaunch = %v, want the store's error naming the job its row may hold", launchErr)
 	}
