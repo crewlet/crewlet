@@ -324,6 +324,25 @@ func TestAViewedDigestIsKeyedByItsRepository(t *testing.T) {
 	}
 }
 
+// A VIEWED DIGEST IS THE ONE THE DASHBOARD COMPUTES: the vector routes/gitlet/change/viewed.test.ts
+// holds, so the engine's digest and the screen's stay one reading.
+func TestAViewedDigestIsTheOneTheDashboardComputes(t *testing.T) {
+	t.Parallel()
+	key := gitlet.ViewedKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+	const path = "internal/render/page.go"
+	if got := key.PathDigest(path); got != "af0f83b2429025ab636e20b293f5f898d3b3c10ab93d594412234f460285ebae" {
+		t.Errorf("PathDigest(%q) = %s", path, got)
+	}
+	if got := key.FileDigest(path, "3b18e512dba79e4c8300dd08aeb37f8e728b8dad", "100644"); got !=
+		"558c14cd8105c9319ef44064c0d064f71c7d4e7fb8d2f7a57304fe52cffbed4c" {
+		t.Errorf("FileDigest(%q) = %s", path, got)
+	}
+	if got := key.FileDigest("web/src/legacy.ts", "", ""); got !=
+		"24f4e4b25a25d96127370b75a3f9e2a89dc52cf0bb56c2febb2f500512635940" {
+		t.Errorf("a deletion's FileDigest = %s", got)
+	}
+}
+
 // A VIEWED MARK IS DECIDED WHERE THE REPOSITORY IS CURRENT: a node holding a record back on web's
 // repository declines founder's mark of web's files, ErrNotServing for ReasonDeferred, with nothing
 // appended, whether or not web holds a key; one held back on another repository leaves it landing,
