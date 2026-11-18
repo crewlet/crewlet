@@ -99,6 +99,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AJobItsCapEndedIsRecordedOnceForItsOwnJob", testAJobItsCapEndedIsRecordedOnceForItsOwnJob},
 		{"AJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands", testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands},
 		{"AJobsHarnessEndRidesEveryWriteOfItsRecord", testAJobsHarnessEndRidesEveryWriteOfItsRecord},
+		{"AReleaseRecordsTheHarnessEndByTheRecordsRule", testAReleaseRecordsTheHarnessEndByTheRecordsRule},
 		{"AJobsMeasureIsItsOwnOrCarriedAlongItsCopy", testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy},
 		{"AMeasureLandsWhereTheEndIsAlreadyRecorded", testAMeasureLandsWhereTheEndIsAlreadyRecorded},
 		{"AJobsCountIsItsOwnReadsAndNeverCarried", testAJobsCountIsItsOwnReadsAndNeverCarried},
@@ -589,6 +590,33 @@ func testAJobsHarnessEndRidesEveryWriteOfItsRecord(t *testing.T, s sandbox.Pendi
 	mustBeginLaunch(t, s, run(turn))
 	if got := mustGet(t, s, turn).Launch.HarnessEnd; got != "" {
 		t.Errorf("the next launch's job reads %q, the job before's end, want nothing said", got)
+	}
+}
+
+// A RELEASE RECORDS HOW THE JOB'S HARNESS ENDED BY THE RECORD'S OWN RULE, in the
+// write that returns the row to running ([sandbox.Release.HarnessEnd]): an end
+// over nothing is recorded, a cut-off end over an own run too, and an own run
+// over a recorded cut-off leaves the cut-off standing.
+//
+// Mutation: write the release's end over the record's whenever it carries one,
+// and the cut-off is lost.
+func testAReleaseRecordsTheHarnessEndByTheRecordsRule(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-released-end"
+	mustLaunched(t, s, run(turn))
+	for _, step := range []struct{ carries, want sandbox.HarnessEnd }{
+		{sandbox.HarnessEndOwnRun, sandbox.HarnessEndOwnRun},
+		{sandbox.HarnessEndCutOff, sandbox.HarnessEndCutOff},
+		{sandbox.HarnessEndOwnRun, sandbox.HarnessEndCutOff},
+	} {
+		release := releaseOf(mustClaim(t, s, turn))
+		release.HarnessEnd = step.carries
+		if released, err := s.ReleaseClaim(ctx, turn, release); err != nil || !released {
+			t.Fatalf("a release carrying %q = %v, %v", step.carries, released, err)
+		}
+		if got := mustGet(t, s, turn).Launch.HarnessEnd; got != step.want {
+			t.Fatalf("a release carrying %q left the record saying %q, want %q", step.carries, got, step.want)
+		}
 	}
 }
 

@@ -73,14 +73,16 @@ func watchConfirmed(coordinator *Coordinator) *confirmedSpy {
 }
 
 // verdictStore is a run store whose verdicts on a job's hooks' serves
-// ([PendingStore.SettleHook]) go unanswered while silent, land with their
-// answer lost while losing, and answer only after slow; RowCrossing is
-// crossing where set. Every other call is the store beneath it.
+// ([PendingStore.SettleHook]) go unanswered while silent and for the first
+// refusals, land with their answer lost while losing, and answer only after
+// slow; RowCrossing is crossing where set. Every other call is the store
+// beneath it.
 type verdictStore struct {
 	PendingStore
 	mu       sync.Mutex
 	silent   bool
 	losing   bool
+	refusals int
 	slow     time.Duration
 	crossing time.Duration
 }
@@ -88,6 +90,10 @@ type verdictStore struct {
 func (s *verdictStore) SettleHook(ctx context.Context, turnID string, settle HookSettle) ([]RunNote, error) {
 	s.mu.Lock()
 	silent, losing, slow := s.silent, s.losing, s.slow
+	if s.refusals > 0 {
+		s.refusals--
+		silent = true
+	}
 	s.mu.Unlock()
 	if slow > 0 {
 		wait := time.NewTimer(slow) //fixedwait:simulated a store slow to answer the verdict, on the case's bubble clock
@@ -245,11 +251,12 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 
 // EVERY READ M1 RUNS IN PUBLISHES WHAT ITS JOB'S HOOKS READ: a collection's, a
 // stop's and a loss's read each hand the engine the notes the job's session
-// confirmed; and a verdict that landed with its answer lost hands the read
-// back, and the read made again, asking nothing, publishes the note once.
+// confirmed, never an item of the store's; and a verdict that landed with its
+// answer lost hands the read back, and the read made again, asking nothing,
+// publishes the note once.
 //
-// Mutation: publish at a collection alone, or only off the verdict's answer,
-// and a case goes red.
+// Mutation: publish at a collection alone, only off the verdict's answer, or
+// items too, and a case goes red.
 func TestEveryReadM1RunsInPublishesWhatItsJobsHooksRead(t *testing.T) {
 	t.Parallel()
 	for name, read := range map[string]func(*coordRig) error{
@@ -282,6 +289,27 @@ func TestEveryReadM1RunsInPublishesWhatItsJobsHooksRead(t *testing.T) {
 			}
 		})
 	}
+	t.Run("an item read off a serve", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		spy := watchConfirmed(rig.coordinator)
+		run := rig.launch("t1")
+		run.Harness = ClaudeCodeHarness
+		served := func(id string) RunNote {
+			return RunNote{ID: id, Read: &NoteRead{Launch: run.LaunchID, Take: "take-" + id},
+				Serves: []HookServed{{Take: "take-" + id, Launch: run.LaunchID,
+					Boundary: string(types.SteerBoundaryToolBatch)}}}
+		}
+		item := served("item")
+		item.For = run.LaunchID
+		run.Steer.Notes = []RunNote{served("n1"), item}
+		if err := rig.coordinator.settleHookReceipts(t.Context(), run, HookReceipts{}, BoxReadCollect); err != nil {
+			t.Fatalf("the publish: %v", err)
+		}
+		if got := spy.ids(); !slices.Equal(got, []string{"n1"}) {
+			t.Errorf("published %v, want the person's note alone, never the store's item", got)
+		}
+	})
 	t.Run("a verdict landed with its answer lost", func(t *testing.T) {
 		t.Parallel()
 		rig := newCoordRig(t)
@@ -736,5 +764,27 @@ func TestARemoteLossesVerdictSilenceKeepsItsEndingUntilItsHostIsGivenUp(t *testi
 	}
 	if !slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {
 		t.Error("the loss given up did not reach its reclaim")
+	}
+}
+
+// A VERDICT THE STORE REFUSES ONCE IS ASKED AGAIN WITHIN ITS ROOM: a refusal is
+// no silence while the room lasts, so the second attempt lands the verdict and
+// the read goes on, never handed back.
+//
+// Mutation: make one attempt, and the read is handed back.
+func TestAVerdictTheStoreRefusesOnceIsAskedAgainWithinItsRoom(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	launched := rig.launch("t1")
+	serveNote(t, rig.pending, launched.LaunchID, "n1", types.SteerBoundaryToolBatch)
+	rig.runner.MainThread = sessionShows("take-n1").read
+	rig.runner.Finish(wholeAccount())
+	rig.coordinator.pending = &verdictStore{PendingStore: rig.pending, refusals: 1}
+	rig.coordinator.verdictWait, rig.coordinator.verdictRetry = time.Minute, 5*time.Millisecond
+	if _, _, err := rig.coordinator.readBox(t.Context(), rig.get("t1"), BoxReadCollect); err != nil {
+		t.Fatalf("a verdict refused once = %v, want it asked again and landed", err)
+	}
+	if read := readOf(t, rig, "n1"); read == nil {
+		t.Fatal("the verdict asked again did not land")
 	}
 }
