@@ -158,7 +158,7 @@ func TestAPermissionRequestIsTheEnginesDecision(t *testing.T) {
 	}
 	if !strings.Contains(d.Question, "Origin Rules: Edit") || !strings.Contains(d.Question, "example.com") ||
 		!strings.Contains(d.Options[0].Label, "expires in 2 hours") ||
-		!strings.Contains(d.Options[0].Detail, "sign in again") {
+		!strings.Contains(trk.patched[0].Comment.Body, "sign in again") {
 		t.Errorf("decision words = %+v, want the builder's name, the zone, the hours and the step-up", d)
 	}
 	if err := d.ValidateRecommendedAt(""); err != nil {
@@ -176,8 +176,8 @@ func TestAPermissionTheProvisionerLacksIsAskedNamingWhatToAdd(t *testing.T) {
 	if got.Failed || len(trk.patched) != 1 {
 		t.Fatalf("result = %+v, want the request posted", got)
 	}
-	if d := trk.patched[0].Comment.Decision; !strings.Contains(d.Options[0].Detail, "must first give") {
-		t.Errorf("the option does not say what the provisioner needs: %+v", d.Options[0])
+	if body := trk.patched[0].Comment.Body; !strings.Contains(body, "must first give") {
+		t.Errorf("the ask %q does not say what the provisioner needs", body)
 	}
 }
 
@@ -249,9 +249,10 @@ func TestAOneChangePermissionIsAskedForItsTargetAlone(t *testing.T) {
 	if !strings.Contains(d.Question, "for one change to user-uploads") || d.Rationale != why {
 		t.Errorf("question %q and rationale %q, want the target asked and the agent's change", d.Question, d.Rationale)
 	}
-	if !strings.Contains(d.Options[0].Detail, "lifecycle rules, which can delete objects") ||
+	if !strings.Contains(trk.patched[0].Comment.Body, "lifecycle rules, which can delete objects") ||
 		!strings.Contains(d.Options[0].Label, "expires in 1 hour)") {
-		t.Errorf("the grant option %+v does not say what else it allows for its hour", d.Options[0])
+		t.Errorf("the ask %q with option %+v does not say what else it allows for its hour",
+			trk.patched[0].Comment.Body, d.Options[0])
 	}
 	for name, c := range map[string]struct {
 		args map[string]any
@@ -269,6 +270,43 @@ func TestAOneChangePermissionIsAskedForItsTargetAlone(t *testing.T) {
 				t.Errorf("result %q (filed %d), want a refusal saying %q", got.Output, len(desk.filed), c.says)
 			}
 		})
+	}
+}
+
+// A GRANT IS ASKED WHATEVER ITS NOTE, SCOPE AND TARGET: what applies to the
+// request as a whole rides the body, never an option's detail, and a question
+// too long to name everything names less. Mutation: put the request-wide
+// sentences back in each option's detail and the request is refused.
+func TestAGrantIsAskedWhateverItsNoteScopeAndTarget(t *testing.T) {
+	t.Parallel()
+	trk, desk := newFakeTracker(), oneChangeDesk()
+	note := strings.Repeat("It also changes a bucket's settings. ", 12)
+	desk.opts.Grants[len(desk.opts.Grants)-1].Note = note
+	var scope []any
+	for i := range 12 {
+		zone := fmt.Sprintf("zone-%02d.%s.example.com", i, strings.Repeat("z", 40))
+		desk.opts.GrantScope = append(desk.opts.GrantScope, zone)
+		scope = append(scope, zone)
+	}
+	target := "b" + strings.Repeat("x", 254)
+	got := requestOf(t, trk, desk, map[string]any{"permission": "Bucket Write", "scope": scope,
+		"target": target, "hours": 4, "why": strings.Repeat("w", builtin.MaxAccessReasonBytes)})
+	if got.Failed || len(trk.patched) != 1 {
+		t.Fatalf("the request was not asked: %s", got.Output)
+	}
+	c := trk.patched[0].Comment
+	for _, says := range []string{note, target, scope[11].(string), "sign in again"} {
+		if !strings.Contains(c.Body, strings.TrimSpace(says)) {
+			t.Errorf("the ask's body does not say %q", says)
+		}
+	}
+	for _, o := range c.Decision.Options {
+		if strings.Contains(o.Detail, "bucket's settings") {
+			t.Errorf("option %s carries the request's note: %q", o.ID, o.Detail)
+		}
+	}
+	if err := c.Decision.ValidateRecommendedAt(""); err != nil {
+		t.Errorf("the decision is not one an agent may ask: %v", err)
 	}
 }
 

@@ -479,6 +479,18 @@ func (e Evidence) validate(field string) error {
 	return Join(found)
 }
 
+// FittingQuestion is the first phrasing within [MaxQuestion], else the last: a
+// writer composing a question from names it does not bound lists phrasings
+// most specific first, ending with one of bounded words.
+func FittingQuestion(phrasings ...string) string {
+	for _, q := range phrasings {
+		if len(q) <= MaxQuestion {
+			return q
+		}
+	}
+	return phrasings[len(phrasings)-1]
+}
+
 // CheckText refuses an empty required value and one over its cap, in bytes,
 // the unit every cap here counts in. Exported for the writers that hold a
 // field of their own beside a decision (a run's ask holds its context), so
