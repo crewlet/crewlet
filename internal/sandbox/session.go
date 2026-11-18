@@ -185,6 +185,13 @@ type SessionKeep interface {
 	// Policy says so ([Coordinator.capturing]).
 	Keeps() bool
 
+	// SaveInterval is the shortest time between saves of a running job's
+	// session, as the revision THIS NODE runs states it, read without a round
+	// trip: a cadence binds no other node, each node paces only the boxes it
+	// drives, and the poll that offers a save makes no round trip for it
+	// ([Coordinator.SaveRunning]).
+	SaveInterval() time.Duration
+
 	// SealHanded seals the secrets a launch handed its box, encoded
 	// ([HandedSecrets]), for the run's row, bound to its turn
 	// ([PendingStore.Handed]); OpenHanded opens what it sealed, or says why it

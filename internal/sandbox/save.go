@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -44,12 +45,67 @@ const (
 // is read again.
 const saveRetryCeiling = time.Hour
 
+// maxConcurrentSaves is how many saves a node takes at once, each from its
+// offer to its keep's end, for both its waiters together: it bounds the packs
+// and the scrubs (a pack of 1 to 20 MiB takes 0.04 to 0.46 s of a core) and
+// the spools in the node's temporary directory (four at the sealed bound are
+// about 132 MiB, within the operator's smallest 256 MiB). A run's final
+// captures take none. A judgment for E2B and a container's hop, which the
+// saved line's took_s measures.
+const maxConcurrentSaves = 4
+
 // saveState is this coordinator's part in saving its runs' sessions as they
 // work.
 type saveState struct {
 	// ledger is the fleet's ledger of each seat's saves
 	// ([CoordinatorOptions.Saves]); nil counts, and so takes, none.
 	ledger SaveLedgers
+	// slots is [maxConcurrentSaves], taken without waiting by an offer and
+	// given back once its task's keep has ended.
+	slots chan struct{}
+
+	// mu guards memos and swept: this node's memory of each turn's saves, by
+	// turn, and when it last forgot the ones no offer came for. Never c.mu,
+	// so an offer from the poll waits on no run's work.
+	mu    sync.Mutex
+	memos map[string]*saveMemo
+	swept time.Time
+}
+
+// saveMemo is this node's memory of one turn's saves, every instant on this
+// node's clock (the package doc's "A save is offered by the poll, from
+// memory"). Kept nowhere else, so a node that restarts starts it at first
+// sight.
+type saveMemo struct {
+	// launch and box are the job and box it counts; an offer of another
+	// starts it again.
+	launch, box string
+	// offered is the last offer's instant, which forgetting reads.
+	offered time.Time
+	// last is the last attempt's start, or first sight's estimate of it.
+	last time.Time
+	// failures counts the attempts in a row that failed.
+	failures int
+	// pacedUntil is where the seat's allowance holds the next save back to;
+	// zero unpaced.
+	pacedUntil time.Time
+	// mark is the job's stream length read at the start of this node's last
+	// landed save of the job; -1 for none.
+	mark int64
+	// counted is what the job's last save to reach its charge was counted at.
+	counted int64
+	// running is the task under way on this node, nil for none.
+	running *saveRun
+	// logged is every kind of failure already logged at Warn for the job.
+	logged map[string]bool
+}
+
+// saveRun is a save task under way on this node: taken is closed once it has
+// passed its spool or ended before it, ended once its outcome is in memory and
+// its slot given back.
+type saveRun struct {
+	taken chan struct{}
+	ended chan struct{}
 }
 
 // saveClass is what came of one save task, as the attempt memory reads it:
@@ -113,6 +169,14 @@ type saveJob struct {
 	taken chan struct{}
 }
 
+// point is the point job's save is taken at, as its stamp's lines name it.
+func (j saveJob) point() string {
+	if j.drainEnd.IsZero() {
+		return savePoint
+	}
+	return drainSavePoint
+}
+
 // saveOutcome is what came of a save task, for its memory.
 type saveOutcome struct {
 	class saveClass
@@ -124,6 +188,10 @@ type saveOutcome struct {
 	counted int64
 	// pacedUntil is where a paced save is due again.
 	pacedUntil time.Time
+	// unplaced names the step a failure came at before the save's place was
+	// asked ("handed", "pack", "scrub", "take"), which no stamp's line logs;
+	// "" for every other outcome.
+	unplaced string
 }
 
 // saveTaken is what a save task holds once its session is in hand.
@@ -155,10 +223,7 @@ func (c *Coordinator) saveTask(job saveJob) saveOutcome {
 	})
 	defer passed()
 	start := c.now()
-	point := savePoint
-	if !job.drainEnd.IsZero() {
-		point = drainSavePoint
-	}
+	point := job.point()
 	duty, endDuty := context.WithCancel(c.life)
 	defer endDuty()
 	if job.stint != nil {
@@ -248,6 +313,7 @@ func (c *Coordinator) saveInHand(duty context.Context, job saveJob, out saveOutc
 		}
 	}
 	if unopened := c.saveHanded(row); unopened != "" {
+		out.unplaced = "handed"
 		return end(saveFailed, unopened)
 	}
 	hold, held := c.heldTaker()
@@ -257,6 +323,7 @@ func (c *Coordinator) saveInHand(duty context.Context, job saveJob, out saveOutc
 	archive, err := saver.PackSave(duty, box, hold.holder)
 	switch {
 	case err != nil:
+		out.unplaced = "pack"
 		return end(saveFailed, fmt.Sprintf("the box's session could not be packed: %v", err))
 	case archive.Path == "":
 		return end(saveNothing, "the box holds no session yet")
@@ -419,14 +486,17 @@ func (c *Coordinator) takeSave(job saveJob, point string, in *saveTaken, out sav
 	scrub, err := c.scrubValues(take, row, in.box)
 	if err != nil {
 		release()
+		out.unplaced = "scrub"
 		return end(saveFailed, err.Error())
 	}
 	taken, err := in.saver.TakeSession(take, in.box, SessionTake{Save: in.archive.Path, Scrub: scrub,
 		MaxBytes: executorkeep.SessionMaxBytes})
 	switch {
 	case err != nil:
+		out.unplaced = "take"
 		return end(saveFailed, takeRefusal(take, err))
 	case taken.Body == nil:
+		out.unplaced = "take"
 		return end(saveFailed, "the save was gone from its box when it was taken")
 	}
 	defer func() { _ = taken.Body.Close() }()
@@ -480,4 +550,175 @@ func (c *Coordinator) takeSave(job saveJob, point string, in *saveTaken, out sav
 		return end(saveLanded, "")
 	}
 	return end(saveUnresolved, "the save's record was sent and not answered")
+}
+
+// SaveRunning is offered run's box, which a waiter's poll found running under
+// stint, for a save of its job's session as it works ([WaiterOptions.Save]).
+// It decides from memory alone and returns at once: a save that is due and
+// finds a slot free runs as a task of the coordinator's own lifetime (the
+// package doc's "A save is offered by the poll, from memory").
+func (c *Coordinator) SaveRunning(stint context.Context, run PendingRun, runner Runner) {
+	c.offerSave(stint, run, runner)
+}
+
+// offerSave is [Coordinator.SaveRunning], answering the task it started, nil
+// for none.
+func (c *Coordinator) offerSave(stint context.Context, run PendingRun, runner Runner) *saveRun {
+	// RULE 1, saves are on: a save names its taker and is charged to a ledger.
+	if !c.capturing() || c.taker == nil || c.saves.ledger == nil {
+		return nil
+	}
+	// RULE 2, the runner saves.
+	if saver, ok := runner.(SessionSaver); !ok || !saver.Saves() {
+		return nil
+	}
+	// RULE 3, the duty's stint is live and no task of the turn runs here.
+	if stint == nil || stint.Err() != nil {
+		return nil
+	}
+	now, interval := c.now(), c.keep.SaveInterval()
+	c.saves.mu.Lock()
+	if memo := c.saves.memos[run.TurnID]; memo != nil && memo.running != nil {
+		c.saves.mu.Unlock()
+		return nil
+	}
+	memo := c.saves.memoOf(run, now, interval)
+	// RULE 4, due; RULE 5, a slot free now, or the next poll offers again.
+	due := memo.due(interval)
+	if now.Before(due) {
+		c.saves.mu.Unlock()
+		return nil
+	}
+	select {
+	case c.saves.slots <- struct{}{}:
+	default:
+		c.saves.mu.Unlock()
+		return nil
+	}
+	running := &saveRun{taken: make(chan struct{}), ended: make(chan struct{})}
+	memo.running = running
+	job := saveJob{run: run, stint: stint, due: due, mark: memo.mark, interval: interval, last: memo.last,
+		counted: memo.counted, taken: running.taken}
+	c.saves.mu.Unlock()
+	c.mu.Lock()
+	closed := c.closed
+	if !closed {
+		c.inflight.Add(1)
+		go c.runSave(job, memo, running)
+	}
+	c.mu.Unlock()
+	if closed {
+		c.saves.mu.Lock()
+		memo.running = nil
+		c.saves.mu.Unlock()
+		<-c.saves.slots
+		return nil
+	}
+	return running
+}
+
+// runSave runs one save task its offer spawned, then writes what came of it
+// to memo, gives its slot back once its keep has ended, and logs a failure no
+// stamp's line names.
+func (c *Coordinator) runSave(job saveJob, memo *saveMemo, running *saveRun) {
+	start := c.now()
+	out := c.saveTask(job)
+	c.saves.mu.Lock()
+	memo.running = nil
+	if out.counted > 0 {
+		memo.counted = out.counted
+	}
+	switch out.class {
+	case saveGone:
+		if c.saves.memos[job.run.TurnID] == memo {
+			delete(c.saves.memos, job.run.TurnID)
+		}
+	case savePaced:
+		memo.pacedUntil = out.pacedUntil
+	case saveNotYet, saveNothing, saveUnresolved:
+		// NEVER DOUBLED: what was not there now says nothing of the box.
+		memo.last = start
+	case saveFailed:
+		memo.last = start
+		memo.failures++
+	case saveLanded:
+		memo.last, memo.failures, memo.mark = start, 0, out.streamed
+	}
+	failures, due := memo.failures, memo.due(job.interval)
+	unlogged := out.class == saveFailed && out.unplaced != "" && !memo.logged[out.unplaced]
+	if unlogged {
+		memo.logged[out.unplaced] = true
+	}
+	c.saves.mu.Unlock()
+	<-c.saves.slots
+	close(running.ended)
+	if out.class != saveFailed || out.unplaced == "" {
+		return
+	}
+	level := slog.LevelDebug
+	if unlogged {
+		level = slog.LevelWarn
+	}
+	log.Log(c.life, level, "executor_session_not_kept", "turn_id", job.run.TurnID, "point", job.point(),
+		"failures", failures, "next_due_s", due.Sub(c.now()).Seconds(), "detail", out.why)
+}
+
+// memoOf is run's memory, made at FIRST SIGHT where none is kept or it counts
+// another job or box, and dated to this offer; memories no offer came for in
+// [saveRetryCeiling] are forgotten first, at most once in that time. Its
+// caller holds s.mu and has checked no task of the turn runs.
+func (s *saveState) memoOf(run PendingRun, now time.Time, interval time.Duration) *saveMemo {
+	if now.Sub(s.swept) >= saveRetryCeiling {
+		for turn, memo := range s.memos {
+			if memo.running == nil && now.Sub(memo.offered) >= saveRetryCeiling {
+				delete(s.memos, turn)
+			}
+		}
+		s.swept = now
+	}
+	memo := s.memos[run.TurnID]
+	if memo == nil || memo.launch != run.LaunchID || memo.box != run.SandboxID {
+		memo = &saveMemo{launch: run.LaunchID, box: run.SandboxID, last: firstSight(run, now, interval),
+			mark: -1, logged: map[string]bool{}}
+		s.memos[run.TurnID] = memo
+	}
+	memo.offered = now
+	return memo
+}
+
+// firstSight is when a job first seen by this node's memory was last saved,
+// as far as the run's row can say: the later of its launch's start and its
+// newest capture of this launch, clamped to within one interval of now, or
+// now where neither is set. RULE H's: an instant another machine stamped only
+// shortens a wait one interval bounds (the package doc's "A save is offered by
+// the poll, from memory").
+func firstSight(run PendingRun, now time.Time, interval time.Duration) time.Time {
+	newest := run.Launch.StartedAt
+	if capture := run.Capture; capture != nil && capture.Launch == run.LaunchID &&
+		capture.LaunchSeq == run.LaunchSeq && capture.At.After(newest) {
+		newest = capture.At
+	}
+	if newest.IsZero() {
+		return now
+	}
+	return now.Add(-min(max(now.Sub(newest), 0), interval))
+}
+
+// due is when the turn's next save is due: its interval after the last
+// attempt, doubled for each failure in a row up to the larger of the interval
+// and [saveRetryCeiling], and never before the seat's allowance allows it.
+func (m *saveMemo) due(interval time.Duration) time.Time {
+	ceiling := max(interval, saveRetryCeiling)
+	wait := interval
+	for range m.failures {
+		if wait >= ceiling {
+			break
+		}
+		wait *= 2
+	}
+	due := m.last.Add(min(wait, ceiling))
+	if m.pacedUntil.After(due) {
+		return m.pacedUntil
+	}
+	return due
 }

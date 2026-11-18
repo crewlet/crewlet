@@ -180,11 +180,12 @@ func (w *Waiter) pollNow(ctx context.Context, manager *Manager, run PendingRun, 
 	w.mu.Unlock()
 	taskCtx, stop := context.WithDeadline(ctx, w.taskDeadline(duty))
 	defer stop()
-	if !w.begin(ctx, run.TurnID, stop) {
+	stint, begun := w.begin(ctx, run.TurnID, stop)
+	if !begun {
 		return false
 	}
 	defer w.end(run.TurnID)
-	return w.pollBounded(ctx, taskCtx, manager, run, read)
+	return w.pollBounded(ctx, taskCtx, stint, manager, run, read)
 }
 
 // holdsDuty reports whether this waiter may poll now: one that claims no duty

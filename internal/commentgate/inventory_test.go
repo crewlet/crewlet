@@ -156,7 +156,7 @@ var excessInventory = map[string]int{
 	"internal/mcprelay":                             5,
 	"internal/node":                                 377,
 	"internal/notify":                               860,
-	"internal/objstore":                             256,
+	"internal/objstore":                             255,
 	"internal/objstore/collect":                     186,
 	"internal/objstore/natsobj":                     337,
 	"internal/objstore/natsobj/replicated":          1,

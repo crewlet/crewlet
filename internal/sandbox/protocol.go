@@ -638,6 +638,39 @@
 // replaced with a fresh session. So a save is placed at its launch's newest
 // landed save's point, or zero, which tells more, never less.
 //
+// # A save is offered by the poll, from memory
+//
+// Kept by save.go and the waiter's hook. THE POLL IS THE ONE TRIGGER: it
+// reaches every running box each interval already, under the duty that
+// authorises touching it, so each box a poll finds running within its turn's
+// cap is offered ([WaiterOptions.Save]); a bridge call, a clock in the box's
+// script or a signal would each be a second way into the box, under no duty.
+// THE OFFER DECIDES FROM MEMORY AND NEVER BLOCKS, since the poll is the box's
+// keepalive: saves on, the runner saving, the stint live and no task of the
+// turn under way on this node, the save due, and one of [maxConcurrentSaves]
+// slots free, taken without waiting (the next poll offers again). The task
+// runs on the coordinator's own lifetime, counted for its stop, and gives its
+// slot back only once its keep has ended, so the slots bound the uploads too.
+//
+// THE STINT is the waiter's duty, made by the pass that claimed it and ended
+// by its stand-down. A task carries the stint it began under, so a poll that
+// returns after a stand-down offers nothing under a duty this node lost.
+//
+// DUE-NESS IS COUNTED ON THIS NODE'S CLOCK ALONE: the interval
+// ([SessionKeep.SaveInterval], this node's revision) after the last attempt,
+// doubled for each failure in a row up to the larger of the interval and an
+// hour, and never before the seat's allowance paces it. What was not there
+// (the box, the license, the taker, the place) moves the clock without
+// doubling; a landing resets it and remembers how far the job's stream had
+// run, so a job that has not moved since is not saved again. AT FIRST SIGHT
+// (a node that restarted, or took an E2B duty over) the last save is taken
+// to be the later of the launch's start and this launch's newest capture,
+// instants other machines stamped, clamped to within one interval of now: as
+// in "A capture's life is counted on one clock", an age read across machines
+// decides only a wait one interval bounds, so the first save comes within an
+// interval of first sight whatever any clock says, and a paced seat takes no
+// unpaced save then. A memory no offer came for in an hour is forgotten.
+//
 // # A turn's session is continued in whichever box its next launch gets
 //
 // A TURN'S SESSION, CONTINUED IN WHICHEVER BOX ITS NEXT LAUNCH GETS — AND A

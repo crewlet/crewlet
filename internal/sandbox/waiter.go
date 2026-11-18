@@ -215,7 +215,19 @@ type WaiterOptions struct {
 	// scrubbed by. REQUIRED WITH Refresh, since a token the refresh wrote that
 	// nothing recorded would be a live secret no capture is scrubbed of.
 	Record func(ctx context.Context, run PendingRun, value string, expires time.Time) error
+
+	// Save is offered every box this waiter's poll found running, not past
+	// its turn's cap, with the runner the poll asked and the stint of duty
+	// the poll's task began under ([SaveFunc]): the coordinator's
+	// [Coordinator.SaveRunning] in the engine. Nil offers nothing.
+	Save SaveFunc
 }
+
+// SaveFunc is offered a running box for a save of its job's session as it
+// works. stint is done once the waiter that offered it stands down from its
+// duty, or stops; the offer decides from memory, starts any work on a lifetime
+// of its own and returns at once, since the poll is the box's keepalive.
+type SaveFunc func(stint context.Context, run PendingRun, runner Runner)
 
 // RefreshFunc brings one box's expiring credentials up to date for the job
 // running in it, or about to start there: the files a run was provisioned
@@ -304,6 +316,7 @@ type Waiter struct {
 	now       func() time.Time
 	refresh   RefreshFunc
 	record    func(ctx context.Context, run PendingRun, value string, expires time.Time) error
+	save      SaveFunc
 
 	// pollBound is [pollBound], held on the value so a test can watch a box
 	// at its bound without waiting a minute for it.
@@ -353,6 +366,12 @@ type Waiter struct {
 	// sweeping is whether a sweep of this host's boxes is running: one at
 	// a time ([Waiter.sweep]).
 	sweeping bool
+	// stint is this waiter's current stint of its duty, which every task
+	// begun under it carries to [WaiterOptions.Save]: made by a pass that
+	// holds the duty, ended by [Waiter.standDown] (endStint), and with the
+	// waiter's life. Nil before the first such pass and after a stand-down.
+	stint    context.Context
+	endStint context.CancelFunc
 	// life is the context Start ran the loop under, which a nudge's
 	// schedule runs under too; nil before Start. closed is set as the loop
 	// ends, after which a nudge starts nothing ([Waiter.closeTasks]).
@@ -394,6 +413,7 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 		now:       opts.Now,
 		refresh:   opts.Refresh,
 		record:    opts.Record,
+		save:      opts.Save,
 		pollBound: pollBound,
 		slots:     make(chan struct{}, MaxConcurrentPolls),
 		failures:  map[string]connectStreak{},
@@ -547,6 +567,15 @@ func (w *Waiter) pass(ctx context.Context) (*round, error) {
 	deadline := w.deadline(asked)
 	w.mu.Lock()
 	w.dutyUntil = deadline
+	// A STINT MADE HERE, NEVER AT THE HOOK: a poll whose task began before a
+	// stand-down carries the stint that stand-down ended.
+	if w.stint == nil || w.stint.Err() != nil {
+		base := w.life
+		if base == nil {
+			base = ctx
+		}
+		w.stint, w.endStint = context.WithCancel(base)
+	}
 	w.mu.Unlock()
 	// ONE MANAGER FOR THE WHOLE PASS, read once: a reload landing mid-pass
 	// must not poll half the runs through one catalogue and reap the rest
@@ -654,7 +683,8 @@ func (w *Waiter) walkTasks(ctx, walkCtx context.Context, deadline time.Time, man
 			return
 		}
 		taskCtx, stop := context.WithDeadline(ctx, w.taskDeadline(deadline))
-		if !w.begin(walkCtx, t.run.TurnID, stop) {
+		stint, begun := w.begin(walkCtx, t.run.TurnID, stop)
+		if !begun {
 			stop()
 			<-w.slots
 			continue
@@ -671,7 +701,7 @@ func (w *Waiter) walkTasks(ctx, walkCtx context.Context, deadline time.Time, man
 				w.reapOne(taskCtx, manager, t.run)
 				return
 			}
-			if w.pollBounded(ctx, taskCtx, manager, t.run, t.listed) {
+			if w.pollBounded(ctx, taskCtx, stint, manager, t.run, t.listed) {
 				r.fired.Add(1)
 			}
 		}()
@@ -806,18 +836,19 @@ func (w *Waiter) rowContext(ctx context.Context) (context.Context, context.Cance
 }
 
 // pollBounded polls one box within its task's context and announces its
-// completion where the poll found one, reporting whether it did; read is when
-// the store was asked for the row run was read from, which the announcement
-// says ([rowAskedField]).
+// completion where the poll found one, reporting whether it did; stint is the
+// duty's stint the task began under ([Waiter.begin]), and read is when the
+// store was asked for the row run was read from, which the announcement says
+// ([rowAskedField]).
 //
 // THE ANNOUNCEMENT IS NOT UNDER THE BOUND: the bound is on reaching the box,
 // and a completion found a second before it ran out is still a completion. A
 // duplicate announcement is harmless — the coordinator claims once — so it
 // takes the pass's context, not the task's.
-func (w *Waiter) pollBounded(ctx, taskCtx context.Context, manager *Manager, run PendingRun,
+func (w *Waiter) pollBounded(ctx, taskCtx, stint context.Context, manager *Manager, run PendingRun,
 	read time.Time,
 ) bool {
-	state := w.pollOne(taskCtx, manager, run)
+	state := w.pollOne(taskCtx, stint, manager, run)
 	// A LOSS IS RECORDED BEFORE IT IS ANNOUNCED, as the fleet's verdict on a
 	// gone launch node is ([Waiter.endGone]): the completion only routes it to
 	// the seat's holder, which carries the round on from what the row says.
@@ -865,23 +896,24 @@ func (w *Waiter) isBusy(turnID string) bool {
 
 // begin claims the turn's box for one task, reporting false where a task is
 // already working on it or the walk starting it has lost its authority; stop
-// is what ends the task early.
+// is what ends the task early. It answers the stint of duty current as the
+// task begins ([Waiter.stint]), nil for none.
 //
 // THE WALK IS ASKED UNDER THE LOCK [Waiter.standDown] stops everything under,
 // so a task is either registered before a stand-down, and stopped by it, or
 // refused after it — never started in between, where nothing would stop it
 // while a peer holds the duty.
-func (w *Waiter) begin(walkCtx context.Context, turnID string, stop context.CancelFunc) bool {
+func (w *Waiter) begin(walkCtx context.Context, turnID string, stop context.CancelFunc) (context.Context, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if walkCtx.Err() != nil {
-		return false
+		return nil, false
 	}
 	if _, busy := w.busy[turnID]; busy {
-		return false
+		return nil, false
 	}
 	w.busy[turnID] = stop
-	return true
+	return w.stint, true
 }
 
 // end releases the claim [Waiter.begin] took and dates it for the next walk's
@@ -908,7 +940,8 @@ func (w *Waiter) replaceWalk(stop context.CancelFunc) {
 
 // standDown stops the walk and every task in flight: this node has
 // definitively lost the duty, so a peer may hold it and work the same boxes.
-// And it forgets every absence it had been timing ([Waiter.forgetAbsences]).
+// And it forgets every absence it had been timing ([Waiter.forgetAbsences]),
+// and ends its stint, so no save is offered under the duty it lost.
 //
 // UNDER THE LOCK, so a walk between taking a slot and registering its task
 // cannot slip a task past it ([Waiter.begin]). A cancel only closes channels,
@@ -918,6 +951,10 @@ func (w *Waiter) standDown() {
 	defer w.mu.Unlock()
 	w.dutyUntil = time.Time{}
 	clear(w.absent)
+	if w.endStint != nil {
+		w.endStint()
+	}
+	w.stint, w.endStint = nil, nil
 	if w.walk != nil {
 		w.walk()
 	}
@@ -1032,8 +1069,10 @@ func lossOf(state pollState) LossCause {
 	return ""
 }
 
-// pollOne reconnects and asks the runner whether the job has finished.
-func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) pollState {
+// pollOne reconnects and asks the runner whether the job has finished, and
+// offers a job still running, within its turn's cap, for a save under stint
+// ([WaiterOptions.Save]).
+func (w *Waiter) pollOne(ctx, stint context.Context, manager *Manager, run PendingRun) pollState {
 	provider, err := manager.Provider(Placement(run.Placement))
 	if err != nil {
 		// A row naming a cell this build or this company does not have can
@@ -1152,6 +1191,9 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 			"detail", "the turn's wall-clock cap has passed with its run still working; "+
 				"the run is ended and its turn resumed with what it did")
 		return pollDone
+	}
+	if w.save != nil && stint != nil && stint.Err() == nil {
+		w.save(stint, run, runner)
 	}
 	return pollRunning
 }

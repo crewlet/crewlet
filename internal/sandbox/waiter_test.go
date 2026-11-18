@@ -837,7 +837,7 @@ func TestThePollNeverWakesABoxItsRunHasMovedOnFrom(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := rig.waiter.pollOne(t.Context(), rig.manager, listed); got != pollRunning {
+	if got := rig.waiter.pollOne(t.Context(), t.Context(), rig.manager, listed); got != pollRunning {
 		t.Errorf("the poll of a run that moved on = %v; want nothing done", got)
 	}
 	if !box.Paused() {
@@ -1554,7 +1554,7 @@ func TestEveryPollHandsTheRunningBoxToTheRefresh(t *testing.T) {
 			if err := moved.provider.Box(listed.SandboxID).Pause(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			moved.waiter.pollOne(t.Context(), moved.manager, listed)
+			moved.waiter.pollOne(t.Context(), t.Context(), moved.manager, listed)
 			if calls != 0 {
 				t.Error("a box its run has moved on from was handed to the refresh")
 			}

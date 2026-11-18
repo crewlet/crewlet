@@ -1353,11 +1353,12 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		sessions:           opts.Sessions,
 		keep:               opts.Keep,
 		restore:            opts.Restore,
-		saves:              saveState{ledger: opts.Saves},
-		relaunchWait:       relaunchCaptureWait,
-		holdingsWait:       holdingsReadWait,
-		endWait:            JobEndWait,
-		endPoll:            jobEndPoll,
+		saves: saveState{ledger: opts.Saves, slots: make(chan struct{}, maxConcurrentSaves),
+			memos: map[string]*saveMemo{}},
+		relaunchWait: relaunchCaptureWait,
+		holdingsWait: holdingsReadWait,
+		endWait:      JobEndWait,
+		endPoll:      jobEndPoll,
 
 		// THE ONE WAIT every reading of a job's main thread shares.
 		mainThreadWait: MainThreadReadWait,
