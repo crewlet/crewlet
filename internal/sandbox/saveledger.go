@@ -209,25 +209,9 @@ func (c *Coordinator) chargeOnce(ctx context.Context, seat string, entry savedEn
 	if err != nil {
 		return "", "", err
 	}
-	ledger, err := readSaveLedger(raw)
-	if err != nil {
-		return saveNotYet, err.Error(), nil
-	}
-	if ledger.counts(entry.ID) {
-		return "", "", nil
-	}
-	live := ledger.live(c.now())
-	switch {
-	case len(live) >= saveLedgerCap:
-		return savePaced, fmt.Sprintf("the seat's save ledger counts %d saves, its cap", len(live)), nil
-	case ledgerHeld(live)+entry.Bytes > budget:
-		return savePaced, fmt.Sprintf("the seat's saves hold %d bytes, and this one is counted at %d: past "+
-			"the seat's budget of %d (turn_engine.conversation_session.max_bytes_per_seat)", ledgerHeld(live),
-			entry.Bytes, budget), nil
-	}
-	value, err := json.Marshal(saveLedger{V: saveLedgerVersion, Entries: append(live, entry)})
-	if err != nil {
-		return saveNotYet, fmt.Sprintf("the seat's save ledger could not be encoded: %v", err), nil
+	value, class, why := chargedLedger(raw, entry, budget, c.now())
+	if value == nil {
+		return class, why, nil
 	}
 	wrote, err := c.saves.ledger.SwapSaveLedger(ctx, seat, value, revision)
 	switch {
@@ -237,4 +221,33 @@ func (c *Coordinator) chargeOnce(ctx context.Context, seat string, entry savedEn
 		return saveRaced, "", nil
 	}
 	return "", "", nil
+}
+
+// chargedLedger is the decision of a charge of entry to the ledger raw as of
+// now: the ledger to write with entry counted, or nil with what the charge
+// comes to without a write: "" where entry is counted already, [savePaced]
+// where the seat's room or the cap refuses it, and [saveNotYet] where raw is
+// unreadable or a newer build's.
+func chargedLedger(raw []byte, entry savedEntry, budget int64, now time.Time) ([]byte, saveClass, string) {
+	ledger, err := readSaveLedger(raw)
+	if err != nil {
+		return nil, saveNotYet, err.Error()
+	}
+	if ledger.counts(entry.ID) {
+		return nil, "", ""
+	}
+	live := ledger.live(now)
+	switch {
+	case len(live) >= saveLedgerCap:
+		return nil, savePaced, fmt.Sprintf("the seat's save ledger counts %d saves, its cap", len(live))
+	case ledgerHeld(live)+entry.Bytes > budget:
+		return nil, savePaced, fmt.Sprintf("the seat's saves hold %d bytes, and this one is counted at %d: "+
+			"past the seat's budget of %d (turn_engine.conversation_session.max_bytes_per_seat)",
+			ledgerHeld(live), entry.Bytes, budget)
+	}
+	value, err := json.Marshal(saveLedger{V: saveLedgerVersion, Entries: append(live, entry)})
+	if err != nil {
+		return nil, saveNotYet, fmt.Sprintf("the seat's save ledger could not be encoded: %v", err)
+	}
+	return value, "", ""
 }
