@@ -1117,32 +1117,38 @@ func (e *endlessLine) Read(p []byte) (int, error) {
 // each piece of the member a line takes, so a context that ends part way
 // through a line of 64 MiB ends the reading with its error having read at
 // most one piece ([lineChunkBytes]) past the byte it ended at, counted in the
-// member's bytes, never in time; the line before it was read whole, and the
-// reading stays over whatever context a later Next is handed.
+// member's bytes, never in time: a long string the pass reads, and a line
+// refused at its first bytes whose rest is drained to its break. The line
+// before it was read whole, and the reading stays over whatever context a
+// later Next is handed.
 //
-// Mutation: ask the context only before a line, and the whole 64 MiB line is
-// read.
+// Mutation: ask the context only before a line, or not while draining, and
+// the whole 64 MiB line is read.
 func TestAReadingStopsWithinAFillOfItsContext(t *testing.T) {
 	t.Parallel()
 	brief := ctThread(ctBrief(ctUUID(1)))
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	head := brief + `{"type":"queue-operation","operation":"enqueue","content":"`
-	member := &endlessLine{head: head, size: int64(len(brief)) + 64<<20, cancelAt: int64(len(brief)) + 1<<20,
-		cancel: cancel}
-	r := newScanReader(member, threadPlainMax)
-	if line, err := r.Next(ctx); err != nil || line.Head.Type != recordUser {
-		t.Fatalf("the brief before the long line reads as %q, %v", line.Head.Type, err)
-	}
-	if _, err := r.Next(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("the line its context ended inside reads as %v; want %v", err, context.Canceled)
-	}
-	if member.handed > member.cancelAt+lineChunkBytes {
-		t.Errorf("the reading took %d bytes of the member, %d past where its context ended; want at most %d",
-			member.handed, member.handed-member.cancelAt, lineChunkBytes)
-	}
-	if _, err := r.Next(t.Context()); !errors.Is(err, context.Canceled) {
-		t.Errorf("a Next after the reading's context ended answered %v; want %v", err, context.Canceled)
+	for name, opening := range map[string]string{
+		"a long string":                     `{"type":"queue-operation","operation":"enqueue","content":"`,
+		"a line refused at its first bytes": "{\"type\":\x00\"",
+	} {
+		ctx, cancel := context.WithCancel(t.Context())
+		member := &endlessLine{head: brief + opening, size: int64(len(brief)) + 64<<20,
+			cancelAt: int64(len(brief)) + 1<<20, cancel: cancel}
+		r := newScanReader(member, threadPlainMax)
+		if line, err := r.Next(ctx); err != nil || line.Head.Type != recordUser {
+			t.Fatalf("%s: the brief before the long line reads as %q, %v", name, line.Head.Type, err)
+		}
+		if _, err := r.Next(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("%s: the line its context ended inside reads as %v; want %v", name, err, context.Canceled)
+		}
+		if member.handed > member.cancelAt+lineChunkBytes {
+			t.Errorf("%s: the reading took %d bytes of the member, %d past where its context ended; want at most %d",
+				name, member.handed, member.handed-member.cancelAt, lineChunkBytes)
+		}
+		if _, err := r.Next(t.Context()); !errors.Is(err, context.Canceled) {
+			t.Errorf("%s: a Next after the reading's context ended answered %v; want %v", name, err, context.Canceled)
+		}
+		cancel()
 	}
 }
 
@@ -1226,6 +1232,86 @@ func TestAResetReaderOnTheScannerReadsAsAFreshOne(t *testing.T) {
 		t.Errorf("one reader reading a member after another allocates %d bytes a member, where a fresh reader's "+
 			"buffers take %d; want those at least %d, and a member under an eighth of them", each, buffers,
 			2*lineChunkBytes)
+	}
+}
+
+// scanEnds is every answer a reader gives of its member to its end, as text:
+// each line's place, size, head type and parent and byte facts, or its fault
+// as [scanAnswer] says it, then what ended the reading, what a Next after it
+// answers and whether the member was torn.
+func scanEnds(ctx context.Context, r interface {
+	Next(context.Context) (threadLine, error)
+	Torn() bool
+}) string {
+	var b strings.Builder
+	for {
+		line, err := r.Next(ctx)
+		var broken *threadLineError
+		switch {
+		case err == nil:
+			fmt.Fprintf(&b, "line %d, size %d, type %q, parent %q\nbytes: %s\n", line.N, line.Size, line.Head.Type,
+				line.Head.Parent, scanBytes(line.Bytes))
+		case errors.As(err, &broken):
+			b.WriteString(scanAnswer(line, err))
+		default:
+			_, again := r.Next(ctx)
+			fmt.Fprintf(&b, "ended by %v (io.EOF %t, past its bound %t), then %v, torn %t\n", err,
+				errors.Is(err, io.EOF), errors.Is(err, errThreadBound), again, r.Torn())
+			return b.String()
+		}
+	}
+}
+
+// THE SCAN READER ENDS A MEMBER AS THE OLD READER DOES ([threadReader]): a
+// member of records, refused lines and trailing data, read within every bound
+// from none to two bytes past its length (so at, before and after each break),
+// with each tail a member can end in (none, NULs, a whole record, a lone CR, a
+// cut value, a blank, a short record), and its reader failing at every offset
+// with an error of its own, a wrapped io.EOF and a wrapped scrub bound, under
+// each bound about the failure, answers alike in pieces of 16 bytes and of
+// [lineChunkBytes].
+//
+// Mutation: count no line's break against the member's bound; read a wrapped
+// io.EOF as the reader's error both where a piece is taken and where the line
+// ends, each of which alone reads it as the member's end.
+func TestTheScanReaderEndsAMemberAsTheOldReaderDoes(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	brief := ctBrief(ctUUID(1))
+	member := ctThread(brief, "[1]", brief, `{"type":7}`, "\x00"+brief, brief+" x", brief)
+	mismatches := 0
+	compare := func(what string, read func() io.Reader, bound int64) {
+		want := scanEnds(ctx, newThreadReader(read(), bound))
+		for _, chunk := range []int{16, lineChunkBytes} {
+			if got := scanEnds(ctx, newScanReaderSize(read(), bound, chunk)); got != want {
+				if mismatches++; mismatches <= 3 {
+					t.Errorf("%s, within %d bytes, in pieces of %d, reads as\n%swant it read as the old reader "+
+						"reads it\n%s", what, bound, chunk, got, want)
+				}
+			}
+		}
+	}
+	for _, tail := range []string{"", "\x00\x00", brief, "\r", "{", " ", `{"type":"user"}`} {
+		text := member + tail
+		for bound := range int64(len(text)) + 3 {
+			compare(fmt.Sprintf("a member ending in %q", tail), func() io.Reader { return strings.NewReader(text) },
+				bound)
+		}
+	}
+	text := member + brief
+	for _, failure := range []error{io.ErrUnexpectedEOF, fmt.Errorf("member: %w", io.EOF),
+		fmt.Errorf("meter: %w", errScrubBound)} {
+		for cut := range len(text) + 1 {
+			read := func() io.Reader {
+				return io.MultiReader(strings.NewReader(text[:cut]), iotest.ErrReader(failure))
+			}
+			for _, bound := range []int64{threadPlainMax, int64(cut) - 1, int64(cut), int64(cut) + 1} {
+				compare(fmt.Sprintf("a member whose reader fails with %v at byte %d", failure, cut), read, bound)
+			}
+		}
+	}
+	if mismatches > 3 {
+		t.Errorf("%d readings in all read otherwise than the old reader's", mismatches)
 	}
 }
 
