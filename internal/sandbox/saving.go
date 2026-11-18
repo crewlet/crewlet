@@ -54,14 +54,14 @@ func (r PendingRun) capturesMayLand(now time.Time) bool {
 // completion as announced, whatever its status says: a FINAL capture of this
 // launch as its newest or kept capture (nothing of a job is taken once a take
 // found it ended, [Coordinator.takeCapture]), how its harness ended
-// ([LaunchRecord.HarnessEnd], which a hand-back after the box answered writes
-// as it clears the failures behind it), its turn's cap seen ending it
+// ([LaunchRecord.HarnessEnd]), its turn's cap seen ending it
 // ([LaunchRecord.EndedAtDeadline]), its box read back
 // ([LaunchRecord.Collected]), a collection whose read failed
 // ([LaunchRecord.CollectFailures]), a refused delivery of its completion owed
 // its re-fire ([LaunchRecord.RefusalOwed]), or its loss ([PendingRun.Lost]).
 // Every arm is the launch's own: the next launch clears each, and a claim
-// handed back undoes none of them.
+// handed back leaves the job over, since one that clears its failures
+// ([Release.BoxAnswered]) writes how its harness ended, or is a lost job's.
 func (r PendingRun) jobOver() bool {
 	finalOfThisLaunch := func(c *SessionCapture) bool {
 		return c != nil && c.Final && c.Launch == r.LaunchID && c.LaunchSeq == r.LaunchSeq
