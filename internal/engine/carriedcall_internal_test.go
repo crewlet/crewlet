@@ -15,10 +15,10 @@ import (
 // A CALL LANDING BEFORE A SEND-BACK'S OPENING REACHES THE SENT-BACK JOB. A
 // call of the collected job still in flight as its collection read the log
 // lands through its session's ledger before the send-back's opening: as that
-// job's own, in its own round, after the read. The send-back's launch hands
-// the store the read its briefs were built from, and the opening carries the
-// call into the new round late, for the new round's first job, whose next tool
-// batch is answered it under the engine's heading for a late call.
+// job's own, in its own round, after the read. The send-back's opening, handed
+// the read its briefs were built from, carries the call into the new round
+// late, for the new round's first job, whose next tool batch is answered it
+// under the engine's heading for a late call.
 //
 // Mutation: carry nothing into a new round, and the sent-back job is told
 // nothing.
@@ -76,5 +76,48 @@ func TestACallLandingBeforeASendBacksOpeningReachesTheSentBackJob(t *testing.T) 
 		!strings.Contains(hook.Output.Context, `Call: post_message({"channel":"#eng"})`) {
 		t.Errorf("the sent-back job's next batch was handed %q, want the call under the late call's heading",
 			hook.Output.Context)
+	}
+}
+
+// A SEND-BACK'S LAUNCH HANDS ITS OPENING THE READ ITS BRIEFS WERE BUILT FROM,
+// through the real launcher and coordination store: a launch that continues
+// no session hands it as one carrying the round on does
+// (sandbox.LaunchRequest.BriefRead). So a call of the asking job landing
+// after the collection's read is carried into the new round late, with no
+// place, for the sent-back job, and the call the read saw is not.
+//
+// Mutation: hand the store the read only on a launch that continues a
+// session, and the new round carries nothing.
+func TestASendBacksLaunchHandsItsOpeningTheReadItsBriefsWereBuiltFrom(t *testing.T) {
+	t.Parallel()
+	const turnID = "t-send-back-read"
+	read := newHeldTool("read_page")
+	close(read.release)
+	asking := launchBridged(t, turnID, read)
+	asking.call(t, "read_page")
+	briefRead := asking.calls(t, turnID).Read()
+	before := asking.row(t, turnID)
+
+	// THE ASKING JOB'S CALL LANDING AFTER THE COLLECTION'S READ.
+	asking.call(t, "read_page")
+	sent := asking.launchFrom(t, nil, &briefRead)
+
+	row := sent.row(t, turnID)
+	if row.Round == before.Round {
+		t.Fatalf("the send-back works in round %q, want a new one", row.Round)
+	}
+	logged := sent.calls(t, turnID)
+	if len(logged.Calls) != 1 || !logged.Calls[0].Late || logged.Calls[0].Seq != 0 {
+		t.Fatalf("the new round's log lists %+v, want the call taken after the briefs' read, late with no "+
+			"place", logged.Calls)
+	}
+	var items []sandbox.RunNote
+	for _, n := range row.Steer.Notes {
+		if n.LateCall != nil {
+			items = append(items, n)
+		}
+	}
+	if len(items) != 1 || items[0].For != row.LaunchID || items[0].LateCall.Call.Name != "read_page" {
+		t.Errorf("the record holds items %+v, want the carried call for the sent-back job", items)
 	}
 }
