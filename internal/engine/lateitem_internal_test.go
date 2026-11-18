@@ -147,6 +147,67 @@ func TestALateCallReachesTheWorkingJobAtItsNextBatch(t *testing.T) {
 	servedNotRead(t, r.store, r.turn, items[0].ID, r.next.LaunchID, takeOf(t, answer))
 }
 
+// AN ITEM AT ITS SERVE BOUND IS SAID LEFT TO THE CONTINUATION. A late call's
+// item served to the job's hook as often as a note may be, and never shown
+// taken, is passed over like a note, and said so once at WARN
+// (steer_serve_bound); but no review reads an item, so the line says the next
+// launch removes it and its continuation tells the call. NOT PARALLEL: it
+// reads the process's log.
+//
+// Mutation: say an item waits for the review as a note does
+// (item-bound-as-a-note), and the line says what never happens.
+func TestAnItemAtItsServeBoundIsSaidLeftToTheContinuation(t *testing.T) {
+	logs := captureSteerLogs(t)
+	ctx := t.Context()
+	r := newLateRig(t, "run-1")
+	r.late(t, 1, tools.Call{Name: "post_message", Args: map[string]any{"channel": "#eng"}})
+	inbox := boundInbox(t, r.runs, r.store, r.turn, r.next.LaunchID)
+	viewHolds(t, inbox, 1)
+	item := r.items(t)[0].ID
+	for k := range sandbox.MaxNoteServes {
+		answer := inbox.Take(ctx, mcpbridge.SteerEventToolBatch, hookCall())
+		if answer == "" {
+			t.Fatalf("serve %d answered nothing, want the late call", k+1)
+		}
+		if _, err := r.store.SettleHook(ctx, r.turn, sandbox.HookSettle{Launch: r.next.LaunchID,
+			Absent: []string{takeOf(t, answer)}}); err != nil {
+			t.Fatal(err)
+		}
+		viewSettled(t, inbox, item, k+1)
+	}
+	if got := inbox.Take(ctx, mcpbridge.SteerEventToolBatch, hookCall()); got != "" {
+		t.Fatalf("an item at its bound was served again: %q", got)
+	}
+	said := logs.String()
+	if !strings.Contains(said, `"steer_serve_bound"`) ||
+		!strings.Contains(said, "the next launch removes it, and its continuation tells the call") ||
+		strings.Contains(said, "it waits for the run's review") {
+		t.Errorf("an item at its bound is said as:\n%s\nwant it left to the next launch's continuation", said)
+	}
+}
+
+// viewSettled waits until the inbox's view of the record, which a tool batch is
+// served from, shows note id served n times and none of them live.
+func viewSettled(t *testing.T, inbox *runInbox, id string, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, watch := inbox.bound()
+		view, _, changed := watch.snapshot()
+		at := slices.IndexFunc(view.Steer.Notes, func(held sandbox.RunNote) bool { return held.ID == id })
+		if at >= 0 {
+			if _, live := view.Steer.Notes[at].LiveServe(); !live && len(view.Steer.Notes[at].Serves) == n {
+				return
+			}
+		}
+		select {
+		case <-changed:
+		case <-time.After(time.Until(deadline)):
+			t.Fatalf("the view never showed note %s served %d times, none of them live", id, n)
+		}
+	}
+}
+
 // NO LATE CALL IS HANDED AT A CLAUDE CODE FINISH. A job about to finish makes
 // no more calls, so the duplicate an item prevents cannot happen in it, and
 // its review judges it on the report it gives next, which an item at its

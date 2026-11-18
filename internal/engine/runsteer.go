@@ -1943,8 +1943,10 @@ func (i *runInbox) candidates(ctx context.Context, event, launch string, watch *
 // whose live serve to launch its harness may hold (one whose call is named in
 // cancelled, or whose take is named in unanswered, is settled by the serve's
 // own write), and none at
-// [sandbox.MaxNoteServes] serves to launch, which waits for the review or the
-// next launch's brief, said once a note (steer_serve_bound).
+// [sandbox.MaxNoteServes] serves to launch, said once a note
+// (steer_serve_bound): a person's note waits for the review or the next
+// launch's brief, and a late call's item for the next launch, which removes it
+// and whose continuation tells the call.
 func (i *runInbox) servable(ctx context.Context, launch string, candidates []openedNote,
 	cancelled []sandbox.NoteCall, unanswered []string) []openedNote {
 	return slices.DeleteFunc(slices.Clone(candidates), func(c openedNote) bool {
@@ -1962,9 +1964,14 @@ func (i *runInbox) servable(ctx context.Context, launch string, candidates []ope
 			return false
 		}
 		if i.hooks.atBound(c.held.ID) {
+			detail := "the note was served to the run's job as often as it may be, and never shown taken: " +
+				"it waits for the run's review or the next launch's brief"
+			if c.held.LateCall != nil {
+				detail = "the late call's item was served to the run's job as often as it may be, and never " +
+					"shown taken: the next launch removes it, and its continuation tells the call"
+			}
 			log.WarnContext(ctx, "steer_serve_bound", "turn_id", i.ident.turn.TurnID, "note_id", c.held.ID,
-				"serves", serves, "detail", "the note was served to the run's job as often as it may be, "+
-					"and never shown taken: it waits for the run's review or the next launch's brief")
+				"serves", serves, "detail", detail)
 		}
 		return true
 	})
