@@ -64,6 +64,26 @@ export function newGrant(
   };
 }
 
+/** The lengths a grant of entry is offered for: for one change, an hour up to its bound. */
+export function grantHours(entry: AccessGrantEntry | undefined): number[] {
+  const max = entry?.max_hours;
+  if (!max) return [...GRANT_HOURS];
+  const hours = new Set([1, ...GRANT_HOURS.filter((h) => h > 0 && h <= max), max]);
+  return [...hours].sort((a, b) => a - b);
+}
+
+/** What a person reads before granting entry, beyond its name: what else it allows and its bound. */
+export function grantCaution(entry: AccessGrantEntry | undefined): string {
+  const parts: string[] = [];
+  if (entry?.note) parts.push(entry.note);
+  if (entry?.max_hours) {
+    parts.push(
+      `It is granted for one change, for at most ${hoursWords(entry.max_hours)}, never permanently.`,
+    );
+  }
+  return parts.join(" ");
+}
+
 /** A lane's catalogue entry for a permission, or undefined where it lists none. */
 export function grantEntry(lane: AccessOptions, permission: string): AccessGrantEntry | undefined {
   return lane.grants?.find((e) => e.id === permission);

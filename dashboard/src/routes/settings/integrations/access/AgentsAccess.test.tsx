@@ -2169,6 +2169,66 @@ test("a Scaleway grant is worded by projects, by name, and its whole reach is th
   });
 });
 
+// A PERMISSION GRANTED FOR ONE CHANGE IS OFFERED FOR IT ALONE: what else it
+// allows, an hour or four and never Permanent, and a held grant's target.
+// Mutation: offer GRANT_HOURS for it and Permanent is a choice.
+test("a Scaleway bucket grant is offered for one change, an hour up to four, saying what else it allows", async () => {
+  const answer = scalewayGrantsAnswer();
+  const lane = answer.seats.find((s) => s.handle === "sre")!.lanes.scaleway!;
+  lane.desired.grants = [
+    ...(lane.desired.grants ?? []),
+    {
+      id: "gcccccccccc",
+      permission: "ObjectStorageBucketsWrite",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      granted_by: "Ada",
+      granted_at: new Date().toISOString(),
+      reason: "make it private",
+      request: "abcdefghij",
+      target: "user-uploads",
+    },
+  ];
+  draw(answer);
+  expect(
+    screen.getByText(/^ObjectStorageBucketsWrite · The agent's own projects · for user-uploads · /),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Add grant" }));
+  const dialog = screen.getByRole("dialog", { name: "Add a grant for SRE" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "SRE's new Scaleway permission" }));
+  const bucket = screen
+    .getAllByRole("option")
+    .find((o) => o.textContent?.startsWith("ObjectStorageBucketsWrite"))!;
+  expect(bucket.textContent).toContain("For one change, up to 4 hours");
+  fireEvent.mouseDown(bucket);
+  const caution = within(dialog).getByText(/lifecycle rules, which can expire and delete objects/);
+  expect(caution.textContent).toContain("for at most 4 hours, never permanently");
+  expect(caution.textContent).toContain("asks you to sign in again");
+  const lengths = within(dialog)
+    .getAllByRole("radio")
+    .map((r) => r.textContent);
+  expect(lengths).toEqual(["1 hour", "4 hours"]);
+  expect(within(dialog).getByRole("radio", { name: "1 hour" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Why SRE needs it" }), {
+    target: { value: "close the public listing" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add grant" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await screen.findByRole("dialog", { name: "Review changes to Scaleway" });
+  const seats = calls.plan[0] as {
+    seats: { sre: { scaleway: { grants: Record<string, unknown>[] } } };
+  };
+  const added = seats.seats.sre.scaleway.grants.at(-1)!;
+  expect(added).toMatchObject({
+    permission: "ObjectStorageBucketsWrite",
+    reason: "close the public listing",
+  });
+  const hours = (Date.parse(String(added.expires_at)) - Date.now()) / 3_600_000;
+  expect(hours).toBeGreaterThan(0.9);
+  expect(hours).toBeLessThanOrEqual(1);
+});
+
 // ADD GRANT PICKS ONE PERMISSION FROM THE LIVE CATALOGUE, a write marked as
 // asking a fresh sign-in and an unavailable one offered disabled with why,
 // and drafts it with its zones, how long and why, leaving the id and author
