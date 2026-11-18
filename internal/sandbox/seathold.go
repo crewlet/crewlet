@@ -1,104 +1,33 @@
 package sandbox
 
-import "context"
+import (
+	"context"
+	"errors"
 
-// THE SEAT'S INBOX IS HELD WHILE A RUN HOLDS THE SEAT, OR AN ANSWER IS OWED.
-//
-// # What used to spin
-//
-// A seat a detached run held took no new turn, and the inbox screening PARKED
-// every delivery that reached it: requeued it onto the seat's own inbox and
-// acked the original. Nothing stopped the consumer, so the copy was the next
-// thing it fetched — immediately, since a pull consumer fetches again the
-// moment its handler returns — and it was parked again. For the length of the
-// run (hours, for a real task) every message waiting on a busy seat went
-// round that loop at whatever rate the broker would serve: a fetch, a
-// screening, a store read for the answer offer, a replicated publish (and the
-// event-store write the publish listener makes for it) and an ack, per message
-// per lap. Nothing was lost — the same-id dedupe and the completion ledger
-// held — but a seat parked on a long run was the busiest thing on its node,
-// doing nothing.
-//
-// # What happens instead
-//
-// The coordinator holds the seat's inbox — a pause hold under ONE reason,
-// [SeatHold] — for exactly as long as the seat has a run in [Holding] or owes
-// one of its runs a recorded answer's resume or the finish of an ending this
-// node keeps, and lifts it the moment it has neither. Held, the consumer
-// fetches nothing: the mail waits on the broker with its order and its delivery
-// count intact, costs nothing while it waits, and is delivered in order when
-// the hold lifts. Both conditions are this node's own counts ([seatRuns], the
-// owed set), moved by the coordinator's own transitions, so the hold follows
-// them at the transition itself rather than at whichever delivery happens to
-// arrive next: a launch, from the write that opens its row
-// ([Coordinator.Launch]) — not from the started event a separate subscription
-// processes later, which left a window for the seat's next mail to run beside
-// the job. Then a park on a question, a run that settles — its record deleted,
-// which for a resumed turn comes once the turn has RETURNED, and where the
-// record owes the executor log the turn's end, once its ending's retry has
-// recorded that end (never at a resumed turn's start: the resumed turn is the
-// seat's work, and the hold lasts through it and through its end, see
-// [Coordinator.resumeAndSettle]) — and a seat recovered mid-run, whose hold is
-// taken in its preparation, before its mailbox is attached: for a run it finds
-// running, and for an ending it finds decided and owing its turn's end, which
-// this node then keeps ([Coordinator.endRun]).
-//
-// A delivery that reaches a held seat anyway — one that raced the hold, or a
-// hold the queue refused — is DEFERRED by the screening, which asks for the
-// hold again first ([Coordinator.HoldSeat]). A deferral keeps the delivery at
-// the head of the inbox at the cost of one of its deliveries, once per hold
-// rather than once per lap.
-//
-// # The rule: a seat busy coding takes no other work
-//
-// A HELD SEAT RECEIVES NOTHING, a person's answer to ANOTHER of its runs
-// included, until the run holding it settles or parks on its own question.
-// That is the rule rather than a price paid for the hold: an agent whose
-// executor is in the middle of a job is busy with that job, and it takes up
-// the next one — a new task, a colleague's message, the answer that resumes
-// its other run — when this one is done, exactly as a person would. Resuming
-// a second run beside the first would put two of its turns in flight at once,
-// each acting for the seat with no view of the other.
-//
-// So a chat reply waits on the inbox with everything else and is offered when
-// the job stops holding the seat. Nothing is lost: the reply keeps its place,
-// the question keeps its anchor, and a box that outlives `pause_ttl_seconds`
-// meanwhile re-seeds from its branch when the answer arrives. The answer used
-// to be offered on a held seat, beside the park the hold replaced, and that
-// meant consuming the held seat's mail to look for it, and a consumed message
-// that is not the answer has nowhere to go but back onto the inbox, in a loop.
-//
-// AN ANSWER BY TURN DOES NOT WAIT ON THE INBOX. It names its run, so nothing
-// has to be read to find it, and it travels on the seat's control topic, which
-// no hold stops ([AnswerDesk.Deliver]). It used to ride the inbox, and there it
-// waited out every job that held the seat and then every older message, any of
-// which could start the next job: on a busy seat it never arrived. Now it is
-// recorded on arrival, and the rule above still holds for its RESUME, which
-// waits for the job holding the seat ([SeatCoding]) and is then the first thing
-// the seat does, its inbox held behind it.
-//
-// WHO HAS TO AGREE ON IT: this node alone. The hold lives in this process's
-// queue client, keyed on the subscription, and is derived from this node's
-// counts of the seat's runs. A detach drops it with the attachment, and the
-// seat's next holder takes its own from its recovery pass.
+	"github.com/crewlet/crewlet/internal/queue"
+)
 
-// SeatHold takes and lifts the hold on a seat's inbox — see the top of this
-// file for when.
-//
-// DECLARED HERE AND IMPLEMENTED BY THE ENGINE, which owns the seat's inbox and
-// the name the hold is taken under. The coordinator calls Hold when a seat
-// starts to need it and Release when it stops, once each: holds are keyed by
-// reason, so a second Hold would be the same hold and a Release the last of
-// it.
-//
-// CALLED WITH THE SEAT'S HANDLE, which is what this node's own counts are kept
-// under, and IMPLEMENTED ON ITS ID: the inbox a hold sits on is named by the
-// seat's id, a pure function of its immutable handle (ADR-0013), so the
-// implementation derives the id and holds the mailbox it names — as every
-// other hold on a seat's mailbox is keyed.
+// The seat's inbox is held while a run holds the seat, or an answer is owed: a
+// pause hold under one reason ([SeatHold]) for as long as the seat has a run in
+// [Holding] or owes a resume or an ending's finish, lifted the moment it has
+// neither, at the transition itself. Held, the mail waits on the broker in
+// order at no cost; a delivery that reaches a held seat anyway is deferred. A
+// seat busy coding takes no other work, a person's answer to another run
+// included; an answer by turn travels on the control topic and its resume waits
+// ([SeatCoding]). This node's alone; each hold names its inbox attachment
+// ([queue.Attachment]). See the package doc, "The seat's inbox hold".
+
+// SeatHold takes and lifts the hold on a seat's inbox (see the package doc,
+// "The seat's inbox hold", for when). Declared here and implemented by the
+// engine, which owns the inbox and the hold's name. Hold is called when a seat
+// starts to need it and Release when it stops, once each, since holds are keyed
+// by reason. Called with the seat's handle and implemented on its id, a pure
+// function of the handle (ADR-0013). Each names the attachment the hold is for:
+// Hold refuses an ended one with [queue.ErrAttachmentGone], and Release under
+// one lifts nothing.
 type SeatHold interface {
-	Hold(ctx context.Context, handle string) error
-	Release(ctx context.Context, handle string) error
+	Hold(ctx context.Context, handle string, inbox queue.Attachment) error
+	Release(ctx context.Context, handle string, inbox queue.Attachment) error
 }
 
 // wantsHoldLocked reports whether a seat's inbox must be held: a run holds the
@@ -148,13 +77,17 @@ func (c *Coordinator) reconcileHold(ctx context.Context, handle string) {
 		}
 		c.holdBusy[handle] = true
 		gen := c.holdGen[handle]
+		// THE ATTACHMENT THIS DECISION IS FOR, read with it: a release that
+		// lands before the queue call ends it, and the queue then refuses
+		// the hold rather than carry it onto the next attachment.
+		inbox := c.inboxes[handle]
 		c.mu.Unlock()
 
 		var err error
 		if want {
-			err = c.hold.Hold(ctx, handle)
+			err = c.hold.Hold(ctx, handle, inbox)
 		} else {
-			err = c.hold.Release(ctx, handle)
+			err = c.hold.Release(ctx, handle, inbox)
 		}
 
 		c.mu.Lock()
@@ -175,6 +108,19 @@ func (c *Coordinator) reconcileHold(ctx context.Context, handle string) {
 			}
 		}
 		c.mu.Unlock()
+		if errors.Is(err, queue.ErrAttachmentGone) {
+			// THE ATTACHMENT HAS ENDED: the seat's release detached it, or
+			// this node holds no attachment of the seat yet. Nothing is
+			// held, and nothing needs to be: the detach dropped every hold,
+			// and the seat's next recovery takes the hold its own attachment
+			// needs. Decided again if the seat was forgotten meanwhile.
+			log.DebugContext(ctx, "sandbox_seat_hold_attachment_ended", "agent", handle,
+				"attachment", uint64(inbox))
+			if !dirty {
+				return
+			}
+			continue
+		}
 		if err != nil {
 			// Logged and left: a hold that could not be taken lets the
 			// seat's mail reach the screening, which defers it and asks
@@ -192,18 +138,29 @@ func (c *Coordinator) reconcileHold(ctx context.Context, handle string) {
 	}
 }
 
-// forgetHold drops what this node believes about a seat's hold, for a seat it
-// has released: the release DETACHED the inbox, and a detach drops every hold
-// the attachment carried, so there is nothing to lift — and a Release from here
-// would act on the subscription this node takes its own hold on again the
-// moment it re-acquires the seat.
+// forgetHold drops what this node believes about a seat's hold, and the
+// attachment it was taken for, for a seat it has released: the release
+// DETACHED the inbox, and a detach drops every hold the attachment carried, so
+// there is nothing to lift.
 //
 // A GENERATION, because a reconcile may be out at the queue as this runs: left
 // to finish, it would record a hold on an attachment that no longer exists,
-// and a seat re-acquired here would then be believed held and never be.
+// and a seat re-acquired here would then be believed held and never be. What
+// that reconcile asked of the queue was for the ended attachment, so the queue
+// refused it and it gates nothing.
 func (c *Coordinator) forgetHold(handle string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.held, handle)
+	delete(c.inboxes, handle)
 	c.holdGen[handle]++
+}
+
+// attachInbox records the attachment of a seat's inbox this node is taking the
+// seat under, which every hold of it is taken for from here
+// ([Coordinator.RecoverSeat]).
+func (c *Coordinator) attachInbox(handle string, inbox queue.Attachment) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.inboxes[handle] = inbox
 }

@@ -249,7 +249,7 @@ var leProducers = []struct {
 	name string
 	read func(raw []byte) (threadLine, error)
 }{
-	{"the whole line's decode", func(raw []byte) (threadLine, error) { return decodeThreadLine(1, raw) }},
+	{"the whole line's decode", func(raw []byte) (threadLine, error) { return decodeThreadLine(1, raw, nil) }},
 }
 
 // EVERY PRODUCER FILLS THE ESTIMATE: what each producer of a line's facts

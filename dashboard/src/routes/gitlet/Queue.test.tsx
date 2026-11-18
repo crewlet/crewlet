@@ -1,312 +1,705 @@
 /**
- * Gitlet › Queue draws the merge queues of gated branches as the engine
- * answers them.
- *
- * The invariants: a band per repository and branch, its entries in queue
- * order with the change, who enqueued it and where it stands; once a
- * repository is named, each entry's train base and a meter of the required
- * checks of what it is tested in, and what the queue put out lately in the
- * danger tone with the reason and the checks or paths the engine found;
- * nothing queued is an empty state, never an empty band; and a name no
- * repository can have is said in place and never asked.
+ * Gitlet › Queue draws every repository's merge queues as boxes of trains, as the engine answers
+ * them: a box per branch, its train base and its entries in queue order on a spine, the gate's
+ * required checks, what each train's checks stand at and how long they have run.
  */
 
-import { cleanup, fireEvent, screen, within } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
 
-import {
-  CODE_POSITION,
-  jsonAnswer,
-  mountCode,
-  stubCodeEngine,
-  onTheRight,
-} from "~/test/codeScreens.tsx";
+import { CODE_POSITION, jsonAnswer, mountCode, stubCodeEngine } from "~/test/codeScreens.tsx";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { ADMIN_VIEWER } from "~/test/viewer.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { Queue } from "./Queue.tsx";
+
+beforeAll(() => {
+  // jsdom implements no scrolling, and a step scrolls its row into view.
+  Element.prototype.scrollIntoView = () => {};
+});
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "";
 });
 
-const A = "a".repeat(40);
-const BASE = "b".repeat(40);
-const TIP = "c".repeat(40);
+const oid = (short: string) => short.padEnd(40, "0");
+const BASE = oid("c71d0e9");
+const T1 = oid("e1e1e1e");
+const HEAD = oid("aaaaaaa");
+const C17 = oid("c17");
 const page = { position: CODE_POSITION, level: "stale" };
+const NOW = Date.now();
+const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
 const LISTING = () => jsonAnswer({ repos: [{ name: "web" }, { name: "api" }], ...page });
 
-function entry(repo: string, place: number, extra: Record<string, unknown> = {}) {
+function entry<M extends object>(repo: string, place: number, number: number, more = {} as M) {
   return {
     repo_id: `id-${repo}`,
     repo,
     entry_id: `${repo}-${place}`,
     target_ref: "refs/heads/main",
-    change_id: `c-${repo}-${place}`,
-    number: 40 + place,
+    change_id: `c-${repo}-${number}`,
+    number,
     place,
     seq: CODE_POSITION,
-    head_oid: A,
+    head_oid: HEAD,
     method: "merge",
     enqueued_by: { handle: "cto", kind: "agent" },
     state: "waiting",
-    enqueued_at: "2026-11-01T10:00:00Z",
-    ...extra,
+    enqueued_at: ago(12),
+    ...more,
   };
 }
 
-// EVERY REPOSITORY'S QUEUES, a band each, in queue order: the change, who
-// enqueued it and where it stands. Mutation: draw one band for every
-// repository, or the rows in the order the answer listed them, and this
-// fails.
-test("every repository's queues are a band per branch, in queue order", async () => {
-  stubCodeEngine({
+const WEB44 = entry("web", 1, 44, {
+  title: "server: drain inside the load balancer's deregistration delay",
+  state: "testing",
+  candidate_id: "cand-1",
+  train: "t1",
+  enqueued_at: ago(16),
+});
+const WEB43 = entry("web", 2, 43, {
+  title: "checkout: retry a declined card once with the network token",
+  enqueued_by: { handle: "jane", kind: "person" },
+});
+const TRAIN = {
+  repo_id: "id-web",
+  candidate_id: "cand-1",
+  target_ref: "refs/heads/main",
+  train: "t1",
+  ordinal: 1,
+  base_oid: BASE,
+  tip_oid: T1,
+  entries: [{ entry_id: "web-1", commit: T1 }],
+  state: "testing",
+  position: CODE_POSITION,
+};
+const API17 = {
+  repo_id: "id-api",
+  repo: "api",
+  entry_id: "api-gone",
+  target_ref: "refs/heads/main",
+  change_id: "c-api-17",
+  number: 17,
+  title: "api: page the orders listing by keyset",
+  head_oid: HEAD,
+  method: "merge",
+  enqueued_by: { handle: "cto", kind: "agent" },
+  reason: "check_failed",
+  checks: ["e2e"],
+  enqueued_at: ago(23),
+  ejected_at: ago(20),
+  tested_in: { candidate_id: "cand-9", base_oid: oid("5c3e8b1"), commit_oid: C17 },
+};
+
+function check(name: string, state: string, more: Record<string, unknown> = {}) {
+  return {
+    repo_id: "id-web",
+    repo: "web",
+    oid: T1,
+    target: "refs/heads/main",
+    name,
+    attempt: 1,
+    state,
+    required: true,
+    timeout_seconds: 1800,
+    ...more,
+  };
+}
+
+const T1_CHECKS = [
+  check("unit", "passed", { started_at: ago(3) }),
+  check("e2e", "running", { started_at: ago(4.5) }),
+];
+
+const C17_CHECKS = [
+  check("e2e", "failed", { repo_id: "id-api", repo: "api", oid: C17, started_at: ago(22) }),
+];
+const CHECKS_OF: Record<string, unknown[]> = { [T1]: T1_CHECKS, [C17]: C17_CHECKS };
+
+const GATE = {
+  pattern: "main",
+  gate: {
+    merge_by: "writers",
+    approvals: "one",
+    checks: ["e2e", "unit"],
+    landing: { depth: 8, batch: 4 },
+    delete_source: "seats",
+  },
+};
+
+type Answers = Record<string, (url: URL, init?: RequestInit) => Response>;
+
+/** The story's engine: web's train and api's ejection, each answer replaceable. */
+function story(over: Answers = {}): URL[] {
+  return stubCodeEngine({
     "/query/code_repos": LISTING,
     "/query/code_queue": () =>
       jsonAnswer({
-        queue: [entry("web", 2), entry("api", 1), entry("web", 1, { state: "testing" })],
+        queue: [WEB43, WEB44],
+        trains: [TRAIN],
+        ejected: [API17],
+        ejected_total: { total: 1 },
+        ...page,
+      }),
+    "/query/code_checks": (url) =>
+      jsonAnswer({ checks: CHECKS_OF[url.searchParams.get("oid") ?? ""] ?? [], ...page }),
+    "/query/code_repo": (url) =>
+      jsonAnswer({ repo: { name: url.searchParams.get("name"), gates: [GATE] }, ...page }),
+    "/query/code_refs": () =>
+      jsonAnswer({
+        refs_detail: [
+          {
+            ref: "refs/heads/main",
+            oid: BASE,
+            position: CODE_POSITION,
+            moved_at: ago(30),
+            protection: { patterns: ["main"], direct_push: "none" },
+          },
+        ],
+        ...page,
+      }),
+    "/query/code_log": () =>
+      jsonAnswer({
+        log: {
+          commits: [{ oid: BASE, subject: "Merge change web!41: cache the cart badge for 30s" }],
+          scanned: 1,
+          complete: true,
+        },
+        ...page,
+      }),
+    "/query/code_counts": () => jsonAnswer({ counts: { queue: { live: 2 } }, ...page }),
+    ...over,
+  });
+}
+
+const box = (name: string) => screen.getByRole("list", { name: new RegExp(`^${name} into`) });
+const headOf = (name: string) =>
+  box(name)
+    .closest<HTMLElement>(".code-list__group")!
+    .querySelector<HTMLElement>(".code-list__band")!;
+const asked = (urls: URL[], path: string) => urls.filter((u) => u.pathname === path);
+/** An entry's train meter as drawn: each segment's tone (the rest unmarked) and share. */
+const segmentsOf = (row: HTMLElement) =>
+  [...row.querySelectorAll<HTMLElement>(".crewlet-segmented-meter__segment")].map(
+    (s) => `${s.dataset.tone ?? "rest"} ${s.style.flexBasis}`,
+  );
+
+// Mutation: ask trains for a named repository only.
+test("every scope asks the queues with their trains, on the next page too", async () => {
+  const urls = story({
+    "/query/code_queue": (url) =>
+      url.searchParams.get("cursor") === "p2"
+        ? jsonAnswer({ queue: [WEB43], ...page })
+        : jsonAnswer({ queue: [WEB44], trains: [TRAIN], next: "p2", ...page }),
+  });
+  mountCode("#/gitlet/queue", <Queue />);
+  fireEvent.click(await screen.findByRole("button", { name: "Load more queued changes" }));
+  await screen.findByText(WEB43.title);
+  const queues = asked(urls, "/query/code_queue");
+  expect(queues.map((u) => u.searchParams.get("trains"))).toEqual(queues.map(() => "true"));
+  expect(queues.some((u) => u.searchParams.get("cursor") === "p2")).toBe(true);
+  cleanup();
+  const named = story();
+  mountCode("#/gitlet/queue?repo=web", <Queue />);
+  await screen.findByText(WEB44.title);
+  const first = asked(named, "/query/code_queue")[0]!;
+  expect(first.searchParams.get("repo")).toBe("web");
+  expect(first.searchParams.get("trains")).toBe("true");
+});
+
+// Mutation: drop "at least" from the page's last box.
+test("while more queued changes are to load, the page's last box says at least", async () => {
+  story({
+    "/query/code_queue": () => jsonAnswer({ queue: [WEB44], trains: [TRAIN], next: "p2", ...page }),
+  });
+  mountCode("#/gitlet/queue", <Queue />);
+  expect(
+    await screen.findByRole("list", { name: /^web into main, at least 1 in the queue/ }),
+  ).toBeTruthy();
+});
+
+// Mutation: draw the rows in the answer's order.
+test("a box per queue, its entries in queue order on its spine with their titles", async () => {
+  story();
+  mountCode("#/gitlet/queue", <Queue />);
+  const web = await screen.findByRole("list", { name: /^web into main, 2 in the queue/ });
+  const rows = within(web).getAllByRole("listitem");
+  expect(rows.map((r) => r.querySelector(".code-list__link")?.textContent)).toEqual([
+    WEB44.title,
+    WEB43.title,
+  ]);
+  expect(within(rows[0]!).getByText("Place 1")).toBeTruthy();
+  expect(within(rows[0]!).getByText("web!44")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: /^api into main, Empty/ })).toBeTruthy();
+  expect(screen.getByText("Nothing is queued for main")).toBeTruthy();
+});
+
+// Mutation: read the base by the branch.
+test("the train base row names the base and its subject", async () => {
+  const urls = story();
+  mountCode("#/gitlet/queue", <Queue />);
+  expect(await screen.findByText("Merge change web!41: cache the cart badge for 30s")).toBeTruthy();
+  const base = screen.getByText("Train base").closest("p")!;
+  expect(within(base).getByRole("link", { name: "c71d0e9" }).getAttribute("href")).toBe(
+    `#/gitlet/repos/web/commits/${BASE}`,
+  );
+  const logs = asked(urls, "/query/code_log");
+  expect(logs).toHaveLength(1);
+  expect(logs[0]!.searchParams.get("ref")).toBe(BASE);
+  expect(logs[0]!.searchParams.get("limit")).toBe("1");
+});
+
+// Mutation: say "next to land" on every row.
+test("an entry says who enqueued it, when, and where it stands", async () => {
+  story();
+  mountCode("#/gitlet/queue", <Queue />);
+  await screen.findByText(WEB44.title);
+  const [first, second] = within(box("web")).getAllByRole("listitem");
+  expect(first!.querySelector(".code-list__meta")?.textContent).toMatch(
+    /CTOenqueued it 16 minutes ago· next to land$/,
+  );
+  expect(second!.querySelector(".code-list__meta")?.textContent).toMatch(
+    /Jane Founderenqueued it 12 minutes ago· waits behind web!44$/,
+  );
+  expect(within(second!).getByRole("link", { name: "web!44" }).getAttribute("href")).toBe(
+    "#/gitlet/repos/web/changes/44",
+  );
+});
+
+// Mutation: total the required rows alone, or drop the candidate's meter.
+test("required checks are the gate's of the rules the engine matched, and the meter counts the tip's against them", async () => {
+  const urls = story();
+  mountCode("#/gitlet/queue", <Queue />);
+  await screen.findByText(WEB44.title);
+  expect(await within(headOf("web")).findByText("e2e, unit")).toBeTruthy();
+  const first = within(box("web")).getAllByRole("listitem")[0]!;
+  expect(await within(first).findByText("e2e running · unit passed")).toBeTruthy();
+  expect(segmentsOf(first)).toEqual(["success 50%", "info 50%"]);
+  const repos = asked(urls, "/query/code_repo");
+  expect(repos.map((u) => u.searchParams.get("name")).sort()).toEqual(["api", "web"]);
+  expect(repos.every((u) => u.searchParams.get("gates") === "true")).toBe(true);
+  const refs = asked(urls, "/query/code_refs").find((u) => u.searchParams.get("name") === "web")!;
+  expect(refs.searchParams.get("contains")).toBe("main");
+  expect(refs.searchParams.get("detail")).toBe("true");
+});
+
+// Mutation: draw a waiting entry's meter from the train ahead.
+test("a waiting entry's checks have not started and it says what it starts after", async () => {
+  story();
+  mountCode("#/gitlet/queue", <Queue />);
+  await screen.findByText(WEB43.title);
+  const second = within(box("web")).getAllByRole("listitem")[1]!;
+  expect(await within(second).findByText("e2e and unit not started")).toBeTruthy();
+  expect(second.querySelector(".code-queue__words strong")?.textContent).toBe("web!44");
+  expect(second.textContent).toMatch(/starts after web!44/);
+  expect(within(second).queryByRole("meter")).toBeNull();
+  expect(segmentsOf(second)).toEqual(["rest 100%"]);
+});
+
+// Mutation: measure from enqueued_at.
+test("the elapsed bar runs from the first required check's start against the slowest timeout", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: NOW });
+  story();
+  mountCode("#/gitlet/queue", <Queue />);
+  await screen.findByText(WEB44.title);
+  const first = within(box("web")).getAllByRole("listitem")[0]!;
+  const bar = await within(first).findByRole("meter", { name: "Time its checks have run" });
+  expect(bar.getAttribute("aria-valuetext")).toBe("4 of 30 minutes");
+  expect(within(first).getByText("4 of 30 minutes")).toBeTruthy();
+  vi.setSystemTime(NOW + 2 * 60_000);
+  await act(async () => void vi.advanceTimersByTime(1_000));
+  expect(within(first).getByText("6 of 30 minutes")).toBeTruthy();
+});
+
+// Mutation: draw "No required checks".
+test("a gate read refused says the required checks are unavailable, and the meter counts the required rows", async () => {
+  story({
+    "/query/code_repo": () =>
+      jsonAnswer({ error: "bad_params", detail: "gates is not a key this node reads" }, 400),
+  });
+  mountCode("#/gitlet/queue", <Queue />);
+  await screen.findByText(WEB44.title);
+  const unavailable = await within(headOf("web")).findByText("Required checks are unavailable");
+  expect(unavailable.closest("[title]")?.getAttribute("title")).toBe(
+    "gates is not a key this node reads",
+  );
+  expect(within(headOf("web")).queryByText("No required checks")).toBeNull();
+  const first = within(box("web")).getAllByRole("listitem")[0]!;
+  expect(await within(first).findByText("unit passed · e2e running")).toBeTruthy();
+});
+
+// Mutation: one list per box, so j stops at web's last entry.
+test("j moves over every box's entries and Enter peeks the change", async () => {
+  story({
+    "/query/code_queue": () =>
+      jsonAnswer({
+        queue: [WEB44, entry("api", 1, 18, { title: "api: stream the export" })],
+        trains: [TRAIN],
         ...page,
       }),
   });
   mountCode("#/gitlet/queue", <Queue />);
-  const web = await screen.findByRole("table", { name: "Queued into web · main" });
-  expect(onTheRight(web, "In the queue")).toBe(true);
-  const rows = within(web).getAllByRole("row").slice(1);
-  expect(rows.map((r) => within(r).getByRole("link").textContent)).toEqual(["web!41", "web!42"]);
-  expect(within(rows[0]!).getByText("testing")).toBeTruthy();
-  expect(within(rows[1]!).getByText("CTO")).toBeTruthy();
-  expect(screen.getByRole("table", { name: "Queued into api · main" })).toBeTruthy();
+  await screen.findByText("api: stream the export");
+  await afterMicrotasks();
+  fireEvent.pointerDown(screen.getByRole("group", { name: "Merge queues" }));
+  fireEvent.keyDown(window, { key: "j" });
+  expect(document.activeElement?.textContent).toBe(WEB44.title);
+  fireEvent.keyDown(window, { key: "j" });
+  expect(document.activeElement?.textContent).toBe("api: stream the export");
+  act(() => (document.activeElement as HTMLElement).blur());
+  fireEvent.keyDown(window, { key: "Enter" });
+  expect(decodeURIComponent(location.hash)).toMatch(/peek=change:api!18/);
 });
 
-// A NAMED REPOSITORY'S DETAIL: the train base an entry is tested on, the
-// meter of its candidate's required checks, and what the queue put out —
-// danger, with why and the checks that failed. The candidate tests a batch of
-// two, and its tip's checks are asked ONCE for both. Mutation: drop the
-// ejections, meter every check rather than the required ones, or ask the
-// checks per entry, and this fails.
-test("a named repository's queue shows its train base, its required checks and its ejections", async () => {
-  const asked = stubCodeEngine({
-    "/query/code_repos": LISTING,
+const callout = () => screen.getByRole("group", { name: "Taken out of api's queue" });
+
+// Mutation: link the base commit instead of the failed one.
+test("the ejection says why in words with the train's base, and View the run opens that run", async () => {
+  const urls = story();
+  mountCode("#/gitlet/queue", <Queue />);
+  await screen.findByText(/was taken out of the queue/);
+  expect(callout().querySelector(".code-queue__why")?.textContent).toBe(
+    "api!17 was taken out of the queue 20 minutes ago: e2e failed on the train's merge onto main at 5c3e8b1",
+  );
+  expect(callout().querySelector(".code-queue__why strong")?.textContent).toBe("api!17");
+  expect(callout().textContent).toMatch(
+    /api: page the orders listing by keyset ·\s+CTO enqueued it 23 minutes ago/,
+  );
+  expect(within(callout()).getByRole("link", { name: "Open api!17" }).getAttribute("href")).toBe(
+    "#/gitlet/repos/api/changes/17",
+  );
+  const run = await within(callout()).findByRole("link", { name: "View the run" });
+  expect(decodeURIComponent(run.getAttribute("href")!)).toBe(
+    `#/gitlet/checks?run=api:e2e:1:${C17}:refs/heads/main`,
+  );
+  const reads = asked(urls, "/query/code_checks").filter((u) => u.searchParams.get("oid") === C17);
+  expect(reads).toHaveLength(1);
+  expect(reads[0]!.searchParams.get("target")).toBe("refs/heads/main");
+});
+
+// Mutation: link with an empty commit.
+test("an ejection without its train says why and offers no run", async () => {
+  const urls = story({
+    "/query/code_queue": () =>
+      jsonAnswer({ queue: [], ejected: [{ ...API17, tested_in: undefined }], ...page }),
+  });
+  mountCode("#/gitlet/queue", <Queue />);
+  await screen.findByText(/on the train it was tested in/);
+  await afterMicrotasks();
+  expect(within(callout()).queryByRole("link", { name: /run/ })).toBeNull();
+  expect(asked(urls, "/query/code_checks")).toEqual([]);
+});
+
+// Mutation: say nothing where the train's rows are gone.
+test("a run no longer kept is said so", async () => {
+  story({ "/query/code_checks": () => jsonAnswer({ checks: [], ...page }) });
+  mountCode("#/gitlet/queue", <Queue />);
+  expect(
+    await within(await screen.findByRole("group", { name: "Taken out of api's queue" })).findByText(
+      "Its run is no longer kept.",
+    ),
+  ).toBeTruthy();
+});
+
+// Mutation: read every ejection's run on mount.
+test("more than three ejections in a box show three and the rest on a press, each run read only when drawn", async () => {
+  const five = Array.from({ length: 5 }, (_, i) => ({
+    ...API17,
+    entry_id: `api-gone-${i}`,
+    number: 17 + i,
+    ejected_at: ago(20 + i),
+    tested_in: { ...API17.tested_in, commit_oid: oid(`c${i}`) },
+  }));
+  const urls = story({
+    "/query/code_queue": () => jsonAnswer({ queue: [], ejected: five, ...page }),
+  });
+  mountCode("#/gitlet/queue", <Queue />);
+  await screen.findByText("api!17");
+  await afterMicrotasks();
+  expect(screen.getAllByRole("group", { name: "Taken out of api's queue" })).toHaveLength(3);
+  expect(asked(urls, "/query/code_checks")).toHaveLength(3);
+  fireEvent.click(screen.getByRole("button", { name: "Show 2 more taken out in the last day" }));
+  await screen.findByText("api!21");
+  await afterMicrotasks();
+  expect(screen.getAllByRole("group", { name: "Taken out of api's queue" })).toHaveLength(5);
+  expect(asked(urls, "/query/code_checks")).toHaveLength(5);
+});
+
+// Mutation: draw the ejections in the answer's order.
+test("a box's ejections are drawn newest first", async () => {
+  const older = { ...API17, entry_id: "api-older", number: 16, ejected_at: ago(50) };
+  const newer = { ...API17, entry_id: "api-newer", number: 18, ejected_at: ago(5) };
+  story({
+    "/query/code_queue": () => jsonAnswer({ queue: [], ejected: [older, API17, newer], ...page }),
+  });
+  mountCode("#/gitlet/queue", <Queue />);
+  await screen.findByText("api!18");
+  const drawn = screen.getAllByRole("group", { name: "Taken out of api's queue" });
+  expect(drawn.map((g) => g.querySelector(".code-queue__why strong")?.textContent)).toEqual([
+    "api!18",
+    "api!17",
+    "api!16",
+  ]);
+});
+
+const WRITER = { ...ADMIN_VIEWER, acts: ["code_merge_change", "code_dequeue_change"] };
+
+/** The story with every act recorded and answered by `outcome`. */
+function acting(
+  over: Answers = {},
+  outcome: () => Response = () => jsonAnswer({ outcome: "applied" }),
+) {
+  const acted: { tool: string; args: Record<string, unknown> }[] = [];
+  const urls = story({
+    "/operator/act/code_merge_change": (_url, init) => {
+      acted.push({
+        tool: "code_merge_change",
+        args: (JSON.parse(String(init?.body)) as { args: Record<string, unknown> }).args,
+      });
+      return outcome();
+    },
+    ...over,
+  });
+  return { acted, urls };
+}
+
+const requeue = () => screen.findByRole("button", { name: "Add api!17 to the queue again" });
+
+// Mutation: drop `expected_head`, send the engine's default for the branch, or send the
+// branch deletion and work-item closing as constants.
+test.each([
+  ["neither", {}, false],
+  ["its branch deleted and its work item closed", { delete_source: true, close_task: true }, true],
+])("Re-queue adds it again with how it was to land: %s", async (_how, flags, wanted) => {
+  const { acted, urls } = acting({
     "/query/code_queue": () =>
       jsonAnswer({
-        queue: [
-          entry("web", 1, { state: "testing", candidate_id: "cand-1", train: "t1" }),
-          entry("web", 2, { state: "testing", candidate_id: "cand-1", train: "t1" }),
-        ],
-        trains: [
-          {
-            repo_id: "id-web",
-            candidate_id: "cand-1",
-            target_ref: "refs/heads/main",
-            train: "t1",
-            ordinal: 1,
-            base_oid: BASE,
-            tip_oid: TIP,
-            entries: [
-              { entry_id: "web-1", commit: BASE },
-              { entry_id: "web-2", commit: TIP },
-            ],
-            state: "testing",
-            position: CODE_POSITION,
-          },
-        ],
-        ejected: [
-          {
-            repo_id: "id-web",
-            repo: "web",
-            entry_id: "web-gone",
-            target_ref: "refs/heads/main",
-            change_id: "c-gone",
-            number: 39,
-            head_oid: A,
-            enqueued_by: { handle: "cto", kind: "agent" },
-            reason: "check_failed",
-            checks: ["unit"],
-            enqueued_at: "2026-11-01T09:00:00Z",
-            ejected_at: "2026-11-01T09:20:00Z",
-          },
-        ],
-        ...page,
-      }),
-    "/query/code_checks": () =>
-      jsonAnswer({
-        checks: [
-          {
-            repo_id: "id-web",
-            repo: "web",
-            oid: TIP,
-            target: "refs/heads/main",
-            name: "unit",
-            attempt: 1,
-            state: "passed",
-            required: true,
-            timeout_seconds: 1800,
-          },
-          {
-            repo_id: "id-web",
-            repo: "web",
-            oid: TIP,
-            target: "refs/heads/main",
-            name: "e2e",
-            attempt: 1,
-            state: "running",
-            required: true,
-            timeout_seconds: 600,
-          },
-          {
-            repo_id: "id-web",
-            repo: "web",
-            oid: TIP,
-            target: "refs/heads/main",
-            name: "lint",
-            attempt: 1,
-            state: "failed",
-          },
-        ],
+        queue: [WEB43, WEB44],
+        trains: [TRAIN],
+        ejected: [{ ...API17, ...flags }],
         ...page,
       }),
   });
-  mountCode("#/gitlet/queue?repo=web", <Queue />);
-  const web = await screen.findByRole("table", { name: "Queued into web · main" });
-  expect(within(web).getAllByText(BASE.slice(0, 7))).toHaveLength(2);
-  // OF TWO: unit and e2e are required, lint is not — on both entries.
-  expect(await within(web).findAllByRole("img", { name: / of 2$/ })).toHaveLength(2);
-  expect(within(web).getAllByText(/of 30m/)).toHaveLength(2);
-  const out = screen.getByLabelText("Put out lately");
-  expect(within(out).getByText(/put out of the queue in the last day$/)).toBeTruthy();
-  expect(within(out).getByText(/a required check failed$/)).toBeTruthy();
-  expect(within(out).getByText("unit")).toBeTruthy();
-  expect(asked.find((u) => u.pathname === "/query/code_queue")?.searchParams.get("repo")).toBe(
-    "web",
-  );
-  // ONE READ for the candidate both entries are tested in: its tip, for the
-  // band's branch, at each check's latest attempt.
+  mountCode("#/gitlet/queue", <Queue />, WRITER);
+  const button = await requeue();
   await afterMicrotasks();
-  const checks = asked.filter((u) => u.pathname === "/query/code_checks");
-  expect(checks.map((u) => u.searchParams.get("oid"))).toEqual([TIP]);
+  expect(button.getAttribute("title")).toBeNull();
+  const before = asked(urls, "/query/code_queue").length;
+  fireEvent.click(button);
+  await afterMicrotasks();
+  expect(acted).toEqual([
+    {
+      tool: "code_merge_change",
+      args: {
+        change: "api!17",
+        expected_head: HEAD,
+        method: "merge",
+        delete_branch: wanted,
+        close_task: wanted,
+      },
+    },
+  ]);
+  await afterMicrotasks();
+  expect(asked(urls, "/query/code_queue").length).toBeGreaterThan(before);
+});
+
+// Mutation: hide the button instead.
+test("Re-queue is held where the fleet does not say how it was to land, and once it is queued again", async () => {
+  const { acted } = acting({
+    "/query/code_queue": () =>
+      jsonAnswer({ queue: [], ejected: [{ ...API17, method: undefined }], ...page }),
+  });
+  mountCode("#/gitlet/queue", <Queue />, WRITER);
+  const old = await requeue();
+  await afterMicrotasks();
+  expect(old.getAttribute("title")).toBe(
+    "This fleet does not say how it was to land: add it to the queue from its page.",
+  );
+  fireEvent.click(old);
+  expect(acted).toEqual([]);
+  cleanup();
+  acting({
+    "/query/code_queue": () =>
+      jsonAnswer({
+        queue: [entry("api", 1, 17, { change_id: API17.change_id })],
+        ejected: [API17],
+        ...page,
+      }),
+  });
+  mountCode("#/gitlet/queue", <Queue />, WRITER);
+  const again = await requeue();
+  await afterMicrotasks();
+  expect(again.getAttribute("title")).toBe("It is in the queue again, at #1.");
+});
+
+// Mutation: drop the refusal under the callout.
+test("Re-queue refused says why under the callout", async () => {
+  acting({}, () =>
+    jsonAnswer(
+      {
+        error: "stale_version",
+        refusal: "head_moved",
+        detail: "Its head moved since it was taken out, so nothing was queued.",
+      },
+      409,
+    ),
+  );
+  mountCode("#/gitlet/queue", <Queue />, WRITER);
+  const button = await requeue();
+  await afterMicrotasks();
+  fireEvent.click(button);
+  expect(
+    await within(callout()).findByText(
+      "Its head moved since it was taken out, so nothing was queued.",
+    ),
+  ).toBeTruthy();
+});
+
+// Mutation: hide Re-queue or Take out from a reader who cannot act.
+test.each([
+  [
+    "an anonymous reader",
+    { login: "", grants: [], handle: "", owner: "", name: "", acts: [], anonymous: true },
+    WRITE_REASONS.anonymous,
+  ],
+  ["a person the engine does not serve", { ...ADMIN_VIEWER, acts: [] }, WRITE_REASONS.not_served],
+])("Re-queue and Take out are drawn for %s, held with the reason", async (_who, viewer, reason) => {
+  const { acted } = acting();
+  mountCode("#/gitlet/queue", <Queue />, viewer);
+  const button = await requeue();
+  const out = await screen.findByRole("button", { name: "Take web!44 out of the queue" });
+  await afterMicrotasks();
+  expect(button.getAttribute("title")).toBe(reason);
+  expect(out.getAttribute("title")).toBe(reason);
+  fireEvent.click(button);
+  fireEvent.click(out);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(acted).toEqual([]);
+});
+
+// Mutation: draw 0 for a refusal.
+test("the summary counts what is queued and what was taken out, and a refused half is not drawn", async () => {
+  const urls = story();
+  mountCode("#/gitlet/queue", <Queue />);
+  const said = () => document.querySelector(".code-queue__summary")?.textContent;
+  await screen.findByText(WEB44.title);
+  await afterMicrotasks();
+  expect(said()).toBe("2 changes queued · 1 taken out in the last day");
+  const counts = asked(urls, "/query/code_counts")[0]!;
+  expect(counts.searchParams.get("parts")).toBe("queue");
+  expect(counts.searchParams.get("repo")).toBeNull();
+  cleanup();
+  const named = story({
+    "/query/code_counts": () =>
+      jsonAnswer({ error: "bad_params", detail: "queue is not a part this node counts" }, 400),
+  });
+  mountCode("#/gitlet/queue?repo=web", <Queue />);
+  await screen.findByText(WEB44.title);
+  await afterMicrotasks();
+  expect(said()).toBe("1 taken out in the last day");
+  expect(asked(named, "/query/code_counts")[0]!.searchParams.get("repo")).toBe("web");
+});
+
+// Mutation: offer an item the engine does not serve, or copy the hash alone.
+test("More offers the target's protection and gate, its commits and the queue's link", async () => {
+  const writeText = vi.fn(async () => undefined);
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  story();
+  mountCode("#/gitlet/queue", <Queue />);
+  const more = await screen.findByRole("button", { name: "More on web's queue into main" });
+  fireEvent.click(more);
+  const items = await screen.findAllByRole("menuitem");
+  expect(items.map((i) => i.textContent)).toEqual([
+    "Protection and merge gate",
+    "Commits on main",
+    "Copy a link to this queue",
+  ]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Copy a link to this queue" }));
+  await afterMicrotasks();
+  expect(writeText).toHaveBeenCalledWith(new URL("#/gitlet/queue?repo=web", location.href).href);
+  fireEvent.click(screen.getByRole("button", { name: "More on web's queue into main" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Commits on main" }));
+  expect(location.hash).toBe("#/gitlet/repos/web?tab=commits&ref=main");
+  location.hash = "#/gitlet/queue";
+  await afterMicrotasks();
+  fireEvent.click(await screen.findByRole("button", { name: "More on web's queue into main" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Protection and merge gate" }));
+  expect(location.hash).toBe("#/gitlet/repos/web?tab=settings");
+});
+
+// Mutation: fall back to the listing without trains.
+test("a fleet that refuses trains says so, with no listing in its place", async () => {
+  const urls = story({
+    "/query/code_queue": () =>
+      jsonAnswer({ error: "bad_params", detail: "trains is not a key this node reads" }, 400),
+  });
+  mountCode("#/gitlet/queue", <Queue />);
+  expect(
+    await screen.findByText("Every queue’s trains are unavailable on this fleet yet."),
+  ).toBeTruthy();
+  expect(screen.getByText(/trains is not a key this node reads/)).toBeTruthy();
+  await afterMicrotasks();
+  const queues = asked(urls, "/query/code_queue");
+  expect(queues.every((u) => u.searchParams.get("trains") === "true")).toBe(true);
+  expect(screen.queryByRole("group", { name: "Merge queues" })).toBeNull();
+});
+
+// One read for a candidate's entries: its tip, for the box's branch, at each check's latest
+// attempt. Mutation: ask the checks per entry.
+test("a candidate's tip is read once for every entry it tests", async () => {
+  const both = {
+    ...TRAIN,
+    entries: [
+      { entry_id: "web-1", commit: BASE },
+      { entry_id: "web-2", commit: T1 },
+    ],
+  };
+  const testing = { state: "testing", candidate_id: "cand-1", train: "t1" };
+  const urls = story({
+    "/query/code_queue": () =>
+      jsonAnswer({ queue: [WEB44, { ...WEB43, ...testing }], trains: [both], ...page }),
+  });
+  mountCode("#/gitlet/queue?repo=web", <Queue />);
+  expect(await screen.findAllByText("e2e running · unit passed")).toHaveLength(2);
+  await afterMicrotasks();
+  const checks = asked(urls, "/query/code_checks");
+  expect(checks.map((u) => u.searchParams.get("oid"))).toEqual([T1]);
   expect(checks[0]!.searchParams.get("target")).toBe("refs/heads/main");
   expect(checks[0]!.searchParams.get("latest")).toBe("true");
 });
 
-// A TIP'S CHECKS PAST ONE PAGE are read to their end before the meter is
-// drawn: a required check the engine sends on the second page is in the
-// meter, and its timeout in the figure the time queued is read against.
-// Mutation: draw the first page alone (no `next` followed) → "of 1" and no
-// thirty minutes, red.
-test("a tip's checks past one page are all in its meter", async () => {
-  const train = {
-    repo_id: "id-web",
-    candidate_id: "cand-1",
-    target_ref: "refs/heads/main",
-    train: "t1",
-    ordinal: 1,
-    base_oid: BASE,
-    tip_oid: TIP,
-    entries: [{ entry_id: "web-1", commit: TIP }],
-    state: "testing",
-    position: CODE_POSITION,
-  };
-  const row = (name: string, state: string, timeout: number) => ({
-    repo_id: "id-web",
-    repo: "web",
-    oid: TIP,
-    target: "refs/heads/main",
-    name,
-    attempt: 2,
-    state,
-    required: true,
-    timeout_seconds: timeout,
-  });
-  const asked = stubCodeEngine({
-    "/query/code_repos": LISTING,
-    "/query/code_queue": () =>
-      jsonAnswer({
-        queue: [entry("web", 1, { state: "testing", candidate_id: "cand-1", train: "t1" })],
-        trains: [train],
-        ...page,
-      }),
+// Mutation: draw the first page of a tip's checks alone.
+test("a tip's checks past one page are all in its words", async () => {
+  const urls = story({
+    "/query/code_queue": () => jsonAnswer({ queue: [WEB44], trains: [TRAIN], ...page }),
     "/query/code_checks": (url) =>
-      url.searchParams.get("cursor") === "lint/2"
-        ? jsonAnswer({ checks: [row("unit", "passed", 1800)], ...page })
-        : jsonAnswer({ checks: [row("lint", "failed", 60)], next: "lint/2", ...page }),
+      url.searchParams.get("cursor") === "unit/1"
+        ? jsonAnswer({ checks: [T1_CHECKS[0]], ...page })
+        : jsonAnswer({ checks: [T1_CHECKS[1]], next: "unit/1", ...page }),
   });
-  mountCode("#/gitlet/queue?repo=web", <Queue />);
-  const web = await screen.findByRole("table", { name: "Queued into web · main" });
-  expect(await within(web).findByRole("img", { name: / of 2$/ })).toBeTruthy();
-  expect(within(web).getByText(/of 30m/)).toBeTruthy();
-  const checks = asked.filter((u) => u.pathname === "/query/code_checks");
-  expect(checks.map((u) => u.searchParams.get("cursor"))).toEqual([null, "lint/2"]);
+  mountCode("#/gitlet/queue", <Queue />);
+  expect(await screen.findByText("e2e running · unit passed")).toBeTruthy();
+  const checks = asked(urls, "/query/code_checks");
+  expect(checks.map((u) => u.searchParams.get("cursor"))).toEqual([null, "unit/1"]);
 });
 
-// NOTHING QUEUED is an empty state that says how a change joins a queue.
 test("no queue holding a change is an empty state", async () => {
-  stubCodeEngine({ "/query/code_repos": LISTING, "/query/code_queue": () => jsonAnswer(page) });
+  story({ "/query/code_queue": () => jsonAnswer(page) });
   mountCode("#/gitlet/queue", <Queue />);
   expect(
     await screen.findByRole("heading", { name: "No merge queue holds a change" }),
   ).toBeTruthy();
 });
 
-// A NAME NO REPOSITORY CAN HAVE is said in place, by the engine's grammar,
-// and never sent. Mutation: drop the check, and the queue is asked.
+// Mutation: drop the name check, and the queue is asked.
 test("a name no repository can have is said in place and never asked", async () => {
-  const asked = stubCodeEngine({
-    "/query/code_repos": LISTING,
-    "/query/code_queue": () => jsonAnswer(page),
-  });
+  const urls = story();
   mountCode("#/gitlet/queue?repo=Web_App", <Queue />);
   expect(await screen.findByText(/is not a repository’s name/)).toBeTruthy();
   await afterMicrotasks();
-  expect(asked.filter((u) => u.pathname === "/query/code_queue")).toEqual([]);
-});
-
-// A QUEUE PAST ONE PAGE reads on: Load more asks the page after with the
-// engine's cursor, its entries join their band in queue order, and the
-// candidate both pages name is asked for its checks once. Mutation: draw the
-// first page alone (no pager), and web!43 is never listed.
-test("a queue past one page reads its next with Load more", async () => {
-  const train = {
-    repo_id: "id-web",
-    candidate_id: "cand-1",
-    target_ref: "refs/heads/main",
-    train: "t1",
-    ordinal: 1,
-    base_oid: BASE,
-    tip_oid: TIP,
-    entries: [
-      { entry_id: "web-1", commit: BASE },
-      { entry_id: "web-3", commit: TIP },
-    ],
-    state: "testing",
-    position: CODE_POSITION,
-  };
-  const testing = { state: "testing", candidate_id: "cand-1", train: "t1" };
-  const asked = stubCodeEngine({
-    "/query/code_repos": LISTING,
-    "/query/code_queue": (url) =>
-      url.searchParams.get("cursor") === "p2"
-        ? jsonAnswer({ queue: [entry("web", 3, testing)], trains: [train], ...page })
-        : jsonAnswer({
-            queue: [entry("web", 1, testing), entry("web", 2)],
-            trains: [train],
-            next: "p2",
-            ...page,
-          }),
-    "/query/code_checks": () => jsonAnswer({ checks: [], ...page }),
-  });
-  mountCode("#/gitlet/queue?repo=web", <Queue />);
-  fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
-  const web = screen.getByRole("table", { name: "Queued into web · main" });
-  await within(web).findByText("web!43");
-  const rows = within(web).getAllByRole("row").slice(1);
-  expect(rows.map((r) => within(r).getAllByRole("link")[0]!.textContent)).toEqual([
-    "web!41",
-    "web!42",
-    "web!43",
-  ]);
-  const pages = asked.filter((u) => u.pathname === "/query/code_queue");
-  expect(pages.some((u) => u.searchParams.get("cursor") === "p2")).toBe(true);
-  await afterMicrotasks();
-  const checks = asked.filter((u) => u.pathname === "/query/code_checks");
-  expect(checks.map((u) => u.searchParams.get("oid"))).toEqual([TIP]);
+  expect(asked(urls, "/query/code_queue")).toEqual([]);
 });

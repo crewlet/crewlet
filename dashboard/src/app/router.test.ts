@@ -61,6 +61,8 @@ import {
   ITEM_KEY_SHAPE,
   KEY_SHAPE,
   artifactStandalonePath,
+  inboxItemKey,
+  inboxItemPath,
   pagePath,
   resolve,
   resolves,
@@ -605,6 +607,34 @@ describe("the navigation grammar", () => {
 
 describe("the resolver", () => {
   const uuid = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f";
+
+  // EVERY INBOX ITEM HAS AN ADDRESS OF ITS OWN, read back to the row key it was written from.
+  // Mutation: join a code notice's record and change with anything but `/`, or drop an
+  // executor's launch, and the key that comes back names another row.
+  test("an Inbox item's address names its row and is the Inbox", () => {
+    for (const [key, path] of [
+      [`ask:${uuid}`, ["inbox", "ask", uuid]],
+      ["run:turn-7", ["inbox", "run", "turn-7"]],
+      ["run:turn-7:q1", ["inbox", "run", "turn-7", "q1"]],
+      ["seat:pm", ["inbox", "seat", "pm"]],
+      ["condition:seat-state-pm", ["inbox", "condition", "seat-state-pm"]],
+      [`notice:${uuid}`, ["inbox", "notice", uuid]],
+      [`change:${uuid}/change-42`, ["inbox", "change", uuid, "change-42"]],
+      [`artifact:${uuid}`, ["inbox", "artifact", uuid]],
+    ] as const) {
+      expect(inboxItemPath(key), key).toEqual(path);
+      expect(inboxItemKey(path.slice(1)), key).toBe(key);
+      expect(resolve([...path]), key).toMatchObject({ screen: "inbox", item: key });
+      // ONE RECENT AND ONE STAR for the Inbox, whichever item is open.
+      expect(pagePath(path), key).toEqual(["inbox"]);
+    }
+    expect(resolve(["inbox"])).toMatchObject({ screen: "inbox" });
+    expect(resolve(["inbox"])).not.toHaveProperty("item");
+    // A KIND THE INBOX DOES NOT LIST, or no id, is no item.
+    expect(resolve(["inbox", "task", "ENG-1"]).resolved).toBe(false);
+    expect(resolve(["inbox", "ask"]).resolved).toBe(false);
+    expect(inboxItemPath("r-1")).toEqual(["inbox"]);
+  });
 
   // THE SIGN-IN SCREENS take exactly the tail their address has. An
   // invitation and a reset link are the exceptions: each screen answers a link

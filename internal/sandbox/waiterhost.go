@@ -145,6 +145,9 @@ func (w *Waiter) follow(ctx context.Context, n Nudge) {
 		if manager == nil || !w.holdsDuty() {
 			return
 		}
+		// WHEN THE STORE WAS ASKED FOR THE ROW, which an announcement made
+		// from it says ([rowAskedField]).
+		read := w.now()
 		run, found, err := w.pending.Get(ctx, n.TurnID)
 		if err != nil {
 			// The STORE did not answer, which says nothing about the run:
@@ -156,7 +159,7 @@ func (w *Waiter) follow(ctx context.Context, n Nudge) {
 			run.SandboxID == "" || run.Held(w.now()) || !w.drivesRun(manager, run) {
 			return
 		}
-		if w.pollNow(ctx, manager, run) {
+		if w.pollNow(ctx, manager, run, read) {
 			return
 		}
 	}
@@ -164,9 +167,10 @@ func (w *Waiter) follow(ctx context.Context, n Nudge) {
 
 // pollNow polls one run as a pass's task would — a slot of its own, the box
 // claimed for it alone, bounded by the duty it runs under — and reports
-// whether it announced the run's completion. A run a pass's task is already
-// polling is left to it.
-func (w *Waiter) pollNow(ctx context.Context, manager *Manager, run PendingRun) bool {
+// whether it announced the run's completion; read is when the store was asked
+// for the row run was read from. A run a pass's task is already polling is
+// left to it.
+func (w *Waiter) pollNow(ctx context.Context, manager *Manager, run PendingRun, read time.Time) bool {
 	if !w.acquireSlot(ctx) {
 		return false
 	}
@@ -180,7 +184,7 @@ func (w *Waiter) pollNow(ctx context.Context, manager *Manager, run PendingRun) 
 		return false
 	}
 	defer w.end(run.TurnID)
-	return w.pollBounded(ctx, taskCtx, manager, run)
+	return w.pollBounded(ctx, taskCtx, manager, run, read)
 }
 
 // holdsDuty reports whether this waiter may poll now: one that claims no duty
@@ -196,39 +200,14 @@ func (w *Waiter) holdsDuty() bool {
 }
 
 // goneAfter is the fleet's waiter finding the launch nodes that left for good,
-// and ending what their local runs were waiting on.
-//
-// A LOCAL BOX GOES WITH ITS NODE. A `direct` or `container` box is driven by
-// the node that launched it alone ([Drives]), so a node that leaves the fleet
-// for good takes with it every poll, keepalive and reclaim its runs would ever
-// get: a running job is never announced, and its seat stays held behind it for
-// ever. So the fleet's waiter watches the presence of every node a local run
-// names ([NodeRoster]), and once one has been without it for the box timeout
-// ([Manager.BoxTimeout]) — the bound a box in any cell gets without its
-// engine's keepalive, which on E2B is when the provider reclaims it — its
-// runs are ended for it:
-//
-//   - A RUNNING JOB has the verdict recorded on its row as lost
-//     ([PendingStore.MarkLost], [LossLaunchNodeGone]) and its completion
-//     announced, which the seat's holder claims and carries the job's round
-//     on from in a box of its own ([Coordinator.carryOnLost]) — announced
-//     again on every pass until a claim takes it, as a finished job's is.
-//   - A RUN PARKED ON A QUESTION, or answered and waiting on its resume, has
-//     its box released as an expired pause's is ([PendingStore.ExpirePause]),
-//     with nothing to kill: the run waits for its answer without a box, and
-//     its resume starts from the pushed branch.
-//
-// NEVER WHILE THE NODE IS MERELY RESTARTING. Presence is what the fleet knows
-// a node by, and a node that drains gives it up at the drain's first step, so
-// its absence at one instant is no verdict at all: the bound is the box
-// timeout, measured from when this waiter first found the node without it, and
-// a node that is back within it — its own waiter picking its runs up again —
-// is never found gone. A roster that cannot answer is no evidence either way,
-// and changes nothing.
-//
-// The clock is this waiter's own and starts again where the duty moves — every
-// absence is forgotten when the duty is lost, or cannot be confirmed
-// ([Waiter.forgetAbsences]) — which can only make a verdict later.
+// and ending what their local runs were waiting on: a local box goes with its
+// node ([Drives]). Once a node a local run names ([NodeRoster]) has been absent
+// for the box timeout ([Manager.BoxTimeout]), a running job is recorded lost
+// ([PendingStore.MarkLost], [LossLaunchNodeGone]) and announced, and a run on a
+// question has its box released ([PendingStore.ExpirePause]). Never while a
+// node merely restarts; an unanswering roster changes nothing; the clock is
+// this waiter's own ([Waiter.forgetAbsences]). See the package doc, "Lost
+// jobs".
 func (w *Waiter) goneAfter(ctx context.Context, manager *Manager, runs []PendingRun) {
 	if w.roster == nil {
 		return
@@ -308,6 +287,10 @@ func (w *Waiter) endGone(ctx context.Context, run PendingRun, since, now time.Ti
 		}
 		return
 	}
+	// WHEN THE STORE WAS ASKED TO RECORD THE LOSS, which the announcement made
+	// once it answered says ([rowAskedField]): a write of the run's row it
+	// answered, as a read is.
+	read := w.now()
 	markCtx, markDone := w.rowContext(ctx)
 	marked, err := w.pending.MarkLost(markCtx, run.TurnID, run.LaunchID,
 		JobLoss{Cause: LossLaunchNodeGone, Node: run.LaunchNode, At: now})
@@ -339,7 +322,7 @@ func (w *Waiter) endGone(ctx context.Context, run PendingRun, since, now time.Ti
 	if !due {
 		return
 	}
-	if err := w.publishCompletion(ctx, run, first); err != nil {
+	if err := w.publishCompletion(ctx, run, first, read); err != nil {
 		w.unannounce(run.TurnID)
 		log.WarnContext(ctx, "sandbox_completion_publish_failed", "turn_id", run.TurnID,
 			"error", err.Error())

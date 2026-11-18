@@ -15,6 +15,20 @@
 // [sandbox.CoordStore]. The record operations it is built on are certified on
 // both coordination backends by coordtest, and this suite certifies every
 // conditional flip built on top of them.
+//
+// # A later build's keys
+//
+// The pending-run record is rewritten whole by every node that touches it, so
+// a field a newer build adds to the notes section, to one note, to where a
+// note was read, to a hook's serve of a note, to the call that serve answered
+// or to the job's own record is gone the moment this build writes the record
+// back, unless every level that can grow keeps what it does not know. The log
+// beside the record ([sandbox.BridgeLog]) is rewritten whole by every append,
+// so the same holds at its top, in each bridged call it keeps and in each
+// identity of a call it dropped: nine levels in all. One loss is meant: a
+// relaunch's reset replaces the job's record whole, so the key a later build
+// added to it goes with the job it was about. Every level is held by
+// testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite (notes.go).
 package sandboxtest
 
 import (
@@ -72,9 +86,11 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARelaunchsBoxMovesTheRowToItsCell", testARelaunchsBoxMovesTheRowToItsCell},
 		{"EveryLaunchRecordsTheNodeThatLaunchedIt", testEveryLaunchRecordsTheNodeThatLaunchedIt},
 		{"ALossIsRecordedOnlyOnTheJobItWasJudgedOn", testALossIsRecordedOnlyOnTheJobItWasJudgedOn},
+		{"AClaimsCollectionRecordsItsJobLostOnItsClaimAlone", testAClaimsCollectionRecordsItsJobLostOnItsClaimAlone},
 		{"ARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn", testARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn},
 		{"AHeldReleaseHoldsTheResumeUntilItsConditionLifts", testAHeldReleaseHoldsTheResumeUntilItsConditionLifts},
 		{"AHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts", testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts},
+		{"AHeldReleaseOwesItsCompletionOnTheJobsRecord", testAHeldReleaseOwesItsCompletionOnTheJobsRecord},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
@@ -83,6 +99,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AJobItsCapEndedIsRecordedOnceForItsOwnJob", testAJobItsCapEndedIsRecordedOnceForItsOwnJob},
 		{"AJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands", testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands},
 		{"AJobsHarnessEndRidesEveryWriteOfItsRecord", testAJobsHarnessEndRidesEveryWriteOfItsRecord},
+		{"AReleaseRecordsTheHarnessEndByTheRecordsRule", testAReleaseRecordsTheHarnessEndByTheRecordsRule},
 		{"AJobsMeasureIsItsOwnOrCarriedAlongItsCopy", testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy},
 		{"AMeasureLandsWhereTheEndIsAlreadyRecorded", testAMeasureLandsWhereTheEndIsAlreadyRecorded},
 		{"AJobsCountIsItsOwnReadsAndNeverCarried", testAJobsCountIsItsOwnReadsAndNeverCarried},
@@ -133,6 +150,10 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AReleaseOfAMissingRunIsNotAnError", testAReleaseOfAMissingRunIsNotAnError},
 		{"AReleaseRecordsTheClaimsCharge", testAReleaseRecordsTheClaimsCharge},
 		{"AReleaseCountsAFailedCollectionOntoTheJob", testAReleaseCountsAFailedCollectionOntoTheJob},
+		{"AReleaseWhoseReadAnsweredEndsTheRunOfFailures", testAReleaseWhoseReadAnsweredEndsTheRunOfFailures},
+		{"AReleaseRecordsWhatTheHostsStoreLastSaid", testAReleaseRecordsWhatTheHostsStoreLastSaid},
+		{"AnOwedRefusalIsRecordedOnceAndSettledByThePark", testAnOwedRefusalIsRecordedOnceAndSettledByThePark},
+		{"AnOwedRefusalIsRecordedOnAClaimOfItsCompletion", testAnOwedRefusalIsRecordedOnAClaimOfItsCompletion},
 		{"AReleaseNeverClearsAChargeRecord", testAReleaseNeverClearsAChargeRecord},
 		{"ARefusedReleaseRecordsNoCharge", testARefusedReleaseRecordsNoCharge},
 		{"OnlyALaunchClearsAChargeRecord", testOnlyALaunchClearsAChargeRecord},
@@ -245,8 +266,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, runs := newStore(t)
-			vanishing := &vanishingRuns{records: runs}
-			tc.fn(t, vanishing, over(vanishing))
+			overtaking := &overtakingRuns{records: runs}
+			tc.fn(t, overtaking, over(overtaking))
 		})
 	}
 }
@@ -573,6 +594,33 @@ func testAJobsHarnessEndRidesEveryWriteOfItsRecord(t *testing.T, s sandbox.Pendi
 	mustBeginLaunch(t, s, run(turn))
 	if got := mustGet(t, s, turn).Launch.HarnessEnd; got != "" {
 		t.Errorf("the next launch's job reads %q, the job before's end, want nothing said", got)
+	}
+}
+
+// A RELEASE RECORDS HOW THE JOB'S HARNESS ENDED BY THE RECORD'S OWN RULE, in the
+// write that returns the row to running ([sandbox.Release.HarnessEnd]): an end
+// over nothing is recorded, a cut-off end over an own run too, and an own run
+// over a recorded cut-off leaves the cut-off standing.
+//
+// Mutation: write the release's end over the record's whenever it carries one,
+// and the cut-off is lost.
+func testAReleaseRecordsTheHarnessEndByTheRecordsRule(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-released-end"
+	mustLaunched(t, s, run(turn))
+	for _, step := range []struct{ carries, want sandbox.HarnessEnd }{
+		{sandbox.HarnessEndOwnRun, sandbox.HarnessEndOwnRun},
+		{sandbox.HarnessEndCutOff, sandbox.HarnessEndCutOff},
+		{sandbox.HarnessEndOwnRun, sandbox.HarnessEndCutOff},
+	} {
+		release := releaseOf(mustClaim(t, s, turn))
+		release.HarnessEnd = step.carries
+		if released, err := s.ReleaseClaim(ctx, turn, release); err != nil || !released {
+			t.Fatalf("a release carrying %q = %v, %v", step.carries, released, err)
+		}
+		if got := mustGet(t, s, turn).Launch.HarnessEnd; got != step.want {
+			t.Fatalf("a release carrying %q left the record saying %q, want %q", step.carries, got, step.want)
+		}
 	}
 }
 
@@ -1541,6 +1589,88 @@ func testALossIsRecordedOnlyOnTheJobItWasJudgedOn(t *testing.T, s sandbox.Pendin
 	}
 }
 
+// A CLAIM'S COLLECTION RECORDS ITS JOB LOST ON ITS CLAIM ALONE. The collection
+// of a job whose box only its node's host can read, from a host that has not
+// been able to read the run's row for the box timeout, records the job lost
+// with that host on the claim it holds, and that claim carries the job's round
+// on: the relaunch that does counts the loss. A job still running is the
+// waiter's to judge, and a verdict on another job, another node's box, or a
+// claim under a lease since outranked is one about a claim no collection
+// holds, which would have a round carried on that nothing found lost. Recorded
+// once, it stands at its first instant and cause.
+func testAClaimsCollectionRecordsItsJobLostOnItsClaimAlone(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := run("t-claim-lost")
+	first.LaunchNode = "node-a"
+	launch := mustLaunched(t, s, first)
+	at := base.Add(time.Hour)
+	lost := sandbox.JobLoss{Cause: sandbox.LossLaunchNodeStoreSilent, Node: "node-a", At: at}
+	holder := sandbox.Fence{Owner: "node-b:1", Epoch: 3}
+	if _, err := s.ClaimOwnership(ctx, "t-claim-lost", holder.Owner, holder.Epoch); err != nil {
+		t.Fatalf("own: %v", err)
+	}
+
+	// RUNNING, the job is the waiter's to judge.
+	if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", launch, lost, holder); err != nil || marked {
+		t.Fatalf("a verdict on a running job: marked=%v err=%v; want refused", marked, err)
+	}
+	mustClaim(t, s, "t-claim-lost")
+	for _, refused := range []struct {
+		name, launch, node string
+		fence              sandbox.Fence
+	}{
+		{"another job", "not-" + launch, "node-a", holder},
+		{"another node", launch, "node-b", holder},
+		{"no job", "", "node-a", holder},
+		{"a lease the claim's outranks", launch, "node-a", sandbox.Fence{Owner: "node-c:1", Epoch: 2}},
+	} {
+		loss := lost
+		loss.Node = refused.node
+		if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", refused.launch, loss, refused.fence); err != nil ||
+			marked {
+			t.Errorf("a verdict on %s: marked=%v err=%v; want refused", refused.name, marked, err)
+		}
+	}
+	if got := mustGet(t, s, "t-claim-lost"); got.Lost != nil {
+		t.Fatalf("a refused verdict landed: %+v", *got.Lost)
+	}
+
+	if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", launch, lost, holder); err != nil || !marked {
+		t.Fatalf("the verdict on the claim's own job: marked=%v err=%v", marked, err)
+	}
+	got := mustGet(t, s, "t-claim-lost")
+	if got.Status != sandbox.StatusResumed || got.Lost == nil || !got.Lost.At.Equal(at) ||
+		got.Lost.Cause != sandbox.LossLaunchNodeStoreSilent || got.Lost.Node != "node-a" {
+		t.Fatalf("the row is %s and records %+v; want the claim kept with the verdict %+v on it",
+			got.Status, got.Lost, lost)
+	}
+	// It STANDS: asked again, the row still carries the first.
+	again := sandbox.JobLoss{Cause: sandbox.LossBoxGone, Node: "node-a", At: at.Add(time.Minute)}
+	if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", launch, again, holder); err != nil || !marked {
+		t.Errorf("a second verdict on the same claim: marked=%v err=%v; want the verdict standing", marked, err)
+	}
+	if got := mustGet(t, s, "t-claim-lost"); got.Lost == nil || !got.Lost.At.Equal(at) ||
+		got.Lost.Cause != sandbox.LossLaunchNodeStoreSilent {
+		t.Errorf("a second verdict moved the first to %+v", got.Lost)
+	}
+
+	// THE RELAUNCH THAT CARRIES THE ROUND ON counts the loss, and its job is
+	// one nothing has judged.
+	next := run("t-claim-lost")
+	next.LaunchNode = "node-b"
+	next.Continues = true
+	mustBeginLaunch(t, s, next)
+	if got := mustGet(t, s, "t-claim-lost"); got.Lost != nil || got.RoundLosses != 1 {
+		t.Errorf("the relaunch left the verdict %+v and counts %d losses; want it cleared and counted once",
+			got.Lost, got.RoundLosses)
+	}
+
+	// Nor does a run with no record.
+	if marked, err := s.MarkClaimLost(ctx, "t-none", "l", lost, holder); err != nil || marked {
+		t.Errorf("a verdict on no run: marked=%v err=%v; want refused", marked, err)
+	}
+}
+
 // A ROUND COUNTS ITS LOST JOBS ACROSS THE RELAUNCHES THAT CARRY IT ON — each
 // one counted by the relaunch that follows it — and a new round starts from
 // none. The count is what stops a run that keeps taking its host down from
@@ -2134,6 +2264,10 @@ func testADecidedRunTakesNoOtherWrite(t *testing.T, s sandbox.PendingStore) {
 			return ok, err
 		},
 		"ExpirePause": func() (bool, error) { return s.ExpirePause(ctx, "t1") },
+		"MarkClaimLost": func() (bool, error) {
+			return s.MarkClaimLost(ctx, "t1", launch,
+				sandbox.JobLoss{Cause: sandbox.LossLaunchNodeStoreSilent, At: base}, sandbox.Fence{})
+		},
 	}
 	for name, write := range refusedQuietly {
 		if ok, err := write(); err != nil || ok {
@@ -2720,6 +2854,70 @@ func testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts(t *testing.T, s sand
 	mustClaim(t, s, "t1")
 }
 
+// A HELD RELEASE OWES ITS COMPLETION ON THE JOB'S RECORD. The hold spends the
+// completion's delivery, and a lift clears the hold, so the release that writes
+// it records the completion as owed in the same write: the hold's condition and
+// the store's instant, which a lift of the hold leaves, so a restart after the
+// lift still finds the job owed. Only where the record owes none yet, so an
+// earlier refusal's condition and instant stand; and a hold whose condition is
+// past what an owed refusal records is refused, the claim left as it was.
+func testAHeldReleaseOwesItsCompletionOnTheJobsRecord(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	until := time.Now().UTC().Add(time.Hour)
+	mustLaunched(t, s, run("t1"))
+	held := releaseOf(mustClaim(t, s, "t1"))
+	held.Hold = &sandbox.Refusal{Condition: "budget", Until: until}
+	if released, err := s.ReleaseClaim(ctx, "t1", held); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "budget" || got.Launch.RefusalOwedSince.IsZero() {
+		t.Fatalf("the held job's record owes %q since %v; want the hold's condition owed, since the release",
+			got.Launch.RefusalOwed, got.Launch.RefusalOwedSince)
+	}
+	if lifted, err := s.LiftHold(ctx, "t1", "budget"); err != nil || !lifted {
+		t.Fatalf("a lift of the hold: lifted=%v err=%v", lifted, err)
+	}
+	if lifted := mustGet(t, s, "t1"); lifted.HeldFor != "" || lifted.Launch.RefusalOwed != "budget" {
+		t.Fatalf("the lifted row is held for %q and owes %q; want the hold gone and the completion still owed",
+			lifted.HeldFor, lifted.Launch.RefusalOwed)
+	}
+
+	// AN EARLIER REFUSAL STANDS.
+	first := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	launch := mustLaunched(t, s, run("t2"))
+	row := mustGet(t, s, "t2")
+	if wrote, err := s.OweRefusal(ctx, "t2", launch, sandbox.OwedRefusal{Condition: "provider", Since: first},
+		sandbox.Fence{Owner: row.Owner, Epoch: row.OwnerEpoch}); err != nil || !wrote {
+		t.Fatalf("an owed refusal on a running job = %v, %v; want it written", wrote, err)
+	}
+	again := releaseOf(mustClaim(t, s, "t2"))
+	again.Hold = &sandbox.Refusal{Condition: "budget", Until: until}
+	if released, err := s.ReleaseClaim(ctx, "t2", again); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t2"); got.HeldFor != "budget" || got.Launch.RefusalOwed != "provider" ||
+		!got.Launch.RefusalOwedSince.Equal(first) {
+		t.Fatalf("the held job's record, owing provider since %v before its hold, is held for %q and owes %q "+
+			"since %v; want it held and the first refusal standing", first, got.HeldFor,
+			got.Launch.RefusalOwed, got.Launch.RefusalOwedSince)
+	}
+
+	// PAST THE BOUND, refused, the claim standing.
+	mustLaunched(t, s, run("t3"))
+	long := releaseOf(mustClaim(t, s, "t3"))
+	long.Hold = &sandbox.Refusal{Condition: sandbox.Condition(strings.Repeat("c", sandbox.MaxOwedConditionBytes+1)),
+		Until: until}
+	if released, err := s.ReleaseClaim(ctx, "t3", long); err == nil || released {
+		t.Fatalf("a release holding the run for a condition past the bound = %v, %v; want it refused",
+			released, err)
+	}
+	if got := mustGet(t, s, "t3"); got.Status != sandbox.StatusResumed || got.HeldFor != "" ||
+		got.Launch.RefusalOwed != "" {
+		t.Fatalf("the refused release left the run %s, held for %q, owing %q; want the claim as it was",
+			got.Status, got.HeldFor, got.Launch.RefusalOwed)
+	}
+}
+
 func testAReleaseHandsTheClaimBackWhereItFoundIt(t *testing.T, s sandbox.PendingStore) {
 	// The retry a failed resume opens has to find the run exactly where the
 	// signal it is retrying can take it: a completion's job running, an
@@ -2962,6 +3160,248 @@ func testAReleaseCountsAFailedCollectionOntoTheJob(t *testing.T, s sandbox.Pendi
 	mustBeginLaunch(t, s, run("t1"))
 	if got := mustGet(t, s, "t1").Launch; got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {
 		t.Errorf("a new launch inherited the last job's failed collections: %+v", got)
+	}
+}
+
+// A RELEASE WHOSE COLLECTION READ THE BOX ENDS THE RUN OF FAILURES WITHOUT
+// COLLECTING THE JOB. A collection whose read answered, and that a later step
+// handed back uncounted (a coordination store that did not answer the step, or
+// a node that stopped), ends the job's run of failed collections as a
+// collected one does, so the next failure starts a run of its own. But the job
+// is not collected: it stays stoppable, and the collection made again charges
+// and records it. And a release cannot both count a failed collection and end
+// the run of failures it counts onto.
+func testAReleaseWhoseReadAnsweredEndsTheRunOfFailures(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t1"))
+	first := base.Add(3 * time.Second)
+	failed := releaseOf(mustClaim(t, s, "t1"))
+	failed.CollectFailedAt = first
+	if released, err := s.ReleaseClaim(ctx, "t1", failed); err != nil || !released {
+		t.Fatalf("release of a failed collection = %v, %v", released, err)
+	}
+
+	answered := releaseOf(mustClaim(t, s, "t1"))
+	answered.BoxAnswered = true
+	if released, err := s.ReleaseClaim(ctx, "t1", answered); err != nil || !released {
+		t.Fatalf("release of a collection whose read answered = %v, %v", released, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusRunning || got.Launch.CollectFailures != 0 ||
+		!got.Launch.CollectFailingSince.IsZero() {
+		t.Fatalf("the job's row reads %s with %d failed collections since %v; want it running with its "+
+			"run of failures ended", got.Status, got.Launch.CollectFailures, got.Launch.CollectFailingSince)
+	}
+	if got.Launch.Collected || !got.Launch.CollectedAt.IsZero() {
+		t.Fatalf("a release whose read answered recorded the job collected (%v at %v)", got.Launch.Collected,
+			got.Launch.CollectedAt)
+	}
+	stop := sandbox.RunStop{By: "founder"}
+	if decided, ok, err := s.DecideEnding(ctx, "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Stoppable, Launch: launch}, Reclaim: true, Stop: &stop,
+	}); err != nil || !ok || decided.Stop == nil {
+		t.Fatalf("a stop of a job whose read answered = %+v, %v, %v; want it decided, the job uncollected",
+			decided.Stop, ok, err)
+	}
+
+	mustLaunched(t, s, run("t2"))
+	claimed := mustClaim(t, s, "t2")
+	both := releaseOf(claimed)
+	both.BoxAnswered, both.CollectFailedAt = true, first
+	if _, err := s.ReleaseClaim(ctx, "t2", both); err == nil {
+		t.Error("a release that both counts a failed collection and ends the run it counts onto was accepted")
+	}
+	if got := mustGet(t, s, "t2"); got.Status != sandbox.StatusResumed || got.Launch.CollectFailures != 0 {
+		t.Errorf("the refused release wrote the row: %s with %d failed collections", got.Status,
+			got.Launch.CollectFailures)
+	}
+	mustRelease(t, s, claimed)
+}
+
+// A RELEASE RECORDS WHAT THE STORE OF THE HOST OF THE JOB'S BOX LAST SAID, on
+// the job's record, where its claim learned anything of it: a release whose
+// collection found that store silent marks the job with when its clock
+// started, a later one with the later start, one that learned that store
+// answers clears the mark, and one that learned nothing leaves it as it
+// stands. A release cannot say both, and one that does is refused and writes
+// nothing. The job's next launch starts without it: the host of its box, and
+// what that host's store says, are that job's.
+func testAReleaseRecordsWhatTheHostsStoreLastSaid(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	later := first.Add(time.Minute)
+	mustLaunched(t, s, run("t1"))
+	silent := releaseOf(mustClaim(t, s, "t1"))
+	silent.HostStoreSilentSince = first
+	if released, err := s.ReleaseClaim(ctx, "t1", silent); err != nil || !released {
+		t.Fatalf("release of a collection whose host found its store silent = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning ||
+		!got.Launch.HostStoreSilentSince.Equal(first) {
+		t.Fatalf("the row reads %s, its host's store silent since %v; want it running and marked since %v",
+			got.Status, got.Launch.HostStoreSilentSince, first)
+	}
+
+	mustRelease(t, s, mustClaim(t, s, "t1"))
+	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilentSince.Equal(first) {
+		t.Fatalf("a release that learned nothing of the host's store left it silent since %v; want %v",
+			got.Launch.HostStoreSilentSince, first)
+	}
+
+	again := releaseOf(mustClaim(t, s, "t1"))
+	again.HostStoreSilentSince = later
+	if released, err := s.ReleaseClaim(ctx, "t1", again); err != nil || !released {
+		t.Fatalf("release of a later collection whose host found its store silent = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilentSince.Equal(later) {
+		t.Fatalf("a later clock's release left the job silent since %v; want the later start, %v",
+			got.Launch.HostStoreSilentSince, later)
+	}
+
+	claimed := mustClaim(t, s, "t1")
+	both := releaseOf(claimed)
+	both.HostStoreSilentSince, both.HostStoreAnswered = first, true
+	if _, err := s.ReleaseClaim(ctx, "t1", both); err == nil {
+		t.Error("a release that says the host's store was both silent and answering was accepted")
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed ||
+		!got.Launch.HostStoreSilentSince.Equal(later) {
+		t.Errorf("the refused release wrote the row: %s, its host's store silent since %v", got.Status,
+			got.Launch.HostStoreSilentSince)
+	}
+	answered := releaseOf(claimed)
+	answered.HostStoreAnswered = true
+	if released, err := s.ReleaseClaim(ctx, "t1", answered); err != nil || !released {
+		t.Fatalf("release of a claim that learned the host's store answers = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilentSince.IsZero() {
+		t.Fatalf("a release that learned the host's store answers left the job silent since %v",
+			got.Launch.HostStoreSilentSince)
+	}
+
+	marked := releaseOf(mustClaim(t, s, "t1"))
+	marked.HostStoreSilentSince = first
+	if released, err := s.ReleaseClaim(ctx, "t1", marked); err != nil || !released {
+		t.Fatalf("release marking the job again = %v, %v", released, err)
+	}
+	mustBeginLaunch(t, s, run("t1"))
+	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilentSince.IsZero() {
+		t.Error("the job's next launch inherited what the last job's host's store said")
+	}
+}
+
+// AN OWED REFUSAL IS RECORDED ONCE, ON A RUNNING JOB, AND SETTLED BY THE PARK.
+// The seat's holder records a refused delivery of a job's completion it
+// acknowledges: the job's record takes the condition and the instant, a second
+// refusal writes nothing and leaves the first standing, and one that names no
+// condition, one past the bound, or no instant is refused. A claim leaves it,
+// a claim handed back puts the completion back still owed, the park on the
+// job's question clears it in its own write, and the job's next launch starts
+// without it. Only a running job of the launch named takes it, and a row a
+// newer lease owns refuses it.
+func testAnOwedRefusalIsRecordedOnceAndSettledByThePark(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	launch := mustLaunched(t, s, run("t1"))
+	row := mustGet(t, s, "t1")
+	fence := sandbox.Fence{Owner: row.Owner, Epoch: row.OwnerEpoch}
+	owe := func(owed sandbox.OwedRefusal) (bool, error) {
+		return s.OweRefusal(ctx, "t1", launch, owed, fence)
+	}
+	for _, bad := range []sandbox.OwedRefusal{
+		{Since: first},
+		{Condition: sandbox.Condition(strings.Repeat("c", sandbox.MaxOwedConditionBytes+1)), Since: first},
+		{Condition: "provider"},
+	} {
+		if wrote, err := owe(bad); err == nil || wrote {
+			t.Errorf("an owed refusal %+v was taken (%v, %v); want it refused", bad, wrote, err)
+		}
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "" {
+		t.Fatalf("a refused record wrote the row: it owes %q", got.Launch.RefusalOwed)
+	}
+	if wrote, err := owe(sandbox.OwedRefusal{Condition: "provider", Since: first}); err != nil || !wrote {
+		t.Fatalf("an owed refusal on a running job = %v, %v; want it written", wrote, err)
+	}
+	if wrote, err := owe(sandbox.OwedRefusal{Condition: "pause", Since: first.Add(time.Minute)}); err != nil || wrote {
+		t.Fatalf("a second owed refusal = %v, %v; want nothing written", wrote, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "provider" ||
+		!got.Launch.RefusalOwedSince.Equal(first) {
+		t.Fatalf("the job's record owes %q since %v; want the first refusal's, provider since %v",
+			got.Launch.RefusalOwed, got.Launch.RefusalOwedSince, first)
+	}
+	if wrote, err := s.OweRefusal(ctx, "t1", "another-launch", sandbox.OwedRefusal{Condition: "pause",
+		Since: first}, fence); err != nil || wrote {
+		t.Errorf("an owed refusal of another launch = %v, %v; want nothing written", wrote, err)
+	}
+
+	claimed := mustClaim(t, s, "t1")
+	if wrote, err := owe(sandbox.OwedRefusal{Condition: "pause", Since: first}); err != nil || wrote {
+		t.Errorf("a second owed refusal on a claimed job = %v, %v; want nothing written", wrote, err)
+	}
+	mustRelease(t, s, claimed)
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "provider" {
+		t.Fatalf("a claim handed back left the job's record owing %q; want it still owed", got.Launch.RefusalOwed)
+	}
+	newer := sandbox.Fence{Owner: "node-c:1", Epoch: fence.Epoch + 5}
+	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: first}); err != nil {
+		t.Fatalf("parking the run: %v", err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "" || !got.Launch.RefusalOwedSince.IsZero() {
+		t.Fatalf("the park left the job's record owing %q since %v; want it settled", got.Launch.RefusalOwed,
+			got.Launch.RefusalOwedSince)
+	}
+
+	launch = mustLaunched(t, s, run("t2"))
+	if won, err := s.ClaimOwnership(ctx, "t2", newer.Owner, newer.Epoch); err != nil || !won {
+		t.Fatalf("fencing t2 to a newer lease = %v, %v", won, err)
+	}
+	if wrote, err := s.OweRefusal(ctx, "t2", launch, sandbox.OwedRefusal{Condition: "provider", Since: first},
+		sandbox.Fence{Owner: "node-a:1", Epoch: newer.Epoch - 1}); !errors.Is(err, sandbox.ErrSeatNotHeld) || wrote {
+		t.Errorf("an owed refusal under a lease a newer one outranks = %v, %v; want it refused, the seat not "+
+			"held", wrote, err)
+	}
+	if wrote, err := s.OweRefusal(ctx, "t2", launch, sandbox.OwedRefusal{Condition: "provider", Since: first},
+		newer); err != nil || !wrote {
+		t.Fatalf("an owed refusal under the row's lease = %v, %v; want it written", wrote, err)
+	}
+	mustBeginLaunch(t, s, run("t2"))
+	if got := mustGet(t, s, "t2"); got.Launch.RefusalOwed != "" {
+		t.Error("the job's next launch inherited the refusal the last job owed")
+	}
+}
+
+// AN OWED REFUSAL IS RECORDED ON A JOB CLAIMED FOR ITS COMPLETION, NEVER ON A
+// RECORDED ANSWER'S CLAIM. A claim settles nothing by itself: one handed back
+// puts the completion back as it was, so a refusal acknowledged while another
+// attempt holds the job's claim is recorded on the claimed row, and is still
+// owed once that claim is handed back. A recorded answer's claim holds a job
+// that parked on its question, which settled its completion, and takes none.
+func testAnOwedRefusalIsRecordedOnAClaimOfItsCompletion(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	at := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	owed := sandbox.OwedRefusal{Condition: "provider", Since: at}
+	launch := mustLaunched(t, s, run("t1"))
+	claimed := mustClaim(t, s, "t1")
+	fence := sandbox.Fence{Owner: claimed.Owner, Epoch: claimed.OwnerEpoch}
+	if wrote, err := s.OweRefusal(ctx, "t1", launch, owed, fence); err != nil || !wrote {
+		t.Fatalf("an owed refusal on a job claimed for its completion = %v, %v; want it written", wrote, err)
+	}
+	mustRelease(t, s, claimed)
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning || got.Launch.RefusalOwed != "provider" ||
+		!got.Launch.RefusalOwedSince.Equal(at) {
+		t.Fatalf("the claim handed back left the run %s owing %q since %v; want it running and still owing "+
+			"provider since %v", got.Status, got.Launch.RefusalOwed, got.Launch.RefusalOwedSince, at)
+	}
+
+	asking := claimedAnswerOn(t, s, "t2", answerOf("r1", "use main"), false)
+	if wrote, err := s.OweRefusal(ctx, "t2", asking, owed, sandbox.Fence{}); err != nil || wrote {
+		t.Errorf("an owed refusal on a recorded answer's claim = %v, %v; want nothing written", wrote, err)
+	}
+	if got := mustGet(t, s, "t2"); got.Launch.RefusalOwed != "" {
+		t.Errorf("a recorded answer's claim owes %q; want nothing owed of a job its question settled",
+			got.Launch.RefusalOwed)
 	}
 }
 

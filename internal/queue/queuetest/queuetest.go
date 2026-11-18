@@ -563,7 +563,7 @@ type Capabilities struct {
 	// streams, so Start is a no-op — but the CONSISTENCY is not optional.
 	// Whichever way this flag points,
 	// an_unstarted_queue_answers_the_same_way_for_every_verb sends all
-	// twenty-one and refuses a backend that answers some one way and some the
+	// twenty-two and refuses a backend that answers some one way and some the
 	// other. After Stop there is no choice — see
 	// a_stopped_queue_refuses_every_verb.
 	//
@@ -1876,6 +1876,18 @@ func publish(ctx context.Context, t *testing.T, q queue.EventQueue, topic string
 	if err := q.Publish(ctx, topic, ev); err != nil {
 		t.Fatalf("Publish(%s, %s): %v", topic, ev.Type, err)
 	}
+}
+
+// attachmentOf is the pair's current attachment, which a case's hold names.
+// It reports a refusal with Errorf, so a handler's goroutine may call it, and
+// then answers the zero Attachment, which every PauseTopic refuses.
+func attachmentOf(ctx context.Context, t testing.TB, q queue.EventQueue, topic, group string) queue.Attachment {
+	t.Helper()
+	at, err := q.Attachment(ctx, topic, group)
+	if err != nil {
+		t.Errorf("Attachment(%s, %s): %v", topic, group, err)
+	}
+	return at
 }
 
 func subscribe(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string, h queue.Handler) {

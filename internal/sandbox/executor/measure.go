@@ -100,8 +100,12 @@ type contextMeter struct {
 // newContextMeter starts a meter for an archive of layout holding session,
 // written by release (the box's word on its harness's release,
 // [sandbox.SessionArchive.Version]), read within ctx, the take's own: a take
-// cut short ends the walk, whose count is then unread.
-func newContextMeter(ctx context.Context, layout archiveLayout, session, release string) *contextMeter {
+// cut short ends the walk, whose count is then unread; ctx also ends its wait
+// for the take's large slot, which its walk holds a line past the base at a
+// time, as the take's scrub holds its pieces ([passBudget]).
+func newContextMeter(ctx context.Context, layout archiveLayout, session, release string,
+	large *passBudget) *contextMeter {
+
 	pr, pw := io.Pipe()
 	m := &contextMeter{pw: pw, done: make(chan struct{})}
 	go func() {
@@ -115,7 +119,7 @@ func newContextMeter(ctx context.Context, layout archiveLayout, session, release
 		)
 		switch layout {
 		case archiveTar:
-			n, count, next, err = meterArchive(ctx, pr, session, release)
+			n, count, next, err = meterArchive(ctx, pr, session, release, large)
 		case archiveDocument:
 			var read exportReading
 			read, err = meterExport(ctx, pr, release)
@@ -173,16 +177,16 @@ func (m *contextMeter) next() sandbox.NextRequest {
 // meterArchive is the input of the last request a Claude Code archive's main
 // thread of session records, zero where it records none, what Claude Code
 // counts the session at, and what it estimates the next request at, read off
-// ONE walk of that thread ([walkThread]) by the three readings. The count is
-// marked where the archive's members say so (the file comment) and unread
-// where the archive does not read to its end, and the estimate is none where
-// the count is unread or of a release its rules were not read in; err is the
-// archive's own, where its gzip or tar framing failed. A SAVED COMPACTION
-// LEAVES THE ESTIMATE STANDING: it marks the count, since the harness may swap
-// it in, but what it swaps in is smaller than the session it replaces, so the
-// estimate of the session whole is the floor's safe side.
-func meterArchive(ctx context.Context, r io.Reader, session, release string) (int64, *sandbox.ResumedCount,
-	sandbox.NextRequest, error) {
+// ONE walk of that thread ([walkThread]) by the three readings, under large.
+// The count is marked where the archive's members say so (the file comment)
+// and unread where the archive does not read to its end, and the estimate is
+// none where the count is unread or of a release its rules were not read in;
+// err is the archive's own, where its gzip or tar framing failed. A SAVED
+// COMPACTION LEAVES THE ESTIMATE STANDING: it marks the count, since the
+// harness may swap it in, but what it swaps in is smaller than the session it
+// replaces, so the estimate of the session whole is the floor's safe side.
+func meterArchive(ctx context.Context, r io.Reader, session, release string,
+	large *passBudget) (int64, *sandbox.ResumedCount, sandbox.NextRequest, error) {
 
 	var (
 		callers countMarks
@@ -235,11 +239,11 @@ func meterArchive(ctx context.Context, r io.Reader, session, release string) (in
 			// figure reads the later as it always has.
 			callers = callers.with(sandbox.CountUnread)
 			figure = contextReading{}
-			walkThread(ctx, tr, threadPlainMax, &figure)
+			walkThread(ctx, tr, threadPlainMax, large, &figure)
 			continue
 		}
 		walked = true
-		walkThread(ctx, tr, threadPlainMax, &figure, &count, &next)
+		walkThread(ctx, tr, threadPlainMax, large, &figure, &count, &next)
 	}
 	if !walked {
 		callers = callers.with(sandbox.CountUnread)

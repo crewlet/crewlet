@@ -509,6 +509,9 @@ type round struct {
 type task struct {
 	run  PendingRun
 	reap bool
+	// listed is when the pass asked the store for the listing run was read
+	// from, which an announcement its poll makes says ([rowAskedField]).
+	listed time.Time
 }
 
 // pass claims the duty, lists the runs, and starts a WALK that hands every
@@ -552,12 +555,16 @@ func (w *Waiter) pass(ctx context.Context) (*round, error) {
 	if manager == nil {
 		return nil, errors.New("sandbox: the waiter's manager source answered no manager")
 	}
+	// WHEN THE STORE WAS ASKED FOR THE LISTING, which every announcement made
+	// from it says ([rowAskedField]): that store answered this waiter after
+	// it, whatever a box's poll took before the announcement is made.
+	listed := w.now()
 	runs, err := w.pending.ListActive(ctx)
 	if err != nil {
 		return nil, err
 	}
 	w.forget(runs)
-	work := w.order(manager, runs)
+	work := w.order(manager, runs, listed)
 
 	// ONE CHILD OF ctx PER WALK, made once: ctx is the loop's, which lives
 	// as long as the process, and a child it was never told to forget —
@@ -664,7 +671,7 @@ func (w *Waiter) walkTasks(ctx, walkCtx context.Context, deadline time.Time, man
 				w.reapOne(taskCtx, manager, t.run)
 				return
 			}
-			if w.pollBounded(ctx, taskCtx, manager, t.run) {
+			if w.pollBounded(ctx, taskCtx, manager, t.run, t.listed) {
 				r.fired.Add(1)
 			}
 		}()
@@ -694,8 +701,9 @@ func (w *Waiter) acquireSlot(walkCtx context.Context) bool {
 }
 
 // order is the runs needing a task, the one whose last task ended longest ago
-// first and the listing's own order between equals.
-func (w *Waiter) order(manager *Manager, runs []PendingRun) []task {
+// first and the listing's own order between equals; listed is when the store
+// was asked for that listing.
+func (w *Waiter) order(manager *Manager, runs []PendingRun, listed time.Time) []task {
 	now := w.now()
 	var work []task
 	for _, run := range runs {
@@ -711,7 +719,7 @@ func (w *Waiter) order(manager *Manager, runs []PendingRun) []task {
 			// the ending is reclaiming, and a reap would race the ending's
 			// own reclaim.
 		case run.Status == StatusRunning && run.SandboxID != "" && !run.Held(now):
-			work = append(work, task{run: run})
+			work = append(work, task{run: run, listed: listed})
 		case pauseExpired(run, now):
 			work = append(work, task{run: run, reap: true})
 		}
@@ -798,13 +806,17 @@ func (w *Waiter) rowContext(ctx context.Context) (context.Context, context.Cance
 }
 
 // pollBounded polls one box within its task's context and announces its
-// completion where the poll found one, reporting whether it did.
+// completion where the poll found one, reporting whether it did; read is when
+// the store was asked for the row run was read from, which the announcement
+// says ([rowAskedField]).
 //
 // THE ANNOUNCEMENT IS NOT UNDER THE BOUND: the bound is on reaching the box,
 // and a completion found a second before it ran out is still a completion. A
 // duplicate announcement is harmless — the coordinator claims once — so it
 // takes the pass's context, not the task's.
-func (w *Waiter) pollBounded(ctx, taskCtx context.Context, manager *Manager, run PendingRun) bool {
+func (w *Waiter) pollBounded(ctx, taskCtx context.Context, manager *Manager, run PendingRun,
+	read time.Time,
+) bool {
 	state := w.pollOne(taskCtx, manager, run)
 	// A LOSS IS RECORDED BEFORE IT IS ANNOUNCED, as the fleet's verdict on a
 	// gone launch node is ([Waiter.endGone]): the completion only routes it to
@@ -821,7 +833,7 @@ func (w *Waiter) pollBounded(ctx, taskCtx context.Context, manager *Manager, run
 		if !due {
 			return false
 		}
-		if err := w.publishCompletion(ctx, run, first); err != nil {
+		if err := w.publishCompletion(ctx, run, first, read); err != nil {
 			w.unannounce(run.TurnID)
 			log.WarnContext(ctx, "sandbox_completion_publish_failed",
 				"turn_id", run.TurnID, "error", err.Error())
@@ -1314,16 +1326,12 @@ func (w *Waiter) reapOne(ctx context.Context, manager *Manager, run PendingRun) 
 	return true
 }
 
-// publishCompletion announces the completion and routes the resume to the
-// owner.
-//
-// TWO PUBLISHES, TWO PURPOSES. The crewlet.events.* copy is an ANNOUNCEMENT:
-// the dashboard's broadcast stream watches that subject space, and dropping it
-// would blank the running-sandboxes panel. The per-seat control copy is a
-// COMMAND, and it goes to the seat's own topic because only the node holding
-// that seat has the parked turn to resume — a single
-// fleet-wide group would hand it to a non-owner (N-1)/N of the time.
-func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun, public bool) error {
+// announcementOf is the completion of run's job, and a fresh announcement of
+// it, as the waiter that drives the job's box makes one: what a node that owes
+// the job's completion a re-fire with no delivery in hand offers its
+// coordinator ([Coordinator.RecoverSeat]), so the two never say the job
+// differently.
+func announcementOf(run PendingRun) (types.ExecutorFinished, *events.Event) {
 	completion := types.ExecutorFinished{
 		Agent:       run.AgentID,
 		AgentHandle: run.AgentHandle,
@@ -1342,6 +1350,19 @@ func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun, public b
 		TraceID: run.TraceID, ParentSpanID: run.SpanID,
 	})
 	announcement.Source = run.Role
+	return completion, announcement
+}
+
+// publishCompletion announces the completion and routes the resume to the
+// owner; read is when this waiter asked its store for the run's row it
+// announces the job from, which the announcement says ([rowAskedField],
+// [announcedAfter]). Two publishes: the crewlet.events.* copy is an
+// announcement the dashboard's running-sandboxes panel watches, and the
+// per-seat control copy is a command to the one node holding the seat, which a
+// fleet-wide group would hand to a non-owner (N-1)/N of the time.
+func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun, public bool, read time.Time) error {
+	completion, announcement := announcementOf(run)
+	askedRow(announcement, read)
 
 	// THE EVENTS COPY ONCE PER JOB: it is the record that the job finished,
 	// which the dashboard and the event store keep, and a job announced

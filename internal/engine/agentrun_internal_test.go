@@ -84,7 +84,7 @@ func harnessProvider(t *testing.T, m chainMember) *harness.Provider {
 			// structured limit and sign-in reports, the cap's signature in it.
 			"event_type_path": []any{}, "text_events": []any{},
 			"requests": nil, "cap": nil, "limit_events": nil,
-			"limit_reset_events": nil, "auth_events": nil,
+			"limit_reports": nil, "auth_events": nil,
 			"mcp": map[string]any{"failure_events": []any{}},
 		}
 	}
@@ -630,7 +630,7 @@ func TestASeatThatMovesWhileItsExecutorLaunchesIsHandedOn(t *testing.T) {
 					}
 				}
 				if tc.recover {
-					if err := successor.RecoverSeat(ctx, seat.Handle(), "node-b:1", 7); err != nil {
+					if err := successor.RecoverSeat(ctx, seat.Handle(), "node-b:1", 7, noSeatInbox, nil); err != nil {
 						t.Errorf("the next holder's recovery: %v", err)
 					}
 				}
@@ -1533,3 +1533,8 @@ func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
 	}
 	return bridge
 }
+
+// noSeatInbox is the zero attachment, which names none: what a case hands a
+// seat's recovery or preparation where nothing it does holds the seat's inbox,
+// or where what it reads is not the hold.
+const noSeatInbox queue.Attachment = 0

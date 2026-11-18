@@ -21,7 +21,9 @@ func nxtUUID(n int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d",
 // holding at most ringMax records (0 for its bound).
 func nxtNext(ringMax int, lines ...string) sandbox.NextRequest {
 	r := nextReading{ringMax: ringMax}
-	walkThread(context.Background(), strings.NewReader(cntThread(lines...)), threadPlainMax, &r)
+	var large passBudget
+	defer large.release()
+	walkThread(context.Background(), strings.NewReader(cntThread(lines...)), threadPlainMax, &large, &r)
 	return r.next()
 }
 
@@ -92,7 +94,7 @@ func TestTheNextRequestCountsTheReplysOutputAndTail(t *testing.T) {
 
 	body := cntThread(lines...)
 	for _, release := range []string{"2.1.322", "2.1.0"} {
-		meter := newContextMeter(t.Context(), archiveTar, ctSession, release)
+		meter := newContextMeter(t.Context(), archiveTar, ctSession, release, testPass(t))
 		_, _ = meter.Write(cntArchive(t, body))
 		meter.finish(nil)
 		box, paths := cntBox(body, nil)
@@ -120,7 +122,7 @@ func TestTheNextRequestRestartsAtACompaction(t *testing.T) {
 	wantNext(t, "a boundary no request has followed", nxtNext(0, before...),
 		sandbox.NextRequest{Tokens: 3, OlderTokens: 2})
 	figure, _, next, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(before...))),
-		ctSession, "2.1.322")
+		ctSession, "2.1.322", testPass(t))
 	if err != nil || figure != 900_000 || next.Tokens != 3 {
 		t.Errorf("the meter read the last request's input %d and the next request %+v (%v), want 900,000 beside 3",
 			figure, next, err)

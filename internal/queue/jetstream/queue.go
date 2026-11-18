@@ -347,10 +347,17 @@ type Queue struct {
 	mu          sync.Mutex
 	attachments map[attachKey][]*attachment
 	holds       map[attachKey]map[string]struct{}
-	streams     map[string]struct{}
-	listeners   []queue.PublishListener
-	paused      bool
-	closed      bool
+	// current is each pair's current [queue.Attachment], minted from the
+	// one counter minted on its first read and ended (deleted) by the
+	// pair's Detach, so a hold asked for an attachment that has ended is
+	// refused rather than carried onto the next one. See
+	// [Queue.Attachment].
+	current   map[attachKey]queue.Attachment
+	minted    queue.Attachment
+	streams   map[string]struct{}
+	listeners []queue.PublishListener
+	paused    bool
+	closed    bool
 
 	// retired is every attachment Detach or Stop has let go of whose
 	// consume loop has not returned yet, and lastLoop the last id an
@@ -463,6 +470,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 		link:        linkOf(embedded, dialled),
 		attachments: map[attachKey][]*attachment{},
 		holds:       map[attachKey]map[string]struct{}{},
+		current:     map[attachKey]queue.Attachment{},
 		streams:     map[string]struct{}{},
 		retired:     map[*attachment]struct{}{},
 		lost:        newConnectionLoss(),
@@ -2072,6 +2080,9 @@ func (q *Queue) Stop(ctx context.Context) error {
 	// exist. Carrying them past a stop would leave a restarted queue
 	// silently deaf on subjects nothing is holding any more.
 	q.holds = map[attachKey]map[string]struct{}{}
+	// And every attachment ended with them: a stopped client carries no
+	// hold, and no attachment one could be asked for, into anything.
+	q.current = map[attachKey]queue.Attachment{}
 	q.mu.Unlock()
 
 	// Stop attachments concurrently so one unresponsive consumer bounds

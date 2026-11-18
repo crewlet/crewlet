@@ -9,14 +9,14 @@ import (
 // the line: each fact is filled ONCE, as the line is read, by [factsOf], so a
 // reader that asks twice pays for one reading. A fact is a small value as
 // written (its accessor holds it to its type), a value's kind ([valueKind]), a
-// frame's answers (what each reader's rule reads of a container, with the error
-// it meets), or a list's entries up to the first that fails, with that failure,
-// so its accessor hands what a walk handed before the failure and nothing after.
+// frame's answers (what each reader's rule reads of a container or a text, the
+// asked takes a hook's words name among them, with the error it meets, worded
+// as its accessor words it), or a list's entries up to the first that fails and
+// that failure, handed as a walk hands them, nothing after.
 //
-// A frame its record's type does not read ([factsOf] names which) is left
-// empty, and its accessor answers as on a record without the key. A line's
-// facts are shared with no other line, so they stay valid as long as the line
-// is held; a nil facts is a line of no keys ([threadLine.facts]).
+// A frame its record's type does not read ([factsOf] names which) is empty,
+// its accessor answering as on a record without the key. A line's facts are
+// its own, valid while the line is held; nil facts are a line of no keys.
 
 // lineFacts is what a line's accessors read of it ([threadLine]), filled once
 // by [factsOf].
@@ -105,8 +105,15 @@ type attachmentFacts struct {
 	// kind is the attachment's kind, and err what decoding its object met.
 	kind valueKind
 	err  error
-	// typ, toolUseID and by are its `type`, `toolUseID` and `by`, as written.
-	typ, toolUseID, by json.RawMessage
+	// typ, toolUseID, by and event are its `type`, `toolUseID`, `by` and
+	// `hookEvent`, as written.
+	typ, toolUseID, by, event json.RawMessage
+	// contentTokens and stdoutTokens are which asked take tokens
+	// ([threadReader.Asking]) a hook record's `content` ([hookRecordPrefix]),
+	// and a hook_success's `stdout`, name where each is a string
+	// ([textTakes]): bit i for token i. A uint64, the width an ask is held to
+	// ([maxAskedTakes]), which the row's own bounds stay under.
+	contentTokens, stdoutTokens uint64
 	// content is its `content`'s kind; contentStrings and contentObjects
 	// whether that is a list whose every element is a string, or an object.
 	content                        valueKind

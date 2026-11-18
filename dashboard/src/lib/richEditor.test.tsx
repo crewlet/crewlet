@@ -197,6 +197,20 @@ describe("the rich editor's round trip", () => {
   test.each(whole)("$name rewritten whole reads as it did", ({ text }) => rewritten(text));
   test.each(cut)("$name rewritten from “$from” reads as it did", ({ text }) => rewritten(text));
 
+  // A FENCE IN A NUMBERED STEP IS A CODE BLOCK (#1207): read as paragraph
+  // text, its backticks became an inline span on a save, and a YAML `- name:`
+  // inside it became a list item that took the next paragraph's words.
+  test("a fenced block inside a list item stays a code block, its text and code spans whole", () => {
+    const text = readFileSync(join(fixtures, "fence-in-item.md"), "utf8");
+    const before = seen(text);
+    expect(before.elements.filter((e) => e === "PRE")).toHaveLength(2);
+    const after = seen(canonicalMarkdown(text));
+    expect(after.elements).toEqual(before.elements);
+    expect(after.text).toBe(before.text);
+    expect(after.text).toContain("- name: mattermost");
+    expect(after.text).toContain("It is pinned to a release (see the catalogue)");
+  });
+
   // THE PARTS ARE THE DOCUMENT, every byte once and in order, each no longer
   // than a part may be unless it is one section — so reading them is reading
   // the document, and a cut that dropped or doubled a stretch fails here.

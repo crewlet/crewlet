@@ -23,11 +23,15 @@
  * The right column is the open row read in full, top to bottom, with the
  * answer to it (`InboxPane.tsx`), and every row opens at its head: the pane
  * is told which row it reads (`ReadingPane`'s `contentKey`), and whatever
- * scrolls it goes back to the row's top, however the row was opened. Stepping down the list REPLACES history, so
- * four rows read through one open pane are one place the reader has been (the
- * rule the frame's own peek follows), and `j`/`k` step through it from the
- * keyboard. A task named on a row or in a byline opens beside the inbox, in
- * the frame's side panel.
+ * scrolls it goes back to the row's top, however the row was opened. A task
+ * named on a row or in a byline opens beside the inbox, in the frame's side
+ * panel.
+ *
+ * # Every item has its own address
+ *
+ * `#/inbox/<kind>/<id>` (`inboxItemPath`), and every row links to it. Opening one pushes, so Back
+ * steps between items; the screen's own moves replace. A notice no loaded page holds is read by
+ * its id (`inbox{record}`), and an address nobody holds says so rather than opening another.
  *
  * # Whatever runs the tracker
  *
@@ -79,7 +83,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Callout, InlineCode, Link, announce, useMediaMatch, useScreenBelow } from "@crewlethq/ui";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
-import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { href, useNavigator, useRoute } from "~/app/router.tsx";
+import { inboxItemPath, resolve } from "~/app/routes.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
@@ -120,13 +125,16 @@ import {
   inboxSelection,
   inboxRows,
   isNoticeRow,
+  legacyRowKey,
   nextAfter,
+  noticeKeyRecord,
   noticeRows,
   pairAnswered,
   questionOf,
   readThrough,
   rowItem,
   rowKey,
+  rowNamed,
   type InboxRow,
   type ReadThrough,
 } from "./model.ts";
@@ -197,8 +205,15 @@ export function Inbox() {
   // page scrolls as any other.
   useFillScreen(!phone);
 
-  // THE OPEN ROW IS IN THE URL; what the quiet links opened is this visit's.
-  const [open] = useParam("row", "");
+  // THE OPEN ITEM IS THE ADDRESS'S; what the quiet links opened is this visit's.
+  const route = useRoute();
+  const where = resolve(route.path);
+  const open = where.resolved && where.screen === "inbox" ? (where.item ?? "") : "";
+  // A `?row=` ADDRESS names an item the earlier way, and is replaced by the item's own.
+  const legacy = route.query.get("row");
+  useEffect(() => {
+    if (legacy !== null) nav.replace(inboxItemPath(legacyRowKey(legacy)));
+  }, [legacy, nav]);
   const [snoozedOpen, setSnoozedOpen] = useState(false);
   const [earlierOpen, setEarlierOpen] = useState(false);
 
@@ -362,12 +377,7 @@ export function Inbox() {
   // lands in the closed group's count rather than opening the group. Where
   // nothing is left to open, the move opens the group itself ([settle]).
   useEffect(() => {
-    if (
-      open &&
-      !answeredOpen &&
-      !settled.get(open)?.moved &&
-      answered.some((r) => r.key === open)
-    ) {
+    if (open && !answeredOpen && !settled.get(open)?.moved && rowNamed(answered, open)) {
       setAnsweredOpen(true);
     }
   }, [open, answeredOpen, answered, settled]);
@@ -390,34 +400,87 @@ export function Inbox() {
   // answered row is keyed by the launch that asked as well as its turn.
   const held = useRef<InboxRow | null>(null);
   const movedHere = settled.get(open);
-  const named =
-    order.find((r) => r.key === open) ??
-    updates.find((r) => r.key === open) ??
-    answered.find((r) => r.key === open) ??
+  const listed =
+    rowNamed(order, open) ??
+    rowNamed(updates, open) ??
+    rowNamed(answered, open) ??
     (movedHere?.moved
       ? answered.find((r) => questionOf(r) === questionOf(movedHere.row))
       : undefined) ??
-    (open && held.current?.key === open ? held.current : null);
+    (open && held.current?.key === open ? held.current : undefined);
+  // A NOTICE NO LOADED PAGE HOLDS is read by its id, read, unread or snoozed.
+  const sought = !listed ? noticeKeyRecord(open) : null;
+  const lone = useQuery(
+    "inbox",
+    bound && sought
+      ? { handle: owner, record: sought, snoozed: "include", cards: true }
+      : undefined,
+    { enabled: bound && sought !== null, refetchOnInboxOf: owner },
+  );
+  const loneRow = sought && lone.data ? rowNamed(noticeRows(lone.data.notices), open) : undefined;
+  const named = listed ?? loneRow ?? null;
+  // A NOTICE READ BY ITS ID OPENS THE GROUP IT IS IN, as a listed one does.
+  const loneState =
+    loneRow && isNoticeRow(loneRow)
+      ? loneRow.notice.snoozed
+        ? "snoozed"
+        : loneRow.notice.read
+          ? "read"
+          : ""
+      : "";
+  useEffect(() => {
+    if (loneState === "snoozed") setSnoozedOpen(true);
+    else if (loneState === "read") setEarlierOpen(true);
+  }, [sought, loneState]);
+  // EVERY READ THAT COULD HOLD IT HAS ANSWERED, and nothing does: the item is gone or not
+  // this reader's, which the pane says rather than opening another.
+  const everyRead =
+    org !== null &&
+    !(bound && (decisions.loading || updatesRead.loading || answeredRead.loading)) &&
+    !(sought !== null && lone.loading);
+  const missing = open !== "" && named === null && everyRead && !(sought !== null && lone.error);
+  const seeking = open !== "" && named === null && !missing;
   const selected =
     named ??
-    (single
+    (single || open
       ? null
       : (order.find((r) => r.kind !== "answered" && !settled.has(r.key)) ?? order[0] ?? null));
   useEffect(() => {
     if (selected) held.current = selected;
   }, [selected]);
+  // THE OPEN ROW IS IN VIEW in the list, however it opened: a link, Back, or `j` and `k`.
+  useEffect(() => {
+    document
+      .querySelector(".inbox-list .crewlet-inbox-row__control[aria-current='true']")
+      ?.scrollIntoView?.({ block: "nearest" });
+  }, [selected?.key]);
   // WHAT NEEDS YOU IS ABOUT, named for the assistant: the screen's list is
   // built here and no route answers it, so a question asked on this screen
   // reads these records rather than the task notices alone. The row the
   // reader opened is its selection, so a brief asked now is of that row.
   useAssistantContext({ resources: inboxResources(needs), selection: inboxSelection(named) });
 
-  const openRow = useCallback((key: string) => nav.filter({ row: key }), [nav]);
-
   // THE NEXT ROW, once the open one is settled. Read from refs when the timer
   // fires rather than from this render: by then the list has been re-read.
   const live = useRef({ open, order, settled, index });
   live.current = { open, order, settled, index };
+  // OPENING AN ITEM PUSHES, so Back returns to the one before; the pane's Back on a narrow
+  // screen steps back to the list it came from.
+  const fromList = useRef(false);
+  const openRow = useCallback(
+    (key: string) => {
+      if (key === live.current.open) return;
+      fromList.current = live.current.open === "";
+      nav.to(inboxItemPath(key));
+    },
+    [nav],
+  );
+  const backToList = useCallback(() => {
+    if (fromList.current) nav.back();
+    else nav.to(["inbox"]);
+    fromList.current = false;
+  }, [nav]);
+
   // THE MOVES ON THIS VISIT, counted, so Answered's head is in the order the
   // rows moved ([pairAnswered]): a run's answer is held as sent before it
   // moves, and its entry was made before rows answered in the meantime.
@@ -480,12 +543,12 @@ export function Inbox() {
         window.clearTimeout(timer.current);
         // NOTHING LEFT TO OPEN: the row stays open on its outcome, and the
         // group it moved to opens on it, so the list never hides the open row.
-        if (next) nav.filter({ row: next });
+        if (next) nav.replace(inboxItemPath(next));
         else setAnsweredOpen(true);
         return;
       }
       // NAMED FIRST, so the row stays open while it leaves the list.
-      if (live.current.open !== row.key) nav.filter({ row: row.key });
+      if (live.current.open !== row.key) nav.replace(inboxItemPath(row.key));
       window.clearTimeout(timer.current);
       timer.current = window.setTimeout(() => {
         const { open: now, order: after, settled: done } = live.current;
@@ -502,7 +565,7 @@ export function Inbox() {
             ...after.filter((r) => r.kind === "answered").map((r) => r.key),
           ]),
         );
-        if (next) nav.filter({ row: next });
+        if (next) nav.replace(inboxItemPath(next));
       }, ADVANCE_MS);
     },
     [nav],
@@ -567,8 +630,8 @@ export function Inbox() {
     shown: needs.length + others.length + updates.length,
     watched: watchedIn("seat", unwatched),
   });
-  const showList = !single || !named;
-  const showPane = !single || named !== null;
+  const showList = !single || !open;
+  const showPane = !single || open !== "";
   // THE ANSWER GIVEN TO THE OPEN ROW, where it moved to Answered and the
   // engine has not listed it yet: the pane draws it in place of the controls
   // that gave it, which would answer the question again.
@@ -589,7 +652,7 @@ export function Inbox() {
   );
 
   return (
-    <div className="inbox-frame" data-phone-pane={single && named ? "true" : undefined}>
+    <div className="inbox-frame" data-phone-pane={single && open ? "true" : undefined}>
       {/* MARK ALL READ IS EVERY SOURCE'S, drawn for every reader since every
           company keeps artifacts, and held with its reason where there is
           nothing of theirs to mark. */}
@@ -680,7 +743,8 @@ export function Inbox() {
                 answeredRead.error ||
                 snoozedCount.error ||
                 snoozed.error ||
-                earlier.error) && (
+                earlier.error ||
+                lone.error) && (
                 <>
                   <QueryState
                     error={updatesRead.error}
@@ -721,6 +785,14 @@ export function Inbox() {
                   >
                     {null}
                   </QueryState>
+                  <QueryState
+                    error={lone.error}
+                    refusal={lone.refusal}
+                    detail={lone.detail}
+                    loading={false}
+                  >
+                    {null}
+                  </QueryState>
                 </>
               )
             }
@@ -729,8 +801,9 @@ export function Inbox() {
         {showPane && (
           <InboxPane
             row={selected}
+            missing={missing}
             listEmpty={Boolean(quiet)}
-            loading={!allAnswered}
+            loading={!allAnswered || seeking}
             index={index}
             now={now}
             zone={zone}
@@ -738,7 +811,7 @@ export function Inbox() {
             title={
               selected ? (titleOf(titles, rowItem(selected)) ?? taskTitleOf(selected)) : undefined
             }
-            onBack={single ? () => nav.filter({ row: null }) : undefined}
+            onBack={single ? backToList : undefined}
             answered={answeredHere}
             onSettled={(label, answer, hold) => selected && settle(selected, label, answer, hold)}
           />

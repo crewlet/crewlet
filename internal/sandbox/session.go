@@ -695,13 +695,13 @@ type SessionCapture struct {
 	// NoteCursor is the last note read ([RunSteer.Reads]) the run's record says
 	// the session holds ([notesHeld]): every note the record says was read when
 	// the archive was packed, where its harness ended its own run, up to the
-	// first read the record marks unanswered ([NoteRead.Unanswered]) and not
-	// past it; and none where it was cut off. A launch that continues the
-	// session hands it every note read after — as notes it may already show
-	// where the cursor stopped before an unanswered read, since the session holds
-	// the answered ones after it; and of a session cut off, every note the turn
-	// has read, as notes it may already show (internal/agent/runner's
-	// keptSession).
+	// first read the record marks unanswered ([NoteRead.Unanswered]) or taken
+	// before the session's restart ([NoteRead.Restarted]), or a hook's serve
+	// unconfirmed, and not past it; none where it was cut off. READ ONLY where
+	// the launch's own test says the copy holds its brief
+	// (internal/agent/runner's keptSession): it hands every note read after it,
+	// as notes the session may show where the cursor stopped early, and of a
+	// copy that may lack its brief every note the turn has read.
 	NoteCursor int `json:"note_cursor,omitempty"`
 
 	// Interrupted says the session's harness was CUT OFF rather than exiting
@@ -1508,46 +1508,29 @@ func openPlaces(calls BridgeLog, last int) []int {
 }
 
 // notesHeld is the last note read ([RunSteer.Reads]) run's record says a
-// session packed from its job holds ([SessionCapture.NoteCursor]): every one
-// the record says was read, where its harness ended its own run, up to the
-// first read it marks unanswered; and NONE where it was cut off.
-//
-// NEVER PAST A READ MARKED UNANSWERED ([NoteRead.Unanswered]): its take's write
-// landed and its answer never reached the harness, so the session lacks that
-// note however cleanly it ended — while it holds the answered reads after it.
-// One number cannot say both, so the cursor stops before the unanswered read,
-// and a launch that continues the session tells every note past it, as notes it
-// may already show (internal/agent/runner's keptSession). WHICHEVER JOB'S TAKE
-// it was: a later launch whose brief told the note again records it read by
-// its job, unmarked ([NoteRead.Retold]), and records only a note its brief
-// told as marked. A mark made off the take's frame can land after a brief was
-// built, held past the next launch by a store's bad moment, and that brief did
-// not tell it as marked; so a read still marked unanswered stops the cursor of
-// every capture after it, told again rather than never. An older build, which
-// tells a continuation every note past the cursor with no header, tells the
-// unanswered note too.
-//
-// NONE, NOT THE NOTES BEFORE THE JOB'S LAST TAKE. A take is recorded read in
-// the write that answers the harness's ask, before the answer is handed back
-// (internal/engine's note hooks), so a harness cut off between the two never
-// had its last take's notes; but neither is such a session known to hold its
-// job's brief, the message that told the notes the session it continued
-// lacked, an earlier job's among them: no probe has measured whether Claude
-// Code 2.1.310 writes the message a continued session is handed before it
-// answers a call, and no record says which notes that brief told. A cursor
-// stopped before the job's last take said the session held the notes that
-// brief told, which may never have reached it. A launch that continues a
-// session cut off tells it every note the turn has read, as notes it may
-// already show, whatever its cursor (internal/agent/runner's keptSession); an
-// older build, which tells it every note past its cursor, tells it every one.
+// session packed from its job holds ([SessionCapture.NoteCursor]): every read
+// where its harness ended its own run, up to the first read marked unanswered
+// ([NoteRead.Unanswered]) or restarted ([NoteRead.Restarted]), or the place of
+// a note a hook was served and nothing read ([RunNote.Place]); none where it
+// was cut off. A continuation tells every note past it as notes the session may
+// already show (internal/agent/runner's keptSession). An item for one job stops
+// nothing. See the package doc, "A turn's notes".
 func notesHeld(run PendingRun, cutOff bool) int {
 	if cutOff {
 		return 0
 	}
 	held := run.Steer.Reads
 	for _, n := range run.Steer.Notes {
-		if n.Read != nil && n.Read.Unanswered && n.Read.Order > 0 && n.Read.Order <= held {
-			held = n.Read.Order - 1
+		stop := 0
+		switch {
+		case n.For != "":
+		case n.Read == nil:
+			stop = n.Place
+		case n.Read.Unanswered || n.Read.Restarted:
+			stop = n.Read.Order
+		}
+		if stop > 0 && stop <= held {
+			held = stop - 1
 		}
 	}
 	return held
@@ -2524,77 +2507,106 @@ func (c *Coordinator) overBudget(ctx context.Context, run PendingRun, size, budg
 		"uploaded", held, size, budget)
 }
 
-// keepLostSession keeps the session of a run whose ending is a LOSS where its box
-// may still be read — a launch whose engine restarted before its turn could
-// park, reaped as the seat is recovered — before the ending reclaims the box:
-// the last read of it anything makes, which ends the job first, as a stop's
-// does ([Coordinator.endJob]). On this node's host it is attached and taken
-// here; on another node's it is asked of that host ([BoxReadLoss]), which ends
-// the job and takes its session there. A box that is gone, and a job of this
-// launch already taken whole, are passed over.
+// keepLostSession makes the last read of a lost run's box, where its box may
+// still be read, before the ending reclaims it ([Coordinator.capturesLoss]):
+// the job ended, as a stop's is ([Coordinator.endJob]), its served notes
+// settled by its session and its session taken, here or asked of the box's
+// host ([BoxReadLoss]). ATTACHED, NEVER CONNECTED: a box about to be reclaimed
+// is not woken. Made by the ending's own retry ([Coordinator.finishEnding]).
 //
-// ATTACHED, NEVER CONNECTED: a box about to be reclaimed is not woken to be
-// read, and one its backend cannot read paused is passed over.
-//
-// MADE BY THE ENDING'S OWN RETRY, off any frame somebody waits on
-// ([Coordinator.finishEnding]): the pack and the take are bounded by their own
-// budget, and the keep after them by its own.
-func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun) {
+// A STEP THE STORE DID NOT ANSWER ([ErrStoreSilent]) is returned and the
+// ending kept; only the host's alone (another node's host, rowRead answered)
+// is given up as a stop's is ([Coordinator.hostGivenUp]), the loss then ending
+// with its notes unconfirmed. Every other failure is logged and answers nil.
+func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRead bool) error {
 	if !c.capturesLoss(run) {
-		return
+		return nil
 	}
-	if !c.hosts(run) {
+	asked, local := c.now(), c.hosts(run)
+	var err error
+	if local {
+		var spooled *spooledCapture
+		spooled, _, err = c.readLost(ctx, run)
+		c.keepLater(ctx, spooled)
+	} else {
 		if c.boxes == nil {
-			return
+			return nil
 		}
-		result, _, err := c.boxes.ReadBox(ctx, run, BoxReadLoss)
-		if err != nil {
-			log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", string(BoxReadLoss),
-				"node", run.LaunchNode, "error", err.Error(),
-				"detail", "the lost run's box is on another node's host, which did not read it before "+
-					"its ending reclaims it")
-			return
-		}
-		if kept := result.Kept; kept != nil && kept.NotKept != "" {
+		var result Result
+		result, _, err = c.boxes.ReadBox(ctx, run, BoxReadLoss)
+		if kept := result.Kept; err == nil && kept != nil && kept.NotKept != "" {
 			log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", string(BoxReadLoss),
 				"node", run.LaunchNode, "detail", kept.NotKept)
 		}
-		return
 	}
-	spooled, _ := c.readLost(ctx, run)
-	c.keepLater(ctx, spooled)
+	switch {
+	case err == nil:
+		return nil
+	case !errors.Is(err, ErrStoreSilent):
+		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", string(BoxReadLoss),
+			"node", run.LaunchNode, "error", err.Error(),
+			"detail", "the lost run's box is on another node's host, which did not read it before "+
+				"its ending reclaims it")
+		return nil
+	case rowRead && !local && c.hostGivenUp(run, c.hostSilence(run, asked, err)):
+		log.WarnContext(ctx, "steer_receipt_unsettled", "turn_id", run.TurnID, "launch_id", run.LaunchID,
+			"point", string(BoxReadLoss), "given_up", true, "error", err.Error(),
+			"detail", "the coordination store did not answer the lost job's read for the box timeout by "+
+				"this node's clock; the loss ends, and its served notes are reported unconfirmed")
+		return nil
+	}
+	return fmt.Errorf("sandbox: reading lost run %s's box: %w", run.TurnID, err)
 }
 
-// readLost is the read of a lost run's box on this node's host — for this
-// node's own ending, or asked by the node ending it ([BoxReadLoss]): the box
-// attached, never woken; its job ended, where it still works
-// ([Coordinator.endJob]); and its session taken, final wherever the job
-// ended. Nothing else of the box is read: what a lost job spent is no
-// question a loss asks.
-func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCapture, *SessionKept) {
+// readLost is the read of a lost run's box on this node's host, for this
+// node's own ending or asked by the node ending it ([BoxReadLoss]): the box
+// attached, never woken; its job ended where it still works
+// ([Coordinator.endJob]); the release that ran it collected, for the verdict
+// alone; its served notes settled off its main thread (mainthread.go); and,
+// for a company that keeps sessions, its session taken. The verdict's
+// [ErrStoreSilent] is returned before the take; nothing else of the box is read.
+func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCapture, *SessionKept, error) {
 	manager := c.mgr()
 	if manager == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	box, runner, err := manager.Attach(ctx, Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {
 		why := fmt.Sprintf("the lost run's box could not be read before it was reclaimed: %v", err)
 		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", string(BoxReadLoss),
 			"detail", why)
-		return nil, &SessionKept{NotKept: why}
+		return nil, &SessionKept{NotKept: why}, nil
 	}
 	over := c.endJob(ctx, run, box, runner, nil)
-	return c.takeCapture(ctx, run, box, runner, readCapture(BoxReadLoss, Result{}, over))
+	// THE RELEASE ALONE: a failed Collect leaves it "", which confirms nothing.
+	var result Result
+	if asksMainThread(run, BoxReadLoss) {
+		if collected, err := runner.Collect(ctx, box, run.Handle()); err == nil {
+			result.HarnessVersion = collected.HarnessVersion
+		}
+	}
+	at := readCapture(BoxReadLoss, result, over)
+	reading := c.readMainThread(ctx, run, box, runner, BoxReadLoss, at, result)
+	if err := c.settleHookReceipts(ctx, run, reading.Receipts, BoxReadLoss); err != nil {
+		return nil, nil, err
+	}
+	if !c.capturing() {
+		return nil, nil, nil
+	}
+	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
+	return spooled, kept, nil
 }
 
-// capturesLoss reports whether a lost run's ending reads its box for its
-// session: a company that keeps sessions ([Coordinator.capturing]), a run whose
-// job was in a box, a loss that leaves the box behind ([LossCause.leavesBox] — a
-// box lost with its host, or with a node that left, has nothing left to read),
-// and no take of this job made once it had ended that has settled
-// ([keptWhole]): beside one still being kept, the read stands by for it.
+// capturesLoss reports whether a lost run's ending reads its box: for its
+// session, in a company that keeps sessions ([Coordinator.capturing]), or for
+// its served notes' receipts ([PendingRun.asksReceipts]), whatever the company
+// keeps; of a run whose job was in a box, by a loss that leaves the box behind
+// ([LossCause.leavesBox]). A job already taken whole ([keptWhole]) is read
+// again only for its receipts: beside a take still being kept, the read stands
+// by for it.
 func (c *Coordinator) capturesLoss(run PendingRun) bool {
-	if !c.capturing() || run.SandboxID == "" || !run.lost() || keptWhole(run) {
+	receipts := run.asksReceipts()
+	if (!c.capturing() && !receipts) || run.SandboxID == "" || !run.lost() || (keptWhole(run) && !receipts) {
 		return false
 	}
 	return run.Lost == nil || run.Lost.Cause.leavesBox()

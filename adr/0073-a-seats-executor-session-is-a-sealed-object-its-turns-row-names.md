@@ -302,13 +302,25 @@ session, not how a stop ends a job — and a loss closes the run's bridge sessio
 before its read, as a stop does, so a lost job still working stops acting as the
 seat before its take.
 
-**The read's budget holds the end.** `BoxReadBudget` is per read: a collection's
-stays 460 seconds; a stop's and a loss's add `JobEndBudget` (the wait and the
-kill, 145 seconds) at the host's three-quarter share, 653 seconds, so a host's
-take after an end at its bound is still given its whole `SessionTakeBudget`. No
-wire changes: a host's reply carries `Result.JobEnd` additively, an older
-engine never sends the request, and a script of an older build is asked nothing
-and killed.
+**The read's budget holds the end.** `BoxReadBudget` is per read: a stop's and
+a loss's add `JobEndBudget` (the wait and the kill, 145 seconds) to a
+collection's at the host's three-quarter share, about 193.3 seconds more, so a
+host's take after an end at its bound is still given its whole
+`SessionTakeBudget`. As `BoxReadBudget` (`internal/sandbox/boxhost.go`) computes
+it, a collection of a turn with no cap waits about 4,700.1 seconds (a Claude
+Code one 20 more, for its main thread's read, `MainThreadReadWait`, below) and
+a stop's or a loss's about 4,893.5: the poll's 60-second bound, and at the
+share the take's 240 seconds, its reservation's 30, three 30-second graces and
+the four changes of the run's row its host makes, each at the slowest node's
+crossing (`coord.MaxValueCrossing`, about 780.03 seconds), so
+60 + 3,480.1 / 0.75. The figures first given here, 460 and 653 seconds, were
+from before those changes were counted at their crossings.
+`internal/sandbox.TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing`
+holds the collection's terms and
+`internal/sandbox.TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake` the end
+on top of them. No wire changes: a host's reply carries `Result.JobEnd`
+additively, an older engine never sends the request, and a script of an older
+build is asked nothing and killed.
 
 ## Amendment: a turn's first read holds the session it was handed
 
@@ -674,12 +686,28 @@ process of the box's user takes nothing a later job needs.
 
 **The read's budget holds the end.** `BoxReadBudget` takes the run as well as
 the read: every collection of a turn with a cap waits as a stop's and a loss's
-read do, 653 seconds, whether or not the cap has passed on the asker's clock,
-since the host decides on its own as it reads; a collection of a turn with none
-waits 460, as it did. While builds are mixed, an asker of an older build still
-waits 460 seconds on every collection, so a newer host's take after an end at
-its bound is cut short of its budget there, and that capture is stamped
-refused; this lasts only for the upgrade's window.
+read do, with the record that the cap ended a job it saw working on top, at
+its grace and the slowest node's crossing (`recordsTheCap`), whether or not
+the cap has passed on the asker's clock, since the host decides on its own as
+it reads; a collection of a turn with none waits as it did. As the code
+computes them, that is about 5,973.5 seconds for a collection of a turn with a
+cap, 4,700.1 + (145 + 30 + 780.03) / 0.75, and about 4,700.1 for one with none
+(the derivation is in the amendment above), and a Claude Code collection waits
+20 seconds more for its main thread's read (`MainThreadReadWait`,
+`internal/sandbox.TestTheBoxReadBudgetHoldsTheMainThreadRead`). A Claude Code
+read whose run holds a hook's serve to its job (`asksReceipts`) waits for that
+read, the verdict on the serve (`hookVerdictWait`, 10 s) and one more change of
+the row at the slowest crossing: about 5,773.5 seconds for a collection of a
+turn with no cap, 7,046.9 with one, and 5,966.8 for a stop's or a loss's
+read. The figures
+first given here, 653 and 460 seconds, were from before the changes of the
+run's row were counted at their crossings and before the cap's record was
+counted at all;
+`internal/sandbox.TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake` holds
+the record's terms. While builds are mixed, an asker of an older build still
+waits an uncapped collection's budget on every collection, so a newer host's
+take after an end at its bound is cut short of its budget there, and that
+capture is stamped refused; this lasts only for the upgrade's window.
 
 ## Amendment: a seat reads its own sessions, and a read holds nothing
 
@@ -1479,10 +1507,14 @@ not it takes or keeps a capture, through `PendingStore.MarkHarnessEnd`, with no
 fence, as `MarkEndedAtDeadline` takes none; once recorded cut off it is cut off
 for the job, and nothing is recorded over a word this build does not know
 (`HarnessEnd.after`). It is written after the take, within the room the read
-leaves the take's own records (`recordsBy`): `BoxReadBudget` holds no time of
-its own for it, so a store slow to answer it costs neither the take nor the
-box's pause their time, and a record that does not land is never read as an own
-run. The read's result carries it back (`Result.HarnessEnd`) to the claim it
+leaves the take's own records (`recordsBy`): the grace they share and the
+crossing of this change of the run's row on the host's connection
+(`takeRecordsRoom`), which `BoxReadBudget` counts at the slowest node's
+crossing as one of the four changes a read makes (`boxReadChanges`); when this
+was first written `BoxReadBudget` held no time of its own for the record. So a
+store slow to answer it costs neither the take nor the box's pause their time,
+and a record that does not land is never read as an own run. The read's result
+carries it back (`Result.HarnessEnd`) to the claim it
 collects for, which was read before the record was written, for the resume that
 follows on that claim. The job's record and no other: the fact is the job's, a
 capture's stamp exists only where a capture was taken, and the record is
@@ -2753,11 +2785,12 @@ and ONE read of the job's main thread in the read that collects a job, on the
 box's host, before the take, within `sandbox.MainThreadReadWait` (15 s), which
 `sandbox.BoxReadBudget` holds for a Claude Code or an OpenCode collection, 20 s
 more for its asker than a read that asks no thread (about 4,720 s for an
-uncapped turn's, about 5,994 s with a cap), a look at each saved compaction's size and never a read of
+uncapped turn's, about 5,994 s with a cap), a look at each saved compaction's
+size and never a read of
 its body, written with how the harness ended in the one write
 (`sandbox.EndRead.Count`, `sandbox.LaunchRecord.ResumedCount`). A job not
-over is counted unread with no read, since its harness may still write; a stop's
-read and a loss's ask nothing. The walk is the seam every later reading of the
+over is counted unread with no count read, since its harness may still write; a
+stop's read and a loss's ask no count, only their served notes' receipts. The walk is the seam every later reading of the
 thread joins (`walkThread`, `threadReading`), never a second read.
 The count is this job's copy's, or this archive's: the next launch's record
 starts with none. Beside it, the least `contextWindow` the run's result lines

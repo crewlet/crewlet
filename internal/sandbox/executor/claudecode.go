@@ -86,8 +86,8 @@ const ClaudeCodeName = sandbox.ClaudeCodeHarness
 //
 // A RELEASE OLDER THAN 2.1.163 IS STARTED WITHOUT THE HOOKS ([claudeNotesFloor]),
 // on the settings every run has: it runs them, and drops what a Stop hook
-// answers, so a note taken as the run finishes would be recorded read by a run
-// that never saw it. What switches the hooks off otherwise — a managed policy
+// answers, so a note served as the run finishes would be handed to a run that
+// never sees it. What switches the hooks off otherwise — a managed policy
 // that allows only managed hooks (allowManagedHooksOnly,
 // strictPluginOnlyCustomization) or disables every hook (disableAllHooks) —
 // leaves, like that older release, a run that succeeded without asking once,
@@ -1352,18 +1352,19 @@ const claudeProjectDir = "crewlet"
 //     subagent's `autoCompactWindow` to lower the window set by
 //     `CLAUDE_CODE_AUTO_COMPACT_WINDOW`", the 2.1.312 changelog; read in
 //     2.1.310 and 2.1.322). Lower only, so no request carries more than the
-//     window.
+//     window;
+//   - DISABLE_AUTOUPDATER, 1 (the package doc's "A box's release is pinned").
 //
-// The transcript's trim (CLAUDE_CODE_TRANSCRIPT_LOCAL_GC) is the script's to
-// set, by release ([claudeLocalGCFloor]); and the harness's own retention sweep
-// is held off by the settings every run is started with ([claudeSettings]),
-// since no variable reaches it.
+// The transcript's trim (CLAUDE_CODE_TRANSCRIPT_LOCAL_GC) is the script's, by
+// release ([claudeLocalGCFloor]); the harness's own retention sweep is held off
+// by every run's settings ([claudeSettings]), since no variable reaches it.
 func claudeSessionLayout(paths Paths, window sandbox.ExecutorWindow) []Pinned {
 	return []Pinned{
 		{Name: "CLAUDE_CONFIG_DIR", Value: paths.ClaudeConfigDir()},
 		{Name: "CLAUDE_CODE_PROJECT_DIR_NAME", Value: claudeProjectDir},
 		{Name: "CLAUDE_CODE_DISABLE_AUTO_MEMORY", Value: "1"},
 		{Name: "CLAUDE_CODE_AUTO_COMPACT_WINDOW", Value: strconv.Itoa(window.Tokens)},
+		{Name: "DISABLE_AUTOUPDATER", Value: "1"},
 	}
 }
 
@@ -1436,11 +1437,11 @@ func newClaudeSettings(env map[string]string) claudeSettings {
 }
 
 // claudeSettingsPin is the `env` block of every pinned settings file
-// ([claudeSettingsPinFloor]), which pins the point the run compacts at and
-// what a resume of its session loads: CLAUDE_CODE_AUTO_COMPACT_WINDOW at the
-// window [claudeSessionLayout] pins, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE and
-// CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE blank, and every switch a resume is
-// started without ([claudeResumeSwitches]) blank.
+// ([claudeSettingsPinFloor]), pinning the point the run compacts at, what a
+// resume loads and the release: CLAUDE_CODE_AUTO_COMPACT_WINDOW at the window
+// [claudeSessionLayout] pins, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE,
+// CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE and every switch a resume is started
+// without ([claudeResumeSwitches]) blank, and DISABLE_AUTOUPDATER 1.
 //
 // THE WRAPPER'S AND THE SCRIPT'S PINS AGAIN, BECAUSE A REPOSITORY'S SETTINGS
 // CAN UNDO THEM. The harness assigns every settings source's `env` block to its
@@ -1471,6 +1472,7 @@ func claudeSettingsPin(window sandbox.ExecutorWindow) map[string]string {
 		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(window.Tokens),
 		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":     "",
 		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
+		"DISABLE_AUTOUPDATER":                 "1",
 	}
 	for _, name := range claudeResumeSwitches {
 		pin[name] = ""

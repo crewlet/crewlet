@@ -44,15 +44,13 @@ import {
   Highlight,
   InlineCode,
   MARKDOWN_CALLOUT_NAMES,
-  markdownClosesFence,
-  markdownFenceOf,
-  markdownHeadingOf,
+  markdownCodeText,
   markdownInline,
   parseMarkdown,
+  parseMarkdownSpans,
   peelPunctuation,
   safeHref,
   type MarkdownBlock,
-  type MarkdownFence,
 } from "@crewlethq/ui";
 import { ColourCode, InlineToken, LabelledLink, TokenRun } from "~/components/InlineToken.tsx";
 import { codeColour, inlineTokens, type LinkMode } from "./inlineTokens.ts";
@@ -164,37 +162,31 @@ export function headingLines(source: string): HeadingLine[] {
 }
 
 /**
- * A document's lines, each with its offset and — outside a fenced block — the
- * heading it is, if it is one.
+ * A document's lines, each with its offset and the heading it is, if it is
+ * one of the document's own: a heading block at the top level.
  *
- * A FENCE SUSPENDS THE GRAMMAR, which is the whole reason this is not a
- * `split(/^#/m)`: `# install deps` inside a shell sample is a comment, and a
- * tool catalogue is full of them. ONE walk for both readers of a document's
- * headings, so the fence rule is written once.
+ * THE GRAMMAR DECIDES, through [parseMarkdownSpans], which names the lines
+ * of every top-level block. A walk of its own had to restate the grammar's
+ * rules line by line (a fence suspends it, `# install deps` in a shell
+ * sample is a comment) and fell behind it: a fence closes only on a run as
+ * long as its opening, a heading may be indented, and a heading inside a
+ * list item or a quote belongs to that block, not to the outline. Both
+ * split a source at the same line breaks (`\r\n`, `\r` or `\n`), so the
+ * span's line index is [readLines]' index.
  */
 function* walkLines(
   source: string,
 ): Generator<{ line: Line; at: number; heading: { level: number; title: string } | null }> {
-  // The fence marker currently open, or null outside one.
-  let fence: MarkdownFence | null = null;
+  const headings = new Map<number, { level: number; title: string }>();
+  for (const { block, start } of parseMarkdownSpans(source).spans) {
+    if (block.kind === "heading") headings.set(start, { level: block.level, title: block.text });
+  }
   let at = 0;
+  let index = 0;
   for (const line of readLines(source)) {
     const start = at;
     at += line.text.length + line.eol.length;
-    if (fence !== null) {
-      if (markdownClosesFence(line.text, fence)) fence = null;
-      yield { line, at: start, heading: null };
-      continue;
-    }
-    const opened = markdownFenceOf(line.text);
-    if (opened) {
-      fence = opened.marker;
-      yield { line, at: start, heading: null };
-      continue;
-    }
-    // Closing hashes are decoration, not content: the same reader
-    // [parseMarkdown] applies to the same line.
-    yield { line, at: start, heading: markdownHeadingOf(line.text) };
+    yield { line, at: start, heading: headings.get(index++) ?? null };
   }
 }
 
@@ -470,9 +462,10 @@ export function renderInline(
       // AN ESCAPED CHARACTER IS ITSELF: `\*` is an asterisk somebody meant.
       out.push(createElement("span", { key }, g.esc));
     } else if (g.tick !== undefined) {
-      // A code span loses ONE leading and trailing space, which is how
-      // CommonMark lets a span start with a backtick of its own.
-      const code = (g.code ?? "").replace(/^ | $/g, "");
+      // A code span's text by CommonMark's rules, the grammar's own reader: a
+      // line ending is a space, and one space goes from each end only when
+      // both ends have one.
+      const code = markdownCodeText(g.code ?? "");
       // A SHORT SPAN IS ONE TOKEN to a reader: `nimbus jobs wait --node <n>`
       // split at a space reads as two commands, and the break always lands on
       // the flag. Up to [UnbrokenCode] characters it is kept on one line; a

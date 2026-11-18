@@ -528,7 +528,9 @@ stateDiagram-v2
   ceilings of either scope or the company's clock (which moves every window's
   end) — the apply of the revision that changed them — the hold
   is lifted, `seat_budget_park_released` is logged, and the held mail is
-  delivered again, the seat's priority lane first, and asked again. A change that lowers a ceiling
+  delivered again, the seat's priority lane first, and asked again. A park
+  taken while the release was in flight holds the seat again, and the
+  release's line then says so (`held_again=true`): its inbox stays held. A change that lowers a ceiling
   parks it again at the cost of one delivery. A delivery whose launch was
   refused below a floor above the static one waits one turnover for that
   floor at most: the park keeps, on this node, the window that delivery
@@ -657,8 +659,9 @@ stateDiagram-v2
   (`paused_by`, `paused_by_kind`) and the credential they came through
   (`operator_id`).
 - **Every node carries it out from its own copy.** Each node watches the
-  records and, the moment a pause lands, takes a pause hold (`seat_paused`) on
-  the seat's inbox; the resume lifts it and the mail that waited is delivered.
+  records and, the moment a pause lands, the node holding the seat takes a
+  pause hold (`seat_paused`) on the seat's inbox, for the attachment of the
+  inbox it holds; the resume lifts it and the mail that waited is delivered.
   A node that acquires a paused seat — placement moved it, or its holder
   restarted — takes the hold **before** attaching the seat's mailbox, so the
   mail it has been holding is never the first thing the new holder runs. A
@@ -732,9 +735,11 @@ answered. The turn's own record says what became of it (`agent_turn_steered`:
 `delivered` where it was read — the round, or the kind of step inside the launch —
 and where a later launch's brief told it again after a step that took it never
 handed it over; `expired` when the turn ended first; `missed` where a step took
-it for a reader that never had it and no later launch whose job started told
-it; or `unconfirmed`
-where the executor was handed it and never confirmed reading it). See [Turn
+it for a reader that never had it, or every serve of it to a Claude Code
+hook was lost and a serve's session proves it absent, and no later launch
+whose job started told it; or `unconfirmed` where the executor was handed it
+and never confirmed reading it, a hook's note confirmed only by the job's own
+session, and a note whose every lost serve its harness gave up). See [Turn
 Engine § Steering a running turn](turn-engine.md#steering-a-running-turn).
 
 ### Graceful shutdown

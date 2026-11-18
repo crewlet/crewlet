@@ -202,12 +202,16 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	}
 	// AND THE RUN'S NOTE INBOX, built from its record alone — its turn, its
 	// job and its round — so a note to the turn reaches the run between its
-	// steps here as it did on the node that launched it (runsteer.go).
+	// steps here as it did on the node that launched it (runsteer.go). BOUND
+	// TO THE JOB BEFORE THE BRIDGE FILES THE SESSION ([Engine.openBridge]): the
+	// box reaches the opening the moment it is filed, with the token it holds,
+	// and never finds the inbox serving no job.
 	inbox := e.runSteers.inbox(identityOfRun(run), state.Round)
 	if inbox != nil {
 		session.Steer = inbox
 	}
 	if _, err := e.openBridge(ctx, session, ledger, inbox, job); err != nil {
+		// CLOSED, which stops the view its bind started.
 		inbox.Close()
 		refuse("the bridge opened no session for the run's job", "error", err.Error())
 		return

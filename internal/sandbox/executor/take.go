@@ -112,11 +112,19 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return sandbox.TakenSession{}, fmt.Errorf("executor: the session's archive is %d bytes, past the %d "+
 			"a session is kept at", archive.Size, take.MaxBytes)
 	}
-	bounds := boundsFor(take.MaxBytes)
+	// ONE PASS, the scrub and its meter: held to the base, past it the one
+	// large slot both share while either holds a piece past it (the package
+	// doc's "A collection's read of a thread"). Each one's wait for it ends
+	// with the take's reader, as the scrub's reads of the box do
+	// ([takenBody]); the meter's apart, as it walks on past the scrub's end.
+	large := new(passBudget)
+	scrubbing, stopScrub := context.WithCancel(ctx)
+	metering, stopMeter := context.WithCancel(ctx)
+	bounds := boundsFor(take.MaxBytes).gatedBy(scrubbing, large)
 	scrub := newScrubber(take.Scrub)
 	archive.RunStart = keptRunStart(scrub, archive.RunStart)
 	read, write := io.Pipe()
-	out := &takenBody{PipeReader: read, done: make(chan struct{})}
+	out := &takenBody{PipeReader: read, done: make(chan struct{}), stopScrub: stopScrub, stopMeter: stopMeter}
 	if !out.reading(body) {
 		_ = body.Close()
 	}
@@ -124,9 +132,15 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	// WHAT THE SESSION'S LAST REQUEST CARRIED, and what its harness counts it
 	// at, read off the archive as it is kept (measure.go), beside the take and
 	// within its context, never holding it up.
-	meter := newContextMeter(ctx, carries.layout(), archive.SessionID, archive.Version)
+	meter := newContextMeter(metering, carries.layout(), archive.SessionID, archive.Version, large)
 	go func() {
 		defer close(out.done)
+		defer stopScrub()
+		// THE TAKE ENDS WITH ITS METER, which may still wait for the slot.
+		defer func() {
+			<-meter.done
+			stopMeter()
+		}()
 		reopen := func() (io.ReadCloser, error) {
 			again, openErr := box.OpenFile(ctx, archive.Path)
 			if openErr != nil {
@@ -196,6 +210,10 @@ var errTakeClosed = errors.New("executor: the session's reader was closed while 
 type takenBody struct {
 	*io.PipeReader
 	done chan struct{}
+	// stopScrub ends the scrub's wait for a large slot ([passBudget]), and
+	// stopMeter the meter's, where the scrub did not write the whole take:
+	// the meter of one that did walks its tail whatever the reader does.
+	stopScrub, stopMeter context.CancelFunc
 
 	mu     sync.Mutex
 	src    io.Closer
@@ -204,6 +222,13 @@ type takenBody struct {
 	// the whole archive; failed is why it did not.
 	sum    string
 	failed error
+}
+
+// whole reports whether the scrub wrote the whole archive.
+func (t *takenBody) whole() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sum != ""
 }
 
 // reading names src as the archive the scrub reads now, false where the reader
@@ -260,6 +285,10 @@ func (t *takenBody) Close() error {
 	t.mu.Unlock()
 	if src != nil {
 		_ = src.Close()
+	}
+	t.stopScrub()
+	if !t.whole() {
+		t.stopMeter()
 	}
 	<-t.done
 	return err

@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -16,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -287,4 +292,179 @@ func TestEverySandboxClassIsACondition(t *testing.T) {
 	if builtin.RetryAfter(timedOut, time.Second) != 0 {
 		t.Error("a refused key whose request also ran out of time was told to wait")
 	}
+}
+
+// EVERY CONDITION KIND IS THE NODE'S OR THE WORK'S, AND NEVER BOTH, decided
+// once ([builtin.InfrastructureKind]): the work's side is exactly worksKinds
+// (a write the state log refused for what it is, a deadline, an abandoned
+// wait) and any sandbox class sandboxClassSides leaves with the work, today
+// none; every other declared kind and condition is the node's. The state log's
+// two kinds hold for every reason it names, and a sandbox class added there
+// fails until it has a side here (builtin's "Whose failure a condition is").
+//
+// Mutation: take a declared kind off InfrastructureKind's list, put a work's
+// kind on it, read every state-log refusal under one kind, move a sandbox
+// class to the work's side or read every class as the work's, or declare a
+// kind no condition is recorded under, and its rows go red.
+func TestEveryConditionKindIsTheNodesOrTheWorks(t *testing.T) {
+	t.Parallel()
+	works := func(kind string) bool {
+		if class, ok := strings.CutPrefix(kind, builtin.SandboxKindPrefix); ok {
+			nodes, decided := sandboxClassSides[sandbox.Why(class)]
+			return decided && !nodes
+		}
+		return worksKinds[kind]
+	}
+	for _, why := range sandbox.Whys {
+		if _, decided := sandboxClassSides[why]; !decided {
+			t.Errorf("the sandbox class %q has no side decided here: say whether a mail can "+
+				"cause it, here and in builtin's sandboxClassIsTheNodes", why)
+		}
+	}
+	for why := range sandboxClassSides {
+		if !why.Valid() {
+			t.Errorf("%q is decided here and is not a class the sandbox names", why)
+		}
+	}
+	recorded := map[string]bool{}
+	for name, err := range everyCondition() {
+		kind, ok := builtin.ConditionKind(err)
+		if !ok {
+			t.Errorf("%s is recorded under no kind", name)
+			continue
+		}
+		recorded[kind] = true
+		if nodes := builtin.InfrastructureKind(kind); nodes == works(kind) {
+			t.Errorf("%s (kind %q): the node's = %v and the work's = %v, want exactly one",
+				name, kind, nodes, works(kind))
+		}
+	}
+	for _, reason := range statelog.Reasons() {
+		err := fmt.Errorf("worklet: decide: %w", &statelog.Unavailable{Reason: reason, OpID: "op-1"})
+		want := builtin.KindStateLogUnavailable
+		if reason.RefusesTheWrite() {
+			want = builtin.KindStateLogWriteRefused
+		}
+		if kind, _ := builtin.ConditionKind(err); kind != want {
+			t.Errorf("a write refused %s is recorded under %q, want %q", reason, kind, want)
+		}
+	}
+	for _, kind := range declaredKinds(t) {
+		if !recorded[kind] {
+			t.Errorf("the declared kind %q is recorded for no condition", kind)
+		}
+		if builtin.InfrastructureKind(kind) == worksKinds[kind] {
+			t.Errorf("the declared kind %q: the node's = %v, want %v", kind,
+				builtin.InfrastructureKind(kind), !worksKinds[kind])
+		}
+	}
+	for _, kind := range []string{"", types.ErrorKindUnclassified, "sandbox"} {
+		if builtin.InfrastructureKind(kind) {
+			t.Errorf("%q, no kind of a condition, is the node's", kind)
+		}
+	}
+}
+
+// ONLY A CONDITION AN OPERATOR MUST CLEAR IS ONE A FINISHED JOB'S RESUME WAITS
+// FOR THE OPERATOR ON: a disk full, read-only or failing, a process at its
+// limit of open files, and nodes holding different keys or running different
+// builds, each of them the node's too; and nothing a store, a log or a broker
+// answering again clears, nothing of the work's, and no kind at all. Raised as
+// executor_resume_blocked, a kind put on the wrong side either pages an
+// operator for an outage that ends by itself or leaves a run waiting on one
+// unsaid.
+//
+// Mutation: drop a kind from builtin.OperatorKind, or add one a wait clears
+// (coordination_unavailable), and its row goes red.
+func TestOnlyAConditionAnOperatorClearsWaitsForTheOperator(t *testing.T) {
+	t.Parallel()
+	operators := map[string]bool{
+		builtin.KindDiskFull: true, builtin.KindDiskReadOnly: true, builtin.KindDiskFailed: true,
+		builtin.KindOpenFilesExhausted: true, builtin.KindFleetKeysDiffer: true,
+		builtin.KindFleetBuildsDiffer: true,
+	}
+	seen := map[string]bool{}
+	for name, err := range everyCondition() {
+		kind, _ := builtin.ConditionKind(err)
+		seen[kind] = true
+		if got := builtin.OperatorKind(kind); got != operators[kind] {
+			t.Errorf("%s (kind %q): waits for an operator = %v, want %v", name, kind, got, operators[kind])
+		}
+	}
+	for kind := range operators {
+		if !seen[kind] {
+			t.Errorf("the operator's kind %q is recorded for no condition", kind)
+		}
+		if !builtin.InfrastructureKind(kind) {
+			t.Errorf("the operator's kind %q is not the node's", kind)
+		}
+	}
+	for _, kind := range []string{"", types.ErrorKindUnclassified, builtin.KindCoordinationUnavailable} {
+		if builtin.OperatorKind(kind) {
+			t.Errorf("%q waits for an operator", kind)
+		}
+	}
+}
+
+// sandboxClassSides is every coding sandbox class's side, true for the node's:
+// a provider that did not answer, at its account's limit, wanting it paid for
+// or refusing its credentials, a setup download failing on the far side and a
+// configuration the deployment cannot start are no mail's doing.
+var sandboxClassSides = map[sandbox.Why]bool{
+	sandbox.WhyProviderUnavailable: true,
+	sandbox.WhySetupUnavailable:    true,
+	sandbox.WhyProviderLimit:       true,
+	sandbox.WhyProviderBilling:     true,
+	sandbox.WhyConfiguration:       true,
+	sandbox.WhyProviderRefused:     true,
+}
+
+// worksKinds is every kind outside a coding sandbox's classes that is the
+// work's rather than the node's: each one what was asked can cause.
+var worksKinds = map[string]bool{
+	builtin.KindStateLogWriteRefused: true,
+	llm.KindTimeout.String():         true,
+	llm.KindCancelled.String():       true,
+}
+
+// declaredKinds is every kind constant conditionkind.go declares, read from
+// its source so a kind added there is held to a side without being listed
+// here too.
+func declaredKinds(t *testing.T) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "conditionkind.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range value.Names {
+				if !strings.HasPrefix(name.Name, "Kind") || i >= len(value.Values) {
+					continue
+				}
+				lit, ok := value.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					t.Fatalf("%s is not a string literal", name.Name)
+				}
+				kind, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				kinds = append(kinds, kind)
+			}
+		}
+	}
+	if len(kinds) == 0 {
+		t.Fatal("conditionkind.go declares no kind: the walk read nothing")
+	}
+	return kinds
 }

@@ -656,7 +656,10 @@ What no seat can do is take a turn, and each node handles that the same way:
   `seat_inbox_paused` for the seat, naming `providers.llm` again.
 - The apply that adds a provider releases every inbox the node paused
   (`seat_inbox_resumed`), and the held work runs on the new provider. Nothing
-  sent to a seat in the meantime is lost.
+  sent to a seat in the meantime is lost. A line with `held_again=true` met a
+  pause taken against a revision with no provider while the release was in
+  flight: that seat's inbox stays held until a revision with a provider
+  releases it.
 - The revision that adds the first provider to a company with an agent seat
   must configure `providers.sandbox` in the same edit — every agent seat's
   executor runs in one of its cells — or it is refused at `providers.sandbox`,

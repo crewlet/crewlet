@@ -17,39 +17,16 @@ import (
 
 // A PROVIDER PARK'S NOTICES: ONE PER CHANGE, AND HELD WHILE THE BROKER IS DOWN.
 //
-// A seat's park, each renewal of it and its release are announced as events
+// A seat's park, each renewal and its release are announced as events
 // (`seat_provider_parked`, `seat_provider_released`), which every screen draws
-// the seat's condition from (internal/api/livestate). They were published on
-// the path that decided them, once, best effort, so a broker that refused cost
-// a WARN per seat per decision and the notice itself: a screen went on drawing
-// a seat parked after its release for as long as nothing else moved it. And a
-// decision path that ran hot published on every pass: a probe re-armed for an
-// instant already past renewed every seat's park as fast as its call
-// returned, and one node logged 36 000 `seat_provider_park_not_published`
-// lines in a three-minute broker outage.
-//
-// So a notice is handed to [parkNotices], which keeps the newest one per seat:
-//
-//   - ONCE PER CHANGE: a notice equal to the last one published for its seat
-//     (or on its way) is dropped, so a renewal that moved nothing is no news.
-//   - THE NEWEST WINS: a notice that arrives while an older one for the same
-//     seat waits replaces it, so a seat parked and released during an outage
-//     is published released, once, and never parked after it.
-//   - PUBLISHED BY ITS CALLER while the broker answers, as before, so what the
-//     caller decided is published before it returns; one caller at a time
-//     drains, and a seat's notices go out in the order they were decided.
-//   - HELD AND RETRIED ON A BACKOFF once the broker refuses: no caller
-//     publishes while they are held, and each attempt publishes every waiting
-//     notice in turn and stops at the first refusal, since a broker that
-//     refused one refuses the rest. An outage costs one attempt per step of
-//     the backoff, however many decisions it spans.
-//   - SAID PER OUTAGE, NOT PER NOTICE: one WARN when publishing first fails,
-//     and one INFO when the held notices land, with how many and for how long.
-//
-// WHO HAS TO AGREE ON IT: nobody. The park is this node's and holds whether or
-// not a screen hears of it; what this keeps is that the screen hears its latest
-// state once the broker answers. A node that stops drops what it held: its
-// seats are given up with it, and the node that takes one announces its own.
+// the seat from. [parkNotices] keeps the newest per seat: a notice equal to the
+// last one is dropped, a newer one replaces one waiting, its caller publishes
+// while the broker answers (in the order decided, or noted under a lock and
+// published once let go, [parkNotices.note]), and once the broker refuses they
+// are held and retried on a backoff, said once per outage. Published once, best
+// effort, a refused notice was lost and a hot path flooded the log. Who has to
+// agree: nobody; a stopping node drops what it held. The package doc's "A
+// provider park's notices" says why.
 
 // The schedule held notices are retried on.
 const (
@@ -121,6 +98,15 @@ type parkNotices struct {
 // another caller is publishing (which then publishes it too) or notices are
 // held.
 func (n *parkNotices) post(ctx context.Context, publish parkPublisher, handle string, ev *events.Event) {
+	n.note(ctx, handle, ev)
+	n.flush(ctx, publish)
+}
+
+// note hands one seat's notice over without publishing it, for a caller that
+// decides it under a lock no publish may be made under and calls
+// [parkNotices.flush] once it has let go. Noted, it is the seat's newest: a
+// notice noted after it replaces it, and it replaces any noted before it.
+func (n *parkNotices) note(ctx context.Context, handle string, ev *events.Event) {
 	key, err := json.Marshal(struct {
 		Type string         `json:"type"`
 		Data events.Payload `json:"data"`
@@ -131,8 +117,8 @@ func (n *parkNotices) post(ctx context.Context, publish parkPublisher, handle st
 		return
 	}
 	n.mu.Lock()
+	defer n.mu.Unlock()
 	if n.stopped {
-		n.mu.Unlock()
 		return
 	}
 	if n.waiting == nil {
@@ -147,14 +133,18 @@ func (n *parkNotices) post(ctx context.Context, publish parkPublisher, handle st
 	switch {
 	case bytes.Equal(ahead, key):
 		delete(n.waiting, handle)
-		n.mu.Unlock()
 		return
 	case bytes.Equal(n.waiting[handle].key, key):
-		n.mu.Unlock()
 		return
 	}
 	n.waiting[handle] = parkNotice{ev: ev, key: key}
-	if n.draining || n.held {
+}
+
+// flush publishes every waiting notice before returning, unless another
+// caller is publishing (which then publishes them too) or notices are held.
+func (n *parkNotices) flush(ctx context.Context, publish parkPublisher) {
+	n.mu.Lock()
+	if n.stopped || n.draining || n.held || len(n.waiting) == 0 {
 		n.mu.Unlock()
 		return
 	}
