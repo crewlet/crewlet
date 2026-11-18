@@ -36,8 +36,8 @@ func CheckChange(c *config.Company, ch Change) error {
 		return err
 	}
 	before := len(config.Problems(c.ValidateAdmission()))
-	if problems := config.Problems(copied.ValidateAdmission()); len(problems) > before {
-		return fmt.Errorf("advisor: the change breaks a rule: %v", copied.ValidateAdmission())
+	if err := copied.ValidateAdmission(); len(config.Problems(err)) > before {
+		return fmt.Errorf("advisor: the change breaks a rule: %w", err)
 	}
 	return nil
 }
@@ -49,7 +49,7 @@ func applyTo(entity any, ch Change) error {
 		return err
 	}
 	var fields map[string]any
-	if err := json.Unmarshal(raw, &fields); err != nil {
+	if err = json.Unmarshal(raw, &fields); err != nil {
 		return err
 	}
 	merge, err := asJSON(ch.Merge)

@@ -167,8 +167,8 @@ func (s *Served) read(from string) (int64, bool) {
 		step, path, _ = strings.Cut(path, ".")
 		name, index, indexed := strings.Cut(strings.TrimSuffix(step, "]"), "[")
 		if name != "" {
-			m, ok := v.(map[string]any)
-			if !ok {
+			var m map[string]any
+			if m, ok = v.(map[string]any); !ok {
 				return 0, false
 			}
 			if v, ok = m[name]; !ok {
@@ -176,7 +176,8 @@ func (s *Served) read(from string) (int64, bool) {
 			}
 		}
 		if indexed {
-			list, ok := v.([]any)
+			var list []any
+			list, ok = v.([]any)
 			i, err := strconv.Atoi(index)
 			if !ok || err != nil || i < 0 || i >= len(list) {
 				return 0, false
