@@ -183,6 +183,10 @@ type revisionRow struct {
 	kind       PartyKind
 	pushID     string
 	workingFor *types.WorkingFor
+	// via and forced are how the push moved the change's source: its way, and
+	// whether it rewrote the branch rather than moving it forward.
+	via    PushVia
+	forced bool
 }
 
 // authorRow is one code_change_authors row a record writes.
@@ -578,7 +582,7 @@ func (b *changeBook) move(e PushEntry) {
 		row = b.touch(row.id)
 		row.head, row.revision = c.New, row.revision+1
 		b.writes.revisions = append(b.writes.revisions, revisionRow{change: row.id, n: row.revision, head: c.New,
-			pusher: pusher, kind: kind, pushID: e.PushID, workingFor: e.WorkingFor})
+			pusher: pusher, kind: kind, pushID: e.PushID, workingFor: e.WorkingFor, via: e.Via, forced: c.Forced})
 		// A push no seat or person made adds no author: an author row naming
 		// nobody names what no review could ask after (and no decide admits
 		// one, a token bound to nobody reading only).
@@ -688,7 +692,7 @@ func (b *changeBook) open(e PushEntry) (string, string) {
 	w.touched = append(w.touched, id)
 	w.opened[id] = true
 	w.revisions = append(w.revisions, revisionRow{change: id, n: 1, head: source.New, pusher: owner, kind: kind,
-		pushID: e.PushID, workingFor: e.WorkingFor})
+		pushID: e.PushID, workingFor: e.WorkingFor, via: e.Via, forced: source.Forced})
 	b.author([2]string{id, owner})
 	w.authors = append(w.authors, authorRow{change: id, author: owner, kind: kind, first: 1})
 	if e.Change.Body != "" {

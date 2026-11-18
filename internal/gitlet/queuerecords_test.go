@@ -652,6 +652,77 @@ func TestAnEjectedEntryLeavesItsQueueAndItsTrain(t *testing.T) {
 	requireQueueRefused(t, n, before, res, err, gitlet.MergeRefusalNotQueued, "is ejected")
 }
 
+// A CHANGE'S QUEUE ENTRIES ARE ITS PART, in queue order: each enqueue names who
+// made it, the head and the target, and once it ended how, with the record's
+// position; an ejection names the checks it failed, and a dequeue its reason. A
+// page resumes after the entry its cursor names.
+//
+// Mutation: read the entries newest first, drop the ejection's checks, or
+// resume a page at its cursor's entry, and this fails.
+func TestAChangesQueueEntriesAreItsPart(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := mergeStream(t, n)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := queueRepo(t, n, c, "web")
+	ready(t, n, w, repo, change)
+	first := enqueueing(repo, change, ada, oidOf("B"))
+	res, err := c.ProposeQueue(t.Context(), first)
+	requireQueued(t, res, err, gitlet.QueueWaiting, 1)
+	ejected, err := c.ProposeQueue(t.Context(), queueRecord(func(p *gitlet.QueueProposal) {
+		p.Eject = &gitlet.Eject{RepoID: repo, Entries: []gitlet.Ejection{{EntryID: first.Enqueue.EntryID,
+			Reason: gitlet.EjectCheckFailed, Checks: []string{"unit"}}}}
+	}))
+	ejectedAt := requireRecorded(t, ejected, err)
+	second := enqueueing(repo, change, ada, oidOf("B"))
+	res, err = c.ProposeQueue(t.Context(), second)
+	requireQueued(t, res, err, gitlet.QueueWaiting, 1)
+	dequeued, err := c.ProposeQueue(t.Context(), dequeueing(repo, second.Enqueue.EntryID, ada))
+	if err != nil || dequeued.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the dequeue answered %+v, %v", dequeued, err)
+	}
+
+	read := func(limit int, cursor string) gitlet.ReadAnswer {
+		t.Helper()
+		answer, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Asker: ada, Kind: gitlet.ReadChange, Repo: "web",
+			Change: 1, Part: gitlet.PartQueue, Limit: limit, Cursor: cursor, Fresh: stale})
+		if err != nil {
+			t.Fatalf("read the change's queue entries after %q: %v", cursor, err)
+		}
+		return answer
+	}
+	var got []gitlet.ChangeQueueEntry
+	cursor, pages := "", 0
+	for {
+		answer := read(1, cursor)
+		pages++
+		got = append(got, answer.QueueEntries...)
+		if cursor = answer.Next; cursor == "" || pages > 3 {
+			break
+		}
+	}
+	founder := gitlet.Party{Handle: "founder", Kind: gitlet.PartyPerson}
+	// ONE A PAGE: a full page carries a cursor, so the walk ends on the page past the second.
+	if len(got) != 2 || pages < 2 {
+		t.Fatalf("the change's queue entries, one a page, read in %d pages as %+v; want its two entries, a page "+
+			"each", pages, got)
+	}
+	one, two := got[0], got[1]
+	if one.EntryID != first.Enqueue.EntryID || one.State != gitlet.QueueEjected ||
+		one.Reason != gitlet.EjectCheckFailed || !slices.Equal(one.Checks, []string{"unit"}) ||
+		one.EnqueuedBy != founder || one.HeadOID != oidOf("B") || one.TargetRef != mainRef ||
+		one.EnqueuedPosition.IsZero() || one.EndedPosition != ejectedAt || one.EndedAt.IsZero() {
+		t.Errorf("the first entry is %+v, want founder's enqueue of B into main, ejected for unit at %v", one,
+			ejectedAt)
+	}
+	if two.EntryID != second.Enqueue.EntryID || two.State != gitlet.QueueDequeued || two.Reason != gitlet.EndAsked ||
+		two.EndedPosition != dequeued.Position || one.EndedPosition.Packed() >= two.EnqueuedPosition.Packed() {
+		t.Errorf("the second entry is %+v, want founder's later enqueue, dequeued as asked at %v", two,
+			dequeued.Position)
+	}
+}
+
 // A PUSH THAT EJECTS A QUEUED HEAD ANNOUNCES IT: a push moving a queued
 // change's source branch ejects its entry head_moved in the push's own record,
 // which no queue record names, so the committer that landed the push announces

@@ -131,12 +131,17 @@ const (
 	// retargeted it. An older build refuses it as an unknown part, as it does
 	// [PartStanding].
 	PartMoves ChangePart = "moves"
+	// PartQueue is the change's queue entries, in queue order
+	// ([ChangeQueueEntry]): who added it to its target's queue, and how each
+	// entry landed, was taken out or left. An older build refuses it as an
+	// unknown part.
+	PartQueue ChangePart = "queue"
 )
 
 // ChangeParts is the closed set, in this order.
 func ChangeParts() []ChangePart {
 	return []ChangePart{PartRevisions, PartReviewers, PartComments, PartReviews, PartFindings, PartStanding,
-		PartMoves}
+		PartMoves, PartQueue}
 }
 
 // Valid reports a part this build knows.
@@ -159,6 +164,8 @@ func (p ChangePart) maxPerPage() int {
 		return MaxFindingsPerPage
 	case PartMoves:
 		return MaxMovesPerPage
+	case PartQueue:
+		return MaxQueueEntriesPerPage
 	}
 	return MaxRevisionsPerPage
 }
@@ -179,6 +186,11 @@ const (
 	// and 500, some 75 KB, is under a page's bytes.
 	defaultMoveLimit = 100
 	MaxMovesPerPage  = 500
+	// A change is enqueued a few times at most, each entry a few hundred
+	// bytes (a conflict's paths, at most MaxEjectedPaths, its widest): 50 is
+	// a change's whole history in the queue, 200 a page's bytes.
+	defaultQueueEntryLimit = 50
+	MaxQueueEntriesPerPage = 200
 )
 
 // waitedOn is the handle a listing of what its changes wait on names: for

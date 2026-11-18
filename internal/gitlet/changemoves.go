@@ -152,7 +152,7 @@ func (e ChangeEdit) parts() int {
 	return n
 }
 
-// changeMoves serves a page of change id's moves — named, its web!n — oldest first, after the
+// changeMoves serves a page of change id's moves (named: its web!n), oldest first, after the
 // move a cursor names ([ChangeMove.Cursor]).
 func (r *Reader) changeMoves(ctx context.Context, tx *sql.Tx, q ReadQuery, named, id string,
 	out *ReadAnswer) error {

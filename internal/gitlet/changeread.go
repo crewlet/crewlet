@@ -628,6 +628,8 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		return r.changeStanding(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
 	case PartMoves:
 		return r.changeMoves(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
+	case PartQueue:
+		return r.changeQueue(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
 	}
 	limit := min(limitOr(q.Limit, defaultRevisionLimit), r.pageRows)
 	var rows *sql.Rows
@@ -702,17 +704,18 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for rows.Next() {
 		var (
-			rev      RevisionRow
-			kind     string
-			position int64
-			at       int64
-			facts    factsScan
+			rev       RevisionRow
+			kind, via string
+			position  int64
+			at        int64
+			facts     factsScan
 		)
-		if scanErr := rows.Scan(append([]any{&rev.N, &rev.Head, &rev.Pusher, &kind, &rev.PushID, &position, &at},
-			facts.targets()...)...); scanErr != nil {
+		if scanErr := rows.Scan(append([]any{&rev.N, &rev.Head, &rev.Pusher, &kind, &rev.PushID, &position, &at,
+			&via, &rev.Forced}, facts.targets()...)...); scanErr != nil {
 			return fmt.Errorf("gitlet: read the revisions of %s: %w", ChangeRef(repo.ref.Name, row.number), scanErr)
 		}
-		rev.PusherKind, rev.Position, rev.At = PartyKind(kind), unpacked(position), store.DecodeTime(at)
+		rev.PusherKind, rev.Position, rev.At, rev.Via = PartyKind(kind), unpacked(position), store.DecodeTime(at),
+			PushVia(via)
 		if rev.Facts, err = facts.row(); err != nil {
 			return fmt.Errorf("gitlet: read revision %d of %s's facts: %w", rev.N, ChangeRef(repo.ref.Name,
 				row.number), err)
@@ -986,11 +989,12 @@ const (
 		WHERE change_id = ? ORDER BY author`
 	// Revisions with their facts, joined by key (a revision of none reads
 	// NULLs), newest first in the revisions' key order.
-	revisionsSQL = `SELECT r.n, r.head_oid, r.pusher, r.pusher_kind, r.push_id, r.position, r.at, ` +
+	revisionsSQL = `SELECT r.n, r.head_oid, r.pusher, r.pusher_kind, r.push_id, r.position, r.at, r.via, r.forced, ` +
 		revisionFactsColumns + ` FROM code_revisions AS r LEFT JOIN code_revision_facts AS f
 			ON f.change_id = r.change_id AND f.n = r.n
 		WHERE r.change_id = ? ORDER BY r.n DESC LIMIT ?`
-	revisionsAfterSQL = `SELECT r.n, r.head_oid, r.pusher, r.pusher_kind, r.push_id, r.position, r.at, ` +
+	revisionsAfterSQL = `SELECT r.n, r.head_oid, r.pusher, r.pusher_kind, r.push_id, r.position, r.at, r.via,
+		r.forced, ` +
 		revisionFactsColumns + ` FROM code_revisions AS r LEFT JOIN code_revision_facts AS f
 			ON f.change_id = r.change_id AND f.n = r.n
 		WHERE r.change_id = ? AND r.n < ? ORDER BY r.n DESC LIMIT ?`

@@ -1056,6 +1056,12 @@ func (r RevisionRow) encodedBytes() int {
 		n += field("push_id", stringBytes(r.PushID), false)
 	}
 	n += field("position", positionBytes(r.Position), false) + field("at", timeBytes(r.At), false)
+	if r.Via != "" {
+		n += field("via", stringBytes(string(r.Via)), false)
+	}
+	if r.Forced {
+		n += field("forced", trueBytes, false)
+	}
 	if r.Facts != nil {
 		n += field("facts", r.Facts.encodedBytes(), false)
 	}
@@ -1177,6 +1183,37 @@ func (m ChangeMove) encodedBytes() int {
 		n += field("became", stringBytes(m.Became), false)
 	}
 	return n + field("position", positionBytes(m.Position), false) + field("at", timeBytes(m.At), false)
+}
+
+// encodedBytes is the length of the queue entry's JSON encoding.
+func (e ChangeQueueEntry) encodedBytes() int {
+	n := 2 + field("entry_id", stringBytes(e.EntryID), true) +
+		field("target_ref", stringBytes(e.TargetRef), false) +
+		field("head_oid", stringBytes(e.HeadOID), false) +
+		field("method", stringBytes(string(e.Method)), false) +
+		field("enqueued_by", e.EnqueuedBy.encodedBytes(), false) +
+		field("state", stringBytes(string(e.State)), false)
+	if e.Reason != "" {
+		n += field("reason", stringBytes(string(e.Reason)), false)
+	}
+	if len(e.Checks) > 0 {
+		n += field("checks", stringsBytes(e.Checks), false)
+	}
+	if len(e.Paths) > 0 {
+		n += field("paths", stringsBytes(e.Paths), false)
+	}
+	if e.CommitOID != "" {
+		n += field("commit_oid", stringBytes(e.CommitOID), false)
+	}
+	n += field("enqueued_position", positionBytes(e.EnqueuedPosition), false) +
+		field("enqueued_at", timeBytes(e.EnqueuedAt), false)
+	if !e.EndedPosition.IsZero() {
+		n += field("ended_position", positionBytes(e.EndedPosition), false)
+	}
+	if !e.EndedAt.IsZero() {
+		n += field("ended_at", timeBytes(e.EndedAt), false)
+	}
+	return n
 }
 
 // encodedBytes is the length of the reviewer's JSON encoding.

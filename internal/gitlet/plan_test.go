@@ -1519,6 +1519,9 @@ func registeredStatements() map[string]statement {
 			[]string{reviewerKey + " (change_id=?)"}},
 		"reviewers of a change after": {reviewersOfAfterSQL, []any{"repo-1-change-000001", "seat-0", 200},
 			[]string{reviewerKey + " (change_id=? AND reviewer>?)"}},
+		// A CHANGE'S QUEUE ENTRIES (changequeue.go), in queue order on its index.
+		"queue entries of a change": {queueOfChangeSQL, []any{"repo-1-change-000001", int64(0), 50},
+			[]string{"code_queue_change_idx (change_id=? AND seq>?)"}},
 		// A CHANGE'S MOVES (changemoves.go), oldest first on the table's key.
 		"moves of a change": {movesOfSQL, []any{"repo-1-change-000001", 100},
 			[]string{movesKey + " (change_id=?)"}},

@@ -1462,10 +1462,12 @@ type ReadAnswer struct {
 	Revisions []RevisionRow `json:"revisions,omitempty"`
 	Reviewers []ReviewerRow `json:"reviewers,omitempty"`
 	// Moves is a page of a change's moves ([PartMoves]).
-	Moves    []ChangeMove `json:"moves,omitempty"`
-	Comments []CommentRow `json:"comments,omitempty"`
-	Reviews  []ReviewRow  `json:"reviews,omitempty"`
-	Findings []FindingRow `json:"findings,omitempty"`
+	Moves []ChangeMove `json:"moves,omitempty"`
+	// QueueEntries is a page of a change's queue entries ([PartQueue]).
+	QueueEntries []ChangeQueueEntry `json:"queue_entries,omitempty"`
+	Comments     []CommentRow       `json:"comments,omitempty"`
+	Reviews      []ReviewRow        `json:"reviews,omitempty"`
+	Findings     []FindingRow       `json:"findings,omitempty"`
 	// FindingPaths is a `finding_paths` page of a change ([ReadQuery.FindingPaths]).
 	FindingPaths []FindingPathRow `json:"finding_paths,omitempty"`
 	// Viewed is a `viewed` page of a change ([ReadQuery.Viewed]): the asker's own marks.
@@ -2782,7 +2784,14 @@ type RevisionRow struct {
 	PushID     string            `json:"push_id,omitempty"`
 	Position   statelog.Position `json:"position"`
 	At         time.Time         `json:"at"`
-	Facts      *RevisionFactsRow `json:"facts,omitempty"`
+	// Via is how the push that made it was built ("" for a revision no push
+	// made: an open by a tool, a reopen) and Forced whether it rewrote the
+	// source branch rather than moving it forward: a force-push, or, through
+	// the engine, a rebase of the change onto its target ([WriteRebaseChange],
+	// the engine's one write that rewrites a branch).
+	Via    PushVia           `json:"via,omitempty"`
+	Forced bool              `json:"forced,omitempty"`
+	Facts  *RevisionFactsRow `json:"facts,omitempty"`
 }
 
 // RevisionFactsRow is a revision's facts as the change's home recorded them

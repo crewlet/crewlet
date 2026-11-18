@@ -384,11 +384,12 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 	}
 	if _, err := store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO code_revisions (change_id, n, head_oid, pusher, pusher_kind, push_id, position, at,
-			working_for) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, n) DO NOTHING`, len(w.revisions),
+			working_for, via, forced) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, n) DO NOTHING`, len(w.revisions),
 		func(i int) []any {
 			r := w.revisions[i]
-			return []any{r.change, r.n, r.head, r.pusher, string(r.kind), r.pushID, b.packed, b.at, madeFor[i]}
+			return []any{r.change, r.n, r.head, r.pusher, string(r.kind), r.pushID, b.packed, b.at, madeFor[i],
+				string(r.via), r.forced}
 		}); err != nil {
 		return 0, fmt.Errorf("gitlet: write the revisions: %w", err)
 	}

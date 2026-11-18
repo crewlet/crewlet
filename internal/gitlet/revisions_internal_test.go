@@ -204,10 +204,10 @@ func TestAnEntryTakenBackLeavesTheBookAsItFoundIt(t *testing.T) {
 		}
 		// ALONE, the entry writes as a record of its own: the head the record
 		// moved counts again, and none of the record's writes are its. Eleven
-		// rows — four changes, two revisions, two authors, the readiness of
+		// rows (four changes, two revisions, two authors, the readiness of
 		// the change it merged and the one it closed, a row each whether held
 		// or not, as the book reads no mergeability ([clearReadiness],
-		// [changeBook.rowCount]), and the close's move — plus the tally row
+		// [changeBook.rowCount]), and the close's move), plus the tally row
 		// ([changeBook.decidedRows]).
 		rows, moved := book.alone(tried[0])
 		if rows != 11+tallyRows || moved != 4 {
