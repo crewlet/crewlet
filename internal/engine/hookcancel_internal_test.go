@@ -476,8 +476,8 @@ func servesLostSaid(logs *bundleLog, turnID string) []int {
 // a serve's write lost one, and a case goes red.
 func TestAServeLostToACancelIsSaidWhereItIsLost(t *testing.T) {
 	logs := captureSteerLogs(t)
-	ctx := t.Context()
 	t.Run("by the settle loop", func(t *testing.T) {
+		ctx := t.Context()
 		store := sandbox.NewCoordStore(coordmem.NewFleet())
 		runs, _ := steersOver(t, steerRing, store)
 		runs.stopped = ctx.Done()
@@ -504,6 +504,7 @@ func TestAServeLostToACancelIsSaidWhereItIsLost(t *testing.T) {
 		}
 	})
 	t.Run("by a serve's own write", func(t *testing.T) {
+		ctx := t.Context()
 		store := sandbox.NewCoordStore(coordmem.NewFleet())
 		held := &lostServeStore{PendingStore: store, held: make(chan struct{})}
 		t.Cleanup(func() { close(held.held) })
