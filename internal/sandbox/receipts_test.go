@@ -249,7 +249,7 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 	}
 }
 
-// EVERY READ M1 RUNS IN PUBLISHES WHAT ITS JOB'S HOOKS READ: a collection's, a
+// EVERY ENDING READ PUBLISHES WHAT ITS JOB'S HOOKS READ: a collection's, a
 // stop's and a loss's read each hand the engine the notes the job's session
 // confirmed, never an item of the store's; and a verdict that landed with its
 // answer lost hands the read back, and the read made again, asking nothing,
@@ -257,7 +257,7 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 //
 // Mutation: publish at a collection alone, only off the verdict's answer, or
 // items too, and a case goes red.
-func TestEveryReadM1RunsInPublishesWhatItsJobsHooksRead(t *testing.T) {
+func TestEveryEndingReadPublishesWhatItsJobsHooksRead(t *testing.T) {
 	t.Parallel()
 	for name, read := range map[string]func(*coordRig) error{
 		"a collection": func(rig *coordRig) error {
@@ -340,8 +340,8 @@ func TestEveryReadM1RunsInPublishesWhatItsJobsHooksRead(t *testing.T) {
 
 // A STOP AND A LOSS CONFIRM, AND DENY NOTHING: their read ends the job, so the
 // thread is asked as one its harness did not end, which proves no take absent,
-// under the release that ran the job, which D28's gate needs to confirm any;
-// and the note its session shows taken is read.
+// under the release that ran the job, which the release gate needs to confirm
+// any; and the note its session shows taken is read.
 //
 // Mutation: skip the thread at a stop or a loss, ask it as one its harness
 // ended, or skip the loss's collection of the release, and a case goes red.

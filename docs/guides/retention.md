@@ -1698,8 +1698,8 @@ screen raw.
 ## Re-anchoring a recreated or restored log
 
 If a stream is genuinely recreated — deleted and remade, rebuilt by hand, or
-provisioned afresh on a broker that lost its store — its sequences restart at
-1. Every position the fleet holds then names a number space that no longer
+provisioned afresh on a broker that lost its store — its sequences restart
+at 1. Every position the fleet holds then names a number space that no longer
 exists: a stored version, a consumer cursor, an arbitration anchor. Nodes
 refuse to serve, which is correct.
 

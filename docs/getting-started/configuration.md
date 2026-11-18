@@ -1999,9 +1999,9 @@ therefore publishes its posture on its presence lease, and the fleet view
 deployment's identity estate is empty, so a Tier A token is what puts the
 first person in it — invited onto, or created on, the human seat the company
 declares for them: from that seat's page or panel in **Company › Structure**, or with
-`crewlet iam invite <address> -seat <handle>` (`crewlet iam create -email
-<address> -seat <handle>` creates them instead and prints their first password
-link). Every person holds a human seat, so a company has to declare one before
+`crewlet iam invite <address> -seat <handle>` (`crewlet iam create
+-email <address> -seat <handle>` creates them instead and prints their first
+password link). Every person holds a human seat, so a company has to declare one before
 anybody can join it. An invitation or a create confers only what its issuer
 holds, so the token that brings them in has to hold `admin` — `grants:
 [admin]` — on a node that serves it. On a running deployment it is the way back
