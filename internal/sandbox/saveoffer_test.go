@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord/memory"
@@ -449,9 +450,11 @@ func TestAPollThatEndsAfterAStandDownOffersNoSave(t *testing.T) {
 }
 
 // ONE SAVE OF A RUN IS UNDER WAY ON A NODE: while a save of the turn is taken,
-// another offer of its box, or of a later launch of the turn, starts nothing.
+// another offer of its box, or of a later launch of the turn, starts nothing,
+// and a drain beside it waits for that save rather than start its own.
 //
-// Mutation: drop the check for a task of the turn under way.
+// Mutation: drop the check for a task of the turn under way, from the offer or
+// from the drain.
 func TestOneSaveOfARunIsUnderWayOnANode(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -476,7 +479,16 @@ func TestOneSaveOfARunIsUnderWayOnANode(t *testing.T) {
 				defer func() { <-running.ended }()
 			}
 		}
+		drained := make(chan []*saveRun, 1)
+		go func() { drained <- rig.coordinator.saveHosted(t.Context()) }()
+		// THE DRAIN HAS LISTED THE RUN once every goroutine waits, and only
+		// then does the save under way go on.
+		synctest.Wait()
 		close(release)
+		if picked := <-drained; !slices.Equal(picked, []*saveRun{first}) || len(packing) != 0 {
+			t.Errorf("the drain beside the save under way picked %v and packed %d more, want that save alone",
+				picked, len(packing))
+		}
 		<-first.ended
 	})
 }

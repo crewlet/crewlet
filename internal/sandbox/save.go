@@ -1,10 +1,12 @@
 package sandbox
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -54,22 +56,30 @@ const saveRetryCeiling = time.Hour
 // saved line's took_s measures.
 const maxConcurrentSaves = 4
 
+// drainSaveWait is the longest a draining node saves its Direct jobs'
+// sessions for: a take of an ordinary session is seconds, and the wait runs
+// beside the drain's wait for turns, within a seat pod's grace. A judgment,
+// which a drain save's late_s and took_s measure.
+const drainSaveWait = 30 * time.Second
+
 // saveState is this coordinator's part in saving its runs' sessions as they
 // work.
 type saveState struct {
 	// ledger is the fleet's ledger of each seat's saves
 	// ([CoordinatorOptions.Saves]); nil counts, and so takes, none.
 	ledger SaveLedgers
-	// slots is [maxConcurrentSaves], taken without waiting by an offer and
-	// given back once its task's keep has ended.
+	// slots is [maxConcurrentSaves], taken without waiting by an offer, and
+	// waiting by a drain, and given back once its task's keep has ended.
 	slots chan struct{}
 
-	// mu guards memos and swept: this node's memory of each turn's saves, by
-	// turn, and when it last forgot the ones no offer came for. Never c.mu,
-	// so an offer from the poll waits on no run's work.
-	mu    sync.Mutex
-	memos map[string]*saveMemo
-	swept time.Time
+	// mu guards memos, swept and draining: this node's memory of each turn's
+	// saves, by turn, when it last forgot the ones no offer came for, and
+	// whether the node drains ([Coordinator.SaveHosted]), which admits no
+	// offer. Never c.mu, so an offer from the poll waits on no run's work.
+	mu       sync.Mutex
+	memos    map[string]*saveMemo
+	swept    time.Time
+	draining bool
 }
 
 // saveMemo is this node's memory of one turn's saves, every instant on this
@@ -98,6 +108,11 @@ type saveMemo struct {
 	running *saveRun
 	// logged is every kind of failure already logged at Warn for the job.
 	logged map[string]bool
+}
+
+// of reports whether m is the memory of run's job and box.
+func (m *saveMemo) of(run PendingRun) bool {
+	return m != nil && m.launch == run.LaunchID && m.box == run.SandboxID
 }
 
 // saveRun is a save task under way on this node: taken is closed once it has
@@ -572,13 +587,14 @@ func (c *Coordinator) offerSave(stint context.Context, run PendingRun, runner Ru
 	if saver, ok := runner.(SessionSaver); !ok || !saver.Saves() {
 		return nil
 	}
-	// RULE 3, the duty's stint is live and no task of the turn runs here.
+	// RULE 3, the duty's stint is live, the node is not draining and no task
+	// of the turn runs here.
 	if stint == nil || stint.Err() != nil {
 		return nil
 	}
 	now, interval := c.now(), c.keep.SaveInterval()
 	c.saves.mu.Lock()
-	if memo := c.saves.memos[run.TurnID]; memo != nil && memo.running != nil {
+	if memo := c.saves.memos[run.TurnID]; c.saves.draining || (memo != nil && memo.running != nil) {
 		c.saves.mu.Unlock()
 		return nil
 	}
@@ -600,6 +616,13 @@ func (c *Coordinator) offerSave(stint context.Context, run PendingRun, runner Ru
 	job := saveJob{run: run, stint: stint, due: due, mark: memo.mark, interval: interval, last: memo.last,
 		counted: memo.counted, taken: running.taken}
 	c.saves.mu.Unlock()
+	return c.spawnSave(job, memo, running)
+}
+
+// spawnSave starts job's task, counted in c.inflight, unless the coordinator
+// has stopped: then it gives back the slot its caller took and clears memo's
+// task, and answers nil.
+func (c *Coordinator) spawnSave(job saveJob, memo *saveMemo, running *saveRun) *saveRun {
 	c.mu.Lock()
 	closed := c.closed
 	if !closed {
@@ -615,6 +638,132 @@ func (c *Coordinator) offerSave(stint context.Context, run PendingRun, runner Ru
 		return nil
 	}
 	return running
+}
+
+// SaveHosted saves the session of every running Direct job this node
+// launched whose session moved since its last save here, most stale first,
+// under the node's save slots, for at most [drainSaveWait]; from its first
+// instant the node takes no periodic save. It returns once each save it
+// picked has passed its spool, or at its wait; their keeps go on, counted
+// with every keep, until the coordinator's stop (the package doc's "A save as
+// its node drains").
+func (c *Coordinator) SaveHosted(ctx context.Context) {
+	c.saveHosted(ctx)
+}
+
+// saveHosted is [Coordinator.SaveHosted], answering every task it waited on.
+func (c *Coordinator) saveHosted(ctx context.Context) []*saveRun {
+	// RULE 1, saves are on, as an offer's.
+	if !c.capturing() || c.taker == nil || c.saves.ledger == nil {
+		return nil
+	}
+	c.saves.mu.Lock()
+	c.saves.draining = true
+	c.saves.mu.Unlock()
+	begun := c.now()
+	drainEnd := time.Now().Add(drainSaveWait)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(drainEnd) {
+		drainEnd = deadline
+	}
+	wait, cancel := context.WithDeadline(ctx, drainEnd)
+	defer cancel()
+	defer context.AfterFunc(c.life, cancel)()
+	var picked []*saveRun
+	for _, hosted := range c.hostedSaves(wait) {
+		running := hosted.running
+		if running == nil {
+			running = c.drainSave(wait, hosted.run, begun, drainEnd)
+		}
+		if running == nil {
+			// The wait ended, or the coordinator stopped: no slot comes now.
+			break
+		}
+		picked = append(picked, running)
+	}
+	for _, running := range picked {
+		select {
+		case <-running.taken:
+		case <-wait.Done():
+			return picked
+		}
+	}
+	return picked
+}
+
+// hostedSave is a job a drain saves: its run as listed, the save of its turn
+// already under way on this node (nil for none), and when it was last saved.
+type hostedSave struct {
+	run     PendingRun
+	running *saveRun
+	stale   time.Time
+}
+
+// hostedSaves is every job a drain saves, most stale first by this node's
+// memory of its last save, else by the later of its launch's start and its
+// newest capture: running, its ending undecided, its box a Direct one this
+// node launched, its harness one that saves.
+func (c *Coordinator) hostedSaves(ctx context.Context) []hostedSave {
+	manager := c.mgr()
+	if manager == nil {
+		return nil
+	}
+	runs, err := c.pending.ListActive(ctx)
+	if err != nil {
+		log.WarnContext(c.life, "executor_session_not_kept", "point", drainSavePoint,
+			"detail", fmt.Sprintf("this node's runs could not be listed: %v", err))
+		return nil
+	}
+	var hosted []hostedSave
+	now := c.now()
+	c.saves.mu.Lock()
+	for _, run := range runs {
+		if run.Status != StatusRunning || run.SandboxID == "" || run.Ending != nil || run.LaunchNode != c.node ||
+			manager.CellOf(run) != Direct {
+			continue
+		}
+		runner, _ := manager.RunnerFor(run.Harness)
+		if saver, ok := runner.(SessionSaver); !ok || !saver.Saves() {
+			continue
+		}
+		job := hostedSave{run: run, stale: lastSaved(run, now)}
+		if memo := c.saves.memos[run.TurnID]; memo != nil {
+			job.running = memo.running
+			if memo.of(run) {
+				job.stale = memo.last
+			}
+		}
+		hosted = append(hosted, job)
+	}
+	c.saves.mu.Unlock()
+	slices.SortFunc(hosted, func(a, b hostedSave) int {
+		return cmp.Or(a.stale.Compare(b.stale), cmp.Compare(a.run.TurnID, b.run.TurnID))
+	})
+	return hosted
+}
+
+// drainSave starts run's drain save once a slot is free, waiting for one until
+// wait ends, and answers it: the turn's task already under way where one
+// started meanwhile, nil where none started.
+func (c *Coordinator) drainSave(wait context.Context, run PendingRun, begun, drainEnd time.Time) *saveRun {
+	select {
+	case c.saves.slots <- struct{}{}:
+	case <-wait.Done():
+		return nil
+	}
+	now, interval := c.now(), c.keep.SaveInterval()
+	c.saves.mu.Lock()
+	if memo := c.saves.memos[run.TurnID]; memo != nil && memo.running != nil {
+		c.saves.mu.Unlock()
+		<-c.saves.slots
+		return memo.running
+	}
+	memo := c.saves.memoOf(run, now, interval)
+	running := &saveRun{taken: make(chan struct{}), ended: make(chan struct{})}
+	memo.running = running
+	job := saveJob{run: run, drainEnd: drainEnd, due: begun, mark: memo.mark, interval: interval, last: memo.last,
+		counted: memo.counted, taken: running.taken}
+	c.saves.mu.Unlock()
+	return c.spawnSave(job, memo, running)
 }
 
 // runSave runs one save task its offer spawned, then writes what came of it
@@ -677,7 +826,7 @@ func (s *saveState) memoOf(run PendingRun, now time.Time, interval time.Duration
 		s.swept = now
 	}
 	memo := s.memos[run.TurnID]
-	if memo == nil || memo.launch != run.LaunchID || memo.box != run.SandboxID {
+	if !memo.of(run) {
 		memo = &saveMemo{launch: run.LaunchID, box: run.SandboxID, last: firstSight(run, now, interval),
 			mark: -1, logged: map[string]bool{}}
 		s.memos[run.TurnID] = memo
@@ -687,12 +836,17 @@ func (s *saveState) memoOf(run PendingRun, now time.Time, interval time.Duration
 }
 
 // firstSight is when a job first seen by this node's memory was last saved,
-// as far as the run's row can say: the later of its launch's start and its
-// newest capture of this launch, clamped to within one interval of now, or
-// now where neither is set. RULE H's: an instant another machine stamped only
-// shortens a wait one interval bounds (the package doc's "A save is offered by
-// the poll, from memory").
+// as far as the run's row can say ([lastSaved]), clamped to within one
+// interval of now. RULE H's: an instant another machine stamped only shortens
+// a wait one interval bounds (the package doc's "A save is offered by the
+// poll, from memory").
 func firstSight(run PendingRun, now time.Time, interval time.Duration) time.Time {
+	return now.Add(-min(max(now.Sub(lastSaved(run, now)), 0), interval))
+}
+
+// lastSaved is the later of run's launch's start and its newest capture of
+// this launch, or now where neither is set.
+func lastSaved(run PendingRun, now time.Time) time.Time {
 	newest := run.Launch.StartedAt
 	if capture := run.Capture; capture != nil && capture.Launch == run.LaunchID &&
 		capture.LaunchSeq == run.LaunchSeq && capture.At.After(newest) {
@@ -701,7 +855,7 @@ func firstSight(run PendingRun, now time.Time, interval time.Duration) time.Time
 	if newest.IsZero() {
 		return now
 	}
-	return now.Add(-min(max(now.Sub(newest), 0), interval))
+	return newest
 }
 
 // due is when the turn's next save is due: its interval after the last

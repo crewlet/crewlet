@@ -399,6 +399,14 @@ var coordinatorEntries = map[string][]entryDrive{
 			rig.coordinator.SaveRunning(t.Context(), run, rig.runner)
 		},
 	}},
+	"SaveHosted": {{
+		// IT ENDS NOTHING: a drain's save is a save as an offered one is, of a
+		// job the drain leaves running.
+		name: "a draining node saving its Direct jobs' sessions",
+		call: func(t *testing.T, rig *coordRig) {
+			rig.coordinator.SaveHosted(t.Context())
+		},
+	}},
 	"Manager": {{
 		name: "the manager a caller mints a box through",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.Manager() },

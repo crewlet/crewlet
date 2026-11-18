@@ -671,6 +671,23 @@
 // interval of first sight whatever any clock says, and a paced seat takes no
 // unpaced save then. A memory no offer came for in an hour is forgotten.
 //
+// # A save as its node drains
+//
+// Kept by [Coordinator.SaveHosted]. A DRAINING NODE SAVES EACH DIRECT JOB IT
+// LAUNCHED whose session moved since its last save here, since that job's box
+// is on the node's host. Not a container's, which survives an engine's restart
+// and dies only with its host, nor an E2B one, which outlives the engine and
+// whose duty a peer takes up, saving it within an interval of first sight.
+// It LISTS the runs rather than reading the waiter's offers, so a box whose
+// poll is stuck at its bound is not missed, and saves THE MOST STALE FIRST
+// under the same slots, waiting for one for at most [drainSaveWait]. A save
+// of the turn under way counts; a drain save is never paced, only charged;
+// and from the drain's first instant no offer starts a save. The drain's end
+// bounds each save's box phase, and its take once the take's own context is
+// made, never that context's parent, whose deadline would end the take before
+// it began. A take cut before its place stamps nothing, one cut after it is
+// stamped refused, and the run keeps its newest periodic save.
+//
 // # A turn's session is continued in whichever box its next launch gets
 //
 // A TURN'S SESSION, CONTINUED IN WHICHEVER BOX ITS NEXT LAUNCH GETS — AND A
