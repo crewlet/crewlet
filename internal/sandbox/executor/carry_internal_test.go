@@ -11,13 +11,11 @@ import (
 )
 
 // A RUN'S REASON FOR STARTING ANEW IS ONE SENTENCE, HELD AS ITS RESULT IS
-// BUILT. The session record's `why` line quotes whatever OpenCode answered,
-// and the record is a file the run's own agent can rewrite, so read whole the
-// line was as long as the file, and the launch's record carried it past the
-// queue's ceiling. A reason past [sandbox.MaxFellBackBytes] keeps its opening,
-// cut on a character and marked inside the bound; a short one is kept whole;
-// and the cut comes after the redaction, so a credential across it leaves no
-// fragment of itself behind.
+// BUILT. The record's `why` line quotes whatever OpenCode answered, in a file
+// the run's own agent can rewrite. A reason past [sandbox.MaxFellBackBytes]
+// keeps its opening, cut on a character and marked inside the bound; a short
+// one is kept whole; and the cut comes after the redaction, so a credential
+// across it leaves no fragment behind.
 //
 // Mutation: keep the line whole, cut it on a byte, leave the mark out or past
 // the bound, or cut it before redacting it, and a case goes red.
@@ -85,20 +83,13 @@ func TestARunsReasonForStartingAnewIsHeldToItsBound(t *testing.T) {
 	}
 }
 
-// A SESSION RECORD IS READ WHERE IT LIES, AND ALLOCATES NOTHING. The record is
-// a file the run's own agent can write, up to the 32 MiB the engine reads
-// whole, and it is read on every collection and every take of the box's
-// session. Split into a slice of its lines with a set of every key it named, a
-// record of empty lines cost sixteen times its size on each of those reads,
-// half a GiB, and every distinct key it named grew the set. Its reason is the
-// box's too, and the take never reads it: it is held where the run's result
-// is built ([TestARunsReasonForStartingAnewIsHeldToItsBound]), and the parse
-// hands it on as the box wrote it.
-//
-// NOT PARALLEL, because an allocation count is the whole process's: counted
-// over a hundred reads, a stray allocation elsewhere divides to nothing, and
-// a parse that allocates — one slice, one set, one cut reason — divides to one
-// or more whatever else did.
+// A SESSION RECORD IS READ WHERE IT LIES, AND ALLOCATES NOTHING: the record is
+// agent-writable up to the 32 MiB the engine reads whole, and read on every
+// collection and take. Its reason is handed on as the box wrote it, bounded
+// only where the result is built ([TestARunsReasonForStartingAnewIsHeldToItsBound]).
+// Not parallel, since an allocation count is the whole process's: over a
+// hundred reads a stray allocation elsewhere divides to nothing, while a parse
+// that allocates divides to one or more.
 //
 // Mutation: split the record into its lines, keep a set of the keys it named,
 // or hold the reason to its bound as it is read, and the case goes red.
@@ -127,11 +118,10 @@ func TestASessionRecordIsReadWhereItLies(t *testing.T) {
 	}
 }
 
-// A RELEASE IS REFUSED PAST WHAT THE EXECUTOR LOG RECORDS, never cut: its
-// numbers are runs of digits and what it is read from was printed in the box,
-// so a run of them as long as the line read as a release the launch's record
-// carried whole. A release at the log's bound is still one; past it, and
-// past it by digits at either end, it is none.
+// A RELEASE IS REFUSED PAST WHAT THE EXECUTOR LOG RECORDS, never cut: it is
+// printed in the box, so a line-long run of digits must not read as one. A
+// release at the log's bound is still one; past it, by digits at either end,
+// it is none.
 //
 // Mutation: drop the bound, hold it with ">=", or cut the release to it, and a
 // case goes red.

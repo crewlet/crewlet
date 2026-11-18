@@ -19,10 +19,8 @@ import (
 	"github.com/crewlet/crewlet/internal/textindex"
 )
 
-// A seat's own page of a transcript: held to a seat's bounds, narrowed by kind
-// or by words — a match decided on what the redaction shows, its window cut from
-// that redaction — every part it could not read handed out, and the seats' one
-// slot.
+// A seat's page of a transcript: its bounds, its kind and word filters (matched
+// and windowed on the redacted text), its unread parts, and the seats' one slot.
 
 // seatRead is a seat's read of raw, an OpenCode archive, from from on,
 // narrowed by filter.
@@ -45,13 +43,11 @@ func called(said, answered string) string {
 		`{"status":"completed","input":{"command":"ls"},"content":[{"type":"text","text":`+string(result)+`}]}`))
 }
 
-// A SEAT'S PAGE IS HELD TO A SEAT'S BOUNDS. A seat's read hands out at most
-// fifty entries and thirty-two KiB of their text, each entry at most eight KiB
-// cut and marked, where a person's page is unchanged — two hundred, a MiB and
-// sixteen KiB — and both read the same lines and the same archive bytes.
+// A SEAT'S PAGE IS HELD TO A SEAT'S BOUNDS: at most fifty entries and 32 KiB of
+// text, each entry cut and marked at 8 KiB, where a person's page keeps two
+// hundred, a MiB and 16 KiB, both over the same lines and archive bytes.
 //
-// Mutation: read a seat's page held to a person's bounds, and a check goes
-// red.
+// Mutation: hold a seat's page to a person's bounds, and a check goes red.
 func TestASeatsPageIsHeldToASeatsBounds(t *testing.T) {
 	t.Parallel()
 	person := executor.TranscriptReadBounds()
@@ -91,11 +87,10 @@ func TestASeatsPageIsHeldToASeatsBounds(t *testing.T) {
 }
 
 // A FILTERED PAGE COUNTS EVERY ENTRY. A read narrowed to some kinds hands out
-// only those, each at the ordinal the whole read gives it — so one cursor
-// grammar serves both — and its next read starts at the first entry it did not
-// examine: past every entry it passed over, never at its first plus how many it
-// kept; read on from there, the pages are every entry of the kinds, once, in
-// order, and the last read's next is past the transcript's last entry.
+// only those, each at its unfiltered ordinal, so one cursor grammar serves
+// both, and its next starts at the first entry it did not examine, never its
+// first plus how many it kept. Read on, the pages hold every entry of the
+// kinds once, in order, and the last next is past the transcript's end.
 //
 // Mutation: number the entries a filter kept by how many it kept, or start the
 // next read at the first plus how many were kept, and a check goes red.
@@ -156,12 +151,11 @@ func TestAFilteredPageCountsEveryEntry(t *testing.T) {
 	}
 }
 
-// A MATCH IS FOUND ANYWHERE IN AN ENTRY. A read for words searches what each
-// entry's whole text redacts to: a word a hundred and fifty KiB into a tool's
-// answer of two hundred makes that answer a hit, handed out as
-// the window of its text around the word, a third of the window before it, with
-// the whole text's size, the cut, and where in it the window begins; the
-// entries that do not hold every word are passed over.
+// A MATCH IS FOUND ANYWHERE IN AN ENTRY. A read for words searches each
+// entry's whole redacted text: a word 150 KiB into a 200 KiB tool answer is a
+// hit, handed out as a window around the word (a third of it before), with the
+// whole text's size, the cut and the window's start. Entries missing any word
+// are passed over.
 //
 // Mutation: search only what an entry's opening hands out, and the answer is
 // no hit.
@@ -206,14 +200,12 @@ func keyBlock() (string, []string) {
 	return "-----BEGIN RSA PRIVATE KEY-----\n" + strings.Join(body, "\n") + "\n-----END RSA PRIVATE KEY-----\n", body
 }
 
-// A WINDOW NEVER HANDS OUT A CREDENTIAL, OR A MARKER, IN PART. A match's
-// window is cut from what the entry's whole text redacts to, so a token that
-// runs across where the window would start or end, and a private key whose
-// block begins before the window, are markers there, never pieces of
-// themselves; and an end that would fall inside a marker moves off it, away
-// from the word — a start on past it, an end back to where it begins — so no
-// marker is handed out in part, and the window still holds the word. The
-// window says where it begins, in what the whole text redacts to.
+// A WINDOW NEVER HANDS OUT A CREDENTIAL, OR A MARKER, IN PART. It is cut from
+// the entry's whole redacted text, so a token across either edge, or a private
+// key whose block begins before it, is a marker, never a piece of itself. An
+// edge inside a marker moves away from the word (a start past it, an end back
+// before it), so the window still holds the word, and says where it begins in
+// the redacted text.
 //
 // Mutation: cut the window from the text as the harness recorded it, or leave
 // an end inside a marker, and a check goes red.
@@ -291,13 +283,11 @@ func TestAWindowNeverHandsOutACredentialOrAMarkerInPart(t *testing.T) {
 }
 
 // A MATCH IS DECIDED ON WHAT ITS READER IS SHOWN. An entry is a hit only where
-// what the redaction shows of its own words holds every term: a word found
-// only inside a credential the redaction takes out is no hit, whether it is
-// the one word asked for or one of two whose other the entry shows — so a
-// right guess at a redacted password and a wrong one are answered alike — and
-// a word the redaction's own marker spells is no word of the entry's. An
-// entry that shows the word further on than a credential that held it is a
-// hit, its window around the word it shows.
+// its redacted text holds every term: a word only inside a redacted credential
+// is no hit, alone or beside a word the entry shows, so a right guess at a
+// password and a wrong one are answered alike, and a word a marker spells is
+// not the entry's. An entry that shows the word past a credential that held it
+// is a hit, its window around the shown word.
 //
 // Mutation: decide the hit on the text as the harness recorded it, read a
 // marker's words as the entry's, or place the window at the earliest word as
@@ -350,13 +340,11 @@ func TestAMatchIsDecidedOnWhatItsReaderIsShown(t *testing.T) {
 func unitEscaped(unit rune) string { return fmt.Sprintf(`\u%04x`, unit) }
 
 // A CALL'S WORDS ARE READ THROUGH ITS INPUT'S ESCAPES. A tool call's text is
-// its input as JSON, where a string's line break or tab is written `\n` or
-// `\t`, glued as written to the word after it: a word that opens a line of a
-// multi-line command, or of a file a call writes, or follows a tab, is the
-// call's all the same — a hit, shown as the call's JSON — where the call's
-// result does not echo it; and so is a word with a letter the input names by
-// `\u` and its digits. The escape's own letter glued to the word is no word of
-// the call's.
+// its input as JSON, where `\n` or `\t` is glued to the next word: a word
+// opening a line of a command or a written file, or following a tab, is still
+// a hit (shown as the call's JSON) where the result does not echo it, as is a
+// word with a `\u`-escaped letter. The escape's own letter glued to the word is
+// no word of the call's.
 //
 // Mutation: read a call's text as written, for the hit or for the test before
 // its redaction, and a case goes red.
@@ -396,23 +384,18 @@ func TestACallsWordsAreReadThroughItsInputsEscapes(t *testing.T) {
 	}
 }
 
-// TWO RECORDS THAT REDACT ALIKE ARE READ ALIKE. Two transcripts that differ
-// only in what the redaction takes out — a password the guess names and one it
-// does not, of another length — are shown alike, so a seat's read, for any
-// words or for none, answers both alike: the same entries, windows, places
-// and sizes, and the same stop. A word a redaction's marker ends, `deploy`
-// before a token, is a word its reader is shown, a hit in both, though as
-// recorded it is a piece of a longer word and only one of the passwords held
-// it whole; a page full of hits stops at the next hit in both, whether or not
-// the entry before it held the guessed word where the redaction took it out;
-// and an entry states the size of what its whole text redacts to — or, for
-// the opening of a text longer than the read redacts, its size as recorded
-// rounded up to a KiB — never its size as recorded to the byte, which beside a
-// text shown whole told the password's length.
+// TWO RECORDS THAT REDACT ALIKE ARE READ ALIKE: transcripts differing only in a
+// redacted password (guessed or not, of any length) answer every read, for any
+// words or none, with the same entries, windows, places, sizes and stop. A word
+// a marker ends (`deploy` before a token) is a hit in both, though as recorded
+// only one password held it whole; a full page stops at the next hit in both,
+// whether or not an earlier entry held the guess under a marker; and an entry
+// states its redacted text's size (an over-long opening: its recorded size
+// rounded up to a KiB), never the recorded size, which leaks the password's length.
 //
-// Mutation: ask the recorded text whether it holds every term whole before
-// redacting it, ask the page's bound before the hit is decided, or state an
-// entry's size as recorded, and a check goes red.
+// Mutation: test the recorded text for every term before redacting it, check
+// the page's bound before deciding the hit, or state an entry's recorded size,
+// and a check goes red.
 func TestTwoRecordsThatRedactAlikeAreReadAlike(t *testing.T) {
 	t.Parallel()
 	glued := func(password string) []byte {
@@ -502,12 +485,10 @@ func readOf(t executor.Transcript) string {
 	return fmt.Sprintf("entries at %v, next %d, cut %q", at, t.Next, t.Cut)
 }
 
-// A FILTER HANDS OUT EVERY PART IT COULD NOT READ. A part of the record the read
-// could not read is an entry of its own, and a filter cannot say what kind it
-// was or which words it held: so a read narrowed by kind, or by words, hands
-// it out as it is — its account of the gap, never searched — where it is, so
-// a filtered page that reaches the transcript's end never passes over what it
-// never read.
+// A FILTER HANDS OUT EVERY PART IT COULD NOT READ. An unread part is an entry
+// whose kind and words no filter can know, so a read narrowed by kind or words
+// hands it out where it is, its account of the gap never searched: a filtered
+// page never passes over what it never read.
 //
 // Mutation: let a filter pass over an unread part, or search its account of the
 // gap for the words, and a check goes red.
@@ -541,11 +522,10 @@ func TestAFilterHandsOutEveryPartItCouldNotRead(t *testing.T) {
 	}
 }
 
-// A MATCH READ PAST ITS BUDGET SAYS WHERE IT STOPPED. A transcript whose archive
-// inflates past what one read takes stops the search there: the hits before it
-// are handed out, the cut says no later read gets further, and the next
-// ordinal is the first entry the read did not examine — what a reader is told
-// the search stopped at.
+// A MATCH READ PAST ITS BUDGET SAYS WHERE IT STOPPED. An archive inflating past
+// one read's budget stops the search there: the hits before it are handed out,
+// the cut says no later read gets further, and next is the first entry the
+// read did not examine.
 //
 // Mutation: answer a read past its budget as no cut, and a check goes red.
 func TestAMatchReadPastItsBudgetSaysWhereItStopped(t *testing.T) {
@@ -574,9 +554,8 @@ func TestAMatchReadPastItsBudgetSaysWhereItStopped(t *testing.T) {
 // NOT PARALLEL, for the reason the process's slots' cases are not: the slots
 // are the process's own.
 
-// countedWait is a read's context that says when the read asks for its Done
-// channel the nth time: a seat's read asks once as it waits for the seats'
-// slot and once more as it waits for one of the process's.
+// countedWait is a read's context that signals the nth call of its Done: a
+// seat's read calls it once waiting for the seats' slot, again for the process's.
 type countedWait struct {
 	context.Context
 	nth   int32
@@ -611,13 +590,12 @@ func seatReadOf(ctx context.Context, raw []byte, gate <-chan struct{}, err *erro
 	return opened, done
 }
 
-// A SEAT TAKES AT MOST ONE OF THE NODE'S TRANSCRIPT SLOTS. With one seat's
-// read in flight — the seats' slot and one of the process's held — a second
-// seat's read waits for the seats' slot, opening nothing, while a person's
-// read takes the process's other slot and reads; the waiting seat's read
-// leaves with its caller, holding nothing. And a seat's read that holds the
-// seats' slot and waits for one of the process's gives the seats' slot back
-// when its caller leaves.
+// A SEAT TAKES AT MOST ONE OF THE NODE'S TRANSCRIPT SLOTS. With one seat's read
+// holding the seats' slot and one of the process's, a second seat's read waits,
+// opening nothing, while a person's read takes the other process slot; the
+// waiting read leaves with its caller, holding nothing. A seat's read holding
+// the seats' slot while waiting for a process slot gives it back when its
+// caller leaves.
 //
 // Mutation: take a seat's read straight to the process's slots, and the second
 // seat's read opens its archive beside the first; give the seats' slot back

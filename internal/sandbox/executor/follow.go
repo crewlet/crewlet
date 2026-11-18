@@ -11,51 +11,24 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// The live reading of a running job — what [Runner.Follow] begins, and what a
-// person watching the run is shown.
-//
-// # The same two accounts Collect reads, settled as they grow
-//
-// The transcript the harness's decoder builds out of its event stream, and the
-// error stream for a job whose stream has said nothing yet (a harness that failed
-// to start). Each read takes only what was written since the last one — a
-// ranged read of each stream's end, sized to what has grown — feeds the new
-// complete lines through the same decoder for as long as the reading lasts,
-// and SETTLES what it can show ([redact.Settled]): whole lines, redacted over
-// everything written before them, never a line a later one could still
-// change. So what a reading shows is an append-only text, which is what lets
-// the node that owns the run send a viewer only the part it lacks
-// (internal/sandbox, livefeed.go) — and it is exactly the whole text redacted,
-// however the reads fell.
-//
-// # Where a reading begins, and why that is its name
-//
-// At the start of each stream's last [liveWindow] — all of a stream shorter
-// than that — on a line. The reading's ORIGIN is that place, with the account
-// it reads, so two owners reading the same stream from the same place name the
-// same origin and derive the same text; a reading that has to begin again
-// further on — the stream outran [liveBacklog] between two reads, or shrank —
-// names another, and so does the switch from the error stream to the
-// transcript the moment the transcript has something to say.
-//
-// The error stream's reading also reads [redactContext] BEFORE that place, and
-// never shows it: it is what the text's start is redacted with, so a private
-// key whose BEGIN came before the reading is read as the key it is rather than
-// from inside — which publishes its lines above three that part it — and the
-// reading shows only what that context settles ([pendingText.settle]). The
-// origin is still the place the text begins, and two owners read the same
-// context before it. The event stream needs none: an event is one line, and so
-// is a credential inside one, however its text wraps.
+// The live reading of a running job ([Runner.Follow]), of Collect's accounts:
+// the transcript, or the error stream until the transcript has an entry. Each
+// read takes only what grew, through one decoder kept for the whole reading,
+// and shows only what is settled ([redact.Settled]), so the text is
+// append-only (what lets the run's owner send a viewer only what it lacks,
+// internal/sandbox's livefeed.go) and is the whole text redacted however the
+// reads fell. A reading begins on a line at the start of a stream's last
+// [liveWindow]; its ORIGIN names that place and the account, so two owners
+// derive the same text, and beginning again (the stream outran [liveBacklog]
+// or shrank, or the transcript spoke) names another. The error stream reads
+// redaction context before that place ([rawStream.leads]); an event is one
+// line, a credential in it whole, so the event stream needs none.
 
-// liveWindow is how much of the END of a stream a reading begins from.
-//
-// One transcript line stands for one event whose raw size is dominated by what
-// the event echoes — a tool's whole output on a stream that carries it (Claude
-// Code's carries it twice: the result block, and the harness's own copy beside it),
-// tens of KiB for a file read or a long command. A mebibyte of stream is the
-// last dozen or more such events whole, which is a screen of activity at once,
-// in one ranged read — and a reading that began further back would show a
-// person what the run did a while ago until it caught up.
+// liveWindow is how much of a stream's END a reading begins from. An event's
+// size is dominated by what it echoes (a tool's output, twice on Claude Code's
+// stream), tens of KiB for a file read; a mebibyte is the last dozen or more
+// events whole, a screen of activity in one ranged read. Beginning further
+// back would show a person old activity until the reading caught up.
 const liveWindow = 1 << 20
 
 // liveReadFloor is the least one read asks for beyond what the reading has not
@@ -63,10 +36,9 @@ const liveWindow = 1 << 20
 // apart, at the rate a harness writes when it is not echoing a file.
 const liveReadFloor = 64 << 10
 
-// liveBacklog is the most one read catches up. A stream that grew by more than
-// this between two reads — a tool's echoed output of a large file — is read
-// again from its end rather than in full, because the whole of it would cost a
-// read of that size for one screen's worth of what it says.
+// liveBacklog is the most one read catches up: a stream that grew more between
+// two reads (a tool echoing a large file) is read again from its end, since
+// reading it all costs that much for one screen of it.
 const liveBacklog = 8 << 20
 
 // Follow implements [sandbox.Runner].
@@ -102,9 +74,8 @@ func (f *follower) Read(ctx context.Context, box sandbox.Sandbox) (sandbox.LiveR
 	if err != nil {
 		return sandbox.LiveRead{}, err
 	}
-	// DONE MEANS WHOLE. The wrapper writes its marker after the harness has
-	// exited, so nothing more is written to either stream: what is held
-	// back is settled, and an unfinished last line is a line.
+	// DONE MEANS WHOLE: the wrapper writes its marker after the harness exits,
+	// so what is held back is settled and an unfinished last line is a line.
 	done := len(marker) > 0
 	read := sandbox.LiveRead{AsOf: time.Now().UTC(), Finished: done}
 	if out.Events {
@@ -185,17 +156,14 @@ func (p *pendingText) lead(s string) {
 	}
 }
 
-// settle takes what is settled — all of it, once the job is done — redacted.
+// settle takes what is settled (all of it once the job is done), redacted.
 //
-// THE CONTEXT SETTLES THE TEXT'S START, and nothing of it is shown. Until what
-// is settled reaches past it, the context is read with the text: what settles
-// is decided over both, and what is shown is what the text redacts to as the
-// two redact together — from the line after the last place the text redacted
-// alone reads otherwise, which is where whatever the context decided ends (a
-// key whose BEGIN it holds, read alone as one cut off from its BEGIN, whose
-// lines above three that part it are published). Past that point nothing
-// before it can change how what follows redacts, which is what settling it
-// means, so the context is let go and every later settle is the text's alone.
+// THE CONTEXT SETTLES THE TEXT'S START and is never shown: until what settles
+// reaches past it, settling is decided over context and text together, and
+// what is shown starts on the line after the last place where the text
+// redacted alone differs from the two together (a key whose BEGIN the context
+// holds would, read alone, publish its lines above three that part it). Past
+// that nothing before can change how what follows redacts, so the context goes.
 func (p *pendingText) settle(done bool) string {
 	if p.ctx == "" {
 		n := len(p.text)
@@ -242,19 +210,16 @@ type rawStream struct {
 	// place is not the text read from there before.
 	restarts int
 	// partialOpen is set when the reading began inside a line longer than
-	// the whole window, so there was no line break to begin after. Until a
-	// break arrives the reading is still mid-line, and what has come so far
-	// is the END of a line whose start is off the window — unshowable, the
-	// way [FileTail.Lines] drops a partial FIRST line. Showing it would put
-	// the tail of a credential that straddled the window's edge on screen,
-	// redacted in isolation with its rule's anchor cut off before it.
+	// the window: until a break arrives, what comes is the END of a line
+	// begun off the window, dropped as [FileTail.Lines] drops a partial first
+	// line. Shown, it could put a credential's tail on screen, redacted
+	// without its rule's anchor.
 	partialOpen bool
-	// leads is set on a stream whose text is shown as it was written (the
-	// error stream): a reading that begins inside it reads [redactContext]
-	// more before where it begins, and hands what it read there on as lead —
-	// the context the text's start is redacted with and never shows
-	// ([pendingText.settle]) — as it hands on, too, the rest of a line too
-	// long to have begun after, which it drops ([rawStream.take]).
+	// leads is set on a stream shown as written (the error stream): a reading
+	// that begins inside it reads [redactContext] more before that place and
+	// hands it on as lead, the context the text's start is redacted with and
+	// never shows ([pendingText.settle]), with the rest of an overlong line it
+	// drops ([rawStream.take]).
 	leads bool
 	lead  []byte
 }
@@ -287,14 +252,13 @@ func (s *rawStream) origin(account string) string {
 	return fmt.Sprintf("%s@%d#%d", account, s.start, s.restarts)
 }
 
-// next is the complete lines written since the last read — everything left,
-// once the stream is done — and whether the reading had to begin again.
+// next is the complete lines written since the last read (everything left once
+// the stream is done) and whether the reading had to begin again.
 //
-// SIZED TO WHAT HAS GROWN. A read asks for what it has not taken yet plus
-// twice the last growth (at least [liveReadFloor]), so a reading costs about
-// what the job writes rather than a window per read. A stream that outgrew the
-// guess is asked again for exactly its backlog, and one whose backlog is past
-// [liveBacklog], or that shrank, is read again from its end.
+// A read asks for what it has not taken plus twice the last growth (at least
+// [liveReadFloor]), so a reading costs about what the job writes, not a window
+// a read. A stream that outgrew that is asked again for its exact backlog; one
+// past [liveBacklog], or that shrank, is read again from its end.
 func (s *rawStream) next(ctx context.Context, box sandbox.Sandbox, path string, done bool) ([]byte, bool, error) {
 	if !s.started {
 		return s.begin(ctx, box, path, done, false)
@@ -325,11 +289,9 @@ func (s *rawStream) next(ctx context.Context, box sandbox.Sandbox, path string, 
 }
 
 // begin starts the reading at the start of the stream's last [liveWindow], on
-// a line — or, when the window holds no line break at all, mid-line with
-// [rawStream.partialOpen] set, so the rest of that unreadable line is dropped
-// rather than shown as if it were whole ([rawStream.take]). A stream that
-// leads reads [redactContext] more before the window, and keeps all it read
-// before where the reading begins as lead.
+// a line, or mid-line with [rawStream.partialOpen] set when the window holds no
+// break. A stream that leads reads [redactContext] more before the window and
+// keeps all it read before the reading's start as lead.
 func (s *rawStream) begin(ctx context.Context, box sandbox.Sandbox, path string, done, again bool) ([]byte, bool, error) {
 	want := liveWindow
 	if s.leads {
@@ -348,10 +310,9 @@ func (s *rawStream) begin(ctx context.Context, box sandbox.Sandbox, path string,
 	s.keepLead(read.Data[:len(read.Data)-len(data)])
 	s.start = tail.Before() + int64(partial)
 	s.pos, s.size, s.growth, s.started = s.start, tail.Size, 0, true
-	// A mid-file window with no break is one long line whose start is off
-	// the window. Lines returns nothing, and partial is the whole window;
-	// begin would otherwise start at the file's end and the next read would
-	// hand the rest of that line to the display as a whole line.
+	// A mid-file window with no break: Lines returns nothing and partial is the
+	// whole window, so without this the next read would show the rest of that
+	// line as a whole one.
 	s.partialOpen = !tail.Whole() && len(data) == 0 && bytes.IndexByte(tail.Data, '\n') < 0
 	if again {
 		s.restarts++
@@ -359,14 +320,10 @@ func (s *rawStream) begin(ctx context.Context, box sandbox.Sandbox, path string,
 	return s.take(data, done), again, nil
 }
 
-// take is data up to its last line break — all of it once the stream is done
-// — and moves the reading past it.
-//
-// While [rawStream.partialOpen], the reading is still inside a line too long
-// to have begun after: its bytes so far are dropped up to the first break —
-// the rest of that line — and only then does normal line-taking resume. A
-// stream that ends (done) still inside such a line has no whole line to show,
-// so nothing settles.
+// take is data up to its last line break (all of it once the stream is done)
+// and moves the reading past it. While [rawStream.partialOpen], bytes up to the
+// first break are the rest of a line begun off the window and are dropped; a
+// stream done still inside it shows nothing.
 func (s *rawStream) take(data []byte, done bool) []byte {
 	if s.partialOpen {
 		i := bytes.IndexByte(data, '\n')

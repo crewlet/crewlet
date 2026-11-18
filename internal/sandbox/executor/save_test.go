@@ -19,20 +19,19 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A save of a session its harness still works in, and every pack beside such a
-// harness, made on a real box by the runner's own pack — the harness's writes
-// under it played by a writer each case controls, never raced against a clock.
+// Saves, and every pack beside a working harness, made on a real box by the
+// runner's own pack: the harness's writes are played by a writer each case
+// controls, never raced against a clock.
 
-// takerA and takerB are two takers of one box's saves, named as a process names
-// the lease it takes captures under: its incarnation, `<node>:<uuid>`.
+// takerA and takerB are two takers of one box's saves, named as a lease
+// holder's incarnation is, `<node>:<uuid>`.
 const (
 	takerA = "node-a:2a6c3f4e-0b1d-4c8e-9f7a-1b2c3d4e5f60"
 	takerB = "node-b:7d8e9f0a-1b2c-4d3e-8f4a-5b6c7d8e9f01"
 )
 
-// forgetCapture removes the archive the run's script packed as its harness
-// exited, and the digests beside it: a box whose job never got its own pack in,
-// so whatever is found at a pack's destination after is that pack's doing.
+// forgetCapture removes the job's capture and the digests beside it, so what a
+// pack's destination holds after is that pack's doing.
 func forgetCapture(t *testing.T, box sandbox.Sandbox) {
 	t.Helper()
 	p := paths(box)
@@ -42,9 +41,8 @@ func forgetCapture(t *testing.T, box sandbox.Sandbox) {
 	}
 }
 
-// saveStagingLeft is every staging directory a save of taker's left in box:
-// each is named for its save alone (executor.Paths.SessionSaveStaging), after
-// its taker, so it is found by its pattern rather than named.
+// saveStagingLeft is every staging directory taker's saves left in box, found
+// by pattern: each is named for its save (executor.Paths.SessionSaveStaging).
 func saveStagingLeft(t *testing.T, box sandbox.Sandbox, taker string) []string {
 	t.Helper()
 	res, err := box.Exec(t.Context(), "for d in "+shQuote(paths(box).SessionSaveStaging(taker, ""))+"*; do "+
@@ -55,9 +53,8 @@ func saveStagingLeft(t *testing.T, box sandbox.Sandbox, taker string) []string {
 	return strings.FieldsFunc(res.Stdout, func(r rune) bool { return r == '\n' })
 }
 
-// savesLeft is every save of taker's left in box: each is named for its save
-// alone (executor.Paths.SessionSave), after its taker, so it is found by its
-// pattern rather than named.
+// savesLeft is every save of taker's left in box, found by pattern: each is
+// named for its save (executor.Paths.SessionSave).
 func savesLeft(t *testing.T, box sandbox.Sandbox, taker string) []string {
 	t.Helper()
 	res, err := box.Exec(t.Context(), "for d in "+shQuote(paths(box).SessionSave(taker, ""))+"*; do "+
@@ -68,8 +65,8 @@ func savesLeft(t *testing.T, box sandbox.Sandbox, taker string) []string {
 	return strings.FieldsFunc(res.Stdout, func(r rune) bool { return r == '\n' })
 }
 
-// hostTool is where this machine's own name is, for a stand-in that hands its
-// calls on to it.
+// hostTool is the path of this machine's own name, for a stand-in to hand
+// calls on to.
 func hostTool(t *testing.T, name string) string {
 	t.Helper()
 	path, err := exec.LookPath(name)
@@ -79,20 +76,18 @@ func hostTool(t *testing.T, name string) string {
 	return path
 }
 
-// rewritingTar is a stand-in `tar` for a box's bin directory, which a pack's
-// PATH puts first: every call but a pack's (`tar -czf <archive> <files...>`)
-// goes to this machine's tar, and a pack's runs pack — a script with that tar
-// as "$tar", the archive as "$1" and the files after it, run where the pack
-// runs tar: in the harness's configuration directory for a pack beside a
-// working harness, beside it for one made once the harness is gone — so the
-// case's own writer changes the session at exactly the moment the case names,
-// as a harness would while tar read it.
+// rewritingTar is a stand-in `tar` for a box's bin directory, first on a pack's
+// PATH: every call but a pack's (`tar -czf <archive> <files...>`) goes to this
+// machine's tar, and a pack's runs pack with that tar as "$tar", the archive as
+// "$1" and the files after it, where the pack runs tar (in the configuration
+// directory beside a working harness, beside it once the harness is gone). So
+// the case's writer changes the session at the moment the case names.
 func rewritingTar(t *testing.T, pack string) string { return tarStandIn(t, pack, "") }
 
-// tarStandIn is [rewritingTar] that hands every call to others first: shell
-// that reads the call's words ("$1" the first, "$tar" this machine's tar) and
-// exits where it answers that call itself — the read back of a member, say —
-// or falls through.
+// tarStandIn is [rewritingTar] with others run first on every call: shell that
+// reads the call's words ("$1" the first, "$tar" this machine's tar) and exits
+// where it answers the call itself (a member's read back, say), or falls
+// through.
 func tarStandIn(t *testing.T, pack, others string) string {
 	t.Helper()
 	return "#!/bin/sh\ntar=" + shQuote(hostTool(t, "tar")) + "\n" + others + "\n" +
@@ -105,9 +100,9 @@ func afterTar(change string) string {
 	return `"$tar" -czf "$@"; st=$?` + "\n" + change + "\nexit $st\n"
 }
 
-// grownBack rewrites the file at file, IN PLACE — the same inode — down to its
-// first "$h" bytes and then past its old size, as Claude Code's withdrawal of a
-// message cuts its transcript and writes it again.
+// grownBack rewrites file IN PLACE (the same inode) to its first "$h" bytes and
+// on past its old size, as Claude Code withdrawing a message rewrites a
+// transcript.
 func grownBack(file string) string {
 	f := shQuote(file)
 	return `cp ` + f + ` ` + f + `.was && { head -c "$h" ` + f + `.was; printf '%s\n' ` +
@@ -115,25 +110,21 @@ func grownBack(file string) string {
 		` && rm -f ` + f + `.was`
 }
 
-// neverNewerFind is a stand-in `find` for a box's bin directory to which no
-// file is ever newer than another: a box whose clock never moves, or that
-// stamps its files with none. Every other word goes to this machine's find.
+// neverNewerFind is a stand-in `find` to which no file is ever newer than
+// another, as in a box whose clock never moves; every other call goes to this
+// machine's find.
 func neverNewerFind(t *testing.T) string {
 	t.Helper()
 	return "#!/bin/sh\nfor a; do [ \"$a\" != -newer ] || exit 0; done\nexec " + shQuote(hostTool(t, "find")) +
 		` "$@"` + "\n"
 }
 
-// coarseClock puts in b's bin directory a stand-in `find` and a stand-in
-// `sleep` that together play a find of a coarse grain, as busybox's is, which
-// compares whole seconds (measured on BusyBox 1.37.0: a file written 200 ms
-// after the reference, within its second, is not newer to it): to that find
-// NO FILE IS NEWER than another until the box's sleep has slept — the box's
-// clock gone past the grain its marker was written in — and after that it
-// compares as this machine's own find does, to which every other word goes;
-// the sleep sleeps as this machine's own. So a case decides which writes the
-// grain hides — every one made before the pack's first sleep — rather than
-// racing the second the wall clock is in.
+// coarseClock puts a stand-in `find` and `sleep` in b's bin directory that play
+// a find comparing whole seconds, as busybox's does (on BusyBox 1.37.0 a file
+// written 200 ms after the reference is not newer): NO FILE IS NEWER than
+// another until the box's sleep has slept, and then find compares as this
+// machine's does. So a case decides which writes the grain hides (every one
+// before the pack's first sleep) rather than racing the wall clock's second.
 func coarseClock(t *testing.T, b sandbox.Sandbox) {
 	t.Helper()
 	slept := shQuote(b.Home() + "/coarse-clock-slept")
@@ -154,24 +145,17 @@ func filesOf(s string) sessionFiles {
 }
 
 // A SAVE IS PACKED TO ITS TAKER'S OWN PATH, AND NEVER TAKEN AS THE JOB'S FINAL
-// ARCHIVE. A box whose job's own exit pack never landed is saved by one taker
-// and then another: each save is packed in a staging directory of its own — a
-// pack on demand's, and another taker's save's, left as they were — and moved
-// into a place of that save's own, named by a digest of its taker rather than
-// the taker itself, its staging directory gone and its digest kept in the box.
-// A take of a save reads that save alone, packs nothing and removes it once
-// read: the job's capture is still not there after it, nor any digest added; a
-// save no longer there is taken as nothing, and a path that is no save is
-// refused unread. Only then is the job's final archive read, and a
-// collection's read finds none, so the final take packs the job's own — at
-// that pack's own place, as every pack on demand keeps its archive.
+// ARCHIVE. A box whose job's exit pack never landed is saved by two takers:
+// each save stages in a directory of its own, leaving a pack on demand's and
+// another taker's alone, and moves to a place named by a digest of its taker,
+// its digest kept in the box. A take of a save reads that save alone, packs
+// nothing, adds no digest and removes it once read; a save gone is taken as
+// nothing, a path that is no save is refused unread. The job's final archive
+// is then still none, so the final take packs the job's own at its own place.
 //
-// Mutation: move a save over the job's capture, and the collection's read
-// finds it; name one path for every taker and the second save replaces the
-// first; stage a save where a pack on demand or another taker stages, and that
-// one's archive is gone; take a save by packing one — over the job's capture or
-// anywhere — or the job's final archive from a save's path, or any path a take
-// is handed, and its check goes red.
+// Mutation: move a save over the capture, name one path for every taker, share
+// a staging directory, or have a take pack (anywhere) or read any path but the
+// save's, and a check goes red.
 func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
@@ -298,40 +282,17 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 }
 
 // A SAVE OF A FILE REWRITTEN WHILE IT WAS PACKED FAILS, AND SAYS WHICH CHECK
-// REFUSED IT — and so does every pack made beside a harness that may still
-// work, a take of a job its box would not end, which packs it on demand
-// (sandbox.SessionTake.Pack). Each case is a write the harness makes as tar
-// reads its session, made at that moment by the case's own writer: a trim's
-// rename over the transcript (its inode), a subagent's thread cut in place (a
-// shrink), a task file touched (a file that is no transcript, written) — and
-// touched again where the box's find compares at a coarse grain, as busybox's
-// does whole seconds, after the pack's marker — the transcript rewritten in
-// place and grown back past its old size, as a withdrawn message rewrites it
-// (no byte prefix), a subagent's thread rewritten in place once tar read it
-// (no byte prefix either, read back since it was written after the marker),
-// the transcript shrunk and grown back within the read as
-// each tar packs that — GNU padding the member with NULs, busybox cutting the
-// archive inside it, which its listing refuses as GNU's does — a transcript
-// whose read back fails part way, past a listing that held, a file tar could
-// not read left out of an archive that still reads back (missing), an archive
-// that holds no file at all, a spilled result the harness removed (gone), a
-// file made and removed as tar read the session (gone, a member no check of the
-// manifest reads), and a task file written under the tar and removed before
-// the check of what was written looked at it (gone, found by the last check).
-// Every one is refused, whatever tar's exit said, naming its check and its
-// file; and nothing is moved to the pack's destination, recorded as a digest
-// the box holds, or left in its staging directory.
+// REFUSED IT, as does every pack beside a harness that may still work
+// (heldPacks). Each case, named for it, is a write the harness makes as tar
+// reads the session, made at that moment by the case's own writer. Every one
+// is refused whatever tar's exit said, naming its check and its file, and
+// nothing is moved to the destination, recorded as a digest or left staged.
 //
-// Mutation: take tar's exit 0 or 1 on its own word, drop a check, run the last
-// look for a removed member before the others, read an extraction that failed
-// as the bytes it gave, read a listing of nothing as an archive, move the
-// archive before the checks, or leave the staging directory behind, and a case
-// goes red; read back the session's own transcript alone, none of the threads
-// written since the marker, and the thread rewritten in place is packed torn;
-// drop the wait for the box's find to see the clock move past the
-// marker, and the task file touched under a coarse find reads as written before
-// it; hold the take of a job still working to the run's own end's rule and its
-// cases do.
+// Mutation: take tar's exit on its word, drop a check, run the last look for a
+// removed member first, read a failed extraction's bytes or an empty listing as
+// an archive, move the archive before the checks, leave staging behind, read
+// back the session's own transcript alone, drop the coarse find's clock wait,
+// or hold a working job's take to the run's own end's rule: a case goes red.
 func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -411,12 +372,11 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 		{name: "its transcript shrunk and grown back as tar read it, as busybox's tar packs that",
 			pack: func(f sessionFiles) string {
 				tr := shQuote(f.transcript)
-				// BUSYBOX'S ARCHIVE: a whole gzip, the tar inside it cut part way
-				// into the member it read shrinking — the transcript, the pack's
-				// first file, behind its 512-byte header — and nothing after it.
-				// Listed through gunzip, as the pack lists it, the cut is an
-				// error to busybox's tar ("short read") as to GNU's, which this
-				// machine lists it with ("Unexpected EOF in archive").
+				// BUSYBOX'S ARCHIVE: a whole gzip whose tar is cut part way into
+				// the shrinking member (the transcript, first, behind its 512-byte
+				// header). Listed through gunzip, as the pack lists it, the cut is
+				// an error to busybox's tar ("short read") and to GNU's, which
+				// lists it here ("Unexpected EOF in archive").
 				return `archive=$1; shift; n=$(wc -c < ` + tr + `); h=$((n / 2))` + "\n" +
 					`"$tar" -cf - "$@" | head -c "$((512 + h))" | gzip > "$archive"` + "\n" +
 					grownBack(f.transcript) + "\n" +
@@ -465,11 +425,9 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 			}},
 		{name: "a task file written under the tar and removed before what was written was looked for",
 			pack: func(f sessionFiles) string { return afterTar(`touch ` + shQuote(f.task)) },
-			// THE WRITER AT THE CHECK OF WHAT WAS WRITTEN, the one find that
-			// asks for files that are not transcripts (`! -name`), never the
-			// walk before the marker, which asks for what is no link
-			// (`! -type`): the task file goes just before that find reads the
-			// session.
+			// THE WRITER AT THE CHECK OF WHAT WAS WRITTEN: the task file goes
+			// just before the one find asking for non-transcripts (`! -name`),
+			// never the walk before the marker (`! -type`).
 			find: func(t *testing.T, f sessionFiles) string {
 				return "#!/bin/sh\ncase \" $* \" in *\" ! -name \"*) rm -f " + shQuote(f.task) + ";; esac\nexec " +
 					shQuote(hostTool(t, "find")) + ` "$@"` + "\n"
@@ -525,11 +483,9 @@ func madeAndRemoved(f sessionFiles) string {
 	return strings.TrimSuffix(f.spilled, "out.txt") + "made.txt"
 }
 
-// heldPacks are the packs made beside a harness that may still work, each held
-// to the rule of such a pack: a save, and a take of a job its box would not
-// end, which packs it on demand (sandbox.SessionTake.Pack) — each with what it
-// left where a pack of its moves its archive, and what it left of the
-// directory it stages it in.
+// heldPacks are the packs made beside a harness that may still work: a save,
+// and a take that packs on demand (sandbox.SessionTake.Pack), each with what it
+// left where it moves its archive and where it stages it.
 var heldPacks = []struct {
 	name   string
 	make   func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error
@@ -561,22 +517,16 @@ var heldPacks = []struct {
 }
 
 // A PACK BESIDE A WORKING HARNESS PROVES THE SESSION'S OWN TRANSCRIPT WHATEVER
-// ITS FIND READS OF IT. Claude Code rewrites that transcript in place where it
-// withdraws a message (2.1.310's removeTranscriptMessage, read in its shipped
-// code, truncates it and writes it again in the same inode), and a clock that
-// steps back while a pack runs stamps such a rewrite before the pack's marker,
-// so the box's find reads the file as unwritten since. Here the transcript is
-// rewritten in place and grown back past its old size once tar has read it,
-// under a find that reads it as unwritten since any file: every way the pack
-// is made — a save, and the take of a job still working — reads the
-// transcript back out of its archive all the same, finds it is not the start
-// of the live file, and is refused saying so, with nothing moved to its
-// destination, recorded as a digest the box holds, or left in its staging
-// directory.
+// ITS FIND READS OF IT. Claude Code withdraws a message by rewriting the
+// transcript in the same inode (2.1.310's removeTranscriptMessage), and a clock
+// stepped back mid-pack stamps that rewrite before the marker, so find reads it
+// as unwritten. Here it is rewritten and grown back once tar read it, under a
+// find that never lists it as newer: every held pack still reads it back, finds
+// it is not the start of the live file, and is refused saying so, leaving no
+// archive, digest or staging directory.
 //
 // Mutation: read the session's own transcript back only where find reads it as
-// written since the marker, as a subagent's thread is, and the transcript
-// rewritten under the stepped-back clock is packed torn.
+// written since the marker, as a subagent's thread is, and it is packed torn.
 func TestAPackProvesTheSessionsOwnTranscriptWhateverItsFindReads(t *testing.T) {
 	t.Parallel()
 	for _, pack := range heldPacks {
@@ -588,10 +538,8 @@ func TestAPackProvesTheSessionsOwnTranscriptWhateverItsFindReads(t *testing.T) {
 			forgetCapture(t, b)
 			f := filesOf(ran.SessionID)
 			tr := shQuote(f.transcript)
-			// A FIND THAT READS THE TRANSCRIPT AS UNWRITTEN SINCE ANY FILE, as
-			// under a clock stepped back while the pack ran: every listing of
-			// files newer than another leaves it out, and every other word
-			// goes to this machine's find.
+			// A FIND THAT NEVER LISTS THE TRANSCRIPT AS NEWER, as under a clock
+			// stepped back mid-pack; every other call is this machine's find.
 			find := shQuote(hostTool(t, "find"))
 			writeBoxStandIn(t, b, p.BinDir()+"/find", "#!/bin/sh\ncase \" $* \" in *\" -newer \"*) "+find+
 				` "$@" | grep -vxF `+tr+"; exit 0;; esac\nexec "+find+` "$@"`+"\n")
@@ -615,42 +563,22 @@ func TestAPackProvesTheSessionsOwnTranscriptWhateverItsFindReads(t *testing.T) {
 	}
 }
 
-// A HELD PACK WHOSE CHECKS CANNOT BE MADE IS REFUSED, AND SAYS WHICH. Every
-// check of a pack beside a harness that may still work reads a list the pack
-// kept in its staging directory, or compares two with grep, and one that
-// cannot be made is a refusal as a difference is, never a pass. No check rests
-// on a tool's word that what it wrote landed: each list and each answer comes
-// to the shell through a pipe, and the shell writes it to its file and reads it
-// back. So here: the files it listed and its marker removed under the tar; the
-// inodes it listed removed; its marker alone removed, which the look for what
-// was written walks by; a find that could not walk the whole session as it
-// listed its files, their inodes or their sizes, before the tar or after it,
-// or the transcripts it reads back; the list of what its archive holds
-// removed as a transcript is read back; each comparison grep could not answer
-// (its exit 2: a list it could not read); a comparison grep answered with a
-// difference it named no line of (its exit 0, and nothing); what was written
-// since the marker, and the sizes the check of a shrink found differing, each
-// lost as the shell wrote it — written where nothing keeps it, as a full disk
-// loses a write its writer was told landed — beside a task file touched, or a
-// subagent's thread cut, under the tar; and a list read back holding half of
-// what was written to it, as a write a full disk cut short leaves it (played
-// by a cksum that reads the first line of a file it is handed). Each is
-// refused, the save and the take of a job still working alike, saying what
-// could not be done; and nothing is moved to the pack's destination, recorded
-// as a digest the box holds, or left in its staging directory.
+// A HELD PACK WHOSE CHECKS CANNOT BE MADE IS REFUSED, AND SAYS WHICH. Each
+// check reads a list kept in the staging directory or compares two with grep,
+// and one that cannot be made is a refusal, never a pass; none takes a tool's
+// word that a write landed: the shell writes each list or answer from a pipe
+// and reads it back. Each case, named for it, removes a list, fails a find or a
+// grep, or loses or halves a write as a full disk does (halved by a cksum that
+// reads one line); each is refused, for both held packs, saying what could not
+// be done, and leaves no archive, digest or staging directory.
 //
-// Mutation: read grep's exit 2 as no difference, or its exit 0 with nothing
-// named as one it can read; take a list or an answer as written without
-// reading it back, or read back only that its file holds something; or leave
-// unchecked the read back of the files listed or of what the archive holds,
-// or the exit of the find of the files, of their inodes or sizes before or
-// after the tar, of what was written or of the transcripts; and a case goes
-// red.
+// Mutation: read grep's exit 2, or its exit 0 naming nothing, as no
+// difference; take a list as written unread, or read back only that it holds
+// something; or leave any find's exit or a read back unchecked; a case goes red.
 func TestAHeldPackWhoseChecksCannotBeMadeIsRefused(t *testing.T) {
 	t.Parallel()
-	// grew is a harness that appends to a subagent's thread once tar has read
-	// the session, so the pack lists a transcript other than its own to read
-	// back.
+	// grew appends to a subagent's thread once tar has read the session, so the
+	// pack has a transcript besides its own to read back.
 	grew := func(f sessionFiles) string {
 		return `printf '%s\n' '{"type":"user","more":1}' >> ` + shQuote(f.thread)
 	}
@@ -777,11 +705,10 @@ func TestAHeldPackWhoseChecksCannotBeMadeIsRefused(t *testing.T) {
 	}
 }
 
-// faultyFind is a stand-in `find` for a box's bin directory that, on the call
-// whose words match pattern — a case pattern over them, padded with a space
-// each side — walks as this machine's find does and then exits 1, as a find
-// that met an error on some path of its walk does; every other call goes to
-// this machine's find.
+// faultyFind is a stand-in `find` that, on a call whose words match pattern (a
+// case pattern over them, padded with a space each side), walks as this
+// machine's find and exits 1, as a find that met an error mid-walk; every
+// other call goes to this machine's find.
 func faultyFind(t *testing.T, pattern string) string {
 	t.Helper()
 	find := shQuote(hostTool(t, "find"))
@@ -789,13 +716,11 @@ func faultyFind(t *testing.T, pattern string) string {
 		` "$@"` + "\n"
 }
 
-// faultyFindFirst is [faultyFind] on the FIRST call alone whose words match
-// pattern: that call walks as this machine's find does and exits 1, saying so
-// in a file under home, the box's own, and every later call walks as it does —
-// so a pack that makes one find before its tar and again after it meets the
-// failure before, and only there. (Failing both, the refusal after the tar,
-// "could not be listed again", holds the words of the one before it, and a pack
-// that took the first find's exit on its word would still be refused.)
+// faultyFindFirst is [faultyFind] on the FIRST matching call alone, recorded in
+// a file under home (the box's), so a pack that finds before and after its tar
+// fails before only. Failing both would let a pack that took the first find's
+// exit on its word still be refused, since "could not be listed again" holds
+// the words of the refusal before the tar.
 func faultyFindFirst(t *testing.T, home, pattern string) string {
 	t.Helper()
 	find := shQuote(hostTool(t, "find"))
@@ -804,11 +729,9 @@ func faultyFindFirst(t *testing.T, home, pattern string) string {
 		` "$@"; exit 1; fi;; esac` + "\nexec " + find + ` "$@"` + "\n"
 }
 
-// faultyFindAgain is [faultyFind] on the SECOND call whose words match pattern:
-// the first such call walks as this machine's find does, saying so in a file
-// under home, the box's own, and so does every call that does not match — so
-// a pack that makes one find twice, before its tar and after it, meets the
-// failure after.
+// faultyFindAgain is [faultyFind] on the SECOND matching call: the first walks
+// as usual, recorded in a file under home (the box's), so a pack that finds
+// before and after its tar fails after.
 func faultyFindAgain(t *testing.T, home, pattern string) string {
 	t.Helper()
 	find := shQuote(hostTool(t, "find"))
@@ -817,21 +740,19 @@ func faultyFindAgain(t *testing.T, home, pattern string) string {
 		` "$@"; exit 1; fi; : > ` + seen + ";; esac\nexec " + find + ` "$@"` + "\n"
 }
 
-// faultyGrep is a stand-in `grep` for a box's bin directory that, on the one
-// comparison a pack makes of its list named patterns with its list named input
-// (`-f <staging directory>/<patterns> <staging directory>/<input>`), does what
-// answer says instead — exits 2, say, as a grep that could not read a list or
-// write its answer does; every other call goes to this machine's grep.
+// faultyGrep is a stand-in `grep` that, on the one comparison of the pack's
+// lists patterns and input (`-f <staging>/<patterns> <staging>/<input>`), runs
+// answer instead (exit 2, say, as a grep that could not read or write); every
+// other call goes to this machine's grep.
 func faultyGrep(t *testing.T, patterns, input, answer string) string {
 	t.Helper()
 	return "#!/bin/sh\ncase \" $* \" in *\"/" + patterns + " \"*\"/" + input + " \"*) " + answer + ";; esac\nexec " +
 		shQuote(hostTool(t, "grep")) + ` "$@"` + "\n"
 }
 
-// stampedEntry is a file or a directory of a session a case stamps, named as
-// the pack names it — relative to the harness's configuration directory — with
-// what a file holds, and whether it is stamped an hour AHEAD of the box's clock
-// or an hour behind it.
+// stampedEntry is a file or directory of a session a case stamps, named
+// relative to the configuration directory as the pack names it, with a file's
+// body and whether it is stamped an hour AHEAD of the box's clock or behind it.
 type stampedEntry struct {
 	name, body string
 	dir, ahead bool
@@ -845,10 +766,10 @@ func (e stampedEntry) stamp(now time.Time) time.Time {
 	return now.Add(-time.Hour)
 }
 
-// stampedSession is session s as a box whose clock ran an hour ahead of this
-// one's leaves it: its transcript, a subagent's thread and metadata, a spilled
-// result, its task list and their directories, the newest of them stamped in
-// this box's future and the oldest in its past, every line of them whole.
+// stampedSession is session s as a box whose clock ran an hour ahead left it:
+// its transcript, a subagent's thread and metadata, a spilled result, its task
+// list and their directories, the newest stamped in this box's future and the
+// oldest in its past, every line whole.
 func stampedSession(s string) []stampedEntry {
 	project := "projects/" + executor.ClaudeProjectDir + "/"
 	return []stampedEntry{
@@ -865,15 +786,12 @@ func stampedSession(s string) []stampedEntry {
 	}
 }
 
-// stampInBox files session s in box b as [stampedSession] stamps it against
-// now, under the harness's configuration directory: the copy a box keeps of a
-// session whose newest files were stamped in its future — by a box whose clock
-// ran ahead, the session carried here with the times its archive keeps, or by
-// this box before its clock stepped back. Beside them it files a LINK among the
-// session's spilled results, stamped an hour ahead, to a file in the box's home
-// outside the session, stamped an hour behind: a box's own copy may hold one,
-// since anything run in the box can make it. It returns the link and the file
-// it names.
+// stampInBox files session s in box b's configuration directory as
+// [stampedSession] stamps it against now: a session whose newest files were
+// stamped in the box's future, carried from a box whose clock ran ahead or
+// stamped before this one's stepped back. Among the spilled results it files a
+// LINK, stamped ahead, to a file in the box's home stamped behind, since
+// anything run in the box can make one. It returns the link and that file.
 func stampInBox(t *testing.T, b sandbox.Sandbox, s string, now time.Time) (link, outside string) {
 	t.Helper()
 	cfg := executor.PathsFor(b).ClaudeConfigDir()
@@ -898,8 +816,8 @@ func stampInBox(t *testing.T, b sandbox.Sandbox, s string, now time.Time) (link,
 		t.Fatal(err)
 	}
 	// THE TIMES LAST, once nothing more is written into a directory, and the
-	// link's own by a call that does not follow it, as os.Chtimes would, to
-	// the file it names.
+	// link's own by a call that does not follow it to its file, as os.Chtimes
+	// would.
 	for _, e := range stampedSession(s) {
 		if err := os.Chtimes(filepath.Join(cfg, e.name), e.stamp(now), e.stamp(now)); err != nil {
 			t.Fatal(err)
@@ -916,9 +834,9 @@ func stampInBox(t *testing.T, b sandbox.Sandbox, s string, now time.Time) (link,
 	return link, outside
 }
 
-// boxNow is the box's clock as it stamps a file: the time of a file named name
-// written in b's home now, read by the clock that stamps the session's files,
-// never by the finer one a test reads, which runs ahead of it.
+// boxNow is the box's clock as it stamps a file: the time of a file name
+// written in b's home now, never the finer clock a test reads, which runs ahead
+// of it.
 func boxNow(t *testing.T, b sandbox.Sandbox, name string) time.Time {
 	t.Helper()
 	at := filepath.Join(b.Home(), name)
@@ -933,11 +851,9 @@ func boxNow(t *testing.T, b sandbox.Sandbox, name string) time.Time {
 }
 
 // noneAhead checks session s in box b, stamped against now as [stampedSession]
-// has it, once a pack was made of it that began at began and was done by ended,
-// each as the box's clock stamps a file ([boxNow]): every file and directory of
-// it stamped an hour ahead now stamped within the pack — no earlier than began
-// and no later than ended — and every one stamped an hour behind still stamped
-// so, to the second.
+// has it, after a pack from began to ended ([boxNow]): every entry stamped an
+// hour ahead is now stamped within [began, ended], and every one stamped an
+// hour behind keeps its time to the second.
 func noneAhead(t *testing.T, b sandbox.Sandbox, s string, now, began, ended time.Time) {
 	t.Helper()
 	cfg := executor.PathsFor(b).ClaudeConfigDir()
@@ -961,10 +877,9 @@ func noneAhead(t *testing.T, b sandbox.Sandbox, s string, now, began, ended time
 	}
 }
 
-// linkLeftAlone checks link, a link in a session a pack was made of, and
-// outside, the file outside the session it names, stamped an hour behind now:
-// the link is a link still, and the file keeps its time to the second, the pack
-// having set no time through the link.
+// linkLeftAlone checks that link, in a packed session, is still a link, and
+// that outside, the file it names, keeps its time (an hour behind now) to the
+// second: the pack set no time through the link.
 func linkLeftAlone(t *testing.T, link, outside string, now time.Time) {
 	t.Helper()
 	info, err := os.Lstat(link)
@@ -984,36 +899,17 @@ func linkLeftAlone(t *testing.T, link, outside string, now time.Time) {
 }
 
 // A PACK BESIDE A WORKING HARNESS SETS EVERY FILE OF ITS SESSION FROM ITS BOX'S
-// FUTURE TO ITS OWN START, AND HOLDS. A box cannot hold a file from its own
-// future, and the pack's checks read one as written since its marker until the
-// box's clock passes it: a task file that a box whose clock ran ahead stamped,
-// carried here with its time, or that this box stamped before its clock stepped
-// back, would fail every such pack for that long. So every pack, before its
-// marker, sets every file and directory of the session that the box's find
-// reads as newer than a reference it writes to the box's present, and leaves
-// every earlier time as it is, which the harness's own retention sweep,
-// held off, deletes nothing by; and it sets no time through a link, which touch
-// would follow out of the session. Here the box's own copy of the session
-// holds its transcript, a task file, a subagent's metadata and their
-// directories stamped an hour ahead of the box's clock, a subagent's thread, a
-// spilled result and its directory stamped an hour behind it, and among the
-// spilled results a link stamped an hour ahead to a file outside the session
-// stamped an hour behind: every way the pack is made — a save, and the take of
-// a job still working — holds, and leaves each one that was ahead stamped no
-// earlier than the pack began and no later than it was done, each one behind
-// with its time to the second, directories included, the link a link, and the
-// file outside the session with its own time.
+// FUTURE TO ITS OWN START, AND HOLDS. The checks read a file from the box's
+// future as written since the marker until the clock passes it, so before its
+// marker every pack sets each file and directory find reads as newer than a
+// reference to the present, leaves earlier times alone (the harness's
+// retention sweep reads them) and sets none through a link (touch follows it).
+// Both held packs hold over [stampInBox]'s session ([noneAhead]).
 //
-// Mutation: drop the step that sets the times, and the pack is refused for a
-// file written while the session was packed; set them once the marker is
-// written and the box's clock has moved past it, and every file set to that
-// later time reads as written since the marker, so the pack is refused for one
-// too; set every time rather than those in the box's future, and a file an
-// hour behind loses its own; set those in the future to a time long past
-// rather than the present, and they end stamped before the pack began; set
-// files alone, and a directory stamped an hour ahead stays in the box's
-// future; drop `! -type l`, and the file outside the session takes the pack's
-// time through the link to it.
+// Mutation: drop the step or run it after the marker (refused); set every time
+// (a time behind is lost) or future ones to a time long past (stamped before
+// the pack); set files alone (a directory stays ahead); drop `! -type l` (the
+// file outside takes the pack's time through the link).
 func TestAPackSetsEveryFileOfItsSessionFromItsBoxsFutureToItsStartAndHolds(t *testing.T) {
 	t.Parallel()
 	for _, pack := range heldPacks {
@@ -1035,19 +931,15 @@ func TestAPackSetsEveryFileOfItsSessionFromItsBoxsFutureToItsStartAndHolds(t *te
 }
 
 // A FILE FROM ITS BOX'S FUTURE THAT ITS HARNESS REWRITES AS IT IS PACKED IS
-// STILL REFUSED. The pack sets a file stamped in its box's future to the box's
-// present, before its marker, and sets no time back after it, so a write the
-// harness makes as tar reads that file is newer than the marker to every check,
-// whether the file was set before it or not. Here a task file stamped an hour
-// ahead is rewritten in place once tar has read the session: every way the
-// pack is made — a save, and the take of a job still working — is refused,
-// saying a file was written while the session was packed and naming the task
-// file, with nothing moved to its destination, recorded as a digest the box
-// holds, or left in its staging directory.
+// STILL REFUSED. The pack sets such a file to the present before its marker
+// and sets no time back after it, so a write under tar is newer than the
+// marker to every check. Here a task file stamped an hour ahead is rewritten
+// once tar has read the session: both held packs are refused naming it,
+// leaving no archive, digest or staging directory.
 //
 // Mutation: once tar has read the session, set every file newer than the
-// reference back to the reference's time, and the task file rewritten under
-// the tar is set behind the marker, and the pack holds.
+// reference back to its time, and the rewritten task file falls behind the
+// marker, and the pack holds.
 func TestAFileFromItsBoxsFutureRewrittenAsItIsPackedIsStillRefused(t *testing.T) {
 	t.Parallel()
 	for _, pack := range heldPacks {
@@ -1083,25 +975,17 @@ func TestAFileFromItsBoxsFutureRewrittenAsItIsPackedIsStillRefused(t *testing.T)
 }
 
 // TWO PACKS BESIDE ONE WORKING HARNESS HIDE NO WRITE FROM EACH OTHER. Two packs
-// of one box's session can run at once — two takers' saves, as when a box's
-// waiter duty changes hands mid-save, or a save and the take of a job still
-// working — each in a staging directory of its own; and each, before its
-// marker, sets every file of the session that the box's find reads as newer
-// than a reference it writes, as a file stamped in the box's future is, to the
-// box's present: never to an earlier time, at which a walk that ran late would
-// set a file behind the other pack's marker. Here pack B's walk picks a task
-// file stamped an hour ahead and is held between picking it and setting it, as
-// a find held up on a busy box is, until pack A — its reference and marker
-// written after B's reference — has had the harness rewrite that task file in
-// place once A's tar read the session; only then does B set it, and only then
-// do A's checks run. A is refused, saying a file was written while the session
-// was packed and naming the task file, and B, whose marker is written after
-// that write, holds. The packs and the case pass their words through fifos the
-// case holds open, so nothing waits on a clock.
+// of one session can run at once (two takers' saves as waiter duty changes
+// hands, or a save and a working job's take), and each sets future-stamped
+// files to the present, never an earlier time, which a late walk would put
+// behind the other's marker. Here B's walk picks a future task file and holds,
+// as a find on a busy box does, until A (reference and marker after B's
+// reference) has the harness rewrite it under A's tar; then B sets it and A
+// checks. A is refused naming the task file; B, its marker after the write,
+// holds. Words pass through fifos the case holds open, on no clock.
 //
-// Mutation: set the files the walk picks to the reference's time rather than
-// the present (`touch -c -r`), and B sets the task file rewritten under A's tar
-// back behind A's marker, and A holds.
+// Mutation: set the files the walk picks to the reference's time (`touch -c -r`),
+// and B sets the rewritten task file back behind A's marker, and A holds.
 func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
@@ -1118,12 +1002,9 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 	if err := os.MkdirAll(flags, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// THE WORDS THE PACKS AND THE CASE PASS: B's walk's that it has picked the
-	// task file, which the case waits on before it starts A; A's tar's that the
-	// harness has rewritten that file, which B's walk waits on; and B's walk's
-	// that it has set it, which A's tar waits on. A pack that ends says so in
-	// every fifo a word of its is owed in, so nothing waits on a word that is
-	// not coming (wordInFifo).
+	// THE WORDS PASSED: B's walk's "picked" (the case then starts A), A's tar's
+	// "rewritten" (B's walk waits on it) and B's walk's "set" (A's tar waits on
+	// it). A pack that ends says so in every fifo it owes a word in (wordInFifo).
 	picked := heldFifo(t, flags, "picked")
 	heldFifo(t, flags, "rewritten")
 	heldFifo(t, flags, "set")
@@ -1180,41 +1061,17 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 }
 
 // TWO PACKS ON DEMAND OF ONE BOX AT ONCE BOTH HOLD BESIDE A HARNESS STILL
-// WRITING, each staged in a directory of its own and each its own read's. Two
-// reads of one job its box would not end — a stop's and a collection's — each
-// pack it now as it stands, by the rule of a pack beside a harness that may
-// still work, and each such pack keeps what it lists, its marker and its
-// archive in its own staging directory, and its archive once made in its own
-// place, for its read (executor.Paths.SessionPackHeld). Here the harness
-// appends to its transcript and to a subagent's thread once each pack's tar
-// has read them, as a harness still working does — under each pack, after its
-// tar and before its checks — and the first pack's tar, once it has packed,
-// holds until the second pack's has packed too, so the second pack lists the
-// session, writes its marker and packs while the first has yet to check what
-// it packed: each pack holds, each hands back a whole archive
-// whose transcript is a byte prefix of what the harness wrote, and once each
-// is released neither leaves a file behind. The tars pass their words through
-// a fifo the case holds open, so nothing waits on a clock.
+// WRITING. Two reads of a job its box would not end (a stop's and a
+// collection's) each pack it by the working rule, its lists, marker and archive
+// in a place of its own (executor.Paths.SessionPackHeld). Here the harness
+// appends after each tar, and the first tar holds until the second has packed:
+// each hands back a whole archive whose transcript is a byte prefix of the live
+// one, and neither leaves a file once released, on no clock. An exited harness
+// is TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive's.
 //
-// WHAT TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive LEAVES OUT, and
-// only that: that case holds two reads of a job whose harness has exited, on
-// either harness, for a read of a job that left no archive and for one that
-// packs the job as it stands — which here is a pack held to the working rule —
-// so it holds a read's way to its pack, and not a session that changes under
-// each pack, after its tar and before its checks, which a pack beside a
-// working harness is made for. A case of two packs once the harness is gone
-// would be that case again.
-//
-// Mutation: stage every pack on demand in one directory, and the two packs
-// share one archive and one set of lists: the first to move takes the archive
-// and the other's move finds nothing, or the first done removes the other's
-// lists under its checks, so one of the two is refused. Compare a transcript's
-// whole live file with what the archive holds of it, rather than its first as
-// many bytes, and both packs are refused: the harness wrote after each tar.
-// Neither mutant is this case's alone — main's case of two reads refuses the
-// first, and the save of a session that only grew the second — and what it
-// holds alone is the two together, packs on demand beside a harness still
-// writing, which no single mutant takes apart.
+// Mutation: stage every pack on demand in one directory (refused there too),
+// or compare a transcript's whole live file rather than its first bytes (and
+// in TestASaveOfASessionThatOnlyGrewAsItWasPackedHolds), and a pack is refused.
 func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
@@ -1292,32 +1149,18 @@ func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
 	}
 }
 
-// A SAVE OF A SESSION THAT ONLY GREW AS IT WAS PACKED HOLDS — the one change a
-// pack beside a working harness takes. As tar reads the session, the harness
-// appends to its transcript (its last line left torn, as an append cut short
-// leaves it) and to a subagent's thread, starts a thread of a new subagent in a
-// directory of its own with its metadata beside it, and spills a result to a
-// file — the last two no transcripts, written after tar read their
-// directories, so in no archive. Tar says so as each tar does — GNU's exit 1,
-// "file changed as we read it", beside a find that compares the clock's own
-// grain, and busybox's exit 0 and nothing, beside a find of a coarse grain —
-// and both list a directory with the slash they end one in (measured on GNU
-// tar 1.35 and BusyBox 1.37.0), which no file find names matches; a tar that
-// lists one without it is played too, so that the check of what was written
-// reads files alone, however a box's tar names a directory: the directories
-// that gained a thread and a spilled result are newer than the marker, and
-// listed so they match what find names. Every way the save is made, holding
-// each transcript as tar first read it — a whole prefix of the live file — and
-// nothing made after tar read its directory.
+// A SAVE OF A SESSION THAT ONLY GREW AS IT WAS PACKED HOLDS: the one change a
+// held pack takes. As tar reads, the harness appends to the transcript (last
+// line torn) and a subagent's thread, and starts a new thread and a spilled
+// result after tar read their directories, in no archive. GNU's tar says exit
+// 1 beside a fine find, busybox's exit 0 beside a coarse one; both end a listed
+// directory in a slash (measured on GNU tar 1.35 and BusyBox 1.37.0), and a tar
+// without it is played: the check of what was written reads files alone. The
+// save holds each transcript as first read.
 //
-// Mutation: refuse tar's exit 1 where every check holds, hold a `.jsonl` to
-// the check that a file was written since the marker, compare a grown
-// transcript's whole live file rather than its first as many bytes as the
-// archive holds, count a thread made after the tar as one the archive lost,
-// or hold a file written after tar read its directory to the check of what
-// was written though no archive holds it, and a save is refused; read a
-// directory newer than the marker as a file written, and the save beside the
-// tar that lists a directory without its slash is.
+// Mutation: refuse tar's exit 1, check `.jsonl` for writes, compare a whole live
+// file, count a later thread as lost, check a file no archive holds, or read a
+// newer directory as a file written, and a save is refused.
 func TestASaveOfASessionThatOnlyGrewAsItWasPackedHolds(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1375,18 +1218,15 @@ func TestASaveOfASessionThatOnlyGrewAsItWasPackedHolds(t *testing.T) {
 }
 
 // A PACK MADE ONCE ITS HARNESS IS GONE KEEPS THE RULE THE RUN'S OWN END PACKS
-// BY. No harness is left to write under it, so neither the run's own end nor a
-// take of a job that is over whose script left no archive waits on the box's
-// clock or refuses a file written as it packed — here the task file, touched
-// once tar has read the session, as a process the harness started and that
-// outlived it may touch it — and each lands where its read reads it: the
-// run's own end over the job's capture, the take's pack at a place of its own.
-// (The take packs such a job by tar run beside the configuration directory,
-// never in it, so the case's writer names the file whole.)
+// BY. No harness is left to write, so neither the run's own end nor a take of
+// a finished job that left no archive waits on the clock or refuses a file
+// written as it packs (the task file, as a process that outlived the harness
+// may touch it); each lands where its read reads it, the end over the capture
+// and the take at a place of its own. The take runs tar beside the
+// configuration directory, so the writer names the file whole.
 //
-// Mutation: hold the run's own end to the rule of a pack beside a working
-// harness, or route a take of a job that is over to it, and that pack is
-// refused.
+// Mutation: hold the run's own end to the working rule, or route a finished
+// job's take to it, and that pack is refused.
 func TestAPackMadeOnceItsHarnessIsGoneKeepsTheEndsRule(t *testing.T) {
 	t.Parallel()
 	t.Run("the run's own end", func(t *testing.T) {
@@ -1424,12 +1264,10 @@ func TestAPackMadeOnceItsHarnessIsGoneKeepsTheEndsRule(t *testing.T) {
 }
 
 // A PACK BESIDE A WORKING HARNESS FAILS WHERE ITS BOX'S CLOCK NEVER MOVES,
-// rather than pack blind. Its checks tell a file written as tar read it by
-// the box's own find reading that file as newer than a marker written before,
-// so the pack first waits for that find to read a file written now as newer
-// than the marker; a box whose find never does — a clock that does not move,
-// or files stamped with none — is refused once the wait's bound has passed,
-// saying so, and tar is never asked to pack.
+// rather than pack blind. Its checks see a write by find reading the file as
+// newer than a marker, so it first waits for find to read a fresh file as
+// newer than the marker; a box whose find never does is refused once the
+// wait's bound passes, saying so, and tar is never asked to pack.
 //
 // Mutation: drop the wait's bound, and the pack waits until its exec is cut
 // off and says nothing of the clock; pack once the bound has passed, and the
@@ -1459,11 +1297,10 @@ func TestAPackWhoseBoxClockNeverMovesIsRefused(t *testing.T) {
 }
 
 // A PACK BESIDE A WORKING HARNESS FAILS ON A BOX WHOSE SLEEP TAKES NO TENTH OF
-// A SECOND, and says so. Its wait for the box's clock counts in tenths, as
-// every wait the engine's own scripts make does; a sleep that refuses one would
-// run that count out at once, and read a box whose clock moves as one whose
-// clock never did. So the refused tenth fails the pack by its own name, and tar
-// is never asked to pack.
+// A SECOND, and says so. Its clock wait counts in tenths, as every wait in the
+// engine's scripts does; a sleep that refuses one would run the count out at
+// once and read a moving clock as one that never moved. So the refused tenth
+// fails the pack by its own name, and tar is never asked to pack.
 //
 // Mutation: sleep a second where the tenth is refused, or go on as though it
 // had been slept, and the pack is refused as a box whose clock never moved.
@@ -1492,19 +1329,16 @@ func TestAPackOnABoxWhoseSleepTakesNoTenthIsRefused(t *testing.T) {
 }
 
 // A PACK BESIDE A WORKING HARNESS NAMES A TOOL ITS BOX LACKS, rather than
-// refuse on what that lack makes another check read. Without find, the wait for
-// the box's clock would read a clock that never moved; without touch, the pack
-// could set no file from the box's future back, nor write the file its wait
-// reads the clock by, and would be refused as a pack that could not write its
-// marker. So the pack asks the box for every tool it reads the session with,
-// and a box whose PATH holds all of them but find, or all but touch, is told
-// which it lacks, its session left unpacked. The pack runs here as the runner
-// hands it to a box's login shell, under that PATH alone.
+// refuse on what the lack makes another check read: without find its clock
+// wait reads a clock that never moved, and without touch it can neither set
+// future files back nor write its marker. So it asks the box for every tool it
+// reads the session with, and a box lacking find or touch is told which, its
+// session unpacked. The pack runs as the runner hands it to a login shell,
+// under that PATH alone.
 //
-// Mutation: drop the pack's ask for its tools, and the box without find is
-// refused as a box whose clock never moved; leave touch out of the tools it
-// asks for, and the box without touch is refused as a pack that could not
-// write its marker.
+// Mutation: drop the ask, and the box without find is refused as a clock that
+// never moved; leave touch out of it, and the box without touch is refused as a
+// pack that could not write its marker.
 func TestAPackBesideAWorkingHarnessNamesAToolItsBoxLacks(t *testing.T) {
 	t.Parallel()
 	// THE BOX'S PATH holds every tool the pack reads a session with but the
@@ -1556,17 +1390,14 @@ func TestAPackBesideAWorkingHarnessNamesAToolItsBoxLacks(t *testing.T) {
 }
 
 // A SAVE THAT FAILS LEAVES THE LAST ONE STANDING, AND NOTHING OF ITS OWN. A
-// taker's save lands; the harness goes on, and writes its task file as the
-// taker's next save is packed, which is refused — and the save before it is
-// still at its own place, byte for byte, with no archive of the refused one's
-// beside it, no digest added for an archive that never landed and no staging
-// directory left behind; a later save that holds lands at a place of its own,
-// the session as it went on.
+// taker's save lands; the harness writes its task file under the taker's next
+// save, which is refused, and the last save stays at its place byte for byte,
+// with no archive, digest or staging directory of the refused one's; a later
+// save that holds lands at a place of its own, the session as it went on.
 //
-// Mutation: move the staged archive into place before its checks, or on a
-// failure, and the refused save leaves an archive; move a save over the
-// taker's last, and that one is gone; remove the staging directory only where
-// the pack held, and the refused one stays.
+// Mutation: move the staged archive into place before its checks or on a
+// failure, move a save over the taker's last, or remove the staging directory
+// only where the pack held, and a check goes red.
 func TestAFailedSaveLeavesTheLastOneStanding(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
@@ -1620,11 +1451,9 @@ func TestAFailedSaveLeavesTheLastOneStanding(t *testing.T) {
 }
 
 // A SAVE IS NOT PACKED PAST WHAT THE SCRUB WOULD READ. A session whose files
-// add up past what one reading of an archive yields a kept session's scrub —
-// its spilled results grown past it, sparse here so the case writes nothing
-// near it — would be refused by the take once packed, so the pack refuses it
-// first, saying so, and tar is never asked to pack it; the same session
-// without that file is saved.
+// sum past what a kept session's scrub reads of one archive (a sparse spilled
+// result here) would be refused by the take once packed, so the pack refuses
+// it first, saying so, without asking tar; without that file it is saved.
 //
 // Mutation: drop the sum before the tar, or sum less than every file, and tar
 // packs the quarter of a gibibyte.
@@ -1663,16 +1492,14 @@ func TestASaveIsNotPackedPastWhatTheScrubWouldRead(t *testing.T) {
 	}
 }
 
-// THE CLEAR BEFORE EVERY RUN REMOVES THE SAVES' FILES, whoever took them: two
-// takers' saves and the staging directory a save cut short left, none of which
-// a later job's take may read as its own, and nothing the box keeps for its
-// life — the digests of the archives its copy holds stay. In a box whose home's
-// path holds a space, which the clear quotes, as in any other.
+// THE CLEAR BEFORE EVERY RUN REMOVES THE SAVES' FILES, whoever took them (two
+// takers' saves and a cut-short save's staging directory), which a later job's
+// take must not read as its own, and keeps what the box keeps for its life,
+// the digests. A home whose path holds a space, which the clear quotes, too.
 //
 // Mutation: leave the saves out of the clear, or quote their pattern so it
 // matches nothing, and a file outlives it; leave the work directory unquoted,
-// and in the box whose home's path holds a space the clear splits that path
-// into words and removes none of them.
+// and a path holding a space splits into words and nothing is removed.
 func TestTheClearBeforeEveryRunRemovesTheSavesFiles(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, root string }{
@@ -1726,23 +1553,17 @@ func TestTheClearBeforeEveryRunRemovesTheSavesFiles(t *testing.T) {
 	}
 }
 
-// TWO SAVES OF ONE TAKER AT ONCE BOTH HOLD, each staged in a directory of its
-// own. One taker can save one box twice at once — the drain's save beside one
-// the waiter asked for — and each save keeps what it lists, its marker and its
-// archive in a staging directory named for that save alone, after its taker
-// (executor.Paths.SessionSaveStaging), and moves its archive to a place of its
-// own whole (executor.Paths.SessionSave). Here the first save's tar, once it
-// has packed, holds until the second save's tar has packed too, so the second
-// save clears its staging directory, lists the session, writes its marker and
-// packs while the first has yet to check what it packed: both hold, each at a
-// place of its own holding a whole archive of the session, and neither save
-// leaves its staging directory behind. The tars pass their words through a
-// fifo the case holds open, so nothing waits on a clock.
+// TWO SAVES OF ONE TAKER AT ONCE BOTH HOLD. One taker can save a box twice at
+// once (the drain's save beside the waiter's), so each save stages in a
+// directory named for it alone (executor.Paths.SessionSaveStaging) and moves
+// its archive whole to a place of its own (executor.Paths.SessionSave). Here
+// the first tar holds until the second has packed: both hold, each place holds
+// a whole archive, and neither leaves its staging directory. Words pass
+// through a fifo the case holds open, so nothing waits on a clock.
 //
-// Mutation: stage every save of a taker in one directory, and the two saves
-// share one archive and one set of lists: the first to move takes the archive
-// and the other's move finds nothing, or the first done removes the other's
-// lists under its checks, so one of the two is refused.
+// Mutation: stage every save of a taker in one directory, and the two share an
+// archive and lists: one's move finds nothing, or one's lists go under the
+// other's checks, so one is refused.
 func TestTwoSavesOfOneTakerAtOnceBothHold(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
@@ -1802,9 +1623,9 @@ func TestTwoSavesOfOneTakerAtOnceBothHold(t *testing.T) {
 	}
 }
 
-// wordInFifo writes word, a line, into the fifo name in dir, which the case
-// holds open both ways (heldFifo), so the write never waits: what a pack that
-// has ended says in the stead of a word it owed, so nothing waits on that word.
+// wordInFifo writes word as a line into fifo name in dir, held open both ways
+// (heldFifo) so the write never blocks: what a pack that has ended says in the
+// stead of a word it owed, so nothing waits on that word.
 func wordInFifo(dir, name, word string) {
 	if fifo, err := os.OpenFile(filepath.Join(dir, name), os.O_WRONLY|unix.O_NONBLOCK, 0); err == nil {
 		_, _ = fifo.WriteString(word + "\n")
@@ -1828,20 +1649,16 @@ func takeSave(ctx context.Context, runner *executor.Runner, b sandbox.Sandbox, p
 }
 
 // A TAKE OF A SAVE STREAMS THAT SAVE'S OWN ARCHIVE, WHATEVER ANOTHER SAVE OF ITS
-// TAKER LANDS AS IT READS. One taker can save one box twice at once — the
-// drain's save beside one the waiter asked for — and a Claude Code take reads
-// its archive twice, opening it again by its path for its second pass. Here a
-// save lands and its take holds before that second pass; the session is
-// written on, and a second save of the same taker lands; then the first take
-// goes on. It is not refused, and hands back the first save's archive, without
-// what was written after it; the second save's take hands back its own, with
-// it; and neither save is left in the box once taken. The take is held by its
-// own steps, through a box that holds it, and waits on no clock.
+// TAKER LANDS AS IT READS. One taker can save a box twice at once, and a
+// Claude Code take opens its archive again by path for a second pass. Here the
+// first save's take holds before that pass while the session grows and a
+// second save lands; the first take is not refused and hands back its own
+// archive, without the later write; the second hands back its own, with it;
+// neither save is left once taken. A box holds the take by its own steps, on
+// no clock.
 //
-// Mutation: move every save of a taker to one path of the taker's, as saves
-// once were, and the second save lands over the archive the first take is
-// reading: its second pass finds a member changed under it, and the take is
-// refused.
+// Mutation: move every save of a taker to one path, and the second lands over
+// the archive the first take is reading, which its second pass refuses.
 func TestATakeOfASaveStreamsItsOwnWhateverAnotherSaveOfItsTakerLands(t *testing.T) {
 	t.Parallel()
 	runner, b := sessionBox(t, "2.1.310")
@@ -1895,23 +1712,17 @@ func TestATakeOfASaveStreamsItsOwnWhateverAnotherSaveOfItsTakerLands(t *testing.
 }
 
 // A TAKE OF A JOB STILL WORKING NEVER MOVES ITS ARCHIVE OVER THE JOB'S CAPTURE.
-// The capture is what every read of a job that is over takes as its last, and
-// the job's own end pack moves its final archive there the moment its harness
-// exits — which can come while a read packs the job as it stands, a pack
-// beside a working harness taking seconds to check what it read. Here, on
-// either harness, the program a pack writes its archive with (Claude Code's
-// tar, an OpenCode export's gzip) is played so that, once the take's pack has
-// written its archive, the job's final archive lands over the capture, as the
-// job's own end pack moves it there: the take hands back a whole archive of
-// the session, packed for it alone (executor.Paths.SessionPackHeld); the
-// capture still holds the job's final archive after it; and once the take's
-// reader is closed, nothing of the pack is left in the box.
+// The capture is every finished job's last read, and the job's end pack moves
+// its final archive there the moment the harness exits, which can fall within
+// a held pack's seconds of checks. Here, on either harness, the program the
+// pack writes with (Claude Code's tar, OpenCode's gzip) lands the job's final
+// archive over the capture once the take's pack has written its own: the take
+// hands back a whole archive of its own (executor.Paths.SessionPackHeld), the
+// capture keeps the final archive, and nothing is left once the reader closes.
 //
-// Mutation: move the archive of a job still working over the capture, as the
-// run's own end pack moves its own, or have either harness's pack move it
-// there whatever it is handed, and the job's final archive is replaced by the
-// older one; leave the archive packed for the take behind once the take is
-// done, and it is found after.
+// Mutation: move a working job's archive over the capture, or have either pack
+// move it there whatever it is handed, and the final archive is replaced; leave
+// the take's archive behind once done, and it is found after.
 func TestATakeOfAJobStillWorkingNeverMovesItsArchiveOverTheJobsCapture(t *testing.T) {
 	t.Parallel()
 	const final = "the job's own final archive, moved over the capture as its harness exited"

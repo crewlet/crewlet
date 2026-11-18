@@ -16,11 +16,10 @@ import (
 // whole failure it composes — to failure bytes, and the lines of an event
 // stream it reads to line bytes, and returns r.
 //
-// FOR THE CASES THAT GO PAST A BOUND: a failure past two mebibytes, or a line
-// past thirty-two, is the case each is about, and at the real figures every one
-// built and redacted megabytes under -race. Each runs at a bound it can fill,
-// sizes what it writes from that bound, and leaves the real figures to
-// [TestARunnerReadsToTheEnginesOwnBounds].
+// For the cases past a bound (a failure past two mebibytes, a line past
+// thirty-two), which at the real figures build and redact megabytes under
+// -race: each runs at a bound it can fill and sizes its writes from it, and
+// [TestARunnerReadsToTheEnginesOwnBounds] holds the real figures.
 func Bounded(r *Runner, failure, line int) *Runner {
 	r.failureBound, r.lineBound = failure, line
 	return r
@@ -137,9 +136,9 @@ const HeldPlainMax = heldPlainMax
 
 // OpenCodeStops is a run's script's stops ([openCodeStops]) beside the end they
 // stop with ([endFunction]) at stop, and OpenCodeExporter its login exporter
-// ([openCodeExporter]) at sync into file: the two pieces a case about stopping
-// the exporter runs on their own, since no run of the whole script can choose
-// the instant its exporter is stopped.
+// ([openCodeExporter]) at sync into file: a case about stopping the exporter
+// runs the two alone, since a run of the whole script cannot choose the
+// instant it is stopped.
 func OpenCodeStops(stop time.Duration) string { return endFunction(stop) + openCodeStops() }
 
 // OpenCodeExporter is [OpenCodeStops]' other half.
