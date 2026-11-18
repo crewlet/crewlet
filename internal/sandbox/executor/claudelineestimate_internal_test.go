@@ -686,31 +686,55 @@ var (
 	leImageAnd10 = func(images int64) threadEstimate { return leTen.plus(estimateFlat(2000 * images)) }
 )
 
+// leInputs is a call's name and its input's member as written
+// ([leCall]), of each kind an input is written as, and what the call charges.
+var leInputs = []struct {
+	kind, name, input string
+	want              threadEstimate
+}{
+	{"an object with blanks before and inside it (12 + 10)", "abcdefghijkl", `"input":   { "k": 1 }`, leTwentyTwo},
+	{"a string (2 + 8)", "ab", `"input":"abcdef"`, leTen},
+	{"a list (1 + 9)", "a", `"input":[1,2,3,4]`, leTen},
+	{"a number (2 + 8)", "ab", `"input":12345678`, leTen},
+	{"true (6 + 4)", "abcdef", `"input":true`, leTen},
+	{"false (5 + 5)", "abcde", `"input":false`, leTen},
+	{"null, as {} (8 + 2)", "abcdefgh", `"input":null`, leTen},
+	{"none, as {} (8 + 2)", "abcdefgh", "", leTen},
+}
+
 // leHardCases is every hard case, each charging a text of 10 units (22 where
 // a name and an input must both be there) unless it says otherwise.
 func leHardCases() []leHardCase {
 	pdf := func(pages int64) threadEstimate { return estimateFlat(pages * 3000) }
-	return []leHardCase{
+	var cases []leHardCase
+	// A call as a block, nested as a result's first element (the digest's)
+	// and as an element of a content document's source, its input each kind.
+	for _, in := range leInputs {
+		call := leCall(in.name, in.input)
+		for _, at := range []struct{ where, record string }{
+			{"a block", leBlocks(call)},
+			{"a result's element", leBlocks(leResult(`[` + call + `]`))},
+			{"a source's element", leBlocks(`{"type":"document","source":{"type":"content","content":[` + call + `]}}`)},
+		} {
+			cases = append(cases, leHardCase{name: "a call as " + at.where + ", its input " + in.kind,
+				record: at.record, want: in.want})
+		}
+	}
+	return append(cases, []leHardCase{
 		{name: "a block's type last", record: leBlocks(`{"text":"abcdefghij","type":"text"}`), want: leTen},
 		{name: "a nested type escaped, past the digest", record: leBlocks(leResult(
 			`[{"type":"tool_result","content":[{"type":"\u0074ext","text":"abcdefghij"}]}]`)), want: leTen},
 		{name: "a second element's type escaped", record: leBlocks(leResult(
 			`["",{"type":"\u0074ext","text":"abcdefghij"}]`)), want: leTen},
-		{name: "an input with blanks before and inside it (12 + 10)", record: leBlocks(leCall("abcdefghijkl",
-			`"input":   { "k": 1 }`)), want: leTwentyTwo},
+		{name: "a result's string element", record: leBlocks(leResult(`["abcdefghij"]`)), want: leTen},
+		{name: "a result's string element after a one-unit text, rounded to none", record: leBlocks(leResult(
+			`[{"type":"text","text":"x"},"abcdefghij"]`)), want: leTen},
 		{name: "an input escaping a character beside one written (1 + 9)", record: leBlocks(leCall("a",
 			`"input":"\u00e9é"`)), want: leTen},
 		{name: "an input holding an invalid byte (7 + 3)", record: leBlocks(leCall("abcdefg", "\"input\":\"\xff\"")),
 			want: leTen},
 		{name: "an input holding a lone surrogate (2 + 8)", record: leBlocks(leCall("ab", `"input":"\ud800"`)),
 			want: leTen},
-		{name: "an input of a number (2 + 8)", record: leBlocks(leCall("ab", `"input":12345678`)), want: leTen},
-		{name: "an input of true (6 + 4)", record: leBlocks(leCall("abcdef", `"input":true`)), want: leTen},
-		{name: "an input of false (5 + 5)", record: leBlocks(leCall("abcde", `"input":false`)), want: leTen},
-		{name: "an input of null, as {} (8 + 2)", record: leBlocks(leCall("abcdefgh", `"input":null`)), want: leTen},
-		{name: "no input, as {} (8 + 2)", record: leBlocks(leCall("abcdefgh", "")), want: leTen},
-		{name: "an input of a string (2 + 8)", record: leBlocks(leCall("ab", `"input":"abcdef"`)), want: leTen},
-		{name: "an input of a list (1 + 9)", record: leBlocks(leCall("a", `"input":[1,2,3,4]`)), want: leTen},
 		{name: "an input written twice, its last (2 + 8)", record: leBlocks(leCall("ab",
 			`"input":[1],"input":12345678`)), want: leTen},
 		{name: "a text that is a number", record: leBlocks(`{"type":"text","text":12345}`)},
@@ -728,6 +752,14 @@ func leHardCases() []leHardCase {
 		{name: "a content's first line naming the handback, its rest past a piece unread by any automaton",
 			record: leUser(`"`+claudeToolHandback+`\n`+strings.Repeat("x", 12010-len(claudeToolHandback)-1)+`"`,
 				""), want: estimateUnits(12010)},
+		{name: "a text block past a piece, saying something in its first", record: leBlocks(
+			`{"type":"text","text":"a` + strings.Repeat("x", 12009) + `"}`), want: threadEstimate{4003, 3003}},
+		// 1 + 3,003 × 3 = 9,010 units; its 4,096th byte decoded is an emoji's first.
+		{name: "a text block past a piece, past ASCII", record: leBlocks(
+			`{"type":"text","text":"a` + strings.Repeat("é😀", 3003) + `"}`), want: threadEstimate{3003, 2253}},
+		{name: "a text block past a piece, past ASCII, escaped", record: leBlocks(
+			`{"type":"text","text":"a` + strings.Repeat(`\u00e9\ud83d\ude00`, 3003) + `"}`),
+			want: threadEstimate{3003, 2253}},
 		{name: "a source's data before its type", record: leBlocks(
 			`{"type":"document","source":{"data":"abcdefghij","type":"text"}}`), want: leTen},
 		{name: "a type turning after its source", record: leBlocks(
@@ -784,6 +816,8 @@ func leHardCases() []leHardCase {
 			leDocument(`"x"`, `,"title":5`)), fault: true},
 		{name: "a delivery's result twice, the last no list", record: leDelivered(
 			`{"result":{"content":[{"type":"image"}]},"result":{"content":5}}`), want: leTen},
+		{name: "a delivery's result's content twice, the last no list", record: leDelivered(
+			`{"result":{"content":[{"type":"image"}],"content":5}}`), want: leTen},
 		{name: "a snapshot object, then null: its own result", record: leDelivered(
 			`{"mcpTaskSnapshot":{"result":{"content":[{"type":"image"}]}},"mcpTaskSnapshot":null,` +
 				`"result":{"content":[{"type":"image"},{"type":"image"}]}}`), want: leImageAnd10(2)},
@@ -795,6 +829,8 @@ func leHardCases() []leHardCase {
 		{name: "a snapshot twice, its last", record: leDelivered(
 			`{"mcpTaskSnapshot":{"result":{"content":[{"type":"image"}]}},"mcpTaskSnapshot":{"result":{"content":` +
 				`[{"type":"image"},{"type":"image"},{"type":"image"}]}}}`), want: leImageAnd10(3)},
+		{name: "a snapshot twice, its last of no result", record: leDelivered(
+			`{"mcpTaskSnapshot":{"result":{"content":[{"type":"image"}]}},"mcpTaskSnapshot":{}}`), want: leTen},
 		{name: "a snapshot that is no object", record: leDelivered(
 			`{"mcpTaskSnapshot":"x","result":{"content":[{"type":"image"}]}}`), want: leImageAnd10(1)},
 		{name: "a snapshot's result that is no object", record: leDelivered(
@@ -835,21 +871,21 @@ func leHardCases() []leHardCase {
 		{name: "a queued command's delivery and rendering", attachment: true, read: true, want: leImageAnd10(2),
 			record: leAttachment(`{"type":"queued_command","taskDelivery":{"result":{"content":[{"type":"image"},`+
 				`{"type":"image"}]}}}`, `"rendered":[{"content":"abcdefghij"}],`)},
-	}
+	}...)
 }
 
 // THE ESTIMATE READS EVERY KEY BY ITS DECODED NAME AND LAST OCCURRENCE, IN
 // ANY ORDER, as the harness's JSON.parse reads it, and every length as the
 // harness counts it, in both producers alike: a type written after the keys
-// it reads, escaped or turning; an input as written, its blanks inside and an
-// escape counted as written, each of its kinds; a text a rule reads that is
-// no string none; a title decoded before it is split, at any length; each key
-// written twice; a task delivery's snapshot and result in either order; a
-// rendering and a PDF read's pages at their edges. Each figure is of a text
-// of 10 (mod 12) units, so a count one unit off moves a rate.
+// it reads, escaped or turning; a call's input as written, its blanks and
+// escapes counted, each of its kinds, as a block and nested; a text block
+// past a piece; a result's string element; a text a rule reads that is no
+// string none; a title decoded before it is split; each key written twice, a
+// delivery's snapshot and result in either order; a rendering and a PDF
+// read's pages at their edges. Each figure is 10 (mod 12) units ([leTen]).
 //
-// Mutation: read a nested type as written, start an input without what Next
-// took of it, or set it where null, and this fails naming the case.
+// Mutation: start a nested input without what Next took of it, set it where
+// null, or stop a text block at its first piece, and this fails naming it.
 func TestTheEstimateReadsTheHardCasesAsTheHarness(t *testing.T) {
 	t.Parallel()
 	for _, tc := range leHardCases() {
@@ -1054,11 +1090,14 @@ func TestAnEstimatingReaderAllocatesNothingAnElement(t *testing.T) {
 }
 
 // scanEstimateLines is records at the estimate's edges, for the differential
-// (claudelinescan_internal_test.go): every case above, and chains of element
+// (claudelinescan_internal_test.go): every case above; chains of element
 // lists to [estimateNestMax] and one past it, alone and inside a block that
-// charges its JSON.
+// charges its JSON; and a content refused, alone and after a block charged,
+// beside a delivery's image, whose message estimates nothing.
 func scanEstimateLines() [][]byte {
-	var lines [][]byte
+	delivery := `"taskDelivery":{"result":{"content":[{"type":"image"}]}},`
+	lines := [][]byte{[]byte(leUser(`5`, delivery)),
+		[]byte(leUser(`[{"type":"text","text":"abcdefghij"},5]`, delivery))}
 	for _, tc := range leMessageCases {
 		lines = append(lines, []byte(tc.record))
 	}
