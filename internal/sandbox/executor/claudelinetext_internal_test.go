@@ -68,6 +68,21 @@ func enclosed(line, opening, closing string) (string, bool) {
 	return strings.CutSuffix(inner, closing)
 }
 
+// ltAsked is the take tokens the automata are asked of every text.
+var ltAsked = []string{claudeTakeToken(ctProbeBatchTake), claudeTakeToken(ctProbeStopTake)}
+
+// takesNamed is which of asked text names, bit i for asked[i], each anywhere
+// in it: [textTakes]'s rule.
+func takesNamed(text string, asked []string) uint64 {
+	var bits uint64
+	for i, token := range asked {
+		if strings.Contains(text, token) {
+			bits |= 1 << i
+		}
+	}
+	return bits
+}
+
 // utf16Units is text's length in UTF-16 code units, as JavaScript counts it:
 // [textUnits]'s rule.
 func utf16Units(text []byte) int {
@@ -91,6 +106,7 @@ type ltFacts struct {
 	Handback   bool
 	Result     threadResultText
 	Units      int
+	Takes      uint64
 }
 
 // ltWhole is what the oracles read of text, held whole.
@@ -99,6 +115,7 @@ func ltWhole(text string) ltFacts {
 		Says:     strings.ContainsFunc(text, jsTrimKeeps),
 		Handback: handbackNotice(text),
 		Units:    min(utf16Units([]byte(text)), skillListingMaxNameUnits+1),
+		Takes:    takesNamed(text, ltAsked),
 	}
 	f.Agent, f.Leg, f.Notice = taskNotification(text)
 	f.Result.size = int64(len(text)) + 1
@@ -117,6 +134,7 @@ func ltStreamed(pieces [][]byte) ltFacts {
 		handback textHandback
 		result   textResult
 		units    textUnits
+		takes    = textTakes{asked: ltAsked}
 	)
 	for _, p := range pieces {
 		says.write(p)
@@ -124,9 +142,11 @@ func ltStreamed(pieces [][]byte) ltFacts {
 		handback.write(p)
 		result.write(p)
 		units.write(p)
+		takes.write(p)
 	}
 	notice.end()
-	f := ltFacts{Says: says.any, Handback: handback.named, Result: result.sum(), Units: units.units()}
+	f := ltFacts{Says: says.any, Handback: handback.named, Result: result.sum(), Units: units.units(),
+		Takes: takes.bits}
 	f.Agent, f.Leg, f.Notice = notice.notice()
 	return f
 }
@@ -176,7 +196,8 @@ func ltNotification(leg string, files []string, status, tail string) string {
 // ltSeeds are the texts every automaton is held to its rule on: the shapes a
 // task notification's reading turns on, a handback's name, the characters
 // trim() keeps and drops, the bounds of a result's digests and of a skill's
-// name, and texts a cut ends inside a character of.
+// name, take tokens and texts that nearly are, and texts a cut ends inside a
+// character of.
 func ltSeeds() []string {
 	const leg = "toolu_test_leg"
 	done := claudeNotificationCompleted
@@ -227,6 +248,10 @@ func ltSeeds() []string {
 		strings.Repeat("\U0001f600", skillListingMaxNameUnits/2) + "a",
 		strings.Repeat("a", skillListingMaxNameUnits-1) + "\U0001f600",
 		strings.Repeat("\u00e9", skillListingMaxNameUnits),
+		ltAsked[0], "a note " + ltAsked[0] + " reached the run", ltAsked[1] + ltAsked[0] + ltAsked[1],
+		ltAsked[0][:len(ltAsked[0])-1], ltAsked[0][:len(ltAsked[0])-1] + "0]", claudeTakePrefix,
+		claudeTakePrefix + ltAsked[0], claudeTakePrefix + ctProbeBatchTake, claudeTakeToken(ctProbeUntakenOne),
+		strings.Repeat("a", textPieceBytes-20) + ltAsked[1], strings.Repeat("\u00e9", 7) + ltAsked[0] + "\xff",
 	}
 	for _, n := range []int{255, 256, 257, 4095, 4096, 4097, 9 << 20} {
 		seeds = append(seeds, strings.Repeat("r", n), strings.Repeat("\u00e9", n/2)+strings.Repeat("r", n%2))

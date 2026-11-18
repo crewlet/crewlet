@@ -755,12 +755,14 @@ func TestAReadingEndsAtTheLineItsContextEnded(t *testing.T) {
 // before its end could say whether it is torn.
 //
 // Mutation: keep any of what a reading leaves across Reset (how it ended, how
-// many lines it read, its torn piece, what of its bound it took), and the
-// member after it reads otherwise.
+// many lines it read, its torn piece, what of its bound it took, the takes it
+// asked), and the member after it reads otherwise.
 func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
-	next := ctThread(ctBrief(ctUUID(2)), "[1]", ctBrief(ctUUID(3)))
+	token := claudeTakeToken(ctProbeStopTake)
+	said := ctAttachment(ctUUID(3), ctUUID(4), ctReplace(t, ctBatchSystem, `the run"`, `the run `+token+`"`), "")
+	next := ctThread(ctBrief(ctUUID(2)), "[1]", ctBrief(ctUUID(3)), said)
 	within := int64(len(next)) + 1
 	ended, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -784,6 +786,9 @@ func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 	} {
 		for _, bound := range []int64{within, within - 2} {
 			r := newThreadReader(tc.before(), tc.maxBytes)
+			if err := r.Asking([]string{token}); err != nil {
+				t.Fatal(err)
+			}
 			ctTrace(tc.ctx, r)
 			r.Reset(strings.NewReader(next), bound)
 			got := ctTrace(t.Context(), r)
