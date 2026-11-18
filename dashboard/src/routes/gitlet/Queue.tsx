@@ -88,6 +88,7 @@ import type { CodeCheckRow, CodeEjectedRow, CodeParty, CodeQueueAnswer } from "~
 import { CHECKS_POLL_MS } from "./checks/CheckList.tsx";
 import { REPO_PARAM } from "./paths.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { useGitletSectionCounts } from "./sectionCounts.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 
@@ -99,6 +100,7 @@ import { plainSeat } from "~/app/frame/cells.tsx";
 const QUEUE_POLL_MS = CHECKS_POLL_MS;
 
 export function Queue() {
+  useGitletSectionCounts();
   const [repo, setRepo] = useParam(REPO_PARAM, "", "filter");
   const named = repo !== "" && isRepoName(repo);
   const params = useMemo(() => (named ? { repo } : {}), [named, repo]);

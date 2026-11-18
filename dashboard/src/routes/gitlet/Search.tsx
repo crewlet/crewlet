@@ -72,6 +72,7 @@ import { plural } from "~/lib/format.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { repoHref } from "./paths.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { useGitletSectionCounts } from "./sectionCounts.ts";
 import { Painted, tokensOf, useGrammar } from "./syntax.tsx";
 import { coverageNotes, groupHits, hitAt, type FileHits, type RepoHits } from "~/lib/codeSearch.ts";
 import "~/styles/gitlet.css";
@@ -96,6 +97,7 @@ function asMode(raw: string): (typeof CODE_SEARCH_MODES)[number] {
 const EVERY_REPO = "";
 
 export function Search() {
+  useGitletSectionCounts();
   // `/` FOCUSES THIS SCREEN'S PHRASE rather than opening the palette over it.
   const box = useRef<HTMLInputElement>(null);
   useSearchTarget(box);

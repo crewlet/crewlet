@@ -8662,7 +8662,11 @@ table the socket's query errors use.
 The Gitlet workspace is the company's git repositories as the engine hosts
 them ([Gitlet](../concepts/gitlet.md)), and the changes proposed to them: a
 Workspace row after Worklet, `g g`, landing on **Changes** at `#/gitlet`, its
-sections drawn as tabs in the page header. It is drawn only where the company hosts code in the engine —
+sections drawn as tabs in the page header. The tabs count the company's live
+changes, its repositories and the entries its merge queues hold, from one
+`code_counts` question each section page asks; a part the engine did not
+answer draws no figure, never a zero. The workspace is drawn only where the
+company hosts code in the engine —
 `services.code` on the org projection — and is hidden, never locked, where it
 is `none`, an address under it answered by the service notice. It names the
 **Gitlet** access (ADR-0110): every section reads the code questions — the
