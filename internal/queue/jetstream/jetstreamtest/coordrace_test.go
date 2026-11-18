@@ -14,43 +14,15 @@ import (
 // A CREATE RACING OTHERS OVER A REMOVED RECORD IS A RACE ON A REPLICATED FLEET
 // TOO, AND NEVER AN OUTAGE.
 //
-// The same check [coordtest.RunFleet] runs against one server, carried to the
-// one substrate where it can fail. Every round stands on a set-up — a record
-// written, read back and removed at the version read, or a token counter
-// nothing has written yet — and on three members every step of that has a way
-// to go wrong that one server never shows, each of which this case has met:
+// [coordtest.RunFleet]'s check where it can fail; three members add:
+//   - A READ SERVED BY A REPLICA behind an acknowledged write (coord/kv reads
+//     from the stream leader).
+//   - A LEADER'S "ANOTHER WRITE IS IN FLIGHT" read as a lost race (coord/kv
+//     waits it out, internal/jsinflight).
+//   - A LOSER TOLD THE STORE WAS DOWN: a delivery claim processed twice.
 //
-//   - A READ SERVED BY A REPLICA behind an acknowledged write: a run just
-//     created read back as absent, and a charge was counted short. coord/kv
-//     reads every key from the stream leader and certifies every listing
-//     against the leader's per-subject index.
-//   - A LEADER'S "ANOTHER WRITE IS IN FLIGHT", read as a lost race: a removal
-//     at the version its caller had just read was refused while the leader
-//     still had that caller's own create in flight, and the race over a record
-//     that was never removed had no winner. coord/kv waits that answer out
-//     (internal/jsinflight).
-//   - A LOSER TOLD THE STORE WAS DOWN: on a replicated stream a share of a
-//     create race's losers came back as a refusal the client wrapped in
-//     neither of its sentinels, and a create that matched only the sentinel
-//     answered "unknown" — a released delivery claim processed twice.
-//
-// IT IS A RACE AND FAILS LIKE ONE: under load, a share of runs, and on an idle
-// machine almost never. Each mechanism has a staged case that fails every time
-// — TestACertifyingReadIsNeverAnsweredByAReplicaThatIsBehind and
-// TestAReadIsNeverAnsweredByACopyThatIsBehind in coord/kv, the in-flight
-// cases of internal/jsinflight, and
-// TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind here — and this
-// one holds them together under the timing that produced the failures.
-//
-// Mutation, measured with eight CPU burners on four cores: the build before
-// coord/kv read through the leader failed 9 runs of 12 ("a run just created
-// read back as absent", "8 admitted and 7 counted"). Handing back the
-// leader's first in-flight answer rather than waiting it out failed 0 of 12 at
-// that load — the in-flight answer is rarer than a stale replica — which is
-// why that mechanism's guard is the staged case, not this one. And no round
-// here lists any more: a windowed counter is rolled inside the charge that
-// counts it and never reset (ADR-0019), so a listing that stops short of the
-// leader is guarded by coord/kv's staged walk cases alone.
+// IT FAILS LIKE A RACE, under load; each mechanism's staged case fails every
+// time. No round lists: a windowed counter is rolled inside its charge (ADR-0019).
 func TestCreatesOverARemovedRecordAreRacesOnAReplicatedFleet(t *testing.T) {
 	t.Parallel()
 	c := StartCluster(t, 3, js.Config{})

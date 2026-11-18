@@ -49,23 +49,18 @@ type ValueTypes map[string]reflect.Type
 // the answer leaves out (omitted where empty) is held to.
 const AnswerScope = "answer"
 
-// HoldCard holds every path spec reads to answer, the decoded body a route's
-// handler gave the request a tool named name sent, and fails each one the
-// answer does not hold:
-//
+// HoldCard holds every path spec reads, but its Note, to answer (the decoded
+// body a route's handler gave the request a tool named name sent), and fails
+// each one it does not hold:
 //   - a path read from the answer is a key of it at every step (null counts,
 //     an empty list is a list);
 //   - a path read from a row, the record or an item is a key of at least one
 //     of them, the rows expanded as cards.Build expands them.
 //
-// Every path but the spec's Note, which only a search that could not run
-// answers: the caller holds it to such an answer with [Present].
-//
-// A path a row, the record or an item does not show is held to types instead
-// (see [ValueTypes]); a type declared for a scope must hold every key a real
-// value there carries, so a declaration naming the wrong type fails. It
-// answers how many paths it held and which declarations it consulted, so a
-// suite can fail one that is no longer needed.
+// The Note is the caller's to hold, with [Present], to a search that could not
+// run. A path no row, record or item shows is held to types ([ValueTypes]); a
+// scope's type must hold every key a real value carries. It answers the paths
+// held and declarations consulted.
 func HoldCard(t testing.TB, name string, spec cards.Spec, answer any, types ValueTypes) (
 	held int, consulted []string) {
 

@@ -64,40 +64,17 @@ func (s *suite) runAttachment(t *testing.T) {
 	t.Run("a_detach_inside_a_handler_stops_the_next_delivery", func(t *testing.T) {
 		t.Parallel()
 		// THE SINGLE-DELIVERY HALF of
-		// Batch/a_detach_taken_mid_batch_stops_the_rest, and it is a
-		// separate case because the two paths answer the same condition
-		// through DIFFERENT mechanisms.
+		// Batch/a_detach_taken_mid_batch_stops_the_rest: the paths answer
+		// one condition through DIFFERENT mechanisms (batch: a flag on the
+		// held consumer; here: the consumer gone from the member list), so
+		// one can rot while the other passes. It detaches from INSIDE a
+		// handler with the next event already waiting.
 		//
-		// The case above detaches between publishes, so a backend passes
-		// it by checking anything at all at the point of delivery. This
-		// one detaches from INSIDE a handler with the next event already
-		// waiting — the arrangement the batch case exposed, where a
-		// backend that had answered the question once went on to serve
-		// the rest of what it had already drained. On the single path a
-		// backend re-asks per event rather than holding a consumer across
-		// a partition walk, so the question here is whether it re-asks at
-		// all.
-		//
-		// WHY THAT IS NOT THE SAME CODE. On the batch path the twin reads
-		// a flag on the consumer it is holding; on this one the consumer
-		// is simply gone from the subscription's member list by the time
-		// the next event is considered. Two mechanisms, one rule — so one
-		// of them can rot while the other keeps passing, which is what a
-		// case per path is for.
-		//
-		// WHAT THIS CASE DOES AND DOES NOT DISCRIMINATE, measured rather
-		// than claimed, because the finding this was written alongside
-		// was precisely a claim about coverage that nothing checked.
-		// Each backend answers a detach on THIS path twice over — the
-		// twin by the detached flag and by the member leaving
-		// sub.members, JetStream by attachment.blocked() and by the
-		// consume loop's context being cancelled — and removing either
-		// half alone leaves this case GREEN on that backend. So it holds
-		// the rule, not a mechanism: it goes red when a detach stops
-		// stopping the next delivery, by whatever route. The mechanism
-		// half is held by the batch case, which measurably fails when the
-		// flag (twin) or blocked()'s detached term (JetStream) is
-		// removed.
+		// IT HOLDS THE RULE, NOT A MECHANISM (measured): each backend
+		// answers a detach here twice over (twin: flag and member removal;
+		// JetStream: attachment.blocked() and the cancelled consume loop),
+		// and removing either half leaves this GREEN. The batch case holds
+		// the mechanisms.
 		q := s.start(ctx, t)
 
 		seen := newJournal()
@@ -355,25 +332,17 @@ func (s *suite) runAttachment(t *testing.T) {
 		awaitSignal(t, entered, "the handler to start", func() {})
 
 		// The fenced release: detach first, then let the abandoned handler
-		// land its deferral.
-		//
-		// Detach must NOT wait for the in-flight handler. The two verbs
-		// differ on exactly this point — a quiesce lets a running handler
-		// finish, a fenced detach abandons it — and a Detach that joined
-		// its dispatcher would block a node that has LOST its lease behind
-		// a handler that may run for minutes, which is the one moment it
-		// must not wait. It also deadlocks outright here, because the
+		// land its deferral. Detach must NOT wait for the in-flight
+		// handler: a fenced detach abandons it (a quiesce lets it finish),
+		// and joining would block a node that has LOST its lease behind a
+		// handler that may run for minutes; here it deadlocks, since the
 		// handler is released only once Detach returns.
 		//
-		// WHAT THIS DECIDES IS THAT DETACH DOES NOT JOIN THE HANDLER: one
-		// that did never returns, and stallFor ends the wait as liveness.
-		// One that joined it under a grace of its own shorter than
-		// stallFor would return in time, and nothing short of a clock tells
-		// "at once" from "after a grace" on a real broker; a clock that
-		// decided it would fail a healthy build a loaded runner paused
-		// (#1204). That half is held where its code sits: JetStream's
-		// Detach closes its attachments and returns, joining nothing
-		// (attach.go), and the twin's likewise.
+		// This decides only that Detach does not JOIN: one that did never
+		// returns, and stallFor ends the wait as liveness. A join under a
+		// shorter grace would return in time, and only a clock tells "at
+		// once" from "after a grace", failing a healthy build on a paused
+		// runner (#1204). That half is held in attach.go and the twin.
 		detached := make(chan error, 1)
 		go func() {
 			_, err := q.Detach(ctx, "topic.q", "grp")

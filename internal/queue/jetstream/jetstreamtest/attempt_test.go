@@ -9,20 +9,12 @@ import (
 
 // ONE ATTEMPT CANNOT SPEND EVERY ATTEMPT'S BUDGET.
 //
-// [jetstreamtest.ClusterStartBudget] bounds the SEQUENCE, because "n attempts
-// at an unbounded cost each is a product nobody declared". A ceiling on the
-// sequence with no term per attempt is that same defect wearing the other
-// face: the first attempt is handed the whole remaining budget, so one that
-// hangs consumes every retry before any of them runs.
-//
-// Measured on this repository's own CI, which is why this is a test rather
-// than a tidy: `TestAFleetOfThree/AFleetAgreesAboutOneCompany`, then a test
-// standing up a fleet of its own, failed after 181.05s with
-// "no cluster came up within 3m0s (1 of 4 attempts)". Member 0's broker spent
-// the entire ceiling retrying a route to a port where nothing was listening,
-// and the three attempts that exist to absorb exactly that never ran — the
-// harness's own remedy, "trying again with DIFFERENT NUMBERS", unreachable
-// from inside the failure it is for.
+// [jetstreamtest.ClusterStartBudget] bounds the SEQUENCE of attempts. A ceiling
+// with no term per attempt hands the first attempt the whole remaining budget,
+// so one that hangs (a broker retrying a route to a port where nothing
+// listens) consumes every retry before any runs, and the harness's remedy,
+// "trying again with DIFFERENT NUMBERS", is unreachable from the failure it
+// is for.
 func TestOneAttemptCannotSpendTheWholeBudget(t *testing.T) {
 	t.Parallel()
 
