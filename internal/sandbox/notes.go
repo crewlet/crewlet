@@ -364,9 +364,10 @@ type EndedNote struct {
 	// Serve is the hook's serve the outcome is at, where it is one: for a note
 	// unconfirmed, the serve that was live before every read of it that handed
 	// nothing over, a take marked unanswered or the brief of a job that never
-	// started ([RunNote.LiveServe] of the note unread); for one missed that no
-	// read marked, the last of its serves, every one of them lost. Nil
-	// otherwise.
+	// started ([RunNote.LiveServe] of the note unread), else the last of its
+	// lost serves, every one of them one its session may hold
+	// ([HookServed.MayHold]); for one missed that no read marked, the last of
+	// its serves, every one of them lost, one absent. Nil otherwise.
 	Serve *HookServed
 }
 
@@ -374,11 +375,12 @@ type EndedNote struct {
 // each as what the record knows became of it
 // ([CoordinatorOptions.SteersEnded]), in this precedence: delivered (told again
 // by a brief whose job started), unconfirmed (served to a harness, never
-// confirmed), missed (read by a take marked unanswered and told by no started
-// launch, or every hook serve lost), expired (waiting, or first told by a brief
-// whose job never started). Items for one job are not reported, and never the
-// row's command. The record is the one witness, since only the ending sees what
-// a brief took and that no job ran. See the package doc, "A turn's notes".
+// confirmed, or every lost serve one its session may hold), missed (read by a
+// take marked unanswered and told by no started launch, or every hook serve
+// lost, one absent), expired (waiting, or first told by a brief whose job never
+// started). Items for one job are not reported, and never the row's command.
+// The record is the one witness, since only the ending sees what a brief took
+// and that no job ran. See the package doc, "A turn's notes".
 func (r PendingRun) EndedNotes() []EndedNote {
 	var out []EndedNote
 	for _, n := range r.Steer.Notes {
@@ -409,7 +411,7 @@ func (r PendingRun) endOf(n RunNote) (EndedNote, bool) {
 	if r.briefNeverRan(n) {
 		read = read.Retold
 	}
-	lost := lostServe(n)
+	lost, mayHold := lostServe(n)
 	end := EndedNote{Note: n}
 	switch {
 	case read != nil && read.Retold != nil:
@@ -426,6 +428,12 @@ func (r PendingRun) endOf(n RunNote) (EndedNote, bool) {
 		if live, ok := unread.LiveServe(); ok {
 			end.Serve = &live
 		}
+	case lost != nil && mayHold:
+		// EVERY LOST SERVE ITS HARNESS GAVE UP ([ServeCancelled]), whose answer
+		// may have outrun the cancel: its session may hold the note, so it is
+		// unconfirmed at the last of them, never missed, whatever take marked
+		// unanswered read it since, as a live serve's note is.
+		end.Outcome, end.Serve = types.SteerUnconfirmed, lost
 	case read != nil:
 		end.Outcome, end.Read = types.SteerMissed, read
 	case lost != nil:
@@ -436,14 +444,20 @@ func (r PendingRun) endOf(n RunNote) (EndedNote, bool) {
 	return end, true
 }
 
-// lostServe is the last of n's serves a loss struck, nil where none did.
-func lostServe(n RunNote) *HookServed {
-	for i := len(n.Serves) - 1; i >= 0; i-- {
-		if s := n.Serves[i]; s.Lost != "" {
-			return &s
+// lostServe is the last of n's serves a loss struck, nil where none did, and
+// whether the session of every serve a loss struck may hold the note
+// ([HookServed.MayHold]).
+func lostServe(n RunNote) (*HookServed, bool) {
+	var last *HookServed
+	mayHold := true
+	for i := range n.Serves {
+		s := n.Serves[i]
+		if s.Lost == "" {
+			continue
 		}
+		last, mayHold = &s, mayHold && s.MayHold()
 	}
-	return nil
+	return last, mayHold
 }
 
 // briefNeverRan reports whether n was read by the brief of the record's job

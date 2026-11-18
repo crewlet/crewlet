@@ -3127,13 +3127,14 @@ func (f providerFunc) Complete(ctx context.Context, req llm.Request) (*llm.Compl
 // AN ENDING REPORTS A NOTE A HOOK WAS SERVED AT THAT SERVE. A note a run's hook
 // was served and its job's session never confirmed is UNCONFIRMED at the step
 // the hook answered, of the job it served and at the iteration the serve kept,
-// never at a poll's step; one whose every serve was lost, here to its harness's
-// cancel, and that no step read since, is MISSED at the last of them; and an
-// item for the job, served as a note is, is reported as nothing.
+// never at a poll's step; so is one whose serve its harness cancelled, whose
+// session may hold it; one whose serve its session proves absent, read by no
+// step since, is MISSED there; and the job's item is reported as nothing.
 //
-// Mutation: report a hook's live serve at a poll's step or at no step, report a
-// note whose serves were all lost as expired, or report the job's item, and the
-// case goes red.
+// Mutation: report a hook's live serve at a poll's step or at no step, report
+// the cancelled serve's note missed (sandbox's endOf without its `lost != nil
+// && mayHold` arm), the absent one's as anything but missed, or report the
+// job's item, and the case goes red.
 func TestAnEndingReportsAHookServedNoteAtItsServe(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -3141,7 +3142,7 @@ func TestAnEndingReportsAHookServedNoteAtItsServe(t *testing.T) {
 	store := sandbox.NewCoordStore(fleet)
 	runs, p := steersOver(t, steerRing, store)
 	launch := workingRun(t, store, runs, "run-1")
-	for _, id := range []string{"n-live", "n-lost"} {
+	for _, id := range []string{"n-live", "n-lost", "n-absent"} {
 		fileSealed(t, runs, "run-1", steer.Note{ID: id, Text: "the note " + id, By: "founder"})
 	}
 	placeItemFor(t, runs, fleet, "run-1", "i-1", launch)
@@ -3155,7 +3156,8 @@ func TestAnEndingReportsAHookServedNoteAtItsServe(t *testing.T) {
 	}
 	serve("take-1", 1, types.SteerBoundaryFinish, 4, "n-live", "i-1")
 	serve("take-2", 2, types.SteerBoundaryToolBatch, 2, "n-lost")
-	if _, err := store.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: launch,
+	serve("take-3", 3, types.SteerBoundaryToolBatch, 3, "n-absent")
+	if _, err := store.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: launch, Absent: []string{"take-3"},
 		Cancelled: []sandbox.NoteCall{{Session: "mcp-session-1", ID: "2"}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -3176,12 +3178,17 @@ func TestAnEndingReportsAHookServedNoteAtItsServe(t *testing.T) {
 		t.Errorf("the note a live serve handed over was reported %+v, want it unconfirmed at the finish, "+
 			"iteration 4, of job %s", rec, launch)
 	}
-	if rec := got["n-lost"]; rec.Outcome != types.SteerMissed || rec.Boundary != types.SteerBoundaryToolBatch ||
+	if rec := got["n-lost"]; rec.Outcome != types.SteerUnconfirmed || rec.Boundary != types.SteerBoundaryToolBatch ||
 		rec.Iteration != 2 || rec.LaunchID != launch {
-		t.Errorf("the note whose serve a cancel lost was reported %+v, want it missed at the tool batch, "+
+		t.Errorf("the note whose serve a cancel lost was reported %+v, want it unconfirmed at the tool batch, "+
 			"iteration 2, of job %s", rec, launch)
 	}
-	if rec, ok := got["i-1"]; ok || len(got) != 2 {
+	if rec := got["n-absent"]; rec.Outcome != types.SteerMissed || rec.Boundary != types.SteerBoundaryToolBatch ||
+		rec.Iteration != 3 || rec.LaunchID != launch {
+		t.Errorf("the note whose serve its session proves absent was reported %+v, want it missed at the tool "+
+			"batch, iteration 3, of job %s", rec, launch)
+	}
+	if rec, ok := got["i-1"]; ok || len(got) != 3 {
 		t.Errorf("the ending reported %d notes, the job's item among them: %+v", len(got), rec)
 	}
 }

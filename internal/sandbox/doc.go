@@ -3977,7 +3977,9 @@
 //     have reached the run is never said to have reached nothing. At the hook's
 //     serve that was live before those reads, where a hook was served it
 //     ([EndedNote.Serve]), the step it was handed over at; else at the job a
-//     poll served it to.
+//     poll served it to. And a note whose EVERY LOST SERVE ITS SESSION MAY
+//     HOLD ([HookServed.MayHold]), its harness having given the call up, at
+//     the last of them, ahead of a marked take's read as a live serve is.
 //   - MISSED: read by a take marked UNANSWERED ([NoteRead.Unanswered]), and
 //     told again by no launch whose job started: the take's write landed, its
 //     answer never reached its reader, and no later write records the note
@@ -3986,10 +3988,8 @@
 //     take's read beside it ([NoteRead.Retold]): so a note still marked is one
 //     no launch recorded telling again, and one whose telling's job never
 //     started is missed all the same, at that take, since the brief handed
-//     nothing over. And SERVED TO A JOB'S HOOKS AND EVERY SERVE LOST
-//     ([HookServed.Lost]), read by nothing since: its harness cancelled the
-//     call, or its session proves it never took the note. At the last of
-//     those serves ([EndedNote.Serve]).
+//     nothing over. And SERVED TO A JOB'S HOOKS, EVERY SERVE LOST, ONE ABSENT
+//     ([ServeAbsent]), read by nothing since: at the last serve ([EndedNote.Serve]).
 //   - EXPIRED: still WAITING, or read by the BRIEF OF THE RECORD'S CURRENT JOB
 //     where that job never started and that brief was the first to tell it:
 //     the job's record never took its command ([LaunchRecord.Started]),

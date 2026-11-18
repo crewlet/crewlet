@@ -1095,8 +1095,10 @@ func (s *runSteers) ended(ctx context.Context, run sandbox.PendingRun) error {
 // where it is the record's own and none where the record has moved on from it.
 // A note a hook was served is reported at that hook's serve instead
 // ([sandbox.EndedNote.Serve]): unconfirmed at the serve that was live before
-// every read of it that handed nothing over, and missed at the last of its
-// serves, every one lost, each at the step the hook answered.
+// every read of it that handed nothing over, or at the last of its lost serves
+// where its session may hold each (its harness gave the call up), and missed
+// at the last of its serves, every one lost, one absent, each at the step the
+// hook answered.
 func noteEnd(run sandbox.PendingRun, n sandbox.EndedNote) steer.End {
 	switch n.Outcome {
 	case types.SteerDelivered:

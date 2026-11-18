@@ -1372,19 +1372,20 @@ nothing else, in this order:
   never confirmed it, and that no step read after: OpenCode's plugin never
   confirmed it, or a hook's job's session neither showed it taken nor proved
   it absent (a read of its thread could not decide, or its box was never
-  read). At the
-  hook's serve that was live, its step and job, or else at the job a poll
-  served it to (`boundary: step`, its `launch_id`). Its session may hold it,
-  and nothing says it does.
+  read). At the hook's serve that was live, its step and job, or else at the
+  job a poll served it to (`boundary: step`, its `launch_id`). Its session may
+  hold it, and nothing says it does. So is a note every hook's serve of which
+  its harness gave up past the hook's timeout, at the last of them: the answer
+  can outrun the cancel.
 - **`missed`**, a note a take whose answer was lost recorded read, marked
   unanswered, that no later launch whose job started was told: at the step that
   took it. The review after it, if one ran, read it carried. A note a later
   launch told again and whose job never started (the launch failed after
   writing the record) is `missed` too, at that take: the brief handed nothing
   over, and the record keeps the take's read beside the telling. And a note
-  served to a job's hooks whose every serve was lost, its harness having
-  cancelled the call or its session proving it never took the note, and that
-  nothing read since: at the last of those serves.
+  served to a job's hooks whose every serve was lost, one of them a serve its
+  job's whole session proves it never took, and that nothing read since: at
+  the last of those serves.
 - **`expired`**, a note no job ran with: still waiting, or read first into the
   brief of a launch that failed after writing the record, whose job never
   started, at no step.
