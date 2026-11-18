@@ -1290,11 +1290,26 @@ func TestAWaitsSettleIsWrittenInItsOwnRoomPastTheWait(t *testing.T) {
 	t.Run("a relaunch's withdrawal of a gone standby", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			rig, _, kept, store := settledOnRelaunch(t)
-			refused := takenBy(t, rig, kept, thisProcess, 1)
+			// A JOB THAT KEPT NOTHING BEFORE the refused capture, so a relaunch
+			// reading a copy that still names the standby has nothing older of
+			// the job to continue and answers that capture still being kept.
+			store := newTakerStore()
+			rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
+			rig.coordinator.relaunchWait, rig.coordinator.recordBudget = relaunchCaptureWait, sessionRecordBudget
+			run := rig.launchKept(t, "t1")
+			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}, noRowFound: true}
+			refused := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
+				State: CaptureBegun, Final: true, At: rig.coordinator.now(), Taker: thisProcess, TakerEpoch: 1,
+				Harness: "claude-code", SessionID: "s-1"}
+			if took, err := rig.pending.StampCapture(t.Context(), "t1", refused); err != nil || !took {
+				t.Fatalf("stamping the capture begun = %v, %v", took, err)
+			}
 			refused.State, refused.Reason = CaptureRefused, "the session could not be uploaded"
 			if took, err := rig.pending.StampCapture(t.Context(), "t1", refused); err != nil || !took {
 				t.Fatalf("refusing the capture = %v, %v", took, err)
+			}
+			if got := rig.get("t1"); got.Kept != nil {
+				t.Fatalf("the premise: the row keeps %+v, want nothing of the job kept", got.Kept)
 			}
 			lease := claimTaker(t, store, takingProcess)
 			standby := refused
@@ -1311,9 +1326,9 @@ func TestAWaitsSettleIsWrittenInItsOwnRoomPastTheWait(t *testing.T) {
 			if c := rig.get("t1").Capture; c == nil || !c.sameTake(refused) || !c.StandbyAt.IsZero() {
 				t.Errorf("the row holds %+v, want the gone standby withdrawn past the wait", c)
 			}
-			if strings.Contains(why, "still being kept") {
-				t.Errorf("the relaunch answered %q, want the capture whose standby its wait withdrew not read as "+
-					"still being kept", why)
+			if strings.Contains(why, "still being kept") || !strings.Contains(why, unkeptWhy(refused)) {
+				t.Errorf("the relaunch answered %q, want the capture whose standby its wait withdrew read as %q, "+
+					"never as still being kept", why, unkeptWhy(refused))
 			}
 		})
 	})
