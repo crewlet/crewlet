@@ -2061,6 +2061,21 @@ for as long as its caller waits, holding no decoder meanwhile, and a slot frees
 within one bounded read; a caller that leaves first is answered nothing, and
 nothing was opened for it.
 
+**A node holds one large thread read at a time for its collections and
+takes.** A job's collection reads its main thread, and a capture's take scrubs
+and measures its session, holding no slot while each line, JSON value or
+stretch of text it holds stays within 256 KiB, four times the longest line of
+99 in 100 real threads: about 5 MiB a read at its worst. A piece past that
+waits for the node's one large-read slot (`CollectionLargeReadsAtOnce`), a pool
+apart from the transcripts' two, so a person paging a transcript never delays a
+turn's collection. A take holds it while it holds that piece, and a collection
+whose reading keeps the thread's records (its hook receipts) holds it to the
+read's end: at worst about 109 MiB for a collection and 89 MiB for a take's
+piece. The wait is spent inside the read's own: a collection whose read runs
+past its 15 seconds counts the session unread and decides none of its hooks'
+notes, and a take past its budget is refused, its session not kept, the safe
+side each time; `executor_large_read_waited` says the slot was contended.
+
 **It is the seat's trail, and it holds more than the run's live output
 showed.** It is read by exactly who reads that output — the seat, whoever leads
 it, and an administrator, `audit.seat.read`

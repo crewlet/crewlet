@@ -3,6 +3,7 @@ package executor
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -905,6 +906,73 @@ func TestATakesCloseEndsItsMetersWaitForTheSlot(t *testing.T) {
 		}
 		free()
 	})
+}
+
+// WHAT A TAKE HOLDS AT ITS LARGE TIER, the figure the package doc's "A
+// collection's read of a thread" states beside the collection's pass: a kept
+// archive whose main thread holds a line at [scrubPieceMaxBytes] and whose
+// `.json` member holds a string at it, each of bytes no UTF-8 holds, which the
+// decode reads as U+FFFD, three bytes a byte; scrubbed, both readings, with
+// its meter fed as [Runner.TakeSession] feeds it, under one budget. What is
+// held at most is read off the runtime's GC trace as
+// BenchmarkAThreadChainAtItsBounds says:
+//
+//	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkATakeAtItsLargeTier$' -benchtime 1x -benchmem
+func BenchmarkATakeAtItsLargeTier(b *testing.B) {
+	archive := takeAtTheLargeTier(b)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	fmt.Fprintf(os.Stderr, "take-bench: the take starts\n")
+	b.ResetTimer()
+	var kept countedWriter
+	for range b.N {
+		large := new(passBudget)
+		meter := newContextMeter(b.Context(), archiveTar, ctSession, "2.1.322", large)
+		err := scrubArchive(archiveTar, bytes.NewReader(archive), reopenOf(archive), io.MultiWriter(&kept, meter),
+			newScrubber(nil), testBounds.gatedBy(b.Context(), large))
+		meter.finish(err)
+		meter.count()
+		if err != nil {
+			b.Fatalf("the take: %v", err)
+		}
+	}
+	b.StopTimer()
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	fmt.Fprintf(os.Stderr, "take-bench: the take ends\n")
+	b.ReportMetric(float64(kept.n.Load())/float64(b.N)/(1<<20), "kept-MiB")
+	b.ReportMetric(float64(int64(after.HeapAlloc)-int64(before.HeapAlloc))/(1<<20), "live-MiB")
+	if len(collectionLargeReads) != 0 {
+		b.Fatalf("the take ended holding %d large slots, want none", len(collectionLargeReads))
+	}
+}
+
+// takeAtTheLargeTier is [BenchmarkATakeAtItsLargeTier]'s archive, built where
+// nothing the read is measured by keeps its pieces.
+func takeAtTheLargeTier(b *testing.B) []byte {
+	thread, _ := claudeMainThread(ctSession)
+	bare := cntUser("", "u1", `""`)
+	members := []struct{ name, body string }{
+		{thread, cntUser("", "u1", `"`+benchInvalid(scrubPieceMaxBytes-len(bare)-1)+`"`) + "\n"},
+		{"tasks/s/1.json", `{"text":"` + benchInvalid(scrubPieceMaxBytes-64) + `"}`},
+	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	for _, m := range members {
+		if err := tw.WriteHeader(&tar.Header{Name: m.name, Mode: 0o600, Size: int64(len(m.body)),
+			Typeflag: tar.TypeReg}); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := io.WriteString(tw, m.body); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := errors.Join(tw.Close(), zw.Close()); err != nil {
+		b.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 // logBuffer is the process's log, written from any goroutine.

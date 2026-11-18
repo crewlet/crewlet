@@ -135,19 +135,28 @@
 // holding 4 MiB at most at GOGC=10 and its heap peaking at 9 MiB at the
 // default, within the arithmetic, and taking no slot.
 //
-// THE LARGE TIER, ONE SLOT IN A POOL APART: one pass past its base holds the
-// measured 109 MiB at most. Shared with [TranscriptReadsAtOnce]'s two, a
-// collection's large pass waits behind two transcript reads of up to about
-// 11 s each and spends internal/sandbox's MainThreadReadWait (15 s), so a
-// person paging a transcript would decide how a turn's relaunch is told;
-// apart, it never does. One slot, not two: the process's thread readers then
-// hold at worst 2 x 133 + 109 = 375 MiB beside the base tier, and one waiter
-// behind one holder at its worst (2.85 s, 5.7 s loaded) is through in 11.4 s,
-// within the 15 s. A later waiter, or one behind a take whose scrub holds the
-// slot while its archive streams out, may not be: its read ends with its
-// context's error and reads as no reading (count unread), the safe side, as a
-// read past MainThreadReadWait already is. The wait is spent inside that wait,
-// never added to it.
+// THE BASE TIER'S COUNT: no token holds it, so it is every read in flight at
+// once, each about 5.1 MiB at its worst: one per seat collecting on this node,
+// one per take (its scrub's piece and its meter's line, each within the base),
+// and up to the box host's boxReadsHeld (64) reads for its peers, 326 MiB.
+//
+// THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
+// holds the measured 109 MiB at most; a take's piece at the scrub's bound, its
+// meter beside it under the same slot, 89 MiB (BenchmarkATakeAtItsLargeTier: a
+// main-thread line and a `.json` string each at [scrubPieceMaxBytes] of bytes
+// the decode triples, both readings and the meter, read as above, 1.5 to 1.7 s
+// on two cores, its heap peaking at 137 MiB at the default GOGC against the
+// pass's 176 to 191). Shared with [TranscriptReadsAtOnce]'s two, a collection's
+// large pass waits behind two transcript reads of up to about 11 s each and
+// spends internal/sandbox's MainThreadReadWait (15 s), so a person paging a
+// transcript would decide how a turn's relaunch is told; apart, it never does.
+// One slot, not two: the process's thread readers then hold at worst
+// 2 x 133 + 109 = 375 MiB beside the base tier, and one waiter behind one
+// pass at its worst (2.85 s, 5.7 s loaded) is through in 11.4 s, within the
+// 15 s. A later waiter, or one behind a take's piece streaming from a slow box,
+// may not be: its read ends with [errLargeWait] and reads as no reading (count
+// unread), the safe side, as a read past MainThreadReadWait already is. The
+// wait is spent inside that wait, never added to it.
 //
 // WHAT RE-DERIVES IT: a layer that charges a line by its facts rather than
 // holding it whole moves the line's trigger to that charge and replaces the
