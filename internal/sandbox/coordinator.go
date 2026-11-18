@@ -2124,10 +2124,17 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	// ([LaunchRecord.Context]), for the same resume: a round carried on in the
 	// job's box is held to that copy's measure.
 	run.Launch.Context = run.Launch.measured(result.LastRequest, run.LaunchID)
-	// AND WHAT CLAUDE CODE COUNTS ITS COPY AT, by the rule the record follows
-	// ([LaunchRecord.counted]), for the same resume: a round carried on in the
-	// job's box is told what that copy may have compacted away.
-	run.Launch.ResumedCount = run.Launch.counted(result.ResumedCount)
+	// AND WHAT THE HARNESS COUNTS ITS COPY AT, with the provider of the reply
+	// an OpenCode count is anchored on and the release that wrote the copy,
+	// by the rule the record follows ([LaunchRecord.counted]), for the same
+	// resume: a round carried on in the job's box is told what that copy may
+	// have compacted away.
+	run.Launch.ResumedCount, run.Launch.CountProvider, run.Launch.CountRelease = run.Launch.counted(
+		result.ResumedCount, result.CountProvider, result.HarnessVersion)
+	// AND WHAT THE HARNESS ESTIMATES ITS COPY'S NEXT REQUEST AT, by the rule
+	// the record follows ([LaunchRecord.nextRequested]), for the same resume:
+	// a round carried on in the job's box is held to it with its brief.
+	run.Launch.setNextRequest(run.Launch.nextRequested(result.NextRequest))
 	run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
 	run.Launch = c.publishCollected(ctx, run, result)
 	return run, result, true, nil
@@ -2565,13 +2572,16 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	at.exhausted = ranOutOfContext(asCollected(run, result, ended))
 	at.refused = requestRefused(asCollected(run, result, ended))
 	// THE JOB'S MAIN THREAD, read once on the box's host before the take, by
-	// every reading the read asks of it (mainthread.go): what Claude Code
-	// counts the session at, written with how the harness ended after the
-	// take, and the receipts of its hooks' serves, settled here BEFORE the
-	// take: a verdict the store does not answer hands the read back with the
-	// box answered and how its harness ended ([boxAnsweredError]).
+	// every reading the read asks of it (mainthread.go): what its harness
+	// counts the session at, with the provider of an OpenCode count's reply,
+	// and what it estimates the next request at, of a Claude Code or an
+	// OpenCode job, kept on the result, the count with the least window its
+	// run reported, and written with how the harness ended after the take; and
+	// the receipts of its hooks' serves, settled here BEFORE the take: a
+	// verdict the store does not answer hands the read back with the box
+	// answered and how its harness ended ([boxAnsweredError]).
 	reading := c.readMainThread(ctx, run, box, runner, read, at, result)
-	result.ResumedCount = reading.Count
+	result.ResumedCount, result.CountProvider, result.NextRequest = reading.Count, reading.Provider, reading.Next
 	if err := c.settleHookReceipts(ctx, run, reading.Receipts, read); err != nil {
 		return Result{}, false, &boxAnsweredError{err: err, end: at.harnessEnd()}
 	}
@@ -2591,10 +2601,13 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 		return result, ended, nil
 	}
 	// AND WHAT THE COPY'S NEWEST REQUEST CARRIED, as the run's own account
-	// measured it, and what Claude Code counts the copy at, as the read of its
-	// main thread above found it, in the same write.
+	// measured it, and what its harness counts the copy at, as the read of its
+	// main thread above found it, with its provider and the release that wrote
+	// the copy, and what the harness estimates its next request at, off the
+	// same read, in the same write.
 	c.markHarnessEnd(ctx, run, EndRead{End: result.HarnessEnd, Request: result.LastRequest,
-		Count: result.ResumedCount})
+		Count: result.ResumedCount, CountProvider: result.CountProvider, CountRelease: result.HarnessVersion,
+		Next: result.NextRequest})
 	if err := box.Pause(ctx); err != nil {
 		log.WarnContext(ctx, "sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
 	} else if err := c.markBoxPaused(ctx, run); err != nil {

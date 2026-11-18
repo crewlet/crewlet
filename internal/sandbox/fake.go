@@ -728,6 +728,12 @@ type FakeRunner struct {
 	packedIn map[string]string
 	released []string
 	packs    int
+	// Point, when set, is what a read of a box's OpenCode point answers
+	// ([FakeRunner.ReadOpenCodePoint]); unset, every read is an error, a box
+	// that could not be asked. Set it before the launch that reads.
+	Point func(PointAsk) (OpenCodePoint, error)
+	// pointAsks is every ask a read of a point was handed, in order.
+	pointAsks []PointAsk
 
 	// The job's live account: what it has said, under which origin and
 	// from which source. See [FakeRunner.Say].
@@ -1151,6 +1157,14 @@ type FakeSession struct {
 	// nil for a take that counts nothing.
 	Count *ResumedCount
 
+	// NextRequest is what the take estimates the session's next request at
+	// ([TakenSession.Next]), zero for none.
+	NextRequest NextRequest
+
+	// CountProvider is the provider the take names beside its count
+	// ([TakenSession.CountProvider]), "" for none.
+	CountProvider string
+
 	// Taking, where set, runs with the take's context as a take reads the
 	// box, after the capture placed the session from the run's log and before
 	// the archive is handed over: a case lands a call between the two there,
@@ -1234,7 +1248,11 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 		Archive: archive,
 		Body:    body,
 		Context: func() int64 { return session.ContextTokens },
+		Next:    func() NextRequest { return session.NextRequest },
 		Count:   count,
+		CountProvider: func() string {
+			return session.CountProvider
+		},
 		Keep: func(ctx context.Context) error {
 			if session.Keeping != nil {
 				session.Keeping(ctx)
@@ -1530,6 +1548,29 @@ func (r *FakeRunner) Started() []RunRequest {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.started)
+}
+
+var _ PointReader = (*FakeRunner)(nil)
+
+// ReadOpenCodePoint records ask and answers [FakeRunner.Point] of it, an error
+// where it is unset.
+func (r *FakeRunner) ReadOpenCodePoint(_ context.Context, _ Sandbox, ask PointAsk) (OpenCodePoint, error) {
+	r.mu.Lock()
+	r.pointAsks = append(r.pointAsks, ask)
+	point := r.Point
+	r.mu.Unlock()
+	if point == nil {
+		return OpenCodePoint{}, errors.New("fake: this runner reads no OpenCode point")
+	}
+	return point(ask)
+}
+
+// PointAsks is every ask a read of a box's OpenCode point was handed, in
+// order.
+func (r *FakeRunner) PointAsks() []PointAsk {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.pointAsks)
 }
 
 var _ mainThreadReader = (*FakeRunner)(nil)

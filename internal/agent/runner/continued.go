@@ -2015,6 +2015,10 @@ type launchBriefs struct {
 	// launch may not continue that.
 	kept    *SessionContinuation
 	inPlace string
+	// inPlaceSummarized is the job before's own session's brief told as one
+	// that may be a summary ([Continuation.Summarized]), "" where the launch
+	// is handed none.
+	inPlaceSummarized string
 
 	// state is the parked state of the job the relaunch follows and bridged
 	// the round's calls: what the guard of the session it continues is
@@ -2101,6 +2105,11 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 			case d.Exact && b.kept.Exact != nil:
 				holds, readHeld = b.exact.holds, b.exact.held
 				brief, replaced = b.kept.Exact.Brief, b.kept.Exact.Replaced
+			case d.Summarized && b.kept.Summarized != nil:
+				// THE BOX'S POINT DID NOT PROVE THE HELD BRIEF WHOLE: the
+				// summarized telling's, which arms nothing.
+				holds.compacts = true
+				brief, replaced = b.kept.Summarized.Brief, b.kept.Summarized.Replaced
 			case d.Unheld && b.kept.Unheld != nil:
 				holds = b.unheldHolds
 				brief, replaced = b.kept.Unheld.Brief, b.kept.Unheld.Replaced
@@ -2122,14 +2131,19 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 			// and its own loads only where it is known to hold its job's brief:
 			// one cut off may never have written a load it made, which is told
 			// as a call it may lack, and is loaded again before a call it
-			// covers. And none at all where it may be a summary.
-			if !b.inPlaceHolds.summarized() {
+			// covers. And none at all where it may be a summary, the box's
+			// point having failed to prove the held brief whole among them.
+			holds, brief := b.inPlaceHolds, b.inPlace
+			if d.Summarized && b.inPlaceSummarized != "" {
+				holds.compacts, brief = true, b.inPlaceSummarized
+			}
+			if !holds.summarized() {
 				loaded = b.state.LoadedSkills
-				if !b.inPlaceHolds.lacksBrief() {
+				if !holds.lacksBrief() {
 					calls = ownCalls(b.bridged, b.state.BridgeFrom, nil, b.owed)
 				}
 			}
-			handed = prompts.Prompt{Text: b.inPlace}
+			handed = prompts.Prompt{Text: brief}
 		default:
 			publish = !b.freshReported
 		}

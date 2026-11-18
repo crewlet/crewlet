@@ -1489,6 +1489,16 @@ func NextTurnAgain(m NextTurn) string {
 	return w.String()
 }
 
+// FreshTaskAgain is the lead of a fresh brief, which opened a session of the
+// run's own with the turn's task, as a later brief to a session of the work
+// that may be a summary tells it again (internal/agent/runner's leadsAgain):
+// the task it opened with follows it, rendered again by its teller. NO TURN
+// BOUNDARY AND NO BOX: that brief said neither, and the session it reaches may
+// have begun as another, so it says only that the work was started on it.
+const FreshTaskAgain = "### The task this work was started on" +
+	"\nA run of this work that began a session of its own was first told the task below, and the session " +
+	"above may show it only in a summary."
+
 // turnAgainSpan is the turn a conversation's last turn left this one after, as
 // [NextTurnAgain] names it, the clause that follows "your earlier turns of this
 // conversation": that turn, and of how it ended only what is the turn's own,

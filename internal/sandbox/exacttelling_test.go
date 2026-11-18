@@ -117,7 +117,7 @@ func TestABriefToldByAReadingIsHandedOnlyToABoxThatAnswersItsRelease(t *testing.
 			logs := captureLogs(t)
 			rig, opened, req := exactRelaunch(t, true, tc.answers)
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false)
+				rig.runner, tc.reused, false, RunSources{})
 			t.Cleanup(got.release)
 			kind := BriefContinuedNewBox
 			if tc.reused {
@@ -200,7 +200,7 @@ func TestAReadingOfACaptureTheBoxsCopyWentPastIsSaidUnused(t *testing.T) {
 			}
 			req.Continue = &Continuation{SessionID: "s-1", Brief: copyBrief, Told: copyTold}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false)
+				rig.runner, tc.reused, false, RunSources{})
 			t.Cleanup(got.release)
 			if got.kind != tc.kind || got.brief != tc.brief || got.session != tc.session || got.exact != tc.exact {
 				t.Fatalf("the launch hands a %s brief %q on session %q (by a reading: %v); want a %s brief %q on "+
@@ -241,7 +241,7 @@ func TestAnEmptyBriefToldByAReadingFallsBackToTheBriefWithout(t *testing.T) {
 			rig, opened, req := exactRelaunch(t, true, readFor)
 			req.Session.Exact.Brief, req.Session.Exact.Replaced = "", ""
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, reused, false)
+				rig.runner, reused, false, RunSources{})
 			t.Cleanup(got.release)
 			want := map[bool]string{true: savePointSameBox, false: savePointNewBox}[reused]
 			if got.brief != want || got.session != "s-1" || got.exact ||
@@ -274,7 +274,7 @@ func TestAKeptSessionTheBoxStillHoldsRecordsWhatItsBriefLeftOut(t *testing.T) {
 	rig, opened, req := exactRelaunch(t, false, readFor)
 	req.Continue = &Continuation{Fresh: BriefTold{Omitted: []int{2}}}
 	got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-		rig.runner, true, false)
+		rig.runner, true, false, RunSources{})
 	t.Cleanup(got.release)
 	if got.kind != BriefContinued || got.brief != savePointSameBox || got.carried != nil || got.exact {
 		t.Fatalf("the launch hands a %s brief %q (by a reading: %v), carrying %v; want the box's own copy "+

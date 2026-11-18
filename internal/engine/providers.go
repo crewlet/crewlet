@@ -339,6 +339,29 @@
 // kept under a larger window, continued on a member whose model has a smaller
 // one, can be past what one request can send (launchFloor.carriedBy).
 //
+// THE CONTEXT A CONTINUED SESSION'S FLOOR HOLDS is its harness's own estimate
+// of the session's next request where the capture or the job's record holds
+// one, read at the rate of the model the member names (continuedContext over
+// sandbox.NextRequest.At), and the last request's input only where neither
+// does: never the larger of the two, since past a compaction no request has
+// followed, the last request's input is the compacted-away conversation's.
+// Both are the continued session's own: a kept capture's its stamp's
+// (runner.SessionBasis.NextRequest), never a newer capture's of its job that
+// the relaunch continued past, and the job's copy in its box its job's
+// record's, else its newest capture's (runner.SessionBasis.CopyNextRequest).
+//
+// WHICH SESSION A LAUNCH CONTINUES is answered for ANY MEMBER OF THE CHAIN,
+// never one picked by the probe (agentLauncher.ProbeSession): the launch picks
+// its member once, as it launches (agentLauncher.member), and a member's plan
+// can be spent or come back between the probe and that pick. Asked for one
+// member, the probe answered for a member the launch then passed over,
+// holding the launch to the floor of a session it would start fresh, or
+// writing no continuation for a session its member could have taken up. So
+// the briefs that continue the session are written wherever some member
+// restores it, and the launch hands them on only where the member it picked
+// runs the harness that wrote the session (runner.SessionBasis.Harness,
+// agentLauncher.continuedFloor).
+//
 // # Seat credentials issued at use
 //
 // Some integrations never seal an agent's credential: the engine issues it,

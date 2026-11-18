@@ -4422,6 +4422,11 @@ type PriorBox struct {
 	// thread whole or not by the rules of its release, or the record held no
 	// count.
 	Restart *string
+	// Writer is the release that wrote that copy, as that job's record's
+	// count named it ([LaunchRecord.CountRelease]): what the box's OpenCode
+	// point is paired with where the copy is continued in place. "" where the
+	// record named none.
+	Writer string
 }
 
 // KeptBoxMaxAge is how old a turn's box may be, dated from the attach that
@@ -4861,7 +4866,7 @@ type LaunchRecord struct {
 	// the job; every other is carried, and says from where ([MeasureSource]).
 	Context *SessionMeasure `json:"session_context,omitempty"`
 
-	// ResumedCount is what Claude Code counts the copy of the session the
+	// ResumedCount is what the harness counts the copy of the session the
 	// job's box holds at before its next request (resumed.go), as the read
 	// that collected the job found it in one read of the job's main thread
 	// (mainthread.go), written with HarnessEnd in that read's one write
@@ -4873,6 +4878,43 @@ type LaunchRecord struct {
 	// another harness, one an older build collected, a write that did not
 	// land, each read as a copy that may compact.
 	ResumedCount *ResumedCount `json:"resumed_count,omitempty"`
+
+	// CountProvider is the provider of the reply an OpenCode ResumedCount is
+	// anchored on, as the same read found it: a count is OpenCode's estimate
+	// for the provider that answered that reply, which a continuation on
+	// another provider's model is not held to. BESIDE THE COUNT, NEVER IN IT:
+	// ResumedCount is closed, so a later build's knowledge of a count rides a
+	// key of the record that holds it, which an older build's write carries
+	// in Extra. Written and cleared where the count is
+	// ([LaunchRecord.counted]), and NEVER CARRIED. "" for a Claude Code
+	// count, where no reply anchored one, and on a record an older build
+	// wrote. Held to [ValidCountProvider].
+	CountProvider string `json:"count_provider,omitempty"`
+
+	// CountRelease is the release of the harness whose thread ResumedCount
+	// read ([Result.HarnessVersion]): the writer of the copy the job's box
+	// holds, which a relaunch continuing that copy in the box pairs the box's
+	// OpenCode point with ([PriorBox.Writer]). On the record, never only on a
+	// capture's stamp, since a company that keeps no session takes none.
+	// Written and cleared where the count is ([LaunchRecord.counted]), NEVER
+	// CARRIED, held to [ValidRelease]. "" where no read named a release and
+	// on a record an older build wrote: no pair, the copy told as a summary.
+	CountRelease string `json:"count_release,omitempty"`
+
+	// NextRequestTokens and NextRequestOlderTokens are the harness's own
+	// estimate of the next request of the copy the job's box holds, at each
+	// of the two rates Claude Code counts text at ([NextRequest],
+	// [LaunchRecord.NextRequest]), as the read that collected the job found it
+	// in the same read of the job's main thread as ResumedCount, written with
+	// HarnessEnd in that read's one write ([PendingStore.MarkHarnessEnd]):
+	// what a relaunch that continues the copy in the job's box is held to with
+	// its brief (internal/engine's continuedFloor), where the job's newest
+	// request's input (Context) under-counts it. NEVER CARRIED, as the count
+	// is not: the next launch's record starts with none. Zero where nothing
+	// estimated it (a job of another harness, a thread not read whole, one an
+	// older build collected, a write that did not land), each read as Context.
+	NextRequestTokens      int64 `json:"next_request_tokens,omitempty"`
+	NextRequestOlderTokens int64 `json:"next_request_older_tokens,omitempty"`
 
 	// BasisRestart is the newest place the session the launch handed its run
 	// restarts at ([ResumedCount.Restart]), as the launch knew it when it

@@ -80,7 +80,7 @@ func (r *Runner) leadsAgain(ctx context.Context, history []ledger.Iteration, cur
 		// kept and handed on, for a later read to tell.
 		out      = toldAgain{unread: slices.Clone(r.cfg.Resume.LeadsUnread)}
 		rendered []string
-		tells    = func(told ResumeLead) bool { return told.Told || all }
+		tells    = oneAsk(r.cfg.Resume.Leads, func(told ResumeLead) bool { return told.Told || all })
 		nested   = answersNested(r.cfg.Resume.Leads, tells)
 	)
 	for _, told := range r.cfg.Resume.Leads {
@@ -115,7 +115,7 @@ type tasksTold []int64
 func answersNested(leads []ResumeLead, tells func(ResumeLead) bool) tasksTold {
 	var tasks tasksTold
 	for _, told := range leads {
-		if tells(told) && toldAsTask(told.Lead) {
+		if tells(told) && (toldAsTask(told.Lead) || toldAsFresh(told.Lead)) {
 			tasks = append(tasks, told.Lead.Seq)
 		}
 	}
@@ -129,6 +129,37 @@ func answersNested(leads []ResumeLead, tells func(ResumeLead) bool) tasksTold {
 // the answers that task carries would be told nowhere.
 func toldAsTask(lead sandbox.Lead) bool {
 	return lead.Unread == "" && lead.Kind == sandbox.LeadKindTask && lead.Task != nil
+}
+
+// toldAsFresh reports whether lead is told again as the task a fresh brief
+// opened with, its answers nested under it as a task lead's are
+// ([toldAsTask], [Runner.freshAgain]): a fresh lead that opened here.
+func toldAsFresh(lead sandbox.Lead) bool {
+	return lead.Unread == "" && lead.Kind == sandbox.LeadKindFresh && lead.Task != nil
+}
+
+// oneAsk is tells narrowed so that a section tells the turn's ask once (see
+// the package doc): no fresh lead where a task lead that opens here is told,
+// else one, the newest that opens here, or the newest where none does.
+func oneAsk(leads []ResumeLead, tells func(ResumeLead) bool) func(ResumeLead) bool {
+	kept := -1
+	for i, told := range leads {
+		switch {
+		case !tells(told):
+		case toldAsTask(told.Lead):
+			return func(t ResumeLead) bool { return tells(t) && t.Lead.Kind != sandbox.LeadKindFresh }
+		case told.Lead.Kind == sandbox.LeadKindFresh &&
+			(kept < 0 || toldAsFresh(told.Lead) || !toldAsFresh(leads[kept].Lead)):
+			kept = i
+		}
+	}
+	if kept < 0 {
+		return tells
+	}
+	job := leads[kept].Lead.Job
+	return func(t ResumeLead) bool {
+		return tells(t) && (t.Lead.Kind != sandbox.LeadKindFresh || t.Lead.Job == job)
+	}
 }
 
 // carries reports whether a task told again carries lead, an answer: whether
@@ -179,6 +210,8 @@ func (r *Runner) leadAgain(ctx context.Context, told ResumeLead, tasks tasksTold
 				Again: true}).Nested().Text, nil, 0
 		}
 		return prompts.ReviewNotKept, nil, 0
+	case toldAsFresh(lead):
+		return r.freshAgain(ctx, lead, tasks.from(lead.Seq), history, current, b)
 	case toldAsTask(lead):
 		return r.taskAgain(ctx, lead, tasks.from(lead.Seq), history, current, b)
 	}
@@ -214,18 +247,35 @@ func reviewOf(history []ledger.Iteration, iteration int) (string, bool) {
 func (r *Runner) taskAgain(ctx context.Context, lead sandbox.Lead, from int64, history []ledger.Iteration,
 	current int, b provenance.Boundary) (string, []toldHeld, int) {
 
-	task := *lead.Task
 	m := prompts.NextTurn{Fire: notify.Scheduled(r.cfg.Turn.ConversationKey)}
 	if base := r.cfg.Resume.Base; base != nil {
 		m.BaseTurn, m.EndedAt, m.CapturedAt = provenance.Neutralise(b, base.Turn), base.EndedAt, base.CapturedAt
 		m.WentOn, m.Lost, m.Interrupted = base.WentOn, base.Lost, base.Interrupted
 	}
+	return r.askAgain(ctx, prompts.NextTurnAgain(m), lead, from, history, current, b)
+}
+
+// freshAgain is a fresh lead told again, to a run working in round current:
+// the turn's ask as the fresh brief rendered it, with the answers that brief
+// told, as [Runner.taskAgain] tells a task's, under [prompts.FreshTaskAgain]
+// rather than a turn boundary, which that brief never said.
+func (r *Runner) freshAgain(ctx context.Context, lead sandbox.Lead, from int64, history []ledger.Iteration,
+	current int, b provenance.Boundary) (string, []toldHeld, int) {
+	return r.askAgain(ctx, prompts.FreshTaskAgain, lead, from, history, current, b)
+}
+
+// askAgain is the turn's ask a task or fresh lead's brief rendered, told again
+// under heading ([Runner.taskAgain], [Runner.freshAgain]).
+func (r *Runner) askAgain(ctx context.Context, heading string, lead sandbox.Lead, from int64,
+	history []ledger.Iteration, current int, b provenance.Boundary) (string, []toldHeld, int) {
+
+	task := *lead.Task
 	rendered := roundsThrough(history, task.Rounds)
 	reviewed := ""
 	if task.Reviewed > 0 {
 		reviewed, _ = reviewOf(history, task.Reviewed)
 	}
-	told := prompts.NextTurnAgain(m) + "\n\n" + r.turnAsk(ctx, rendered, reviewed).Nested().Text
+	told := heading + "\n\n" + r.turnAsk(ctx, rendered, reviewed).Nested().Text
 	answers := earlierAnswers(answersBetween(r.cfg.Resume.Leads, from, lead.Seq), current, rendered, 0, false, b)
 	if answers.section.Text != "" {
 		told += "\n\n" + answers.section.Nested().Text
@@ -537,6 +587,15 @@ func taskLead(round int, history []ledger.Iteration, notes string) []sandbox.Lea
 		task.Reviewed = history[len(history)-1].Iteration
 	}
 	return []sandbox.Lead{{Kind: sandbox.LeadKindTask, Round: round, Task: task}}
+}
+
+// freshLead is the lead a fresh brief opens a session of the run's own with, as
+// the run keeps it beside its record: the turn's task, with the same facts as
+// a task lead's ([taskLead]), for round, the round the launch runs.
+func freshLead(round int, history []ledger.Iteration, notes string) []sandbox.Lead {
+	lead := taskLead(round, history, notes)
+	lead[0].Kind = sandbox.LeadKindFresh
+	return lead
 }
 
 // lastRound is the number of the last closed round history holds, zero for none:

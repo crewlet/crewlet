@@ -419,7 +419,19 @@ type SessionCapture struct {
 	// none this build reads.
 	ContextTokens int64 `json:"context_tokens,omitempty"`
 
-	// ResumedCount is what Claude Code counts the session at before its next
+	// NextRequestTokens and NextRequestOlderTokens are the harness's own
+	// estimate of the session's next request at each of the two rates Claude
+	// Code counts text at ([NextRequest], [SessionCapture.NextRequest]), as the
+	// take read its archive's main thread whole ([TakenSession.Next]): what a
+	// launch that continues the session is held to with its brief, where its
+	// last request's input (ContextTokens) under-counts it. Zero where the take
+	// read none (a harness whose taker estimates none, a thread not read whole,
+	// a stamp settled off the executor log, which carries ContextTokens alone,
+	// a stamp an older build wrote), each read as ContextTokens.
+	NextRequestTokens      int64 `json:"next_request_tokens,omitempty"`
+	NextRequestOlderTokens int64 `json:"next_request_older_tokens,omitempty"`
+
+	// ResumedCount is what its harness counts the session at before its next
 	// request, as the take read its archive's main thread whole
 	// ([TakenSession.Count], resumed.go), with the least window the run that
 	// left it reported ([Result.ReportedWindow]): what a launch that continues
@@ -430,6 +442,15 @@ type SessionCapture struct {
 	// that may compact. Its mark is held to [maxCountMarkBytes]
 	// ([SessionCapture.Bounded]).
 	ResumedCount *ResumedCount `json:"resumed_count,omitempty"`
+
+	// CountProvider is the provider of the reply an OpenCode ResumedCount is
+	// anchored on, as the take read it ([TakenSession.CountProvider]): BESIDE
+	// THE COUNT, NEVER IN IT, since ResumedCount is closed and an older build's
+	// write carries this key in Extra ([LaunchRecord.CountProvider] has why a
+	// count needs it). "" for a Claude Code count, where no reply anchored
+	// one, and on a stamp an older build wrote. Held to [ValidCountProvider]
+	// ([SessionCapture.Bounded]).
+	CountProvider string `json:"count_provider,omitempty"`
 
 	// At is when it was taken, on this node's clock.
 	At time.Time `json:"at"`
@@ -574,7 +595,17 @@ func (c SessionCapture) Bounded() error {
 				len(*count.Restart), RestartIDMaxBytes, ErrCaptureUnbounded)
 		}
 	}
+	if !ValidCountProvider(c.CountProvider) {
+		return fmt.Errorf("sandbox: its count's provider is %d bytes, past the %d it may be or holding a byte "+
+			"a record escapes: %w", len(c.CountProvider), MaxCountProviderBytes, ErrCaptureUnbounded)
+	}
 	return nil
+}
+
+// NextRequest is what c's stamp says the session's next request carries
+// ([SessionCapture.NextRequestTokens]).
+func (c SessionCapture) NextRequest() NextRequest {
+	return NextRequest{Tokens: c.NextRequestTokens, OlderTokens: c.NextRequestOlderTokens}
 }
 
 // RunStart is where the run that packed c's session began in it, as the stamp
@@ -1553,11 +1584,13 @@ func (c *Coordinator) besideAnother(ctx context.Context, run PendingRun, stamp S
 }
 
 // spooledWhole is what a take does once its session is spooled: the last
-// request's context read off the archive as it was spooled, for the floor of
-// the launch that continues it, and what Claude Code counts the archive at with
-// window, the least window the run reported ([capturePoint.window]), for its
-// telling, both stamped with the capture's outcome, which is the stamp that
-// launch reads; and the kept archive's digest left in its box
+// request's context and the harness's own estimate of the next request, read
+// off the archive as it was spooled, for the floor of the launch that
+// continues it, and what the harness counts the archive at with window, the
+// least window the run reported ([capturePoint.window]), and the provider an
+// OpenCode count is anchored on, for its telling, both stamped with the
+// capture's outcome, which is the stamp that launch reads; and the kept
+// archive's digest left in its box
 // ([TakenSession.Keep]).
 func (c *Coordinator) spooledWhole(ctx context.Context, by time.Time, run PendingRun, spooled *spooledCapture,
 	taken TakenSession, window int64) {
@@ -1565,13 +1598,26 @@ func (c *Coordinator) spooledWhole(ctx context.Context, by time.Time, run Pendin
 	if taken.Context != nil {
 		spooled.stamp.ContextTokens = taken.Context()
 	}
-	// AND WHAT CLAUDE CODE COUNTS THE ARCHIVE AT, as the take read its main
-	// thread whole, beside the least window the run reported: what a launch
-	// that continues this capture judges its first request by.
+	// AND THE HARNESS'S OWN ESTIMATE OF ITS NEXT REQUEST, off the same read:
+	// what a launch that continues this capture is held to with its brief.
+	if taken.Next != nil {
+		next := taken.Next()
+		spooled.stamp.NextRequestTokens, spooled.stamp.NextRequestOlderTokens = next.Tokens, next.OlderTokens
+	}
+	// AND WHAT THE HARNESS COUNTS THE ARCHIVE AT, as the take read it whole,
+	// beside the least window the run reported and the provider of the reply
+	// an OpenCode count is anchored on: what a launch that continues this
+	// capture judges its first request by. Held to what a stamp carries
+	// ([ResumedCount.provided]), so the take never loses its capture to a
+	// count the stamp's bounds refuse.
 	if taken.Count != nil {
 		if count := taken.Count(); count != nil {
 			count.Window = window
-			spooled.stamp.ResumedCount = count.bounded()
+			var provider string
+			if taken.CountProvider != nil {
+				provider = taken.CountProvider()
+			}
+			spooled.stamp.ResumedCount, spooled.stamp.CountProvider = count.provided(provider)
 		}
 	}
 	digestCtx, digestCancel := stampContext(ctx, by)

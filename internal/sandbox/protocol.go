@@ -560,16 +560,34 @@ type Result struct {
 	// runner's collection, beside its result.
 	ReportedWindow int64
 
-	// ResumedCount is what Claude Code counts the copy of the session the
+	// ResumedCount is what its harness counts the copy of the session the
 	// job's box holds at before its next request, as the read that collected
 	// this result found it in one read of the job's main thread
 	// ([Coordinator.readMainThread]), with ReportedWindow beside it: recorded
 	// on the job's record with HarnessEnd, in that read's one write
 	// ([LaunchRecord.ResumedCount]), and carried back for the claim it
 	// collects for. Set by the coordinator, never by a runner; nil where the
-	// read asked nothing (a stop's, a loss's, another harness's job), and from
-	// a host of an older build, which reads as a copy that may compact.
+	// read asked no count (a stop's, a loss's, a job of neither Claude Code
+	// nor OpenCode, [asksMainThread]), and from a host of an older build,
+	// which reads as a copy that may compact.
 	ResumedCount *ResumedCount
+
+	// CountProvider is the provider of the reply an OpenCode ResumedCount is
+	// anchored on, off the same read: recorded beside the count on the job's
+	// record ([LaunchRecord.CountProvider]) and carried back with it. "" for a
+	// Claude Code count, where no reply anchored one, and from a host of an
+	// older build.
+	CountProvider string
+
+	// NextRequest is the harness's own estimate of the next request of the
+	// copy the job's box holds, as the read that collected this result found
+	// it in the same read of the job's main thread as ResumedCount: recorded
+	// on the job's record with HarnessEnd, in that read's one write
+	// ([LaunchRecord.NextRequestTokens]), and carried back for the claim it
+	// collects for. Set by the coordinator, never by a runner; zero where the
+	// read made none, and from a host of an older build, which leaves the
+	// record what it held.
+	NextRequest NextRequest
 
 	// Turns is how many model turns the run's harness says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero
