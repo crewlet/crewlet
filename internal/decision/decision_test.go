@@ -209,3 +209,23 @@ func fixture() *decision.Decision {
 		Role:        decision.RoleApprover,
 	}
 }
+
+// A QUESTION COMPOSED FROM UNBOUNDED NAMES IS THE MOST SPECIFIC PHRASING THAT
+// FITS, and the last where none does. Mutation: return the first phrasing
+// and the long one is refused at write.
+func TestAQuestionIsTheMostSpecificPhrasingThatFits(t *testing.T) {
+	t.Parallel()
+	long := "May " + strings.Repeat("x", decision.MaxQuestion) + " run it?"
+	for _, c := range []struct {
+		phrasings []string
+		want      string
+	}{
+		{[]string{"May cto run it?", "May this agent run it?"}, "May cto run it?"},
+		{[]string{long, "May this agent run it?"}, "May this agent run it?"},
+		{[]string{long, long + "!"}, long + "!"},
+	} {
+		if got := decision.FittingQuestion(c.phrasings...); got != c.want {
+			t.Errorf("FittingQuestion = %.40q, want %.40q", got, c.want)
+		}
+	}
+}
