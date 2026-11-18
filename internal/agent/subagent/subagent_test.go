@@ -456,6 +456,31 @@ func TestAGrantIsBoundedByTheParentsOwnTools(t *testing.T) {
 	}
 }
 
+// THE EXECUTOR ASKS IN ITS HARNESS'S SPELLING. It delegates from its harness,
+// which shows it the engine's tools under a prefix of its own, so the names it
+// passes are that harness's (`mcp__crewlet__read_file`). Compared verbatim,
+// every one was refused and the worker went without the tools it was sent
+// for. A prefixed name still reaches no tool the grant refuses.
+//
+// Mutation: compare the asked name verbatim, and every prefixed name is
+// rejected.
+func TestAGrantReadsAToolNameInItsHarnesssSpelling(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	g := subagent.Permit(w.snapshot, []string{"read_file"},
+		[]string{"mcp__crewlet__read_file", "crewlet_read_file", "mcp__crewlet__web_search"})
+
+	if !slices.Contains(g.Active, "read_file") || slices.Contains(g.Active, "mcp__crewlet__read_file") {
+		t.Errorf("active = %v, want read_file under the engine's own name", g.Active)
+	}
+	if n := slices.Index(g.Active, "read_file"); slices.Index(g.Active[n+1:], "read_file") >= 0 {
+		t.Errorf("one tool asked in two spellings was granted twice: %v", g.Active)
+	}
+	if !slices.Equal(g.Rejected, []string{"mcp__crewlet__web_search"}) {
+		t.Errorf("rejected = %v, want the tool the parent lacks, as it was asked", g.Rejected)
+	}
+}
+
 func TestAGrantRefusesTheEngineControlDenylist(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
