@@ -4,12 +4,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -262,6 +264,78 @@ func TestTheRunsOpeningFrameIsTheUnheldBriefWhereItWasHanded(t *testing.T) {
 			if !strings.Contains(want, other) && strings.Contains(published[len(published)-1], other) {
 				t.Errorf("%s: the opening frame states a brief the run was not handed:\n%s", name, other)
 			}
+		}
+	}
+}
+
+// A HOOK'S UNHELD TELLING IS JUDGED ON ITS OWN BRIEF. It tells again every note
+// from the first read at a hook's step, so it is longer than the default: at
+// the compaction point's edge the default's brief for a new box sends the
+// session whole and its own does not. There a box whose release the resume was
+// not read in is handed the briefs told as a session that may be a summary, the
+// note among them, and its guard arms no skill where the launch says it handed
+// them; the default's guard still arms its own.
+//
+// Mutation: judge the unheld telling by the default's verdict, or arm the guard
+// by the default's value where the launch handed the unheld one, and a case
+// goes red.
+func TestAHooksUnheldTellingIsJudgedOnItsOwnBrief(t *testing.T) {
+	t.Parallel()
+	active := guarded{basis: inBoxBasis}.relaunch(t).Surface.Active()
+	long := noteRead("hook", 1, types.SteerBoundaryToolBatch, false)
+	long.Text = strings.Repeat("keep the long note short ", 76)
+	at := func(tokens int64, decides func(runner.AgentRunRequest) runner.SessionDecision) guarded {
+		return guarded{basis: keptClaude(countOf(tokens), false), decides: decides,
+			state: execstate.State{ActiveTools: active, LoadedSkills: []string{"chat-conventions"}},
+			carry: func(r *runner.Resume) {
+				answered("use main")(r)
+				copyOf(sandbox.HarnessEndOwnRun, countOf(tokens))(r)
+				r.Steered = []steer.Read{long}
+			}}
+	}
+	first := at(10_000, nil).relaunch(t)
+	if first.Session == nil || first.Session.Unheld == nil {
+		t.Fatalf("the continuation carries no unheld telling, so the case tests nothing: %+v", first.Session)
+	}
+	edge, hi := int64(1), int64(200_000)
+	for edge < hi {
+		if mid := (edge + hi + 1) / 2; standard200k.SendsWhole(countOf(mid), first.Session.Replaced) {
+			edge = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	if standard200k.SendsWhole(countOf(edge), first.Session.Unheld.Replaced) {
+		t.Fatalf("at %d tokens the unheld brief sends whole too, so the case tests nothing", edge)
+	}
+	unheld := func(runner.AgentRunRequest) runner.SessionDecision {
+		return runner.SessionDecision{Continues: true, Kept: true, NewBox: true, Unheld: true}
+	}
+	for name, tc := range map[string]struct {
+		tokens         int64
+		decides        func(runner.AgentRunRequest) runner.SessionDecision
+		summary, armed bool
+	}{
+		"at the edge, the unheld telling handed": {tokens: edge, decides: unheld, summary: true},
+		"at the edge, the default handed":        {tokens: edge, summary: true, armed: true},
+		"far from it, the unheld telling handed": {tokens: 10_000, decides: unheld, armed: true},
+	} {
+		req := at(tc.tokens, tc.decides).relaunch(t)
+		s := req.Session
+		if s == nil || s.Unheld == nil || strings.Contains(s.Replaced, prompts.MayCompactSession) {
+			t.Fatalf("%s: the relaunch continues %+v, want the default held and an unheld telling beside it",
+				name, s)
+		}
+		u := s.Unheld.Replaced
+		if got := strings.Contains(u, prompts.MayCompactSession); got != tc.summary ||
+			!strings.Contains(u, noteMsg(long)) {
+			t.Errorf("%s: the unheld telling is told as a summary: %v, want %v, the note told:\n%s", name, got,
+				tc.summary, u)
+		}
+		bridged := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"hi"}`)}})
+		refused := bridged[0].Failed && strings.Contains(bridged[0].Result, "chat-conventions")
+		if refused == tc.armed {
+			t.Errorf("%s: a skill-covered call refused for its skill: %v, want %v", name, refused, !tc.armed)
 		}
 	}
 }

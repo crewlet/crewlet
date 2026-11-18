@@ -673,8 +673,8 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// AND JUDGED ON THAT LEAD, known before the budget is asked: where
 		// its harness may hand the session to its model as a summary, the
 		// telling of a session that may be one is handed ([firstRequest]).
-		briefs.kept, briefs.keptHolds, briefs.exact = r.keptTellings(ctx, basis, collected, round, nil, history,
-			built, fresh, "").led(ctx, r, r.sendBackLead(notes).Text, reviewLead(history))
+		briefs.kept, briefs.keptHolds, briefs.exact, briefs.unheldHolds = r.keptTellings(ctx, basis, collected,
+			round, nil, history, built, fresh, "").led(ctx, r, r.sendBackLead(notes).Text, reviewLead(history))
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
 		// launch armed only where its box said it took them up.
@@ -1012,7 +1012,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if carry.keeps() {
 		switch {
 		case basis.Continues():
-			briefs.kept, briefs.keptHolds, briefs.exact = kept.led(ctx, r, lead, own)
+			briefs.kept, briefs.keptHolds, briefs.exact, briefs.unheldHolds = kept.led(ctx, r, lead, own)
 		case basis.ContinuesBase():
 			// A TURN THAT HAS KEPT NO SESSION OF ITS OWN — its job lost with
 			// its box before anything of it was kept — continues the one its

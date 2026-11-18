@@ -2030,6 +2030,12 @@ type launchBriefs struct {
 	// calls its reading found the session holding, read in place of keptHolds
 	// where the launch hands that telling's brief. Zero where none rides.
 	exact exactHolds
+
+	// unheldHolds is the value the kept continuation's telling for a box
+	// whose release the resume was not read in was decided by
+	// ([keptTellings.led]), read in place of keptHolds where the launch hands
+	// that telling's brief ([SessionDecision.Unheld]).
+	unheldHolds sessionHolds
 }
 
 // sessionDecided is what a launch tells the runner once it has decided how its
@@ -2056,18 +2062,16 @@ type launchBriefs struct {
 // THE VALUE THAT TELLING WAS DECIDED BY ([exactHolds]): beside the loads the
 // save point holds, the job's own loads among the calls its reading found the
 // session holding (past the job's BridgeFrom, as [ownCalls] judges a job's
-// own), since a load the reading holds is in the session whole as one below
-// the save point is; none at all where the session may be a summary, its job
-// having restarted it. A subagent's held load arms the run's one guard, as
-// the live run's guard does: a job's call is its own whatever thread made it.
+// own), whole in the session as one below the save point is, a subagent's
+// among them; none where the session may be a summary, its job having
+// restarted it. Where it handed the one for a box whose release the resume
+// was not read in ([SessionDecision.Unheld]), that telling's value.
 //
-// AND IT PUBLISHES THE PROMPT THE RUN WAS HANDED as the phase's opening frame
-// ([emitter.prompted]) — the continuation in the form its box takes, the one
-// told by a reading or the one for a box whose release the resume was not read
-// in where the launch handed it ([SessionDecision.Unheld]), or the fresh
-// brief — where the phase's record does not carry it already: the started
-// record carries the fresh brief, which a run that continues its session never
-// reads.
+// AND IT PUBLISHES THE PROMPT THE RUN WAS HANDED, the one of whichever telling
+// the launch handed in the form its box takes, or the fresh brief, as the
+// phase's opening frame ([emitter.prompted]) where the phase's record does not
+// carry it already: the started record carries the fresh brief, which a run
+// that continues its session never reads.
 //
 // What it decided is kept in decided, which the box's word on the session it
 // started is read against ([Runner.sessionStarted]), BESIDE THE SKILLS IT ARMED,
@@ -2092,6 +2096,7 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 				holds, readHeld = b.exact.holds, b.exact.held
 				brief, replaced = b.kept.Exact.Brief, b.kept.Exact.Replaced
 			case d.Unheld && b.kept.Unheld != nil:
+				holds = b.unheldHolds
 				brief, replaced = b.kept.Unheld.Brief, b.kept.Unheld.Replaced
 			}
 			// NONE WHERE THE SESSION MAY BE A SUMMARY: a summary holds a skill's

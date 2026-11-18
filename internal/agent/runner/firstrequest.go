@@ -12,16 +12,16 @@ import (
 
 // WHETHER A CONTINUED SESSION REACHES ITS RUN'S FIRST REQUEST WHOLE. A relaunch
 // tells it what it lacks and counts the rest as held, which can be gone: Claude
-// Code may compact it before that request (internal/sandbox's SendsWhole), and a
-// session its job restarted after its brief holds only what the restart left. So
-// each path decides ONE VALUE, once ([sessionHolds]), after its briefs and lead
-// exist, since compaction is judged on the held telling's brief ([firstRequest]);
-// every telling of the path and its guard read it. One that may lack what it is
-// counted as holding is told as cut off, its guard arming no skill a summary may
-// hold only in words. A thread that restarted at all holds the closed rounds only
-// in a summary, which no listed call's value can be compared with
-// ([sessionHolds.closedSummarized], [Runner.otherCalls]). A kept cut-off session
-// may also get a telling by a reading of the calls it holds ([keptTellings]).
+// Code may compact it before that request (internal/sandbox's SendsWhole), and
+// a session its job restarted after its brief holds only what the restart left.
+// So each path decides ONE VALUE, once ([sessionHolds]), after its briefs and
+// lead exist ([firstRequest] judges the held brief); its tellings and guard
+// read it, one that may lack what it is counted as holding told as cut off, its
+// guard arming no skill a summary may hold only in words. A thread that ever
+// restarted holds the closed rounds only in a summary no listed call's value
+// compares with ([sessionHolds.closedSummarized], [Runner.otherCalls]). A kept
+// cut-off session may get a telling by a reading of its calls, and an unread
+// release's box an unheld one, each judged on its own brief ([keptTellings]).
 
 // firstRequest is how a relaunch judges whether the session a path continues
 // still holds, at its run's first request, what its telling counts as held:
@@ -283,20 +283,20 @@ func (r *Runner) keptTellings(ctx context.Context, basis SessionBasis, round rou
 	return t
 }
 
-// led is the kept continuation the path's verdict picks, led by lead and own (the
-// leads its launch keeps), with the value its telling and guard were decided by:
-// the held telling where it sends the session whole, else the summarized one.
-// Judged on the LONGER of the held telling's two briefs (the one for another box),
-// as the launch's floor reads them; monotone, since the summarized telling is
-// never the shorter and is handed wherever the held one may compact.
-//
-// The exact telling ([SessionContinuation.Exact]) is decided FIRST, for the
-// default's log line; attached only where [firstRequest.judges] and its OWN brief
-// sends whole (else executor_session_holdings_unused), since it drops held calls
-// and may add sections. [Runner.sessionDecided] reads its value (exactHolds)
-// where the launch hands it; its Resumer is [SessionBasis.Release].
+// led is the kept continuation the path's verdict picks, led by lead and own
+// (the leads its launch keeps), and each telling's value,
+// [Runner.sessionDecided] reading the handed one's. The default is the held
+// telling where it sends the session whole, else the summarized one, judged on
+// the LONGER held brief (another box's) as the launch's floor reads it:
+// monotone, the summarized one never the shorter. The exact telling
+// ([SessionContinuation.Exact], resumed by [SessionBasis.Release]) is decided
+// FIRST, for the default's log line, and rides only where [firstRequest.judges]
+// and its OWN brief sends whole (else executor_session_holdings_unused). The
+// unheld one ([SessionContinuation.Unheld]) retells every note from a hook's
+// step, so is the longer: where its own brief may compact, it is the summarized
+// telling, value too.
 func (t keptTellings) led(ctx context.Context, r *Runner, lead string,
-	own []sandbox.Lead) (*SessionContinuation, sessionHolds, exactHolds) {
+	own []sandbox.Lead) (*SessionContinuation, sessionHolds, exactHolds, sessionHolds) {
 
 	var exact *ExactTelling
 	var value exactHolds
@@ -325,10 +325,19 @@ func (t keptTellings) led(ctx context.Context, r *Runner, lead string,
 			picked, holds.compacts = summed, true
 		}
 	}
-	if picked != nil {
-		picked.Exact = exact
+	if picked == nil {
+		return nil, holds, value, holds
 	}
-	return picked, holds, value
+	picked.Exact = exact
+	unheld := holds
+	// Only a held telling carries one, and judged it implies byBrief, under
+	// which t.summed was built.
+	if u := picked.Unheld; u != nil && r.judged(ctx, t.f, "kept_unheld", u.Replaced, false) {
+		summed := t.summed.led(lead, own)
+		picked.Unheld = &UnheldTelling{Brief: summed.Brief, Replaced: summed.Replaced, Told: summed.Told}
+		unheld.compacts = true
+	}
+	return picked, holds, value, unheld
 }
 
 // exactHolds is the value the exact telling was decided by ([keptTellings.led]):

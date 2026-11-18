@@ -18,13 +18,10 @@ var toldUnheld = BriefTold{Omitted: []int{4}, Own: []Lead{answerLead("told again
 // A HOOK NOTE IS TOLD AGAIN IN A BOX WHOSE RELEASE THE RESUME WAS NOT READ IN.
 // A read at a hook's step is held as the job's session showed it, which only a
 // release whose resume this build read rebuilds (CarryCheck.ResumeRead). So a
-// box whose harness answers such a release is handed the brief told by the
-// save point, and any other the one that tells those notes again
-// ([UnheldTelling]), for the box it is, its own told set recorded and the
-// launch's decision saying it handed that telling, so the runner publishes and
-// guards by it. The job's own box, its copy taken whole there, is asked
-// nothing and holds what its own release wrote, so it is handed the save
-// point's.
+// box answering such a release is handed the save point's brief, and any other
+// the one that tells those notes again ([UnheldTelling]) for the box it is,
+// its told set recorded and the decision saying so. The job's own box, its
+// copy taken whole there, is asked nothing and is handed the save point's.
 //
 // Mutation: hand the unheld brief whatever the box answers, never hand it,
 // hand it to the job's own whole copy, record the save point's told set beside
