@@ -80,7 +80,8 @@ const (
 
 // HookReceipts is what the job's session shows of the takes asked: each asked
 // take in one list at most, or in none where the read cannot decide it, Why
-// saying why where none is decided.
+// saying why where none is decided. A thread that compacted or rooted again
+// decides none (executor's package doc, "A hook's note").
 type HookReceipts struct {
 	// Held are takes the session shows taken after its last restart.
 	Held []string

@@ -196,6 +196,15 @@
 // a turn of its own. A pair the resume does not hand (a withdrawn record, a
 // parent naming no record) is neither, and is evidence its take arrived.
 //
+// SO A THREAD THAT COMPACTED DECIDES NO TAKE, wherever its pairs lie: a
+// compaction's boundary, or a record the dispatch from the last record does
+// not reach (a later root's thread), binds it to the small path, so it is no
+// thread every size path reads alike, and every take on it is undecided and
+// its note told again; Restarted is never reached through a compaction or a
+// later root. Holding the pairs after the last boundary needs what every size
+// path hands of the records after it, which the readers' ports have not
+// measured.
+//
 // No walk is made for takes on a release whose resume was not read, where
 // none can be held and so none absent, nor for more than 64, which a hook
 // record's masks cannot name ([unreadTakes]): each is undecided.

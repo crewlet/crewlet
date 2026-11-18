@@ -484,12 +484,13 @@ type NoteRead struct {
 	Retold *NoteRead `json:"retold,omitempty"`
 
 	// Restarted says the read is a hook's serve its job's session shows taken
-	// BEFORE the session's last restart (a compaction, or a later root of its
-	// thread) ([PendingStore.SettleHook]): the harness took the note, and a
-	// resume of that session rebuilds its conversation from the restart on,
-	// which is not known to hold it. Delivered all the same, and carried; but
-	// no capture of the session counts it held ([notesHeld]), so a launch that
-	// continues one tells it again.
+	// BEFORE the session's last restart ([PendingStore.SettleHook]): the
+	// harness took the note, and a resume of that session rebuilds its
+	// conversation from the restart on, which is not known to hold it.
+	// Delivered all the same, and carried; but no capture of the session
+	// counts it held ([notesHeld]), so a launch that continues one tells it
+	// again. A thread that compacted or rooted again decides no take, so marks
+	// none Restarted (executor's package doc, "A hook's note").
 	Restarted bool `json:"restarted,omitempty"`
 
 	// Extra is every key of the read this build does not know — see

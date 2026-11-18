@@ -84,8 +84,11 @@ func rhPair(event, firing string, takes ...string) []rhRecord {
 
 // rhChained is records chained in order, each the next's parent, the first
 // rooting the thread under a prompt.
-func rhChained(records ...[]rhRecord) []string {
-	lines := []string{rcPrompt(0, 1, 0)}
+func rhChained(records ...[]rhRecord) []string { return rhOn([]string{rcPrompt(0, 1, 0)}, records...) }
+
+// rhOn is lines, then records chained in order after its last.
+func rhOn(lines []string, records ...[]rhRecord) []string {
+	lines = slices.Clone(lines)
 	for _, group := range records {
 		for _, record := range group {
 			n := len(lines) + 1
@@ -105,21 +108,28 @@ func rhBase() []string {
 		rhPair(rhStop, rhStopFire, rhStopTake))
 }
 
-// rhProbe is the lines of a probe's kept main thread before its /compact, whose
-// boundary would leave no pair before it held: a batch's and a Stop's pairs as
-// the release wrote them.
+// rhProbe is the lines of a probe's kept main thread before its /compact: a
+// batch's and a Stop's pairs as the release wrote them, on a thread every size
+// path reads alike, which the whole thread is not ([rhProbeWhole]).
 func rhProbe(t *testing.T, thread string) []string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "claude", thread))
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	lines := rhProbeWhole(t, thread)
 	cut := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, `"subtype":"compact_boundary"`) })
 	if cut < 0 {
 		t.Fatalf("%s holds no compaction to cut before", thread)
 	}
 	return lines[:cut]
+}
+
+// rhProbeWhole is the lines of a probe's whole kept main thread, its /compact
+// included.
+func rhProbeWhole(t *testing.T, thread string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "claude", thread))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
 }
 
 // rhRead is what readMainThread answers of lines, the box's main thread, asked
@@ -262,14 +272,44 @@ func TestAPairTheResumeDoesNotHandIsNotHeld(t *testing.T) {
 
 // A PAIR IS HELD ONLY ON A THREAD EVERY SIZE PATH READS ALIKE (D27): a thread
 // a large-file reader of the resume may read otherwise holds no pair, since
-// the copy resumed may differ in size from the one read.
+// the copy resumed may differ in size from the one read. A compaction's
+// boundary or a later root makes every thread such a one, wherever its pairs
+// lie and whatever its size, so a thread that compacted decides no take (the
+// package doc's "A hook's note").
 //
 // Mutation: hold a pair without asking AnySize, and this goes red.
 func TestAPairIsHeldOnlyOnAThreadEverySizePathReadsAlike(t *testing.T) {
 	t.Parallel()
-	lines := rhBase()
-	lines[0] = ctReplace(t, lines[0], `{"parentUuid":null,"isSidechain":false,`, `{"isSidechain":false,"parentUuid":null,`)
-	rhWant(t, "a record keyed otherwise", rhRead(t, "2.1.322", true, lines, rhAskBatch, rhAskStop), nil, nil, nil)
+	keyed := rhBase()
+	keyed[0] = ctReplace(t, keyed[0], `{"parentUuid":null,"isSidechain":false,`, `{"isSidechain":false,"parentUuid":null,`)
+	compaction := []rhRecord{func(_, n, ms int) string { return rcBoundary(n, ms, `{"trigger":"manual"}`) },
+		func(parent, n, ms int) string { return rcSummary(parent, n, ms) }, rhReply(rcSaid("after"))}
+	root := []rhRecord{func(_, n, ms int) string { return rcPrompt(0, n, ms) }, rhReply(rcSaid("after"))}
+	compacted := []string{rcPrompt(0, 1, 0), rcReply(1, 2, "msg_kept", 100, rcSaid("kept")),
+		rcBoundary(3, 300, `{"trigger":"manual"}`), rcSummary(3, 4, 400)}
+	threads := map[string][]string{
+		"a record keyed otherwise":      keyed,
+		"a compaction after both pairs": rhOn(rhBase(), compaction),
+		"both pairs after a compaction": rhOn(compacted, rhCall("x1"), rhPair(rhBatch, rhBatchFire, rhBatchTake),
+			[]rhRecord{rhReply(rcSaid("done"))}, rhPair(rhStop, rhStopFire, rhStopTake)),
+		"a later root after both pairs": rhOn(rhBase(), root),
+	}
+	for name, lines := range threads {
+		got := rhRead(t, "2.1.322", true, lines, rhAskBatch, rhAskStop)
+		rhWant(t, name, got, nil, nil, nil)
+		if !strings.Contains(got.Why, "every size path") {
+			t.Errorf("%s: why %q; want the size paths named", name, got.Why)
+		}
+	}
+	for _, thread := range ctProbeThreads {
+		got := rhRead(t, strings.Split(thread, "/")[0], true, rhProbeWhole(t, thread),
+			sandbox.AskedTake{Take: ctProbeBatchTake, Event: rhBatch}, sandbox.AskedTake{Take: ctProbeStopTake,
+				Event: rhStop})
+		rhWant(t, thread+" whole", got, nil, nil, nil)
+		if !strings.Contains(got.Why, "every size path") {
+			t.Errorf("%s whole: why %q; want the size paths named", thread, got.Why)
+		}
+	}
 }
 
 // NO TAKE IS HELD FOR A RELEASE THE RESUME WAS NOT READ IN (D28): the chain
