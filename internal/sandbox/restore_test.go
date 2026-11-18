@@ -1216,30 +1216,17 @@ func TestACapturesNoteCursorStopsBeforeAReadItsHarnessNeverHad(t *testing.T) {
 	}
 }
 
-// EVERY STAMP OF A CAPTURE STATES THE NOTES ITS SESSION HOLDS, TAKEN OR REFUSED.
-// The note cursor on a capture's stamp is what a launch that continues it tells
-// it the notes past, on this build where its harness ended its own run and on
-// an older build whatever it ended: so the stamp of a session its harness ended
-// its own run in states every note the record says was read up to the first
-// read it marks unanswered — a take whose answer never reached the harness —
-// and the stamp of one cut off states none — the stamp of a capture taken, and
-// that of one refused before its place was reserved, alike. An older build
-// tells a continuation of a capture cut off every note the turn has read, and
-// one of a capture whose take went unanswered that take's notes, only because
-// its stamp states so.
+// EVERY STAMP OF A CAPTURE STATES THE NOTES ITS SESSION HOLDS, TAKEN OR REFUSED
+// ([SessionCapture.NoteCursor]): where the harness ended its own run, every
+// read up to the first marked unanswered; where it was cut off, none, for a
+// capture taken and one refused before its place alike, since an older build
+// tells a continuation by the stamp alone. A served note unread stops it before
+// its place, a read marked restarted stops it, a confirmed read counts, and an
+// item stops nothing.
 //
-// AND A NOTE A HOOK WAS SERVED stops it before that note's place, where no step
-// has read it, its session maybe lacking it; a read the job's session shows
-// taken only before its last restart stops it too, a resume rebuilding the
-// session from there; a read the session shows taken is counted; and an item
-// for the job, served and never confirmed, stops nothing, being no person's
-// note.
-//
-// Mutation: stamp a capture cut off with every note read, or one whose take
-// went unanswered with that take's notes, where it is taken or where it is
-// refused before its place, and that case goes red. And: stamp past a served
-// note's place, past a read marked restarted, short of a read its session
-// confirmed, or short of an item's place, and that case goes red.
+// Mutation: stamp a capture cut off with every note read, or past an unanswered
+// take, a served note's place or a restarted read, or short of a confirmed read
+// or an item's place, and that case goes red.
 func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1330,10 +1317,17 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 					}
 				}
 				if tc.item {
-					filed, _, err := rig.pending.FileNote(t.Context(), "t1", NoteFiling{Note: RunNote{ID: "item",
-						Sealed: []byte("sealed:item"), For: launched.LaunchID}, MaxWaiting: 5, MaxNotes: 10})
-					if err != nil || filed != NoteAccepted {
-						t.Fatalf("file the job's item = %s, %v", filed, err)
+					// PUT ON THE RECORD BY THE STORE'S OWN WRITE, as an item
+					// is filed: no filer may file one ([ErrNoteKind]).
+					if _, won, _, err := rig.pending.writeFound(t.Context(), "t1", true, Fence{},
+						func(run *PendingRun) bool {
+							run.Steer.Seq++
+							run.Steer.Notes = append(slices.Clone(run.Steer.Notes), RunNote{ID: "item",
+								Seq: run.Steer.Seq, Sealed: []byte("sealed:item"), At: rig.now,
+								For: launched.LaunchID})
+							return true
+						}); err != nil || !won {
+						t.Fatalf("put the job's item on its record: %v, %v", won, err)
 					}
 					serve("item")
 				}

@@ -324,16 +324,16 @@ describe("an executor's live output from its box", () => {
     expect(await screen.findByText("No output yet.")).toBeTruthy();
   });
 
-  // IT HOLDS WHAT IT IS SENT AND FOLLOWS THE END. Each answer adds what was
-  // written since; the block keeps the newest line in view — the one that
-  // says what the executor is doing now — until the reader scrolls up, after which
-  // the text they are reading stays where it is.
-  //
-  // Mutation: drop the follow, and the block stays at its top; follow
-  // regardless of the reader, and their scroll is taken away.
+  // IT HOLDS WHAT IT IS SENT AND FOLLOWS THE END until the reader scrolls up,
+  // when their place holds and Jump to latest takes them back. Mutation: drop
+  // the follow, or follow regardless of the reader, and it goes red.
   test("accumulates what it is sent and follows the end until the reader scrolls up", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
-    const lines = ["[tool] bash: go build\n", "[tool] bash: go vet\n", "[tool] bash: go test\n"];
+    const lines = [
+      "[tool 1] bash: go build\n",
+      "[tool 2] bash: go vet\n",
+      "[tool 3] bash: go test\n",
+    ];
     let end = 0;
     const answer = (n: number): ExecutorTailAnswer => {
       const text = lines[Math.min(n, lines.length) - 1]!;
@@ -360,16 +360,16 @@ describe("an executor's live output from its box", () => {
     };
     const { asked } = mount(PARKED, answer, { selected: "run:L1" });
     await flush();
-    const pre = document.querySelector(".live-output pre") as HTMLElement;
-    expect(pre.textContent).toContain("go build");
-    Object.defineProperty(pre, "scrollHeight", { configurable: true, value: 1_000 });
-    Object.defineProperty(pre, "clientHeight", { configurable: true, value: 100 });
+    const log = document.querySelector(".live-output [role='log']") as HTMLElement;
+    expect(log.textContent).toContain("go build");
+    Object.defineProperty(log, "scrollHeight", { configurable: true, value: 1_000 });
+    Object.defineProperty(log, "clientHeight", { configurable: true, value: 100 });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS);
     });
-    expect(pre.textContent).toContain("go build");
-    expect(pre.textContent).toContain("go vet");
+    expect(log.textContent).toContain("go build");
+    expect(log.textContent).toContain("go vet");
     expect(asked[1]).toEqual({
       turn_id: "turn-1",
       launch_id: "L1",
@@ -377,15 +377,16 @@ describe("an executor's live output from its box", () => {
       after: lines[0]!.length,
       digest: `d${lines[0]!.length}`,
     });
-    expect(pre.scrollTop).toBe(1_000);
+    expect(log.scrollTop).toBe(900);
 
-    pre.scrollTop = 200;
-    fireEvent.scroll(pre);
+    log.scrollTop = 200;
+    fireEvent.scroll(log);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS);
     });
-    expect(pre.textContent).toContain("go test");
-    expect(pre.scrollTop).toBe(200);
+    expect(log.textContent).toContain("go test");
+    expect(log.scrollTop).toBe(200);
+    expect(screen.getByRole("button", { name: /Jump to latest/ })).toBeTruthy();
   });
 
   // A LAUNCH STILL BEING SET UP IS ASKED ABOUT AGAIN, and is not called stopped.
@@ -821,14 +822,20 @@ describe("a live tail's announcements", () => {
     vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
     mount(PARKED, RUNNING, { selected: "run:L1" });
     await flush();
-    const live = document.querySelectorAll("[aria-live], [role='status']");
-    expect(live).toHaveLength(1);
-    expect(live[0]!.textContent).toBe("Showing the executor's live output.");
-    expect(live[0]!.contains(screen.getByText("running go test ./..."))).toBe(false);
+    // The copy action's region speaks only once something is copied.
+    const live = [
+      ...document.querySelectorAll("[aria-live]:not([aria-live='off']), [role='status']"),
+    ];
+    const state = live.filter((region) => region.textContent !== "");
+    expect(state).toHaveLength(1);
+    expect(state[0]!.textContent).toBe("Showing the executor's live output.");
+    expect(live.some((region) => region.contains(screen.getByText("running go test ./...")))).toBe(
+      false,
+    );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS);
     });
-    expect(document.querySelector("[role='status']")!.textContent).toBe(
+    expect(document.querySelector(".live-output > [role='status']")!.textContent).toBe(
       "Showing the executor's live output.",
     );
   });

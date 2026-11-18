@@ -11,89 +11,62 @@ import (
 // EVERY CONSTANT THE HOST WAITS ON OR BOUNDS BY, each with its reason.
 
 const (
-	// RequestMemoryBytes is the most of ONE fetch request's DECODED body
-	// held in memory before the rest is spooled to disk: one mebibyte. A
-	// request is held as large as it is — a clone's or an ordinary fetch's
-	// negotiation is a few kilobytes, a want and a have a commit at fifty
-	// bytes each, and costs that — so nearly every request lives in memory
-	// and only a partial clone's lazy fetch, which names every blob a
-	// checkout lacks in one request, reaches the spool. What every request
-	// holds together is RequestMemoryAllowance's to bound.
+	// RequestMemoryBytes is the most of ONE fetch request's DECODED body held in
+	// memory before the rest is spooled to disk: one mebibyte. A clone's or a
+	// fetch's negotiation is a few kilobytes, so only a partial clone's lazy
+	// fetch, naming every blob a checkout lacks in one request, reaches the
+	// spool. RequestMemoryAllowance bounds what every request holds together.
 	RequestMemoryBytes = 1 << 20
 
 	// WantBytes is one `want <id>` on the wire: a pkt-line's four hex digits,
-	// "want ", forty hex digits and a newline. The most wants a request to a
-	// repository can legitimately name is one for each object it holds and
-	// each ref, so this is what a request's bound is counted in
-	// (RequestBound); a have line is the same size.
+	// "want ", forty hex digits and a newline; a have line is the same size. A
+	// request legitimately names at most one want per object and ref the
+	// repository holds, so RequestBound is counted in it.
 	WantBytes = 4 + len("want ") + 40 + 1
 
-	// SpoolPerTransfer is how much spooled request each slot of the transfer
-	// lane is given in the node's SPOOL ALLOWANCE (SpoolAllowance), and the
-	// most ONE request spools (SpoolRequestBytes): 64 MiB, a want list of
-	// about 1.3 million objects — a blobless checkout of a tree that size,
-	// past the largest public monorepos' working trees. Per SLOT, because a
-	// spooled request becomes exactly one upload-pack in the transfer lane,
-	// which admits that many at once: the lane is what bounds how many
-	// spooled requests the node can put to use, so a lane's width of the
-	// largest requests is exactly the allowance.
+	// SpoolPerTransfer is each transfer-lane slot's share of the node's SPOOL
+	// ALLOWANCE (SpoolAllowance), and the most ONE request spools
+	// (SpoolRequestBytes): 64 MiB, a want list of about 1.3 million objects, past
+	// a blobless checkout of the largest public monorepos. Per SLOT, because a
+	// spooled request becomes exactly one upload-pack in the transfer lane, so
+	// the lane's width bounds how many spooled requests the node can put to use.
 	SpoolPerTransfer = 64 << 20
 
-	// SpoolCredentialShare is the share of the node's spooling one
-	// credential's requests may hold at once: a quarter of the allowance's
-	// bytes (SpoolCredentialBytes) and of the waiting room
-	// (SpoolWaitersPerCredential). A spool's bytes are held from its first
-	// byte until the answer's first byte is written — through its sync (a cold
-	// one included), upload-pack's read of it, and, for a fetch, pack-objects'
-	// run before its pack begins (at most a progress line or one keepalive, 5
-	// s, for a side-band client; body.go) — so without a cap one credential
-	// could hold the node's whole allowance in the requests of a few CI
-	// runners or a few slow clients at almost no cost to itself. A quarter
-	// still lets a CI fleet behind one token spool a quarter of the node's
-	// room at once — the rest WAIT THEIR TURN, never refused for it (spool.go)
-	// — and leaves three quarters to everybody else. WHAT IT COSTS is that
-	// wait: the sync of the requests ahead plus each one's pack-objects before
-	// its pack — behind a cold sync of a minute or two the waits past the
-	// quarter reach Timing.SpoolWait first and are answered 503, so N lazy
-	// fetches of B bytes behind one token fail on a cold node once N × B passes
-	// the quarter — thirteen of 20 MB on a four-core node's 256 MiB
-	// (TestACredentialsEndedSpoolsOutlastingTheWait); a token per runner moves
+	// SpoolCredentialShare is the share of the node's spooling one credential's
+	// requests may hold at once: a quarter of the allowance's bytes
+	// (SpoolCredentialBytes) and of the waiting room (SpoolWaitersPerCredential).
+	// A spool is held from its first byte to the answer's first (its sync,
+	// upload-pack's read, pack-objects' run; body.go), so uncapped, a few CI
+	// runners or slow clients behind one credential could hold the whole
+	// allowance. Requests past the quarter WAIT, never refused (spool.go); the
+	// cost is that wait: behind a cold sync it reaches Timing.SpoolWait (503), so
+	// N lazy fetches of B bytes behind one token fail on a cold node once N × B
+	// passes the quarter, thirteen of 20 MB on a four-core node's 256 MiB
+	// (TestACredentialsEndedSpoolsOutlastingTheWait). A token per runner moves
 	// that to the node's whole room.
 	SpoolCredentialShare = 4
 
-	// MaxCommandSectionBytes bounds a push's command section — the ref
-	// updates before the pack, and the push's options after them, which
-	// receive-pack holds in its memory with no bound of git's: one
-	// mebibyte. gitlet.MaxCommandsPerPush commands naming refs the engine takes
-	// — at most gitlet.MaxRefNameBytes, each line its two ids beside the ref,
-	// the first its capability list — come to about 340 KiB, and a change's
-	// options at their longest (gitlet.ParseChangeOptions) to some 33 KiB. So a
-	// section past a mebibyte necessarily holds refs the engine refuses
-	// bad_ref (a pkt-line carries one of up to 64 KiB, and seventeen such are
-	// enough), lines that parse as no command, or options of a forge's that a
-	// push to Gitlet has no reason to send, and refusing it whole
-	// costs no push the engine would have taken.
+	// MaxCommandSectionBytes bounds a push's command section (the ref updates
+	// before the pack and the push options after them), which receive-pack holds
+	// in memory with no bound of git's: one mebibyte. gitlet.MaxCommandsPerPush
+	// commands at gitlet.MaxRefNameBytes come to about 340 KiB and a change's
+	// longest options (gitlet.ParseChangeOptions) to some 33 KiB, so a larger
+	// section holds refs the engine refuses bad_ref, lines that parse as no
+	// command, or options a push to Gitlet has no reason to send: refusing it
+	// whole costs no push the engine would have taken.
 	MaxCommandSectionBytes = 1 << 20
 
 	// maxEngineCommits is the most commits committed as the engine
 	// (landing.EngineCommitter) one coding box's pack may hold for the host to
-	// ask the repository about (forged): a thousand. A box's git commits under
-	// the identity it was given, and every amend, rebase and cherry-pick
-	// rewrites the committer to it, so a commit its pack holds under the
-	// engine's name is either a forgery or one of the engine's own writes the
-	// box brings back — a seat branch the repository lost its ref to
-	// (deleted, or expired) that the box's old checkout still holds, one
-	// commit a tool write. A thousand is a seat's whole pushing for some
-	// thirty-three days at the reference company's thirty a day
-	// (config.DefaultCodePushesPerSeatDay's reckoning), every push of it a
-	// tool write on that one branch. They are asked in ONE cat-file whether
-	// the repository holds them (cache.Cache.Missing, some 14 ms a thousand
-	// ids by gitproc's measured section) and kept by the scan until then
-	// (committedAs), forty hex digits each, so the bound is what one push may
-	// make the node keep and ask, never what a box sends: the scan ends at the
-	// first such commit past it, and the push is refused forged_committer with
-	// its remedy — push the history back in parts, since a part once landed is
-	// reached by a ref, and the box's git sends the next part without it.
+	// ask the repository about (forged). A box's git commits, amends and rebases
+	// under the box's identity, so such a commit is a forgery or an engine write
+	// the box brings back (a seat branch whose ref the repository lost). A
+	// thousand is a seat's pushing for some thirty-three days at
+	// config.DefaultCodePushesPerSeatDay. The scan keeps them (committedAs) and
+	// asks in ONE cat-file (cache.Cache.Missing, some 14 ms a thousand), so this
+	// bounds what one push makes the node keep and ask: past it the push is
+	// refused forged_committer, whose remedy is pushing the history back in parts
+	// (a landed part is reached by a ref, so git sends the next without it).
 	maxEngineCommits = 1_000
 
 	// HookDialTimeout is how long the hook gives the engine's socket to
@@ -194,40 +167,33 @@ func archiveBound(m treeMeasure) int64 {
 }
 
 // RequestBound is the most decoded bytes a fetch request to repo may carry:
-// fifty bytes for every object its live packs hold and every live ref — the
-// most wants and haves a request can legitimately name — beside the
-// mebibyte held in memory. Read from the row admission already holds
-// (gitlet.RepoRef.LiveObjects), before the request is read. On DECODED bytes, so
-// a gzip-compressed request cannot expand past it.
+// WantBytes for every object its live packs hold and every live ref (the most
+// wants and haves a request can legitimately name), beside the mebibyte held
+// in memory. Read from the row admission already holds
+// (gitlet.RepoRef.LiveObjects) before the request is read; on DECODED bytes,
+// so a gzip-compressed request cannot expand past it.
 func RequestBound(repo gitlet.RepoRef) int64 {
 	return int64(WantBytes)*(max(repo.LiveObjects, 0)+max(repo.Refs, 0)) + RequestMemoryBytes
 }
 
 // RequestMemoryAllowance is the memory every fetch request held on a node may
 // take together, for a transfer lane of transfers slots: RequestMemoryBytes
-// each — 64 MiB on a lane of 64 slots, the default at sixteen cores with the
-// 32 GiB that back them (gitproc: four a core, and no more than one for every
-// gitproc.TransferShare of the node's memory).
-// Charged as each request's in-memory part grows and given back at the
-// answer's first byte (a fetch's is its pack's, after pack-objects; body.go),
-// so it bounds what requests WAITING for their sync
-// and their transfer slot hold, however many arrive at once; a request that
-// finds it spent has the rest spooled, never refused for it. Per slot for
-// SpoolPerTransfer's reason: the lane is what puts a request to use. ONLY the
-// requests held in memory are charged here: a request that goes to the spool
-// takes its head there with it — written into its spool once it starts, held
-// in a place of the spool's waiting room (SpoolWaiters) until then — because
-// charged here, a queue of large fetches behind one token spent the allowance
-// and sent every other request on the node, an ls-refs of a few hundred bytes
-// among them, to the spool and its queue.
+// each, 64 MiB at sixteen cores' default 64 slots (gitproc's sizing). Charged
+// as each request's in-memory part grows and given back at the answer's first
+// byte (body.go), it bounds what requests WAITING for their sync and slot
+// hold, however many arrive; a request that finds it spent spools, never
+// refused. Per slot for SpoolPerTransfer's reason. A request bound for the
+// spool is NOT charged here: its head goes with it (into its spool, or a
+// SpoolWaiters place until then), since charged here a queue of large fetches
+// behind one token would spend the allowance and send every other request,
+// a small ls-refs among them, to the spool and its queue.
 func RequestMemoryAllowance(transfers int) int64 {
 	return int64(max(transfers, 1)) * RequestMemoryBytes
 }
 
 // SpoolAllowance is the node's spool allowance for a transfer lane of
-// transfers slots: SpoolPerTransfer each. On the cache's volume and never in
-// its budget (cache.Spool): 4 GiB on a lane of 64 slots, the default at
-// sixteen cores with the 32 GiB that back them.
+// transfers slots: SpoolPerTransfer each, on the cache's volume and never in
+// its budget (cache.Spool), 4 GiB at sixteen cores' default 64 slots.
 func SpoolAllowance(transfers int) int64 {
 	return int64(max(transfers, 1)) * SpoolPerTransfer
 }
@@ -240,96 +206,78 @@ func SpoolCredentialBytes(transfers int) int64 {
 }
 
 // SpoolRequestBytes is the most ONE request spools on a transfer lane of
-// transfers slots: SpoolPerTransfer, and never past a credential's bytes —
-// 64 MiB, about 1.3 million wants, on every lane of four slots or more, and a
-// quarter of the allowance on a smaller one. A request past it is refused 413
-// at once. It is also what a body whose client declared no length — every
-// spooled request git sends — CLAIMS while it arrives (spool.go): the room
-// the bodies behind the oldest one arriving keep free, so the bodies arriving
-// may hold all but this much of the allowance, and of a credential's bytes,
-// before one waits on another — 960 MiB of a four-core node's gibibyte, and
-// 192 MiB of a credential's 256. Held below the credential's bytes on every
-// lane of four slots or more for that reason: a claim of the credential's
-// whole share leaves it no room for a second body while the first arrives,
-// which is what a lane narrower than four slots gives a credential.
+// transfers slots, refused 413 past it: SpoolPerTransfer, never past a
+// credential's bytes, so 64 MiB (about 1.3 million wants) on a lane of four
+// slots or more and a quarter of the allowance on a smaller one. It is also
+// what a body of undeclared length (every spooled request git sends) CLAIMS
+// while it arrives (spool.go): arriving bodies may hold all but this much of
+// the allowance, and of a credential's bytes, before one waits on another
+// (960 MiB of a four-core node's GiB, 192 MiB of a credential's 256). Hence
+// below the credential's bytes on lanes of four or more: a claim of the whole
+// share leaves no room for a second body while the first arrives.
 func SpoolRequestBytes(transfers int) int64 {
 	return min(SpoolPerTransfer, SpoolCredentialBytes(transfers))
 }
 
 // SpoolWaiters is the node's WAITING ROOM on a transfer lane of transfers
 // slots: how many fetch requests may wait at once to start spooling,
-// SpoolCredentialShare places a slot. A place holds what its request read
-// into memory before it was known to need the spool — up to
-// RequestMemoryBytes — so the room is a memory bound, 4 MiB a transfer slot,
-// beside RequestMemoryAllowance and never in it: 64 MiB on a four-core node's
-// sixteen slots and 256 MiB on sixteen cores' sixty-four, out of the 896 MiB
-// a core a Gitlet node keeps for serving (cache.ServingMemoryPerCore). Past it a
-// request that must wait is answered 503 at once; one that need not wait
-// never takes a place (spool.go).
+// SpoolCredentialShare places a slot. A place holds up to RequestMemoryBytes
+// read before the request was known to need the spool, so the room is a
+// memory bound beside RequestMemoryAllowance, never in it: 4 MiB a slot,
+// 256 MiB at sixteen cores, out of the 896 MiB a core a node keeps for
+// serving (cache.ServingMemoryPerCore). Past it a request that must wait is
+// answered 503 at once; one that need not wait takes no place (spool.go).
 func SpoolWaiters(transfers int) int {
 	return SpoolCredentialShare * max(transfers, 1)
 }
 
 // SpoolWaitersPerCredential is how many of one credential's requests may wait
 // at once to start spooling, on a transfer lane of transfers slots:
-// SpoolCredentialShare of the waiting room, the lane's own width — so a burst
-// behind one token as wide as the node runs transfers at once waits whole
-// beside the requests it has spooling. WHAT IT COSTS: a token with more large
-// fetches waiting to start at once than that — 16 on a four-core node, 64 on
-// sixteen cores — has the excess refused 503 at once, and git does not retry
-// a lazy fetch, so those checkouts fail: a token for each CI runner ends it.
+// SpoolCredentialShare of the waiting room, the lane's own width, so a burst
+// behind one token as wide as the node's transfers waits whole. The cost: a
+// token's excess past it (16 on four cores, 64 on sixteen) is refused 503 at
+// once, and git does not retry a lazy fetch, so those checkouts fail; a token
+// for each CI runner ends it.
 func SpoolWaitersPerCredential(transfers int) int {
 	return SpoolWaiters(transfers) / SpoolCredentialShare
 }
 
-// HookBudget bounds what a push's hook session does inside one receive-pack —
-// its landing (land) — as gitproc.ReceivePackDeadline's hook term: the three
-// scans over the stored pack (force, blobs, introduced — each
-// gitproc.PackWorkDeadline of the largest pack one push may store,
-// gitlet.MaxPackBytes), the bundle's put under its own bound at that size
-// (gitlet.UploadDeadline: objstore.ReadBase and the pace floor every leg is
-// held to), ProposeBudget, and the pending wait — summed, though the
-// introduced listing runs beside the put, because a bound on the two together
-// is no less than the longer of them. A coding box's push scans once more,
-// its commits' committers before the put (committedAs, one more
-// gitproc.PackWorkDeadline), and fits the same sum: its listing, still beside
-// the put, is far shorter than the put's term at that size. The put's term
-// IS the bound the put is given (gitlet.StoreBundle), read from the one
-// function, so the hook never kills a receive-pack whose upload is still
-// inside its own deadline.
-// Over gitlet.MaxPackBytes rather than the epoch's push limit, because what the
-// landing scans and stores is the client's input COMPLETED against the
-// repository plus its indexes, which a thin push can grow past
-// max_push_bytes. A BOUND on a trickling client, never a schedule: a push that
-// stops moving is ended by its Timing.Stall long before it.
+// HookBudget bounds a push's hook session inside one receive-pack (land), as
+// gitproc.ReceivePackDeadline's hook term: three scans of the stored pack
+// (force, blobs, introduced; each gitproc.PackWorkDeadline of
+// gitlet.MaxPackBytes), the bundle's put at gitlet.UploadDeadline (the bound
+// gitlet.StoreBundle gives it, so the hook never kills an upload inside its
+// deadline), ProposeBudget and the pending wait, summed though the listing
+// runs beside the put. A coding box's extra scan before the put (committedAs,
+// one more PackWorkDeadline) fits that slack: its listing is far shorter than
+// the put. Over gitlet.MaxPackBytes, not the epoch's push limit, because a
+// thin push grows past max_push_bytes once completed and indexed. A BOUND on
+// a trickling client, never a schedule: a push that stops moving is ended by
+// Timing.Stall long before it.
 func HookBudget(t Timing) time.Duration {
 	return 3*gitproc.PackWorkDeadline(gitlet.MaxPackBytes) + gitlet.UploadDeadline(gitlet.MaxPackBytes) +
 		ProposeBudget + t.PendingGrace
 }
 
 // receivePackDeadline bounds one push's receive-pack (gitproc.ReceivePackDeadline)
-// of cmds into repo — the row the push is judged on, as its round synced it —
-// under limits: the push's bytes at the floor pace; a walk of repo's history,
-// which git's own connectivity check is for a tip dated before its parent;
-// and the landing its hook runs inside the process, its own work (HookBudget)
-// and the walks of the history it may make (hookWalks). Every history term
-// reads repo's live objects HERE, so the one call site hands the row and
-// never a count it could get wrong.
+// of cmds into repo, the row the push is judged on, under limits: the push's
+// bytes at the floor pace; a walk of repo's history (git's connectivity check
+// of a tip dated before its parent); and its hook's landing, HookBudget plus
+// hookWalks. Every history term reads repo's live objects HERE, so the one
+// call site hands the row and never a count it could get wrong.
 func receivePackDeadline(limits gitlet.Limits, repo gitlet.RepoRef, cmds []parsedCommand, t Timing) time.Duration {
 	return gitproc.ReceivePackDeadline(limits.MaxPushBytes, repo.LiveObjects,
 		HookBudget(t)+hookWalks(cmds, repo.LiveObjects))
 }
 
-// hookWalks bounds the walks of a repository's history a push's landing may
-// make beside its HookBudget, over a repository of objects live objects: one
-// for each force check (a branch update whose old and new are both commits,
-// one merge-base each, in series on a loaded node), one for the listing of
-// what the push introduces and one for the path of a blob over the limit —
-// each a gitproc.HistoryWalk, the term that bounds the process itself. Sized
-// by the repository, never by the push: a skewed push into a large history
-// with no commit-graph walks every commit in each of them, and a hook budget
-// of the push's own bytes killed receive-pack under its landing rather than
-// let the push be slow.
+// hookWalks bounds the history walks a push's landing may make beside
+// HookBudget, over a repository of objects live objects: one per force check
+// (a branch update from commit to commit, a merge-base each, in series on a
+// loaded node), one for listing what the push introduces and one for an
+// oversized blob's path, each a gitproc.HistoryWalk. Sized by the repository,
+// never the push: a skewed push into a large history with no commit-graph
+// walks every commit in each, and a budget of the push's own bytes would kill
+// receive-pack under its landing rather than let the push be slow.
 func hookWalks(cmds []parsedCommand, objects int64) time.Duration {
 	walks := 2
 	for _, c := range cmds {

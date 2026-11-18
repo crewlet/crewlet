@@ -17,53 +17,36 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A VERIFY IS AN OPERATION THAT OUTLIVES ITS REQUEST. An operator's check of
-// this node's cache of a repository reads every byte of it — a hash of every
-// pack, then git's connectivity check over the whole history — and, asked to
-// repair, puts the copy right, in place or by a rebuild, and checks it again:
-// about nine seconds a gigabyte measured (cache.BenchmarkVerify, the
-// connectivity check most of it), twice that with a repair, minutes for a
-// large repository. Answered in one request, the check outlived every
-// balancer's read timeout in front of the API (nginx's default is sixty
-// seconds), and the timeout's close cancelled the request and with it the
-// check and any repair in flight — so a large repository could never be
-// verified, or repaired, through a default proxy, each retry cut at the same
-// point. So [Server.StartVerify] decides at once everything it can decide
-// without reading the repository — the name, the copy this node holds, a
-// slot of the maintenance lane and the memory the check needs, each a
-// refusal its caller is told at once — and then runs the check on a goroutine
-// of the HOST'S lifetime, never the request's: the caller is handed the
-// verification's id, and [Server.Verification] answers it, running or ended,
-// while the node keeps it.
+// A VERIFY OUTLIVES ITS REQUEST: it reads every byte of a repository's cache
+// (every pack's hash, then git's connectivity check) and may repair and check
+// again, minutes for a large repository (cache.BenchmarkVerify): past a
+// balancer's read timeout (nginx's default is 60 s), whose close would cancel
+// a request-bound check at the same point on every retry. So
+// [Server.StartVerify] refuses at once what needs no read of the repository
+// (the name, the copy held, a maintenance slot, the check's memory), then runs
+// the check on a goroutine of the HOST'S lifetime and hands back an id that
+// [Server.Verification] answers while the node keeps it.
 //
-// One verification a repository at a time on a node: a second asking for the
-// same check is handed the one running, and one asking for the other
-// (a repair beside a check, or a check beside a repair) is refused naming it
-// ([VerifyRunningError]).
+// One verification a repository at a time on a node: one with the same repair
+// setting joins the running one; the other is refused ([VerifyRunningError]).
 
 // VerifyKept is how long an ended verification is kept for its caller to read:
-// an hour, so a client that lost its connection while the check ran — a
-// laptop asleep, a proxy restarted — comes back for the answer rather than
-// read every byte of the repository again, while what a report says of a
-// cache that pushes keep moving is still recent. Memory is not the bound: a
-// node keeps one verification a repository, the latest, so it holds at most
-// one report for each repository it was asked about within the hour. A
-// restart keeps none — a report is a check of a cache this process held.
+// an hour, so a client that lost its connection while the check ran comes
+// back for the answer rather than read the repository again, while a report
+// of a cache pushes keep moving is still recent. Memory is not the bound: a
+// node keeps only each repository's latest. A restart keeps none, since a
+// report checked a cache this process held.
 const VerifyKept = time.Hour
 
-// VerifyHold is how long the request that begins a verify may wait for the
-// check to end, so a check of a small copy is answered in the one request
-// that asked for it (AwaitVerification) rather than read again after a
-// wait the client has to guess.
+// VerifyHold is how long the request that begins a verify waits for the check
+// to end (AwaitVerification), so a small copy's check is answered in that one
+// request rather than after a wait the client must guess.
 //
-// A QUARTER OF A SECOND. cache.BenchmarkVerify measured a whole check at
-// 9.5 ms over five pushes of 150 KB and 9.4 ms a mebibyte over 100 MB, so
-// a quarter of a second answers at once a copy of up to some 25 MiB — most
-// of a company's repositories — while a check that runs longer is answered
-// running a quarter of a second later than it would have been, far inside
-// every balancer's read timeout. Answered at once instead, each small
-// repository of a sweep cost its client a sleep about ten times the check
-// before its first read, the node's slot idle meanwhile.
+// A QUARTER OF A SECOND answers at once a copy of up to some 25 MiB
+// (cache.BenchmarkVerify: about 9.4 ms a MiB), most of a company's
+// repositories, and delays a longer check's answer by only that, far inside
+// every balancer's read timeout. With no hold, a sweep's client slept about
+// ten times each small check before reading it, the node's slot idle.
 const VerifyHold = 250 * time.Millisecond
 
 // VerifyState is where a verification is: one of [VerifyStates].
@@ -99,25 +82,20 @@ type Verification struct {
 	// State is where it is; Started and Ended (zero while it runs) when.
 	State          VerifyState
 	Started, Ended time.Time
-	// Report is what the check found: once it is done, everything; once it
-	// failed, what it found before it did, the repository named whenever it
-	// was known.
+	// Report is what the check found: everything once done; once failed,
+	// what it found before, the repository named whenever it was known.
 	Report cache.VerifyReport
-	// Err is why a failed verification failed, and nil otherwise:
-	// ErrStopping wrapping what the cut left when the host's stop cut it
-	// short.
+	// Err is why a failed verification failed, else nil: ErrStopping
+	// wrapping what the cut left when the host's stop cut it short.
 	Err error
-	// Deadline is, while it checks the copy, when this node ends that check
-	// by: the bound of the check pass running (cache.CheckBudget over what
-	// the copy holds), counted from the pass's start. Zero while it brings
-	// the copy to the rows it is checked against first, or repairs it — a
-	// read in place, a rebuild — whose reads of the object store are
-	// bounded each on its own (objstore.ReadBudget, objstore.Stall), as
-	// every sync's are — and once it has ended.
+	// Deadline is, while a check pass runs, when this node ends it: the
+	// pass's bound (cache.CheckBudget over what the copy holds) from its
+	// start. Zero while the copy is brought to the rows it is checked against
+	// or repaired (each object-store read bounded on its own:
+	// objstore.ReadBudget, objstore.Stall), and once ended.
 	Deadline time.Time
 
-	// ended is closed once the verification has ended: what
-	// AwaitVerification waits on.
+	// ended is closed once the verification has ended (AwaitVerification).
 	ended chan struct{}
 }
 
@@ -137,17 +115,13 @@ func (e *VerifyRunningError) Error() string {
 // by its id, kept until VerifyKept after it ended or until the next verify
 // of the same repository begins.
 //
-// AGED FROM THE FRONT OF A QUEUE, never by a walk: ended holds every
-// verification in the order it ended — the order of its Ended, each stamped
-// under mu as it is appended — so the ones past VerifyKept are a prefix of
-// it, and a sweep looks at them and at the first one still kept, and at
-// nothing else. A sweep of every repository a node holds keeps a
-// verification for each, and aged by a walk of the whole registry at every
-// StartVerify and every read of one, under the lock every check's end takes
-// too, that sweep cost the node a number of map visits quadratic in what it
-// held — some 10^8 at ten thousand repositories. An id a newer verification
-// of its repository replaced is no longer in byID, and is passed over when
-// the queue reaches it.
+// AGED FROM THE FRONT OF A QUEUE, never by a walk: ended holds ids in the
+// order they ended (each Ended stamped under mu as it is appended), so the
+// expired ones are a prefix, and a sweep looks at them and the first one
+// still kept. A walk of the registry at every StartVerify and read, under the
+// lock every check's end takes, made a sweep of a node's repositories
+// quadratic in them (TestAVerifySweepLooksOnlyAtWhatItAges). An id a newer
+// verification replaced is gone from byID and passed over.
 type verifications struct {
 	mu     sync.Mutex
 	byID   map[uuid.UUID]*Verification
@@ -181,10 +155,9 @@ func (r *verifications) end(id uuid.UUID, at time.Time, set func(*Verification))
 }
 
 // sweep drops every verification that ended more than VerifyKept before
-// now, answering how many it looked at — those it dropped or passed over,
-// and the first one still kept; mu is held. Run at every StartVerify and
-// every read of a verification, so what a node keeps needs no goroutine of
-// its own to age.
+// now, answering how many it looked at (those dropped or passed over, and the
+// first one still kept); mu is held. It runs at every StartVerify and read,
+// so aging needs no goroutine of its own.
 func (r *verifications) sweep(now time.Time) int {
 	looked := 0
 	for len(r.ended) > 0 {
@@ -205,40 +178,18 @@ func (r *verifications) sweep(now time.Time) int {
 	return looked
 }
 
-// StartVerify begins a check of this node's cache of the repository named
-// name, repairing what it finds when repair is set (cache.Verification.Run),
-// and answers the verification RUNNING — whose end [Server.Verification]
-// reads. What it refuses, it refuses at once, having read nothing of the
-// repository:
-//
-//   - gitlet.ErrRepoNotFound when no repository is declared under the name —
-//     read stale, and again through the barrier when not found, since a
-//     refusal is never a stale answer — or the grammar refuses it;
-//   - cache.ErrNotHeld when this node holds no copy of it: a check builds
-//     none, since that is a whole download of the repository;
-//   - gitproc.ErrBusy when the maintenance lane has no free slot or the
-//     background work leaves the check's memory no room, and
-//     cache.ErrNoMemory when the node's memory cannot hold the check at all;
-//   - [*VerifyRunningError] when a verify of the repository with the other
-//     repair setting is running here; one with the same setting is answered
-//     as the verification running, its caller sharing it;
-//   - ErrStopping on a stopping host, and whatever the resolve's read
-//     refused with.
-//
-// The check runs under the host's lifetime alone: its caller ending its
-// request ends nothing, and the host's Stop ends it, the verification then
-// failed with ErrStopping wrapping what the cut left.
-//
-// AT A FLOOR ITS CALLER NAMES, or at the log's head. A floor — a position on
-// the code log the caller read at — is what the repository is resolved at
-// and its copy brought to before it is checked, with no barrier: a copy
-// already past it is checked as it is. With none, the copy is brought to the
-// log's head, which appends a barrier to the code log — single-flighted only
-// among requests in flight together, so an operator's sweep of every
-// repository one at a time appended one a repository: ten thousand a sweep
-// at config.CodeMaxRepos, on every Gitlet node it ran on, a log whose census
-// counts a day's barriers as its people's git reads. A sweep reads its
-// listing at the head once and names that listing's position for each.
+// StartVerify begins a check of this node's cache of the repository name,
+// repairing what it finds when repair is set (cache.Verification.Run), and
+// answers it RUNNING for [Server.Verification] to read. It refuses at once,
+// having read nothing of the repository: gitlet.ErrRepoNotFound (read stale,
+// then through the barrier, since a refusal is never stale); cache.ErrNotHeld
+// (a check builds no copy, a whole download); gitproc.ErrBusy or
+// cache.ErrNoMemory; [*VerifyRunningError] beside a running verify of the
+// other repair setting (the same setting shares it); ErrStopping. The caller's
+// request ending ends nothing; Stop fails the check with ErrStopping. A floor
+// (a code-log position) is what the copy is resolved at and brought to, with
+// no barrier; none appends one at the head, so a sweep names its listing's
+// position for each repository rather than append a barrier a repository.
 func (s *Server) StartVerify(ctx context.Context, name string, repair bool, floor statelog.Position) (
 	Verification, error) {
 	if !gitref.ValidRepoName(name) {
@@ -278,8 +229,8 @@ func (s *Server) StartVerify(ctx context.Context, name string, repair bool, floo
 		return running, nil
 	}
 	// ADMITTED UNDER THE REGISTRY'S LOCK, so two asking at once for one
-	// repository are one verification rather than two admitted beside each
-	// other; the admission waits for nothing (cache.AdmitVerify).
+	// repository are one verification; the admission waits for nothing
+	// (cache.AdmitVerify).
 	checked, err := s.o.Cache.AdmitVerify(ref.ID)
 	if err != nil {
 		return Verification{}, err
@@ -296,10 +247,10 @@ func (s *Server) StartVerify(ctx context.Context, name string, repair bool, floo
 	return *v, nil
 }
 
-// resolveVerified is the repository a verify names — read stale, at the
-// caller's floor where it names one — under ctx joined to the host's
-// lifetime — a Stop reaches the read — and ErrStopping, wrapping what the cut
-// left, when the stop cut it short rather than its caller.
+// resolveVerified is the repository a verify names, read stale at the
+// caller's floor, under ctx joined to the host's lifetime so Stop reaches the
+// read; ErrStopping, wrapping what the cut left, when the stop rather than
+// the caller cut it short.
 func (s *Server) resolveVerified(ctx context.Context, name string, floor statelog.Position) (gitlet.RepoRef, error) {
 	work, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -317,21 +268,17 @@ func (s *Server) resolveVerified(ctx context.Context, name string, floor statelo
 	return ref, err
 }
 
-// runVerify is one verification's check, on a goroutine of the host's
-// lifetime that StartVerify counted among the work Stop waits for, and the
-// record of how it ended — ended closed once that is recorded. how carries
-// its repair and its freshness; its Checking is this function's own.
+// runVerify runs one verification's check on a goroutine of the host's
+// lifetime, counted in the work Stop waits for, records how it ended, then
+// closes ended. how carries repair and freshness; Checking is set here.
 //
-// WHAT THE CHECK HELD IS LET GO BEFORE ITS END IS RECORDED: a caller that
-// reads the verification done — or is answered it by the request that began
-// it — asks for the next one at once, and finding this one's maintenance slot
-// still held it would be refused busy and told to wait BusyRetryAfter, ten
-// seconds of a sweep's for each repository, for a slot freed microseconds
-// later.
+// WHAT THE CHECK HELD IS LET GO BEFORE ITS END IS RECORDED: a caller reading
+// it done asks for the next at once, and finding this slot still held would
+// be refused busy for BusyRetryAfter, ten seconds a repository of a sweep.
 func (s *Server) runVerify(id uuid.UUID, ended chan struct{}, checked *cache.Verification, how cache.VerifyRun) {
 	defer s.inflight.Done()
-	// WHEN THE NODE ENDS WHAT IT IS DOING is said as each check pass begins,
-	// so a caller reading the verification waits by the node's own bound.
+	// Each check pass publishes its deadline, so a caller reading the
+	// verification waits by the node's own bound.
 	checking := func(bound time.Duration) {
 		s.verifies.mu.Lock()
 		defer s.verifies.mu.Unlock()
@@ -369,10 +316,9 @@ func (s *Server) runVerify(id uuid.UUID, ended chan struct{}, checked *cache.Ver
 }
 
 // AwaitVerification answers the verification id of the repository named name
-// once it has ended, or as it stands when ctx ends first — the request that
-// began it, held for VerifyHold, so a small check is answered where it was
-// asked. False for one this node does not keep, or one of another
-// repository.
+// once it has ended, or as it stands when ctx (the beginning request, held for
+// VerifyHold) ends first. False for one this node does not keep, or one of
+// another repository.
 func (s *Server) AwaitVerification(ctx context.Context, name string, id uuid.UUID) (Verification, bool) {
 	s.verifies.mu.Lock()
 	v, ok := s.verifies.byID[id]

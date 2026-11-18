@@ -279,12 +279,12 @@ type chainCallID int32
 // sum, since a thread of ordinary calls fills each about halfway. Past either,
 // See files nothing more (whyBound). HELD AT MOST (GOGC=10,
 // BenchmarkAThreadChainAtItsBounds): 43 MiB at both bounds, End 27 to 37 ms of
-// a 1.2 to 1.4 s read; End's worst, windows merging at threadChainMaxSpread,
-// 1.4 s; 101 MiB beside the reading's worst line. THE COLLECTION'S PASS
-// charges the chain to the one walk a collection reads its main thread in
-// ([walkThread]), beside the resumed count, in no transcript slot: 2.8 s, well
-// within internal/sandbox's MainThreadReadWait, and 109 MiB at worst, within
-// the about 133 MiB one slot's read holds ([SeatTranscriptReadsAtOnce]).
+// a 1.2 to 1.4 s read; End's worst 1.4 s; 101 MiB beside the worst line. THE
+// COLLECTION'S PASS charges the chain and the hook receipts ([chainReading],
+// [hookReading]) to the collection's one walk of its main thread
+// ([walkThread]), never a transcript slot: 2.8 s, within MainThreadReadWait,
+// and 109 MiB at worst, in its own large slot ([CollectionLargeReadsAtOnce];
+// the package doc's "A collection's read of a thread").
 const (
 	// threadChainMaxRecords is the most items the chain files of one thread:
 	// its records, the retraction prefixes they carry, and the uuids its
@@ -1082,8 +1082,9 @@ func (c *threadChain) keptOf(line threadLine) (k chainKept, named, fits bool) {
 // 8, 4, 4 and 4 lowercase hex digits, each run followed by a hyphen. An entry
 // that begins otherwise retracts nothing, since every record the chain models
 // carries a lowercase canonical uuid, and the filter compares their first 24
-// characters as strings.
-func chainPrefix(entry string) ([chainPrefixBytes]byte, bool) {
+// characters as strings. Entry is a string or its bytes, for [uuidBytes]'s
+// reason.
+func chainPrefix[T ~string | ~[]byte](entry T) ([chainPrefixBytes]byte, bool) {
 	var p [chainPrefixBytes]byte
 	if len(entry) < 24 {
 		return p, false

@@ -15,60 +15,15 @@ import (
 )
 
 // A SEAT PARKED UNTIL AN INSTANT: the machinery the budget park
-// (budgetpark.go) and the provider park (providerpark.go) share.
-//
-// Both answer one condition the same way: a seat that cannot run a turn until
-// a known instant (a token window turning over, a model's usage limit lifting)
-// is not handed work it would only fail, and is not NAKed into the same
-// refusal on a backoff until the broker dead-letters its mail. Instead:
-//
-//   - a pause hold is taken on its inbox, under the park's own reason, so
-//     nothing more is delivered to it, and the delivery that found the
-//     condition is DEFERRED, which keeps its place at the head of the inbox;
-//   - the hold is lifted when the condition ends, and the mail is delivered
-//     again in order, ONCE: the hold keeps the resumed attachment from being
-//     handed anything until then;
-//   - and the record of what the park was decided under (its basis) lets a
-//     change of the company release it at once.
-//
-// WHAT ENDS THE CONDITION is the one place the two differ in kind. A window's
-// end IS the end of the budget's condition, so each budget park arms its own
-// alarm for it ([seatParks.take] with an instant). A model's limit is the
-// limited entries', not the seat's, and its end is learned by asking them: one
-// probe per limited chain, whatever number of seats are parked on it, which
-// releases them all (providerpark.go). Such a park is taken with no instant
-// and no alarm of its own. The held mail is never the question either way: a
-// delivery handed back by a park spends one of its deliveries.
-//
-// What else differs between the two is the condition, the basis and what a
-// park says about itself, which each file keeps. What is the same (the record,
-// the alarm, the race between a release and a re-park, a seat given up, a
-// node stopping) lives here once, so the two cannot drift apart on the parts
-// that have to be right for both.
-//
-// A PARK OUTLIVES NO SEAT. The seat's release detaches its inbox, which drops
-// every hold on it and ends the attachment each was taken for, and then forgets
-// its parks; it waits for none of the turns that can park the seat, so a park
-// can be asked for in between, or after. Its hold names the attachment the seat
-// held as it was asked (seatinbox.go), so one asked after the detach is refused
-// and records no park, the forget drops the record of one it finds
-// ([seatParks.forget]), and a park that finds its seat gone once it is taken
-// undoes itself.
-//
-// A RELEASE AND A RE-PARK of one seat agree through the record: a park takes
-// its hold and records it as one step under the parks' lock, and a release
-// drops the record under that lock and lifts the hold outside it, then reads
-// the record again and takes back the hold of a park recorded meanwhile, which
-// its lift took from it ([seatParks.reholdParked]). What a release says of the
-// seat beyond its hold (a provider park's probe and its notice) it says as it
-// drops the record, under the same lock, so a park taken after the drop says
-// its own after it ([Engine.releaseProviderParking]).
-//
-// HOLDS ARE KEYED BY REASON, so two parks on one inbox (a seat whose window is
-// spent AND whose model is limited) are two holds, and neither release lifts
-// the other's. WHO HAS TO AGREE ON A PARK: this node alone. It is a hold in
-// this process's queue client and an alarm in its memory, decided again from
-// shared facts on the first delivery after a restart or a move.
+// (budgetpark.go) and the provider park (providerpark.go) share. A seat that
+// cannot run a turn until a known instant takes a pause hold under the park's
+// reason and DEFERS the delivery that found the condition; the hold is lifted
+// when the condition ends (an alarm for a budget window, the chain's probe for
+// a model's limit) and the mail delivered again once; and the park's basis lets
+// a change of the company release it. A park outlives no seat, a release and a
+// re-park agree through the record, and holds are keyed by reason. Who has to
+// agree on a park: this node alone. The package doc's "A seat parked until an
+// instant" holds the decisions and why.
 
 // alarm is an armed release: stopped when the park is released some other way.
 type alarm interface{ Stop() bool }
@@ -229,17 +184,13 @@ func (p *seatParks[B]) release(ctx context.Context, e *Engine, spec parkSpec, se
 // record, reporting whether it did.
 //
 // dropped, where the kind of park has more to say of the seat than its hold,
-// says it as the record is dropped, under the parks' lock: a park of the seat
-// is taken under that lock, so one taken after the drop says what it says of
-// the seat after this, and one taken before it replaced the record, which this
-// then finds and leaves alone ([Engine.releaseProviderParking]). It makes no
-// queue call and takes no lock a park's take holds across its own.
-//
+// says it as the record is dropped, under the parks' lock, so a park taken
+// after the drop says its own after it ([Engine.releaseProviderParking]); it
+// makes no queue call and takes no lock a park's take holds across its own.
 // OUTSIDE THE LOCK for the queue call, because the in-memory twin's resume
-// drains synchronously into the seat's handler, and a delivery that finds the
-// condition still there comes straight back to the park. A park taken while
-// that call is in flight would lose its hold to it, so the release reads the
-// record again once the call returns ([seatParks.reholdParked]).
+// drains synchronously into the seat's handler, and a park taken while it is
+// in flight is held again after it ([seatParks.reholdParked]). The package
+// doc's "A lift takes back a hold taken in its window" says why.
 func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkSpec,
 	seat uuid.UUID, parking *seatParking[B], why string, dropped func()) bool {
 
@@ -278,41 +229,44 @@ func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkS
 				"client is replaced")
 		return false
 	}
-	p.reholdParked(ctx, e, spec, seat)
+	heldAgain := p.reholdParked(ctx, e, spec, seat)
+	// SAID WITH THE RELEASE, because the park that holds the seat again can
+	// have logged its own line before this one: without it the seat's last
+	// line read released while its inbox was held.
+	detail := "this park's hold is lifted from the seat's inbox"
+	if heldAgain {
+		detail = "a park taken while this release was in flight holds the seat again, " +
+			"so its inbox stays held until that park is released"
+	}
 	log.InfoContext(ctx, spec.released, "seat", parking.handle,
-		"agent_id", seat.String(), "reason", why)
+		"agent_id", seat.String(), "reason", why, "held_again", heldAgain, "detail", detail)
 	return true
 }
 
 // reholdParked takes back the hold of a park recorded while a release of the
 // seat's earlier park was in flight, which that release's resume has just
-// lifted.
+// lifted, reporting whether a park stands with the seat's inbox held under it
+// once it returns, which the release's line says.
 //
-// THE WINDOW is the release's own: it drops its record under the lock and
-// resumes outside it, and a park taken between the two (a turn on another
-// partition that met the condition) re-holds the same attachment, which a hold
-// one per reason leaves unchanged on the queue, and records itself. The resume
-// then lifts the hold that park owns: the seat stays recorded parked, its
-// alarm armed, with its inbox not held, until its next delivery meets the
-// condition and parks it again, at the cost of one of that delivery's
-// attempts. Read again under the lock once the resume has returned, a park in
-// force takes its hold back, for the attachment its record names, which is the
-// one the seat holds now or one its release has ended, which the queue refuses
-// and the release's forget drops. A park taken once the queue has lifted the
-// hold (the resumed mail meeting the condition again, which the in-memory twin
-// hands over inside the resume) holds by itself, as does one taken after this
-// read, and a release after it reads again after its own resume.
-func (p *seatParks[B]) reholdParked(ctx context.Context, e *Engine, spec parkSpec, seat uuid.UUID) {
+// The release drops its record under the lock and resumes outside it, and a
+// park taken between the two re-holds the same attachment and records itself,
+// so the resume lifts the hold that park owns. Read again under the lock, a
+// park in force takes its hold back for the attachment its record names. The
+// package doc's "A lift takes back a hold taken in its window" says why.
+func (p *seatParks[B]) reholdParked(ctx context.Context, e *Engine, spec parkSpec, seat uuid.UUID) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	parking := p.seats[seat]
 	if parking == nil {
-		return
+		return false
 	}
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
 	err := e.backends.Queue.PauseTopic(ctx, subject, group, parking.inbox, spec.hold)
-	if err == nil || errors.Is(err, queue.ErrAttachmentGone) {
-		return
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, queue.ErrAttachmentGone) {
+		return false
 	}
 	// A pause fails only on a client that has stopped, a process on its way
 	// out; the record stays for the release that lifts it.
@@ -320,6 +274,7 @@ func (p *seatParks[B]) reholdParked(ctx context.Context, e *Engine, spec parkSpe
 		"agent_id", seat.String(), "hold", spec.hold, "error", err,
 		"detail", "this seat's park stands but its inbox is not held; a delivery "+
 			"that meets the condition parks it again")
+	return false
 }
 
 // changed is every parked seat whose basis keep says no longer holds, in a

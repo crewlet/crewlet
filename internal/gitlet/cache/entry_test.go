@@ -8,11 +8,10 @@ import (
 )
 
 // A RETIRED INCARNATION OUTLIVES ITS LAST READER, and not a moment longer: a
-// reader's git process has that directory as its GIT_DIR, so removing or
-// renaming it under the process would have it open another directory's files
-// half way through its run — and a directory nobody holds any more is disk the
-// cache gives back at once. Release is idempotent, so a reader that releases
-// twice never steals another reader's pin.
+// reader's git process has that directory as its GIT_DIR, so moving it under
+// the process would have it open another directory's files mid-run, and a
+// directory nobody holds is disk the cache gives back at once. Release is
+// idempotent, so a reader that releases twice never steals another's pin.
 func TestARetiredIncarnationLeavesWithItsLastReader(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -67,9 +66,8 @@ func TestARetiredIncarnationLeavesWithItsLastReader(t *testing.T) {
 }
 
 // A READER THAT OUTLIVES STOP MOVES NOTHING when it lets go: Stop releases
-// the directory's claim, so the directory may already be another process's —
-// the next Open's scan, which needs nothing from a stopped cache, decides
-// what becomes of it.
+// the directory's claim, so it may already be another process's; the next
+// Open's scan decides what becomes of it.
 func TestAReleaseAfterStopMovesNothing(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)

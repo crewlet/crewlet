@@ -9,24 +9,18 @@ import (
 	"testing"
 )
 
-// A SOURCE REPOSITORY'S HISTORY, for every benchmark whose figure follows
-// the shape of a history and not only its bytes: what an index costs — the
-// commit-graph reads every commit, the bitmap selects and walks commits —
-// follows the commits as much as the objects, and so does what a push into a
-// large repository or a clone of one costs. ONE GENERATOR, so the cache's
-// index figures and the host's push figures are taken over the same
-// history.
+// A SOURCE REPOSITORY'S HISTORY, for every benchmark whose figure follows the
+// shape of a history, not only its bytes (an index, a push and a clone cost
+// with the commits): ONE GENERATOR, so the cache's index figures and the
+// host's push figures are taken over the same history.
 //
 // Every commit changes historyFilesPerCommit files of one directory of
-// historyDirFiles: a commit object, the root tree, its directory's tree and
-// four blobs, so commits are a seventh of the objects and trees two sevenths,
-// and a gigabyte of history is 455 680 commits over 1 421 files (32 MB is
-// 14 080 over 44) — the hundreds of thousands a source repository of that
-// size has. Each file's versions are a chain of deltas: a session writes
-// every version of each file in turn (fast-import deltas a blob against the
-// one before it in the stream), each rewriting a historyWindow of the file
-// with seeded random bytes, then the session's commits, every file's version
-// v before any file's v+1. The count of files is what the size scales.
+// historyDirFiles, so commits are a seventh of the objects and trees two
+// sevenths: a gigabyte is 455 680 commits over 1 421 files, as a source
+// repository of that size has. A session writes every version of each file in
+// turn, so fast-import deltas each against the one before, each rewriting a
+// historyWindow with seeded random bytes; then its commits, every file's
+// version v before any file's v+1. The size scales the count of files.
 const (
 	// HistorySessions is how many fast-import sessions a History is
 	// written in — and so how many pushes a benchmark that pushes it a
@@ -71,28 +65,26 @@ const (
 
 // After is the date (GIT_AUTHOR_DATE, GIT_COMMITTER_DATE) for the n-th commit
 // made on top of a History of commits: a second past its last commit, and n
-// more. A Client stamps every commit at one instant, the History's first, so
-// a commit it made on top of a History would be older than its parent — a
-// skewed clock, which git's date-ordered walks read as a reason to walk the
-// whole history: `merge-base --is-ancestor` and `rev-list --not` took 2.5 s
-// each over the gigabyte's 455 680 commits for a push of one commit.
+// more. A Client stamps every commit at the History's first instant, so its
+// commit on top would be older than its parent: a skewed clock, which git's
+// date-ordered walks (`merge-base --is-ancestor`, `rev-list --not`) read as a
+// reason to walk the whole history.
 func After(commits []string, n int) string {
 	return fmt.Sprintf("@%d +0000", historyEpoch+len(commits)+n)
 }
 
 // Skewed is the date (GIT_AUTHOR_DATE, GIT_COMMITTER_DATE) for a commit made
 // on top of a History by a client whose clock is behind: the day before the
-// History's first commit, so the commit is older than its parent and than
-// every commit under it — what a person's skewed clock makes, and what a
-// Client's own fixed instant made before After existed. git's walks by date
-// read it as a reason to walk the whole history.
+// History's first commit, so the commit is older than every commit under it,
+// as a person's skewed clock makes it, and git's date-ordered walks walk the
+// whole history.
 func Skewed() string {
 	return fmt.Sprintf("@%d +0000", historyEpoch-86_400)
 }
 
 // historySeed keys a History's random bytes and draws: fixed, so a size's
-// history is the same bytes on every run — and the one BenchmarkMidx's
-// figures were first measured over.
+// history is the same bytes on every run (BenchmarkMidx's figures were
+// measured over this one).
 var historySeed = [32]byte{3}
 
 // History fast-imports a history of about size bytes into a repository the
@@ -105,19 +97,14 @@ func History(t testing.TB, c *Client, size int64) (string, []string) {
 	return history(t, c, size, flatLayout)
 }
 
-// DeepHistory is History's commits — the same files, versions and bytes —
-// with every file at DeepPath, four levels down, and a WIDE TREE of wide
-// files beside them from the first commit on, which no later commit changes:
-// src/a0000/f000000 and on, a hundred to a directory, so src/ lists a
-// thousand directories at 100 000 of them, every one named to sort before
-// core/. Every commit rewrites src/, as a monorepo's every commit rewrites the
-// directory its code lives under, so a read of one path that diffs a commit —
-// one with no changed-path filter — reads src/ in both commits and walks its
-// listing past every wide directory to the path's entry, where in a History
-// it compares one entry of a root tree of thirty directories. What a filter
-// saves a read is that walk, which a History cannot show. A commit
-// writes four trees where a History's writes two (the root, src/, src/core/
-// and its directory), so it adds nine objects (DeepObjectsPerCommit).
+// DeepHistory is History's commits (the same files, versions and bytes) with
+// every file at DeepPath, four levels down, beside a WIDE TREE of wide files
+// that the first commit adds and no later one changes: src/a0000/f000000 on, a
+// hundred to a directory, each sorting before core/. Every commit rewrites
+// src/, as a monorepo's does, so a read of one path that diffs a commit
+// without a changed-path filter walks src/'s listing past every wide directory
+// in both commits. That walk is what a filter saves, and a History cannot show
+// it. A commit writes four trees, not two, so it adds DeepObjectsPerCommit.
 func DeepHistory(t testing.TB, c *Client, size int64, wide int) (string, []string) {
 	t.Helper()
 	return history(t, c, size, historyLayout{path: DeepPath, wide: wide})

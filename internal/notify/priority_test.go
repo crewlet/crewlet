@@ -216,3 +216,34 @@ func TestAPersonsWaitingMessageIsAnnouncedToItsSeat(t *testing.T) {
 		}
 	}
 }
+
+// quietPrompt is a chat prompt whose source says no person waits on its wakes.
+type quietPrompt struct{ notify.ChatPrompt }
+
+func (quietPrompt) PersonWaits(notify.Inbound) bool { return false }
+
+// A SOURCE'S LANE RULE NARROWS THE LANE ([notify.LaneRule]): a person's wake
+// its source says nobody waits on stays with the background. Mutation: publish
+// on Addressed and WrittenByPerson alone, and it rides the lane.
+func TestASourcesLaneRuleKeepsAPersonsChangeOffTheLane(t *testing.T) {
+	t.Parallel()
+	h := newService(t, func(o *notify.Options, _ *harness) {
+		o.Prompts = o.Prompts.With(quietPrompt{notify.ChatPrompt{
+			Backend: "chat", Label: "Chat",
+			Address: notify.AddressRule{DirectKinds: []string{"D"}, Follows: notify.AddressingFollows()},
+		}})
+	})
+	r := to(notify.Recipient{Handle: "engineering-lead"}, "assigned to you")
+	r.Inbound.Source, r.Inbound.EventType, r.Inbound.Sender = "chat", "message", "dana-founder"
+	r.Inbound.Metadata = map[string]string{"channel": "D1", "channel_type": "D", "ts": "q1",
+		notify.BodyAuthorKindField: string(iam.ActorHuman)}
+	h.parser.out = []notify.Routed{r}
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+	woken := h.inbox(t, "engineering-lead")
+	if len(woken) != 1 || queue.Prioritized(woken[0]) {
+		t.Fatalf("woken %d times, on the lane = %v; want once, with the background", len(woken),
+			len(woken) == 1 && queue.Prioritized(woken[0]))
+	}
+}

@@ -24,35 +24,27 @@ import (
 )
 
 // THE HARNESS: a prepared directory, a real pool over its HOME, and a cache
-// opened over both with every log line kept for the case to read. Every open
-// is a whole boot — Prepare, gitproc.New, Open — as a node's is: Prepare reads
-// repos/ and hands the reading to Open, so what a case writes there before it
-// opens is what the boot finds.
+// opened over both, every log line kept. Every open is a whole boot (Prepare,
+// gitproc.New, Open) as a node's is, so what a case writes under repos/ before
+// it opens is what the boot finds.
 
-// suiteShare is whose every transfer a case runs through a world's pool is
-// (gitproc.Cmd.Share, which a transfer requires): a machine token's, since no
-// case here is about who waits for a transfer slot.
+// suiteShare is the Share every transfer through a world's pool runs as
+// (gitproc.Cmd.Share): a machine token's, since no case here is about who
+// waits for a transfer slot.
 var suiteShare = gitproc.Share{Class: gitproc.ShareMachine, Principal: "suite"}
 
-// pastEveryTimer is how far a case in a synctest bubble moves the clock before
-// it reads, a second time, that something did NOT happen. The first read is
-// once synctest.Wait returns: every other goroutine of the case is durably
-// blocked by then, but one asleep on the bubble's clock is durably blocked
-// too, so an event the code would make only after a wait on that clock of its
-// own — a grace, a pace, a retry — has not been made yet, however wrong it
-// is. The case then sleeps pastEveryTimer and waits again: the sleep ends
-// only once the clock has reached its end, every timer due before then fired
-// and what each woke run until it blocked, and the second Wait lets run what
-// woke at that very instant. So the second read decides what the first
-// cannot.
+// pastEveryTimer is how far a synctest case moves the clock before reading, a
+// second time, that something did NOT happen. synctest.Wait counts a
+// goroutine asleep on the bubble's clock as durably blocked, so after the
+// first Wait an event the code makes only after a wait of its own (a grace, a
+// pace, a retry) has not happened yet, however wrong. Sleeping pastEveryTimer
+// fires every timer due by then and runs what each woke; a second Wait runs
+// what woke at that instant, so the second read decides what the first cannot.
 //
-// Past the longest timer the cache arms, a day — the scrubber's wake at a
-// copy's interval (ScrubInterval) and the backfill's at its next horizon
-// (HorizonEvery) — so a bug that delays its event by any wait of the cache's
-// own is past it too. It costs a bubble nothing, since the clock jumps from
-// one timer to the next; and a case moves it only where nothing the span
-// fires starts or ends any work on a healthy build, which each such case
-// says.
+// It is past the cache's longest timer, a day (ScrubInterval, HorizonEvery),
+// so past any delay a wait of the cache's own adds, and costs a bubble nothing.
+// A case moves it only where nothing in the span starts or ends work on a
+// healthy build, which each such case says.
 const pastEveryTimer = max(cache.ScrubInterval, cache.HorizonEvery) + time.Second
 
 // world is one cache directory and the pool that serves it.
@@ -63,26 +55,22 @@ type world struct {
 	// gitPath is the git every boot's pool runs; "" is the one on PATH.
 	gitPath string
 	// processes is every boot's pool's MaxProcesses; 0 is two, whose
-	// maintenance lane is ONE slot — the lane a case holds whole by holding
-	// one process.
+	// maintenance lane is ONE slot, which a case holds by holding one process.
 	processes int
-	// transfers is every boot's pool's MaxTransfers, an operator's
-	// gitlet.max_transfers; 0 is the pool's own default, sized to its
-	// processes and its memory.
+	// transfers is every boot's pool's MaxTransfers (gitlet.max_transfers);
+	// 0 is the pool's own default.
 	transfers int
-	// memory is every boot's pool's node memory; 0 is a tebibyte, so every
-	// case's lanes and maintenance budget are its own, never whatever the
-	// machine running the suite has left after its pool's lanes — which,
-	// for a pool of eight cores on a sixteen-gigabyte runner, is little. A
-	// case about the budget sets it, or sets machineMemory, which makes the
-	// pool read the machine's own as a node's does.
+	// memory is every boot's pool's node memory; 0 is a tebibyte, so a case's
+	// lanes and maintenance budget never depend on the runner's memory. A case
+	// about the budget sets it, or sets machineMemory to make the pool read
+	// the machine's own as a node's does.
 	memory        int64
 	machineMemory bool
 }
 
-// newWorld prepares a fresh cache directory and a real gitproc pool over the
-// HOME Prepare names. Nothing is opened yet; the Layout holds the claim until
-// an Open takes it or the case ends.
+// newWorld prepares a fresh cache directory and a real pool over its HOME.
+// Nothing is opened; the Layout holds the claim until an Open takes it or the
+// case ends.
 func newWorld(t testing.TB) *world {
 	t.Helper()
 	gittest.RequireNode(t)
@@ -91,10 +79,9 @@ func newWorld(t testing.TB) *world {
 	return w
 }
 
-// prepare prepares dir — w's own directory again, after its first — and
-// builds a real pool over the HOME it names. A Layout opens once, and
-// Prepare moves the last pool's HOME aside, so every boot takes both anew;
-// the Layout before it is released first (nothing, once an Open took it).
+// prepare prepares dir and builds a real pool over its HOME. A Layout opens
+// once and Prepare moves the last pool's HOME aside, so every boot takes both
+// anew, releasing the previous Layout first (a no-op once an Open took it).
 func (w *world) prepare(t testing.TB, dir string) {
 	t.Helper()
 	w.layout.Release()
@@ -164,8 +151,8 @@ func (w *world) options(t testing.TB, mutate ...func(*cache.Options)) cache.Opti
 	return o
 }
 
-// open boots a cache over w — Prepare, a pool, Open — and stops it when the
-// case ends.
+// open boots a cache over w (Prepare, a pool, Open), stopped when the case
+// ends.
 func (w *world) open(t testing.TB, mutate ...func(*cache.Options)) *cache.Cache {
 	t.Helper()
 	w.reboot(t)
@@ -177,10 +164,9 @@ func (w *world) open(t testing.TB, mutate ...func(*cache.Options)) *cache.Cache 
 	return c
 }
 
-// clock is a case's own time: what the cache reads as now — a last use, a
-// rebuild's cooldown, the maintainer's debounce and interval — moved only
-// when the case moves it; and the timers a knob arms on it (At), each fired
-// by the move that reaches its time.
+// clock is a case's own time: the cache's now (a last use, a rebuild's
+// cooldown, the maintainer's debounce and interval), moved only by the case,
+// and the timers a knob arms on it (At), each fired by the move reaching it.
 type clock struct {
 	mu     sync.Mutex
 	at     time.Time
@@ -221,14 +207,13 @@ func (c *clock) Set(t time.Time) {
 	c.fire()
 }
 
-// At is a timer on the clock for t: a channel the clock's time is sent on
-// once the clock reads t or later — AT ONCE where it does already, as a timer
-// reset to a wait that is not positive fires at once. A knob standing in for
-// a loop's timer answers one of these, never a channel the case sends on by
-// hand: a loop re-arms its wait from a pass that read the clock before the
-// case moved it (a kick it took while it waited), so the channel the case saw
-// armed may be one nobody waits on any more, and a send on it is lost while
-// the loop waits on the wake it armed after, which nothing sends on.
+// At is a timer on the clock for t: a channel the clock's time is sent on once
+// it reads t or later, AT ONCE if it already does, as a timer reset to a
+// non-positive wait fires. A knob standing in for a loop's timer answers one
+// of these, never a channel the case sends on by hand: a loop may re-arm from
+// a pass that read the clock before the case moved it, so a hand send can
+// land on a channel nobody waits on any more while the loop waits on its new
+// wake, which nothing sends on.
 func (c *clock) At(t time.Time) <-chan time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -238,9 +223,9 @@ func (c *clock) At(t time.Time) <-chan time.Time {
 	return ch
 }
 
-// fire sends on every timer whose time the clock has reached and forgets it:
-// each fires once, into the one place its channel keeps, so moving the clock
-// never waits for whoever armed one. c.mu is held.
+// fire sends on every timer the clock has reached and drops it: each fires
+// once, into its channel's buffer of one, so moving the clock never waits on
+// whoever armed it. c.mu is held.
 func (c *clock) fire() {
 	kept := c.timers[:0]
 	for _, tm := range c.timers {
@@ -292,25 +277,18 @@ func (n noObjects) Open(context.Context, objstore.Object) (io.ReadCloser, error)
 type logs struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
-	// logging, when set, is told each line's message as the line is logged,
-	// on the goroutine logging it and before the line is written: a case
-	// holds a line there to tell one logged before what it watches from one
-	// logged after. Set before the cache that logs here is opened.
+	// logging, when set, is told each line's message on the logging goroutine
+	// before the line is written, so a case can hold a line to tell what was
+	// logged before it from after. Set it before the cache is opened.
 	//
-	// NO LOCK OF THE LOGGER'S IS HELD WHILE IT RUNS. It is told by the
-	// logger's own handler (heard), ahead of the JSON handler, and never from
-	// Write: the JSON handler calls Write holding a lock that every logger
-	// made from it shares, so a line held there would hold every other line
-	// of the cache behind it, and a goroutine queued on a sync.Mutex is not
-	// durably blocked — the hold's synctest.Wait would never return, and the
-	// case would hang to the binary's timeout rather than fail.
+	// NO LOGGER LOCK IS HELD WHILE IT RUNS: heard calls it ahead of the JSON
+	// handler, never from Write, which runs under a lock every derived logger
+	// shares. A goroutine queued on a sync.Mutex is not durably blocked, so a
+	// hold there would hang the hold's synctest.Wait to the binary's timeout.
 	//
-	// A hook that holds a line waits with synctest.Wait, never on a timer,
-	// which nothing fires once the case has returned. It holds only a line
-	// its code logs with no lock held that another goroutine of the case may
-	// take — one queued on that lock would keep the Wait from returning just
-	// the same — and holds it on one goroutine at a time: two Waits at once
-	// panic.
+	// A hook holding a line waits with synctest.Wait, never a timer; holds
+	// only a line logged with no lock held that another goroutine of the case
+	// may take; and holds on one goroutine at a time (two Waits at once panic).
 	logging func(msg string)
 }
 
@@ -325,9 +303,9 @@ func (l *logs) logger() *slog.Logger {
 	return slog.New(heard{slog.NewJSONHandler(l, &slog.HandlerOptions{Level: slog.LevelDebug}), l})
 }
 
-// heard is the handler of a logger logs made: the JSON handler over logs,
-// which each line reaches only once logs.logging has been told of it. A
-// logger made from it with With or WithGroup tells logging too.
+// heard is the handler of logs' loggers: the JSON handler over logs, which a
+// line reaches only after logs.logging is told of it, With and WithGroup
+// included.
 type heard struct {
 	slog.Handler
 	l *logs
@@ -405,7 +383,7 @@ func read(t testing.TB, path string) string {
 	return string(raw)
 }
 
-// exists reports whether path is there, as itself.
+// exists reports whether path is there, a symlink not followed.
 func exists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil

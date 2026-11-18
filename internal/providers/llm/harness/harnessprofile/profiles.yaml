@@ -490,12 +490,18 @@ claude-code:
   # A REFUSED SIGN-IN IS RECOGNISED BY ITS STATUS FIRST, as a spent plan is:
   # a refused key or token ends in a result event with `api_error_status:
   # 401`, and a refused token is first retried with a `system` `api_retry`
-  # event naming `authentication_failed` (both measured on 2.1.312).
+  # event naming `authentication_failed` (both measured on 2.1.312). A 403 is
+  # a login its account does not entitle, which no retry cures either.
   auth_events:
     - match:
         - {path: ["type"], equals: "result"}
         - {path: ["is_error"], equals: true}
         - {path: ["api_error_status"], equals: 401}
+      said_path: ["result"]
+    - match:
+        - {path: ["type"], equals: "result"}
+        - {path: ["is_error"], equals: true}
+        - {path: ["api_error_status"], equals: 403}
       said_path: ["result"]
     - match:
         - {path: ["type"], equals: "system"}

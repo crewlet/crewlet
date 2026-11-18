@@ -61,14 +61,29 @@
 //     back, failed only for a reason of the node's own — on its UNHANDLED
 //     subject, a healthy delivery no member handled, where a reader that
 //     can handle it now finds it again.
+//   - A delivery that failed for a reason of THIS NODE's is answered NakNode
+//     (a broker it could not reach, a queue that is not live, a stop that
+//     ended its handler, a coordination store that did not answer a step the
+//     handler cannot go on without) and is never counted as the message's
+//     own failure. NodeFault is the one test of such a failure the queue
+//     itself can tell (a broker that did not answer, a queue no longer live,
+//     a handler whose context ended), and every handler that asks it
+//     (internal/notify's wakes, internal/engine's seat control topic and
+//     seat mailbox, internal/observe's custody keeper) asks the same one, so
+//     a failure one of them keeps out of its group's poison the others keep
+//     out too.
 //   - A PAUSE HOLD IS TAKEN FOR ONE ATTACHMENT, which its caller names
 //     (Attachment): the pair's attachment from one Detach to the next, live
-//     or about to be made. A hold asked for an attachment a Detach has ended
-//     is refused, and so never gates the attachment after it. Keyed by the
-//     pair alone, a hold whose PauseTopic landed after its seat's release
-//     was carried onto the next attachment of that inbox on the node, which
-//     then consumed nothing, and nothing that knew of the hold was left to
-//     lift it.
+//     or about to be made, minted per client from one counter, the zero one
+//     naming none. A hold taken before anything attaches gates the attach it
+//     was taken for; a hold asked for an attachment a Detach has ended is
+//     refused (ErrAttachmentGone), and a ResumeTopic under one lifts nothing,
+//     so it never gates the attachment after it. Keyed by the pair alone, a
+//     hold whose PauseTopic landed after its seat's release was carried onto
+//     the next attachment of that inbox on the node, which then consumed
+//     nothing, and nothing that knew of the hold was left to lift it.
+//     queuetest's a_hold_taken_for_a_detached_attachment_does_not_pause_the_next
+//     holds both backends to it.
 //   - A failed verb is MARKED with one of four sentinels when the failure is
 //     one a caller acts on, and nothing else about it may be branched on:
 //     ErrTooLarge (the event can never fit — permanent), ErrNotLive (this
@@ -101,10 +116,9 @@ var log = logging.Get("queue.contract")
 // ErrTooLarge reports that an event does not fit on the wire.
 //
 // ONE OF THE FOUR SENTINELS THE LAYERS ABOVE MAY BRANCH ON — ErrNotLive,
-// ErrUnavailable and ErrAttachmentGone are the others — and for the reason
-// all four exist: the layers above must not branch on which backend is
-// running, so each backend translates its own refusal into this and callers
-// ask one question everywhere.
+// ErrUnavailable and ErrAttachmentGone are the others — since they must not
+// branch on which backend is running: each backend translates its own refusal
+// into this, and callers ask one question everywhere.
 //
 // It exists because "too large" is the one publish failure that is PERMANENT.
 // The reasons a publish fails that trying again does answer — a broker
@@ -440,15 +454,14 @@ func Ack() Result { return Result{} }
 func Nak(err error) Result { return Result{Outcome: OutcomeNak, Err: err} }
 
 // NakNode negatively acknowledges a delivery that failed for a reason of THIS
-// NODE's, never of the message: a broker it could not reach
-// ([ErrUnavailable]), a queue that is not live ([ErrNotLive]), a stop that
-// ended its handler, a coordination store that did not answer a step the
-// handler cannot go on without. Returned exactly as a [Nak] is — spaced, behind the mail
-// that was waiting, the attachment taking mail on — because the condition may
-// clear in a moment, here or on a peer; but never counted as the message's own
-// failure ([Result.FailsMessage]), so a message whose budget it spends is kept
-// with its group's unhandled deliveries, as a healthy delivery no member
-// handled, and not with its poison ([RetiredTo]).
+// NODE's, never of the message: a broker it could not reach ([ErrUnavailable]),
+// a queue that is not live ([ErrNotLive]), a stop that ended its handler, a
+// coordination store that did not answer. Returned exactly as a [Nak] is —
+// spaced, behind the mail that was waiting, the attachment taking mail on —
+// because the condition may clear in a moment, here or on a peer; but never
+// counted as the message's own failure ([Result.FailsMessage]), so a message
+// whose budget it spends is kept with its group's unhandled deliveries, as a
+// healthy delivery no member handled, and not with its poison ([RetiredTo]).
 //
 // NOT A DEFER, which is the outcome for a node that has lost the right to the
 // work: a deferral quiesces the attachment until something resumes it, and a
@@ -503,11 +516,10 @@ type BatchHandler func(ctx context.Context, evs []*events.Event) Result
 // good, which no later call reopens and which stops the node.
 //
 // ONE OF THE FOUR SENTINELS THE LAYERS ABOVE MAY BRANCH ON — see ErrTooLarge,
-// ErrUnavailable and ErrAttachmentGone for the others — because they must
-// not branch on which backend is running: each backend keeps its own error
-// (jetstream.ErrClosed, jetstream.ErrConnectionLost, memory.ErrNotStarted)
-// and wraps this, so errors.Is(err, queue.ErrNotLive) is the same question
-// everywhere.
+// ErrUnavailable and ErrAttachmentGone for the others — because they must not
+// branch on which backend is running: each backend keeps its own error
+// (jetstream.ErrClosed, jetstream.ErrConnectionLost, memory.ErrNotStarted) and
+// wraps this, so errors.Is(err, queue.ErrNotLive) is one question everywhere.
 //
 // It exists because "the queue is down" is not a failure for every caller. A
 // seat release detaches the mailbox and the seat host KEEPS THE LEASE if that
@@ -948,12 +960,12 @@ type EventQueue interface {
 	// and ack per partition. A failing partition never blocks or replays
 	// a different one.
 	//
-	// On a laned topic a drain takes the priority lane's mail first, and a
-	// partition holding a priority event is dispatched ahead of every other
-	// ([OrderForDispatch]). The partition holds what the drain took: an event
-	// of it deeper on the topic than the drain's cap is delivered in its own
-	// turn once the topic reaches it, exactly once (the drain window is the
-	// bound of what one turn is handed; see lane.go).
+	// On a laned topic a drain takes the lane's mail first and again before
+	// each partition ([JoinLane]), and a partition holding a priority event is
+	// dispatched ahead of every other ([OrderForDispatch]). The partition holds
+	// what the drain took: an event of it deeper on the topic than the drain's
+	// cap is delivered in its own turn once the topic reaches it, exactly once
+	// (the drain window is the bound of what one turn is handed; see lane.go).
 	//
 	// opts is read live on every cycle, so a config reload changes
 	// linger and batch size with no re-subscription.
@@ -1468,20 +1480,17 @@ type EventQueue interface {
 	// no broker.
 	Attachment(ctx context.Context, topic, group string) (Attachment, error)
 
-	// PauseTopic pauses ONE subscription's delivery under a named reason,
-	// for the attachment at names, and refuses with ErrAttachmentGone,
-	// holding nothing, when at is not the pair's current attachment. A
-	// hold taken before anything attaches gates the attach it was taken
-	// for; one asked for an attachment a Detach has ended never gates the
-	// one after it. Holds are reason-scoped and keyed by the (topic, group)
-	// PAIR, so a second subsystem gating the same inbox cannot release
-	// the first one's hold by lifting its own, and a hold on one group
-	// does not gate every other group on a shared subject. The engine
-	// holds a seat's inbox under four, each lifted only by the subsystem
-	// that took it: a company with no turn engine, a person's pause, a
-	// spent budget window, and a detached executor holding the seat
-	// (or an answer's resume it owes) — see internal/agent/inbox's Hold
-	// and the engine's budget park.
+	// PauseTopic pauses ONE subscription's delivery under a named reason, for
+	// the attachment at names, and refuses with ErrAttachmentGone, holding
+	// nothing, when at is not the pair's current attachment (the package doc
+	// says why). Holds are reason-scoped and keyed by the (topic, group) PAIR,
+	// so a second subsystem gating the same inbox cannot release the first one's
+	// hold by lifting its own, and a hold on one group does not gate every other
+	// group on a shared subject. The engine holds a seat's inbox under four,
+	// each lifted only by the subsystem that took it: a company with no turn
+	// engine, a person's pause, a spent budget window, and a detached executor
+	// holding the seat (or an answer's resume it owes) — see
+	// internal/agent/inbox's Hold and the engine's budget park.
 	PauseTopic(ctx context.Context, topic, group string, at Attachment, reason string) error
 
 	// ResumeTopic releases one reason's hold on the attachment at names,
@@ -1656,6 +1665,20 @@ func eventType(ev *events.Event) string {
 		return ""
 	}
 	return ev.Type
+}
+
+// JoinLane is what a drain has left to dispatch once lane mail that landed
+// mid-drain joins it: partitioned and ordered again, so the lane's partitions
+// run next and an event the drain held under the same key joins their turn.
+func JoinLane[T any](rest []Partition[T], lane []T, key BatchKeyFunc, eventOf func(T) *events.Event) []Partition[T] {
+	if len(lane) == 0 {
+		return rest
+	}
+	var items []T
+	for _, p := range rest {
+		items = append(items, p.Items...)
+	}
+	return OrderForDispatch(PartitionByKey(append(items, lane...), key, eventOf), eventOf)
 }
 
 // OrderForDispatch establishes BOTH levels of ordering a drained batch

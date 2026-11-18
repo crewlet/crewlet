@@ -118,6 +118,7 @@ import { pathOf } from "~/app/frame/objects.ts";
 import { PromptRecord } from "~/components/PromptDoc.tsx";
 import { WITHHELD_WHY, WITHHELD_WORDS } from "~/lib/access.ts";
 import { ArtifactLink, artifactHref } from "./ArtifactLink.tsx";
+import { ActivityLog } from "./ActivityLog.tsx";
 import { writtenArtifact, type WrittenArtifact } from "~/lib/artifacts/transcript.ts";
 
 /**
@@ -743,7 +744,7 @@ function LaunchBody({ record }: { record: PhaseRecord }) {
         // its end — which is a long log to mount for a reader who came for
         // the report. The count says when it is not the whole.
         <Disclosure title="Activity" count={transcriptLength(record)} lazy>
-          <p className="prose mono">{record.transcript}</p>
+          <ActivityLog label="What the executor did" text={record.transcript} />
         </Disclosure>
       )}
     </>

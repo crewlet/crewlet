@@ -18,48 +18,21 @@ import (
 )
 
 // A CHANGE REBASED ONTO ITS TARGET, ON THE GITLET NODE (gitlet.WriteRebaseChange):
-// the change's commits its target does not hold, replayed onto the target's
-// tip in order, and its source branch moved to the last of them as ONE PUSH —
-// forced, since the branch no longer holds its old head — through the one
-// landing every engine write takes (write.go): its protections, its grant and
-// the committer's decide hold a rebase as they hold a force-push of the same
-// branch, and the push's apply records the change's new revision.
-//
-// # Replayed as git's own rebase replays them
-//
-// ONE `rev-list --topo-order --parents` of the head less the target's tip, at
-// most gitlet.MaxRebaseCommits+1 of them — more is too_many_commits, a merge
-// among them merge_commit, since a merge needs a mainline to replay — then,
-// for each commit C on its parent P, oldest first: ONE `merge-tree
-// --write-tree -z --merge-base=P <tip> C` — the cherry-pick of C onto what is
-// rebased so far — and ONE `commit-tree` of its tree onto that tip. The FIRST
-// that conflicts stops the rebase, naming the commit and its conflicted paths,
-// and nothing is stored; a commit whose change the tip already holds (its
-// merge leaves the tip's tree as it was) is dropped, as `git rebase` drops it.
-// The commits are read in batches of rebaseReadBatch, so what a rebase holds
-// of their messages is bounded whatever its length.
-//
-// # Each commit its author's (U43 a)
-//
-// A replayed commit keeps its AUTHOR — the name, the address and the author
-// date with its zone, as git wrote them — and its message, byte for byte; its
-// COMMITTER is the engine, at U18 c's date: the instant the rebase was asked,
-// or its new parent's committer date, or its own author date, whichever is
-// latest, so no commit is committed before it is authored or dated before its
-// parent, and a rebase asked again builds the same commits. A commit git would
-// not write back as it was — an author it names in a form git trims or
-// refuses, a message in another encoding than UTF-8, or one past
-// gitlet.MaxCommitPayloadBytes — is refused rather than rewritten
-// (rejected_object, too_large): the rebase replays a history, it never edits
-// one.
+// the commits its target lacks, replayed oldest first onto the target's tip as
+// `git rebase` replays them, and its source moved to the last as ONE forced
+// push through the one landing (write.go), so its protections, its grant and
+// the committer's decide hold it as a force-push of that branch, and the
+// push's apply records the change's new revision. The first conflict stops it
+// with nothing stored; a commit whose change the tip holds is dropped. Each
+// replayed commit keeps its author (its date's zone too) and message byte for
+// byte, committed by the engine (U43 a); one git would not write back as it
+// was is refused, never rewritten: a rebase replays a history, never edits it.
 
-// rebaseReadBatch is how many commits a rebase reads in one `cat-file
-// --batch`: SIXTEEN, a JUDGMENT — each message is held whole until its commit
-// is replayed, up to gitlet.MaxCommitPayloadBytes, so a batch holds at most 16
-// MiB of messages at the bound where a whole history of gitlet.MaxRebaseCommits
-// read at once could hold a gigabyte; and one process for sixteen replayed
-// commits, each of which runs two of its own, is a sixteenth of a process
-// more a commit.
+// rebaseReadBatch is how many commits one `cat-file --batch` reads: SIXTEEN,
+// a judgment. Each message is held whole until replayed, up to
+// gitlet.MaxCommitPayloadBytes, so a batch holds at most 16 MiB where a whole
+// gitlet.MaxRebaseCommits history read at once could hold a gigabyte; and one
+// process per sixteen commits, each running two of its own, adds little.
 const rebaseReadBatch = 16
 
 // rebasing is one rebase's replay: the commit it is replaying onto, its tree
@@ -158,10 +131,11 @@ func (wr *writing) rebasedChange(ctx context.Context) (*gitlet.ChangeDetail, err
 // replayed is one commit a rebase replays: its id and its one parent.
 type replayed struct{ id, parent string }
 
-// toReplay is the commits the head holds and target does not, oldest first —
-// ONE `rev-list --topo-order --parents` in the copy, at most one past
-// gitlet.MaxRebaseCommits — or the refusal of a history too long, or holding a
-// merge.
+// toReplay is the commits the head holds and target does not, oldest first,
+// from ONE `rev-list --topo-order --parents` of at most
+// gitlet.MaxRebaseCommits+1 — or the refusal of a longer history
+// (too_many_commits) or one holding a merge, which has no mainline to replay
+// (merge_commit).
 func (b *building) toReplay(ctx context.Context, named, target string) ([]replayed, gitlet.EngineWriteResult,
 	bool, error) {
 
@@ -217,11 +191,13 @@ func (b *building) toReplay(ctx context.Context, named, target string) ([]replay
 	return out, gitlet.EngineWriteResult{}, false, nil
 }
 
-// replay is commit cm — the i-th of n, its header h — cherry-picked onto the
-// rebase's tip: ONE merge-tree of it against its parent, and ONE commit-tree
-// keeping its author and its message, committed by the engine — or the
-// rebase stopped at its conflict, or refused for a commit git would not write
-// back as it was.
+// replay is commit cm (the i-th of n, header h) cherry-picked onto the
+// rebase's tip: ONE merge-tree against its parent and ONE commit-tree keeping
+// its author and message — or the rebase stopped at its conflict, or refused
+// for a commit git would not write back as it was. Its committer date is the
+// latest of the rebase's instant, its new parent's committer date and its
+// author date (U18 c), so no commit is committed before it is authored or
+// dated before its parent, and a rebase asked again builds the same commits.
 func (r *rebasing) replay(ctx context.Context, named string, cm replayed, h *commitHeader, i, n int) (
 	gitlet.EngineWriteResult, bool, error) {
 
@@ -250,9 +226,8 @@ func (r *rebasing) replay(ctx context.Context, named string, cm replayed, h *com
 		return res, true, err
 	}
 	if m.tree == r.tree {
-		// ITS CHANGE IS THE TIP'S ALREADY — a commit the target holds under
-		// another id, or one that changed nothing: dropped, as git's own
-		// rebase drops a commit that becomes empty.
+		// ITS CHANGE IS THE TIP'S ALREADY (held under another id, or empty):
+		// dropped, as git's own rebase drops a commit that becomes empty.
 		r.dropped++
 		return gitlet.EngineWriteResult{}, false, nil
 	}

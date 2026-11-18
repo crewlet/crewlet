@@ -25,13 +25,13 @@ func openOf(repoID, source, title string) gitlet.ChangeProposal {
 		ChangeID: gitlet.OpenChangeID(opID), SourceRef: source, TargetRef: "refs/heads/main", Title: title}}
 }
 
-// F31: an open whose committer dies after appending its record and before it
-// answered is asked of the repository's runner-up under its OWN operation id,
-// which the ledger collapses onto the record that landed: the open is answered
-// applied, with the change and the number that record took, and no second
-// change is opened — asked again it is the same change, appending nothing, and
-// the repository's next open takes the next number. The dead committer, back,
-// applies the one record and holds the rows every member does.
+// F31: an open whose committer dies after appending its record, before
+// answering, is asked of the repository's runner-up under its OWN operation
+// id, which the ledger collapses onto the landed record: it answers applied
+// with that record's change and number and opens no second change. Asked
+// again it is the same change, appending nothing; the next open takes the next
+// number; the committer, back, applies the one record and holds the rows every
+// member does.
 func aChangeOpenSurvivesItsCommitter(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f31")
 	committer := rc.committer()
@@ -113,13 +113,13 @@ func commentOf(repoID, changeID, parent, body string) gitlet.ConversationWrite {
 			Body: body}}
 }
 
-// F39: a comment whose writer dies after appending its record and before it
-// answered is asked of the repository's runner-up under its OWN operation id,
-// which the ledger collapses onto the record that landed: the comment is
-// answered applied, by the id that record gave it, and no second comment is
-// said — asked again it is the same comment, appending nothing. A reply to it,
-// whose decide reads the thread's root, lands through another member; and the
-// dead writer, back, applies the records every member does.
+// F39: a comment whose writer dies after appending its record, before
+// answering, is asked of the repository's runner-up under its OWN operation
+// id, which the ledger collapses onto the landed record: it answers applied by
+// that record's id and says no second comment; asked again it is the same
+// comment, appending nothing. A reply, whose decide reads the thread's root,
+// lands through another member; the writer, back, applies the records every
+// member does.
 func aConversationSurvivesItsWriter(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f39")
 	writer := rc.committer()

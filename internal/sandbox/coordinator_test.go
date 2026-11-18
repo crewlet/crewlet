@@ -441,7 +441,7 @@ const rigInbox queue.Attachment = 1
 func (r *coordRig) recoverSeatOn(ctx context.Context, owner string, epoch int64,
 	inbox queue.Attachment) error {
 	r.coordinator.lease = leased(Fence{Owner: owner, Epoch: epoch})
-	return r.coordinator.RecoverSeat(ctx, "swe", owner, epoch, inbox)
+	return r.coordinator.RecoverSeat(ctx, "swe", owner, epoch, inbox, nil)
 }
 
 // fireRetries runs every owed-answer attempt the coordinator has scheduled
@@ -2607,7 +2607,7 @@ func TestAFailedResumeDoesNotReviveARunTheSeatsNextOwnerReaped(t *testing.T) {
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 1000})
 	successor := rig.withResumer(t, &resumeSpy{})
 	coordinator := rig.withResumer(t, relaunchThenBreak{relaunch: func(ctx context.Context, _ PendingRun) {
-		if err := successor.RecoverSeat(ctx, "swe", "node-b:1", 2, rigInbox); err != nil {
+		if err := successor.RecoverSeat(ctx, "swe", "node-b:1", 2, rigInbox, nil); err != nil {
 			t.Errorf("the successor's recovery: %v", err)
 		}
 	}})
@@ -2618,7 +2618,7 @@ func TestAFailedResumeDoesNotReviveARunTheSeatsNextOwnerReaped(t *testing.T) {
 	}
 	// The reap ended the run, and the hand-back leaves it ended.
 	rig.finished("t1")
-	if err := successor.RecoverSeat(t.Context(), "swe", "node-c:1", 3, rigInbox); err != nil {
+	if err := successor.RecoverSeat(t.Context(), "swe", "node-c:1", 3, rigInbox, nil); err != nil {
 		t.Fatalf("a later recovery: %v", err)
 	}
 	if successor.SeatHeldBySandbox("swe") {

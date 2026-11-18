@@ -160,6 +160,81 @@
 // to a tool call of the same turn: the engine reads the cited call's answer
 // itself, derives the record's confidence from the cited tool, and lets an
 // agent remove nothing and decide no meaning (ADR-0132, atlasrecord.go).
+//
+// # Whose failure a condition is
+//
+// A failed phase or turn records a condition under a kind ([ConditionKind]):
+// the environment's, never the engine's own defect. A coding sandbox's class
+// is [SandboxKindPrefix] and the class ([sandbox.Why]); a deadline is
+// `timeout` and an abandoned wait `canceled`, the provider layer's own words.
+//
+// THE STATE LOG HAS TWO KINDS. [KindStateLogUnavailable] is the log, the node
+// or the broker refusing a read or a write (the node evicted, behind or
+// deferring, the log full or wrong, a broker that refused it), which another
+// node, a later attempt or an operator gets past. [KindStateLogWriteRefused]
+// is the log refusing a write for what the write itself is or names
+// ([statelog.Reason.RefusesTheWrite]: a record too large for the broker, an
+// object deleted for good, an operation id that names another write, an
+// operation a later record undid), which every node and every attempt meets
+// alike. One kind for both put a write the work asked for and no node could
+// make beside an outage, on the node's side. [stateLogSaid] picks between
+// them; every refusal but a write refused for what it is is the first.
+//
+// EVERY KIND IS THE INFRASTRUCTURE'S OR THE WORK'S, decided once
+// ([InfrastructureKind]). A failure on the infrastructure (a store, a log, a
+// broker, a disk, the fleet's nodes and what they hold) is counted as the
+// failing node's, never the work's: a seat's mail that failed on one is
+// handed back as the node's own (internal/engine's nakFailure), and a
+// delivery it spends is kept with its group's unhandled deliveries rather
+// than with its poison. Every kind the package declares is the
+// infrastructure's but the ones a piece of work can cause: a write the state
+// log refused for what the write itself is ([KindStateLogWriteRefused]: no
+// node can make it and no wait lets one, and a different write, a split
+// change, a fresh operation or an object not deleted, is what gets past it);
+// and a deadline and an abandoned wait, a call that ran past its own wall
+// clock or that its caller gave up on, which the length of what was asked
+// decides as much as the node does. Anything that is no kind of a condition
+// is on neither side. A record's kind does not always name the failure its
+// mail is sided by: a provider's failure that wraps a condition (a harness
+// whose prompt a full disk could not take) is recorded under the provider's
+// own kind (internal/agent/runner's ErrorKind), while its mail is handed back
+// as the node's.
+//
+// A CODING SANDBOX'S CLASS IS PUT ON A SIDE CLASS BY CLASS, by whether a mail
+// can cause it ([sandboxClassIsTheNodes], each class with its reason), never
+// as a block: a provider that did not answer or is at its account's limit
+// spent a seat's backlog into its poison when every class was the work's.
+// Every class a turn or a resume fails on is met where the engine starts a
+// box for the seat (the provider's create, the company's setup recipe, the
+// engine's probes of the box, a relaunch), and every request and command
+// there is the deployment's or the engine's own; a command the seat's
+// executor runs in its box ends with its own exit status (a timeout's 124, a
+// signal's), never with a class (internal/sandbox's e2b.go). So a provider
+// that did not answer, at the account's limit, wanting it paid for or
+// refusing the company's credentials, a setup download failing on the far
+// side and a configuration the deployment cannot start are each the node's;
+// a class this build does not name is not, and a class added there is
+// decided on its own.
+//
+// OF THE INFRASTRUCTURE'S, THE ONES ONLY AN OPERATOR CLEARS are decided there
+// too ([OperatorKind]): this node's disk full, mounted read-only or failing to
+// read or write, its limit of open files reached, or the fleet's nodes holding
+// different keys or running different builds. No wait clears one: somebody
+// has to act on the host, on the keys or on the upgrade. A finished job whose
+// resume fails on one waits for the operator: the resume give-up counts no
+// failure of the node's (internal/sandbox's resumeGivenUp), so the run and its
+// seat wait for as long as the condition lasts, and nothing ends it but a
+// turn's deadline. So it is said: while one such run waits, the node holding
+// the seat says so in its status record (internal/sandbox's
+// Coordinator.ResumesBlocked), and every data node raises
+// `executor_resume_blocked` from there. Every other kind, one that clears when
+// a store, a log or a broker answers again included, is not an operator's.
+//
+// EVERY KIND THIS PACKAGE DECLARES, AND EVERY CLASS THE SANDBOX NAMES, IS
+// NAMED in [InfrastructureKind] on one side, and
+// TestEveryConditionKindIsTheNodesOrTheWorks holds every declared and every
+// recorded kind to exactly one side, so a new kind or class lands on the side
+// its author chose rather than on a default.
 package builtin
 
 import (

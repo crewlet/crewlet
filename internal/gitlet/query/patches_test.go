@@ -103,13 +103,12 @@ func filePatches(t *testing.T, ps []gitlet.GitAnswer) []gitlet.FilePatch {
 	return out
 }
 
-// A DIFF'S PATCHES, PAGE BY PAGE, ARE GIT'S PATCH. Forty files changed every way git
-// writes a patch for (modified, added, deleted, renamed, made executable, binary, a file
-// made a link, paths git quotes and a UTF-8 path, an empty file added), read a small page
-// at a time from the first page's Next on: the pages' patches joined are git's own patch of
-// the two commits, byte for byte; each file's patch is one FilePatch named as the stat
-// names the file, the link's two headers one patch; every page carries the stat's totals
-// and an empty files; and each page ends where its Next says, at a line or a file's start.
+// A DIFF'S PATCHES, PAGE BY PAGE, ARE GIT'S PATCH: forty files changed every way git writes
+// a patch (modified, added, deleted, renamed, made executable, binary, made a link, quoted
+// and UTF-8 paths, an empty file added), read a small page at a time, join to git's own
+// patch byte for byte; each file is one FilePatch named as the stat names it (the link's two
+// headers one patch); every page carries the stat's totals and an empty Files; and each page
+// ends where its Next says, at a line or a file's start.
 //
 // Mutation: split files at `diff --git` headers (the link reads as two), or answer totals
 // of the page → red.
@@ -208,10 +207,9 @@ func btoi(b bool) int {
 	return 0
 }
 
-// A FILE'S PATCH GOES ON ON THE NEXT PAGE. A file whose patch is several pages long is a
-// FilePatch on each, with the same file, continuing on every page but its last, its parts
-// joined its own patch; a page that ends at a file's end leaves its last patch whole, and
-// its Next is the next file's first byte.
+// A FILE'S PATCH GOES ON ON THE NEXT PAGE: a patch several pages long is a FilePatch of the
+// same file on each, continuing on all but its last, its parts joined its own patch; a page
+// ending at a file's end leaves its last patch whole, its Next the next file's first byte.
 //
 // Mutation: set continues on every page's last patch → red.
 func TestAFilesPatchGoesOnOnTheNextPage(t *testing.T) {
@@ -476,10 +474,10 @@ func TestAPatchesRunStopsPastItsPages(t *testing.T) {
 }
 
 // A LINE TOO LONG FOR A PAGE OMITS THE REST OF ITS FILE'S PATCH, NOT THE FILES AFTER IT: a
-// file whose patch holds a line longer than one answer, pages in, is its patch up to that
-// line marked rest_omitted, and the pages go on to every file after it, git's own patches,
-// all kept by the first read's run. A read from the long line's own start answers the file
-// marked so with no text, and one the budget ends inside that line goes on at the next file.
+// file with a line longer than one answer, pages in, is its patch up to that line marked
+// rest_omitted, and the pages go on with git's own patches of every later file, all kept by
+// the first read's run. A read from the long line's start answers the file so marked with no
+// text; one the budget ends inside that line goes on at the next file.
 //
 // Mutation: refuse the read at the long line, or let a page the budget ends inside it go on
 // inside the file → red.

@@ -50,25 +50,17 @@ func (q *questionRefused) heal() {
 	q.refused = false
 }
 
-// EVERY HAND-BACK THE STORE DOES NOT ANSWER IS KEPT UNTIL IT LANDS, a park's and
-// a resume's as much as a collection's. A park whose question could not be
-// announced or recorded, and a resume that failed or that its seat's budget
-// held, each hands back the claim a completion took, and the release that does
-// it is one more write to a coordination store that may be the very one that
-// went silent. Each used to end the run where the store did not answer that
-// release, as a claim that cannot be given back, announced claim_unreverted,
-// while the run's box held its question or its result and the store answered a
-// moment later. Now this node keeps the claim, makes the release again on the
-// hand-back's spacing while the store is silent, claims nothing of the job
-// meanwhile, and keeps the seat counted held by the claim the run still is on
-// the store's row; once the store answers, the run is back in running, counted
-// once, and its next collection parks it on its question or resumes it.
+// EVERY HAND-BACK THE STORE DOES NOT ANSWER IS KEPT UNTIL IT LANDS, a park's
+// and a resume's as much as a collection's: this node keeps the claim, makes
+// the release again on the hand-back's spacing, claims nothing of the job
+// meanwhile and keeps the seat counted held by the claim; once the store
+// answers, the run is back in running, counted once, and its next collection
+// parks or resumes it.
 //
-// Mutation: end a park's or a resume's release the store did not answer, as
-// unclaimAt did; give a resume's claim's count back before its release, as
-// resumeAndSettle did, and the seat reads free while the release is owed; or
-// count the run where its release lands instead of moving the claim's count
-// there, and the seat counts the one run twice. Each turns a case red.
+// Mutation: end a park's or a resume's release the store did not answer; give a
+// resume's claim's count back before its release, and the seat reads free while
+// the release is owed; or count the run where its release lands instead of
+// moving the claim's count there, and it is counted twice.
 func TestEveryHandBackTheStoreDoesNotAnswerIsKeptUntilItLands(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -102,6 +94,17 @@ func TestEveryHandBackTheStoreDoesNotAnswerIsKeptUntilItLands(t *testing.T) {
 			store.silence("ReleaseClaim")
 
 			_ = collectAgain(t, rig) // each hand-back's own answer to its delivery
+			if tc.held != "" {
+				// THE COMPLETION IS KEPT FOR THE HOLD'S INSTANT besides, its
+				// re-fire an hour on, which is another case's subject
+				// (TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold): set
+				// aside here, where the release is.
+				if delays := rig.retries.delays(); !slices.Contains(delays, time.Hour) {
+					t.Fatalf("after the held hand-back the retries waiting are %v; want the completion's "+
+						"re-fire at the hold's instant among them", delays)
+				}
+				rig.coordinator.forgetRefused("t1")
+			}
 			seatHeldByItsClaim(t, rig, holds, tc.landed, "the hand-back")
 
 			// STILL SILENT AT THE RETRY: owed again, never ended.
@@ -209,22 +212,15 @@ func heldResume(rig *coordRig, _ *unansweredRelease) func() {
 }
 
 // AN ANSWER'S HAND-BACK THE STORE DOES NOT ANSWER IS MADE AGAIN, AND THE ANSWER
-// THEN RESUMED. A person's answer is recorded on the run and resumed by this
-// node's own series, and a resume that fails, or that its seat's budget holds,
-// hands the claim back to the answer. A release the store did not answer used
-// to end the run, letting the person's answer go back to the seat as an
-// ordinary message. Now the series that owes the answer owes the release too:
-// it makes the release again before anything else, no later than the
-// hand-back's spacing whatever the answer waits for, makes no attempt at the
-// answer while the release is out, and once the store answers goes on to the
-// answer, resuming the run with it once.
+// THEN RESUMED: the series that owes the answer owes the release too, makes it
+// first within the hand-back's spacing whatever the answer waits for, attempts
+// nothing at the answer while it is out, then resumes the run with it once.
 //
-// Mutation: settle the series once its release lands, as a collection's release
-// settles it, and the answer is never resumed; count a read the store did not
-// answer after the release landed as a failed attempt, and the next one comes
-// on the answer's backoff; or arm a series that owes a release on the wait its
-// answer's budget names, and the release waits for the budget's window. Each
-// turns a case red.
+// Mutation: settle the series once its release lands, and the answer is never
+// resumed; count a read the store did not answer after the release landed as a
+// failed attempt, and the next comes on the answer's backoff; or arm a series
+// owing a release on its answer's budget wait, and the release waits for the
+// window. Each turns a case red.
 func TestAnAnswersHandBackTheStoreDoesNotAnswerIsMadeAgainThenResumed(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -368,19 +364,12 @@ func (s *recordedPark) ReleaseClaim(ctx context.Context, turnID string, release 
 	return s.unansweredRelease.ReleaseClaim(ctx, turnID, release)
 }
 
-// AN ANSWER IS NEVER CLAIMED OVER A RELEASE OF ITS JOB STILL OUT. A park whose
-// question the store recorded, though it did not answer the write, hands its
-// claim back while the run already waits on its question, and a reply recorded
-// on it is the answer to the very job the release names. A release names its
-// claim by the job, the status and the lease, and the answer's claim carries
-// all three, so the release, made again or reaching the store late, gave that
-// claim back to running under the turn it had resumed, the person's answer with
-// it. The reply's own attempt, made where it is recorded rather than by the
-// series that owes the release, used to claim the answer at once. It is left to
-// that series, which makes the release first and resumes the answer once the
-// release is no longer out: owed, the series is armed already; still on its
-// way, the series is armed by the attempt it refused, and reads the row once the
-// release has landed.
+// AN ANSWER IS NEVER CLAIMED OVER A RELEASE OF ITS JOB STILL OUT: a park's
+// release names the same job, status and lease as the answer's claim, so it
+// would give that claim back to running, the answer with it. The reply's
+// attempt leaves the answer to the series owing the release, which makes it
+// first: owed, the series is armed already; on its way, the refused attempt
+// arms it to read the row once the release lands.
 //
 // Mutation: let an answer's attempt claim while a release of its job is out,
 // and the release gives the answer's claim back to running under its turn; or
@@ -483,17 +472,11 @@ func TestAnAnswerIsNeverClaimedOverAReleaseOfItsJobStillOut(t *testing.T) {
 	}
 }
 
-// A RELEASE THAT PUT ITS RUN BACK IN RUNNING COUNTS NO READ AFTER IT. Once an
-// owed release lands, its series reads the row to find what it still owes: the
-// answer an answer's release returned to its run, or copies a decline left
-// there. A completion's release returns its run to running, which owes the
-// series no answer, so a read the store does not answer is no failed attempt
-// at one. Only the read just after the landing went uncounted: every read
-// after it was counted as an answer's failed resume, retried on the answer's
-// backoff, and once the answer's attempts were spent, an answer the run never
-// had was given up as unreadable. Each is read again on the hand-back's
-// spacing, uncounted, until the row is read. An answer's release keeps its
-// answer's bound: its second unanswered read counts as an answer series' does.
+// A RELEASE THAT PUT ITS RUN BACK IN RUNNING COUNTS NO READ AFTER IT: such a
+// run owes the series no answer, so each unanswered read is read again on the
+// hand-back's spacing, uncounted, or an answer it never had would be given up
+// as unreadable. An answer's release keeps its answer's bound: its second
+// unanswered read counts as an answer series' does.
 //
 // Mutation: count the reads after the first wherever the release put the run,
 // and the completion's next read comes on the answer's backoff; or count none

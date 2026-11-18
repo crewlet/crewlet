@@ -35,9 +35,9 @@ func SetShareWait(s *GitShare, d time.Duration) { s.wait = d }
 // SummaryBytes is a repository summary's computed size, as a page of them is measured.
 func SummaryBytes(s RepoSummary) int { return s.encodedBytes() }
 
-// SetPageLimits has r end every page at rows rows or bytes of encoded rows —
-// the cases that read a snapshot across several pages without seeding tens of
-// thousands of rows. The shipped limits are MaxSnapshotItems and MaxPageBytes.
+// SetPageLimits has r end every page at rows rows or bytes of encoded rows, in
+// place of MaxSnapshotItems and MaxPageBytes, so a case pages a snapshot
+// without seeding tens of thousands of rows.
 func SetPageLimits(r *Reader, rows, bytes int) { r.pageRows, r.pageBytes = rows, bytes }
 
 // SetRefScanBounds has a refs listing read at most scanned refs a page narrowed
@@ -76,17 +76,16 @@ func SetQueueCountBound(r *Reader, n int) { r.queueCounted = n }
 func SetWordsBounds(r *Reader, candidates, tail int) { r.textCandidates, r.textTail = candidates, tail }
 
 // SetRetentionPace has r measure and pace its steps by clock and sleep, take
-// steps for budget, and read the listing page repositories at a time, rather
-// than the monotonic clock, a timer, RetentionPassBudget and retentionPage —
-// the cases that stage a pass's budget, its pacing and a listing across pages
-// without waiting out a minute. A zero leaves that one as shipped.
+// steps for budget, and read the listing page repositories at a time, in place
+// of the monotonic clock, a timer, RetentionPassBudget and retentionPage, so a
+// case stages a pass without waiting out a minute. A zero leaves that one as
+// shipped.
 func SetRetentionPace(r *Retention, clock func() time.Time, sleep func(context.Context, time.Duration) error,
 	budget time.Duration, page int) {
 	r.clock, r.sleep, r.budget, r.page = clock, sleep, budget, page
 }
 
-// RetentionIdlePerStep is how many times a step's duration a pass waits after
-// it.
+// RetentionIdlePerStep is how many times a step's duration a pass waits after it.
 const RetentionIdlePerStep = retentionIdlePerStep
 
 // RetiredDuePages is every page of the retention pass's retired listing over
@@ -193,9 +192,9 @@ func SetCommitterWithdrawal(c *Committer, arm func(d time.Duration) (<-chan time
 }
 
 // SetCommitterNodeBytes has c hold at most n bytes of proposals across its
-// repositories, rather than CommitterNodeBytes — the case that fills a node
-// across two repositories without four repositories' queues of maximal
-// pushes. Set before c's first proposal.
+// repositories, rather than CommitterNodeBytes, so a case fills a node from two
+// repositories without four queues of maximal pushes. Set before c's first
+// proposal.
 func SetCommitterNodeBytes(c *Committer, n int) { c.nodeBytes = n }
 
 // NewCommitterAnnouncing is NewCommitter with an announcer that holds at most
@@ -257,9 +256,9 @@ func ChangeWriterHolders(w *ChangeWriter, changeID string) int { return w.flight
 func ChecksWriterHolders(w *ChecksWriter, repoID string) int { return w.flights.holders(repoID) }
 
 // SetChangeWriterBounds has w admit at most key writes of one change, node of
-// every change and bytes of their weight, rather than its constants — the
-// cases that fill a node's share without a thousand writes or sixty-four
-// maximal reviews. Writes already held stay held.
+// every change and bytes of their weight, rather than its constants, so a case
+// fills a node's share without a thousand writes or sixty-four maximal
+// reviews. Writes already held stay held.
 func SetChangeWriterBounds(w *ChangeWriter, key, node, bytes int) {
 	w.flights.setBounds(key, node, bytes)
 }

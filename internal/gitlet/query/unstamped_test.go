@@ -22,22 +22,18 @@ func (unindexed) Provenance(cache.Synced) (cache.Provenance, error) {
 }
 func (unindexed) Tags(cache.Synced) (*cache.TagIndex, bool) { return nil, false }
 
-// AN UNSTAMPED PAGE IS A FUNCTION OF WHAT IT NAMES. A stamped page is cut
-// against the room its stamps leave, so the same history by the same whole id
-// is a page of fewer commits where the node's index names the push behind each
-// — a question could never answer it as one that never changes. Asked
-// unstamped (gitlet.GitQuery.Unstamped), it is one page, byte for byte, whoever
-// cuts it: the read that cuts it and the one the memo answers with no git at
-// all, a node whose index names every push and one that has none, and a copy
-// the log has moved past since — and it carries no stamp, so nothing it
-// answers moves either: no repository, no position, no memo, no push and no
-// coverage.
+// AN UNSTAMPED PAGE IS A FUNCTION OF WHAT IT NAMES: a stamped page is cut
+// against the room its stamps leave, so the same history by the same id holds
+// fewer commits where the index names each one's push. Unstamped (gitlet.GitQuery.Unstamped), it is the same
+// bytes whoever cuts it (the read, the memo, a node with or without an index,
+// a copy the log has since moved past) and carries no stamp: no repository,
+// position, memo, push or coverage.
 //
-// Mutation: read the index on an unstamped read (index's Unstamped arm) — the
-// indexed node cuts a shorter page than the unindexed one; stamp an
-// unstamped answer (stamp's Unstamped arm) — it carries a position and the
-// pushes; key the two cuts alike (memoKey's "unstamped" part) — the stamped
-// read is answered the unstamped page from the memo, and overruns its bound.
+// Mutation: read the index on an unstamped read (index's Unstamped arm): the
+// indexed node cuts a shorter page; stamp an unstamped answer (stamp's
+// Unstamped arm): it carries a position and pushes; key the two cuts alike
+// (memoKey's "unstamped" part): the stamped read gets the unstamped page from
+// the memo and overruns its bound.
 func TestAnUnstampedPageIsAFunctionOfWhatItNames(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -117,14 +113,13 @@ func TestAnUnstampedPageIsAFunctionOfWhatItNames(t *testing.T) {
 	}
 }
 
-// AN UNSTAMPED READ IS A PAGE'S. A landed-in read's answer is what the node's
-// index says of the push that landed a commit, a history narrowed by who
-// pushed it is a page of that index, and a revision's facts, a re-anchoring
-// and a checks file answer no page: none can be asked unstamped, and each is
-// refused before any Gitlet node is.
+// AN UNSTAMPED READ IS A PAGE'S: a landed-in read and a history narrowed by
+// pusher answer from the node's index, and a revision's facts, a re-anchoring
+// and a checks file answer no page, so each is refused unstamped before any
+// Gitlet node is asked.
 //
-// Mutation: drop Validate's unstamped arm → every one of them is accepted;
-// drop its ReadsIndex arm → the narrowed history accepted, red.
+// Mutation: drop Validate's unstamped arm → every one is accepted; drop its
+// ReadsIndex arm → the narrowed history is accepted.
 func TestOnlyAPageIsReadUnstamped(t *testing.T) {
 	t.Parallel()
 	const repo, oid = "0e8bd7a4-5a04-4e17-8f3c-7e7d4b2c9a11", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"

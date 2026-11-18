@@ -24,17 +24,15 @@ type Class string
 
 const (
 	// ClassRead is a bounded local read that waits on nothing while it
-	// holds its slot — rev-parse, cat-file, merge-base, show-index,
-	// rev-list, for-each-ref, `git version` — and the one bounded local
-	// WRITE a waiting request needs: a full cache round's multi-pack-index
-	// without a bitmap, CPU work a request waits on and so never left to the
-	// maintenance lane's refusal. The READ lane: a core a slot.
+	// holds its slot (rev-parse, cat-file, merge-base, rev-list, …), and the
+	// one bounded local WRITE a waiting request needs: a cache round's
+	// multi-pack-index without a bitmap, never left to the maintenance lane's
+	// refusal. The READ lane: a core a slot.
 	ClassRead Class = "read"
 
 	// ClassTransfer is upload-pack and receive-pack, and what they start.
-	// The TRANSFER lane, sized by memory rather than cores, because a client
-	// paces it; a receive-pack's hook runs reads, which is why reads have a
-	// lane of their own.
+	// The TRANSFER lane, sized by memory rather than cores because a client
+	// paces it; a receive-pack's hook runs reads, so reads have their own lane.
 	ClassTransfer Class = "transfer"
 
 	// ClassMaintenance is multi-pack-index, commit-graph and fsck — local
@@ -61,11 +59,10 @@ type KV struct{ Key, Value string }
 const RepoConfig = "[core]\n\trepositoryformatversion = 0\n\tbare = true\n"
 
 // DroppingDir is the name, in a cache incarnation's root, of the OBJECT
-// DIRECTORY its dropping packs live in ([Cmd.Dropping]): beside objects/ and
-// never under it, so a process that reads objects/ through an alternate — a
-// push's scratch, an advertisement view, a build — reaches none of it, and so
-// git, which lists an alternate's refs by stripping "/objects" from its path
-// and running in what is left, starts no process at it.
+// DIRECTORY its dropping packs live in ([Cmd.Dropping]): beside objects/, never
+// under it, so a process reading objects/ through an alternate reaches none of
+// it, and git, which lists an alternate's refs in its path less "/objects",
+// starts no process at it.
 const DroppingDir = "objects-dropping"
 
 // The two variables a call site may add (Cmd.Env): where receive-pack's hook
@@ -88,47 +85,17 @@ var identityVars = []string{
 }
 
 // Identity is a commit's author and committer and their dates, for
-// `commit-tree` and nothing else ([Cmd.Identity]): the pool builds every other
-// process's environment with no identity at all, so a commit's names and
-// dates are exactly what its call states — never the HOME's, never the
-// host's, never the clock's. A git left to find an identity takes one from
-// the node it runs on — its account's name, its mail name or host name, its
-// clock — or refuses when it finds none, so the same commit-tree run on two
-// nodes, or twice on one, would be two commits naming a machine.
-//
-// EVERY PART IS ONE GIT WRITES AS IT IS GIVEN, or the run is refused before
-// any process starts ([ErrInvalid], naming the field). git builds an identity
-// line by cutting every line feed, `<` and `>` out of a name or an address and
-// trimming from either end of it every control byte but DEL, the space and
-// every `,` `:` `;` `"` `\` `'` (ident.c's crud), and it rewrites every byte
-// of a commit that is not UTF-8 AS GIT READS IT as though the byte were
-// Latin-1 (commit.c's ensure_utf8): git's UTF-8 is unicode/utf8's less
-// Unicode's 66 noncharacters — U+FDD0 to U+FDEF, and the last two code points
-// of every plane, U+xxFFFE and U+xxFFFF — which Go takes as any other rune.
-// A part git changes is a name the call never stated, in history for good,
-// and a part made of nothing else git refuses itself, late, after the work
-// that asked for the commit. A NUL is refused, since no environment variable
-// can carry one, and so is an empty part — an empty name git refuses too, but
-// an empty address it writes as `<>`, a commit that names no address. Those
-// two are the pool's own rules; every other is git's, and
-// TestThePoolAdmitsAnIdentityPartExactlyWhereGitWritesItAsGiven holds them
-// both ways against git. git holds a commit's message to the same UTF-8 rule
-// (gitref.CommitText, the one reading of it), since ensure_utf8 reads the
-// whole commit, and the pool hands Stdin to git unread: a call site that
-// writes a message holds it to that rule itself.
-//
-// THE DATES are written in the one form git reads as seconds whatever their
-// digits, `@<unix seconds> <zone>` — without the `@`, git reads a number of
-// eight digits or fewer as a calendar date, as it reads 20070606, and refuses
-// the epoch's 0 as one it cannot read — so each is held to WHOLE seconds at or
-// after the epoch: a fraction of a second is refused rather than dropped, so
-// the call states the second it means. The zone is the time's own offset —
-// `+0000` for the engine's own dates, which are UTC, and an author's own for
-// a rebased commit, which keeps its author date as its author wrote it (U43
-// a). CommitterWhen is never before AuthorWhen and may be after it: an
-// engine-built commit's committer date is held to its parent's, so no child is
-// dated before its parent, while its author date stays the instant its
-// principal acted.
+// commit-tree alone ([Cmd.Identity]): a git left to find one takes it from the
+// node (package doc, "A git process is configured by the engine and by nothing
+// else"). Each part must be one git writes as given, or the run is refused
+// before it starts ([ErrInvalid]): git cuts line feeds, < and >, trims
+// ident.c's crud() from either end, and rewrites as Latin-1 what is not UTF-8
+// by its reading, which also excludes Unicode's 66 noncharacters (commit.c's
+// ensure_utf8). The pool also refuses a NUL and an empty part (git writes an
+// empty address as `<>`). Held against git by
+// TestThePoolAdmitsAnIdentityPartExactlyWhereGitWritesItAsGiven. git holds a
+// message to the same UTF-8 rule and the pool hands Stdin over unread, so a
+// call site writing one holds it to gitref.CommitText.
 type Identity struct {
 	AuthorName, AuthorEmail       string
 	CommitterName, CommitterEmail string
@@ -149,16 +116,19 @@ func (id *Identity) env() []string {
 	return out
 }
 
-// gitDate is t as the timestamp git writes into a commit, seconds since the
-// epoch behind the `@` that makes git read it as one, at t's own offset
-// (`-0700`'s form: a sign and four digits, which is git's).
+// gitDate is t as git writes it into a commit: `@<unix seconds>` (without the
+// `@`, git reads eight digits or fewer as a calendar date) at t's own offset,
+// in `-0700`'s form, so a rebased commit keeps its author's zone (U43 a).
 func gitDate(t time.Time) string {
 	return "@" + strconv.FormatInt(t.Unix(), 10) + " " + t.Format("-0700")
 }
 
-// checkIdentity holds a run's identity to its subcommand — commit-tree's
-// alone, and required there — and every part of it to what git writes as it
-// is given ([Identity]).
+// checkIdentity holds a run's identity to its subcommand (commit-tree's alone,
+// and required there) and every part to what git writes as given ([Identity]).
+// Each date is whole seconds at or after the epoch, as gitDate writes it, a
+// fraction refused rather than dropped; CommitterWhen is never before
+// AuthorWhen (an engine-built commit's committer date is held to its parent's,
+// its author date to when its principal acted).
 func checkIdentity(sub string, id *Identity) error {
 	switch {
 	case sub != commitTree && id != nil:
@@ -203,19 +173,13 @@ func checkIdentity(sub string, id *Identity) error {
 	return nil
 }
 
-// IdentityRefusal is why git would not write s into a commit's identity — a
-// name or an address of its author or its committer — as it is given, or why
-// the pool refuses it of its own (an empty part, a NUL), and "" when it would:
-// [Identity]'s rules, which every run of commit-tree is held to before any
-// process starts.
-//
-// EXPORTED FOR WHOEVER FORMS AN IDENTITY FROM TEXT IT DID NOT WRITE:
-// Gitlet signs an engine-built commit with a seat's role name and address, which
-// a company document states as it likes, and asks this first, so it can sign
-// with a part git writes as given (the seat's handle, an address on the
-// identity domain) rather than have the build refused after its work — one
-// rule, here, rather than a second reading of git's beside the one the pool
-// enforces.
+// IdentityRefusal is why git would not write s, a name or address of a
+// commit's author or committer, as given, or why the pool refuses it (empty, a
+// NUL), and "" when neither: [Identity]'s rules. Exported for whoever forms an
+// identity from text it did not write: Gitlet asks it of a seat's role name and
+// address from the company document, so it can sign with a part git writes as
+// given rather than have the build refused after its work, from this one
+// reading of git's rules.
 func IdentityRefusal(s string) string { return identityPart(s) }
 
 // identityPart is IdentityRefusal: its rules are [Identity]'s.
@@ -238,8 +202,8 @@ func identityPart(s string) string {
 
 // identityCrud reports whether git trims b from either end of a name or an
 // address it writes into an identity line: ident.c's crud(), every byte at or
-// below the space — each control byte but DEL, and the space itself — and the
-// eight marks , : ; < > " \ '. No byte of a multi-byte UTF-8 sequence is one.
+// below the space and the eight marks , : ; < > " \ '. No byte of a multi-byte
+// UTF-8 sequence is one.
 func identityCrud(b byte) bool {
 	return b <= ' ' || strings.IndexByte(`,:;<>"\'`, b) >= 0
 }
@@ -248,63 +212,50 @@ func identityCrud(b byte) bool {
 // it comes from the environment, the HOME, or a configuration file.
 type Cmd struct {
 	// Dir is the repository: absolute, filepath.Clean'ed, of the shape
-	// [CheckShape] holds it to — RepoConfig, no commondir, an objects
-	// directory of its own, and the alternate Alternate names or none. It is
-	// GIT_DIR and the working
-	// directory. "" runs with NO repository: the working directory is the
-	// pool's HOME and GIT_CEILING_DIRECTORIES is its parent, so git
-	// discovers none.
+	// [CheckShape] holds it to; GIT_DIR and the working directory. "" runs
+	// with NO repository: the working directory is the pool's HOME and
+	// GIT_CEILING_DIRECTORIES its parent, so git discovers none.
 	Dir string
 
-	// Alternate is the one repository Dir reads objects from beside its
-	// own — absolute and clean, never Dir — or "" for none. Dir's
-	// objects/info/alternates must be exactly the one line naming
-	// Alternate's objects directory, and with no Alternate there must be
-	// no such file: A REPOSITORY DOES NOT CHOOSE ITS OWN ALTERNATE
-	// ([ShapeAlternates]). Read from the file, an alternate is whatever a
-	// disk or anything outside the engine wrote there — and under
-	// protocol v2 every object an alternate holds is fetchable by id
-	// through the repository naming it, so a cache with a planted
-	// alternates file would serve another repository's objects. A push's
-	// scratch and an advertisement view name the cache incarnation they
-	// lean on; nothing else the engine runs git in has one.
+	// Alternate is the one repository Dir reads objects from beside its own
+	// (absolute, clean, never Dir), or "" for none: a push's scratch and an
+	// advertisement view name the cache incarnation they lean on. Dir's
+	// objects/info/alternates must be exactly the line naming it, or absent:
+	// A REPOSITORY DOES NOT CHOOSE ITS OWN ALTERNATE ([ShapeAlternates]),
+	// since under protocol v2 every object an alternate holds is fetchable by
+	// id through the repository naming it.
 	Alternate string
 
 	// Dropping is the object directory of the DROPPING packs of the cache
-	// incarnation Dir is — exactly Dir's [DroppingDir], a directory of Dir's
-	// own — or "" for none: what a process that SERVES the incarnation reads
-	// beside its objects, as GIT_ALTERNATE_OBJECT_DIRECTORIES, so an object
-	// an expunge has left dropping is still answered by id while no push may
-	// rely on it. Refused ([ErrInvalid]) with no Dir, beside an Alternate —
-	// a process leaning on one writes into a repository of its own, and
-	// nothing it writes may rely on a dropping object — and as any other
-	// path; a directory that is not Dir's own, or none at all, is the
-	// repository's shape ([ShapeDropping]). Never an alternates file: git
-	// follows one from every repository that names Dir as its alternate.
+	// incarnation Dir is, exactly Dir's [DroppingDir], or "" for none. A
+	// process that SERVES the incarnation reads it beside its objects as
+	// GIT_ALTERNATE_OBJECT_DIRECTORIES (never an alternates file, which git
+	// follows from every repository naming Dir as its alternate), so an object
+	// an expunge left dropping is still answered by id while no push relies on
+	// it. Refused ([ErrInvalid]) with no Dir, beside an Alternate (that process
+	// writes, and may not rely on a dropping object) and as any other path; a
+	// missing or linked directory is [ShapeDropping].
 	Dropping string
 
 	// Loads, when set, is the chunk-format files the process loads, where
-	// its caller knows it loads only one of them — a cat-file asked about
-	// object ids alone reads objects through the multi-pack-index and never
-	// parses a commit: the pool's observer reads the run's damage narrowed
+	// its caller knows it loads only one (a cat-file asked only about object
+	// ids never parses a commit): the pool's observer narrows the run's damage
 	// by it ([Damage.Narrow]), as the caller does. Zero says nothing.
 	Loads Part
 
 	// Repairer, when set, names the caller that repairs what this run fails
-	// with before its first byte — Gitlet, for a process it runs in
-	// a cache incarnation it holds pinned — and the pool hands it to its
-	// observer untouched (Ran.Repairer), so what the run reports is held
-	// for that caller's own repair rather than acted on beside it. Zero
-	// names nobody: the run's report is acted on as it arrives.
+	// with before its first byte (Gitlet, for a process in a cache incarnation
+	// it holds pinned); the pool hands it to its observer (Ran.Repairer), so
+	// the run's report is held for that repair rather than acted on beside
+	// it. Zero names nobody: the report is acted on as it arrives.
 	Repairer Repairer
 
 	// Args follow "git". Args[0] is a SUBCOMMAND (^[a-z][a-z0-9-]*$): a
 	// global option there (-c, --exec-path, --git-dir, --config-env) would
-	// change what the process is. The engine passes no argument a client
-	// wrote except validated object ids and refs — never a path or an
-	// option; that rule is the call site's, since a path the engine built
-	// itself is an ordinary argument. A receive-pack's options are the
-	// pool's to read, so each is one of receivePackOptions, in full.
+	// change what the process is. An argument a client wrote is only ever a
+	// validated object id or ref, never a path or option: the call site's
+	// rule, since a path the engine built is an ordinary argument. A
+	// receive-pack's options are each one of receivePackOptions, in full.
 	Args []string
 
 	// Config is the call site's configuration, after the pool's base. Each
@@ -319,26 +270,20 @@ type Cmd struct {
 	Env []KV
 
 	// Identity is the author, committer and dates of the commit a
-	// commit-tree writes — REQUIRED on a commit-tree and ErrInvalid on every
-	// other subcommand — written into the process's environment as the six
-	// variables git reads them from (GIT_AUTHOR_NAME, _EMAIL and _DATE, and
-	// GIT_COMMITTER_NAME, _EMAIL and _DATE), which Env never names. See
-	// [Identity] for why the identity is the call's and what a part may hold.
+	// commit-tree writes: REQUIRED there and ErrInvalid on every other
+	// subcommand, written as the six variables identityVars names, which Env
+	// never may ([Identity]).
 	Identity *Identity
 
-	// Remote is the one host the run dials — REQUIRED of a fetch, an
-	// ls-remote and a push, and ErrInvalid on every other subcommand, in
-	// any lane but the transfer lane, beside a Stall (libcurl watches a
-	// remote's leg, where the pool's watchdog cannot see it), and where its
-	// arguments name any remote but this one: git reads the remote from the
-	// first argument that is no option (or the first after "--"), which
-	// must be Remote.URL, and no other argument may name a URL. Built by
-	// [ResolveRemote] alone, so every address git connects to is one the
-	// public-address rule judged; the pool turns it into the run's
-	// configuration after the base (https alone, its host pinned to those
-	// addresses, no redirect, its header as http.extraHeader), and takes
-	// its secrets out of every line the run hands back. The package doc's
-	// "One outbound dial" says why each is so.
+	// Remote is the one host the run dials: REQUIRED of a fetch, an ls-remote
+	// and a push, and ErrInvalid on every other subcommand, outside the
+	// transfer lane, beside a Stall (libcurl watches a remote's leg, where the
+	// pool's watchdog cannot see it), and where the arguments name another
+	// remote: the first non-option argument (or the first after "--") must be
+	// Remote.URL, and no other may name a URL. Built by [ResolveRemote] alone,
+	// so the public-address rule judged every address git dials; the pool
+	// writes its configuration after the base and takes its secrets out of
+	// every line the run hands back (package doc, "One outbound dial").
 	Remote *Remote
 
 	// Protocol is GIT_PROTOCOL as the client sent it. One not matching
@@ -352,35 +297,31 @@ type Cmd struct {
 	// after the copy does, and no goroutine Run starts outlives it.
 	Stdin io.Reader
 
-	// Stdout receives everything git writes — every byte, however long after
-	// the process ended the caller takes it; nil captures up to CaptureMax
-	// into Result.Stdout. Same contract as Stdin: every Write returns within
-	// a bound of its own, and a Write error stops git (the pipe is closed
-	// under it).
+	// Stdout receives every byte git writes, however long after the process
+	// ended the caller takes it; nil captures up to CaptureMax into
+	// Result.Stdout. Stdin's contract: every Write returns within a bound of
+	// its own, and a Write error stops git (its pipe is closed).
 	Stdout io.Writer
 
 	// Class picks the lane.
 	Class Class
 
 	// Share is whose transfer this is: the class and principal of the
-	// credential that asked for it, by which the transfer lane decides who is
-	// granted a released slot and charges what the run spent (share.go).
-	// REQUIRED on every ClassTransfer Cmd and refused on every other, as
-	// Indexed is: a transfer without one would be scheduled as nobody's, and
-	// a read or a maintenance run carrying one would claim a share no lane
-	// reads.
+	// credential that asked for it, by which the transfer lane grants released
+	// slots and charges what the run spent (share.go). REQUIRED on a
+	// ClassTransfer Cmd and refused on every other: a transfer without one
+	// would be nobody's, and anything else carrying one would claim a share no
+	// lane reads.
 	Share Share
 
 	// Deadline bounds the run from start to reap; 0 or negative is
 	// ErrNoDeadline. Pick one from deadlines.go.
 	Deadline time.Duration
 
-	// Stall ends a run in which no byte of Stdin was consumed and no byte of
-	// stdout or stderr produced for this long; 0 is not watched; negative is
-	// ErrInvalid. Stderr counts: a receive-pack serving a client that did
-	// not ask for side-band relays its hook's output — the engine's
-	// keepalives among it — on its own stderr, and a process writing
-	// anything has not stopped.
+	// Stall ends a run that consumed no Stdin byte and produced no stdout or
+	// stderr byte for this long; 0 is not watched, negative is ErrInvalid.
+	// Stderr counts: a receive-pack whose client asked for no side-band relays
+	// its hook's output, the engine's keepalives among it, there.
 	Stall time.Duration
 
 	// Answers are exit statuses that are the command's ANSWER rather than
@@ -388,20 +329,16 @@ type Cmd struct {
 	// check-ref-format 1 for "not a valid name". 0 always is. Each 1..255.
 	Answers []int
 
-	// Indexed is a push's receive-pack's, closed by the call site once the
-	// receive-pack's index-pack has finished: the cores it was lent
-	// (MaxLentCores) are repaid then rather than when it exits, so the hook,
-	// the object-store upload and the wait for the push's record hold no
-	// loan. The host closes it when the proc-receive hook first reaches its
-	// relay, which receive-pack starts only once its index-pack has exited;
-	// a push that never gets there (its pack refused) repays at its exit.
-	// REQUIRED on a receive-pack that receives a pack — in the transfer
-	// lane, and not a push's ADVERTISEMENT (--advertise-refs), which writes
-	// the refs and exits with no index-pack and no hook — and ErrInvalid on
-	// every other command, the advertisement included, since nothing else
-	// is lent a core: a call site that left it nil would hold every push's
-	// loan to the end, and nothing but the lent-cores gauge would ever say
-	// so.
+	// Indexed is closed by the call site once a push's receive-pack's
+	// index-pack has finished, so the cores it was lent (MaxLentCores) are
+	// repaid then rather than at exit, and the hook, the object-store upload
+	// and the wait for the push's record hold no loan. The host closes it when
+	// the proc-receive hook first reaches its relay, which receive-pack starts
+	// only after its index-pack exits; a push that never gets there repays at
+	// its exit. REQUIRED on a receive-pack in the transfer lane that receives a
+	// pack (not --advertise-refs, which runs no index-pack) and ErrInvalid on
+	// everything else: a nil one would hold every push's loan to the end,
+	// which only the lent-cores gauge would show.
 	Indexed <-chan struct{}
 }
 
@@ -413,74 +350,56 @@ type Result struct {
 	Exit   int           // the exit status; -1 when a signal ended the process
 	Took   time.Duration // start to reap
 	Waited time.Duration // in the lane, before start
-	// Began is when the process started — after its slot was granted — a
-	// time.Now() reading, so a caller orders it against a time.Now() of its
-	// own on the MONOTONIC clock (Time.Before uses it when both carry one):
-	// the cache compares it with when it last rewrote a file the run may
-	// have read, and a wall-clock step must not make a report look newer
-	// than the rewrite it predates. Zero when no process started.
+	// Began is when the process started (after its slot was granted), a
+	// time.Now() reading, so a caller orders it against its own on the
+	// MONOTONIC clock: the cache compares it with when it last rewrote a file
+	// the run may have read, which a wall-clock step must not reorder. Zero
+	// when no process started.
 	Began time.Time
-	// Damage is a [*Damage] — of kind [ErrCorrupt] or [ErrMissingObject] —
-	// when an error event of the run's process tree names one (trace.go):
-	// the highest kind, as [ExitError.Kind] is chosen, the parts its events
-	// named and the first such event's words; and nil when none does,
-	// WHATEVER THE OUTCOME: git answers some questions over damage it
-	// reports and exits 0 (cat-file --batch-check says an object in a pack
-	// whose index is truncated is `missing`, past `index file … is too
-	// small`), so a caller that takes an answer as what the repository holds
-	// asks this first. Like the kind, it describes the repository the process
-	// read. An error, never a *Damage field: a nil pointer in an error is a
-	// non-nil error at every %w.
+	// Damage is a [*Damage] of kind [ErrCorrupt] or [ErrMissingObject] when an
+	// error event of the run's process tree names one (trace.go): the highest
+	// kind, as [ExitError.Kind] is chosen, the parts named and the first such
+	// event's words, about the repository the process read; nil when none
+	// does, WHATEVER THE OUTCOME. git answers some questions over damage and
+	// exits 0 (cat-file --batch-check calls an object `missing` past `index
+	// file … is too small`), so a caller taking an answer as what the
+	// repository holds asks this first. An error, not a *Damage field: a nil
+	// pointer in an error is non-nil at every %w.
 	Damage error
 	// Trace is what the run's trace2 event stream said: every kind its
 	// formats named (what an ExitError matches through errors.Is), the
 	// formats themselves, the hints, and how much of it was read.
 	Trace Trace
 	// Crashed is that a process of the run's tree died of a signal the pool
-	// did not send: the leader, with no kill of the pool's (a deadline, a
-	// stall, the caller's context), no failure of the caller's own input or
-	// output, and a signal other than SIGPIPE — a consumer that hung up — or
-	// a child the tree reported dying (Trace.Crashes: git's own reports,
-	// which leave SIGPIPE out). Never set for a run the pool ended. Nothing
-	// a crash names is a part: a git that dies reading a damaged reverse
-	// index or bitmap says nothing else, so the cache reads it as a reason
-	// to hash what the process read (cache's scrub), never as damage.
+	// did not send, in a run the pool did not end (deadline, stall, the
+	// caller's context) and whose caller's own I/O did not fail: the leader, of
+	// a signal other than SIGPIPE (a consumer that hung up), or a child the
+	// tree reported dying (Trace.Crashes, which leave SIGPIPE out). A crash names
+	// no part: a git dying on a damaged reverse index or bitmap says nothing
+	// else, so the cache reads it as a reason to hash what the process read
+	// (cache's scrub), never as damage.
 	Crashed bool
-	// CPU is the user and system time the process tree spent, the whole of
-	// it, counted when the run ends: the process and every descendant it
-	// waited for (upload-pack's pack-objects, receive-pack's index-pack), as
-	// wait4 reports them at the reap — and for a run the node ended, at
-	// least what its group's members had spent when it was signalled, read
-	// from their own records first, since a leader killed with its group
-	// reaps none of them (Linux; elsewhere the reap's figure alone).
+	// CPU is the user and system time the whole process tree spent, as wait4
+	// reports it at the reap (with every descendant waited for: upload-pack's
+	// pack-objects, receive-pack's index-pack). For a run the node ended, at
+	// least what its group's members had spent when signalled, read from
+	// their own records first, since a leader killed with its group reaps
+	// none of them (Linux; elsewhere the reap's figure alone).
 	CPU time.Duration
 }
 
-// THE BASE CONFIGURATION, set first for every process, in this order. A call
-// site may not set any of these keys: a rule every call site has to remember
-// is the rule ADR-0008 says gets one implementation.
-//
-//   - protocol.allow=never: no engine git dials anything through git's
-//     transports — alternates are not one — but a remote run, whose
-//     configuration after the base lifts it for https alone, for that run
-//     ([Cmd.Remote], remote.go's keys and the package doc's "One outbound
-//     dial").
-//   - gc.auto=0, maintenance.auto=false: only the cache's sync and its
-//     maintainer change a cache, and an automatic gc or maintenance run
-//     would detach a background process the sweep then kills.
-//   - pack.threads: one, so no process uses more than one core — a READ or
-//     MAINTENANCE slot IS one, and a CPU-bound transfer shares one. The one
-//     exception is a receive-pack lent free read cores (lane.go), whose
-//     index-pack is given a thread for each.
-//   - core.hooksPath: Cmd.Hooks, or a path that cannot exist, so a
-//     repository's own hooks/ never runs.
-//   - core.attributesFile: a path that cannot exist (ENOTDIR, which git
-//     reads as an absent file without a warning), because git otherwise
-//     reads $HOME/.config/git/attributes — GIT_CONFIG_GLOBAL does not move
-//     it — and a file written into the pool's HOME after New checked it was
-//     empty would steer every process's attributes. Its system twin, the
-//     host's system attributes file (`git var GIT_ATTR_SYSTEM`), is the
-//     environment's GIT_ATTR_NOSYSTEM (gitproc.go).
+// THE BASE CONFIGURATION, set first for every process, in this order; no call
+// site may set these keys (ADR-0008: one implementation of each rule).
+//   - protocol.allow=never: only a remote run's configuration lifts it, for
+//     https and that run (package doc, "One outbound dial").
+//   - gc.auto=0, maintenance.auto=false: only the cache's sync and maintainer
+//     change a cache, and a detached gc would be killed by the sweep.
+//   - pack.threads=1: a slot is a core, but for a receive-pack lent read
+//     cores (lane.go), whose index-pack gets a thread for each.
+//   - core.hooksPath: Cmd.Hooks or a path that cannot exist, never hooks/.
+//   - core.attributesFile: a path that cannot exist (ENOTDIR, read as absent
+//     silently), else git reads $HOME/.config/git/attributes, which a file
+//     written after New checked HOME would steer; GIT_ATTR_NOSYSTEM the host's.
 const (
 	keyThreads   = "pack.threads"
 	keyHooksPath = "core.hooksPath"
@@ -499,28 +418,20 @@ var baseKeys = []KV{
 	{"core.attributesFile", noAttributes},
 }
 
-// allowedConfig is every key a call site may set, keyed by its lowercase form
-// (git's keys are case-insensitive), each with the call site that needs it.
-//
-// AN ALLOWLIST, NOT A DENYLIST, for hostbox's reason: git has a dozen keys that
-// run a command (alias.*, uploadpack.packObjectsHook, core.fsmonitor,
-// core.alternateRefsCommand, core.sshCommand, include.path, …) and one that
-// serves every object in a repository to anyone who asks
-// (uploadpack.allowAnySHA1InWant, which Gitlet never sets, with its
-// two siblings) — a denylist leaks whichever nobody named. A key a call site
-// needs is added here in the commit that adds the call site. No key of a
-// remote run's configuration is here, nor any other that reaches a network:
-// the pool writes those from the run's [Cmd.Remote], and a call site setting
-// one is told to name the remote there.
+// allowedConfig is every key a call site may set, by its lowercase form (git's
+// keys are case-insensitive), each with the call site that needs it, added in
+// that call site's commit. An allowlist, since a denylist leaks whichever
+// command-running or object-serving key nobody named (package doc, "A git
+// process is configured by the engine and by nothing else"). No key that
+// reaches a network is here: the pool writes those from [Cmd.Remote].
 var allowedConfig = map[string]string{
 	"core.multipackindex": "the cache's serve configuration and its maintainer",
 	"pack.allowpackreuse": "the cache's serve configuration: `single` — the bitmap's preferred pack sent " +
 		"verbatim and every other object packed as pack-objects packs any (a stored delta reused, a whole " +
 		"copy searched for a delta), which sends a cache's clones fewer bytes than `multi`",
-	// The delta window's memory, PER THREAD (pack.threads is the pool's 1): a
-	// cache's pack-objects for a clone, and a compaction's build, whose charge
-	// against the node's background budget counts it and what the build holds
-	// beside it (internal/gitlet/cache's CompactWindowBytes).
+	// The delta window's memory, PER THREAD (pack.threads is the pool's 1); a
+	// compaction's charge against the node's background budget counts it
+	// (internal/gitlet/cache's CompactWindowBytes).
 	"pack.windowmemory": "the cache's serve configuration, and a compaction's pack-objects in its scratch " +
 		"(internal/gitlet/compact's PackConfig) and an import's or a pull mirror's cut in its own " +
 		"(internal/gitlet/mirror)",
@@ -535,10 +446,9 @@ var allowedConfig = map[string]string{
 		"version-2 changed-path filters, which hash a path alike on every build (correct past ASCII), and " +
 		"read only those",
 	"uploadpack.allowfilter": "the cache's serve configuration",
-	// Which partial-clone filters upload-pack serves. A subsection — the
-	// filter's name — is the one part of a key git reads case-sensitively, so
-	// another case of one of these names no filter git knows: it allows
-	// nothing, and what it names is refused by uploadpackfilter.allow=false.
+	// Which partial-clone filters upload-pack serves. A subsection (the
+	// filter's name) is read case-sensitively, so another case names no
+	// filter: it allows nothing, and uploadpackfilter.allow=false refuses it.
 	"uploadpackfilter.allow":             "the cache's serve configuration: only the filters a bitmap answers",
 	"uploadpackfilter.blob:none.allow":   "the cache's serve configuration: only the filters a bitmap answers",
 	"uploadpackfilter.blob:limit.allow":  "the cache's serve configuration: only the filters a bitmap answers",
@@ -546,9 +456,8 @@ var allowedConfig = map[string]string{
 	"uploadpackfilter.object:type.allow": "the cache's serve configuration: only the filters a bitmap answers",
 	"uploadpackfilter.combine.allow":     "the cache's serve configuration: only the filters a bitmap answers",
 	"uploadpack.keepalive":               "the cache's serve configuration: the stall watchdog relies on it",
-	// A prefix filter on the refs git lists of an alternate, passed to the
-	// for-each-ref it runs as patterns: it names refs and runs nothing. Its
-	// sibling core.alternateRefsCommand runs a command, and is not here.
+	// Patterns for the refs git lists of an alternate: it runs nothing, unlike
+	// its sibling core.alternateRefsCommand, which is not here.
 	"core.alternaterefsprefixes":   "the cache's advertisement view (Cache.AdvertiseConfig)",
 	"receive.procreceiverefs":      "the receive configuration",
 	"receive.unpacklimit":          "the receive configuration",
@@ -557,38 +466,29 @@ var allowedConfig = map[string]string{
 	"receive.advertisepushoptions": "the receive configuration",
 	"receive.autogc":               "the receive configuration",
 	"receive.updateserverinfo":     "the receive configuration",
-	// What a fetch from another host is held to, beside the remote's own keys
-	// the pool writes: every object it receives checked as receive-pack
-	// checks a push's, and kept as the pack it arrived in, never exploded
-	// into loose objects, which the cut after it could not name.
+	// A fetch from another host checks every object as receive-pack checks a
+	// push's, and keeps the pack it arrived in: the cut after it cannot name
+	// loose objects.
 	"transfer.fsckobjects": "an import's and a pull mirror's fetch into its scratch (internal/gitlet/mirror)",
 	"fetch.unpacklimit":    "an import's and a pull mirror's fetch into its scratch (internal/gitlet/mirror)",
-	// The .rev a stored bundle carries is written by the process that wrote
-	// or checked its pack: for content from outside — a push, an engine
-	// write — the index-pack that checked the pack as it indexed it,
-	// receive-pack's own for a push and for an engine write the
-	// `index-pack --strict` of its scratch, the relay's own fsck, never
-	// pack-objects or a second process after it; and for a COMPACTION the
-	// pack-objects that wrote the output (internal/gitlet/compact), since every
-	// object it writes comes out of packs Gitlet already stored and
-	// checked, and its bundle is held to its seal on the way to the store
-	// like any other (gitlet.StoreBundle). Pinned rather than left to git's
-	// default, which changed in 2.41.
+	// A stored bundle's .rev is written by the process that checked its pack
+	// as it indexed it, never a later one: receive-pack's index-pack for a
+	// push, the scratch's `index-pack --strict` for an engine write; or for a
+	// compaction the pack-objects that wrote it from packs already stored and
+	// checked (its bundle still held to its seal, gitlet.StoreBundle). Pinned
+	// because git's default changed in 2.41.
 	"pack.writereverseindex": "the receive configuration, an engine write's index-pack in its scratch, and a " +
 		"compaction's pack-objects in its scratch (internal/gitlet/compact's PackConfig)",
-	// The index a stored bundle carries is version 2, which the bundle check
-	// requires; pinned so a future default cannot store one no cache accepts.
-	// Written by the same process as the .rev.
+	// Version 2, which the bundle check requires, pinned against a future
+	// default; written by the same process as the .rev.
 	"pack.indexversion": "the receive configuration, an engine write's index-pack in its scratch, and a " +
 		"compaction's pack-objects in its scratch (internal/gitlet/compact's PackConfig)",
-	// How git writes a path in what it prints, and nothing else: off, a path
-	// is quoted only where a quote, a backslash or a control byte would break
-	// its line, rather than every byte past ASCII written as an octal escape.
+	// How git prints a path, and nothing else: off, a path is quoted only for
+	// a quote, a backslash or a control byte, not every byte past ASCII.
 	"core.quotepath": "a seat's read of one file's patch (internal/gitlet/query's diff-pairs): its header names " +
 		"a UTF-8 path as it is, as the stat beside it does",
-	// Where a `.mailmap` is read from in a bare repository — HEAD's, unless
-	// this names another blob — and nothing else: it runs nothing and dials
-	// nothing. Set EMPTY, it names no blob, so no mailmap is read.
+	// Where a bare repository's `.mailmap` is read from (HEAD's unless this
+	// names a blob); it runs and dials nothing. EMPTY reads no mailmap.
 	"mailmap.blob": "a seat's blame (internal/gitlet/query's blame.go): empty, so a commit's author is named as the " +
 		"commit states it — git blame reads HEAD's .mailmap in a bare repository and has no --no-mailmap",
 }
@@ -596,25 +496,18 @@ var allowedConfig = map[string]string{
 // subcommand is what Args[0] must be.
 var subcommand = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
-// receivePackOptions is every option a receive-pack may be given, by the one
+// receivePackOptions is every option a receive-pack may be given, in the one
 // spelling the pool reads, each with whether it makes the run a push's
-// ADVERTISEMENT — the refs a push's GET is answered with — rather than the
-// receive-pack of its POST, which receives a pack.
-//
-// The pool has to know which of the two a receive-pack is, EXACTLY: only the
-// one that receives a pack runs an index-pack, so only it is lent cores and
-// must carry Cmd.Indexed, and an advertisement taken for a push would hold a
-// loan of three cores for as long as its client takes to read the refs while
-// carrying an Indexed nothing ever closes (lane.go). A rule that looked for
-// one spelling would guess, because git reads more than one: any unambiguous
-// ABBREVIATION (--adv, --http — whose meaning moves the day git adds an option
-// sharing the prefix), a NEGATION (--no-advertise-refs, which makes the run a
-// push again), "--", after which an option is a directory, and an option after
-// the directory as well as before it (all measured on git 2.43). So every
-// argument of a receive-pack that begins with a dash must be a key here,
-// spelled in full, and one is read wherever it stands, as git reads it. Both
-// full names of the advertisement option are read: --advertise-refs is git's
-// alias of http-backend-info-refs, the name git's own http-backend passes.
+// ADVERTISEMENT (its GET) rather than the receive-pack of its POST. The pool
+// must know which EXACTLY: only the POST runs an index-pack, is lent
+// cores and carries Cmd.Indexed, and a misread advertisement would hold a
+// three-core loan until its client read the refs (package doc, "Lending a
+// push cores"). git also reads abbreviations (--adv, whose meaning moves as
+// git adds options), negations (--no-advertise-refs), "--" and options after
+// the directory, so every dashed argument must be a key here, in full, read
+// wherever it stands.
+// --advertise-refs is git's alias of --http-backend-info-refs, which git's own
+// http-backend passes; both are read.
 var receivePackOptions = map[string]bool{
 	"--stateless-rpc":          false,
 	"--advertise-refs":         true,
@@ -708,7 +601,7 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 	}
 	// Refused whatever the node: a call site checked only on a node with no
 	// core to lend would pass, and hold every loan to the end everywhere
-	// else (lane.go).
+	// else (package doc, "Lending a push cores").
 	if c.Indexed == nil && lendsCores(c) {
 		return prepared{}, fmt.Errorf("%w: git receive-pack carries no Cmd.Indexed: a receive-pack that receives a pack is lent free read cores for its index-pack, "+
 			"and without it the loan is held through the hook, the object-store upload and the wait for the push's record — "+
@@ -785,10 +678,9 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 		env = append(env, "GIT_ALTERNATE_OBJECT_DIRECTORIES="+alternateEntry(c.Dropping))
 	}
 	if c.Alternate != "" && leansOnDropping(c.Alternate) {
-		// No commit-graph's word for a commit the process cannot read: its
-		// alternate's graph may name one only a dropping pack holds
-		// (leansOnDropping), and git answers a commit the graph names from
-		// the graph alone unless told to hold it to the objects.
+		// The alternate's commit-graph may name a commit only a dropping pack
+		// holds (leansOnDropping), which git answers from the graph alone
+		// unless told to hold it to the objects.
 		env = append(env, "GIT_COMMIT_GRAPH_PARANOIA=1")
 	}
 	env = append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(len(baseKeys)+len(remote)+len(c.Config)))
@@ -804,8 +696,8 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 		env = append(env, configKey(i, kv.Key), configValue(i, value))
 	}
 	// A remote run's configuration, after the base and before the call
-	// site's: written by the pool from Cmd.Remote, and so in the process's
-	// environment, never its arguments — a credential header among it.
+	// site's: in the environment, never the arguments, since it carries a
+	// credential header.
 	for i, kv := range remote {
 		env = append(env, configKey(len(baseKeys)+i, kv.Key), configValue(len(baseKeys)+i, kv.Value))
 	}
@@ -861,10 +753,8 @@ func checkConfig(config []KV) error {
 	return nil
 }
 
-// checkEnv holds a call site's variables to the two the pool admits. A
-// commit's identity is not among them: the pool writes its variables from
-// [Cmd.Identity], for commit-tree alone, and a call site naming one is told
-// to name it there.
+// checkEnv holds a call site's variables to the two the pool admits; a
+// commit's identity is named in [Cmd.Identity] instead.
 func checkEnv(env []KV) error {
 	seen := map[string]bool{}
 	for _, kv := range env {
@@ -889,9 +779,9 @@ func checkEnv(env []KV) error {
 
 // ShapeRule is one rule of the SHAPE the pool holds a repository to before it
 // runs git there ([CheckShape]): a closed set, [ShapeRules], each the reason a
-// [ShapeError] gives. Every rule is about a file that CONFIGURES the process —
-// what it reads its keys, its objects and its refs from — never about content
-// the engine wrote (refs, packs), which git classifies itself.
+// [ShapeError] gives. Every rule is about a file that CONFIGURES the process
+// (where it reads keys, objects and refs), never content the engine wrote
+// (refs, packs), which git classifies itself.
 type ShapeRule string
 
 const (
@@ -901,21 +791,19 @@ const (
 	// ShapeCommondir refuses a commondir, which would move objects AND refs
 	// to another repository with no override.
 	ShapeCommondir ShapeRule = "commondir"
-	// ShapeObjects holds objects to a directory of the repository's OWN — at
-	// its real path, the repository's real path and "objects" — never a
-	// link, which would read another directory's objects as this
-	// repository's.
+	// ShapeObjects holds objects to a directory of the repository's OWN, at
+	// its real path's "objects", never a link, which would read another
+	// directory's objects as this repository's.
 	ShapeObjects ShapeRule = "objects"
 	// ShapeAlternates holds objects/info/alternates to exactly what the
-	// call's [Cmd.Alternate] makes it — no file for none, the one line
-	// naming the alternate's objects directory for one — and the alternate
-	// to holding none of its own.
+	// call's [Cmd.Alternate] makes it (no file for none, else the one line
+	// naming the alternate's objects directory), and the alternate to none
+	// of its own.
 	ShapeAlternates ShapeRule = "alternates"
 	// ShapeDropping holds a [DroppingDir], where there is one, to a
-	// directory of the repository's OWN — at its real path, never a link,
-	// which would serve another directory's objects by id to every process
-	// that names it ([Cmd.Dropping]) — and holds a call that names it to one
-	// that is there.
+	// directory of the repository's OWN at its real path (a link would serve
+	// another directory's objects by id), and one a call names
+	// ([Cmd.Dropping]) to being there.
 	ShapeDropping ShapeRule = "dropping"
 )
 
@@ -932,10 +820,9 @@ func (r ShapeRule) Valid() bool { return slices.Contains(ShapeRules, r) }
 type ShapeError struct {
 	// Rule is the rule broken.
 	Rule ShapeRule
-	// Dir is the repository that breaks it: the call's Dir, or — when
-	// InAlternate — the alternate the call names, at the real path git
-	// resolves it to. What a caller repairs is the one it names: a refusal
-	// of a scratch's alternate is a refusal of the cache it leans on.
+	// Dir is the repository that breaks it: the call's Dir, or, when
+	// InAlternate, the alternate it names at the real path git resolves. A
+	// caller repairs the one named: a scratch's alternate is its cache.
 	Dir         string
 	InAlternate bool
 	// found is what was found, as the error says it.
@@ -954,45 +841,22 @@ func misshapen(rule ShapeRule, dir string, alternate bool, format string, args .
 	return &ShapeError{Rule: rule, Dir: dir, InAlternate: alternate, found: fmt.Sprintf(format, args...)}
 }
 
-// A REPOSITORY CANNOT CONFIGURE ITS OWN PROCESS — and overriding dangerous
-// keys on the command line does not achieve it.
-//
-// Command-line configuration (GIT_CONFIG_COUNT) outranks a repository's config
-// file only for the keys it sets; every other key is read from the file, so a
-// repository config naming uploadpack.allowAnySHA1InWant is honoured by every
-// git that does not set it, and an include.path there reads any file at all. A
-// planted commondir moves objects AND refs to another repository and has no
-// override (GIT_COMMON_DIR does not beat it), and a planted alternates file
-// adds another repository's objects to this one's — every one of them
-// fetchable by id under protocol v2. The engine writes every repository it
-// runs git in, by hand, so a check of their SHAPE costs nothing legitimate and
-// turns "a repository can configure git" from a hope into a refusal.
-//
-// Not checked, deliberately: info/attributes and info/exclude (a bare
-// repository's own attributes are info/attributes alone, since git reads no
-// tree's .gitattributes there, HEAD's included, on the node floor; they steer
-// pack-objects' delta search and the conversions an archive applies, and a
-// cache holds none, its image having no info/; exclude is a work-tree file).
-// The HOST's and the HOME's attributes are another matter and are never read
-// (GIT_ATTR_NOSYSTEM, the base's core.attributesFile): written by whoever
-// administers the machine, for something else, they would apply to every
-// repository the node serves.
-// Also not checked: hooks/ (never run: core.hooksPath is the pool's), the
-// refs and packed-refs (content the engine wrote, not configuration), and the
-// commit-graph and multi-pack-index (written by git itself under the
-// maintainer; a damaged one is classified). info/grafts and shallow are
-// neutralised by the environment rather than checked (GIT_GRAFT_FILE,
-// GIT_SHALLOW_FILE).
+// Why the shape is checked: package doc, "A git process is configured by the
+// engine and by nothing else". Deliberately not checked: info/attributes (a
+// bare repository's only attributes, as git reads no tree's there on the node
+// floor; they steer only pack-objects' delta search and an archive's
+// conversions, and a cache, whose image has no info/, holds none),
+// info/exclude (a work-tree file), hooks/ (core.hooksPath is the pool's), refs
+// and packed-refs (content the engine wrote), and the commit-graph and
+// multi-pack-index (git writes them under the maintainer; damage is
+// classified). info/grafts and shallow are neutralised by GIT_GRAFT_FILE and
+// GIT_SHALLOW_FILE instead.
 
 // CheckShape holds the repository at dir to every [ShapeRule], as a process
-// whose [Cmd.Alternate] is alternate ("" for none): exactly the check Run
-// makes of a Cmd's Dir before it starts anything. A refusal is a *[ShapeError];
-// a file that could not be read is the read's own error.
-//
-// Exported for the one caller that MAKES a directory this shape — the git
-// cache's sweep, which repairs a cache the pool refused — so what it leaves is
-// held to the pool's own predicate rather than to a copy of it, and the two
-// can never disagree about what the pool will run in.
+// whose [Cmd.Alternate] is alternate ("" for none): exactly Run's check of a
+// Cmd's Dir. A refusal is a *[ShapeError]; a failed read is the read's own
+// error. Exported for the git cache's sweep, which repairs a cache the pool
+// refused, so what it leaves is held to the pool's own predicate, not a copy.
 func CheckShape(dir, alternate string) error {
 	if err := checkRepo(dir, false); err != nil {
 		return err
@@ -1000,17 +864,12 @@ func CheckShape(dir, alternate string) error {
 	return checkAlternates(dir, alternate)
 }
 
-// checkRepo holds dir to ShapeConfig, ShapeCommondir and ShapeObjects;
-// alternate says dir is the alternate a call names.
-//
-// ErrRepoShape is a DEFINITE answer and only that — the config absent or
-// holding other bytes, a commondir present, an objects directory that is a
-// link or none at all. A read that FAILED (descriptors exhausted on a busy
-// node, an I/O error, a directory where the file should be) says nothing
-// about the shape, so it is returned as the read's own error, wrapped and
-// without ErrRepoShape: collapsing "could not be read" into "definitely
-// wrong" would tell a caller a healthy cache was tampered with on a transient
-// failure, and the operator reading it the same.
+// checkRepo holds dir to ShapeConfig, ShapeCommondir, ShapeObjects and
+// ShapeDropping; alternate says dir is the alternate a call names.
+// ErrRepoShape is a DEFINITE answer only: a read that FAILED (descriptors
+// exhausted, an I/O error, a directory where the file should be) is returned
+// as its own error, without ErrRepoShape, so a transient failure never reports
+// a healthy cache as tampered with.
 func checkRepo(dir string, alternate bool) error {
 	config, err := os.ReadFile(filepath.Join(dir, "config"))
 	switch {
@@ -1037,11 +896,9 @@ func checkRepo(dir string, alternate bool) error {
 	return checkDropping(dir, alternate, false)
 }
 
-// checkDropping holds dir's [DroppingDir] to ShapeDropping: absent — but for
-// a call that names it (named), to which it must be there — or a directory of
-// dir's own, at its real path. As checkObjects does dir's objects, and for
-// its reason: a link there would read another directory's objects as the
-// dropping packs of this repository, every one of them fetchable by id.
+// checkDropping holds dir's [DroppingDir] to ShapeDropping: absent unless the
+// call names it (named), else a directory of dir's own at its real path, for
+// checkObjects' reason.
 func checkDropping(dir string, alternate, named bool) error {
 	view := filepath.Join(dir, DroppingDir)
 	_, err := os.Lstat(view)
@@ -1079,9 +936,7 @@ func checkDropping(dir string, alternate, named bool) error {
 }
 
 // checkDroppingCall refuses a call that names a dropping view it may not
-// ([Cmd.Dropping]): with no repository, beside an alternate, or as anything
-// but its repository's own DroppingDir — and holds the one it names to being
-// there (ShapeDropping, checkDropping).
+// ([Cmd.Dropping]), and holds the one it names to being there (ShapeDropping).
 func checkDroppingCall(c Cmd) error {
 	switch {
 	case c.Dropping == "":
@@ -1100,24 +955,20 @@ func checkDroppingCall(c Cmd) error {
 	return checkDropping(c.Dir, false, true)
 }
 
-// leansOnDropping reports whether alternate — the repository a process leans
-// on — holds a dropping view (DroppingDir): its commit-graph, which git loads
-// for the process as its own, may then name a commit only a dropping pack
-// holds, which the process cannot read. Anything at the name but its absence
-// counts, an unreadable one included: the paranoia it asks costs a lookup a
-// commit, and leaving it off a process that needed it lets a push rely on an
-// object an expunge drops.
+// leansOnDropping reports whether alternate holds a dropping view: its
+// commit-graph, which git loads for the process as its own, may then name a
+// commit only a dropping pack holds. Anything at the name counts, an
+// unreadable one included: the paranoia costs a lookup a commit, and missing
+// it lets a push rely on an object an expunge drops.
 func leansOnDropping(alternate string) bool {
 	_, err := os.Lstat(filepath.Join(alternate, DroppingDir))
 	return !errors.Is(err, fs.ErrNotExist)
 }
 
-// alternateEntry is path as one entry of GIT_ALTERNATE_OBJECT_DIRECTORIES:
-// as it is, or — where it holds the list's separator, begins with a double
-// quote or holds a byte git's C-style unquoting would read — C-quoted, as git
-// reads an entry that begins with a double quote (object-file.c's
-// parse_alt_odb_entry, unquote_c_style): a cache directory may be named
-// anything its operator chose.
+// alternateEntry is path as one entry of GIT_ALTERNATE_OBJECT_DIRECTORIES: as
+// it is, or C-quoted (object-file.c's parse_alt_odb_entry) where it holds the
+// list separator, a quote, a backslash or a control byte, since an operator
+// may name a cache directory anything.
 func alternateEntry(path string) string {
 	if !strings.ContainsAny(path, string(os.PathListSeparator)+`"\`) && !hasControl(path) {
 		return path
@@ -1144,11 +995,9 @@ func hasControl(s string) bool {
 	return strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0
 }
 
-// checkObjects holds dir to ShapeObjects: its objects directory, resolved,
-// is its own — its real path's "objects" — and a directory. A link there
-// reads ANOTHER directory's objects as this repository's, every one of them
-// fetchable by id under protocol v2, which is exactly what an alternates file
-// the call did not name would do; the engine never makes one.
+// checkObjects holds dir to ShapeObjects: its objects directory, resolved, is
+// its real path's "objects" and a directory. A link there would serve
+// another directory's objects by id, as an unnamed alternates file would.
 func checkObjects(dir string, alternate bool) error {
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
@@ -1174,32 +1023,18 @@ func checkObjects(dir string, alternate bool) error {
 	return nil
 }
 
-// checkAlternates holds dir's alternates file to the call's alternate: no
-// file for none, and for one the one line naming its objects directory — and
-// holds that alternate to the same shape, with no alternate of its own.
-//
-// THE GUARD REACHES ONE REPOSITORY FURTHER THAN THE PROCESS'S OWN, because git
-// does: a repository with an alternate lists that alternate's refs by running
-// `git --git-dir=<alternate> for-each-ref` with every variable this pool sets
-// for a repository CLEARED (git's local_repo_env: GIT_CONFIG_COUNT,
-// GIT_GRAFT_FILE and GIT_SHALLOW_FILE among them). That process is configured
-// by the alternate's own files and nothing else. Today it runs no command and
-// reads no history — but the guard holds the SHAPE rather than a list of what
-// today's subprocess happens to read, for the reason the configuration is an
-// allowlist. A chained alternate is refused because its second hop would be
-// read by the same unconfigured process, and the engine never builds one.
-//
-// THE REPOSITORY CHECKED IS THE ONE GIT RUNS IN. git resolves the line to its
-// real path (strbuf_realpath in refs_from_alternate_cb), strips "/objects" and
-// runs for-each-ref there — so a line whose objects directory were a link into
-// another repository would be configured by THAT repository's files, and
-// checking the directory the line merely passes through would accept a config
-// git never reads. ShapeObjects holds the alternate's objects directory to
-// its own real path, which makes the repository git resolves the line to the
-// alternate itself, and that is the one checked.
-//
-// As in checkRepo, ErrRepoShape is a definite answer, and a read that failed
-// is the read's own error.
+// checkAlternates holds dir's alternates file to the call's alternate (no
+// file for none, else the one line naming its objects directory), and that
+// alternate to checkRepo's shape with no alternate of its own: git lists an
+// alternate's refs by running for-each-ref in it with every variable the pool
+// sets CLEARED (local_repo_env), so its own files alone configure it. The
+// SHAPE is held, not what that process reads today, for the allowlist's
+// reason; a chain's second hop would be read the same way. The repository
+// checked is the one git runs in: git resolves the line to its real path
+// (refs_from_alternate_cb) and strips "/objects", and ShapeObjects makes that
+// the alternate itself (package doc, "A git process is configured by the
+// engine and by nothing else"). As in checkRepo, a failed read is its own
+// error.
 func checkAlternates(dir, alternate string) error {
 	body, err := os.ReadFile(filepath.Join(dir, "objects", "info", "alternates"))
 	switch {

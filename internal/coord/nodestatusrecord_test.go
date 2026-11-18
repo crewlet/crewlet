@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // recorded writes r through its wire form and reads it back under its node,
@@ -86,6 +87,55 @@ func TestANodesStatusRecordRoundTripsWhole(t *testing.T) {
 	got, err := coord.DecodeNodeStatusRecord("node-9", mustEncode(t, want))
 	if err != nil || got.Node != "node-9" {
 		t.Errorf("a record filed under node-9 read back as %q (%v)", got.Node, err)
+	}
+}
+
+// A NODE SAYS WHICH OF ITS SEATS' RUNS WAIT FOR AN OPERATOR, so a node with no
+// alarm table of its own (a satellite) is raised by those that have one: the
+// count and the run waiting longest, its seat, its condition and since when,
+// read back as written through the bytes a store keeps the record as; the seat
+// and the kind bounded on the wire, since the record is rewritten for as long
+// as the wait lasts. Nothing waiting is nothing on the wire, and a row that
+// counts no run, or is no row, names none.
+//
+// Mutation: leave the row off the wire, read it back without its instant, or
+// carry a seat past its bound, and a case goes red.
+func TestAStatusRecordCarriesTheResumesWaitingForAnOperator(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 3, 4, 5, 6, 7, 891, time.UTC)
+	want := coord.NodeStatusRecord{Node: "n1", Epoch: 2, At: since, ResumesBlocked: &coord.ResumesBlocked{
+		Runs: 2, Seat: "swe", Kind: "disk_full", Since: since}}
+	if got := recorded(t, want); !reflect.DeepEqual(got, want) {
+		t.Errorf("read back %+v, want %+v", got.ResumesBlocked, want.ResumesBlocked)
+	}
+
+	long := coord.NodeStatusRecord{Node: "n1", Epoch: 2, ResumesBlocked: &coord.ResumesBlocked{Runs: 1,
+		Seat: strings.Repeat("s", 4*iam.MaxLogin), Kind: strings.Repeat("k", 4*coord.MaxResumeBlockedKindBytes),
+		Since: since}}
+	if b := recorded(t, long).ResumesBlocked; b == nil || len(b.Seat) > iam.MaxLogin ||
+		len(b.Kind) > coord.MaxResumeBlockedKindBytes {
+		t.Errorf("a seat of %d bytes and a kind of %d crossed as %+v, want them bounded to %d and %d",
+			len(long.ResumesBlocked.Seat), len(long.ResumesBlocked.Kind), b, iam.MaxLogin,
+			coord.MaxResumeBlockedKindBytes)
+	}
+
+	for name, r := range map[string]coord.NodeStatusRecord{
+		"nothing waiting": {Node: "n1", Epoch: 2},
+		"a row counting no run": {Node: "n1", Epoch: 2, ResumesBlocked: &coord.ResumesBlocked{Seat: "swe",
+			Kind: "disk_full", Since: since}},
+	} {
+		if _, sent := wireOf(t, r)["resumes_blocked"]; sent {
+			t.Errorf("%s: wrote a row of runs waiting for an operator", name)
+		}
+	}
+	for name, row := range map[string]any{
+		"a row that is no map":  "swe",
+		"a row counting no run": map[string]any{"runs": 0, "seat": "swe", "kind": "disk_full"},
+		"a row counting less":   map[string]any{"runs": -1, "seat": "swe", "kind": "disk_full"},
+	} {
+		if got := decoded(t, map[string]any{"epoch": 2, "resumes_blocked": row}); got.ResumesBlocked != nil {
+			t.Errorf("%s: read as %+v, want no run named", name, got.ResumesBlocked)
+		}
 	}
 }
 

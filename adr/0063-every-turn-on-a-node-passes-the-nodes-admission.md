@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/node`
-- **Enforced-by:** `internal/node.TestEveryTurnStartIsAdmitted` and `internal/node.TestTheAdmissionGuardFindsEveryRoad` (a syntactic guard: every non-test Go file in the module is parsed, the root package included; `turn.Run` is matched under whatever name a file imports the turn package by and refused through a dot import; every other edge of the two chains to a turn is an unexported name matched on any operand; and the coordinator's `admitted` type may be named, in a signature or a body, only by `admitTurn`, which makes it, and the three frames that take it, each of which is called only from its one admitting caller; it does not see a guarded function carried out of its pinned frames as a stored method value, or a call made through reflection, which review holds), `internal/node.TestTheMailboxTurnIsAdmittedBeforeItRuns`, the compiler, outside the two packages (the mailbox's turn is the unexported `engine.Engine.mailboxTurn`, and `sandbox.Coordinator.resumeAndSettle` takes the unexported `admitted`; inside `internal/sandbox` only the guard holds who makes one), `internal/engine.TestADrainingNodeLeavesACompletionForTheSeatsNextHolder`, `internal/engine.TestARefusedCompletionIsHandedBackByItsCondition`, `internal/engine.TestACompletionRefusedOnAWaitResumesOnceItClears`, `internal/sandbox.TestARefusedCompletionIsReFiredWhenItsConditionClears`, `internal/sandbox.TestARefusalWhileTheClockOnItsHostRunsIsHandedBack`, `internal/sandbox.TestAJobNoWaiterAnnouncesIsRenewedByItsRow`, `internal/sandbox.TestAWaiterAnnouncementMadeSinceTheClockEndsIt`, `internal/sandbox.TestAnAnnouncementFromAReadBeforeTheClockEndsNothing`, `internal/sandbox.TestAnAnnouncementSaysWhenItsRowWasRead`, `internal/sandbox.TestEveryRoadsAnnouncementSaysWhenItsStoreWasAsked`, `internal/sandbox.TestAnUnclaimedCompletionIsAnnouncedAgain`, `internal/sandbox.TestAnAcknowledgedRefusalOutlivesItsHolder`, `internal/sandbox.TestAnAcknowledgedRefusalIsRecordedOnItsJob`, `internal/sandbox.TestASettledCompletionOwesNoRefusal`, `internal/sandbox.TestARefusalAcknowledgedUnderAnotherAttemptsClaimIsOwed`, `internal/sandbox.TestADrainsRefusalIsHandedOnOwingNothing`, `internal/sandbox.TestAKeptCompletionIsReFiredWithoutASignal`, `internal/sandbox.TestACompletionHeldHereIsReFiredAtItsInstantAndNeverSooner`, `internal/sandbox.TestARefireTheStoreDidNotAnswerIsKeptForItsBackstop`, `internal/sandbox.TestASignalledRefireTheStoreDidNotAnswerIsHeldNoLonger`, `internal/sandbox.TestAKeptCompletionsRefireGoesWithIt`, the `internal/sandbox/sandboxtest` contract cases `AnOwedRefusalIsRecordedOnceAndSettledByThePark` and `AnOwedRefusalIsRecordedOnAClaimOfItsCompletion`, `internal/engine.TestAResumedTurnTakesASlotUnderTheNodesCeiling`, `internal/node.TestADrainingNodeAdmitsNoTurn`, `internal/node.TestADrainWaitsForATurnNoDeliveryStarted`
+- **Enforced-by:** `internal/node.TestEveryTurnStartIsAdmitted` and `internal/node.TestTheAdmissionGuardFindsEveryRoad` (a syntactic guard: every non-test Go file in the module is parsed, the root package included; `turn.Run` is matched under whatever name a file imports the turn package by and refused through a dot import; every other edge of the two chains to a turn is an unexported name matched on any operand; and the coordinator's `admitted` type may be named, in a signature or a body, only by `admitTurn`, which makes it, and the three frames that take it, each of which is called only from its one admitting caller; it does not see a guarded function carried out of its pinned frames as a stored method value, or a call made through reflection, which review holds), `internal/node.TestTheMailboxTurnIsAdmittedBeforeItRuns`, the compiler, outside the two packages (the mailbox's turn is the unexported `engine.Engine.mailboxTurn`, and `sandbox.Coordinator.resumeAndSettle` takes the unexported `admitted`; inside `internal/sandbox` only the guard holds who makes one), `internal/engine.TestADrainingNodeLeavesACompletionForTheSeatsNextHolder`, `internal/engine.TestARefusedCompletionIsHandedBackByItsCondition`, `internal/engine.TestACompletionRefusedOnAWaitResumesOnceItClears`, `internal/sandbox.TestARefusedCompletionIsReFiredWhenItsConditionClears`, `internal/sandbox.TestARefusalWhileTheClockOnItsHostRunsIsHandedBack`, `internal/sandbox.TestAJobNoWaiterAnnouncesIsRenewedByItsRow`, `internal/sandbox.TestAWaiterAnnouncementMadeSinceTheClockEndsIt`, `internal/sandbox.TestAnAnnouncementFromAReadBeforeTheClockEndsNothing`, `internal/sandbox.TestAnAnnouncementSaysWhenItsRowWasRead`, `internal/sandbox.TestEveryRoadsAnnouncementSaysWhenItsStoreWasAsked`, `internal/sandbox.TestAnUnclaimedCompletionIsAnnouncedAgain`, `internal/sandbox.TestAnAcknowledgedRefusalOutlivesItsHolder`, `internal/sandbox.TestAnAcknowledgedRefusalIsRecordedOnItsJob`, `internal/sandbox.TestASettledCompletionOwesNoRefusal`, `internal/sandbox.TestARefusalAcknowledgedUnderAnotherAttemptsClaimIsOwed`, `internal/sandbox.TestADrainsRefusalIsHandedOnOwingNothing`, `internal/sandbox.TestAKeptCompletionIsReFiredWithoutASignal`, `internal/sandbox.TestACompletionHeldHereIsReFiredAtItsInstantAndNeverSooner`, `internal/sandbox.TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold`, `internal/sandbox.TestAHeldCompletionPastItsDeadlineEndsWithinTheBackstop`, `internal/sandbox.TestARefireTheStoreDidNotAnswerIsKeptForItsBackstop`, `internal/sandbox.TestASignalledRefireTheStoreDidNotAnswerIsHeldNoLonger`, `internal/sandbox.TestAKeptCompletionsRefireGoesWithIt`, `internal/sandbox.TestASeatsRecoveryAndTheClaimsOfItsRunsExcludeEachOther`, the `internal/sandbox/sandboxtest` contract cases `AnOwedRefusalIsRecordedOnceAndSettledByThePark` and `AnOwedRefusalIsRecordedOnAClaimOfItsCompletion`, `internal/engine.TestAResumedTurnTakesASlotUnderTheNodesCeiling`, `internal/node.TestADrainingNodeAdmitsNoTurn`, `internal/node.TestADrainWaitsForATurnNoDeliveryStarted`
 - **Measured:** a draining engine (2026-10-27): `engine_draining` with two turns in flight, then two `sandbox_waiter_fired` completions 6 and 9 minutes into the drain, each resuming a full turn (the in-flight count rose from 1 to 2, then 3) on a node whose every mailbox was quiesced and whose API answered `api_refused_while_draining`. Both resumed turns ended `sandbox_resume_abandoned`, and the drain completed 16 minutes after it began, waiting on turns it should never have started.
 - **Cost-when-tried:** the admission lived inside the mailbox subscription's handler (`node.runTurn`), so it was a property of one road rather than of a turn. The sandbox coordinator re-entered suspended turns from the seat's control topic and from its own answer-retry timer, and neither road passed the ownership check, the `node.max_concurrent` slot or the drain's closed gate. A recorded answer's retry was not even counted by the drain, which waited only for the queue's handlers.
 - **Tag-status:** unreleased
@@ -54,10 +54,47 @@ announces nothing either, so the holder that kept the seat waited for neither
 for as long as that silence lasted. A completion it holds off itself after its
 claim waits for its instant instead (`sandbox.Coordinator.keptRefireIn`): a
 re-fire drops the hold, and one at five minutes claimed the job and ran its
-review into the same limit every five minutes until that instant. The claim is
-at-most-once, so any of them arriving together resume the run once. A seat this
-node lets go of drops its kept completions, for the waiter that drives each
-run's box to announce to the seat's next holder.
+review into the same limit every five minutes until that instant. So does a
+completion whose resume its seat's budget held on the run's row
+(`sandbox.Coordinator.keepHeldOnRow`): its delivery is spent by the hold, and
+the claim refuses a held row, so before the instant nothing carried the job
+but that host's waiter, and a re-fire then claimed nothing and dropped the
+keep; it is kept unheld, re-fired at the hold's instant and never sooner, and
+on its condition's signal once the lift of its hold has landed, a signal since
+what was read before the resume was admitted, so one that landed during the
+resume, with no hold yet to lift, re-fires it too; and the seat's recovery
+keeps every held row it finds the same way, and re-arms one whose hold a lift
+cleared before its re-fire claimed the job, since the release that writes a
+hold records the completion as owed on the job's record too
+(`sandbox.PendingStore.ReleaseClaim`); and every lift of a hold a signal
+makes re-fires the job too (`sandbox.Coordinator.refireLifted`), since a
+lift that found nothing kept, as one racing the seat's recovery can, left the
+job to that host's waiter, unless the node carries the job already, kept for
+anything but that hold or a re-fire of it on its way, as the seat's recovery
+keeps no row whose job it does: neither starts a second re-fire beside one
+(`sandbox.Coordinator.carriedLocked`), since a second asked the gate, claimed
+and read the row for a job the first carried already; but a keep for the hold
+the lift cleared is re-fired in its place, and a re-fire on its way that
+leaves the job kept for it is followed by one as it returns
+(`sandbox.Coordinator.refired`), since that keep, made against a reading of
+the row from before the lift and of the signals from after the signal, waited
+for the hold's instant once the hold was gone.
+A delivery of it that the hold refuses leaves it kept, and a claim the hold
+refuses with nothing kept for the job, whatever was kept in its place having
+re-fired into the hold, keeps it again from the row
+(`sandbox.Coordinator.keepHeldClaim`). The timer of a completion held here
+still fires every five minutes before its instant, and there does only what an
+announcement of the job does (`sandbox.Coordinator.recheckHeld`): past the
+turn's deadline the run is ended, and before it the hold is kept and the next
+backstop armed, so a turn whose deadline passes while no waiter announces the
+job ends within five minutes of it, rather than at the hold's instant; and a
+hold on the run's row is written no later than the turn's deadline
+(`sandbox.Coordinator.unclaimHeld`), since nothing reaches a held row to end
+it, so the hold lapses there and its keep re-fires the job, whose resume past
+the deadline ends the run. The claim is at-most-once, so any of them arriving
+together resume the run once. A seat this node lets go of drops its kept
+completions, for the waiter that drives each run's box to announce to the
+seat's next holder.
 
 **An acknowledged refusal is an obligation the seat's holder owes, recorded on
 the run's row.** The acknowledgement stays: it spends none of the completion's
@@ -112,6 +149,28 @@ refusal of it is acknowledged as above: the waiter read the row through the
 store they say is silent, and announces the job again from there. One whose
 read was asked before ends nothing, however late it was made, since the
 waiter polls the box between its read and its announcement.
+
+**A seat's recovery pass is exclusive with every claim of the seat's runs on
+the node.** The pass (`sandbox.Coordinator.RecoverSeat`) reads a claim it finds
+as one whose node stopped, and reaps it or revives its answer, which is right
+only where no attempt of its own node holds the claim. The admission made that
+so at the acquisition, which admits no turn of a seat still establishing
+(`seat.Host.MayStart`), but not on every road: a completion past its turn's
+deadline is claimed to be ended without the admission, and an apply that
+brings the sandbox up on a seat already held recovers its runs while the seat
+admits turns, so a delivery, a signal's re-fire or an owed answer's attempt
+claimed inside the pass, which reaped this node's own live claim under the
+review running it. So the acquisition's rule is carried to every claim, at one
+place in the claim path (`sandbox.Coordinator.claimGateLocked`, recoverygate.go):
+while the seat's pass runs on the node, a claim is refused
+(`sandbox.ErrSeatRecovering`), the gate closed before the seat's control topic
+is attached; and every claim the gate lets through is counted as the node's
+live attempt until it returns, which the reap refuses to touch. A refused
+claim is never lost: a delivery is handed back to the queue as the node's
+failure, and a re-fire, a held completion's backstop and an owed answer's
+attempt are carried by the pass when it is done. It is a gate of the
+coordinator's, beside the admission rather than inside it, because the
+deadline's claim asks no admission and must still meet it.
 
 **A turn inside an admitted turn reuses that admission, and skips the
 ownership check for the inner turn.** The inline answer resume runs on the

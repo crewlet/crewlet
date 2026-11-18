@@ -302,3 +302,65 @@ func TestAVersionThisBuildDoesNotKnowIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// THE VERSION ALONE IS READ BY ITS OWN READER, and read as Decode reads it:
+// no bytes, a JSON null or an object with no keys is no state; an object is
+// the version it names, zero for one that names none or names it as no
+// number; bytes that are no object are an error. AND NOTHING ELSE OF THE STATE
+// IS READ: a state of this build's version whose body this build refuses still
+// names its version, which is what a caller asking only which build may read
+// it needs, without decoding the whole of a state that may be large.
+//
+// Mutation: read the version through Decode, and the refused body's row names
+// no version; read it as anything but Decode does, and a row disagrees with
+// Decode.
+func TestAStatesVersionIsReadAloneAsDecodeReadsIt(t *testing.T) {
+	t.Parallel()
+	whole, err := execstate.Encode(parked())
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	refused := `{"version":` + strconv.Itoa(execstate.Version) + `,"active_tool_names":"not a list"}`
+	for name, tc := range map[string]struct {
+		blob    string
+		version int
+		parked  bool
+		fails   bool
+	}{
+		"no bytes":                    {},
+		"a JSON null":                 {blob: "null"},
+		"an object with no keys":      {blob: " { } "},
+		"this build's state":          {blob: string(whole), version: execstate.Version, parked: true},
+		"a newer state":               {blob: `{"version":` + strconv.Itoa(execstate.Version+1) + `}`, version: execstate.Version + 1, parked: true},
+		"no version named":            {blob: `{"rounds":[]}`, parked: true},
+		"a version that is no number": {blob: `{"version":"four"}`, parked: true},
+		"bytes that are no object":    {blob: `[1, 2]`, fails: true},
+		"a body this build refuses":   {blob: refused, version: execstate.Version, parked: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			version, parked, err := execstate.VersionOf(json.RawMessage(tc.blob))
+			if (err != nil) != tc.fails || version != tc.version || parked != tc.parked {
+				t.Fatalf("VersionOf(%s) = %d, %v, %v; want %d, %v, failing %v", tc.blob, version, parked,
+					err, tc.version, tc.parked, tc.fails)
+			}
+			// AS DECODE READS IT, wherever Decode gets as far as the version.
+			_, ok, decodeErr := execstate.Decode(json.RawMessage(tc.blob))
+			var unknown *execstate.VersionError
+			switch {
+			case errors.As(decodeErr, &unknown):
+				if unknown.Found != version {
+					t.Errorf("Decode names version %d, VersionOf %d", unknown.Found, version)
+				}
+			case ok:
+				if version != execstate.Version {
+					t.Errorf("Decode read this build's state, VersionOf names %d", version)
+				}
+			case decodeErr == nil:
+				if parked {
+					t.Errorf("Decode found no state, VersionOf found one at %d", version)
+				}
+			}
+		})
+	}
+}

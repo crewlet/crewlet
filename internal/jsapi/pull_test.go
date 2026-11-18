@@ -176,6 +176,35 @@ func TestAPullAWaitingConsumerHoldsIsHeartbeatedUntilItExpires(t *testing.T) {
 	}
 }
 
+// A PULL ASKED TO END AT ITS CONSUMER'S END ENDS THERE.
+//
+// A pull the server holds for its expiry once its consumer has nothing more
+// holds whatever its reader took to ask it for that long: a walk across a link
+// held the link's whole window to the expiry past every walk's end. Asked to
+// end there, it ends with `404` once it has delivered what the consumer holds.
+// Here a pull of ten expiring in a minute, of a consumer holding three,
+// delivers the three and then its end, well inside [next]'s half minute.
+//
+// Mutation: ask it without no_wait, and no end comes before the expiry.
+func TestAPullAskedToEndAtItsConsumersEndEndsThere(t *testing.T) {
+	t.Parallel()
+	_, nc, js := pullServer(t, []byte("first"), []byte("second"), []byte("third"))
+	p := pullsOf(t, nc, js, "walker", "pulls.a")
+	if err := p.AskToEnd(10, 1<<20, time.Minute, 15*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		if ev := next(t, p); ev.Kind != jsapi.Delivered || ev.Ended {
+			t.Fatalf("word %d of a pull of ten of a consumer holding three = %q (%s %s), ended %t; "+
+				"want a delivery that ends nothing", i+1, ev.Kind, ev.Code, ev.Description, ev.Ended)
+		}
+	}
+	if ev := next(t, p); ev.Kind != jsapi.Expired || ev.Code != "404" || !ev.Ended {
+		t.Errorf("after the consumer's three the pull said %q (%s %s), ended %t; want its end at "+
+			"the consumer's, a 404", ev.Kind, ev.Code, ev.Description, ev.Ended)
+	}
+}
+
 // A PULL IS ASKED ON ONE INBOX FOR ITS WHOLE READ.
 //
 // The client's fetch subscribes an inbox for one pull and drops it when the

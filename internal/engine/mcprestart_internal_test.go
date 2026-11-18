@@ -11,12 +11,14 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // twoSeatCompany is a company whose one per-seat MCP server, `tracker`, is
@@ -277,5 +279,62 @@ roles:
 	want := []string{"tracker", coord.MCPRestartEntry("tracker", seatOf("ceo"))}
 	if fmt.Sprint(kept) != fmt.Sprint(want) {
 		t.Errorf("restarts kept %v, want %v: the server's and the seat it still has", kept, want)
+	}
+}
+
+// ALWAYS ALLOW DOES NOT RESTART THE SEAT'S CHILD. Its revision moves only the
+// tool's level, so the seat's pass refiles the child, and the approved call,
+// made through the surface built before that pass, is made.
+//
+// Mutation: have mcp.Bridge.Runs compare every field, and the pass restarts
+// the child under the approved call, which is refused.
+func TestAlwaysAllowRefilesTheSeatsChildWithoutRestartingIt(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	launches := t.TempDir()
+	at := func(level string) *Company {
+		return specCompany(t, fmt.Sprintf(`
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    zulu:
+      model: claude-sonnet-5
+mcp_servers:
+  - name: tracker
+    shared: false
+    command: %q
+    env:
+      %s: "server"
+      %s: %q
+      %s: %q
+    tools: {levels: {probe: %s}}
+roles:
+  - {name: CEO, handle: ceo, llm: zulu}
+`, os.Args[0], ToolServerModeEnv, ToolServerLaunchesEnv, launches, procgrouptest.GORACE,
+			procgrouptest.StandInRaceOptions(), level))
+	}
+	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{})}
+	asking := at("approve")
+	e.epoch.current.Store(asking)
+	s := heldSeatChildren(t, e, "ceo", func() bool { return true })
+	e.convergeSeat(ctx, s, false)
+	before := e.ToolsFor("ceo")
+	if entry, ok := before.Lookup("probe"); !ok || entry.Tool.(*mcp.Tool).Level() != mcp.LevelApprove {
+		t.Fatal("precondition: the seat's surface holds probe at approve")
+	}
+	turn := &turnctx.Turn{RunID: "run-1", Seat: asking.Org.AgentSeatByHandle("ceo"), Org: asking.Org}
+	approved := tools.NewSurface("execute", before.Snapshot(), []string{"probe"}).ForTurn(turn)
+
+	e.epoch.current.Store(at("allow"))
+	e.convergeSeat(ctx, s, false)
+	if entries, _ := os.ReadDir(launches); len(entries) != 1 {
+		t.Fatalf("the seat's child was launched %d times, want once: Always allow restarted it", len(entries))
+	}
+	if entry, ok := e.ToolsFor("ceo").Lookup("probe"); !ok || entry.Tool.(*mcp.Tool).Level() != mcp.LevelAllow {
+		t.Fatal("the seat's surface does not hold probe at allow after the pass")
+	}
+	if res, err := approved.RunApproved(ctx, "probe", map[string]any{}); err != nil || res.Output != "ok" {
+		t.Fatalf("the approved call = %q (%v), want it made", res.Output, err)
 	}
 }

@@ -22,108 +22,63 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A REVISION'S FACTS, RECORDED: what one revision of a live change is against
-// the branch it would merge into — the base it is measured from, the id of the
-// change it makes, the files it touches — read once by the repository's HOME
-// Gitlet node (internal/gitlet/query's revision_facts, a function of two commits
-// alone) and recorded on the change as a [Revise]: a record on the change's own
-// subject ([KindChange]), which the repository's committing data node decides
-// and publishes for the home, as it does every write of a change's
-// conversation ([ChangeWriter]). A Gitlet node never publishes it. Every reader of
-// a revision's facts after that reads the rows (code_revision_facts), never
-// git.
+// A REVISION'S FACTS (package doc, "A change's conversation is rows on its
+// own subject"): what the repository's HOME Gitlet node read of one revision
+// against its target (internal/gitlet/query's revision_facts, a function of
+// two commits alone), recorded as a [Revise] on the change's subject, which
+// the committing data node's [ChangeWriter] decides and publishes; a Gitlet
+// node never does. Every later reader reads code_revision_facts, never git.
 //
-// A HEAD ITS TARGET HOLDS IS NO REVISION TO MEASURE: whatever moved the target
-// there merged the change, and there is nothing left of it to touch or to
-// review. Its facts are never recorded — a revise whose base is its own head
-// is refused before anything is read — because what the home owes such a
-// change is its landing, a record on the repository's subject, where its
-// lifecycle is decided; a facts row beside it would be a second record of one
-// finding, and a due listing that had to tell a revision measured from one
-// waiting to be landed.
-//
-// # Path owners, matched on the home
-//
-// The repository's PATH OWNERS ([PathOwner]) are asked to review a revision
-// that touches their paths. Matching is the HOME's: a glob ([gitref.PathGlob])
-// against every touched path — every owner, where the revision touches all —
-// is up to MaxPathOwners × MaxPathOwnerPaths globs against
-// MaxTouchedPaths paths, which no decide pays on every round it may take. So
-// the home matches ([MatchOwners]) and sends the owners it matched beside the
-// DIGEST of the owner rows it matched them against ([OwnersDigest]), and the
-// decide holds it to the digest its own snapshot's repository row carries
-// (code_repos.owners_digest, written beside the rows): another digest is
-// owners that changed since the home read them, and the facts are SUPERSEDED,
-// recorded nowhere, for the home's next pass to match again. Owners changed
-// AFTER a revision's facts were recorded make it due its facts again
-// ([ReadChangesDue]), and the same tip read again is then no repeat: the facts
-// it holds were matched against owners the repository no longer has, and the
-// new match replaces them, asking any owner it adds. What the decide
-// does with the matched owners is a judgment of the chart, which no home
-// makes: a unit owner is asked of its EFFECTIVE LEAD, a seat owner of itself;
-// one who may not review the repository — a seat below review — or who is an
-// author of the change, whose review of their own change counts for nothing,
-// is SKIPPED, the record naming each skipped owner and why; an owner whose ask
-// the change holds already — waiting, answered by their review, ended with the
-// change or withdrawn by somebody's word on this change, which no rule
-// overrides — is left as it is; and the change asks at
-// most MaxReviewersPerChange at once, past which the rest are skipped too. A
-// path owner GRANTS NOTHING: its ask is a review request, and whether its
+// A HEAD ITS TARGET HOLDS IS NO REVISION TO MEASURE: the change is merged, and
+// the home owes it a landing, decided on the repository's subject. Facts
+// beside it would be a second record of one finding, so a revise whose base
+// is its own head is refused before anything is read.
+
+// PATH OWNERS ARE MATCHED ON THE HOME ([MatchOwners]): up to MaxPathOwners ×
+// MaxPathOwnerPaths globs against MaxTouchedPaths paths is more than a decide
+// pays on every round it may take. The home sends the matched owners beside
+// their [OwnersDigest], which the decide holds to code_repos.owners_digest:
+// another digest is owners changed since, and the facts are SUPERSEDED for
+// the home's next pass. Owners changed after the facts were recorded make the
+// revision due again ([ReadChangesDue]), and the same tip's new match
+// replaces them. Whom they ask is the chart's judgment, which no home makes
+// ([judgeOwners], [SkipReason]); an owner whose ask the change holds already
+// (waiting, answered, ended, or withdrawn by somebody's word, which no rule
+// overrides) is left as it is. A path owner GRANTS NOTHING: whether its
 // review counts is the reviewer's grant's, as any reviewer's.
-//
-// The home matches the HUMAN PATHS the change's target's merge gate names the
-// same way and for the same reason ([MatchTargetHumanPaths], humanpaths.go):
-// the facts carry which entries hold the revision for a person and which their
-// unless waives, by place, beside the digest of the repository's rules' human
-// paths the home matched against, which the decide holds to its snapshot's
-// repository row (code_repos.human_paths_digest) as it holds the owners'. A
-// match naming a place is checked against the target's gate as the
-// snapshot's rules combine it, so no recorded place is past the list it names.
-//
-// # The guard
-//
-// Facts are of the change's HEAD revision against its CURRENT target, and a
-// revise is decided only while they still are: one of an earlier revision, of
-// a head the change has moved from, against a branch the change no longer
-// merges into, or no later than the facts it holds of that revision against
-// that branch — the same tip read twice, by a home that ran its pass again or
-// two homes a split presence view each called home — is SUPERSEDED, while the
-// facts it holds still hold: facts matched against path owners or human paths
-// the repository has changed since are replaced by the same tip's facts
-// matched again. A
-// retarget is new facts of the same revision against another branch, which
+
+// HUMAN PATHS are matched on the home the same way ([MatchTargetHumanPaths]),
+// held to code_repos.human_paths_digest, each place checked against the
+// target's gate ([humanPlacesIn]).
+
+// THE GUARD: facts are of the change's HEAD revision against its CURRENT
+// target, and a revise is decided only while they still are. One of an
+// earlier revision or head, of a branch it no longer merges into, or no later than the facts
+// held of that revision there (the same tip read twice, by a home that ran
+// its pass again or two homes a split presence view each called home) is
+// SUPERSEDED, unless the held facts were matched against owners or human
+// paths since changed. A retarget is new facts of the same revision, which
 // replace the row.
-//
-// # Whom the facts concern, for the wakes
-//
-// A revise's ROUTING says whom its revision concerns beside the asks it makes,
-// stamped by the writer from the snapshot and the chart: the reviewers whose
-// standing verdict asks for changes on an earlier revision — asked to look
-// again (re_review) — on the revision's first facts; and, on the change's
-// first facts, where nobody who may review it is asked, the lead of the
-// repository's owner — its unit's effective lead, or the lead of the unit an
-// owning seat sits in — so a change nobody is asked to review still reaches
-// somebody (lead_fallback). The routing is their ONE copy: the apply asks the
-// reviewers it names under re_review to look again, and nothing reads a
-// lead_fallback but the wakes, so the payload restates neither.
-//
-// # A revision's classes ride its facts
-//
-// What the home read of a revision includes its CLASSES, two kinds of them.
-// The TREES of its base and its head ([Revise.BaseTree], [Revise.HeadTree]):
-// two revisions holding the same pair hold the same code, byte for byte, so
-// an approval of the one carries to the other however their histories differ
-// and whatever their patch ids say — [ChangeClassNoCodeChange], a revision
-// carry-forward kind ([ReadinessOf]), where an omitted patch id carries
-// nothing. The trees are recorded rather than the class itself, because the
-// class is a relation between two revisions: recorded, it would be judged by
-// a home against the rows it read of the revision before, which a late
-// record of that revision may replace after; compared, it is judged by
-// whoever reads the two rows, in one snapshot, as two patch ids are. And the
-// PATH classes of the paths it touches ([RevisionClasses]): what each touched
-// Go file's change is to the language's own lexer ([ClassifyGo]), within the
-// bounds a revision's classification keeps to ([MaxClassedBytes]) — what a
-// merge gate's exemptions read ([MergeGate.ApprovalsUnless],
+
+// A revise's ROUTING ([ChangeRouting]), stamped by the writer from the
+// snapshot and the chart, is whom it concerns beside its asks: on a
+// revision's first facts, the reviewers standing on request_changes from an
+// earlier one (re_review); on the change's first, where nobody who may review
+// it is asked, the lead of the repository's owner (lead_fallback), so it
+// still reaches somebody. The routing is their ONE copy (the apply asks its
+// re_review to look again, and only the wakes read lead_fallback): the
+// payload restates neither.
+
+// A REVISION'S CLASSES RIDE ITS FACTS (package doc, "A change's class is
+// lexed, and a directive is code"). The TREES of its base and head
+// ([Revise.BaseTree], [Revise.HeadTree]): a revision holding the same pair
+// holds the same code, so an approval carries to it whatever its history or
+// patch id ([ChangeClassNoCodeChange], [ReadinessOf]). The trees are recorded
+// rather than the class, a relation between two revisions: recorded by a
+// home, it would be judged against a row a late record may replace;
+// compared, it is judged by whoever reads both rows in one snapshot. And the
+// PATH classes of its touched Go files ([RevisionClasses], [ClassifyGo]),
+// which a merge gate's exemptions read ([MergeGate.ApprovalsUnless],
 // [HumanPath.Unless]).
 
 // SkipReason is why a revise asked no review of a path owner whose globs its
@@ -207,9 +162,8 @@ type Revise struct {
 	// BaseTree and HeadTree are the trees of the base and of the head — the
 	// empty tree's id for a history that shares no commit with its target's —
 	// which a later revision holding the same pair holds the same code as
-	// (this file's head, "A revision's classes ride its facts").
-	//
-	// BASE FORMAT, as [OpRevise] is.
+	// (this file's head, "A revision's classes ride its facts"). BASE FORMAT,
+	// as [OpRevise] is.
 	BaseTree string `json:"base_tree"`
 	HeadTree string `json:"head_tree"`
 	// PatchID is `git patch-id --verbatim` of the cumulative diff from the
@@ -224,10 +178,8 @@ type Revise struct {
 	Touched    []string `json:"touched"`
 	TouchesAll bool     `json:"touches_all,omitempty"`
 	// Classes is the path classes of the touched files' changes, each named
-	// by its place in Touched ([RevisionClasses]).
-	//
-	// BASE FORMAT, as [OpRevise] is. Omitted where it is the zero value:
-	// nothing classed, the classification incomplete.
+	// by its place in Touched ([RevisionClasses]). BASE FORMAT, as [OpRevise]
+	// is; omitted at its zero: nothing classed, the classification incomplete.
 	Classes RevisionClasses `json:"classes,omitzero"`
 	// Node is the Gitlet node that recorded the facts: the repository's home as
 	// it took itself to be, which asked for them.
@@ -235,21 +187,16 @@ type Revise struct {
 	// MeasuredAt is when the home read these facts, by its clock and to the microsecond: SENT BY THE
 	// HOME, zero from a home before [OwnedPathsVersion].
 	MeasuredAt time.Time `json:"measured_at,omitzero"`
-	// RequestedOwners is the path owners one of whose globs matched a touched
-	// path, every owner where the revision touches all, as [MatchOwners]
-	// answers them: each with its globs that matched, none where the revision
-	// touches all. OwnersDigest is the digest of the owner rows they were
-	// matched against ([OwnersDigest]), which the decide holds its own
-	// snapshot's to.
+	// RequestedOwners is the path owners [MatchOwners] answered, and
+	// OwnersDigest the [OwnersDigest] of the owner rows they were matched
+	// against, which the decide holds its own snapshot's to.
 	RequestedOwners []MatchedOwner `json:"requested_owners,omitempty"`
 	OwnersDigest    string         `json:"owners_digest"`
 	// HumanPaths is which of the human paths the change's target's merge gate
 	// names hold the revision to a person and which their unless waives, each
-	// by its place in the target's human paths ([HumanPathMatch]), as
-	// [MatchTargetHumanPaths] answers them; HumanPathsDigest the digest of
-	// the repository's rules' human paths they were matched against
-	// ([HumanPathsDigest]), which the decide holds its own snapshot's to.
-	//
+	// by its place in the target's human paths, as [MatchTargetHumanPaths]
+	// answers them; HumanPathsDigest the [HumanPathsDigest] of the rules' human
+	// paths they were matched against, which the decide holds its snapshot's to.
 	// BASE FORMAT, as [OpRevise] is.
 	HumanPaths       HumanPathMatch `json:"human_paths,omitzero"`
 	HumanPathsDigest string         `json:"human_paths_digest"`
@@ -262,42 +209,29 @@ type Revise struct {
 	Asked         []OwnerAsk     `json:"asked,omitempty"`
 	SkippedOwners []SkippedOwner `json:"skipped_owners,omitempty"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
-	// WRITER from its snapshot and chart; an asker sends none. Its re_review
-	// is the reviewers the apply asks to look again, and its lead_fallback
-	// the lead a change nobody who may review it is asked reaches — each
-	// held there alone (this file's head); nil where the facts concern
-	// nobody, and then nobody is asked to look again.
+	// WRITER; an asker sends none. nil where the facts concern nobody (this
+	// file's head).
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
-// MaxReReviewers is the most reviewers one revise asks to look again: the
-// reviewers whose standing verdict on an earlier revision asks for changes.
-// SIXTY-FOUR, as many as a change's routing names watchers: a reviewer
-// standing on request_changes is one a change has asked, or one who reviewed
-// it unasked, and a change reaching more than sixty-four of either has an
-// audience no wake is the way to — the rest read it in their listings.
+// MaxReReviewers is the most reviewers one revise asks to look again: 64, as
+// many as a change's routing names watchers. A change with more standing on
+// request_changes has an audience no wake is the way to; the rest read it in
+// their listings.
 const MaxReReviewers = 64
 
-// RevisionClasses is what the changes of the paths a revision touches are to
-// a lexer ([ClassifyGo]): each touched path a class holds of, in the list of
-// its NARROWEST class — a whitespace_only change is a comment_only one too,
-// and is listed as whitespace_only alone.
+// RevisionClasses is what the changes of a revision's touched paths are to a
+// lexer ([ClassifyGo]): each classed path in the list of its NARROWEST class
+// alone — a whitespace_only change is a comment_only one too.
 //
-// A PATH IS NAMED BY ITS PLACE in the facts' touched list, counted from 0,
-// never by its name again: the facts are one page beside a touched list of up
-// to [MaxTouchedBytes] (MaxGitAnswerBytes), and a class list naming every
-// path a second time — a thousand Go files reformatted — would take the
-// page twice over, where a thousand places take some four kilobytes.
+// A PATH IS NAMED BY ITS PLACE in the facts' touched list, from 0, never by
+// name: beside a touched list of up to [MaxTouchedBytes], naming a thousand
+// reformatted Go files again would take the facts' page twice over.
 //
-// COMPLETE IS WHAT LETS A LIST BE READ AS EVERY PATH. A path no list names
-// has no class: one no lexer reads (another language, a file added, deleted
-// or changed in its mode, a symbolic link, a submodule), one whose versions
-// ClassifyGo gives none — and, where the classification is NOT complete, one
-// it never reached: past [MaxClassedBytes] of Go a revision's classification
-// lexes, past the read's budget of git, and every path of a revision that
-// touches all, which lists none. So a reader exempting a change because every
-// path it touches is of a class requires Complete: incomplete, an empty list
-// would read as every path classed.
+// COMPLETE IS WHAT LETS A LIST BE READ AS EVERY PATH. A path no list names has
+// no class, or, incomplete, was never reached (past [MaxClassedBytes], past
+// the read's git budget, or every path of a revision touching all). So an
+// exemption needing every touched path classed requires Complete.
 type RevisionClasses struct {
 	WhitespaceOnly []int `json:"whitespace_only,omitempty"`
 	CommentOnly    []int `json:"comment_only,omitempty"`
@@ -407,19 +341,13 @@ func matchingGlobs(globs, paths []string) []string {
 	return out
 }
 
-// validFields holds a revise to [ConversationWrite.Validate]'s rules: a
-// revision from 1; whole object ids for the head, the target's tip, the
-// base's and the head's trees, and the base and the patch id where set; a
-// base that is not the head, which its target would hold (this file's head);
-// the target a branch a change may name, and its tip's position one on the
-// code log; an omitted id with no id; a touched list within the bounds the
-// facts keep it to, beside no word that it touches all, of clean paths; its
-// classes naming its touched paths ([classesProblem]); the node a node id
-// config admits; the matched owners each a unit or a seat, sorted and once,
-// at most MaxPathOwners; each owner's globs, named where the facts were
-// measured and do not touch all and nowhere else, at most MaxPathOwnerPaths,
-// sorted and once; a measured instant after 1970; a digest of SHA-256's width
-// in lowercase hex; and no field the writer stamps.
+// validFields holds a revise to [ConversationWrite.Validate]'s rules: whole
+// object ids; a base that is not the head (this file's head); a branch target
+// and a position on the code log; touched paths within the facts' bounds and
+// classes naming them; a node id config admits; matched owners sorted and
+// once, their globs named exactly where measured facts do not touch all
+// ([matchedGlobsProblem]); digests of SHA-256's width in lowercase hex; and
+// no field the writer stamps.
 func (r *Revise) validFields() error {
 	if r.N < 1 {
 		return badField("revise.n", "%d; a change's revisions count from 1", r.N)
@@ -720,19 +648,15 @@ func decideRevise(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster R
 	if j.fallback != nil {
 		d.concern.lead = *j.fallback
 	}
-	// AND WHOSE ERRAND THEY ARE: the home records the facts, but a revision
-	// is somebody's push — the opener's for revision 1, whoever moved the head
-	// for every later one — and the review it asks for is that principal's
-	// request. Named as the record's actor, the wake it sends a path owner or
-	// a reviewer states that principal as its writer, so the woken seat's
-	// reads are decided for both grants (the requester ceiling); named as
-	// nobody, a seat that may push one repository could have a reviewer
-	// that may read a `visibility: unit` one read for it unbounded. AND FOR
-	// WHOM: a seat's push made in a turn it worked for somebody is that
-	// somebody's errand, which the revision's row keeps (concerns.go's head,
-	// "Whom the actor acted for"), so the wake states them beside the pusher
-	// and the woken seat reads for them, as the push's own wake would have.
-	// The pusher hears nothing of their own revision, as every actor.
+	// AND WHOSE ERRAND THEY ARE: a revision is somebody's push (the opener's for
+	// revision 1, whoever moved the head after), so the review it asks for is
+	// that principal's request. Named as the record's actor, the wake states
+	// them as its writer and the woken seat's reads are decided for both grants
+	// (the requester ceiling); named as nobody, a seat that may push one
+	// repository could have a reviewer read a `visibility: unit` one for it
+	// unbounded. Whom a seat's push was made for rides the revision's row
+	// (concerns.go's head, "Whom the actor acted for"), and the wake states them
+	// too, so the woken seat reads for them. The pusher hears nothing of their own revision, as every actor.
 	if d.concern.actor, d.concern.actorKind, d.concern.workingFor, err = revisionPusher(ctx, tx, row.id,
 		r.N); err != nil {
 		return conversationDecision{}, err

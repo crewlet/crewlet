@@ -1,7 +1,7 @@
 /**
  * A change's Files changed tab: every file a revision changes on one page, a
- * stack of sticky-headed diffs (`FileStack.tsx`) beside the files' tree in its
- * own scroller, with what lies on each line drawn under it.
+ * stack of sticky-headed diffs (`../FileStack.tsx`) beside the files' tree in
+ * its own scroller, with what lies on each line drawn under it (`StackNotes.tsx`).
  *
  * # Read by object id, placed by the engine
  *
@@ -26,7 +26,7 @@
  * review sends every draft of the head in ONE `code_review_change`.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   Button,
   Checkbox,
@@ -60,6 +60,7 @@ import { fmtCount, plural } from "~/lib/format.ts";
 import { useReviewDrafts } from "~/lib/reviewDrafts.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
+import { spellPosition } from "~/protocol/session.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type {
   CodeChangeAnswer,
@@ -68,9 +69,19 @@ import type {
   CodeRevisionRow,
 } from "~/protocol/index.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
-import { FileTree, type FileBadges } from "../FileTree.tsx";
+import { type FileBadges } from "../FileTree.tsx";
 import { FIND_LIMIT, Matched } from "../repo/GoToFile.tsx";
-import { FileStack, fileKey, matchPath, type StackJump } from "./FileStack.tsx";
+import {
+  FileStack,
+  fileKey,
+  matchPath,
+  type StackHeadSlot,
+  type StackJump,
+  type StackSource,
+} from "../FileStack.tsx";
+import { FilesPane, TREE_BESIDE_FROM, useFileArrival } from "../FilesPane.tsx";
+import { changeHref } from "../paths.ts";
+import { ChangeLines, StackNotesContext } from "./StackNotes.tsx";
 import { findingStands } from "./FindingAnswer.tsx";
 import { FinishReview } from "./ReviewDialog.tsx";
 import {
@@ -84,10 +95,8 @@ import {
   usePagedFindingPaths,
   usePagedFindings,
 } from "./reads.ts";
+import { useViewedMarks, ViewedMarksContext, ViewedProgress, ViewedToggle } from "./Viewed.tsx";
 import "~/styles/gitlet.css";
-
-/** The page's width from which the tree sits beside the stack (the sheet's 720 px fold). */
-const TREE_BESIDE_FROM = 720;
 
 /** A whole number from 1 off the address, or null. */
 function wholeParam(value: string): number | null {
@@ -189,17 +198,52 @@ export function Files({
   // WHAT LIES ON THE LINES, one object until it moves: each section is drawn
   // again only when what it shows does.
   const { drafts: drafted, add, remove, update, clear } = drafts;
-  const notes = useMemo(
+  const notesOf = useMemo(
     () => ({
-      findings: findings.items,
-      placed,
-      comments: comments.items,
-      drafts: drafting ? { drafts: drafted, add, remove, update, clear } : null,
-      thread,
+      change,
+      rev,
+      since,
+      notes: {
+        findings: findings.items,
+        placed,
+        comments: comments.items,
+        drafts: drafting ? { drafts: drafted, add, remove, update, clear } : null,
+        thread,
+      },
     }),
-    [findings.items, placed, comments.items, drafting, drafted, add, remove, update, clear, thread],
+    [
+      change,
+      rev,
+      since,
+      findings.items,
+      placed,
+      comments.items,
+      drafting,
+      drafted,
+      add,
+      remove,
+      update,
+      clear,
+      thread,
+    ],
   );
   const listed = pagedFiles.items;
+  // THE READER'S VIEWED FILES, marked at the position the listing was read at: a viewed file is folded.
+  const position = files.data?.position;
+  const marks = useViewedMarks({
+    change,
+    listed,
+    seen: position ? spellPosition(position) : "",
+  });
+  // THE TOGGLE READS THE MARKS from context, so its control and each head stay put across reads.
+  const viewedControl = useCallback((f: CodeDiffFile) => <ViewedToggle file={f} />, []);
+  const headSlot = useMemo<StackHeadSlot>(
+    () => ({
+      control: viewedControl,
+      foldedByHost: (f) => !f.path_b64 && marks.viewed.has(f.path),
+    }),
+    [viewedControl, marks.viewed],
+  );
   // WHAT THE FILTERS KEEP: the words a path holds, the extensions shown, and
   // the files with a standing finding.
   const findingPaths = usePagedFindingPaths(change);
@@ -223,12 +267,21 @@ export function Files({
   const shownExts = listParam(extParam).map(tokenExt);
   const only = listParam(onlyParam);
   const byFindings = only.includes("findings") && pathsRead;
+  // UNVIEWED IS HELD until every mark is read: a partial read would keep a viewed file.
+  const byUnviewed = only.includes("unviewed") && marks.read === "read";
+  const unviewedHeld =
+    typeof marks.read === "object"
+      ? marks.read.refused
+      : marks.read === "reading"
+        ? "Still reading your viewed files."
+        : undefined;
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   const keeps = (f: CodeDiffFile) =>
     words.every((w) => f.path.toLowerCase().includes(w)) &&
     (shownExts.length === 0 || shownExts.includes(extOf(f.path))) &&
-    (!byFindings || standing.has(f.path));
-  const filtering = words.length > 0 || shownExts.length > 0 || byFindings;
+    (!byFindings || standing.has(f.path)) &&
+    (!byUnviewed || !marks.viewed.has(f.path) || Boolean(f.path_b64));
+  const filtering = words.length > 0 || shownExts.length > 0 || byFindings || byUnviewed;
   const visible = filtering ? listed.filter(keeps) : listed;
   const clearFilters = () => {
     setQ("");
@@ -263,40 +316,34 @@ export function Files({
     [setFile, visible, setQ, setExt, setOnly, toast],
   );
   // THE FILE THE ADDRESS NAMES, once it is listed: the stack opens at it.
-  const arrived = useRef(false);
-  const { more, paging, pageError, next } = pagedFiles;
-  const listsIt = listed.some((one) => one.path === file);
-  // A FILE THE PAGES LISTED LACK is asked alone first, so a path the diff does
-  // not change pages nothing; one it changes is listed by the pages after.
-  const namedParams = useMemo(
-    () =>
-      changePartParams({ repo: change.repo, number: change.number }, "diff", {
-        revision: rev,
-        file,
-        ...(since !== null ? { since_revision: since } : {}),
-      }),
-    [change.repo, change.number, rev, since, file],
+  const source = useMemo<StackSource>(
+    () => ({ kind: "change", change: { repo: change.repo, number: change.number }, rev, since }),
+    [change.repo, change.number, rev, since],
   );
-  const named = useCodeQuery("code_change", namedParams, {
-    enabled: file !== "" && !listsIt && more && !arrived.current,
-  });
-  const namedEntry = named.data?.diff?.files?.find((one) => one.path === file);
-  const unchanged =
-    file !== "" &&
-    !listsIt &&
-    !arrived.current &&
-    ((named.data !== undefined && !namedEntry) || (files.data !== undefined && !more));
-  useEffect(() => {
-    if (arrived.current || !file) return;
-    const f = listed.find((one) => one.path === file);
-    if (!f) {
-      if (namedEntry && more && !paging && !pageError) next();
-      return;
-    }
-    arrived.current = true;
+  const onArrive = useCallback((f: CodeDiffFile) => {
     setCurrent(f.path);
     setJump({ key: fileKey(f), seq: 1 });
-  }, [file, listed, namedEntry, more, paging, pageError, next]);
+  }, []);
+  const { unchanged } = useFileArrival({
+    source,
+    file,
+    listed,
+    loaded: files.data !== undefined,
+    more: pagedFiles.more,
+    paging: pagedFiles.paging,
+    pageError: pagedFiles.pageError,
+    next: pagedFiles.next,
+    onArrive,
+  });
+  const linkOf = useCallback(
+    (f: CodeDiffFile) =>
+      changeHref(change.repo, change.number, {
+        tab: "files",
+        ...(rev !== change.revision ? { rev } : {}),
+        file: f.path,
+      }),
+    [change.repo, change.number, change.revision, rev],
+  );
   const draftsOn = new Map<string, number>();
   if (drafting)
     for (const d of drafts.drafts) draftsOn.set(d.path, (draftsOn.get(d.path) ?? 0) + 1);
@@ -400,6 +447,14 @@ export function Files({
             active={since !== null}
           />
           <GoToChanged files={listed} onGo={go} />
+          {live && marks.read === "read" && listed.length > 0 && (
+            <ViewedProgress
+              viewed={marks.viewed.size}
+              listed={listed.length}
+              changed={files.data?.diff?.total}
+              more={pagedFiles.more}
+            />
+          )}
           <span className="code-files-bar__end">
             <span className="code-files-bar__layout">
               <SegmentedControl
@@ -473,6 +528,8 @@ export function Files({
                       only={only}
                       onOnly={(next) => setOnly(next.join(","))}
                       withFindings={listed.filter((f) => standing.has(f.path)).length}
+                      unviewed={listed.length - marks.viewed.size}
+                      unviewedHeld={unviewedHeld}
                       findingsHeld={
                         pathsRefused !== null
                           ? refusedWords("Findings by file are unavailable", pathsRefused)
@@ -525,80 +582,41 @@ export function Files({
                 {pagedFiles.pageError && <PageFailed error={pagedFiles.pageError} />}
               </FilesPane>
             )}
-            <FileStack
-              change={change}
-              head={head}
-              rev={rev}
-              since={since}
-              moved={diffMoved}
-              files={visible}
-              lead={
-                <>
-                  {unchanged && (
-                    <p className="muted" role="status">
-                      {since !== null
-                        ? `${file} is not among the files changed since revision ${since}.`
-                        : `${file} is not among the files revision ${rev} changes.`}
-                    </p>
-                  )}
-                  {showing}
-                </>
-              }
-              indexOf={indexOf}
-              layout={layout === "split" ? "split" : "unified"}
-              notes={notes}
-              jump={jump}
-              onCurrent={setCurrent}
-              foot={loadMoreFiles && <span>{loadMoreFiles}</span>}
-            />
+            <ViewedMarksContext.Provider value={marks}>
+              <StackNotesContext.Provider value={notesOf}>
+                <FileStack
+                  source={source}
+                  repo={change.repo}
+                  head={head}
+                  moved={diffMoved}
+                  files={visible}
+                  lead={
+                    <>
+                      {unchanged && (
+                        <p className="muted" role="status">
+                          {since !== null
+                            ? `${file} is not among the files changed since revision ${since}.`
+                            : `${file} is not among the files revision ${rev} changes.`}
+                        </p>
+                      )}
+                      {showing}
+                    </>
+                  }
+                  indexOf={indexOf}
+                  layout={layout === "split" ? "split" : "unified"}
+                  linkOf={linkOf}
+                  lines={ChangeLines}
+                  jump={jump}
+                  onCurrent={setCurrent}
+                  foot={loadMoreFiles && <span>{loadMoreFiles}</span>}
+                  headSlot={headSlot}
+                />
+              </StackNotesContext.Provider>
+            </ViewedMarksContext.Provider>
           </div>
         </QueryState>
       </Stack>
     </div>
-  );
-}
-
-/** The files' tree in its own scroller beside the stack, its current row kept in the list's view. */
-function FilesPane({
-  files,
-  current,
-  onOpen,
-  badges,
-  label,
-  head,
-  foot,
-  children,
-}: {
-  files: readonly CodeDiffFile[];
-  current: string;
-  onOpen: (f: CodeDiffFile) => void;
-  badges: (f: CodeDiffFile) => FileBadges | null;
-  label: string;
-  head?: ReactNode;
-  foot: ReactNode;
-  children?: ReactNode;
-}) {
-  const scroller = useRef<HTMLDivElement>(null);
-  // THE CURRENT ROW INTO THE LIST'S VIEW by the list's own scroll, never the page's.
-  useEffect(() => {
-    const box = scroller.current;
-    const row = box?.querySelector<HTMLElement>('[aria-current="true"]');
-    if (!box || !row) return;
-    const at = row.getBoundingClientRect();
-    const view = box.getBoundingClientRect();
-    if (at.top < view.top || at.bottom > view.bottom) {
-      box.scrollTop += at.top - view.top - (view.height - at.height) / 2;
-    }
-  }, [current]);
-  return (
-    <aside className="code-tree code-files__pane" aria-label={label}>
-      {head && <div className="code-tree__head">{head}</div>}
-      <div ref={scroller} className="code-tree__scroll">
-        <FileTree files={files} current={current} onOpen={onOpen} badges={badges} />
-        {children}
-      </div>
-      <div className="code-tree__foot">{foot}</div>
-    </aside>
   );
 }
 
@@ -711,7 +729,7 @@ function GoToChanged({
   );
 }
 
-/** Filter options: the diff's own extensions and With findings, each a checkbox. */
+/** Filter options: the diff's own extensions, With findings and Unviewed, each a checkbox. */
 function FilterOptions({
   exts,
   shown,
@@ -720,6 +738,8 @@ function FilterOptions({
   onOnly,
   withFindings,
   findingsHeld,
+  unviewed,
+  unviewedHeld,
   narrowing,
   onClear,
 }: {
@@ -732,6 +752,9 @@ function FilterOptions({
   withFindings: number;
   /** Why With findings is held, where finding_paths was refused. */
   findingsHeld: string | undefined;
+  unviewed: number;
+  /** Why Unviewed is held, while the marks are read or where they were refused. */
+  unviewedHeld: string | undefined;
   narrowing: boolean;
   onClear: () => void;
 }) {
@@ -782,6 +805,14 @@ function FilterOptions({
             disabled={findingsHeld !== undefined}
             checked={only.includes("findings") && findingsHeld === undefined}
             onCheckedChange={(on) => toggleOnly("findings", on)}
+          />
+          <Checkbox
+            size="sm"
+            label={`Unviewed ${fmtCount(unviewed)}`}
+            description={unviewedHeld}
+            disabled={unviewedHeld !== undefined}
+            checked={only.includes("unviewed") && unviewedHeld === undefined}
+            onCheckedChange={(on) => toggleOnly("unviewed", on)}
           />
         </fieldset>
         <Button size="small" variant="ghost" onClick={onClear} disabled={!narrowing}>

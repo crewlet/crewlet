@@ -7,24 +7,22 @@ import (
 )
 
 // A LOG'S GREP is a LITERAL, matched here over each commit's whole message as
-// git streams it — never handed to git, whose --grep takes a regular
-// expression: a pattern from a model is a runtime nobody bounded, and a
-// read's argument lists carry no client text. It is matched CASE-FOLDED, as
-// strings.EqualFold folds (Unicode's simple case folding: every rune stands
-// for the least rune of its fold orbit, so `K`, `k` and the Kelvin sign are
-// one), by Knuth–Morris–Pratt over those folded runes: one pass, never a step
-// back, so a message of any length is searched whole in memory bounded by the
-// literal — its runes and their failure table, and the opening of a rune a
-// write ended inside. A byte that is not UTF-8 stands for itself alone, and
-// so matches nothing a literal, which is valid UTF-8, holds.
+// git streams it, never handed to git, whose --grep takes a regular
+// expression: a pattern from a model is a runtime nobody bounded, and a read's
+// argument lists carry no client text. It is matched case-folded as
+// strings.EqualFold folds (every rune stands for the least of its fold orbit,
+// so `K`, `k` and the Kelvin sign are one), by Knuth–Morris–Pratt: one pass,
+// never a step back, so a message of any length is searched in memory bounded
+// by the literal. A byte that is not UTF-8 stands for itself alone, so it
+// matches nothing in the literal, which is valid UTF-8.
 
 // literal is one Grep, matched over one message at a time.
 type literal struct {
 	pat  []rune
 	fail []int
-	// at is how much of pat the message's tail matches, found whether the
-	// whole of it has occurred, and carry the opening of a rune the last
-	// write ended inside, completed by the next.
+	// at is how much of pat the message's tail matches, found whether all of
+	// it has occurred, and carry the opening of a rune the last write ended
+	// inside.
 	at    int
 	found bool
 	carry []byte
@@ -64,13 +62,11 @@ func fold(r rune) rune {
 	return least
 }
 
-// write takes the message's next bytes — and, once the literal is found, reads
-// none: nothing the message goes on to say unfinds it, and the match is
-// whole, so no rune of the literal is left to step to.
+// write takes the message's next bytes, and reads none once the literal is
+// found: nothing later unfinds it, and step has no rune of pat left to compare.
 func (l *literal) write(p []byte) {
-	// A RUNE THE LAST WRITE ENDED INSIDE, completed by this one's opening
-	// bytes — or, where they do not complete it, its bytes each standing for
-	// themselves.
+	// A rune the last write ended inside, completed by this one's opening
+	// bytes, or else its bytes each standing for themselves.
 	for len(l.carry) > 0 && len(p) > 0 && !l.found {
 		take := min(utf8.UTFMax-len(l.carry), len(p))
 		buf := slices.Concat(l.carry, p[:take])
@@ -97,13 +93,12 @@ func (l *literal) write(p []byte) {
 	}
 }
 
-// step advances the match by one rune of the message — r, size bytes long,
-// the first of them b. Never once the literal is found: the match is then the
-// whole literal, and the literal has no rune past its last to compare.
+// step advances the match by one rune of the message, r, size bytes long,
+// the first of them b. Never call it once found: pat has no rune past its last.
 func (l *literal) step(r rune, size int, b byte) {
 	if r == utf8.RuneError && size == 1 {
-		// A BYTE THAT IS NOT UTF-8, which no rune of the literal is: below
-		// every rune, and one of its own for every byte.
+		// A byte that is not UTF-8: below every rune, so no rune of the
+		// literal, and distinct for every byte.
 		r = -1 - rune(b)
 	} else {
 		r = fold(r)
@@ -119,9 +114,8 @@ func (l *literal) step(r rune, size int, b byte) {
 	}
 }
 
-// end ends the message — a rune it ended inside is bytes that are not UTF-8
-// — and answers whether the literal occurred in it, readying the matcher for
-// the next.
+// end ends the message (a rune it ended inside is bytes that are not UTF-8),
+// answers whether the literal occurred, and readies the matcher for the next.
 func (l *literal) end() bool {
 	for _, b := range l.carry {
 		if !l.found {

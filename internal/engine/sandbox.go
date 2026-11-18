@@ -1379,6 +1379,16 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			return &sandbox.TurnRefused{Refusal: refusal}
 		}
 	}
+	// THE TURN'S NOTES AS ITS RUN'S RECORD HOLDS THEM NOW, under the same
+	// claim: the read that collected the job settled its hooks' serves after
+	// the claim read the row ([runSteers.claimedNotes]). One place for every
+	// road here: a completion, the cap's collection, a parked job's answer, a
+	// lost carry. A RETRY, like every early return below.
+	claimed, err := e.runSteers.claimedNotes(ctx, in.Run)
+	if err != nil {
+		return err
+	}
+	in.Run = claimed
 	// THE TURN'S NOTES ARE ON ITS RUN'S RECORD, which this segment claimed:
 	// taken there, pinned to the claim — the job it collects, the resumed
 	// status and the lease the claim stamped — and carried from there, every
@@ -2281,15 +2291,11 @@ func resumeInputFor(in resumeInput, reply turn.Reply) turn.Input {
 // sees the trigger that raised the obligation, and the event that carries the
 // completion here is the run FINISHING rather than the ask, so [ReplyFor] over
 // it would answer "nobody is waiting" for every turn somebody is waiting on.
-//
-// A value this build does not recognise is refused rather than defaulted: it
-// was written by a build that knows a kind this one does not, and guessing at
-// who is waiting is the half of the delivery question this engine exists to get
-// right. The refusal is a ROUTING failure, like a state this build cannot
-// decode, so the completion goes back for a peer that can read it
-// ([sandbox.ErrResumeElsewhere]). An absent value is no kind at all — every
-// launch writes one, `none` included — and is refused too, but as one no peer
-// gets past ([sandbox.ErrResumeUnavailable]): no build writes it.
+// A value this build does not recognise is refused rather than defaulted, as a
+// ROUTING failure a peer can get past ([sandbox.ErrResumeElsewhere]); an absent
+// one, which no build writes, as one no peer gets past
+// ([sandbox.ErrResumeUnavailable]). The package doc's "A resume another node or
+// build can make" says why.
 func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 	reply := turn.ParseReply(run.Reply)
 	if !reply.Valid() {
@@ -3091,6 +3097,9 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// seat's deliveries are NAKed by ([nodesFailure]).
 		NodesFailure:       nodesFailure,
 		ResumableElsewhere: e.resumableElsewhere,
+		// And one only an operator clears is said while the run waits for
+		// one, by the one classification of conditions ([operatorsCondition]).
+		OperatorsCondition: operatorsCondition,
 		Resume:             &resumer{engine: e},
 		Account:            e.sandboxAccountant(),
 		// Who a parked question is put to, resolved against the live
@@ -3124,6 +3133,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// (delivered where a later launch told it again, unconfirmed, missed
 		// or expired), before the record goes. See runsteer.go.
 		SteersEnded: e.runSteers.ended,
+		// AND EVERY NOTE A HOOK'S SERVE HANDED OVER THAT ITS JOB'S SESSION
+		// SHOWED IT TOOK is recorded delivered by every read of the job's box
+		// that settles its serves. See runsteer.go.
+		SteersConfirmed: e.runSteers.confirmed,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,
@@ -4105,19 +4118,28 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	if control == "" {
 		return nil
 	}
-	// The subscription is attached BEFORE recovery, so a completion
-	// published in the window between the two is held rather than dropped.
-	// A detached run outlives its node, so that window is not hypothetical.
-	if err := e.backends.Queue.Subscribe(ctx, control, group,
-		func(ctx context.Context, ev *events.Event) queue.Result {
-			return controlOutcome(ctx, rt.coordinator.OnEvent(ctx, ev))
-		}); err != nil {
-		return fmt.Errorf("attaching the sandbox control topic: %w", err)
+	// The subscription is attached BEFORE the recovery reads the seat's
+	// runs, so a completion published in the window between the two is held
+	// rather than dropped. A detached run outlives its node, so that window
+	// is not hypothetical. And INSIDE the recovery's gate, which the pass
+	// closes before it attaches: a delivery from here is refused its claim,
+	// and handed back, until the pass is done, so none is claimed and
+	// resumed while the pass reads the runs, which on a seat already held
+	// (an apply bringing the runtime up) this node's admission alone did not
+	// keep from happening (internal/sandbox's recoverygate.go).
+	attach := func(ctx context.Context) error {
+		if err := e.backends.Queue.Subscribe(ctx, control, group,
+			func(ctx context.Context, ev *events.Event) queue.Result {
+				return controlOutcome(ctx, rt.coordinator.OnEvent(ctx, ev))
+			}); err != nil {
+			return fmt.Errorf("attaching the sandbox control topic: %w", err)
+		}
+		// ATTACHED FROM HERE, whatever recovery says: a release has to
+		// detach what this call attached, and a refused seat is released.
+		e.markSandboxSeat(handle, true)
+		return nil
 	}
-	// ATTACHED FROM HERE, whatever recovery says: a release has to detach
-	// what this call attached, and a refused seat is released.
-	e.markSandboxSeat(handle, true)
-	if err := rt.coordinator.RecoverSeat(ctx, handle, owner, epoch, e.inboxOf(seat.ID)); err != nil {
+	if err := rt.coordinator.RecoverSeat(ctx, handle, owner, epoch, e.inboxOf(seat.ID), attach); err != nil {
 		return err
 	}
 	// A SEAT TAKEN WHILE A PERSON'S STOP IS ON IT ends the runs its last
@@ -4142,156 +4164,15 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // controlOutcome is what a seat's control-topic delivery leaves with the broker,
 // given what the coordinator made of it under ctx, the delivery's context.
 //
-// # A refusal is handed back by the condition it names
-//
-// A completion the node's admission refused ([Engine.admitResume]) left its run
-// unclaimed and running, so the delivery carries nothing that is lost with it,
-// wherever a waiter can announce the run again (below): the waiter announces a
-// finished run again on its schedule for as long as its row is running and
-// unheld, at most twenty poll intervals apart, five minutes at the default
-// cadence ([sandbox.Waiter]). What a refusal does to the
-// delivery is therefore keyed on the condition it names ([sandbox.TurnRefused]),
-// never on which error caused it, so a condition a later change adds is handed
-// back by the rule for its kind with nothing here to edit:
-//
-//   - A CONDITION THAT CLEARS BY WAITING (the seat's ownership not yet proven
-//     again, and any limit a seat sits out) is ACKED. A Nak or a deferral each
-//     spend one of the broker's deliveries ([queue.OutcomeDefer]), so handing a
-//     healthy completion back on a wait would walk it to the dead-letter
-//     boundary while nothing was wrong with it, and a deferral would also
-//     quiesce the attachment, which nothing undoes. The coordinator keeps the
-//     completion and re-fires it when the condition clears
-//     ([Engine.readmitResumes]), and the waiter's next announcement is the
-//     backstop for a clearing nothing signals, at most twenty poll intervals
-//     after its last, beside the coordinator's own re-fire of what it keeps,
-//     which no silent store keeps from coming: at the refusal's instant, and
-//     never later than five minutes save for a completion the coordinator
-//     holds off itself until that instant, refused after its claim, whose
-//     re-fire waits for it. Before it hands this the refusal, the coordinator
-//     has written on the run's row that it owes the completion
-//     ([sandbox.Coordinator.OnEvent]), which a restart or the seat's next
-//     holder re-fires at its recovery; a record the store did not take
-//     reaches this as the store's silence alone, which is handed back as the
-//     node's (below), never acknowledged.
-//   - A DRAINING NODE ([sandbox.Draining]) DEFERS: the condition does not
-//     clear on this node, which is leaving, so the attachment is quiesced for
-//     the rest of the drain, as a mailbox's is, and the completion goes back to
-//     the head of the topic for the seat's next holder. It costs one delivery,
-//     as every handoff does, which the delivery budget is sized for, and no
-//     write: a delivery handed on is never acknowledged, so the coordinator
-//     records nothing owed for it, and named here alone the drain's refusal
-//     cost a write per job, and one the store did not take came back as the
-//     store's silence, handed back to the node that is leaving.
-//   - A SEAT THIS NODE HAS LET GO OF ([sandbox.SeatLost]) DEFERS for the same
-//     reason, and it is the condition a person's answer is refused on as well
-//     as a completion: the delivery belongs to the seat's holder. Naked, it
-//     came back here on every backoff while the attachment outlived the lease,
-//     one delivery each, and an answer walked to the dead-letter subject; the
-//     deferral hands it to the holder for one, and the release that follows
-//     detaches the quiesced attachment, so a later claim attaches a fresh one.
-//
-// # Unless no waiter can announce it
-//
-// THE WAITER IS THE BACKSTOP WHILE THE STORE ANSWERS THE BOX'S HOST, AND THE
-// BROKER IS WHILE IT DOES NOT. While the coordinator keeps a clock on the store
-// of the host of a run's box, or the run's record says what such a clock would
-// (the job's own record of that host's silence, or the job lost with it and
-// its round not yet carried on), that host's waiter reads the run's record
-// through a store that does not answer it and announces nothing, and a completion the
-// coordinator keeps for its condition is in this node's memory alone, which a
-// restart or a seat let go of forgets. So the coordinator marks every delivery
-// it hands back meanwhile [sandbox.ErrUnannounced], and a refusal so marked is
-// NAKED, as the node's (below), whatever condition clears it, never acked: the
-// coordinator still keeps it for the signalled re-fire, and renews the delivery
-// before its last, so a restart, a release or a clearing nothing signals loses
-// nothing, and the two arriving together resume the run once. A drain's and a
-// seat let go of still DEFER it, which hands it on rather than acknowledging it.
-// A DELIVERY THAT IS THAT HOST'S WAITER'S OWN ANNOUNCEMENT, made from a read
-// of the run's record asked after the clock or the record began, which the
-// announcement says, ends the clock, a claim of it clears the record, and it
-// is acknowledged on its refusal as above: that waiter read the run's record
-// through the store they say is silent, and announces the job again from
-// there. One whose read was asked before ends nothing, however late it was
-// made. The coordinator's renewals read no record and say no read, so it
-// never takes one for that announcement (internal/sandbox's renew.go).
-//
-// # Everything else NAKs
-//
-// A completion this node could not settle (the store failing, a refusal that
-// names no condition, a row the store says a newer lease owns while this
-// node's lease still stands, which the heartbeat settles within a beat) comes
-// back on the broker's backoff: to this node once its store recovers, or to
-// the seat's next owner. Acked, it would wait for the waiter's next
-// announcement instead, up to five minutes away.
-//
-// A STORE'S SILENCE IS THIS NODE'S FAILURE, NEVER THE MESSAGE'S. A completion
-// handed back because the coordination store did not answer a step
-// ([sandbox.ErrStoreSilent]: a collection's, the record of a park's question,
-// or the claim itself, or a claim refused while the store has yet to take the
-// release of the last one, or the record of a refusal this would acknowledge),
-// and every delivery handed back while no waiter can announce the job
-// ([sandbox.ErrUnannounced], above: a renewal's NAK and a refusal's among
-// them), is NAKED AS THE NODE'S ([queue.NakNode]): returned on
-// the same backoff and spending the same budget, so the spacing and the budget
-// the dead-letter inequality below holds are unchanged, but a delivery whose
-// budget it spends is kept with the group's unhandled deliveries, never with
-// its poison, the subject an operator reads as messages that failed as
-// themselves. SO IS EVERY FAILURE THE QUEUE TELLS AS ITS NODE'S
-// ([queue.NodeFault], the one test internal/notify's wakes are classified by
-// too): a publish the broker did not answer or a queue no longer live refused,
-// the announcement of a park's question among them, and any failure under a
-// context that has ended, a collection this node's stop or seat move cut short
-// ("interrupted") among them. AND SO IS A CONDITION OF THE INFRASTRUCTURE
-// the engine runs on: a resumed turn that could not read where its writes are
-// minted from a coordination store that did not answer ([rebaseFor]) is the
-// same failure the seat's mailbox hands back as the node's, and one answer
-// decides both ([nodesFailure]). AND SO IS A RESUME ANOTHER NODE OR BUILD CAN
-// MAKE ([sandbox.ErrResumeElsewhere]: a parked state of a version this build
-// does not read, a reply kind it does not know, a seat or a company that is
-// not this node's): the completion waits for a node that can resume it, which
-// says nothing of the message, and NAK'd as the message's, a roll that kept an
-// older node holding the seat sent it to the poison. A refusal that names
-// nothing to wait on is not one: it stays the message's (below). A DRAIN'S
-// CUT IS NOT ONE: it ends only the turn's admission context (internal/node's
-// cut), never the delivery's, so a hand-back it interrupted reads as no
-// failure of this node's here and is NAK'd as the message's. Nothing turns on
-// it: the cut fires only once the queue's own broker connection is closed for
-// good, so no outcome of that delivery reaches the broker, and the message
-// comes back to the seat's next holder when its ack wait lapses, as every
-// delivery a lost connection held does. A refusal that waits is still
-// acknowledged whatever the context, as above, unless a store's silence
-// stands in front of it. A failure the completion itself
-// caused (a resume that failed for what it ran, a refusal that names nothing
-// to wait on) stays the message's wherever a waiter announces the job
-// again; while none can, it is marked and handed back as the node's with every
-// other hand-back (above), since its delivery is then what carries the
-// completion.
-//
-// THIS NODE'S OWN STORE'S SILENCE TAKES NOTHING MORE. A delivery that
-// dead-letters while it lasts loses nothing: the waiter's schedule never stops
-// while the run's row is running and unheld, and its next announcement is a
-// fresh message with a fresh budget, due at most twenty poll intervals after
-// the last. At production's cadence that is 300 s, inside the broker's
-// delivery budget (about 601 s from a message's first delivery to its dead
-// letter, never under about 481 s with its jitter), so while the waiter's own
-// store answers, a fresh announcement is in flight before the last can
-// dead-letter, and no dead letter the silence leaves is the completion's last
-// copy (internal/sandbox's collectFailedAt, held by its
-// TestAJobsNextAnnouncementIsOutBeforeItsLastCanDeadLetter).
-//
-// WHILE THE COORDINATOR KEEPS A CLOCK ON THE STORE OF THE BOX'S HOST, EVERY
-// HAND-BACK IS RENEWED BY IT, whatever the hand-back, and its renewal reaches
-// this as nil. The clock says that host's store alone did not answer the host's
-// read of the run's row: a box on another node's host is driven by that node's
-// waiter alone, which reads the row through the silent store and announces
-// nothing, so the broker's redelivery is all that asks again, and its budget is
-// shorter than the box timeout that bounds the wait. So the hand-back is NAK'd
-// as any other until the delivery in hand has a few deliveries left, and then
-// the coordinator announces the completion afresh and answers nil, and the
-// delivery is ACKED: the fresh announcement carries the completion on, one in
-// flight. A renewal the broker does not take answers the hand-back's error, and
-// the delivery is NAK'd to try again on ([sandbox.Coordinator.OnEvent],
-// internal/sandbox's renew.go).
+// A refusal is handed back by the condition it names ([sandbox.TurnRefused]),
+// never by its error: one that clears by waiting is ACKED, the coordinator
+// keeping the completion and the waiter announcing the run again; a draining
+// node and a seat let go of DEFER. A refusal marked [sandbox.ErrUnannounced]
+// is NAKED, never acked. Nil (a run settled elsewhere, a renewal) is ACKED.
+// Everything else NAKs, as the node's ([queue.NakNode]) wherever [nodesFailure]
+// or a routing failure says it is not the message's. The package doc's
+// sections from "A refused completion is handed back by the condition it
+// names" to "Everything else on the control topic NAKs" hold the why.
 func controlOutcome(ctx context.Context, err error) queue.Result {
 	if err == nil {
 		return queue.Ack()
@@ -4305,7 +4186,8 @@ func controlOutcome(ctx context.Context, err error) queue.Result {
 		return queue.Defer(queue.DeferSeatMoved, err.Error())
 	case waits && !storeUnheard(err):
 		return queue.Ack()
-	case nodesFailure(ctx, err), errors.Is(err, sandbox.ErrResumeElsewhere):
+	case nodesFailure(ctx, err), errors.Is(err, sandbox.ErrResumeElsewhere),
+		errors.Is(err, sandbox.ErrSeatNotHeld), errors.Is(err, sandbox.ErrSeatRecovering):
 		return queue.NakNode(err)
 	}
 	return queue.Nak(err)

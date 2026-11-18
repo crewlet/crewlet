@@ -111,18 +111,12 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 // THE RELAY'S HANDLER IS THE MCP HANDLER ITSELF, behind the route's own
 // pattern so the token reaches it as a path value, never the route's
 // handler, which would relay a relayed call again: at the job's endpoint, and
-// at each of the seat's MCP servers beneath it, whose name it reads as a path
-// value too ([ServerPattern]). And the notes route's and the skill route's,
-// served on the opening the token names here, for the same reason never
-// through their own routing.
-//
-// EVERY ROUTE ON THE OPENING HELD HERE ([Bridge.heldOnly]), behind the step
-// that holds it to the session the job's box started ([Bridge.serveBegun]): a
-// relayed request is as much the run's first as one that reached this node's
-// own route, and the MCP handler alone would serve it before that is told.
-// And the MCP handler on that opening as this node's own route serves it
-// ([Bridge.serveMCP]): never on a second reading of the token, and a request
-// opening a session only while the opening has not ended.
+// at each of the seat's MCP servers beneath it ([ServerPattern]); and the
+// notes and skill routes' own, never their routing. EVERY ROUTE IS SERVED ON
+// THE OPENING HELD HERE ([Bridge.heldOnly]), behind the step that holds it to
+// the session the box started ([Bridge.serveBegun]), and through
+// [Bridge.serveMCP] as this node's own route is: a relayed request is as much
+// the run's first, and the MCP handler alone would serve it before that.
 func (b *Bridge) relayed() http.Handler {
 	mux := http.NewServeMux()
 	streamable := b.heldOnly(b.serveMCP)

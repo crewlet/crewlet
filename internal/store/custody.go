@@ -35,9 +35,15 @@ type UnsettledBatch struct {
 
 // ErrCustodyRefused marks a custody batch [EventLog.WriteCustody] refuses to
 // store whatever node is asked to: one naming no id or origin, or holding a
-// record that cannot be stored ([ErrIncompleteRecord]). It is the batch's own
-// failure, and the one failure of a write that is: an error without it is
-// this node's store failing.
+// record that cannot be stored ([ErrIncompleteRecord]), refused by every node
+// before anything is written. It is the batch's own failure, and the only one
+// a custody write marks. Every other failure of WriteCustody (its transaction,
+// once every record has validated) and every failure of
+// [EventLog.SettleCustody], which takes only the batch's id and the fleet's
+// answer and refuses nothing a batch carries, is this node's store failing: a
+// full disk or a busy store fails a healthy batch that another node, or this
+// one a moment later, writes whole. internal/observe's keeper tells the two
+// apart by this mark.
 var ErrCustodyRefused = errors.New("store: the custody batch cannot be stored")
 
 // rowIdentity is one row of a batch by the event log's own (time, id) key, as
@@ -68,16 +74,7 @@ type rowIdentity struct {
 //
 // Every record is checked before anything is written, and one that cannot be
 // stored refuses the batch: a batch partly written and recorded as whole would
-// be released incompletely.
-//
-// A REFUSAL IS MARKED ([ErrCustodyRefused]), and only a refusal: a batch that
-// names no id or origin, or holds a record that cannot be stored, is refused
-// by every node that is asked to write it, so it is the batch's own failure.
-// Every other failure is this node's store failing once every record has
-// validated, the transaction that writes them, and is this node's own: a full
-// disk or a busy store fails a healthy batch that another node, or this one a
-// moment later, writes whole. internal/observe's keeper tells the two apart by
-// the mark.
+// be released incompletely. Only that refusal is marked ([ErrCustodyRefused]).
 func (l *EventLog) WriteCustody(ctx context.Context, b CustodyBatch, at time.Time) error {
 	if b.ID == "" || b.Origin == "" {
 		return fmt.Errorf("%w: it needs an id and an origin", ErrCustodyRefused)
@@ -141,10 +138,6 @@ func (l *EventLog) WriteCustody(ctx context.Context, b CustodyBatch, at time.Tim
 // its rows were never counted, so no count changes and nothing is marked — a
 // fire whose trace only these rows named loses its turn label
 // ([DB.usageSchedules]), which no count is made of.
-//
-// EVERY FAILURE OF IT IS THIS NODE'S STORE'S, never a batch's: it takes only
-// the batch's id and the fleet's answer, and refuses nothing a batch carries,
-// so it marks none ([ErrCustodyRefused]).
 func (l *EventLog) SettleCustody(ctx context.Context, batchID string, kept bool) error {
 	if err := l.db.Tx(ctx, func(tx *sql.Tx) error {
 		var held int

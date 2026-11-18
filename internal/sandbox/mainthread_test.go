@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // countingThread is a [FakeRunner.MainThread] that answers count and records
@@ -212,17 +213,17 @@ func TestTheMainThreadIsReadBeforeTheTakeWithinItsWait(t *testing.T) {
 }
 
 // THE BOX READ'S BUDGET HOLDS THE MAIN THREAD'S READ: a Claude Code collection,
-// capped or not, waits the read's wait more at the host's share; an OpenCode
-// collection, a stop and a loss do not. A capped one's host may also record the
-// cap ending a job it saw working, so it is held with both. Each is held
-// against the same read of a run naming no harness, which asks the thread
-// nothing. The docs' figures are held too: twenty seconds more than another
-// harness's collection, and about 4,720 s uncapped and 5,994 s capped, composed
-// rather than pinned since coord.MaxValueCrossing is a figure of the store's.
+// capped or not, waits the read's wait more at the host's share, as does a
+// stop's or a loss's whose copy holds a hook's serve, and a read holding one
+// the verdict's reason and a row's crossing too; others wait as before. A
+// capped host may record the cap ending a job, so it is held with both, each
+// against a run naming no harness. The docs' figures are held: twenty seconds
+// more than another harness's collection, about 4,720 s uncapped and 5,994 s
+// capped, composed, as coord.MaxValueCrossing is the store's.
 //
-// Mutation: add the wait to every read or none, ask the thread for a run naming
-// no harness, drop the wait or the cap's record from a capped Claude Code
-// collection or from every read, or change the wait, and a case goes red.
+// Mutation: add the wait to every read or none, ask a run naming no harness,
+// drop the wait or the cap's record, change the wait, or drop the verdict's
+// crossing or count it with no serve, and a case goes red.
 func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 	t.Parallel()
 	share := time.Duration(float64(MainThreadReadWait) / BoxReadAnswerShare)
@@ -266,6 +267,30 @@ func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 		if got, want := BoxReadBudget(tc.run, BoxReadCollect),
 			pollBound+time.Duration(float64(tc.held)/BoxReadAnswerShare); got != want {
 			t.Errorf("%s turn's Claude Code collection's budget is %v, want %v", name, got, want)
+		}
+	}
+	served := func(run PendingRun) PendingRun {
+		run.LaunchID = "job-1"
+		run.Steer.Notes = []RunNote{{ID: "n1", Serves: []HookServed{{Take: "take-n1", Launch: "job-1",
+			Boundary: string(types.SteerBoundaryToolBatch)}}}}
+		return run
+	}
+	verdictHeld := hookVerdictWait + coord.MaxValueCrossing
+	verdict := time.Duration(float64(verdictHeld) / BoxReadAnswerShare)
+	for name, tc := range map[string]struct {
+		run  PendingRun
+		read BoxRead
+		more time.Duration
+	}{
+		"a Claude Code collection":                  {run: claude, read: BoxReadCollect, more: verdict},
+		"a Claude Code collection of a capped turn": {run: capped, read: BoxReadCollect, more: verdict},
+		"a Claude Code job's stop":                  {run: claude, read: BoxReadStop, more: share + verdict},
+		"a Claude Code job's loss":                  {run: claude, read: BoxReadLoss, more: share + verdict},
+		"an OpenCode collection":                    {run: open, read: BoxReadCollect},
+	} {
+		got, want := BoxReadBudget(served(tc.run), tc.read), BoxReadBudget(tc.run, tc.read)+tc.more
+		if off := got - want; off < -time.Microsecond || off > time.Microsecond {
+			t.Errorf("%s whose copy holds a serve: the read's budget is %v, want %v", name, got, want)
 		}
 	}
 }

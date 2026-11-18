@@ -58,32 +58,17 @@ func (f failingLog) SettleCustody(ctx context.Context, batchID string, kept bool
 	return f.CustodyLog.SettleCustody(ctx, batchID, kept)
 }
 
-// A FAILURE OF THIS NODE'S IS NEVER THE BATCH'S OWN. A custody batch that
-// could not be written or settled is sent back for a retry; where the failure
-// is this node's, it is sent back as the node's (queue.NakNode), so a delivery
-// whose budget it spends is kept with the custody group's unhandled
-// deliveries, never with its poison. The batch's own failure is the one a
-// batch can cause, the store's refusal of a batch no node can write
-// (store.ErrCustodyRefused: here one that names no origin); everything else
-// is this node's: what the queue tells as its node's (queue.NodeFault: here a
-// context this node's leaving the group ended, at the write, the claim or the
-// settle), which wins over the store's mark (here a batch naming no origin met
-// as the keeper left), a claim that named no keeper (the coordination store's
-// unknown answer, every error of a claim but the undecidable record's, which
-// the delivery acknowledges, whether or not its backend wrapped it in
-// coord.ErrUnavailable), and this node's own store failing at the write once
-// every record validated or at the settle, whether closed under the keeper
-// or failing with an error it left unmarked.
+// A FAILURE OF THIS NODE'S IS NEVER THE BATCH'S OWN: a custody batch sent back
+// is the batch's only where the store refused it (here one naming no origin),
+// and the node's (queue.NakNode) for what the queue tells as the node's, which
+// wins over the mark, a claim's unknown answer (wrapped in coord.ErrUnavailable
+// or not), and this node's store failing at the write or the settle, closed or
+// unmarked (observe's "A custody batch sent back is this node's failure").
 //
-// Mutation: send back every failure with queue.Nak unless the queue tells it
-// as the node's, and the rows of a claim and of this node's store count the
-// failure against the batch; mark the write's transaction failure as the
-// store's refusal and the closed store's write row does; send back the
-// settle's failure with queue.Nak and both settle rows do; send back a
-// refusal with queue.NakNode and the row of a batch that names no origin
-// counts it against the node; let the store's mark win over what the queue
-// tells as the node's and the row of a batch naming no origin met as the
-// keeper left counts it against the batch.
+// Mutation: send back every failure with queue.Nak unless the queue tells it,
+// mark the write's transaction failure as the store's refusal, send back the
+// settle's failure with queue.Nak, send back a refusal with queue.NakNode, or
+// let the store's mark win over the queue's, and the rows that meet it go red.
 func TestAFailureOfThisNodesIsNeverTheBatchsOwn(t *testing.T) {
 	t.Parallel()
 	unmarked := errors.New("disk I/O error")

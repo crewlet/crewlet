@@ -41,9 +41,9 @@ func PersonWithToken(t testing.TB, token string) *Person {
 // git at git, presenting user and token.
 func clientWith(t testing.TB, git, user, token string) *Person {
 	t.Helper()
-	// A SHELL FUNCTION, as a person writes one: git runs a helper whose
-	// value starts with `!` through the shell, with get, store or erase as
-	// its argument, and reads only what `get` prints.
+	// A shell function, as a person writes one: git runs a `!` helper through
+	// the shell with get, store or erase as its argument, and reads only what
+	// `get` prints.
 	helper := "!f() { test \"$1\" = get || exit 0; echo username=" + user + "; echo password=" + token + "; }; f"
 	return &Person{t: t, token: token, git: gittest.NewClientWith(t, git).Env(
 		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=credential.helper", "GIT_CONFIG_VALUE_0="+helper,
@@ -203,7 +203,7 @@ func parsePorcelain(out string) map[string]RefStatus {
 	return refs
 }
 
-// randomFile is n random bytes as a string — incompressible, so a pack holding
+// randomFile is n random bytes as a string: incompressible, so a pack holding
 // it is at least n bytes.
 func randomFile(n int) string {
 	raw := make([]byte, n)

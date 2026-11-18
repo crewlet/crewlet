@@ -70,7 +70,7 @@ func (q *Queue) SubscribeBatch(
 				a.handBackUndispatched(ctx, batch, a.blockedBy())
 				continue
 			}
-			a.dispatchBatch(ctx, batch, h, key)
+			a.dispatchBatch(ctx, batch, h, key, opts)
 		}
 	})
 }
@@ -186,11 +186,28 @@ func (a *attachment) toDelivery(msg jetstream.Msg) (delivery, bool) {
 	return delivery{msg: msg, ev: ev}, true
 }
 
-// dispatchBatch partitions a drain and runs one handler per partition.
-func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queue.BatchHandler, key queue.BatchKeyFunc) {
+// dispatchBatch partitions a drain and runs one handler per partition, asking
+// the priority lane again before each one after the first, so lane mail that
+// landed while a partition ran is the next turn ([queue.JoinLane]).
+func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queue.BatchHandler,
+	key queue.BatchKeyFunc, opts *queue.BatchOptions) {
+
 	parts := queue.OrderForDispatch(queue.PartitionByKey(batch, key, eventOf), eventOf)
 
-	for _, part := range parts {
+	for first := true; len(parts) > 0; first = false {
+		if !first && !a.blocked() {
+			var lane []delivery
+			if err := a.fetchLane(opts.EffectiveMaxBatch(), func(msg jetstream.Msg) {
+				if d, ok := a.toDelivery(msg); ok {
+					lane = append(lane, d)
+				}
+			}); err != nil {
+				a.logLaneFetchErr(ctx, err)
+			}
+			parts = queue.JoinLane(parts, lane, key, eventOf)
+		}
+		part := parts[0]
+		parts = parts[1:]
 		// A deferral, a detach or a pause taken mid-drain stops the rest:
 		// the remaining partitions go back unhandled, to the successor.
 		//

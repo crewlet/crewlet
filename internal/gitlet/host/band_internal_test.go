@@ -37,12 +37,11 @@ func scanned(answer string, whole bool) *answerScan {
 	return &s
 }
 
-// THE ANSWER BEGINS WITH ITS PACK — its first band-1 packet, a keepalive's
-// included, or a band-2 line that is no report of git's — and never with what
-// upload-pack writes before it (the negotiation's lines, a v2 section header,
-// an ERR) nor with anything in band 3; the line pack-objects dies with in
-// band 2 holds it, whichever packets it was cut across. Read whole or a byte
-// at a time, the reading is the same.
+// THE ANSWER BEGINS WITH ITS PACK: its first band-1 packet (a keepalive's
+// included) or a band-2 line that is no git report, never upload-pack's own
+// lines before it (negotiation, a v2 section header, an ERR) nor band 3. The
+// band-2 line pack-objects dies with holds it however it is cut, and reading
+// whole or a byte at a time reads the same.
 func TestTheAnswerBeginsWithItsPack(t *testing.T) {
 	t.Parallel()
 	notOurs := "ERR upload-pack: not our ref " + strings.Repeat("a", 40)
@@ -82,10 +81,9 @@ func TestTheAnswerBeginsWithItsPack(t *testing.T) {
 
 // A REPORT DOES NOT BEGIN THE PACK. A band-2 line beginning with one of
 // git's report prefixes — "fatal: ", "error: ", "warning: ", "BUG: " — keeps
-// the hold, whatever it goes on to say: the rule judges whether a line is a
-// report, and nothing about what it names (the run's trace decides that).
-// Progress begins the pack, a line rewritten in place included, and so does a
-// band-1 keepalive; nothing in band 3 does.
+// the hold whatever it goes on to say: the rule judges only whether a line is
+// a report (the run's trace decides what it names). Progress, rewritten in
+// place or not, and a band-1 keepalive begin the pack; band 3 never does.
 //
 // Mutation: drop "fatal: " from the prefixes — red here, and in
 // TestADamagedMidxBitmapIsRepaired (E's retry is lost: the answer starts at
@@ -123,9 +121,9 @@ func TestAReportDoesNotBeginThePack(t *testing.T) {
 }
 
 // A REPORT SPLIT ACROSS PACKETS KEEPS THE HOLD: upload-pack relays
-// pack-objects' writes as they come, so a report's prefix may arrive across
-// two packets of its band, and it is judged whole. And the scan keeps no more
-// of a band-2 line than the longest prefix, however long the line grows.
+// pack-objects' writes as they come, so a prefix split across two packets is
+// judged whole, and the scan keeps no more of a band-2 line than the longest
+// prefix, however long the line grows.
 //
 // Mutation: judge a line at the end of each packet rather than at reportLead
 // bytes or its end, and the split arms begin the pack.
@@ -151,12 +149,12 @@ func TestAReportSplitAcrossPacketsKeepsTheHold(t *testing.T) {
 	}
 }
 
-// A FETCH'S SINK HOLDS ITS ANSWER UNTIL THE PACK BEGINS: nothing reaches the
-// client — no status, no byte — before it, and everything held reaches it, in
-// order, once it does; a preamble outgrowing preambleHoldBytes starts the
-// answer as before; a held answer whose run's words stand is released whole,
-// and one whose run wrote nothing is not started, so it can still be answered
-// with a status; another run over the same request starts from nothing.
+// A FETCH'S SINK HOLDS ITS ANSWER UNTIL THE PACK BEGINS: no status or byte
+// reaches the client before it, and everything held does, in order, once it
+// begins; a preamble past preambleHoldBytes starts the answer anyway; a held
+// answer whose run's words stand is released whole, one whose run wrote
+// nothing stays unstarted so a status can still answer it; another run over
+// the same request starts from nothing.
 func TestASinkHoldsAFetchsAnswerUntilItsPackBegins(t *testing.T) {
 	t.Parallel()
 	newHeld := func() (*sink, *httptest.ResponseRecorder) {
@@ -217,12 +215,11 @@ func TestASinkHoldsAFetchsAnswerUntilItsPackBegins(t *testing.T) {
 			t.Fatalf("the answer after another run is %q, want only that run's %q", w.Body.String(), pack)
 		}
 	})
-	// onStart — which frees a fetch's request body and its spool allowance
-	// (fetch.go sets it to body.started) — fires with the answer's first byte,
-	// which for a held fetch is its PACK's, not upload-pack's opening line. So a
-	// spooled request's room is held through pack-objects' silence, to its first
-	// band-1 packet (a keepalive's included, at most one upload-pack keepalive
-	// for a client that asked for no progress), and no later.
+	// onStart (fetch.go's body.started, which frees the request body and its
+	// spool allowance) fires at a held fetch's PACK, not upload-pack's opening
+	// line: a spooled request keeps its room through pack-objects' silence to
+	// its first band-1 packet, a keepalive's included (upload-pack sends at
+	// most one to a client that asked for no progress), and no later.
 	t.Run("onStart at the pack", func(t *testing.T) {
 		s, _ := newHeld()
 		var started int

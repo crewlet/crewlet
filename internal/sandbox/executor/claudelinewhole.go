@@ -57,11 +57,12 @@ type threadWire struct {
 // decodeThreadLine decodes whole line n, raw (its break dropped), into its head
 // and its facts ([factsOf]) by ONE decode that holds every byte to JSON
 // ([wireDecode]), and reads its byte facts ([lineBytesOf]), a refused line's
-// too. Every line is decoded before anything reads it, with no keyword
-// prefilter: a line no keyword marks can still be no record (a write that tore
-// into another), and a reader that passed it unread would decide from the
-// thread around it as though it were whole.
-func decodeThreadLine(n int, raw []byte) (threadLine, error) {
+// too; asked is the take tokens its reader asks of a hook's words
+// ([threadReader.Asking]). Every line is decoded before anything reads it, with
+// no keyword prefilter: a line no keyword marks can still be no record (a
+// write that tore into another), and a reader that passed it unread would
+// decide from the thread around it as though it were whole.
+func decodeThreadLine(n int, raw []byte, asked []string) (threadLine, error) {
 	// HELD TO AN OBJECT FIRST: a JSON null decodes into a struct as nothing,
 	// with no error, and would pass for a record of no keys.
 	if trimmed := bytes.TrimLeft(raw, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
@@ -79,7 +80,7 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 			Size: len(raw) + 1, Bytes: lineBytesOf(raw)}
 	}
 	return threadLine{N: n, Size: len(raw) + 1, Bytes: lineBytesOf(raw), Head: head,
-		f: factsOf(&w, head)}, nil
+		f: factsOf(&w, head, asked)}, nil
 }
 
 // head is the line's head, its keys held to their types by [headOf].
@@ -93,8 +94,9 @@ func (w threadWire) head() (threadHead, error) {
 // its small values as written, and each frame its record's type reads. A frame
 // the type does not read is left empty, so a record never pays for reading one
 // it carries (an api-request-blob's whole request), though [wireDecode] still
-// copies its bytes.
-func factsOf(w *threadWire, h threadHead) *lineFacts {
+// copies its bytes. asked is the take tokens its reader asks of a hook's words
+// ([threadReader.Asking]).
+func factsOf(w *threadWire, h threadHead, asked []string) *lineFacts {
 	f := &lineFacts{
 		uuid: w.UUID, version: w.Version, origin: w.Origin, apiError: w.APIError,
 		leafUUID: w.LeafUUID, explicit: w.Explicit, rewound: w.Rewound,
@@ -112,7 +114,7 @@ func factsOf(w *threadWire, h threadHead) *lineFacts {
 		f.retracted, f.retractedErr = retractedOf(w.Retracted)
 		f.batch = batchOf(w.Batch)
 	case recordAttachment:
-		f.attachment = attachmentOf(w.Attachment)
+		f.attachment = attachmentOf(w.Attachment, asked)
 	case recordSystem:
 		switch h.Subtype {
 		case subtypeCompactBoundary:
@@ -161,8 +163,9 @@ func toolResultOf(raw json.RawMessage) toolResultFacts {
 
 // attachmentOf reads an attachment record's `attachment`, raw, once, answering
 // every attachment type's shape rule at once, so the accessor picks by the
-// attachment's type ([threadLine.AttachmentWellFormed]).
-func attachmentOf(raw json.RawMessage) attachmentFacts {
+// attachment's type ([threadLine.AttachmentWellFormed]), and which of the
+// asked take tokens its words name ([takesOf]).
+func attachmentOf(raw json.RawMessage, asked []string) attachmentFacts {
 	a := attachmentFacts{kind: kindOfValue(raw)}
 	if a.kind != '{' {
 		return a
@@ -171,15 +174,23 @@ func attachmentOf(raw json.RawMessage) attachmentFacts {
 		Type      json.RawMessage `json:"type"`
 		ToolUseID json.RawMessage `json:"toolUseID"`
 		By        json.RawMessage `json:"by"`
+		HookEvent json.RawMessage `json:"hookEvent"`
 		Skills    json.RawMessage `json:"skills"`
 		Content   json.RawMessage `json:"content"`
+		Stdout    json.RawMessage `json:"stdout"`
 		Names     json.RawMessage `json:"names"`
 		Entries   json.RawMessage `json:"entries"`
 	}
 	if a.err = wireDecode(raw, &wire); a.err != nil {
 		return a
 	}
-	a.typ, a.toolUseID, a.by = wire.Type, wire.ToolUseID, wire.By
+	a.typ, a.toolUseID, a.by, a.event = wire.Type, wire.ToolUseID, wire.By, wire.HookEvent
+	if len(asked) > 0 {
+		a.contentTokens = takesOf(wire.Content, asked)
+		if typ, err := wireRequiredString("type", wire.Type); err == nil && typ == hookSuccess {
+			a.stdoutTokens = takesOf(wire.Stdout, asked)
+		}
+	}
 	a.content = kindOfValue(wire.Content)
 	a.contentStrings = everyElement(wire.Content, func(raw json.RawMessage) bool { return raw[0] == '"' })
 	a.contentObjects = everyElement(wire.Content, wireObject)
@@ -187,6 +198,22 @@ func attachmentOf(raw json.RawMessage) attachmentFacts {
 	a.namesKept, a.namesErr = skillNamesKept(wire.Names)
 	a.entriesKept = everyElement(wire.Entries, withheldEntryKept)
 	return a
+}
+
+// takesOf is which of asked, take tokens, raw names where it is a string,
+// decoded once as the layer reads one and read as it will stream
+// ([textTakes]): bit i for asked[i]; none for every other value.
+func takesOf(raw json.RawMessage, asked []string) uint64 {
+	var text string
+	if len(raw) == 0 || raw[0] != '"' || wireDecode(raw, &text) != nil {
+		return 0
+	}
+	takes := textTakes{asked: asked}
+	cut := textCut{text: text}
+	for p := cut.next(); p != nil; p = cut.next() {
+		takes.write(p)
+	}
+	return takes.bits
 }
 
 // compactOf reads a compaction boundary's `compactMetadata`, raw, once
@@ -225,7 +252,7 @@ func retractedOf(raw json.RawMessage) (threadRetracted, error) {
 		if err != nil {
 			return err
 		}
-		r.entry(entry)
+		r.entry(chainPrefix(entry))
 		return nil
 	})
 	if err != nil {
@@ -652,8 +679,7 @@ func skillNamesKept(names json.RawMessage) (bool, error) {
 		return false, nil
 	}
 	if unreadable {
-		return false, errors.New("a skill's name holds a byte that is no UTF-8, so its length in UTF-16 code units " +
-			"is not one the layer can count as Claude Code does")
+		return false, errSkillNameUnmeasured
 	}
 	return true, nil
 }
@@ -683,7 +709,7 @@ func preservedList(raw json.RawMessage) (threadPreserved, error) {
 		if entryErr != nil {
 			return entryErr
 		}
-		p.list(entry)
+		p.list(uuidBytes(entry))
 		return nil
 	})
 	if err != nil {

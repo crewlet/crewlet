@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -581,5 +582,38 @@ func TestAnAgentsRequestThatNamesAPersonIsAnAsk(t *testing.T) {
 				t.Errorf("a refused comment was written: %d writes", len(trk.patched))
 			}
 		})
+	}
+}
+
+// A DECISION CITING THE URL A PUBLISH ANSWERED CITES THE ARTIFACT (ADR-0160), on any
+// scheme; the same id under another host stays a url, held to https.
+// Mutation: match the id's path on any host, and a foreign address becomes this engine's.
+func TestADecisionCitingAPublishedArtifactsURLCitesTheArtifact(t *testing.T) {
+	t.Parallel()
+	const id = "0f2a6c3e-6b1d-4e0a-9d6f-2b4c8a1e7f30"
+	link := func(a artifacts.ID) string { return "http://crewlet.test/dashboard#/artifacts/" + a.String() }
+	trk := newFakeTracker()
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, gated(builtin.Deps{
+		Work: builtin.WorkDeps{Reader: trk, Writer: trk.as, ArtifactLink: link},
+	})); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	ask := func(ref string) tools.Result {
+		d := decisionArg()
+		d["evidence"] = []any{map[string]any{"kind": "url", "ref": ref, "label": "version 8"}}
+		return callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
+			"item": "ENG-1", "body": "Version 8 is up.", "ask": "pm", "decision": d})
+	}
+	if got := ask("http://crewlet.test/dashboard#/artifacts/" + id); got.Failed {
+		t.Fatalf("citing the published artifact's url was refused: %s", got.Output)
+	}
+	cited := trk.patched[0].Comment.Decision.Evidence[0]
+	if cited.Kind != decision.EvidenceArtifact || cited.Ref != id {
+		t.Errorf("the evidence is stored as %+v, want the artifact %s", cited, id)
+	}
+	if got := ask("http://elsewhere.test/dashboard#/artifacts/" + id); !got.Failed ||
+		!strings.Contains(got.Output, "https://") {
+		t.Errorf("another host's address answered %q, want the https refusal", got.Output)
 	}
 }

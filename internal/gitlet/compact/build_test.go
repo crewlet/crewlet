@@ -31,11 +31,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// The bounds the build cases scale a compaction to: a cut of 4 MiB — what a
-// case's pushes fill in a few seconds, where production's gibibyte would be
-// minutes — the bundle bound five quarters of it, as gitlet.MaxPackBytes is of
-// gitlet.CompactPackBytes, and a blob of max_blob_bytes' default scaled the
-// same: the largest object a cut of production's meets, at the cut's scale.
+// The build cases' scale: a cut of 4 MiB, which a case's pushes fill in
+// seconds where production's gibibyte would take minutes; the bundle bound five
+// quarters of it, as gitlet.MaxPackBytes is of gitlet.CompactPackBytes; and
+// max_blob_bytes' default scaled the same.
 const (
 	scaledCut    = 4 << 20
 	scaledBundle = scaledCut / 4 * 5
@@ -66,10 +65,10 @@ func outputs(before, after gitlettest.Rows) []gitlet.PackRow {
 	return out
 }
 
-// cutFixture is a repository of gitlet.CompactMinMerge pushes — the fewest one
-// roll merges — of two and a half scaled cuts in all, some 10 MiB, each one
-// commit adding files of random bytes no larger than scaledBlob, whose packs
-// weigh alike, so one roll merges them all whatever the floor.
+// cutFixture is a repository of gitlet.CompactMinMerge pushes (the fewest one
+// roll merges) of two and a half scaled cuts in all, each one commit adding
+// files of random bytes no larger than scaledBlob; the packs weigh alike, so
+// one roll merges them all whatever the floor.
 func cutFixture(t *testing.T) *fixture {
 	t.Helper()
 	x := newFixture(t)
@@ -83,10 +82,10 @@ func cutFixture(t *testing.T) *fixture {
 }
 
 // EVERY CUT OUTPUT BUT THE LAST IS FULL: pack-objects closes an output before
-// the object that would take it past the cut, so with objects no larger than
-// max_blob_bytes — an eighth of the cut and less — every output but the last
-// is at seven eighths of the cut or past it: full (gitlet.PackRow.Full), merged
-// by no later roll. Pushes of two and a half cuts make three outputs.
+// the object that would pass the cut, so with objects of at most
+// max_blob_bytes, an eighth of the cut, every output but the last reaches
+// seven eighths of it: full (gitlet.PackRow.Full), merged by no later roll.
+// Pushes of two and a half cuts make three outputs.
 //
 // Mutation: cut at gitlet.FullPackBytes' share of the cut rather than at the
 // cut, and the first outputs close under seven eighths.
@@ -118,16 +117,13 @@ func TestEveryCutOutputButTheLastIsFull(t *testing.T) {
 	}
 }
 
-// EVERY OUTPUT IS UPLOADED AT ONCE: a key is minted as its upload begins, and a
-// record naming it is refused once it is older than objstore.RecordWithin, so
-// outputs uploaded one after another would age the first by every later one —
-// two gibibyte outputs at the store's pacing floor past it, for ever. A store
-// that holds every put until all three of a build's outputs have begun is
-// answered, every put let go by that and nothing else: so every key, minted
-// inside the store's put once the hold lets it go, is minted with all three
-// uploads begun, and none waits on another's upload. The hold's own count
-// says so, with no clock: a put it let go before all three had begun, or that
-// its hang detector ended, would be one uploaded alone.
+// EVERY OUTPUT IS UPLOADED AT ONCE: a key is minted as its upload begins and a
+// record naming it is refused once older than objstore.RecordWithin, so
+// uploads one after another would age the first by every later one (two
+// gibibyte outputs at the store's pacing floor put it past for good). The
+// store holds every put until all three of a build's outputs have begun, and
+// its count says, with no clock, that none was let go earlier or ended by its
+// hang detector: no output was uploaded alone.
 //
 // Mutation: upload the outputs in a loop, one put at a time, and the first put
 // waits for the others until its hold gives up, failing the compaction.
@@ -177,9 +173,8 @@ func TestEveryOutputIsUploadedAtOnce(t *testing.T) {
 }
 
 // A COMPACTION'S OUTPUT FITS THE BUNDLE RULE: every output is a bundle every
-// Gitlet node installs — its index version 2 and its reverse index written beside
-// it, held to its seal (gitlet.CheckBundle) as every stored pack is — with its
-// pack section under gitlet.MaxPackBytes.
+// Gitlet node installs, index version 2 and a reverse index held to its seal
+// (gitlet.CheckBundle), with its pack section under gitlet.MaxPackBytes.
 //
 // Mutation: drop pack.writeReverseIndex from PackConfig, and the build
 // writes no reverse index, so no output can be laid out.
@@ -232,8 +227,8 @@ func blobID(body string) string {
 }
 
 // handmade is a source repository a case writes objects into with
-// fast-import, and packs exactly the objects it names out of — each pack into
-// a bare repository of its own, as a push's receive-pack stores one.
+// fast-import and packs exactly the objects it names out of, each pack into a
+// bare repository of its own, as a push's receive-pack stores one.
 type handmade struct {
 	x   *fixture
 	src string
@@ -299,12 +294,11 @@ func (h *handmade) pack(ids []string) (bare, checksum string) {
 	return bare, gittest.PackObjects(h.x.t, h.x.p.Git(), bare, h.src, ids...)
 }
 
-// A COMPACTION KEEPS EVERY OBJECT OF ITS INPUTS: its outputs hold every object
-// the packs it merges hold — one that a pack it does not merge holds as well
-// among them — because a merge judges no reachability: two compactions decided
-// from different snapshots may each retire the pack the other relied on, and
-// both land (ADR-0090). A heavy pack and gitlet.CompactMinMerge light ones share
-// a blob; the light ones are merged, and the blob is in the outputs.
+// A COMPACTION KEEPS EVERY OBJECT OF ITS INPUTS, even one a pack it does not
+// merge holds too: a merge judges no reachability, since two compactions from
+// different snapshots may each retire the pack the other relied on (ADR-0090).
+// A heavy pack and gitlet.CompactMinMerge light ones share a blob; the light
+// ones are merged, and the blob is in the outputs.
 //
 // Mutation: hand the build the packs it does not merge as excluded packs (a
 // `^` line each), and the shared blob is left to the heavy pack alone.
@@ -362,21 +356,17 @@ func TestACompactionKeepsEveryObjectOfItsInputs(t *testing.T) {
 	}
 }
 
-// THE BUILD READS EXACTLY ITS INPUTS, THROUGH ITS ALTERNATE: the scratch a
-// compaction builds in holds no pack before its pack-objects runs, and its one
-// alternate is a store holding exactly the packs the build is handed — each
-// one's .pack, .idx and .rev the incarnation's own files, linked — and nothing
-// else: no pack the roll leaves out, no multi-pack-index, no commit-graph. So
-// `--stdin-packs`, which walks every commit, tree and blob it can reach to fill
-// in its name hashes, walks the roll and never the history beside it — here a
-// heavy pack live beside the light ones merged, which the store does not
-// hold. And the build succeeds on the node pin's git: a platform assertion, as
-// a git that did not read an alternate's packs for `--stdin-packs` would fail
-// every compaction.
+// THE BUILD READS EXACTLY ITS INPUTS, THROUGH ITS ALTERNATE: the scratch holds
+// no pack before pack-objects runs, and its one alternate is a store of exactly
+// the packs the build is handed (the incarnation's own .pack, .idx and .rev,
+// linked) and nothing else: no pack the roll leaves out (here a heavy pack live
+// beside the light ones merged), no multi-pack-index, no commit-graph. So
+// `--stdin-packs` walks the roll, never the history beside it (package doc, "A
+// merge makes no reachability judgement"). The build succeeding asserts the
+// node pin's git reads an alternate's packs for `--stdin-packs`.
 //
 // Mutation: lean the build's scratch on the incarnation (NewMergeScratch's
-// alternate the copy's own directory, as the build's was), and its alternate
-// holds the heavy pack.
+// alternate the copy's own directory), and its alternate holds the heavy pack.
 func TestTheBuildReadsItsInputsThroughTheAlternate(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
@@ -479,11 +469,10 @@ func filesIn(t *testing.T, dir string) []string {
 	return out
 }
 
-// builder is a case's stand-in for a build's git: every pack-objects asked of
-// it recorded — the cut it was asked for and the packs it was handed — and
-// then run, by rewrite where that is set, in the admission's slot; and every
-// other git process of a build — a layer's multi-pack-index and commit-graph
-// writes — counted by its command and run as asked.
+// builder is a case's stand-in for a build's git: it records every
+// pack-objects' cut and input packs, then runs it (through rewrite where set)
+// in the admission's slot, and counts by command every other git process (a
+// layer's multi-pack-index and commit-graph writes), run as asked.
 type builder struct {
 	mu      sync.Mutex
 	cuts    []int64
@@ -559,14 +548,13 @@ func cutAt(args []string, n int64) []string {
 	return args
 }
 
-// A DENSE ROLL IS CUT TO FIT THE BUNDLE: an index costs 32 bytes an object, so
-// an output of many small objects cut at the nominal cut is a bundle past the
-// bound every stored pack is held to. The build is asked for a cut scaled down
-// by its inputs' aggregate bundle-to-pack ratio, and an output past the bound
-// anyway — here the first build's, made with no cut at all — is built once
-// more at its own ratio BEFORE ANY BYTE IS STORED: nothing past the bound
-// reaches the store, every output stored passes the bundle rule, and every
-// output but the last is full.
+// A DENSE ROLL IS CUT TO FIT THE BUNDLE: at 32 index bytes an object, an
+// output of many small objects cut at the nominal cut is a bundle past the
+// bound. The build is asked for a cut scaled by its inputs' aggregate
+// bundle-to-pack ratio, and an output past the bound anyway (here the first
+// build's, made with no cut) is built once more at its own ratio BEFORE ANY
+// BYTE IS STORED: every output stored passes the bundle rule, and every output
+// but the last is full.
 //
 // Mutation: drop the check of the outputs before their upload, and the first
 // build's one output past the bound is stored; cut at the nominal cut, and the
@@ -634,13 +622,11 @@ func TestADenseRollIsCutToFitTheBundle(t *testing.T) {
 }
 
 // bulkFixture is a repository of 28 pushes, each one commit adding three
-// scaledBlob files of random bytes and rewriting one more file a little — a
+// scaledBlob files of random bytes and rewriting one more file a little: a
 // delta family whose bases a cut may send to an earlier output, which
-// pack-objects then writes whole — some 19 MiB of packs in all, each under
-// seven eighths of a 1 MiB cut: sixteen cuts of pack-objects' own floor and
-// more, none of them full. Each STORED pack carries the family's base whole
-// too, which the receiver's index-pack --fix-thin appends to the thin pack the
-// client sent, so the family is kept to 100 KiB.
+// pack-objects then writes whole. Some 19 MiB in all, sixteen cuts of
+// pack-objects' 1 MiB floor and more, no pack full. Each STORED pack carries the family's base whole too
+// (index-pack --fix-thin appends it), so the family is kept to 100 KiB.
 func bulkFixture(t *testing.T) *fixture {
 	t.Helper()
 	x := newFixture(t)
@@ -682,10 +668,10 @@ func packBytesOf(rows gitlettest.Rows, checksums []string) int64 {
 }
 
 // A ROLL AT ITS BYTE CAP WRITES AT MOST ITS OUTPUTS: a roll merges at most half
-// gitlet.MaxCompactOutputs cuts of pack bytes (compact.InputByteCap), so with
-// the outputs a cut writes a little under it, and a delta whose base went to
-// an earlier output written whole, a roll at its cap still writes no more
-// outputs than one compaction records — and applies.
+// gitlet.MaxCompactOutputs cuts of pack bytes (compact.InputByteCap), so even
+// with outputs a little under the cut and deltas whose base went to an earlier
+// output written whole, it writes no more outputs than one compaction records,
+// and applies.
 //
 // Mutation: cap a roll at gitlet.MaxCompactOutputs whole cuts, and the build
 // writes more outputs than one compaction records, applying nothing.
@@ -716,15 +702,13 @@ func TestARollAtItsByteCapWritesAtMostItsOutputs(t *testing.T) {
 	}
 }
 
-// TOO MANY OUTPUTS HALVE THE NEXT PLAN: the build's own count is the
-// authority on how many outputs it wrote, so a build past what one compaction
-// records fails — nothing uploaded — and halves the bytes the repository's
-// next plan merges, at every failure until one fits; and so does a build whose
-// output is past the bundle rule even at the smaller cut its rebuild takes.
+// TOO MANY OUTPUTS HALVE THE NEXT PLAN: a build past what one compaction
+// records (its own count is the authority) fails, uploading nothing, and halves
+// the bytes the next plan merges, at every failure until one fits; so does a
+// build whose output is past the bundle rule even at its rebuild's cut.
 // Neither is remembered at the repository's version: at the pack bound every
 // push carrying a pack is refused and records nothing, so a memory at the
-// version would leave the repository refusing pushes until something else
-// wrote to it.
+// version would refuse pushes until something else wrote to the repository.
 //
 // Mutation: keep the cap where it was, and the next plan merges the same bytes
 // again; remember a bundle too large at the version, and the repository at the
@@ -736,9 +720,9 @@ func TestTooManyOutputsHalveTheNextPlan(t *testing.T) {
 		x := bulkFixture(t)
 		rs := &recordingStore{Store: x.store}
 		c, rec, _ := x.scaled(func(o *compact.Options) { o.Objects = rs })
-		// Every build cut at pack-objects' floor, a quarter of the cut the
-		// plan was capped for: its outputs pass what one compaction records
-		// until the cap is down to a quarter.
+		// Every build cut at pack-objects' floor, a quarter of the plan's
+		// cut: its outputs pass what one compaction records until the cap is
+		// down to a quarter.
 		b := &builder{rewrite: func(_ int, args []string) []string { return cutAt(args, 1<<20) }}
 		compact.BuildWith(c, b.run)
 		before := x.rows()

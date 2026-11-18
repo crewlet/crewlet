@@ -10,6 +10,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -37,7 +38,7 @@ func meteredSyncer(t *testing.T, db *store.DB, copies *fakeCopies, link Link) (*
 	t.Helper()
 	js := &fakeJS{log: copies.log, created: time.Unix(1_700_000_000, 0).UTC()}
 	s := mustNew(db, js, func(string) string { return seat.AgentID },
-		Config{AcrossLink: true, Link: link})
+		Config{AcrossLink: true, Link: link, Window: jsapi.NewLinkWindow()})
 	s.copies = copies
 	return s, js
 }
@@ -295,8 +296,9 @@ func hydrated(ctx context.Context, s *Syncer) error {
 // A LINK IS READ ONLY ACROSS ONE.
 //
 // A node whose connection reaches the changelog in its own process crosses no
-// link, so a meter handed with it is refused by name, rather than read as a
-// link its hydrations wait on.
+// link, so a meter or a window handed with it is refused by name, rather than
+// read as a link its hydrations wait on; and a node across one pulls inside
+// its link's window, so one handed none is refused.
 //
 // Mutant: take the meter whatever the topology — the member's syncer is made.
 func TestALinkIsReadOnlyAcrossOne(t *testing.T) {
@@ -305,5 +307,20 @@ func TestALinkIsReadOnlyAcrossOne(t *testing.T) {
 	s, err := New(openStore(t), &fakeJS{}, func(string) string { return seat.AgentID }, Config{Link: link})
 	if err == nil || s != nil || !strings.Contains(err.Error(), "Config.Link") {
 		t.Errorf("a member's syncer handed a link = (%v, %v), want it refused naming Config.Link", s, err)
+	}
+	// AND ITS WINDOW IS THE LINK'S, both ways: a member handed one is
+	// refused, and so is a node across a link handed none, which would
+	// otherwise pull beside its link's other transfers.
+	for _, c := range []struct {
+		name string
+		cfg  Config
+	}{
+		{"a member handed a window", Config{Window: jsapi.NewLinkWindow()}},
+		{"a node across a link handed none", Config{AcrossLink: true}},
+	} {
+		s, err := New(openStore(t), &fakeJS{}, func(string) string { return seat.AgentID }, c.cfg)
+		if err == nil || s != nil || !strings.Contains(err.Error(), "Config.Window") {
+			t.Errorf("%s = (%v, %v), want it refused naming Config.Window", c.name, s, err)
+		}
 	}
 }

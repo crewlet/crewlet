@@ -4,48 +4,17 @@ import (
 	"bytes"
 )
 
-// AN UPLOAD-PACK ANSWER, READ AS GIT WRITES IT, for the one fact the host
-// needs twice: whether its PACK has begun — before it lets a fetch's answer
-// start (below), and once the answer has ended, whether it sent the
-// repository's contents at all, which the fetch audit records (fetch.go). ONE
-// READING for both, so the answer the hold released at its pack and the answer
-// the audit counts as one that carried a pack are the same answers.
+// AN UPLOAD-PACK ANSWER, READ AS GIT WRITES IT, for whether its PACK has
+// begun: ONE reading for the hold before a fetch's answer starts (sink.go;
+// package doc, "A damaged cache is repaired under the request that found it")
+// and the fetch audit's "sent the contents" (fetch.go), so both judge alike.
 //
-// A fetch's pack-objects runs AFTER upload-pack has written its answer's first
-// line — protocol v2's `packfile`, v0's NAK or ACK — and when it meets a
-// damaged cache it dies there, with upload-pack's answer already begun: over a
-// multi-pack-index whose reverse index is damaged, the bitmap a clone reads
-// makes pack-objects die "invalid MIDX object position, MIDX is likely
-// corrupt". What it met is classified from its trace2 events, which reach the
-// pool on the stream every process of the tree writes to (gitproc), never from
-// the words it sends the client. Answered at its first byte, such a fetch had
-// already begun its response when git died — past the point a repair can run
-// it again (repair.go) — and git's own failure was its answer, on every fetch
-// the copy served, until an operator's repair. So a fetch's sink HOLDS the
-// answer until the pack begins (sink.go); a process that fails holding only
-// its preamble has shown the client nothing, and the damage its trace names is
-// repaired, and the request run again, like any failure before the first byte.
-//
-// THE PACK HAS BEGUN at the first of: a band-1 packet — pack data, or the
-// empty keepalive upload-pack sends after uploadpack.keepAlive seconds of
-// silence from pack-objects — or a band-2 line that is not one of git's
-// REPORTS, which is pack-objects' progress (and arrives each second while it
-// counts). A report is a line beginning with one of usage.c's prefixes —
-// "fatal: ", "error: ", "warning: ", "BUG: ", English under the pool's
-// LC_ALL=C — so the line pack-objects dies with keeps the hold, whatever it
-// says: the release rule judges only whether a line is a report, and nothing
-// about what it names, which the run's trace decides once it has ended. So a
-// hold lasts until pack-objects' first word, at most a keepalive for a client
-// that asked for no progress; the damage line is pack-objects' first word,
-// since it dies loading the bitmap, before it writes any progress. Band 3 is a
-// process ending, and never begins anything.
-//
-// THE BAND IS THE PACKET'S FIRST BYTE, under either protocol: every line of
-// the negotiation upload-pack writes before its pack — ACK, NAK, ready,
-// shallow, a v2 section header, ERR — is text, and the host advertises no
-// sideband-all, the one capability that would put those lines in band 1 too.
-// A packet that is not one (a v0 pack sent with no side band begins with its
-// raw "PACK") begins the pack, and nothing past it is read.
+// THE PACK HAS BEGUN at the first band-1 packet (data, or the keepalive's empty
+// one) or band-2 line that is no REPORT of git's (reportPrefixes, English under
+// LC_ALL=C). Only the prefix is judged, so the damage line (before any
+// progress: pack-objects dies loading the bitmap) keeps the hold, its trace
+// naming it. Band 3 begins nothing. The band is a packet's first byte, since
+// the host advertises no sideband-all; a non-packet (v0's raw "PACK") begins it.
 
 // reportPrefixes are the prefixes git's reports begin with (usage.c's die,
 // error, warning and BUG routines), as a side band carries them.
@@ -65,9 +34,8 @@ type answerScan struct {
 	first bool // the next payload byte is the current packet's first
 	band  byte // the current packet's band; 0 a line of the negotiation
 	// lead is the start of band 2's line in progress, up to reportLead: a
-	// line upload-pack relays is cut wherever pack-objects' write was, so
-	// its prefix may continue in the next packet of its band. judged is set
-	// once the line in progress has been judged.
+	// relayed line is cut wherever pack-objects' write was, so its prefix may
+	// continue in the next band-2 packet. judged: the line has been judged.
 	lead   []byte
 	judged bool
 	raw    bool // the answer is no longer pkt-lines: nothing past it is read
@@ -117,9 +85,9 @@ func (s *answerScan) scan(p []byte) {
 }
 
 // progress reads b, more of band 2's text, line by line: a line ends at a
-// newline or at a carriage return (git's progress rewrites its line in place
-// with one). Each line is judged once, as soon as reportLead of it — or all
-// of it, if shorter — has arrived.
+// newline or a carriage return (git's progress rewrites its line with one).
+// Each line is judged once, when reportLead of it, or all of a shorter one,
+// has arrived.
 func (s *answerScan) progress(b []byte) {
 	for len(b) > 0 {
 		end := bytes.IndexAny(b, "\r\n")

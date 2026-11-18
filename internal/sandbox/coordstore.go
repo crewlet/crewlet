@@ -240,33 +240,14 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		run.TurnID)
 }
 
-// resetLaunch is [CoordStore.BeginLaunch]'s half for a row that was already
-// there, a relaunch its turn's resumed frame makes, reporting the row as it
-// reset it and whether it did; a row that is gone is neither. A kick-off
-// delivered again never reaches it: it runs under a turn id of its own
-// ([TurnRef.TurnID], ADR-0017), and its launch creates a row of its own.
-//
-// Only the LAUNCH-SCOPED state is reset: the identity fields stay the existing
-// row's, and so do the turn's read of its conversation ([PendingRun.Base]),
-// which the create alone writes, and the box reference — its id, its cell, its
-// harness and its host ([PendingRun.LaunchNode]), as one — until the launch
-// attaches a box of its own ([CoordStore.AttachSandbox]). The reset row hands that box to the
-// launch as [PendingRun.Prior], which decides whether the new job continues in
-// it or reclaims it through its own cell first; the row naming it meanwhile is
-// what lets recovery reclaim it if the launching node dies before deciding, and
-// it is reclaimed where it is: a box on another node's host, by that host.
-//
-// WHAT WAS THE PREVIOUS JOB'S AND NOT ITS BOX'S GOES: its command and its
-// session. The row names the new job from here, and a reader that found the
-// previous job's command on it — a person's stop, before this launch attaches
-// one of its own — read that finished job back off the box and charged it a
-// second time, as this job's.
-//
-// A RESET THE ROW REFUSES IS NEVER A LAUNCH THAT WENT AHEAD: a newer lease
-// owns the run — an error wrapping [ErrSeatNotHeld] — or its ending is decided
-// — one wrapping [ErrRunEnding] ([CoordStore.mutateFenced] says which wins).
-// Answered as a launch, either would start a job in a box the row did not
-// record — killed under it by the ending, or billed and named by nothing.
+// resetLaunch is [CoordStore.BeginLaunch]'s half for a row already there, a
+// relaunch its turn's resumed frame makes, reporting the row as it reset it and
+// whether it did; a kick-off delivered again has a turn id and row of its own
+// (ADR-0017). Only launch-scoped state resets: identity, [PendingRun.Base] and
+// the box reference stay until a box is attached, handed to the launch as
+// [PendingRun.Prior]; the previous job's command and session go. A reset the
+// row refuses ([ErrSeatNotHeld], [ErrRunEnding]) is never a launch that went
+// ahead. See the package doc, "Launching a run".
 func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, bool, error) {
 	full := false
 	var (
@@ -1043,6 +1024,11 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		return false, errors.New("sandbox: a release cannot say both that the host of the job's box found its " +
 			"coordination store silent and that it answered")
 	}
+	if hold := release.Hold; hold != nil && len(hold.Condition) > MaxOwedConditionBytes {
+		return false, fmt.Errorf("sandbox: the condition a hold on run %s names is %d bytes, past the %d an "+
+			"owed refusal records", turnID, len(hold.Condition), MaxOwedConditionBytes)
+	}
+	now := s.clock().UTC()
 	_, released, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusResumed || run.LaunchID != release.Launch || outranked(*run, release.Fence) {
 			return false
@@ -1100,6 +1086,9 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			run.Launch.CollectFailures = 0
 			run.Launch.CollectFailingSince = time.Time{}
 		}
+		// AND HOW ITS HARNESS ENDED, where that read found it: in this
+		// write, which is the one that returns the row to running.
+		run.Launch.HarnessEnd = run.Launch.HarnessEnd.after(release.HarnessEnd)
 		// AND WHAT THE CLAIM'S COLLECTION LEARNED OF THE STORE OF THE HOST OF
 		// THE JOB'S BOX, where it learned anything ([LaunchRecord.HostStoreSilentSince]):
 		// the latest clock's start, since a waiter's announcement made
@@ -1116,6 +1105,14 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		run.HeldFor, run.HeldUntil = "", time.Time{}
 		if hold := release.Hold; hold != nil {
 			run.HeldFor, run.HeldUntil = hold.Condition, hold.Until.UTC()
+			// AND THE COMPLETION OWED, in the same write, where the record
+			// owes none yet ([LaunchRecord.RefusalOwed]): the hold spent its
+			// delivery, and a lift clears the hold, so this is what tells a
+			// restart or the seat's next holder the job is owed its re-fire
+			// once the hold is gone.
+			if hold.Condition != "" && run.Launch.RefusalOwed == "" {
+				run.Launch.RefusalOwed, run.Launch.RefusalOwedSince = hold.Condition, now
+			}
 		}
 		// THE WINDOW ITS RELAUNCH WAS REFUSED IN, unlike the hold, is KEPT by
 		// a release that names none: it is what the turn's next relaunch

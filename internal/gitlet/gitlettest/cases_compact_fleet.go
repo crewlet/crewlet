@@ -15,22 +15,16 @@ import (
 
 // THE COMPACTION'S FLEET CASES: what only more than one data node can make of
 // a compaction — two maintainers, a committer that dies under one, an answer
-// that comes back late.
+// that comes back late. Each drives whole passes and judges them by what a
+// member's compactor counted and the store holds since the case began, since a
+// pass meets the case's own repository alone (package doc, "A case is a
+// person's git, and what every cache then holds").
 //
-// EACH DRIVES WHOLE PASSES, and judges them by what a member's compactor
-// counted and what the store holds since the case began, because a pass meets
-// the case's own repository alone: RunFleet confines every case's maintenance
-// to the repositories it made (Cluster.ConfineMaintenance), and the cluster
-// holds others due throughout, an earlier case's among them.
-//
-// AND A PASS MAY FIND THE MAINTENANCE LANE BUSY, which the compactor answers
-// busy and leaves to its next pass. The lane is the member's own maintainer's
-// as much as its compactions' (cache.Cache.AdmitCompaction): its tick indexes
-// a copy at whatever moment it falls, a copy the case just pushed to among
-// them, and a compaction admitted beside that run is refused at once. So a
-// case that needs a pass to compact takes passes until one does
-// (passUntilCompacted, heldPass), as the compactor's loop would, and judges
-// what that one was answered — never the first pass alone (#952).
+// A PASS MAY FIND THE MAINTENANCE LANE BUSY: the lane is the member's own
+// maintainer's too (cache.Cache.AdmitCompaction), whose tick may index a copy
+// the case just pushed to, and a compaction beside it is answered busy. So a
+// case takes passes until one compacts (passUntilCompacted, heldPass), as the
+// compactor's loop would, and judges that one, never the first alone (#952).
 
 // memberNode is the running member called id as a Gitlet node.
 func memberNode(t *testing.T, c Cluster, id string) Node {
@@ -71,11 +65,10 @@ func outcomes(n Node, outcome compact.Outcome) uint64 {
 }
 
 // landing is how many compactions a member's compactor answered with their
-// record LANDED, by what each was answered: applied, or pending or unknown —
-// the record appended and not yet known applied where it was decided. A pass
-// counts the three alike as compacted (compact.Compactor.Poll), because which
-// of them a compaction is answered says how far the deciding member's applier
-// had got, not whether the compaction landed.
+// record LANDED, by answer: applied, or pending or unknown (appended, not yet
+// known applied where decided). A pass counts the three alike as compacted
+// (compact.Compactor.Poll): which one says how far the deciding member's
+// applier had got, not whether the compaction landed.
 type landing struct{ applied, pending, unknown uint64 }
 
 // landingOn is what node n's compactor has answered so far.
@@ -94,17 +87,15 @@ func (l landing) since(before landing) landing {
 func (l landing) landed() uint64 { return l.applied + l.pending + l.unknown }
 
 // heldPass runs passes of node's compactor on a goroutine until one is held at
-// CompactAfterUpload — its outputs stored, nothing proposed — while each before
-// it is answered busy (the file's head), and answers once the hold is
-// reached, with the hold's release and the held pass's end. A pass that ends
-// any other way before the hold fails the case, with what it did.
+// CompactAfterUpload — outputs stored, nothing proposed — while each before it
+// is answered busy (the file's head), and answers once the hold is reached,
+// with the hold's release and the held pass's end. A pass that ends any other
+// way first fails the case.
 //
-// THE HELD PASS ENDS WITH THE CASE, however the case ends: where the case has
-// not let it go itself, it is let go and waited for as the case's cleanup —
-// after the case's own defers, so once whatever the case stopped is back.
-// Held, it would keep its member's compactor, one compaction at a time a
-// node, from every later case's pass, which would then fail for this case's
-// fault.
+// THE HELD PASS ENDS WITH THE CASE: a cleanup, after the case's own defers (so
+// once whatever it stopped is back), lets it go and waits for it. Held, it
+// would keep its member's compactor, one compaction at a time, from every
+// later case's pass.
 func heldPass(t *testing.T, c Cluster, n Node) (release func(), done <-chan struct{}) {
 	t.Helper()
 	held, reached := make(chan struct{}), make(chan struct{})
@@ -255,42 +246,18 @@ func twoMaintainersLandOneCompaction(t *testing.T, c Cluster) {
 	rc.converged()
 }
 
-// F29: a committer that dies after a compaction's outputs are stored and
-// before its proposal is asked of its repository's runner-up, under the same
-// compaction id: the compaction LANDS ONCE — one record, the runner-up's, the
-// only one the fleet appends, which retires every input and adds the one
-// output on every member — and the dead committer, back, applies that record
-// and holds the rows every member does.
+// F29: a committer dies between storing a compaction's outputs and proposing
+// it, which its runner-up is asked under the same id: it LANDS ONCE — one
+// record, the runner-up's, retiring every input for the one output — and every
+// member, the dead committer back, holds its rows.
 //
-// LANDED, NOT APPLIED. A pass counts a compaction compacted once its record
-// landed, whatever the member that decided it answered ([landing]): applied
-// where that member's own applier reached the record in time, pending or
-// unknown where it had not. The leader change the kill causes stalls the
-// survivors' appliers for as long as it lasts, and once that outlasted the
-// five seconds the runner-up waits for its own record
-// (statelog.DefaultResolveBudget) the answer was pending, so a case that
-// counted applied alone read a failover that worked as one that never
-// happened (#1130). So the case makes that stall CERTAIN — every survivor's
-// applier held from before the kill until the pass has returned, so the
-// record cannot apply where it was decided and the runner-up answers pending
-// (or unknown), never applied — and it reads what the record did only once
-// every running member has applied it, waiting on each as the case's end does
-// (Fleet.Level, bounded by the case's own context alone).
-//
-// PROPOSED ONCE THE KILL'S ELECTION IS OVER. The runner-up's admission reads
-// the code log's usage from its own broker before it appends
-// (statelog.Reserve), and a broker the kill left with no meta leader answers
-// that read 503, err_code 10008: the runner-up refuses the compaction
-// `usage_unknown`, and its asker takes it to the member after it, which
-// decides it — a record that is not the runner-up's — or refuses it too, and
-// the pass counts it failed, landed nowhere. So the held pass is let go only
-// once every survivor's own broker answers that read
-// (Cluster.AwaitElection), bounded by the case's own context alone as the
-// wait for the record is: what the case decides never turns on how soon an
-// election ends on a loaded runner.
-//
-// Mutation: count applied alone and the case fails on every run, where main's
-// failed on a run whose election outlasted the pass.
+// LANDED, NOT APPLIED ([landing], #1130; counting applied alone fails every
+// run): every survivor's applier is held from before the kill until the pass
+// returns, so the runner-up answers pending or unknown, and the record is read
+// once every member applied it (Fleet.Level). The pass is let go only once the
+// kill's election is over (Cluster.AwaitElection), as mid-election the
+// runner-up refuses `usage_unknown` (statelog.Reserve); both waits are bounded
+// by ctx alone, so a slow election never decides the case.
 func aCompactionFailsOverToTheRunnerUpCommitter(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f29")
 	committer := rc.committer()
@@ -320,11 +287,9 @@ func aCompactionFailsOverToTheRunnerUpCommitter(t *testing.T, c Cluster) {
 		held = nil
 	}
 	defer resume()
-	// EVERY SURVIVOR'S APPLIER HELD BEFORE THE KILL — every running member's
-	// but the committer's, whatever the cluster's size, so the runner-up's is
-	// held whichever member it is: each is levelled with the log first
-	// (Cluster.PauseApplier), which after the kill would wait on the very
-	// leader change this hold makes certain.
+	// EVERY SURVIVOR'S APPLIER HELD BEFORE THE KILL, so the runner-up's is,
+	// whichever member it is: Cluster.PauseApplier levels each with the log
+	// first, which after the kill would wait on the leader change it holds.
 	for _, m := range c.DataNodes() {
 		if m != committer {
 			held = append(held, c.PauseApplier(t, m))
@@ -334,9 +299,8 @@ func aCompactionFailsOverToTheRunnerUpCommitter(t *testing.T, c Cluster) {
 	c.Kill(t, committer)
 	down = true
 	runnerUp := rc.committer()
-	// THE PROPOSAL WAITS FOR THE KILL'S ELECTION: asked while it runs, the
-	// runner-up's admission cannot read the log's usage, and the compaction
-	// lands by the member after it, or nowhere. Never Fleet.Level, which
+	// THE PROPOSAL WAITS FOR THE KILL'S ELECTION, or the compaction lands by
+	// the member after the runner-up, or nowhere. Never Fleet.Level, which
 	// would wait on the appliers held above.
 	if err := c.AwaitElection(rc.ctx); err != nil {
 		t.Fatalf("the survivors' brokers after %s's death: %v", committer, err)

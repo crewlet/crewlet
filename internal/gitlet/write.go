@@ -24,18 +24,15 @@ import (
 // AN ENGINE WRITE is a change a seat or a person asks of a repository through
 // a tool — files committed, a commit reverted or picked, a branch created or
 // deleted, a review's suggestions applied — that the engine BUILDS on the
-// repository's Gitlet node, in a scratch
-// beside its cache, and LANDS as a push through the one landing every push
-// takes (internal/gitlet/host's Server.Write, ADR-0092). This package holds what
-// both ends of it import, as it does for a read by object id: the WIRE — the
-// write ([EngineWrite]), its answer ([EngineWriteResult]) and the change's
-// own refusals ([WriteRefusal]) — the one rule a write is held to by the tool
-// that asks it, the router that carries it and the Gitlet node that builds it
+// repository's Gitlet node and LANDS as a push through the one landing every
+// push takes (internal/gitlet/host's Server.Write, ADR-0092). This file holds
+// what both ends import: the wire ([EngineWrite], [EngineWriteResult],
+// [WriteRefusal]), the one rule every party holds a write to
 // ([EngineWrite.Validate]), and the bounds that size it.
 //
-// NOT A RECORD: nothing here rides the code log. What a write leaves is a
-// push — its proposal and its row, whose shapes are the domain's own — so no
-// field here takes a versionedFields row.
+// NOT A RECORD: nothing here rides the code log. A write leaves a push, whose
+// proposal and row are the domain's own, so no field here takes a
+// versionedFields row.
 
 // EngineCommitterName and EngineCommitterLocal spell the committer of every
 // engine-built commit, `Crewlet <engine@<code.identity_domain>>`: a convention
@@ -54,16 +51,13 @@ func EngineCommitted(name, email string) bool {
 		!strings.ContainsFunc(domain, func(r rune) bool { return r == '@' || r <= ' ' || r == 0x7f })
 }
 
-// Source is Gitlet as a delivery's SURFACE: the name a seat's code
-// write delivers to (internal/agent/builtin registers every code write tool
-// with tools.DeliversTo(Source)), and the notification source the code feed
-// publishes a change's wakes under ([Translator], [Parser]) — one name for
-// both, so the delivery gate compares a write's surface and a wake's source in
-// one spelling, and an addressed code wake is answered by a code write, as
-// worklet.Source and
-// doclet.Source are each one. FIXED: a wake published under another spelling
-// would find no delivery to it, and the gate would read every obligation
-// about code as reaching nobody.
+// Source is Gitlet as a delivery's SURFACE: the name every code write tool
+// delivers to (tools.DeliversTo(Source), internal/agent/builtin) and the
+// notification source the code feed publishes a change's wakes under
+// ([Translator], [Parser]), one name as worklet.Source and doclet.Source are.
+// FIXED: the delivery gate compares a write's surface with a wake's source, so
+// a wake under another spelling would read every obligation about code as
+// reaching nobody.
 const Source = "code"
 
 // EngineWriteKind is what an engine write builds: a closed set
@@ -108,18 +102,15 @@ const (
 	WriteRebaseChange EngineWriteKind = "rebase_change"
 	// WriteRevertChange reverts a MERGED change ([EngineWrite.Change]) on a
 	// NEW branch ([EngineWrite.Ref], which must not exist) started at its
-	// target's tip: ONE commit undoing what the change's merge brought into
-	// its target — its merge_oid against the target it was merged onto,
-	// which is that commit's first parent for a merge commit (git's mainline
-	// 1) and for a squash, and the change's own range for a fast-forward,
-	// from the base its head revision recorded — landed as ONE PUSH whose
-	// record opens the change "Revert <repo>!<n>" into the same target
-	// (M5-D25: the push's own change, PushEntry.Change). A revert that does
-	// not apply cleanly stops it, nothing stored, every conflicting path
-	// named. A write is no record (this file's doc), so the kind takes no
-	// versionedFields row; it crosses the estate's wire to the Gitlet node,
-	// and the domain landed on main with it ([RecordVersion]). The push it
-	// lands opens its change through PushEntry.Change, in the base format.
+	// target's tip: ONE commit undoing what the change's merge brought in —
+	// its merge_oid against its first parent (git's mainline 1) for a merge
+	// commit or a squash, the change's own range from the base its head
+	// revision recorded for a fast-forward — landed as ONE PUSH whose record
+	// opens the change "Revert <repo>!<n>" into the same target (M5-D25,
+	// PushEntry.Change). One that does not apply cleanly stops it, nothing
+	// stored, every conflicting path named. A write is no record (this file's
+	// doc), so the kind takes no versionedFields row, and the push opens its
+	// change in the base format ([RecordVersion]).
 	WriteRevertChange EngineWriteKind = "revert_change"
 )
 
@@ -133,23 +124,20 @@ func EngineWriteKinds() []EngineWriteKind {
 func (k EngineWriteKind) Valid() bool { return slices.Contains(EngineWriteKinds(), k) }
 
 // Commits reports whether the kind makes a commit — and so a pack, a
-// signature and a build — rather than only move a ref to a commit the
-// repository holds — and lands it as ONE PUSH. A merge_change is a pipeline
-// of its own, whose commit is its method's and whose signature U43's
-// (internal/gitlet/host's merge.go).
+// signature and a build — landed as ONE PUSH, rather than only moving a ref to
+// a commit the repository holds. A merge_change is a pipeline of its own,
+// whose signature is U43's (internal/gitlet/host's merge.go).
 func (k EngineWriteKind) Commits() bool {
 	return k == WriteCommitFiles || k == WriteRevert || k == WriteCherryPick || k == WriteApplySuggestions ||
 		k == WriteRebaseChange || k == WriteRevertChange
 }
 
 // BuildDeadline is the git run time a write of the kind is given for its
-// whole build, every process of it together: [MergeBuildDeadline] for a
-// merge_change, whose one merge-tree is the one a change's mergeability is
-// measured by; [RebaseBuildDeadline] for a rebase_change, which replays up to
-// [MaxRebaseCommits] commits a merge each; and [WriteBuildDeadline] for every
-// other kind. The estate's attempt on a Gitlet node follows it
-// (internal/estate's Timing.GitWriteAttemptFor), so a kind given a longer
-// build is given the time to run it and nothing more.
+// whole build, every process together: [MergeBuildDeadline] for a
+// merge_change, [RebaseBuildDeadline] for a rebase_change, and
+// [WriteBuildDeadline] otherwise. The estate's attempt on a Gitlet node
+// follows it (internal/estate's Timing.GitWriteAttemptFor), so a longer build
+// is given the time to run it and nothing more.
 func (k EngineWriteKind) BuildDeadline() time.Duration {
 	switch k {
 	case WriteMergeChange:
@@ -240,36 +228,26 @@ type EngineWrite struct {
 	// [MaxSuggestionOps], each finding at most once.
 	Suggestions []SuggestionOp `json:"suggestions,omitempty"`
 	// Ceiling is whom a SEAT'S write is made for inside a turn somebody woke
-	// ([WriteCeiling]), nil for a write made for its seat alone or for a
-	// person: the Gitlet node that builds it judges the write's one command
-	// against the seat's grant held to the ceiling's ([Grant.Under]), from
-	// its own chart and the synced row, beside the seat's own. Refused beside
-	// a person's write, which no ceiling bounds. The committer's decide never
-	// reads it, as it never reads a coding box's (the run's grant and its
-	// ceiling are an admission's).
-	//
-	// A write is no record (this file's doc), so the field takes no
-	// versionedFields row; it crosses the estate's wire to the repository's
-	// Gitlet node, and every Gitlet node asked it reads it: the domain landed
-	// on main with it ([RecordVersion]).
+	// ([WriteCeiling]); nil for a write made for its seat alone, and refused
+	// beside a person's, which no ceiling bounds. The building Gitlet node
+	// judges the write's one command against the seat's grant held to the
+	// ceiling's ([Grant.Under]), from its own chart and the synced row, beside
+	// the seat's own. The committer's decide never reads it (the run's grant
+	// and its ceiling are an admission's). A write is no record (this file's
+	// doc), so the field takes no versionedFields row.
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
 	// WrittenFor is whom a SEAT'S write is made for (ADR-0109), as
-	// [ChangeProposal.WrittenFor] is: whoever the turn that asks it works for,
-	// composed by the engine from the call's own bound ceiling, or stated
-	// nobody; a person's states nothing. Held to the principal and the
-	// ceiling by [writtenForUnder]: by Validate, and against its chart by the
-	// Gitlet node that builds the write ([EngineWrite.WrittenForOn]), which
-	// hands it on to the push, the merge or the enqueue it lands.
-	//
-	// A write is no record, so this field takes no versionedFields row. It
-	// crosses the estate's wire to the repository's Gitlet node, and a node of
-	// a build without it refuses a write carrying somebody, naming
-	// args.written_for, so the walk asks one that reads it, and a node of a
-	// build that does not know its carrier's kind, or an app a credential's
-	// carrier names, refuses it alike, naming args.written_for.kind or
-	// args.written_for.apps[] ([unknownToThisBuild]); one made for nobody sends
-	// no member, as such a build does. What such a build sends arrives stated
-	// nobody ([EngineWrite.UnmarshalJSONFrom]), decided by its ceiling.
+	// [ChangeProposal.WrittenFor] is: whoever the asking turn works for,
+	// composed by the engine from the call's bound ceiling, or stated nobody;
+	// a person's states nothing. Held to the principal and the ceiling by
+	// [writtenForUnder] in Validate, and against its chart by the building
+	// Gitlet node ([EngineWrite.WrittenForOn]), which hands it on to what it
+	// lands. No record, so no versionedFields row: a node of a build without
+	// it, or not knowing its carrier's kind or app, refuses a write carrying
+	// somebody, naming args.written_for (.kind, .apps[]) ([unknownToThisBuild]),
+	// so the walk asks one that reads it. One made for nobody sends no member,
+	// and what such a build sends arrives stated nobody
+	// ([EngineWrite.UnmarshalJSONFrom]), decided by its ceiling.
 	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
 	// Change is a merge_change's or a rebase_change's change, by its number
 	// on the repository — web!42's 42, the name every change tool and the
@@ -282,16 +260,12 @@ type EngineWrite struct {
 	// commit, or a fast-forward.
 	Method MergeMethod `json:"method,omitempty"`
 	// DeleteSource is whether a merge_change deletes the change's source
-	// branch as it merges, where its caller said; nil — the zero value —
-	// leaves it to THE DEFAULT, which the Gitlet node decides on the snapshot
-	// it judges the merge on (Q4: a source in a seat's namespace deleted
-	// unless a gate over the target keeps it, [GateRules.KeepsSource]; any
-	// other kept) and answers back ([MergeAnswer.DeleteSource]). A pointer
-	// because false is a word a caller says (keep it), never the default.
-	//
-	// A write is no record, so the field takes no versionedFields row; it
-	// crosses the estate's wire to the repository's Gitlet node, as Ceiling
-	// does.
+	// branch as it merges, where its caller said; nil leaves it to THE
+	// DEFAULT, decided by the Gitlet node on the snapshot it judges the merge
+	// on (Q4: a source in a seat's namespace deleted unless a gate over the
+	// target keeps it, [GateRules.KeepsSource]; any other kept) and answered
+	// in [MergeAnswer.DeleteSource]. A pointer because false (keep it) is a
+	// word a caller says, never the default. No record: no versionedFields row.
 	DeleteSource *bool `json:"delete_source,omitempty"`
 	// Override is a PERSON'S reason for merging past the target's merge gate,
 	// at most [MaxOverrideReasonBytes] — merged directly, on a queue target
@@ -522,90 +496,72 @@ func (r WriteRefusal) Valid() bool { return slices.Contains(WriteRefusals(), r) 
 // The bounds of an engine write.
 const (
 	// MaxCommitPayloadBytes bounds what one write carries: its Files or its
-	// Suggestions and its Message together, EACH AS encoding/json SPELLS IT —
-	// the encoding every hop of the write's way sends it in, in which a '<', a
-	// '>', a '&' and a control byte other than a tab, a newline, a carriage
-	// return, a backspace or a form feed take six bytes — for every kind that
-	// carries any: a commit_files' operations and message, an
-	// apply_suggestions' suggestions and message, and the message a revert or
-	// a cherry-pick gives in place of git's own ([EngineWrite.Validate]). A
-	// MEBIBYTE: an engine write is a doc or a configuration fix, never a
-	// codebase — a change larger than this belongs in a coding box, which
-	// pushes through the relay with no such bound. It is what sizes a write in
-	// flight: a Gitlet node holds each one it builds for a peer through every
-	// wait it makes, in a slot of its writes' lane (internal/estate's
-	// laneGitWrites, which states what a slot holds, measured).
+	// Suggestions and its Message together, EACH AS encoding/json SPELLS IT,
+	// the encoding every hop sends ([EngineWrite.validPayload]). A MEBIBYTE:
+	// an engine write is a doc or a configuration fix, never a codebase; a
+	// larger change belongs in a coding box, which pushes through the relay
+	// with no such bound. It sizes a write in flight: a Gitlet node holds each
+	// one it builds for a peer in a slot of its writes' lane through every
+	// wait (internal/estate's laneGitWrites states what a slot holds,
+	// measured).
 	MaxCommitPayloadBytes = 1 << 20
 
 	// MaxFileOps is the most operations one commit_files carries: past every
-	// doc or configuration change, and — with MaxTreePathDepth — what bounds
-	// the directories one build rewrites: every directory above a path the
-	// write names, at most 2 × MaxFileOps × (MaxTreePathDepth − 1) and the
-	// root, since a move names two paths. MEASURED (BenchmarkEngineCommit,
-	// internal/gitlet/host's doc.go): a thousand files put at depth six into a
-	// 100 000-file tree build in 0.28–0.52 s at the p50 and 0.37–0.64 s at
-	// the p99 over two runs — a fifteenth of WriteBuildDeadline at the most —
-	// into a pack of 58 KB, so at the depths a write's paths keep the bound
-	// is the payload's and the purpose's, never the build's: a thousand
-	// operations of a kilobyte each are MaxCommitPayloadBytes. A thousand
-	// paths at MaxTreePathDepth itself are the build deadline's to refuse
-	// (MaxTreePathDepth).
+	// doc or configuration change, and with MaxTreePathDepth the bound on the
+	// directories one build rewrites — at most 2 × MaxFileOps ×
+	// (MaxTreePathDepth − 1) and the root, since a move names two paths.
+	// MEASURED (BenchmarkEngineCommit, internal/gitlet/host's doc.go): a
+	// thousand files put at depth six into a 100 000-file tree build in at
+	// most 0.64 s at the p99, a fifteenth of WriteBuildDeadline, into a 58 KB
+	// pack, so the bound is the payload's and the purpose's, never the
+	// build's (a thousand 1 KiB operations are MaxCommitPayloadBytes). A
+	// thousand paths at MaxTreePathDepth are the build deadline's to refuse.
 	MaxFileOps = 1_000
 
 	// MaxWritePackBytes bounds the one pack an engine write stores: FOUR
 	// MEBIBYTES, four payloads' worth — a commit_files' pack is at most its
 	// payload compressed plus the trees it touches, and a revert's or a
-	// cherry-pick's past it is a change for a coding box. The largest new
-	// object a write makes is a touched directory's tree, written whole into
-	// its self-contained pack, its 20-byte ids incompressible. MEASURED
-	// (BenchmarkEngineCommit's flat arms): a put into a directory of 100 000
-	// entries packs 2 393 208 bytes, 24 an entry where the estimate was 40 —
-	// zlib takes the names, never the ids — and one of 10 000, 240 KB; a
-	// thousand files at depth six, 58 KB. So a directory of some 175 000
-	// entries is the largest one write can touch, and four mebibytes stands.
-	// A proposal of an engine-built push carrying a pack
-	// past it is refused by every committer as one no Gitlet node built
-	// (Proposal.Validate).
+	// cherry-pick's past it is a coding box's. The largest new object is a
+	// touched directory's tree, written whole, its 20-byte ids
+	// incompressible: MEASURED (BenchmarkEngineCommit's flat arms), a put into
+	// a directory of 100 000 entries packs 2 393 208 bytes, 24 an entry, so
+	// some 175 000 entries is the largest directory one write can touch. Every
+	// committer refuses an engine-built push's proposal carrying a pack past
+	// it, as one no Gitlet node built (Proposal.Validate).
 	MaxWritePackBytes = 4 << 20
 
-	// WriteBuildDeadline is a write's whole build — every git process it
-	// runs, together, sequentially: ONE READ'S DEADLINE, gitproc.ReadDeadline's
-	// ten seconds, since every build step is a read-lane process of a
-	// bounded local read's size, and BenchmarkEngineCommit's p99 of a hundred
-	// files at depth six in a 100 000-file tree is held to a tenth of it:
-	// MEASURED 0.07–0.24 s over two runs, and the dearest build it measures,
-	// one file into a directory of 100 000 entries, 0.68–1.2 s. This package
-	// imports no git process wrapper, so internal/gitlet/host's
+	// WriteBuildDeadline is a write's whole build, every git process it runs
+	// together: ONE READ'S DEADLINE (gitproc.ReadDeadline's ten seconds),
+	// since every build step is a read-lane process of a bounded local read's
+	// size. MEASURED (BenchmarkEngineCommit, which holds the first under a
+	// tenth of this): a hundred files at depth six in a 100 000-file tree at a
+	// p99 of 0.24 s at most, and the dearest build, one file into a directory
+	// of 100 000 entries, 1.2 s. This package imports no git process wrapper,
+	// so internal/gitlet/host's
 	// TestAWriteBuildIsOneReadsDeadline holds the equality.
 	WriteBuildDeadline = 10 * time.Second
 
 	// MergeBuildDeadline is a merge_change's whole build — its ancestry, its
-	// one `merge-tree --write-tree`, its commit and its pack, and every
-	// rebuild's onto a target that moved (MergeRecomputes) together, never
-	// this much a round, since the estate's attempt on a Gitlet node holds one
-	// build term: THIRTY SECONDS, three of a write's own (gitlet/home's MergeabilityDeadline is
-	// this constant), since the one merge-tree a merge runs is the one a
-	// change's mergeability is recorded by, merging the same two commits —
-	// the merge base found, both sides diffed against it, their changes
-	// merged — and BenchmarkMergeability measures it (gitlet/home's doc: 125 ms
-	// for 1 000 files changed both ways, some 240 times inside). PROVISIONAL
-	// as that deadline is: what moves it is a production merge whose p99
-	// nears it. A merge whose first build runs past it is too_large, a
-	// change to merge in a coding box; a rebuild that runs out what the
-	// builds before it left is target_moving, its change no larger than its
-	// first build proved it.
+	// one `merge-tree --write-tree`, its commit and pack, and every rebuild
+	// onto a target that moved (MergeRecomputes) together, never this much a
+	// round, since the estate's attempt holds one build term: THIRTY SECONDS,
+	// three of a write's own. Its merge-tree is the one a change's
+	// mergeability is recorded by (gitlet/home's MergeabilityDeadline is this
+	// constant; BenchmarkMergeability: 125 ms for 1 000 files changed both
+	// ways). PROVISIONAL: a production merge whose p99 nears it moves it. A
+	// merge whose first build runs past it is too_large, a coding box's; a
+	// rebuild that runs out what earlier builds left is target_moving, since
+	// its first build proved the change no larger.
 	MergeBuildDeadline = 3 * WriteBuildDeadline
 
 	// MergeRecomputes is how many times a merge_change is built again onto a
 	// target that moved between its build and its decide (target_moved)
-	// before it is answered target_moving: FOUR, the design's (M5-D10). A
-	// branch moving under five consecutive builds is a branch moving faster
-	// than its merges are built — a queue's work (M5-D9), or a person's —
-	// and a fifth rebuild would only spend the attempt the write is given.
-	// A bound, not a promise: every rebuild draws on the one
-	// MergeBuildDeadline and must fit what is left of the write's attempt,
-	// or the merge is answered target_moving with fewer (internal/gitlet/host's
-	// merge.go).
+	// before it is answered target_moving: FOUR (M5-D10). A branch moving
+	// under five consecutive builds moves faster than its merges are built —
+	// a queue's work (M5-D9), or a person's. A bound, not a promise: every
+	// rebuild draws on the one MergeBuildDeadline and what is left of the
+	// attempt, or the merge is answered target_moving with fewer
+	// (internal/gitlet/host's merge.go).
 	MergeRecomputes = 4
 
 	// MaxRebaseCommits is the most commits one rebase_change replays: A
@@ -629,30 +585,17 @@ const (
 	MaxTreePathBytes = 4_096
 
 	// MaxTreePathDepth is the most components a path an engine write NAMES
-	// may have — an operation's path, a move's destination: SIXTY-FOUR, a
-	// JUDGMENT. An engine write is a document or a configuration fix, whose
-	// paths run from a few components to a couple of dozen even in a deep
-	// tree — a source file of a Java module in a monorepo sits some fifteen
-	// down — so sixty-four refuses no such change, and a deeper one belongs in
-	// a coding box, whose push has no such bound.
-	//
-	// It is what bounds every cost of a write that GROWS WITH DEPTH, which
-	// MaxTreePathBytes alone leaves at 2 048 components: the directories one
-	// build rewrites, every one above a path the write names (MaxFileOps); its
-	// mktree, one process a level, each a read-lane slot; what its plan and
-	// its asks hold, a map entry and an ask of git a directory; and its read
-	// of what every named path and every directory above one is, which git
-	// walks from the root, at a cost growing with the SQUARE of the depth
-	// (internal/gitlet/host's building.paths: a thousand paths at this bound,
-	// each with every directory above it, took 19 s of git on two E-cores,
-	// which WriteBuildDeadline answers too_large). Unbounded, one mebibyte of
-	// paths 2 047 components deep was some 1.1 GB of asks for git, the
-	// directories of 253 of them for the plan to hold, and 2 047 mktree
-	// processes for one. A repository's own deeper paths are never judged:
-	// only the paths a write names, which EngineWrite.Validate holds to it
-	// beside ValidTreePath — a rule of what a write may carry, as MaxFileOps
-	// is, never of what a name in a tree may be, so ValidTreePath's other
-	// callers (a check's report path) are not held to it.
+	// (an operation's path, a move's destination) may have: SIXTY-FOUR, a
+	// JUDGMENT — a doc or configuration fix's paths run to a couple of dozen
+	// even in a deep monorepo, and a deeper change belongs in a coding box.
+	// It bounds every cost of a write that GROWS WITH DEPTH, which
+	// MaxTreePathBytes leaves at 2 048 components: the directories a build
+	// rewrites (MaxFileOps), its mktree processes (a read-lane slot a level),
+	// its plan's entries, and git's read of each named path and the
+	// directories above it, growing with the SQUARE of the depth
+	// (internal/gitlet/host's building.paths: a thousand paths at this bound
+	// took 19 s of git, too_large under WriteBuildDeadline). It holds only the
+	// paths a write names ([validWritePath]), never a name in a tree.
 	MaxTreePathDepth = 64
 
 	// ConflictMarkedBytes is how much of a conflicted file a write answers:
@@ -663,37 +606,33 @@ const (
 	// WriteUploadAllowance is what a write's attempt holds for its bundle's
 	// PUT: objstore.MiBPace, one mebibyte at the pace floor every object
 	// transfer is held to. A write's bundle is a few kilobytes in the common
-	// case, and its one PUT a first byte's wait (BenchmarkEngineWrite: a p99
-	// of 265 ms at the most against the S3 fake answering 200 ms late,
-	// sixty-four writes at once, under a hundredth of this); a larger one on a
-	// bucket at the floor is
-	// answered busy BEFORE its upload when the caller's deadline cannot hold
-	// it and the proposal after it (internal/gitlet/host's deadline rule), so a
-	// slow bucket costs a refusal, never a PUT nobody proposes.
+	// case (BenchmarkEngineWrite: a p99 of 265 ms at most against an S3 fake
+	// answering 200 ms late, sixty-four writes at once); a larger one on a
+	// bucket at the floor is answered busy BEFORE its upload when the
+	// caller's deadline cannot hold it and the proposal after it
+	// (internal/gitlet/host's deadline rule), so a slow bucket costs a
+	// refusal, never a PUT nobody proposes.
 	WriteUploadAllowance = objstore.MiBPace
 
 	// MinProposeAttempt is the least a push's proposal needs of its caller's
 	// deadline as it leaves the node that built the push: the serving data
-	// node's wait for the asker's floor at its whole budget
-	// (statelog.ReadBudget), then a whole CommitBudget and ReplyMargin, which a
-	// repository's committer must still find before the push's deadline to
-	// start its batch at all — under it the push is answered busy, undecided.
-	// ONE SUM: the estate router refuses a write attempt no longer than it
-	// (internal/estate's minWriteAttempt is this constant), and Gitlet
-	// refuses to upload an engine write whose caller left less than it after
-	// the upload.
+	// node's wait for the asker's floor (statelog.ReadBudget), then the
+	// CommitBudget and ReplyMargin a committer must still find to start its
+	// batch at all — under it the push is answered busy, undecided. ONE SUM:
+	// the estate router refuses a write attempt no longer than it
+	// (internal/estate's minWriteAttempt is this constant), and Gitlet refuses
+	// to upload an engine write whose caller left less than it after the
+	// upload.
 	MinProposeAttempt = statelog.ReadBudget + CommitBudget + ReplyMargin
 )
 
 // WritePushID is the push id an engine write lands under: an UNNAMED
-// derivation of the caller's operation at the operation's own instant — a
-// canonical UUIDv7, which is what a scratch's name and a proposal's push id
-// must be (a named derivation carries a `.<name>` suffix both refuse) — and
-// never statelog.StepOpID, which would give two steps of one gesture one
-// push. So a retry of the write — on the same node, on the runner-up after
-// silence, after a crash — is the same push, and collapses at its committer.
-// A caller holds the id to statelog.CheckCallerOpID first
-// ([EngineWrite.Validate]).
+// derivation of the caller's operation at its own instant — a canonical
+// UUIDv7, as a scratch's name and a proposal's push id must be (both refuse a
+// named derivation's `.<name>` suffix) — never statelog.StepOpID, which would
+// give two steps of one gesture one push. So a retry, on any node or after a
+// crash, is the same push and collapses at its committer. A caller holds the
+// id to statelog.CheckCallerOpID first ([EngineWrite.Validate]).
 func WritePushID(opID string) string {
 	t, _ := statelog.OpMintedAt(opID)
 	return statelog.DeriveOpID(t, "", "code_write", opID)
@@ -709,12 +648,11 @@ func (w EngineWrite) Instant() time.Time {
 }
 
 // Validate refuses a write no party to it may act on ([ErrInvalid], naming the
-// field): the one rule the tool that asks a write, the router that carries it
-// and the Gitlet node that builds it all hold it to. Before any of it, a value
-// whom the write is made for names that this build does not know is answered
-// as its decoder answers it on the wire, never as ErrInvalid, whatever else
-// the write holds ([unknownToThisBuild]): this build cannot judge the write at
-// all, and a Gitlet node of a build that knows the value does.
+// field): the one rule the asking tool, the carrying router and the building
+// Gitlet node all hold it to. First, a written_for value this build does not
+// know is answered as its decoder answers it on the wire, never as ErrInvalid
+// ([unknownToThisBuild]): this build cannot judge the write, and a Gitlet node
+// of a build that knows the value can.
 func (w EngineWrite) Validate() error {
 	if err := unknownToThisBuild(writtenForAt, w.WrittenFor); err != nil {
 		return err
@@ -737,11 +675,9 @@ func (w EngineWrite) Validate() error {
 		return fmt.Errorf("%w: principal.run: a seat's write names the run that made it — its turn at least, "+
 			"stamped by the engine from the call", ErrInvalid)
 	case w.Principal.Run.RunID != "":
-		// A WRITE IS A TOOL CALL'S, whose run is the turn that called it — an
-		// executor's box pushes through git — and the push it lands as is
-		// engine-built, which Proposal.Validate refuses naming an executor.
-		// Refused here, by the rule every party holds a write to, rather than
-		// by the landing after a Gitlet node has built it.
+		// A WRITE IS A TOOL CALL'S, whose run is its turn (an executor's box
+		// pushes through git), and Proposal.Validate refuses an engine-built
+		// push naming an executor: refused here, before a Gitlet node builds it.
 		return fmt.Errorf("%w: principal.run.run_id: a write the engine builds is a tool call's, whose run "+
 			"is its turn: it names no executor", ErrInvalid)
 	case w.Principal.Kind == PrincipalOperator && w.Principal.Seat == "":
@@ -803,22 +739,17 @@ func (w EngineWrite) Validate() error {
 }
 
 // validPayload holds what the write carries to [MaxCommitPayloadBytes]: its
-// operations or its suggestions and its message together, each as
-// encoding/json encodes it, for every kind that carries any — a commit_files'
-// operations and message, an apply_suggestions' suggestions and message, and
-// a revert's or a cherry-pick's message.
+// operations or suggestions and its message together, for every kind that
+// carries any (a revert's or a cherry-pick's message too).
 //
-// MEASURED AS THE WIRE SPELLS IT, NEVER BY THE TEXT'S LENGTH. What a write
-// costs every party holding it is its encoding — the router's request, the Gitlet
-// node's slot of its writes' lane — and encoding/json spells a '<', a '>', a
-// '&' and most control bytes in six bytes each (queue.ErrTooLarge states the
-// same of every payload). Counted by its length, a commit_files' message of a
-// mebibyte of '<' crossed at six, and a revert's or a cherry-pick's message,
-// bounded by nothing here, at up to the transport's whole eight
-// (queue.MaxPayloadBytes): past it the transport refused the request to every
-// peer, while the home's own seat had the same write built in process — an
-// answer that depended on which node asked. A suggestion's text is code a
-// reviewer wrote, as full of '<' and '&' as any file's.
+// MEASURED AS THE WIRE SPELLS IT, NEVER BY THE TEXT'S LENGTH: what a write
+// costs every party holding it (the router's request, the Gitlet node's lane
+// slot) is its encoding, and encoding/json spells a '<', a '>', a '&' and
+// most control bytes in six bytes each (queue.ErrTooLarge). Counted by
+// length, a write could cross past queue.MaxPayloadBytes, refused to every
+// peer while the home's own seat built it in process: an answer that
+// depended on which node asked. A suggestion's text is code, as full of '<'
+// and '&' as any file's.
 func (w EngineWrite) validPayload() error {
 	n := 0
 	if len(w.Files) > 0 {
@@ -1171,27 +1102,17 @@ func validWritePath(p string) error {
 }
 
 // ValidTreePath is the EARLY, NAMED refusal of a path an engine write may make
-// in a tree: what git's own check of a tree (fsck, which the build's
-// `index-pack --strict` runs, the relay's receive.fsckObjects) refuses of a
-// NAME, and more, so a write is refused at least what a push of the same
-// objects is — before anything is read. What an object HOLDS — a .gitmodules'
-// url, a .gitattributes' size — is that check's alone.
-//
-// At most [MaxTreePathBytes], each component at most 255 bytes of valid UTF-8;
-// no empty, `.` or `..` component and no leading or trailing `/`; no control
-// character (U+0000–U+001F, U+007F) and no backslash; no component that is
-// `.git` or `git~1` in any spelling git's is_ntfs_dotgit reads as one — any
-// case, trailing dots and spaces, and a `:` stream suffix (`.GIT::$INDEX_ALLOCATION`
-// is `.git` on NTFS); and no component holding a code point HFS+ ignores
-// (U+200C–U+200F, U+202A–U+202E, U+206A–U+206F, U+FEFF), by which `.g\u200cit`
-// is `.git` on a Mac. STRICTER THAN GIT on purpose — a control character,
-// a backslash or an HFS-ignorable code point in a NEW name is refused
-// outright, where git refuses one only where it spells `.git` — because no
-// tool needs one in a name it writes and each is a way to make a name read as
-// another. Existing names in a tree are never judged: a write passes every
-// entry it does not touch through unchanged. A path a write names is held to
-// [MaxTreePathDepth] besides — a bound of what one write carries, never of a
-// name ([validWritePath]).
+// in a tree: at least what git's fsck (the build's `index-pack --strict`, the
+// relay's receive.fsckObjects) refuses of a NAME, before anything is read;
+// what an object HOLDS is that check's alone. At most [MaxTreePathBytes], each
+// component at most 255 bytes of valid UTF-8; no empty, `.` or `..` component,
+// no leading or trailing `/`, no control character and no backslash; no
+// component git reads as `.git` on NTFS ([dotGit]) and no code point HFS+
+// ignores ([hfsIgnorable]), by which `.g\u200cit` is `.git` on a Mac. STRICTER
+// THAN GIT on purpose, which refuses those only where they spell `.git`: no
+// tool needs one in a name it writes, and each makes a name read as another.
+// Existing names are never judged: a write passes every entry it does not
+// touch unchanged. Depth is [validWritePath]'s.
 func ValidTreePath(p string) error {
 	switch {
 	case p == "":

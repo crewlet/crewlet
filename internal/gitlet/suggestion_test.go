@@ -22,18 +22,16 @@ func anApply() gitlet.EngineWrite {
 	return w
 }
 
-// APPLY_SUGGESTIONS EXTENDS EVERY ENGINE WRITE TABLE: the kind is in the
-// closed set every party reads and makes a commit — a pack, a signature and a
-// build; its two refusals are in the closed set of a change's refusals; and
-// the one rule every party holds a write to takes its fields and no other —
-// the head it lands on, a message and 1 to gitlet.MaxSuggestionOps suggestions,
-// each a finding's id once, a path one write may name, a whole blob id, lines
-// from 1 to gitlet.MaxAnchorLine and a text within its bound, the payload
-// within one write's — and refuses suggestions on every other kind.
+// APPLY_SUGGESTIONS EXTENDS EVERY ENGINE WRITE TABLE: the kind is in the closed
+// set every party reads and commits (a pack, a signature, a build); its two
+// refusals are in a change's closed set; and the one rule every party holds a
+// write to takes its fields alone — the head, a message, 1 to MaxSuggestionOps
+// suggestions, each a finding's id once, a writable path, a whole blob id,
+// lines 1 to MaxAnchorLine and a bounded text, the payload within one write's —
+// and refuses suggestions on every other kind.
 //
-// Mutations: Commits leaving apply_suggestions out → no signature, red; a
-// kind that takes suggestions beside files → red; a finding named twice
-// admitted → red; a line past gitlet.MaxAnchorLine admitted → red.
+// Mutations: Commits leaving apply_suggestions out → red; suggestions admitted
+// beside files → red; a finding named twice → red; a line past MaxAnchorLine → red.
 func TestApplySuggestionsExtendsEveryEngineWriteTable(t *testing.T) {
 	t.Parallel()
 	if !slices.Contains(gitlet.EngineWriteKinds(), gitlet.WriteApplySuggestions) || !gitlet.WriteApplySuggestions.Valid() ||
@@ -71,8 +69,8 @@ func TestApplySuggestionsExtendsEveryEngineWriteTable(t *testing.T) {
 		"a commit":       {edit(func(w *gitlet.EngineWrite) { w.Commit = oidOf("C") }), "commit"},
 		"too many":       {edit(func(w *gitlet.EngineWrite) { w.Suggestions = many }), "suggestions"},
 		"a finding twice": {edit(func(w *gitlet.EngineWrite) {
-			// THE SAME FINDING'S, at other lines: what is refused is the
-			// finding named twice, not a suggestion repeated.
+			// The same finding at other lines: the finding named twice is
+			// refused, not a suggestion repeated.
 			again := w.Suggestions[0]
 			again.LineStart, again.LineEnd = 7, 7
 			w.Suggestions = append(w.Suggestions, again)
@@ -97,12 +95,10 @@ func TestApplySuggestionsExtendsEveryEngineWriteTable(t *testing.T) {
 			t.Errorf("%s: Validate answered %v, want ErrInvalid naming %s", name, err, c.field)
 		}
 	}
-	// THE PAYLOAD'S BOUND: suggestions within their own bounds whose whole
-	// passes one write's.
+	// THE PAYLOAD'S BOUND: MaxSuggestionOps suggestions, each at its text's
+	// bound — the texts alone are the whole payload, so their encoding is past it.
 	full := edit(func(w *gitlet.EngineWrite) {
 		w.Suggestions = nil
-		// AS MANY AS ONE WRITE APPLIES, each at its text's bound: their texts
-		// alone are the whole payload, so the encoding beside them is past it.
 		for range gitlet.MaxSuggestionOps {
 			w.Suggestions = append(w.Suggestions, gitlet.SuggestionOp{FindingID: uuid.Must(uuid.NewV7()).String(),
 				Path: "a.go", BlobOID: oidOf("B"), LineStart: 1, LineEnd: 1, Text: wide})
@@ -114,20 +110,17 @@ func TestApplySuggestionsExtendsEveryEngineWriteTable(t *testing.T) {
 }
 
 // A PLACING MOVES LINES BY EVERY HUNK ABOVE THEM AND SETTLES AT THE FIRST AT
-// OR BELOW THEM: fed a diff's zero-context hunks one at a time, in the diff's
-// order, it places a range where the new file holds it — moved by what each
-// hunk wholly above it added less what it removed, an insertion right above
-// it included — and settles at the first hunk that touches or follows it: the
-// same lines where that hunk is below them or an insertion right after their
-// last line, OUTDATED where it replaces, deletes or inserts between any of
-// them, placed then where only the hunks above moved it. Each placing is held
-// to the figures, written out, it must reach after each prefix of the diff,
-// and Reanchor — a placing fed a slice — to the figures after the whole of it.
+// OR BELOW THEM: fed a diff's zero-context hunks in order, it moves a range by
+// what each hunk wholly above it added less removed (an insertion right above
+// included), and settles at the first hunk that touches or follows it — the
+// same lines where that hunk is below or inserts right after their last line,
+// OUTDATED, where the hunks above left it, if it replaces, deletes or inserts
+// between them. Each placing is held to its figures after each prefix of the
+// diff, and Reanchor to the figures after all of it.
 //
-// Mutations: a hunk above moving the range by one more than it added less it
-// removed → red; an insertion right after the range's last line read as
-// inside it → red; an insertion above it moving nothing → red; a hunk below
-// it reported unsettled → red.
+// Mutations: a hunk above moving the range one line too far → red; an insertion
+// right after its last line read as inside → red; an insertion above moving
+// nothing → red; a hunk below reported unsettled → red.
 func TestAPlacingSettlesAtTheFirstHunkAtOrBelowItsLines(t *testing.T) {
 	t.Parallel()
 	hunks := []gitlet.Hunk{

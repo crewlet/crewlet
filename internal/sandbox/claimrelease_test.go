@@ -74,22 +74,16 @@ func (s *unansweredRelease) released() int {
 	return s.releases
 }
 
-// A COLLECTION'S HAND-BACK THE STORE DOES NOT ANSWER NEVER ENDS THE RUN. A
-// collection that could not finish hands its claim back, and the release that
-// does it is one more write to a coordination store that may be the very one
-// that went silent. It used to be decided as a hand-back that cannot be
-// written: the claim's ending, decided at once or kept and decided the moment
-// the store answered, and the run announced claim_unreverted, "its result is
-// lost", while its box held the result. Now this node keeps the claim, makes
-// the release again on the hand-back's spacing while the store is silent, and
-// the run is back in running for its completion's retry once the store answers:
-// collected then and resumed once, on what its box held. Every kind of
-// collection's hand-back keeps it, the counted one counting its failure once
-// when its release lands, a release that landed with its answer lost included.
+// A COLLECTION'S HAND-BACK THE STORE DOES NOT ANSWER NEVER ENDS THE RUN: this
+// node keeps the claim and makes the release again on the hand-back's spacing,
+// and once the store answers the run is back in running, collected and resumed
+// once. Every kind of collection's hand-back keeps it, a counted one counting
+// its failure once when its release lands, a release that landed with its
+// answer lost included. See the package doc, "Owed claim releases".
 //
 // Mutation: end a release the store did not answer (unclaimOwing), at the first
-// attempt or at a retry; hand back any one branch of collectFailed the old way;
-// or leave the series unsettled once the release lands, holding the seat's mail
+// attempt or at a retry; end any one branch of collectFailed's hand-back; or
+// leave the series unsettled once the release lands, holding the seat's mail
 // after its run ended: each turns a case red.
 func TestAHandBackTheStoreDoesNotAnswerIsKeptUntilItLands(t *testing.T) {
 	t.Parallel()
@@ -435,23 +429,11 @@ func (s *claimOnItsWay) ReleaseClaim(ctx context.Context, turnID string, release
 	return released, err
 }
 
-// A CLAIM OF THE JOB ALREADY ON ITS WAY WHEN ITS RELEASE WENT OUT IS NEVER GIVEN
-// BACK BY THAT RELEASE. A completion that reaches this node while it is giving
-// a collection's claim back, or owes that release, is refused; but a claim of
-// the job can already be on its way to the store when the release goes out
-// (one claimed at its turn's deadline asks the node for no admission, so
-// nothing orders it behind the collection, as nothing orders two claims of a
-// coordinator with no gate, which is how the cases make one), and it wins the
-// moment the release lands. Its release and its claim name the same job, status
-// and lease, so the release made again afterwards gave back the claim the turn
-// was resumed under, while it worked, and the claim after it would collect and
-// resume the job a second time. The win is proof the release landed: it is
-// never made again, whether the claim won once the release was owed or while
-// it was still out, and a release owed is not made again while such a claim is
-// still on its way. Its move in its run's entry (countwrite.go) is made there
-// too, as the release's own answer would have made it: left out, the entry
-// held the run counted as the claim after the run was over, and the seat took
-// no mail.
+// A CLAIM OF THE JOB ALREADY ON ITS WAY WHEN ITS RELEASE WENT OUT IS NEVER
+// GIVEN BACK BY THAT RELEASE: its win proves the release landed, so the release
+// is never made again, owed or out, nor while such a claim is on its way, and
+// its move in the run's entry is made there. The cases make such a claim with a
+// coordinator that has no gate, as a deadline's claim asks for none.
 //
 // Mutation: forget the win (keep the release recorded when a claim of its job
 // wins on the run it put back), owe a release such a claim took over while it
@@ -578,20 +560,14 @@ func TestAClaimOnItsWayWhenTheReleaseWentOutIsNeverGivenBackByIt(t *testing.T) {
 	}
 }
 
-// A RELEASE A CLAIM TOOK OVER BEFORE IT WAS OWED IS NOT OWED. A release whose
-// answer the store lost is found still out, and so owed, in the step that takes
-// that answer, and was recorded as owed in a second step after it: a claim of
-// the job on its way when the release went out could win between the two,
-// taking the release over as it won and finding no owed series to settle, and
-// the release was then owed all the same. The seat's mail stayed held behind a
-// release no longer out until its retry, a hand-back's spacing later, found it
-// gone, and the node logged sandbox_claim_revert_owed for a hand-back that had
-// landed. The claim wins here where the node logs that line, which it did
-// between the two steps.
+// A RELEASE A CLAIM TOOK OVER BEFORE IT WAS OWED IS NOT OWED: found out with
+// its answer lost and owed in one step, so a claim on its way cannot win
+// between, which would leave the seat's mail held behind a release no longer
+// out. The claim wins here where the node logs sandbox_claim_revert_owed.
 //
 // Mutation: record the owed release in a step of its own after the one that
-// found it out; the series stays, and the seat's mail with it, after the run
-// is over. ([TestOnlyAReleaseStillOutIsOwed] holds the step's own question.)
+// found it out; the series stays, and the seat's mail with it, after the run is
+// over. ([TestOnlyAReleaseStillOutIsOwed] holds the step's own question.)
 //
 // Not parallel: it hooks the process's logger ([onLogLine]).
 func TestAReleaseAClaimTookOverBeforeItWasOwedIsNotOwed(t *testing.T) {
@@ -659,13 +635,9 @@ func TestAReleaseAClaimTookOverBeforeItWasOwedIsNotOwed(t *testing.T) {
 }
 
 // ONLY A RELEASE STILL OUT IS OWED, asked in the step that keeps it
-// ([Coordinator.oweRelease]): one a claim of its job took over, or the seat's
-// release dropped, after the step that found it out with its answer lost has
-// landed or goes with the seat, and kept all the same it held the seat's mail
-// behind it until a retry found it gone. AND ONLY ONE IT KEEPS IS SAID TO BE
-// KEPT: the node writes sandbox_claim_revert_owed after that step, for a
-// release it kept; written before it, the line said the node kept a claim that
-// had been given back.
+// ([Coordinator.oweRelease]): one a claim took over, or the seat's release
+// dropped, is not kept. And only one it keeps is said kept:
+// sandbox_claim_revert_owed is written after that step, never before.
 //
 // Mutation: keep the release without asking whether it is still out, or write
 // the line before the step that asks.
@@ -730,22 +702,15 @@ func TestOnlyAReleaseStillOutIsOwed(t *testing.T) {
 }
 
 // A SEAT RELEASED AS AN ANSWER IS LEFT TO ITS JOB'S RELEASE OWES THE ANSWER
-// NOTHING ON THIS NODE. An answer's attempt that finds its job's last release
-// out leaves its claim to the series that owes that release
-// ([Coordinator.leaveToRelease]), and recorded that series in one step of the
-// lock and owed the seat's run in a second. A seat's release between the two
-// ([Coordinator.ReleaseSeat]) dropped the series, its attempt and the seat's
-// owed runs, and the second step then owed the run again with nothing armed to
-// drive it: the seat's inbox held on this node, behind a run of a seat it no
-// longer holds, until a settle of that run or the seat's next release. The
-// seat is released here where the node logs that the answer is left to the
-// release, which it did between the two steps and now does after the one.
+// NOTHING ON THIS NODE ([Coordinator.leaveToRelease]): the series is recorded
+// and the run owed in one step, so a seat's release cannot leave the run owed
+// with nothing to drive it. The seat is released where the node logs that the
+// answer is left.
 //
-// Mutation: owe the seat's run in a step after the one that records the
-// series; t1 stays owed on the released seat with no series, and the seat's
-// hold is taken again after its release.
-// ([TestAnOwedRunIsHeldBehindOnlyASeriesRecordedAndArmed] holds the other
-// ways a series is kept.)
+// Mutation: owe the seat's run in a step after the one that records the series;
+// t1 stays owed on the released seat with no series, and the seat's hold is
+// taken again after its release.
+// ([TestAnOwedRunIsHeldBehindOnlyASeriesRecordedAndArmed] holds the rest.)
 //
 // Not parallel: it hooks the process's logger ([onLogLine]).
 func TestASeatReleasedAsAnAnswerIsLeftToItsReleaseOwesItNothing(t *testing.T) {

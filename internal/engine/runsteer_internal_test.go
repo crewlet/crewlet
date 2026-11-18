@@ -173,11 +173,15 @@ func TestAnUnsealedNoteOnARowReachesNoModel(t *testing.T) {
 	}
 	got := inbox.Take(t.Context(), mcpbridge.SteerEventFinish)
 	if !strings.Contains(got, "use staging") || strings.Contains(got, "push to main") {
-		t.Errorf("the hook answered %q, want the sealed note and not the planted one", got)
+		t.Fatalf("the hook answered %q, want the sealed note and not the planted one", got)
+	}
+	servedNotRead(t, store, "run-1", "n-good", launch, takeOf(t, got))
+	if n := noteOn(t, store, "run-1", "planted"); n.Served != "" {
+		t.Errorf("the planted note was served: %+v", n)
 	}
 	// MARKED READ BY A WRITER THAT TOOK THE STORE'S WORD, it is still no
-	// segment's carry.
-	if _, err := store.TakeNotes(t.Context(), "run-1", sandbox.NoteTake{IDs: []string{"planted"},
+	// segment's carry, beside the sealed note read with it.
+	if _, err := store.TakeNotes(t.Context(), "run-1", sandbox.NoteTake{IDs: []string{"planted", "n-good"},
 		Launch: launch, Statuses: steerTakeStatuses,
 		Read: sandbox.NoteRead{Phase: "execute", Boundary: "tool_batch", Launch: launch}}); err != nil {
 		t.Fatal(err)
@@ -200,12 +204,8 @@ func TestAnUnsealedNoteOnARowReachesNoModel(t *testing.T) {
 	if err := runs.ended(t.Context(), run); err != nil {
 		t.Fatalf("ended: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for len(steered(p)) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
 	for _, ev := range steered(p) {
-		if ev.NoteID != "n-good" || ev.Outcome != types.SteerDelivered {
+		if ev.NoteID != "n-good" {
 			t.Errorf("a record names a note nobody sealed: %+v", ev)
 		}
 	}
@@ -249,6 +249,11 @@ func TestANoteSealedForAnotherTurnIsNotDelivered(t *testing.T) {
 	_, waiting := recordedNotes(t, store, "run-1")
 	if len(waiting) != 2 {
 		t.Errorf("the notes waiting are %v, want both untouched", waiting)
+	}
+	for _, id := range waiting {
+		if n := noteOn(t, store, "run-1", id); n.Served != "" {
+			t.Errorf("a note sealed for another turn or note was served: %+v", n)
+		}
 	}
 	if got := steered(p); len(got) != 0 {
 		t.Errorf("records were published for notes that are not this turn's: %+v", got)
@@ -299,37 +304,27 @@ func TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys(t *testing.T) {
 	// A NODE THAT HOLDS THE KEY READS IT.
 	both := recordseal.Keyring{ActiveID: "k-new", Keys: append(slices.Clone(newRing.Keys), oldRing.Keys...)}
 	rotated, _ := steersOver(t, both, store)
-	if got := boundInbox(t, rotated, store, "run-1", launch).Take(t.Context(), mcpbridge.SteerEventFinish); !strings.Contains(got, "use staging") {
-		t.Errorf("a node holding the key did not read the note: %q", got)
+	got := boundInbox(t, rotated, store, "run-1", launch).Take(t.Context(), mcpbridge.SteerEventFinish)
+	if !strings.Contains(got, "use staging") {
+		t.Fatalf("a node holding the key did not serve the note: %q", got)
 	}
+	servedNotRead(t, store, "run-1", "n-1", launch, takeOf(t, got))
 	if got := steered(p); len(got) != 0 {
 		t.Errorf("the node without the key recorded the note: %+v", got)
 	}
 }
 
 // A CONFIRMATION OF A NOTE UNDER A KEY THIS NODE DOES NOT HOLD WAITS FOR A NODE
-// THAT HOLDS IT. In a fleet whose nodes hold different keys, the node serving a
-// run's session can lack the key a note is sealed under while the node that
-// served the note to the job's harness held it: the run's seat moved, or a
-// recovery opened its session on another node. This node's take hands over
-// only a note it opened, so a confirmation naming that note took no read of
-// it, and answered done, the plugin never confirmed it again: the read was
-// recorded nowhere. So the confirmation is turned away
-// (mcpbridge.ErrNoteUntaken), the note still waiting and served to the
-// job, and said once, at WARN with the keys this node holds, however often the
-// plugin asks again. A note beside it that this node opens is recorded and
-// reported all the same, and reported again through the job's earlier read
-// when the plugin asks again. The confirmation made again where the key is
-// held is recorded there. A note this node cannot open that waits no more, or
-// that waits for another job, is no such note: answered done.
+// THAT HOLDS IT (the package doc's "An OpenCode confirmation is recorded once,
+// and reported"): it is turned away (mcpbridge.ErrNoteUntaken), said once at
+// WARN with the keys held however often the plugin asks, while a note beside it
+// this node opens is recorded and reported, and reported again through the
+// job's earlier read. A note this node cannot open that waits no more, or waits
+// for another job, is answered done. Not parallel: it installs the log sink.
 //
-// Mutation: answer the note this node cannot open done, and the first
-// confirmation goes red; say it at every confirmation, and its line is
-// counted twice; turn it away before the take, or before the job's earlier
-// read is reported, and the note beside it goes unrecorded or unreported
-// again; turn a note this node cannot open away whether or not it waits, or
-// whatever job it is for, and the last two confirmations go red. Not
-// parallel: it installs the process's log sink.
+// Mutation: answer the unopened note done, say it at every confirmation, turn
+// it away before the take or before the earlier read is reported, or turn away
+// an unopened note that waits no more or for another job, and a step goes red.
 func TestAConfirmationOfANoteUnderAnUnheldKeyWaitsForANodeThatHoldsIt(t *testing.T) {
 	logs := captureSteerLogs(t)
 	ctx := t.Context()
@@ -499,20 +494,17 @@ func TestAConfirmationIsTurnedAwayOnlyForANoteItNamesThatWaitsForItsKey(t *testi
 }
 
 // EVERY NOTE THAT WAITS FOR ITS KEY IS SAID ONCE, WHEREVER ITS CONFIRMATION IS
-// TURNED AWAY. A confirmation naming two notes this node cannot open says each
-// of them, at WARN, the first time it is turned away for them, and never
-// again however often the plugin makes it again: once a note, as the open of
-// one is said, so a second note is not hidden behind the first. And the first
-// time is the first turn-away, whatever else turns it away: a confirmation
-// reaching the inbox once the job's completion claimed the run, so that its
-// take left the note this node opens waiting too, says the notes waiting for
-// their key as well, and the confirmation made again once the claim is handed
-// back, which records the note this node opens, says nothing more.
+// TURNED AWAY: each of two notes this node cannot open is said at WARN the
+// first time a confirmation is turned away for it, and never again, so a
+// second note is not hidden behind the first. The first time is the first
+// turn-away whatever else turns it away: under a completion's claim, whose
+// take left the note this node opens waiting too, both notes waiting for their
+// key are said, and the confirmation made again once the claim is handed back
+// says nothing more. Not parallel: it installs the process's log sink.
 //
 // Mutation: say the turn-away once a turn, and the second note goes unsaid;
 // ask whether the take left a note before asking for a note waiting for its
-// key, and the confirmation turned away under the claim says neither. Not
-// parallel: it installs the process's log sink.
+// key, and the confirmation turned away under the claim says neither.
 func TestEveryNoteThatWaitsForItsKeyIsSaidOnceWhereverItsConfirmationIsTurnedAway(t *testing.T) {
 	logs := captureSteerLogs(t)
 	ctx := t.Context()
@@ -688,7 +680,8 @@ func TestAnAnchorUnderAnUnheldKeyNamesTheHeldKeysInTheLog(t *testing.T) {
 // context as JavaScript does, so notes of characters outside the Basic
 // Multilingual Plane count two units each — three full notes of emoji are 7,000
 // characters, inside the budget by a count of characters and past it by the
-// harness's. The oldest that fit are taken, and the rest wait for the next step.
+// harness's. The oldest that fit are served, and the rest wait unserved for the
+// next step.
 //
 // Mutation: count runes in executor.UTF16Len, and the take hands all three
 // to a harness that files the answer away unread.
@@ -714,8 +707,12 @@ func TestAClaudeTakeFitsItsBudgetInUTF16Units(t *testing.T) {
 	if n := executor.UTF16Len(hook.Output.Context); n > executor.ClaudeContextBudget+200 {
 		t.Errorf("the hook carries %d UTF-16 units, past the budget of %d", n, executor.ClaudeContextBudget)
 	}
-	if _, waiting := recordedNotes(t, store, "run-1"); !slices.Equal(waiting, []string{"n-3"}) {
-		t.Errorf("the notes still waiting are %v, want the newest, which did not fit", waiting)
+	take := takeOf(t, answer)
+	for _, id := range []string{"n-1", "n-2"} {
+		servedNotRead(t, store, "run-1", id, launch, take)
+	}
+	if n := noteOn(t, store, "run-1", "n-3"); n.Served != "" || !n.Waiting() {
+		t.Errorf("the newest note, which did not fit, holds %+v, want it waiting unserved", n)
 	}
 }
 
@@ -924,9 +921,11 @@ func TestARunsViewOfItsNotesWatchesAgainWhenItsWatchCloses(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if answer := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch); !strings.Contains(answer, "use staging") {
-		t.Errorf("the hook after a batch was answered %q, want the note filed after the watch closed", answer)
+	answer := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch)
+	if !strings.Contains(answer, "use staging") {
+		t.Fatalf("the hook after a batch was answered %q, want the note filed after the watch closed", answer)
 	}
+	servedNotRead(t, store, "run-1", "req-1", launch, takeOf(t, answer))
 }
 
 // stallingStore is a run store whose note reads — the record's read and a take
@@ -1081,9 +1080,14 @@ func TestANoteAtItsWorstFitsWhatARunsRowKeepsOfOne(t *testing.T) {
 	t.Logf("a note at its worst seals to %d bytes of the %d", len(note.Sealed), sandbox.MaxNoteSealedBytes)
 }
 
-// fileItemFor seals an item for job as a note is sealed, and files it on
-// turnID's record under the turn's bounds.
-func fileItemFor(t *testing.T, runs *runSteers, store sandbox.PendingStore, turnID, id, job string) {
+// placeItemFor puts an item for job on turnID's record, sealed as a note is
+// sealed, waiting and served to nobody, numbered after every note the record
+// holds, as the store's own write of the record files one.
+//
+// ONTO THE RECORDS THE STORE IS BUILT ON, because no filer may file one
+// (sandbox.ErrNoteKind) and this build's store files none: what every reader
+// does with an item a record holds is the subject here, whoever put it there.
+func placeItemFor(t *testing.T, runs *runSteers, records coord.SandboxRuns, turnID, id, job string) {
 	t.Helper()
 	n, err := runs.seal(turnID, steer.Note{ID: id, Text: "item for the job " + id, By: "founder",
 		ByKind: iam.ActorHuman})
@@ -1091,10 +1095,18 @@ func fileItemFor(t *testing.T, runs *runSteers, store sandbox.PendingStore, turn
 		t.Fatal(err)
 	}
 	n.For = job
-	filed, _, err := store.FileNote(t.Context(), turnID, sandbox.NoteFiling{Note: n,
-		MaxWaiting: steer.MaxPendingNotes, MaxNotes: steer.MaxTurnNotes})
-	if err != nil || filed != sandbox.NoteAccepted {
-		t.Fatalf("file item %s = %s, %v", id, filed, err)
+	if _, ok, err := records.MutateSandboxRun(t.Context(), turnID, func(current coord.Record) (coord.SandboxRunChange, error) {
+		var row sandbox.PendingRun
+		if err := json.Unmarshal(current.Value, &row); err != nil {
+			return coord.SandboxRunChange{}, err
+		}
+		row.Steer.Seq++
+		n.Seq = row.Steer.Seq
+		row.Steer.Notes = append(row.Steer.Notes, n)
+		raw, err := json.Marshal(row)
+		return coord.SandboxRunChange{Put: raw}, err
+	}); err != nil || !ok {
+		t.Fatalf("put item %s for job %s on %s: %v %v", id, job, turnID, ok, err)
 	}
 }
 
@@ -1138,22 +1150,28 @@ func TestEveryReaderOfWaitingNotesNamesItsJob(t *testing.T) {
 	t.Run("the run inbox hands its job its item", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		store := sandbox.NewCoordStore(coordmem.NewFleet())
+		fleet := coordmem.NewFleet()
+		store := sandbox.NewCoordStore(fleet)
 		runs, _ := steersOver(t, steerRing, store)
 		launch := workingRun(t, store, runs, "run-1")
 		fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
-		fileItemFor(t, runs, store, "run-1", "i-1", launch)
+		placeItemFor(t, runs, fleet, "run-1", "i-1", launch)
 		inbox := boundInbox(t, runs, store, "run-1", launch)
 		viewHolds(t, inbox, 2)
-		if answer := inbox.Take(ctx, mcpbridge.SteerEventToolBatch); !strings.Contains(answer, "use staging") ||
-			!strings.Contains(answer, "item for the job i-1") {
-			t.Errorf("the batch's hook was answered %q, want the person's note and the job's own item", answer)
+		answer := inbox.Take(ctx, mcpbridge.SteerEventToolBatch)
+		if !strings.Contains(answer, "use staging") || !strings.Contains(answer, "item for the job i-1") {
+			t.Fatalf("the batch's hook was answered %q, want the person's note and the job's own item", answer)
+		}
+		for _, id := range []string{"n-1", "i-1"} {
+			servedNotRead(t, store, "run-1", id, launch, takeOf(t, answer))
 		}
 		fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "and tag it", By: "founder"})
-		fileItemFor(t, runs, store, "run-1", "i-2", launch)
-		if answer := inbox.Take(ctx, mcpbridge.SteerEventFinish); !strings.Contains(answer, "and tag it") ||
-			!strings.Contains(answer, "item for the job i-2") {
-			t.Errorf("the finish's hook was answered %q, want the person's note and the job's own item", answer)
+		placeItemFor(t, runs, fleet, "run-1", "i-2", launch)
+		answer = inbox.Take(ctx, mcpbridge.SteerEventFinish)
+		if !strings.Contains(answer, "and tag it") || !strings.Contains(answer, "item for the job i-2") ||
+			strings.Contains(answer, "use staging") {
+			t.Errorf("the finish's hook was answered %q, want the person's note and the job's own item, and "+
+				"none the batch's serve still stands for", answer)
 		}
 	})
 	t.Run("the poll passes another job's item over", func(t *testing.T) {
@@ -1195,10 +1213,11 @@ func TestEveryReaderOfWaitingNotesNamesItsJob(t *testing.T) {
 	t.Run("the review and a brief take no item", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		store := sandbox.NewCoordStore(coordmem.NewFleet())
+		fleet := coordmem.NewFleet()
+		store := sandbox.NewCoordStore(fleet)
 		runs, _ := steersOver(t, steerRing, store)
 		launch := workingRun(t, store, runs, "run-1")
-		fileItemFor(t, runs, store, "run-1", "i-1", launch)
+		placeItemFor(t, runs, fleet, "run-1", "i-1", launch)
 		source := claimedSource(t, store, runs, launch)
 		eventually(t, "the segment's view to hold the item", func() bool {
 			view, opened, _ := source.watch.snapshot()

@@ -16,16 +16,13 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A PAGE IS MEASURED AS ITS JSON, because what bounds it is the bytes of the
-// answer the asker reads (gitlet.MaxGitAnswerBytes), and text grows on its way
-// into JSON: a quote or a backslash is two bytes there, a control character
-// six, every `<`, `>` and `&` six (encoding/json escapes them for HTML), and
-// every byte that is not UTF-8 six. Counting raw bytes, a page of a file full
-// of `<` would encode at six times its bound. So every item a page takes is
-// costed in the encoder's own terms — a tree entry or a diff file by encoding
-// it, text by the per-rune table below, which init builds FROM encoding/json
-// itself so the two cannot disagree — against the room an answer has once its
-// envelope is spent.
+// A PAGE IS MEASURED AS ITS JSON, because its bound (gitlet.MaxGitAnswerBytes)
+// is the answer's bytes and text grows into JSON: a quote or a backslash is two
+// bytes, a control character, a `<`, `>` or `&` (escaped for HTML) or a byte
+// that is not UTF-8 six. Counted raw, a page of `<` would encode at six times
+// its bound. A tree entry or a diff file is costed by encoding it, text by the
+// per-rune table below, which init builds FROM encoding/json so the two cannot
+// disagree.
 
 // asciiCost is what each ASCII byte costs inside a JSON string, read off
 // encoding/json at init; sepCost a U+2028 or U+2029 (each escaped, since a
@@ -90,36 +87,30 @@ func textCost(b []byte) int {
 	return cost
 }
 
-// A FIELD THE CODE TOOLS FENCE IS COSTED AS THEY SEND IT. A page of a file or
-// of a patch fences one text, whose fence the room a page leaves beside a
-// tool's envelope holds; a log's page fences every commit's subject and a
-// blame's every line and every commit's subject — a hundred, five hundred —
-// and a diff's patches every patch, so each such field is costed here as
-// internal/agent/builtin's code tools send it: inside the fence they put a
-// repository's text in, naming no writer at trust external
-// (provenance.Repository), its text NEUTRALISED there as every other string
-// of a code tool's answer is (provenance.Neutralise: every
-// marker-shaped `[` lengthened into `[escaped `). The fence's label and closer
-// are read off provenance itself at init, so a fence grown longer is costed
-// longer; only the turn's own boundary, which no Gitlet node knows, is not —
-// text spelling it is a turn's own echo, and a page it lengthens past one
-// answer is refused by the tool naming a narrower read, never cut.
+// A FIELD THE CODE TOOLS FENCE IS COSTED AS THEY SEND IT. A file's page fences
+// one text, which the room beside a tool's envelope holds; but a log's page
+// fences every subject, a blame's every line and subject, and a diff's patches
+// every patch, so each is costed as internal/agent/builtin sends it: fenced
+// naming no writer at trust external (provenance.Repository) and NEUTRALISED
+// (provenance.Neutralise lengthens every marker-shaped `[`). The fence is read
+// off provenance at init, so a longer fence costs longer. Only the turn's own
+// boundary, which no Gitlet node knows, is not costed: text spelling it is the
+// turn's own echo, and a page it lengthens past one answer is refused by the
+// tool naming a narrower read, never cut.
 
 // fenceCost is what the fence of each source a log, a blame or a diff's
 // patches fence adds to a text once encoded: its opening line, the line feed
 // before its closer and the closer.
 var fenceCost = map[provenance.Source]int{}
 
-// costModel is what a log's, a blame's and a diff's patches' pages were
-// measured with — what each fence adds, and what neutralising one marker does
-// — in every key the memo keeps such a page under: a build whose fence or
-// escape is longer cuts its pages anew rather than serve one measured short of
-// it.
+// costModel is what a fenced page was measured with (each fence's cost and one
+// marker's neutral growth), in every memo key of such a page: a build whose
+// fence or escape is longer cuts its pages anew rather than serve one measured
+// short of it.
 var costModel string
 
-// init measures both after the table above, which the measuring reads: an
-// init runs after every package variable is set, and in the order this file
-// declares it.
+// init runs after the one above, whose table it reads: a file's inits run in
+// the order it declares them.
 func init() {
 	for _, src := range []provenance.Source{provenance.SourceRepoFile, provenance.SourceRepoCommit,
 		provenance.SourceRepoPatch} {
@@ -153,27 +144,20 @@ func jsonLen(v any) int {
 	return len(out)
 }
 
-// room is what a page's items may take in the read's answer whose envelope —
-// the answer with no items, every number and the cursor at their longest — is
-// envelope. THE FIELDS EVERY ANSWER CARRIES are filled here ([read.stamp]):
-// the repository and the position Read stamps on whatever the kind answered,
-// the push that introduced each commit it names with the coverage of the
-// index that says so (step 9, decorated before any page is cut), and Memo set
-// — the page may be read from the memo — so no kind can measure its envelope
-// without them and cut a page that its stamp then pushes past the bound. An
-// UNSTAMPED read ([gitlet.GitQuery.Unstamped]) is stamped with none, so its
-// room is the bound less an envelope of the request's own fields alone, and
-// its page a function of what it names.
+// room is what a page's items may take in an answer whose envelope (no items,
+// every number and the cursor at their longest) is envelope. The envelope is
+// stamped here ([read.stamp], Memo set; step 9 decorates before any page is
+// cut), so no kind cuts a page its stamp then pushes past the bound. An
+// unstamped read ([gitlet.GitQuery.Unstamped]) is stamped with none, so its
+// page is a function of what it names alone.
 func (r *read) room(envelope gitlet.GitAnswer) int {
 	r.stamp(&envelope, true)
 	return r.s.pageBytes - jsonLen(envelope)
 }
 
-// stamp sets on a every field Read stamps on an answer — the repository, the
-// copy's position, the push that introduced each commit it names, the index's
-// coverage, and memo — or none, on an unstamped read ([gitlet.GitQuery.Unstamped]):
-// THE ONE PLACE they are set, so the envelope a page is cut against, the cost
-// a memoized page's budget is held to and the answer itself carry the same.
+// stamp sets on a every field Read stamps on an answer, or none on an
+// unstamped read: THE ONE PLACE they are set, so the envelope a page is cut
+// against, a memoized page's budget and the answer itself carry the same.
 func (r *read) stamp(a *gitlet.GitAnswer, memo bool) {
 	if r.q.Unstamped {
 		return
@@ -204,12 +188,10 @@ func widestCursor(letter byte, numbers int) string {
 // — "b:<n>:<o>" byte o of line n, "p:<o>" byte o of a patch, "s:<n>" the n-th
 // commit of a history's walk (counted from 0, the commits git skips first),
 // "x:<n>" the n-th anchor of an excerpts read, "w:<n>:<o>" byte o of the n-th
-// file's patch of a diff's patches (both from 1), and "d:<seconds>:<name>" a tags
-// page's last tag (tags.go), a KEY of the listing rather than a position: a
-// listing at another position resumes past the same tag. Each other is a
-// position in an answer that is a function of object ids alone — the same
-// listing, file, patch or walk on every node at every position — so a cursor
-// any node issued is sound on any other.
+// file's patch of a diff's patches (both from 1), and "d:<seconds>:<name>" a
+// tags page's last tag (tags.go), a KEY that a listing at another position
+// resumes past. Every other is a position in an answer that is a function of
+// object ids alone, so a cursor any node issued is sound on any other.
 
 // cursor is a parsed Next: its letter and positions; the zero cursor is a
 // first page.

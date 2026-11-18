@@ -17,129 +17,31 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A CHANGE'S LIFECYCLE, DECIDED: an open, an edit of what it says of itself, a
-// draft's state, a retarget, a close, a reopen and a landing are each a
-// [ChangeProposal] its asker — the repository's home Gitlet node, for a landing —
-// hands the repository's committer ([Committer.ProposeChange]),
-// which decides it in ONE snapshot, alone, as a record of its own op
-// ([ChangeOps]) on the REPOSITORY's subject — the subject every push that
-// moves the change's branches is on too, so the broker arbitrates a change's
-// lifecycle and its pushes together, and a change is never both merged and
-// closed. Its number is no decision's: the apply that opens it reads and
-// advances the repository's next_change, so numbers follow the log's order.
+// A change's lifecycle — an open, an edit, a draft's state, a retarget, a
+// close, a reopen and a landing — is each a [ChangeProposal] the repository's
+// committer decides alone ([Committer.ProposeChange]) as a record of its own
+// op ([ChangeOps]) on the REPOSITORY's subject, where the pushes that move the
+// change's branches are too, so the broker arbitrates both and a change is
+// never both merged and closed. Its number is the apply's (next_change), so
+// numbers follow the log's order.
 //
-// # What the decide holds a write to
-//
-// Against the rows of one snapshot, in this order; the first rule that fails
-// is the answer, and none of them writes anything.
-//
-// Every write first meets its repository: absent, deleted or being purged is
-// repo_deleted, in the sentence of the state it is in ([RepoGone]); archived
-// is repo_archived, since an archived repository is read-only and its changes
-// are read and written nothing; being imported is repo_importing, since it
-// takes no write until its import is done; and a pull mirror is
-// repo_mirrored for every write but a close and a landing, since it moves only
-// by its syncs and neither of those moves a ref.
-//
-// AN OPEN then meets:
-//
-//  1. its asker's grant on the repository taking a fast-forward of the
-//     source branch ([Grant.RefRule]) — else not_permitted, in the grant's
-//     own sentence: a change proposes what its source holds, so who may open
-//     one from a branch is who may push to it — a seat's own namespace for a
-//     full_access seat outside the owning unit, any branch for one that
-//     writes, and every branch for a person — and, for a seat whose turn
-//     works for somebody ([ChangeProposal.Ceiling]), them too
-//     ([WriteCeiling.changeRefusal]: a colleague reading the repository,
-//     nobody steering only an open of the seat's own namespace or in a
-//     repository it owns) — else not_permitted;
-//  2. a source that is not its target — else same_ref;
-//  3. a source and a target that are live branches — else no_source, then
-//     no_target: a change is about branches that exist;
-//  4. heads that differ — else no_difference, since a source at its target's
-//     commit holds nothing to merge;
-//  5. no live change already on the source — else change_exists, naming it
-//     ([ChangeRef]): a branch heads ONE live change at a time, the invariant
-//     the push apply's revisions rest on, which every write that makes a
-//     change live — an open and a reopen — holds.
-//
-// EVERY OTHER WRITE meets:
-//
-//  1. its change, on this repository — else change_not_found;
-//  2. its asker being the change's owner, a principal that maintains the
-//     repository ([AccessMaintain]) or a person — else not_permitted
-//     ([mayWrite]): a change's lifecycle is its author's to steer, its
-//     repository's maintainers' to keep in order, and every person's — and,
-//     for a seat whose turn works for somebody, them too: a colleague reading
-//     the repository, nobody steering only the seat's own change or one in a
-//     repository it owns ([WriteCeiling.changeRefusal]) — else not_permitted;
-//  3. the version it names being the change's ([ChangeProposal.ExpectedVersion])
-//     — else stale: another write landed first, a push that moved the
-//     change's head among them, and the asker reads the change again;
-//  4. the op's own rule: an edit, a draft's state and a retarget take a LIVE
-//     change — else change_closed or change_merged — and a retarget's target
-//     is a live branch that is not its source (no_target, same_ref); a close
-//     refuses a merged change (change_merged); a reopen refuses a merged one
-//     too, and takes a closed change's source only where it is a live branch
-//     (no_source) that heads no other live change (change_exists).
-//
-// A LANDING ([ChangeLanded]) is the repository's home Gitlet node's own write,
-// which names no asker and judges no grant: it meets its change on this
-// repository (change_not_found); a closed change, which nobody lands
-// (change_closed); and then the rows its home read — the change's head
-// revision and head, its target branch, and the target's tip, each where the
-// home read it — else stale, decided against rows the home did not read, for
-// its next pass to read again. The decide runs no git: whether the tip holds
-// the head is the home's finding, which the tip it names makes true, since a
-// branch's tip holds what it held whatever moved it there. Who made the merge
-// is the home's finding too — the push after which the target held the head
-// through to that tip, which its walk of the target's moves tells by git —
-// and the decide holds the push it names to the rows ([landingPusher]): a
-// move of the target, applied, between the record of the change's head
-// revision and the record that last moved the target; its pusher is the
-// landing's actor, and its routing carries whom the push's row says it was
-// made for. A push that is none of those names nobody.
-//
-// A write that asks for what the change already says — an edit to its own
-// values, a draft's state it is in, the target it has, a close of a closed
-// change, a reopen of a live one, a landing of a merged one — is ANSWERED
-// UNCHANGED from the change's row, with no record: nothing moves, so nothing
-// is appended, and a write asked again after its answer was lost, under a new
-// operation id, lands on what the first did rather than refused.
-//
-// # A seat's write is decided only by a node that can judge it
-//
-// Every rule that judges a SEAT reads the chart of the deciding node's epoch
-// ([SeatRules]), as a seat's push does: a node with no chart yet, or one
-// confirmed behind the company's configuration, decides none of a seat's
-// writes and says so about itself ([ErrNotServing]), so the router asks the
-// repository's runner-up under the same operation id. A person's and a token's
-// are decided as ever, since no rule of theirs reads the chart.
+// [decideChange] holds a write to its rules in order, the first that fails
+// the answer ([ChangeRefusal]'s codes follow it). A write asking for what the
+// change already says is ANSWERED UNCHANGED from its row with no record, so
+// one retried under a new operation id lands on what the first did.
 
 // Validate refuses a proposal no committer could decide ([ErrInvalidProposal],
-// naming the field), before it is queued: anything but exactly one of the
-// seven records; an operation id this engine does not accept
-// (statelog.CheckCallerOpID); an asker that is no principal, or that names a
-// run — and a landing that names any asker, being the home's own; whom the
-// write is made for, where its asker may not state it so or its ceiling does
-// not bound it ([writtenForUnder]: the chart's half is the decide's); a Seen
-// that is no position on the code log; a repository id that is no UUID in its
-// canonical spelling; a change id that is no bare UUIDv7 — and an open's that
-// is not [OpenChangeID] of its operation id; an open or a landing that names a
-// version, or any other write that names none; a branch that is no branch a
-// change may name ([branchProblem]); a title, a body, a close's reason, a work
-// item, a turn or a run its bounds refuse; an edit that sets nothing, or sets a
-// work item and clears it; a field the committer stamps — who wrote it, an
-// open's or a reopen's head — set by the asker; a landing of no revision, of a
-// head or a tip that is no whole object id, or found by a node no node id
-// names; and a record past what one proposal may carry ([EntryRoom]). What the
-// repository and the change hold is the decide's to judge, from the rows.
+// naming the field) before it is queued: its shape (one record), its ids
+// (statelog.CheckCallerOpID; an open's is [OpenChangeID] of its operation id),
+// an asker that is no principal or names a run, its branches ([branchProblem])
+// and bounds, an edit that sets nothing, whom it is made for as far as no chart
+// is needed ([writtenForUnder]), a field the committer stamps, and a record
+// past [EntryRoom]. A landing names no asker and no version; every other write
+// but an open names a version. The rows are the decide's to judge.
 //
-// Before any of it, a value whom the write is made for names that this build
-// does not know is answered as its decoder answers it on the wire, never as
-// ErrInvalidProposal, whatever else the proposal holds ([unknownToThisBuild]):
-// this build cannot judge the proposal at all, and a committer of a build that
-// knows the value does.
+// A value of whom the write is made for that this build does not know is
+// answered first, as its decoder answers it on the wire and never as
+// ErrInvalidProposal ([unknownToThisBuild]): a build that knows it decides it.
 func (p ChangeProposal) Validate() error {
 	_, err := p.measure()
 	return err
@@ -263,15 +165,12 @@ func (p ChangeProposal) ChangeID() string {
 	return ""
 }
 
-// JudgesChart reports a proposal whose decide reads the deciding node's chart:
-// a SEAT'S write, whose grant the chart says, and a write that MENTIONS
-// somebody, whose mentions the chart holds the handles of and says which are
-// persons (concerns.go). A person's and a token's that mention nobody consult
-// none, and neither does a landing, which names no asker and judges no grant —
-// so a node behind the company's configuration, or holding no chart yet, still
-// decides a landing. ONE ANSWER, which the committer queues and decides by and
-// the estate declares the operation's grant by, so the two never disagree
-// about which writes a node behind the company's configuration may decide.
+// JudgesChart reports whether p's decide reads the deciding node's chart: a
+// SEAT'S write, whose grant the chart says, and one that MENTIONS somebody,
+// whose handles the chart resolves (concerns.go). A landing never does, so a
+// node behind the company's configuration or holding no chart yet still
+// decides one. The committer queues and decides by this answer and the estate
+// declares the operation's grant by it, so the two never disagree.
 func (p ChangeProposal) JudgesChart() bool {
 	return p.Landed == nil && (p.Asker.Kind.readsChart() || len(p.mentions()) > 0)
 }
@@ -555,25 +454,22 @@ func stampedBy(what string, by Principal) error {
 	return nil
 }
 
-// again is what a proposal's asker does after a refusal that decided nothing.
+// changeAgain is what a proposal's asker does after a refusal that decided
+// nothing.
 const changeAgain = "send the write again"
 
-// ProposeChange decides one write of a change's lifecycle as a batch of its own
-// in the repository's queue and answers what became of it — the push's queue
-// and bounds ([Committer.Propose]), as a compaction's are
-// ([Committer.ProposeCompaction]): a full queue or a node holding its bytes is
-// busy at once, a write whose caller's deadline leaves too little for a batch
-// and its answer is busy undecided, a stopping committer answers
-// [ErrNotServing] — as does one that cannot judge a seat's write, behind the
-// company's configuration or holding no chart yet — and a proposal that is not
-// one answers [ErrInvalidProposal]. ctx bounds only this caller's wait.
+// ProposeChange decides one write of a change's lifecycle as a batch of its
+// own under the push's queue and bounds ([Committer.Propose]): a full queue, or
+// a node at its byte cap, is busy at once; a deadline too short for a batch is
+// busy undecided; a stopping committer, or one that cannot judge a seat's
+// write, answers [ErrNotServing]; a malformed proposal, [ErrInvalidProposal].
+// ctx bounds only this caller's wait.
 //
-// ITS OPERATION ID IS THE PROPOSAL'S OWN, never one minted for the batch, so a
-// write its asker hands the repository's runner-up after this node went
-// silent is the same write there, collapsed by the ledger onto the record that
-// landed — an open onto the change it opened, never a second. ITS SESSION IS
-// ITS SEEN. Applied is answered FROM THE CHANGE'S ROW the record wrote, never
-// from the decision: its number is the apply's to give.
+// ITS OPERATION ID IS THE PROPOSAL'S OWN, never minted for the batch, so the
+// same write handed to the repository's runner-up collapses in the ledger onto
+// the record that landed — an open onto its change, never a second. Its
+// session is its Seen. Applied is answered FROM THE CHANGE'S ROW: its number
+// is the apply's to give.
 func (c *Committer) ProposeChange(ctx context.Context, p ChangeProposal) (ChangeResult, error) {
 	bytes, err := p.measure()
 	if err != nil {
@@ -631,11 +527,9 @@ type changeDecision struct {
 	// a notice a handle and the change's count of them ([noticeWrites]) —
 	// beside the change's own ([withinChange]).
 	notices int
-	// actor and actorKind are who made the change a landing records — the
-	// home's own write, which names no asker — as its decide found them: the
-	// pusher of the push the home found bringing the head into the target
-	// ([landingPusher]); and workingFor whom they made that push for, as the
-	// push's row keeps it, nil for nobody.
+	// actor and actorKind are who merged the change a landing records, which
+	// names no asker: the pusher [landingPusher] finds; workingFor is whom
+	// they made that push for, nil for nobody.
 	actor      string
 	actorKind  PartyKind
 	workingFor *types.WorkingFor
@@ -653,15 +547,10 @@ func routeChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRep
 	if d.payload == nil || d.refusal != "" {
 		return d, nil
 	}
-	// WHO MADE IT: the asker of a write somebody asked; for the home's
-	// landing, which names no asker, whoever made the push the home found
-	// bringing the head into the target, as its decide read them — that push
-	// merged the change, so its pusher hears nothing of a merge they made,
-	// and a person who made it is named among the routing's persons, as a
-	// push's own merge names its pusher. AND FOR WHOM: the asker's write was
-	// made for whom its request states, and the landing for whom that push
-	// was made, as its row keeps it — the change's other authors told it
-	// merged read for them, as the push's own merge would have told them
+	// WHO MADE IT: the asker; for a landing, which names none, the pusher of
+	// the push that merged it (d.actor), so they hear nothing of their own
+	// merge, as a push's own merge names its pusher. FOR WHOM: whom the
+	// request states, or for a landing whom that push was made for
 	// (concerns.go's head, "Whom the actor acted for").
 	actor, actorKind := p.Asker.party()
 	workingFor := p.WrittenFor.Carrier()
@@ -723,12 +612,14 @@ func (d changeDecision) refuse(code ChangeRefusal, detail string) (changeDecisio
 	return d, nil
 }
 
-// decideChange is one round's decision of p over the rows tx holds — see this
-// file's head for the rules, in their order. Pure over (the rows, p, seats,
-// retention): seats is the deciding epoch's chart and calendar, which a seat's
-// write is judged by and which a write by anybody else may leave unset;
-// retention is code.deleted_retention_days on the deciding epoch, which a
-// repo_deleted refusal names the purge's earliest instant by.
+// decideChange is one round's decision of p over the rows tx holds: the
+// repository's state, then an open's rules ([decideOpen]), a landing's
+// ([decideLanded]), or every other write's — its change, [mayWrite], the
+// ceiling, the version it names, then its op's own rule. Pure over (the rows,
+// p, seats, retention): seats is the deciding epoch's chart and calendar,
+// which a write that judges no chart ([ChangeProposal.JudgesChart]) may leave
+// unset; retention is code.deleted_retention_days,
+// by which a repo_deleted refusal names the purge's earliest instant.
 func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatRules,
 	retention time.Duration) (changeDecision, error) {
 
@@ -849,10 +740,13 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 	return routeChange(ctx, tx, p, repo, row, seats, d)
 }
 
-// decideOpen is an open's rules 1–5 over the repository's row as repo holds it
-// and the rows tx holds, its asker's grant g — rule 1 held, for a seat whose
-// turn works for somebody, to them too ([WriteCeiling.changeRefusal]) on
-// roster, the deciding chart.
+// decideOpen is an open's rules over repo and the rows tx holds, in order:
+// its asker's grant g to fast-forward the source ([Grant.RefRule]), since who
+// may open a change from a branch is who may push it — and for a seat whose
+// turn works for somebody, them too, on roster ([WriteCeiling.changeRefusal]);
+// a source that is not its target; both live branches; heads that differ; and
+// no live change on the source — a branch heads ONE live change at a time, the
+// invariant the push apply's revisions rest on, which a reopen holds too.
 func decideOpen(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRepo, g Grant, roster Roster,
 	d changeDecision) (changeDecision, error) {
 
@@ -964,10 +858,13 @@ func decideRetarget(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo push
 	return d, nil
 }
 
-// decideLanded is a landing's rules over row — see this file's head: a change
-// that is not closed, answered unchanged where it is merged already; then the
-// change's head revision and head, its target branch and the target's tip as
-// its home read them (stale otherwise).
+// decideLanded is a landing's rules over row. A landing is the home's own
+// write: it names no asker and judges no grant. A closed change is landed by
+// nobody, a merged one is answered unchanged, and the change's head revision
+// and head, its target and the target's tip must be as its home read them,
+// else stale, for the home's next pass to read again. The decide runs no git:
+// that the tip holds the head is the home's finding, which the tip it names
+// makes true, since a branch's tip holds what it held whatever moved it there.
 func decideLanded(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRepo, row changeRow, named string,
 	d changeDecision) (changeDecision, error) {
 
@@ -1007,13 +904,9 @@ func decideLanded(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRe
 			"at %s: the home reads the target again", l.TargetRef, repo.name, short(tip), named, short(l.TargetOID)))
 	}
 	// WHO MERGED IT: the push the home found bringing the head into the
-	// target — an author's push of a merge commit onto it, most often — and
-	// never the push that last moved it, which may be somebody's push on top
-	// that merged nothing. Its pusher is the landing's actor, as a push that
-	// sets the target to exactly the head names its own, and whom they made
-	// it for is whom the landing was made for. Named as nobody, the pusher
-	// would be told `merged` of their own merge: a seat woken for a turn, a
-	// person sent a notice.
+	// target, never the one that last moved it, which may have merged nothing
+	// ([landingPusher]). Its pusher is the landing's actor; named as nobody,
+	// they would be told `merged` of their own merge.
 	var err error
 	if d.actor, d.actorKind, d.workingFor, err = landingPusher(ctx, tx, p.RepoID(), row.id, *l,
 		moved); err != nil {
@@ -1068,12 +961,10 @@ func notLive(row changeRow, named string) (string, ChangeRefusal) {
 }
 
 // mayWrite is why asker may not write row's lifecycle beyond its open, or ""
-// where it may (rule D21): the change's OWNER — a seat by its handle, a person
-// by the human seat they hold — a principal that MAINTAINS the repository on
-// its grant g, and every PERSON, whom a grant puts at maintain anyway. A token
-// bound to nobody reads every repository and writes no change; a seat that
-// neither owns the change nor maintains the repository is told what it holds
-// and who may.
+// where it may (rule D21): a change is its OWNER's to steer, a repository
+// MAINTAINER's (on grant g) to keep in order, and every PERSON's, whom a grant
+// puts at maintain anyway. A token bound to nobody writes no change; a seat
+// that may not is told what it holds and who may.
 func mayWrite(asker Principal, row changeRow, g Grant, named string) string {
 	handle, kind := asker.party()
 	switch {

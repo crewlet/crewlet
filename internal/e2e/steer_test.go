@@ -23,18 +23,16 @@ import (
 // The run is the stand-in Claude Code in a real `direct` box, held open, its
 // hooks the settings file the runner wrote. A person sends a note through the
 // route the dashboard presses (`/operator/act/steer_turn`) while the run
-// works: it waits sealed on the run's record, answered as read at the run's
-// next step. Released, the run makes its one call — a batch — and its
-// PostToolBatch hook calls steer_take over the run's own bridge session, which
-// takes the note: recorded read by the run's job, published delivered at the
-// `tool_batch` boundary under that job, and printed into the run's transcript
-// by the harness's own line. The run completes, the turn resumes, and its review
-// opens with the note — so the work is judged against the correction.
+// works: it waits sealed on the run's record. Released, the run makes its one
+// call, a batch, and its PostToolBatch hook's steer_take serves it the note,
+// which the harness prints in its own line and files in its session. The run's
+// collection finds the take there and publishes the note delivered at the
+// `tool_batch` boundary under the job; its review opens with the note.
 //
-// Mutations: write no settings file and no hook asks, so the note is read by the
-// review alone and the delivered record names no job; drop the informational
-// line from the transcript decoder and the run's record never shows it arrive;
-// answer no version probe and the held process is the probe, not the harness.
+// Mutations: write no settings file, or file no hook records, and the review
+// reads the note, naming no job; drop the informational line from the
+// transcript decoder and the run's record never shows it arrive; answer no
+// version probe and the held process is the probe, not the harness.
 func TestAPersonSteersALiveExecutor(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()

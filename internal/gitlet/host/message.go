@@ -4,28 +4,18 @@ import (
 	"strings"
 )
 
-// A REVERT'S AND A CHERRY-PICK'S DEFAULT MESSAGE IS GIT'S OWN — what `git
-// revert --no-edit` and `git cherry-pick -x` write (git 2.56.0's sequencer.c,
-// do_pick_commit) — so a history that mixes the engine's reverts with a
-// person's reads as one (TestARevertIsGitsRevert, TestACherryPickIsGitsCherryPick
-// hold both against git's own commands on every run):
-//
-//   - a revert: `Revert "<subject>"`, a blank line, `This reverts commit
-//     <id>.` — and a revert of a revert `Reapply "<its subject>"` (git
-//     2.43's rule, which leaves a revert of a reapply as it is) — VERBATIM;
-//   - a cherry-pick: the commit's message from its subject on, a line feed
-//     where it ends without one, a blank line unless it already ends in a
-//     trailer block (sequencer.c's has_conforming_footer, whose trailer
-//     reading is trailer.c's: conformingFooter), and `(cherry picked from
-//     commit <id>)` — every line's trailing white space then taken off and
-//     runs of blank lines made one (strbuf_stripspace, which git's pick
-//     applies and its revert does not: measured on 2.56.0).
-//
-// A subject is the first line of the message once lines of nothing but
-// white space are skipped (commit.c's find_commit_subject), and everything
-// from a NUL on is no part of the message, as every C string git reads it as.
-// The comment character is git's default `#` and no trailer is configured:
-// the pool runs git with no configuration file of a person's.
+// A REVERT'S AND A CHERRY-PICK'S DEFAULT MESSAGE IS GIT'S OWN, as `git revert
+// --no-edit` and `git cherry-pick -x` write it (git 2.56.0's sequencer.c), so
+// the engine's reverts and a person's read as one history (TestARevertIsGitsRevert
+// and TestACherryPickIsGitsCherryPick hold both against git's own commands):
+//   - a revert: `Revert "<subject>"`, a blank line, `This reverts commit <id>.`;
+//     a revert of a revert is `Reapply "<its subject>"` (git 2.43's rule);
+//   - a cherry-pick: the message from its subject on, ended by a line feed, a
+//     blank line unless it ends in a trailer block (conformingFooter), then
+//     `(cherry picked from commit <id>)`, all through stripspace (git's pick
+//     applies it, its revert does not).
+// A subject is the first non-blank line (find_commit_subject); a NUL ends the
+// message. Comments are `#`, no trailer is configured: git runs unconfigured.
 
 // revertMessage is `git revert --no-edit`'s message for commit c, whose
 // message is msg.

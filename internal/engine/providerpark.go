@@ -211,15 +211,13 @@ type limitProbes struct {
 	// which the Models page and the `llm_limit_waiting` alarm measure from
 	// ([Engine.parkedByEntry]).
 	//
-	// THE SEAT'S, NOT A PROBE'S: an apply that brings new models releases
-	// every park decided under the old ones, and the seat's next delivery
-	// parks it again at once on the same limit, under a new probe. Dated by
-	// the probe, the wait restarted at every apply, so a seat stuck for an
-	// hour read as parked for seconds and the alarm that turns red at
-	// fifteen minutes went out and came back with every config change. A wait
-	// ends when the chain answers (or stops reporting a limit) or the seat
-	// leaves this node; a park that follows a release for any other reason
-	// within [parkCarryWindow] is the same wait.
+	// THE SEAT'S, NOT A PROBE'S: an apply that brings new models re-parks
+	// the seat at once under a new probe, and dated by the probe the wait
+	// restarted at every apply. A wait ends when the chain answers (or stops
+	// reporting a limit) or the seat leaves this node; a park that follows a
+	// release within [parkCarryWindow] is the same wait, and so is one taken
+	// in a release's own window ([Engine.unlessParked]). The package doc's
+	// "A provider park's release and its wait" says more.
 	waits map[uuid.UUID]parkWait
 }
 
@@ -344,21 +342,21 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 
 // unparkReleased undoes a provider park taken on a seat this node no longer
 // holds ([Engine.providerPark]): its hold lifted, its place on the chain's
-// probe left, and the seat said released, as the release says of a park it
-// forgets ([Engine.forgetProviderPark]).
+// probe left, the seat said released and its wait forgotten, as the release
+// does with a park it forgets ([Engine.forgetProviderPark]).
 //
-// WHETHER OR NOT ITS RECORD IS LEFT. The release's forget can land between the
-// park's take and this, dropping the record and lifting the hold, and still
-// come before the park joined the probe or said the seat parked: with no
-// record to release, the place on the probe stayed, its alarm went on calling
-// the models as the seat, and the seat read parked on every screen while a
-// peer ran it. So the probe is left and the release said either way.
+// WHETHER OR NOT ITS RECORD IS LEFT, and the wait either way: the release's
+// forget can land between the park's take and this, dropping the record and
+// the wait before the park joined the probe, said the seat parked and began
+// the wait again, and left, the probe called the models as the seat and the
+// wait outlived it here. The package doc's "A provider park's release and its
+// wait" says why.
 func (e *Engine) unparkReleased(ctx context.Context, seat uuid.UUID, handle string, basis providerBasis) {
-	if e.releaseProviderPark(ctx, seat, seatReleasedHere) {
-		return
+	if !e.releaseProviderPark(ctx, seat, seatReleasedHere) {
+		e.leaveLimitProbe(seat, basis)
+		e.publishProviderPark(ctx, handle, types.SeatProviderReleased{Reason: seatReleasedHere})
 	}
-	e.leaveLimitProbe(seat, basis)
-	e.publishProviderPark(ctx, handle, types.SeatProviderReleased{Reason: seatReleasedHere})
+	e.forgetParkWait(seat)
 }
 
 // parkResumeOnLimit parks handle's seat on the limit a resumed segment met
@@ -379,15 +377,11 @@ func (e *Engine) parkResumeOnLimit(ctx context.Context, handle string, err error
 // Nothing for a limit that names no instant, which no probe could be armed for.
 //
 // THE PARK IS NO DELIVERY'S, so a hold it could not take is said and
-// otherwise left: the resume is reverted and waits on its refusal either way,
-// as it did before it parked anything.
-//
-// A SEAT THIS NODE HAS LET GO OF is refused its park, and that is said at debug
-// rather than as a park that failed. The resume runs in no delivery and its
-// review is minutes long, so the seat can be released under it, and the park's
-// hold then names the attachment the release ended, which the queue refuses
-// (seatinbox.go): the seat is no longer this node's to park, and the node that
-// takes it asks its own models on its first delivery.
+// otherwise left: the resume is reverted and waits on its refusal either way.
+// A seat this node has let go of under the resume is refused its park, which
+// the queue refuses for the ended attachment its hold names; that is said at
+// debug, since the node that takes the seat asks its own models (the package
+// doc's "A provider park's release and its wait").
 func (e *Engine) parkOnLimit(ctx context.Context, handle string, limit chain.Limit) {
 	_, _, err := e.providerPark(ctx, handle, limit)
 	switch {
@@ -641,25 +635,59 @@ func (e *Engine) endLimitProbe(ctx context.Context, key probeKey, probe *limitPr
 			e.releaseProviderParking(ctx, seat, parking, why)
 		}
 		// THE WAIT IS OVER: the chain answered, or stopped reporting a
-		// limit.
+		// limit, unless the seat met it again in the release's window and
+		// stands parked on it ([Engine.unlessParked]). After the release,
+		// whose park, standing, would keep it.
 		e.endParkWait(seat)
 	}
 }
 
 // parkReleased marks seat's wait as released at this instant, without ending
-// it: a park within [parkCarryWindow] continues it.
+// it: a park within [parkCarryWindow] continues it. A park of the seat that
+// stands keeps it unmarked ([Engine.unlessParked]).
 func (e *Engine) parkReleased(seat uuid.UUID) {
+	e.unlessParked(seat, func(p *limitProbes) {
+		if wait, known := p.waits[seat]; known {
+			wait.releasedAt = e.now()
+			p.waits[seat] = wait
+		}
+	})
+}
+
+// endParkWait forgets when seat began waiting, its wait over, unless a park of
+// the seat stands, which keeps it ([Engine.unlessParked]).
+func (e *Engine) endParkWait(seat uuid.UUID) {
+	e.unlessParked(seat, func(p *limitProbes) { delete(p.waits, seat) })
+}
+
+// unlessParked settles seat's wait record under the probes' lock, unless a
+// provider park of the seat stands, which owns the record.
+//
+// A release marks the wait released, or a probe's answer ends it, only after
+// its resume, and a turn that meets the limit again in between parks the seat
+// on the record first: landed on that park's record, the late mark or end made
+// its next re-park begin a new wait, though the seat had waited throughout.
+// UNDER THE PARKS' LOCK, which a park records itself under before it joins a
+// probe, taken before the probes' one here as in [seatParks.releaseParking],
+// and nowhere the other way round. The package doc's "A provider park's
+// release and its wait" says why.
+func (e *Engine) unlessParked(seat uuid.UUID, settle func(p *limitProbes)) {
+	parks := &e.providerParks
+	parks.mu.Lock()
+	defer parks.mu.Unlock()
+	if parks.seats[seat] != nil {
+		return
+	}
 	p := &e.limitProbes
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if wait, known := p.waits[seat]; known {
-		wait.releasedAt = e.now()
-		p.waits[seat] = wait
-	}
+	settle(p)
 }
 
-// endParkWait forgets when seat began waiting: its wait is over.
-func (e *Engine) endParkWait(seat uuid.UUID) {
+// forgetParkWait forgets when seat began waiting, whatever park stands: the
+// seat has left this node ([Engine.forgetProviderPark],
+// [Engine.unparkReleased]).
+func (e *Engine) forgetParkWait(seat uuid.UUID) {
 	p := &e.limitProbes
 	p.mu.Lock()
 	delete(p.waits, seat)
@@ -882,16 +910,12 @@ func (e *Engine) releaseProviderPark(ctx context.Context, seat uuid.UUID, why st
 //
 // THE SEAT TAKEN OFF ITS PROBE AND ITS RELEASE NOTED AS THE RECORD IS DROPPED,
 // under the parks' lock ([seatParks.releaseParking]), and the notice published
-// once the release has let go of it. A turn that meets the limit again in the
-// release's window parks the seat on the same chain, and that park joins the
-// chain's probe and notes the seat parked after its take, which the lock puts
-// after the drop. Both used to come after the queue's resume, and so after
-// that park: the release took the seat off the probe the park had just joined
-// and noted it released after the park had noted it parked, so the seat, whose
-// hold the release takes back ([seatParks.reholdParked]) or the park took after
-// the resume, stayed held with no probe left to release it, and every screen
-// drew it released. The probes' and the notices' locks are taken under the
-// parks' one here and nowhere the other way round.
+// once the release has let go: a park taken in the release's window joins the
+// probe and notes the seat parked after the drop, where after the queue's
+// resume the release would take it off that probe and draw it released. The
+// probes' and the notices' locks are taken under the parks' one here and
+// nowhere the other way round (the package doc's "A provider park's release
+// and its wait").
 func (e *Engine) releaseProviderParking(ctx context.Context, seat uuid.UUID, parking *providerParking, why string) bool {
 	released := e.providerParks.releaseParking(ctx, e, providerParkSpec, seat, parking, why, func() {
 		e.leaveLimitProbe(seat, parking.basis)
@@ -902,7 +926,9 @@ func (e *Engine) releaseProviderParking(ctx context.Context, seat uuid.UUID, par
 		return false
 	}
 	// RELEASED, NOT ANSWERED: a park soon after continues this wait
-	// ([limitProbes.waits]); one that ends it forgets it after this.
+	// ([limitProbes.waits]); one that ends it forgets it after this. A park
+	// taken in this release's window stands on the wait, and is left it
+	// ([Engine.unlessParked]).
 	e.parkReleased(seat)
 	e.readmitResumes(waitProvider)
 	return true
@@ -927,7 +953,7 @@ func (e *Engine) reconcileProviderParks(ctx context.Context, next *Company) {
 // (see [seatParks.forget]), and says the seat no longer waits here: the node
 // that takes it asks its own models on the first delivery.
 func (e *Engine) forgetProviderPark(ctx context.Context, seat uuid.UUID) {
-	e.endParkWait(seat)
+	e.forgetParkWait(seat)
 	if parking, ok := e.providerParks.forget(seat); ok {
 		e.leaveLimitProbe(seat, parking.basis)
 		e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: seatReleasedHere})

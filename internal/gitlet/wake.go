@@ -17,9 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/routing"
 )
 
-// The metadata keys a code wake carries, which the prompt reads back
-// ([Prompt]). Named, because the parser writes them and the prompt reads
-// them, and a typo in either is a field that silently renders empty.
+// The metadata keys a code wake carries and [Prompt] reads back. Named, since
+// a typo on either side is a field that silently renders empty.
 const (
 	// MetaRecordID is the record the wake was derived from ([RecordID]).
 	MetaRecordID = "record_id"
@@ -36,9 +35,8 @@ const (
 	MetaVia = "routed_via"
 	// MetaVerdict is a review's verdict, on a wake a review sent.
 	MetaVerdict = "verdict"
-	// MetaNotClosed is why a merged change's work item was not closed, on
-	// the wake a close_settled sent for a close that ended not_closed
-	// ([ChangeRouting.NotClosed]).
+	// MetaNotClosed is why a merged change's work item was not closed, on a
+	// close_settled wake ([ChangeRouting.NotClosed]).
 	MetaNotClosed = "not_closed"
 	// MetaWorkBackend, MetaWorkID, MetaWorkKey and MetaWorkProject are the
 	// work item the change implements ([ChangeRouting.WorkItem]), each absent
@@ -51,10 +49,9 @@ const (
 
 // Parser turns a code record the feed relayed into the wakes it implies.
 //
-// It implements [notify.Parser]. EVERYTHING IT NEEDS IS IN THE RECORD: the
-// routing snapshot its writer decided ([ChangeRouting]), read through the one
-// rule every native domain routes by (internal/routing), so the node that wins
-// a delivery routes without reading a row it may be behind on.
+// It implements [notify.Parser]. Everything it needs is in the record (the
+// routing its writer decided, [ChangeRouting], routed by internal/routing), so
+// the node that wins a delivery reads no row it may be behind on.
 type Parser struct {
 	logger *slog.Logger
 }
@@ -78,30 +75,18 @@ func NewParser(opts ParserOptions) *Parser {
 // Source is the integration name, matching the delivery's own: [Source].
 func (p *Parser) Source() string { return Source }
 
-// Parse reports which seats a code record wakes.
+// Parse reports which seats a code record wakes, change by change.
 //
-// # The rule, in order, change by change
+//  1. Whom it concerns is [Concerns] over its routings (the applier's notice
+//     set), each dropping its own actor, so nobody hears of their own change.
+//  2. [routing.Route] asks the roster about the rest, keeping the repository
+//     lead's copy only where nobody ordinary survived, per change.
+//  3. A person (who reads the inbox, never queue-woken) is dropped last, after
+//     the roster's filter, so the lead gets no fallback copy of a person's ask.
 //
-//  1. Whom the record concerns is [Concerns] over its routings — the same set
-//     the applier writes a notice row each for — and the actor step is each
-//     routing's own: a push record carries a routing per change it merges or
-//     opens, each naming its own pusher, so nobody is told of a change they
-//     made ([Concern.Hears]).
-//  2. internal/routing's [routing.Route] asks the roster about the rest, and
-//     keeps the repository lead's copy only where nobody ordinary survived —
-//     PER CHANGE, as [Concerns]' add-once rule is: a record that tells of two
-//     changes is two answers, and somebody hearing of one change does not
-//     drop the lead's copy of the other.
-//  3. A PERSON is dropped last: a person reads their code inbox, composed from
-//     the notice the applier wrote them, and is never queue-woken. Dropped
-//     AFTER the roster's filter, so a change a person hears about is one
-//     somebody heard about, and the lead's fallback copy does not wake a seat
-//     for a review a person was asked for.
-//
-// THE WAKE ID IS DERIVED from the record, the change and the recipient
-// ([changefeed.WakeID] over [NoticeID]), so a redelivery — the feed's claim
-// fails open — collapses into the wake it already made, and a seat two changes
-// of one batched record concern is woken about each.
+// The wake id is [changefeed.WakeID] over [NoticeID] and the recipient, so a
+// redelivery (the feed's claim fails open) collapses into the wake it made, and
+// a seat two changes of one record concern is woken about each.
 func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Registry) ([]notify.Routed, error) {
 	record, err := recordFromBody(w.Body)
 	if err != nil {
@@ -113,14 +98,12 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	}
 	concerns := Concerns(RoutingsOf(payload))
 	if len(concerns) == 0 {
-		// A RECORD THAT CONCERNS NOBODY reaching the parser at all means the
-		// feed's own decision was bypassed — a replayed body, a second
-		// producer. "Nobody" keeps the two layers independent.
+		// The feed's own decision was bypassed (a replayed body, a second
+		// producer); answering nobody keeps the two layers independent.
 		return nil, nil
 	}
-	// THE TRIGGER IS THE RECORD'S POSITION, which is what [RecordID] falls
-	// back to for a record with no operation id — the same identity the
-	// applier's notice row and the feed's claim name.
+	// The record's position is [RecordID]'s fallback for a record with no
+	// op id: the identity the notice row and the feed's claim name too.
 	recordID := record.OpID
 	if recordID == "" {
 		recordID = w.Trigger
@@ -136,10 +119,8 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 			byHandle[c.Handle] = c
 			candidates = append(candidates, c.Candidate)
 		}
-		// NO ACTOR AND NO REASON THAT WAKES ONE: the actor step was each
-		// routing's own above (Concern.Hears), which already kept the one
-		// reason that is news to whoever made the record — a failed check of
-		// the head they pushed ([Reason.WakesActor]).
+		// No actor here: Concern.Hears already dropped each routing's own,
+		// keeping only [Reason.WakesActor] (a failed check of their head).
 		for _, c := range routing.Route(candidates, registryHas(reg), "", nil) {
 			concern := byHandle[c.Handle]
 			if concern.Change.Person(c.Handle) {
@@ -149,8 +130,8 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 				Inbound: inboundOf(record, payload, recordID, concern),
 				To:      notify.Recipient{Handle: c.Handle},
 				WakeID:  changefeed.WakeID(NoticeID(recordID, concern.Change.ChangeID), c.Handle),
-				// THE RECORD'S OWN INSTANT, the same on every copy of the
-				// wake — see [notify.Routed.WakeAt].
+				// The record's own instant, the same on every copy
+				// ([notify.Routed.WakeAt]).
 				WakeAt: record.CreatedAt,
 			})
 		}
@@ -189,9 +170,8 @@ func registryHas(reg *notify.Registry) func(string) bool {
 	}
 }
 
-// inboundOf is the wake one concern's seat is given, PER RECIPIENT: its
-// reason, which the wake's metadata and its origin both carry, is the
-// recipient's own.
+// inboundOf is the wake one concern's seat is given, per recipient: the
+// reason its metadata and origin carry is the recipient's own.
 func inboundOf(record MutationRecord, payload any, recordID string, c Concern) notify.Inbound {
 	r := c.Change
 	meta := map[string]string{
@@ -215,10 +195,8 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 	}
 	body, source := wakeText(payload, r.ChangeID)
 	if body != "" {
-		// WHAT THE BODY IS AND WHO WROTE IT, for the fence the spine puts it
-		// in (ADR-0040): every word of a change's text is its writer's —
-		// the description they filed, the reason they gave, their comment,
-		// their review — and the record's actor is that writer.
+		// For the spine's fence (ADR-0040): a change's text is all its
+		// writer's, and the record's actor is that writer.
 		meta[notify.BodySourceField] = string(source)
 		meta[notify.BodyAuthorField] = r.Actor
 	}
@@ -233,52 +211,26 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 		Subject:   subject,
 		Body:      body,
 		Metadata:  meta,
-		// WHO WROTE WHAT THE WAKE ANNOUNCES, by the routing's own record of
-		// it: a person as the seat they hold, a seat as itself — a revision's
-		// facts and a landing, which the home records, as whoever pushed the
-		// revision and the push the home found merging the change, and a
-		// queue's landing as each entry's enqueuer — and nobody, the engine,
-		// for the home's other records; a seat with whom it wrote for, where
-		// the routing carries it, and the engine with whom an entry's enqueue
-		// was made for on the queue's two records about it that carry it. The
-		// record's ACTOR is the deciding node for every code record, so the
-		// routing's actor is the writer here.
+		// By the routing's actor, never the record's, which is the deciding
+		// node for every code record ([writerOf]).
 		Writer: writerOf(record.Op, r),
-		// WHAT STARTS THE TURN THIS WAKES: the change, as the Gitlet screens
-		// name it, under this recipient's own reason — so the turn a review
-		// request or a failed check started is found from the change
-		// (`GET /turns?origin=code_change:<repo>!<number>`), as a chat
-		// message's turn is from the message.
+		// The change under this recipient's reason, so the turn is found
+		// from it (`GET /turns?origin=code_change:<repo>!<number>`).
 		Origin: types.TriggerOrigin{Kind: types.OriginCodeChange, ID: r.ChangeRef, Reason: string(c.Reason)},
 	}
 }
 
-// writerOf is who wrote the record r routes, as a first-party notice states
-// them ([notify.FirstPartyWriter]): the kind the routing records, never the
-// spelling of the handle.
+// writerOf is who wrote the record r routes ([notify.FirstPartyWriter]): the
+// kind the routing records, never the handle's spelling. Never apps: a code
+// record is made as a seat, and a token bound to nobody asks nothing of this
+// domain (LifecycleRequest's Actor).
 //
-// NO APPS, because no record here is a credential's own: a code record is
-// made as a seat — an agent's, or a person's through the token bound to them —
-// and a token bound to nobody asks nothing of this domain (LifecycleRequest's
-// Actor), so a writer here is never one a turn is worked for by its apps.
-//
-// AND WHOM AN AGENT WROTE FOR, as the routing carries it beside its actor
-// ([ChangeRouting.WorkingFor], ADR-0109): the turn the record wakes works for
-// them, held to what they may use. Handed for an agent's actor, and
-// FirstPartyWriter keeps it for nobody but an agent and the engine: a person
-// writes for nobody but themselves, so a carrier on such a routing is no
-// request this wake works for. The engine's records that name an earlier
-// actor — a revision's facts, a failed check of a head, the home's landing, a
-// queue's landing — carry it beside that actor as the act's row kept it
-// (concerns.go's head, "Whom the actor acted for"), so the turn such a record
-// wakes works for whom the act was made for, as the act's own wake did.
-//
-// AND THE ENGINE'S, ON THE QUEUE'S TWO RECORDS ABOUT AN ENQUEUE that name no
-// actor — op eject and op close_settled ([carriesAnEnqueue]) — which carry
-// whom the entry's enqueue was made for beside no actor (concerns.go's head,
-// "The one exception"): the engine writes, for them. Every other record with
-// no actor is the engine's alone, whatever its routing holds, so a carrier on
-// one is never the turn's to work for.
+// An agent carries whom it wrote for ([ChangeRouting.WorkingFor], ADR-0109),
+// as an engine record naming an earlier actor keeps that act's (concerns.go's
+// head, "Whom the actor acted for"); a person writes only for themselves. With
+// no actor, only the queue's records about an enqueue ([carriesAnEnqueue])
+// carry one, the engine writing for them (concerns.go's head, "The one
+// exception"); any other actorless record is the engine's alone.
 func writerOf(op OpKind, r *ChangeRouting) *types.NotificationWriter {
 	switch {
 	case r.Actor == "" && carriesAnEnqueue(op):
@@ -291,20 +243,16 @@ func writerOf(op OpKind, r *ChangeRouting) *types.NotificationWriter {
 	return notify.FirstPartyWriter(iam.ActorAgent, r.Actor, nil, r.WorkingFor)
 }
 
-// carriesAnEnqueue reports whether op is one of the merge queue's own records
-// about an entry's enqueue that name no actor and carry whom that enqueue was
-// made for — an ejection, and a close of a landed change's item settled — the
-// two whose decides hand [routingFor] the entry's carrier beside no actor
-// ([concerning.enqueuedFor]).
+// carriesAnEnqueue reports whether op is a merge queue record that names no
+// actor yet carries whom an entry's enqueue was made for (an ejection, a landed
+// change's item close settled): the two whose decides hand [routingFor] that
+// carrier ([concerning.enqueuedFor]).
 func carriesAnEnqueue(op OpKind) bool { return op == OpEject || op == OpCloseSettled }
 
-// wakeText is what a woken seat reads of what the record says about change:
-// a comment, a review's summary, an ask's note, an open's or an edit's
-// description, a close's reason — WHOLE, where a notice row keeps an excerpt
-// ([MaxNoticeExcerpt]): the wake is the one message a seat acts on, and a
-// review cut at six hundred bytes reads as the whole of it. Nothing for a
-// record that says nothing of its own, a push's among them, and nothing for a
-// payload about another change.
+// wakeText is what a woken seat reads of what the record says about change,
+// whole, where a notice row keeps an excerpt ([MaxNoticeExcerpt]), since the
+// wake is the one message a seat acts on and a cut review reads as the whole.
+// Nothing for a record with no text of its own (a push) or about another change.
 func wakeText(payload any, change string) (string, provenance.Source) {
 	var (
 		text, about string
@@ -333,17 +281,14 @@ func wakeText(payload any, change string) (string, provenance.Source) {
 	return strings.TrimSpace(text), source
 }
 
-// recordFromBody recovers the record the feed relayed, through the domain's
-// own decoder, so a record a newer build wrote reaches the parser with
-// everything it carried.
+// recordFromBody recovers the record the feed relayed through the domain's
+// own decoder, so a newer build's record arrives with everything it carried.
 //
-// A RECORD AT A VERSION A NEWER BUILD WRITES IS DEFERRED to a peer on that
-// build ([notify.Defer]), never refused as a payload nobody can read: the
-// notify service acks what a parser refuses, on the ONE group every node takes
-// inbound mail from, so the wake the newer node's feed relayed was gone for
-// the whole fleet when an older node won its delivery during a roll
-// (crewlet#993). It is the feed's own future-version arm ([Translator]), met
-// on this side of the relay.
+// A record at a newer version is deferred to a peer on that build
+// ([notify.Defer]), never refused: notify acks a refusal on the one group every
+// node takes inbound mail from, so an older node winning the delivery during a
+// roll would lose the wake fleet-wide. It is the feed's future-version arm
+// ([Translator]) on this side of the relay.
 func recordFromBody(body map[string]any) (MutationRecord, error) {
 	if len(body) == 0 {
 		return MutationRecord{}, fmt.Errorf("gitlet: the delivery carries no record")

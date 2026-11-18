@@ -126,10 +126,7 @@ func BuildPhaseUserMessage(m UserMessage) Prompt {
 // injection guard. The executor reads an instruction, the reviewer what the
 // work is judged against. The note is last and verbatim.
 func SteerMessage(sender, note string) string {
-	who, lead := sender, sender
-	if strings.TrimSpace(sender) == "" {
-		who, lead = "a person who runs this company", "A person who runs this company"
-	}
+	who, lead := steerSender(sender)
 	return "## A note from " + who + ", sent while this turn was running" +
 		"\n" + lead + " sent this through Crewlet while the work was under way." +
 		" It is not a new request and not a repeat of the task: it corrects or" +
@@ -137,4 +134,30 @@ func SteerMessage(sender, note string) string {
 		" it and the task disagree, the note is the later word. What has" +
 		" already been done stays unless the note says otherwise." +
 		"\n\n" + strings.TrimSpace(note)
+}
+
+// SteerMessageSentBefore is a person's note handed to a reader after a note
+// filed later was already handed to it, as the model reads it: the heading
+// [SteerMessage] opens with, which a captured session's reader finds a note by
+// (internal/sandbox/executor, transcript.go), then one line saying the note
+// was sent before one already handed over, which stands where the two
+// disagree, then the note. Without it the reader would take the older note as
+// the later word, since it arrived last.
+func SteerMessageSentBefore(sender, note string) string {
+	who, lead := steerSender(sender)
+	return "## A note from " + who + ", sent while this turn was running" +
+		"\n" + lead + " sent this through Crewlet while the work was under way, before a later note" +
+		" already handed to this turn: where the two disagree, the later note stands; otherwise this" +
+		" note corrects or adds to the work in hand and stands for the rest of this turn." +
+		"\n\n" + strings.TrimSpace(note)
+}
+
+// steerSender is who a note names its sender as, in its heading and leading
+// its first line: the person, or a person who runs the company where the note
+// names nobody.
+func steerSender(sender string) (who, lead string) {
+	if strings.TrimSpace(sender) == "" {
+		return "a person who runs this company", "A person who runs this company"
+	}
+	return sender, sender
 }

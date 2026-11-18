@@ -22,12 +22,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A REVISION'S FACTS THROUGH THE CHANGE WRITER: what the repository's home
-// Gitlet node read of a revision against its target, handed to the change writer
-// as the home's own write (no asker), decided in one snapshot on a real
-// embedded broker as a record on the change's own subject — its guard, the
-// path owners it asks and skips, whom it wakes — and applied by the shipped
-// applier from the record alone.
+// A REVISION'S FACTS THROUGH THE CHANGE WRITER: the home Gitlet node's read of
+// a revision against its target, written as the home's own (no asker), decided
+// on a real embedded broker as a record on the change's subject (its guard, the
+// path owners it asks and skips, whom it wakes) and applied from the record alone.
 
 // tip is ref's target on repo and the position of the record that moved it
 // there, as n's rows hold them: what a home reads its facts against.
@@ -44,14 +42,11 @@ func (n *node) tip(repo, ref string) (string, statelog.Position) {
 	return target, statelog.Unpack(topics.CodeLogStream, at)
 }
 
-// revising is the home's write of revision rev's facts on change — its head
-// head, against target at its tip — touching touched, the path owners matched
-// against owners: what a home that read them would send, its owners matched
-// by gitlet.MatchOwners and the human paths its target's gate names by
-// gitlet.MatchTargetHumanPaths, against the gates repo's rules hold now, and
-// measured at [measuredAt] as a home of this build measures. Its base is A,
-// and its head's tree its head's own, so no two heads hold the same code
-// unless a case says they do (codeOf).
+// revising is the home's write of revision rev's facts on change (head head,
+// against target at its tip, touching touched), its owners matched by
+// gitlet.MatchOwners and its human paths by gitlet.MatchTargetHumanPaths against
+// repo's gates now, measured at [measuredAt]. Its base is A and each head's tree
+// its own, so no two heads hold the same code unless a case says so (codeOf).
 func (n *node) revising(repo, change string, rev int64, head, target string, owners []gitlet.PathOwner,
 	touched ...string) gitlet.ConversationWrite {
 
@@ -71,8 +66,8 @@ func (n *node) revising(repo, change string, rev int64, head, target string, own
 		HumanPathsDigest: humanDigest}}
 }
 
-// measuredAt is when [node.revising]'s home read its facts: a sub-second instant at the microsecond,
-// as a home's clock gives it, so the figures a case measures price a real instant's widest spelling.
+// measuredAt is when [node.revising]'s home read its facts: sub-second, at the microsecond as a
+// home's clock gives it, so a case's figures price an instant's widest spelling.
 var measuredAt = harnessAt.Add(123_456 * time.Microsecond)
 
 // olderHome is w's revise as a home before gitlet.OwnedPathsVersion sends it: no instant, and no
@@ -101,9 +96,8 @@ func (n *node) gatesOfID(repo string) []gitlet.RuleGate {
 	return n.gatesOf(name)
 }
 
-// codeOf is w's revise as one holding the trees of the code named held — the
-// base's and the head's — whatever its head commit: what a revision whose
-// commits moved and whose code did not reads.
+// codeOf is w's revise holding the base and head trees of the code named held,
+// whatever its head commit: a revision whose commits moved and whose code did not.
 func codeOf(w gitlet.ConversationWrite, held string) gitlet.ConversationWrite {
 	w.Revise.BaseTree, w.Revise.HeadTree = oidOf("the base tree of "+held), oidOf("the head tree of "+held)
 	return w
@@ -174,18 +168,17 @@ func ownedChangeFor(t *testing.T, n *node, name string, f types.WrittenFor,
 }
 
 // A REVISE IS GUARDED BY ITS REVISION AND ITS TARGET: facts are recorded only
-// of the change's HEAD revision and head, against the branch it merges into
-// now, and only past the tip the facts it holds of that revision were read at
-// — so the same tip read twice (a home's pass run again, two homes a split
-// presence view each called home), facts of a revision a push has moved past,
-// of a head the change no longer has and against a branch it does not merge
-// into are each refused superseded, appending nothing, while facts of a later
-// tip of the same branch replace the row. A closed or merged change takes no
-// facts; a revise naming any asker, or measuring a head from itself — which
-// its target holds, and its home lands — is no write at all.
+// of the change's head revision and head, against the branch it merges into now,
+// and only past the tip its held facts of that revision were read at. The same
+// tip read twice (a pass rerun, two homes of a split presence view), a revision
+// a push moved past, a head the change lacks and a branch it does not merge into
+// are each refused superseded, appending nothing; a later tip replaces the row.
+// A closed or merged change takes no facts; a revise naming an asker, or
+// measuring a head from itself (its target holds it, for the home to land), is
+// no write.
 //
-// Mutation: drop the position term of the guard, and the tip read twice
-// appends a second record.
+// Mutation: drop the guard's position term, and the tip read twice appends a
+// second record.
 func TestAReviseIsGuardedByItsRevisionAndTarget(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -240,10 +233,10 @@ func TestAReviseIsGuardedByItsRevisionAndTarget(t *testing.T) {
 	if got := n.count(`SELECT COUNT(*) FROM code_revision_facts WHERE change_id = ?`, change); got != 2 {
 		t.Fatalf("the change holds %d revisions' facts, want one row each of its two revisions", got)
 	}
-	// THE EARLIER TIP'S FACTS, arriving after the later tip's — a pass that read
-	// before the target moved, slower than the pass that read after — are a
-	// fresh op of facts the change has moved past. (Sending `second` itself
-	// again would be its own op retried, answered with its first outcome.)
+	// THE EARLIER TIP'S FACTS arriving after the later tip's (a slower pass that
+	// read before the target moved) are a fresh op of facts the change has moved
+	// past; resending `second` itself would be its op retried, answered with its
+	// first outcome.
 	late := second
 	late.OpID = statelog.NewOpID(time.Now(), "")
 	before = n.end()
@@ -271,11 +264,9 @@ func TestAReviseIsGuardedByItsRevisionAndTarget(t *testing.T) {
 	requireConversationRefused(t, n, before, res, err, gitlet.ConversationRefusalChangeClosed, "closed")
 }
 
-// A RETARGET RECOMPUTES THE FACTS: a revision's facts are against the branch its
-// change merges into, so once the change is retargeted the facts its home holds
-// against the old branch are no longer the change's — facts read against the
-// old branch are refused superseded — and the facts read against the new one
-// replace them, one row a revision.
+// A RETARGET RECOMPUTES THE FACTS: facts are against the branch the change
+// merges into, so after a retarget facts read against the old branch are refused
+// superseded, and those read against the new one replace them, one row a revision.
 //
 // Mutation: hold a revise to the facts already held of its revision whatever
 // branch they are against, and the new branch's facts are refused.
@@ -311,10 +302,9 @@ func TestARetargetRecomputesTheFacts(t *testing.T) {
 }
 
 // MATCHING A REVISION'S TOUCHED PATHS IS THE HOME'S (gitlet.MatchOwners): every
-// owner one of whose globs matches a touched path — and every owner where the
-// revision touches all — in the order the repository's settings hold them,
-// each with every one of its globs that matched, in its order, and none where
-// the revision touches all; beside the digest of the rows matched against.
+// owner a glob of which matches a touched path (every owner, where the revision
+// touches all), in the settings' order, each with every glob that matched in its
+// order (none where it touches all), beside the digest of the rows matched against.
 //
 // Mutation: stop an owner's match at its first hit, and the cto is named with
 // one of its two touched globs.
@@ -359,16 +349,15 @@ func TestMatchOwnersReadsEveryGlobOfEveryOwner(t *testing.T) {
 	}
 }
 
-// PATH OWNERS ARE REQUESTED FROM THE TOUCHED PATHS: the owners whose globs a
-// revision's touched paths match are asked to review it — a unit owner of its
-// EFFECTIVE LEAD, a seat owner of itself — each asked once, its ask a row
-// with the reason path_owner naming no asker, the reviewer a participant; an
-// owner whose globs the revision does not touch is asked nothing, and a
-// revision touching all asks every owner the chart lets review.
+// PATH OWNERS ARE REQUESTED FROM THE TOUCHED PATHS: owners whose globs the
+// touched paths match are asked to review (a unit owner by its EFFECTIVE LEAD, a
+// seat owner itself), each once, the ask a path_owner row naming no asker, the
+// reviewer a participant; an owner not touched is asked nothing, and a revision
+// touching all asks every owner the chart lets review.
 //
-// Mutation: resolve a unit owner to the unit's own key rather than its lead,
-// and the ask names no seat; ask every owner whatever it matched, and the
-// seat owning the docs is asked of a change to the code.
+// Mutation: resolve a unit owner to the unit's own key rather than its lead, and
+// the ask names no seat; ask every owner whatever it matched, and the seat owning
+// the docs is asked of a change to the code.
 func TestPathOwnersAreRequestedFromTouchedPaths(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -422,14 +411,13 @@ func TestPathOwnersAreRequestedFromTouchedPaths(t *testing.T) {
 }
 
 // A PATH OWNER WHO CANNOT REVIEW IS SKIPPED, the record naming each and why: a
-// seat whose grant is below review, an author of the change — whose review of
-// their own change counts for nothing — a unit with no lead, and an owner the
-// chart holds no seat of; and an owner whose ask the change holds already,
-// withdrawn by somebody's word, is left as it is — neither asked again nor
-// skipped.
+// seat whose grant is below review, an author (whose review of their own change
+// counts for nothing), a unit with no lead and an owner the chart holds no seat
+// of. An owner whose ask the change holds already, withdrawn, is left as it is:
+// neither asked again nor skipped.
 //
-// Mutation: drop the author term, and dev is asked to review dev's change;
-// drop the grant term, and a read-only seat is asked.
+// Mutation: drop the author term, and dev is asked to review dev's change; drop
+// the grant term, and a read-only seat is asked.
 func TestAPathOwnerWhoCannotReviewIsSkipped(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -477,11 +465,10 @@ func TestAPathOwnerWhoCannotReviewIsSkipped(t *testing.T) {
 	}
 }
 
-// AN OWNER RULE CHANGE SUPERSEDES THE REVISE: the decide recomputes the digest
-// of the repository's path owners from its own snapshot, and facts matched
-// against owners the repository has changed since are refused superseded —
-// recorded nowhere, for the home to match again — while facts matched against
-// the owners it holds now land.
+// AN OWNER RULE CHANGE SUPERSEDES THE REVISE: the decide recomputes the owners'
+// digest from its own snapshot, so facts matched against owners since changed
+// are refused superseded, recorded nowhere, for the home to match again; facts
+// matched against the owners held now land.
 //
 // Mutation: skip the digest's check, and the facts land asking the owner the
 // repository no longer names.
@@ -512,19 +499,16 @@ func TestAnOwnerRuleChangeSupersedesTheRevise(t *testing.T) {
 	}
 }
 
-// AN OWNER CHANGE MAKES THE FACTS DUE AGAIN: a revision's facts matched
-// against the path owners its repository held are its home's work no longer,
-// until the repository's owners change — and then the change is due its facts
-// again, since a statement cannot match a glob and the gate judging
-// owners_approve on the stale match would wait, computing, for a push that
-// may never come. The same tip read again is then no repeat: its facts,
-// matched against the owners the repository holds now, replace the stale
-// ones and ask the owner they add, and the change is no longer due them; the
-// same tip read a third time, the owners unchanged, is a repeat, superseded.
+// AN OWNER CHANGE MAKES THE FACTS DUE AGAIN: once the repository's owners
+// change, the change is due its facts again, since a statement cannot match a
+// glob and the gate judging owners_approve on the stale match would wait for a
+// push that may never come. The same tip read again is then no repeat: its
+// facts, matched against the owners now, replace the stale ones, ask the owner
+// they add and clear the due; a third read, owners unchanged, is superseded.
 //
-// Mutations: drop the owners' term of the due listing — the change is not
-// due its facts after the owners change, red; drop it from the revise's
-// guard — the same tip's facts matched again are refused superseded, red.
+// Mutations: drop the owners' term of the due listing (not due after the owners
+// change, red), or of the revise's guard (the facts matched again are refused
+// superseded, red).
 func TestAnOwnerChangeMakesTheFactsDueAgain(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -560,18 +544,16 @@ func TestAnOwnerChangeMakesTheFactsDueAgain(t *testing.T) {
 	requireConversationRefused(t, n, before, res, err, gitlet.ConversationRefusalSuperseded, "holds facts against")
 }
 
-// A HUMAN PATH CHANGE MAKES THE FACTS DUE AGAIN: which of a gate's human paths
-// hold a revision is its home's match, recorded on its facts beside the
-// digest of the repository's rules' human paths it was made against — so a
-// rule change that adds a human path makes the change due its facts again,
-// the revise matched against the old rules is refused superseded, and the one
-// matched against the rules the repository holds now lands, naming the entry
-// that holds it, after which the change is no longer due them. A rule change
-// that moves no human path — its merge_by — makes nothing due.
+// A HUMAN PATH CHANGE MAKES THE FACTS DUE AGAIN: the facts record which of a
+// gate's human paths hold a revision beside the digest of the rules' human paths
+// they were matched against, so a rule change adding a human path makes the
+// change due its facts, the revise matched against the old rules is refused
+// superseded, and one matched against the rules now lands, naming the entry that
+// holds it, and clears the due. A rule change moving no human path (its
+// merge_by) makes nothing due.
 //
-// Mutations: drop the human paths' term of the due listing — the change is
-// not due its facts after the rule change, red; skip the decide's digest
-// check — the stale revise lands, red.
+// Mutations: drop the human paths' term of the due listing (not due after the
+// rule change, red); skip the decide's digest check (the stale revise lands, red).
 func TestAHumanPathChangeMakesTheFactsDueAgain(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -642,22 +624,17 @@ func (n *node) factsDue(repo, change string) bool {
 }
 
 // A REVISION'S FIRST FACTS WAKE WHO MUST LOOK AGAIN, AND A CHANGE'S FIRST
-// FACTS ITS LEAD: the writer stamps on the record, from its snapshot and its
-// chart, the reviewers whose standing verdict asks for changes on an earlier
-// revision (re_review) — on a revision's first facts alone, so a retarget's or
-// a later tip's facts wake nobody again — and, on the change's first facts
-// where nobody who may review it is asked, the lead of the repository's owner
-// (lead_fallback); a change somebody may review is asked of falls back to
-// nobody.
+// FACTS ITS LEAD: the writer stamps from its snapshot and chart the reviewers
+// whose standing verdict asks for changes on an earlier revision (re_review), on
+// a revision's first facts only, so a retarget's or later tip's wake nobody
+// again; and, on the change's first facts where nobody who may review it is
+// asked, the owner's lead (lead_fallback). The routing is their ONE copy: the
+// apply asks plat-lead again from re_review, and facts concerning nobody carry no
+// routing.
 //
-// The routing is the ONE copy of both (no payload field restates them): the
-// apply asks plat-lead again from its re_review, and a later tip's facts,
-// which concern nobody, carry no routing at all.
-//
-// Mutation: wake again on every facts of a revision, and the later tip's
-// facts name plat-lead a second time; fall back whatever was asked, and the
-// owned repository's first facts name the cto beside its path owner; let the
-// apply ask nobody again, and plat-lead's ask stays answered.
+// Mutations: wake on every facts (plat-lead named twice); fall back whatever was
+// asked (the cto named beside the path owner); apply asking nobody again
+// (plat-lead's ask stays answered).
 func TestARevisionsFirstFactsWakeWhoMustLookAgain(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -666,8 +643,7 @@ func TestARevisionsFirstFactsWakeWhoMustLookAgain(t *testing.T) {
 	ctx := t.Context()
 	res, err := w.Converse(ctx, n.revising(repo, change, 1, oidOf("B"), mainRef, nil, "upload/retry.go"))
 	requireConversed(t, res, err)
-	// WHOM THE FACTS WAKE, as their routing holds it: its one copy, and none
-	// at all where they concern nobody.
+	// WHOM THE FACTS WAKE, from their routing: none where there is none.
 	woken := func(r gitlet.Revise) (again []string, lead string) {
 		if r.Routing == nil {
 			return nil, ""
@@ -715,17 +691,14 @@ func TestARevisionsFirstFactsWakeWhoMustLookAgain(t *testing.T) {
 	}
 }
 
-// A REVISION'S FACTS ARE ITS PUSHER'S ERRAND: the home records them, but a
-// revision is somebody's push, so the review they ask for is that principal's
-// request. The facts of revision 1, which the seat dev opened, ask Platform's
-// lead to review as dev — the routing's actor, the wake's sender and its
-// writer the seat dev, which bounds the woken seat's reads by dev's grant
-// too — and the facts of revision 2, which the person holding the seat
-// harness pushed, ask plat-lead to look again as that person.
+// A REVISION'S FACTS ARE ITS PUSHER'S ERRAND: the home records them, but the
+// review they ask for is the pusher's request. Revision 1, which the seat dev
+// opened, asks Platform's lead as dev (the routing's actor, the wake's sender and
+// writer), which bounds the woken seat's reads by dev's grant too; revision 2,
+// which the person on the seat harness pushed, asks plat-lead again as them.
 //
-// Mutation: drop the pusher from the revise's concern, and both wakes say
-// nobody wrote them — a turn bounded by nothing beyond the reviewer's own
-// grant, red.
+// Mutation: drop the pusher from the revise's concern, and both wakes name no
+// writer: a turn bounded by nothing beyond the reviewer's own grant, red.
 func TestARevisionsFactsAreItsPushersErrand(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -774,27 +747,18 @@ func factsWake(t *testing.T, n *node, p statelog.Position, want string) notify.R
 	return routed[0]
 }
 
-// A REVISION'S FACTS WAKE FOR WHOM ITS REVISION WAS PUSHED (ADR-0109): the
-// facts are their pusher's errand (TestARevisionsFactsAreItsPushersErrand),
-// and a seat's push made in a turn it worked for somebody is that somebody's,
-// so the facts carry whom the revision's row says the revision was made for
-// beside its pusher, and the turn they wake works for them. Revision 1, which
-// the seat dev opened in a turn founder woke, has its facts ask Platform's
-// lead to review in a wake written by dev for founder, the record at version
-// 2. A change nobody who may review it is asked about, opened the same way,
-// has its first facts tell one seat, the lead of the repository's owner, cto,
-// through the lead's fallback, and the routing that tells only that lead
-// carries founder too, so cto's wake is written by dev for founder. Revision
-// 2, which the person on harness pushed, is a person's push, made for nobody
-// but themselves: its facts carry nobody, at version 1, and the reviewer they
-// ask to look again is woken by harness for nobody. Every revise is sent as a
-// home before gitlet.OwnedPathsVersion sends it, since a home of this build
-// stamps its every revise at that version whatever it routes.
+// A REVISION'S FACTS WAKE FOR WHOM ITS REVISION WAS PUSHED (ADR-0109): beyond
+// TestARevisionsFactsAreItsPushersErrand, a seat's push in a turn worked for
+// somebody is theirs, so the facts carry whom the revision's row was made for and
+// the woken turn works for them. Revision 1, dev's open in a turn founder woke,
+// wakes Platform's lead written by dev for founder, at WorkingForVersion; so does
+// the cto's lead fallback of a change asking nobody who may review. Revision 2,
+// the push of the person on harness, carries nobody, at version 1. Each revise is
+// an olderHome's, since this build stamps every revise at OwnedPathsVersion.
 //
 // Mutations: the open's revision kept without its carrier, or revisionPusher
-// reading none — revision 1's wakes are written for nobody, red; the stamp's
-// wakesASeat skipping the lead's fallback — cto's wake is written for nobody,
-// red.
+// reading none (revision 1's wakes written for nobody, red); wakesASeat skipping
+// the lead's fallback (cto's wake written for nobody, red).
 func TestARevisionsFactsWakeForWhomItsRevisionWasPushed(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -865,12 +829,11 @@ func TestARevisionsFactsWakeForWhomItsRevisionWasPushed(t *testing.T) {
 	}
 }
 
-// A REVISE APPLIES FROM ITS RECORD ALONE: whom its facts ask, skip and wake is
-// stamped on the record by the writer from its snapshot and its chart, so a
-// node applying the record judges nothing again — it holds no chart at all —
-// and holds the rows of the node that wrote it, byte for byte: the instant
-// its home measured the facts, the first glob each owner kept, and the globs
-// each ask is for, one of them through two.
+// A REVISE APPLIES FROM ITS RECORD ALONE: the writer stamps whom its facts ask,
+// skip and wake from its snapshot and chart, so an applying node judges nothing
+// again (it holds no chart) and holds the writer's rows byte for byte: the
+// measured instant, each owner's first glob, and each ask's globs, one ask for
+// two.
 func TestAReviseAppliesFromItsRecordAlone(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)
@@ -918,16 +881,14 @@ func factsRead(t *testing.T, n *node, number, rev int64) gitlet.RevisionFactsRow
 	return gitlet.RevisionFactsRow{}
 }
 
-// A CLASS IS RECORDED ON THE REVISION'S FACTS: what its home read of a
-// revision's code — the path classes of the files it touches, each by its
-// place in the touched list, whether its classification was complete, and
-// the trees of its base and its head — rides the revise as the home sent it,
-// is kept on the revision's facts row, and is served with its facts by a
-// change read. Facts that touch all list no path, so they class none and are
-// never complete: their row keeps no classes, and the read serves none.
+// A CLASS IS RECORDED ON THE REVISION'S FACTS: the home's read of the code
+// (each touched file's path class by its place in the touched list, whether the
+// classification was complete, the base and head trees) rides the revise, is kept
+// on the facts row and served by a change read. Facts touching all list no path,
+// so they class none and are never complete: no classes kept or served.
 //
-// Mutation: write no classes to the row (bind "" for the column) — the read
-// serves none, red.
+// Mutation: write no classes to the row (bind "" for the column): the read serves
+// none, red.
 func TestAClassIsRecordedOnTheRevisionsFacts(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1042,17 +1003,15 @@ func readReviewers(t *testing.T, n *node, number int64) map[string]gitlet.Review
 }
 
 // A PATH OWNER'S ASK NAMES THE GLOBS IT IS FOR: Platform and Infra both resolve
-// to plat-lead, who is asked once, for the union of the globs of both that the
-// revision touched, sorted and each once though both own docs/**; the record
-// names each owner's own, the facts keep each owner's first and how many more,
-// and the reviewers part answers the ask's. An ask by name names none, and
-// asking a path owner again by name makes the row the asker's, its note and no
-// globs.
+// to plat-lead, asked once for the union of both owners' touched globs, sorted
+// and each once though both own docs/**; the record names each owner's own, the
+// facts each owner's first and how many more, the reviewers part the ask's. An
+// ask by name names none, and re-asking a path owner by name makes the row the
+// asker's: its note, no globs.
 //
 // Mutations: union only the first owner's globs (Infra's missing, red); keep a
-// glob two owners share twice (docs/** twice, red); drop the clearing in
-// askReviewersConflictSQL (the re-asked row keeps its globs beside the note,
-// red).
+// shared glob twice (docs/** twice, red); drop the clearing in
+// askReviewersConflictSQL (the re-asked row keeps its globs, red).
 func TestAPathOwnersAskNamesTheGlobsItIsFor(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

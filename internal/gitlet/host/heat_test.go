@@ -8,21 +8,17 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 )
 
-// THE HOST COUNTS EACH REQUEST'S USE INTO ITS REPOSITORY'S HEAT, as a person's
-// own git makes the requests: a push is one push whatever its requests; a
-// clone is one fetch — its advertisement — and one clone, since it offers the
-// node nothing it holds; a fetch of what moved since is a fetch and no clone,
-// since it offers its tips; a fetch that finds its client up to date is still
-// a fetch; and every answer adds the bytes git wrote its client. The status
-// reads it back with the node, its cache, and the repository's copy in
-// service, among the hottest and asked about by id — the hot list only where
-// it is asked for, since a status asked without it is one whose reader would
-// throw it away.
+// The host counts each request's use into its repository's heat, as real git
+// makes the requests: a push is one push however many requests; a clone is one
+// fetch (its advertisement) and one clone, since it offers no haves; a later
+// fetch, even one finding nothing new, is a fetch and no clone; every answer
+// adds the bytes written. The status reads it back with the node, its cache
+// and the copy in service, by id and among the hottest, the hot list only
+// when asked for (an unasked reader discards it).
 //
-// Mutation: count no fetch at the advertisement, count a clone for any fetch
-// that wants (ignoring its haves), or count no push at its record, and the
-// counts below go wrong; fill the hot list whatever the ask, or never, and the
-// last checks go red.
+// Mutation: count no fetch at the advertisement, a clone for any fetch that
+// wants, or no push at its record, and the counts go wrong; fill the hot list
+// always, or never, and the last checks go red.
 func TestTheHostCountsEachRequestsUseIntoItsRepositorysHeat(t *testing.T) {
 	c := newCase(t, gitlettest.SoloOptions{}, gitlettest.Settings())
 	node := c.Fleet.Nodes()[0]

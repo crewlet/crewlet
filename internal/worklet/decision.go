@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -60,6 +61,10 @@ type EvidenceLookup interface {
 	// PageID resolves a page id or "CONTAINER/Title" address to the id of a
 	// LIVE page, false for none. An error is the lookup failing, never "no".
 	PageID(ctx context.Context, ref string) (id string, found bool, err error)
+
+	// OwnArtifact reads ref as the address this engine hands out for one of
+	// its artifacts and answers that artifact's id, or false for any other.
+	OwnArtifact(ref string) (id string, ok bool)
 }
 
 // CitedTask is a cited task as [EvidenceLookup] resolves it.
@@ -139,6 +144,7 @@ func ValidateDecision(ctx context.Context, d decision.Decision, author AuthorKin
 func ValidateDecisionAt(ctx context.Context, d decision.Decision, author AuthorKind,
 	lookup EvidenceLookup, prefix string) (decision.Decision, error) {
 
+	d = ownLinksCited(d, lookup)
 	var found []error
 	if err := validDecision(d, author, prefix); err != nil {
 		found = append(found, err)
@@ -199,6 +205,23 @@ func ValidateDecisionAt(ctx context.Context, d decision.Decision, author AuthorK
 		out.Evidence = d.Evidence
 	}
 	return out, nil
+}
+
+// ownLinksCited is d with every url this engine handed out for one of its
+// artifacts cited as that artifact (ADR-0160): its address is on the
+// deployment's own URL, which may be http, and the kind is a link that is not.
+func ownLinksCited(d decision.Decision, lookup EvidenceLookup) decision.Decision {
+	cited := slices.Clone(d.Evidence)
+	for i, evidence := range cited {
+		if evidence.Kind != decision.EvidenceURL {
+			continue
+		}
+		if id, ok := lookup.OwnArtifact(evidence.Ref); ok {
+			cited[i].Kind, cited[i].Ref = decision.EvidenceArtifact, id
+		}
+	}
+	d.Evidence = cited
+	return d
 }
 
 // lookupSentence is a lookup's refusal without the "worklet: invalid: " prefix,

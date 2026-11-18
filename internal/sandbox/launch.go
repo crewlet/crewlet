@@ -674,57 +674,15 @@ type LaunchResult struct {
 	Brief     BriefKind
 }
 
-// Launch provisions a box, starts the harness detached, and persists the
-// row that outlives the turn — and HOLDS THE SEAT from the moment that row is
-// written.
-//
-// THE ORDER IS THE CONTRACT. The row is created and the box attached to it
-// BEFORE the job starts: a crash in that window leaves a row naming a box
-// nobody is using, which recovery can kill, while the reverse ordering leaves
-// a box that nothing names and nothing can ever reclaim.
-//
-// On any failure after the box exists, the box is reclaimed before the error
-// propagates — an unreferenced box is billed for until its TTL and collected
-// by nobody.
-//
-// # The seat is held from the row, not from the announcement
-//
-// A run is counted into the seat's [Holding] set, and the seat's inbox hold
-// taken ([SeatHold]), in the step that takes the answer to the write that opens
-// its row, before the box is provisioned, and so before the launching turn can
-// return and its seat's consumer go on to the next thing it has. THROUGH THE
-// ONE MECHANISM EVERY WRITE THAT MOVES A RUN'S COUNT TAKES (countwrite.go): the
-// open is recorded before it is sent, so a recount between the row's write and
-// its answer counts the run where it was, and the answer counts it in once.
-// Counted after the write and outside the lock, a recount whose listing was
-// read after the row was written counted the run holding, and the launch then
-// counted it a second time, the seat held until a recount after the run had
-// settled. WHERE IT WAS is no row at all for a turn's launch, and the claim
-// its resumed turn holds for a relaunch that turn makes ([Coordinator.framing]),
-// which holds the seat already: counted in a second time, the claim and the
-// job it relaunched held the seat twice until the turn's frame recounted it.
-// THERE IS NO THIRD: a launch outside a resumed frame of its turn is the
-// turn's first, and finds no row, since a turn id names one execution
-// ([TurnRef.TurnID], ADR-0017): a kick-off delivered again runs under an id
-// of its own, and its launch opens a row of its own. A run used to be
-// counted when its [types.ExecutorLaunched] was processed off the seat's
-// control topic, which is a separate subscription the launching turn does not
-// wait for: mail already drained beside the launching delivery (the next
-// partition of the same batch) and mail fetched after the turn returned both
-// reached a seat the screening called free, and ran a turn beside the job. The
-// announcement still RECOUNTS the seat from the store wherever it is processed
-// — that is what carries a held seat across a restart or a handoff — but
-// nothing waits for it.
-//
-// A launch that fails after the row is written gives the count back as the
-// delete that abandons the row lands ([Coordinator.abandon]); one that fails to
-// suspend into the row is settled by [Coordinator.FailRun], whose ending gives
-// it back the same way.
-//
-// m is the manager the request's [Spec] was built with ([Manager.BuildSpec]),
-// passed rather than read off the coordinator here: an apply landing between
-// the two swaps the coordinator's, and a spec resolved against one catalogue
-// is launched on that catalogue.
+// Launch provisions a box, starts the harness detached, and persists the row
+// that outlives the turn, holding the seat from the moment that row is written.
+// The order is the contract: the row is created and the box attached before the
+// job starts, so a crash leaves a row naming an unused box, never a box nothing
+// names; after any failure past the box's creation it is reclaimed. The seat is
+// counted holding and its inbox held in the step that takes the row's write's
+// answer, through countwrite.go. m is the manager the request's [Spec] was
+// built with ([Manager.BuildSpec]), since an apply between could swap the
+// coordinator's. See the package doc, "Launching a run".
 func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest) (_ LaunchResult, err error) {
 	defer origin.Stamp(&err)
 	store, q := c.pending, c.queue
@@ -1396,30 +1354,12 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 	ctx, done := detachedEnding(ctx)
 	defer done()
 	// Every live status and every job: this launch is abandoned whatever the
-	// row reached. TWO BOXES CAN BE OWED A RECLAIM, and each is reclaimed by
-	// the one party that can name it. The launch's own is killed above,
-	// because the launch may never have attached it to the row. The box the
-	// ROW names is reclaimed by the ending, after its decision: a relaunch
-	// that never got a box of its own leaves the row naming the previous
-	// job's paused one, and the ending deletes the only record of it — so a
-	// box left to the turn's own settle was named by nothing once the turn
-	// came back, and was killed only off that settle's stale snapshot, which
-	// a settle may no longer act on ([Coordinator.finish]). Where the two are
-	// one box — the attach landed — it is killed twice, which every provider
-	// answers as the reclaim it wanted: a kill of a box already gone succeeds.
-	//
-	// AND THE SEAT GOES BACK AS THE DELETE LANDS, once ([ending.counted]): the
-	// launch counted the run holding as it opened the row, and the ending's
-	// delete moves it out as its answer is taken. A record that survives the
-	// delete is a launching row whose ending this node keeps and retries,
-	// holding the seat's mail behind it, and it stays counted where a
-	// recount reads it until its own delete lands. Given back here whether or
-	// not the record was deleted, the seat read that row as gone, and a
-	// recount whose listing was read after a delete that did land had
-	// counted it out already, so the seat whose other run still worked read
-	// free beside it. A row no longer this node's to end, ended by somebody
-	// else or owned by a newer lease, has no delete of this node's to move
-	// it, and the seat is recounted from the store instead.
+	// row reached. Two boxes can be owed a reclaim: the launch's own is killed
+	// here, since it may never have been attached, and the box the row names is
+	// reclaimed by the ending after its decision; where they are one box it is
+	// killed twice, which every provider answers as done. The seat goes back as
+	// the delete lands, once ([ending.counted]); a row no longer this node's to
+	// end is recounted from the store. See the package doc, "Launching a run".
 	run := PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle}
 	decided, err := c.endRecord(ctx, run, ending{
 		fence: fence, whileIn: Active, launch: EveryLaunch, reclaim: true, counted: true,

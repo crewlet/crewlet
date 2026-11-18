@@ -18,36 +18,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// EACH WRITE OF A CHANGE'S ROW REWRITES ONLY THE INDEXES IT MOVES.
+// EACH WRITE OF A CHANGE'S ROW REWRITES ONLY THE INDEXES IT MOVES. The pinned
+// driver rewrites a row's entry in every index on a column a write sets, moved
+// or not ([changeWrite]), so a write's cost on every data node is the columns
+// it NAMES. Each write is planned as the code makes it ([changeBook.write],
+// [lifecycleWrite]) and its EXPLAIN program's IdxDeletes read ([rewrites]), held to an
+// explicit list rather than one derived from the schema, so a new index on a
+// column a write sets fails until its cost is decided — above all a push's
+// head move, which rewrites code_changes_target_idx alone. Every declared kind
+// of write is one a case makes, and every case's write a declared kind.
 //
-// The pinned driver rewrites a row's entry in every index whose key or
-// partial predicate holds a column a write sets, whether or not the value
-// moved ([changeWrite]), so what a write of code_changes costs every data
-// node is decided by the columns it NAMES. This plans each write as the code
-// makes it — a push record's through the change book's own write
-// ([changeBook.write]), and each write of a change's lifecycle through the
-// write its op makes ([lifecycleWrite]) — and reads its PROGRAM (EXPLAIN, the
-// bytecode, not the query plan): the indexes it deletes a row's entry from
-// (IdxDelete) are the ones it rewrites, since an insert deletes none and a
-// write over a row deletes the entry of every index it keeps, a partial
-// index's predicate deciding only whether the delete runs. Each write is held
-// to EXACTLY the indexes its kind moves, written out here rather than derived
-// from the schema, so an index a migration adds on a column a write sets
-// fails that write's case until somebody decides what it costs — above all
-// for a push's head move, the write a change meets most, which rewrites
-// code_changes_target_idx alone.
-//
-// Every kind of write the package declares is one a case makes, and every
-// write of code_changes a case makes is a declared kind, so a kind added for a
-// new write is held from the change that adds it.
-//
-// Mutation: set the state beside the head in changeHeadMoved, and the head
-// move rewrites the state, owner, open and repository-state listings; name the
-// work item in changeEdited, and an edit of the title rewrites
-// code_changes_work_idx; key the live indexes without updated_at, and an edit of
-// the title rewrites none of them; drop a case, and its kind is declared and never
-// planned; read IdxInsert rather than IdxDelete, and the opens rewrite every
-// index.
+// Mutations, each red: state beside the head in changeHeadMoved; work item in
+// changeEdited; live indexes without updated_at; a case dropped; IdxInsert.
 func TestAChangeWriteRewritesOnlyTheIndexesItMoves(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -126,10 +108,9 @@ func TestAChangeWriteRewritesOnlyTheIndexesItMoves(t *testing.T) {
 	if err := e.db.Tx(ctx, func(tx *sql.Tx) error {
 		roots := changeIndexRoots(ctx, t, tx)
 		// THE READING, ON WRITES WHOSE VERDICT IS KNOWN: a write of every
-		// column a change's lifecycle may move keeps every index but the
-		// number's and the source's, whose keys no write moves, so a reading that found
-		// nothing, which every case below expecting no index would pass, is
-		// caught here — and a write of the title alone keeps none.
+		// column a lifecycle may move rewrites every index but the number's
+		// and the source's, so a reading that finds nothing — which every case
+		// expecting no index would pass — is caught; the title alone, none.
 		for _, control := range []struct {
 			name, sql string
 			args      []any
@@ -158,9 +139,10 @@ func TestAChangeWriteRewritesOnlyTheIndexesItMoves(t *testing.T) {
 			plan     func(x *explainer) error
 			rewrites []string
 		}{
-			// A PUSH: the heads it moves, the hottest write a change meets —
-			// the head is in one index's key, and its instant in another — and what it merges and closes,
-			// each moving the state; and the change it opens, an insert.
+			// A PUSH: the heads it moves, the hottest write a change meets
+			// (the head in one index's key, its instant in another); what it
+			// merges and closes, each moving the state; and the change
+			// it opens, an insert.
 			{"a push moving changes' heads", push(pushEntry("heads",
 				move(liveSource(0), liveHead(0), oid("next-0")),
 				move(liveSource(1), liveHead(1), oid("next-1")))), append([]string{target}, movedLive...)},
@@ -312,9 +294,10 @@ func program(ctx context.Context, t *testing.T, tx *sql.Tx, query string, args [
 	return out
 }
 
-// rewrites is every index of roots a program deletes a row's entry from: the
-// root page of the cursor each IdxDelete names, as the OpenWrite that opened
-// the cursor names it. An index of another table is no write of a change's.
+// rewrites is every index of roots a program deletes a row's entry from (the
+// root page each IdxDelete's cursor was opened on): what it rewrites, since an
+// insert deletes none and a write over a row deletes the entry of every index
+// it keeps, a partial predicate deciding only whether the delete runs.
 func rewrites(t *testing.T, program []instruction, roots map[int64]string) []string {
 	t.Helper()
 	opened := map[int64]int64{}

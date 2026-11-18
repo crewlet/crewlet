@@ -52,13 +52,12 @@ func (e *estate) dispatchesDump() string {
 }
 
 // TWO READINGS OF ONE TARGET CONVERGE IN EITHER ORDER: a home's dispatch and a
-// failover's second home's land in either order — the subject carries no
-// expectation — and each row keeps the reading of the LATER TIP, then the
-// later record, so the two orders leave the target's reading and the head's
-// dispatch byte for byte, both naming the checks file the later tip held.
+// failover home's land in either order (the subject carries no expectation), and
+// each row keeps the reading of the LATER TIP, then the later record, so both
+// orders leave the same rows, naming the checks file the later tip held.
 //
-// Mutation: keep whichever record a row holds first (first in log order
-// wins) — the two orders keep two readings, red.
+// Mutation: keep whichever record a row holds first — the two orders keep two
+// readings, red.
 func TestTwoDispatchesOfOneTargetConvergeInEitherOrder(t *testing.T) {
 	t.Parallel()
 	tipAt := func(seq uint64) statelog.Position {
@@ -70,9 +69,8 @@ func TestTwoDispatchesOfOneTargetConvergeInEitherOrder(t *testing.T) {
 			Tip: oid(tip), TipPosition: tipAt(seq), DefsOID: oid(defs), Heads: []DispatchedHead{head},
 			DispatchedAt: applyClock})
 	}
-	// THE EARLIER TIP'S READING LANDS LATER in the log in one order: a
-	// home that read main before a push moved it, recording after the home
-	// that read it after.
+	// The earlier tip's reading lands later in one order: a home read main
+	// before a push moved it and recorded after the home that read it after.
 	records := map[uint64]built{20: reading("tip-2", 3, "defs-2"), 21: reading("tip-1", 2, "defs-1")}
 	dumps := map[string]string{}
 	for name, order := range map[string][]uint64{"in log order": {20, 21}, "reversed": {21, 20}} {
@@ -91,14 +89,12 @@ func TestTwoDispatchesOfOneTargetConvergeInEitherOrder(t *testing.T) {
 }
 
 // THE WIDEST HEAD'S DISPATCH FITS ONE RECORD, so the home never splits a head
-// between records: a checks file of MaxChecksPerFile checks of the longest
-// name, filling its MaxChecksFileBytes with text JSON writes six bytes a byte
-// (`<`, as <), queued at one head of a long target, as the attempts of
-// one dispatch record naming that head, encodes within MaxDispatchBytes and
-// is a dispatch Validate passes.
+// between records: MaxChecksPerFile checks of the longest name, filling
+// MaxChecksFileBytes with text JSON writes six bytes a byte (`<` as <),
+// queued at one head of a long target in one dispatch record, encodes within
+// MaxDispatchBytes and passes Validate.
 //
-// Mutation: halve MaxDispatchBytes — the widest head's dispatch no longer
-// fits one record, red.
+// Mutation: halve MaxDispatchBytes — red.
 func TestTheWidestHeadsDispatchFitsOneRecord(t *testing.T) {
 	t.Parallel()
 	const perCheck = 64 // a check's YAML beside its run and name: its keys, indentation and timeout

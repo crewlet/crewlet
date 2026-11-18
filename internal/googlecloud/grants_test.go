@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/seataccess/seataccesstest"
 )
 
 // A ROLE WRITES UNLESS EVERY PERMISSION ONLY READS, failing closed on a verb
@@ -183,5 +184,24 @@ func TestTheGrantCatalogueIsTheGrantsLists(t *testing.T) {
 	}
 	if !slices.Equal(opts.GrantScope, opts.Scope) {
 		t.Errorf("a grant may name %v, want the offered projects %v", opts.GrantScope, opts.Scope)
+	}
+}
+
+// EVERY GRANT THE CATALOGUE OFFERS CAN BE ASKED FOR, each at its longest
+// ([seataccesstest.AskFaults]).
+func TestEveryGrantTheCatalogueOffersCanBeAsked(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "", projectWeb)
+	withPubSub(w)
+	session, err := w.vendor.Open(t.Context(), w.open())
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := seataccess.ReadOptions(t.Context(), session, seataccess.LaneGoogleCloud)
+	if err != nil || len(opts.Grants) == 0 {
+		t.Fatalf("the catalogue offers %d grants (%v)", len(opts.Grants), err)
+	}
+	for _, fault := range seataccesstest.AskFaults(opts) {
+		t.Error(fault)
 	}
 }

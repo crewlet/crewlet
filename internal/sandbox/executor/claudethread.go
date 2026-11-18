@@ -77,14 +77,14 @@ import (
 //     but a call's, through [threadMessage.Calls], and an attachment's
 //     `toolUseID` leaves it only as a key ([threadLine.AttachmentToolUseID]),
 //     since a PostToolUse hook's firing carries the id of the call it followed.
-//     An id written inside a record's text (a tool's output, a call's input)
-//     never leaves it as bytes: of a call's input, a result's text, a record's
-//     own toolUseResult and a message's text the layer hands out only the facts
-//     it reads of them ([threadCall], [threadLine.HandsBack],
-//     [threadLine.AgentAnswer], [threadMessage.NamesHandback]). A task
-//     notification's `<tool-use-id>`, the text's own claim, leaves it as the
-//     leg it names ([threadMessage.Notification]), which its one reader matches
-//     only against a call it read.
+//     An id written inside a record's text never leaves it as bytes: of a
+//     call's input, a result's text, a record's own toolUseResult, a message's
+//     text and a hook's words the layer hands out only the facts it reads of
+//     them ([threadCall], [threadLine.HandsBack], [threadLine.AgentAnswer],
+//     [threadMessage.NamesHandback], and the asked take tokens a hook's words
+//     name, [threadLine.HookTakes]). A task notification's `<tool-use-id>`
+//     leaves it as the leg its text claims ([threadMessage.Notification]),
+//     which its one reader matches only against a call it read.
 //
 // What these rules were measured on is Claude Code 2.1.310 and 2.1.322, driven
 // as the engine drives a box's executor, and 2.1.118 beside 2.1.310 for a hook
@@ -319,6 +319,9 @@ type threadReader struct {
 	torn bool
 	// end is what ended the reading: io.EOF, errThreadBound, or an error of r.
 	end error
+	// asked is the take tokens each line names of a hook's words
+	// ([threadReader.Asking]).
+	asked []string
 }
 
 // newThreadReader reads r, one member, a whole line at a time: at most maxBytes
@@ -338,7 +341,28 @@ func (t *threadReader) Reset(r io.Reader, maxBytes int64) {
 	maxBytes = max(maxBytes, 0)
 	t.r.Reset(threadSource{r})
 	t.maxBytes, t.left = maxBytes, maxBytes
-	t.n, t.torn, t.end = 0, false, nil
+	t.n, t.torn, t.end, t.asked = 0, false, nil, nil
+}
+
+// maxAskedTakes is the most take tokens one reading asks
+// ([threadReader.Asking]): a hook record's masks' width, 64 bits.
+const maxAskedTakes = 64
+
+// Asking makes every line t reads from here on name which of tokens, take
+// tokens ([claudeTakeToken]), a hook's words hold ([threadLine.HookTakes]):
+// bit i for tokens[i]. Called before the first [threadReader.Next];
+// [threadReader.Reset] clears it.
+func (t *threadReader) Asking(tokens []string) { t.asked = askedTokens(tokens) }
+
+// askedTokens is tokens as a reader keeps them asked, a copy. Past
+// [maxAskedTakes] it panics: a reading asks at most 60, so more is its
+// caller's bug, never a thread's.
+func askedTokens(tokens []string) []string {
+	if len(tokens) > maxAskedTakes {
+		panic(fmt.Sprintf("executor: a thread's reading asks %d take tokens, past the %d a hook record's masks hold",
+			len(tokens), maxAskedTakes))
+	}
+	return slices.Clone(tokens)
 }
 
 // threadSource is a member's reader whose every error but its end reaches
@@ -439,7 +463,7 @@ func (t *threadReader) Next(ctx context.Context) (threadLine, error) {
 	}
 	t.left -= int64(len(raw))
 	t.n++
-	return decodeThreadLine(t.n, raw[:len(raw)-1])
+	return decodeThreadLine(t.n, raw[:len(raw)-1], t.asked)
 }
 
 // Torn reports whether the member ended in a piece with no break, which
@@ -1244,6 +1268,11 @@ const (
 	editClearToolUses = "clear_tool_uses_20250919"
 )
 
+// hookSystemMessage is the record of a hook's firing that holds its answer's
+// system message, the take's token among it: the reading that confirms a
+// hook's note reached its session reads it ([threadLine.HookTakes]).
+const hookSystemMessage = "hook_system_message"
+
 // The attachments whose payloads Claude Code's resume holds to a shape
 // ([threadLine.AttachmentWellFormed]): two of the records of a hook's firing,
 // its success and its additional context, and the others.
@@ -1977,19 +2006,19 @@ func (l threadLine) SourceToolAssistantUUID() ([16]byte, bool) {
 	return uuidBytes(source)
 }
 
-// uuidBytes is s as the 16 bytes of a LOWERCASE CANONICAL UUID, and true: 36
-// characters, a hyphen at 8, 13, 18 and 23 and a lowercase hex digit at every
-// other place, whatever its version and variant. False for every other
-// string, one of an uppercase digit among them: Claude Code keys a thread's
-// records by their uuids as written, so only this form maps a uuid's 16 bytes
-// to one string and back.
+// uuidBytes is s, a string or the bytes a streaming reader holds (a string
+// made of them would cost an allocation an entry), as the 16 bytes of a
+// LOWERCASE CANONICAL UUID, and true: 36 characters, a hyphen at 8, 13, 18 and
+// 23 and a lowercase hex digit elsewhere, whatever its version and variant.
+// False for every other string, one of an uppercase digit among them: Claude
+// Code keys a thread's records by their uuids as written, so only this form
+// maps 16 bytes to one string and back.
 //
-// BYTES, NOT CLAUDE.md'S uuid.UUID, though they are as wide: uuid.Parse also
-// reads a uuid of uppercase digits, of no hyphens, in braces or behind a
-// urn:uuid: prefix, each a string Claude Code's load holds apart from the
-// lowercase one, so a type whose parse its readers would reach for would
-// merge records the load keeps apart.
-func uuidBytes(s string) ([16]byte, bool) {
+// BYTES, NOT CLAUDE.md'S uuid.UUID, though as wide: uuid.Parse also reads
+// uppercase digits, no hyphens, braces or a urn:uuid: prefix, each a string
+// Claude Code's load holds apart from the lowercase one, so a type whose parse
+// its readers would reach for would merge records the load keeps apart.
+func uuidBytes[T ~string | ~[]byte](s T) ([16]byte, bool) {
 	var u [16]byte
 	if len(s) != 36 {
 		return [16]byte{}, false
@@ -2341,6 +2370,36 @@ func (l threadLine) AttachmentType() (string, error) {
 	return wireString("attachment.type", a.typ)
 }
 
+// HookEvent is a hook record's event, its attachment's `hookEvent`: "" on
+// every other record and where the key is absent; an error where it is no
+// string, this accessor's alone, never the attachment's
+// ([threadLine.AttachmentWellFormed] reads no event). Read off the
+// attachment's own keys as written, which the line's one decode keeps.
+func (l threadLine) HookEvent() (string, error) {
+	a := &l.facts().attachment
+	if l.Head.Type != recordAttachment || a.kind == 0 {
+		return "", nil
+	}
+	if a.kind != '{' {
+		return "", fmt.Errorf("an attachment record's attachment is %s, not an object", a.kind)
+	}
+	if a.err != nil {
+		return "", fmt.Errorf("an attachment: %w", a.err)
+	}
+	return wireString("attachment.hookEvent", a.event)
+}
+
+// HookTakes is which of the take tokens its reader asked
+// ([threadReader.Asking]) a hook record's words name: content of its
+// attachment's `content`, stdout of a hook_success's `stdout`, each where it
+// is a string; bit i for token i, each whole and exactly ([textTakes]). Zero
+// on every other record. A hook's words leave the layer only so, never as
+// bytes.
+func (l threadLine) HookTakes() (content, stdout uint64) {
+	a := &l.facts().attachment
+	return a.contentTokens, a.stdoutTokens
+}
+
 // ReplacedResults hands each, in order, the id of every tool result a
 // content-replacement record says its harness hands its model replaced: each
 // entry of the record's `replacements` whose `kind` is "tool-result", by its
@@ -2528,12 +2587,13 @@ func (r threadRetracted) Prefixes() (held [][chainPrefixBytes]byte, all bool) {
 	return r.prefixes, !r.more
 }
 
-// entry reads the list's next entry, a string: counted, and its canonical
-// prefix held where it begins with one, while fewer than
-// [threadChainMaxRecords] are held ([threadLine.Retracted]).
-func (r *threadRetracted) entry(s string) {
+// entry reads the list's next entry, a string, by what [chainPrefix] reads of
+// it, prefix and canonical: counted, and its prefix held where it is
+// canonical, while fewer than [threadChainMaxRecords] are held
+// ([threadLine.Retracted]).
+func (r *threadRetracted) entry(p [chainPrefixBytes]byte, canonical bool) {
 	r.Entries++
-	if p, ok := chainPrefix(s); ok {
+	if canonical {
 		if len(r.prefixes) == threadChainMaxRecords {
 			r.more = true
 		} else {
@@ -2697,6 +2757,13 @@ func skillNameKept(units int, valid bool) (kept, unreadable bool) {
 	return false, false
 }
 
+// errSkillNameUnmeasured is a skill listing whose names are kept but for one
+// past [skillListingMaxNameUnits] that holds a byte that is no UTF-8
+// ([skillNameKept]): an answer the layer cannot give
+// ([threadLine.AttachmentWellFormed]).
+var errSkillNameUnmeasured = errors.New("a skill's name holds a byte that is no UTF-8, so its length in UTF-16 " +
+	"code units is not one the layer can count as Claude Code does")
+
 // threadPreserved is what a compaction's boundary says it kept of the thread
 // before it ([threadLine.Preserved]).
 type threadPreserved struct {
@@ -2729,14 +2796,14 @@ type threadPreserved struct {
 	Nowhere bool
 }
 
-// list reads the list's next entry, a string: counted; held where it is a
-// canonical uuid ([uuidBytes]), while fewer than [threadChainMaxRecords] are
-// held, and More set where one is past them; Nowhere set where it is none
-// ([threadLine.Preserved]).
-func (p *threadPreserved) list(entry string) {
+// list reads the list's next entry, a string, by what [uuidBytes] reads of
+// it, u and canonical: counted; held where it is a canonical uuid, while
+// fewer than [threadChainMaxRecords] are held, and More set where one is past
+// them; Nowhere set where it is none ([threadLine.Preserved]).
+func (p *threadPreserved) list(u [16]byte, canonical bool) {
 	p.Listed++
-	switch u, ok := uuidBytes(entry); {
-	case !ok:
+	switch {
+	case !canonical:
 		p.Nowhere = true
 	case len(p.UUIDs) == threadChainMaxRecords:
 		p.More = true

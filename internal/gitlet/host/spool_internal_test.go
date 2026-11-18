@@ -13,12 +13,11 @@ import (
 	"time"
 )
 
-// THE SPOOL ALLOWANCE'S TURNS, over the allowance alone: who starts and is
-// granted room, in what order, and what a wait that ends unserved gives back.
-// Every case waits at most a second for an answer it asserts, reads a request
-// that must still wait off the allowance's own queue (waiting), and bounds its
-// waits by a minute, so a request that is never granted is a failure here
-// rather than a wait.
+// THE SPOOL ALLOWANCE'S TURNS, over the allowance alone: who is granted room,
+// in what order, and what a wait that ends unserved gives back. A case waits
+// at most a second for an answer it asserts, reads a request that must still
+// wait off the allowance's own queue (waiting), and bounds its waits by a
+// minute, so a request never granted fails rather than hangs.
 
 // turn is one request's start or room, run off the case's goroutine.
 type turn struct {
@@ -119,10 +118,9 @@ func granted(t *testing.T, what string, r request) turn {
 }
 
 // waiting fails t unless r still waits: its waiter in its queue, neither
-// granted nor gone. Read off the allowance itself — a grant takes its waiter
-// out of the queue under the allowance's lock, in the call that gives it the
-// room — so a grant the case's last move made is seen however late its
-// answer would reach the case.
+// granted nor gone. Read off the allowance itself, since a grant dequeues its
+// waiter under the lock in the call that grants it, so a grant the case's last
+// move made is seen however late its answer would arrive.
 func waiting(t *testing.T, what string, r request) {
 	t.Helper()
 	if r.w == nil {
@@ -146,9 +144,9 @@ func spooled(ctx context.Context, t *testing.T, a *spools, credential string, n 
 }
 
 // holdsCondition reports a body arriving whose claim the bodies younger than
-// it leave short — of the node's limit, or its credential's share — which no
-// grant may ever make. Worked out from the youngest back, a way of its own
-// rather than boundsLocked's, so the two cannot share a mistake.
+// it leave short of the node's limit or its credential's share, which no grant
+// may make. Worked out from the youngest back, unlike boundsLocked, so the two
+// cannot share a mistake.
 func (a *spools) holdsCondition() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -524,18 +522,15 @@ func TestABodyNeverTakesRoomPastItsClaim(t *testing.T) {
 	}
 }
 
-// EVERY BODY ARRIVES WHOLE, however the requests interleave and however their
-// claims run — each claiming what one request spools, as git's undeclared
-// bodies do, or exactly its size, as a declared one does: a hundred and twenty
-// requests of five credentials, each arriving in pieces with pauses between
-// them, on an allowance six of the largest wide — less than the five shares
-// together, so the node's room binds as well as each credential's — all start
-// and all arrive, none of them expiring, and no grant ever leaves a body's
-// claim short. And the allowance is empty when they have gone.
+// EVERY BODY ARRIVES WHOLE, however requests interleave and whatever they
+// claim (one request's most, as git's undeclared bodies do, or exactly their
+// size): 120 requests of five credentials, arriving in pieces with pauses, on
+// an allowance six of the largest wide (less than the five shares, so the
+// node's room binds as well as each credential's), all start and arrive, none
+// expiring, no grant leaving a body's claim short, and the allowance empties.
 //
-// Mutation: grant without the room boundsLocked leaves — drop nodeRoom, or
-// credentialRoom, from grantLocked's checks — and a grant leaves a body's
-// claim short, and bodies that filled the room between them wait on each
+// Mutation: drop nodeRoom or credentialRoom from grantLocked's checks and a
+// grant leaves a claim short, and bodies that filled the room wait on each
 // other until they expire.
 func TestEveryBodyArrivesWhole(t *testing.T) {
 	t.Parallel()

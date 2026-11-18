@@ -1349,6 +1349,22 @@ type SessionContinuation struct {
 	// reading was read for ([ExactTelling.Resumer]), and Brief or Replaced
 	// to every other box ([Coordinator.continueKept]).
 	Exact *ExactTelling
+
+	// Unheld is the briefs for a box whose harness answers a release whose
+	// resume this build did not read ([CarryCheck.ResumeRead]), beside Brief
+	// and Replaced; nil where they would tell the same. Only for a kept
+	// capture. The launch hands one of them only to such a box.
+	Unheld *UnheldTelling
+}
+
+// UnheldTelling is a relaunch's briefs for a box whose release this build did
+// not read the resume of: a read at a hook's step is held only as the job's
+// session showed it, which such a box's resume may not rebuild, so these tell
+// the notes from the first such read on again, as notes the session may
+// already show. They tell the calls Brief and Replaced tell, so their Told is
+// [SessionContinuation.Told].
+type UnheldTelling struct {
+	Brief, Replaced string
 }
 
 // ExactTelling is a relaunch's briefs told by a reading of what the session it
@@ -1707,8 +1723,16 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 		return continuedLaunch{}, check.Why
 	}
 	exact, unused := exactFor(want.Exact, check, reused)
-	if exact != "" {
+	switch {
+	case exact != "":
 		brief = exact
+	case want.Unheld != nil && !check.ResumeRead:
+		// A BOX WHOSE RELEASE THE RESUME WAS NOT READ IN holds no read at a
+		// hook's step as the job's session showed it ([UnheldTelling]).
+		brief = want.Unheld.Replaced
+		if reused {
+			brief = want.Unheld.Brief
+		}
 	}
 	fetched, err := c.fetchSession(ctx, row)
 	if err != nil {

@@ -7,12 +7,9 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A SERVED HALF WITH NO COMMITTER REFUSES A PUSH, and a compaction, and
-// answers every read: a node that does not publish — a maintenance mode —
-// decides nothing and appends nothing, so its refusal is the one the router
-// reads as a node that ran nothing and hands the proposal to the repository's
-// runner-up under the same id; its reader still serves, since a read appends
-// nothing.
+// A SERVED HALF WITH NO COMMITTER REFUSES A PUSH and a compaction with
+// ErrNotServing, which the router hands to the repository's runner-up under
+// the same id, and still answers every read, since a read appends nothing.
 func TestAServedHalfWithNoCommitterRefusesAPush(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -22,7 +19,7 @@ func TestAServedHalfWithNoCommitterRefusesAPush(t *testing.T) {
 		gitlet.ErrNotServing) {
 		t.Fatalf("a proposal to a half with no committer = %v, want ErrNotServing", err)
 	}
-	// A COMPACTION'S TOO, which is a write of the same committer's.
+	// A COMPACTION'S TOO: a write of the same committer.
 	if _, err := half.ProposeCompaction(t.Context(), gitlet.CompactionProposal{}); !errors.Is(err,
 		gitlet.ErrNotServing) {
 		t.Fatalf("a compaction to a half with no committer = %v, want ErrNotServing", err)
@@ -34,9 +31,8 @@ func TestAServedHalfWithNoCommitterRefusesAPush(t *testing.T) {
 }
 
 // A SERVED HALF WITH NO READER RUNS NOTHING rather than panicking on the
-// serving goroutine: every operation answers ErrNotServing, which the router
-// reads as a node that ran nothing and asks the next data node. A zero value
-// the estate could be handed has to mean something; this is what it means.
+// serving goroutine: the zero value answers every operation ErrNotServing, and
+// the router asks the next data node.
 func TestAServedHalfWithNoReaderRunsNothing(t *testing.T) {
 	t.Parallel()
 	var half gitlet.Served

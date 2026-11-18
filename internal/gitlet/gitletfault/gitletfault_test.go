@@ -55,11 +55,10 @@ func errorText(r any) string {
 	return "a panic that is not text"
 }
 
-// The crash matrix walks PushPath() and kills the receiving node at each
-// point, so the order IS the claim: a point listed out of order is a crash at
-// a step the matrix believes comes before or after the one it really marks.
-// The ten are written out here, in the order a push reaches them, rather than
-// read back from the package, which would assert nothing.
+// The crash matrices walk these paths and kill the node at each point, so the
+// order IS the claim: a point out of order is a crash at a step other than
+// the one the matrix believes. The lists are written out here, not read back
+// from the package, which would assert nothing.
 func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	want := []gitletfault.Point{
 		gitletfault.HostAfterCommands,    // the commands read, nothing started
@@ -84,8 +83,6 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 		gitletfault.SyncSwapBeforeRename, // the round applied, the next incarnation staged, not yet renamed in
 		gitletfault.InstallAfterFetch,    // a published layer fetched and checked, nothing of it placed
 	}
-	// The compaction's crash matrix walks CompactPath() as F21's walks the
-	// push path's, so its order is a claim too.
 	compactPoints := []gitletfault.Point{
 		gitletfault.CompactAfterBuild,   // the outputs written in the scratch, nothing stored
 		gitletfault.CompactUpload,       // inside an output's upload
@@ -95,8 +92,6 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	if got := gitletfault.CompactPath(); !slices.Equal(got, compactPoints) {
 		t.Fatalf("CompactPath() = %v\nwant the order a compaction reaches them: %v", got, compactPoints)
 	}
-	// The publication's crash matrix walks PublishPath(), so its order is a
-	// claim as well.
 	publishPoints := []gitletfault.Point{
 		gitletfault.PublishAfterBuild,   // the layer and any outputs written in the scratch, nothing stored
 		gitletfault.PublishUpload,       // inside a part's or an output's upload
@@ -106,9 +101,7 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	if got := gitletfault.PublishPath(); !slices.Equal(got, publishPoints) {
 		t.Fatalf("PublishPath() = %v\nwant the order a publication reaches them: %v", got, publishPoints)
 	}
-	// An engine write's crash matrix walks WritePath(): its own point, then
-	// the landing's, each in the order the one landing hits it — and none of
-	// the relay's own, which a write never meets.
+	// A write's own point, then the landing's, and none of the relay's own.
 	writePoints := []gitletfault.Point{
 		gitletfault.WriteAfterBuild,  // the commit and its pack made in the scratch, nothing stored
 		gitletfault.HostUpload,       // inside the bundle's upload
@@ -130,13 +123,11 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	if got := gitletfault.MergePath(); !slices.Equal(got, mergePoints) {
 		t.Fatalf("MergePath() = %v\nwant the order a merge reaches them: %v", got, mergePoints)
 	}
-	// A chain's build reaches its own point alone: what follows it — its
-	// bundle stored, its caller's record — is no landing's.
+	// A chain's build reaches its own point alone: what follows is no
+	// landing's.
 	if got := gitletfault.ChainPath(); !slices.Equal(got, []gitletfault.Point{gitletfault.ChainAfterBuild}) {
 		t.Fatalf("ChainPath() = %v\nwant the chain's entries merged and its pack made, nothing stored", got)
 	}
-	// An expunge's crash matrix walks ExpungePath(), its order a claim as
-	// the others are.
 	expungePoints := []gitletfault.Point{
 		gitletfault.ExpungeAfterBuild,        // kept and dropping packs written in the scratch, nothing stored
 		gitletfault.ExpungeAfterBegin,        // the begin applied, the rescue not started
@@ -146,12 +137,9 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	if got := gitletfault.ExpungePath(); !slices.Equal(got, expungePoints) {
 		t.Fatalf("ExpungePath() = %v\nwant the order an expunge reaches them: %v", got, expungePoints)
 	}
-	// A check's run walks CheckPath(): its claim applied, before any box.
 	if got := gitletfault.CheckPath(); !slices.Equal(got, []gitletfault.Point{gitletfault.CheckAfterClaim}) {
 		t.Fatalf("CheckPath() = %v\nwant the claim applied, before any box", got)
 	}
-	// An import walks ImportPath() and a pull mirror's sync MirrorPath():
-	// each its build, a step's packs stored, the committer's answer to it.
 	importPoints := []gitletfault.Point{
 		gitletfault.ImportAfterBuild,   // fetched and cut in its scratch, nothing stored
 		gitletfault.ImportAfterUpload,  // a chunk's packs stored, no row names them
@@ -326,18 +314,12 @@ func TestConcurrentHitsFireAOnceActionOnce(t *testing.T) {
 	}
 }
 
-// A Block is the hold of a process that LIVES — two pushes ordered, a slot
-// held, a client hanging up on a held request — so it ends with its channel
-// or with the hit's context, whichever comes first, and the call site goes on
-// as it would.
+// A Block is the hold of a process that LIVES, so it ends with its channel or
+// the hit's context, whichever comes first.
 //
-// In a bubble, where synctest.Wait returns once every goroutine but the
-// case's is durably blocked: a hit that was going to return without its hold
-// has returned by then, and Reached is closed by the firing that holds.
-//
-// Mutations: return from a Block's hit without waiting on it — it has
-// returned while its Block is open, red; wait on the Block alone — the hit
-// whose context ended never returns, red.
+// Mutations: return from a Block's hit without waiting on it (it returns
+// while its Block is open, red); wait on the Block alone (the hit whose
+// context ended never returns, red).
 func TestABlockHoldsUntilReleasedOrCancelled(t *testing.T) {
 	t.Run("released", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
@@ -399,11 +381,10 @@ func TestABlockHoldsUntilReleasedOrCancelled(t *testing.T) {
 	})
 }
 
-// stillHeld fails the test if the hit whose answer arrives on done has
-// returned once every other goroutine of the case's bubble is durably blocked:
-// a hit that was going to return has returned by then, and one held is parked
-// on its hold. Called inside a synctest bubble — synctest.Wait panics outside
-// one.
+// stillHeld fails the test if the hit answering on done has returned once
+// every other goroutine of the bubble is durably blocked: a hit that was
+// going to return has by then. Only inside a synctest bubble (synctest.Wait
+// panics outside one).
 func stillHeld(t *testing.T, done <-chan error, why string) {
 	t.Helper()
 	synctest.Wait()
@@ -425,9 +406,9 @@ func requireReached(t *testing.T, reached <-chan struct{}) {
 	}
 }
 
-// answer waits, under the hang detector, for the hit whose answer arrives on
-// done — inside a synctest bubble, whose clock reaches the detector only once
-// every goroutine of the case is durably blocked: a hit that never returns.
+// answer waits for the hit answering on done under the hang detector, inside
+// a synctest bubble, whose clock reaches it only once every goroutine is
+// durably blocked: a hit that never returns.
 //
 //fixedwait:bubble
 func answer(t *testing.T, done <-chan error, why string) error {
@@ -441,22 +422,15 @@ func answer(t *testing.T, done <-chan error, why string) error {
 	}
 }
 
-// A crash is the process-death shape, and a node killed inside a test process
-// cancels every request it was serving. So a crash hit must OUTLIVE its
-// context: one that ended with it would run the call site's error path — its
-// deferred cleanup included — before the restart, and the crash matrix's
-// restart assertions would pass on what that path tidied. It ends only when
-// the case has judged the restarted node and its cleanup releases the
-// crashes, and then it answers ErrCrashed so nothing after the point runs.
+// A crash hit OUTLIVES its context: a node killed in-process cancels every
+// request it served, and a hit ending with its context would run the call
+// site's error path, deferred cleanup included, before the restart, so the
+// matrix's restart assertions would pass on what that path tidied. It ends
+// only at ReleaseCrashes, answering ErrCrashed so nothing after the point runs.
 //
-// Each hold in a bubble, where synctest.Wait returns once every goroutine but
-// the case's is durably blocked: a hit that was going to return without its
-// hold has returned by then.
-//
-// Mutations: answer a crash at its context's end — the hit has returned once
-// its context ended, red; answer a crash at once, unheld — it has returned
-// before ReleaseCrashes, red; end a Block at ReleaseCrashes — it has returned
-// before its context ended, red.
+// Mutations: answer a crash at its context's end (it returns once the context
+// ended, red); answer at once, unheld (it returns before ReleaseCrashes, red);
+// end a Block at ReleaseCrashes (it returns before its context ended, red).
 func TestACrashOutlivesItsContextUntilReleased(t *testing.T) {
 	t.Run("held past its context", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
@@ -532,8 +506,8 @@ func TestACrashOutlivesItsContextUntilReleased(t *testing.T) {
 		s.Arm(gitletfault.HostBeforeAdopt, gitletfault.Action{Crash: true})
 		s.ReleaseCrashes()
 		s.ReleaseCrashes() // the cleanup may release twice
-		// What hits a crash once the case has judged — the teardown of the
-		// node it restarted — is answered at once, or that teardown hangs.
+		// A crash hit after the judgement (the restarted node's teardown) is
+		// answered at once, or that teardown hangs.
 		err := returns(t, func() error { return s.Hit(t.Context(), gitletfault.HostBeforeAdopt, 0) })
 		if !errors.Is(err, gitletfault.ErrCrashed) {
 			t.Fatalf("a crash hit after ReleaseCrashes = %v, want ErrCrashed at once", err)
@@ -563,9 +537,8 @@ func TestACrashOutlivesItsContextUntilReleased(t *testing.T) {
 	})
 }
 
-// Reached is how a case knows to Kill: it closes ONCE, at the first firing,
-// however many hits an action without Once fires on — a second close would
-// panic inside the call site, under whatever the case was crashing.
+// Reached closes ONCE, at the first firing, however many hits an action
+// without Once fires on: a second close would panic inside the call site.
 func TestReachedClosesOnceWhateverFires(t *testing.T) {
 	ctx := t.Context()
 	s := new(gitletfault.Script)
@@ -587,8 +560,7 @@ func TestReachedClosesOnceWhateverFires(t *testing.T) {
 		t.Fatal("Reached is still open after the point fired")
 	}
 
-	// Two points armed with one channel: whichever fires first closes it,
-	// and the other firing must not close it again.
+	// Two points sharing one channel: the second firing must not close it again.
 	both := make(chan struct{})
 	s.Arm(gitletfault.SyncRefs, gitletfault.Action{Reached: both})
 	s.Arm(gitletfault.SyncState, gitletfault.Action{Reached: both})
@@ -625,11 +597,9 @@ func TestAnUploadFaultFiresAtItsOffset(t *testing.T) {
 		t.Fatalf("a later upload hit after a Once action fired = %v, want nil", err)
 	}
 
-	// THE COMPACTION'S UPLOAD READS ITS OFFSET TOO: a crash "mid-bundle"
-	// armed at an offset must fire there, not at the output's first byte —
-	// the rule spelled at the firing's gate as at the arming and the call
-	// site, or a case crashing a home half way through an output would be
-	// crashing it before any byte.
+	// THE COMPACTION'S UPLOAD READS ITS OFFSET TOO: a crash armed mid-bundle
+	// fires there, not at the output's first byte, which a firing gate
+	// missing the point would do.
 	s.Arm(gitletfault.CompactUpload, gitletfault.Action{At: 4096, Once: true, Err: errCrash})
 	for _, at := range []int64{0, 1024, 4095} {
 		if err := s.Hit(ctx, gitletfault.CompactUpload, at); err != nil {
@@ -661,9 +631,8 @@ func TestAnUploadFaultFiresAtItsOffset(t *testing.T) {
 	}
 }
 
-// A case that arms something no hit can ever reveal is a case that can never
-// fail where it means to, so arming one panics in the case rather than
-// passing in silence.
+// A case arming something no hit can reveal could never fail where it means
+// to, so arming one panics rather than passing in silence.
 func TestArmingAPointThatDoesNotExistPanics(t *testing.T) {
 	closed := make(chan struct{})
 	close(closed)
@@ -726,9 +695,9 @@ func TestArmingAPointThatDoesNotExistPanics(t *testing.T) {
 	}
 }
 
-// Hit is the CALL SITE's half, so a call site that names a point that does
-// not exist, or hands an offset to a point that reads none, fails loudly at
-// once — armed or not, scripted or not — rather than silently never firing.
+// Hit is the CALL SITE's half: an unknown point, or an offset to a point that
+// reads none, fails at once, armed or not, scripted or not, rather than
+// silently never firing.
 func TestAHitOnAnUnknownPointFails(t *testing.T) {
 	ctx := t.Context()
 	for _, c := range []struct {
@@ -740,10 +709,9 @@ func TestAHitOnAnUnknownPointFails(t *testing.T) {
 			if !errors.Is(err, gitletfault.ErrNotAPoint) || !strings.Contains(err.Error(), `"x"`) {
 				t.Fatalf(`Hit(ctx, "x", 0) = %v, want ErrNotAPoint naming "x"`, err)
 			}
-			// Each refusal names what the call site has to change: an
-			// offset handed to a point that reads none, or a negative one
-			// handed to the upload — which DOES read an offset, so its
-			// refusal must not say it reads none.
+			// Each refusal names what the call site must change; a negative
+			// offset to an upload, which DOES read one, must not say it reads
+			// none.
 			err = c.s.Hit(ctx, gitletfault.SyncState, 7)
 			if !errors.Is(err, gitletfault.ErrOffset) || !strings.Contains(err.Error(), "sync.state reads no offset") ||
 				!strings.Contains(err.Error(), "7") {

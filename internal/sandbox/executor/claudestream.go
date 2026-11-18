@@ -8,7 +8,9 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/activityline"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -19,11 +21,9 @@ import (
 // `parent_tool_use_id` and are activity like any other; the main thread's
 // newest request is measured off the same lines ([claudeEvents.measure]).
 //
-// The transcript is OpenCode's shape: what the agent said, a line per tool call
-// and a failed call's first line of error. Never a successful result's body (a
-// whole file or a command's output: orders of magnitude more record, and
-// somebody's files through redaction) or thinking. Unknown types are skipped,
-// as releases add them; one system line shows, a hook's note ([claudeSteerLine]).
+// The transcript is OpenCode's shape ([activityline]), each call timed by the lines'
+// own timestamps. Never a result's body or thinking; unknown types are skipped, and
+// one system line shows, a hook's note ([claudeSteerLine]).
 
 // claudeEventWire is the part of one stream line this decoder reads: the
 // result's keys ([claudeResultWire]), a system line's text and a message, each
@@ -39,6 +39,9 @@ type claudeEventWire struct {
 	Content json.RawMessage `json:"content"`
 	// Message is an assistant or a user line's message ([claudeMessageWire]).
 	Message json.RawMessage `json:"message"`
+	// Timestamp is when the harness wrote an assistant or a user line: a
+	// call's line and its result's time the call ([claudeEvents.took]).
+	Timestamp json.RawMessage `json:"timestamp"`
 	// ParentToolUseID is raw AS WRITTEN: null on a main-thread line, the
 	// spawning call's id on a subagent's, and nil where the key is absent,
 	// which is no main thread's ([claudeEvents.measure]).
@@ -110,7 +113,7 @@ type claudeBlock struct {
 	Text string `json:"text"`
 
 	// A tool_use block. Input is the call's input as written: the live
-	// transcript names its subject ([claudeToolLine]), a session's shows it whole.
+	// transcript names its subject ([claudeToolSubject]), a session's shows it whole.
 	ID    string          `json:"id"`
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input"`
@@ -221,7 +224,7 @@ func looseFloat(raw json.RawMessage) float64 {
 // claudeToolInput is the field each harness tool takes its subject in — Bash
 // its command, Read, Edit and Write their file, NotebookEdit its notebook, Grep
 // and Glob their pattern, WebFetch its URL, WebSearch its query, Task its
-// description — each by its exact name and raw, read loosely ([claudeToolLine]).
+// description — each by its exact name and raw, read loosely ([claudeToolSubject]).
 type claudeToolInput struct {
 	Command      json.RawMessage `json:"command"`
 	FilePath     json.RawMessage `json:"file_path"`
@@ -239,10 +242,11 @@ type claudeToolInput struct {
 type claudeEvents struct {
 	transcript transcriptLines
 
-	// tools names a pending call by its id, so its result, in this read or a
-	// later one, can say which tool failed. A call is forgotten when its
-	// result arrives, so the map holds only calls in flight.
-	tools map[string]string
+	// calls is each pending call by its id, so its result, in this read or a
+	// later one, names it ([activityline]). A call is forgotten when its result
+	// arrives, so the map holds only calls in flight; seq numbers the run's calls.
+	calls map[string]claudeCall
+	seq   int
 
 	// spent is each assistant message's tokens by id, the LARGEST reported
 	// (a message's lines carry its usage as it grew), and spentTotal their
@@ -407,9 +411,16 @@ func (d *claudeEvents) Line(line []byte) {
 					d.transcript.add(text)
 				}
 			case "tool_use":
-				d.transcript.add(claudeToolLine(block))
+				d.seq++
+				for _, l := range activityline.Call(d.seq, firstNonBlank(block.Name, "tool"),
+					claudeToolSubject(block)) {
+					d.transcript.add(l)
+				}
 				if block.ID != "" {
-					d.tools[block.ID] = block.Name
+					if d.calls == nil {
+						d.calls = map[string]claudeCall{}
+					}
+					d.calls[block.ID] = claudeCall{seq: d.seq, at: claudeStamp(ev.Timestamp)}
 				}
 			}
 			return nil
@@ -419,17 +430,13 @@ func (d *claudeEvents) Line(line []byte) {
 			if block.Type != "tool_result" {
 				return nil
 			}
-			name := d.tools[block.ToolUseID]
-			delete(d.tools, block.ToolUseID)
+			call := d.calls[block.ToolUseID]
+			delete(d.calls, block.ToolUseID)
+			took := call.took(claudeStamp(ev.Timestamp))
 			if block.IsError {
-				if name == "" {
-					name = "tool"
-				}
-				line := "[tool] " + name + " → error"
-				if failure := strings.TrimSpace(claudeResultText(block.Content)); failure != "" {
-					line += ": " + firstLine(failure, transcriptDetailLimit)
-				}
-				d.transcript.add(line)
+				d.transcript.add(activityline.Failed(call.seq, claudeResultText(block.Content), took))
+			} else {
+				d.transcript.add(activityline.OK(call.seq, took))
 			}
 			return nil
 		})
@@ -439,7 +446,8 @@ func (d *claudeEvents) Line(line []byte) {
 		// [ClaudeCode.Parse] reads the same line.
 		result := ev.result()
 		if !result.succeeded() {
-			d.transcript.add("[error] the run ended: " + firstLine(result.failure(), transcriptDetailLimit))
+			d.transcript.add(activityline.Words(activityline.TagError,
+				"the run ended: "+firstLine(result.failure(), transcriptDetailLimit)))
 		}
 		// PRESENT, EVEN EMPTY, IS STATED: no calls since the last result says
 		// nothing more was spent. Unread figures ([claudeResult.sinceLastResult])
@@ -493,7 +501,7 @@ func (d *claudeEvents) Result() sandbox.Result {
 var claudeSteerPrefix = regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` +
 	claudeEventFinish + `) says: crewlet: `)
 
-// claudeSteerLine is `[steer]` and the first line of what the run's own hook
+// claudeSteerLine is a [activityline.TagSteer] line: the first line of what the run's own hook
 // said ([claudeSteerSaid]), redacted and bounded as a live line is
 // ([firstLine]): the one place a person watching sees the note arrive. Nothing
 // for any other system message.
@@ -506,12 +514,13 @@ func claudeSteerLine(subtype string, raw json.RawMessage) (string, bool) {
 	if line == "" {
 		return "", false
 	}
-	return "[steer] " + line, true
+	return activityline.Words(activityline.TagSteer, line), true
 }
 
 // claudeSteerSaid is what the run's own hook said as it handed the model a
-// note — the content after the event's opening, AS THE HARNESS RECORDED IT —
-// and false for any other system message. ONE READING for the live transcript
+// note — the content after the event's opening, AS THE HARNESS RECORDED IT,
+// less the take's token, cut here alone ([withoutTakeToken]) — and false for
+// any other system message. ONE READING for the live transcript
 // ([claudeSteerLine]) and a captured session's ([ReadTranscript]). Neither
 // redaction nor a bound is here, because each applies its own: the live view
 // redacts the whole and cuts a line; the session reader redacts and bounds an
@@ -528,14 +537,13 @@ func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 	if loc == nil {
 		return "", false
 	}
-	return content[loc[1]:], true
+	return withoutTakeToken(content[loc[1]:]), true
 }
 
-// claudeToolLine renders one tool call for the transcript: its name and the
-// first line of its subject, bounded as OpenCode's are.
-func claudeToolLine(block claudeBlock) string {
-	name := firstNonBlank(block.Name, "tool")
-	line := "[tool] " + name
+// claudeToolSubject is what one call works on, whole: its subject field
+// ([claudeToolInput]), or for a tool with none (an MCP server's) its input as
+// compact JSON. [activityline.Call] previews and bounds it.
+func claudeToolSubject(block claudeBlock) string {
 	// DECODED LOOSELY by exact key names, as the block is: a retyped field
 	// leaves the others named, and an input that is no object names no
 	// subject — the call's name is still its line.
@@ -543,12 +551,37 @@ func claudeToolLine(block claudeBlock) string {
 	if wireObject(block.Input) && wireDecode(block.Input, &in) != nil {
 		in = claudeToolInput{}
 	}
-	if detail := firstNonBlank(looseString(in.Command), looseString(in.FilePath),
+	if subject := firstNonBlank(looseString(in.Command), looseString(in.FilePath),
 		looseString(in.NotebookPath), looseString(in.Pattern), looseString(in.URL), looseString(in.Query),
-		looseString(in.Path), looseString(in.Description)); detail != "" {
-		line += ": " + firstLine(detail, transcriptDetailLimit)
+		looseString(in.Path), looseString(in.Description)); subject != "" {
+		return subject
 	}
-	return line
+	return compactInput(block.Input)
+}
+
+// claudeCall is a call in flight: its number in the run, and when the line
+// that made it was written (zero where the line says no time).
+type claudeCall struct {
+	seq int
+	at  time.Time
+}
+
+// took is how long the call ran, from its line's time to its result's: known
+// only where both lines carry one, in order.
+func (c claudeCall) took(done time.Time) activityline.Took {
+	if c.at.IsZero() || done.IsZero() || done.Before(c.at) {
+		return activityline.Took{}
+	}
+	return activityline.Took{D: done.Sub(c.at), Known: true}
+}
+
+// claudeStamp is a line's timestamp, or zero where it carries none that reads.
+func claudeStamp(raw json.RawMessage) time.Time {
+	at, err := time.Parse(time.RFC3339Nano, looseString(raw))
+	if err != nil {
+		return time.Time{}
+	}
+	return at
 }
 
 // claudeResultText is a tool result's text, from a string or its blocks

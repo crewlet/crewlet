@@ -16,11 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE TRANSFER LANE'S FAIR SHARE (share.go), driven on a clock of each case's
-// own through gitproc.NewShareLane — a lane of the shape the case names, its
-// cores and its slots — or, where what New makes of a node is the subject,
-// through the pool's own lane (gitproc.TransferLane): arrivals, settles and
-// leaves, no git.
+// THE TRANSFER LANE'S FAIR SHARE (share.go), on each case's own clock through
+// gitproc.NewShareLane, or through the pool's lane (gitproc.TransferLane)
+// where what New makes of a node is the subject: no git.
 
 // fakeClock is a clock a case moves by hand.
 type fakeClock struct {
@@ -57,8 +55,7 @@ func personShare(who string) gitproc.Share {
 const quarter = 1.0 / gitproc.TransfersPerProcess
 
 // occupied is what a slot held for d accrues at rate core-seconds a second,
-// decayed to its end: each second's charge decayed over ShareWindow by the
-// time d ends.
+// each second's charge decayed over ShareWindow to d's end.
 func occupied(rate float64, d time.Duration) float64 {
 	w := gitproc.ShareWindow.Seconds()
 	return rate * w * (1 - math.Exp(-d.Seconds()/w))
@@ -73,11 +70,9 @@ func decayed(charge float64, d time.Duration) float64 {
 func near(a, b, tol float64) bool { return math.Abs(a-b) <= tol }
 
 // A CONTENDED LANE IS SHARED BY CLASS, by weight: with persons, a machine and
-// a coding box all always waiting, persons take four sevenths of what the lane
-// spends, the machine two and the box one — however many principals each
-// class has (eight persons, one machine credential, one run) — and the box's
-// cap of half the lane, which its seventh never reaches, takes nothing from
-// that.
+// a coding box always waiting, persons take four sevenths of what the lane
+// spends, the machine two and the box one, however many principals each class
+// has; the box's cap of half the lane never bites at a seventh.
 //
 // Mutation: next hands the slot to the lane's oldest waiter (FIFO), and the
 // ten principals take turns — persons four fifths — red.
@@ -95,8 +90,8 @@ func TestAContendedTransferLaneSharesByClass(t *testing.T) {
 		class gitproc.ShareClass
 		count bool
 	}
-	// The lane full of the machine's runs before anybody waits — not counted,
-	// since nobody was choosing — then every principal always waiting.
+	// The lane starts full of uncounted machine runs (nobody was choosing),
+	// then every principal always waits.
 	var running []held
 	for range 4 {
 		running = append(running, held{turn: lane.Arrive(machine), class: gitproc.ShareMachine})
@@ -107,9 +102,8 @@ func TestAContendedTransferLaneSharesByClass(t *testing.T) {
 	}
 	charged := map[gitproc.ShareClass]float64{}
 	for settled := 0; settled < 700; {
-		// Each run holds its slot a second (four steps), a quarter of a
-		// core-second of occupancy, and spends a whole core-second of CPU:
-		// charged one core-second each.
+		// Each run holds its slot a second (four steps) and spends a
+		// core-second of CPU, above its quarter of occupancy: charged one.
 		clk.advance(250 * time.Millisecond)
 		h := running[0]
 		running = running[1:]
@@ -144,13 +138,11 @@ func TestAContendedTransferLaneSharesByClass(t *testing.T) {
 }
 
 // BOXES HOLD AT MOST HALF THE TRANSFER LANE, the one class the share does not
-// let fill it: on a lane of eight, sixty-four coding boxes' arrivals never run
-// more than four at once, however many settle and arrive; a person arriving
-// while the boxes hold their four takes a free slot at once, though boxes
-// wait; and a machine with the boxes at their cap is granted the next slot a
-// person releases, ahead of every box that waits — while the release of a box
-// hands its slot to the next box. A slot is never free while a waiter that may
-// take it waits.
+// let fill it: on a lane of eight, sixty-four boxes never run more than four;
+// a person takes a free slot at once though boxes wait; a machine is granted
+// the next slot a person releases, ahead of every box; and a box's release
+// goes to the next box. A slot is never free while a waiter that may take it
+// waits.
 //
 // Mutation: Cap answering the whole lane for the run class — eight boxes run
 // and the person waits — red.
@@ -182,8 +174,7 @@ func TestBoxesHoldAtMostHalfTheTransferLane(t *testing.T) {
 		t.Fatalf("the lane holds %d and queues %d, want %d held and 60 boxes waiting", held, waiting, size/2)
 	}
 
-	// A PERSON TAKES A FREE SLOT AT ONCE beside the waiting boxes, as many as
-	// the lane has free.
+	// A PERSON TAKES A FREE SLOT AT ONCE beside the waiting boxes.
 	var persons []*gitproc.Turn
 	for i := range size / 2 {
 		p := lane.Arrive(personShare(fmt.Sprintf("person%d", i)))
@@ -193,8 +184,8 @@ func TestBoxesHoldAtMostHalfTheTransferLane(t *testing.T) {
 		}
 		persons = append(persons, p)
 	}
-	// A MACHINE, with every slot held, waits — and is granted the next
-	// release of a person's slot ahead of all sixty boxes.
+	// A MACHINE at a full lane waits, then takes a person's released slot
+	// ahead of all sixty boxes.
 	machine := lane.Arrive(machineShare("ci"))
 	if machine.Granted() {
 		t.Fatal("a machine arrived at a full lane and was granted at once")
@@ -207,8 +198,7 @@ func TestBoxesHoldAtMostHalfTheTransferLane(t *testing.T) {
 	if n := running(); n != size/2 {
 		t.Fatalf("a person's release left %d boxes running, want the %d at the cap", n, size/2)
 	}
-	// A PERSON'S RELEASE WITH ONLY BOXES WAITING frees its slot: none of
-	// them may take it.
+	// A PERSON'S RELEASE WITH ONLY CAPPED BOXES WAITING stays free.
 	persons[1].Settle(0)
 	if n := running(); n != size/2 {
 		t.Fatalf("a person's release with only capped boxes waiting started a box: %d run", n)
@@ -216,8 +206,7 @@ func TestBoxesHoldAtMostHalfTheTransferLane(t *testing.T) {
 	if held, _ := lane.Counts(); held != size-1 {
 		t.Fatalf("the lane holds %d after a release no waiter could take, want %d", held, size-1)
 	}
-	// A BOX'S RELEASE hands its slot to the next box, and the free slot stays
-	// free: the class is back at its cap.
+	// A BOX'S RELEASE goes to the next box; the free slot stays free.
 	for i, b := range boxes {
 		if b.Granted() {
 			b.Settle(0)
@@ -239,8 +228,8 @@ func runShare(launch string) gitproc.Share {
 }
 
 // A CLASS ALONE TAKES THE WHOLE LANE: the share is work-conserving, so one
-// machine principal's sixty-four arrivals run four at once from the first
-// instant, nobody waits while a slot is free, and every grant is its.
+// machine principal's sixty-four arrivals run four at once from the start and
+// nobody waits while a slot is free.
 func TestAClassAloneTakesTheWholeLane(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
@@ -312,13 +301,11 @@ func TestWithinAClassThePrincipalThatSpentLeastGoesFirst(t *testing.T) {
 }
 
 // A RUN GRANTED FROM THE QUEUE IS CHARGED TO ITS PRINCIPAL, a fresh one
-// included: the account it was granted on is the one the book holds, so what
-// it spends is what the principal's next turn is judged by and what its
-// class's standing is swept to.
+// included: the account it was granted on is the one the book holds, which
+// judges the principal's next turn and its class's standing.
 //
-// Mutation: forget the account as its waiter is taken out of the queue,
-// before its run starts — its charges land on an account the book no longer
-// holds, and the principal reads as having spent nothing — red.
+// Mutation: forget the account as its waiter leaves the queue, so its charges
+// land on an account the book no longer holds — red.
 func TestARunGrantedFromTheQueueIsChargedToItsPrincipal(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
@@ -336,9 +323,8 @@ func TestARunGrantedFromTheQueueIsChargedToItsPrincipal(t *testing.T) {
 	if got, want := chargeOf(t, lane, fresh), occupied(1, 4*time.Second)+(10-4); !near(got, want, 1e-9) {
 		t.Fatalf("a fresh principal granted from the queue, run 4 s on 10 s of CPU, stands at %v, want %v", got, want)
 	}
-	// A WINDOW ON — the sweep's turn — the class reads what its accounts do:
-	// the fresh principal's, the holder having spent nothing and been
-	// forgotten.
+	// A WINDOW ON, the sweep sets the class to its accounts: the fresh
+	// principal's alone, the holder having spent nothing and been forgotten.
 	clk.advance(gitproc.ShareWindow)
 	lane.Arrive(machineShare("tick")).Settle(0)
 	if got, want := lane.Usage(gitproc.SharePerson), chargeOf(t, lane, fresh); !near(got, want, 1e-9) || got < 1 {
@@ -347,10 +333,9 @@ func TestARunGrantedFromTheQueueIsChargedToItsPrincipal(t *testing.T) {
 }
 
 // A CHARGE IS THE GREATER OF CPU AND OCCUPANCY: a run holding its slot 40 s on
-// 0.1 s of CPU is charged its occupancy, ten core-seconds; one holding it 2 s
-// on 30 s of CPU, thirty. Occupancy accrues while the run holds its slot and
-// what CPU spent past it is charged at the end, so the two sum to the greater
-// exactly — read through the decay, which the occupancy accrues under.
+// 0.1 s of CPU is charged ten core-seconds of occupancy; one holding it 2 s on
+// 30 s of CPU, thirty. Occupancy accrues (decaying) while the slot is held and
+// CPU past it is charged at the end, so the two sum to the greater exactly.
 //
 // Mutations: the charge counting CPU only, or occupancy only, or the accrual
 // skipped — each red.
@@ -377,9 +362,8 @@ func TestAChargeIsTheGreaterOfCPUAndOccupancy(t *testing.T) {
 			"occupancy as it accrued and the CPU past it: %v", got, want)
 	}
 
-	// TWO RUNS OF ONE PRINCIPAL, OVERLAPPING, with the account read and
-	// written in between: a at 0–25 s on 1 s of CPU (occupancy 6.25, the
-	// greater), b at 10–40 s on 20 s (occupancy 7.5, CPU the greater).
+	// TWO OVERLAPPING RUNS OF ONE PRINCIPAL: a at 0–25 s on 1 s of CPU
+	// (occupancy 6.25 the greater), b at 10–40 s on 20 s (CPU over 7.5).
 	both := machineShare("both")
 	a := lane.Arrive(both)
 	clk.advance(10 * time.Second)
@@ -395,12 +379,8 @@ func TestAChargeIsTheGreaterOfCPUAndOccupancy(t *testing.T) {
 }
 
 // A HELD SLOT IS CHARGED THE SHARE OF A CORE IT STANDS FOR, as New sized the
-// lane: the node's cores over its transfer slots, and never more than one,
-// since a transfer's git runs on one thread. A quarter of a core at the
-// default four a core; a whole core where the lane is narrower than the
-// cores — 32 cores whose 8 GiB back 16 slots, or an operator's two slots on
-// four cores; a half at two a core; and a sixteenth on four cores an
-// operator widened to 64.
+// lane: the node's cores over its transfer slots, never more than one, since a
+// transfer's git runs on one thread.
 //
 // Mutations: the rate a constant quarter of a core — every row but the first
 // red; the cap at one core dropped — the two narrowed rows red.
@@ -441,17 +421,15 @@ func TestAHeldSlotIsChargedTheShareOfACoreItStandsFor(t *testing.T) {
 }
 
 // SLOTS HELD ALIKE ARE CHARGED ALIKE WHERE SLOTS ARE WHAT RUNS OUT: on 32
-// cores whose 8 GiB back 16 slots, two cores' worth each, one credential's
-// four clones paced by slow links (no CPU) and another's four reading as fast
-// as one thread serves them (a core each) hold four slots each for a minute,
-// and stand equal — so when both wait, arrival order decides between them, as
-// it does between any two who spent the same. Where the cores run out first —
-// the default four a core — the fast one is charged its CPU, above the slow
-// one's slot-time.
+// cores whose 8 GiB back 16 slots (two cores a slot, charged one), one
+// credential's four slow clones (no CPU) and another's four fast ones (a core
+// each) holding their slots a minute stand equal, so arrival order decides
+// between them. Where cores run out first (four a core), the
+// fast one is charged its CPU, above the slow one's slot-time.
 //
 // Mutation: the rate a constant quarter of a core — on 32 cores the slow
-// credential stands at 38 core-seconds to the fast one's 218, and would be
-// granted ahead of it though it asked second — red.
+// credential stands at 38 core-seconds to the fast one's 218, and is granted
+// first though it asked second — red.
 func TestSlotsHeldAlikeAreChargedAlikeWhereSlotsRunOut(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -497,8 +475,8 @@ func TestSlotsHeldAlikeAreChargedAlikeWhereSlotsRunOut(t *testing.T) {
 				}
 				return
 			}
-			// THE LANE FULL AGAIN, the fast credential asking first: a tie,
-			// and the older waiter goes first.
+			// THE LANE FULL AGAIN, the fast credential asking first: a tie
+			// goes to the older waiter.
 			for range 8 {
 				held = append(held, lane.Arrive(machineShare("token:filler")))
 			}
@@ -523,9 +501,8 @@ func chargeOf(t *testing.T, lane *gitproc.ShareLane, s gitproc.Share) float64 {
 }
 
 // A RUNNING TRANSFER ACCRUES WHILE IT RUNS: a principal holding all four
-// slots for nine and a half minutes reads four slots' occupancy — a core-second
-// a second, decayed — at a grant, not zero, so a fresh principal of its class
-// is granted ahead of its own next arrival though that arrived first.
+// slots for 570 s reads their decayed occupancy at a grant, not zero, so a
+// fresh principal of its class goes ahead of its earlier next arrival.
 //
 // Mutation: a standing that leaves its running runs out — red.
 func TestARunningTransferAccruesWhileItRuns(t *testing.T) {
@@ -569,9 +546,8 @@ func TestAChargeDecaysOverTheWindow(t *testing.T) {
 		t.Fatalf("a charge of 60 reads %v a window later, want 60/e = %v", got, 60/math.E)
 	}
 
-	// Ten windows on — e^-11 of 60 is 0.00100, just over the line — the
-	// account is still held after the lane's events; two more and a lane
-	// event forgets it.
+	// Eleven windows in, e^-11 of 60 is 0.00100, just over ShareForget: still
+	// held. Two more and a lane event forgets it.
 	other := personShare("other")
 	clk.advance(10 * gitproc.ShareWindow)
 	lane.Arrive(other).Settle(0)
@@ -590,15 +566,12 @@ func TestAChargeDecaysOverTheWindow(t *testing.T) {
 	}
 }
 
-// THE INVARIANT HOLDS UNDER THE SHARE, its capped class included: whichever
-// waiter a release picks, no slot is free while a waiter that MAY take it
-// waits — a coding box at its class's cap of half the lane may not — a
-// release hands its slot straight to such a waiter where there is one and to
-// the lane where there is none, an arrival never takes a slot ahead of one,
-// the boxes never hold more than their cap, and every arrival, settle and
-// leave is accounted for — over 10 000 random steps of all three classes and
-// eighteen principals, and again with waits whose contexts end, on
-// goroutines.
+// THE INVARIANT HOLDS UNDER THE SHARE: no slot is free while a waiter that MAY
+// take it waits (a box at its class's cap may not); a release hands its slot
+// to such a waiter if any; an arrival never goes ahead of one; boxes never
+// pass their cap; and every arrival, settle and leave is accounted for — over
+// 10 000 random steps of three classes and eighteen principals, and again on
+// goroutines with waits whose contexts end.
 func TestTheInvariantHoldsUnderTheShare(t *testing.T) {
 	t.Parallel()
 	t.Run("steps", func(t *testing.T) {
@@ -723,11 +696,9 @@ func TestTheInvariantHoldsUnderTheShare(t *testing.T) {
 	})
 }
 
-// A TRANSFER WITHOUT A SHARE IS REFUSED, and so is a share on anything else:
-// a transfer carrying none would be scheduled as nobody's, a read or a
-// maintenance run carrying one claims what no lane reads. Each refusal is the
-// call's, before any process starts. A principal is 1..255 bytes with no NUL:
-// the longest name an identity is given, a credential's or a seat's, is
+// A TRANSFER WITHOUT A SHARE IS REFUSED (it would be nobody's), and so is a
+// share on anything else (no lane reads it), before any process starts. A principal is 1..255 bytes
+// with no NUL: the longest identity name, a credential's or a seat's, is
 // admitted at the bound and one byte past it is not.
 //
 // Mutations: drop prepare's share checks — red; drop Share.Valid's length
@@ -806,11 +777,10 @@ func TestTheShareIsRecordedByClass(t *testing.T) {
 }
 
 // BenchmarkTransferGrant is ONE GRANT OF A FULL, CONTENDED LANE: 10 000
-// waiters over 1 000 principals of both classes behind one slot, each
-// iteration a settle that grants the next — the scan over the waiting
-// principals that decides it — and the granted principal's arrival at the back
-// again, so the queue stays as deep. What it decides: whether next's linear
-// scan stays under a grant's budget (100 µs) at that depth, or a heap is owed.
+// waiters over 1 000 principals behind one slot, each iteration a settle that
+// grants the next and the granted principal's re-arrival, keeping the queue as
+// deep. It decides whether next's linear scan stays under a grant's budget
+// (100 µs) at that depth, or a heap is owed.
 func BenchmarkTransferGrant(b *testing.B) {
 	const principals, waiters = 1_000, 10_000
 	clk := newFakeClock()

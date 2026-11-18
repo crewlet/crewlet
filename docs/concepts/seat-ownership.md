@@ -84,7 +84,7 @@ The acquire hook (`node.Node.OnAcquire`, preparing the seat through `Engine.prep
 
 A hook that ignores its context is not shortened by a cut, but nothing waits for it either, and what it returns is discarded.
 
-**Establishing is an edge, and it is reported.** The seat admits no turn while its acquire hook runs, and something the hook starts can be refused for exactly that reason: the sandbox recovery retries the resume of an answer the seat's last holder recorded and never resumed with, and that retry is told the seat is not yet established. Nothing used to say when that lifted — an establishment is not a renew's admission edge — so the retry slept until the clock said a heartbeat had passed, 15 s at the default TTL. The host now reports the moment the hook returns and the seat starts admitting turns (`seat.Hooks.OnEstablished`), the node passes it on together with the renew that proves ownership again after a store blip (`node.Config.SeatAdmitted`), and the engine re-checks the answers waiting on ownership at once.
+**Establishing is an edge, and it is reported.** The seat admits no turn while its acquire hook runs, and something the hook starts can be refused for exactly that reason: the sandbox recovery retries the resume of an answer the seat's last holder recorded and never resumed with, and that retry is told the seat is not yet established. Nothing used to say when that lifted — an establishment is not a renew's admission edge — so the retry slept until the clock said a heartbeat had passed, 15 s at the default TTL. The host now reports the moment the hook returns and the seat starts admitting turns (`seat.Hooks.OnEstablished`), the node passes it on together with the renew that proves ownership again after a store blip (`node.Config.SeatAdmitted`), and the engine re-checks the answers waiting on ownership at once. The admission is not the only gate the sandbox recovery stands behind: a completion past its turn's deadline is claimed to be ended without asking it, and an apply that prepares a seat already established recovers its runs while the seat admits turns, so every claim of the seat's detached runs on the node also meets the sandbox's own gate, which refuses it for as long as the seat's runs are being recovered there ([Durability, completion, and observability](code-sandbox.md#durability-completion-and-observability)). That is the establishing rule carried to every claim, the apply's included.
 
 **A seat a person paused is attached already held.** A pause holds the seat's inbox under a named hold, and a release drops every hold with the attachment. Every hold is taken for one attachment of the inbox, the one the node holds as the hold is asked: one asked once a release has detached the inbox is refused, so it never gates the inbox that node attaches if it takes the seat back. So the node that acquires a paused seat (placement moved it, or its holder restarted) takes the pause hold **before** it attaches the inbox: the seat's preparation takes it (`node.Config.SeatReady`), for the attachment the acquisition hands it. A hold taken after the attach would be taken after the first delivery can arrive, and the mail the pause was holding would be the first thing the new holder ran. The hold is taken and recorded as one step, under the lock every pause and resume on the node is folded under, so a resume that lands as the seat is acquired finds either no hold or the record of one to lift, never a hold it cannot see. See [Agent Runtime § Pausing a seat](agent-runtime.md#pausing-a-seat).
 
@@ -509,23 +509,19 @@ on that link waits behind whatever of it is still crossing — a read, a small
 write or a lease renewal, on the coordination connection the replay and every
 renewal ride or on another crossing the same link — and each is held to a
 five-second term: a request behind a full window still has the second its own
-round trip needs, at every lease TTL, as the object store windows an upload. A
-row larger than the window crosses alone, in a pull of one message at the
-broker's limit. The window's price is round trips on a fast distant link: a
-year of episodes takes 1,380 pulls, about two and a half minutes with its
-writes across 100 ms at 100 Mbit/s. What it does not cover
-([#1035](https://github.com/crewlet/crewlet/issues/1035)): the window is the
-hydration's own, one for the link's inbound direction, and the object store's
-upload window is another, for its outbound, so a request whose bytes cross
-behind an upload and whose reply crosses behind a pull waits behind both, 7.75
-seconds at the floor beyond its own round trip, past its term, a lease renewal
-sent there among them; and nothing windows the rest of what crosses the link
-toward the node — a download holds four of the object store's 128 KiB messages
-in hand, fifteen seconds at the floor, for each download in flight, and an
-event for one of the node's seats crosses whole — so a request whose reply
-crosses behind them waits for all of it, a lease renewal among them. A pull's
-next row waiting there refuses no seat: the replay waits while the link moves
-(above). One row larger than the window holds the link for its own crossing. A memory row is bounded only by the broker (an episode keeps its ask whole), so a pull
+round trip needs, at every lease TTL. The window is **the link's one window**,
+both ways: a pull takes it before it is asked, beside the object store's
+uploads, downloads and listings on the same link, first come first served
+([ADR-0161](../../adr/0161-a-link-carries-one-window-both-ways-sized-to-a-requests-term.md)),
+so whatever the node has in flight a request crosses inside its term; and a
+pull waiting its turn is no silence of its copy's. A row larger than the window
+crosses alone, in a pull of one message at the broker's limit, once the window
+is empty. The window's price is round trips on a fast distant link: a year of
+episodes takes 1,380 pulls, about two and a half minutes with its writes across
+100 ms at 100 Mbit/s. What it does not hold is an event for one of the node's
+seats, which crosses whole, so a request whose reply crosses behind one waits
+for it, a lease renewal among them. A pull's next row waiting there refuses no
+seat: the replay waits while the link moves (above). One row larger than the window holds the link for its own crossing. A memory row is bounded only by the broker (an episode keeps its ask whole), so a pull
 bounded by its rows alone
 held up to 256 rows of 8 MiB each, 2 GiB, inside seat acquisition
 ([#1052](https://github.com/crewlet/crewlet/issues/1052)). The broker sends a
@@ -921,13 +917,21 @@ a roll, or a seat or a company that is not the node's) while a live node reads
 the version of the run's parked state: the run is resumed once a node that
 can holds the seat. Once no live node reads it, as after a rollback, it counts
 like the run's own, so a state nobody running can read holds the seat no longer
-than the give-up does. A condition only an operator clears (this node's disk
-full, read-only or failing, its open files at their limit, the fleet's nodes
-holding different keys or running different builds) is the node's too, so the
-give-up never ends a run held by one: the run and its seat wait for the
-operator, and a turn with a wall-clock cap still ends at it. What the operator
-sees is each attempt's `sandbox_resume_failed` line, at error, its `error`
-naming the condition, and for a full volume holding the node's databases the
+than the give-up does. A reply kind is no part of that version, so one this
+build does not read waits only while a live node runs another build, and
+counts once every live node runs this one. A condition only an operator clears
+(this node's disk full, read-only or failing, its open files at their limit,
+the fleet's nodes holding different keys or running different builds) is the
+node's too, so the give-up never ends a run held by one: the run and its seat
+wait for the operator, and a turn with a wall-clock cap still ends at it. What
+the operator sees is the [`executor_resume_blocked`](../reference/alarms.md)
+alarm while such a run waits, raised by every data node from the status record
+of the node holding the seat, so a seat a satellite holds is raised too (a live
+node whose record is not counted keeping its last word), naming the seat
+waiting longest, the node holding it, the condition and for how long, and
+cleared once a resume gets past it; each attempt's `sandbox_resume_failed`
+line, at error, on the node holding the seat, its `error` naming the condition;
+and for a full volume holding the node's databases the
 [`volume_low`](../reference/alarms.md) alarm besides.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:

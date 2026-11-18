@@ -181,11 +181,10 @@ func TestTheTreeParserReadsWhatLsTreePrints(t *testing.T) {
 	}
 }
 
-// A MODE IS READ AS GIT READS ONE: whatever octal an old writer left, a
-// regular file is 100644 or 100755 by its owner's execute bit, a link
-// 120000, a directory 40000, anything else a submodule — the modes a
-// directory a write passes through is written in, as a commit of it from an
-// index would be (git's canon_mode).
+// A MODE IS READ AS GIT READS ONE (canon_mode): whatever octal an old writer
+// left, a regular file is 100644 or 100755 by its owner's execute bit, a link
+// 120000, a directory 40000, anything else a submodule, the modes a write
+// rewrites a directory in, as a commit from an index would.
 func TestAModeIsReadAsGitReadsIt(t *testing.T) {
 	t.Parallel()
 	for mode, want := range map[string]string{

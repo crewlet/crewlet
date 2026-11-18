@@ -8,17 +8,14 @@ import (
 	"time"
 )
 
-// A PACK IS KNOWN BY ITS INODE AND ITS SIZE (fileID): git freshens a .pack —
-// utime(2) to now, not a byte — whenever a process writes an object the pack
-// already holds, as an engine write's build in a scratch leaning on a copy
-// does, so a .pack whose time moved is the same pack to every verdict kept
-// about it — a scrub hashing it, the repair mark and a confirmed hint naming
-// it. Its .idx and .rev, which git never freshens, keep their time in their
-// identity, and so does every other file; a pack renamed in over the name, or
-// cut, is another identity whatever its time.
+// A PACK IS KNOWN BY ITS INODE AND ITS SIZE (fileID): git freshens a .pack's
+// time, not its bytes, whenever a process writes an object it holds, so a
+// freshened pack keeps every verdict about it (a scrub's hash, the repair
+// mark, a confirmed hint). Its .idx and .rev, which git never freshens, keep
+// their time in their identity, as every other file does; a pack renamed in
+// over the name, or cut, is another identity.
 //
-// Mutation: read a pack's modification time into its identity — the
-// freshened pack is another identity, red.
+// Mutation: read a pack's modification time into its identity (red).
 func TestAPackIsKnownByItsInodeAndSize(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

@@ -50,7 +50,7 @@ func ArtifactToolDeps(e *Engine) builtin.ArtifactDeps {
 		Requesters:   turnRequesters{engine: e},
 		Limits:       e.artifactLimits,
 		ManageOthers: e.artifactsManageOthers,
-		Link:         e.artifactLink,
+		Link:         e.ArtifactLink,
 		Org:          e.currentOrg,
 		Await:        e.router.Await,
 		KitVersion:   kitVersion,
@@ -115,10 +115,10 @@ func (e *Engine) artifactsManageOthers() bool {
 	return c != nil && c.Config != nil && c.Config.Artifacts.AgentsManageOthers
 }
 
-// artifactLink is an artifact's dashboard address on `api.external_url`, or
+// ArtifactLink is an artifact's dashboard address on `api.external_url`, or
 // empty where none is set: the one builder of every tool answer's `url`, so a
-// forwarded link works.
-func (e *Engine) artifactLink(id artifacts.ID) string {
+// forwarded link works, and of what a decision reads back as the artifact.
+func (e *Engine) ArtifactLink(id artifacts.ID) string {
 	if e.externalBase == "" {
 		return ""
 	}

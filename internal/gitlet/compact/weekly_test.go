@@ -17,14 +17,13 @@ import (
 )
 
 // AN EXPUNGE ON THE MAINTAINER'S OWN SCHEDULE: the `expunge_due` listing's
-// weekly arm, the scan that judges a repository's unreachable share, and the
-// cycle that keeps every pack younger than gitlet.PruneGrace whole — driven on
-// a solo fleet with a compactor whose clock stands past the grace, so what a
-// case pushed reads old, and what a drop left is past its grace.
+// weekly arm, the scan judging a repository's unreachable share, and the cycle
+// keeping every pack younger than gitlet.PruneGrace whole, driven on a solo
+// fleet by a compactor whose clock stands past the grace.
 
 // past is a compactor of x whose clock stands a grace and an hour after the
-// wall's — every pack pushed so far arrived before its grace, and every drop
-// made so far is past it — expunging on its schedule from a single byte.
+// wall's, so every pack and drop so far is past its grace, expunging on its
+// schedule from a single byte.
 func (x *fixture) past() *compact.Compactor {
 	x.t.Helper()
 	c, _, _ := x.compactorOf(func(o *compact.Options) {
@@ -56,11 +55,10 @@ func (x *fixture) weekly(name string, before time.Time) (gitlet.ExpungeCandidate
 	}
 }
 
-// steppedClock is a clock a case moves on by hand from the wall's instant
-// where it began. Its fleet's applier reads every record's broker instant off
-// it (stampedBy), so the instant a pack ARRIVED at is one the case stated, and
-// a compactor's clock set from it judges the grace against such instants
-// alone.
+// steppedClock is a clock a case moves by hand. Its fleet's applier stamps
+// every record's broker instant from it (stampedBy), so a pack ARRIVES at an
+// instant the case stated, and a compactor's clock set from it judges the
+// grace against those instants alone.
 type steppedClock struct {
 	mu sync.Mutex
 	at time.Time
@@ -86,13 +84,11 @@ func steppedFixture(t *testing.T, clock *steppedClock) *fixture {
 }
 
 // between is the instant between the packs x has pushed and the ones it pushes
-// next, on x's stepped clock: the fleet levelled, so every record appended so
-// far is applied and stamped at the clock's instant, then the clock stepped an
-// hour on to it and an hour past it. A pack pushed so far arrived an hour
-// before it, and one pushed from here on arrives an hour after. Never two
-// sleeps around a reading of the wall clock, which hold the instants apart
-// only once the clock has moved between them, and not at all on a coarse
-// one.
+// next: the fleet levelled, so every record so far is stamped at the clock's
+// instant, then the clock stepped an hour to it and an hour past it. A pack
+// pushed so far arrived an hour before it, one pushed later an hour after.
+// Never sleeps around wall-clock readings, which a coarse clock may not
+// separate.
 func (x *fixture) between(clock *steppedClock) time.Time {
 	x.t.Helper()
 	if err := x.fleet.Level(x.c.Ctx, ""); err != nil {
@@ -104,10 +100,9 @@ func (x *fixture) between(clock *steppedClock) time.Time {
 	return mid
 }
 
-// leakBytes commits a file of n seeded random bytes — incompressible — on a
-// branch named name, pushes it and deletes the branch, the work tree back
-// where it was: a commit no ref reaches, of about n bytes. It answers the
-// commit.
+// leakBytes commits a file of n seeded random (incompressible) bytes on a
+// branch named name, pushes it and deletes the branch, restoring the work
+// tree: it answers that commit, of about n bytes, which no ref reaches.
 func (x *fixture) leakBytes(name string, n int) string {
 	x.t.Helper()
 	base := x.p.Head(x.work)
@@ -123,11 +118,10 @@ func (x *fixture) leakBytes(name string, n int) string {
 }
 
 // A WEEKLY EXPUNGE WAITS FOR A QUARTER: a repository whose unreachable bytes
-// are under a quarter of its live bytes is scanned and left alone — not due,
-// every pack where it was — and once they pass a quarter, the same scan finds
-// it due and one cycle takes them out: no live pack holds what was leaked, a
-// cache rebuilt from the rows passes git fsck, and the weekly arm no longer
-// names the repository until a week after the commit.
+// are under a quarter of its live bytes is scanned and left alone; past a
+// quarter, the same scan finds it due and one cycle takes them out: no live
+// pack holds the leak, a cache rebuilt from the rows passes git fsck, and the
+// weekly arm leaves the repository out until a week after the commit.
 //
 // Mutation: judge due at any unreachable byte (drop the share), and the first
 // scan expunges; judge the share against the unreachable bytes rather than
@@ -165,10 +159,9 @@ func TestAWeeklyExpungeWaitsForAQuarter(t *testing.T) {
 	if dir := x.fresh(); x.holds(dir, big) {
 		t.Errorf("a cache rebuilt from the rows holds the leaked commit %s", big)
 	}
-	// The commit stamped the repository expunged at its record's broker
-	// instant, the wall's now — not the compactor's clock, a grace ahead —
-	// so a maintainer asking now names it no more, and one asking a week and
-	// a minute on names it again.
+	// The commit stamped the repository at its record's broker instant (the
+	// wall's now, not the compactor's clock a grace ahead), so it is unlisted
+	// now and listed again a week and a minute on.
 	if _, ok := x.weekly(gitlettest.RepoName, time.Now().Add(-gitlet.ExpungeInterval)); ok {
 		t.Error("the weekly arm still names the repository its expunge has just committed in")
 	}
@@ -177,22 +170,18 @@ func TestAWeeklyExpungeWaitsForAQuarter(t *testing.T) {
 	}
 }
 
-// AN OBJECT YOUNGER THAN THE GRACE IS KEPT: a weekly expunge takes only the
-// packs whose newest content arrived gitlet.PruneGrace or longer before its
-// clock, so a pack of objects no ref and no drop has ever reached — a push in
-// flight's, whose ref has not landed yet — survives the expunge that takes
-// out an older leak beside it, whole; and the next weekly expunge whose clock
-// stands a grace past that pack's arrival takes it.
-//
-// EVERY INSTANT IS THE CASE'S (steppedClock): the old leak arrives and is
-// dropped an hour before mid, the young pack arrives an hour after it, and
-// each expunge's clock is a grace past an instant on the same clock, so the
-// grace is judged against what the case stated and no wall clock has to move.
+// AN OBJECT YOUNGER THAN THE GRACE IS KEPT: a weekly expunge takes only packs
+// whose newest content arrived gitlet.PruneGrace or longer before its clock, so
+// a pack nothing has reached (a push in flight's, its ref not landed) survives
+// whole the expunge that takes an older leak beside it, and the next expunge,
+// a grace past its arrival, takes it. Every instant is the case's
+// (steppedClock): the old leak lands an hour before mid, the young pack an
+// hour after.
 //
 // Mutations: plan the schedule's inputs without their arrival (every live
-// pack), and the young pack's objects go with the first expunge; date a pack's
-// arrival by the applying node's own clock rather than its record's broker
-// instant, and the young pack reads as arrived before mid, and goes with it.
+// pack), and the young pack goes with the first expunge; date a pack's arrival
+// by the applying node's clock rather than its record's broker instant, and
+// the young pack reads as arrived before mid, and goes with it.
 func TestAnObjectYoungerThanTheGraceIsKept(t *testing.T) {
 	t.Parallel()
 	clock := &steppedClock{at: time.Now()}
@@ -227,8 +216,8 @@ func TestAnObjectYoungerThanTheGraceIsKept(t *testing.T) {
 		t.Fatalf("the commit %s, whose pack arrived within the grace, left the live packs", young)
 	}
 
-	// THE NEXT WEEKLY EXPUNGE, its clock a grace and an hour past the young
-	// pack's arrival, on the case's clock.
+	// The next weekly expunge, its clock a grace and an hour past the young
+	// pack's arrival.
 	clock.step(time.Hour)
 	at := clock.now().Add(gitlet.PruneGrace)
 	second, _, _ := x.compactorOf(func(o *compact.Options) { o.Now = func() time.Time { return at } })
@@ -246,14 +235,11 @@ func TestAnObjectYoungerThanTheGraceIsKept(t *testing.T) {
 	x.fresh()
 }
 
-// A CLEAN REPOSITORY IS SCANNED WEEKLY, WHICHEVER NODE MAINTAINS IT: a scan
-// on the maintainer's own schedule that finds a repository not due records so
-// on the code log (gitlet.ExpungeScan), so the weekly arm leaves it out for
-// gitlet.ExpungeInterval on every node — a second compactor, as a restarted
-// node or a new maintainer runs, scans it no sooner, whatever is pushed
-// meanwhile — and lists it again, to be scanned again, once the interval has
-// passed: its whole history is walked at most once a week, and a deploy of
-// the whole fleet rescans nothing.
+// A CLEAN REPOSITORY IS SCANNED WEEKLY, WHICHEVER NODE MAINTAINS IT: a
+// not-due scan is recorded on the code log (gitlet.ExpungeScan), so the weekly
+// arm leaves the repository out for gitlet.ExpungeInterval on every node (a
+// second compactor, as a restarted node or new maintainer runs, scans it no
+// sooner, whatever is pushed meanwhile) and lists it again once it passes.
 //
 // Mutation: record no scan (judgedClean proposes nothing), and the second
 // compactor's pass a day later scans again; have the scan's apply leave
@@ -328,26 +314,18 @@ func TestACleanRepositoryIsScannedWeekly(t *testing.T) {
 	}
 }
 
-// A WEEKLY EXPUNGE THAT WOULD DROP NOTHING BEGINS NOTHING: a repository whose
-// unreachable bytes are past a quarter of its live bytes, every one of them in
-// a pack younger than gitlet.PruneGrace — a push in flight's, or a compaction's
-// output that merged an old leak with a later push and arrived when the push
-// did — while every pack old enough to take holds only what its refs reach,
-// is NOT DUE: the scan weighs what the packs a cycle may take would drop, and
-// they would drop nothing — so the scan itself finds it not due, never a plan
-// that comes up empty after it. No begin is proposed, every live pack stays
-// where it was, and the young pack's objects are still live.
+// A WEEKLY EXPUNGE THAT WOULD DROP NOTHING BEGINS NOTHING: a repository past a
+// quarter unreachable, all of it in a pack younger than gitlet.PruneGrace,
+// while every pack old enough to take holds only what refs reach, is NOT DUE:
+// the scan weighs only what the takeable packs would drop, so it finds it not
+// due itself, never a plan that comes up empty. No begin, the live packs stay,
+// and the young pack's objects are still live. Every instant is the case's
+// (steppedClock): the reachable pack an hour before mid, the young one after.
 //
-// EVERY INSTANT IS THE CASE'S (steppedClock): the reachable pack arrives an
-// hour before mid and the young one an hour after it, and the scan's clock is
-// a grace past mid on the same clock.
-//
-// Mutations: weigh every live pack rather than the eligible ones, and the scan
-// finds the repository due (code_expunge_due); take into the plan a pack that
-// frees nothing as well, and the cycle rewrites the old, reachable packs to
-// free nothing — applied; date a pack's arrival by the applying node's own
-// clock rather than its record's broker instant, and the young pack is weighed
-// as old, and found due.
+// Mutations: weigh every live pack, and the scan finds it due
+// (code_expunge_due); plan a pack that frees nothing too, and the cycle
+// rewrites the old packs for nothing; date arrival by the applying node's
+// clock rather than the broker instant, and the young pack is weighed as old.
 func TestAWeeklyExpungeThatWouldDropNothingBeginsNothing(t *testing.T) {
 	t.Parallel()
 	clock := &steppedClock{at: time.Now()}
@@ -401,11 +379,10 @@ func TestAWeeklyExpungeThatWouldDropNothingBeginsNothing(t *testing.T) {
 	}
 }
 
-// A REPOSITORY UNDER THE MINIMUM IS JUDGED FROM ITS ROW: a repository whose
-// live bytes are under the least an expunge frees can never be due — what no
-// tip reaches is at most its live bytes — so a pass answers it not due and
-// records the scan without syncing it (no download of a repository no cache
-// holds, no admission, no walk), and the weekly arm leaves it out for a week.
+// A REPOSITORY UNDER THE MINIMUM IS JUDGED FROM ITS ROW: one whose live bytes
+// are under the least an expunge frees can never be due (what no tip reaches
+// is at most its live bytes), so a pass answers it not due and records the
+// scan without syncing it, and the weekly arm leaves it out for a week.
 //
 // Mutation: drop the row's check, and the scan syncs the small repository.
 func TestARepositoryUnderTheMinimumIsJudgedFromItsRow(t *testing.T) {
@@ -434,10 +411,9 @@ func TestARepositoryUnderTheMinimumIsJudgedFromItsRow(t *testing.T) {
 	}
 }
 
-// A QUARTER UNDER THE MINIMUM IS NOT DUE: a repository whose packs old enough
-// to take hold more than a quarter of its live bytes unreachable, but fewer
-// unreachable bytes than the least an expunge frees, is scanned and left
-// alone — not due, its leak still in a live pack.
+// A QUARTER UNDER THE MINIMUM IS NOT DUE: a repository whose takeable packs
+// hold more than a quarter of its live bytes unreachable, but less than the
+// least an expunge frees, is scanned and left alone, its leak still live.
 //
 // Mutation: drop the least from the due rule (`unreachable >= least`), and
 // the scan expunges the leak.

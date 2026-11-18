@@ -23,75 +23,16 @@ var (
 
 // Compact plans and runs ONE compaction of cand — a repository this node
 // maintains, as the `compaction_due` listing named it — and answers what
-// became of it: the unit a suite drives, and what every pass runs one at a
-// time. Nothing is retried inside it: every failure is the next poll's (a
-// moment's state) or remembered until something changes (a definite one), and
-// every outcome is counted and logged. Its error is the one that failed or
-// refused it, nil for every other outcome.
+// became of it; every pass runs one at a time. Nothing is retried inside it:
+// a moment's failure is the next poll's, a definite one remembered until
+// something changes. Its error is the one that failed or refused it, nil for
+// every other outcome. cand.ID is the REPOSITORY; the compaction's own id is
+// minted at its build.
 //
-// Throughout, cand.ID is the REPOSITORY and the compaction's own id is minted
-// at its build — two ids of two things, never one name for both.
-//
-// BESIDE A PUBLICATION OF THE SAME REPOSITORY on this node, NEVER OVER ITS
-// PACKS: the plan leaves out every pack the publication in flight reserved —
-// every pack its layer will name, its repack's inputs among them — and merges
-// the packs pushed since, which the layer neither names nor needs, so both
-// records apply ([Compactor.claimCompaction]). Only while that publication has
-// not planned yet, its sync and its plan, does a compaction answer busy, to be
-// planned again at the next pass. And so BESIDE AN EXPUNGE of the repository
-// on this node: the plan leaves out every input the expunge's plan chose
-// until its rescue has synced past its begin, and nothing after; only while
-// the expunge syncs and plans does a compaction answer busy.
-//
-//  1. SYNC at session, floored at the repository's version the listing read:
-//     never linearizable, because a barrier a compaction would cost the code
-//     log up to some 17 000 records a day at 250 000 pushes buys nothing — the
-//     committer holds every input to its own snapshot, and a plan from an
-//     older one is refused stale. The repository's maintainer holds it
-//     already in the ordinary case — on a fleet of alike Gitlet nodes it is the
-//     home, whose reads are asked of it too (ADR-0089).
-//  2. PLAN ([plan]) over the incarnation's live packs less every pack a
-//     published layer of its chain names — a published pack is never a
-//     compaction's input (the decide's rule 2), since a node's chain loads
-//     only over every pack it names — and less every pack a publication or
-//     an expunge in flight here reserved, capped at the repository's cap
-//     ([Compactor.capFor]) and then at [InputByteCap] of the cut the inputs
-//     take ([bounds.cutFor]). Not due is remembered at the listing's version
-//     and the cap, never an admission's refusal: a publication, the one thing
-//     that moves the chain, moves the version too. A plan made beside a
-//     reservation is never remembered: the reservation goes with its
-//     publication or its expunge, which may land nothing and leave the
-//     version where it was.
-//  3. ADMIT the build to the maintenance lane ([cache.Cache.AdmitCompaction]):
-//     busy is the next poll's; a charge the node's memory cannot hold is
-//     refused `memory` and never remembered, since the budget is read again
-//     every pass.
-//  4. BUILD in a scratch named by a fresh compaction id, leaning on a store of
-//     exactly the packs it merges, linked from the incarnation
-//     ([Compactor.pack]), so its cost follows the roll and never the history
-//     beside it; lay each output out; hold the build's
-//     own COUNT to what one compaction records — past it nothing is uploaded
-//     and the repository's cap is halved — and every output to the BUNDLE
-//     RULE, rebuilding ONCE at the densest offender's own ratio, the plan
-//     capped again at that cut's [InputByteCap]; a second miss halves the cap
-//     too. Then the whole proposal is held to every rule its committer will
-//     (gitlet.CompactionProposal.ValidateUnstored), before any byte is stored.
-//     THE ADMISSION IS RELEASED HERE, once the last git process has ended:
-//     the uploads, the proposal and the adoption run no git, and holding the
-//     slot and the charge through an upload the store paces would idle the
-//     node's maintenance for every other repository (M3-decisions M3-O29,
-//     M3-O40). The scratch, and its pin of the incarnation, stay to the end.
-//  5. UPLOAD every output at once ([uploadAll]); a store with no room is
-//     refused `store_full` and the repository held back until it has the room
-//     ([Compactor.releaseHeld]), and outputs stored drop the repository's own
-//     hold, whatever the store ([Compactor.stored]).
-//  6. PROPOSE one compaction through the estate's router, under its write
-//     attempt, and answer what the committer decided: applied adopts the
-//     outputs into this node's cache by link — so the node that built them
-//     downloads none — and forgets the repository's not-due memory.
-//
-// THE COMPACTOR'S LIFETIME BOUNDS IT, whoever asked: [Compactor.Stop] ends the
-// compaction in flight whether a pass or a caller of its own started it.
+// It syncs at session, plans, admits, builds, uploads and proposes (package
+// doc: "Who maintains, and why one node does all three" for the sync and its
+// claims beside a publication or an expunge, "The builds' bounds", "The
+// uploads, and a store with no room"). [Compactor.Stop] ends it, whoever asked.
 func (c *Compactor) Compact(ctx context.Context, cand gitlet.CompactionCandidate) (Outcome, error) {
 	c.compacting.Lock()
 	defer c.compacting.Unlock()
@@ -113,12 +54,12 @@ func (c *Compactor) Compact(ctx context.Context, cand gitlet.CompactionCandidate
 	return out, err
 }
 
-// compact is [Compactor.Compact]'s body, beside the publication or the
-// expunge of the repository in flight here that reserved the packs in
-// reserved, if one is.
+// compact is [Compactor.Compact]'s body; reserved is the packs a publication
+// or an expunge of the repository in flight here reserved, if one is.
 func (c *Compactor) compact(ctx context.Context, cand gitlet.CompactionCandidate, reserved map[string]bool,
 	began time.Time) (Outcome, error) {
 
+	// The maintainer, ordinarily the home, holds the repository already (ADR-0089).
 	s, err := c.o.Cache.Sync(ctx, cand.ID, statelog.FloorAt(statelog.ReadSession, cand.Version))
 	if err != nil {
 		return c.failed(cand, "sync", err)
@@ -140,6 +81,8 @@ func (c *Compactor) compact(ctx context.Context, cand gitlet.CompactionCandidate
 	}
 	p := plan(packs, leftOut, cap, c.bounds)
 	if !p.due {
+		// Not due is remembered at the version and the cap, but never beside
+		// a reservation, whose build may land nothing and leave the version.
 		if len(reserved) == 0 {
 			c.remember(cand, cap)
 		}
@@ -156,10 +99,8 @@ func (c *Compactor) compact(ctx context.Context, cand gitlet.CompactionCandidate
 		c.log.Debug("code_compaction_busy", "repo", cand.Name, "error", err)
 		return OutcomeBusy, err
 	case errors.Is(err, cache.ErrNoMemory):
-		// NEVER REMEMBERED: the node's budget is read again at every pass —
-		// a container resized in place, a maintainer run that ended — so the
-		// next poll plans again and is admitted once the budget holds the
-		// charge. The cache logged it once for the incarnation.
+		// NEVER REMEMBERED: the budget is read again every pass (a container
+		// resized, a maintainer run ended). The cache logged it once.
 		c.refused(reasonMemory)
 		return OutcomeRefused, err
 	case err != nil:
@@ -172,6 +113,9 @@ func (c *Compactor) compact(ctx context.Context, cand gitlet.CompactionCandidate
 		return out, err
 	}
 	defer b.sc.Remove()
+	// Released once the last git process ended, before uploads the store may
+	// pace (package doc, "The builds' bounds"; M3-decisions M3-O29, M3-O40);
+	// the scratch stays to the end.
 	adm.Release()
 
 	if out, err = c.upload(ctx, cand, &b); err != nil {
@@ -200,9 +144,9 @@ type built struct {
 }
 
 // buildChecked builds p at cut and holds the result to the build's own count
-// and to the bundle rule, rebuilding once where an output passes the rule (see
-// [Compactor.Compact], step 4), and then to every rule of the proposal. cap is
-// the pack bytes p was capped at, which a failure halves. On an error the
+// and to the bundle rule, rebuilding once where an output passes the rule
+// (package doc, "The builds' bounds"), then to every rule of the proposal. cap
+// is the pack bytes p was capped at, which a failure halves. On an error the
 // scratch is gone, and the outcome is the compaction's.
 func (c *Compactor) buildChecked(ctx context.Context, cand gitlet.CompactionCandidate, s cache.Synced,
 	adm *cache.Admission, p planned, cut, cap int64, limits gitlet.Limits) (built, Outcome, error) {
@@ -215,8 +159,8 @@ func (c *Compactor) buildChecked(ctx context.Context, cand gitlet.CompactionCand
 		return built{}, out, countErr
 	}
 	if ratio := pastBound(b.outs, c.bounds.maxBundle); ratio > 0 {
-		// ONE REBUILD, in the same reserved slot, at the densest offender's
-		// own ratio, the plan capped again at that cut's byte cap.
+		// ONE REBUILD, in the same slot, at the densest offender's own ratio,
+		// the plan capped again at that cut's byte cap.
 		b.sc.Remove()
 		cut = int64(float64(c.bounds.cut) / ratio)
 		if at := InputByteCap(cut); at < cap {
@@ -275,11 +219,11 @@ func (c *Compactor) build(ctx context.Context, repoID string, s cache.Synced, ad
 		Add: refs(outs)}}}, nil
 }
 
-// countHolds holds a build to its own count — THE AUTHORITY on how many packs
-// it wrote, which no cut bounds alone ([InputByteCap]): more than one
-// compaction records (gitlet.MaxCompactOutputs), or more than it retires, and
-// nothing is uploaded, the scratch is removed and the repository's cap is
-// halved, so the next poll plans a smaller roll rather than the same one.
+// countHolds holds a build to its own count, THE AUTHORITY on how many packs
+// it wrote, which no cut bounds alone ([InputByteCap]): past what one
+// compaction records (gitlet.MaxCompactOutputs) or what it retires, nothing is
+// uploaded, the scratch is removed and the cap halved, so the next poll plans
+// a smaller roll rather than the same one.
 func (c *Compactor) countHolds(cand gitlet.CompactionCandidate, b built, cap int64) (Outcome, error) {
 	if n := len(b.outs); n <= gitlet.MaxCompactOutputs && n <= len(b.proposal.Compaction.Retire) {
 		return "", nil
@@ -352,9 +296,8 @@ func (c *Compactor) answered(ctx context.Context, cand gitlet.CompactionCandidat
 	cid := b.proposal.Compaction.CompactionID
 	switch res.Outcome {
 	case statelog.OutcomeApplied:
-		// THE OUTPUTS ARE PRESENT AT ONCE, linked from the scratch — never a
-		// GET of what this node just stored — and the inputs leave this
-		// node's copy at its next round's swap, as on every other Gitlet node.
+		// Adopted by link from the scratch, never a GET of what this node just
+		// stored; the inputs leave at the next round's swap, as on every node.
 		// A failed adoption costs that round a GET, never the compaction.
 		if err := c.o.Cache.Adopt(ctx, cand.ID, b.sc, b.proposal.Compaction.Add...); err != nil {
 			c.log.Warn("code_compaction_adopt_failed", "repo", cand.Name, "compaction", cid, "error", err)
@@ -388,9 +331,8 @@ func (c *Compactor) answered(ctx context.Context, cand gitlet.CompactionCandidat
 	case gitlet.RefusalUnavailable:
 		return c.failed(cand, "propose", refusal)
 	case gitlet.RefusalPackTooLarge:
-		// The builder's check and the decide's disagreeing — a bug — on the
-		// same inputs it would make the same outputs, so it is remembered
-		// until the repository moves.
+		// The builder's check and the decide's disagreeing is a bug that the
+		// same inputs would repeat: remembered until the repository moves.
 		c.remember(cand, c.capFor(cand.ID))
 	}
 	c.log.Warn("code_compaction_refused", "repo", cand.Name, "compaction", cid, "refusal", string(res.Refusal),

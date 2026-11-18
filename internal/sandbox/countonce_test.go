@@ -58,19 +58,14 @@ func seatCounts(rig *coordRig) seatRuns {
 	return rig.coordinator.runs["swe"]
 }
 
-// A WRITE THAT MOVES A RUN OFF ITS CLAIM MOVES ITS SEAT'S COUNT ONCE. A claim
+// A WRITE THAT MOVES A RUN OFF ITS CLAIM MOVES ITS SEAT'S COUNT ONCE: a claim
 // handed back, or parked on its job's question, is counted as the claim until
-// the write's answer is taken, and that answer moves the count where the write
-// put the run: a release the store did not answer keeps the claim, and a park
-// frees the seat only with its question on the row. A recount whose listing was
-// read after the write landed, and written before its answer was taken, counted
-// the run where the write had put it, and the answer's move then counted it
-// there again. An answer's release, whose claim goes back to the answer and
-// holds nothing, took the seat's holding count down twice, freeing a seat whose
-// other run still worked; a park counted its one question twice and its claim's
-// hold off twice, the seat offering its mail to an answer match beside a job
-// it no longer counted. Here a second run of the seat works throughout, and the
-// recount lands between each write and its answer.
+// the write's answer is taken, which moves the count where the write put the
+// run. Here a second run of the seat works throughout, and a recount lands
+// between each write and its answer; counted twice, an answer's release frees a
+// seat whose other run works, and a park counts its question twice. See the
+// package doc, "Every write that moves a run between its seat's sets moves the
+// count once".
 //
 // Mutation: have a recount count a run whose release is out, or whose park is
 // being written, where the store's row says it is, or leave the park unrecorded
@@ -208,18 +203,11 @@ func parkElsewhere(t *testing.T, rig *coordRig, turnID string) {
 }
 
 // AN ANSWER'S WRITE MOVES ITS SEAT'S COUNT ONCE, as a release and a park do
-// ([TestAWriteThatMovesARunOffItsClaimMovesItsSeatsCountOnce]). The writes a
-// person's answer moves its run by are the record that takes the run out of the
-// question set, the claim that resumes it, and a decline that puts it back on
-// its question. Each moves its seat's count where the write put the run as its
-// answer is taken, and a recount whose listing was read after the write landed,
-// and written before that, counts the run where it was. Moved after the write
-// and outside the lock, the move counted the run where the write put it a
-// second time: the record took a seat holding a second question out of the
-// question set altogether, so that question's answer was run as an unrelated
-// turn ([seatRuns.awaiting]: erring low is the harmful way); the claim counted
-// its run holding twice; and each decline counted the question it put the run
-// back on twice.
+// ([TestAWriteThatMovesARunOffItsClaimMovesItsSeatsCountOnce]): the record that
+// takes the run out of the question set, the claim that resumes it, and a
+// decline that puts it back on its question. Counted twice, the record takes a
+// seat holding a second question out of the question set, so that answer runs
+// as an unrelated turn ([seatRuns.awaiting]: erring low is the harmful way).
 //
 // Mutation: drop any one write's record before it is sent, or have a recount
 // count a run with a write out where the store's row says it is; each counts a
@@ -406,16 +394,12 @@ func TestTwoWritesOutOnOneRunMoveItsSeatsCountInTheOrderTheyWereRecorded(t *test
 }
 
 // A RECOUNT COUNTS A RUN WITH A WRITE STILL OUT WHERE THE MOVES ALREADY MADE
-// LEAVE IT (countwrite.go), a move made by an earlier write's answer included.
-// Here a park's question and an answer by turn recorded to it have both landed,
-// and their answers come back in the order the writes were made: the park's
-// first, which moves the run off the claim and onto its question, while the
-// record's is still out. A recount then counts the run on its question, and
-// the record's answer moves it from there to the answer, which is in neither
-// set. Counted where the run stood before the park's answer, the recount put
-// the run back on the claim, and the record's move then took the run out of a
-// question set it was no longer counted in: the seat held for a run that holds
-// nothing, its mail waiting behind it until the next recount.
+// LEAVE IT (countwrite.go), an earlier write's move included. A park's question
+// and an answer by turn recorded to it both land, their answers in order: the
+// park's moves the run onto its question while the record's is out, so a
+// recount counts it there and the record moves it to the answer. Counted where
+// it stood before the park's answer, the seat is held for a run holding
+// nothing.
 //
 // Mutation: leave a write's move out of what a recount counts its run as while
 // a later write on it is still out.
@@ -528,18 +512,12 @@ var countedEndings = []countedEnding{
 	},
 }
 
-// AN ENDING'S DELETE MOVES ITS SEAT'S COUNT ONCE (countwrite.go). An ending
-// takes its run out of the seat's sets as the delete that ends it lands: it is
-// recorded before the delete is sent, a recount meanwhile counts the run where
-// it was whether or not its listing still has the row, and the delete's answer
-// takes it out. Counted out after the delete and outside the lock, a recount
-// whose listing was read after the delete and written before that counted the
-// run out already, and the ending then took it out a second time: here the
-// seat's other run, a claim that holds it throughout, was left counted by
-// nothing, and the seat read free beside it, its next mail run beside the
-// claim's resumed turn. Each ending is made twice, once with no recount
-// beside it, where its own move is the only one, and once with a recount
-// between its delete and the delete's answer.
+// AN ENDING'S DELETE MOVES ITS SEAT'S COUNT ONCE (countwrite.go): recorded
+// before it is sent, the run counted where it was by a recount meanwhile,
+// whether or not its listing has the row, and taken out by the delete's answer.
+// The seat's other run is a claim that holds it throughout. Each ending is made
+// twice, with no recount beside it and with one between its delete and the
+// delete's answer.
 //
 // Mutation: count an ending's run out as it ends, after its delete, or have a
 // recount count only the runs its listing has, and the seat reads free beside
@@ -666,15 +644,11 @@ var besides = []struct {
 	{"a recount between the write and its answer", true},
 }
 
-// A LAUNCH MOVES ITS SEAT'S COUNT ONCE (countwrite.go). The write that opens a
+// A LAUNCH MOVES ITS SEAT'S COUNT ONCE (countwrite.go): the write that opens a
 // run's row counts it holding as its answer is taken, recorded before it is
-// sent, so a recount between the two counts the run where it was: no row at
-// all for a launch, and the claim it was for a relaunch its resumed turn
-// makes, which counts it holding already. Counted after the write and outside
-// the lock, a recount whose listing was read after the row was written counted
-// the run holding, and the launch then counted it a second time; and a
-// relaunch counted holding a run its claim held the seat for already. Either
-// way the seat stayed held until a recount after the run had settled.
+// sent, so a recount between counts the run where it was: no row for a launch,
+// and the claim for a relaunch its resumed turn makes, which holds already.
+// Counted twice, the seat stays held until a recount after the run settled.
 //
 // Mutation: record the open after it lands, or record it against another run,
 // or record a relaunch as opening a row nothing counted; the run is counted
@@ -742,23 +716,15 @@ func (s *recountOnFence) ClaimOwnership(ctx context.Context, turnID, owner strin
 	return won, err
 }
 
-// A RECOVERY COUNTS EACH RUN IT TAKES OVER ONCE (countwrite.go). A node taking
-// a seat counts each run its recovery takes over where the recovery leaves it:
-// a running job holding, a question awaiting, and a tail the seat's last holder
-// left launching nowhere, since it is reaped. The seat's control topic is
-// attached before the recovery runs, so a recount from it can land before the
-// recovery, or between a run's fence and its count. The recovery starts the
-// seat's counts afresh as it records every run it takes over, and a recount
-// meanwhile counts each where the recovery has left it so far. Counted after
-// the fence and outside the lock, on top of whatever a recount had already
-// counted, the running job held the seat twice and the question was counted
-// twice (the seat's mail offered to an answer match with nothing more to
-// answer), and a recount that had counted the tail kept it holding after its
-// reap.
+// A RECOVERY COUNTS EACH RUN IT TAKES OVER ONCE (countwrite.go), where the
+// recovery leaves it: a running job holding, a question awaiting, a reaped
+// launching tail nowhere. The control topic is attached before the recovery
+// runs, so a recount can land before it or between a fence and a count; the
+// recovery starts the counts afresh as it records every takeover.
 //
 // Mutation: count a run after its fence without recording it first, or leave
-// the counts a recount made before the recovery standing; the seat counts a
-// run twice, or a reaped tail.
+// the counts a recount made before the recovery standing; the seat counts a run
+// twice, or a reaped tail.
 func TestARecoveryCountsEachRunItTakesOverOnce(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -912,21 +878,15 @@ func (s *parkLandsUnanswered) ReleaseClaim(ctx context.Context, turnID string, r
 }
 
 // A RECORD MADE WHILE A RELEASE IS OWED MOVES ITS RUN AFTER THE RELEASE
-// (countwrite.go). A park's question can land with its answer lost: the park
-// moves no count, hands its claim back, and the store leaves that release
-// unanswered too, so it is owed and the run counts as the claim it still is.
-// A reply then answers the question on the row, and its record lands. The
-// release is one more write in the run's entry, recorded before the record,
-// so the record's move waits for the release's answer, and the run moves from
-// the claim to its answer once the release is found moved on. Read apart, the
-// release counted the run as the claim whatever was out behind it, and the
-// record moved it out of a question set it was never counted in: the seat's
-// other question read as closed, the state in which its answer runs as an
-// unrelated turn.
+// (countwrite.go). A park's question lands with its answer lost, the park hands
+// its claim back, and the store leaves that release unanswered, so it is owed.
+// A reply's record of the question then lands; recorded behind the release in
+// the run's entry, its move waits for the release's answer. Read apart, the
+// seat's other question reads as closed.
 //
 // Mutation: keep a claim's release apart from its run's entry, or move each
-// write by the sets it was recorded from and to rather than to where it put
-// the run; t3's question reads as closed.
+// write by the sets it was recorded from and to rather than to where it put the
+// run; t3's question reads as closed.
 func TestARecordMadeWhileAReleaseIsOwedMovesItsRunAfterTheRelease(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -993,20 +953,13 @@ func onLogLine(t *testing.T, level slog.Level, msg string, step func()) {
 }
 
 // A PARK'S HAND-BACK IS RECORDED IN THE STEP THAT TAKES THE PARK'S ANSWER
-// (countwrite.go), where the park's write did not land. A park's question can
-// land with its answer lost: the park moves no count, and the run is the claim
-// it still is, its write in the run's entry answered and gone. Recorded in a
-// second step after it, the hand-back's release left a moment with no write
-// out on the run, and a recount in that moment counted the run off its row,
-// the question it found there, while the release then recorded counted it as
-// the claim: the seat counted a question nobody had answered as open beside
-// the claim's hold it no longer counted, and a write recorded behind the
-// release later moved by the difference from the claim. Here the recount is
-// made where the park logs that its write did not land, which it did between
-// the two steps and now does after the one.
+// (countwrite.go), where the park's write did not land, so no moment falls with
+// no write out on the run, in which a recount would count the question off its
+// row while the release counts the claim. The recount is made where the park
+// logs that its write did not land, after the one step.
 //
-// Mutation: take the park's answer and record its hand-back in two steps of
-// the lock; the recount between them counts t1's question.
+// Mutation: take the park's answer and record its hand-back in two steps of the
+// lock; the recount between them counts t1's question.
 //
 // Not parallel: it hooks the process's logger ([onLogLine]).
 func TestAParksHandBackIsRecordedInTheStepThatTakesItsAnswer(t *testing.T) {
@@ -1069,18 +1022,11 @@ func (s *answeredBehindPark) ReleaseClaim(ctx context.Context, turnID string, re
 }
 
 // A PARK'S HAND-BACK MOVES AFTER THE WRITES RECORDED BEHIND THE PARK
-// (countwrite.go). A park's question can land with its answer lost, and an
-// answer by turn be recorded to that question while the park's write is still
-// out, the record's own answer taken first: its move waits for the park's. The
-// park's answer, lost, then lets the record's move go, from the claim to the
-// answer, which is in neither set, and the park hands its claim back. Its
-// release is recorded behind them in the run's entry, in the step that takes
-// the park's answer, so a recount while the release is out counts the run where
-// the record put it, and the release, made against a run no longer the claim,
-// finds it moved on. Recorded once the park's answer had been taken, in an
-// entry of its own from the claim, the release counted the answered run as the
-// claim: the seat held by a run whose row holds nothing, until the store
-// answered the release.
+// (countwrite.go). An answer by turn is recorded to a park's question while the
+// park's write is out, its answer taken first; the park's lost answer then lets
+// the record's move go, to the answer, and its release, recorded behind them in
+// the same step, finds the run moved on. Recorded later, in an entry of its
+// own, the release counts the answered run as the claim.
 //
 // Mutation: record the park's hand-back after taking the park's answer; the
 // recount made as the release goes out counts t1 holding.
@@ -1136,19 +1082,11 @@ func TestAParksHandBackMovesAfterTheWritesRecordedBehindThePark(t *testing.T) {
 }
 
 // A RELEASE A LATER JOB'S TAKES THE PLACE OF LEAVES NOTHING OUT ON ITS RUN
-// (claimrelease.go). A resumed turn can relaunch its executor and then fail, and
-// the claim its frame gives back names the job the relaunch moved the run off:
-// a release that cannot land, which the store here leaves unanswered, so it is
-// owed. The relaunched job then finishes, its claim wins, since only a claim of
-// the owed release's own job is refused, and its resume fails too, so its claim
-// is given back before the earlier release is made again. The later release
-// takes the earlier one's place among the releases out, and the earlier one's
-// write in the run's entry is answered there, as the write that did not land
-// that it is. Left out, it held every later move on the run behind it for as
-// long as this node held the seat, the later release's and the run's last among
-// them: the seat counted the run holding after it was over, and took no mail.
-// Answered as landed, an answer's release took the run out of the holding set
-// while its relaunched job still worked, the seat read free beside it.
+// (claimrelease.go). A resumed turn relaunches and fails, its release owed
+// unanswered; the relaunched job's claim wins and its resume fails too, so the
+// later release takes the earlier one's place, which is answered as a write
+// that did not land. Left out, the seat counts the run holding after it is
+// over; answered as landed, the seat reads free beside the relaunched job.
 //
 // Mutation: put a release in the place of one still out without answering the
 // earlier one's write, or answer it as one that landed.
@@ -1243,15 +1181,11 @@ func TestAReleaseALaterJobsTakesThePlaceOfLeavesNothingOutOnItsRun(t *testing.T)
 }
 
 // A RECOVERY'S TAKEOVER HAS THE LAST WORD ON ITS RUN (countwrite.go). A write
-// a frame of this node's earlier holding records after the seat's release is
-// still out when this node takes the seat back, and the recovery's takeover of
-// the run is recorded behind it. The recovery reaps the run, a tail its last
-// holder left launching, and counts it in no set; the earlier write's answer
-// then comes, landed. Each landed write puts the run where its own status says,
-// in the order they were recorded, so the takeover, answered as landed whatever
-// its status, leaves the run in no set. Answered as a write that did not land,
-// as a takeover counting its run in no set was, the earlier write's move stood,
-// and the seat counted a question for a run that was gone.
+// of this node's earlier holding is still out when this node takes the seat
+// back; the recovery reaps the run and counts it in no set, and the earlier
+// write then lands. Each landed write puts the run where its status says, in
+// recorded order, so the takeover, answered as landed, leaves the run in none;
+// answered as not landed, the seat counts a question for a run that is gone.
 //
 // Mutation: answer a takeover that counts its run in no set as a write that did
 // not land.
@@ -1325,17 +1259,11 @@ func (s *seatMovesOnLanding) RecordAnswer(ctx context.Context, turnID, launch st
 	return run, won, err
 }
 
-// A MOVE FOR A SEAT THIS NODE NO LONGER HOLDS MOVES NOTHING (countwrite.go), as
-// a release's has not since R3-4. A write this node had out on a seat it lets
-// go of is answered after the seat's counts have gone ([Coordinator.ReleaseSeat]),
-// and a recovery of the seat by this node, taking it back, counts the write's
-// run where it finds it. Moved all the same, the write counted the run a second
-// time on top of the recovery's count: a park's question counted twice, the
-// seat's mail offered to an answer match with nothing more to answer, and an
-// answer's record took the seat's other question out of the question set, so
-// its answer ran as an unrelated turn. And until the write's answer came, the
-// recovery's own count of the run waited behind it, where the write had left
-// it: the parked run held the seat.
+// A MOVE FOR A SEAT THIS NODE NO LONGER HOLDS MOVES NOTHING (countwrite.go). A
+// write out on a seat this node lets go of is answered after the seat's counts
+// have gone ([Coordinator.ReleaseSeat]), and a recovery taking the seat back
+// counts its run where it finds it. Moved all the same, the run is counted
+// twice; kept out, the recovery's count waits behind it.
 //
 // Mutation: keep a seat's writes out when the seat is let go of; the run is
 // counted where the write was recorded from while its answer is out, and twice
@@ -1491,20 +1419,16 @@ func recovered(f func()) {
 	f()
 }
 
-// A WRITE WHOSE STORE CALL PANICS LEAVES NOTHING OUT ON ITS RUN (countwrite.go).
-// Every write that moves a run's count is recorded before its store call, and
-// answered on every way out of it, a panic included, as one that did not land;
-// so is the record of a claim's release, which refuses every claim of its job
-// while it stands, and the count of claims on their way, which holds an owed
-// release back while it is above nothing. The queue's handler recovers a panic
-// and the process lives on: a write left out held every later write's move on
-// its run behind it, the run counted where the write was recorded from until
-// the seat moved; a release left recorded refused the job's completion, and
-// left it counted as the claim, for as long; and a claim's count left up never
-// let an owed release be made again.
+// A WRITE WHOSE STORE CALL PANICS LEAVES NOTHING OUT ON ITS RUN
+// (countwrite.go): answered on every way out as one that did not land, and so
+// are a claim's release record, the count of claims on their way, a claim's
+// count as this node's live attempt, and the recovery gate a pass closes
+// (recoverygate.go). The queue's handler recovers a panic and the process lives
+// on, so anything left up blocks its run or seat until a restart.
 //
-// Mutation: drop any one write's settle on its way out, the release's or the
-// claims' count's; its case leaves it out.
+// Mutation: drop any one write's settle on its way out, the release's, the
+// claims' count's, the live attempt's or the recovery gate's; its case leaves
+// it out.
 func TestAWriteWhoseStoreCallPanicsLeavesNothingOutOnItsRun(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1611,6 +1535,7 @@ func TestAWriteWhoseStoreCallPanicsLeavesNothingOutOnItsRun(t *testing.T) {
 			rig.coordinator.mu.Lock()
 			out, release, claiming := rig.coordinator.writing["t1"], rig.coordinator.releases["t1"],
 				rig.coordinator.claiming["t1"]
+			live, gate := rig.coordinator.live["t1"], rig.coordinator.recovering["swe"]
 			rig.coordinator.mu.Unlock()
 			if out != nil {
 				t.Errorf("a write is left out on t1 (%d of them), holding every later move on it", len(out.out))
@@ -1621,6 +1546,13 @@ func TestAWriteWhoseStoreCallPanicsLeavesNothingOutOnItsRun(t *testing.T) {
 			if claiming != 0 {
 				t.Errorf("%d claims of t1's job are left counted as on their way, holding its release back",
 					claiming)
+			}
+			if live != nil {
+				t.Errorf("%d claims of t1 are left counted as this node's live attempt, keeping every later "+
+					"recovery pass of its seat off it", live.n)
+			}
+			if gate != nil {
+				t.Error("the seat's recovery gate is left closed, refusing every later claim of its runs")
 			}
 		})
 	}

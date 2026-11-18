@@ -913,7 +913,7 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	// rides the seat's priority lane, ahead of whatever background work the
 	// seat has queued (see priority.go). The mark is on the event, so a park
 	// or a requeue of this wake keeps it.
-	priority := out.Addressed && WrittenByPerson(reg, r.Inbound)
+	priority := RidesLane(prompt, reg, r.Inbound)
 	if priority {
 		queue.Prioritize(wake)
 	}

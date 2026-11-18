@@ -29,8 +29,8 @@ func searchQ(repo string, s gitlet.SearchQuery) gitlet.GitQuery {
 	return gitlet.GitQuery{Kind: gitlet.GitSearch, RepoID: repo, Asker: person, Home: true, Search: &s}
 }
 
-// grepOnly is a node's cache keeping no code index and no memo: every search
-// a server over it answers is read with git grep, by a run of its own.
+// grepOnly is a node's cache keeping no code index and no memo: a server over
+// it answers every search with a git grep of its own.
 type grepOnly struct{ query.Cache }
 
 func (grepOnly) IndexTip(cache.Synced) (cache.IndexedTip, bool) { return cache.IndexedTip{}, false }
@@ -41,9 +41,9 @@ func (grepOnly) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool)   { return n
 func (grepOnly) MemoProbe(cache.Synced, cache.MemoKey) ([]byte, bool) { return nil, false }
 func (grepOnly) Memo(cache.Synced) *cache.MemoBatch                   { return nil }
 
-// building is a node's cache on one of the repository's index holders whose
-// indexer has not yet indexed the tip: it keeps no index, and says it holds
-// one — the first of the holders, with a second after it, where first is set.
+// building is a node's cache on an index holder whose indexer has not yet
+// indexed the tip: it keeps no index but says it holds one, as the first of
+// two holders where first is set.
 type building struct {
 	query.Cache
 	first bool
@@ -56,12 +56,11 @@ func (building) CodeIndex(context.Context, cache.Synced) (*cache.CodeIndexView, 
 	return nil, false
 }
 
-// searchFixture is a fixture whose default branch holds what a search reads
-// and passes over: matches in two directories, a line only Unicode's case
-// folding matches, a binary and a file past gitlet.MaxIndexedFileBytes that
-// both hold the text searched, a file holding none of it, a line of the
-// syntax of git's expressions, which a search reads as text, and a file whose
-// needles are near each other and at its unterminated last line.
+// searchFixture's default branch holds matches in two directories, a line only
+// Unicode case folding matches, a binary and a file past
+// gitlet.MaxIndexedFileBytes both holding the text, a file holding none, a line
+// of git's expression syntax (searched as text), and a file of near needles,
+// some on its unterminated last line.
 func searchFixture(t *testing.T) (*fixture, string, string) {
 	t.Helper()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -93,25 +92,18 @@ func (x *fixture) codeIndexed(repo string) {
 	}
 }
 
-// INDEX AND GREP ANSWER THE SAME HITS (M6-D13). A repository's default branch
-// read through its code index and the same commit read with git grep answer
-// one list of lines — RE2's matches, in path order and then line order — over
-// a literal, an expression, case folded beyond ASCII, a path filter and a
-// literal of git's expression syntax; and both pass over the binary and the
-// file past the bound that hold the text.
+// INDEX AND GREP ANSWER THE SAME HITS (M6-D13): the default branch read through
+// its code index and with git grep answer one list of lines (RE2's matches, in
+// path then line order) for a literal, an expression, case folded beyond ASCII,
+// a path filter and a literal of git's expression syntax, both passing over the
+// binary and the oversized file; with the same matches, context (a line two
+// near hits share carried once) and per_file totals.
 //
-// Both also answer where each line matched, the lines around each where
-// context is asked, a line two near hits share carried once, and each file's
-// total where per_file is asked.
-//
-// Mutation: answer the index's candidates unconfirmed (viaIndex without
-// Confirm) — the index path answers every line of a candidate; drop the
-// large file's lines by nothing (viaGrep's large) — the grep path answers the
-// large file's lines; escape nothing of the strings git is handed
-// (codeindex.Plan.Grep's ereMeta) — git reads count+1 (a|b) as an expression
-// and the grep path misses its line. Drop the grep path's context pass, carry
-// a line twice (withContext's carried), or count FileMatches over the kept
-// hits alone: red.
+// Mutation: viaIndex without Confirm (every candidate line answered); keep the
+// large file's lines (viaGrep's large); escape nothing (codeindex.Plan.Grep's
+// ereMeta: git reads count+1 (a|b) as an expression); drop the grep path's
+// context pass, carry a line twice (withContext's carried), or count
+// FileMatches over the kept hits alone: red.
 func TestIndexAndGrepAnswerTheSameHits(t *testing.T) {
 	t.Parallel()
 	x, repo, tip := searchFixture(t)
@@ -174,8 +166,7 @@ func TestIndexAndGrepAnswerTheSameHits(t *testing.T) {
 				t.Errorf("a search of a few files answered truncated (index %t, grep %t)", a.Truncated,
 					g.Truncated)
 			}
-			// The lines around each hit, each carried once, and the file's
-			// total, both as each case asks them.
+			// Context and file totals only where the case asks them.
 			for _, h := range a.Hits {
 				if tc.q.Context == 0 && (h.Before != nil || h.After != nil) ||
 					tc.q.PerFile == 0 && h.FileMatches != 0 || tc.q.PerFile > 0 && h.FileMatches != 3 {
@@ -184,8 +175,8 @@ func TestIndexAndGrepAnswerTheSameHits(t *testing.T) {
 						tc.q.Context, tc.q.PerFile)
 				}
 			}
-			// The large file is passed over by its size on both paths, the
-			// binary by the index alone (git grep -I passes it over unsaid).
+			// Both paths count the large file skipped; only the index counts
+			// the binary (git grep -I skips it unsaid).
 			if wantIndex, wantGrep := skippedIn(tc.q, 2), skippedIn(tc.q, 1); a.SkippedFiles != wantIndex ||
 				g.SkippedFiles != wantGrep {
 				t.Errorf("the index skipped %d files and git grep %d, want %d and %d", a.SkippedFiles,
@@ -195,19 +186,17 @@ func TestIndexAndGrepAnswerTheSameHits(t *testing.T) {
 	}
 }
 
-// A NEAR HIT'S LINES ARE CARRIED ONCE. Three lines of context around
-// e/near.txt's needles (lines 2, 3 and 9 of nine, the last unterminated)
-// answer line 1 before line 2, nothing between lines 2 and 3, which are both
-// hits, lines 4 to 6 after line 3, and lines 7 and 8 before line 9, never
-// line 6 again; the two needles of line 9 are two matches. A per-file bound of
-// one answers line 2 alone, its total 3, and lines 3 to 5 after it: a line
-// past the bound is not answered, so it is a context line. A limit of one
-// answers line 2 with nothing after it: line 3 is the next page's first hit,
-// never this page's context. Both paths alike.
+// A NEAR HIT'S LINES ARE CARRIED ONCE, on both paths. Three lines of context
+// around e/near.txt's needles (lines 2, 3 and 9 of nine, the last
+// unterminated) answer line 1 before 2, nothing between hits 2 and 3, lines
+// 4-6 after 3 and lines 7-8 before 9 (never 6 again); line 9's two needles are
+// two matches. per_file 1 answers line 2 alone, total 3, lines 3-5 after it:
+// an unanswered line is context. limit 1 answers line 2 with nothing after:
+// line 3 is the next page's first hit, never this page's context.
 //
-// Mutation: bound After by the next line that matched rather than the next
-// answered (withContext's next), or let Before reach back past the line
-// before's After (carried): red.
+// Mutation: bound After by the next matched line rather than the next answered
+// (withContext's next), or let Before reach past the previous After (carried):
+// red.
 func TestANearHitsLinesAreCarriedOnce(t *testing.T) {
 	t.Parallel()
 	x, repo, _ := searchFixture(t)
@@ -246,20 +235,17 @@ func TestANearHitsLinesAreCarriedOnce(t *testing.T) {
 	}
 }
 
-// A SEARCH CONTINUED AFTER A PLACE ANSWERS THE LINES PAST IT, and only those
-// (gitlet.SearchQuery.After): walked a line a page, each page continued after
-// the last line the one before answered, the index and git grep each answer
-// every line once and in order — a place inside a file and one between
-// files alike — and a second walk, answered from the memo where the node
-// keeps one, answers the same, since a page is memoized under its place.
-// A place past every file holding the text answers nothing, and passes over
-// no file before it unsaid: the files it skips for their size or as
-// binaries are behind it, never counted.
+// A SEARCH CONTINUED AFTER A PLACE ANSWERS ONLY THE LINES PAST IT
+// (gitlet.SearchQuery.After): walked a line a page, the index and git grep each
+// answer every line once and in order, for a place inside a file or between
+// files, and a second walk (from the memo where kept) answers the same, since
+// a page is memoized under its place. A place past every matching file answers
+// nothing and counts no skipped file: those lie behind it.
 //
-// Mutation: drop the place from the line check (searching.add) — the index
-// answers a/one.go:3 again on every page; key the memo without the place —
-// every page is the first's; count the large file before the place (viaGrep)
-// — git grep says it skipped a file a page past it never read.
+// Mutation: drop the place from the line check (searching.add) — a/one.go:3 on
+// every page; key the memo without the place — every page is the first's;
+// count the large file before the place (viaGrep) — a skip of a file the page
+// never read.
 func TestASearchContinuedAfterAPlaceAnswersTheLinesPastIt(t *testing.T) {
 	t.Parallel()
 	x, repo, _ := searchFixture(t)
@@ -311,17 +297,14 @@ func skippedIn(q gitlet.SearchQuery, n int) int {
 	return 0
 }
 
-// A SEARCH STOPS AT ITS BUDGET AND SAYS SO. A search that runs
-// gitlet.SearchBudget out while its asker still listens answers what it found
-// by then, Truncated — never a refusal — and keeps nothing in the memo: its
-// page is no function of its arguments, so the next search of the same
-// commit reads it again and answers every hit, which is then memoized and
-// answered from the memo.
+// A SEARCH STOPS AT ITS BUDGET AND SAYS SO: one that runs out of
+// gitlet.SearchBudget while its asker listens answers what it found, Truncated,
+// never a refusal, and memoizes nothing (its page is no function of its
+// arguments), so the next search reads anew, answers every hit and memoizes it.
 //
-// Mutation: answer a budget's end as the read's failure (searchRead's
-// budget case) — the read is refused; memoize an answer the budget cut
-// (searchRead's !budget) — the next search is answered the truncated page
-// from the memo.
+// Mutation: answer a budget's end as the read's failure (searchRead's budget
+// case) — refused; memoize a cut answer (searchRead's !budget) — the next
+// search gets the truncated page from the memo.
 func TestASearchStopsAtItsBudgetAndSaysSo(t *testing.T) {
 	t.Parallel()
 	x, repo, _ := searchFixture(t)
@@ -346,21 +329,18 @@ func TestASearchStopsAtItsBudgetAndSaysSo(t *testing.T) {
 	}
 }
 
-// AN UNHELD INDEX SENDS THE WALK ON (M6-D12). The first of an indexed
-// repository's two index holders, asked as its walk's home, that keeps no
-// index of the default branch's tip yet refuses a search of that branch as
-// unready, index_building — which passes no fill
-// (gitlet.UnreadyReason.PassesFill), so the walk asks the second holder rather
-// than this node read it on the slow path a moment before its index. Every
-// node after it answers: the second holder building its own, the first asked
-// past the home, and a node keeping none all grep at once — as the first does
-// a search of any other commit, which no index answers for — so a walk always
-// ends at an answer.
+// AN UNHELD INDEX SENDS THE WALK ON (M6-D12). The first of two index holders,
+// asked as the walk's home with no index of the default branch's tip yet,
+// refuses a search of that branch as unready index_building, which passes no
+// fill (gitlet.UnreadyReason.PassesFill): the walk asks the second holder
+// rather than grep a moment before the index lands. Every later node greps at
+// once (the second holder building its own, the first asked past the home, a
+// node keeping none), as the first does for any other commit (which no index
+// answers), so a walk always ends at an answer.
 //
 // Mutation: drop the index_building refusal (searchRead's holder case) — the
-// first holder greps the default branch; refuse on any holder (Holder for
-// PassesOn) — the second holder refuses; refuse past the home (drop
-// r.q.Home) — the first holder asked past the home refuses.
+// first holder greps; refuse on any holder (Holder for PassesOn) — the second
+// refuses; drop r.q.Home — the first holder asked past the home refuses.
 func TestAnUnheldIndexSendsTheWalkOn(t *testing.T) {
 	t.Parallel()
 	x, repo, tip := searchFixture(t)
@@ -408,15 +388,13 @@ func TestAnUnheldIndexSendsTheWalkOn(t *testing.T) {
 }
 
 // A SEARCH'S REFUSAL IS JUDGED AT THE LOG'S HEAD, as every read's is
-// (objects): a Gitlet node whose copy predates the activation that made a
-// repository `visibility: company` would refuse a seat outside its unit from
-// the row it holds, so it syncs once at the log's head and searches from the
-// row that admits the seat. A search the head refuses too is refused after
-// that one look.
+// (objects): a node whose copy predates the activation making a repository
+// `visibility: company` would refuse a seat outside its unit, so it syncs once
+// at the log's head and judges from that row; a search the head refuses too is
+// refused after that one look.
 //
-// Mutation: judge the grant on the copy as it stands (searchTarget's first
-// refusal returned at once) — the seat is refused once the repository is
-// company-wide, and the refused search takes no second look.
+// Mutation: return searchTarget's first refusal at once — the seat is refused
+// once the repository is company-wide, and a refusal takes no second look.
 func TestASearchRefusalIsJudgedAtTheLogsHead(t *testing.T) {
 	t.Parallel()
 	settings := gitlettest.Settings()
@@ -451,17 +429,15 @@ func TestASearchRefusalIsJudgedAtTheLogsHead(t *testing.T) {
 	}
 }
 
-// A SECOND LOOK SYNCS TO THE HEAD ITS ASKER READ: a person's search naming a
-// commit a Gitlet node's copy predates, and one naming a ref nobody pushed, each
-// carrying the head its asker read after the push, look once more at that
-// head — at session, a floor, with no barrier of the node's own — and the
-// first finds its commit's line there while the second is answered not found;
-// the same search with no head looks at a barrier of its own. A company-wide
-// search naming a ref most repositories lack so costs the one barrier its
-// listing took, not one a repository.
+// A SECOND LOOK SYNCS TO THE HEAD ITS ASKER READ: a search naming a commit the
+// node's copy predates, or a ref nobody pushed, carrying the head its asker
+// read, looks again at that head (session level, a floor, no barrier of the
+// node's own): the first finds its line, the second is not found. With no head
+// it takes a barrier of its own. So a company-wide search naming a ref most
+// repositories lack costs its listing's one barrier, not one a repository.
 //
-// Mutation: ignore the asker's head (lookAtHead syncing at linearizable
-// whatever it names) — each look takes a barrier of its own, red.
+// Mutation: lookAtHead syncing at linearizable whatever head it names — each
+// look takes a barrier of its own, red.
 func TestASecondLookSyncsToTheHeadItsAskerRead(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{Shape: gitlettest.Shape{GitletNodes: 2}}, gitlettest.Settings())
@@ -533,17 +509,16 @@ func TestASearchHitNamesWhereItsLineMatched(t *testing.T) {
 	}
 }
 
-// A PER-FILE SEARCH COUNTS EVERY LINE OF A FILE. Two lines a file at the most
-// answers the first two of a file of seven and the one of a file of one, each
-// naming its file's total, untruncated; a page continued after the first
-// file's first line answers its second, still naming 7, since the lines before
-// the place count in the total. Both paths alike. A grep whose git ends after
-// the file's third line answers its two lines with no total, Truncated: a
+// A PER-FILE SEARCH COUNTS EVERY LINE OF A FILE, on both paths. per_file 2
+// answers the first two lines of a file of seven and the one of a file of one,
+// each with its file's total, untruncated; continued after the first file's
+// first line it answers its second, still totalling 7. A grep whose git ends
+// after the file's third line answers two lines with no total, Truncated: a
 // count short of the file's is never answered.
 //
-// Mutation: count from the place rather than the file's first line (drop the
-// place's own file's lines before add on the grep path, or count after the
-// answered check); leave the file a cut grep stopped in uncut (viaGrep): red.
+// Mutation: count from the place rather than the file's first line (on the grep
+// path drop the place's file's lines before add, or count after the answered
+// check); leave the file a cut grep stopped in uncut (viaGrep): red.
 func TestAPerFileSearchCountsEveryLineOfAFile(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -584,8 +559,8 @@ func TestAPerFileSearchCountsEveryLineOfAFile(t *testing.T) {
 	}
 }
 
-// cutGrep is a query.Pool whose git grep passes on its first lines alone and
-// then ends as a process the read's git budget ended.
+// cutGrep is a query.Pool whose git grep passes on its first lines, then ends
+// as if the read's git budget ended it.
 type cutGrep struct {
 	query.Pool
 	lines int
@@ -613,13 +588,12 @@ func (p cutGrep) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error)
 
 // A CONTEXT PASS CUT SHORT ANSWERS THE FILES IT READ. A grep search asking
 // context reads its hits' files after git grep ends (withHeldContext); a pass
-// that the read's git running out, or its answer falling due, ends after its
-// first file answers that file's hit with its context, Truncated, and
-// memoizes nothing: the next search reads anew and answers every hit.
+// ended after its first file, by the git budget or the answer falling due,
+// answers that file's hit with context, Truncated, and memoizes nothing: the
+// next search reads anew and answers every hit.
 //
-// Mutation: answer a pass the due instant cut as the read's failure (drop
-// passCut from searchRead's budget case), or memoize a cut pass (searchRead's
-// !budget), red.
+// Mutation: answer a due-cut pass as the read's failure (drop passCut from
+// searchRead's budget case), or memoize a cut pass (searchRead's !budget): red.
 func TestAContextPassCutShortAnswersTheFilesItRead(t *testing.T) {
 	t.Parallel()
 	x, repo, _ := searchFixture(t)
@@ -634,7 +608,7 @@ func TestAContextPassCutShortAnswersTheFilesItRead(t *testing.T) {
 	for _, due := range []bool{false, true} {
 		ctx, cancel := context.WithCancel(t.Context())
 		if due {
-			// Two seconds on: far past a warm grep of the fixture, so the
+			// Two seconds: far past a warm grep of the fixture, so the
 			// instant falls during the pass.
 			ctx, cancel = gitlet.AnswerBy(t.Context(), time.Now().Add(gitlet.ReplyMargin+2*time.Second))
 		}
@@ -657,9 +631,9 @@ func TestAContextPassCutShortAnswersTheFilesItRead(t *testing.T) {
 	}
 }
 
-// cutPass is a query.Pool whose cat-file after a git grep (the grep path's
-// context pass) reads the first blob asked, then ends: at the read's due
-// instant where due is set, otherwise as a process the read's git budget ended.
+// cutPass is a query.Pool whose cat-file after a git grep (the context pass)
+// reads the first blob asked, then ends: at the read's due instant where due is
+// set, otherwise as if the read's git budget ended it.
 type cutPass struct {
 	query.Pool
 	due     bool
@@ -694,12 +668,12 @@ func (p *cutPass) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error
 // A SEARCH ANSWER HOLDS ITS BOUND (gitlet.MaxGitAnswerBytes), on both paths:
 // hundreds of matching lines of gitlet.MaxSearchLineBytes, each with more
 // matches than a hit names and a line between each two, answer at most the
-// bound of JSON, Truncated, their hits the first lines of the search's order;
-// so does the same search asking three lines of context. And a search asking
-// context with no limit answers at most gitlet.MaxSearchContextHits.
+// bound of JSON, Truncated, as the search's first lines, with or without three
+// lines of context; a search asking context with no limit answers at most
+// gitlet.MaxSearchContextHits.
 //
 // Mutation: weigh a hit before its context is attached (flush's emit before
-// withContext), and the answer passes the bound, red.
+// withContext): the answer passes the bound, red.
 func TestASearchAnswerHoldsItsBound(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -746,8 +720,8 @@ func TestASearchAnswerHoldsItsBound(t *testing.T) {
 }
 
 // A SEARCH'S PAGE IS MEMOIZED UNDER ITS CONTEXT AND ITS PER-FILE BOUND: the
-// same search asking context, or another bound, is another answer, read anew,
-// never the first's page from the memo.
+// same search asking context or another bound is read anew, never answered the
+// first's page from the memo.
 //
 // Mutation: key the page without Context or PerFile (memoKey), red.
 func TestASearchsContextAndBoundKeyItsMemo(t *testing.T) {

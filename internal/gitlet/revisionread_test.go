@@ -14,9 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CHANGE'S REVISIONS READ BY OBJECT ID (revisionread.go): the one rule both
-// the code tools and the API's change question read a revision's files and
-// place its findings by.
+// Tests of revisionread.go: the one rule both the code tools and the API's
+// change question read a revision's files and place its findings by.
 
 // atSeq is a position on the code log's first generation.
 func atSeq(seq uint64) statelog.Position {
@@ -33,12 +32,11 @@ func measured(n int64, head, base string, pushed, target uint64, touched ...stri
 }
 
 // A REVISION'S FILES ARE READ FROM THE BASE ITS FACTS RECORD, or not at all:
-// a revision with no facts is pending on a live change — its home records them
-// within a minute — and unrecorded on one that ended; one whose facts record
-// no base shares no history with its target and has no base to read its files
-// from, though an interdiff of it, which reads no base, still reads; and the
-// read is the diff from the recorded base to the head, renames read as such,
-// or the two revisions' interdiff kept to the paths either touches.
+// a revision with no facts is pending on a live change and unrecorded on one
+// that ended; one with no recorded base has no base to read its files from,
+// though an interdiff of it, reading no base, still reads; and the read is the
+// diff from the recorded base to the head with renames, or the two revisions'
+// interdiff kept to the paths either touches.
 //
 // Mutations: read an ended change's revision with no facts as pending → red;
 // diff a revision from the target's tip rather than its base → red; drop the
@@ -214,14 +212,12 @@ func TestAFindingIsPlacedWithoutAReadWhereTheRowsSay(t *testing.T) {
 	}
 }
 
-// A PAGE OF FINDINGS IS PLACED WHATEVER ITS SIZE: a Gitlet node's re-anchoring
-// places at most gitlet.MaxReanchors anchors, and the reader serves a page of up
-// to gitlet.MaxFindingsPerPage findings, every one of which may need one — so a
-// page past one read is cut into reads that each pass the Gitlet node's own
-// check, that together ask every anchor once, and that keep the anchors of
-// one pair of blobs in one read wherever the page allows; and every read's
-// answer is folded in, however the reads interleave, while a read that is
-// refused answers that refusal — the first in the reads' order.
+// A PAGE OF FINDINGS IS PLACED WHATEVER ITS SIZE: a page of up to
+// gitlet.MaxFindingsPerPage findings past one re-anchoring's
+// gitlet.MaxReanchors is cut into reads that each pass the Gitlet node's own
+// check, together ask every anchor once, and keep one blob pair's anchors
+// together wherever the page allows; every read's answer is folded in however
+// the reads interleave, and a refusal answered is the first in the reads' order.
 //
 // Mutations: one read of every anchor → the read the Gitlet node refuses, red;
 // cut the page in its own order → a pair split across reads, red; fold in only
@@ -230,9 +226,8 @@ func TestAFindingIsPlacedWithoutAReadWhereTheRowsSay(t *testing.T) {
 func TestAPageOfFindingsIsPlacedWhateverItsSize(t *testing.T) {
 	t.Parallel()
 	rev := measured(2, "head-2", oidOf("base"), 20, 18)
-	// A FULL PAGE raised on revision 1, interleaving its files, so a page
-	// cut in its own order puts each file in every read: file i%5, each
-	// file's findings on one blob of it.
+	// A full page on revision 1 interleaving five files (one blob each), so
+	// a page cut in its own order puts each file in every read.
 	var page []gitlet.FindingRow
 	for i := range gitlet.MaxFindingsPerPage {
 		path := fmt.Sprintf("pkg/file%d.go", i%5)
@@ -324,9 +319,9 @@ func TestAPageOfFindingsIsPlacedWhateverItsSize(t *testing.T) {
 }
 
 // meeting is a barrier of two reads, each answering whether the other arrived
-// while it waited: a read made only after the other has answered meets
-// nobody. meetWait bounds the wait — far past a loaded runner's scheduling
-// delay, and short enough that a read made alone fails the case quickly.
+// while it waited: a read made only after the other answered meets nobody.
+// meetWait is far past a loaded runner's scheduling delay, and short enough
+// that a read made alone fails the case quickly.
 type meeting struct {
 	arrived atomic.Int32
 	both    chan struct{}
@@ -349,11 +344,9 @@ func (m *meeting) meet() bool {
 }
 
 // A CHANGE'S REVISIONS ARE READ AT ONCE: once its head is read, the revision
-// asked about and the earlier one an interdiff reads from need nothing of
-// each other, so neither waits for the other's answer — a node reading the
-// estate through another pays one round trip for the two; the head is never
-// read again; and of two refusals the one answered is the revision asked
-// about's, however late it arrives.
+// asked about and the earlier one an interdiff reads from are read together,
+// neither waiting on the other; the head is never read again; and of two
+// refusals the one answered is the revision asked about's, however late.
 //
 // Mutations: AtOnce reads one after the other → the two reads never meet,
 // red; read the head again → a read too many, red; answer the first refusal

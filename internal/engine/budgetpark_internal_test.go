@@ -818,13 +818,11 @@ func (unreachableFleet) Used(context.Context, string, coord.Windows) (coord.Usag
 
 // A RELEASED SEAT TAKES ITS ALARM AND ITS HOLD WITH IT, and a stopping node
 // disarms every alarm: an alarm left armed would fire into a seat a peer now
-// serves, or into a queue client that has closed. The release's detach drops
-// every hold the inbox had then and ends the attachment they were taken for,
-// and the release forgets the park after it; a park asked in between (a turn
-// refused mid-flight, which the release does not wait for) names that ended
-// attachment, and the queue refuses it. Taken anyway, as it was when holds
-// were keyed by the subscription alone, its hold kept the seat deaf on this
-// node once it came back, with no park left to lift it.
+// serves, or into a queue client that has closed. A park asked between the
+// release's detach and its forget (a turn refused mid-flight) names the ended
+// attachment, and the queue refuses it, so its hold never keeps the seat deaf
+// on this node once it comes back (the package doc's "A seat parked until an
+// instant").
 //
 // Mutation: take a park's hold for the inbox's current attachment rather than
 // the one the seat held, and the park asked between the detach and the forget

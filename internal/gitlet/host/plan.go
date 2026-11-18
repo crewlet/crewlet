@@ -11,34 +11,16 @@ import (
 )
 
 // A COMMIT_FILES' CHANGE IS PLANNED BEFORE ITS DIRECTORIES ARE READ (planFiles):
-// its operations judged against what the parent holds at every path they name
-// and every directory above one — the build's first read (building.paths) —
-// and laid out by directory, so the build reads exactly the directories the
-// change touches and writes exactly those again.
+// judged against what the parent holds at every path it names and every
+// directory above one (the build's first read, building.paths), and laid out
+// by directory, so the build reads and writes exactly the directories it
+// touches.
 //
-// THE TREE AS THE CALL LEAVES IT is what is judged, so one call may remove a
-// path and make another beneath it — delete `a` and put `a/b` is one change,
-// `a` a directory holding `b` alone. Each operation reads the PARENT: an
-// edit, a mode, a delete and a move name what the parent holds, and a path
-// the call names beneath one it removes may only be made anew there. Every
-// other nesting of two named paths is a path_conflict, since one of the two
-// would undo the other: a path beneath one the call makes a file, keeps a file
-// or moves an entry to, and an edit, a mode, a delete or a move out of a path
-// beneath one the call removes.
-//
-// EVERY DIRECTORY IS JUDGED ONCE, from its parent's judgement (ancestry):
-// whether the call removes it or a path above it, the nearest path the call
-// names at or above it, and the file above it a path the call makes would
-// need to be a directory. Every rule above asks those of a path's directory,
-// and a rule that walked the directory's ancestors again at every ask made a
-// plan's work grow with the CUBE of its paths' depth — every directory of a
-// path asking again of every one above it, each ask hashing a prefix as long
-// as its own: one put 2 047 components deep, which a 4 KiB path holds, took
-// 5.3 s of a core before a byte of git ran. So the plan's work is a few map
-// operations a path it names and a directory above one, each hashing the
-// directory's own path once, whatever the depth — and the depth is bounded
-// besides (gitlet.MaxTreePathDepth, refused before anything is read), so what a
-// plan holds is at most a directory a component of every path it names.
+// THE TREE AS THE CALL LEAVES IT is judged: delete `a` and put `a/b` is one
+// change, `a` a directory holding `b` alone. Each operation reads the PARENT,
+// and beneath a path the call removes it may only make a path anew; every
+// other nesting of two named paths is a path_conflict (nested), since one of
+// the two would undo the other.
 
 // plan is a commit_files' change laid out by directory.
 type plan struct {
@@ -160,7 +142,12 @@ const (
 
 // ancestry is what the plan knows of every directory above a path the call
 // names, each JUDGED ONCE, from its parent's judgement, and asked of as often
-// as a rule needs it.
+// as a rule needs it. Walking a directory's ancestors again at every ask grows
+// with the CUBE of the depth, each ask hashing a prefix: seconds of a core for
+// one put as deep as a 4 KiB path holds, before git runs. Judged once, a plan
+// costs a few map operations a directory whatever the depth, and
+// gitlet.MaxTreePathDepth bounds the depth besides
+// (TestAPlanJudgesEachDirectoryOnce).
 type ancestry struct {
 	role  map[string]int
 	at    func(string) object

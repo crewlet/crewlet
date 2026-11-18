@@ -25,44 +25,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// EVERY INTERLEAVING OF AN EXPUNGE KEEPS WHAT A REF REACHES: an expunge is the
-// one rewrite that DROPS objects, so it is held, over interleavings of what a
-// node's cache meets, to a reference model of reachability — every object a
-// ref reaches stays where every copy and every fresh copy finds it, and every
-// commit no ref reached when an expunge's rescue read the refs, pushed before
-// its begin, leaves the repository at its commit.
-//
-// Each expunge is the PRODUCTION EXPUNGER's (internal/gitlet/compact) — its own
-// scan, build, begin, rescue and commit — over this node's cache, the world's
-// store and a committer (expungeCommitter) that decides its records on the
-// world's log to the code domain's rules, so what is interleaved is what a
-// maintainer runs. Beside the operations a node meets every day — pushes,
-// force-pushes, deletions, tags, refused pushes, adoptions, syncs at three
-// levels and killed ones, restarts, evictions, rebuilds, the maintainer's
-// pass, a merge compaction and the sweep of what it retired past its grace —
-// each seed draws a person's PURGE request; an EXPUNGE cycle, which finishes
-// one left open from the rows; a cycle with a REVIVE between its scan and its
-// begin — a branch created at a commit the scan found unreachable, as an
-// engine write creating a branch at an old commit does, which the rescue must
-// keep; a cycle over a copy whose COMMIT-GRAPH LISTS what it drops — a branch
-// the maintainer graphed, then deleted; and a cycle CRASHED at a point of
-// gitletfault.ExpungePath, which a later cycle resumes from the rows.
-//
-// After every expunge and at every check, each repository's copy, synced
-// linearizable, passes `git fsck --connectivity-only --no-dangling` with its
-// dropping view named, as a serving process names it (I1: no ref reaches an
-// object the copy lacks); every check holds each copy to a fresh cache's at
-// the same position — its image live and dropping packs where their rows
-// place them, and nothing else — as the cache's own interleavings do; and
-// after every commit no commit the model says dropped is one the copy's
-// commit-graph lists or `git rev-list -1` walks (I2: over a graph still
-// listing it, git answers it as though it were there).
-//
-// Mutations: give a push's scratch the dropping view as an alternate, and a
-// push building on a dropping commit lands and its ref reaches what the
-// commit retires (I1); keep the commit-graph on EventPackExpunged, and the
-// copy's graph still lists the commit the commit dropped (I2); skip the
-// rescue, and the revived branch names a commit no pack holds (I1).
+// EVERY INTERLEAVING OF AN EXPUNGE KEEPS WHAT A REF REACHES: the production
+// expunger (internal/gitlet/compact), deciding on a committer with the code
+// domain's rules (expungeCommitter), runs beside the cache's everyday operations,
+// purges, a revive between scan and begin, a drop of what the commit-graph
+// lists, and crashes at each gitletfault.ExpungePath point (resumed from rows).
+// I1: after every expunge and check, each copy synced linearizable passes `git
+// fsck --connectivity-only --no-dangling` with its dropping view named, and every
+// check matches it to a fresh cache's. I2: after a commit, no commit the model
+// drops is in the copy's commit-graph or walked by `git rev-list -1`.
+// Mutations: give a push's scratch the dropping view as an alternate (I1); keep
+// the commit-graph on EventPackExpunged (I2); skip the rescue, and the revived
+// branch names a commit no pack holds (I1).
 func TestEveryInterleavingOfAnExpungeKeepsWhatARefReaches(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
@@ -92,10 +66,9 @@ func TestEveryInterleavingOfAnExpungeKeepsWhatARefReaches(t *testing.T) {
 	}
 }
 
-// SIXTEEN SEEDS OF FORTY-EIGHT STEPS, a check every eight: an expunge cycle
-// runs three git builds and a rescue's, so a step costs more than the cache's
-// own interleavings' and a seed is fewer of them; sixteen reach every outcome
-// of expungeOutcomes between them.
+// SIXTEEN SEEDS OF FORTY-EIGHT STEPS, a check every eight: a cycle runs three
+// git builds and a rescue's, so seeds are shorter than the cache's own
+// interleavings'; sixteen reach every expungeOutcomes entry between them.
 const (
 	expungeSeeds      = 16
 	expungeSteps      = 48
@@ -130,8 +103,7 @@ var expungeOps = []struct {
 	{"expunge crashed", 7, (*expungeRun).expungeCrashed},
 }
 
-// expungeOutcomes is every outcome the seeds must reach between them: each
-// expunge operation having done what it is drawn to do.
+// expungeOutcomes is every outcome the seeds must reach between them.
 var expungeOutcomes = []string{
 	"purge", "expunge applied", "expunge resumed from its rows", "a revive rescued", "a commit dropped history",
 	"a commit dropped a commit its copy's graph listed",
@@ -145,30 +117,25 @@ var expungeOutcomes = []string{
 // errExpungeCrashed is what a crashed cycle's fault point answers.
 var errExpungeCrashed = errors.New("the maintainer crashed here")
 
-// expungeRun is one seed's run: the cache's interleaving it draws operations
-// beside, and what the expunge's committer and the model keep of each
-// repository.
+// expungeRun is one seed's run: the cache's interleaving, and what the
+// committer and the model keep of each repository.
 type expungeRun struct {
 	in *interleaving
 	// mu guards repos, which the committer moves on the expunger's
 	// goroutine, and seq.
 	mu    sync.Mutex
 	repos map[string]*expungeRows
-	// seq orders what the model must order finer than a step: a commit
-	// pushed, and a begin applied — a step may push a commit and begin an
-	// expunge whose inputs hold it.
+	// seq orders a push against a begin within one step, which may do both.
 	seq int
-	// branches counts the branches the run created, which names each.
+	// branches counts the branches the run created, naming each.
 	branches int
 }
 
-// expungeRows is what the expunge's committer and the model keep of one
-// repository: the expunge open — its id, when its begin applied (seq), the
-// position its scan read and every commit a ref reached at its scan — the
-// purge requested and its record's position; every drop a ref's force-move
-// or deletion left; every commit the run pushed, and when (seq); every commit
-// a commit dropped; and the commit a revive is creating a branch at, which no
-// ref reached at the scan whatever reaches it by the begin.
+// expungeRows is what the committer and the model keep of one repository: the
+// open expunge (its begin's seq, seen position and scan's reach), the purge
+// request, every ref drop, every push and its seq, and every commit a commit
+// purged. revived is a revive's commit, unreached at the scan whatever reaches
+// it by the begin.
 type expungeRows struct {
 	open      string
 	begunAt   int
@@ -180,18 +147,15 @@ type expungeRows struct {
 	drops     []expungeDrop
 	pushed    []expungeCommit
 	purged    map[string]bool
-	// committed is set by a commit the committer applied, until the step
-	// that drove it reads it, with when the begin it ended applied, what
-	// that begin's scan reached, and every commit the copy's commit-graph
-	// listed as the commit was proposed.
+	// committed is set by an applied commit until afterCommit reads it, with
+	// its begin's seq and scan reach and the copy's graph as proposed.
 	committed      bool
 	committedBegun int
 	committedScan  map[string]bool
 	committedGraph map[string]bool
 }
 
-// expungeDrop is one ref drop: the instant its record landed and the object
-// the ref left.
+// expungeDrop is one ref drop: when its record landed and the object left.
 type expungeDrop struct {
 	at  time.Time
 	old string
@@ -203,8 +167,7 @@ type expungeCommit struct {
 	seq int
 }
 
-// interleaveExpunge runs one seed and answers the outcomes its operations
-// reached.
+// interleaveExpunge runs one seed and answers the outcomes it reached.
 func interleaveExpunge(t *testing.T, seed uint64) map[string]bool {
 	in := startInterleaving(t, seed)
 	x := &expungeRun{in: in, repos: map[string]*expungeRows{}}
@@ -262,9 +225,9 @@ func (x *expungeRun) isOpen(repo string) bool {
 	return r.open != ""
 }
 
-// unreachable is every commit the run pushed to repo that no live ref reaches
-// and no commit dropped — those the open expunge's begin left dropping alone,
-// where dropping is set: pushed before it, and reached by no ref at its scan.
+// unreachable is every commit pushed to repo that no live ref reaches and no
+// commit purged; with dropping, only those the open begin left dropping
+// (pushed before it, unreached at its scan).
 func (x *expungeRun) unreachable(repo string, dropping bool) []string {
 	reach := x.reachable(repo)
 	r := x.rows(repo)
@@ -279,12 +242,9 @@ func (x *expungeRun) unreachable(repo string, dropping bool) []string {
 	return out
 }
 
-// onHeld puts repo's work tree back on a commit the repository holds where an
-// expunge took its head out — main's — so the next commit made there builds
-// on a parent its pack may leave out: a client's push sends every object the
-// remote's refs do not reach, and the world's packs leave out every object an
-// earlier push brought (syncWorld's tips), which holds only while the
-// repository still has them.
+// onHeld resets repo's work tree to main when an expunge purged its head: the
+// world's packs omit what earlier pushes brought (syncWorld's tips), so the next
+// commit must build on a parent the repository still holds.
 func (x *expungeRun) onHeld(repo string) {
 	f := x.in.w.repos[repo]
 	r := x.rows(repo)
@@ -299,8 +259,7 @@ func (x *expungeRun) onHeld(repo string) {
 	f.head = main
 }
 
-// restart is the cache's interleaving's crash and boot, which the expunger
-// meets as a copy read again from its state and its rows.
+// restart is the cache's interleaving's crash and boot.
 func (x *expungeRun) restart(repo string) string {
 	out := x.in.restart(repo)
 	x.in.saw("restart")
@@ -326,8 +285,8 @@ func (x *expungeRun) tag(repo string) string {
 	return x.in.tag(repo)
 }
 
-// forcePush moves a branch to a new commit made on an older one main
-// reaches, by force: what the branch named before is a drop.
+// forcePush force-moves a branch to a new commit on an older reachable one;
+// its old target is a drop.
 func (x *expungeRun) forcePush(repo string) string {
 	t := x.in.t
 	ref := x.in.branch()
@@ -359,8 +318,8 @@ func (x *expungeRun) forcePush(repo string) string {
 	return fmt.Sprintf("%s from %.7s to %.7s on %.7s", ref, old, oid, base)
 }
 
-// deleteBranch deletes a branch but main, which the run keeps so a ref
-// always reaches a commit the repository holds: what it named is a drop.
+// deleteBranch deletes a branch other than main, which stays so a ref always
+// reaches a held commit; its target is a drop.
 func (x *expungeRun) deleteBranch(repo string) string {
 	var branches []string
 	for _, ref := range x.in.w.log.liveRefs(repo) {
@@ -387,17 +346,14 @@ func (x *expungeRun) dropped(repo, old string) {
 	r.drops = append(r.drops, expungeDrop{at: x.in.clk.Now(), old: old})
 }
 
-// pushOntoDropping is a push received while an expunge is open, building on a
-// commit its begin left dropping and carrying none of that commit's objects:
-// its receive's connectivity check, run in a push's scratch over the copy as
-// a receiving node runs it, must find the parent missing — a push's scratch
-// leans on the copy's objects/ alone, never its dropping view — and the push
-// lands nothing. That is what makes a rescue valid at any position after the
-// begin, so a receive that PASSED lands its push where nothing after it is
-// rescued — between the rescue's sync and the commit, the cycle held there —
-// and the commit then retires the parent its new branch reaches. An expunge
-// is left open first where none is; a repository with no commit dropping is
-// pushed to as ever.
+// pushOntoDropping pushes, while an expunge is open, a commit on a dropping
+// parent without that parent's objects. The receive's connectivity check in a
+// push's scratch must find the parent missing: a scratch leans on the copy's
+// objects/ alone, never its dropping view, which keeps a rescue valid at any
+// position after the begin. A receive that passed lands between the rescue and
+// the commit (the cycle held there), and the commit retires the parent it
+// reaches. It opens an expunge first where none is; with nothing dropping it
+// pushes as ever.
 func (x *expungeRun) pushOntoDropping(repo string) string {
 	t := x.in.t
 	var did []string
@@ -421,11 +377,9 @@ func (x *expungeRun) pushOntoDropping(repo string) string {
 	}
 	defer sc.Remove()
 	tip, cs := x.in.w.packInto(t, repo, sc.Dir, nil)
-	// THE RECEIVE'S CONNECTIVITY CHECK, as receive-pack makes it: every
-	// object the new tip reaches, short of what the scratch's alternate's
-	// refs reach, must be in the scratch or its alternate. Run by the case's
-	// own git, so a scratch whose alternates file a mutation widened is read
-	// as git reads it.
+	// THE RECEIVE'S CONNECTIVITY CHECK, as receive-pack makes it, by the
+	// case's own git, so an alternates file a mutation widened is read as
+	// git reads it.
 	_, stderr, err := x.in.w.client.Try(t, "", nil, "--git-dir="+sc.Dir, "rev-list", "--objects", tip, "--not",
 		"--alternate-refs")
 	f.tips, f.head = tips, head
@@ -435,9 +389,8 @@ func (x *expungeRun) pushOntoDropping(repo string) string {
 		return strings.Join(append(did, fmt.Sprintf("onto dropping %.7s: refused (%s)", parent, firstLine(stderr))),
 			"; ")
 	}
-	// A RECEIVE THAT PASSED lands the push, as its committer would — a branch
-	// of its own at the tip, its pack stored — after the rescue read the refs
-	// and before the commit retires what the rescue did not keep.
+	// A RECEIVE THAT PASSED lands as its committer would, after the rescue
+	// read the refs and before the commit retires what it did not keep.
 	row := x.in.w.storeBundle(t, x.in.w.bundle(cs), "")
 	x.branches++
 	ref := fmt.Sprintf("refs/heads/onto-%d", x.branches)
@@ -463,9 +416,8 @@ func (x *expungeRun) pushOntoDropping(repo string) string {
 		x.answered(repo, cand, out, cerr))), "; ")
 }
 
-// openAnExpunge leaves an expunge open on repo — a cycle serving its purge
-// stopped at its begin — with a commit dropping: a branch pushed and deleted
-// first where every commit the run pushed is reachable or dropped.
+// openAnExpunge leaves an expunge open on repo, stopped at its begin, with a
+// commit dropping: it pushes and deletes a branch first where none would be.
 func (x *expungeRun) openAnExpunge(repo string) string {
 	if len(x.unreachable(repo, false)) == 0 {
 		x.onHeld(repo)
@@ -492,8 +444,8 @@ func firstLine(s string) string {
 	return line
 }
 
-// purge is a person's purge request of repo, recorded at a record of its own:
-// a request asked while one is open widens it to this one.
+// purge is a person's purge request of repo, at a record of its own; one asked
+// while another is open widens it.
 func (x *expungeRun) purge(repo string) string {
 	at := x.in.w.log.mark()
 	r := x.rows(repo)
@@ -526,8 +478,7 @@ func (x *expungeRun) owe(repo string) {
 	}
 }
 
-// expunge is one cycle of the expunge repo owes, if any: an open one
-// finished from its rows, or the purge requested served.
+// expunge runs one cycle of the expunge repo owes, if any.
 func (x *expungeRun) expunge(repo string) string {
 	cand, ok := x.candidate(repo)
 	if !ok {
@@ -537,10 +488,9 @@ func (x *expungeRun) expunge(repo string) string {
 	return x.answered(repo, cand, out, err)
 }
 
-// expungeWithRevive is a cycle serving a purge with a branch created between
-// its scan and its begin at a commit the scan found unreachable — one no ref
-// reaches, pushed before and not yet dropped — which the rescue must keep. An
-// expunge open is finished first, so the cycle has a scan to come between.
+// expungeWithRevive serves a purge with a branch created, between its scan and
+// begin, at a commit the scan found unreachable, which the rescue must keep. An
+// open expunge is finished first, so the cycle has a scan to come between.
 func (x *expungeRun) expungeWithRevive(repo string) string {
 	var done []string
 	if cand, ok := x.candidate(repo); ok && cand.Open != "" {
@@ -590,15 +540,12 @@ func (x *expungeRun) expungeWithRevive(repo string) string {
 	return strings.Join(append(done, fmt.Sprintf("%s at %.7s: %s", ref, victim, answer)), "; ")
 }
 
-// expungeGraphed is a cycle over a copy whose commit-graph lists what it
-// drops, as a maintained node's copy does: a branch pushed and the maintainer
-// run until its graph lists the branch's commit — a graph-first run where the
-// copy holds no graph, and where it holds one the index's run, due again once
-// interleavingMidxPacks packs gathered beside the index, which writes the
-// graph after it — then the branch deleted and the purge served. The commit
-// takes the graph with what it drops (X04's one drop), or git walks the
-// dropped commit from the graph alone (afterCommit). An expunge open is
-// finished first, so the cycle's own scan reads the deletion.
+// expungeGraphed drops a commit the copy's commit-graph lists: a branch pushed
+// and maintained until the graph lists it (once there is a graph, the index's
+// run rewrites it, due every interleavingMidxPacks packs), then deleted and
+// purged. The commit must take the graph with it (X04's one drop), or git walks
+// the dropped commit from the graph (afterCommit). An open expunge is finished
+// first, so the cycle's own scan reads the deletion.
 func (x *expungeRun) expungeGraphed(repo string) string {
 	var done []string
 	if cand, ok := x.candidate(repo); ok && cand.Open != "" {
@@ -633,16 +580,14 @@ func (x *expungeRun) expungeGraphed(repo string) string {
 		x.answered(repo, cand, out, err))), "; ")
 }
 
-// expungeCrashed is a cycle that stops at a point of gitletfault.ExpungePath —
-// one a fresh cycle reaches, or a resumed one where an expunge is open — as
-// a maintainer killed there stops; a later cycle resumes from the rows.
+// expungeCrashed stops a cycle at a gitletfault.ExpungePath point it reaches,
+// as a killed maintainer stops; a later cycle resumes from the rows.
 func (x *expungeRun) expungeCrashed(repo string) string {
 	x.owe(repo)
 	cand, _ := x.candidate(repo)
 	points := gitletfault.ExpungePath()
 	if cand.Open != "" {
-		// A resumed cycle starts at the rescue: it reaches neither a build
-		// nor a begin of its own.
+		// A resumed cycle starts at the rescue.
 		points = []gitletfault.Point{gitletfault.ExpungeAfterRescueUpload, gitletfault.ExpungeAfterCommit}
 	}
 	p := points[x.in.rng.IntN(len(points))]
@@ -657,12 +602,10 @@ func (x *expungeRun) expungeCrashed(repo string) string {
 	return fmt.Sprintf("at %s: %s", p, x.answered(repo, cand, out, err))
 }
 
-// cycle is one cycle of cand by the production expunger over this node's
-// cache — a compactor of its own, never started — with faults armed, and
-// during run beside it until the cycle has ended (the channel it is handed
-// closes then); a cycle the node's maintenance lane holds busy is asked
-// again. The drops before it are before its scan: the clock moves a second
-// first.
+// cycle runs one cycle of cand by the production expunger (a compactor never
+// started) with faults armed and during beside it until the cycle ends (its
+// channel closes then), retrying Busy. The clock moves a second first, so
+// earlier drops precede the scan.
 func (x *expungeRun) cycle(cand gitlet.ExpungeCandidate, faults *gitletfault.Script,
 	during func(ended <-chan struct{})) (compact.Outcome, error) {
 
@@ -704,10 +647,9 @@ func (x *expungeRun) cycle(cand gitlet.ExpungeCandidate, faults *gitletfault.Scr
 	}
 }
 
-// answered is what a cycle's outcome makes of the run: an applied cycle's
-// commit judged by the model; and anything else but nothing owed a failure
-// — in an interleaving no other build holds the repository, and the plan is
-// made over the rows the committer decides it from.
+// answered judges a cycle's outcome: an applied commit by the model; anything
+// but NotDue fails, since nothing else holds the repository and the plan comes
+// from the rows the committer decides by.
 func (x *expungeRun) answered(repo string, cand gitlet.ExpungeCandidate, out compact.Outcome, err error) string {
 	switch out {
 	case compact.OutcomeApplied:
@@ -724,13 +666,10 @@ func (x *expungeRun) answered(repo string, cand gitlet.ExpungeCandidate, out com
 	return ""
 }
 
-// afterCommit is the model's judgement of a commit the committer applied to
-// repo during the step, if any: every commit pushed before its begin that no
-// ref reached at its scan — what it left dropping — and no ref reaches now —
-// what its rescue did not keep — left the repository: the copy's
-// commit-graph, if it holds one, lists none of them, and `git rev-list -1`
-// refuses each, which over a graph still listing it git answers as though
-// the commit were there. And the copy, synced to the commit, is whole (fsck).
+// afterCommit judges a commit applied to repo during the step, if any: every
+// commit pushed before its begin, unreached at its scan and now, is gone — no
+// commit-graph lists it and `git rev-list -1` refuses it (git walks a commit a
+// stale graph lists) — and the synced copy passes fsck.
 func (x *expungeRun) afterCommit(repo string) {
 	r := x.rows(repo)
 	x.mu.Lock()
@@ -772,10 +711,9 @@ func (x *expungeRun) afterCommit(repo string) {
 	x.fsck(repo)
 }
 
-// graphed is every commit repo's copy's commit-graph lists, read from its OIDL
-// chunk as the copy stands: none where the cache holds no copy of it, or the
-// copy no commit-graph. An expunge's interleaving publishes nothing, so a
-// copy's one commit-graph is the maintainer's objects/info/commit-graph.
+// graphed is every commit in the OIDL chunk of repo's copy's commit-graph, nil
+// without a copy or graph. This interleaving publishes nothing, so the one graph
+// is the maintainer's objects/info/commit-graph.
 func (x *expungeRun) graphed(repo string) map[string]bool {
 	if _, ok := cache.Repos(x.in.c)[repo]; !ok {
 		return nil
@@ -800,7 +738,7 @@ func (x *expungeRun) graphed(repo string) map[string]bool {
 
 // fsck holds repo's copy, synced linearizable, to `git fsck
 // --connectivity-only --no-dangling` with its dropping view named, as a
-// serving process names it: every object a ref reaches is in the copy.
+// serving process names it (I1).
 func (x *expungeRun) fsck(repo string) {
 	s := x.in.syncAt(repo, linearizable)
 	defer s.Release()
@@ -812,9 +750,8 @@ func (x *expungeRun) fsck(repo string) {
 	}
 }
 
-// reachable is every commit repo's live refs reach, as git walks them in the
-// repository's work tree, which holds every commit the run made — read under
-// the case's context, a git that fails ending the case.
+// reachable is every commit repo's live refs reach, walked in its work tree
+// (which holds every commit the run made); a git failure ends the case.
 func (x *expungeRun) reachable(repo string) map[string]bool {
 	out, err := x.reachableIn(x.in.t.Context(), repo)
 	if err != nil {
@@ -823,9 +760,8 @@ func (x *expungeRun) reachable(repo string) map[string]bool {
 	return out
 }
 
-// reachableIn is [expungeRun.reachable] under ctx, answering git's failure:
-// the committer's decide reads it under the call it decides, on the
-// expunger's goroutine, where ending the case is not its to do.
+// reachableIn is [expungeRun.reachable] under ctx, returning git's failure: the
+// committer calls it on the expunger's goroutine, which must not end the case.
 func (x *expungeRun) reachableIn(ctx context.Context, repo string) (map[string]bool, error) {
 	targets := x.in.w.log.liveTargets(repo)
 	out := map[string]bool{}
@@ -843,15 +779,12 @@ func (x *expungeRun) reachableIn(ctx context.Context, repo string) (map[string]b
 	return out, nil
 }
 
-// expungeCommitter is a repository's committer as an interleaving's expunger
-// reaches it: the listing of the expunges owed and the tips the drops left,
-// read from the run's rows, and an expunge's begin and commit decided from
-// the log's rows as they stand when proposed — the code domain's rules: a
-// begin over no expunge open, at the next drop epoch, every input a live pack;
-// a commit of the open expunge at its epoch, retiring exactly the dropping
-// packs — and, decided, applied there as one record each
-// (fakeLog.expungeBegin, fakeLog.expungeCommit), its outputs kept as bundles
-// for a later merge of them.
+// expungeCommitter is the committer the expunger reaches: it lists expunges
+// owed and drop tips from the run's rows, and decides begins and commits from
+// the log's rows by the code domain's rules — a begin needs no expunge open, the
+// next drop epoch and every input live; a commit needs the open expunge at its
+// epoch, retiring exactly the dropping packs — applying each as one record
+// (fakeLog.expungeBegin, fakeLog.expungeCommit) with outputs kept as bundles.
 type expungeCommitter struct{ x *expungeRun }
 
 func (e expungeCommitter) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
@@ -983,8 +916,7 @@ func (e expungeCommitter) Expunge(ctx context.Context, p gitlet.ExpungeProposal)
 		gitlet.ErrInvalid)
 }
 
-// refusedStale is the refusal the committer's decide answers a plan its rows
-// no longer hold by.
+// refusedStale refuses a plan the rows no longer hold.
 func refusedStale(detail string) gitlet.ExpungeResult {
 	return gitlet.ExpungeResult{Refusal: gitlet.RefusalStale, Detail: detail}
 }
@@ -1035,9 +967,8 @@ func (f *fakeLog) dropEpoch(repo string) int64 {
 	return f.repos[repo].ref.DropEpoch
 }
 
-// mark is a record on the log that moves no row a cache reads — a purge
-// request's, whose apply writes the repository's request columns alone — and
-// its position.
+// mark is a record moving no row a cache reads (a purge request's), and its
+// position.
 func (f *fakeLog) mark() statelog.Position {
 	f.mu.Lock()
 	defer f.mu.Unlock()

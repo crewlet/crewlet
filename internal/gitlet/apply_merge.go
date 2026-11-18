@@ -9,39 +9,33 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE MERGE'S APPLY ([Applier.applyMerge]), and the two writes every record
-// that lands on a protected branch shares — its landing rows
-// ([writeLandings]) and the branch's green row ([advanceGreen]) — in the one
-// transaction the framework holds a record's apply to, PURE IN THE RECORD, ITS
-// POSITION AND ITS INSTANT. The decide held the change open at its head and
-// into its target, the target at the merge's base and the source at the head;
-// the broker's arbitration on the repository's subject guarantees the record
-// applies against the rows that decide read. So every guard here is a SKIP,
-// never a refusal, which would stop the log on every node: a merge that finds
-// any of them otherwise applies as NOTHING, whole, logged
-// (code_merge_not_applied) — no correct log carries one but a record the
-// ledger would have collapsed, met again.
+// The merge's apply ([Applier.applyMerge]) and the two writes every record
+// landing on a protected branch shares: its landing rows ([writeLandings]) and
+// the branch's green row ([advanceGreen]). The decide held the change open at
+// its head and into its target, the target at the merge's base and the source
+// at the head, and arbitration on the repository's subject keeps that, so
+// every guard is a SKIP, never a refusal that would stop the log on every
+// node: a merge finding otherwise applies as NOTHING, whole, logged
+// (code_merge_not_applied); only a replayed record meets one.
 
-// LandingKind is what landed a commit on a protected branch, as its landing
-// row says (code_landings.kind): a queue's landing of its tested prefix, a
-// change's direct merge, or a push. A named string with a closed set, so a
-// kind a later build records is a value. Each kind is spelled as the
-// [MergedVia] of the same route is, so a landing row and the change row it
-// merged name one route one way, in the rows and in the REST reads alike.
+// LandingKind is what landed a commit on a protected branch
+// (code_landings.kind): a queue's landing of its tested prefix, a change's
+// direct merge, or a push. Each is spelled as the [MergedVia] of the same
+// route, so a landing row and the change it merged name one route one way.
 type LandingKind string
 
 const (
 	// LandedQueue is a queue's landing, each change tested merged on the
-	// branch before it landed (m5-q2's `land` record).
+	// branch before it landed (the queue's `land` record).
 	//
-	// BASE FORMAT, as queuerecords.go's head says: only a land record's apply
+	// BASE FORMAT (queuerecords.go's head): only a land record's apply
 	// writes it.
 	LandedQueue LandingKind = "queue"
 	// LandedDirect is a change merged by a merge record ([Merge]), its gate
-	// held — or overridden by a person — from one snapshot.
+	// held, or overridden by a person, from one snapshot.
 	LandedDirect LandingKind = "direct"
 	// LandedPush is a push that moved the branch: a person's under
-	// direct_push persons, their recorded override (m5-q2's push landings).
+	// direct_push persons, their recorded override.
 	LandedPush LandingKind = "push"
 )
 
@@ -52,14 +46,12 @@ func LandingKinds() []LandingKind { return []LandingKind{LandedQueue, LandedDire
 // Valid reports a kind this build knows.
 func (k LandingKind) Valid() bool { return slices.Contains(LandingKinds(), k) }
 
-// landing is one code_landings row a record writes: its place among the
-// record's landings on its branch (from 1), what kind of landing it is, what
-// landed — the change and its queue entry, "" for a push that landed none —
-// the branch before and after, who queued it and who merged it, and whether
-// its record proved it green as it lands — which moves the branch's green row
-// onto it. A row holds no green of its own: a landing is green once it lies
-// at or below its branch's green row, which one record moves whatever lies
-// beneath it.
+// landing is one code_landings row a record writes: its ordinal among the
+// record's landings on its branch (from 1), its kind, the change and queue
+// entry ("" for a push), the branch before and after, who queued and who
+// merged it, and whether its record proved it green, which moves the branch's
+// green row onto it. A row holds no green of its own: a landing is green once
+// it lies at or below its branch's green row.
 type landing struct {
 	target         string
 	ordinal        int
@@ -70,14 +62,12 @@ type landing struct {
 	green          bool
 }
 
-// writeLandings writes landings, a record's landings on protected branches,
-// at the record's position and instant — in as few statements as the
-// engine's parameters allow ([store.InsertRows]) — and the TIP WORK each
-// landing its record did not prove owes its branch (code_tips_due, one row a
-// branch: tipwork.go), answering the rows it wrote. A conflict on the key is a
-// skip, never an abort, which would stall the log on every node: no record
-// this build applies meets one, since every landing a record writes is keyed
-// by its own position.
+// writeLandings writes a record's landings at its position and instant, in as
+// few statements as the parameter limit allows ([store.InsertRows]), and the
+// tip work (code_tips_due, one row a branch: tipwork.go) each landing its
+// record did not prove green owes its branch; it answers the rows written. A
+// key conflict is a skip, never an abort that would stall every node's log;
+// none occurs, since every landing is keyed by its own record's position.
 func writeLandings(ctx context.Context, tx store.Execer, at applyContext, repoID string,
 	landings []landing) (int, error) {
 
@@ -108,14 +98,12 @@ func writeLandings(ctx context.Context, tx store.Execer, at applyContext, repoID
 	return rows, nil
 }
 
-// advanceGreen moves target's green row on repoID to commit, at the record's
-// position and instant: the branch's newest commit whose required checks
-// passed — or that needed none — which mirrors and deploys follow. An upsert
-// by the row's key, so the first green a branch reaches inserts its row: a
-// record's position is past every earlier one's, so the row only moves
-// forward. Every landing the branch holds then lies at or below its green
-// row — none can lie past the record applying — so the branch owes its home
-// no tip work, and its row of it goes. It answers the rows it wrote.
+// advanceGreen moves target's green row to commit (the newest commit whose
+// required checks passed, or needed none, which mirrors and deploys follow) at
+// the record's position and instant: an upsert by key, so a branch's first
+// green inserts it, and positions only grow, so it only moves forward. Every
+// landing then lies at or below it, so the branch's tip work row goes. It
+// answers the rows it wrote.
 func advanceGreen(ctx context.Context, tx store.Execer, at applyContext, repoID, target, commit string) (int,
 	error) {
 
@@ -131,11 +119,9 @@ func advanceGreen(ctx context.Context, tx store.Execer, at applyContext, repoID,
 	return 1 + int(cleared), nil
 }
 
-// settleTipWork removes target's row of tip work on repoID once no landing
-// lies above above — its green row's position, or -1 for a branch none of
-// whose tips has passed — that no bisect found broken: what a green row moved
-// onto a landing older than the newest, and a broken landing named, leave. It
-// answers the rows it removed.
+// settleTipWork removes target's row of tip work once no landing above above
+// (its green row's position, or -1 when no tip has passed) is left that no
+// bisect found broken. It answers the rows it removed.
 func settleTipWork(ctx context.Context, tx store.Execer, repoID, target string, above int64) (int, error) {
 	res, err := tx.ExecContext(ctx, settleTipSQL, repoID, target, above)
 	if err != nil {
@@ -145,28 +131,18 @@ func settleTipWork(ctx context.Context, tx store.Execer, repoID, target string, 
 	return int(n), nil
 }
 
-// applyMerge applies a change's merge as one record — see merge.go's head:
+// applyMerge applies a change's merge as one record (merge.go's head):
 //
-//  1. THE CHANGE MERGED FIRST — `merged_via direct`, at the merge's commit,
-//     who merged it and a person's override — so that the push this record
-//     lands finds it merged: M4's merge by push (a target set to a live
-//     change's head) and its close on a deleted source would otherwise take
-//     the change for live, and merge or close it again.
-//  2. Its live queue entry ended, where a person's override merged a queued
-//     change directly: dequeued, as a landing of the change ends its entry;
-//     and its stored readiness cleared ([clearReadiness]).
-//  3. The target's landing row, where a rule protects it, and its green row,
-//     where its gate requires no check besides — what the decide stamped
-//     ([Merge.Protected], [Merge.Green]).
-//  4. THE PUSH, through the one apply every push takes ([Applier.landPushes]):
-//     the target moved from its base onto the commit, the source deleted
-//     where the merge asks it, the merge's pack, its push row `via merge`
-//     naming the merger, whom the merge was made for ([keptCarrier]) and what it
-//     introduced, the repository's counters, and the horizons with what the
-//     record's rows leave them.
-//  5. Its merge counted in the repository's changes by state and their tally
-//     ([countChanges]), after the push, so the horizons are given what an older
-//     build's rows leave them.
+//  1. the change merged FIRST, so the push it lands does not take it for live
+//     and merge it by push, or close it on a deleted source, again;
+//  2. its live queue entry dequeued, where an override merged a queued change,
+//     and its stored readiness cleared ([clearReadiness]);
+//  3. the target's landing row where a rule protects it, and its green row
+//     where no other check is required ([Merge.Protected], [Merge.Green]);
+//  4. the push, through the apply every push takes ([Applier.landPushes]),
+//     `via merge`, made for [keptCarrier], with the record's horizons;
+//  5. its merge counted ([countChanges]), after the push, so the horizons get
+//     what an older build's rows leave them.
 func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m Merge) (int, error) {
 	m.WorkingFor = keptCarrier(at, m.WorkingFor)
 	row, found, err := changeRowIn(ctx, tx, m.ChangeID)
@@ -201,10 +177,9 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 		return mergeNotApplied(ctx, at, m, m.SourceRef+" is at "+short(refTip(refs, m.SourceRef))+", and the "+
 			"merge deletes it at "+short(m.HeadOID))
 	}
-	// ITS PUSH LANDS WHOLE WITH IT OR NOT AT ALL: a push id the history holds
-	// already is a push landed — which only this merge's own record, met
-	// again past the version guard, could have landed — and the change is
-	// never merged by a record whose push the history skips.
+	// ITS PUSH LANDS WHOLE WITH IT OR NOT AT ALL: a push id already in the
+	// history is this merge's own record met again past the version guard,
+	// and no record merges a change whose push the history skips.
 	landed, err := pushesApplied(ctx, tx, []string{m.MergeID})
 	if err != nil {
 		return 0, fmt.Errorf("gitlet: read whether the merge at %s landed its push: %w", at.position, err)
@@ -217,9 +192,8 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	next := row
 	next.state, next.mergedVia, next.mergeOID = ChangeStateMerged, MergedViaDirect, m.CommitOID
 	next.mergedAt = sql.NullInt64{Int64: at.at(), Valid: true}
-	// WHO MERGED IT, as every record a write leaves names them
-	// (iam.ActorFor): a seat by its handle, a person by their human seat
-	// beside the credential they merged with.
+	// Who merged it, as every record names them (iam.ActorFor): a seat by
+	// handle, a person by human seat beside the credential they used.
 	next.mergedBy, next.mergedByKind, next.overrideReason = by, kind, m.Override
 	if kind == PartyPerson {
 		next.mergedOperator = m.Principal.OperatorID
@@ -279,13 +253,11 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	return rows + pushed + tallied, nil
 }
 
-// push is the push m lands, as its push row records it: its push id the
-// merge's, the merger its principal and whom the merge was made for its
-// carrier, `via merge`, the Gitlet node that built it;
-// the target moved from its base onto the commit — a fast-forward of it,
-// whose old object the commit still reaches, so no drop — and the source
-// deleted where it asks; its pack; and what it introduced: the commit a merge
-// or a squash built, and none for a fast-forward, whose head the change's own
+// push is the push m lands, as its push row records it: m's id, principal,
+// carrier and node, `via merge`; the target fast-forwarded from its base onto
+// the commit (whose old object the commit still reaches, so no drop) and the
+// source deleted where asked; its pack; and what it introduced: the commit a
+// merge or squash built, none for a fast-forward, whose head the change's own
 // pushes brought.
 func (m Merge) push() PushEntry {
 	e := PushEntry{PushID: m.MergeID, Principal: m.Principal, WorkingFor: m.WorkingFor, Via: ViaMerge, Node: m.Node,
@@ -308,12 +280,11 @@ func mergeNotApplied(ctx context.Context, at applyContext, m Merge, why string) 
 	return 0, nil
 }
 
-// advanceGreenSQL is a branch's green row moved by its key — an upsert, which
-// locates the row by the key its VALUES carry and so is registered nowhere;
-// oweTipSQL a branch's row of tip work, the same way. tipPaidSQL removes it by
-// its key, and settleTipSQL does where no landing above a place on the branch
-// is left unbroken — the key's range above it, read until the first unbroken
-// one — each registered in plan_test.go.
+// advanceGreenSQL and oweTipSQL are upserts, located by the key their VALUES
+// carry and so registered nowhere. tipPaidSQL removes a branch's tip work by
+// its key, and settleTipSQL where no unbroken landing lies above a position
+// (the key's range, read to the first unbroken one), both registered in
+// plan_test.go.
 const (
 	advanceGreenSQL = `INSERT INTO code_green (repo_id, target_ref, commit_oid, position, at)
 		VALUES (?, ?, ?, ?, ?)

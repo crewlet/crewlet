@@ -112,11 +112,18 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return sandbox.TakenSession{}, fmt.Errorf("executor: the session's archive is %d bytes, past the %d "+
 			"a session is kept at", archive.Size, take.MaxBytes)
 	}
-	bounds := boundsFor(take.MaxBytes)
+	// ONE PASS, the scrub and its meter: held to the base, past it the one
+	// large slot both share, given back by the meter, the take's last reader
+	// (the package doc's "A collection's read of a thread").
+	// Its scrub's wait for the slot ends with the take's reader, as its reads
+	// of the box do ([takenBody]).
+	large := new(passBudget)
+	scrubbing, stopScrub := context.WithCancel(ctx)
+	bounds := boundsFor(take.MaxBytes).gatedBy(scrubbing, large)
 	scrub := newScrubber(take.Scrub)
 	archive.RunStart = keptRunStart(scrub, archive.RunStart)
 	read, write := io.Pipe()
-	out := &takenBody{PipeReader: read, done: make(chan struct{})}
+	out := &takenBody{PipeReader: read, done: make(chan struct{}), stop: stopScrub}
 	if !out.reading(body) {
 		_ = body.Close()
 	}
@@ -124,9 +131,10 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	// WHAT THE SESSION'S LAST REQUEST CARRIED, and what Claude Code counts it
 	// at, read off the archive as it is kept (measure.go), beside the take and
 	// within its context, never holding it up.
-	meter := newContextMeter(ctx, carries.layout(), archive.SessionID, archive.Version)
+	meter := newContextMeter(ctx, carries.layout(), archive.SessionID, archive.Version, large)
 	go func() {
 		defer close(out.done)
+		defer stopScrub()
 		reopen := func() (io.ReadCloser, error) {
 			again, openErr := box.OpenFile(ctx, archive.Path)
 			if openErr != nil {
@@ -196,6 +204,8 @@ var errTakeClosed = errors.New("executor: the session's reader was closed while 
 type takenBody struct {
 	*io.PipeReader
 	done chan struct{}
+	// stop ends the scrub's wait for a large slot ([passBudget]).
+	stop context.CancelFunc
 
 	mu     sync.Mutex
 	src    io.Closer
@@ -261,6 +271,7 @@ func (t *takenBody) Close() error {
 	if src != nil {
 		_ = src.Close()
 	}
+	t.stop()
 	<-t.done
 	return err
 }

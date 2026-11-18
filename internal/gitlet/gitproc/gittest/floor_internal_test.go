@@ -10,9 +10,9 @@ import (
 )
 
 // THE FLOOR JUDGEMENT IS THE FLOORS': a git below a floor cannot stand for
-// it, one at or above it can — and one NAMED as a floor's own build must be of
-// that floor's series as well, so a newer git named in its place is a floor
-// nobody is testing rather than a pass. A floor that is not one is refused.
+// it, one at or above it can, and one NAMED as a floor's own build must also
+// be of that floor's series, so a newer git in its place fails rather than
+// leaving the floor untested. A floor that is not one is refused.
 //
 // Mutation: drop the series check, and 2.41.0 stands for the client floor's
 // build — red.
@@ -49,14 +49,13 @@ func TestTheFloorJudgementIsTheFloors(t *testing.T) {
 	}
 }
 
-// A FLOOR'S GIT IS NAMED, OR REQUIRED, OR SKIPPED — and never guessed. Unset,
-// the floor's arm is a missing prerequisite by internal/prereqtest's one rule:
-// it fails where CREWLET_REQUIRE_PREREQUISITES is 1, which the make targets
-// that run the suite set, naming the variable and the recipe that builds the
-// git, and is skipped otherwise naming `make git`; a value of the requirement
-// that is neither is refused rather than read as either. Named, it must be an
-// absolute path to an executable of the floor's series, or the variable is
-// named; the floor's own build is handed back.
+// A FLOOR'S GIT IS NAMED, OR REQUIRED, OR SKIPPED, and never guessed. Unset,
+// it is a missing prerequisite (internal/prereqtest): it fails naming the
+// variable and the recipe where CREWLET_REQUIRE_PREREQUISITES is 1, as the
+// make targets set it, and is skipped naming `make git` otherwise; a
+// requirement value that is neither is refused. Named, it must be an absolute
+// path to an executable of the floor's series, or the variable is named; the
+// floor's own build is handed back.
 //
 // Not parallel: it sets the variables every floor's arm reads.
 //

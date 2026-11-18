@@ -66,6 +66,32 @@
 // note's id is the person's request id, so a retry after an answer that was lost
 // in transit is the same note, and a turn that read the same instruction twice
 // would act on it twice.
+//
+// # What counts as unread
+//
+// "Unread" on a run's record, for the five notes a turn may hold waiting
+// ([MaxPendingNotes]), means waiting for a step to read it. A note a poll
+// served its harness (OpenCode's), which has not yet confirmed putting it in
+// front of its model at its next step, still counts. A note a hook's answer
+// handed to the model at the step it answered (a live hook serve on the run's
+// record, internal/sandbox's RunNote.LiveServe) does not, whatever its
+// session's record later says, and counts again once its serve is lost.
+//
+// # Where a brief tells a note
+//
+// A brief tells the notes the turn has read in the order the record numbered
+// their reads, never in the order its runner came to hold them. The reads a
+// segment makes reach it before the record has numbered them (Order zero), so
+// the source that recorded them says where they are ([Briefing].Orders, by
+// id): every note the segment's source handed it from the record, and every
+// note of the brief's own whose place the record holds already. That is one
+// the record's word reads already, a lost take's, whose settle handed it to
+// this brief, told at its take's place; and a waiting one a hook's serve
+// placed (internal/sandbox's RunNote.Place), which the launch's write reads at
+// that place, told at its first serve's. Neither is ever told after a note a
+// later take read, a correction of it among them. A note of the brief's it
+// places none of is read at the launch's own place, after every read; a
+// source that keeps no record places nothing.
 package steer
 
 import (
@@ -88,12 +114,8 @@ import (
 // conversation, and a conversation belongs in chat or on the work item, where
 // it is threaded, kept and answered. The bound is also what keeps one step's
 // reading from being a wall of notes the model weighs against its own task.
-// "Unread" on a run's record means waiting for a step to read it: a note a
-// poll served its harness (OpenCode's), which has not yet confirmed putting it
-// in front of its model at its next step, still counts; a note a hook's answer
-// handed to the model at the step it answered (a live hook serve on the run's
-// record, internal/sandbox's RunNote.LiveServe) does not, whatever its
-// session's record later says, and counts again once its serve is lost.
+// A note a hook's live serve handed the model no longer counts as unread; one a
+// poll served does until its harness confirms it ("What counts as unread").
 const MaxPendingNotes = 5
 
 // MaxTurnNotes bounds the notes one turn takes in all, read or not.
@@ -194,6 +216,12 @@ type Note struct {
 
 	// At is when the box took it, in UTC.
 	At time.Time
+
+	// SentBefore says the source handed the note over after a note filed
+	// later that its reader already holds, so its reader is told it was sent
+	// before that one (prompts.SteerMessageSentBefore), never that it is the
+	// later word. Set by the source as it hands the note over, never filed.
+	SentBefore bool
 }
 
 // Validate reports what is wrong with a note's text, or nil. The ONE rule,
@@ -226,27 +254,36 @@ func (e *TooLongError) Error() string {
 // Reading is where a turn read a note: the phase, iteration and round, on the
 // phase's own one-based scale, the kind of step ([types.SteerBoundary]) and, for
 // an executor's read, the launch that read it; At is when.
-//
-// Order is the place of the write that recorded the read among the run's
-// record's reads (sandbox.NoteRead.Order) — what tells a read a saved session
-// accounts for from one made after it (sandbox.SessionCapture.NoteCursor) —
-// and zero for a read this segment made, which the record places after every
-// session its run was saved with before the segment began.
-//
-// Unanswered says the record marks the read as one whose take's answer was
-// lost (sandbox.NoteRead.Unanswered): the executor's harness named by Launch
-// was never handed the note at that step, though the turn carries it as read —
-// so no session of that job holds it from there, and a launch that continues
-// one is told it again.
 type Reading struct {
-	Phase      types.Phase
-	Iteration  int
-	Round      int
-	Boundary   types.SteerBoundary
-	Launch     string
-	At         time.Time
-	Order      int
+	Phase     types.Phase
+	Iteration int
+	Round     int
+	Boundary  types.SteerBoundary
+	Launch    string
+	At        time.Time
+
+	// Order is the place of the write that recorded the read among the run's
+	// record's reads (sandbox.NoteRead.Order) — what tells a read a saved
+	// session accounts for from one made after it
+	// (sandbox.SessionCapture.NoteCursor) — and zero for a read this segment
+	// made, which the record places after every session its run was saved
+	// with before the segment began.
+	Order int
+
+	// Unanswered says the record marks the read as one whose take's answer was
+	// lost (sandbox.NoteRead.Unanswered): the executor's harness named by
+	// Launch was never handed the note at that step, though the turn carries
+	// it as read — so no session of that job holds it from there, and a launch
+	// that continues one is told it again.
 	Unanswered bool
+
+	// Restarted says the record holds the read as a hook's serve its job's
+	// session showed taken before the session's last restart
+	// (sandbox.NoteRead.Restarted): the harness took the note, and a resume of
+	// that session rebuilds its conversation from the restart on, which is not
+	// known to hold it — so a launch that continues one tells it again, as a
+	// note it may already show.
+	Restarted bool
 }
 
 // Briefing is what a launch's brief takes of a turn's notes: Notes, the ones it
@@ -261,17 +298,8 @@ type Reading struct {
 //
 // Orders is the place among the record's reads (Reading.Order) of every note
 // the segment's source handed it from the record, and of every note of Notes
-// whose place the record holds already, by id: one the record's word reads
-// already, a lost take's, whose settle handed it to this brief; and a waiting
-// one a hook's serve placed (sandbox.RunNote.Place), which the launch's write
-// reads at that place. Nil from a source that keeps no record. A brief tells
-// the notes the turn has read in the order the record numbered their reads,
-// and the reads a segment makes reach it before the record has numbered them
-// (Order zero), so the source that recorded them says where they are: a note a
-// lost take recorded is then told at its take's place, and a note a hook was
-// served at its first serve's, never after a note a later take read, a
-// correction of it among them. A note of Notes it places none of is read at
-// the launch's own place, after every read.
+// whose place the record holds already, by id; nil from a source that keeps no
+// record ("Where a brief tells a note").
 type Briefing struct {
 	Notes      []Note
 	Unanswered []string

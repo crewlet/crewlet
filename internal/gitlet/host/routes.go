@@ -29,11 +29,9 @@ const (
 	PatternBoxReceivePack = "POST /box/git/{repo}" + ReceivePackSuffix
 )
 
-// A CHECK'S BOX'S THREE READS of its commit by object id — its tree, a file of
-// it, its diff — under auth.BoxGitletPrefix: the API's routes, whose handlers
-// admit the box by AdmitCheck, which reads the repository from the same
-// wildcard ({repo}, PathRepo), so a route reads its repository from the path
-// it was mounted at.
+// A CHECK'S BOX'S THREE READS of its commit by object id — its tree, a file,
+// its diff — under auth.BoxGitletPrefix, whose handlers admit the box by
+// AdmitCheck, reading the repository from the same {repo} wildcard (PathRepo).
 const (
 	PatternBoxGitletTree = "GET /box/gitlet/{repo}/tree"
 	PatternBoxGitletBlob = "GET /box/gitlet/{repo}/blob"
@@ -47,15 +45,12 @@ const (
 	PatternArchive = "GET /git/{repo}/" + auth.DownloadArchiveTail
 )
 
-// What a client that speaks the protocol itself, rather than through git,
-// posts to a repository's two RPCs: the path after the repository's own
-// (`/git/{repo}`), and the content type each handler requires, refusing any
-// other `415`. ONE spelling with the patterns above and the handlers' checks,
-// so such a client — the suite holding a fetch's reader still while a
-// compaction runs, say — posts where a route is mounted and what the host
-// takes, and spells no git service of its own: outside this package and
-// GitAccess, a spelled service is what internal/api/auth's
-// TestGitAccessIsTheOneClassifier fails as a second classifier.
+// What a client speaking the protocol itself, not through git, posts to a
+// repository's two RPCs: the path after `/git/{repo}`, and the content type
+// each handler requires (any other is a 415). One spelling with the patterns
+// and the handlers' checks, so no caller spells a git service of its own:
+// internal/api/auth's TestGitAccessIsTheOneClassifier fails that as a second
+// classifier.
 const (
 	UploadPackSuffix       = "/git-upload-pack"
 	UploadPackRequestType  = "application/x-git-upload-pack-request"

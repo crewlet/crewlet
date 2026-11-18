@@ -8,17 +8,13 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// A STORED CARRIER THIS BUILD CANNOT READ IS A STRANGER'S (ADR-0109): what a
-// working_for column holds is read back by the engine's later records
-// (storedCarrier) — NULL as nobody, a carrier as it was kept, and a value
-// that does not decode, or decodes to nothing (JSON's null, a fragment, a
-// list), as a stranger's, who holds no app: the closed end, never nobody,
-// which would wake the turn for the acting seat with every app. A kind this
-// build does not know is no value it cannot read: it decodes, and is read as
-// the row holds it, for the one rule to judge wherever a holder meets it
-// (KindUnknownToThisBuild) and for a node of the build that knows it to
-// compose — never rewritten to a stranger's here, which would decide for that
-// build what only it can.
+// A STORED CARRIER THIS BUILD CANNOT READ IS A STRANGER'S (ADR-0109):
+// storedCarrier reads NULL as nobody, a carrier as kept, and a value that does
+// not decode or decodes to nothing (JSON's null, a fragment, a list) as a
+// stranger's, who holds no app — never nobody, which would wake the turn for
+// the acting seat with every app. A kind this build does not know decodes and
+// is read as held, for KindUnknownToThisBuild to judge and a build that knows
+// it to compose; rewriting it to a stranger's would decide for that build.
 //
 // Mutations: an unreadable value read as nobody — null, the fragment and the
 // list read nil, red; a kind this build does not know rewritten to a
@@ -52,26 +48,17 @@ func TestAStoredCarrierThisBuildCannotReadIsAStrangers(t *testing.T) {
 }
 
 // A ROUTING BESIDE A PERSON'S ACT CARRIES NOBODY (ADR-0109): routingFor stamps
-// whom a change was made for beside an agent's actor alone, and only where the
-// routing wakes a seat — a person writes for nobody but themselves, and a
-// routing that tells only persons wakes no turn to carry it to. Handed
-// founder's seat as the carrier, a routing that tells reader, an agent,
-// carries it beside dev's act and nothing beside founder's own act or beside
-// no actor at all; and one that tells founder alone carries nothing beside
-// dev's act either. THE ENGINE WRITES FOR NOBODY BUT ITSELF, save its one
-// exception: handed founder as whom an entry's enqueue was made for — what the
-// merge queue's ejection and a close it could not make hand it, and nothing
-// else does — a routing beside no actor that tells reader carries founder,
-// one that tells founder alone carries nothing, and one beside dev's act
-// carries nothing of it either.
+// the carrier beside an agent's actor alone, and only where the routing wakes
+// a seat — a person writes for nobody but themselves, and a routing telling
+// only persons wakes no turn. The engine writes for nobody, save an entry's
+// enqueue carrier, which only the queue's ejection and a close it could not
+// make hand it, stamped beside no actor where the routing wakes a seat, never
+// beside one.
 //
-// Mutations: stamp a person actor's routing — founder's carries the carrier,
-// red; stamp every routing whatever it wakes — the one telling founder alone
-// carries it, red; never stamp — dev's carries nothing, red; stamp an
-// actor's carrier beside no actor — the routing beside no actor carries the
-// carrier dev's act was handed, red; never stamp an enqueue's beside no actor
-// — the queue's record carries nobody, red; stamp an enqueue's beside an
-// actor — dev's act carries what it never asked, red.
+// Mutations, each red: stamp a person actor's routing (founder's act); stamp
+// every routing (telling founder alone); never stamp (dev's act); stamp an
+// actor's carrier beside no actor; never stamp an enqueue's beside no actor;
+// stamp an enqueue's beside an actor (dev's act).
 func TestARoutingBesideAPersonsActCarriesNobody(t *testing.T) {
 	t.Parallel()
 	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
@@ -82,9 +69,8 @@ func TestARoutingBesideAPersonsActCarriesNobody(t *testing.T) {
 		actor    string
 		kind     PartyKind
 		mentions []string
-		// workingFor is the carrier handed beside the actor, and
-		// enqueuedFor the one handed as whom an entry's enqueue was made
-		// for.
+		// workingFor is handed beside the actor, enqueuedFor as an entry's
+		// enqueue carrier.
 		workingFor, enqueuedFor *types.WorkingFor
 		want                    *types.WorkingFor
 	}{

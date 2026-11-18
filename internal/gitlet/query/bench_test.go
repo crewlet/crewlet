@@ -21,73 +21,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// BenchmarkCodeRead is a seat's read by object id, timed whole through a Gitlet
-// node's query server — its sync at the copy as it stands, the check of what
-// it names, its unit of the share and its kind's git — over a repository that
-// came to a host as one does: gittest.History pushed a session at a time, then
-// a push of a 3 MB file of lines, a push adding a WIDE TREE of small files of
-// lines under src/, a hundred to a directory, and a push editing one line in
-// wideEdits of them, spread over every directory:
-//
-//   - history=32MB is gittest.History's 32 MB composition — 44 files of one
-//     directory, every one rewritten in every session, over 14 080 commits —
-//     under the 10 000-file tree, every file of which the edit changes;
-//     history=1GB — 1 421 files in thirty directories over 455 680 commits —
-//     under the 100 000-file tree, every tenth file of which the edit
-//     changes, runs only under CREWLET_BENCH_LARGE.
-//   - objects is the store the fleet keeps the repository's packs in, which
-//     a cold node's download reads (readStores): the in-memory twin (mem);
-//     the S3 fake behind the production backend at 100 and 200 ms to each
-//     request's first byte, S3's own range, and 80 MB/s a connection
-//     (s3fake/firstbyte=…); and the bucket CREWLET_BENCH_S3_* names (real),
-//     which skips when none is named. The warm kinds run over mem alone: a
-//     warm read reads no object — its copy is the node's own files, current
-//     — so under another store they would time the same files again.
-//   - kind is the read: the root's listing; the whole tree's listing at its
-//     first page and at a page nine tenths of the way through it (recursive:
-//     git lists the whole tree for its Total on every page, and looks up the
-//     size of every file in it); a file's first page and its fiftieth; the
-//     stat of one session's pushes — what a pull request of that size diffs;
-//     the stat of the wide edit, whole and filtered to one of its
-//     directories, and one file's patch from it; and a comparison of the
-//     history's middle with its tip.
-//   - cache=warm reads the node that took the pushes, its copy current, with
-//     its memo hidden: every read cuts its page, and keeps nothing — the read
-//     as it would be with no memo, which a hit is weighed against;
-//     cache=miss reads it with the memo, each read a page the memo does not
-//     hold yet (a bound a byte narrower than the last read's, so a key of its
-//     own): a read cutting its page, and every page after it, and keeping
-//     them; cache=memo reads a page the memo holds, every read a hit;
-//     cache=cold reads a Gitlet node emptied before every iteration, whose first
-//     read waits statelog.ReadBudget on the download and answers what it can.
-//   - fresh is the FLOOR a read is sent with, over the root's listing from the
-//     memo on the copy that took every push — so the read itself costs a memo
-//     hit, and what one floor costs over another is the sync it makes the copy
-//     run first. Each read follows its own linearizable resolve of main,
-//     untimed, as a code tool's call follows its ref's: none is a read by an
-//     id the asking node never wrote (the copy as it stands); moved is a read
-//     by a ref as a code tool floors it, where the ref last moved
-//     (gitlet.ResolvedRef.Moved); read is the floor the tools sent before, where
-//     the resolve READ the ref, past its own barrier — a delta round of the
-//     copy on every read, which installs nothing.
-//
-// Each warm, miss, memo and fresh arm reports the p50, p95 and p99 of one
-// read, and the memo arm how many times faster than the warm and the miss
-// arms' p50 its own p50 is (x-warm, x-miss); the cold arm the time to its
-// answer and the share of answers unready, and fails a read answered past
-// statelog.ReadBudget and its margin. The figures decide gitlet.GitShareWait —
-// max(2 s, the slowest warm kind's p95 rounded up to a second), under
-// gitproc.ReadDeadline/4 — confirm the read deadline's terms (a warm read well
-// inside gitproc.ReadDeadline, a cold one answered inside statelog.ReadBudget
-// and its margin from every store), and confirm the memo's premise: a hit at
-// least ten times faster than the read it saves, or the memo costs a sixteenth
-// of the budget for nothing a warm copy does not already give. The fresh arms
-// decide no constant: moved must read as none does — what flooring a read by a
-// ref where the ref moved buys — and read prices the sync round every read by
-// a ref paid before, on this in-process fleet the least it costs anywhere, its
-// data node one call away. Measured at history=32MB over mem, twenty reads an
-// arm on two cores of an Ultra 7 265U (-benchtime 20x): none 0.19 ms and moved
-// 0.19 ms at p50, read 3.8 ms — the round twenty times the read it delayed.
+// BenchmarkCodeRead times a seat's read by object id whole through a Gitlet
+// node's query server (its sync, check, share unit and git) over a repository
+// pushed as a host takes one: a gittest.History a session at a time, then a
+// 3 MB file, a WIDE TREE under src/ and an edit across it (readTops). Its arms
+// are history= (readSizes), objects= (readStores), kind= (readRig.kinds),
+// cache= (warm, miss, memo, cold) and fresh= (readFloors); the rig and its
+// figures are in (package doc, "Measured"). The figures decide
+// gitlet.GitShareWait, max(2 s, the slowest warm kind's p95 rounded up to a
+// second) under gitproc.ReadDeadline/4; confirm a warm read is well inside
+// gitproc.ReadDeadline and a cold one inside statelog.ReadBudget from every
+// store; and hold the memo's premise: a hit at least ten times faster than
+// the read it saves, or the memo costs a sixteenth of the budget for nothing.
 func BenchmarkCodeRead(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, size := range readSizes {
@@ -122,12 +67,15 @@ type readStore struct {
 	name string
 	// open is the arm's store, or a skip of the arm.
 	open func(b *testing.B) objstore.Backend
-	// warm is whether the arm times the warm kinds as well as the cold one.
+	// warm is whether the arm times the warm kinds as well as the cold one:
+	// mem's alone, since a warm read reads no object and another store would
+	// time the same files again.
 	warm bool
 }
 
-// readStores are the objects= arms: S3's documented 100–200 ms to a
-// request's first byte is both ends of the fake's.
+// readStores are the objects= arms: the in-memory twin; the S3 fake at both
+// ends of S3's documented 100–200 ms to a request's first byte; and the
+// bucket CREWLET_BENCH_S3_* names (real), skipped when none is.
 var readStores = []readStore{
 	{name: "mem", open: func(*testing.B) objstore.Backend { return memobj.New() }, warm: true},
 	{name: "s3fake/firstbyte=100ms", open: func(b *testing.B) objstore.Backend {
@@ -145,9 +93,9 @@ var readStores = []readStore{
 const readConnBytes = 80_000_000
 
 // readS3Fake is the S3 fake behind the production backend, answering each
-// request firstByte after it arrives — on loopback the fake answers in
-// microseconds, and a figure taken there would price the SDK rather than the
-// bucket — and sending each connection readConnBytes a second.
+// request firstByte after it arrives (on loopback it answers in microseconds,
+// which would price the SDK, not the bucket) and sending each connection
+// readConnBytes a second.
 func readS3Fake(b *testing.B, firstByte time.Duration) objstore.Backend {
 	b.Helper()
 	srv := s3fake.Start(b, "files")
@@ -191,10 +139,9 @@ const (
 	// two kilobytes, a source file's size.
 	wideLines = 40
 	// wideEdits is how many files the wide edit changes, spread over every
-	// directory: ten thousand — a formatter run over the whole 10 000-file
-	// tree, and the same count of the 100 000-file one, so both arms' whole
-	// stats price one diff of that width while the filtered one prices the
-	// directory it names.
+	// directory: a formatter run over the whole 10 000-file tree, and the same
+	// count in the 100 000-file one, so both arms' whole stats price one diff
+	// of that width.
 	wideEdits = 10_000
 	// readIdent is every commit the rig makes on top of its history: the
 	// committer gittest.History's own commits name.
@@ -249,9 +196,8 @@ func newReadSource(b *testing.B, size readSize) *readSource {
 
 // readTops is the fast-import stream of the three commits on top of a
 // History of commits: big.txt, the wide tree of files files, and the edit of
-// wideEdits of them — each dated a second after the one before it, as a
-// History's own commits are, so no walk by date reads the history as skewed
-// (gittest.After).
+// wideEdits of them, each dated a second after the one before it, so no walk
+// by date reads the history as skewed (gittest.After).
 func readTops(commits []string, files int) func(*bufio.Writer) error {
 	return func(w *bufio.Writer) error {
 		commit := func(n int, msg string) {
@@ -300,10 +246,9 @@ type readRig struct {
 	p50    map[string]time.Duration
 }
 
-// readCacheBytes is every rig's Gitlet node's cache budget: room for the
-// largest repository an arm builds, the gigabyte history under the 100 000-file
-// tree, twice over, so no figure is of a repository the budget evicted
-// between iterations — internal/gitlet/host's benchmarks' budget.
+// readCacheBytes is every rig's Gitlet node's cache budget, as in
+// internal/gitlet/host's benchmarks: the largest arm's repository twice over,
+// so no figure is of a repository evicted between iterations.
 const readCacheBytes = 4 << 30
 
 // newReadRig is a fleet over objects holding src's repository, pushed as a
@@ -393,8 +338,8 @@ func (r *readRig) kinds(b *testing.B) []kind {
 	}
 }
 
-// warm times k's read over the first node with its memo hidden, reporting
-// its percentiles.
+// warm times k's read over the first node with its memo hidden, the read a
+// memo hit is weighed against, reporting its percentiles.
 func (r *readRig) warm(b *testing.B, k kind) {
 	took := make([]time.Duration, 0, b.N)
 	for b.Loop() {
@@ -465,8 +410,10 @@ type readFloor struct {
 	of   func(gitlet.RefAnswer) statelog.Freshness
 }
 
-// readFloors are the fresh= arms (BenchmarkCodeRead): no floor, the ref's
-// move, and where the resolve read it.
+// readFloors are the fresh= arms, which decide no constant: no floor; the
+// ref's move (gitlet.ResolvedRef.Moved), which must read as none does; and
+// where the resolve read the ref, which prices a delta round of the copy on
+// every read, at its least: this fleet's data node is one call away.
 var readFloors = []readFloor{
 	{"none", func(gitlet.RefAnswer) statelog.Freshness { return statelog.Freshness{} }},
 	{"moved", func(a gitlet.RefAnswer) statelog.Freshness {
@@ -478,10 +425,9 @@ var readFloors = []readFloor{
 }
 
 // floored times the root's listing over the first node, its page in the memo,
-// each read sent with f's floor off a linearizable resolve of main made,
-// untimed, just before it — a barrier of its own each, as each call of a code
-// tool resolves its ref anew, so a floor at the resolve's checkpoint is past
-// the copy on every read.
+// each read floored by f off a linearizable resolve of main made untimed just
+// before it, as each code tool call resolves its ref anew, so a floor at the
+// resolve's checkpoint is past the copy on every read.
 func (r *readRig) floored(b *testing.B, f readFloor) {
 	q := treeQ(r.repo, gitlet.TreeQuery{Rev: r.src.edit})
 	if _, err := r.s.Read(b.Context(), q); err != nil {
@@ -549,10 +495,9 @@ func (r *readRig) cold(b *testing.B) {
 		b.StartTimer()
 		start := time.Now()
 		_, err = s.Read(b.Context(), treeQ(r.repo, gitlet.TreeQuery{Rev: r.src.edit}))
-		// REPORTED, never failed on: that a cold read answers within the
-		// statelog.ReadBudget it waits and its margin is
-		// TestAColdRepositoryAnswersUnreadyAndKeepsSyncing's claim, decided
-		// exactly there.
+		// REPORTED, never failed on: a cold read answering within
+		// statelog.ReadBudget and its margin is
+		// TestAColdRepositoryAnswersUnreadyAndKeepsSyncing's claim.
 		took = append(took, time.Since(start)) //fixedwait:measure a benchmark reports this; no gate reads it
 		switch {
 		case unready(err, gitlet.UnreadySyncing):

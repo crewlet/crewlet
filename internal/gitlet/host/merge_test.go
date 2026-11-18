@@ -19,11 +19,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A CHANGE'S MERGE, BUILT ON ITS REPOSITORY'S GITLET NODE (merge.go): a
-// merge_change judged, built onto the target's tip in a scratch and landed as
-// one merge record through the one landing — its commit authored as U43 (a)
-// says, built again onto a target that moved under it, and enqueued where its
-// target's merges land through a queue.
+// A CHANGE'S MERGE, BUILT ON ITS REPOSITORY'S GITLET NODE (merge.go): judged,
+// built onto the target's tip in a scratch and landed as one merge record,
+// authored as U43 (a) says, rebuilt onto a target that moved under it, and
+// enqueued where the target's merges go through a queue.
 
 // featureRef is the branch pat's changes are opened from.
 const featureRef = "refs/heads/feature"
@@ -186,11 +185,11 @@ func (c *mergeCase) requireMerged(n int64, res gitlet.EngineWriteResult, err err
 	return res.Commit
 }
 
-// A MERGE COMMIT IS ITS MERGER'S (U43 a): a change pat opened, merged with a
-// merge commit by the seat alice, is authored by alice — not by pat, who wrote
-// the change — and committed by the engine, its two parents main's tip and the
-// change's head; merged by the person pat, it is pat's. Each is the MERGE
-// RECORD's: the change merged directly at the commit main moved to.
+// A MERGE COMMIT IS ITS MERGER'S (U43 a): pat's change merged with a merge
+// commit by the seat alice is authored by alice, not pat, committed by the
+// engine, its parents main's tip and the change's head; merged by the person
+// pat, it is pat's. Each is the MERGE RECORD's: the change merged directly at
+// the commit main moved to.
 //
 // Mutation: author a merge commit by the change's owner → alice's merge is
 // pat's, red.
@@ -227,11 +226,10 @@ func TestAMergeCommitIsItsMergers(t *testing.T) {
 }
 
 // A SQUASH NAMES ITS CO-AUTHORS (U43 a): a change pat opened and alice added
-// a commit to, squashed by the seat lead, is ONE commit on main's tip
-// authored by pat — the change's owner, not its merger — carrying a
-// `Co-authored-by:` trailer for alice and none for pat, committed by the
-// engine; its tree is the change's, and its message the change's title and
-// reference.
+// to, squashed by the seat lead, is ONE commit on main's tip authored by pat
+// (the owner, not the merger), with a `Co-authored-by:` trailer for alice and
+// none for pat, committed by the engine; its tree is the change's, its message
+// the change's title and reference.
 //
 // Mutation: drop the trailers → alice goes unnamed, red; author the squash by
 // its merger → lead's, red.
@@ -265,9 +263,9 @@ func TestASquashNamesItsCoAuthors(t *testing.T) {
 }
 
 // AN UNREADY MERGE BUILDS NOTHING: a seat's merge of a change whose facts its
-// home has not recorded yet is refused gate_unmet naming them — judged at the
-// log's head before anything is built — and stores no object; a seat's
-// override is refused not_person, likewise.
+// home has not recorded is refused gate_unmet naming them, judged at the log's
+// head before any build, and stores no object; a seat's override is refused
+// not_person, likewise.
 //
 // Mutation: skip the readiness before the build → the merge's pack is stored
 // for the record its decide refuses, red.
@@ -299,19 +297,17 @@ func TestAnUnreadyMergeBuildsNothing(t *testing.T) {
 	}
 }
 
-// A MERGE INTO A PULL MIRROR BUILDS NOTHING, and neither does one into a
-// repository being imported: a ready change's merge — its gate met — on a
-// repository made a pull mirror is refused repo_importing while the mirror's
-// import runs, and repo_mirrored once it is done, each in the domain's one
-// sentence for the state (gitlet.ImportingDetail, gitlet.MirroredDetail), by the
-// Gitlet node from the row it synced, BEFORE anything is built: no object is
-// stored, and the change stays open. The decide refuses either from the same
-// row, but only once a scratch, a share unit and a stored pack were spent on
-// a merge it could never take.
+// A MERGE INTO A PULL MIRROR BUILDS NOTHING, nor one into a repository being
+// imported: a ready change's merge on a pull mirror is refused repo_importing
+// while its import runs and repo_mirrored after, in the domain's sentence
+// (gitlet.ImportingDetail, gitlet.MirroredDetail), by the Gitlet node from its
+// synced row BEFORE any build: no object stored, the change open. The decide
+// refuses either too, but only after a scratch, a share unit and a stored pack
+// were spent.
 //
 // Mutation: drop the importing arm, or the mirror arm, of the Gitlet node's
-// status mapping — that merge is built and its pack stored before its decide
-// refuses it, red.
+// status mapping → that merge's pack is stored before its decide refuses it,
+// red.
 func TestAMergeIntoAPullMirrorBuildsNothing(t *testing.T) {
 	t.Parallel()
 	c := newMergeCase(t, gitlettest.SoloOptions{}, gitlettest.Settings(), map[string]string{"README.md": "one\n"})
@@ -350,12 +346,12 @@ func TestAMergeIntoAPullMirrorBuildsNothing(t *testing.T) {
 
 // A SEAT'S MERGE IS HELD TO WHOEVER ITS TURN WORKS FOR, on the Gitlet node that
 // judges it (gitlet.EngineWrite.Ceiling, M3-decisions U40 (a)): alice, who may
-// merge into main, merges a ready change for the unit's lead, who may too,
-// and not for bob, who only reads the repository, nor for nobody — a
-// stranger, or a person who may not act — each refused not_permitted in
-// words saying whom the work is for, nothing built and the change left open.
+// merge into main, merges a ready change for the unit's lead, who may too, but
+// not for bob, who only reads, nor for nobody (a stranger, or a person who may
+// not act), each refused not_permitted naming whom the work is for, nothing
+// built and the change open.
 //
-// Mutation: mergeVerdict ignoring the write's ceiling — bob's and nobody's
+// Mutation: mergeVerdict ignoring the write's ceiling → bob's and nobody's
 // merges land, red.
 func TestASeatsMergeIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
 	t.Parallel()
@@ -395,11 +391,10 @@ func TestASeatsMergeIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
 }
 
 // AN UNSAID SOURCE DELETION IS THE TARGET'S GATE'S, decided on the Gitlet node
-// that judges the merge: a change from a seat's branch merged with nothing
-// said of its branch deletes it where no gate over the target keeps it, and
-// keeps it where one does (delete_source: none) — each answered as decided
-// and done by the merge's own record — while a branch outside every seat's
-// namespace is kept, and a caller's own word wins over the gate's.
+// that judges the merge: a seat's branch merged with nothing said of it is
+// deleted where no gate over the target keeps it and kept where one does
+// (delete_source: none), each answered by the merge's own record; a branch
+// outside every seat's namespace is kept, and a caller's own word wins.
 //
 // Mutations: the Gitlet node ignoring the gate's KeepsSource → the kept seat
 // branch is deleted, red; defaulting to keep → the seat branch outlives its
@@ -486,12 +481,11 @@ func (r *changeReads) since(from int) ([]gitlet.ReadQuery, int) {
 	return slices.Clone(r.asked[from:]), len(r.asked)
 }
 
-// A COLLEAGUE-STEERED MERGE READS ITS CHANGE ONCE: a seat's merge made for
-// the colleague whose ask woke its turn is held to the colleague's merge
-// authority by the one rule of that term (gitlet.MergeAuthority), judged on the
-// Gitlet node from its own chart, the synced row and the target's gate — so the
-// node reads the change once, as the merger, and never again as the
-// colleague; and the merge the colleague may make lands.
+// A COLLEAGUE-STEERED MERGE READS ITS CHANGE ONCE: a seat's merge made for the
+// colleague whose ask woke its turn is held to the colleague's merge authority
+// (gitlet.MergeAuthority), judged on the Gitlet node from its own chart, the
+// synced row and the target's gate, so the node reads the change once, as the
+// merger, never as the colleague; and the merge the colleague may make lands.
 //
 // Mutation: mergeCeiling reading the change again as the colleague → two
 // reads, red.
@@ -515,23 +509,18 @@ func TestAColleagueSteeredMergeReadsItsChangeOnce(t *testing.T) {
 	}
 }
 
-// A CHANGE'S WRITES READ NO REVISION THEY DROP: a change rebased by pat onto
-// a main that moved, merged by the seat alice for the unit's lead — its change
-// read as alice alone, the lead's merge authority judged from what the Gitlet
-// node holds (TestAColleagueSteeredMergeReadsItsChangeOnce) — and reverted
-// by pat. The
+// A CHANGE'S WRITES READ NO REVISION THEY DROP: pat rebases a change onto a
+// moved main, the seat alice merges it for the unit's lead
+// (TestAColleagueSteeredMergeReadsItsChangeOnce), and pat reverts it. The
 // rebase and the merge read the change as its detail alone
-// (gitlet.ReadQuery.DetailOnly), never with a page of its revisions beside it:
-// neither reads a revision, a merge reads its change again at the log's head
-// before a refusal and on every rebuild, and a first page of revisions is up
-// to 200 of them, each carrying its facts' touched paths, shipped from a data
-// node to the Gitlet node to be dropped. The revert reads its detail and its
-// HEAD REVISION alone — a first page one revision long — whose facts place a
-// fast-forward's range.
+// (gitlet.ReadQuery.DetailOnly): neither reads a revision, a merge reads it
+// again before a refusal and on every rebuild, and a first page is up to 200
+// revisions with their touched paths, shipped from a data node to be dropped.
+// The revert reads its detail and its HEAD REVISION alone (a one-revision
+// page), whose facts place a fast-forward's range.
 //
-// Mutations: read the merge's change or the rebase's with its
-// revisions → that read asks for them, red; read the revert's with a whole
-// page → red.
+// Mutations: read the merge's or the rebase's change with its revisions → red;
+// read the revert's with a whole page → red.
 func TestAChangesWritesReadNoRevisionTheyDrop(t *testing.T) {
 	t.Parallel()
 	r := &changeReads{}
@@ -588,9 +577,9 @@ func TestAChangesWritesReadNoRevisionTheyDrop(t *testing.T) {
 	}
 }
 
-// movingMain moves main under every merge record it is asked to decide, the
-// first moves times — a person's push landing between the merge's build and
-// its decide — and counts the records asked.
+// movingMain moves main under the first moves merge records it is asked to
+// decide, as a person's push between a merge's build and its decide would, and
+// counts the records asked.
 type movingMain struct {
 	host.Estate
 	mu    sync.Mutex
@@ -616,14 +605,13 @@ func (m *movingMain) Merge(ctx context.Context, p gitlet.MergeProposal) (gitlet.
 }
 
 // A MERGE RECOMPUTES FOUR TIMES, THEN REFUSES (M5-D10): a merge whose target
-// moves between its build and its decide is refused target_moved and built
-// again onto the tip the target then holds — twice moved, it merges on its
-// third build, answering its two recomputes, its commit on the tip the last
-// push left; moved under its first build and under every one of
-// gitlet.MergeRecomputes rebuilds after it, it is answered target_moving after
-// five records asked, and the change stays open. Each merge's rebuilds are
-// observed once as it ends, on crewlet.code.merge.recomputes under how it
-// ended: 2 merged, 4 target_moving.
+// moves between build and decide is refused target_moved and rebuilt onto the
+// new tip; moved twice, it merges on its third build, on the last push's tip,
+// answering two recomputes; moved under its first build and all
+// gitlet.MergeRecomputes rebuilds, it is answered target_moving after five
+// records asked, the change open. Each merge's rebuilds are observed once as
+// it ends, on crewlet.code.merge.recomputes under how it ended: 2 merged, 4
+// target_moving.
 //
 // Mutation: rebuild only three times → four records asked, red; answer the
 // first target_moved → nothing merges after two moves, red; drop
@@ -655,10 +643,9 @@ func TestAMergeRecomputesFourTimesThenRefuses(t *testing.T) {
 			w.Override = "chasing a moving main"
 			res, err := c.write(w)
 			// THE REBUILDS ARE OBSERVED ONCE, as the merge ends, on the Gitlet
-			// node that built it: the count its answer carries, under how it
-			// ended — never once a round, nor left unrecorded. (A node that
-			// answered unready and handed the walk on records its own, which
-			// is no merge built.)
+			// node that built it, under how it ended: never once a round, nor
+			// unrecorded. A node that answered unready and handed the walk on
+			// records its own, which is no merge built.
 			outcome, rebuilt := "merged", tc.moves
 			if !tc.merged {
 				outcome, rebuilt = string(gitlet.MergeRefusalTargetMoving), gitlet.MergeRecomputes
@@ -701,29 +688,24 @@ func TestAMergeRecomputesFourTimesThenRefuses(t *testing.T) {
 }
 
 // A MERGE IS BUILT AGAIN ONLY WHERE ITS ONE BUDGET AND ITS ATTEMPT HOLD A
-// ROUND: its git is gitlet.MergeBuildDeadline across every round together — the
-// one build the router's attempt holds — so a merge whose target moves under
-// every build is answered target_moving, nothing more asked of the committer,
-// once what is left of that budget is less than the git its last round ran:
-// its merge-tree charged four seconds of a ten-second budget, it is built
-// twice, and the six seconds left after the first hold a rebuild while the two
-// after the second do not. And where what its caller's deadline leaves cannot
-// hold another round's waits, its git and the upload and proposal its first
-// landing was held to, it is built once. Never a round started to end unready
-// during its build, which sends the walk's runner-up Gitlet node to merge it
-// from scratch, or busy at its landing. The change stays open.
+// ROUND: gitlet.MergeBuildDeadline covers every round's git together, so a
+// merge chasing a moving target is answered target_moving once what is left is
+// less than its last round's git (merge-tree charged 4s of 10s: the 6s left
+// hold a rebuild, the 2s after do not), or once the caller's deadline cannot
+// hold another round's waits, git, upload and proposal. No round starts only
+// to end unready mid-build (the runner-up node would merge from scratch) or
+// busy at its landing. The change stays open.
 //
-// Mutations: give every round the whole budget again → four rebuilds, five
-// records asked, red; start a rebuild the budget cannot hold → its git runs
-// out the budget on a second rebuild, red; start one the attempt cannot hold
-// → five records asked, red.
+// Mutations, each red: every round given the whole budget (four rebuilds); a
+// rebuild the budget cannot hold (git runs out on a second); one the attempt
+// cannot hold (five records asked).
 func TestAMergeIsBuiltAgainOnlyWithinItsOneBudgetAndAttempt(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		// budget scales the merge's budget of git and its merge-tree's
-		// charge, and deadline the caller's attempt; zero leaves each as it
-		// is.
+		// budget and mergeTree set the merge's git budget and its
+		// merge-tree's charge, deadline bounds the caller's attempt; zero
+		// leaves each as it is.
 		budget, mergeTree time.Duration
 		deadline          bool
 		// rebuilds is how many times the merge is built again, and says
@@ -754,13 +736,11 @@ func TestAMergeIsBuiltAgainOnlyWithinItsOneBudgetAndAttempt(t *testing.T) {
 			w.Override = "chasing a moving main"
 			ctx := c.Ctx
 			if tc.deadline {
-				// ROOM FOR ONE LANDING AND NOT ONE MORE ROUND: what the deadline
-				// rule holds the first landing to — its proposal and its
-				// upload's allowance, which a bundle of a few hundred bytes
-				// reaches whole (gitlet.UploadDeadline's first byte alone is
-				// past it) — and four seconds for the round to reach it, short
-				// of the eight seconds of the share's and three reads' waits a
-				// second round needs on top of them.
+				// ROOM FOR ONE LANDING AND NOT ONE MORE ROUND: the first
+				// landing's proposal and upload allowance (a bundle of a few
+				// hundred bytes; gitlet.UploadDeadline's first byte alone is
+				// past it), plus 4s to reach it, short of the 8s of share and
+				// three reads' waits a second round adds.
 				var cancel context.CancelFunc
 				ctx, cancel = context.WithTimeout(c.Ctx, gitlet.MinProposeAttempt+gitlet.WriteUploadAllowance+
 					4*time.Second)
@@ -785,11 +765,9 @@ func TestAMergeIsBuiltAgainOnlyWithinItsOneBudgetAndAttempt(t *testing.T) {
 	}
 }
 
-// expungingBuilds answers the first refusals merges it is asked refused
-// expunging, deciding nothing — as the committer refuses a merge whose
-// builder's copy held another drop epoch than the repository's, an expunge
-// having begun between its build and its decide — and hands every later one
-// to the estate.
+// expungingBuilds refuses the first refusals merges it is asked expunging,
+// deciding nothing, as the committer does when an expunge began between a
+// merge's build and its decide, and hands every later one to the estate.
 type expungingBuilds struct {
 	host.Estate
 	mu       sync.Mutex
@@ -815,16 +793,15 @@ func (e *expungingBuilds) Merge(ctx context.Context, p gitlet.MergeProposal) (gi
 	return e.Estate.Merge(ctx, p)
 }
 
-// A MERGE REFUSED EXPUNGING IS BUILT AGAIN (M6-D4): a merge an expunge's
-// begin overtook between its build and its decide is refused expunging,
-// nothing decided, and its builder builds it again from a copy synced past the
-// begin, as it does a merge whose target moved — the rebuild counted with the
-// target_moved ones, so a merge refused under its fifth build too is answered
-// expunging in the committer's own sentence, the change left open.
+// A MERGE REFUSED EXPUNGING IS BUILT AGAIN (M6-D4): a merge an expunge's begin
+// overtook between build and decide is refused expunging, nothing decided, and
+// rebuilt from a copy synced past the begin, as a moved target's is; the
+// rebuild counts with target_moved ones, so one refused under its fifth build
+// too is answered expunging in the committer's sentence, the change open.
 //
-// Mutation: answer the first expunging refusal as the merge's answer, rather
-// than building it again, and the merge refused once is never landed; answer
-// target_moving at the limit, and the last case's refusal is misnamed.
+// Mutation: answer the first expunging refusal as the merge's answer → the
+// merge refused once never lands; answer target_moving at the limit → the
+// last case's refusal is misnamed.
 func TestAMergeRefusedExpungingIsBuiltAgain(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -866,10 +843,9 @@ func TestAMergeRefusedExpungingIsBuiltAgain(t *testing.T) {
 }
 
 // A QUEUE TARGET'S MERGE IS AN ENQUEUE (M5-D9): a target whose gate requires a
-// check takes a change through its queue, so a merge_change of a change whose
-// head passed it builds nothing and enqueues the change, answering its entry
-// and its place; main does not move; and a person's override merges it
-// directly, past the queue.
+// check takes changes through its queue, so merge_change of a change whose head
+// passed it builds nothing and enqueues it, answering its entry and place, main
+// unmoved; a person's override merges it directly, past the queue.
 //
 // Mutation: build the merge on a queue target → the record is refused
 // queue_target, red.

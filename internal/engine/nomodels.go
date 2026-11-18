@@ -70,13 +70,11 @@ const pauseReasonNoTurnEngine = string(inbox.HoldNoTurnEngine)
 // knows: the queue contract lists no holds, and a release that walked the new
 // epoch's seats instead would resume every seat on every apply to lift holds
 // that almost never exist, and would still miss one the new revision no
-// longer names.
-// BY THE SEAT'S ID, the agent id derived from its handle (ADR-0013), which is
-// what the paused topic is named by. The handle rides along for the log lines.
-//
-// WITH THE ATTACHMENT the hold was taken for, which its lift names: a seat
-// released since ended it, and the lift then lifts nothing, never the hold a
-// later attachment of the inbox took under the same reason.
+// longer names. BY THE SEAT'S ID, the agent id derived from its handle
+// (ADR-0013), which is what the paused topic is named by; the handle rides
+// along for the log lines. WITH THE ATTACHMENT the hold was taken for, which
+// its lift names (the package doc's "Every hold is taken for one attachment of
+// the inbox").
 type modelHolds struct {
 	mu    sync.Mutex
 	seats map[uuid.UUID]modelHold
@@ -189,45 +187,50 @@ func (e *Engine) releaseModelHolds(ctx context.Context) {
 					"until the next release")
 			continue
 		}
-		e.reholdModelHold(ctx, id)
+		heldAgain := e.reholdModelHold(ctx, id)
+		// SAID WITH THE LIFT, because the pause that holds the seat again
+		// can have logged `seat_inbox_paused` before this line: without it
+		// the seat's last line read resumed while its inbox was held.
+		detail := "this seat's no-model pause is lifted from its inbox"
+		if heldAgain {
+			detail = "a no-model pause taken while this lift was in flight holds the seat " +
+				"again, so its inbox stays held until a revision with a model releases it"
+		}
 		log.InfoContext(ctx, "seat_inbox_resumed", "handle", handle,
-			"reason", pauseReasonNoTurnEngine)
+			"reason", pauseReasonNoTurnEngine, "held_again", heldAgain, "detail", detail)
 	}
 }
 
 // reholdModelHold takes back the hold of a no-model pause recorded for seat id
 // while the release was lifting its earlier one, which that lift has just
-// taken from it.
-//
-// THE WINDOW is the release's own: it drops the record under the lock and
-// resumes outside it, and a pause taken between the two (a delivery screened
-// against a revision with no model) re-holds the same attachment, which a hold
-// one per reason leaves unchanged on the queue, and records itself. The resume
-// then lifts the hold that pause owns: the seat stays recorded paused with its
-// inbox not held, until its next delivery meets the screening and pauses it
-// again, at the cost of one of that delivery's attempts. Read again under the
-// lock once the resume has returned, a pause recorded meanwhile takes its hold
-// back, for the attachment its record names, which is the one the seat holds
-// now or one its release has ended, which the queue refuses. A pause taken
-// after this read holds by itself, and the apply that adds a model releases it
-// again.
-func (e *Engine) reholdModelHold(ctx context.Context, id uuid.UUID) {
+// taken from it, reporting whether a pause stands with the seat's inbox held
+// under it once it returns, which the release's line says. The release drops
+// the record under the lock and resumes outside it; a pause taken between the
+// two re-holds the same attachment and records itself, and the resume lifts
+// its hold. Read again under the lock, a pause recorded meanwhile takes its
+// hold back for the attachment its record names. The package doc's "A lift
+// takes back a hold taken in its window" says why.
+func (e *Engine) reholdModelHold(ctx context.Context, id uuid.UUID) bool {
 	e.modelHolds.mu.Lock()
 	defer e.modelHolds.mu.Unlock()
 	hold, again := e.modelHolds.seats[id]
 	if !again {
-		return
+		return false
 	}
 	subject, group := topics.AgentInbox(id), topics.AgentInboxGroup(id)
 	err := e.backends.Queue.PauseTopic(ctx, subject, group, hold.inbox, pauseReasonNoTurnEngine)
-	if err == nil || errors.Is(err, queue.ErrAttachmentGone) {
-		return
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, queue.ErrAttachmentGone) {
+		return false
 	}
 	// A pause fails only on a client that has stopped, a process on its way
 	// out; the record stays for the next release.
 	log.WarnContext(ctx, "seat_inbox_not_paused", "handle", hold.handle, "error", err,
 		"detail", "this seat's no-model pause stands but its inbox is not held; a "+
 			"delivery to it pauses it again")
+	return false
 }
 
 // forgetModelHold drops the record of seat's no-model pause, for a seat this

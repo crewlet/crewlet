@@ -10,32 +10,27 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 )
 
-// THE HOOK'S SIDE OF THE RELAY: the engine's own binary, started by
-// receive-pack as proc-receive in a push's scratch repository, relaying its
-// stdin to the engine and the engine's frames to its stdout and stderr. It
-// decides nothing: everything a push is checked against is the engine's.
+// The hook's side of the relay: this binary, run by receive-pack as
+// proc-receive in a push's scratch repository, relays its stdin to the engine
+// and the engine's frames to its stdout and stderr. It decides nothing.
 
-// hookArgv is the argv after the binary that starts the hook — `gitlet hook
-// proc-receive` — written ONCE, so the spelling that STARTS the hook
-// (HookCommand) and the spelling that RECOGNISES it (HookArgs) cannot drift:
-// a second copy in cmd/crewlet is how an upgrade renames one and every push
-// fails `proc-receive`.
+// hookArgv is the argv after the binary that starts the hook, written once so
+// the spelling that starts it (HookCommand) and the one that recognises it
+// (HookArgs) cannot drift; a second copy in cmd/crewlet would let a rename
+// fail every push at proc-receive.
 //
-// NO OLDER SPELLING IS RECOGNISED, `code hook proc-receive` included (the
-// command's name before it was Gitlet's). A cache writes hooks/proc-receive
-// from this binary's HookCommand every time it opens (cache.Open's step 4), so
-// a hook an older binary wrote never outlives the restart that brings this
-// one; and a push in flight across that restart fails either way, since the
-// engine its hook relays to is the process that stopped.
+// No older spelling is recognised: cache.Open (step 4) rewrites
+// hooks/proc-receive from HookCommand on every open, so an older binary's hook
+// never outlives the restart, and a push in flight across it fails anyway.
 var hookArgv = []string{"gitlet", "hook", "proc-receive"}
 
 // HookCommand is the argv the cache's hooks/proc-receive execs for a binary at
 // exe: [exe, gitlet, hook, proc-receive].
 func HookCommand(exe string) []string { return append([]string{exe}, hookArgv...) }
 
-// HookArgs reports whether args — a process's os.Args[1:] — start the hook
-// ([gitlet, hook, …]), and returns what follows (RunHook's args). main() and
-// every test binary that pushes for real ask it first.
+// HookArgs reports whether args (os.Args[1:]) start the hook ([gitlet, hook,
+// …]) and returns what follows, RunHook's args. main() and every test binary
+// that pushes for real ask it first.
 func HookArgs(args []string) (rest []string, ok bool) {
 	prefix := hookArgv[:2]
 	if len(args) < len(prefix) || !slices.Equal(args[:len(prefix)], prefix) {
@@ -53,22 +48,21 @@ const (
 )
 
 // RunHook is the proc-receive hook. args must be exactly ["proc-receive"] and
-// both of the relay's variables set — getenv(gitproc.EnvHookSocket),
-// getenv(gitproc.EnvHookToken) — or it prints the hand-run sentence and exits
-// 2. It dials the socket within HookDialTimeout, writes its handshake, copies
-// stdin to the connection until EOF and half-closes it, and writes the
-// engine's frames out: channel 1 to stdout, 2 to stderr, and 0 the exit
-// status it returns. A connection that ends with no exit frame is an engine
-// that went away: its outcome is unknown, exit 1. It writes nothing else
-// anywhere — its stdout is git's protocol and its stderr the client's.
+// gitproc.EnvHookSocket and EnvHookToken set, or it prints hookUsage and
+// exits 2. It dials the socket within HookDialTimeout, sends its handshake,
+// relays stdin, half-closing at EOF, and the engine's frames out: channel 1
+// to stdout, 2 to stderr, 0 the exit status. A connection ending with no exit
+// frame is an engine gone mid-push: outcome unknown, exit 1. It writes
+// nothing else, since its stdout is git's protocol and its stderr the
+// client's.
 func RunHook(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
 	socket, token := getenv(gitproc.EnvHookSocket), getenv(gitproc.EnvHookToken)
 	if !slices.Equal(args, hookArgv[2:]) || socket == "" || token == "" {
 		_, _ = io.WriteString(stderr, hookUsage+"\n")
 		return 2
 	}
-	// THE HOOK'S OWN LIFETIME is the process's: nothing above it can end it
-	// but git, which kills it, so the dial is bounded by its timeout alone.
+	// Only git, by killing the process, can end the hook, so the dial is
+	// bounded by its timeout alone.
 	conn, err := (&net.Dialer{Timeout: HookDialTimeout}).DialContext(context.Background(), "unix", socket)
 	if err != nil {
 		_, _ = io.WriteString(stderr, hookUnreachable+"\n")
@@ -80,8 +74,7 @@ func RunHook(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv fu
 		return 1
 	}
 	go func() {
-		// THE HOOK'S STDIN IS GIT'S, relayed until git closes it; the
-		// half-close tells the engine nothing more is coming.
+		// The half-close tells the engine git's stdin is done.
 		_, _ = io.Copy(conn, stdin)
 		if uc, ok := conn.(*net.UnixConn); ok {
 			_ = uc.CloseWrite()
@@ -94,8 +87,7 @@ func RunHook(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv fu
 			_, _ = io.WriteString(stderr, hookBadFrame+"\n")
 			return 1
 		case err != nil:
-			// THE CONNECTION ENDED WITH NO EXIT FRAME — closed, reset or
-			// cut — which is an engine that went away mid-push.
+			// No exit frame: the engine went away mid-push.
 			_, _ = io.WriteString(stderr, hookEngineGone+"\n")
 			return 1
 		}

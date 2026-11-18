@@ -17,11 +17,9 @@ import (
 )
 
 // A ROUND COMPARES EVERY FIELD OF A REPOSITORY'S ROW but the position it was
-// read at (sameRepo): a row that changed only in a field it skipped is a round
-// that writes no state, so the state a restart reads names the row as it was.
-// Each field of gitlet.RepoRef is set alone, by reflection, so a field the row
-// gains is compared or this fails naming it: a list kept by hand beside the
-// row is one every new field of it slips past.
+// read at (sameRepo): a row changed only in a skipped field writes no state, so
+// a restart reads the row as it was. Each field of gitlet.RepoRef is set alone,
+// by reflection, so a field the row gains is compared or this fails naming it.
 //
 // Mutation: drop DropEpoch from sameRepo, and this fails naming it.
 func TestARoundComparesEveryFieldOfARepositorysRow(t *testing.T) {
@@ -44,20 +42,16 @@ func TestARoundComparesEveryFieldOfARepositorysRow(t *testing.T) {
 	}
 }
 
-// THE WIDEST STATE THIS CACHE WRITES FITS ITS READ FOUR TIMES OVER: a
-// repository whose every rule is at the domain's bounds — a 255-byte pattern,
-// every byte of it one JSON spells as six — and whose description, default
-// branch and owner are spelled the same way, beside every bounded list of a
-// state at its bound. A state past maxStateBytes is refused as unreadable,
-// and its repository would start cold at every boot. And what a state weighs
-// is written and made durable at every round that changes anything — every
-// push, on every Gitlet node — which is why the row it keeps carries each rule
-// as a push is judged by it (gitlet.PushRule) and never a rule's merge gate,
-// which at its bound on every rule would make the state five times as wide.
+// THE WIDEST STATE THIS CACHE WRITES FITS ITS READ FOUR TIMES OVER: every rule
+// and string of the row at the domain's bounds, each byte one JSON spells as
+// six, beside every bounded list at its bound. A state past maxStateBytes is
+// refused as unreadable, so its repository starts cold at every boot; and a
+// state is rewritten at every push on every Gitlet node, which is why the row
+// keeps each rule as gitlet.PushRule, never with its merge gate (five times as
+// wide at the bound).
 //
-// Mutation: count a merge gate of gitlet.MaxGateBytes beside every rule of the
-// row — the width the row's rules carried with their gates — and the state is
-// past a quarter of maxStateBytes, red.
+// Mutation: count a merge gate of gitlet.MaxGateBytes beside every rule, and
+// the state is past a quarter of maxStateBytes.
 func TestTheWidestStateFitsItsRead(t *testing.T) {
 	t.Parallel()
 	wide := func(n int) string { return strings.Repeat("&", n) }
@@ -152,12 +146,11 @@ func setSome(v reflect.Value) bool {
 
 // A DERIVED FILE NO RECORDED WRITE MADE COVERS NOTHING, whatever its entry's
 // Covers says: what an index covers is the maintainer's reason not to write
-// one (indexDue, plan's plainDue) and the order its pass takes repositories
-// in, so an entry no write made — a part found beside no main file, or one
-// read from a state — that covered packs would leave a copy unindexed with
-// nothing to say so. The rule lives in the accessor every reader asks, so no
-// path that sets an entry can break it; state.check refuses such a state
-// besides (TestAStateOfAnotherFormatIsDiscarded).
+// one (indexDue, plan's plainDue) and orders its pass, so an entry no write
+// made (a part beside no main file, or one read from a state) that covered
+// packs would leave a copy unindexed silently. The rule lives in the accessor
+// every reader asks, so no path that sets an entry breaks it; state.check also
+// refuses such a state (TestAStateOfAnotherFormatIsDiscarded).
 //
 // Mutation: make covers return Covers whatever its Step — the first row reads
 // three packs covered.
@@ -182,13 +175,11 @@ func TestADerivedFileNoWriteMadeCoversNothing(t *testing.T) {
 	}
 }
 
-// BenchmarkReadState is the part of a warm boot that is each repository's
-// own: one readState — the open, the read, the decode and the check — of a
-// state recording both derived files, as the maintainer leaves a served copy.
-// BenchmarkBoot times a whole boot, whose figure a shared machine's load
-// moves by more than one state's read; this is the per-repository term on
-// its own, the one a change to the state's format moves (cache doc.go,
-// "Measured").
+// BenchmarkReadState is a warm boot's per-repository term: one readState
+// (open, read, decode, check) of a state recording both derived files, as the
+// maintainer leaves a served copy. A shared machine's load moves BenchmarkBoot's
+// whole-boot figure by more than one state's read; a change to the state's
+// format moves this one (package doc, "Measured").
 func BenchmarkReadState(b *testing.B) {
 	dir := b.TempDir()
 	id := "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e"
@@ -228,10 +219,9 @@ func BenchmarkReadState(b *testing.B) {
 
 // A TAIL IS KNOWN BY ITS PACKS, WHATEVER THEIR ORDER (tailDigest): the node's
 // tip persists the digest of the tail it covered, and a boot, a full round and
-// a swap each count the tail afresh — so the same packs counted in any order
-// read the same digest, a pack counted in and out again leaves it where it
-// was, a pack more or less is another tail, and the digest a state records
-// reads back as itself and nothing else does.
+// a swap each count the tail afresh. So any order reads the same digest, a
+// pack counted in and out leaves it unchanged, a pack more or less is another
+// tail, and a recorded digest parses back as itself and nothing else does.
 //
 // Mutation: let flip add a pack's bytes rather than XOR them — the pack
 // counted in and out again leaves the digest moved.

@@ -29,8 +29,7 @@ import (
 // that — 503, BusyRetryAfter, a sentence naming why — and logged as the
 // REQUEST'S failure, a push's whatever process its sync or its receive ran
 // and a fetch's likewise: a deadline, a stall, the process's own input or
-// output failing here. None of them is the code log failing, which is what
-// each read as before it had a case of its own.
+// output failing here. None of them is the code log failing.
 func TestEveryWayTheNodeEndsGitIsAnsweredAsThat(t *testing.T) {
 	requests := map[string]struct {
 		method, target, line string
@@ -80,11 +79,9 @@ func TestEveryWayTheNodeEndsGitIsAnsweredAsThat(t *testing.T) {
 // A FAILURE NO RETRY ENDS PROMISES NO RETRY: a pack whose verified bytes are
 // not the bundle its row describes, and rows this build cannot install into a
 // cache, are each answered 500 with no Retry-After and a sentence that says
-// retrying does not end it and names the line an operator acts on. Promised
-// "retry in 10 s" and a Retry-After of 10, a client or a balancer obeying
-// either started a sync every ten seconds, and for a corrupt pack each one
-// downloaded the whole bundle again — up to gitlet.MaxPackBytes — to fail the
-// same way.
+// retrying does not end it and names the line an operator acts on. A
+// promised retry has a client or balancer sync again, for a corrupt pack
+// downloading the whole bundle (up to gitlet.MaxPackBytes) to fail again.
 func TestAFailureNoRetryEndsPromisesNone(t *testing.T) {
 	for _, tc := range []struct {
 		name, line, want string
@@ -151,9 +148,7 @@ func answerOf(t *testing.T, err error) (syncFailedAnswer, string) {
 // refuses as no argument it takes, or a sync asked at a level no reader
 // serves, is answered 500 with the refusal in its sentence and NO
 // Retry-After, since no retry ends a call-site bug, and logged at ERROR as
-// code_git_refused. Each was a 503 promising a retry — the code log's, the
-// node's, or git stopped for a load it never had (a capture's ErrOutput) —
-// and the retry met the same refusal for ever.
+// code_git_refused.
 //
 // Mutation: drop syncFailed's refusedByCaller case, and each is a 503 again.
 func TestACallSiteRefusalNamesItselfAndPromisesNoRetry(t *testing.T) {
@@ -199,10 +194,8 @@ func TestACallSiteRefusalNamesItselfAndPromisesNoRetry(t *testing.T) {
 // each, as the pool returns it, is held here, and the table is held to the
 // package's own declarations in BOTH directions — an exported Err* variable
 // or type gitproc gains is a row this table must gain with the answer it is
-// given, and a row naming nothing gitproc declares fails. Without it, a new
-// refusal reached syncFailed's last case and was told "the code log could not
-// be read", which is how the five call-site refusals and the shape refusal
-// were answered until each had a case.
+// given, and a row naming nothing gitproc declares fails, so no new error
+// falls to syncFailed's last case unexamined.
 //
 // Mutation: add an exported Err* to gitproc, or delete a row, and the
 // two-sided check fails naming it.
@@ -241,11 +234,9 @@ func TestEveryGitprocErrorHasADecidedAnswer(t *testing.T) {
 		// No request of the host's dials another host: a remote refused is
 		// the engine's own call naming one wrongly, as a malformed command is.
 		"ErrRemote": {fmt.Errorf("%w: http://git.example.com/r.git is not an https URL", gitproc.ErrRemote), refused},
-		// Unmarked, a shape refusal is not the cache's: the cache's own is
-		// repaired under the request, and one met again past its repair is
-		// marked errStillDamaged (repairing). What is left is a scratch's or
-		// a view's own — a directory this request made, which the next makes
-		// again — so it is this node's.
+		// Unmarked, a shape refusal is not the cache's (repair marks its own
+		// errStillDamaged): it is a scratch's or a view's, a directory the next
+		// request makes again, so it is this node's.
 		"ErrRepoShape": {fmt.Errorf("%w: /c/scratch/p.git's config is not the one the engine writes",
 			gitproc.ErrRepoShape), syncFailedAnswer{status: http.StatusServiceUnavailable, retry: true,
 			says: "this node could not serve acme (", line: "code_fetch_failed", level: "WARN"}},
@@ -300,10 +291,8 @@ func TestEveryGitprocErrorHasADecidedAnswer(t *testing.T) {
 
 // EVERY ERROR THE CACHE EXPORTS HAS A DECIDED ANSWER, held to the cache's own
 // declarations in both directions as gitproc's are: an error the cache gains
-// is a row this table must gain with the answer it is given. Without it, the
-// cache's refusal of the host's own call (cache.ErrInvalid) reached
-// syncFailed's last case and was told to retry — against another node, for a
-// bug in this build.
+// is a row this table must gain with the answer it is given, so none falls
+// to syncFailed's last case unexamined.
 //
 // Mutation: add an exported Err* to the cache, or delete a row, and the
 // two-sided check fails naming it; drop cache.ErrInvalid from
@@ -311,16 +300,11 @@ func TestEveryGitprocErrorHasADecidedAnswer(t *testing.T) {
 func TestEveryCacheErrorHasADecidedAnswer(t *testing.T) {
 	refused := syncFailedAnswer{status: http.StatusInternalServerError,
 		says: "this node refused its own call serving this request", line: "code_git_refused", level: "ERROR"}
-	// A cache's boot refusals, a check's own, an expunge's rescue
-	// (ErrInputsLeaving: only the maintainer stages one) and a plan's read
-	// of a copy a swap replaced (ErrSuperseded: only the maintainer's
-	// planners and a mirror's cut list a copy's packs, through Cache.Packs
-	// and Cache.DroppingPacks, and a request's sync calls neither) never
-	// reach a request's sync; should one, it is this node's. The rescue's
-	// and the replaced read's are each a moment's state of this node's
-	// copy, its objects/ still holding a begin's inputs until the round's
-	// swap takes them out, or a newer copy installed since the sync pinned
-	// this one, so the retry this answer promises is the one that ends it.
+	// A cache's boot refusals, a check's own, ErrInputsLeaving (only the
+	// maintainer stages a rescue) and ErrSuperseded (only the maintainer and
+	// a mirror's cut call Cache.Packs or Cache.DroppingPacks) never reach a
+	// request's sync; should one, it is this node's. The last two are a
+	// moment's state of this node's copy, so the promised retry ends them.
 	node := syncFailedAnswer{status: http.StatusServiceUnavailable, retry: true, says: "this node could not serve acme (",
 		line: "code_fetch_failed", level: "WARN"}
 	table := map[string]struct {
@@ -444,13 +428,11 @@ func repairWith(t *testing.T, b *rebuilds, read reading, fails ...error) (*rebui
 	return b, err
 }
 
-// DAMAGE A REPAIR DID NOT END SAYS SO. A request whose cache was repaired
-// under it (repair) and whose git met the same damage on the repaired copy is
-// told the copy is still damaged after its repair — git's own words for it
-// beside — and may retry against another node, whose copy is its own; never
-// git's failure as if no repair had run, or a shape refusal as the node's own
-// directory. The cache is asked once, and damage the repair DID end serves
-// the request.
+// DAMAGE A REPAIR DID NOT END SAYS SO. A request whose git met the same
+// damage on the copy repair rebuilt is told the copy is still damaged, git's
+// words beside, and may retry against another node; never git's failure as if
+// no repair had run, or a shape refusal as the node's own directory. The
+// cache is asked once, and damage the repair DID end serves the request.
 //
 // Mutation: drop repair's errStillDamaged mark, and the corrupt copy is git's
 // 500 and the shape this node's.
@@ -489,34 +471,23 @@ func TestDamageARepairDidNotEndSaysSo(t *testing.T) {
 	}
 }
 
-// A HINT IS REPAIRED ONLY WHERE ITS PACK IS NOT ITS ROW'S, and only for a
-// process run in the incarnation. A run whose trace named no damage but
-// nominated a pack (gitproc.Trace.Hints: git 2.56 reports a corrupt packed
-// object through a bare "%s") has the cache hold that pack to its row
-// (cache.Cache.ConfirmHint): a pack that is not its row's is repaired
-// (`corrupt`, the pack named in cache.Failure.Packs, which the cache installs
-// again in place, and the run's start in Began) and the run served again; a
-// sound one is no repair, and git's own failure is the answer. The same
-// sentence as a ROW (2.55) names a pack's damage itself, and its hint
-// still names the pack to the repair — confirmed, each pack once however
-// many of its objects git named. A process in a push's scratch or an
-// advertisement view (asAlternate) never asks — its hint names the scratch's
-// own pack, the client's. And a derived damage's repair is told which files
-// to drop and when the run that named them began (cache.Failure: the cache
-// spares a file it wrote after), escalating to a whole read when the retry
-// still meets damage.
+// A HINT IS REPAIRED ONLY WHERE ITS PACK IS NOT ITS ROW'S, and only in the
+// incarnation (gitproc.Trace.Hints; cache.Cache.ConfirmHint). A pack that is
+// not its row's is repaired `corrupt`, named in cache.Failure.Packs with the
+// run's start in Began, and the run served again; each pack is confirmed once
+// however many objects name it, even when a damage row (2.55) also names it; a
+// sound one leaves git's failure the answer. A push's scratch or view
+// (asAlternate) never asks: its hint names the client's pack.
+// Derived damage drops its files, told when the run began (the cache spares
+// a file written after), and escalates to a whole read if damage remains.
 //
-// Mutations: repair on a hint without confirming it (the sound arm
-// rebuilds); read hints for asAlternate (the scratch arm asks); hand Rebuild
-// no drops (the derived arms' drops are empty); hand it no Began (their
-// began is zero); confirm no hint beside a row (the row arm names no pack).
+// Mutations: repair an unconfirmed hint; read hints for asAlternate; hand
+// Rebuild no drops or no Began; confirm no hint beside a row.
 func TestAHintIsRepairedOnlyWhereItsPackIsNotItsRows(t *testing.T) {
 	const pack = "0123456789abcdef0123456789abcdef01234567"
 	hint := gitproc.Hint{Object: strings.Repeat("ab", 20), Pack: pack}
-	// THE RUN'S START, STATED years from any clock and to the nanosecond: a
-	// repair that carries it is told apart from one that stamps the run with
-	// its own time.Now(), which a start read from the clock at the case's
-	// beginning equals inside one tick of a coarse clock.
+	// THE RUN'S START, STATED years from any clock and to the nanosecond, so a
+	// repair stamping its own time.Now() cannot match it within a coarse tick.
 	began := time.Date(2003, time.April, 5, 6, 7, 8, 9, time.UTC)
 	hinted := &gitproc.ExitError{Command: "upload-pack", Kind: gitproc.ErrFailed,
 		Result: gitproc.Result{Exit: 128, Began: began, Trace: gitproc.Trace{Hints: []gitproc.Hint{hint}}}}
@@ -595,10 +566,9 @@ func TestAHintIsRepairedOnlyWhereItsPackIsNotItsRows(t *testing.T) {
 		})
 	}
 	// THE CACHE'S ANSWER FROM THE COPY AS IT STANDS IS NO REPAIR, ONCE: the
-	// run that meets the damage again began after the write the cache
-	// answered it by, and is repaired as though first; a second such answer
-	// counts. Mutation: count the guard's answer (the first arm is answered
-	// still damaged after one ask).
+	// retry began after the write that answer stands on, so it is repaired as
+	// though first; a second such answer counts. Mutation: count the guard's
+	// answer (the first arm is answered still damaged after one ask).
 	t.Run("damage answered from the copy as it stands", func(t *testing.T) {
 		b, err := repairWith(t, &rebuilds{guard: map[int]bool{0: true}}, inIncarnation, corrupt, corrupt)
 		if err != nil || !slices.Equal(b.asked, []cache.RebuildReason{cache.RebuildCorrupt, cache.RebuildCorrupt}) {
@@ -629,8 +599,7 @@ func TestAHintIsRepairedOnlyWhereItsPackIsNotItsRows(t *testing.T) {
 // sync's read of the rows, the host's own read of a request's bound — while
 // the object store failing says so, and what nothing names — this node's disk
 // refusing a write, a failure no case foresaw — is this node's, with what
-// failed in the sentence. Each was the code log's sentence, as syncFailed's
-// last case.
+// failed in the sentence.
 //
 // Mutation: answer syncFailed's last case as the code log, and the store, the
 // disk and the unnamed rows fail; drop the log's case, and its rows do.

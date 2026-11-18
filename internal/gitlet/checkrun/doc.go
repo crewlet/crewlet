@@ -136,5 +136,6 @@
 // the others' work through the estate's router. The sweep reaches the home's
 // loop through the loop's own interface, which [Sweeper] satisfies, and a
 // check's token reaches this package as a [Tokens] the engine adapts from
-// Gitlet's.
+// Gitlet's. The engine builds the runner, and decides where one runs and when
+// it stops (internal/engine's codechecks.go).
 package checkrun

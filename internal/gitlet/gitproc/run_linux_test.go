@@ -12,28 +12,17 @@ import (
 )
 
 // A RUN THE NODE ENDS COUNTS WHAT ITS WHOLE GROUP SPENT: an upload-pack whose
-// client went away half way through a clone is killed with its group, and
-// dies without reaping its pack-objects — which spent every bit of the
-// counting, the delta search and half the writing the clone had cost by then
-// — so the reap's own figure is upload-pack alone and would read a clone
-// abandoned at the end of its work as free. The figure is read from the
-// group before the signal: at least half what the same pack-objects spends
-// run to its end by the pool, since it had written at least half the pack
-// when its client stopped reading, and had done all of the rest of its work
-// before its first byte.
+// client went away half way through a clone dies with its group without
+// reaping its pack-objects, which did the counting, the delta search and half
+// the writing, so the reap's figure alone would read the clone as free. Read
+// from the group before the signal, it is at least half what the same
+// pack-objects spends run to its end. Half the pack, more than the pipes
+// hold, is unwritten when the client stops, so pack-objects still runs at
+// the signal.
 //
-// Half the pack is still to be written when the client stops — more than the
-// pipes between it and the client hold — so pack-objects is still running
-// when the group is signalled, the child the leader never reaps.
-//
-// Mutation: drop the reading before the signal (Result.CPU the reap's alone)
-// and this fails — measured, 3.8 ms counted against 527 ms run to its end.
-//
-// Linux alone, as the reading is: XNU keeps a process's CPU where only
-// libproc reads it, and the engine builds without cgo, so procgroup.GroupCPU
-// is errors.ErrUnsupported on darwin and a killed run there counts the reap's
-// figure alone — upload-pack without the pack-objects it never reaped, which
-// is what this case refuses (the macOS job read 6.33 ms against 402 ms).
+// Mutation: drop the reading before the signal and this fails. Linux alone:
+// darwin's records need libproc, so GroupCPU is ErrUnsupported without cgo
+// and a killed run counts the reap's figure alone, which this case refuses.
 func TestARunTheNodeEndsCountsWhatItsGroupSpent(t *testing.T) {
 	t.Parallel()
 	dir, tip := looseHistory(t)

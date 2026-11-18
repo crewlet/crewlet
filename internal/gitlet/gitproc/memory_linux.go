@@ -21,13 +21,12 @@ func readNodeMemory() (Memory, error) { return readLinuxMemory(os.DirFS("/")) }
 // readLinuxMemory reads the memory a process under root may hold: the least of
 // the machine's (/proc/meminfo's MemTotal) and every limit the process's
 // cgroups set, at its own cgroup or any above it that the mount shows — v2's
-// memory.max and v1's memory.limit_in_bytes alike, since a host still on the
-// v1 hierarchy shows a container's limit nowhere else. root is "/" in
-// production and a fixture tree in the suite.
+// memory.max and v1's memory.limit_in_bytes alike, since a host on the v1
+// hierarchy shows a container's limit nowhere else. root is "/" in production
+// and a fixture tree in the suite.
 //
-// FROM THE FILES, NOT A CALL: sysinfo(2) answers the machine's memory and
-// knows nothing of a container's limit, which is the figure that decides
-// whether a run is killed.
+// From the files, not sysinfo(2), which knows nothing of a container's limit,
+// the figure that decides whether a run is killed.
 func readLinuxMemory(root fs.FS) (Memory, error) {
 	physical, err := memTotal(root)
 	if err != nil {
@@ -201,12 +200,10 @@ func unescapeMount(s string) string {
 func isOctal(c byte) bool { return c >= '0' && c <= '7' }
 
 // cgroupLimit is the least limit file sets on cgroup or any cgroup above it
-// that mount m shows, and whether any does. A cgroup m does not show — one
-// outside the cgroup at its root, as a process outside a namespace's root
-// sees it — has nothing m can say. A file that is absent is a cgroup with no
-// limit of its own (a hierarchy's root holds none); "max" is v2's no limit,
-// and v1's is a count past any machine's memory, which the least of them
-// leaves out by itself.
+// that mount m shows, and whether any does; a cgroup outside m's root has
+// nothing m can say. An absent file is a cgroup with no limit of its own (a
+// hierarchy's root holds none); "max" is v2's no limit, and v1's is a count
+// past any machine's memory, which taking the least leaves out by itself.
 func cgroupLimit(root fs.FS, m cgroupMount, cgroup, file string) (Memory, bool, error) {
 	rel, ok := within(cgroup, m.root)
 	if !ok {

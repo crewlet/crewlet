@@ -18,12 +18,12 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE LAYER CASES (LY1–LY7): a repository's bitmapped index published ONCE,
-// by its maintainer, as a layer of a chain every Gitlet node installs only over
-// its own packs, matching its row and in the rows' order — and a node that
-// cannot install one serving from the layers below it, never an error
-// (ADR-0091) — through the production compactor every Gitlet node of a topology
-// is built with, never started, so each case drives its publications itself.
+// THE LAYER CASES (LY1–LY7, LY10; ADR-0091): a repository's bitmapped index
+// published ONCE, by its maintainer, as a layer of a chain every Gitlet node
+// installs only over its own packs, matching its row, in the rows' order; a
+// node that cannot install one serves from the layers below, never an error.
+// Every Gitlet node is built with the production compactor, never started, so
+// each case drives its publications itself.
 
 // otherThan is the first running Gitlet node that is not n.
 func otherThan(c *Case, n Node) Node {
@@ -40,10 +40,9 @@ func otherThan(c *Case, n Node) Node {
 // urlOf is RepoName's URL through node n.
 func urlOf(n Node) string { return n.URL() + "/git/" + RepoName }
 
-// bitmapLoads fails the case unless git loads the bitmap of the chain node n's
-// copy holds and finds commit in it — `rev-list --test-bitmap`, which dies
-// where no bitmap loads or the commit has none — run with the node's own git
-// over the copy, as the cache's canary runs one.
+// bitmapLoads fails the case unless git loads the bitmap of n's chain and
+// finds commit in it (`rev-list --test-bitmap` dies otherwise), run with the
+// node's own git over the copy, as the cache's canary runs it.
 func bitmapLoads(c *Case, n Node, commit string) {
 	c.T.Helper()
 	s, err := n.Cache().Sync(c.Ctx, c.Rows().Repo.ID, Linearizable)
@@ -210,13 +209,12 @@ func (l *lyingPublisher) arm(on bool) {
 	l.armed = on
 }
 
-// LY3: a layer every node refuses `corrupt`, in two arms — one byte of a part
-// spoiled in the store, which its hash check refuses, and a LYING PUBLISHER
-// whose row claims an object its files do not hold, which gitlet.CheckLayer
-// refuses. In both a Gitlet node that joins afterwards serves from the layers
-// below — its own index here, the chain having one layer — and a publication
-// by a maintainer whose own copy refused the layer too REPAIRS it, replacing
-// it whether or not anything was pushed since, which every node installs.
+// LY3: a layer every node refuses `corrupt`, in two arms: a part spoiled in
+// the store (its hash check refuses it) and a LYING PUBLISHER whose row claims
+// an object its files lack (gitlet.CheckLayer refuses it). In both, a Gitlet
+// node that joins afterwards serves from its own index, and the next
+// publication by a maintainer whose copy refused the layer too REPAIRS it,
+// even with nothing pushed since, and every node installs the repair.
 func aCorruptLayerFallsBack(t *testing.T, newFleet NewFleet) {
 	for _, arm := range []string{"spoiled", "lying"} {
 		t.Run(arm, func(t *testing.T) {

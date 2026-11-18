@@ -28,11 +28,9 @@ func TestGitletPassesTheFleetSuiteOnTheBroker(t *testing.T) {
 }
 
 // TestTheCodeHostPassesTheFleetSuiteOnS3 runs every multi-node case whose
-// claim the object store can change with S3, through an in-process bucket
-// speaking its wire — the production store, whose puts go in parts and whose
-// reads go in ranges. The cases whose claim is routing, the committer, the
-// ledger or a recovery, decided before or after the bytes, are the broker
-// run's alone (gitlettest.StoreFleetCases says which and why).
+// claim the object store can change on an in-process S3 bucket, the
+// production store, whose puts go in parts and reads in ranges. The rest are
+// the broker run's alone (gitlettest.StoreFleetCases says which and why).
 func TestTheCodeHostPassesTheFleetSuiteOnS3(t *testing.T) {
 	gitlettest.RunFleet(t, gitlettest.StoreFleetCases,
 		func(t *testing.T) gitlettest.Cluster { return startCluster(t, "s3") })
@@ -40,13 +38,11 @@ func TestTheCodeHostPassesTheFleetSuiteOnS3(t *testing.T) {
 
 // EVERY PUSH OF A REPOSITORY IS APPENDED BY ITS COMMITTER, WHICHEVER MEMBER
 // RECEIVED IT: for each of sixteen repositories a push through every member,
-// and only the repository's committer — the first of its rendezvous order over
-// the running members — appends anything. A router that asked its own member
-// first would have each receiver commit its own pushes, and a burst to one
-// repository would contend at the broker between three committers. And a
-// COMPACTION of a repository, keyed by the same repository id, meets the same
-// committer whichever member proposes it: asked through every member at once,
-// it is appended once, by the committer alone (ADR-0090).
+// and only the repository's committer (the first of its rendezvous order over
+// the running members) appends. A router asking its own member first would
+// have three committers contend at the broker. A COMPACTION, keyed by the same
+// repository id, asked through every member at once is appended once, by the
+// committer alone (ADR-0090).
 func TestEveryMemberRoutesARepositoryToOneCommitter(t *testing.T) {
 	const repos = 16
 	c := startCluster(t, "nats")
@@ -172,12 +168,11 @@ func compactionMeetsTheCommitter(t *testing.T, c *cluster, p *gitlettest.Person)
 	}
 }
 
-// TWO NODES QUEUE ONE CHECK: two members asking at once for the same attempt
-// queued — two homes each believing a head is theirs to dispatch, each under
-// an operation id of its own — meet at the repository's committing data node,
-// whose checks writer decides the one after the other: the first appends, the
-// second is answered from the attempt's row, and the fleet holds ONE row,
-// queued, appended once by the committer alone.
+// TWO NODES QUEUE ONE CHECK: two members queueing the same attempt at once,
+// each under its own operation id, meet at the repository's committer, whose
+// checks writer decides them in turn: the first appends, the second is
+// answered from the attempt's row, and the fleet holds ONE queued row,
+// appended once.
 //
 // Mutation: answer the attempt queued already by appending again, and the
 // committer appends twice for one attempt — red.
@@ -247,14 +242,12 @@ func TestTwoNodesQueueOneCheck(t *testing.T) {
 	}
 }
 
-// EVERY MEMBER ROUTES A GIT READ TO ONE HOME (ADR-0089): a read of a
-// repository by object id through any member's router is answered by the
-// repository's home — the first of its rendezvous order over the running
-// members, which every member computes alike — and by no other member, the
-// home's own router answering in process; and with the home KILLED, it is
-// answered by the home's runner-up, whichever survivor asked. A router that
-// asked its own member first would warm a copy of every repository on every
-// member its seats read through.
+// EVERY MEMBER ROUTES A GIT READ TO ONE HOME (ADR-0089): a read by object id
+// through any member's router is answered by the repository's home alone (the
+// first of its rendezvous order over the running members; the home's own
+// router answers in process); with the home KILLED, by its runner-up,
+// whichever survivor asked. A router asking its own member first would warm a
+// copy of every repository on every member.
 func TestEveryMemberRoutesAGitReadToOneHome(t *testing.T) {
 	c := startCluster(t, "nats")
 	c.Declare(t, gitlet.Declared{Name: "read-home", Settings: gitlettest.Settings()})

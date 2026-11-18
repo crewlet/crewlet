@@ -104,11 +104,9 @@ func TestAnOkIsAnsweredOnlyFromAnAppliedRow(t *testing.T) {
 	}
 }
 
-// A pending push is waited on for at most the grace — read again until it is
-// spent — and then said to be pending, on the whole path: the person's git
-// prints the push pending, its outcome having been read. How the reads are
-// spaced, doubling to their ceiling, and that the last comes at the grace's
-// very end, is held exactly in a bubble
+// A pending push is read again for at most the grace, then reported pending end
+// to end: the person's git prints it pending, its outcome having been read. The
+// reads' spacing is held exactly in a bubble
 // (TestAPendingPushIsReadAgainUntilItsGraceIsSpent).
 func TestAPendingPushWaitsAtMostTheStallGrace(t *testing.T) {
 	timing := fast
@@ -152,10 +150,9 @@ func TestAnUnboundTokenCannotPush(t *testing.T) {
 	if res.Err == nil || !strings.Contains(res.Stderr, "fatal: remote error: this token is not bound to a person: ") {
 		t.Errorf("an unbound token's push: %s", res)
 	}
-	// A POST THAT NEVER ASKED FOR THE ADVERTISEMENT: deletions carry no
-	// pack, so the command section is the whole body. Every command is
-	// refused by the token's grant (ADR-0088) — the domain's not_permitted,
-	// with the sentence the advertisement gives.
+	// A POST THAT SKIPPED THE ADVERTISEMENT: deletions carry no pack, so the
+	// command section is the whole body. The token's grant refuses every
+	// command (ADR-0088) as not_permitted, in the advertisement's sentence.
 	body := pkt(head+" "+gitrefZero+" refs/heads/main\x00report-status\n") +
 		pkt(head+" "+gitrefZero+" refs/heads/feature\n") + "0000"
 	resp, report := post(t, c, 0, "", "git-receive-pack", "", body)
@@ -244,21 +241,17 @@ func TestEveryPushIsAuditedAsItsPerson(t *testing.T) {
 	}
 }
 
-// EVERY PUSH THE NODE ADMITS IS ONE RECORD, HOWEVER IT ENDS — and one push in
-// its repository's heat, counted at that record. A push answered 503 at its
-// sync, as a Gitlet node in a minority of the code log answers every push, at
-// its advertisement or at its POST; one a fault stopped on its way to its
-// run; one whose body this node cannot decode: each is recorded failed, as
-// the person who pushed it. And one declaring more than a push may send is
-// recorded refused, as that person's too: judged after its admission, not
-// before it. Each step's failure is confirmed where it was meant to be — the
-// code log's line for its request, the fault's point reached, the status the
-// client was told — so a step that failed elsewhere proves nothing.
+// EVERY PUSH THE NODE ADMITS IS ONE RECORD, HOWEVER IT ENDS, and one push in
+// its repository's heat. Recorded failed, as its pusher: a 503 at its sync (a
+// minority node's answer, at the advertisement or the POST), a fault on its way
+// to its run, a body this node cannot decode. Recorded refused, as its pusher:
+// one declaring more than a push may send, judged after admission. Each step's
+// failure is confirmed where it was meant to happen (the code log's line, the
+// fault's point, the status), so a step failing elsewhere proves nothing.
 //
-// Mutation: answer any one of these exits without its record — the request's
-// record ended as none of a push's ends there (pushAudit.none), or the
-// declared length judged before admission again — and its step finds no
-// record and the repository's heat a push short.
+// Mutation: end any exit's record as none of a push's ends (pushAudit.none), or
+// judge the declared length before admission, and its step finds no record and
+// the heat a push short.
 func TestEveryPushTheNodeAdmitsIsRecordedHoweverItEnds(t *testing.T) {
 	var failing atomic.Bool
 	e := &recording{state: func(ctx context.Context, inner host.Estate, q gitlet.StateQuery) (gitlet.RepoSnapshot, error) {
@@ -316,8 +309,7 @@ func TestEveryPushTheNodeAdmitsIsRecordedHoweverItEnds(t *testing.T) {
 			}
 		}
 	}
-	// answered is a hand-built POST of the push service, which is answered
-	// status, saying says.
+	// answered asserts the hand-built POST req is answered status, saying says.
 	answered := func(status int, says string, req func(t *testing.T) (*http.Response, string)) func(t *testing.T) {
 		return func(t *testing.T) {
 			t.Helper()
@@ -485,25 +477,24 @@ func (fullBucket) Put(_ context.Context, name string, r io.Reader, _ objstore.Pu
 		"fullbucket: put %s: OBJ_crewlet_files holds as many bytes as it reserves", name)}
 }
 
-// A PUSH THE OBJECT STORE HAS NO ROOM FOR IS REFUSED AS FULL, naming the room
-// the store names: never `unavailable`, whose sentence says to run git push
-// again — into a store that refuses the same push the same way until an
-// operator makes room, so a person, or a CI runner on a loop, re-sent the
-// whole pack each time. Nothing was stored, nothing proposed, and the push is
-// recorded refused under its own class, so the audit tells a full store from
-// a store that failed. Over the fleet's own bucket's twin, and over S3 through
-// an in-process bucket whose provider has no room (MinIO's drives at their
-// floor), through the production backend.
+// A PUSH THE OBJECT STORE HAS NO ROOM FOR IS REFUSED AS FULL, naming the
+// store's room: never `unavailable`, whose sentence says to push again into a
+// store that refuses it the same until an operator makes room. Nothing is
+// stored or proposed, and it is recorded refused under its own class, apart
+// from a store that failed. Over the fleet bucket's twin, and over S3 through
+// s3fake with no room (MinIO's drives at their floor) via the production
+// backend.
 //
-// Mutation: answer a full store as `unavailable` again (land.go's
-// objstore.Full case removed) and this fails on the line git prints and on
-// the record; splice a room of the landing's own and it fails on the room;
-// drop s3obj's classification and the s3fake arm fails.
+// Mutation: answer a full store as `unavailable` (land.go's objstore.Full case
+// removed) and this fails on git's line and the record; splice a room of the
+// landing's own and it fails on the room; drop s3obj's classification and the
+// s3fake arm fails.
 func TestAPushTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
 	for _, arm := range []struct {
 		name    string
 		objects func(t *testing.T) objstore.Backend
-		// remedy is the room the store names, and said its own words.
+		// remedy is the room the store names; said, its own words, which git
+		// must not print.
 		remedy, said string
 	}{
 		{"the nats twin", func(*testing.T) objstore.Backend { return fullBucket{memobj.New()} },
@@ -661,14 +652,10 @@ func randomText(n int) string {
 	return string(raw)
 }
 
-// ONLY A LONE FLUSH IS GIT'S PROBE before a push past its post buffer —
-// answered 200, empty, running nothing and recording nothing. A section
-// holding ANY line is a push, whatever the receiver could make of the line: one
-// it cannot parse goes to receive-pack, which refuses it in its own words, and
-// the push is recorded. Read as "no command parsed", a section of lines the
-// receiver could not parse was answered as the probe — an empty 200, the body
-// never read, nothing recorded — and git printed only that the remote end hung
-// up.
+// ONLY A LONE FLUSH IS GIT'S PROBE before a push past its post buffer:
+// answered 200, empty, running and recording nothing. A section holding ANY
+// line is a push, whatever the receiver makes of it: one it cannot parse goes
+// to receive-pack, which refuses it in its own words, and the push is recorded.
 func TestOnlyALoneFlushIsTheProbe(t *testing.T) {
 	path, calls := gittest.Recording(t)
 	c := newCase(t, gitlettest.SoloOptions{GitPath: path}, gitlettest.Settings())
@@ -701,11 +688,9 @@ func TestOnlyALoneFlushIsTheProbe(t *testing.T) {
 	}
 }
 
-// A REF PAST THE LONGEST A PUSH MAY NAME is a command all the same — git
-// accepts one, and a pkt-line carries one of up to 64 KiB — refused bad_ref
-// and recorded, alone and beside a ref that lands. Read as "not a command",
-// such a ref pushed alone was answered as git's probe: git printed that the
-// remote end hung up, and nothing was recorded.
+// A REF PAST THE LONGEST A PUSH MAY NAME is a command all the same (git
+// accepts one, and a pkt-line carries up to 64 KiB): refused bad_ref and
+// recorded, alone and beside a ref that lands, never answered as git's probe.
 func TestARefPastTheLongestIsRefusedAsNotARef(t *testing.T) {
 	c := newCase(t, gitlettest.SoloOptions{}, gitlettest.Settings())
 	p := gitlettest.NewPerson(t, c.Fleet, "ceo")
@@ -745,17 +730,12 @@ func TestARefPastTheLongestIsRefusedAsNotARef(t *testing.T) {
 	}
 }
 
-// A REF PAST THE LONGEST RIDES ITS RECORD BOUNDED: a ref the engine refuses
-// bad_ref may run to a pkt-line's 64 KiB, and JSON spells an `&` in six bytes,
-// so four such refs carried whole beside main took the push's entry past its
-// record's budget — the committer refused the receiver's own proposal, main
-// was refused with them, an ERROR said the receiver had a bug, and the bundle
-// was stored for nothing. And a ref that is not UTF-8 reads back from JSON as
-// another ref: told to git from the row, two of them were statuses for refs
-// git never sent, and git printed that proc-receive failed to report. Carried
-// as gitlet.RecordedRef, each costs the record a few hundred bytes: main lands,
-// git is told each refused ref by the name it sent, and the push's row holds
-// each in its bounded form.
+// A REF PAST THE LONGEST RIDES ITS RECORD BOUNDED, as gitlet.RecordedRef. A
+// bad_ref ref may run to 64 KiB and JSON spells `&` in six bytes, so four
+// carried whole would take the entry past its record's budget and refuse main
+// with them; and a non-UTF-8 ref reads back from JSON as another ref, giving
+// git statuses for refs it never sent. Bounded, main lands, git is told each
+// refused ref by the name it sent, and the row holds each in its bounded form.
 func TestALongRefRidesItsRecordBounded(t *testing.T) {
 	l := &logs{}
 	c := newCase(t, gitlettest.SoloOptions{Logger: l.logger()}, gitlettest.Settings())
@@ -812,15 +792,13 @@ func TestALongRefRidesItsRecordBounded(t *testing.T) {
 	}
 }
 
-// A PUSH TOO WIDE FOR ITS RECORD IS REFUSED BEFORE ITS WORK: seven hundred
-// refs of the longest, each spelled six times over in the record's JSON (`&`),
-// beside main reach about 1.1 MiB of entry, past the room one push may take.
-// Refused by its committer, such a push had already run receive-pack, its
-// scans and its bundle's upload and made the estate's round trip, and was
-// answered as the engine refusing its own proposal — an ERROR, the push
-// recorded failed and its bundle stored for nothing. The receiver measures the
-// commands as it reads them, with everything the work could add at its
-// largest, and refuses the push in the client's words before receive-pack.
+// A PUSH TOO WIDE FOR ITS RECORD IS REFUSED BEFORE ITS WORK: 700 refs of the
+// longest, each spelled six times over in JSON (`&`), beside main make ~1.1 MiB
+// of entry, past one push's room. The receiver measures the commands as it
+// reads them, with all the work could add at its largest, and refuses in the
+// client's words before receive-pack: no ERROR, nothing stored. Left to the
+// committer, it would be the engine refusing its own proposal after all the
+// push's work.
 func TestAPushTooWideForItsRecordStoresNothing(t *testing.T) {
 	l := &logs{}
 	path, calls := gittest.Recording(t)
@@ -866,15 +844,12 @@ func TestAPushTooWideForItsRecordStoresNothing(t *testing.T) {
 	}
 }
 
-// A HAND-BUILT PUSH IS JUDGED AS RECEIVE-PACK READS IT. A command whose ids a
-// client wrote in capitals, or whose capabilities ride a later line, is the
-// command git acts on, so every check the receiver makes before receive-pack
-// holds it — read as no command, a push of hundreds of the widest refs in
-// capitals ran receive-pack and was refused by the receiver's own proposal
-// check, as its bug, at ERROR; and one ref named in both cases was a ref named
-// twice the same way. A push certificate, whose commands receive-pack acts on
-// though the engine never advertised one, is refused before anything runs.
-// And a command list that cannot be read is recorded like every other push.
+// A HAND-BUILT PUSH IS JUDGED AS RECEIVE-PACK READS IT. A command with ids in
+// capitals, or its capabilities on a later line, is one git acts on, so every
+// check before receive-pack holds it (one ref named in both cases is a ref
+// named twice). A push certificate, never advertised but acted on by
+// receive-pack, is refused before anything runs. A command list that cannot
+// be read is recorded like every other push.
 func TestAHandBuiltPushIsJudgedAsReceivePackReadsIt(t *testing.T) {
 	l := &logs{}
 	path, calls := gittest.Recording(t)
@@ -987,20 +962,16 @@ func TestAHandBuiltPushIsJudgedAsReceivePackReadsIt(t *testing.T) {
 	}
 }
 
-// A PROPOSAL ITS RECEIVER REFUSES IS NEVER SENT, AND ITS UPLOAD IS ENDED: the
-// receiver holds its proposal to every rule its committer will once the
-// commits it introduces are listed, while its bundle is still uploading — so a
-// receiver's bug is answered as the committer would answer it, with nobody
-// asked and no bundle stored for a push no row will name. Stood in by the
-// check itself, since no push the commands' own bound admits reaches it.
+// A PROPOSAL ITS RECEIVER REFUSES IS NEVER SENT, AND ITS UPLOAD IS ENDED: once
+// the introduced commits are listed, while the bundle still uploads, the
+// receiver holds its proposal to every rule its committer will, so a
+// receiver's bug is answered as the committer would, nobody asked and nothing
+// stored. The check stands in for that bug, since no push the commands' bound
+// admits reaches it. It refuses only once the upload is held at its fault
+// point, so the refusal ends an upload in flight; still waiting after ten
+// seconds fails the case.
 //
-// THE CHECK REFUSES ONLY ONCE THE UPLOAD IS HELD — read off the upload's
-// fault point, which a build that starts the upload beside the check reaches
-// at once — so the refusal ends an upload in flight. A check still waiting
-// for it after ten seconds fails the case, rather than refusing a push with
-// nothing in flight to end.
-//
-// Mutation: ask the check before the upload starts (introduceAndStore) — the
+// Mutation: ask the check before the upload starts (introduceAndStore): the
 // upload never reaches its hold while the check waits, red.
 func TestAProposalItsReceiverRefusesIsNeverSent(t *testing.T) {
 	l, e := &logs{}, &recording{}
@@ -1051,12 +1022,11 @@ func TestAProposalItsReceiverRefusesIsNeverSent(t *testing.T) {
 	}
 }
 
-// THE CAPABILITIES ARE THE FIRST COMMAND LINE'S, WHATEVER ITS REF: a push
-// whose first command names a ref past the longest still asked for side-band
-// and --atomic, so its refusal is framed in the band it asked for and refused
-// whole before receive-pack runs — and a refusal line naming the longest ref a
-// pkt-line holds still fits one, the ref whole and the sentence cut to the
-// room left.
+// THE CAPABILITIES ARE THE FIRST COMMAND LINE'S, WHATEVER ITS REF: a push whose
+// first ref is past the longest still asked for side-band and --atomic, so it
+// is refused whole before receive-pack, framed in its band. A refusal line
+// naming the longest ref a pkt-line holds still fits one: the ref whole, the
+// sentence cut to the room left.
 func TestTheFirstCommandsCapabilitiesAreReadWhateverItsRef(t *testing.T) {
 	path, calls := gittest.Recording(t)
 	c := newCase(t, gitlettest.SoloOptions{GitPath: path}, gitlettest.Settings())
@@ -1143,13 +1113,13 @@ func TestASynthesizedReportIsWhatGitPrints(t *testing.T) {
 // A push waiting on its record keeps the connection alive with a line on the
 // client's stderr naming the step it waits on.
 //
-// The keepalive is paced by ticks the case sends (host.SetKeepaliveTicks)
-// while the push waits at its proposal: a session takes a tick only once it
-// has written the line before it, so once three are taken two lines naming
-// that step are written, however a loaded runner schedules the session.
+// The case paces the keepalive with ticks (host.SetKeepaliveTicks) while the
+// push waits at its proposal: a session takes a tick only after writing the
+// line before it, so three taken means two lines written, however a loaded
+// runner schedules it.
 //
-// Mutation: stop the keepalive before the proposal — no tick is taken and no
-// line printed, red.
+// Mutation: stop the keepalive before the proposal: no tick taken, no line
+// printed, red.
 func TestAKeepaliveFlowsWhileAPushWaits(t *testing.T) {
 	ticks := make(chan time.Time)
 	e := &recording{propose: func(ctx context.Context, inner host.Estate, p gitlet.Proposal) (gitlet.ProposeResult, error) {
@@ -1206,9 +1176,9 @@ func TestAnAtomicPushIsNeverAnsweredMixed(t *testing.T) {
 		t.Errorf("a refused atomic push was proposed %d times, want once, as an attempt", got-proposed)
 	}
 
-	// AND ONE THE SESSION REFUSES IN PART: a forced update of protected main
-	// is known only once its objects are — in the hook — and the new branch
-	// beside it goes with it.
+	// AND ONE THE SESSION REFUSES IN PART: a forced update of protected main is
+	// known only in the hook, once its objects are, and takes the new branch
+	// beside it down too.
 	p.Git().Run(t, work, "reset", "--quiet", "--hard", "HEAD~1")
 	p.Git().Run(t, work, "commit", "--quiet", "--amend", "-m", "one, rewritten")
 	res = p.PushArgs(c.Ctx, work, []string{"--atomic", "--force"}, c.URL(0), "main", "HEAD:refs/heads/topic")
@@ -1271,17 +1241,15 @@ func TestEveryForcedUpdateOfAWidePushIsFound(t *testing.T) {
 }
 
 // O11: a receive-pack's loan of read cores is repaid once its index-pack is
-// done — when its hook reaches the relay — never held through the push's
-// upload: with the push held inside its object-store put, the read lane lends
-// nothing and the gauge says so.
+// done (its hook reaches the relay), never held through the push's upload:
+// with the push held in its object-store put, the lane lends nothing and the
+// gauge says so.
 //
-// The lane is read until it is whole rather than once, because the push lists
-// the commits it introduces BESIDE its upload (introduceAndStore), and that
-// listing holds a read slot of its own — a run, never a loan — until it ends by
-// itself, which on a loaded machine is after the upload reaches its put. A
-// loan that outlived its index-pack would last as long as the receive-pack,
-// which is held in its hook for as long as the upload is, so the lane never
-// comes whole and the case fails at the deadline.
+// The lane is polled until whole, not read once: the push lists its introduced
+// commits beside its upload (introduceAndStore), holding a read slot (a run,
+// not a loan) that may end after the upload reaches its put. A loan outliving
+// its index-pack would last as long as the upload, so the lane never comes
+// whole and the case fails at the deadline.
 func TestALoanIsRepaidBeforeThePushsUpload(t *testing.T) {
 	c := newCase(t, gitlettest.SoloOptions{MaxProcesses: 4}, gitlettest.Settings())
 	node := c.Fleet.Nodes()[0]
@@ -1392,15 +1360,13 @@ esac`)
 	}
 }
 
-// A PUSH WHOSE BODY FAILED BEFORE GIT WROTE A BYTE IS TOLD SO — 400 naming the
-// body, as a fetch's is — never the empty 200 a handler that returns without
-// writing answers, which git cannot tell from a push that did nothing. The
-// failure is one the CLIENT is still there to read: a gzip stream whose
-// checksum is wrong, found only at its end, from a client that asked for no
-// report (so receive-pack, its input failed, writes nothing of its own). A
-// body cut short is not this case: net/http ends the request's context on any
-// failed read of the connection, and a push whose client is gone is answered
-// as that. It is recorded failed, and lands nothing.
+// A PUSH WHOSE BODY FAILED BEFORE GIT WROTE A BYTE IS TOLD SO, 400 naming the
+// body as a fetch's is, never the empty 200 git cannot tell from a push that
+// did nothing. The failure is one the CLIENT is still there to read: a gzip
+// checksum found wrong only at its end, from a client that asked for no report
+// (so receive-pack writes nothing of its own). A body cut short is not this
+// case: net/http ends the request's context, answered as a client gone. It is
+// recorded failed and lands nothing.
 func TestAPushWhoseBodyFailedIsToldSo(t *testing.T) {
 	c := newCase(t, gitlettest.SoloOptions{}, gitlettest.Settings())
 	var zipped bytes.Buffer
@@ -1442,11 +1408,10 @@ func TestAPushWhoseBodyFailedIsToldSo(t *testing.T) {
 	}
 }
 
-// A REFUSAL THE RECEIVER WRITES FITS THE PROPOSAL it travels in, whatever
-// the ref and the rule: a ref of the longest a push may name, under a literal
-// protection of that same ref, is refused protected_direct by itself — and
-// the rest of the push lands, where a sentence past the proposal's bound had
-// the committer refuse the whole push as the engine's own bug.
+// A REFUSAL THE RECEIVER WRITES FITS THE PROPOSAL it travels in, whatever the
+// ref and rule: a ref of the longest a push may name, under a literal
+// protection of itself, is refused protected_direct alone and the rest of the
+// push lands, never refused whole by the committer as the engine's own bug.
 func TestALongProtectedRefIsRefusedAlone(t *testing.T) {
 	frozen := "refs/heads/frozen/" + strings.Repeat("x", gitlet.MaxRefNameBytes-len("refs/heads/frozen/"))
 	settings := gitlettest.Settings()
@@ -1475,9 +1440,7 @@ func TestALongProtectedRefIsRefusedAlone(t *testing.T) {
 
 // THE HOOK ASKS THE PROTECTIONS AGAIN ONLY WHAT FORCED CAN CHANGE: a forced
 // update, and a command the handler did not judge as it stands. Every other
-// command's verdict is the handler's, over the same rules and the same ids — a
-// maximal push under the most rules a repository may carry asked them all
-// twice.
+// verdict is the handler's, over the same rules and ids.
 func TestTheHookAsksTheProtectionsOnlyWhatForcedChanges(t *testing.T) {
 	var rules []gitlet.PushRule
 	for i := range gitlet.MaxProtectionsPerRepo - 1 {
@@ -1492,8 +1455,7 @@ func TestTheHookAsksTheProtectionsOnlyWhatForcedChanges(t *testing.T) {
 		c.Forced = i%250 == 0
 		cmds = append(cmds, c)
 	}
-	// One the handler never judged: a command git handed the hook as it
-	// stands — a protection asked about it all the same.
+	// One the handler never judged, handed to the hook as it stands.
 	cmds[1].New = oidN(3 * gitlet.MaxCommandsPerPush)
 	asked, err := host.ProtectAfterForce(cmds, rules, gitlet.PrincipalOperator, judged)
 	if err != nil {
@@ -1514,10 +1476,9 @@ func TestTheHookAsksTheProtectionsOnlyWhatForcedChanges(t *testing.T) {
 }
 
 // A PUSH'S UPLOAD DOES NOT WAIT FOR THE LISTING of the commits it introduces:
-// the listing refuses nothing — it only fills the proposal — so the two
-// longest steps of a push's own work overlap rather than add. The stand-in git
-// holds the listing until the upload has been seen to start, which a push
-// that stored only after listing never reaches.
+// the listing only fills the proposal, refusing nothing, so the push's two
+// longest steps overlap. The stand-in git holds the listing until the upload
+// starts, which a push storing only after listing never reaches.
 func TestAPushsUploadOverlapsItsListing(t *testing.T) {
 	release := filepath.Join(t.TempDir(), "release")
 	fake := gittest.Wrap(t, `case " $* " in
@@ -1544,20 +1505,15 @@ esac`)
 	}
 }
 
-// A STALE UPDATE IS STALE BESIDE DAMAGE GIT READS AROUND. The force check
-// asks `merge-base --is-ancestor <old> <new>` in the push's scratch, whose
-// alternate is the cache; an old this company holds no object for makes git
-// say "Not a valid commit name" (gitproc.ErrMissingObject), which is the
-// update's refusal as stale. A multi-pack-index whose header names another
-// hash version is a file git reads around — it says so ("multi-pack-index hash
-// version … does not match", gitproc.ErrCorrupt) and answers from the packs —
-// and git looks for an object it does not hold through every index of the
-// scratch's alternate, so the run names both. The run's kind is the HIGHEST it
-// named, the index's, and a check that asked only for the kind answered the
-// push as the engine's own failure: every kind the run named is reachable
-// through errors.Is, so the stale update is refused as stale, as on a sound
-// copy. (A commit-graph's damaged header is no such case: merge-base never
-// opens the graph for an id no pack holds — measured on git 2.43 and 2.47.)
+// A STALE UPDATE IS STALE BESIDE DAMAGE GIT READS AROUND. The force check runs
+// `merge-base --is-ancestor <old> <new>` in the push's scratch (alternate: the
+// cache); an old no object exists for is "Not a valid commit name"
+// (gitproc.ErrMissingObject), refused stale. A multi-pack-index naming another
+// hash version git reports (gitproc.ErrCorrupt) and reads around while it
+// searches every index for the missing object, so the run names both and its
+// Kind is the higher, the index's. Every kind named answers errors.Is, so the
+// update is refused stale, as on a sound copy. (A damaged commit-graph header
+// is no such case: merge-base never opens the graph for an id no pack holds.)
 //
 // Mutation: make gitproc.ExitError match its Kind alone, and the push is
 // answered as a failure.
@@ -1585,31 +1541,18 @@ func TestAStaleForcedPushBesideADamagedIndexIsStale(t *testing.T) {
 	}
 }
 
-// AN OLD COMMIT GIT CANNOT READ IS NO STALE UPDATE. The force check's
-// merge-base over an old commit whose entry in the copy's pack is damaged
-// says what it met (a pack report, gitproc.ErrCorrupt) and then that the old
-// is "Not a valid commit name" (gitproc.ErrMissingObject) — the second only
-// BECAUSE of the first. Stale says the company never held the old, which is
-// false here, and it would hide the damage from the operator; the update is
-// answered as a check the engine could not make, logged code_push_unchecked
-// naming the damage, and the branch does not move. Only damage git reads
-// AROUND — a derived file, beside the missing object
-// (TestAStaleForcedPushBesideADamagedIndexIsStale) — leaves an update stale.
-//
-// A SERVED copy, because that is where a force check runs over damage: the
-// maintainer's commit-graph names the old commit, so receive-pack's own
-// connectivity check takes it from the graph (without one, receive-pack
-// refuses the update itself, "missing necessary objects"). Which damage
-// reaches the check is git's to decide, so there are two arms. A zlib stream
-// damaged in the old's data: 2.43 and 2.47 parse the old for merge-base from
-// its object and meet it, while 2.56 takes it from the graph and needs only
-// the entry's header — the update is then answered from the graph, and
-// lands. An entry's TYPE damaged: every git reads the type and meets it
-// (measured on 2.43, 2.47 and 2.56). No arm may answer stale, and on every
-// git at least one meets the damage in the force check.
+// AN OLD COMMIT GIT CANNOT READ IS NO STALE UPDATE. Over an old whose pack
+// entry is damaged, merge-base reports the damage (gitproc.ErrCorrupt) and,
+// because of it, "Not a valid commit name" (gitproc.ErrMissingObject). Stale
+// would say the company never held the old and hide the damage: the update is
+// a check the engine could not make, logged code_push_unchecked, and the
+// branch stays. On a served copy, whose commit-graph passes receive-pack's
+// connectivity check; whether the force check meets the damage is git's call
+// (2.56 answers a damaged zlib stream from the graph, and lands), so one arm
+// damages the data, one the type, none may answer stale, and one must meet it.
 //
 // Mutation: answer stale whenever the run named a missing object, whatever
-// else it named — the arm that meets the damage answers stale.
+// else it named: the arm that meets the damage answers stale.
 func TestAnOldCommitInADamagedPackIsNoStaleUpdate(t *testing.T) {
 	t.Parallel()
 	var unchecked atomic.Int32
@@ -1674,17 +1617,14 @@ func oidN(n int) string { return fmt.Sprintf("%040x", n+1) }
 // shellWord is s as one POSIX shell word.
 func shellWord(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// A PROTECTED BRANCH IS NOT FORCED THROUGH A DAMAGED GRAPH. The force check
-// asks git whether a push's old commit is an ancestor of its new one, and git
-// answers from the commit-graph without checking it: a graph a previous
-// process left that names another commit as the tip's first parent makes a
-// force look like a fast-forward — 2.55 and 2.56 answer from it, 2.40 to
-// 2.48 read the commit itself here and answer right. The first round of the
-// process that serves the copy holds the graph to its trailer before it
-// answers anything, drops it, and the push is refused as a force, as on a
-// sound copy.
+// A PROTECTED BRANCH IS NOT FORCED THROUGH A DAMAGED GRAPH. git answers the
+// force check's ancestry from the commit-graph unchecked, so a graph a
+// previous process left naming another first parent for the tip makes a force
+// look like a fast-forward (2.55 and 2.56 answer from it; 2.40 to 2.48 read the
+// commit). The serving process's first round holds the graph to its trailer
+// before answering anything and drops it, so the push is refused as a force.
 //
-// Mutation: skip the check (sync.go apply) — on 2.56 the force passes the
+// Mutation: skip the check (sync.go apply): on 2.56 the force passes the
 // protection and main moves; on every git the graph is left in place.
 func TestAProtectedBranchIsNotForcedThroughADamagedGraph(t *testing.T) {
 	t.Parallel()

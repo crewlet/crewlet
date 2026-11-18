@@ -20,38 +20,17 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE REPOSITORY LIFECYCLE AS TOOLS: what a person, a unit's lead and a seat
-// may make, rename, change, archive, delete and restore through a tool — and a
-// live turn's hold on a scratch repository or a seat's branch — each ONE
-// request decided by [Store.Lifecycle] on any data node, in ONE snapshot of
-// its subject.
+// THE REPOSITORY LIFECYCLE AS TOOLS: a person's, a unit lead's or a seat's
+// create, rename, settings change, archive, delete and restore, and a live
+// turn's hold, each ONE request decided by [Store.Lifecycle] on any data node
+// in ONE snapshot of its subject.
 //
-// # A change, never a whole
-//
-// What a caller sends for an existing repository is a CHANGE — a field, an
-// archive flag, one protection rule — which the decide resolves against the
-// rows it reads into the whole settings the record carries. A caller cannot
-// form a whole it read in another transaction: two people adding two rules at
-// once would each send a list missing the other's, and the later record would
-// delete the earlier rule.
-//
-// # Who may
-//
-// ONE FUNCTION, [lifecycleRefusal], over the chart of the DECIDING node's
-// epoch: a bound person maintains every tool-made repository and creates
-// projects for any owner the chart holds; a seat maintains what its grant on
-// the repository lets it ([GrantOf], ADR-0088) — a unit's projects if it is
-// the unit's effective lead at full_access, its own scratch repositories at
-// full_access — and never leaves a project owned by a seat: its own
-// repositories are its scratch repositories, which a cap and an idle expiry
-// bound, and only a person makes a project a seat's. And a protection binds
-// every seat, its unit's lead included: a seat adds a rule or tightens one —
-// a rule's merge gate field by field ([MergeGate.LoosenedBy]) — and never
-// removes or loosens one, which is a person's ([loosenings]); nor, where a
-// gate makes the path owners gating, takes a glob from one
-// ([gatingOwnersTaken]). A node behind the company's configuration decides
-// none of it ([StoreOptions.Current]): every kind reads the chart, a person's
-// included.
+// A caller sends a CHANGE (a field, an archive flag, one protection rule),
+// which the decide resolves against the rows it reads: a whole formed from
+// another transaction's read would make two concurrent changes drop each
+// other's. Who may is one function, [lifecycleRefusal], over the deciding
+// node's chart; a node behind the company's configuration decides none of it
+// ([StoreOptions.Current]).
 
 // LifecycleKind is what a lifecycle request asks.
 type LifecycleKind string
@@ -83,9 +62,8 @@ const (
 	LifecycleProtect LifecycleKind = "protect"
 	// LifecycleHold is a live turn's hold on a scratch repository idle
 	// [HoldRecordAfter] or more, or on a seat's branch unset
-	// [RefHoldRecordAfter] or more ([Hold], its Ref) — no tool's: the one seam
-	// a turn's code tools reach a repository or a ref through asks it before
-	// the request.
+	// [RefHoldRecordAfter] or more ([Hold]): no tool asks it; the seam a
+	// turn's code tools go through asks it before the request.
 	LifecycleHold LifecycleKind = "hold"
 )
 
@@ -126,9 +104,9 @@ const (
 	LifecycleStale LifecycleRefusal = "stale"
 	// LifecycleRefDeleted means the seat's branch a hold names is absent or a
 	// tombstone at the decide's snapshot, which is at or past the turn's read
-	// of it ([LifecycleRequest.Seen]) — so it was deleted after the turn read
-	// it. A hold's alone: the turn's request is refused before it reads or
-	// writes anything through the branch.
+	// of it ([LifecycleRequest.Seen]), so it was deleted after that read. A
+	// hold's alone: the turn's request is refused before it touches the
+	// branch.
 	LifecycleRefDeleted LifecycleRefusal = "ref_deleted"
 )
 
@@ -143,16 +121,19 @@ func (r LifecycleRefusal) Valid() bool { return slices.Contains(LifecycleRefusal
 
 // LifecycleRequest is one repository-lifecycle request, decided by
 // [Store.Lifecycle] on any data node in ONE snapshot of the name's or the
-// repository's subject.
+// repository's subject. A request is no record, so no field here, in
+// [RepoChange] or in [ProtectChange] takes a versionedFields row: it crosses
+// the estate's wire whole, and the record it leads to carries the settings in
+// the base format ([RecordVersion]).
 type LifecycleRequest struct {
 	Kind LifecycleKind `json:"kind"`
 	// OpID is the caller's operation: the record's op id, so the domain's
 	// ledger answers a repeat, and a create's repository id is derived from
 	// it ([LifecycleRequest.RepoIDOf]).
 	OpID string `json:"op_id"`
-	// Actor is who asks: a seat (no run), or a bound person — an operator
-	// credential with the human seat it is bound to. A token bound to nobody
-	// has no seat to be judged as, and asks nothing here.
+	// Actor is who asks: a seat (no run), or a bound person (an operator
+	// credential with the human seat it is bound to); a token bound to nobody
+	// has no seat to be judged as.
 	Actor Principal `json:"actor"`
 	// RepoID names the repository, for every kind but create.
 	RepoID string `json:"repo_id,omitempty"`
@@ -162,13 +143,9 @@ type LifecycleRequest struct {
 	// Create is a create's whole initial settings: ManagedTools, no
 	// configuration activation, and the kind its name says ([KindOf]).
 	Create *RepoSettings `json:"create,omitempty"`
-	// Import is a create's, and only a create's: the repository at another
-	// host it is filled from ([CreateRepo.Import]) — a person's alone (U49
-	// a), and nil for none. A request is no record, so it takes no
-	// versionedFields row: the create it leads to carries it, in the base
-	// format (mirror.go). It crosses the estate's wire to whichever data node
-	// decides it, and every node asked it reads it: the domain landed on main
-	// with it ([RecordVersion]).
+	// Import is a create's alone: the repository at another host it is
+	// filled from ([CreateRepo.Import]), a person's alone (U49 a); nil for
+	// none.
 	Import *ImportSource `json:"import,omitempty"`
 	// Change is a settings request's fields, each nil left as it stands.
 	Change *RepoChange `json:"change,omitempty"`
@@ -178,40 +155,22 @@ type LifecycleRequest struct {
 	// Reason is a delete's, recorded on its record.
 	Reason string `json:"reason,omitempty"`
 	// Ceiling is whom a SEAT'S request is made for inside a turn somebody
-	// woke ([WriteCeiling]), nil for one made for its seat alone or for a
-	// person; never a hold's, which is the turn's own bookkeeping rather than
-	// a change made for anybody. The deciding data node judges it beside the
-	// seat ([lifecycleRefusal]): a colleague's request decided again as that
-	// colleague asking it, from the same chart and snapshot, and nobody's
-	// refused — but for the seat's own work, which whoever woke it steers.
-	//
-	// A request is no record, so this field takes no versionedFields row; it
-	// crosses the estate's wire to whichever data node decides it, and every
-	// node asked it reads it: the domain landed on main with it
-	// ([RecordVersion]).
+	// woke ([WriteCeiling]); nil for a seat's own request or a person's, and
+	// always for a hold, which is the turn's own bookkeeping. The deciding
+	// node judges it beside the seat ([ceilingLifecycleRefusal]).
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
-	// TurnID is a hold's, and only a hold's: the turn taking it, recorded on
-	// its [Hold] so a reader of the log can say whose hold ordered an expiry.
+	// TurnID is a hold's alone: the turn taking it, recorded on its [Hold] so
+	// a reader of the log can say whose hold ordered an expiry.
 	TurnID string `json:"turn_id,omitempty"`
-	// Ref is a hold's, and only a hold's, and optional: the seat's branch the
-	// turn holds ([Holdable]), whose row the decide reads — or "" for a hold
-	// on the scratch repository itself.
-	//
-	// A request is no record, so this field takes no versionedFields row
-	// ([Hold.Ref] is the record's, in the base format); it crosses the
-	// estate's wire to whichever data node decides it, and every node asked
-	// it reads it: the domain landed on main with it ([RecordVersion]).
+	// Ref is a hold's alone, and optional: the seat's branch the turn holds
+	// ([Holdable]), or "" for a hold on the scratch repository itself.
 	Ref string `json:"ref,omitempty"`
-	// Seen is a hold's, and only a hold's: the position the turn's read of
-	// what it holds answered at — the repository's resolution
-	// ([RepoRef.Position]), or for a ref the resolve that answered it
-	// ([RefAnswer.Position]). The hold is decided at or past it (the publish's
-	// session floor, as the committer decides a batch at its pushes' Seen),
-	// so its refusals are never answered from rows older than what the turn
-	// has just read: the router may ask a data node behind that read, since
-	// a request carries this node's own writes' floor and never a read's,
-	// and such a node answers that it is behind ([ErrNotServing]) rather than
-	// that a repository the turn read active is deleted.
+	// Seen is a hold's alone: the position the turn's read of what it holds
+	// answered at ([RepoRef.Position], or [RefAnswer.Position] for a ref). The
+	// hold is decided at or past it (the publish's session floor), because the
+	// router's floor is this node's own writes', never a read's: a node behind
+	// the turn's read answers [ErrNotServing] rather than call a repository
+	// the turn read active deleted.
 	Seen statelog.Position `json:"seen,omitzero"`
 }
 
@@ -223,35 +182,18 @@ type RepoChange struct {
 	Visibility *Visibility `json:"visibility,omitempty"`
 	// Search is how code search reads it ([SearchMode]): a scratch repository
 	// is searched with grep, and asking it for an index is refused.
-	//
-	// A request is no record, so this field takes no versionedFields row: the
-	// record a settings change leads to carries the repository's settings
-	// whole, in the base format ([RepoSettings.Search]). It crosses the
-	// estate's wire to whichever data node decides it, and every node asked
-	// it reads it: the domain landed on main with it ([RecordVersion]).
 	Search *SearchMode `json:"search,omitempty"`
 	// Owner is a PROJECT repository's new owner: a scratch repository stays
 	// its seat's own.
 	Owner *Owner `json:"owner,omitempty"`
 	// PathOwners is a PROJECT repository's path owners, changed glob by glob:
 	// a scratch repository takes none.
-	//
-	// A request is no record, so this field takes no versionedFields row:
-	// the record a settings change leads to carries the repository's settings
-	// whole, in the base format ([RepoSettings.PathOwners]). It crosses the
-	// estate's wire to whichever data node decides it, and every node asked
-	// it reads it: the domain landed on main with it ([RecordVersion]).
 	PathOwners *PathOwnersChange `json:"path_owners,omitempty"`
-	// MirrorFrom and MirrorTo set a PROJECT repository's pull mirror and push
-	// mirror ([RepoSettings.MirrorFrom], [RepoSettings.MirrorTo]): nil leaves
-	// one as it stands, a value with no URL removes it, and any other sets it
-	// whole. A person's alone (U49 a): an agent asking either is refused
-	// not_permitted whatever its grant ([lifecycleRefusal]). A request is no
-	// record, so neither takes a versionedFields row: the record the change
-	// leads to carries the settings whole, in the base format (mirror.go).
-	// Each crosses the estate's wire to whichever data node decides it, and
-	// every node asked it reads it: the domain landed on main with them
-	// ([RecordVersion]).
+	// MirrorFrom and MirrorTo set a PROJECT repository's pull and push mirror
+	// ([RepoSettings.MirrorFrom], [RepoSettings.MirrorTo]): nil leaves one as
+	// it stands, a value with no URL removes it, any other sets it whole. A
+	// person's alone (U49 a): an agent asking either is refused not_permitted
+	// whatever its grant ([lifecycleRefusal]).
 	MirrorFrom *MirrorSource `json:"mirror_from,omitempty"`
 	MirrorTo   *MirrorTarget `json:"mirror_to,omitempty"`
 }
@@ -267,8 +209,7 @@ func (c RepoChange) mirrors() bool { return c.MirrorFrom != nil || c.MirrorTo !=
 
 // mirrorsInvalid is why the change's mirrors are none a record could carry, or
 // "": a mirror set is held to a record's rules ([MirrorSource], [MirrorTarget]),
-// and one removed — no URL — names nothing else, which a caller would have
-// meant as a mirror.
+// and one removed (no URL) names nothing else.
 func (c RepoChange) mirrorsInvalid() string {
 	if m := c.MirrorFrom; m != nil {
 		switch {
@@ -313,16 +254,14 @@ func (c RepoChange) applyMirrors(next *RepoSettings) {
 	}
 }
 
-// PathOwnersChange is a settings request's change to who owns which of a
-// repository's paths: globs ADDED to an owner and globs REMOVED from one —
-// never the whole list, which a caller could form only from rows it read in
-// another transaction, so two requests adding globs to one owner at once would
-// each drop the other's. The decide applies it to the owners its own rows hold
-// ([PathOwnersChange.applyTo]): a glob an owner has already is added as
-// nothing, one it does not have is removed as nothing, and an owner left with
-// no glob is no path owner any more. An owner it adds globs to is one the
-// deciding node's chart holds; one it only removes globs from need not be, so
-// a unit the chart dropped can still be taken off.
+// PathOwnersChange is a settings request's change to who owns which paths:
+// globs ADDED to an owner and globs REMOVED from one, never the whole list,
+// which a caller could form only from another transaction's read, so two
+// concurrent adds would drop each other's. The decide applies it to its own
+// rows ([PathOwnersChange.applyTo]): a glob held is added, and one not held
+// removed, as nothing, and an owner left with no glob is dropped. An owner it
+// adds globs to must be on the deciding node's chart; one it only removes from
+// need not be, so a unit the chart dropped can still be taken off.
 type PathOwnersChange struct {
 	// Add gives each owner the globs beside it, beside those it has.
 	Add []PathOwner `json:"add,omitempty"`
@@ -414,27 +353,15 @@ func (c PathOwnersChange) applyTo(owners []PathOwner) []PathOwner {
 	return CanonicalPathOwners(out)
 }
 
-// ProtectChange is one pattern's rule as a protect request changes it, which
-// the decide RESOLVES against the rule its own snapshot holds for the pattern:
-// EVERY CONTROL IT LEAVES NIL IS KEPT as that rule has it — never sent whole,
-// which a caller could form only from a read made in another transaction, so a
-// request changing one control would reset every other it had not read: a
-// person's assistant asked to require a check would hand a branch frozen at
-// direct_push none back to direct pushes, unseen, and a seat asking the same
-// would be refused a loosening it never named. A pattern with no rule yet
-// takes each control's least where the change leaves it out — direct_push
-// persons ([config.CodeDirectPush.Resolved], as a declaration leaving it out
-// does), allow_force and allow_delete off — so a change naming nothing
-// protects a pattern no rule held and changes nothing on one a rule holds.
-// Remove takes the pattern's rule away, its gate with it, and names nothing
-// else.
-//
-// A REQUEST IS NO RECORD, so none of these fields takes a versionedFields
-// row: the record a protect request leads to carries the repository's
-// settings whole, its rules' push controls and their gates in the base format
-// ([MergeGate]). It crosses the estate's wire to whichever data node decides
-// it, and every node asked it reads it: the domain landed on main with it
-// ([RecordVersion]).
+// ProtectChange is one pattern's rule as a protect request changes it,
+// RESOLVED by the decide against the rule its snapshot holds: EVERY CONTROL
+// LEFT NIL IS KEPT. Never sent whole: a whole formed from another
+// transaction's read would reset every control it had not read (asked to
+// require a check, it would reopen a branch frozen at direct_push none, and a
+// seat's would be refused a loosening it never named). An unheld pattern
+// starts from [leastRule], so a change naming nothing protects an unheld
+// pattern and changes nothing on a held one. Remove takes the rule away, its
+// gate with it, and names nothing else.
 type ProtectChange struct {
 	// Pattern is refs/heads/<glob> or refs/tags/<glob> (gitref's grammar).
 	Pattern string `json:"pattern"`
@@ -475,17 +402,17 @@ func (c ProtectChange) named() []string {
 }
 
 // leastRule is the rule a pattern no rule holds starts from: every push
-// control at its least, and no merge gate.
+// control at its least (direct_push as a declaration leaving it out resolves,
+// allow_force and allow_delete off) and no merge gate.
 func leastRule(pattern string) Protection {
 	return Protection{PushRule: PushRule{Pattern: pattern,
 		DirectPush: DirectPush(config.CodeDirectPush("").Resolved())}}
 }
 
-// rule is the rule c leaves its pattern with, given held — the rules the
-// decide's snapshot read: nil where c removes it, and otherwise the rule held
-// carries for the pattern — or [leastRule] where it carries none — with each
-// control c names put in it and the merge gate RESOLVED from the one that
-// rule carries ([GateChange.resolve]).
+// rule is the rule c leaves its pattern with, given held (the rules the
+// decide's snapshot read): nil where c removes it, otherwise held's rule for
+// the pattern, or [leastRule], with each control c names put in it and the
+// merge gate resolved from that rule's ([GateChange.resolve]).
 func (c ProtectChange) rule(held []Protection) *Protection {
 	if c.Remove {
 		return nil
@@ -514,19 +441,13 @@ type LifecycleResult struct {
 	// Repo is the repository as read back after the record applied, or as it
 	// stood where the request needed no record or was refused.
 	Repo RepoRef `json:"repo"`
-	// Rule is a protect request's pattern's rule WHOLE, its merge gate
-	// included, where the request applied or needed no record: as read back
-	// beside Repo, or as the decide that needed none held it — so its gate
-	// is the one the deciding node resolved the request's change against.
-	// Nil for every other kind and answer, and where the pattern holds no
-	// rule. Repo never carries a gate ([RepoRef.Protections] are
-	// [PushRule]s), and a caller that asked to change one is answered what it
-	// became without reading the repository's every rule whole.
-	//
-	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
-	// versionedFields row. The domain landed on main with it
-	// ([RecordVersion]), so every node that serves a lifecycle request
-	// answers it.
+	// Rule is a protect request's pattern's rule WHOLE, gate included, where
+	// the request applied or needed no record: read back beside Repo, or as
+	// the decide held it, so its gate is the one the change was resolved
+	// against. Nil for every other kind and answer, and where the pattern
+	// holds no rule. Repo carries no gate ([RepoRef.Protections] are
+	// [PushRule]s), so this answers what the gate became. An estate answer's
+	// field, not a record's: no versionedFields row ([RecordVersion]).
 	Rule *Protection `json:"rule,omitempty"`
 	// Refusal names why the request was refused; empty where it was not.
 	Refusal LifecycleRefusal `json:"refusal,omitempty"`
@@ -570,11 +491,10 @@ func (r LifecycleResult) Err() error {
 
 // RepoIDOf is the repository a create of operation opID makes: a canonical
 // UUIDv7 DERIVED from the operation ([statelog.DeriveOpID] of its own instant,
-// unnamed), so a retry whose ledger row the ledger's sweep has taken names the
-// same repository and is answered from it, while two requests are two
-// operations and never one id. A turn holds a scratch repository it creates
-// on this id before its create is sent. False for an id that carries no
-// instant.
+// unnamed), so a retry whose ledger row was swept names the same repository
+// and is answered from it, while two requests never share an id. A turn holds
+// a scratch repository it creates on this id before its create is sent. False
+// for an id that carries no instant.
 func RepoIDOf(opID string) (string, bool) {
 	at, ok := statelog.OpMintedAt(opID)
 	if !ok {
@@ -685,17 +605,12 @@ func (r LifecycleRequest) invalid() string {
 		case p.Remove:
 			return ""
 		}
-		// THE CONTROLS ARE HELD HERE TO WHAT A RECORD MAY CARRY, before any
-		// decide, on the rule they form on a pattern no rule holds: left to
-		// the settings a decide forms, a rule no record may carry was refused
-		// naming its index among the repository's stored rules rather than the
-		// field its caller sent, and only once the request had been judged — a
-		// seat that may not protect the repository was told so of a request no
-		// node could decide. A control a record may not carry on that rule it
-		// may carry on none: a direct_push this build does not know, or
-		// allow_force on a tag. So is each field a gate change names: only the
-		// resolved gate's whole weight waits for the decide, which alone reads
-		// what it keeps.
+		// THE CONTROLS ARE HELD HERE to what a record may carry, on the rule
+		// they form on an unheld pattern, so a refusal names the field the
+		// caller sent and comes before any judgement of who may: a control no
+		// record carries there it carries on none (an unknown direct_push,
+		// allow_force on a tag). So is each field a gate change names; only
+		// the resolved gate's whole weight waits for the decide.
 		probe := ProtectChange{Pattern: p.Pattern, DirectPush: p.DirectPush, AllowForce: p.AllowForce,
 			AllowDelete: p.AllowDelete}.rule(nil)
 		if why := probe.invalid(); why != "" {
@@ -808,13 +723,11 @@ func lifecycleActor(p Principal) Actor {
 	return Actor{ID: p.Seat, Kind: ActorOperator, OperatorID: p.OperatorID}
 }
 
-// settingsOf is a repository's settings as a record carries them, from its
-// row as a read serves it, its rules whole, its path owners and its mirrors,
-// none of which a [RepoRef] carries — each read beside it in the same decide
-// ([protectionsIn], [pathOwnersIn], [remotesIn]), since a record carries the
-// settings WHOLE, and one formed from the row's rules alone would remove every
-// merge gate the repository has, one formed without its path owners every path
-// owner, and one formed without its mirrors both mirrors.
+// settingsOf is a repository's settings as a record carries them: its row,
+// with its rules whole, path owners and mirrors read beside it in the same
+// decide ([protectionsIn], [pathOwnersIn], [remotesIn]). A record carries the
+// settings WHOLE, so one formed from the row alone would drop every merge
+// gate, path owner and mirror.
 func settingsOf(r RepoRef, rules []Protection, owners []PathOwner, remotes repoRemotes) RepoSettings {
 	return RepoSettings{
 		ManagedBy: r.ManagedBy, Kind: r.Kind, Owner: r.Owner, DefaultBranch: r.DefaultBranch,
@@ -853,67 +766,18 @@ func mirrorsAsked(req LifecycleRequest) string {
 	return ""
 }
 
-// lifecycleRefusal is whether actor may ask req of a repository — repo as it
-// stands for every kind but a create, with its rules WHOLE beside it (rules,
-// gates included, which no RepoRef carries), and next as the request would
-// leave it (a create's new repository, or a settings change's result; the zero
-// RepoRef where the kind leaves the repository's grant as it is), with the
-// rules it would leave WHOLE beside it (nextRules: a protect request's with
-// its change resolved), owners the repository's path owners as the decide's
-// snapshot read them — rules, nextRules and owners nil where the kind judges
-// none — reading the chart roster, and the sentence why not. THE ONE
-// JUDGEMENT of who may, every kind's:
-//
-//   - a BOUND PERSON maintains every tool-made repository, and creates a
-//     PROJECT for any owner the chart holds — never a scratch repository,
-//     which belongs to the seat whose handle it carries;
-//   - a SEAT may what its grant on the repository maintains ([GrantOf]: its
-//     tier and its relation on the chart) — for a settings change both as the
-//     repository stands and as the change leaves it, so a seat cannot hand a
-//     repository to a unit whose lead it is not, which it could not take back;
-//     for a project's create as the new repository will stand, so only the
-//     owning unit's effective lead at full_access creates one; for a scratch
-//     create, its own handle, at full_access, owning it; and for a hold, only
-//     what its grant reads, since a seat holds what it may read;
-//   - and a seat leaves NO PROJECT OWNED BY A SEAT, its own or another's,
-//     whether it creates the project or hands one on by a settings change —
-//     though GrantOf gives an owning seat maintain on what it owns — because a
-//     seat's own repositories are its scratch repositories, capped and
-//     expiring, and a seat-owned project is neither: only a person makes one
-//     ([seatProjectRefusal]);
-//   - and A MIRROR OR AN IMPORT IS A PERSON'S (U49 a): a seat asking to create
-//     a repository with either, or to change either mirror of one, is
-//     refused whatever its grant ([mirrorsAsked]) — each dials another host
-//     for the company, or sends its code to one;
-//   - and A PROTECTION BINDS EVERY SEAT, its unit's lead included: whatever
-//     its grant, a seat adds a protection rule or tightens one and never
-//     removes or loosens one ([loosenings]), judged against the rule this
-//     decide's snapshot holds for the pattern — among rules, read in it
-//     whole — so two requests cannot loosen a rule between them. With
-//     maintain alone deciding, a lead steered by what it read could lift
-//     main's protection and then force it: the protections would bind every
-//     seat but the one with the most reach. Only a person loosens one — and
-//     so only a person TAKES A GLOB FROM A PATH OWNER where a rule's merge
-//     gate sets owners_approve ([gatingOwnersTaken]): there the path owners
-//     are whom a merge waits for, so a glob taken from one, or an owner taken
-//     whole, lets a merge past the approval it needed, as loosening the gate
-//     itself would. A seat still gives a path owner globs, which only asks a
-//     merge for more.
-//
-// A NAME OF THE OTHER KIND'S FORM is refused for every actor, a person's
-// included: renamed to <handle>.<slug>, a project would read as that seat's
-// own scratch repository and squat the name the seat's create would take; and
-// a scratch repository keeps its seat's handle, whoever renames it.
-//
-// AND A PATH OWNER THE CHART DOES NOT HOLD, for every actor, wherever a
-// request gives one globs ([pathOwnersAdded]), as an owner the chart does not
-// hold is refused a repository: a path owner is whom a review is asked of, and
-// a unit or a seat the chart lacks is nobody to ask. Naming one grants nothing
-// ([PathOwner]), so a seat that maintains the repository may name any the
-// chart holds — the same review it could request by name.
-//
-// AND THEN FOR WHOEVER THE SEAT'S TURN WORKS FOR ([LifecycleRequest.Ceiling]),
-// once the seat itself may ([ceilingLifecycleRefusal]).
+// lifecycleRefusal is whether actor may ask req, and the sentence why not:
+// repo as it stands (but for a create) with its rules WHOLE, gates included;
+// next as the request leaves it (zero where the grant stays) with nextRules;
+// owners the snapshot's path owners; slices nil where the kind judges none.
+// THE ONE JUDGEMENT of who may ([askerLifecycleRefusal]): a bound person
+// maintains every tool-made repository; a seat what its grant maintains
+// ([GrantOf]), as the repository stands and as the change leaves it, but never
+// a seat-owned project ([seatProjectRefusal]), a mirror or an import (U49 a),
+// a loosened protection ([loosenings]) or a glob taken from a gating path
+// owner ([gatingOwnersTaken]): with maintain alone deciding, a lead steered by
+// what it read could lift main's protection and force it. Then for whoever the
+// seat's turn works for ([ceilingLifecycleRefusal]).
 func lifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protection, next RepoRef,
 	nextRules []Protection, owners []PathOwner, roster Roster) (bool, string) {
 	if refused, why := askerLifecycleRefusal(req, repo, rules, next, nextRules, owners, roster); refused ||
@@ -923,17 +787,14 @@ func lifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protection, ne
 	return ceilingLifecycleRefusal(req, repo, rules, next, nextRules, owners, roster)
 }
 
-// ceilingLifecycleRefusal is the requester ceiling of a seat's lifecycle
-// request (M3-decisions U40 (a), [WriteCeiling]), judged once the seat itself
-// may ask it: in a turn a colleague SEAT woke, the request is decided AGAIN as
-// that colleague asking it itself — the same rules, the same chart, the same
-// snapshot, so the ceiling cannot drift from the rules it bounds — and in one
-// whoever may change nothing woke ([WriteCeilingNobody]), it is refused.
-//
-// EXCEPT THE SEAT'S OWN WORK ([steeredOwnWork]), which whoever woke the turn
-// steers, as authz.DecideWithin spares a steerable verb on what an agent
-// owns: creating its own scratch repository, and editing the settings or the
-// protections of a repository it owns without handing it to anybody.
+// ceilingLifecycleRefusal is the requester ceiling of a seat's request
+// (M3-decisions U40 (a), [WriteCeiling]), judged once the seat itself may: in
+// a turn a colleague SEAT woke, the request is decided AGAIN as that colleague
+// asking it, from the same rules, chart and snapshot, so the ceiling cannot
+// drift from the rules it bounds; in one whoever may change nothing woke
+// ([WriteCeilingNobody]), it is refused. EXCEPT THE SEAT'S OWN WORK
+// ([steeredOwnWork]), which whoever woke the turn steers, as
+// authz.DecideWithin spares a steerable verb on what an agent owns.
 func ceilingLifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protection, next RepoRef,
 	nextRules []Protection, owners []PathOwner, roster Roster) (bool, string) {
 	if steeredOwnWork(req, repo, next) {
@@ -955,15 +816,12 @@ func ceilingLifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protect
 	return false, ""
 }
 
-// steeredOwnWork reports whether req is the asking seat's OWN WORK, which
-// whoever its turn works for steers ([ceilingLifecycleRefusal]): a create of
-// its own scratch repository — the one kind a create names the seat as the
-// owner of — and, of a repository it owns, a protection or a settings change
-// that leaves its owner and its visibility as they are. NEVER what discloses
-// it, hands it on or retires it — a visibility, an owner, an archive, a
-// delete, a restore, a rename others clone it by — as sharing, transferring
-// and trashing an artifact are never steered: those are decided for the
-// requester however the repository came to be the seat's.
+// steeredOwnWork reports whether req is the asking seat's OWN WORK
+// ([ceilingLifecycleRefusal]): a create of its own scratch repository, and,
+// of a repository it owns, a protection or a settings change that keeps its
+// owner and visibility. NEVER what discloses it, hands it on or retires it (a
+// visibility, an owner, an archive, a delete, a restore, a rename others clone
+// it by), as sharing, transferring and trashing an artifact are never steered.
 func steeredOwnWork(req LifecycleRequest, repo, next RepoRef) bool {
 	own := Owner{Kind: OwnerSeat, Ref: req.Actor.Seat}
 	switch req.Kind {
@@ -986,7 +844,14 @@ func lifecycleWhat(req LifecycleRequest, repo RepoRef) string {
 }
 
 // askerLifecycleRefusal is [lifecycleRefusal] for the request's own actor,
-// with no ceiling: the rules above.
+// with no ceiling. Refused for every actor, a person's included: a rename into
+// the other kind's name form ([renameForm]), and a path owner the chart lacks,
+// who is nobody to ask a review of (naming one grants nothing, [PathOwner]).
+// A person creates a project for any owner the chart holds, never a scratch
+// repository, which only the seat whose handle it carries creates. A seat's
+// project create takes the owning unit's effective lead at full_access, its
+// scratch create its own handle at full_access ([scratchCreateRefusal]), and
+// its hold only a grant that reads.
 func askerLifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protection, next RepoRef,
 	nextRules []Protection, owners []PathOwner, roster Roster) (bool, string) {
 	actor := req.Actor
@@ -1017,11 +882,9 @@ func askerLifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protectio
 		return false, ""
 	}
 	// A MIRROR AND AN IMPORT ARE A PERSON'S (U49 a), whatever the seat's
-	// grant on the repository — its unit's lead included: a pull mirror and an
-	// import dial another host for the company, and a push mirror sends the
-	// company's code to one, so a seat steered by what it read could publish
-	// the code or reach outside with it. Asked first, so the seat hears this
-	// rather than whichever grant rule its request would otherwise meet.
+	// grant, its unit's lead included: a pull mirror and an import dial
+	// another host for the company, a push mirror sends its code to one.
+	// Asked first, so the seat hears this rather than some grant rule.
 	if what := mirrorsAsked(req); what != "" {
 		return true, fmt.Sprintf("only a person sets a repository's mirror or import, and seat %s asked %s: "+
 			"a pull mirror and an import dial another host for the company, and a push mirror sends its "+
@@ -1053,10 +916,10 @@ func askerLifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protectio
 	if g := GrantOf(actor, repo, roster); g.Access < AccessMaintain {
 		return true, maintainRefusal(g, string(req.Kind)+" "+repo.Name)
 	}
-	// A PROTECTION BINDS EVERY SEAT: maintain lets a seat add a rule or
-	// tighten one, and loosening one is a person's — the gate's path owners
-	// included, where it makes them gating. Both judged against the rules
-	// read whole beside the row, since only those carry a gate.
+	// A PROTECTION BINDS EVERY SEAT: maintain adds or tightens a rule, and
+	// loosening one is a person's, the gate's path owners included where it
+	// makes them gating. Judged against the rules read whole in this snapshot
+	// (only those carry a gate), so two requests cannot loosen one between them.
 	switch req.Kind {
 	case LifecycleProtect:
 		if opens := loosenings(rules, nextRules, req.Protect.Pattern); len(opens) > 0 {
@@ -1074,8 +937,8 @@ func askerLifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protectio
 	}
 	// AS THE CHANGE LEAVES IT TOO: a seat cannot hand a repository to an
 	// owner, or narrow it to a visibility, under which it would not maintain
-	// it — it could not take it back — and hands a project to no seat, itself
-	// included, where it would maintain it ([seatProjectRefusal]).
+	// it (it could not take it back), nor hand a project to any seat
+	// ([seatProjectRefusal]).
 	if req.Kind == LifecycleSettings && (next.Owner != repo.Owner || next.Visibility != repo.Visibility) {
 		if next.Owner != repo.Owner && !rosterHolds(roster, next.Owner) {
 			return true, fmt.Sprintf("the owner %s %s is no %s of the chart", next.Owner.Kind,
@@ -1153,15 +1016,11 @@ func maintainRefusal(g Grant, what string) string {
 }
 
 // seatProjectRefusal is the sentence of a seat that asked to do what, which
-// would leave a PROJECT repository owned by a seat — its own or another's.
-// A seat makes a project only for a unit whose effective lead it is, and
-// hands one on only to such a unit, because a seat's own repositories are its
-// SCRATCH repositories: capped by code.scratch.max_per_seat and expired by
-// code.scratch.idle_days. A project a seat owns is under neither — it never
-// expires, and only the company-wide repo_limit bounds it, the cap every
-// person's and every lead's project counts against — so one seat steered by
-// what it read could fill that cap with projects of its own. Only a person
-// makes a project a seat's.
+// would leave a PROJECT owned by a seat, its own or another's. A seat's own
+// repositories are its scratch repositories, capped (code.scratch.max_per_seat)
+// and expired (code.scratch.idle_days); a seat-owned project is neither, bound
+// only by the company-wide repo_limit, so one seat steered by what it read
+// could fill that cap. Only a person makes a project a seat's.
 func seatProjectRefusal(actor Principal, what string) string {
 	return fmt.Sprintf("seat %s may not %s: a seat's own repositories are its scratch repositories, "+
 		"named %s.<slug>, which code.scratch.max_per_seat caps and code.scratch.idle_days expires — a seat "+
@@ -1198,9 +1057,8 @@ type lifecycleDecision struct {
 	// its record will make it.
 	row RepoRef
 	// rule is a protect request's pattern's rule as the decide resolved it,
-	// whole — what its record carries for the pattern, and, where the
-	// request needs no record, the rule the snapshot holds — nil where the
-	// request leaves the pattern no rule ([LifecycleResult.Rule]).
+	// whole (the snapshot's, where no record is needed); nil where the
+	// pattern is left no rule ([LifecycleResult.Rule]).
 	rule *Protection
 }
 
@@ -1209,24 +1067,17 @@ func (d *lifecycleDecision) refuse(r LifecycleRefusal, format string, args ...an
 	d.refusal, d.detail = r, fmt.Sprintf(format, args...)
 }
 
-// Lifecycle decides req in ONE snapshot of its subject — the name's for a
-// create and a rename, the repository's for every other kind — publishes its
-// record under req.OpID, and reads the repository back at the record's
-// position. An op id the domain's ledger already holds is answered from the
-// ledger (the publisher's rule every write takes) and read back, so a repeated
-// request is one write; a create whose ledger row was swept finds the
-// repository its operation derives ([RepoIDOf]) already holding the name, and
-// is answered from it.
+// Lifecycle decides req in ONE snapshot of its subject (the name's for a
+// create and a rename, the repository's otherwise), publishes its record under
+// req.OpID and reads the repository back at its position. A repeated op id is
+// answered from the ledger, and a create whose ledger row was swept from the
+// repository its operation derives ([RepoIDOf]).
 //
-// A REFUSAL IS AN ANSWER, never an error: [LifecycleResult.Refusal] and its
-// sentence, nothing published. So is an OUTCOME this node could not learn — a
-// record appended and its acknowledgement lost — answered
-// statelog.OutcomeUnknown, which its caller retries as the same operation
-// (the ledger answers what landed) rather than reads as a fault of the node
-// that decided it. An ERROR is a request this node could not
-// decide — [ErrInvalid] for a request no node could, [ErrNotServing] for one
-// this node RAN NOTHING of (it decides no lifecycle request, holds no chart, is
-// behind the company's configuration, or the code log refused this node), so
+// A REFUSAL IS AN ANSWER ([LifecycleResult.Refusal]), nothing published; so is
+// statelog.OutcomeUnknown, which the caller retries as the same operation. An
+// ERROR is a request this node could not decide: [ErrInvalid] for one no node
+// could, [ErrNotServing] for one this node RAN NOTHING of (no lifecycle
+// decide, no chart, behind the configuration, or refused by the code log), so
 // the estate's router asks the next data node.
 func (s *Store) Lifecycle(ctx context.Context, req LifecycleRequest) (LifecycleResult, error) {
 	if err := req.Validate(); err != nil {
@@ -1237,11 +1088,8 @@ func (s *Store) Lifecycle(ctx context.Context, req LifecycleRequest) (LifecycleR
 		return LifecycleResult{}, fmt.Errorf("%w: this node's code store decides no lifecycle request",
 			ErrNotServing)
 	case s.current != nil && !s.current():
-		// EVERY KIND READS THE CHART, a person's included (a create's owner,
-		// who may ask what), so a node confirmed behind the company's
-		// configuration decides none of them, asked first or asked last:
-		// the revision it failed to apply may be the one that took the
-		// actor's grant away.
+		// EVERY KIND READS THE CHART, a person's included: the revision this
+		// node failed to apply may be the one that took the actor's grant away.
 		return LifecycleResult{}, fmt.Errorf("%w: this node is behind the company's configuration and "+
 			"decides no lifecycle request from the chart the fleet replaced", ErrNotServing)
 	}
@@ -1264,16 +1112,15 @@ func (s *Store) Lifecycle(ctx context.Context, req LifecycleRequest) (LifecycleR
 	return s.lifecycleRepo(ctx, req, rules.Roster, policy, noGitlet)
 }
 
-// mirrorPerson is whether the person a push mirror req sets would push as
-// uses no Gitlet — read from the identity directory BEFORE the decide, which
-// reads nothing but its snapshot ([MirrorSeatRefusal], ADR-0110) — for a
-// create or a settings change that sets a push mirror as a HUMAN seat of the
-// chart, and false for every other request: a mirror's seat this request does
-// not choose is judged by the chart alone here, since an owner or a
-// visibility changed under it moves no person's app, and the push holds the
-// seat to the directory again before every push. A directory that cannot
-// answer is [ErrNotServing], so the router asks the next data node rather
-// than refuse somebody who may well use the app.
+// mirrorPerson reports whether the person a push mirror req sets would push
+// as uses no Gitlet, read from the identity directory BEFORE the decide, which
+// reads only its snapshot ([MirrorSeatRefusal], ADR-0110); false for a request
+// that sets no push mirror as a HUMAN seat: a mirror seat it does not choose
+// is judged by the chart alone (an owner or visibility changed under it
+// moves no person's app), and the push checks the directory again before
+// every push. A directory that cannot answer is [ErrNotServing], so the router
+// asks the next data node rather than refuse somebody who may well use the
+// app.
 func (s *Store) mirrorPerson(ctx context.Context, req LifecycleRequest, roster Roster) (bool, error) {
 	var as string
 	switch {
@@ -1548,10 +1395,9 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 				return statelog.Decision{}, s.goneOrMissing(ctx, tx, req.RepoID, &d)
 			}
 			d.row = v.ref
-			// ITS RULES WHOLE, ITS PATH OWNERS AND ITS MIRRORS, which no
-			// RepoRef carries — its rules' merge gates, who owns which paths,
-			// what it follows and publishes to — beside its row: every kind but
-			// a hold writes the settings whole, or decides from them.
+			// ITS RULES WHOLE, PATH OWNERS AND MIRRORS, which no RepoRef
+			// carries: every kind but a hold writes the settings whole, or
+			// decides from them.
 			var (
 				rules   []Protection
 				owners  []PathOwner
@@ -1624,11 +1470,10 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 	case LifecycleSettings:
 		c := req.Change
 		if c.mirrors() {
-			// A SCRATCH REPOSITORY TAKES NO MIRROR, whoever asks — a person
-			// included: it is its seat's own experiment. And an ARCHIVED
-			// one becomes no pull mirror: it takes no sync. Each refused here,
-			// naming why, before the settings' own validation would refuse
-			// the record as invalid.
+			// A SCRATCH REPOSITORY TAKES NO MIRROR, a person's ask included:
+			// it is its seat's own experiment. An ARCHIVED one takes no sync,
+			// so it is no pull mirror. Refused here, naming why, rather than by
+			// the settings' validation as invalid.
 			switch {
 			case v.Kind == RepoScratch:
 				d.refuse(LifecycleNotPermitted, "%s is a scratch repository, which takes no mirror: it is its "+
@@ -1651,11 +1496,9 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 			next.Visibility = *c.Visibility
 		}
 		if c.Search != nil {
-			// A SCRATCH REPOSITORY IS SEARCHED WITH GREP, whoever asks — a
-			// person included: an index of a seat's experiment would be built
-			// and kept on every Gitlet node holding one for a repository that is
-			// deleted once idle. Refused here, naming why, before the
-			// settings' own validation would refuse the record as invalid.
+			// A SCRATCH REPOSITORY IS SEARCHED WITH GREP, a person's ask
+			// included: an index would be kept on every Gitlet node holding a
+			// repository deleted once idle. Refused here, naming why.
 			if v.Kind == RepoScratch && *c.Search == SearchIndexed {
 				d.refuse(LifecycleNotPermitted, "%s is a scratch repository, which is searched with %s: it is "+
 					"its seat's own experiment, and no index is kept for one — a search that names it reads it",
@@ -1694,17 +1537,14 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 				"its seat's own", v.Name)
 			return nil, "", nil
 		}
-		// RESOLVED AGAINST THE ROWS THIS DECIDE READ: the rule is the one this
-		// snapshot holds for the pattern — among the rules read whole beside
-		// the row, which alone carry a gate — with the change's push controls
-		// and gate fields put in it, so another request's change to another
-		// control or field meanwhile is kept, and the loosening judged is the
-		// one the record would make.
+		// RESOLVED AGAINST THE ROWS THIS DECIDE READ (only the rules read
+		// whole carry a gate), so another request's change to another control
+		// meanwhile is kept, and the loosening judged is the one the record
+		// would make.
 		rule := req.Protect.rule(rules)
 		if rule != nil {
-			// ITS WHOLE WEIGHT HERE, naming the field its caller sent: the
-			// request's own validation held each field the change names to
-			// what a record may carry, and only this decide reads what it kept.
+			// ITS WHOLE WEIGHT HERE: Validate held each field the change
+			// names, and only this decide reads what it kept.
 			if why := rule.invalid(); why != "" {
 				return nil, "", fmt.Errorf("%w: protect.%s", ErrInvalid, why)
 			}
@@ -1716,11 +1556,9 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 		d.refuse(LifecycleNotPermitted, "%s", why)
 		return nil, "", nil
 	}
-	// A PUSH MIRROR'S SEAT READS WHAT IT PUBLISHES, judged where a change
-	// moves the judgement — the mirror itself, or the owner or the visibility
-	// its seat's read is judged by — on the repository as the change leaves it
-	// ([MirrorSeatRefusal]), so no change records a mirror pushing what its
-	// seat may not read.
+	// A PUSH MIRROR'S SEAT READS WHAT IT PUBLISHES, judged wherever the change
+	// moves it (the mirror, or the owner or visibility its read is judged by),
+	// on the repository as the change leaves it ([MirrorSeatRefusal]).
 	if c := req.Change; req.Kind == LifecycleSettings && next.MirrorTo != nil &&
 		(c.MirrorTo != nil || c.Owner != nil || c.Visibility != nil) {
 		if why := MirrorSeatRefusal(next.MirrorTo.As, nextRef, roster, noGitlet && c.MirrorTo != nil); why != "" {
@@ -1743,8 +1581,7 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 		return LifecycleRecord{RepoID: v.ID, Reason: req.Reason}, OpDelete, nil
 	case LifecycleRestore:
 		if v.Status != RepoStatusDeleted {
-			// NOT DELETED: there is nothing to restore, and the row is the
-			// answer.
+			// NOT DELETED: nothing to restore; the row is the answer.
 			return nil, "", nil
 		}
 		restored := settingsOf(v, rules, owners, remotes)
@@ -1760,12 +1597,11 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 	return SettingsRecord{RepoID: v.ID, Settings: next}, OpSettings, nil
 }
 
-// archiveRefusal is whether an archive or an unarchive of the repository v,
-// whose mirrors and import remotes are, is refused, and the sentence why: one
-// being IMPORTED is archived once its import is done — an archived one takes
-// nothing an import lands, and the status that says it is importing is the
-// one an archive would take — and a PULL MIRROR is never archived, since an
-// archived repository takes no sync, so its source would never move it.
+// archiveRefusal is whether an archive or unarchive of v (its mirrors in
+// remotes) is refused, and why: one being IMPORTED waits for its import (an
+// archived repository takes nothing an import lands, and the importing status
+// is the one an archive would take), and a PULL MIRROR is never archived,
+// since an archived repository takes no sync.
 func archiveRefusal(req LifecycleRequest, v RepoRef, remotes repoRemotes) (bool, string) {
 	if req.Kind != LifecycleArchive && req.Kind != LifecycleUnarchive {
 		return false, ""
@@ -1781,26 +1617,18 @@ func archiveRefusal(req LifecycleRequest, v RepoRef, remotes repoRemotes) (bool,
 	return false, ""
 }
 
-// decideHold is a hold's decide, in tx: repo_deleted for a repository deleted,
-// being purged or purged, and not_permitted for one the seat may not read —
-// the turn's request is then refused before it reads anything — and then by
-// what it holds:
+// decideHold is a hold's decide: repo_deleted for a repository deleted, being
+// purged or purged, not_permitted for one the seat may not read, then:
 //
-//   - THE SCRATCH REPOSITORY ITSELF (no Ref): a record on an active one,
-//     nothing on a project or an archived one — neither expires while so,
-//     and the scratch expiry refuses on any record past its page, an
-//     unarchive's included, so there is nothing to order;
-//   - A SEAT'S BRANCH (Ref), its row read by its key: ref_deleted where it is
-//     absent or a tombstone — this snapshot is at or past the turn's read of
-//     it, so it was deleted after that read; nothing where no seat set it
-//     (code_refs.seat empty), since only a branch a seat set in its own
-//     namespace is a seat's to lose, and a record would contend for nothing
-//     with every push on the repository's subject; and otherwise a record, in
-//     a repository of EITHER kind, ACTIVE OR ARCHIVED — an archived
-//     repository's status can change and change back between a deletion's
-//     listing and its decide, which then judges the ref alone, so the per-ref
-//     mark this record moves is the one order such a deletion reads, whatever
-//     the status was when the turn read it.
+//   - the scratch repository itself (no Ref): a record on an active one;
+//     nothing on a project or an archived one, which neither expires as it is
+//     nor unarchives without a record the scratch expiry refuses on;
+//   - a seat's branch (Ref): ref_deleted where its row is absent or a
+//     tombstone (deleted after the turn's read, [LifecycleRequest.Seen]);
+//     nothing where no seat set it (code_refs.seat empty): no seat's to lose,
+//     and a record would only contend with every push; otherwise a record,
+//     ARCHIVED included: a status can flip back between a deletion's listing
+//     and its decide, so this per-ref mark is the order such a deletion reads.
 func decideHold(ctx context.Context, tx *sql.Tx, req LifecycleRequest, v RepoRef, roster Roster,
 	d *lifecycleDecision) (any, OpKind, error) {
 
@@ -1885,37 +1713,18 @@ func protected(rules []Protection, pattern string, rule *Protection) []Protectio
 	return out
 }
 
-// loosenings is every way next — the rules a protect request leaves, its
-// change resolved — LOOSENS the rule rules hold for pattern: lets through a
-// push, or a merge, that rule refuses. Each is the phrase a refusal names it
-// by; nil where the change loosens nothing.
-//
-// A PATTERN NO RULE HOLDS loosens nothing, whatever the change: every rule
-// that matches a ref holds ([ProtectionRefusal]), so a rule added only
-// refuses more, and removing one nobody holds changes nothing. A rule REMOVED
-// loosens, since every rule refuses at least a seat's direct push. A rule
-// CHANGED loosens by each CONTROL — each field but its pattern — that the
-// change opens, judged control by control, so one that tightens a control and
-// opens another loosens by the one it opens:
-//
-//   - direct_push loosens unless it stays as it was or becomes none, which
-//     admits nobody. FAIL CLOSED: a value this build does not know, on either
-//     side, is judged a loosening, since nothing here says whom it admits. A
-//     request never carries one this far ([LifecycleRequest.Validate] refuses
-//     it, whoever asks), so what this guards is a rule the rows hold, which a
-//     seat may tighten to none and never move elsewhere.
-//   - allow_force and allow_delete loosen when they are turned on.
-//   - the merge gate ([MergeGate]) loosens REMOVED, and changed it loosens by
-//     each of its fields the change opens ([MergeGate.LoosenedBy], field by
-//     field), so a seat tightens a gate and only a person loosens one. Added
-//     where the rule had none, it only holds a merge to more: a gateless rule
-//     lets anybody who may write merge, with no approval and no check, which
-//     every gate holds a merge to at the least.
-//
-// A field a later milestone adds to [Protection] is a control too, judged
-// here the same way: TestEveryProtectionControlIsJudged holds this function
-// to the struct's own fields and to every pair of direct_push values, so a
-// control or a value nobody judged cannot arrive unseen.
+// loosenings is every way next (the rules a protect request leaves) LOOSENS
+// rules' rule for pattern, each as a refusal phrases it; nil where none. An
+// unheld pattern loosens nothing: every matching rule holds
+// ([ProtectionRefusal]), so an added rule only refuses more. A removed rule
+// loosens (every rule refuses at least a seat's direct push). A changed one
+// loosens by each control it opens: direct_push unless kept or made none (FAIL
+// CLOSED: a value this build does not know is a loosening; Validate refuses
+// one in a request, so this guards the rows'); allow_force or allow_delete
+// turned on; the gate removed, or loosened field by field
+// ([MergeGate.LoosenedBy]); a gate added only holds a merge to more.
+// TestEveryProtectionControlIsJudged holds this to [Protection]'s fields and
+// every direct_push pair.
 func loosenings(rules, next []Protection, pattern string) []string {
 	find := func(list []Protection) (Protection, bool) {
 		i := slices.IndexFunc(list, func(p Protection) bool { return p.Pattern == pattern })
@@ -1964,15 +1773,12 @@ func saidAll(phrases []string) []words.Said {
 	return out
 }
 
-// gatingOwnersTaken is, where a rule of rules sets owners_approve on its merge
-// gate — which makes the repository's path owners whom a merge waits for —
-// those rules as a sentence names them and every glob change takes from a
-// path owner held holds it for, "deploy/** from unit eng", in held's order;
-// two empty values where no rule sets it, or the change takes nothing. What it
-// takes is judged by what it DOES to held ([PathOwnersChange.applyTo]), the
-// one resolution the record carries: a glob an owner does not hold is taken
-// as nothing, and an owner left with none is no path owner any more, every
-// glob it held taken.
+// gatingOwnersTaken is, where a rule sets owners_approve on its merge gate
+// (making the path owners whom a merge waits for), those rules as a sentence
+// names them and every glob the change takes from a path owner in held,
+// "deploy/** from unit eng", in held's order; empty where no rule sets it or
+// nothing is taken. Taken is judged by what [PathOwnersChange.applyTo] does
+// to held, the resolution the record carries.
 func gatingOwnersTaken(rules []Protection, held []PathOwner, change *PathOwnersChange) (string, []string) {
 	if change == nil {
 		return "", nil
@@ -2024,10 +1830,9 @@ func (s *Store) lifecycleAnswer(ctx context.Context, req LifecycleRequest, id st
 	}
 	switch {
 	case result.Collapsed:
-		// THIS OPERATION ALREADY APPLIED: answered from the row as it
-		// stands now, at the first copy's position — and its rule read back
-		// with it, never the one this call's decide resolved, which nothing
-		// published.
+		// THIS OPERATION ALREADY APPLIED: answered from the row as it stands
+		// now, at the first copy's position, its rule read back too, never
+		// the one this call's unpublished decide resolved.
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		back, rule, err := s.readRepo(ctx, id, pattern)
 		if err != nil {
@@ -2041,10 +1846,8 @@ func (s *Store) lifecycleAnswer(ctx context.Context, req LifecycleRequest, id st
 		return LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: d.row, Rule: d.rule}, nil
 	case result.Outcome == statelog.OutcomeUnknown:
 		// AN OUTCOME, NEVER AN ERROR: the record may have landed, and the
-		// same request again — the same operation — is what finds out. As an
-		// error it crossed the estate's wire as words with no sentinel, and
-		// every caller asking a data node read it as that node's fault,
-		// telling whoever asked that trying again could not help.
+		// same operation again finds out; an error would cross the estate's
+		// wire with no sentinel and read as the deciding node's fault.
 		return LifecycleResult{Outcome: statelog.OutcomeUnknown, Repo: d.row, Detail: fmt.Sprintf(
 			"whether the %s of %s landed is unknown (operation %s); make the same request again",
 			req.Kind, cmpName(req, d.row), req.OpID)}, nil
@@ -2188,21 +1991,16 @@ type ScratchExpiry struct {
 }
 
 // ExpireScratch deletes a scratch repository that is, in ONE snapshot, still
-// active, last active at or before x.Cutoff, and has had NO record on its
-// subject past x.Through — its row's version (the composed position of its
-// subject's last record) at or before x.Through, on the same stream identity
-// — and reports whether it did; false where any of it fails, a log recreated
-// since the page included (an unknown, so the repository is kept). The
-// code-retention pass's; the record is an ordinary delete, restorable for
-// code.deleted_retention_days, its actor the system.
+// active, last active at or before x.Cutoff, and whose row's version is at or
+// before x.Through on the same stream identity (no record on its subject
+// since the page), and reports whether it did; false otherwise, a log
+// recreated since included. The code-retention pass's: an ordinary delete,
+// restorable for code.deleted_retention_days, by the system.
 //
-// THE ORDER IS WHAT MAKES A HOLD SAFE: the pass fixes both fields before it
-// reads the live turns' holds, so a hold it could not see either was taken on
-// a repository active within [HoldRecordAfter] — later than this cutoff, which
-// the activity term refuses — or was recorded on this subject after the page
-// was read, which the version term refuses. Any other record past the page
-// refuses it too (a push, a rename, a settings change); the next pass lists it
-// again if it is still idle.
+// THE ORDER MAKES A HOLD SAFE: the pass fixes x before it reads the live
+// turns' holds, so a hold it could not see was taken on a repository active
+// within [HoldRecordAfter] (the activity term refuses it) or recorded after
+// the page (the version term does). The next pass lists it again if idle.
 func (s *Store) ExpireScratch(ctx context.Context, repoID string, x ScratchExpiry) (bool, error) {
 	if x.Cutoff.IsZero() || x.Through.IsZero() {
 		return false, fmt.Errorf("%w: a scratch expiry names its pass's cutoff and the position its page "+

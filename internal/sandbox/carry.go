@@ -129,6 +129,12 @@ type CarryCheck struct {
 	// was read for ([ExactTelling.Resumer]).
 	Version string
 
+	// ResumeRead says Version is a release whose resume this build read
+	// (internal/sandbox/executor's claudeResumeRead): only its resume
+	// rebuilds a hook's note as the job's session showed it, so only it is
+	// handed a brief that counts such a read held ([UnheldTelling]).
+	ResumeRead bool
+
 	// Continues says the session can be continued here.
 	Continues bool
 

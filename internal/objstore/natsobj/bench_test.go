@@ -21,8 +21,8 @@ import (
 // ON A MEMBER'S OWN CLIENT (`via=member`), as a data node reaches the bucket,
 // and THROUGH A LEAF (`via=leaf`), as a node without `data` does: its broker
 // runs no JetStream and every piece crosses the leaf link — opened across a
-// link, as the engine opens a leaf's, so its puts share
-// the window a link is given there ([natsobj.LinkWindow]).
+// link, as the engine opens a leaf's, so its transfers share the one window
+// a link is given (jsapi.LinkWindow), a piece at a time either way.
 //
 // ONE MEMBER, never a cluster: standing a cluster up here would make this
 // package one of the solo half's (`go doc ./internal/solo`), and its whole
@@ -37,7 +37,7 @@ func BenchmarkBackend(b *testing.B) {
 		cfg    natsobj.Config
 	}{
 		{"member", memberClientAt, natsobj.Config{Replicas: 1}},
-		{"leaf", leafClientAt, acrossLink},
+		{"leaf", leafClientAt, acrossLink()},
 	} {
 		cfg := via.cfg
 		cfg.MaxBytes = benchCeiling

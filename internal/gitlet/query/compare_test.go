@@ -11,15 +11,11 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 )
 
-// A COMPARISON COUNTS BOTH SIDES. Over main A-B-C and a branch D-E off B:
-// comparing C with E finds their merge base B, neither containing the other,
-// E two commits ahead and one behind, and the files E changed since B — the
-// three-dot reading; comparing A with C finds A their merge base, a
-// fast-forward from A to C; the reverse has C containing A and nothing changed
-// since; an empty commit F on top of C is one ahead and changed nothing — its
-// files an empty list, as every answer's list is, never a null; and a history
-// that shares no commit with main has no merge base and no files, each side
-// counted whole. A tree is no commit to compare.
+// A COMPARISON COUNTS BOTH SIDES, finds the merge base and lists what head
+// changed since it (the three-dot reading): for diverged branches, a
+// fast-forward and its reverse, an empty commit ahead (its files an empty
+// list, never a null), and an unrelated history (no merge base, each side
+// counted whole). A tree is no commit to compare.
 func TestACompareCountsBothSides(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())

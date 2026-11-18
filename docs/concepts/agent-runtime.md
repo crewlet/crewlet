@@ -528,7 +528,9 @@ stateDiagram-v2
   ceilings of either scope or the company's clock (which moves every window's
   end) — the apply of the revision that changed them — the hold
   is lifted, `seat_budget_park_released` is logged, and the held mail is
-  delivered again, the seat's priority lane first, and asked again. A change that lowers a ceiling
+  delivered again, the seat's priority lane first, and asked again. A park
+  taken while the release was in flight holds the seat again, and the
+  release's line then says so (`held_again=true`): its inbox stays held. A change that lowers a ceiling
   parks it again at the cost of one delivery. A delivery whose launch was
   refused below a floor above the static one waits one turnover for that
   floor at most: the park keeps, on this node, the window that delivery

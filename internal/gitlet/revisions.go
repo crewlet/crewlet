@@ -12,124 +12,72 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// A CHANGE'S REVISIONS ARE DERIVED FROM THE PUSHES THAT MOVE IT, IN THE PUSH'S
-// OWN RECORD: no record of a change's own says its head moved, because the
-// push that moved its source branch already says so, and the apply of that
-// push writes what it did to every live change it reached — pure over the
-// record and the change rows it finds, so every data node derives the same
-// rows. A push record carries its entries in the order they were decided, and
-// each entry moves the changes its OK BRANCH COMMANDS reach, seeing what the
-// entries before it did, in three steps:
-//
-//  1. A HEAD MOVE: a command that moves a live change's source branch to
-//     another commit writes the change's next revision (code_revisions: n + 1,
-//     the new head, who pushed it and the push that did), moves the change's
-//     head and revision, and makes the pusher one of its authors from that
-//     revision — a pusher already one, its owner among them, stays as they
-//     were. A command never sets a ref to where it is (validCommands), and a
-//     live change's head is its source's — its open and its reopen read it
-//     there, and every push that moves the source moves it — so every such
-//     command moves the head.
-//  2. A MERGE: a command that sets a branch to exactly the head of a live
-//     change whose target it is — after the push's own head moves, so a push
-//     that moves a branch and its target to one commit merges it whatever
-//     order git sent them in — marks the change merged, by push, at that
-//     commit. At most [MaxPushMerges] a record, the changes with the lowest
-//     numbers first; a change past it stays open with its head in its target.
-//  3. A CLOSE: a command that deletes a live change's source branch closes the
-//     change, its reason [SourceDeleted] — after the push's merges, so a push
-//     that merges a change and deletes its branch leaves it merged.
-//  4. AN OPEN: an entry carrying the change its decide opened from the push's
-//     options ([PushEntry.Change], pushchange.go) opens it on its one branch
-//     command, at the head that command set — after the entry's own moves,
-//     so the push's move is the change's FIRST revision, made by the push,
-//     rather than a second — numbered the repository's next, its pusher its
-//     owner and first author ([changeBook.open]); the record's later entries
-//     revise, merge or close it as any live change.
-//
-// A CHANGE A RECORD MOVES LEAVES ITS QUEUE: its live queue entry, where its
-// target's queue holds one (queue.go), is EJECTED head_moved by a move of its
-// head — the queue would otherwise test a head nobody enqueued — and DEQUEUED
-// by its merge or its close, in the push's own record, one row an entry, which
-// the book counts with the rest ([changeBook.rowCount]).
-//
-// Every change a record moves counts ONE VERSION and takes the record's
-// position, however many of its entries moved it: a change's version counts
-// the records that changed its row, which a write of its lifecycle states as
-// its expectation, so a push that moved its head stales a write formed before
-// it — and a change a record opens is at version 1 however many of its later
-// entries move it, the opening record being its first. Nothing else moves a
-// change: a push to a ref that is neither a live change's source nor the
-// target its head is set to concerns no change.
-//
-// # One model, which the decide counts by and the apply writes from
-//
-// [changeBook] is the live changes a record can move and the authors its
-// pushers already are of them, read in three statements — the changes its
-// branch commands name as sources, the changes whose targets and heads its
-// commands set, and the authors among its pushers of the changes whose heads
-// they move — and moved by each entry in the record's order. The push decide
-// moves it by each entry it admits, so it counts EXACTLY the rows the
-// record's apply will write about changes beside its entries' own — the apply
-// reads the same rows, which the broker's arbitration on the repository's
-// subject guarantees, and writes what the same model makes of the same
-// entries — save the stored readiness of each change the record merges or
-// closes: the apply clears it only where it holds an answer, and the book,
-// which reads no mergeability, counts it a row whether or not, so the count
-// is never short ([changeBook.rowCount]). It holds the record to
-// [MaxRecordRows] with them. It tries each entry on the book itself,
-// journaled, and takes back one the record cannot hold ([bookTrial]): what an
-// entry costs a round is what its own commands reach. A push whose changes'
-// rows would take its record past the bound beside the entries before it is
-// CARRIED, decided by none of its batch's rounds, to lead the committer's
-// next batch; one whose rows would take even a record of its own past it is
-// refused [RefusalTooManyChanges].
-//
-// # The record's format does not move
-//
-// What a push record's commands do to a change — a revision, a merge, a
-// close — is derived from the commands it already carries, and the one thing
-// it carries for a change, the change a push opens from its options, is a
-// field of its own ([PushEntry.Change]). The domain landed on main with these
-// rows, so every build that meets a push record derives them. What a later
-// apply comes to derive from the commands needs a versionedFields row
-// ([RecordVersion]), and so does what a revision keeps beside them: whom the
-// seat's push that made it was made for, the entry's own field
-// ([PushEntry.WorkingFor]), which came with version 2 and which a revision's
-// row keeps as its entry carries it ([revisionRow]).
+// A change's revisions are derived from the push record that moves it — no
+// record of the change's own, since the push already says its source moved —
+// purely over the record and the change rows it finds, so every data node
+// derives the same rows. Each entry, in decided order and seeing what earlier
+// ones did, applies its OK branch commands in this order ([changeBook.move],
+// then [changeBook.open]): HEAD MOVES (a live change's source moved: its next
+// revision, its pusher an author); MERGES (a branch set to exactly the head of
+// a live change into it — after the head moves, so git's command order is
+// moot; at most [MaxPushMerges]); CLOSES (its source deleted, [SourceDeleted] —
+// after the merges, so merge-then-delete stays merged); then the entry's OPEN
+// ([PushEntry.Change]), after its own moves so the push is the change's FIRST
+// revision. Nothing else moves a change.
+
+// A change a record moves leaves its target's queue (queue.go) in the same
+// record: a head move EJECTS its live entry (head_moved), since the queue would
+// otherwise test a head nobody enqueued, and a merge or close DEQUEUES it
+// ([changeBook.queueEnds]). Each change a record moves counts ONE version at
+// the record's position however many entries move it ([changeBook.touch]), so
+// a lifecycle write formed before a push that moved its head is stale; a change
+// a record opens is at version 1.
+
+// One model: the push decide moves a [changeBook] by each entry it admits, so
+// it counts EXACTLY the change rows the apply writes ([changeBook.rowCount]) —
+// the apply reads the same rows (the broker arbitrates on the repository's
+// subject) and runs the same model — save each ended change's stored
+// readiness, which the book counts whether or not the apply clears it, so the
+// count is never short. Each entry is tried on the book in place and taken back
+// where the record cannot hold it within [MaxRecordRows] ([bookTrial]); a push
+// that fits no record beside earlier entries is CARRIED to lead the committer's
+// next batch, and one that fits not even a record alone is refused
+// [RefusalTooManyChanges].
+
+// The record's format does not move: what a push does to a change is derived
+// from the commands it already carries (the domain landed with these rows, so
+// every build that meets a push record derives them), plus the one field a push
+// opening a change carries ([PushEntry.Change]). Anything a later apply comes to
+// derive, or a revision to keep beside them — as [PushEntry.WorkingFor] came
+// with version 2 — needs a versionedFields row ([RecordVersion]).
 
 // SourceDeleted is the close reason (code_changes.close_reason) of a change a
 // push closed by deleting its source branch — the one reason no person wrote.
 const SourceDeleted = "source_deleted"
 
-// MaxPushMerges is the most changes one push record marks merged: MANY LIVE
-// CHANGES AT ONE HEAD INTO ONE TARGET IS NO PUSH'S ORDINARY WORK — each heads a
-// branch of its own, so it takes as many branches pointing at one commit, each
-// with a change open — and a record's rows are bounded, so a push to a target
-// is never refused for the changes it would merge. Sixty-four, as many as the
-// pushes one record carries ([MaxPushesPerRecord]): one each for a full batch
-// of pushes that each merge their own change, sixty-four rows of the record's
-// [MaxRecordRows] at most. A change past it, in number order, is left open
-// with its head in its target — reached by nothing in this build, and by the
-// repository's home Gitlet node once its change work lands what such a change
-// holds.
+// MaxPushMerges is the most changes one push record marks merged, so a push to
+// a target is never refused for the changes it would merge, a record's rows
+// being bounded; many live changes at one head into one target (each its own
+// branch at that commit) is no push's ordinary work. It is
+// [MaxPushesPerRecord]: one each for a full batch of pushes that each merge
+// their own change, sixty-four rows of [MaxRecordRows] at most. A change past
+// it, in number order, stays open with its head in its target.
 const MaxPushMerges = MaxPushesPerRecord
 
 // changeBook is the live changes a push record's commands can move, and the
 // authors its pushers already are of them, as the record's entries so far
-// leave them: what the push decide counts the record's change rows by, and
-// what the push apply writes them from.
+// leave them: the push decide counts the record's change rows by it, and the
+// apply writes them from it.
 type changeBook struct {
-	// repo is the repository the record is about, which a change it opens
-	// is of.
+	// repo is the repository the record is about, and of any change it opens.
 	repo string
 	// packed and at are the record's position and broker instant, which every
 	// row it writes carries — zero where the decide counts and writes nothing.
 	packed, at int64
-	// next is the number the record's next open gives its change — the
-	// repository's next_change as the apply reads it, moved on by each open —
-	// and zero in the decide, which counts opens without numbering them: a
-	// number is the apply's to give ([Applier.applyChangeOpen]'s rule).
+	// next is the number the record's next open gives its change (the
+	// repository's next_change as the apply reads it), and zero in the decide,
+	// which counts opens without numbering them: a number is the apply's to
+	// give ([Applier.applyChangeOpen]'s rule).
 	next int64
 	// rows is every change read, by id, as the entries so far moved it.
 	rows map[string]*changeRow
@@ -137,18 +85,17 @@ type changeBook struct {
 	// changes read into each branch, in number order.
 	bySource map[string]string
 	byTarget map[string][]string
-	// authored is every pair of a change and an author it holds that the
-	// record's head moves can reach: the ones read, and the ones the entries
-	// so far added.
+	// authored is every (change, author) pair held that the record's head
+	// moves can reach: those read, and those the entries so far added.
 	authored map[[2]string]bool
-	// queued is every change read that holds a live queue entry, which the
+	// queued is every change read holding a live queue entry, which the
 	// record ends where it moves the change.
 	queued map[string]bool
 	// writes is what the entries so far make the record's apply write.
 	writes bookWrites
-	// trial is what the entry the decide is trying has done to the book so
-	// far ([changeBook.try]), kept to take it back; nil while no entry is on
-	// trial — and always in the apply, which writes every entry it meets.
+	// trial journals the entry the decide is trying ([changeBook.try]); nil
+	// while none is on trial, and always in the apply, which writes every
+	// entry it meets.
 	trial *bookTrial
 }
 
@@ -156,21 +103,21 @@ type changeBook struct {
 // the rows a decide counts and the apply writes ([changeBook.rowCount]).
 type bookWrites struct {
 	// opened is every change the entries opened ([changeBook.open]), whose
-	// row the apply INSERTS where it writes every other back; and bodies the
-	// descriptions of those that carry one.
+	// row the apply INSERTS rather than writes back; bodies the descriptions
+	// of those that carry one.
 	opened map[string]bool
 	bodies []bodyRow
-	// touched is every change the entries moved, in the order first moved —
-	// the order the apply writes them in — and isTouched the same changes as
-	// a set, since a push that moves hundreds asks it once a move.
+	// touched is every change the entries moved, in the order first moved
+	// (the apply's write order); isTouched is it as a set, since a push moving
+	// hundreds asks it once a move.
 	touched   []string
 	isTouched map[string]bool
-	// revisions are the revisions the entries wrote, in order, and authors
-	// the authors they added, each pair of a change and an author once.
+	// revisions are the revisions the entries wrote, in order; authors the
+	// authors they added, each (change, author) pair once.
 	revisions []revisionRow
 	authors   []authorRow
-	// merges is how many changes the entries merged, and merged which, in
-	// the order merged — what a push decide routes each entry's merges by.
+	// merges counts the changes the entries merged and merged lists them in
+	// order — what a push decide routes each entry's merges by.
 	merges int
 	merged []string
 }
@@ -180,39 +127,30 @@ func noWrites() bookWrites {
 	return bookWrites{opened: map[string]bool{}, isTouched: map[string]bool{}}
 }
 
-// bookTrial is what one entry on trial did to a [changeBook] — everything it
-// changed, each as it was before — so that taking the entry back leaves the
-// book exactly as the entry found it.
+// bookTrial is what one entry on trial did to a [changeBook], each thing as it
+// was before, so taking the entry back leaves the book exactly as it found it.
 //
-// # Why a journal, never a copy
-//
-// The decide reads ONE book a round for its whole batch — every live change
-// any of its commands can reach — and tries each entry on it before it knows
-// the record can hold what the entry writes. A copy of the book an entry
-// cost every change the BATCH reached, on every entry and on every
-// compare-and-set round of the repository's one committer goroutine, while it
-// holds a connection of the reader pool: a push moving a thousand change
-// branches beside sixty-three one-command pushes copied sixty-four thousand
-// rows a round — 79–80 ms and 64 MB, against 47–50 ms and 11 MB tried in
-// place (doc.go's measured section). The journal holds only what the entry's
-// own commands reached, so an entry costs what it moves — nothing at all for
-// one that reaches no change.
+// A journal, never a copy: the decide reads ONE book a round for its whole
+// batch and tries each entry on it, on the repository's one committer
+// goroutine while it holds a reader-pool connection. A copy would cost every
+// change the BATCH reached, per entry, per round (doc.go's "Measured"); the
+// journal costs what the entry's own commands reach, nothing for one that
+// reaches no change.
 type bookTrial struct {
-	// touched, bodies, revisions, authors and merges are the record's writes'
-	// lengths and count as the entry found them, and next the book's next
-	// number: what taking it back cuts them to.
+	// touched, bodies, revisions, authors, merges and next are the writes'
+	// lengths, merge count and next number as the entry found them: what
+	// taking it back cuts them to.
 	touched, bodies, revisions, authors, merges int
 	next                                        int64
-	// moved is every change the entry moved, by id, as it was before the
-	// entry first moved it; and added every change it opened, which taking
-	// it back forgets.
+	// moved is every change the entry moved, by id, as before its first
+	// move; added every change it opened, which taking it back forgets.
 	moved map[string]changeRow
 	added []string
-	// authored is every pair of a change and an author the entry added.
+	// authored is every (change, author) pair the entry added.
 	authored [][2]string
-	// sources and targets are what its opens pointed at their changes, each
-	// as it was, in the order set: a source's change ([changeBook.bySource]),
-	// and a target's changes by how many it held ([changeBook.byTarget]).
+	// sources and targets are what its opens repointed, each as it was, in
+	// order: a source's change ([changeBook.bySource]) and how many changes a
+	// target held ([changeBook.byTarget]).
 	sources []sourceWas
 	targets []targetWas
 }
@@ -232,9 +170,8 @@ type targetWas struct {
 	held   bool
 }
 
-// revisionRow is one code_revisions row a record writes: whom the push that
-// made the revision was made for among it, as its entry carries it
-// ([PushEntry.WorkingFor]).
+// revisionRow is one code_revisions row a record writes, workingFor as its
+// entry carries it ([PushEntry.WorkingFor]).
 type revisionRow struct {
 	change     string
 	n          int64
@@ -256,12 +193,11 @@ type authorRow struct {
 // change it opened.
 type bodyRow struct{ change, body string }
 
-// readChangeBook reads the live changes of repoID that the commands of entries
-// the decide has not refused can move — the change each branch they name
-// heads, and every live change whose target they set to exactly its head —
-// and the authors each entry's pusher already is of the changes whose heads
-// it moves, into a book whose rows carry packed and at once moved. A command
-// that is no branch's moves no change, so it is read for none.
+// readChangeBook reads into a book the live changes of repoID that the
+// unrefused entries' branch commands can move — the change each branch heads,
+// and every one whose target they set to exactly its head — and the authors
+// each pusher already is of the changes whose heads it moves; moved rows carry
+// packed and at.
 func readChangeBook(ctx context.Context, tx *sql.Tx, repoID string, entries []PushEntry, packed, at int64) (
 	*changeBook, error) {
 
@@ -296,15 +232,13 @@ func readChangeBook(ctx context.Context, tx *sql.Tx, repoID string, entries []Pu
 	}); err != nil {
 		return nil, fmt.Errorf("gitlet: read the live changes a push's targets are set to the heads of: %w", err)
 	}
-	// EACH TARGET'S CHANGES IN NUMBER ORDER, the order a record merges them
-	// in: what bounds the merges ([MaxPushMerges]) picks the same ones on
-	// every node.
+	// Number order, the order a record merges them in, so the merge bound
+	// ([MaxPushMerges]) picks the same ones on every node.
 	for _, ids := range b.byTarget {
 		slices.SortFunc(ids, func(x, y string) int { return cmp.Compare(b.rows[x].number, b.rows[y].number) })
 	}
-	// THE AUTHORS THE PUSHERS ALREADY ARE of the changes whose heads they
-	// move, so the book adds only an author a change does not hold: a row
-	// the record writes, counted, rather than a conflict its insert skips.
+	// The authors the pushers already are, so the book adds only an author a
+	// change lacks: a counted row, never a conflict its insert skips.
 	var held [][2]string
 	seenHeld := map[[2]string]bool{}
 	for _, e := range entries {
@@ -323,8 +257,8 @@ func readChangeBook(ctx context.Context, tx *sql.Tx, repoID string, entries []Pu
 	if err := inChunks(held, func(part [][2]string) error { return b.readAuthors(ctx, tx, part) }); err != nil {
 		return nil, fmt.Errorf("gitlet: read the authors a push's pushers are of the changes it moves: %w", err)
 	}
-	// THE CHANGES THAT HOLD A LIVE QUEUE ENTRY, of those read: a move of
-	// one ends its entry, a row the record writes, counted.
+	// Which changes read hold a live queue entry: a move of one ends it, a
+	// counted row.
 	ids := make([]string, 0, len(b.rows))
 	for id := range b.rows {
 		ids = append(ids, id)
@@ -383,8 +317,7 @@ func (b *changeBook) read(ctx context.Context, tx *sql.Tx, query, repoID string,
 	return rows.Err()
 }
 
-// readAuthors marks every pair of a change and an author pairs names that the
-// change holds.
+// readAuthors marks every (change, author) pair of pairs that the change holds.
 func (b *changeBook) readAuthors(ctx context.Context, tx *sql.Tx, pairs [][2]string) error {
 	encoded, err := json.Marshal(pairs)
 	if err != nil {
@@ -405,9 +338,8 @@ func (b *changeBook) readAuthors(ctx context.Context, tx *sql.Tx, pairs [][2]str
 	return rows.Err()
 }
 
-// try puts the decide's next entry on trial: what its moves and its open do
-// to the book from here is journaled ([bookTrial]), so that [changeBook.takeBack]
-// can undo it, until [changeBook.keep] admits it.
+// try puts the decide's next entry on trial: its moves and open are journaled
+// ([bookTrial]) for [changeBook.takeBack] until [changeBook.keep] admits it.
 func (b *changeBook) try() {
 	w := &b.writes
 	b.trial = &bookTrial{touched: len(w.touched), bodies: len(w.bodies), revisions: len(w.revisions),
@@ -417,10 +349,8 @@ func (b *changeBook) try() {
 // keep admits the entry on trial: its moves are the record's.
 func (b *changeBook) keep() { b.trial = nil }
 
-// takeBack undoes everything the entry on trial did, leaving the book exactly
-// as [changeBook.try] found it — every change it moved as it was, every one it
-// opened forgotten, and the record's writes cut back to what they held —
-// at the cost of what the entry reached.
+// takeBack undoes the entry on trial, leaving the book exactly as
+// [changeBook.try] found it, at the cost of what the entry reached.
 func (b *changeBook) takeBack() {
 	t, w := b.trial, &b.writes
 	b.trial = nil
@@ -447,8 +377,8 @@ func (b *changeBook) takeBack() {
 			delete(b.byTarget, was.target)
 		}
 	}
-	// THE CHANGES THE ENTRY FIRST MOVED are the record's writes past their
-	// length before it — the ones it opened among them.
+	// The changes the entry first moved, its opens among them, are the
+	// writes past their length before it.
 	for _, id := range w.touched[t.touched:] {
 		delete(w.isTouched, id)
 		delete(w.opened, id)
@@ -458,14 +388,12 @@ func (b *changeBook) takeBack() {
 	w.merged = w.merged[:t.merges]
 }
 
-// alone is the rows e — and the change it opens, where it carries one — would
-// make its record write about changes, as the decide holds a record to them
-// ([changeBook.decidedRows]), and how many it moves, as the first
-// entry of a record of its own once the book's record has landed: the
-// changes as that record leaves them, the ones it opened among them as rows
-// the next record finds, and none of its writes. What the decide weighs a
-// push it cannot fit beside the entries before it by. It leaves the book as
-// it found it, its record's writes and every change.
+// alone is the change rows e (and any change it opens) would make a record
+// write ([changeBook.decidedRows]), and how many changes it moves, as the
+// first entry of a record of its own after the book's record lands: the
+// changes as that record leaves them, none of its writes. The decide weighs a
+// push it cannot fit beside earlier entries by it. It leaves the book as it
+// found it.
 func (b *changeBook) alone(e PushEntry) (rows, moved int) {
 	record := b.writes
 	b.writes = noWrites()
@@ -480,15 +408,12 @@ func (b *changeBook) alone(e PushEntry) (rows, moved int) {
 	return rows, moved
 }
 
-// rowCount is the rows the book's moves make the record's apply write: every
-// change it moved or opened, every revision and every author it added, the
-// description of every change it opened that carries one, the live queue
-// entry of every change it moved that holds one, and the stored readiness of
-// every change it merged or closed — a row at most each, which the apply
-// writes only where the row holds an answer ([clearReadiness]), and which the
-// book counts whether or not, since its rows hold no mergeability. The
-// repository's own row, whose next number an open moves, is the record's
-// already ([recordRows]).
+// rowCount is the rows the book's moves make the apply write: each change
+// moved or opened, revision, author and opened change's description, the live
+// queue entry of each moved change holding one, and the stored readiness of
+// each change merged or closed — counted whether or not the apply clears it
+// ([clearReadiness]), since the book holds no mergeability. The repository's
+// own row is the record's already ([recordRows]).
 func (b *changeBook) rowCount() int { return b.rowsEnding(len(b.ended())) }
 
 // rowsEnding is [changeBook.rowCount] with the ended changes counted once by its caller.
@@ -497,8 +422,9 @@ func (b *changeBook) rowsEnding(ended int) int {
 	return len(w.touched) + len(w.revisions) + len(w.authors) + len(w.bodies) + b.queuedMoved() + ended
 }
 
-// decidedRows is [changeBook.rowCount] and, where the moves open or end a change (a push's
-// only state moves), the tally row the apply writes beside it, which no horizon is given.
+// decidedRows is [changeBook.rowCount] plus, where the moves open or end a
+// change (a push's only state moves), the tally row the apply writes beside
+// it, which no horizon is given.
 func (b *changeBook) decidedRows() int {
 	ended := len(b.ended())
 	if len(b.writes.opened) > 0 || ended > 0 {
@@ -507,8 +433,8 @@ func (b *changeBook) decidedRows() int {
 	return b.rowsEnding(ended)
 }
 
-// statesRead is every change the book holds, by id, in its state now: taken before the
-// record's first move, the states the apply read them in.
+// statesRead is every change the book holds, by id, in its state now: taken
+// before the record's first move, the states the apply read them in.
 func (b *changeBook) statesRead() map[string]ChangeState {
 	read := make(map[string]ChangeState, len(b.rows))
 	for id, row := range b.rows {
@@ -517,9 +443,9 @@ func (b *changeBook) statesRead() map[string]ChangeState {
 	return read
 }
 
-// counted is what the book's moves do to the repository's counts, from the states read
-// ([changeBook.statesRead]): each change opened counted in its final state, and each
-// other moved from the state it was read in to its final one.
+// counted is what the book's moves do to the repository's counts from the
+// states read ([changeBook.statesRead]): an opened change in its final state,
+// every other moved from its read state to its final one.
 func (b *changeBook) counted(read map[string]ChangeState) ChangeCounts {
 	var c ChangeCounts
 	for _, id := range b.writes.touched {
@@ -532,9 +458,9 @@ func (b *changeBook) counted(read map[string]ChangeState) ChangeCounts {
 	return c
 }
 
-// ended is the changes the book's moves merged or closed — none of those it
-// opened, which no record has judged the readiness of yet — whose stored
-// readiness the apply clears ([clearReadiness]).
+// ended is the changes the book's moves merged or closed, whose stored
+// readiness the apply clears ([clearReadiness]) — none it opened, whose
+// readiness no record has judged yet.
 func (b *changeBook) ended() []string {
 	var ids []string
 	for _, id := range b.writes.touched {
@@ -560,12 +486,11 @@ func (b *changeBook) queuedMoved() int {
 	return n
 }
 
-// queueEnds is how the book's moves end the live queue entries of the
-// changes they reached that hold one — none of those it opened, which no queue
-// holds yet: a change whose head moved is ejected (head_moved), a merged one
-// and a closed one dequeued. The apply ends the entries by it, and the decide
-// names the ejected to the committer, which announces each
-// (Committer.announcePushEjections): the same model, so the two agree.
+// queueEnds is how the book's moves end the live queue entries of the changes
+// they reached (none it opened, which no queue holds yet): a moved head
+// ejected (head_moved), a merged or closed change dequeued. The apply ends the
+// entries by it and the decide names the ejected to the committer
+// (Committer.announcePushEjections), so the two agree.
 func (b *changeBook) queueEnds() (ejected, merged, closed []string) {
 	w := &b.writes
 	for _, id := range w.touched {
@@ -588,8 +513,8 @@ func (b *changeBook) queueEnds() (ejected, merged, closed []string) {
 func (b *changeBook) moved() int { return len(b.writes.touched) }
 
 // touch counts change id moved by this record — one version, at the record's
-// position, however many entries move it — and answers its row for the move
-// to change, saved first for an entry on trial.
+// position, however many entries move it — and answers its row for the move to
+// change, saved first for an entry on trial.
 func (b *changeBook) touch(id string) *changeRow {
 	row := b.rows[id]
 	if t := b.trial; t != nil {
@@ -609,8 +534,8 @@ func (b *changeBook) touch(id string) *changeRow {
 	return row
 }
 
-// author adds pair, a change and an author it did not hold, journaled for an
-// entry on trial.
+// author adds pair, a change and an author it lacked, journaled for an entry
+// on trial.
 func (b *changeBook) author(pair [2]string) {
 	b.authored[pair] = true
 	if b.trial != nil {
@@ -628,9 +553,10 @@ func (b *changeBook) liveOn(source string) (*changeRow, bool) {
 	return row, row.state.Live()
 }
 
-// move moves the book by one entry of the record — its ok branch commands, in
-// three steps (this file's head): every head move, then every merge, then
-// every close.
+// move moves the book by one entry's ok branch commands in the order this
+// file's head gives: every head move, then every merge, then every close. A
+// head move never checks the head changed: validCommands never sets a ref to
+// where it is, and a live change's head is its source's.
 func (b *changeBook) move(e PushEntry) {
 	pusher, kind := e.Principal.party()
 	var commands []Command
@@ -648,9 +574,9 @@ func (b *changeBook) move(e PushEntry) {
 		row.head, row.revision = c.New, row.revision+1
 		b.writes.revisions = append(b.writes.revisions, revisionRow{change: row.id, n: row.revision, head: c.New,
 			pusher: pusher, kind: kind, pushID: e.PushID, workingFor: e.WorkingFor})
-		// A PUSH NO SEAT OR PERSON MADE adds no author — no decide admits
-		// one, since a token bound to nobody reads only, and an author row
-		// naming nobody would name what no review could ask after.
+		// A push no seat or person made adds no author: an author row naming
+		// nobody names what no review could ask after (and no decide admits
+		// one, a token bound to nobody reading only).
 		if pair := [2]string{row.id, pusher}; pusher != "" && !b.authored[pair] {
 			b.author(pair)
 			b.writes.authors = append(b.writes.authors, authorRow{change: row.id, author: pusher, kind: kind,
@@ -685,32 +611,16 @@ func (b *changeBook) move(e PushEntry) {
 }
 
 // open opens the change e carries ([PushEntry.Change]) on e's one branch
-// command ([ChangeSource]), at the head that command set — the record's rows
-// at its position: the change's, numbered the repository's next where the
-// book numbers (the apply), open or a draft as the change says; its
-// description, where it has one; its pusher as its owner and first author,
-// with what made the push — the turn behind a seat's push and, for a push its
-// coding box made, the executor's launch that pushed ([RunProvenance.RunID])
-// — as the turn and the launch that opened it, an open's own
-// ([ChangeOpen.TurnID], [ChangeOpen.RunID]); and its first revision, made by the push. From here on
-// it is a live change on its source and into its target, which the record's
-// later entries revise, merge or close as any other, at the version the open
-// gave it: the record that opens a change is its first, however many of its
-// entries move it.
+// command ([ChangeSource]) at the head it set, at version 1: numbered the
+// repository's next where the book numbers (the apply); its pusher owner and
+// first author; the push's turn and launch as an open's own ([ChangeOpen.TurnID],
+// [ChangeOpen.RunID]). It carries the push's work item only where the push names
+// its identity ([RunProvenance.WorkID]), in code_open_change's shape; a tracker
+// and key alone, a label a tracker may reuse, carries none.
 //
-// IT CARRIES ITS PUSH'S WORK ITEM where the push names the item's identity
-// — a coding box's, stamped from its run's row ([RunProvenance.WorkID],
-// [RunProvenance.WorkProject]) — as a code_open_change of the same turn and
-// the engine's open at the run's collection carry it: by its tracker, its id,
-// the key it showed and its project, so one run's item lands in one shape
-// however its change was opened. A push that names its item by tracker and key
-// alone — the history's label, which a tracker may give another item — opens
-// a change that carries none.
-//
-// It answers the change's id, or "" and why it opened none — a guard the
-// decide's rules keep from ever failing (pushOpen), which the apply logs and
-// skips (code_change_not_applied), never refuses: an apply that refused would
-// stop the log on every node.
+// It answers the change's id, or "" and why it opened none — a guard pushOpen
+// keeps from failing, which the apply logs and skips (code_change_not_applied)
+// rather than refuses: a refusing apply would stop the log on every node.
 func (b *changeBook) open(e PushEntry) (string, string) {
 	i, r, _ := ChangeSource(e.Commands)
 	if r != "" {
@@ -734,8 +644,8 @@ func (b *changeBook) open(e PushEntry) (string, string) {
 	if e.Change.Draft {
 		state = ChangeStateDraft
 	}
-	// THE CREDENTIAL A PERSON PUSHED WITH, the change's own attribution as
-	// an open's is ([Applier.applyChangeOpen]); a seat acts as itself.
+	// A person's credential is the change's attribution, as an open's is
+	// ([Applier.applyChangeOpen]); a seat acts as itself.
 	var operator string
 	if kind == PartyPerson {
 		operator = e.Principal.OperatorID
@@ -752,7 +662,7 @@ func (b *changeBook) open(e PushEntry) (string, string) {
 	if b.next > 0 {
 		b.next++
 	}
-	// WHAT IT POINTS AT ITS CHANGE, as it was, for an entry on trial.
+	// Journal what it repoints, as it was, for an entry on trial.
 	if t := b.trial; t != nil {
 		was, held := b.bySource[row.source]
 		ids, named := b.byTarget[row.target]
@@ -763,8 +673,8 @@ func (b *changeBook) open(e PushEntry) (string, string) {
 	b.rows[id] = row
 	b.bySource[row.source] = id
 	b.byTarget[row.target] = append(b.byTarget[row.target], id)
-	// TOUCHED BY ITS OPEN, so the record's later moves of it count no
-	// second version.
+	// Touched by its open, so later moves in the record count no second
+	// version.
 	w := &b.writes
 	w.isTouched[id] = true
 	w.touched = append(w.touched, id)
@@ -779,15 +689,12 @@ func (b *changeBook) open(e PushEntry) (string, string) {
 	return id, ""
 }
 
-// The live changes a push record reads — the changes its branches head and
-// the changes its targets are set to the heads of — and the authors its
-// pushers already are of them, each registered in plan_test.go: driven from
-// its JSON list, one seek an element — of the index partial on the live
-// states, its predicate as the index spells it ([liveChanges]), by a branch
-// or by a target and a head; of the authors' key by a change and an author.
-// Every column a change's row holds is read qualified, since json_each has an
-// `id` of its own; [changeColumns]'s order, which
-// TestTheQualifiedChangeColumnsAreTheChangeColumns holds them to.
+// The reads behind [readChangeBook], each registered in plan_test.go: driven
+// from its JSON list, one seek an element — of the index partial on the live
+// states, its predicate as the index spells it ([liveChanges]), or of the
+// authors' key. A change's columns are read qualified, since json_each has an
+// `id` of its own, in [changeColumns]'s order
+// (TestTheQualifiedChangeColumnsAreTheChangeColumns).
 const (
 	qualifiedChangeColumns = `c.id, c.repo_id, c.number, c.title, c.body_bytes, c.state, c.source_ref,
 		c.target_ref, c.head_oid, c.revision, c.owner, c.owner_kind, c.owner_operator_id, c.work_backend,
@@ -804,9 +711,9 @@ const (
 	heldAuthorsSQL = `SELECT a.change_id, a.author FROM json_each(?) AS j
 		CROSS JOIN code_change_authors AS a
 		WHERE a.change_id = CAST(j.value ->> 0 AS TEXT) AND a.author = CAST(j.value ->> 1 AS TEXT)`
-	// queuedChangesSQL is the changes of a list that hold a LIVE queue
-	// entry, one seek of code_queue_change_idx a change, the live states
-	// spelled as code_queue_live_idx is partial on them.
+	// queuedChangesSQL is the changes of a list holding a LIVE queue entry,
+	// one seek of code_queue_change_idx a change, the live states spelled as
+	// code_queue_live_idx is partial on them.
 	queuedChangesSQL = `SELECT q.change_id FROM json_each(?) AS j
 		CROSS JOIN code_queue AS q INDEXED BY code_queue_change_idx
 		WHERE q.change_id = CAST(j.value AS TEXT) AND q.state IN ('waiting', 'testing')`

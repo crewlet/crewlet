@@ -41,19 +41,16 @@ func sizes(set func(*host.SpoolSizes)) host.SpoolSizes {
 }
 
 // O19: BLOBLESS CHECKOUTS BEHIND ONE TOKEN ALL SUCCEED, however many more of
-// them there are than the token's share of the spool holds at once. A checkout
-// of a blobless clone asks for every blob it lacks in ONE lazy fetch, which
-// git does not retry, and behind one CI token the fetch past the credential's
-// share was answered 503 at once — so the checkout failed, under no abuse at
-// all. Here a credential's share holds one such fetch and not two, four
-// checkouts' lazy fetches arrive at once, and the first is held in its
-// upload-pack — its body spooled whole, as through a cold sync — until the
-// other three are seen WAITING for room rather than refused; then all four
-// are served.
+// them than the token's share of the spool holds at once. A blobless
+// checkout asks for every blob it lacks in ONE lazy fetch git never retries,
+// so a fetch past the share must wait, not be refused. Here the share holds
+// one such fetch, four arrive at once, and the first is held in its
+// upload-pack (body spooled whole, as through a cold sync) until the other
+// three are seen WAITING; then all four are served.
 //
 // Mutation: answer a request that must wait 503 at once (spools.start
-// refusing rather than queueing) and the three are never seen waiting: they
-// are refused, and their checkouts fail.
+// refusing rather than queueing) and the three are refused, their checkouts
+// failing.
 func TestBloblessCheckoutsBehindOneTokenAllSucceed(t *testing.T) {
 	fake, hold, started := holdFirst(t)
 	c := newCase(t, gitlettest.SoloOptions{GitPath: fake}, gitlettest.Settings())
@@ -124,12 +121,11 @@ func TestBloblessCheckoutsBehindOneTokenAllSucceed(t *testing.T) {
 	assertNoSpool(t, c)
 }
 
-// A SPOOLED FETCH WAITS ITS TURN — for the room a body arriving claims, the
-// node's or its credential's, or for room the spools that ended hold — and is
-// served once that is given back, while another credential's request its own
-// turn admits is served at once rather than behind the waiter; and a request
-// past what this node spools for one request, which it can never take, is
-// answered 413 at once, never made to wait.
+// A SPOOLED FETCH WAITS ITS TURN for the room a body arriving claims (the
+// node's or its credential's) or ended spools hold, and is served once it is
+// given back; another credential's request its own turn admits is served at
+// once, not behind the waiter; and a request past what this node spools for
+// one request is answered 413 at once, never made to wait.
 func TestASpooledFetchWaitsItsTurn(t *testing.T) {
 	fake, hold, started := holdFirst(t)
 	c := newCase(t, gitlettest.SoloOptions{GitPath: fake}, gitlettest.Settings())
@@ -390,12 +386,11 @@ func TestAWaiterWithNoPlaceIsRefusedAtOnce(t *testing.T) {
 	}
 }
 
-// A WAITER WHOSE CLIENT LEAVES GIVES UP ITS PLACE AT ONCE, where the transport
-// says the client left: over HTTP/2 the client's reset ends the request's
-// context while the waiter reads nothing, and the request behind it starts as
-// soon as the turn it waited behind comes, without waiting for the wait's
-// bound. (Over HTTP/1.1 net/http learns that a client hung up only by reading
-// its connection, which a waiter does not — spool.go.)
+// A WAITER WHOSE CLIENT LEAVES GIVES UP ITS PLACE AT ONCE where the transport
+// says so: over HTTP/2 the client's reset ends the request's context while
+// the waiter reads nothing, and the request behind it starts at its turn, not
+// at the wait's bound. (Over HTTP/1.1 net/http sees a hang-up only by
+// reading, which a waiter does not: spool.go.)
 func TestAWaiterWhoseClientLeavesGivesUpItsPlace(t *testing.T) {
 	c := newCase(t, gitlettest.SoloOptions{}, gitlettest.Settings())
 	node := c.Fleet.Nodes()[0]
@@ -462,10 +457,10 @@ func TestAWaiterWhoseClientLeavesGivesUpItsPlace(t *testing.T) {
 }
 
 // A SPOOL HOLDS WHAT ITS CLIENT SENT, AND NO MEMORY: held in upload-pack before
-// its first byte, a spooled request's spool holds its whole body — the part
-// first read into memory moved in beside the rest — its request memory is let
-// go, and its body no longer counts among those arriving, so it holds its
-// credential's turn no longer than its body took to arrive.
+// its first byte, a spooled request's spool holds its whole body (the head
+// first read into memory moved in), its request memory is let go, and its body
+// no longer counts as arriving, so it holds its credential's turn only while
+// its body arrives.
 //
 // Mutation: keep the head in memory once spooled (body.go's move) and the
 // request memory is held; reserve the repository's bound (start asked for
@@ -506,13 +501,11 @@ func TestASpoolHoldsWhatItsClientSentAndNoMemory(t *testing.T) {
 }
 
 // A FETCH HELD PAST THE WAIT DOES NOT HOLD ITS CREDENTIAL'S TURN: a spooled
-// request whose body has arrived waits for its sync, its transfer slot and
-// upload-pack's read — a cold sync is a minute or two — and counted among its
-// credential's bodies until then, the requests behind it waited out their
-// bound and were refused, a checkout each. Here the first request's body,
-// undeclared as git's are, claims its credential's whole share while it
-// arrives; its upload-pack is held well past the wait's bound, and the
-// request behind it is served all the same.
+// request whose body has arrived still waits for its sync, transfer slot and
+// upload-pack (a cold sync takes minutes); counted as arriving until then, it
+// would refuse every request behind it. Here the first request's undeclared
+// body claims its credential's whole share while it arrives, its upload-pack
+// is held past the wait's bound, and the request behind it is served anyway.
 //
 // Mutation: keep a body among those arriving until its spool is given back
 // (leaveLocked in release only) and the second request is answered 503 when
@@ -559,15 +552,12 @@ func TestAFetchHeldPastTheWaitDoesNotHoldItsCredentialsTurn(t *testing.T) {
 }
 
 // A CREDENTIAL'S ENDED SPOOLS OUTLASTING THE WAIT REFUSE WHAT WAITS BEHIND
-// THEM — the one cost of the share a token per runner removes: a spool holds
-// its room until upload-pack has read it, so a request behind its own
-// credential's spools that ended waits through their syncs, and a cold sync
-// outlasts the wait. Here ceo's first request has spooled most of its
-// credential's share and is held in its upload-pack past the wait's bound, as
-// through a cold sync; ceo's next is answered 503 when its wait expires,
-// naming the bytes its credential's spools hold, while dev's is served at
-// once — so a token behind more lazy fetches than its quarter holds fails the
-// excess on a cold node, which the pages say in figures.
+// THEM, the one cost of the share a token per runner removes: a spool holds
+// its room until upload-pack has read it, and a cold sync outlasts the wait.
+// Here ceo's first request spools most of the share and is held in its
+// upload-pack past the wait's bound; ceo's next is answered 503 when its wait
+// expires, naming the bytes its credential's spools hold, while dev's is
+// served at once. The pages state this cost in figures.
 //
 // Mutation: charge an ended spool's bytes to nobody's share (giveLocked in
 // ended for the whole spool) and ceo's next is served while the first is
@@ -629,13 +619,11 @@ func TestACredentialsEndedSpoolsOutlastingTheWait(t *testing.T) {
 	assertNoSpool(t, c)
 }
 
-// O19, AND A REPOSITORY PAST THE SHARE: a request to a repository whose bound —
-// fifty bytes an object it holds — is far past its credential's share claims
+// O19, AND A REPOSITORY PAST THE SHARE: a request to a repository whose bound
+// (fifty bytes an object it holds) is far past its credential's share claims
 // what one request spools and holds what it sent, so a credential's requests
-// to it spool as many at once as their claims fit beside each other, and the
-// node's as many as it takes, whoever sends them. Reserved by the bound, each
-// held a whole share while its body arrived, and one credential's arrived one
-// at a time.
+// to it spool as many at once as their claims fit, and the node's as many as
+// it takes, whoever sends them.
 //
 // Mutation: claim a body's repository bound (start handed RequestBound for
 // its claim) and the first is refused 413, past what one request spools.
@@ -668,16 +656,13 @@ func TestARepositoryPastTheShareSpoolsAsManyAsTheNodeTakes(t *testing.T) {
 	assertNoSpool(t, c)
 }
 
-// SLOW UPLOADS HOLD WHAT THEY SENT, NEVER A TURN: on a four-core node's own
-// allowance, twenty requests of four credentials whose bodies are arriving —
-// more than the lane is wide, and five of each credential, more than a
-// quarter of it — every one sent but its last bytes, as a client at the pace
-// floor holds one for half an hour, all spool at once, and a fifth
-// credential's request is served beside them. Counted as a whole request each
-// while it arrived, sixteen such uploads held every turn the node had and the
-// requests behind them waited out their bound; held to what they sent, they
-// hold a few mebibytes of the node's gibibyte, and the oldest's claim is the
-// one room kept from the rest.
+// SLOW UPLOADS HOLD WHAT THEY SENT, NEVER A TURN: on a four-core node's
+// allowance, twenty requests of four credentials (more than the lane is wide,
+// five each, past a quarter of it) send all but their last bytes, as a client
+// at the pace floor may for half an hour; all spool at once, and a fifth
+// credential's request is served beside them. Held to what they sent they hold
+// a few mebibytes of the node's gibibyte; only the oldest's claim is kept from
+// the rest.
 //
 // Mutation: charge every body arriving its whole claim in the room the rest
 // may take (boundsLocked reading b.claim for b.held) and ceo's fifth waits
@@ -821,16 +806,14 @@ func TestTheSpoolWaitIsTheIdleWindowLessAKeepalive(t *testing.T) {
 	}
 }
 
-// EVERY LANE'S SPOOL SIZES LET EVERY BODY FINISH, and the figures the pages
-// state are what the allowance admits: at any lane width the largest claim
-// fits the allowance and a credential's share (spoolSizes.check), and on a
-// four-core node's sixteen transfer slots and a sixteen-core node's sixty-four
-// the largest request, the shares, the room the bodies arriving may hold
-// before one waits on another, the waiting room and its memory, and how many
-// lazy fetches of 20 MB fill a token's quarter and the node's room, are the
-// ones the deployment page, the code guide, the concept page and the metric
-// reference say — whatever the repository, since a spool holds what its
-// client sent.
+// EVERY LANE'S SPOOL SIZES LET EVERY BODY FINISH, and the pages' figures are
+// what the allowance admits: at any lane width the largest claim fits the
+// allowance and a credential's share (spoolSizes.check); on sixteen and
+// sixty-four transfer slots (four and sixteen cores) the largest request, the
+// shares, the room arriving bodies may hold, the waiting room and its memory,
+// and how many 20 MB lazy fetches fill a token's quarter and the node's room
+// are what the deployment page, code guide, concept page and metric reference
+// say, whatever the repository, since a spool holds what its client sent.
 //
 // Mutation: make a credential's share a third of the allowance, a place a
 // lane's width, or the largest request the whole share, and this fails.
@@ -923,14 +906,10 @@ func requireSays(t *testing.T, page string, wants ...string) {
 // (armHold) writes started and waits, before it runs, until hold is removed;
 // every other upload-pack runs at once. rearm makes the next one held again.
 //
-// THE FIRST IS THE ONE THAT CLAIMS: it creates claimed, a file, under the
-// shell's own noclobber (`set -C`), which a POSIX shell opens O_CREAT|O_EXCL,
-// so of two upload-packs that start at once the kernel lets one alone create
-// it. Never `mkdir claimed`, whose exclusivity is its tool's: uutils
-// coreutils' mkdir, /usr/bin/mkdir on Ubuntu 26.04, answers success to both
-// of two made at once through 0.10.0 (fixed upstream in 0.11.0; measured on
-// ubuntu:26.04, both succeeded in 2178 rounds of 3000), and both upload-packs
-// would hold.
+// The first claims by creating claimed under the shell's noclobber (`set -C`,
+// opened O_CREAT|O_EXCL), so of two upload-packs starting at once the kernel
+// lets one alone hold. Never `mkdir claimed`: uutils coreutils' mkdir
+// (Ubuntu 26.04's) before 0.11.0 lets two concurrent mkdirs both succeed.
 func holdFirst(t *testing.T) (fake, hold, started string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -968,11 +947,10 @@ func rearm(t *testing.T, hold, started string) {
 // repeatedWants is a v2 fetch of head, asked for again until the request is
 // past size bytes: the fewest wants, at least one, that take it past size.
 //
-// The count is ARITHMETIC — the request's fixed frame and one fixed-length
-// line a want — never found by building the request again for every want
-// added: that was quadratic, and the 80 KiB request took 5.6 s to build under
-// the race detector on an idle machine, which the case that holds a refusal to
-// being answered at once timed as the node's answer.
+// The count is ARITHMETIC (a fixed frame plus one fixed-length line a want):
+// rebuilding the request per want is quadratic, slow enough under the race
+// detector to be timed as the node's answer by the case that holds a refusal
+// to being answered at once.
 func repeatedWants(head string, size int) string {
 	frame := len(fetchWants(nil))
 	line := len(pkt("want " + head + "\n"))

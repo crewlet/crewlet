@@ -57,7 +57,7 @@ const SCRIPT_DECLARED: { name: string; by: string; why: string }[] = [
   },
   {
     name: "--code-gap-digits",
-    by: "routes/gitlet/change/FileStack.tsx",
+    by: "routes/gitlet/FileStack.tsx",
     why: "the digits of a diff's longest line number, set on .code-gap so its controls fill the numbers' gutter the kit's DiffView draws",
   },
 ];

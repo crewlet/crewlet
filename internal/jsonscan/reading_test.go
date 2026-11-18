@@ -24,11 +24,13 @@ var threadDecoding = jsonv2.JoinOptions(
 )
 
 // seenToken is one token as a reader sees it: its kind, a Name's or a String's decoded text or a Number's
-// literal, and how many containers are open after it.
+// literal, and how many containers are open after it; and Invalid, whether the text as written held a byte
+// that begins no UTF-8 character, which the decoded text cannot say ([jsonscan.Scanner.InvalidUTF8]).
 type seenToken struct {
-	Kind  jsonscan.Kind
-	Text  string
-	Depth int
+	Kind    jsonscan.Kind
+	Text    string
+	Depth   int
+	Invalid bool
 }
 
 // scanned is what one reading of a text yields: its tokens and where each begins, and what ended the
@@ -85,6 +87,8 @@ func scan(t *testing.T, data []byte, how reading) scanned {
 			}
 			tok.Text = text
 		}
+		// Asked at every token, read or not: a text passed over unread, and a token with none, answer false.
+		tok.Invalid = s.InvalidUTF8()
 		out.tokens = append(out.tokens, tok)
 		out.offsets = append(out.offsets, at)
 	}
@@ -197,7 +201,8 @@ func scannerClass(t *testing.T, err error) string {
 }
 
 // textTokens is jsontext's tokens of data, which it reads as one value, under the thread layer's options, and
-// where each begins: a string token is a Name where its object expects a name.
+// where each begins: a string token is a Name where its object expects a name, Invalid where utf8.Valid
+// refuses its bytes as written, from where jsontext reads it to where it reads it to.
 //
 // A TOKEN BEGINS WHERE JSONTEXT'S LAST ONE ENDED, past the blanks and the one ',' or ':' between them:
 // jsontext says where a token ends (InputOffset after ReadToken), and in a text it reads as one value only
@@ -248,6 +253,9 @@ func textTokens(t *testing.T, data []byte) ([]seenToken, []int64) {
 		}
 		for at < int64(len(data)) && bytes.IndexByte([]byte(" \t\r\n,:"), data[at]) >= 0 {
 			at++
+		}
+		if tok.Kind() == '"' {
+			next.Invalid = !utf8.Valid(data[at:dec.InputOffset()])
 		}
 		tokens = append(tokens, next)
 		offsets = append(offsets, at)

@@ -228,17 +228,12 @@ func (c *Coordinator) nameUnfinished(ctx context.Context, run PendingRun, left [
 
 // awaitCalls waits until run's log holds no entry of its round in flight
 // ([BridgeLog.InFlight]), or until each it still holds is one no collection
-// waits for any longer — its own bound passed, the turn's cap passed, or its
-// runner gone — and answers those, with how many entries it saw in flight at
-// any point. See this file's doc for what ends the wait.
-//
-// THE WATCH IS ITS OWN, started and stopped here: a watch that stops hearing is
-// watched again, after a jittered pause, and the store's watch reads the log
-// again as it begins ([PendingStore.WatchLog]), so nothing written between the
-// two is missed. A watch that cannot be made is an error: a store that cannot be
-// read could not have answered the read the collection makes next either. It is
-// the store's silence ([ErrStoreSilent]), the first watch's and one made again
-// alike, and never the box's.
+// waits for any longer (its own bound passed, the turn's cap passed, or its
+// runner gone), answers those, and says how many entries it saw in flight. The
+// watch is its own: one that stops hearing is watched again after a jittered
+// pause, and the store's watch reads the log again as it begins
+// ([PendingStore.WatchLog]). A watch that cannot be made is the store's silence
+// ([ErrStoreSilent]), never the box's.
 func (c *Coordinator) awaitCalls(ctx context.Context, run PendingRun) ([]unfinishedCall, int, error) {
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()

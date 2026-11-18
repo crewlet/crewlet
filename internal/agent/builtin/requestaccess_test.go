@@ -51,6 +51,28 @@ func TestAnAccessRequestIsADecisionWhoseOptionIsTheGrant(t *testing.T) {
 	}
 }
 
+// AN ACCESS REQUEST IS ASKED WHATEVER THE SEAT'S NAME, which no config caps: a
+// question too long to name the seat names "this agent", and the option never
+// repeats it. Mutation: name the seat in the option's detail and it is refused.
+func TestAnAccessRequestIsAskedWhateverTheSeatsName(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	turn := turnFor(t, "agent-cto")
+	seat := *turn.Seat
+	seat.Name = strings.Repeat("Principal Site Reliability Engineer ", 16)
+	turn.Seat = &seat
+	got := callIn(t, workRegistry(t, accessDeps(trk)), turn, builtin.RequestAccessTool, map[string]any{
+		"item": "ENG-1", "ask": "founder", "access": string(advisor.AccessHealth),
+		"why": "The backup alarm fired and no agent is told when an alarm fires.",
+	})
+	if got.Failed || len(trk.patched) != 1 {
+		t.Fatalf("the request was not asked: %s", got.Output)
+	}
+	if d := trk.patched[0].Comment.Decision; !strings.HasPrefix(d.Question, "Allow this agent to ") {
+		t.Errorf("question %q, want the seat named as this agent", d.Question)
+	}
+}
+
 // AND REFUSED BEFORE ANYTHING IS POSTED where it could never be granted: a key
 // the catalogue does not name, a person who is not one, or no reason.
 func TestAnAccessRequestNobodyCouldGrantIsRefused(t *testing.T) {

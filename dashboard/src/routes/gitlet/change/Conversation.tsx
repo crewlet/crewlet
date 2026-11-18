@@ -18,8 +18,18 @@
  * page loaded, so a reply on a later page joins its root.
  */
 
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
-import { AsideLayout, Button, Stack, Tag, Textarea, useSendOnEnter } from "@crewlethq/ui";
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  AsideLayout,
+  Button,
+  Kbd,
+  MarkdownEditor,
+  Stack,
+  Tag,
+  Textarea,
+  useSendOnEnter,
+  type MarkdownEditorApi,
+} from "@crewlethq/ui";
 import {
   CheckGlyph,
   EyeGlyph,
@@ -35,6 +45,7 @@ import {
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useDraftState } from "~/app/assistant/draft.ts";
 import { PageFailed } from "~/components/common.tsx";
+import { FINDING_SEVERITIES } from "~/contract/code.ts";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { changeLive } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -54,7 +65,8 @@ import { ownedPathList } from "../owners.ts";
 import { changeHref } from "../paths.ts";
 import { Byline, Face, ShaChip, useWhoName } from "../ui.tsx";
 import { Description } from "./Description.tsx";
-import { MergeBox } from "./Merge.tsx";
+import { MergeBox, MergeDisc, type MergeFacts } from "./Merge.tsx";
+import { reRequestable, reviewerStandings } from "./mergeSections.ts";
 import { ChangeRail } from "./Rail.tsx";
 import {
   Disc,
@@ -62,6 +74,7 @@ import {
   TimelineEvent,
   TimelineItem,
   TimelineList,
+  TimelineMark,
   type DiscTone,
 } from "./Timeline.tsx";
 import { FindingCard, type ExcerptRead } from "./Finding.tsx";
@@ -75,6 +88,7 @@ import {
   usePagedFindings,
   usePagedReviewers,
   usePagedReviews,
+  type LatestChecks,
 } from "./reads.ts";
 import "~/styles/gitlet.css";
 
@@ -158,9 +172,12 @@ export function verdictTone(verdict: string): DiscTone {
 export function Conversation({
   change,
   revisions,
+  checks,
 }: {
   change: CodeChangeDetail;
   revisions: readonly CodeRevisionRow[];
+  /** The head's latest checks, read once by the page for the box, the rail and the tab. */
+  checks: LatestChecks;
 }) {
   const now = useNow();
   const [quoted, setQuoted] = useState<Quote | null>(null);
@@ -200,6 +217,14 @@ export function Conversation({
     repliesTo: (finding) => comments.items.filter((c) => c.finding_id === finding),
     excerptOf,
   };
+  const standings = reviewerStandings(change, reviews.items);
+  const merge: MergeFacts = {
+    revisions,
+    checks,
+    standings,
+    again: reRequestable(change, standings, asked.items),
+    severities: openSeverities(change, findings),
+  };
   const more = parts.some((p) => p.more);
   const paging = parts.some((p) => p.paging);
   const pageError = parts.find((p) => p.pageError)?.pageError ?? null;
@@ -214,7 +239,14 @@ export function Conversation({
       fit="page"
       asideLabel="About this change"
       aside={
-        <ChangeRail change={change} revisions={revisions} reviews={reviews.items} asked={asked} />
+        <ChangeRail
+          change={change}
+          revisions={revisions}
+          standings={standings}
+          again={merge.again}
+          asked={asked}
+          checks={checks}
+        />
       }
     >
       <Stack gap={5}>
@@ -252,11 +284,34 @@ export function Conversation({
           )}
         </section>
         <hr className="code-tl-break" />
-        <MergeBox change={change} />
-        <CommentComposer change={change} quote={quoted} />
+        <TimelineList label="Merge and comment" tail>
+          <TimelineMark disc={<MergeDisc change={change} checks={checks.rows} />}>
+            <MergeBox change={change} facts={merge} />
+          </TimelineMark>
+          <CommentComposer change={change} quote={quoted} />
+        </TimelineList>
       </Stack>
     </AsideLayout>
   );
+}
+
+/** The open findings counted by weight, heaviest first; null until every open one is loaded. */
+function openSeverities(
+  change: CodeChangeDetail,
+  findings: { items: readonly CodeFindingRow[]; more: boolean },
+): Map<string, number> | null {
+  const open = findings.items.filter((f) => f.state === "open");
+  if (findings.more || open.length !== (change.conversation?.open_findings ?? 0)) return null;
+  const counted = new Map<string, number>();
+  for (const severity of FINDING_SEVERITIES) {
+    const n = open.filter((f) => f.severity === severity).length;
+    if (n > 0) counted.set(severity, n);
+  }
+  for (const f of open) {
+    if (!counted.has(f.severity))
+      counted.set(f.severity, open.filter((g) => g.severity === f.severity).length);
+  }
+  return counted;
 }
 
 /** Why an ask carries no time: said as what is known, never guessed. */
@@ -708,23 +763,24 @@ interface Quote {
   n: number;
 }
 
-/** A comment of its own on the change, which starts a thread. */
+/** A comment of its own on the change, which starts a thread: the kit's markdown editor, sent on Mod+Enter. */
 function CommentComposer({ change, quote }: { change: CodeChangeDetail; quote: Quote | null }) {
   const viewer = useViewer();
   const write = useAct("code_comment_on_change");
   const [body, setBody] = useDraftState("");
-  const field = useRef<HTMLTextAreaElement>(null);
+  const editor = useRef<MarkdownEditorApi>(null);
   const landed = useRef(0);
-  // A QUOTE IS APPENDED ONCE per press, and the box takes focus at its end.
+  const keys = useId();
+  // A QUOTE IS APPENDED ONCE per press, and the editor takes focus at its end.
   useEffect(() => {
     if (!quote || quote.n === landed.current) return;
     landed.current = quote.n;
     setBody((was) => (was && !was.endsWith("\n") ? `${was}\n\n` : was) + quote.text);
-    const box = field.current;
-    if (box) {
-      box.focus();
-      queueMicrotask(() => box.setSelectionRange(box.value.length, box.value.length));
-    }
+    queueMicrotask(() => {
+      editor.current?.focus();
+      const box = document.querySelector<HTMLTextAreaElement>(".code-compose textarea");
+      box?.setSelectionRange(box.value.length, box.value.length);
+    });
   }, [quote, setBody]);
   useDraftBox({
     path: "comment",
@@ -743,33 +799,41 @@ function CommentComposer({ change, quote }: { change: CodeChangeDetail; quote: Q
     if (result && (result.kind === "applied" || result.kind === "pending")) setBody("");
   };
   const blocked = body.trim() ? undefined : "Write the comment first.";
-  const keys = useSendOnEnter({ onSend: () => void send(), canSend: pressable(write, blocked) });
+  const press = (
+    <WriteButton write={write} variant="secondary" blocked={blocked} onPress={() => void send()}>
+      Comment
+    </WriteButton>
+  );
   return (
-    <section aria-label="Comment on the change" className="code-compose">
-      {viewer.owner && <Face who={viewer.owner} size="sm" />}
-      <div className="code-compose__box">
-        <Textarea
-          ref={field}
-          aria-label="Comment"
-          aria-describedby={keys.describedBy}
-          placeholder="Comment on the change"
+    <li className="code-timeline__item">
+      {viewer.owner && (
+        <span className="code-tl-face" aria-hidden="true">
+          <Face who={viewer.owner} size="md" />
+        </span>
+      )}
+      <section aria-label="Comment on the change" className="code-compose">
+        <MarkdownEditor
+          ref={editor}
+          label="Comment"
+          placeholder="Leave a comment. Markdown works."
           value={body}
-          rows={3}
-          onChange={(event) => setBody(event.target.value)}
-          onKeyDown={keys.onKeyDown}
+          rows={4}
+          onChange={setBody}
+          aria-describedby={keys}
+          onSubmit={() => {
+            if (pressable(write, blocked)) void send();
+          }}
+          renderPreview={(value) => <div className="prose md">{renderMarkdown(value)}</div>}
+          footer={
+            <span className="code-compose__foot">
+              <span className="t-caption" id={keys}>
+                <Kbd keys={["Mod", "Enter"]} /> sends
+              </span>
+              {press}
+            </span>
+          }
         />
-        <div className="code-compose__foot">
-          {keys.description}
-          <WriteButton
-            write={write}
-            variant="primary"
-            blocked={blocked}
-            onPress={() => void send()}
-          >
-            Comment
-          </WriteButton>
-        </div>
-      </div>
-    </section>
+      </section>
+    </li>
   );
 }

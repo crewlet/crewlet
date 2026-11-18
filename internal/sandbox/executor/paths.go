@@ -59,7 +59,11 @@
 // only as a key ([threadLine.AttachmentToolUseID]), since a PostToolUse
 // hook's firing carries the id of the call it followed, and a task
 // notification's `<tool-use-id>` as the leg its text claims
-// ([threadMessage.Notification]), matched only against a call read. The
+// ([threadMessage.Notification]), matched only against a call read; and a
+// hook's words (a system message, a success's stdout) leave the layer only as
+// the asked take tokens they name ([threadReader.Asking],
+// [threadLine.HookTakes], [claudeTakeToken]), each whole and exactly, never as
+// bytes, alongside the hook's event ([threadLine.HookEvent]). The
 // take's context meter (measure.go) reads the main
 // thread through the layer too, in one walk of its whole lines
 // ([walkThread]): it decides what a continuation of the capture is told, by
@@ -82,6 +86,178 @@
 // depth-one subagent's thread and metadata, through the layer, metering the
 // archive at [threadPlainMax] with the scrub's own meter and handing each
 // member it reads what is left of that budget.
+//
+// # A collection's read of a thread: a base, then one slot
+//
+// A pass over a session's main thread ([walkThread]) — a collection's read of
+// its job's copy ([ClaudeCode]'s readMainThread) and a take, its scrub and
+// its meter one pass — holds no token while it stays within its BASE, and
+// takes ONE slot of a pool of its own ([CollectionLargeReadsAtOnce],
+// [passBudget]) before it holds more, keeping it to the pass's end. Its
+// triggers: a line past [collectionBaseLineBytes] ([lineRun], beneath the
+// line reader, so read-ahead escalates early and never late), and a reading
+// keeping more than [collectionBaseRecords] records ([recordKeeper], the
+// chain). The take's scrub holds its pieces to the same base: a line, a JSON
+// token, and a stretch of short lines a redaction holds ([scrubBounds]).
+//
+// THE TWO COEFFICIENTS are the layer's own worst measurements over their own
+// bounds ([threadChain], THE BOUNDS and THE COLLECTION'S PASS): the chain at
+// both bounds holds 43 MiB at End's peak, 344 bytes a record of 2^17; and the
+// pass's worst line, a reply id at [threadLineMax] of bytes the decode reads
+// as U+FFFD, three bytes a byte, held 109 MiB beside the chain's 35 MiB as
+// End starts, 9.25 bytes a byte of the line.
+//
+// THE BASE: a line of 256 KiB is four times the 61,170-byte p99 of 67,871
+// lines in 9,434 real threads (the census's longest, 2,002,134 bytes; 28
+// threads held a line past the base, each a large file read or written into
+// the thread), at 9.25 bytes a byte 2.3 MiB at worst; and 2^13 records, at
+// 344 bytes 2.7 MiB, a thread of about 16 MiB at the 2,053 bytes a line probe
+// P6 measured, eight times a day's session. With the 64 KiB buffer and the
+// count's carry, a pass at its base holds about 5.1 MiB at its worst, by no
+// token, so a typical collection never waits. MEASURED on two cores
+// (BenchmarkACollectionPassAtItsBase, read off the GC trace as
+// BenchmarkAThreadChainAtItsBounds says): a main thread of 2^13 records the
+// chain files, its last a reply at the line's base whose id the decode
+// triples, read by the chain and the count in one walk, in 0.11 to 0.12 s,
+// holding 4 MiB at most at GOGC=10 and its heap peaking at 9 MiB at the
+// default, within the arithmetic, and taking no slot.
+//
+// THE LARGE TIER, ONE SLOT IN A POOL APART: one pass past its base holds the
+// measured 109 MiB at most. Shared with [TranscriptReadsAtOnce]'s two, a
+// collection's large pass waits behind two transcript reads of up to about
+// 11 s each and spends internal/sandbox's MainThreadReadWait (15 s), so a
+// person paging a transcript would decide how a turn's relaunch is told;
+// apart, it never does. One slot, not two: the process's thread readers then
+// hold at worst 2 x 133 + 109 = 375 MiB beside the base tier, and one waiter
+// behind one holder at its worst (2.85 s, 5.7 s loaded) is through in 11.4 s,
+// within the 15 s. A later waiter, or one behind a take whose scrub holds the
+// slot while its archive streams out, may not be: its read ends with its
+// context's error and reads as no reading (count unread), the safe side, as a
+// read past MainThreadReadWait already is. The wait is spent inside that wait,
+// never added to it.
+//
+// WHAT RE-DERIVES IT: a layer that charges a line by its facts rather than
+// holding it whole moves the line's trigger to that charge and replaces the
+// 9.25-byte coefficient with its own measure.
+//
+// # A hook's note, confirmed off its job's main thread
+//
+// A note a Claude Code hook served counts as read only once the job's session
+// shows it: the read of the job's main thread ([ClaudeCode]'s readMainThread)
+// asks the served takes (internal/sandbox's MainThreadAsk), and one reading in
+// the same walk ([hookReading]), beside the resume's model ([chainReading],
+// fed first on each line so the reading reads that line's handle), answers
+// each take Held, Restarted, Absent, or none of these with why. The release
+// and the saved compaction mark the count alone, never the receipts.
+//
+// A PAIR is a main-thread chained `hook_system_message` at event E whose
+// content names the take's token ([threadLine.HookTakes]), then the
+// `hook_additional_context` of the same firing at E after it. A firing is
+// keyed by the digest of its `toolUseID` and E, never the string, so what the
+// reading keeps is fixed in size whatever the thread wrote: per asked take
+// (at most 64) the firing's digest, its event as one of two constants, the two
+// records' handles, the system message's line, and the firing of the first
+// success whose stdout names the take. A context before its system message
+// pairs nothing. The success's stdout is the hook's whole answer, so it is
+// never a confirmation.
+//
+// HELD where the pair's two records are handed ([threadChain.Handed]) on a
+// thread every size path of the resume reads alike ([threadChain.AnySize]:
+// the box's copy is read, and the archive's resume may take another path),
+// the job's release is one whose resume was read ([claudeResumeRead]), and no
+// restart ([threadRestarts.See]) lies after the system message. RESTARTED
+// where the same holds but one does, or, for a BATCH pair, a main reply after
+// it says its request cleared tool results or says it unreadably
+// ([threadLine.ToolResultsCleared]): a batch's note rides its batch's last
+// tool result into the request and is cleared with it, where a Stop's note is
+// a turn of its own. A pair the resume does not hand (a withdrawn record, a
+// parent naming no record) is neither, and is evidence its take arrived.
+//
+// ABSENT only where the thread proves it: its harness ended its own run, it
+// was read to its end with no refused line and no torn last piece, it never
+// restarts, another asked take at the same event is held (each event writes
+// its own shapes, so a release that rewords one event's pair proves nothing
+// at that event, and a held take at the other licenses nothing), no asked
+// take is named outside its own pair (a success's stdout of another firing,
+// or a system message whose firing never gets its context or names a take of
+// another event), every hook record's type, firing and event read, and the
+// chain places the thread. A take whose pair was found is never absent, and a
+// `hook_cancelled` line names no take, so it denies nothing. Anything else is
+// undecided: the safe side, a note told again.
+//
+// # A thread line is read in one scanner pass, never held
+//
+// The scan reader (claudelinescan.go, [scanReader]) reads a member a line at a
+// time as [threadReader] does and answers each line as it does, but reads it
+// through [jsonscan] in ONE PASS that never holds the line, so a line of any
+// length costs what its readers read of it: Claude Code keeps no bound on a
+// line (a whole-PDF Read writes 55,924,056 bytes on one). Until it takes the
+// old reader's place, a differential holds it to the whole decode line by
+// line (claudelinescan_internal_test.go).
+//
+// A LINE IS ITS OWN READER ([lineSource]): it ends at the break and hands the
+// scanner the line without it, so the scanner reads one JSON text a line.
+// Every byte it takes of the member passes first through the member's meter
+// and through the line's byte facts ([lineBytes]), a tee of the raw bytes,
+// never of the tokens, since a pattern a reader of bytes reads can begin
+// inside a name, through an escaped quote ([threadBytes]). The context is
+// asked before each piece of at most [lineChunkBytes], so a reading overruns
+// its caller's wait by one piece whatever the line's length, and a line
+// refused part way is drained to its break through the same take.
+//
+// NOTHING OF A LINE COMMITS BEFORE ITS BREAK AND THE SCANNER'S END OF IT, and
+// a piece the member ends with no break commits nothing. Then the line is
+// judged in the order Claude Code's load reads it ([scanReader.commit]): a
+// fault of the grammar first, wherever it lies (a NUL or a byte order mark
+// first is faultLead, a cut value faultPrefix, too deep faultDepth, more after
+// the value faultTrailing, else faultSyntax), since the whole decode reads the
+// whole value before its head; then one value that is no object; then the head,
+// each key by its last occurrence; then the bounds below; only then a record,
+// each frame settled to its type ([settle]). So a late fault beats what the
+// line said before it, and a line past a bound is classed exactly where its
+// grammar or head refuses it: past a bound the pass keeps scanning, holding
+// nothing more.
+//
+// EVERY MEMBER IS READ BY ITS DECODED NAME, exactly, case kept, as the whole
+// decode reads a key under [threadDecoding] (`"type"` is `type`; `"Type"`
+// no key the layer reads), and a key written twice by its last value,
+// wholesale: each occurrence replaces what the one before it left, a frame's
+// all of it, never merged with it.
+//
+// EVERY VALUE IS READ BY ONE OF THREE MEANS, or passed over unheld
+// ([jsonscan.Scanner.Skip]). A small value the layer's own code decodes (a
+// uuid, a timestamp, a usage, a block's id) is CAPTURED as written within
+// [threadValueMax] ([jsonscan.Scanner.Capture]), copied into the facts or held
+// in the reader's buffers until its object ends; a capture past that bound
+// fails the line closed, never read as a guess. A container its readers walk
+// is a FRAME, read member by member, keeping only what its readers ask (a
+// message's kind, its blocks counted by kind, its calls) and deciding each
+// object by the layer's one rule of it ([blockCallOf]) once every key of it
+// has been met. A text its readers ask a property of STREAMS into the
+// automaton that answers it at any length ([textSays], [textNotice],
+// [textHandback], [textResult]), a hook's words into the asked take tokens they
+// name ([textTakes], [scanReader.Asking]). A list is read an element at a time by the
+// layer's one rule of an element, up to the first it refuses, as
+// [eachElement] hands it; an entry read by its first characters (a
+// retraction's, a kept uuid) is read one byte past them
+// ([lineDecoder.opening]), and a skill's name streams into its UTF-16 length
+// and whether its bytes were UTF-8 ([jsonscan.Scanner.InvalidUTF8]).
+//
+// A RECORD'S TYPE GATES ITS FRAMES ([gates]): a frame read on records of some
+// types alone is passed over where the `type` written before it names none of
+// them ([lineDecoder.admits]), since an api-request-blob writes its type first
+// and then a message repeating a whole request. A type is known only at the
+// line's end, though (an assistant writes its message first), so a frame met
+// before any type, or after one that is no string, is read; a line whose last
+// type reads a frame passed over for an earlier one fails closed; and a frame
+// the last type or subtype does not read is dropped at the commit.
+//
+// THE FACTS ARE HELD TO [threadLineMax] IN SUM ([lineMeter]), since a bound on
+// each value lets a line of a million tiny calls hold a million calls: every
+// allocation the facts keep is charged as it is made, an array before it is
+// made ([grow]), and nothing is refunded, so a key written many times pays for
+// every copy. What a line allocates and drops (a refused block's strings, an
+// error's text) is not charged: a line of many blocks costs time, not memory.
 //
 // # A run's harness session, carried between boxes
 //

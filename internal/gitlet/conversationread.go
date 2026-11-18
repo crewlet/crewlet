@@ -19,93 +19,54 @@ import (
 
 // THE READS OF A CHANGE'S CONVERSATION: the listings of the changes waiting on
 // somebody ([ReadQuery.Reviewer], [ReadQuery.Needs]) and the parts of one
-// change's conversation a `change` read pages ([ReadQuery.Part]) — its
-// reviewers, its comments, its reviews and its findings — each served inside
-// the one transaction [Reader.Read] hands it, from the rows the records on the
-// change's own subject wrote (replicated 0100 and 0101), and held to the grant
-// on the change's repository as every read of a change is (changeread.go).
+// change a `change` read pages ([ReadQuery.Part]), each inside the one
+// transaction [Reader.Read] hands it, from the rows of the change's own
+// subject (replicated 0100 and 0101), and held to the grant on the change's
+// repository as every read of a change is (changeread.go). The package doc's
+// "A change's conversation is rows on its own subject" has the model.
+
+// WHO A CHANGE WAITS ON. needs=review (the asker's where it names no
+// reviewer) walks code_reviewers_reviewer_idx, which leads with the ask's
+// state after the reviewer, so a page reads standing asks only
+// ([changeWalk.readAsked]). An ask of a closed or merged change still stands
+// (the lifecycle is the repository's records, the asks the change's
+// subject's), so needs=review keeps a LIVE change by testing each row read.
 //
-// # Who a change waits on
+// needs=fix (the asker's own where it names no owner) walks the owner's
+// changes in ONE state, open or the one named (code_changes_owner_idx: two
+// states are no one index order), keeping those whose changes_requested or
+// open_findings counter is set ([needingFixIn]). A pushed revision answers
+// neither; an answered standing blocker waits on its raiser (S40).
+
+// needs=me is needs=review, then needs=fix, each its own index's walk, a page
+// reading one, the fix half's cursor prefixed with [fixHalf]; a change in
+// both (a person may be asked to review their own) is listed by the first.
 //
-// A listing that names a REVIEWER — or the changes that wait on a review,
-// needs=review, the asker's own where it names no reviewer — walks
-// code_reviewers_reviewer_idx: the changes whose ask of that reviewer
-// STANDS, newest first by the change's id, the asks read in ONE seek a page
-// and their changes' rows by their keys beside them ([changeWalk.readAsked]).
-// The index leads with the ask's state after the reviewer, so a page reads the
-// standing asks and none of the withdrawn ones beside them. An ask of a closed
-// or merged change still stands — nothing withdraws it, since the change's
-// lifecycle is its repository's records and its asks are its own subject's —
-// so needs=review keeps a LIVE change alone, tested on each row the page read
-// as every filter the walked index does not seek is; a walk from the newest
-// change down meets the live ones first, and a reviewer who pages on reads
-// the history of what they were asked.
-//
-// The changes that wait on their OWNER's fix, needs=fix — an owner's, the
-// asker's own where it names none — walk the owner's changes in ONE live state
-// (code_changes_owner_idx): open, or the state it names, since the index keeps
-// an owner's changes by state and a walk of two states is no walk of one
-// index's order. A change waits on its owner's fix while a reviewer's latest
-// verdict asks for changes or a finding stands that none of its authors has
-// answered — its conversation's counters (code_conversations
-// changes_requested and open_findings), read for the page's changes in one
-// statement ([needingFixIn]). A pushed revision answers neither: a request for
-// changes stands until its reviewer reviews again, and a finding until an
-// author answers it, so what is waiting is said by the rows and never guessed
-// from a head that moved. A standing blocker an author has answered waits on
-// its raiser, not on the owner (S40), and does not list the change here.
-//
-// What waits on the ASKER, needs=me, is both, one after the other: the changes
-// whose ask of the asker stands, as needs=review lists them, and then the
-// asker's own awaiting a fix, as needs=fix does — each its own index's walk, a
-// page reading one of them, the fix half's cursor spelled after [fixHalf] — a
-// change of both, the asker's own whose review is asked of them (a person may
-// be), listed once, by the first.
-//
-// What waits on A PERSON, needs=person, walks code_mergeability_waits_idx
-// (replicated 0106): the changes whose STORED readiness — the answer the last
-// mergeability record judged and stored (mergeability.go) — waits on one,
-// newest change first by its id, their rows by their keys beside them; and
-// keeps those whose readiness the read judges itself, in its own snapshot
-// against its own chart, still waits on one, since a stored answer is as of
-// the record that stored it. A change that came to wait on a person since its
-// last record — a review, an ask, or a chart that changed who may approve it
-// (Mergeability.ChartEpoch) — is listed once its home refreshes it: at the
-// home's next pass, a minute later at the most once the home's node and the
-// repository's committing data node hold that chart. An ended change stores
-// no answer (clearReadiness), so the index holds the changes waiting now.
-//
-// # A part of one change
-//
-// A `change` read names the part it pages: its revisions — the default, with
-// the change's detail on their first page (changeread.go) — its reviewers, in
-// the order of their handles; its comments, in THREAD order: each thread's
-// first comment and then its replies, by the position of the record that said
-// each, threads in the order of their ids, which are minted as they start
-// (code_comments_thread_idx); its reviews in the order they were given
-// (code_reviews_change_idx); or its findings by id — the order the reviews
-// that raised them were asked — each finding's text read with it
-// (code_finding_texts' key, which leads with the change). Every page names the
-// change by its number and is held to the grant again; a page past a cursor
-// resumes after the row the cursor names, so a comment said meanwhile in a
-// thread already read is read by reading the change again, at the floor its
-// write answered with.
-//
-// # The asker's standing findings
-//
-// The `standing` part is the findings the ASKER keeps standing on the change
-// — open, or answered by an author and not yet judged — by id: exactly the
-// set a review of theirs CARRIES or, of a later revision, supersedes
-// ([Review.Carries]), so a reviewer about to review is shown every finding
-// that review decides, never the first page of the change's whole history.
-// The findings part pages a change's findings oldest first, superseded and
-// dismissed ones among them, so a reviewer's NEWEST standing findings were the
-// ones past its first page on a change a few reviews long — the ones a review
-// sent from that page superseded unseen. The part reads the set the review's
-// own decide reads (standingFindingsSQL, one seek of code_findings_raiser_idx
-// a standing state), at most [MaxStandingFindings] narrow rows, and a page's
-// texts by their keys ([findingsNamed]); an asker bound to no seat raised
-// none and is answered none.
+// needs=person walks code_mergeability_waits_idx (replicated 0106), the
+// STORED readiness (mergeability.go), and keeps those the read's own judgment
+// against its own chart still finds waiting, since a stored answer is as of
+// its record. A change that came to wait since (a review, an ask, a chart
+// change: Mergeability.ChartEpoch) is listed once its home refreshes it, a
+// minute later at most once the home and the repository's committing data
+// node hold that chart. An ended change stores no answer (clearReadiness).
+
+// A PART OF ONE CHANGE. Revisions (the default, the detail on the first page,
+// changeread.go); reviewers by handle; comments in THREAD order, each
+// thread's first comment then its replies by record position, threads by
+// their ids, minted as they start (code_comments_thread_idx); reviews as given
+// (code_reviews_change_idx); findings by id, each with its text
+// (code_finding_texts' key leads with the change). Every page is held to the
+// grant again and resumes after the row its cursor names, so a comment said
+// meanwhile in a thread already read is read by reading the change again.
+
+// THE ASKER'S STANDING FINDINGS, the `standing` part: the asker's open or
+// answered-but-unjudged findings by id, exactly the set their review carries
+// or supersedes ([Review.Carries]). The findings part pages oldest first, so
+// a reviewer's newest standing findings sat past its first page, superseded
+// unseen by a review sent from it. It reads what the review's decide reads
+// (standingFindingsSQL, code_findings_raiser_idx), at most
+// [MaxStandingFindings] narrow rows, texts by key ([findingsNamed]); an asker
+// bound to no seat is answered none.
 
 // Need is what a listing of changes asks its changes to be waiting on
 // ([ReadQuery.Needs]): each a LIVE change's.
@@ -160,10 +121,9 @@ const (
 	// PartFindings is the change's findings, by id, each with its text.
 	PartFindings ChangePart = "findings"
 	// PartStanding is the ASKER's own standing findings on the change, by
-	// id, each with its text: what a review of theirs carries. A build that
-	// predates it refuses it as a part it does not know, rather than answer
-	// another set under its name; an estate request's word and no record's,
-	// so it takes no versionedFields row.
+	// id, each with its text: what a review of theirs carries. An older build
+	// refuses it as an unknown part rather than answer another set; it is an
+	// estate request's word, no record's, so it takes no versionedFields row.
 	PartStanding ChangePart = "standing"
 )
 
@@ -233,12 +193,10 @@ func (q ReadQuery) fixing() ReadQuery {
 	return q
 }
 
-// changesWaitingOnMe serves a page of needs=me: its first half — the changes
-// whose ask of the asker stands, needs=review — until that half's walk ends,
-// and then its second, after [fixHalf] — the asker's own changes awaiting a
-// fix, needs=fix — each a walk of its own index, so a page reads one half and
-// the one that ends the first may be short. A change of both is listed by the
-// first half alone.
+// changesWaitingOnMe serves a page of needs=me: the needs=review half until
+// its walk ends, then the needs=fix half after [fixHalf]. Each half walks its
+// own index, so a page reads one half and the one ending the first may be
+// short; a change in both is listed by the first alone.
 func (r *Reader) changesWaitingOnMe(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster,
 	cp statelog.Position, out *ReadAnswer) error {
 
@@ -261,11 +219,10 @@ func (r *Reader) changesWaitingOnMe(ctx context.Context, tx *sql.Tx, q ReadQuery
 	return nil
 }
 
-// halfOfMe is the half of q — a needs=me listing — a page of it reads, by its
-// cursor: the asker's own changes awaiting a fix, as needs=fix walks them,
-// after [fixHalf], with the cursor behind it and true; else the changes
-// asking the asker's review, as needs=review walks them. THE ONE READING of
-// which half a needs=me cursor is in: the reader's and [ReadQuery.ChangesCursor]'s.
+// halfOfMe is the half of needs=me listing q a page reads, by its cursor:
+// the needs=fix half and true after [fixHalf], else the needs=review half.
+// THE ONE READING of which half a needs=me cursor is in: the reader's and
+// [ReadQuery.ChangesCursor]'s.
 func (q ReadQuery) halfOfMe() (ReadQuery, bool) {
 	half := q
 	if inner, fixes := strings.CutPrefix(q.Cursor, fixHalf); fixes {
@@ -276,13 +233,12 @@ func (q ReadQuery) halfOfMe() (ReadQuery, bool) {
 	return half, false
 }
 
-// readByID is one page of a walk of changes by their ids, newest first — the
-// changes whose ask of the walk's reviewer stands, or whose stored readiness
-// waits on a person or is ready: at most limit ids by first, or by after past
-// a cursor (each binding the walk's keys, the cursor's id and the limit), and
-// the row of each change they name. EVERY ONE: a change's asks and its
-// mergeability go before its row in a purge, and with it in the final one.
-// what names the walk in a failure's sentence.
+// readByID is one page of a walk of changes by their ids, newest first (a
+// reviewer's standing asks, or stored readiness): at most limit ids by first,
+// or by after past a cursor (each binding the walk's keys, the cursor's id and
+// the limit), and the row of each. A missing row is an error: a purge removes
+// a change's asks and mergeability before or with its row. what names the
+// walk in a failure's sentence.
 func (w changeWalk) readByID(ctx context.Context, tx *sql.Tx, first, after, cursor string, limit int,
 	what string) ([]changeRow, error) {
 
@@ -353,12 +309,10 @@ func changesByIDIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]ch
 	return out, rows.Err()
 }
 
-// needingFixIn is which of the changes a page read wait on their owner's fix
-// — a reviewer's latest verdict asks for changes, or a finding stands that
-// none of their authors has answered — less, where asked names a reviewer,
-// those whose ask of asked stands, which the first half of a needs=me listing
-// lists: one statement over the page's changes for each, a seek of a key a
-// change.
+// needingFixIn is which of a page's changes wait on their owner's fix (their
+// counters ask for changes or hold an unanswered finding), less, where asked
+// names a reviewer, those whose ask of asked stands, which needs=me's first
+// half lists: one statement for each, a key seek a change.
 func needingFixIn(ctx context.Context, tx *sql.Tx, scanned []changeRow, asked string) (map[string]bool, error) {
 	out := map[string]bool{}
 	if len(scanned) == 0 {
@@ -405,10 +359,9 @@ func eachID(rows *sql.Rows, each func(id string)) error {
 }
 
 // conversationRowIn is change id's conversation's counters, nil where nobody
-// has discussed it, and the broker instant (store.EncodeTime) of the last
-// record somebody wrote on it, 0 where none has ([ConversationRow.SpokenAt]):
-// what a change read dates the change by beside its lifecycle, from the one
-// row it reads, rather than reading the row again by [withConversations].
+// has discussed it, and the broker instant (store.EncodeTime) of its last
+// record, 0 where none ([ConversationRow.SpokenAt]): what a change read dates
+// the change by, from this one row rather than again by [withConversations].
 func conversationRowIn(ctx context.Context, tx *sql.Tx, id string) (*ConversationRow, int64, error) {
 	var (
 		c                ConversationRow
@@ -667,15 +620,12 @@ func (r *Reader) changeFindings(ctx context.Context, tx *sql.Tx, q ReadQuery, na
 }
 
 // namedFindings serves the findings of change id — named, its web!n — that a
-// read is narrowed to ([ReadQuery.FindingIDs]) and that come after its cursor,
-// in id order, a page's order, so a cursor resumes them as it resumes the
-// part: ONE statement, each id one seek of the texts' key beside the change
-// and one of the narrow row's key, whatever the change's review history
-// holds. Every id is a row at most, so MaxFindingsPerReview bounds what the
-// statement reads; the page's bytes bound what the answer carries, findings
-// whose suggestions reach their bound filling a page before 64 of them do,
-// and the cursor then names the last one it carries — never past the last
-// named, which leaves none to resume.
+// read is narrowed to ([ReadQuery.FindingIDs]), past its cursor, in id order
+// so a cursor resumes them as it resumes the part: ONE statement
+// ([findingsNamed]), whatever the change's review history holds, reading at
+// most MaxFindingsPerReview rows. The page's bytes may fill before that, with
+// findings whose suggestions reach their bound; the cursor then names the
+// last one carried, never one past the last named.
 func (r *Reader) namedFindings(ctx context.Context, tx *sql.Tx, q ReadQuery, named, id string,
 	out *ReadAnswer) error {
 
@@ -691,14 +641,11 @@ func (r *Reader) namedFindings(ctx context.Context, tx *sql.Tx, q ReadQuery, nam
 }
 
 // changeStanding serves a page of the findings the ASKER keeps standing on
-// change id — named, its web!n — by id, after the finding a cursor names
-// ([PartStanding]): every standing finding of theirs read as the decide of
-// their review reads them (standingFindings, at most [MaxStandingFindings]
-// narrow rows), the ones past the cursor sorted by id, and the page's first
-// `limit` of them read whole by their keys ([findingsNamed]). The cursor names
-// the last one a page carries wherever one remains past it: past the limit, or
-// past the page's bytes, which findings whose suggestions reach their bound
-// fill first.
+// change id — named, its web!n — by id, after a cursor ([PartStanding]): all
+// of theirs read as their review's decide reads them (standingFindings, at
+// most [MaxStandingFindings] narrow rows), those past the cursor sorted by id,
+// the first `limit` read whole ([findingsNamed]). The cursor names the last
+// one carried wherever one remains, past the limit or past the page's bytes.
 func (r *Reader) changeStanding(ctx context.Context, tx *sql.Tx, q ReadQuery, named, id string,
 	out *ReadAnswer) error {
 
@@ -820,10 +767,9 @@ const (
 	reviewerAsksKey = "code_reviewers_reviewer_idx"
 	// reviewersKey is code_reviewers' PRIMARY KEY index, (change_id,
 	// reviewer), which every statement over one change's asks NAMES: an
-	// equality on the reviewer beside an ask's state reaches
-	// reviewerAsksKey's leading columns, and a batch of asks driven from a
-	// list of reviewers sought that index on the reviewer alone — every ask
-	// of that reviewer on every change, read to find the one.
+	// equality on reviewer and state reaches reviewerAsksKey's leading
+	// columns, and a batch driven from a list of reviewers would seek it on
+	// the reviewer alone, reading every change's ask of each to find the one.
 	reviewersKey = "sqlite_autoindex_code_reviewers_1"
 	// waitsKey is code_mergeability_waits_idx, (waits_person, change_id)
 	// WHERE waits_person = 1 (replicated 0106): the changes whose stored
@@ -832,16 +778,9 @@ const (
 )
 
 // The reads of a change's conversation, each registered in plan_test.go so
-// the pinned driver's planner is held to the index each is written for, and to
-// reading in its order: a reviewer's standing asks newest first, a first page
-// and a page after a cursor; the changes whose stored readiness waits on a
-// person, the same; the changes they name, driven from the list of
-// their ids; which of a page's changes await their owner's fix, and which of
-// them ask the asker's review, driven from that list too; one change's
-// counters by its key; its reviewers by theirs; its comments in thread order,
-// the >= beside the OR keeping the seek past the thread; its reviews in the
-// order given; and its findings by id, the texts' key walked and each
-// finding's sought by its own, and its review's by its key for when it was raised.
+// the pinned driver's planner is held to the index each is written for and to
+// reading in its order. The comments' >= beside the OR keeps the seek past
+// the thread; a finding's review is joined by its key for when it was raised.
 const (
 	changesAskedSQL = `SELECT change_id FROM code_reviewers INDEXED BY ` + reviewerAsksKey + `
 		WHERE reviewer = ? AND state = 'requested' ORDER BY change_id DESC LIMIT ?`
@@ -898,10 +837,9 @@ const (
 		WHERE x.change_id = ? AND x.finding_id > ? AND f.id = x.finding_id AND v.id = f.review_id
 		ORDER BY x.finding_id LIMIT ?`
 	// findingsNamedSQL is the findings a read names ([ReadQuery.FindingIDs]),
-	// a JSON array of their ids: each one seek of the texts' key — the change
-	// and the id, both — and one of the narrow row's, and no walk of the
-	// change's findings. Unordered: at most MaxFindingsPerReview rows, which
-	// the reader sorts.
+	// a JSON array of their ids: each one seek of the texts' key (change and
+	// id) and one of the narrow row's, no walk of the change's findings.
+	// Unordered: at most MaxFindingsPerReview rows, which the reader sorts.
 	findingsNamedSQL = `SELECT f.id, f.review_id, f.raiser, f.raiser_kind, f.revision, f.commit_oid, f.path,
 			f.blob_oid, f.side, f.line_start, f.line_end, f.severity, f.category, f.state, f.resolution_note,
 			f.resolved_by, f.resolved_by_kind, f.resolved_commit, f.resolved_position, f.position, x.title,
@@ -913,15 +851,13 @@ const (
 )
 
 // reviewsGiven serves a page of ONE REVIEWER'S REVIEWS — the `reviews`
-// listing, what a seat's or a person's "reviews given" reads — newest first,
-// after the review a cursor names, across every change of every repository
-// the asker may read: one range of code_reviews_reviewer_idx (replicated
-// 0118), the changes the page names read by their keys in one statement, and
-// their repositories judged once a page against the grant ([listedReposAmong]),
-// so a review of a change on a repository the asker may not read is left out
-// as a listing of changes leaves the change out. A page READS its limit of
-// reviews, whatever few of them the grant keeps, and resumes after the last
-// it read.
+// listing, a seat's or a person's "reviews given" — newest first, after a
+// cursor, across every repository the asker may read: one range of
+// code_reviews_reviewer_idx (replicated 0118), the page's changes read by
+// their keys in one statement, and their repositories judged once a page
+// against the grant ([listedReposAmong]), leaving out a review the asker may
+// not read. A page READS its limit of reviews, however few the grant keeps,
+// and resumes after the last it read.
 func (r *Reader) reviewsGiven(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	limit := min(limitOr(q.Limit, defaultReviewLimit), r.pageRows)
 	query, args := reviewsGivenSQL, []any{q.Reviewer}
