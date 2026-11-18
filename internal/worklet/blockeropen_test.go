@@ -42,13 +42,9 @@ func edgeOpen(t *testing.T, r *roundTrip, dep, blk string) (open, blocked bool) 
 	return false, false
 }
 
-// A FINISHED BLOCKER SAYS SO ON THE WIRE. `open` is a fact both ways, so an
-// edge whose blocker finished states `false` rather than nothing: a reader
-// cannot tell silence from either value, and the board's chip, reading it as
-// open, named a blocker finished hours before. The row's `blocked` is exactly
-// "some edge states open".
-//
-// Mutation: tag `open` omitempty again, and the finished edge states nothing.
+// A FINISHED BLOCKER SAYS SO ON THE WIRE: `open` is stated both ways, and `blocked` is exactly
+// "some edge states open". Mutation: tag `open` omitempty again, and the finished edge states
+// nothing.
 func TestEveryEdgeStatesWhetherItsBlockerIsOpen(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -92,15 +88,9 @@ func TestEveryEdgeStatesWhetherItsBlockerIsOpen(t *testing.T) {
 	}
 }
 
-// AN EDGE FOLLOWS ITS BLOCKER'S STATUS ON EVERY PATH THAT MOVES EITHER END:
-// the edge written from either end, the blocker finished before the edge or
-// after, done or cancelled, through review, reopened, its mirror repaired
-// late, and every record applied again. The derived row is written from both
-// ends in the apply ([worklet.Applier]), so no order of the two leaves it
-// stale.
-//
-// Mutation: drop the blocker-side update from maintainDeps, and every case
-// that finishes the blocker after the edge reads it open.
+// AN EDGE FOLLOWS ITS BLOCKER'S STATUS ON EVERY PATH THAT MOVES EITHER END, in any order and on
+// replay. Mutation: drop the blocker-side update from maintainDeps, and every case that finishes
+// the blocker after the edge reads it open.
 func TestADependentsEdgeFollowsItsBlockersStatus(t *testing.T) {
 	t.Parallel()
 	cases := map[string]struct {

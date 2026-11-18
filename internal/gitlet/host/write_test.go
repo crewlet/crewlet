@@ -540,14 +540,9 @@ func TestCreateAndDeleteBranchBuildNothing(t *testing.T) {
 	}
 }
 
-// A TAG IS WRITTEN AS A PUSHED TAG IS: a lightweight create moves only its ref;
-// one with a message builds an annotated tag object whose tagger is who a
-// commit of the write would author, at the operation's second, so a retry is
-// the same object. A tag that exists is refused stale (a tag never moves), a
-// delete lands only at the value read, and a protected tag's delete is refused.
-//
-// Mutations: build no object for a message, red; tag as the engine's
-// committer, red; read the tag object as a commit in the head check, red.
+// A TAG IS WRITTEN AS A PUSHED TAG IS: lightweight, or annotated by a message with the write's
+// author as tagger; never moved, deleted only at the value read, protected where a rule says.
+// Mutations: build no object for a message, tag as the committer, or read it as a commit: red.
 func TestATagIsWrittenAsAPushedTagIs(t *testing.T) {
 	t.Parallel()
 	settings := gitlettest.Settings()

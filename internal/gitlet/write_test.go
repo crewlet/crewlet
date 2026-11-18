@@ -40,10 +40,8 @@ func tagWrite(kind gitlet.EngineWriteKind, ref, commit, message string) gitlet.E
 		WrittenFor: aWrite().WrittenFor, OpID: aWrite().OpID, Ref: ref, Commit: commit, Message: message}
 }
 
-// A TAG WRITE NAMES A TAG: create_tag takes refs/tags/<tag> at a commit, with
-// a message making it annotated (Annotates); delete_tag the value read.
-//
-// Mutation: read Annotates off the kind alone, red.
+// A TAG WRITE NAMES A TAG: create_tag at a commit, annotated by a message; delete_tag the value
+// read. Mutation: read Annotates off the kind alone, red.
 func TestATagWriteNamesATag(t *testing.T) {
 	t.Parallel()
 	light := tagWrite(gitlet.WriteCreateTag, "refs/tags/release/1.0", oidOf("C"), "")

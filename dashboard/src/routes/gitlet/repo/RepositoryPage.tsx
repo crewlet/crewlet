@@ -241,11 +241,8 @@ export function RepositoryPage({ repo }: { repo: string }) {
   );
 }
 
-/**
- * A RENAME LEAVES THE OLD NAME REDIRECTING for a while: the page reads the
- * repository it found, and says what it is called now and when the old name
- * is let go, as a moment a person plans by.
- */
+/** A RENAME LEAVES THE OLD NAME REDIRECTING for a while: the page says what the repository is
+ *  called now and when the old name is let go, to the minute. */
 function RenamedNotice({ repo, asked }: { repo: CodeRepoDetail; asked: string }) {
   const until = repo.redirect_until;
   const released = useClock((t) => (until ? fmtAt(until, t) : ""));

@@ -179,10 +179,8 @@ export function DeletedNotice({ repo }: { repo: CodeRepoDetail }) {
   );
 }
 
-/**
- * A tab that reads a deleted repository's content (its files, its history,
- * its tags): none is read, and no clone or push is offered, until its restore.
- */
+/** A tab that reads a deleted repository's content (its files, history or tags): none is read, and
+ *  no clone or push is offered, until its restore. */
 export function GoneContent({ repo, what }: { repo: CodeRepoDetail; what: string }) {
   return (
     <EmptyState

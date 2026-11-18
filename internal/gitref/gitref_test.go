@@ -185,10 +185,8 @@ func TestValidBranchAgreesWithGitBranchRules(t *testing.T) {
 	}
 }
 
-// TestValidTagAgreesWithGitTag holds ValidTag to `git tag` itself, which names
-// its own rule (no check-ref-format mode reads a tag): a refused name dies 128.
-//
-// Mutation: drop the HEAD or the leading '-' clause, red.
+// TestValidTagAgreesWithGitTag holds ValidTag to `git tag` itself (no check-ref-format mode reads
+// a tag): a refused name dies 128. Mutation: drop the HEAD or the leading '-' clause, red.
 func TestValidTagAgreesWithGitTag(t *testing.T) {
 	c := gittest.NewClient(t)
 	dir := c.Init(t)

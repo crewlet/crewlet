@@ -1,9 +1,6 @@
-/**
- * A repository's pictures, shown from its raw route (`downloads.ts`'s
- * rawHref): the bytes read with the reader's session (`rest.blob`) and shown
- * through a typed object URL, since the route answers every binary file as
- * `application/octet-stream`.
- */
+/** A repository's pictures from its raw route (`downloads.ts`'s rawHref), read with the reader's
+ *  session and shown through a typed object URL: the route answers every binary file as
+ *  `application/octet-stream`. */
 import { useEffect, useState } from "react";
 import { Skeleton } from "@crewlethq/ui";
 import { baseName } from "~/lib/code.ts";
@@ -23,10 +20,8 @@ const PICTURE_TYPES: Readonly<Record<string, string>> = {
   svg: "image/svg+xml",
 };
 
-/**
- * The largest picture shown in place: the tab holds its bytes while the page
- * is open, and one past this is a download, not a preview.
- */
+/** The largest picture shown in place: the tab holds its bytes while the page is open, and one
+ *  past this is a download, not a preview. */
 export const PICTURE_MAX_BYTES = 10 * 1024 * 1024;
 
 /** The media type of a picture at `path`, or null for a file that is no picture. */
@@ -38,10 +33,8 @@ export function pictureType(path: string): string | null {
 /** A picture as read: its object URL, or why there is none. */
 export type Picture = { url: string } | { failed: "too_large" | "unread" };
 
-/**
- * The pictures at `paths` of `repo` at the whole `commit`, each read once its
- * commit is known and let go with the page: absent while one is read.
- */
+/** The pictures at `paths` of `repo` at the whole `commit`, each read once its commit is known and
+ *  let go with the page: absent while one is read. */
 export function usePictures(
   repo: string,
   commit: string,
@@ -95,11 +88,9 @@ async function readPicture(
   }
 }
 
-/**
- * Where a document's picture `src` is in the repository, from the directory
- * the document is in: a path relative to it or to the root (`/`), or null for
- * an address elsewhere (another host, a data URL, an anchor).
- */
+/** Where a document's picture `src` is in the repository: a path relative to the document's
+ *  directory or to the root (`/`), or null for an address elsewhere (a host, a data URL, an
+ *  anchor). */
 export function picturePath(src: string, dir: string): string | null {
   if (src === "" || /^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith("//") || src.startsWith("#"))
     return null;

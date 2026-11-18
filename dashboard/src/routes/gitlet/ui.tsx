@@ -241,10 +241,8 @@ export function BranchChip({ name, href }: { name: string; href?: string | undef
   );
 }
 
-/**
- * A branch or a path that wraps after its slashes: a line break offered after
- * each `/`, so a narrow column breaks it between its parts, never mid-word.
- */
+/** A branch or a path that wraps after its slashes, so a narrow column breaks it between its
+ *  parts, never mid-word. */
 export function SlashBreaks({ text }: { text: string }) {
   const parts = text.split("/");
   return (

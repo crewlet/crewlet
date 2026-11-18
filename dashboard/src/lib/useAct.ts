@@ -97,10 +97,8 @@ export interface PressLabel {
    * on the result `run` resolves with, in the person's words.
    */
   drawsCaveats?: boolean;
-  /**
-   * The press that takes an applied write back, offered as the toast's Undo:
-   * a branch deleted is made again at the head it had.
-   */
+  /** The press that takes an applied write back, offered as the toast's Undo: a branch deleted is
+   *  made again at the head it had. */
   undo?: () => void;
 }
 

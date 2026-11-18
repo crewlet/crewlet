@@ -1613,17 +1613,8 @@ function Blame({
   );
 }
 
-/**
- * The README and LICENSE at the root, tabs of one card under the files
- * (`doc=license`), read at the listing's commit, markdown by the dashboard's
- * own renderer with its fences coloured. A root with neither draws nothing.
- */
-/**
- * A document's pictures that are the repository's own, read at the commit the
- * document was: each source a path from the document's directory (or the
- * root), its picture's object URL once read. Any other source is left to the
- * renderer's own rule (`undefined`).
- */
+/** A document's own pictures, read at the document's commit: each source a path from its directory
+ *  (or the root), mapped to its object URL once read; any other source is left to the renderer. */
 function useDocPictures(
   repo: string,
   commit: string,
@@ -1652,6 +1643,11 @@ function useDocPictures(
   );
 }
 
+/**
+ * The README and LICENSE at the root, tabs of one card under the files
+ * (`doc=license`), read at the listing's commit, markdown by the dashboard's
+ * own renderer with its fences coloured. A root with neither draws nothing.
+ */
 function RepoDocs({
   repo,
   entries,

@@ -972,10 +972,9 @@ func (b *building) commitOf(ctx context.Context, tree string, parents []string, 
 	return commit, nil
 }
 
-// tag is an annotated create_tag's tag object: ONE `mktag` of the object git
-// tag -a would write, its tagger the write's author (the acting principal, as
-// a commit's author is: ADR-0092) at the operation's second, so a retry
-// builds the same object. mktag runs git's own fsck of it.
+// tag is an annotated create_tag's object: one `mktag` (git's own fsck) of what git tag -a writes,
+// its tagger the write's author (ADR-0092) at the operation's second, so a retry builds the same
+// object.
 func (b *building) tag(ctx context.Context) (string, error) {
 	wr := b.wr
 	left, err := wr.budget()

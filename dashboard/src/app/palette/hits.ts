@@ -121,11 +121,8 @@ export const ARTIFACT_HITS = 8;
  */
 export const CODE_HITS = 8;
 
-/**
- * How many repositories and how many changes the Code scope lists above its
- * lines: FIVE each, so a name or a title typed whole is in view with the lines
- * under it; the rest are Gitlet › Repositories and Changes, filtered.
- */
+/** How many repositories and changes the Code scope lists above its lines: FIVE each, so a name
+ *  or title typed whole is in view with the lines under it; the rest are Gitlet's own lists. */
 export const CODE_PLACE_HITS = 5;
 
 /**

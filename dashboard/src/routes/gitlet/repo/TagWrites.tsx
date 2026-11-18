@@ -1,7 +1,5 @@
-/**
- * A repository's tags, written: New tag (`code_create_tag`, annotated where a message is given) and
- * a tag's Delete at the value its row shows (`code_delete_tag`), each held as a branch's write is.
- */
+/** A repository's tags, written: New tag (`code_create_tag`, annotated where a message is given) and
+ *  a tag's Delete at the value its row shows (`code_delete_tag`), each held as a branch's write is. */
 
 import { useState } from "react";
 import { Button, Callout, FormField, Input, Stack, Textarea, VisuallyHidden } from "@crewlethq/ui";

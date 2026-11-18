@@ -104,10 +104,8 @@ test("the classes that exempt a change from approval change by what moved", () =
   });
 });
 
-// AN EXEMPTION MEANS SOMETHING ONLY BESIDE AN APPROVAL ASKED: under No approval
-// none is sent and any the gate kept is removed, though the form keeps the
-// ticks for a return to One approval. Mutation: send the ticks whatever
-// Approvals holds, and this fails.
+// EXEMPTIONS ARE SENT ONLY BESIDE AN APPROVAL ASKED; the form keeps the ticks for a return to
+// One approval. Mutation: send the ticks whatever Approvals holds, and this fails.
 test("the exempting classes are sent only where the gate asks an approval", () => {
   expect(
     protectArgs(undefined, { ...FORM, gated: true, approvalsUnless: ["comment_only"] }),

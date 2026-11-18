@@ -1120,10 +1120,8 @@ test("every changed file is a section of one stack read by the walk of code_diff
   expect(reads(asked, "code_diff").some((u) => u.searchParams.has("file"))).toBe(false);
 });
 
-// THE TREE IS THE DIFF'S NAVIGATION, and the stack's unread files are no live
-// regions: one each queued an announcement per file. Mutation: draw the tree as
-// an aside (a complementary landmark inside the page's region), or a pending
-// file's words as a status, and this fails.
+// THE TREE IS THE DIFF'S NAVIGATION, and an unread file is no live region. Mutation: draw the
+// tree as an aside, or a pending file's words as a status, and this fails.
 test("the files' tree is a navigation, and a file not yet read announces nothing", async () => {
   holdSectionsFar();
   const fragment = (file: number, path: string) => ({

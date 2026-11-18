@@ -2703,10 +2703,8 @@ test("a repository is deleted only once its name is typed back", async () => {
   expect(acted[0]).toEqual({ tool: "code_delete_repo", args: { repo: "web" } });
 });
 
-// THE READER'S OWN DELETE MOVES THEM TO ITS NOTICE: the Settings that held
-// Delete fold away, so the notice above the tabs is scrolled into view and
-// takes the focus. Mutation: leave the focus where the dialog dropped it, or
-// leave the scroll, and this fails.
+// THE READER'S OWN DELETE MOVES THEM TO ITS NOTICE, scrolled into view and focused. Mutation:
+// leave the focus where the dialog dropped it, or leave the scroll, and this fails.
 test("a delete brings the Deleted notice into view and focuses it", async () => {
   const scrolled = watchScrolls();
   const repo = detail({ managed_by: "tools" });
@@ -2831,10 +2829,8 @@ test("a deleted repository says so and is restored by one request", async () => 
   expect(acted[0]).toEqual({ tool: "code_restore_repo", args: { repo: "web" } });
 });
 
-// A DELETED REPOSITORY'S CONTENT IS NOT READ: its Code and Commits tabs say
-// so, and nothing offers to clone it, push to it, compare it or list its tags,
-// empty or not. Mutation: draw the files, the clone card or Compare for a
-// deleted repository, and this fails.
+// A DELETED REPOSITORY'S CONTENT IS NOT READ, and nothing offers to clone, push, compare or list
+// its tags. Mutation: draw the files, the clone card or Compare for it, and this fails.
 test.each([
   ["with content", {}],
   ["empty", { head: undefined, branches: 0 }],
@@ -2925,9 +2921,8 @@ test("a tag is made from the Tags view, annotated where a message is given", asy
   });
 });
 
-// A TAG IS DELETED AT THE VALUE ITS ROW SHOWS (an annotated tag's own object),
-// and a tag a rule keeps is held in the confirmation with the engine's own
-// sentence. Mutation: send the peeled commit, or skip the detail read, and
+// A TAG IS DELETED AT THE VALUE ITS ROW SHOWS (an annotated tag's own object), and a rule's hold
+// is said in the confirmation. Mutation: send the peeled commit, or skip the detail read, and
 // this fails.
 test("a tag is deleted at the value its row shows, held where a rule keeps it", async () => {
   const acted: Acted[] = [];

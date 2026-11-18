@@ -1783,10 +1783,9 @@ describe("code", () => {
     );
   });
 
-  // A REPOSITORY IS FOUND BY ITS NAME AND A CHANGE BY ITS TITLE, above the
-  // lines, each opening its page; All carries the term into Code and asks
-  // neither. Mutations: drop either question, ask them from All, or open the
-  // search rather than the repository, and this fails.
+  // A REPOSITORY IS FOUND BY ITS NAME AND A CHANGE BY ITS TITLE above the lines; All asks neither.
+  // Mutations: drop either question, ask them from All, or open the search rather than the
+  // repository, and this fails.
   test("Code lists the repositories a name begins and the changes a title holds, each opening its page", async () => {
     const asked: URL[] = [];
     vi.stubGlobal(

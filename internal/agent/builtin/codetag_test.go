@@ -10,12 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A TAG WRITE ASKS THE TAG IT NAMES: code_create_tag sends refs/tags/<tag> at
-// the commit `at` resolves, its message making it annotated; code_delete_tag
-// sends the value its caller read. Neither moves a branch.
-//
-// Mutations: send refs/heads/<tag>, red; drop the message, red; send no
-// expected value with the delete, red.
+// A TAG WRITE ASKS THE TAG IT NAMES at the commit `at` resolves (annotated by a message), or deletes
+// it at the value read. Mutations: send refs/heads/<tag>, drop the message, or send no expected
+// value with the delete: red.
 func TestATagWriteAsksTheTagItNames(t *testing.T) {
 	t.Parallel()
 	writer := &codeWrites{}
@@ -63,9 +60,7 @@ func TestATagWriteAsksTheTagItNames(t *testing.T) {
 	}
 }
 
-// A TAG NAME GIT REFUSES IS REFUSED BEFORE ANYTHING IS SENT, and a tag that
-// already exists is answered stale with the way out: a tag never moves.
-//
+// A TAG NAME GIT REFUSES IS REFUSED BEFORE ANYTHING IS SENT; an existing tag is answered stale.
 // Mutation: skip ValidTag in the tool's arguments: the write is sent, red.
 func TestATagWriteIsRefusedWhereGitWouldRefuseIt(t *testing.T) {
 	t.Parallel()
