@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -246,9 +247,31 @@ type NoteCall struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// is reports whether c and other name one call: one session AND one id, since
-// a harness numbers its calls per session.
-func (c NoteCall) is(other NoteCall) bool { return c.Session == other.Session && c.ID == other.ID }
+// Is reports whether c and other name one call: one session AND one id, since
+// a harness numbers its calls per session. The one identity of a call, the
+// store's and the engine's alike.
+func (c NoteCall) Is(other NoteCall) bool { return c.Session == other.Session && c.ID == other.ID }
+
+// NoteCallID is a JSON-RPC id as a serve keeps it ([NoteCall.ID]), its
+// canonical JSON text: id is the id as go-sdk's jsonrpc.ID holds it (its Raw,
+// an int64 or a string), and false is an id a serve keeps as none
+// ([keptCallOf]), which no real call has. The one rule the bridge reads a
+// hook's call and its cancel by, so both name a call as the store keeps it.
+func NoteCallID(id any) (string, bool) {
+	var text string
+	switch v := id.(type) {
+	case int64:
+		text = strconv.FormatInt(v, 10)
+	case string:
+		text = `"` + v + `"`
+	default:
+		return "", false
+	}
+	if !validNoteCallID(text) {
+		return "", false
+	}
+	return text, true
+}
 
 // keptCallOf is call as a serve keeps it: whole where its session is of the id
 // charset ([ValidCallID]'s) and its id a JSON integer's text or a JSON string
@@ -1111,7 +1134,7 @@ func unserved(n RunNote, job string, cancelled []NoteCall, unanswered []string) 
 		case slices.Contains(unanswered, h.Take):
 			changed = true
 			continue
-		case h.Lost == "" && n.Served == job && h.Call != nil && slices.ContainsFunc(cancelled, h.Call.is):
+		case h.Lost == "" && n.Served == job && h.Call != nil && slices.ContainsFunc(cancelled, h.Call.Is):
 			h.Lost, changed = ServeCancelled, true
 		}
 		serves = append(serves, h)

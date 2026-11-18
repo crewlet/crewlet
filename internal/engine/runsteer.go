@@ -755,7 +755,7 @@ func (h *hookSettle) merge(settle sandbox.HookSettle) {
 		}
 	}
 	for _, call := range settle.Cancelled {
-		if !slices.ContainsFunc(h.settle.Cancelled, sameCall(call)) {
+		if !slices.ContainsFunc(h.settle.Cancelled, call.Is) {
 			h.settle.Cancelled = kept(append(h.settle.Cancelled, call))
 			h.tried = false
 		}
@@ -768,7 +768,7 @@ func (h *hookSettle) drop(asked sandbox.HookSettle) {
 		return slices.Contains(asked.Unanswered, t)
 	})
 	h.settle.Cancelled = slices.DeleteFunc(h.settle.Cancelled, func(c sandbox.NoteCall) bool {
-		return slices.ContainsFunc(asked.Cancelled, sameCall(c))
+		return slices.ContainsFunc(asked.Cancelled, c.Is)
 	})
 }
 
@@ -1616,11 +1616,11 @@ type hookMemory struct {
 func (m *hookMemory) begin(call sandbox.NoteCall) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if slices.ContainsFunc(m.cancelled, sameCall(call)) {
+	if slices.ContainsFunc(m.cancelled, call.Is) {
 		return false
 	}
 	m.running = append(m.running, call)
-	if !slices.ContainsFunc(m.taken, sameCall(call)) {
+	if !slices.ContainsFunc(m.taken, call.Is) {
 		m.taken = kept(append(m.taken, call))
 	}
 	return true
@@ -1634,10 +1634,10 @@ func (m *hookMemory) end(call *sandbox.NoteCall, take string, lost bool) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if call != nil {
-		if k := slices.IndexFunc(m.running, sameCall(*call)); k >= 0 {
+		if k := slices.IndexFunc(m.running, call.Is); k >= 0 {
 			m.running = slices.Delete(m.running, k, k+1)
 		}
-		lost = lost || slices.ContainsFunc(m.cancelled, sameCall(*call))
+		lost = lost || slices.ContainsFunc(m.cancelled, call.Is)
 	}
 	if lost && take != "" {
 		m.unanswered = kept(append(m.unanswered, take))
@@ -1653,13 +1653,13 @@ func (m *hookMemory) end(call *sandbox.NoteCall, take string, lost bool) bool {
 func (m *hookMemory) cancel(call sandbox.NoteCall, bound bool) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !slices.ContainsFunc(m.cancelled, sameCall(call)) {
+	if !slices.ContainsFunc(m.cancelled, call.Is) {
 		m.cancelled = kept(append(m.cancelled, call))
 	}
 	switch {
-	case !bound, slices.ContainsFunc(m.running, sameCall(call)):
+	case !bound, slices.ContainsFunc(m.running, call.Is):
 		return false
-	case len(m.taken) > 0 && !slices.ContainsFunc(m.taken, sameCall(call)):
+	case len(m.taken) > 0 && !slices.ContainsFunc(m.taken, call.Is):
 		return false
 	}
 	return true
@@ -1671,12 +1671,6 @@ func (m *hookMemory) losses() ([]sandbox.NoteCall, []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return slices.Clone(m.cancelled), slices.Clone(m.unanswered)
-}
-
-// sameCall matches a call by its session AND its id, since a harness numbers
-// its calls per session.
-func sameCall(call sandbox.NoteCall) func(sandbox.NoteCall) bool {
-	return func(c sandbox.NoteCall) bool { return c.Session == call.Session && c.ID == call.ID }
 }
 
 // atBound reports whether note's being at its bound is news to the inbox,
@@ -1862,7 +1856,7 @@ func (i *runInbox) servable(ctx context.Context, launch string, candidates []ope
 	cancelled []sandbox.NoteCall, unanswered []string) []openedNote {
 	return slices.DeleteFunc(slices.Clone(candidates), func(c openedNote) bool {
 		if live, ok := c.held.LiveServe(); ok && live.Launch == launch && !slices.Contains(unanswered, live.Take) &&
-			(live.Call == nil || !slices.ContainsFunc(cancelled, sameCall(*live.Call))) {
+			(live.Call == nil || !slices.ContainsFunc(cancelled, live.Call.Is)) {
 			return true
 		}
 		serves := 0
