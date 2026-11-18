@@ -19,24 +19,15 @@ import (
 // The previews of a message's links: a task, a page or an artifact of this
 // dashboard's own, drawn as the record it names.
 //
-// # Each record is read by the question its own screen asks
+// A link's record is asked through this same registry under the caller's own
+// context (`work_item`, `page`, `artifact`), so posture, authority and shape
+// are those questions' own: a record the caller may not open is not previewed.
 //
-// A link's record is asked through this same registry, under the caller's
-// own context: `work_item` for a task, `page` for a page, `artifact` for an
-// artifact. So the posture, the authority table's decision and the shape are
-// those questions' own, and a record the caller may not open is not
-// previewed, exactly as its screen would not open: a preview is never a way
-// to read what a person could not read by following the link.
-//
-// # Only this dashboard's own addresses
-//
-// A link is taken for a record only when its origin is this deployment's own
-// (`api.external_url`, [Sources.DashboardBase]) and its fragment is an
-// address the link table builds ([cards.ScreenOf]). The same fragment under
-// any other origin is somebody else's page, and a preview of the company's
-// task drawn beside it would vouch for a link that does not go there.
-// Everything else is drawn by the dashboard's link rules alone, so it is
-// simply absent from the answer.
+// A link is a record only when its origin is this deployment's
+// (`api.external_url`, [Sources.DashboardBase]) and its fragment is an address
+// the link table builds ([cards.ScreenOf]). The same fragment under another
+// origin is somebody else's page, which a preview would vouch for. Everything
+// else is absent from the answer.
 
 // PullRequestReader reads one pull request for a preview, through the
 // company's own GitHub wiring, cached briefly by its implementation.

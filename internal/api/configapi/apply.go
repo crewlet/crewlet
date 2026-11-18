@@ -26,35 +26,23 @@ import (
 
 // Writing a revision from inside this process rather than over HTTP.
 //
-// PATCH /config is the surface an operator drives, and it is the only place
-// that knows how to merge onto the active document, restore the masks a
-// redacted read handed back, validate the whole result and flip the
-// activation pointer as a compare-and-set. Everything in this file is that
-// same sequence, exported, so a second surface in this binary can perform a
-// config write WITHOUT a second implementation of it.
-//
-// The alternative was a setup route that reached for the store and the plane
-// itself. Two write paths onto one document is how one of them stops
-// restoring redacted values, or stops validating, or starts overwriting a
-// concurrent write — and the one that drifts is always the one nobody drives
-// by hand.
-//
-// The HTTP handler is a caller like any other: it resolves its preconditions
-// from headers, calls [Service.Apply], and maps the errors below onto the
-// status codes it has always answered with.
-//
+// PATCH /config merges onto the active document, restores the masks a
+// redacted read handed back, validates the result and flips the activation
+// pointer as a compare-and-set. This file is that sequence, exported, so a
+// second surface in this binary performs a config write WITHOUT a second
+// implementation: two write paths onto one document drift, and the one nobody
+// drives by hand stops restoring masks, validating or respecting a concurrent
+// write. The HTTP handler is a caller like any other: it resolves its
+// preconditions from headers, calls [Service.Apply] and maps the errors below.
+
 // # Two halves: prepare, then commit
 //
-// Every write on this surface is the same two steps, and they are separate
-// functions because a DRY RUN is the first without the second. [Service.prepare]
-// reads the fleet's revision ([Service.current]), checks what the caller said
-// it was building on,
-// opens the stored document, builds the proposed one from it, validates it
-// and derives what an answer reports: its warnings and its hierarchy.
-// Nothing is stored. [Service.commit] seals, stores and activates exactly the
-// bytes prepare produced. A check that ran a copy of the first half would
-// validate a different write from the one a save sends, which is the one
-// thing a dry run must never do.
+// [Service.prepare] reads the fleet's revision ([Service.current]), checks the
+// caller's base, opens the stored document, builds and validates the proposal
+// and derives the warnings and hierarchy, storing nothing. [Service.commit]
+// seals, stores and activates exactly the bytes prepare produced. They are
+// separate because a DRY RUN is the first alone: a check running a copy of it
+// would validate a different write from the one a save sends.
 
 // Applied is what a successful write produced.
 type Applied struct {
@@ -112,20 +100,14 @@ type RacedError struct {
 // stated the revision it lost in its If-Match header ([RacedError.Stated]),
 // and 409 where it stated none.
 //
-// HTTP'S RULE, the one every surface here answers a moved version by (RFC
-// 9110 §13.1.1): a condition the request stated as a header that turned out
-// false is a FAILED PRECONDITION, whether it was false when the request
-// arrived or became false before the activation's compare-and-set landed;
-// either way the server did not perform what was conditioned on it. A write
-// that named no revision lost a race it never declared a condition for,
-// which is a conflict. The code is `revision_advanced` either way, because
-// what moved is the company's revision; crewlet-operator and the dashboard
-// read the code, and the status says only which kind of request lost.
-//
-// DECIDED BY WHAT WAS JUDGED, carried on the error from the precondition
-// check, never by reading the request again: a route whose If-Match is
-// another resource's tag, or that reads none, would otherwise answer a stray
-// header's revision as a precondition it never evaluated.
+// HTTP'S RULE (RFC 9110 §13.1.1): a header condition that turned out false,
+// on arrival or before the compare-and-set landed, is a FAILED PRECONDITION; a
+// write naming no revision lost a race it declared no condition for. The code
+// is `revision_advanced` either way; crewlet-operator and the dashboard read
+// it, the status only says which kind of request lost. DECIDED BY WHAT WAS
+// JUDGED, carried on the error, never by reading the request again: a route
+// whose If-Match is another resource's tag, or none, would answer a stray
+// header as a precondition it never evaluated.
 func (e *RacedError) Status() int {
 	if e.Stated {
 		return http.StatusPreconditionFailed
@@ -204,15 +186,12 @@ func (e *ValidationError) Unwrap() error { return e.Err }
 // breaks, located and classified ([config.Problems]), and — for a document the
 // engine parsed far enough to have one — the hierarchy it derived.
 //
-// ONE MAPPING for every surface a document refusal reaches, so a dashboard
-// placing problems on the chart reads the same shape from /config and from
-// /setup.
+// ONE MAPPING for every surface a document refusal reaches, so the dashboard
+// reads the same shape from /config and /setup.
 //
-// EMPTY, NEVER NIL, for an error that is not about a document. Every caller
-// adds its own words to what comes back (a detail, a hint, an id), and a nil
-// map is the one value in Go that reads fine and panics on the write. The
-// caller that needs to know whether there was a structured half reads its
-// length.
+// EMPTY, NEVER NIL, for an error that is not about a document: callers add
+// their own keys, and a nil map panics on the write. A caller needing to know
+// whether there was a structured half reads its length.
 func RefusalFields(err error) map[string]any {
 	var invalid *ValidationError
 	var patchErr *PatchError
@@ -431,28 +410,16 @@ type prepared struct {
 
 // prepare builds and checks a write, storing nothing.
 //
-// # In this order, and each step for a reason
-//
-//   - Whether the CREDENTIAL may change a managed document at all
-//     (managed.go), before anything is read: it is a question about who
-//     is asking and never about what they sent.
-//   - The fleet's revision ([Service.current]), and what the caller built on.
-//     A stale base is refused before any work, because nothing built on it
-//     can be kept.
-//   - The stored document, opened and held to no rule: it is the merge base
-//     and the prior masks are restored from, and a revision this build
-//     would refuse must stay replaceable by the write that corrects it. One
-//     stored WITHOUT A SEAL is replaced by a whole document and read by
-//     nothing ([base.unsealed]); every other write is refused over it.
-//   - The proposal, built by the draft.
-//   - Whether the caller may make it: admin, or a lead inside
-//     their own subtree (admission.go). The engine's own writes are not asked.
-//   - Its hierarchy, DERIVED BEFORE IT IS JUDGED, because a refusal carries
-//     it too.
-//   - Its rules, and what an answer reports about it.
-//   - Whether it takes a human seat away from somebody bound to it or an
-//     open invitation holding it, which is the one step that reads outside
-//     this node (seatheld.go).
+// In this order, each step for a reason: the CREDENTIAL's right to change a
+// managed document (managed.go), before anything is read; the fleet's revision
+// ([Service.current]) and the caller's base, a stale one refused before any
+// work; the stored document, held to no rule since it is the merge base and
+// the masks' source, so a revision this build would refuse stays replaceable
+// (one WITHOUT A SEAL by a whole document, [base.unsealed]); the proposal;
+// whether the caller may make it (admission.go; the engine's own writes are
+// not asked); its hierarchy, DERIVED BEFORE IT IS JUDGED because a refusal
+// carries it; its rules; and last whether it takes a human seat from someone
+// bound to it, the one step reading outside this node (seatheld.go).
 func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	// WHO MAY CHANGE THE DOCUMENT, before this reads or stores anything: a
 	// credential a managed deployment does not let write is refused, and a
@@ -499,22 +466,18 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		switch {
 		case err == nil:
 		case d.wholeDocument && errors.As(err, &unreadable) && unreadable.Unsealed():
-			// AN UNSEALED ACTIVE REVISION IS REPLACED, NEVER READ, which is
-			// the offline import's rule (cmd/crewlet's importConfig) held
-			// online: the refusal every reader answers it with names a
-			// whole document sent with PUT /config as its remedy
-			// ([UnreadableRevisionError.Remedy]), and refusing that too
-			// left a fleet whose active revision nothing could replace
-			// without stopping a node. Nothing vouches for what its body
-			// says, so nothing is taken from it: see [base.unsealed].
+			// AN UNSEALED ACTIVE REVISION IS REPLACED, NEVER READ, the
+			// offline import's rule (cmd/crewlet's importConfig) held
+			// online: readers name a whole PUT /config as its remedy
+			// ([UnreadableRevisionError.Remedy]), so refusing that too would
+			// leave nothing able to replace it without stopping a node.
+			// Nothing vouches for its body, so nothing is taken: see
+			// [base.unsealed].
 			//
-			// ONLY UNSEALED. A revision SEALED is somebody's document
-			// whether or not this node can open it: under a key this
-			// keyring does not hold, which putting the key back recovers
-			// whole, or in a form this build does not read, which the
-			// newer build that sealed it reads. Replaced here, every
-			// credential and field in it would be lost to a write that
-			// could not read them.
+			// ONLY UNSEALED. A SEALED revision is somebody's document even
+			// if this node cannot open it (a key it lacks, or a newer
+			// build's form); replaced here, its credentials and fields would
+			// be lost to a write that could not read them.
 			b.unsealed = true
 		default:
 			return nil, fmt.Errorf("configapi: open the active revision: %w", err)
@@ -762,35 +725,16 @@ func (s *Service) checks(p *prepared, summary string) error {
 
 // commit seals, stores and points the fleet at a prepared write.
 //
-// Stored FIRST, then pointed at: a crash between the two leaves a revision
-// nothing points at, which is inert and recoverable with `crewlet config
-// activate <id>`, where the other order would point the fleet at a revision no
-// node can read. Its base is kept first where this node holds no row for it — a
-// fleet revision the reconciler has not ticked onto yet — because the parent is
-// a row of this node's history ([store.Configs.InsertOn]); a base the pointer
-// carried WITHOUT A SEAL is the one exception, never kept, and the write's row
-// names no parent ([store.Configs.Insert]).
+// Stored FIRST, then pointed at: a crash between leaves an inert revision
+// (`crewlet config activate <id>`), where the other order points the fleet at
+// one no node can read. The base is kept first where this node has no row for
+// it, being the parent's row ([store.Configs.InsertOn]).
 //
-// STORED AS HISTORY, AND ONLY THAT. The pointer is the company, and what this
-// node boots on is the reconciler's to move once its engine has applied the
-// revision. A write that marked itself this node's own when the pointer moved
-// raced the reconciler: one that had read the pointer a moment before walked it
-// back, so a read after the write answered the revision before it, and the
-// write's own `If-Match` was refused.
-//
-// THE COMPARE-AND-SET NAMES WHAT THE WRITE WAS BUILT ON: the base, while the
-// pointer still names it; no pointer at all, when it read none. Never
-// unconditional, so a write cannot land over one it never saw.
-//
-// The plane is there: [Service.prepare] refused the write otherwise, and a
-// prepared write comes from nowhere else.
-//
-// BY IS THE AUTHOR AND THE CREDENTIAL BOTH, and the revision keeps both: a
-// revision is kept for ever, and one that named only the credential — a
-// person's machine token, `pat:<id>` — named something the identity sweep
-// deletes a week after it lapses, and with it the only record of whose it was.
-// It is the prepared write's own party rather than an argument, so the author
-// a revision is stored under is the one [Service.Authorize] judged.
+// STORED AS HISTORY, AND ONLY THAT: what this node boots on is the
+// reconciler's to move, or the write could walk it back and have its own
+// `If-Match` refused. THE COMPARE-AND-SET NAMES WHAT THE WRITE WAS BUILT ON,
+// never unconditional. BY IS THE AUTHOR AND THE CREDENTIAL BOTH: a bare `pat:<id>`
+// is swept a week after it lapses, with the only record of whose write it was.
 func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Applied, error) {
 	by := p.by
 	at := s.now()
@@ -805,16 +749,13 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 	}
 	var id string
 	if p.baseUnsealed && p.baseFleet {
-		// A BODY THAT ARRIVED WITHOUT A SEAL IS NEVER KEPT, which is the
-		// reconciler's rule too: it keeps a pointer's revision only once
-		// this node's keyring opens it ([store.Configs.SawFleet]), because
-		// the seal is what says a node of this fleet wrote it, and a write
-		// replacing it is no reason to file a body from outside the fleet
-		// in this node's history under the author its pointer claims. The
-		// write is still built on it, so its activation is conditioned on
-		// it and replaces exactly the revision that was read; only its row
-		// here names no parent. This node's OWN unsealed copy is held
-		// already and is named, as the offline import names it.
+		// A BODY THAT ARRIVED WITHOUT A SEAL IS NEVER KEPT, as the
+		// reconciler's rule ([store.Configs.SawFleet]): only the seal says a
+		// node of this fleet wrote it, so it is not filed in this node's
+		// history under the author its pointer claims. The write is still
+		// built on it and conditioned on it; only its row names no parent.
+		// This node's OWN unsealed copy is held and named, as the offline
+		// import names it.
 		r.ParentID = ""
 		id, err = s.configs.Insert(ctx, r)
 	} else {
@@ -1015,23 +956,14 @@ func replaceDraft(incoming *config.Company, built string, by iam.Actor) draft {
 // readPatched reads a patched document, catching a typo the PATCH invented
 // while tolerating a field a PEER wrote.
 //
-// Both readers already state this rule and this call had it backwards.
-// [parseDocument]'s doc says its strictness "belongs here and not on the
-// stored form: this is the door a person's document comes through, and a typo
-// is a mistake to catch rather than a peer running a newer build."
-// [config.DecodeCompany]'s says rejecting an unrecognised key in a stored
-// revision "makes a mixed-version fleet an outage in the older direction."
+// A merged document is BOTH a person's words ([parseDocument]'s strict reader
+// catches typos) and bytes a peer may have written ([config.DecodeCompany]
+// must not reject an unknown key, or a mixed-version fleet is an outage in the
+// older direction). So the two inputs are asked separately.
 //
-// A merged document is BOTH at once: a person's words over bytes a peer may
-// have written. Reading it strictly refused every config write on an older
-// node the moment a newer one added a field; reading it leniently would
-// swallow the typo the strict reader exists to catch. So the two questions are
-// asked of the two inputs separately.
-//
-// THE PATCH IS ASKED ONLY ABOUT ITS KEYS. It is a fragment, so nothing else
-// the authored reader decides about it is meaningful yet: a redaction marker
-// is restored after the merge, and a shape is judged by Validate once it has
-// been. Only [config.ErrUnknownField] is a fact about the patch alone.
+// THE PATCH IS ASKED ONLY ABOUT ITS KEYS: a fragment, so a redaction marker
+// is restored after the merge and a shape judged by Validate once it has been.
+// Only [config.ErrUnknownField] is a fact about the patch alone.
 func readPatched(patch []byte, sent *yaml.Node, merged []byte) (*config.Company, error) {
 	cfg, err := parseDocument(merged)
 	if err != nil && !errors.Is(err, config.ErrUnknownField) {
@@ -1044,12 +976,9 @@ func readPatched(patch []byte, sent *yaml.Node, merged []byte) (*config.Company,
 	// ASKED WHETHER OR NOT THE MERGE PRODUCED A CLEAN DOCUMENT, because a
 	// `null` in a merge patch DELETES the key it names (RFC 7396): a patch
 	// naming a key this build does not know leaves no trace of it in the
-	// merged document, so the merged document cannot be what decides. Asked
-	// only when the merged document already showed the key, the null form
-	// answered 201 and changed nothing, since the write carries back every
-	// key it cannot represent that the write does not name. It was the one
-	// silent no-op on a surface whose whole rule is that an unknown key in a
-	// patch is refused rather than ignored.
+	// merged document, so the merged document cannot decide. Otherwise the
+	// null form would answer 201 and change nothing, the one silent no-op on a
+	// surface that refuses an unknown key in a patch rather than ignoring it.
 	named := submitted{text: patch, doc: sent}
 	if patchErr := onlyUnknownField(named.company()); patchErr != nil {
 		return nil, patchErr
@@ -1059,17 +988,13 @@ func readPatched(patch []byte, sent *yaml.Node, merged []byte) (*config.Company,
 	}
 	// The strict reader found a key it does not know and the patch did not
 	// name it, so it is a PEER's. The stored-form reader holds the merged
-	// document to NO rule. Validation happens exactly once, in prepare,
-	// after the masks are restored. This line used to validate here as
-	// well, before the restore, so on a document a newer peer had extended
-	// every PATCH that carried a masked credential (any mcp_servers list
-	// read from GET /config) was refused as an invalid patch naming the
-	// masks.
+	// document to NO rule: validation happens once, in prepare, after the
+	// masks are restored. Validating here, before the restore, refused every
+	// PATCH carrying a masked credential as an invalid patch naming the masks.
 	//
-	// AND IT MINTS NOTHING, where the authored reader writes down every
-	// unit's key and every seat's handle: a seat the patch added would be
-	// stored without its handle, and take another from its name the first
-	// time that name was corrected.
+	// The identities are minted below, as the authored reader does: a seat the
+	// patch added would otherwise be stored without its handle and take
+	// another from its name the first time that name was corrected.
 	cfg, err = config.DecodeCompany(merged)
 	if err != nil {
 		return nil, err
@@ -1112,35 +1037,18 @@ func onlyUnknownField(_ *config.Company, err error) error {
 	return nil
 }
 
-// Reload re-publishes the ACTIVE document unchanged, as a new revision.
-//
-// The gesture a rotated SECRET needs. A `${VAR}` in the company config is
-// resolved when a provider or a transport is constructed, from a snapshot
-// taken at apply time, so writing a new value into the secret store changes
-// nothing in a running process: the pointer in the document is already
-// correct, so there is no patch to make, and with no activation there is no
-// apply and no refreshed snapshot.
-//
-// Re-activating an UNCHANGED revision is what the control plane calls the
-// credential-rotation gesture, and it is exactly why the activation pointer
-// is append-only rather than keyed on a revision id: a pointer that
-// deduplicated would rebuild nothing on precisely this operation.
-//
-// A NEW revision rather than a re-pointed old one, for the same reason revert
-// writes one: the history stays append-only, so "the credentials were
-// reloaded at 04:12" is a fact somebody can find later.
+// Reload re-publishes the ACTIVE document unchanged, as a new revision: the
+// gesture a rotated SECRET needs, since a `${VAR}` is resolved at construction
+// from a snapshot taken at apply time and a new value in the secret store
+// changes nothing running until an activation re-applies. The pointer is
+// append-only, not keyed on a revision id, or a deduplicating one would
+// rebuild nothing here; the revision is NEW, as revert's is.
 //
 // EXPECT IS THE REVISION THE CALLER DECIDED ON, in either spelling
-// [ApplyRequest.Expect] takes, and empty for none — `POST /config/reload`,
-// which takes no `If-Match`, and the engine's own reload after a pass sealed a
-// credential, both of which mean "whatever the fleet runs". A `/setup`
-// rotation is the caller that sends one: it wrote through the `${VAR}` the
-// revision it read holds, and a reload of a document a write in between
-// changed — a literal in that slot, or a pointer at another name — would
-// republish a company that never reads the value it just sealed and answer
-// that the rotation landed. Held as every write's is: refused [RacedError] in
-// [Service.prepare] when the pointer has moved, and the compare-and-set
-// expects it.
+// [ApplyRequest.Expect] takes, empty for "whatever the fleet runs". A `/setup`
+// rotation sends one: if a write in between changed the document, a reload
+// would republish a company that never reads the value just sealed and report
+// the rotation landed. Refused [RacedError] in [Service.prepare] as any write.
 func (s *Service) Reload(ctx context.Context, summary string, by iam.Actor,
 	expect string) (Applied, error) {
 

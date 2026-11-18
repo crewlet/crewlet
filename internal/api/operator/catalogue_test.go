@@ -27,20 +27,16 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY TRANSPORT SERVES THE ONE CATALOGUE, and this holds the two sides a
-// transport has against each other: what it LISTS to a client over the wire,
-// and what the dispatch — the path every transport takes into a tool —
-// actually runs.
+// EVERY TRANSPORT SERVES THE ONE CATALOGUE: this holds what a transport LISTS
+// to a client against what the dispatch, the path every transport takes into a
+// tool, actually runs.
 //
-// The failure it guards is the one the package doc names: a transport that
-// assembled its own tool set would have a second chance to wire it
-// differently, and the result is a verb one surface offers and another does
-// not, or one listed with hints that are not the catalogue's. Each surface
-// looks complete from inside, which is why nothing else would notice.
+// It guards the failure the package doc names: a transport assembling its own
+// tool set could offer a verb another does not, or list hints that are not the
+// catalogue's, and each surface looks complete from inside.
 //
-// THROUGH A REAL MCP CLIENT, because the listing a client receives is the SDK's
-// serialisation of what was registered — the property is what arrives, not
-// what this package believes it registered.
+// THROUGH A REAL MCP CLIENT, because the property is what arrives (the SDK's
+// serialisation), not what this package believes it registered.
 func TestEveryTransportServesTheSameCatalogue(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{

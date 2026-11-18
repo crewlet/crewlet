@@ -12,12 +12,11 @@ import (
 // AN MCP SERVER'S OAUTH SIGN-IN, as the configuration's reader reads it.
 //
 // The public half of a server's grant ([coord.MCPGrant]) beside what the
-// configuration asks for: the grant (a person's sign-in or a service
-// identity's), how the engine registers, the client id it signs in as, the authorization server, the scopes granted, who signed in and when,
-// when the grant runs out and why its last renewal failed. NEVER A TOKEN, and
-// never the client's secret: the refresh token is the engine's own sealed row,
-// which nothing answers, and the access token is held in each node's memory
-// alone (internal/engine's mcpoauth.go).
+// configuration asks for: the grant kind, how the engine registers, the client
+// id, the authorization server, scopes, who signed in and when, when the grant
+// runs out and why its last renewal failed. NEVER A TOKEN, and never the
+// client's secret: the refresh token is a sealed row nothing answers, and the
+// access token lives in each node's memory alone (internal/engine's mcpoauth.go).
 //
 // THE ADMINISTRATOR'S READING ALONE. A member's reading carries the server's
 // state (`needs_sign_in` among them) and none of this: who signed the company

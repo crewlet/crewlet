@@ -238,20 +238,16 @@ func (p *RolePlacement) Seat() placement.SeatPlacement {
 
 // validate refuses a selector no node could ever satisfy.
 //
-// EVERY PART IS MATCHED EXACTLY against what a node advertises, and what a
-// node advertises has already passed Tier A: its id holds to [nodeIDPattern],
-// its label keys to [placement.CheckLabelKey], its values to
-// [placement.CheckLabelValue] (every one also trimmed of the whitespace around
-// it as the file loads), and their count to [placement.MaxLabels]. A selector
-// outside those shapes is not a narrow placement but an impossible one — the
-// seat is served by nobody, and the only symptom is a seats_unplaceable line
-// on a running fleet, long after the document that caused it validated clean. So the grammars are the
-// SAME ONES, reached rather than restated, because a copy that drifted would
-// reopen exactly that gap.
+// EVERY PART IS MATCHED EXACTLY against what a node advertises, and that has
+// already passed Tier A: [nodeIDPattern], [placement.CheckLabelKey],
+// [placement.CheckLabelValue] (values trimmed as the file loads) and
+// [placement.MaxLabels]. A selector outside those shapes is an impossible
+// placement, not a narrow one: nobody serves the seat, and the only symptom
+// is a seats_unplaceable line on a running fleet. So the grammars are the
+// SAME ONES, reached rather than restated: a drifted copy reopens that gap.
 //
 // Refused rather than trimmed: Tier B keeps what its author wrote, and
-// "zone" and "zone " look identical in a file, so a silent trim would hide
-// the one difference the reader cannot see.
+// "zone" and "zone " look identical in a file.
 func (p *RolePlacement) validate(path Path) error {
 	var probs problems
 	if p.Node != "" && !nodeIDPattern().MatchString(p.Node) {
@@ -321,20 +317,17 @@ func (p *RolePlacement) validate(path Path) error {
 // long a box blocked on a person stays paused, and how many rounds one run
 // may take.
 type RoleSandbox struct {
-	// PauseTTLSeconds bounds how long this seat's box, blocked on a
-	// person's answer, stays paused. UNSET inherits the provider default;
-	// an explicit 0 means never pause — tear the box down as soon as the
-	// run blocks, and re-seed from the pushed branch when the answer
-	// arrives.
+	// PauseTTLSeconds bounds how long this seat's box, blocked on a person's
+	// answer, stays paused. UNSET inherits the provider default; an explicit 0
+	// means never pause: tear the box down when the run blocks and re-seed from
+	// the pushed branch on the answer.
 	//
-	// A POINTER, because those are three states and a float64 has only
-	// two: an unset field's zero value would read as "never pause", so
-	// every seat that said nothing would silently lose its checkout the
-	// moment its run asked a question.
+	// A POINTER, because those are three states and a float64 has two: an unset
+	// field's zero would read as "never pause" and every silent seat would lose
+	// its checkout when its run asked a question.
 	//
-	// A NEGATIVE VALUE IS REFUSED. It is never "no expiry" — an unbounded
-	// pause is the leak this knob exists to prevent — and inherit is said by
-	// leaving the field out.
+	// A NEGATIVE VALUE IS REFUSED, never "no expiry" (an unbounded pause is the
+	// leak this knob prevents); inherit is said by leaving the field out.
 	PauseTTLSeconds *float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty" js:"min=0" desc:"Paused-box TTL. Unset = provider default; 0 = never pause."`
 
 	// MaxTurns caps how many agentic rounds one of this seat's executor
@@ -374,18 +367,15 @@ type RoleSandbox struct {
 	// OptionalKeys names the keys of Env whose value may resolve to nothing,
 	// such a key then being left out of the run environment quietly.
 	//
-	// AN EXECUTOR RUN STARTS EITHER WAY. It is the seat's turn itself rather
-	// than a tool call the turn chose, so refusing it for a code-host token
-	// a pass may mint in a minute would fail every message the seat could
-	// answer meanwhile. Any other key that resolves to nothing is left out
-	// too, and the run's start is logged naming it
-	// (sandbox_env_unresolved), because a run handed no code-host token
-	// clones nothing and pushes nothing, and that line is how an operator
-	// finds out why. What this list says is which absences are expected —
-	// a test DATABASE_URL, a proxy — so the line names only the ones that
-	// are not: the declaration a tool server makes
-	// ([MCPServer.OptionalKeys]). A setup step's env and files declare
-	// theirs on the step.
+	// AN EXECUTOR RUN STARTS EITHER WAY. It is the seat's turn itself, not a
+	// tool call the turn chose, so refusing it for a code-host token a pass may
+	// mint in a minute would fail every message the seat could answer meanwhile.
+	// Any other key resolving to nothing is left out too, and the start is
+	// logged naming it (sandbox_env_unresolved): a run with no code-host token
+	// clones and pushes nothing, and that line tells the operator why. This
+	// list says which absences are expected (a test DATABASE_URL, a proxy), so
+	// the line names only the others; a tool server declares them likewise
+	// ([MCPServer.OptionalKeys]), a setup step on the step.
 	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env whose value may resolve to nothing; such a key is left out quietly rather than logged as a gap in the run's environment."`
 
 	// Setup is this seat's own provisioning, applied after the
@@ -476,18 +466,16 @@ func (r RoleIntegrations) IsZero() bool {
 
 // RoleGitHub is a seat's own GitHub App.
 //
-// ONE APP PER AGENT, and there is no other way to have one. A GitHub App has
-// exactly one bot identity, derived from its slug: no token, header or
-// manifest field varies the author. So agents sharing an app all act as the
-// same account, and this engine would refuse them anyway, because two seats
-// resolving to one login means an @mention can no longer say which agent is
-// meant.
+// ONE APP PER AGENT, and there is no other way. A GitHub App has exactly one
+// bot identity, derived from its slug; nothing varies the author. Agents
+// sharing an app would act as one account, which the engine refuses anyway:
+// two seats on one login leave an @mention unable to say which agent is meant.
 //
 // THE CREDENTIALS ARE NOT TYPED IN. An app is created from a manifest the
 // engine builds, and GitHub returns its private key exactly once, to the
-// engine, at conversion time. What an operator does is click through the
-// creation and the install. Everything here except `enabled`, the permissions
-// and the repositories is therefore written by the engine, not by a person.
+// engine, at conversion. The operator only clicks through creation and
+// install, so everything here except `enabled`, the permissions and the
+// repositories is written by the engine.
 type RoleGitHub struct {
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has its own GitHub App. Off suspends the installation and keeps the app."`
 
@@ -570,26 +558,18 @@ func (g *RoleGitHub) validate(path Path) error {
 	return p.err()
 }
 
-// RoleCode is a seat's code access on Gitlet
-// (`code.backend: gitlet`): the tier Gitlet caps what the chart grants the
-// seat by (internal/gitlet's Tier).
+// RoleCode is a seat's code access on Gitlet (`code.backend: gitlet`): the
+// tier Gitlet caps what the chart grants the seat by (internal/gitlet's Tier).
 //
-// A SEAT'S GITHUB APP IS NOT CAPPED HERE. Its access is the App's own
-// permissions in GitHub's terms ([RoleGitHub.Permissions]), which the seat
-// path registers the App at; a tier is the vocabulary of a host whose
-// permissions the engine itself defines, and on GitHub the vendor defines
-// them. So this setting grants nothing on a company with no `code.backend: gitlet`.
+// A SEAT'S GITHUB APP IS NOT CAPPED HERE: its access is the App's own
+// permissions ([RoleGitHub.Permissions]), as a tier is the vocabulary of a
+// host the engine defines. This grants nothing without `code.backend: gitlet`.
 //
-// An AGENT seat's setting. A person acts on Gitlet as their own
-// identity, with a token bound to them, so a tier on a human seat would cap
-// nothing, and [Company.ValidateAdmission] refuses one.
+// An AGENT seat's setting: a person acts on Gitlet as their own identity, so
+// a tier on a human seat caps nothing and [Company.ValidateAdmission] refuses it.
 //
-// ONE SPELLING PER TIER, compared exactly: no hyphen for the underscore, and
-// no case or space folded. No tag shipped this field, so nothing was ever
-// written in another spelling and nothing needs reading in one: a second
-// spelling would be a compatibility path for a version that never existed,
-// and the published schema, which lists the field's enum, would have to carry
-// it too, since the schema must refuse nothing the engine runs.
+// ONE SPELLING PER TIER, compared exactly (no hyphen, case or space folded):
+// the schema's enum would have to list any second spelling too.
 type RoleCode struct {
 	// Access is how much of a repository this seat may do: read_only,
 	// review or full_access. Empty is read_only, the least this engine
@@ -651,19 +631,15 @@ var CodeAccessTiers = []string{TierReadOnly, TierReview, TierFullAccess}
 
 // RoleSlack is a seat's own Slack app.
 //
-// One app per agent is what makes an agent's messages come from that agent
-// rather than from a shared company bot. These credentials drive the
-// TRANSPORT only; the Slack tool server is a separate MCP entry whose token
-// is named again under mcp_env — two consumers, one secret, named twice on
-// purpose so an operator can split them.
+// One app per agent makes an agent's messages come from that agent rather
+// than a shared company bot. These credentials drive the TRANSPORT only; the
+// Slack tool server is a separate MCP entry whose token is named again under
+// mcp_env: two consumers, one secret, named twice so an operator can split it.
 //
-// TWO FIELDS, and there is deliberately no third. A `channel` sat here as
-// long as the transport had a `Send` with a fallback target; that send had no
-// caller — an agent's every message goes out through the Slack MCP server, on
-// this same token — so the field named a channel nothing ever posted in. The
-// seat's room is [OrgUnit.Channel], which the executor prompt renders as the
-// team channel and which names one room per unit whatever chat backend the
-// company runs on.
+// TWO FIELDS, deliberately no third: a `channel` here had no caller, since
+// an agent's every message goes out through the Slack MCP server on this
+// same token. The seat's room is [OrgUnit.Channel], one room per unit
+// whatever the chat backend.
 type RoleSlack struct {
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has its own Slack app. Off revokes the bot token and keeps the app."`
 
@@ -940,22 +916,18 @@ type Unit struct {
 	// channel topic. Nothing references a unit by it — that is the `id`.
 	Name string `yaml:"name" json:"name" js:"required" desc:"Unit name, shown to people. Nothing references a unit by it."`
 
-	// ID is this unit's stable identity — see [org.Unit.ID] — and WHAT
-	// REFERENCES IT: a `manages:` entry naming a unit and a root seat's
-	// `unit:` both resolve by it. A name is read by people and therefore
-	// renamed; an id is not read by anybody and therefore survives.
+	// ID is this unit's stable identity ([org.Unit.ID]), WHAT REFERENCES IT: a
+	// `manages:` entry naming a unit and a root seat's `unit:` both resolve by
+	// it. A name is read by people and renamed; an id survives.
 	//
-	// REQUIRED on an authored unit, and MINTED FROM THE NAME when the
-	// document does not carry one ([MintUnitID], applied by
-	// [ParseCompanyNode]) — so a founder never has to write one and every
-	// document the engine reads has a key that a rename cannot move. The
-	// rule is what refuses a unit assembled in Go with neither.
+	// REQUIRED on an authored unit, and MINTED FROM THE NAME when the document
+	// carries none ([MintUnitID], applied by [ParseCompanyNode]), so a rename
+	// cannot move a key. The rule refuses a unit assembled in Go with neither.
 	//
 	// THE PATTERN IS ON THE FIELD as well as in the validator, because the
-	// generator emits it into the published schema — and a schema that
-	// accepts ids the engine refuses is exactly the drift the schema-diff
-	// test cannot see. A tag cannot name [UnitIDPattern], so
-	// TestUnitIDPatternIsOneRule holds the two to one spelling.
+	// generator emits it into the published schema, and a schema accepting ids
+	// the engine refuses is drift the schema-diff test cannot see. A tag cannot
+	// name [UnitIDPattern], so TestUnitIDPatternIsOneRule holds one spelling.
 	ID string `yaml:"id,omitempty" json:"id,omitempty" js:"pattern=^[a-z][a-z0-9_-]{0,63}$" desc:"Stable identity for this unit, and how lead, manages and unit references key it. Minted from the name at import when unset. Lowercase, starts with a letter."`
 
 	// Type is an informational label — department, team, squad, pod, or
@@ -973,20 +945,14 @@ type Unit struct {
 
 	Goals []string `yaml:"goals,omitempty" json:"goals,omitempty" desc:"What this unit is working toward."`
 
-	// Channel is where this unit talks; inherited by children that
-	// set none.
+	// Channel is where this unit talks; inherited by children that set none.
 	//
-	// Integration-neutral, and it was not always: it was `slack_channel`,
-	// which made the ONE way to give a unit a channel name a third-party
-	// app this build refuses, and put "Team Slack channel" into the prompt
-	// of every agent in a company that talks on Mattermost. A unit's
-	// channel is a fact about the unit, not about who hosts it.
+	// Integration-neutral: a unit's channel is a fact about the unit, not about
+	// who hosts it, so no vendor's name appears in the field or the prompt.
 	//
-	// IT IS AN ADDRESS, which is what the grammar is for — see
-	// [unitChannel]. THE PATTERN IS ON THE FIELD as well as in the
-	// validator, for the reason [Unit.ID] gives: the generator emits it
-	// into the published schema, and a schema accepting channels the engine
-	// refuses is exactly the drift the schema-diff test cannot see.
+	// IT IS AN ADDRESS, which is what the grammar is for ([unitChannel]). THE
+	// PATTERN IS ON THE FIELD as well as in the validator, for the reason
+	// [Unit.ID] gives: the schema must not accept channels the engine refuses.
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" js:"pattern=^[a-z0-9][a-z0-9_-]{0,63}$" desc:"Unit channel on the company's chat surface, e.g. engineering; inherited by child units. Lowercase letters, digits, - and _."`
 
 	// Knowledge is free-text knowledge references for this unit. NOT a
@@ -1008,16 +974,12 @@ type Unit struct {
 	// Project and Space are the unit's tracker and knowledge IDENTITY: the
 	// project it files work in, and the container it writes pages in.
 	//
-	// VENDOR-NEUTRAL, and required of any unit that owns either. They were
-	// `integrations.jira.project` and `integrations.confluence.space`,
-	// which made the org chart name a product: a company switching
-	// backends had to rewrite its units, and a company running Worklet
-	// against a Confluence wiki could not say so at all. The tree
-	// made this rename once already, when `slack_channel` became `channel`.
+	// VENDOR-NEUTRAL, and required of any unit that owns either: the org chart
+	// must not name a product, or switching backends would mean rewriting units.
 	//
 	// NOT a credential, and NOT a read scope. Read scope is the org-wide
-	// knowledge block, and letting an identity double as one is how an
-	// agent ends up unable to read the page it was told to follow.
+	// knowledge block, and letting an identity double as one leaves an agent
+	// unable to read the page it was told to follow.
 	Project string `yaml:"project,omitempty" json:"project,omitempty" desc:"Tracker project this unit owns. Not a credential, not a read scope."`
 	Space   string `yaml:"space,omitempty" json:"space,omitempty" desc:"Knowledge container this unit owns. Not a credential, not a read scope."`
 
@@ -1030,17 +992,15 @@ type Unit struct {
 	Schedules []org.Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty" desc:"Recurring work owned by this unit."`
 }
 
-// IdentityKey is the unit's KEY — its id, or its name where it declares none
-// — which is what a `manages:` entry and a root seat's `unit:` reference
-// address it by, and what [org.Unit.Key] answers. A `lead:` is not one of
-// them: it is written on a unit and names a seat, by the seat's handle.
+// IdentityKey is the unit's KEY (its id, or its name where it declares none),
+// which a `manages:` entry and a root seat's `unit:` address it by, and what
+// [org.Unit.Key] answers. A `lead:` is not one: it names a seat, by handle.
 //
-// THE KEY RATHER THAN THE NAME, because this is what matches a unit to its
-// previous self across a write ([RestoreRedacted], [CarryUnknown]). A name is
-// prose a founder edits; matching on it handed a renamed unit's masked
-// credentials to whichever unit had taken its old name, which on a document
-// that merely swapped two teams' display names is the other team's secrets.
-// Following the key is following the same identity every other consumer does.
+// THE KEY RATHER THAN THE NAME, because it matches a unit to its previous
+// self across a write ([RestoreRedacted], [CarryUnknown]). A name is prose a
+// founder edits; matching on it would hand a renamed unit's masked
+// credentials to whichever unit took its old name, the other team's secrets
+// when two teams merely swapped display names.
 //
 // A VALUE receiver, like [Role.IdentityKey], because the redaction walker
 // holds the prior document by value.
@@ -1122,46 +1082,18 @@ const UnitIDPattern = `^[a-z][a-z0-9_-]{0,63}$`
 // it offers (`MAX_UNIT_ID`).
 const MaxUnitID = 64
 
-// unitChannel is what a unit's channel may look like.
+// unitChannel is what a unit's channel may look like: an ADDRESS, since with
+// `chat.backend: chatlet` the engine MINTS the room it names and a model
+// types the name back into tool calls, so `#eng`, `C_BACKEND` and
+// `Engineering (private)` each fail differently.
 //
-// # A channel is an ADDRESS now, and it had no rule at all
-//
-// The field shipped with no validation of any kind and two consumers — a line
-// in the prompt, and the list a structured ask's `inform` channel is checked
-// against — so anything an author typed was passed through to a model as
-// prose: `#eng`, `C_BACKEND`, `Engineering (private)`. With
-// `chat.backend: chatlet` the engine MINTS the room this names, routes a
-// unit's wakes to it, and hands the name to a model as something to type back
-// into a tool call, which makes every one of those three a different failure:
-// a name nobody can address, a rendering of an id Chatlet has no
-// concept of, and a name no vendor would accept either.
-//
-// The set is the INTERSECTION of the three surfaces rather than Chatlet's own:
-// Mattermost's channel URL names are lowercase alphanumerics with
-// `-` and `_` up to 64 characters, Slack's are lowercase letters, digits, `-`
-// and `_` up to 80, and the engine's own name admits exactly that set too,
-// reaching a broker subject only as a digest. So one grammar serves all
-// three, a company can switch backends without rewriting its org chart — a
-// vendor company's `dev_ops` validates — and the characters an author is most
-// likely to add — the `#` that is a rendering rather than a name, an upper
-// case, a space — are refused where they are written rather than printed into
-// a prompt.
-//
-// 64 characters because that is the shortest of the three limits, and the one
-// that truncates rather than refusing is the one that would give two units the
-// same room.
-//
-// # And why it is not [entityID]
-//
-// The two look alike and differ in the first character on purpose. An id is
-// a KEY this engine mints and nobody reads, so it may as well start with a
-// letter everywhere it lands; a channel is an ADDRESS on somebody's chat
-// surface, where `2fa-rollout` is an ordinary room name a vendor company
-// already has. Folding the two into one pattern would either refuse that
-// company's real channel or let an id start with a digit, and the second is
-// a key [MintUnitID] would then have to stop prefixing.
-// Compiled at first use, not at init: Gitlet's push hook is this
-// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+// The set is the INTERSECTION of Mattermost's, Slack's and Chatlet's
+// grammars (lowercase alphanumerics, `-`, `_`, up to 64: the shortest limit,
+// and a truncating one would give two units one room), so a backend switch
+// needs no chart rewrite. It differs from [entityID] in the first character
+// on purpose: an id is a minted key, a channel an address where `2fa-rollout`
+// is ordinary. Compiled at first use, not init: Gitlet's push hook is this
+// binary and pays every init (cmd/crewlet's hookinit_test.go).
 var unitChannel = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 })
@@ -1194,16 +1126,14 @@ func MintUnitID(name string) string {
 // requireIDs reports every unit in this subtree that declares no id.
 //
 // AN ADMISSION RULE rather than a runnable one (see
-// [org.Organization.Validate] for the class), and the distinction is the
-// whole reason it is not beside the shape check in [Unit.validate]. A unit
-// with no id is addressable — [org.Unit.Key] falls back to its name — so it
-// runs. What may not happen is a NEW document leaving a team keyed on prose
-// somebody will rename, so a submitted one is refused.
+// [org.Organization.Validate]), which is why it is not beside the shape check
+// in [Unit.validate]. A unit with no id runs, since [org.Unit.Key] falls back
+// to its name; what may not happen is a NEW document leaving a team keyed on
+// prose somebody will rename.
 //
-// Unreachable from any document a write stores, every one of which is minted
-// ([MintIdentities]). What it catches is a unit assembled in Go.
-// Skipped where the unit has no NAME either: the org model already reports
-// that, and reporting both puts one mistake in front of an operator twice.
+// Unreachable from any stored document, every one of which is minted
+// ([MintIdentities]); it catches a unit assembled in Go. Skipped where the
+// unit has no NAME either: the org model already reports that.
 func (u *Unit) requireIDs(path Path) error {
 	var p problems
 	if strings.TrimSpace(u.ID) == "" && strings.TrimSpace(u.Name) != "" {
@@ -1221,23 +1151,17 @@ func (u *Unit) requireIDs(path Path) error {
 }
 
 // MintIdentities writes every unit's key and every seat's handle into the
-// document, at any depth, where it declares none: a unit's key minted from its
-// name ([MintUnitID]) and a seat's the handle its name derives ([org.Slugify]),
-// so a unit or a seat whose name is later corrected IN THE STORED DOCUMENT
-// keeps its key or its handle, which are immutable (ADR-0013). A file is
-// minted afresh on every
-// import, from the names it holds then, which is why a file somebody keeps
-// should state both.
+// document, at any depth, where it declares none: a unit's key from its name
+// ([MintUnitID]), a seat's the handle its name derives ([org.Slugify]), so a
+// name later corrected IN THE STORED DOCUMENT keeps its key or handle, which
+// are immutable (ADR-0013). A file is minted afresh on every import.
 //
-// EVERY WRITE CALLS IT BEFORE THE DOCUMENT IS STORED: [ParseCompanyNode] for a
-// file and a whole-document write, and the config surface for a per-entity
-// splice and a merge patch, which decode the stored form ([DecodeCompany]) and
-// a member sent on its own ([ParseMember]), neither of which mints. A seat
-// stored without its handle takes whatever its name derives the next time the
-// document is read, and after a correction to that name that is a new handle —
-// a new agent id, an empty mailbox and an empty memory. Deterministic and
-// idempotent: a unit or a seat that declares its identity keeps it, and a
-// second read of the same file mints the same ones.
+// EVERY WRITE CALLS IT BEFORE THE DOCUMENT IS STORED: [ParseCompanyNode] for
+// a file and a whole-document write, and the config surface for a per-entity
+// splice and a merge patch, which decode ([DecodeCompany], [ParseMember])
+// without minting. A seat stored without its handle takes what its name
+// derives on the next read, a new handle after a correction: a new agent id,
+// empty mailbox and empty memory. Idempotent: a declared identity is kept.
 func MintIdentities(c *Company) {
 	mintUnitIDs(c.Units)
 	for role := range c.EachRole() {

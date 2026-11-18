@@ -54,24 +54,16 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	records := detail.Rows
-	// THE READ STOPS AT THE CAP, not at the end of the turn. A turn is read
-	// forwards, so the rows a long turn loses are its ENDING, which is where
-	// `agent_turn_completed` and `turn_completed` are: the two records a
-	// reader takes the outcome, the wall clock and the plan summary from. A
-	// turn cut at the cap was indistinguishable from one that died before
-	// finishing, and the screen said so out loud, printing "no turn record"
-	// directly above the rows it did get.
+	// THE READ STOPS AT THE CAP, not at the end of the turn, so a long turn would
+	// lose its ENDING (`agent_turn_completed`, `turn_completed`) and look like
+	// one that died. A cut view gets its ENDING BACK and reports the gap in the
+	// MIDDLE, assembled by internal/eventfan from every data node holding part of
+	// the turn (a resumed turn has an opening on one node and an ending on
+	// another; a node without `data` has its events held in custody).
 	//
-	// So a cut view gets its ENDING BACK and reports the gap in the MIDDLE,
-	// which is the part nothing can stand in for — assembled by
-	// internal/eventfan from every data node holding part of the turn, since
-	// a turn resumed on another node after a restart has an opening on one
-	// and an ending on the other, and a turn run on a node without `data` is
-	// held by the data node keeping its events in custody.
-	//
-	// ASKED, NOT INFERRED: each node counts what it holds when its read
-	// filled, because `len(records) == cap` is not "the read stopped early"
-	// — a turn of exactly the cap holds every row it has.
+	// ASKED, NOT INFERRED: each node counts what it holds when its read filled,
+	// because `len(records) == cap` is not "the read stopped early": a turn of
+	// exactly the cap holds every row it has.
 	truncated := detail.Total > len(records)
 	// EVERY TRACE THIS TURN TOUCHED, asked rather than derived.
 	//
@@ -139,37 +131,17 @@ func originOfRows(records []store.EventRecord) *types.TriggerOrigin {
 }
 
 // attemptsOf reports the unit of work a run was an attempt at, and every run
-// of it the fleet still holds, oldest first — an attempt that ran on another
-// node is an attempt all the same.
+// of it the fleet still holds, oldest first, whatever node it ran on.
 //
-// THE KEY COMES OFF THE ROWS THIS READ ALREADY HAS rather than from a second
-// seek: every event of the turn carries it, and a turn with none is answered
-// as having none rather than searched for.
+// THE KEY COMES OFF THE ROWS THIS READ ALREADY HAS, from
+// [store.EventRecord.WorkKey], the column: [store.EventRecord.Spend] is set by
+// the WRITE path only, so it is nil on every row read back.
 //
-// OFF [store.EventRecord.WorkKey], which is the column, and neither off the
-// tags blob nor off [store.EventRecord.Spend]. Spend is set by the WRITE path
-// and never by a read — `finishRecord` does not populate it — so a reader
-// reaching through it would find nil on every row and quietly answer "no
-// attempts" for every turn in the company. The column is the one authority
-// every work-key reader uses — the turns list's grouping, the phase-token
-// rollup, the `work_key` filter. See the field.
-//
-// THE WINDOW IS THE DETAIL READ'S, not the turns list's default. [store.Turn]
-// is a listing type and its query takes DefaultTurnDays — a week — when asked
-// for nothing, while the rows above came from [store.EventLog.Turn], which
-// floors at [store.EventHistory]. Left implicit, opening a turn between eight
-// and thirty days old found its work key and then reported no attempt at all,
-// including the one being read. MaxTurnDays is that same horizon.
-//
-// AND THE INSTANT IS THE DETAIL READ'S: `at` is the one the turn was asked at
-// ([eventfan.TurnDetail.At]), and the listing is pinned to it. Asked at a
-// fresh reading of the clock — a whole fleet scatter later, up to its read
-// budget when a node is slow — the listing's horizon sat above the detail's,
-// so a turn whose first rows lay between the two was shown whole and then
-// listed as starting later with part of its tokens, or, when all of it lay
-// there, not listed at all: the same "no attempt, not even this one" the
-// window above was widened to end. One window AND one instant, so the two
-// halves of this answer describe the same rows.
+// THE WINDOW IS THE DETAIL READ'S, not the turns list's default ([store.Turn]
+// takes a week when asked for nothing; [store.EventLog.Turn] floors at
+// [store.EventHistory]), or a turn eight to thirty days old reported no
+// attempt, itself included. THE INSTANT IS TOO (`at`, [eventfan.TurnDetail.At]):
+// a fresh clock reading put the listing's horizon above the detail's.
 func (s Sources) attemptsOf(ctx context.Context, id string,
 	records []store.EventRecord, at time.Time,
 ) (string, []store.Turn) {
@@ -217,24 +189,16 @@ func (s Sources) attemptsOf(ctx context.Context, id string,
 
 // phases answers what the models have been doing, company-wide: every phase's
 // own record, and every launch of an executor's run as its collection read it
-// (`executor_collected`) — what the run spent and reported, which is the work
-// of the executor round that launched it and no phase of its own
-// ([store.EventLog.Phases]).
+// (`executor_collected`), which is the executor round's work and no phase of
+// its own ([store.EventLog.Phases]).
 //
-// The question the previous dashboard could not ask at all: its only phase
-// history was per-seat, capped at fifty rows, with no pager and no filter — so
-// "what is my money being spent on" and "what did the models actually do" had
-// no screen, while the events behind them sat in the store addressable by id.
+// PAYLOAD INCLUDED, unlike the event listing: that is why this is its own
+// answer rather than `events?type=agent_phase_completed`. A phase record
+// without its payload has no prompts, response, tool calls or decision.
 //
-// PAYLOAD INCLUDED, unlike the event listing. That is the whole reason this is
-// its own answer rather than `events?type=agent_phase_completed`: a phase
-// record without its payload has no prompts, no response, no tool calls and no
-// decision, which is everything a reader came for.
-//
-// AND SO IT IS A TRAIL, decided as `turns` is ([Sources.trailOf]): one seat's
-// to whoever reads that seat's, and the company's to an admin. A row's tags
-// naming the work item it was charged to are the tracker's
-// ([maskHistory]).
+// IT IS A TRAIL, decided as `turns` is ([Sources.trailOf]): one seat's to
+// whoever reads that seat's, and the company's to an admin. A row's tags naming
+// the work item it was charged to are the tracker's ([maskHistory]).
 func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 	var before *store.Cursor
 	if id := p.String("before_id"); id != "" {
@@ -392,38 +356,18 @@ func (s Sources) a2aChannels(ctx context.Context, p Params) (any, error) {
 	}, nil
 }
 
-// knowledgeSearch runs the company's own knowledge search.
+// knowledgeSearch runs the company's own knowledge search, identical to a
+// seat's own turn. IT SEARCHES AS THE ORG, with no seat: a named seat would let
+// a dashboard reader read, through that seat's account, what their own may not.
 //
-// Deliberately identical to what a seat's own turn does: same seam, same
-// backend, same live read with no local copy. That is the point of the screen —
-// an operator asking "what would an agent find" gets the answer an agent would
-// get, not an answer from an index somebody would have to keep fresh.
-//
-// WHOSE IDENTITY IT SEARCHES AS is the one real decision here, and it is
-// answered conservatively: as the ORG, with no seat. A search with no seat is a
-// search with no per-seat credential, so the backend applies whatever the
-// engine's own account can see and nothing more. Searching as a named seat
-// would let a dashboard reader read, through that seat's account, material
-// their own account may not have — which is the exact confusion the seam's
-// "unscoped is not unbounded" rule exists to prevent.
-//
-// THE MODE IS THE ASKER'S, and the answer says what was served: `served_mode`,
-// the `modes` this backend can serve as asked, `degraded` when those differ,
-// and the `coverage` of the fleet the search was divided across — see
-// [knowledge.Outcome]. A mode this build does not know is refused rather than
-// run as the default, because that would answer a different question — and so
-// is a phrase past [knowledge.MaxQueryBytes] ([searchTextRefusal]).
-//
-// # Who is searched for
+// THE MODE IS THE ASKER'S, and the answer says what was served (`served_mode`,
+// `modes`, `degraded`, `coverage`: [knowledge.Outcome]). An unknown mode is
+// refused rather than run as the default, which would answer a different
+// question; so is a phrase past [knowledge.MaxQueryBytes] ([searchTextRefusal]).
 //
 // EVERYBODY MAY ASK, and only a holder of the knowledge base is searched for
-// (ADR-0033): the search reads pages and nothing else — a hit is a page — so a
-// caller without Doclet has no half of it they may see. The
-// tracker's holder is answered `available: false` with [KnowledgeNoAccess]
-// and the search never runs, so the screen they ask from can say that their
-// access leaves the pages out rather than that the company wrote nothing
-// down; a caller holding neither app is refused naming both, because nothing
-// this question could search is theirs.
+// (ADR-0033): the tracker's holder is answered `available: false` with
+// [KnowledgeNoAccess]; a caller holding neither app is refused naming both.
 func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	text := p.String("q")
 	if text == "" {
@@ -614,16 +558,14 @@ const (
 	// KnowledgeBuilding — the backend is wired and its index is still
 	// catching up with what this node has projected.
 	//
-	// SEPARATE FROM AN EMPTY RESULT, and that is the entire reason it
-	// exists: "the company has written nothing down" and "this node has
-	// not finished reading what it wrote" are opposite facts, and the
-	// second is true for the whole first index build on a freshly joined
-	// node. A screen that showed the first for the second would send
-	// somebody looking for a wiki that is right there.
+	// SEPARATE FROM AN EMPTY RESULT: "the company has written nothing down"
+	// and "this node has not finished reading what it wrote" are opposite
+	// facts, and the second holds for a freshly joined node's whole first
+	// index build.
 	//
-	// Only a backend that keeps a local index can report it — a live
-	// vendor search has nothing to build — so it is read through an
-	// optional interface rather than added to [knowledge.Searcher].
+	// Only a backend with a local index can report it (a live vendor search
+	// has nothing to build), so it is read through an optional interface
+	// rather than added to [knowledge.Searcher].
 	KnowledgeBuilding KnowledgeReason = "building"
 
 	// KnowledgeNoAccess means the caller holds Worklet and not Doclet, so no

@@ -35,7 +35,8 @@
 // stranger did not already have: a throttle refusal names only the caller's
 // own recent failures from where they are, on what they typed — a name nobody
 // holds climbs the curve exactly as a real one does — so it tells somebody
-// they are rate-limited, which they knew; a second-factor
+// they are rate-limited, which they knew, and its 429 carries the wait as a
+// Retry-After; a second-factor
 // prompt is reached only by somebody who already passed the first; an
 // invitation's refusal is read by somebody holding the link.
 //
@@ -49,7 +50,10 @@
 // which one shoulder-surfed code works repeatedly; without the second, a
 // one-time code is a second password. Two sign-ins racing one code are
 // arbitrated like any other write to one person, and the loser is refused as a
-// wrong code would be. A spend this node cannot RECORD is a 503 rather than a
+// wrong code would be. The person's own curve decides a second factor before
+// its code is checked, besides the pair's: every address's wrong codes climb
+// one curve, a wait past five seconds is a 429, and the wrong code that takes
+// it to its ceiling is announced once, as iam_second_factor_throttled. A spend this node cannot RECORD is a 503 rather than a
 // session: signing somebody in on a code that stays usable is the replay the
 // spend exists to close.
 //
@@ -58,12 +62,22 @@
 // A required second factor says nobody acts on a password alone, and a
 // person who holds no second factor has nothing else to present. So a sign-in
 // this surface verified that proved a password and no second factor opens a
-// session marked ENROLMENT-ONLY on its own start record, and answers
+// session marked ENROLMENT-ONLY in two places, both read: its signed bearer
+// ([session.Bearer.EnrolmentOnly]) and its start record. A node that has not
+// applied the record serves reads on the bearer alone, so a mark on the row
+// only let a password reach every read for that latency. It answers
 // `status: second_factor_enrolment_required`; internal/api/auth refuses that
 // session every route but the four that let its person in, and enrolling an
 // authenticator through it REPLACES it with a whole session, as a step-up
-// does. The mark is the session's because what restricts it is what its
-// sign-in proved — see [Service.enrolmentOnly].
+// does, keeping the restricted session's proof instant: the enrolment's code
+// proves a seed that session was just handed, not who holds it. Such a session
+// enrols only while its person holds no second factor, decided in the
+// enrolment's own snapshot, or a password-only proof outliving the person's
+// enrolment elsewhere would enrol a stranger's authenticator over it. The mark
+// is the session's because what restricts it is what its sign-in proved — see
+// [Service.enrolmentOnly]. A seed is sealed under the fleet keyring, bound to
+// its person and credential, and opened only to check a code; one that does not
+// open is never a match and is logged, since no retry could change it.
 //
 // # Three outcomes stay three, on every write
 //
@@ -102,13 +116,136 @@
 //
 // # A login cannot require a login
 //
-// Some routes here are unguarded, because requiring a credential to obtain one
-// is a deployment nobody can enter: the posture read, the login itself and
-// the invitation pair. Each that
+// Five entries are unguarded, because requiring a credential to obtain one
+// is a deployment nobody can enter: the posture read, the login itself, the
+// invitation pair, the password reset pair (one prefix each, since the link
+// is the credential) and the sign-out of this session. The list is exact, not
+// an /auth/ prefix, because the same surface ends sessions by name and enrols
+// second factors. Sign-out is unguarded because it must clear the cookie
+// whatever the node can read, and it verifies every bearer it ends itself:
+// guarded, a node that could not read its identity
+// estate answered it 503 first and a shared machine stayed signed in. The
+// exemption and the registration are one set of constants, and a gate walks the
+// mux in both directions. Each that
 // touches the store is admitted by the throttle first, and each that
 // changes state is origin-checked like every other write (internal/api/auth's
 // CSRF gate) — the guard is what they are exempt from, not the cross-site
 // rule, and that gate exempting them too is what left login CSRF open.
+//
+// # Links are read by whoever holds them
+//
+// An invitation or reset link is a credential the reader may not be. A GET
+// renders and never spends, since a mail client, scanner or preview card
+// prefetches. The invitation link is the dashboard's screen,
+// /dashboard#/invite/<id>.<secret>; the secret travels beside it, in the view's
+// X-Crewlet-Invite-Secret header and the redemption's body, never in a URL
+// (the reset pair's is X-Crewlet-Reset-Secret). A secret that is not the
+// link's is the same 410, in the same bytes and counted the same, as an id
+// nobody issued, because told apart it says which ids exist; a link that proved
+// itself and is spent is that 410 too but no failed attempt, since its reader is
+// its holder or a scanner and counting it named the scanner's address as a
+// guesser. A link meets no curve ([Service.uncounted]): it names nobody, so its
+// only key was the address, which a stranger could hold shut for everybody, and
+// its secret is 256 bits ([iamdomain.Blinder.InvitationSecret]).
+//
+// A redemption is retried until it lands: one record ([iamdomain.Writer.Redeem])
+// holds the person, address, login, the human seat and the spent link, so an
+// attempt refused for a login somebody holds writes nothing. What keeps the link
+// single-use is the link. The view always carries the seat, part of what the
+// person agrees to; one the chart has since retired or given an agent is the
+// link's own 410, never a 400 asking for a field the form lacks, and one a
+// person was bound to since is 409.
+//
+// A reset link is the same pair and its spend the same one record, judged in
+// its own snapshot, and it signs nobody in, because a session from the link
+// would skip a second factor the person holds. A first-password link (an
+// administrator's create of a person on a human seat) is the same credential,
+// told apart by the view's first ([iamdomain.ResetRow.First]). Every way a reset
+// link fails to open is one 410 reset_spent. Each spend is its
+// own operation, so a retry finds the link spent and is that 410, never a
+// ledger-replayed success on a node behind the first.
+//
+// # Sessions
+//
+// Every way in sets its cookie through [session.Issue], a replacement (step-up,
+// enrolment, password change) included, and leaves the browser's cache alone.
+// Only a person's own sign-out of this browser goes through [session.SignOut],
+// which also sends Clear-Site-Data: "cache"; every other ending deletes the
+// cookie alone ([session.End]). The request guard sets no-store on the whole
+// /auth/ prefix before anything beneath writes, so its own refusals, the origin
+// check's and the mux's 404 and 405 are covered.
+//
+// A step-up replaces the session it was made from and ends the old one first,
+// so a close that does not land fails the gesture rather than leaving two. The
+// new one records its own proof instant but keeps the old absolute deadline,
+// because restarting the clock would let confirming keep a session for ever.
+//
+// Only a session the rows still hold is ended: a sign-out of one already over
+// clears the cookie and writes and announces nothing, or every cookie ever
+// signed wrote a close per post. The logout's lineage comes from a bearer whose
+// signature verified. Ending a named session reads its owner from this node's
+// rows and asks the authority table about that owner, as iam.session.end, the
+// verb DELETE /iam/people/{id}/sessions is mounted on; a check of its own
+// admitted a machine token's deployment grant for anybody's session.
+//
+// A stale password verifier is re-hashed by the sign-in or step-up that
+// presents it, in the background once the handler has answered, owned by the
+// surface ([Service.Stop] waits within the listener's grace), taking a slot only
+// if one is free and writing within the log's own resolve budget. Given what a
+// refusal deadline left, a 64 MiB verification had spent it, and no verifier was
+// ever rewritten.
+//
+// # Passwords
+//
+// A person changes their own password (POST /auth/password) by presenting what
+// a step-up presents, verified on its terms and the throttle's curve, plus the
+// code from anybody who holds a second factor ([Service.proveSecondFactor]).
+// That is the recent proof, so no step-up comes first: the password alone let a
+// stolen cookie and a known password end every other session and lock the
+// person out. It is iam.credential.proof, so a machine token is refused and a
+// session exchanged from a Tier A token has no password to change. The new
+// password and a moved revocation epoch are one record
+// ([iamdomain.Writer.SetPassword]), because a change means somebody else may
+// hold the old one, so every session and token ends with it; this browser gets a
+// session proved now. A change this node has not applied is 202 and opens no
+// session, since the epoch is read from rows that lack the move. The policy's
+// password floor binds every password and is reported by /auth/config beside the
+// second-factor posture; password sign-in is always served, so there is no
+// backend to report.
+//
+// # Machine tokens
+//
+// A token acts as its owner, a person, stepped up by construction, so the kind
+// check and the step-up clock both passed it into TOTP enrolment and
+// recovery-code regeneration. The authority table refuses what the request
+// presented, the principal's Via the guard stamps, because that alone says
+// nobody is present; the step-up, no verb in the table, refuses it through
+// auth.PresentedToken as token_refused. A principal that is no person is 403
+// forbidden there, never step_up_required, whose replay no proof could lift.
+//
+// POST /auth/token exchanges a presented Tier A bearer for a one-hour session
+// whose subject is the token's login. The guard re-composes it from this node's
+// entry on every request through the bearer's own function, so removing the
+// entry or changing its id ends it wherever the node stands on the log, while a
+// new value under the same id works for the rest of its hour. Every cookie this
+// surface validates itself is read through [auth.SessionSubjects], built from
+// the same Tier A, because against the bare estate a token's login is no person
+// and its sign-out read the session as already over.
+//
+// # How a 503 and a 409 are chosen
+//
+// Every 503 says whether to come back, and httpjson.Unavailable with
+// auth.RetryIdentity is the only writer (auth.UnavailableIdentity for an
+// identity read); a gate walks the source for http.StatusServiceUnavailable and
+// the bare auth.RetryIdentitySeconds. The hint is the identity estate's two
+// seconds where waiting clears the cause and none for a state-log refusal it
+// does not, which a constant told clients to retry for ever. A fault waiting
+// cannot clear is a 500. A lost race is 409 stale, as on /iam and /worklet: an
+// account edit in the state log's words for a person ([statelog.LostRace]), a
+// gesture that edits nothing to look at again in the surface's own, asking only
+// that it be made again ([gestureFailed]). A verification, decoy or new
+// password's hash waits for a slot of the verify cap, and one whose request
+// went away while waiting is 503 and counts as no attempt.
 package authapi
 
 import (
@@ -276,43 +413,16 @@ func errText(err error) string {
 
 // unresolved answers a write whose outcome this node could not establish.
 //
-// # 503, the op id, and nothing built on it
+// Nothing is built on the record (no session, bearer or event): 503 with the
+// identity Retry-After, `outcome: "unknown"` ([httpjson.UnknownOutcome]) and
+// the OPERATION ID, which finds the write in `iam_history`.
 //
-// The record may or may not be on the log, so this surface does exactly what
-// a single write does with `unknown`: it opens no session on it, mints no
-// bearer from it, says no event about it, and answers 503 with the identity
-// Retry-After — an unknown outcome is the one a retry is FOR, so it carries
-// one — `outcome: "unknown"` ([httpjson.UnknownOutcome], which is what tells
-// it from a refusal that wrote nothing) and the OPERATION ID, which is how
-// the write is found in `iam_history`
-// and, where the gesture derives its id from what the caller presented (an
-// invitation), the id the retry lands under by construction. Every other write
-// here is a fresh operation per request, because each is answered inside it
-// and never re-asked: a sign-in, a sign-out or a factor asked again is a new
-// gesture, whose own decide reads what the first one left.
+// An UNVOUCHED unknown ([statelog.Result.Unvouched]) was not published, so a
+// retry here meets the same silence: NO Retry-After, `unvouched`, try elsewhere.
 //
-// # Unless this node's ledger cannot vouch for it
-//
-// An UNVOUCHED unknown ([statelog.Result.Unvouched]) was not published at all:
-// this node's operation ledger may have lost the row the operation needs, so
-// it answers the same operation the same way every time until the write
-// reaches it. Where the operation is derived from what the caller presented —
-// an invitation's redemption is — the same request here re-derives it and
-// meets the same silence, so the answer carries NO Retry-After, says
-// `unvouched`, and sends the caller to another node.
-//
-// # And a COLLAPSED answer is not built on either
-//
-// A write the framework answered with a copy of the operation it cannot prove
-// is this call's own ([statelog.Result.Collapsed]) landed — but whatever this
-// call's decide computed may describe a decision nothing published, or none
-// at all: a second factor's spend whose verdict was another round's, a factor
-// or a set of recovery codes this call formed and nothing stored. Where the
-// answer is formed inside the decide, the route asks [built] rather than
-// [landed], and a collapsed write is answered here as the unknown it is to
-// this call — nothing shown, nothing opened, nothing announced — while a new
-// request is a new operation that forms its own. Its OUTCOME is not unknown,
-// though, so it is not written as one: no `outcome: "unknown"` beside it.
+// A COLLAPSED write ([statelog.Result.Collapsed]) landed, but what this call's
+// decide computed may describe nothing published: routes asking [built], not
+// [landed], answer it as unknown without `outcome: "unknown"`.
 func unresolved(w http.ResponseWriter, r *http.Request, event string,
 	result statelog.Result) {
 
@@ -374,29 +484,16 @@ const gestureRaced = "Something changed at the same moment, so this didn't " +
 	"go through. Try again."
 
 // failWrite answers a write the identity estate REFUSED or could not make:
-// 503 carrying the operation it was published under — so the trail can find
-// it — and the Retry-After the refusal's own rule gives ([auth.RetryIdentity]),
-// none for one waiting cannot clear.
+// 503 carrying the operation it was published under and the Retry-After the
+// refusal's own rule gives ([auth.RetryIdentity]), none for one waiting cannot
+// clear. attrs are what else the log line names, by an id the answer never
+// carries.
 //
-// A LOST RACE IS NOT ONE OF THEM: a write whose snapshot kept moving under it
-// until the framework gave up ([statelog.ErrConflict]) is `409 stale` in
-// raced, the words its caller chose for the person making it, as it is on
-// /iam and /worklet and as this surface's own documentation already said.
-// Nothing about the request or the node was wrong: the record it wrote kept
-// changing under it, and the same gesture, made again, decides on a fresh
-// snapshot and lands. It was the 503 below, whose "this node couldn't make
-// that change" sent the person to wait for a node that had nothing wrong with
-// it.
-//
-// THE OPERATION ID ON EVERY ONE, because the refusals here used to carry
-// nothing but the code, and a refused write is the one an operator reading
-// the identity trail most needs to find. attrs are what else the log line
-// names — the object the write was about, by an id the answer never carries.
-//
-// A STATE-LOG REFUSAL IS TOLD IN A PERSON'S WORDS FOR IT
-// ([statelog.ConditionSentence]), whose advice agrees with the Retry-After:
-// one fixed sentence asked every refusal to be tried again in a moment, a
-// full log and an evicted node among them, under no Retry-After at all.
+// A LOST RACE IS NOT ONE OF THEM: a write whose snapshot kept moving
+// ([statelog.ErrConflict]) is `409 stale` in raced. Nothing was wrong with the
+// node; the same gesture again decides on a fresh snapshot, so a 503 would send
+// the person to wait for nothing. A state-log refusal is told in
+// [statelog.ConditionSentence]'s words, agreeing with the Retry-After.
 func failWrite(w http.ResponseWriter, r *http.Request, raced, event, opID string,
 	err error, attrs ...any) {
 
@@ -548,17 +645,13 @@ type Options struct {
 
 	// Sealer seals and opens the values this surface handles. REQUIRED.
 	//
-	// AN INVITATION'S ADDRESS is one: a form has to show which address a
-	// link was sent to, or the person guesses which of theirs it was. It
-	// is sealed under the INVITATION's key rather than a person's, because
-	// there is no person yet — minting one for an invitation that may
-	// never be redeemed would leave a key behind for every address anybody
-	// ever typed.
+	// AN INVITATION'S ADDRESS is one: a form shows which address a link was
+	// sent to. It is sealed under the INVITATION's key, not a person's, because
+	// there is no person yet and a key per address ever typed would leak.
 	//
-	// A SECOND FACTOR'S SEED is the other, sealed when it is enrolled and
-	// opened only to check a code: it is a secret the replicated estate
-	// would otherwise hold in the clear on every data node, in every
-	// snapshot and every backup.
+	// A SECOND FACTOR'S SEED is the other, sealed at enrolment and opened only
+	// to check a code, so the estate never holds it in the clear on every data
+	// node, snapshot and backup.
 	Sealer Sealer
 
 	// Sessions is what one bearer is validated against. REQUIRED.
@@ -694,20 +787,15 @@ func joinNames(names []string) string {
 
 // refuseSignIn is EVERY failed sign-in, whatever went wrong.
 //
-// ONE FUNCTION so there is one place the code and the status are chosen, and
-// no route can be the one that answered differently. The reason is LOGGED and
-// never sent: an operator investigating needs to know which arm it was, and
-// the caller must not.
+// ONE FUNCTION so no route can answer differently. The reason is LOGGED and
+// never sent: an operator needs the arm, the caller must not.
 //
-// THE ATTEMPT IS COUNTED, NEVER PUBLISHED. A failed sign-in is authored by
-// whoever can reach this listener, so it goes to the throttle's curve, the
-// audit trail's counter and its per-source, per-minute count — the engine's
-// own loop decides when a row is written, and the row carries counts rather
-// than what was typed.
+// THE ATTEMPT IS COUNTED, NEVER PUBLISHED. Anyone who can reach this listener
+// authors a failure, so it goes to the throttle's curve and the audit trail's
+// per-source, per-minute count; the row carries counts, not what was typed.
 //
-// EVERY ARM HAS ALREADY SPENT ITS DERIVATION by the time it reaches here — a
-// verification, or the dummy one ([Service.decoy]) — so nothing is added to
-// the answer's timing here.
+// EVERY ARM HAS ALREADY SPENT ITS DERIVATION (a verification, or the dummy
+// [Service.decoy]), so nothing is added to the answer's timing here.
 func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
 	in admission, attempt authevents.Failure, why string) {
 
@@ -745,22 +833,15 @@ type admission struct {
 // admit runs the throttle's curve for one attempt, answering its [admission]
 // or false once it has written the refusal.
 //
-// BEFORE ANYTHING IS LOOKED UP, on the subject as the caller TYPED it and the
-// source it came from: keyed on what it resolved to, the curve would be one
-// only real people could climb, and the roster again. A route whose
-// credential names nobody takes [Service.uncounted] instead. A wait of up to
-// [credential.InlineDelay] is served inside this call; a longer one is
-// `429 throttled` naming the time left.
-//
-// THE CALLER RESOLVES THE TICKET — [credential.Ticket.Fail] through
-// [Service.refuseSignIn] or its siblings, [credential.Ticket.Succeed] where
-// the credential proved itself — and DEFERS [credential.Ticket.Release], so an
-// attempt that reached no verdict counts as nothing.
-//
-// A THROTTLED REQUEST IS A FAILED ATTEMPT TOO, counted apart as one the curve
-// turned away: a client that keeps going after it was stopped is the part of
-// a guessing run an operator most wants to see, and the method names which
-// door it was pushing on.
+// BEFORE ANYTHING IS LOOKED UP, on the subject as TYPED and its source: keyed
+// on what it resolved to, only real people could climb the curve (a roster
+// oracle). A route whose credential names nobody takes [Service.uncounted]. A
+// wait up to [credential.InlineDelay] is served inside this call, a longer one
+// is `429 throttled`. THE CALLER RESOLVES THE TICKET ([credential.Ticket.Fail],
+// via [Service.refuseSignIn], or [credential.Ticket.Succeed]) and DEFERS
+// [credential.Ticket.Release], so no verdict counts as nothing. A THROTTLED
+// REQUEST IS A FAILED ATTEMPT TOO, counted apart: a client that keeps going
+// once stopped is what an operator most wants to see.
 func (s *Service) admit(w http.ResponseWriter, r *http.Request,
 	attempt credential.Attempt, method types.FailureMethod) (admission, bool) {
 
@@ -824,16 +905,11 @@ func (s *Service) hash(w http.ResponseWriter, r *http.Request, in admission,
 // uncounted is the admission of an attempt whose credential names nobody — an
 // invitation link: where it came from, and no ticket.
 //
-// # No curve, and not for want of a key
-//
-// The only key such an attempt has is its SOURCE, and a curve on the source
-// alone is one anybody sharing the address holds shut for everybody else at
-// it — an office, a VPN's egress, the whole internet behind a proxy this
-// deployment was not told to trust. These routes had one, so one stranger
-// could keep every invitation at that address answering 429. What bounds a
-// walk is the credential itself — a link's secret is 256 bits of crypto/rand
-// — and what shows one is the audit trail's failure count, which every refusal
-// still reaches.
+// There is no curve: the only key such an attempt has is its SOURCE, and a
+// curve on it alone lets one stranger sharing the address (an office, a VPN
+// egress, an untrusted proxy) keep every invitation there answering 429. The
+// credential bounds a walk (a link's secret is 256 bits of crypto/rand) and
+// the audit trail's failure count, which every refusal reaches, shows one.
 func (s *Service) uncounted(r *http.Request) admission {
 	return admission{source: s.sourceOf(r)}
 }

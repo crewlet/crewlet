@@ -72,18 +72,15 @@ func (f *fakeInbox) fire(t *testing.T, moved ...inbox.Movement) {
 
 // AN INBOX MOVEMENT REACHES THE SOCKETS HOLDING THAT SEAT, AND NO OTHER.
 //
-// This is how a person learns they have work: the tracker's applier says whose
-// inbox a committed batch moved, and the API pushes that to the sockets
-// WATCHING that seat. Two failures are invisible from the sending side and are
-// what the case is for. Pushed to every socket, one person's screen would learn
-// when and why somebody else's inbox moved — the `work_inbox` question refuses
-// exactly that. And pushed to nobody (a feed the app never registered on, or a
-// frame built without its seat), every screen would learn a poll interval late,
-// which reads as a quiet company rather than a broken wire.
+// The tracker's applier says whose inbox a batch moved, and the API pushes
+// that to the sockets WATCHING that seat. Two failures are invisible from the
+// sending side. Pushed to every socket, one screen would learn when and why
+// somebody else's inbox moved, which `work_inbox` refuses. Pushed to nobody (a
+// feed never registered, a frame built without its seat), screens learn a poll
+// interval late, which reads as a quiet company, not a broken wire.
 //
 // THE PAYLOAD IS IDENTIFIERS AND A COUNT, never content: the dashboard fetches
-// the inbox through the question that decides who may read it, so the frame
-// says only that it should.
+// the inbox through the question that decides who may read it.
 func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 	t.Parallel()
 	feed := &fakeInbox{}
@@ -377,17 +374,13 @@ func (c inboxChart) Seat(_ context.Context, ref string) (session.Seat, bool, err
 
 // A CODE MOVEMENT REACHES ONLY A WATCHER HOLDING GITLET (ADR-0110).
 //
-// Each half of an inbox is its app's: the inbox question lists a reader
-// without Gitlet no code notice, so the frame saying a code notice arrived —
-// which names the change and counts the notices — must not reach them either,
-// though their watch of the seat stands (it was decided as a read of the
-// person's inbox, which no app decides). So a code movement and a re-read of
-// the code half reach the watcher holding Gitlet and not the one holding
-// Worklet alone, while the tracker's half still reaches both: the frame the
-// second watcher receives next is the tracker's, which proves the code one was
-// withheld rather than late. Mutation: deliver every movement whatever its app
-// (InboxChange.ForReader answering true), and bob's first frame is the code
-// movement.
+// The inbox question lists a reader without Gitlet no code notice, so the frame
+// announcing one (naming the change, counting notices) must not reach them
+// either, though their watch of the seat stands. A code movement reaches the
+// Gitlet holder and not the Worklet-only one, while the tracker's half reaches
+// both: the second watcher's next frame being the tracker's proves the code one
+// was withheld, not late. Mutation: InboxChange.ForReader answering true makes
+// bob's first frame the code movement.
 func TestACodeMovementReachesOnlyAWatcherHoldingGitlet(t *testing.T) {
 	t.Parallel()
 	feed := &fakeInbox{}

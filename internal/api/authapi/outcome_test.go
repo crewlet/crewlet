@@ -20,21 +20,14 @@ import (
 
 // THREE OUTCOMES STAY THREE, ON EVERY WRITE THIS SURFACE MAKES.
 //
-// The identity writer used to answer a bare position, and an `unknown`
-// outcome — nothing can establish whether the record is on the log — came
-// back as a zero position beside a nil error, which every caller read as
-// success. So a second factor whose spend may never have landed opened a
-// session on a code that still worked, a session start nobody could confirm
-// minted a cookie carrying position zero, and every event this surface
-// announces was said of writes that may not exist.
-//
-// Each case below makes ONE write answer unknown and holds the surface to the
-// same three things: a 503 with the Retry-After an unknown outcome carries —
-// its retry under the same id is the point — and the operation id; nothing built on the write (no session, no cookie, no codes);
-// and nothing announced about it.
-//
-// Mutation: treat an unknown outcome as landed at any one site and its case
-// goes red on the status, the session, or the event.
+// An `unknown` outcome (nothing can establish the record is on the log) must
+// never read as success: a zero position beside a nil error would open a
+// session on a spend that may not have landed and announce writes that may not
+// exist. Each case makes ONE write answer unknown and holds the surface to: a
+// 503 with the operation id and Retry-After (a retry under the same id is the
+// point); nothing built on the write (no session, cookie or codes); nothing
+// announced. Mutation: treat unknown as landed at any site and its case goes
+// red on the status, the session, or the event.
 func TestAnUnknownOutcomeIsNeverBuiltOnOrAnnounced(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

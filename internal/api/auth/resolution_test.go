@@ -13,28 +13,13 @@ import (
 // NO CALL SITE DISCARDS THE UNKNOWN ARM, asserted against the SOURCE because
 // nothing a running handler does can show it.
 //
-// # The failure this exists for
-//
-// [iam.From] answers three-valued, and `p, _ := iam.From(ctx)` compiles,
-// reads naturally and is wrong in exactly one case: the zero principal it
-// hands back covers both "nobody presented a credential" and "this node could
-// not tell". The first is a 401 about the caller. The second is a 503 about
-// the node — and answered as the first, it tells everybody holding a perfectly
-// good credential that theirs is invalid, for as long as the identity estate
-// is unreachable, which is precisely how a company gets taught to go and reset
-// working passwords during an outage.
-//
-// Nineteen sites in this tree wrote `operator, _ :=` against the two-valued
-// reader this replaced, and every one of them did it for a good reason: the
-// prefix guard had already answered. The discarded half was a bool then. It is
-// the unknown arm now, and the reason it was safe to discard is gone.
-//
-// # Why a walk rather than a convention
-//
-// Because the convention already failed once, at nineteen sites, silently.
-// [auth.Caller] is the shape that cannot be got wrong — it writes the refusal
-// and returns nothing to drop — and this is what stops the two-valued habit
-// coming back beside it.
+// [iam.From] answers three-valued, and `p, _ := iam.From(ctx)` compiles but
+// is wrong in one case: the zero principal covers both "nobody presented a
+// credential" (401, about the caller) and "this node could not tell" (503,
+// about the node). Answered as the first, everybody with a good credential is
+// told theirs is invalid while the identity estate is unreachable.
+// [auth.Caller] writes the refusal and returns nothing to drop; this walk, not
+// a convention, stops the two-valued habit coming back beside it.
 func TestNoCallSiteDiscardsTheUnknownArm(t *testing.T) {
 	t.Parallel()
 	// EVERY PACKAGE THAT READS A PRINCIPAL OFF A REQUEST, named rather

@@ -741,14 +741,11 @@ func TestARunsLogIsReadOnlyForAReaderShownItsCalls(t *testing.T) {
 
 // A RUN'S STATUS IS EVERYBODY'S AND ITS BODY IS ITS SEAT'S TRAIL (ADR-0033).
 //
-// Every reader sees the run — its seat, its state, where it is, the model it
-// runs under — and only an admin and the seat's lead see what it was asked,
-// who is waiting on it and what its agent called; the work item it is on goes
-// to whoever holds the tracker, whatever else they read; and the
-// `providers.llm` entry its job was launched on is the company's
-// configuration, an admin's alone, which the lead reads the trail without. A
-// withheld body is said (`body_withheld`) rather than left to read as a run
-// that was asked nothing.
+// Every reader sees the run (seat, state, where, model); only an admin and the
+// seat's lead see what it was asked, who waits on it and what its agent
+// called. The work item goes to whoever holds the tracker, and the
+// `providers.llm` entry is an admin's alone. A withheld body is said
+// (`body_withheld`) rather than left to read as a run asked nothing.
 //
 // Mutation: show the body to every reader ([Sources.runReach] answering Body
 // true) and the stranger's row goes red; drop the tracker rule and the lead's

@@ -114,18 +114,16 @@ func TestACodeAccessIsOneOfItsThreeTiers(t *testing.T) {
 	}
 }
 
-// A CODE TIER ON A HUMAN SEAT IS REFUSED AT `code`, AND ONLY ON ADMISSION. A
-// person acts on Gitlet as their own identity (their bound
-// token holds maintain there), so a tier on their seat would cap nothing and
-// read as a setting that does. A
-// written document is refused for it; a block that says nothing is not, and a
-// written read_only is.
+// A CODE TIER ON A HUMAN SEAT IS REFUSED AT `code`, AND ONLY ON ADMISSION. A person
+// acts on Gitlet as their own identity (their bound token holds maintain there), so a
+// tier on their seat would cap nothing and read as a setting that does. A written
+// document is refused for it; a block that says nothing is not, and a written
+// read_only is.
 //
-// AN ADMISSION RULE, like a human seat's own GitHub App beside it, because
-// nothing running reads a tier off a human seat: the native grant skips one. So a revision being APPLIED that
-// carries one runs, which is what lets a later build relax the rule — a tier
-// that caps a person is the plausible relaxation — without this build
-// refusing, mid rolling upgrade, a revision its newer peer admitted and
+// AN ADMISSION RULE, like a human seat's own GitHub App beside it, because nothing
+// running reads a tier off a human seat: the native grant skips one. So a revision
+// being APPLIED that carries one runs, which lets a later build relax the rule without
+// this build refusing, mid rolling upgrade, a revision its newer peer admitted and
 // splitting the fleet's epoch.
 func TestACodeAccessOnAHumanSeatIsRefused(t *testing.T) {
 	t.Parallel()

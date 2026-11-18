@@ -26,12 +26,11 @@ func everything() iam.Principal {
 // STEP ITS GESTURE'S.
 //
 // The publisher vouches for a retry by the instant an operation id carries.
-// Every id here was `people:update:<id>:<uuid4>`, `<op>:seat` and the like,
-// which carry none and read as minted at the epoch: once this node's ledger had
-// swept anything each such write was answered `unknown` without being
-// published — and a step appended to such an id inherits the same nothing. So
-// each is held to the grammar, and each STEP to its gesture's instant, which a
-// step appended with a colon rather than [statelog.StepOpID] does not carry.
+// An id like `people:update:<id>:<uuid4>` carries none and reads as minted at
+// the epoch: once the ledger had swept anything, such a write was answered
+// `unknown` unpublished, and a step appended to it inherits the same nothing.
+// So each id is held to the grammar, and each STEP to its gesture's instant,
+// which a step appended with a colon rather than [statelog.StepOpID] lacks.
 //
 // Mutation: mint any gesture's id outside the grammar, or join a step with a
 // colon, and its row goes red.
@@ -149,12 +148,9 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 //
 // Asked here again it answers the same way until the change reaches this
 // node, so it carries no Retry-After and says `unvouched`. A gesture of
-// several records answers its WEAKEST step, and an unvouched step makes the
-// gesture one this node cannot vouch for: retried here, it meets that step's
-// silence again. The control is a lost acknowledgement, which says when.
-//
-// Every one says `outcome: "unknown"` beside the operation, which is what
-// tells it from a refusal that wrote nothing without reading the sentence.
+// several records answers its WEAKEST step. The control is a lost
+// acknowledgement, which says when. Every one says `outcome: "unknown"`, which
+// tells it from a refusal that wrote nothing.
 //
 // Mutation: drop the unvouched arm, or drop it from the fold of a sequence,
 // and a row carries a Retry-After; write the unknown through UnavailableWith

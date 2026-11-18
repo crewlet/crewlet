@@ -14,86 +14,55 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// WHAT A BOOT PUBLISHES, and over what.
-//
-// The fleet's activation pointer lives in the coordination store, which a
-// command run while the engine is stopped does not open. So what an offline
-// command chooses — `crewlet config import`, `activate`, `rekey` — is an OFFER:
-// this node's store boots on it, and the next start publishes it. And a
-// coordination store that was rebuilt has lost its pointer, which every node
-// that boots after can restore from what it knows.
-//
-// Both used to be one rule: publish this node's active revision wherever the
-// pointer was older by instant. It published an offline change over a fleet
-// that had moved on — a change made on a node that was behind rolled every
-// node back to the stale document underneath it (#321) — it published with no
-// compare-and-set, so a write landing between the read and the publish was
-// replaced (#319), and it published a re-activation of the fleet's own
-// revision only when this node's clock said it was newer (#318).
-//
-// Now each publish is a compare-and-set against what it was built on, decided
-// by [decideBootPublish] — a pure function of the facts, so every rule is a row
-// of a table a test walks — and carried out by [publishBoot]. Each publish also
-// says whether it RESTORES a company the fleet lost or CHOOSES one
-// ([coord.ActivationRequest.Restore]), because only a restore is something a
-// peer that knows better replaces (2b).
-//
-// AN OFFER (the boot row an offline command chose, built on β — its base, or
-// the unconfirmed offer it replaced, [store.Offer.Over]):
-//
-//   - 1b: the fleet took the offer already — the pointer names it at the
-//     instant this node planned for it (the publish landed before a crash),
-//     or this node's reconciler saw the pointer name it. It is confirmed, not
-//     published again, and the boot decides on as for a revision.
-//   - 1a: the pointer names β, and is not a restore of a revision this node
-//     saw the fleet move past. The offer is published expecting that very
-//     activation (its epoch), at an instant later than the pointer's, so it
-//     always mints an epoch — offering the fleet's own revision is the
-//     credential-rotation gesture — and lands at exactly the instant planned.
-//   - 1d: no pointer, and the fleet this node last saw ran β (or it saw none).
-//     Published create-only.
-//   - 1c: anything else. The fleet moved on from what the change was built
-//     on, so it is not published — said at warn on every boot, and kept: this
-//     node runs it until it applies the fleet's revision.
-//   - 1e: 1c, where the pointer is gone or is a stale restore, and the fleet's
-//     revision this node saw is put back as 2a or 2b would.
-//
-// NOT AN OFFER — R is the fleet's revision this node last saw, else what it
-// boots on:
-//
-//   - 2a: no pointer. R is restored create-only, at its own instant.
-//   - 2b: the pointer is a RESTORE of a revision this node holds, older than
-//     R: another node put back the company it remembered, and this one
-//     remembers the fleet moving on to R. R is restored over it, by
-//     compare-and-set against that very restore. A pointer somebody CHOSE is
-//     never replaced here, however old its instant reads: instants come from writers' clocks, and an offline
-//     activation or an override on a node whose clock runs behind would
-//     otherwise be reverted by the first peer to boot.
-//   - 2c: anything else. The pointer is the company, and the reconciler
-//     converges on it.
-//
-// A publish that loses its compare-and-set re-reads the pointer and decides
-// again. That ends: every landing moves the pointer to a later instant, and
-// every rule that publishes needs the pointer where this node left it.
-//
-// What no rule can do is tell a stale restore from the company once somebody
-// has CHOSEN something over it: an edit made on a node that knew no better is
-// a choice, and a peer that remembers a newer revision leaves it alone. A
-// rebuilt coordination store is restored by the first nodes to boot, so the
-// fleet converges on the newest revision any of them remembers only while
-// they boot ahead of the first write.
+// WHAT A BOOT PUBLISHES, and over what. The fleet's activation pointer lives in the coordination store, which an
+// offline command (`crewlet config import`, `activate`, `rekey`) does not open.
+// So what it chooses is an OFFER: this node's store boots on it and the next
+// start publishes it. A rebuilt store has lost its pointer, which booting nodes
+// restore from what they know. Each publish is a compare-and-set against what
+// it was built on (#319), never "wherever the pointer was older by instant":
+// clocks differ (#318), and that rolled the fleet back (#321).
+// [decideBootPublish] is a pure function, one row per [bootRule]. A publish
+// RESTORES or CHOOSES ([coord.ActivationRequest.Restore]): only a restore is
+// replaced by a peer that knows better. A publish that loses its compare-and-set
+// re-reads and decides again; that ends, each landing moving the pointer later.
 
 // bootRule names a row of [decideBootPublish]'s table.
 type bootRule string
 
+// The rules. AN OFFER is the boot row an offline command chose, built on β
+// (its base, or the unconfirmed offer it replaced, [store.Offer.Over]). NOT AN
+// OFFER, R is the fleet's revision this node last saw, else what it boots on.
 const (
-	ruleOfferLanded    bootRule = "1b"
-	ruleOfferOverBase  bootRule = "1a"
-	ruleOfferWithheld  bootRule = "1c"
-	ruleOfferFirst     bootRule = "1d"
-	ruleOfferRestore   bootRule = "1e"
-	ruleRestore        bootRule = "2a"
-	ruleRestoreNewer   bootRule = "2b"
+	// ruleOfferLanded: the fleet took the offer already (the pointer names it
+	// at the planned instant, the publish landed before a crash, or the
+	// reconciler saw it). It is confirmed, not published again.
+	ruleOfferLanded bootRule = "1b"
+	// ruleOfferOverBase: the pointer names β and is not a restore of a
+	// revision this node saw the fleet move past. The offer is published
+	// expecting that activation's epoch, at an instant later than the
+	// pointer's, so it always mints an epoch (offering the fleet's own
+	// revision is the credential-rotation gesture).
+	ruleOfferOverBase bootRule = "1a"
+	// ruleOfferWithheld: the fleet moved on from what the change was built on.
+	// Not published; said at warn on every boot and kept, so this node runs it
+	// until it applies the fleet's revision.
+	ruleOfferWithheld bootRule = "1c"
+	// ruleOfferFirst: no pointer, and the fleet this node last saw ran β (or it
+	// saw none). Published create-only.
+	ruleOfferFirst bootRule = "1d"
+	// ruleOfferRestore: 1c where the pointer is gone or a stale restore; the
+	// fleet's revision this node saw is put back as 2a or 2b would.
+	ruleOfferRestore bootRule = "1e"
+	// ruleRestore: no pointer; R is restored create-only, at its own instant.
+	ruleRestore bootRule = "2a"
+	// ruleRestoreNewer: the pointer is a RESTORE of a revision this node holds,
+	// older than R. R is restored over it by compare-and-set against that
+	// restore. A pointer somebody CHOSE is never replaced however old its
+	// instant reads: instants come from writers' clocks, and a node whose
+	// clock runs behind would otherwise have its activation reverted.
+	ruleRestoreNewer bootRule = "2b"
+	// ruleFleetPublishes: the pointer is the company; the reconciler converges
+	// on it.
 	ruleFleetPublishes bootRule = "2c"
 	ruleNothingToBoot  bootRule = "none"
 )

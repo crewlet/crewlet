@@ -22,21 +22,16 @@ const leadSeat = "agent-1"
 
 // longPhase is the frames one long executor phase publishes, as the runner
 // builds them: an opening frame carrying a 30 KB system prompt and an 8 KB
-// task, then thirty rounds over three harness runs, each round streamed for eight
-// seconds at the loop's five frames a second, committed with its narration,
-// and followed by its tool calls — run side by side where a round asked for
-// two, as a harness runs them, each announced as it starts and listed as it
-// returns with its result's tail — and each run listed once it has ended.
-//
-// BUILT ONCE per test binary and shared by every case that replays it. The
-// 1,311 frames are the measurement detail.go cites, so they are not shrunk —
-// but building them is a JSON round trip of every frame's growing payload,
-// and three parallel cases each building their own spent most of their time
-// doing it three times over. Sharing is safe because nothing writes a frame:
-// [stream.Service.Ingest] takes the envelope by value and the projection
-// copies every list and map it keeps from a payload. It is also stricter than
-// a copy per case — a write to a shared payload map is a race the detector
-// reports, where a private copy would have hidden it.
+// task, then thirty rounds over three harness runs, each streamed for eight
+// seconds at five frames a second, committed with its narration, and followed
+// by its tool calls (each announced, then listed with its result's tail).
+// BUILT ONCE per test binary and shared by every case that replays it: the
+// 1,311 frames are the measurement detail.go cites, so they are not shrunk,
+// and building them is a JSON round trip of every growing payload. Sharing is
+// safe because nothing writes a frame ([stream.Service.Ingest] takes the
+// envelope by value and the projection copies every list and map it keeps),
+// and stricter than a copy per case: a write to a shared payload map is a race
+// the detector reports.
 func longPhase(t *testing.T) []livestate.Envelope {
 	t.Helper()
 	frames, err := longPhaseFrames()
@@ -164,16 +159,12 @@ func buildLongPhase() ([]livestate.Envelope, error) {
 }
 
 // A RUNNING PHASE'S PUSHES CARRY WHAT MOVED, and a tab that applies them holds
-// the whole call — the one the projection holds, field for field, after every
-// frame.
+// the call the projection holds, field for field, after every frame.
 //
-// Every push used to carry the whole row: over this long phase, 185 MiB to
-// each open tab, 144 KiB a push, nearly all of it the prompt, the committed
-// rounds and the tool calls the tab already held, re-sent five times a second
-// while a round streamed. The heavy fields now go only when their version
-// moved, so a streaming frame carries the round being written and the call's
-// light fields — and what the tab rebuilds from the pushes is still exactly
-// what a snapshot would have sent it.
+// Pushing the whole row costs each open tab 185 MiB over this long phase (144
+// KiB a push, nearly all prompt, committed rounds and tool calls it already
+// holds). The heavy fields go only when their version moved, so a streaming
+// frame carries the round being written and the call's light fields.
 //
 // Mutation: push the rows whole again, and the phase costs its tabs the whole
 // call on every frame; leave a moved field out, and the tab's copy falls

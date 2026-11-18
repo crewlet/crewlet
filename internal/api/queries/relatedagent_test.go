@@ -13,11 +13,8 @@ import (
 
 // ONE AGENT'S RELATED EVENTS, NEVER ITS NAMESAKE'S.
 //
-// `events?agent=` matched through a party index keyed on NAMES — the actor,
-// the `agent_role` tag and the participant tags as they came — so two seats
-// both called "Engineer" listed each other's work, and a vendor delivery
-// addressed to one was on the other's page too once the second took the same
-// name. The index is keyed on agent ids and the parameter, a handle, is
+// The party index is keyed on agent ids, not NAMES (two seats both called
+// "Engineer" would list each other's work), and `events?agent=`'s handle is
 // resolved to one through the chart this node holds, as the event log resolved
 // each event's participants when it was written.
 //

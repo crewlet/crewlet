@@ -11,29 +11,16 @@ import (
 
 // requireGrants answers whether a create or an invitation STATED what it
 // confers, refusing it `400 invalid_body` naming `grants` where it did not and
-// where it names a permission this build does not know.
+// where it names a permission this build does not know. It runs BEFORE ANY KEY
+// IS READ OR LINK MINTED: a refusal fixed by typing a field publishes nothing.
 //
-// # Absent is refused, and `[]` is a value
+// Absent is refused and `[]` is a value (the overview alone, ADR-0033): no
+// default could stand for an omission, so the field is a POINTER. The CLI and
+// the dashboard state a default of their own, out loud.
 //
-// There is no default an omission could stand for here: a person enrolled
-// holding every app and a person enrolled holding the overview alone are both
-// legitimate, so a body that names neither is a body whose author did not
-// decide, and the record that lands from it decides who may use Worklet
-// and Doclet until somebody notices. The field is a POINTER so the
-// two are told apart: `[]` is the overview alone (ADR-0033), and an omitted
-// field is refused. The CLI and the dashboard each state a default of their
-// own, out loud, before they send.
-//
-// # A name nobody knows is refused naming the set
-//
-// A conferral adds every name it lists, and a name this build does not know is
-// one it may never add — kept on a row a newer peer wrote, but never written
-// by this one ([iamdomain.Writer.MayConfer] refuses it again in the record's
-// own snapshot). Refused HERE so the caller is told which names exist rather
-// than that they lack a permission nobody holds.
-//
-// BEFORE ANY KEY IS READ OR LINK MINTED, as a missing seat is: a refusal the
-// caller fixes by typing a field publishes nothing.
+// An unknown name is refused HERE, naming the set, so the caller learns which
+// exist rather than that they lack a permission nobody holds
+// ([iamdomain.Writer.MayConfer] refuses it again in the record's snapshot).
 func requireGrants(w http.ResponseWriter, grants *[]iam.Grant, what string) bool {
 	if grants == nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,

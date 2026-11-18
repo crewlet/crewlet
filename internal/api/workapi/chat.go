@@ -18,45 +18,23 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// THE COMPANY'S OWN CHAT, ON THIS SURFACE: the three verbs no tool makes.
-//
-// Every ordinary chat gesture — a post, a reaction, a room made or its
-// settings changed, a read cursor — is a catalogue tool, reached through the
-// act route and the operator's MCP and the one dispatch behind both (ADR-0024),
-// so there is no route here for any of them. What IS here is what no seat is
-// given and so no tool serves: erasing messages, pruning a room's past and
-// setting a room's own horizon. Each destroys what people said, now or on a
-// delay, with nothing to undo it, so each is decided as the purges are —
-// ADMIN'S, A PERSON'S OR A CREDENTIAL'S AND A RECENT PROOF'S
-// ([authz.ActionChatErase], [authz.ActionChatPrune],
-// [authz.ActionChatRetention]) — decided on the route with no row read, and
-// audited through the same `operator_acted` record a tool's call leaves
-// ([operator.AuditGesture]).
-//
-// # Said in nobody's voice, and read from nowhere
-//
-// None of the three is said in the room, so unlike every chat verb a tool
-// serves, none is SEATED: the store records whoever made it under their own
-// name, an administrator's pipeline token included. And none READS the room it
-// destroys from: an administrator is in no private room or direct conversation
-// they were not invited to, and a credential pasted into one is exactly what
-// they need to take out of it without being shown everything else said there.
-// So the confirmation a destruction takes is not something read off the room
-// — the purges' is the item's key or the page's title, read from the row — but
-// what the request itself destroys, repeated: an erase's COUNT of messages,
-// and a prune's CUTOFF. A room the store does not hold is the store's answer.
-//
-// # Bound to what they destroy
-//
-// The operation id is [keyedOp]'s over the request's key and what it ASKS, in
-// a canonical form: the erase's set of messages trimmed, deduplicated and
-// sorted ([chatlet.EraseSet]), so one erase named in two orders is one operation;
-// the prune's cutoff in UTC nanoseconds, so one instant written in two zones is
-// one; the horizon as the number of days or null. The same key sent with other
-// messages, a later cutoff or another horizon is another operation and lands
-// as asked — never answered `applied` from the first request's record while
-// nothing it names was destroyed, which is the one answer a compliance erase
-// may not get.
+// The company's own chat on this surface: the three verbs no tool makes.
+// Every other chat gesture is a catalogue tool behind the act route and MCP
+// (ADR-0024). Erase, prune and a room's horizon destroy what people said with
+// nothing to undo, so each is decided as the purges are (admin's, a person's
+// or a credential's, and a recent proof: [authz.ActionChatErase],
+// [authz.ActionChatPrune], [authz.ActionChatRetention]) with no row read, and
+// audited as `operator_acted` ([operator.AuditGesture]). None is SEATED (the
+// store records the actor under their own name) and none READS the room: an
+// administrator is in no private room they were not invited to, so the
+// confirmation repeats what the request destroys (an erase's COUNT, a prune's
+// CUTOFF), not something read off the room.
+
+// The operation id is [keyedOp]'s over the key and what the request ASKS, in
+// canonical form (the erase set trimmed, deduplicated, sorted by
+// [chatlet.EraseSet]; the cutoff in UTC nanoseconds; the horizon as days or
+// null), so the same key with other messages, cutoff or horizon is another
+// operation, never answered `applied` while nothing it names was destroyed.
 
 // ChatStore is chat's write side for the three verbs no tool makes, through
 // the estate router.
@@ -247,18 +225,13 @@ func pruneArgs(cutoff time.Time) map[string]any {
 // `{"retention_days": n}` keeps the room's messages n days, `0` for ever, and
 // `{"retention_days": null}` returns the room to the company's horizon
 // (`chat.chatlet.message_retention_days`). REQUIRED, as a value or a null: an
-// absent one would read as the company's horizon, and a request that said
-// nothing would then destroy the past of a room an administrator had set to
-// keep for ever.
-// A shorter horizon is a prune on a delay — the duty takes whatever it no
-// longer covers on its next pass — which is why this is decided as a prune is,
-// and CONFIRMED as one: `?confirm=` repeats the horizon the body states — its
-// number of days, `0` for ever included, or `company` for null, spelled by
-// [chatlet.HorizonConfirmation] as the command spells it — checked before
-// anything is written. Every horizon is confirmed, a longer one too:
-// whether a horizon shortens the room's depends on what the room had, which
-// this route deliberately does not read, and a confirmation asked only of some
-// requests is one a caller learns to send without looking.
+// absent one would read as the company's horizon and could destroy the past of
+// a room set to keep for ever.
+// A shorter horizon is a prune on a delay, so it is decided and CONFIRMED as
+// one: `?confirm=` repeats the body's horizon (days, `0`, or `company` for
+// null, per [chatlet.HorizonConfirmation]) before anything is written. Every
+// horizon is confirmed, a longer one too: whether it shortens the room's
+// depends on what the room had, which this route does not read.
 func (s *served) putChatRetention(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "retention_days") {

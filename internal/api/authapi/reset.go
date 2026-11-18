@@ -17,35 +17,16 @@ import (
 
 // A PASSWORD RESET LINK, AND WHY ITS TWO METHODS ARE THE INVITATION'S.
 //
-// An administrator issues it through `/iam` (a `reset` credential on the
-// person, a day long — [credential.ResetLinkLifetime]) and sends it out of
-// band; this is the other end. So is a person's FIRST PASSWORD LINK, which an
-// administrator's create of them on a human seat issues in the same record
-// (`POST /iam/people`, a week long — [credential.EnrolmentLinkLifetime]): the
-// same credential, opened and spent here identically, and told apart only by
-// what the screen says ([resetView.First]). It is the invitation pair in every
-// respect that matters, for the invitation's reasons:
-//
-//   - A GET SAYS WHOSE PASSWORD IT SETS AND SPENDS NOTHING, because a link is
-//     followed by mail clients prefetching, scanners and preview cards.
-//   - THE LINK IS AN ID AND A SECRET and only the id is ever in a path: the
-//     view takes the secret in [ResetSecretHeader], the spend in its body.
-//   - EVERY WAY A LINK FAILS TO OPEN IS ONE 410, in the same bytes — an id
-//     that is no link, a secret that is not the id's, a link spent, revoked
-//     or aged out, a person the reset no longer reaches — and only a link
-//     that did not PROVE itself is a failed attempt ([types.FailReset]).
-//   - IT MEETS NO CURVE ([Service.uncounted]): it names nobody until it
-//     opens, and its secret is 256 bits of crypto/rand.
-//
-// # The spend is one record, and it signs nobody in
-//
-// [iamdomain.Writer.SetPassword], judged in its own snapshot by the link
-// ([iamdomain.ResetRow.Opens]): the new password, the link spent with every
-// other the person held, and the revocation epoch moved — every session and
-// machine token they held ends. It answers the LOGIN and nothing else: the
-// person signs in next, where a second factor they hold still applies, which a
-// session handed out here would skip. A first password link signs nobody in
-// for the same reason, and ends nothing because there was nothing to end.
+// A `reset` credential ([credential.ResetLinkLifetime]) and a FIRST PASSWORD
+// LINK ([credential.EnrolmentLinkLifetime]) are one, told apart by
+// [resetView.First]; both are the invitation pair, for its reasons:
+//   - A GET SPENDS NOTHING (scanners prefetch); the secret is in
+//     [ResetSecretHeader].
+//   - EVERY FAILURE TO OPEN IS ONE 410; only an unproven link is a failed
+//     attempt ([types.FailReset]).
+//   - NO CURVE ([Service.uncounted]): it names nobody; the secret is 256 bits.
+// The spend ([iamdomain.Writer.SetPassword]) signs nobody in, or a second
+// factor would be skipped.
 
 // ResetSecretHeader carries a reset link's secret to the view, for
 // [InviteSecretHeader]'s reason — and is spelled twice and held equal for it

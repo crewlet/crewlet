@@ -31,6 +31,18 @@
 // on a listener of their own ([App.Public]) and api.port serves the rest — the
 // same table and the same chain behind a partition, so a route is guarded,
 // cross-site checked and drained exactly once whichever socket answers it.
+//
+// # A surface states its verb where it mounts
+//
+// The guard answers only whether somebody resolved, so a surface leaning on it
+// alone is open to every signed-in reader (the day sessions arrived, every
+// such surface was). Each surface [New] mounts, `/config`, `/secrets` and
+// `/setup` included, is therefore a guardedMounter whose routes go through
+// [authz.Router] with the verb that decides them, and the deployment's own
+// controls (`/backup`, every `/worklet/retention*` route, the fleet broker's
+// removals, `/feeds/dead-letters`) are mounted on `admin`. A question reached
+// by REST or by socket carries one declared posture in internal/api/queries,
+// so no question is reachable by choosing a channel.
 package api
 
 import (

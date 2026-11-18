@@ -13,19 +13,14 @@ import (
 
 // A PARAMETER REFUSAL IS TOLD IN WORDS, NEVER IN GO'S.
 //
-// A refused parameter reaches a person as the detail of a `bad_params`, on
-// the socket and over REST alike ([queries.RefusalDetail]), and several were
-// the wrap of somebody else's error: a cursor's time as the time package's
-// layout ("parsing time \"x\" as \"2006-01-02T15:04:05.999999999Z07:00\""),
-// a spend window's dates as the tokens package's ("tokens: … is before …"),
-// a histogram's window as the store's with Go's durations ("store: histogram
-// window is too many buckets: minute over 2160h0m0s"), a datastore query as
-// encoding/json's, an entity as the document service's ("configapi: unknown
-// entity kind"), and a closed set as Go prints a slice ("[minute hour day]").
-// Each row asks the real question with the parameter wrong and holds the
-// detail to what it should say and to none of those words. Mutations: wrap
-// the parse error again, list a set with %v, or pass the store's or the
-// document service's error through, and its row goes red.
+// A refused parameter reaches a person as the detail of a `bad_params`
+// ([queries.RefusalDetail]), so it must not be the wrap of somebody else's
+// error: the time package's layout, the tokens or store package's words, Go's
+// durations, encoding/json's or `configapi:`'s errors, a slice printed as
+// "[minute hour day]". Each row asks the real question with the parameter wrong
+// and holds the detail to what it should say and to none of those words.
+// Mutations: wrap the parse error again, list a set with %v, or pass the
+// store's or the document service's error through, and its row goes red.
 func TestAParameterRefusalIsToldInWordsNeverInGos(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)

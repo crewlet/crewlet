@@ -95,19 +95,12 @@ func TestEachOutcomeIsItsOwnStatus(t *testing.T) {
 // A REFUSAL WAITING CANNOT CLEAR SAYS NOTHING ABOUT COMING BACK, and one that
 // can says when.
 //
-// Every statelog refusal went out as `Retry-After: 2`: a write refused by an
-// evicted node, a read refused by a node holding a record it cannot decode —
-// both answer the same however often they are asked, and a client told to come
-// back in two seconds polls them until somebody readmits or upgrades the node.
-//
-// AND A READ THIS SURFACE TAKES ITSELF IS TOLD IN A PERSON'S WORDS FOR IT
-// ([builtin.ConditionSentence]), whose advice agrees with that hint. A refusal
-// answered through the operator surface's one mapping, a tool's or a tool-less
-// write's, answers its code's own message instead: nobody has worded the
-// condition for a person there (ADR-0060). Neither is ever told in its own
-// text: a tool's sentence for it carried the refusal's message, framework,
-// detail and all, and a read this surface takes answered "this node could not
-// read what the decision is about: " and the same.
+// A statelog refusal waiting cannot clear (an evicted node, an undecodable
+// record) answers the same however often asked; `Retry-After: 2` would have a
+// client poll until the node is readmitted or upgraded. A read this surface
+// takes is told in a person's words ([builtin.ConditionSentence]); one through
+// the operator mapping answers its code's own message (ADR-0060). Neither uses
+// the refusal's own text, which carries framework and detail.
 //
 // Mutation: answer a read this surface takes in [builtin.Condition]'s words
 // again, or a tool's failure in the tool's own sentence, and its rows go red.
@@ -610,19 +603,12 @@ func TestABodysNumbersArriveExactly(t *testing.T) {
 	}
 }
 
-// A BODY THAT STATES ANOTHER VERSION THAN ITS If-Match IS REFUSED, whatever
-// shape the second version takes, and one that states the SAME version is
-// taken, however it spells it.
-//
-// The body's version is read as the tool reads it ([argval.Whole], ADR-0059):
-// `"3"`, 3.0 and 3e0 are version 3 to every tool that takes a version, so a
-// body stating any of them beside `If-Match: 3` is the same request said
-// twice. The body's version was read as a float64 and truncated, so
-// `if_match: 3.5` beside `If-Match: 3` agreed with it and was silently
-// overwritten; and once a body's numbers arrive as json.Number, a float64
-// assertion matches nothing at all, so every disagreement would pass; and
-// compared by its spelling, `"3"` beside `If-Match: 3` was refused as a
-// second version, though the tool takes the same body without the header.
+// A BODY THAT STATES ANOTHER VERSION THAN ITS If-Match IS REFUSED, and one
+// stating the SAME version is taken, however spelled. The body's version is
+// read as the tool reads it ([argval.Whole], ADR-0059): `"3"`, 3.0 and 3e0 are
+// version 3. Truncating to a float64 would let `if_match: 3.5` agree; a float64
+// assertion on a json.Number matches nothing, so every disagreement would
+// pass; comparing by spelling would refuse `"3"`.
 //
 // Mutation: compare the body's value by its float64, skip a value that is not
 // one, or compare it by its spelling, and a row goes red.
@@ -1069,11 +1055,9 @@ func (m *patternMux) Handle(pattern string, _ http.Handler) {
 // the principal that made it and the operation the request was made under.
 //
 // A tool-backed route is audited by the operator dispatch it calls, so a
-// person's script, their assistant and their press are recorded the same way;
-// a purge, a rename or a take-down makes its write without a tool and records
-// the same event through the same constructor. Before it, those verbs were
-// the one place a person could change the company with no runtime record of
-// the call at all.
+// script, an assistant and a press are recorded the same way; a purge, rename
+// or take-down writes without a tool and records the same event through the
+// same constructor.
 //
 // Mutation: drop the AuditGesture after the purge, or the AuditRefusal in the
 // router's refusal, and its row goes missing.

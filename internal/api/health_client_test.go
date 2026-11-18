@@ -13,20 +13,11 @@ import (
 // THE DASHBOARD DECLARES EXACTLY THE HEALTH THE ENGINE REPORTS.
 //
 // `EngineHealth` (`contract/health.ts`) is the dashboard's type for
-// [api.Health], which the `health` push carries whole — and `HealthAlarms`,
-// `HealthObjects` and `ConfigAttempt` its types for the structs nested in it. It had drifted with
-// nothing to say so: `stall_lag_seconds` and `unproven_seconds` — the lag that
-// climbs towards the watchdog ending the process, and the seats a teardown
-// stranded — were on the wire and in no declaration, so no screen could read
-// either without first discovering the field exists.
-//
-// BOTH WAYS, and ONE MORE RULE. Every JSON tag on the struct is a member of the
-// interface and every member is a tag. And a field the engine OMITS when empty
-// is optional in the interface: a required member the wire can leave out is a
-// type promising every screen a value that is not there.
-//
-// Read off the struct with reflection rather than restated here, so a field
-// added to [api.Health] is covered the moment it compiles.
+// [api.Health], with `HealthAlarms`, `HealthObjects` and `ConfigAttempt` for the
+// nested structs. BOTH WAYS: every JSON tag is a member of the interface and
+// every member is a tag. A field the engine OMITS when empty is optional in the
+// interface: a required member the wire can leave out promises a missing value.
+// Read off the struct by reflection, so a new field is covered when it compiles.
 func TestTheDashboardDeclaresExactlyTheHealthTheEngineReports(t *testing.T) {
 	t.Parallel()
 	// The envelope, and the one struct it nests that the contract declares

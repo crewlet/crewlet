@@ -15,14 +15,12 @@ import (
 
 // A DISCONNECT THIS NODE COULD NOT RECORD IS TOLD IN A PERSON'S WORDS.
 //
-// Its detail was the error: "setupapi: this node could not take slack to record
-// the disconnect: " and the coordination store's own transport error, hosts and
-// ports, for the coordination store blinking; a pass holding the surface read
-// the same way under its sentinel. A condition is told in its own sentence
-// ([builtin.ConditionSentence]) and the busy surface in a sentence of its own,
-// each under a Retry-After; anything else is this node's own fault, `500` with
-// no Retry-After, which it was not — a 503 telling a person to try again in a
-// moment, for a fault no wait clears. Each error goes to the log.
+// The detail must not be the raw error (the coordination store's transport
+// error, hosts and ports). A condition is told in its own sentence
+// ([builtin.ConditionSentence]) and the busy surface (a pass holding it) in a
+// sentence of its own, each under a Retry-After; anything else is this node's
+// own fault, `500` with no Retry-After: a 503 would tell a person to try again
+// for a fault no wait clears. Each error goes to the log.
 //
 // Mutation: answer err.Error() as the detail again and every row goes red;
 // answer a fault as a 503 and the last one does.

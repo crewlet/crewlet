@@ -18,16 +18,14 @@ import (
 // `mcp_servers_status` flags it ([MCPAgentTools.OverBudget]).
 //
 // ONE HUNDRED, the lowest cap a widely used agent client puts on the tools it
-// hands a model: Windsurf loads at most 100 across all of a person's MCP
-// servers and leaves the rest unloaded, under the 128 VS Code is widely
-// reported to stop at and the 128 OpenAI's API takes in one request. A seat's
-// harness defers MCP tools behind its own search, so nothing breaks past it;
-// what degrades is the model's choice among a long list, which is why it is a
-// warning on the answer and never a refusal anywhere.
+// hands a model (Windsurf loads at most 100; VS Code is reported to stop at 128,
+// as does OpenAI's API per request). A seat's harness defers MCP tools behind
+// its own search, so nothing breaks past it; the model's choice among a long
+// list degrades, hence a warning on the answer, never a refusal.
 //
 // A CONSTANT CARRIED ON THE ANSWER, never configured: no company has a reason
-// to judge a long list differently from another, and a screen reads it from
-// the answer ([MCPStatusAnswer.ToolBudget]) rather than writing its own copy.
+// to judge a long list differently, and a screen reads it from the answer
+// ([MCPStatusAnswer.ToolBudget]) rather than keeping its own copy.
 const MCPToolBudget = 100
 
 // MCPAgentTools is one agent seat's MCP tools: every server whose grant
@@ -76,37 +74,17 @@ type MCPAgentServer struct {
 	State MCPServerState `json:"state"`
 }
 
-// mcpAgents is every agent seat's MCP tools, in the chart's order: the ONE
-// reading of what each agent's grants hand it, which `mcp_servers_status`
-// carries so no screen counts them again.
+// mcpAgents is every agent seat's MCP tools, in the chart's order, carried by
+// `mcp_servers_status` so no screen counts again.
 //
 // A SERVER'S TOOLS REACH A SEAT ONLY THROUGH ITS GRANT ([config.MCPServer.Grants]),
-// the rule the engine builds the seat's surface and starts its instances by,
-// and are counted as the fleet's live listings name them at the level the
-// server's entry decides ([serverTools]), the reading a server's page lists
-// them by, less each tool the seat's own limits block for it: the seat's
-// surface is cut by the same limits ([org.Role.LimitOn]).
-//
-// WHAT THE GRANT HANDS THE SEAT, WHATEVER ITS INSTANCES ARE DOING NOW: a server
-// that is down still lists what it served, and its tools come back with it, so
-// an outage moves no agent across the budget. A PER-AGENT SERVER IS COUNTED AT
-// ITS WHOLE LISTING for every agent it reaches: its children each list what
-// their own seat's credential reaches, which no record the fleet shares says
-// seat by seat (a node's status record carries nothing a seat count multiplies, and an
-// instance is read only where it runs), and the whole listing is the most an
-// agent of it is offered, so the budget errs toward flagging, never toward
-// missing an agent past it.
-//
-// EACH AGENT'S BUILT-INS ARE THE ONES IT IS OFFERED, counted on the answer's
-// own shelves less what builtins withholds from it, decided over the chart
-// this reading lists it in: the engine's one answer, which its turns' surfaces
-// are cut by, so the page never counts an agent a tool its turns are not
-// offered. A withheld name no shelf carries takes nothing off
-// ([builtinsOffered]).
-//
-// NULL, NOT EMPTY, where this node cannot read the fleet's listings: it keeps
-// no copy, or its copy has not been read yet, a moment after it starts. An
-// agent counted at nothing there would read as one holding no tools.
+// counted as the fleet's live listings name them ([serverTools]), less each tool
+// the seat's limits block ([org.Role.LimitOn]), WHATEVER ITS INSTANCES ARE DOING
+// NOW: an outage moves no agent across the budget. A PER-AGENT SERVER IS COUNTED
+// AT ITS WHOLE LISTING for every agent it reaches (no shared record says what
+// each credential reaches), so the budget errs toward flagging. Built-ins are
+// those offered ([builtinsOffered]). NULL, NOT EMPTY, where this node cannot
+// read the fleet's listings: nothing counted would read as no tools.
 func (s Sources) mcpAgents(ctx context.Context, leases []coord.Lease, status MCPStatusAnswer,
 	builtins BuiltinOffer,
 ) []MCPAgentTools {

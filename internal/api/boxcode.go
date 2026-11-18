@@ -15,47 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 )
 
-// A CHECK'S BOX READS ITS COMMIT, through the API rather than a clone:
-// GET /box/gitlet/{repo}/tree, /blob and /diff ([auth.BoxGitletPrefix]) — the
-// listing of a directory of the commit its check measures, a file's lines of
-// it, and the diff from the base its attempt was queued with to it — so a
-// check whose checks file says `checkout: none` (an API-first check: a linter
-// of a change's diff, a policy over its files) reads what it needs and clones
-// nothing.
+// A CHECK'S BOX READS ITS COMMIT through the API rather than a clone: GET
+// /box/gitlet/{repo}/tree, /blob and /diff ([auth.BoxGitletPrefix]), so a check
+// with `checkout: none` reads what it needs and clones nothing.
 //
-// # Admitted as its git is, and held to its commit
-//
-// Each read is ADMITTED BY GITLET'S CHECK ADMISSION
-// (host.Server.AdmitCheck): the check's token as git's Basic password, the
-// attempt's row read on every request — a box whose attempt has ended reads
-// nothing more, whatever its token's expiry — and the repository its token
-// names, under the name its box was given. A refusal there is the one line of
-// text the box's git is answered in, since it is the one admission. Then the
-// read is asked of the code domain's git reads — the repository's home Gitlet
-// node first — as THE ENGINE'S OWN, made for the check (gitlet.GitQuery.Check):
-// held to no grant, recorded as nobody's read, and answered at the check's
-// session, the position its attempt was queued at, so the node answering
-// holds its commit.
-//
-// AND ONLY THAT COMMIT. No read takes a revision: a tree and a file are read
-// at the attempt's commit, and a diff from the attempt's base to it, so a box
-// cannot name another commit of the repository — a later head of its change,
-// a branch's tip, an object it learnt the id of — and the Gitlet node holds the
-// read to that commit again as it validates it, whatever asked. A parameter no
-// read takes is REFUSED, never ignored: a box that asked for `rev=` and was
-// answered its own commit would read the wrong code with nothing saying so.
-//
-// # What it answers
-//
-// The read's page in the read surface's JSON — a tree's listing, a file's
-// lines, a diff's stat or one file's patch, each the Gitlet node's own — with the
-// repository's name, the commit, the base a diff was read from and the next
-// page's cursor: the commit's content alone, and none of the push provenance
-// a seat's read carries (gitlet.GitAnswer.PushedBy), since a check measuring a
-// commit reads nothing of who pushed what. A read's own refusal is the read
-// surface's envelope: `not_found` for a path the commit does not hold,
-// `bad_params` for a parameter the read cannot take (its sentence names it),
-// `unavailable` for a moment no node holding the repository could answer.
+// Each read is ADMITTED BY GITLET'S CHECK ADMISSION (host.Server.AdmitCheck):
+// the check's token as git's Basic password, the attempt's row read on every
+// request (an ended attempt reads nothing more, whatever its token's expiry).
+// It is asked of the code domain as THE ENGINE'S OWN (gitlet.GitQuery.Check):
+// no grant, recorded as nobody's read, at the attempt's queued position.
+// ONLY THAT COMMIT: no read takes a revision, and the Gitlet node holds it to
+// the commit again. A parameter no read takes is REFUSED, never ignored: a
+// box asking `rev=` and answered its own commit would read the wrong code.
 
 // boxCodeParams are the parameters each read takes, every one optional, and
 // the one that may repeat. NO REVISION AMONG THEM: the commit, and a diff's
@@ -70,7 +41,13 @@ var boxCodeParams = map[gitlet.GitReadKind][]string{
 // a diff's paths, each a path its stat is narrowed to.
 const boxCodeRepeated = "paths"
 
-// boxCodeAnswer is a check's box's read of its commit as the API answers it.
+// boxCodeAnswer is a check's box's read of its commit as the API answers it:
+// the read surface's JSON page (the Gitlet node's own tree listing, file lines
+// or diff stat or patch) with the commit's content alone, none of the push
+// provenance a seat's read carries (gitlet.GitAnswer.PushedBy). A read's
+// refusal is the read surface's envelope: `not_found` for a path the commit
+// lacks, `bad_params` for a parameter it cannot take, `unavailable` when no
+// node holding the repository could answer.
 type boxCodeAnswer struct {
 	// Repo is the repository's name, Commit the commit read — the attempt's
 	// — and Base, on a diff, the commit it was read from.

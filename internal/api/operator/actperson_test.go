@@ -130,19 +130,15 @@ func drawsTheEnginesWords(answer map[string]any) bool {
 
 // EVERY REFUSAL THE ACT ROUTE ANSWERS IS WORDED FOR A PERSON (ADR-0060).
 //
-// The act route answers a person: the dashboard draws a refusal's `detail`
-// where the control that caused it is. It used to be the tool's sentence,
-// written for a model: "comment_on_work_item was refused: … change the
-// argument this names (`answers`, or `choice`)". This walks the route through
-// every arm of the refusal mapping, each produced by the REAL tool from a
-// writer's error (so each comes with the tool's own model-phrased sentence
-// on Output), and the route's own refusals, and holds every sentence each
-// answer carries to what a person can read: no tool, no argument, no
-// backtick, no `name: value`, no internal id, no engine vocabulary.
+// The dashboard draws a refusal's `detail` where the control that caused it
+// is, so it must not be the tool's model-phrased sentence. This walks the
+// route through every arm of the refusal mapping, each produced by the REAL
+// tool from a writer's error, and the route's own refusals, and holds every
+// sentence to what a person can read: no tool, no argument, no backtick, no
+// `name: value`, no internal id, no engine vocabulary.
 //
-// Mutation, run when this was written: answer `result.Output` as the
-// detail again (the code before ADR-0060) and every tool-refusal row goes red,
-// on the tool's name, its backticked arguments and its engine words.
+// Mutation: answer `result.Output` as the detail and every tool-refusal row
+// goes red.
 func TestEveryRefusalTheActRouteAnswersIsWordedForAPerson(t *testing.T) {
 	t.Parallel()
 	writes := []struct {
@@ -370,26 +366,15 @@ func (placingWork) PlaceTask(context.Context, string, worklet.Place,
 // EVERY ANSWER THE ACT ROUTE GIVES IS WORDED FOR A PERSON, a write that landed
 // included (ADR-0060).
 //
-// A tool's receipt is its answer to a model, passed on to the dashboard, and
-// any field of it can carry a model's sentence: `place_work_item` reported a
-// card that missed its place in an `unplaced` field holding the refusal it
-// would have answered a model ("… call get_work_item again"), and the board
-// drew it. The act route used to be held only on `warnings`, so a sentence
-// under any other name passed. This walks every string of each answer, at any
-// depth, outside the value fields a screen reads as values, and holds it to a
-// person's words: a new field of prose fails here whatever it is named.
+// Any receipt field can carry a model's sentence (`place_work_item`'s
+// `unplaced` did). This walks every string of each answer, at any depth,
+// outside the value fields a screen reads as values.
 //
-// AND A RECEIPT ECHOING WORDS SOMEBODY ELSE WROTE ANSWERS THEM AS THEY WERE
-// STORED: `update_channel` answers a model the room's topic and purpose
-// fenced, since the one it left alone is whoever set it last, and
-// `answer_executor` the question the parked run asked, in the seat's name;
-// read off those answers the act route handed a person the topic and the
-// question between a fence's two lines, under value fields no walk read.
-//
-// Mutation, run when this was written: answer the missed place as the
-// receipt's `unplaced` again and the drag's row goes red on the tool's name;
-// answer a receipt from the model's Output again and the room's and the run's
-// rows go red on the fence round the topic, the purpose and the question.
+// AND A RECEIPT ECHOING WORDS SOMEBODY ELSE WROTE ANSWERS THEM AS STORED:
+// `update_channel` and `answer_executor` answer a model fenced topic and
+// question text, which a person would get between a fence's two lines.
+// Mutation: answer the missed place as `unplaced`, or a receipt from the
+// model's Output, and the drag's, room's and run's rows go red.
 func TestEveryAnswerTheActRouteGivesIsWordedForAPerson(t *testing.T) {
 	t.Parallel()
 	created := &recordingWork{caveats: []caveat.Caveat{

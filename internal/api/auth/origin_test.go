@@ -245,15 +245,11 @@ func TestTheWebhookEdgeIsNotRefusedForItsOrigin(t *testing.T) {
 
 // A SIGN-IN ROUTE IS A BROWSER ROUTE, AND IT IS JUDGED LIKE ONE.
 //
-// The routes a credential cannot guard — a login cannot require a login — are
-// exempt from the GUARD, and they used to be exempt from this check too, which
-// left login CSRF open: a form on somebody else's page could post an
-// attacker's credentials to the sign-in or redeem an attacker's invitation,
-// and leave the victim's browser signed in as somebody the attacker controls.
-// Walked over every one of them, with the controls beside each: the
-// deployment's own origin is served, and so is a client that sends no Origin
-// and holds no cookie — the operator CLI signing in — while a cookie with no
-// Origin is refused as it is everywhere.
+// These routes are exempt from the GUARD, never from this check, or login CSRF
+// is open: a foreign form could post an attacker's credentials to the sign-in.
+// Each is walked with its controls: the deployment's own origin and a client
+// sending no Origin and no cookie (the CLI signing in) are served, a cookie
+// with no Origin is refused.
 //
 // Mutation: exempt [auth.Unguarded] again and every cross-site case goes
 // through.

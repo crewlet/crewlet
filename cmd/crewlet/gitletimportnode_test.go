@@ -8,19 +8,17 @@ import (
 )
 
 // THE IMPORT COMMAND RUNS ON THE NODE: without -local, `crewlet gitlet import`
-// is the tool's create over the act transport — the source, the name, the
-// owner, the credential's NAME and the mirror as the tool's arguments, the
-// operation key in the header the transport requires, the credential of the
-// request from the environment — and runs no git on this machine; the
-// answer is told as the node gave it, the repository importing. An unknown
-// outcome names the operation, and -op-id sends it again. A flag of the
-// other import is refused before anything is sent: -git or -dry-run without
-// -local, and -owner, -credential, -mirror or -op-id beside it, every such
-// flag given named in one list as a sentence says it.
+// is the tool's create over the act transport (source, name, owner, the
+// credential's NAME and the mirror as arguments, the operation key in the
+// header, the request's credential from the environment) and runs no git here;
+// the answer is told as the node gave it. An unknown outcome names the
+// operation, and -op-id sends it again. A flag of the other import (-git or
+// -dry-run without -local; -owner, -credential, -mirror or -op-id beside it) is
+// refused before anything is sent, every such flag named in one list.
 //
-// Mutation: dispatch the import to the client-side push whatever -local
-// says, or drop the owner or the mirror from the arguments, or join the
-// refused flags with " and " again → red.
+// Mutation: dispatch the import to the client-side push whatever -local says,
+// or drop the owner or the mirror from the arguments, or join the refused
+// flags with " and " again → red.
 func TestTheImportCommandRunsOnTheNode(t *testing.T) {
 	t.Parallel()
 	const source = "https://git.example.com/acme/web.git"

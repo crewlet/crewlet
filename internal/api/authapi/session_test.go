@@ -91,16 +91,13 @@ func TestASignInIsAProofAStepUpSurfaceAccepts(t *testing.T) {
 // CHANGING HOW YOU PROVE WHO YOU ARE ASKS THE STEP-UP WINDOW, AND THE
 // REFUSAL NAMES IT.
 //
-// Enrolling or replacing a second factor and regenerating the recovery codes
-// are the second-factor reset's gesture by another door, decided by the verb
-// `/iam` asks of the reset and of a factor's revocation, so a proof two hours
-// old is refused here as it is there. The refusal carries the reason and the
-// window in the envelope every step-up refusal on this API carries, which is
-// what a client needs to ask the person to confirm and replay; it used to be a
-// bare code. The control is the same person a minute after proving.
-//
-// Mutation: decide a verb that asks no proof and the two-hour proof is served;
-// answer the refusal without its detail and the window goes missing.
+// Enrolling or replacing a factor and regenerating recovery codes are the
+// second-factor reset's gesture by another door, decided by the verb `/iam`
+// asks of it, so a proof two hours old is refused here as there. The refusal
+// carries the reason and window in the standard step-up envelope, which a
+// client needs to ask the person to confirm and replay. The control is a minute
+// after proving. Mutation: decide a verb that asks no proof and the old proof
+// is served; drop the refusal's detail and the window goes missing.
 func TestChangingHowYouProveWhoYouAreAsksTheStepUpWindow(t *testing.T) {
 	t.Parallel()
 	r := newSignInRig(t)

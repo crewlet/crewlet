@@ -16,44 +16,27 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
-// `crewlet fleet broker credential` — the operator key a member's broker
-// admits on its loopback client listener, for the nats tool.
+// `crewlet fleet broker credential` — the operator key a member's broker admits
+// on its loopback client listener, for the nats tool.
 //
-// # Why a gesture at all
-//
-// Every connection to an embedded broker presents a key derived from
-// secrets.keys (ADR-0094), and the docs prescribe broker gestures no engine
-// verb performs: above all the resize every stream and bucket needs before a
-// raised `stream.replicas` lets a node start, which only `nats stream update`
-// does. So a clustered member's client listener — open on loopback because
-// nats-server routes only once one is — admits one more kind of connection:
-// an operator presenting the nkey derived from a key of the ring under
-// [jetstream.ClientKeyDomain]. This writes that key's seed where the nats
-// tool reads one (`--nkey FILE`) and prints the invocation.
-//
-// The key grants nothing its holder lacks: whoever reads this node's Tier A
-// holds the keyring, which already decrypts the company document and the
-// secret store and mints every run token. And it reaches the global account,
-// never the system one, so a membership change still goes through `crewlet
-// fleet broker remove` and the engine.
-//
-// # Derived here, addressed by the node
-//
-// The seed is derived from THIS host's Tier A, never fetched: no API carries a
-// credential. The address is the running node's own — its client listener's
-// port is the OS's, chosen at each start — read from GET /fleet/broker, which
-// takes `admin` as `list` does. A listener on loopback is reachable from its
-// own host alone, so an answer from any other node (an -api naming a balancer,
-// or a peer) is refused rather than printed. A member that serves no API
-// (api.port 0) is asked nothing: its broker_keys line names the listener.
-//
-// # Never to the terminal
-//
-// The seed goes to a file created 0600, never stdout — break-glass, as
-// `crewlet secrets get` is: no scrollback, no screen share — and an existing
-// path is refused, so a credential file is never overwritten.
+// The docs prescribe broker gestures no engine verb performs (above all the
+// resize `nats stream update` does before a raised `stream.replicas` lets a node
+// start), so a clustered member's loopback client listener admits an operator
+// presenting the nkey derived from a ring key under [jetstream.ClientKeyDomain]
+// (ADR-0094). It grants nothing its Tier A holder lacks, and reaches the global
+// account, never the system one: membership changes still go through
+// `crewlet fleet broker remove`.
 
 // fleetBrokerCredential is `crewlet fleet broker credential`.
+//
+// The seed is derived from THIS host's Tier A, never fetched (no API carries a
+// credential). The address is the running node's own, read from GET
+// /fleet/broker (the listener's port is the OS's, per start); loopback is
+// reachable from its own host alone, so an answer from any other node (a
+// balancer, a peer) is refused, and a member serving no API (api.port 0) is
+// asked nothing: its broker_keys line names the listener. The seed goes to a
+// 0600 file, never stdout (break-glass, as `crewlet secrets get`), and an
+// existing path is refused.
 func fleetBrokerCredential(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	bootstrapPath, args := splitSubject(args)
 	flags := flag.NewFlagSet("fleet broker credential", flag.ContinueOnError)

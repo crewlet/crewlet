@@ -16,21 +16,15 @@ import (
 
 // The CLI's client for /config, and why the command needs one.
 //
-// `crewlet config` opens the node's store file directly, which works only
-// while the engine is STOPPED: the store is exclusive to one process, so an
-// import against a running node was refused outright and the operator was
-// told to go and write the curl by hand. That left the one gesture a fleet
-// needs most — "make this file the company, now, everywhere" — with no CLI at
-// all, while `crewlet secrets` had had exactly that route for its own estate
-// all along.
+// `crewlet config` opens the node's store file directly, which works only while
+// the engine is STOPPED (the store is exclusive to one process). That left "make
+// this file the company, now, everywhere" with no CLI route, as `crewlet secrets`
+// has for its own estate.
 //
-// # It is not a fallback, it is the primary path for a running fleet
-//
-// An offline import only OFFERS a revision: this node's store boots on it and
-// the next start publishes it, and only over the revision it was built on —
-// it cannot move the fleet's activation pointer, which on the default
-// topology lives inside the engine's own process. PUT /config stores the
-// revision AND activates it, so every node converges on it with no restart.
+// It is the primary path for a running fleet, not a fallback: an offline import
+// only OFFERS a revision and cannot move the activation pointer, which on the
+// default topology lives in the engine's process. PUT /config stores AND
+// activates, so every node converges with no restart.
 
 // configClient talks to a running node's /config surface.
 type configClient struct {
@@ -136,20 +130,16 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 
 // maxConfigResponseBytes bounds one answer.
 //
-// SIZED FOR THE DOCUMENT, not for the two fields this client reads. A write's
+// SIZED FOR THE DOCUMENT, not for the two fields this client reads: a write's
 // answer carries a located warning per thing the engine will run but a person
-// should know about, and a refusal a located problem per failure, so an
-// answer grows with the document it judged. The 64 KiB this used to be lost a
-// refusal's detail on a large document, and reported a write that had landed
-// as an answer this build could not read.
+// should know about, and a refusal a located problem per failure, so it grows
+// with the document it judged. Too small a bound loses a refusal's detail or
+// reports a landed write as unreadable.
 //
-// Sixteen times the largest document the route accepts
-// ([configapi.MaxBodyBytes]), because each entry restates its path, its
-// segments and a sentence saying what to write instead, which is routinely
-// ten times the field it is about — a mistyped provider key is a few bytes and
-// its problem a few hundred. It still bounds a node that answers with far
-// more than any document could produce, and the client's own timeout bounds
-// one that never stops.
+// Sixteen times [configapi.MaxBodyBytes], because each entry restates its path,
+// segments and a sentence, routinely ten times the field it is about. It still
+// bounds a node answering with far more, and the client's timeout bounds one
+// that never stops.
 const maxConfigResponseBytes = 16 * configapi.MaxBodyBytes
 
 // refusal turns a status code into something an operator can act on.
@@ -262,18 +252,14 @@ func holderOf(node string) string {
 // operator: what won, whether their document was kept, and what puts it live
 // from where they are.
 //
-// FROM WHERE THEY ARE, which is talking to a running node: this route is taken
-// because the engine holds its store, or because -api names a node elsewhere.
-// `crewlet config diff` and `crewlet config activate` open that store
-// directly, so the commands this used to suggest refused on exactly the node
-// that had just answered. The node's own routes are what work: the revision
-// endpoints to look at what was kept, a revert to make it live, and a second
+// FROM WHERE THEY ARE, a running node: `crewlet config diff` and `activate` open
+// the store directly and refuse on exactly this node, so the hint names the
+// node's own routes: the revision endpoints, a revert to make it live, a second
 // import to write the file again over what won.
 //
-// NOTHING STORED IS ITS OWN ANSWER. A write refused before it stored anything
-// names no revision, and a hint built around one sent the operator to
-// activate an empty id. And what was stored is one node's ([holderOf]), as an
-// unanswered import's is: a revision that lost its activation reached no other.
+// NOTHING STORED IS ITS OWN ANSWER: a write refused before storing names no
+// revision, and a hint built around one sent the operator to activate an empty
+// id. What was stored is one node's ([holderOf]), as an unanswered import's is.
 func lostRace(base, current, stored, node string) error {
 	fleet := "a newer revision"
 	if current != "" {
