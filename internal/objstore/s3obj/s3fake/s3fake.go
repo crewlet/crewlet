@@ -205,6 +205,8 @@ type Server struct {
 	// pace ([Server.BodyRateShared]).
 	bodyMu  sync.Mutex
 	bodyDue time.Time
+	// paced counts the body bytes read at [Server.BodyBytesPerSecond].
+	paced atomic.Int64
 
 	// requests is every request the bucket has been sent ([Server.Requests]).
 	requests atomic.Int64
@@ -473,6 +475,11 @@ func (s *Server) hold(w http.ResponseWriter, r *http.Request, op string) {
 	panic(http.ErrAbortHandler)
 }
 
+// PacedRead is how many body bytes the bucket has read at
+// [Server.BodyBytesPerSecond], every request's together: the bucket's own
+// pace, which a case can keep time by where a loaded process's timers lag.
+func (s *Server) PacedRead() int64 { return s.paced.Load() }
+
 // pacedBody is a request's body as a bucket reading it at
 // [Server.BodyBytesPerSecond] reads it: its first [Server.BodyFastBytes] at
 // once, the rest a small piece at a time, each read only once the pace allows.
@@ -498,6 +505,7 @@ func (b *pacedBody) Read(p []byte) (int, error) {
 	if n == 0 {
 		return n, err
 	}
+	s.paced.Add(int64(n))
 	took := time.Duration(float64(n) / float64(s.BodyBytesPerSecond) * float64(time.Second))
 	var due time.Time
 	if s.BodyRateShared {
