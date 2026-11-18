@@ -10,16 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// Domain is Gitlet as the state-log framework sees it.
-//
-// A DECLARATION, not a behaviour: every method answers a question the
-// framework asks before it applies anything, and each has a failure mode that
-// is silent if the answer is wrong — what a donated snapshot scrubs, what an
-// identity claim compares, where an anchor is written, whether an unknown
-// version stops the applier or is filed for later.
-//
-// THE FRAMEWORK'S ELEVENTH DOMAIN, its ninth strict one and its ninth that
-// claims identity.
+// Domain is Gitlet as the state-log framework sees it (ADR-0084): a
+// declaration, not a behaviour. Each method answers a question the framework
+// asks before it applies anything, and a wrong answer fails silently — what a
+// donated snapshot scrubs, what an identity claim compares, where an anchor is
+// written, whether an unknown version stops the applier or is filed for later.
 type Domain struct{}
 
 // Name is the register key, the manifest key and the operator's own column —
@@ -42,9 +37,9 @@ func (Domain) Stream() statelog.StreamSpec {
 	}
 }
 
-// arbitratedKinds is the seven of ten, derived from the enum rather than typed again:
-// a list written twice is a kind that arbitrates in one place and not the
-// other, which wedges that subject the first time a gate drops a record.
+// arbitratedKinds is derived from the enum, never typed again: a second list
+// could arbitrate a kind in one place and not the other, wedging that subject
+// the first time a gate drops a record.
 func arbitratedKinds() []string {
 	out := make([]string, 0, len(ObjectKinds))
 	for _, k := range ObjectKinds {
@@ -78,9 +73,8 @@ func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {
 
 // InstallsGate reports a record whose unknown version must STOP the applier
 // rather than be filed for later — an eviction and the activation fence by
-// their kind, a purge by its op ([RecordEnvelope.InstallsGate]), answered from
-// the envelope alone because that is all a node that cannot decode the
-// payload has.
+// their kind, a purge by its op ([RecordEnvelope.InstallsGate]) — from the
+// envelope alone, all a node that cannot decode the payload has.
 func (Domain) InstallsGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind).InstallsGate() || OpKind(env.Op) == OpPurge
 }
@@ -118,18 +112,16 @@ func (Domain) Evicts(payload []byte) (bool, error) {
 	return !eviction.Readmitted, nil
 }
 
-// Tables is every durable table this domain writes, with its class — the
-// scrub list, the identity claim and the local sweep are all derived from it,
-// so it is built from the exported inventories rather than typed a third time.
+// Tables is every durable table this domain writes, with its class. The scrub
+// list, the identity claim and the local sweep all derive from it, so it is
+// built from the exported inventories rather than typed again.
 //
-// TWO DIVERGENT TABLES. The operation ledger travels with the rows it
-// describes ([statelog.Domain.OpsTable]). And a change record's notices
-// (code_notifications, apply_notices.go) travel inside a snapshot but are
-// outside the identity claim: whether a record writes one depends on the
-// batch's instant and the inbox horizon its epoch states, which two nodes
-// applying one record need not share — the tracker's tracker_notifications'
-// reason. Nothing this domain writes is a build's opinion, as the knowledge
-// base's skill flag is.
+// TWO DIVERGENT TABLES: the operation ledger travels with the rows it
+// describes ([statelog.Domain.OpsTable]), and a change record's notices
+// (code_notifications, apply_notices.go) travel in a snapshot but sit outside
+// the identity claim — whether a record writes one depends on the batch's
+// instant and its epoch's inbox horizon, which two nodes applying it need not
+// share (as with the tracker's tracker_notifications).
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass, len(ReproducibleTables)+len(MachineryTables))
 	for _, table := range ReproducibleTables {
@@ -154,15 +146,11 @@ func (Domain) ScopeIndex() string { return "code_log_deferred_scope" }
 // OpsTable is what this node has already applied.
 func (Domain) OpsTable() string { return "code_ops" }
 
-// GatesSeatAdmission reports that NO seat depends on this domain's copy.
-//
-// FALSE. A wrong or stalled code copy takes only CODE operations out of
-// service: they go to peers — the router asks each operation's own domain's
-// verdict (ADR-0079) — and git requests are answered from them. A seat whose
-// node's code copy stalls still runs, because nothing a seat does reads code
-// until seats push, and then a seat's code tools route to peers like any other
-// operation. Gating admission on it would shed a company's seats for a fault
-// in a subsystem none of them is using.
+// GatesSeatAdmission reports that NO seat depends on this domain's copy: a
+// wrong or stalled code copy takes only code operations out of service, and
+// those, git requests and a seat's code tools alike, go to peers (the router
+// asks each operation's own domain, ADR-0079). Gating admission on it would
+// shed a company's seats for a fault in a subsystem none of them is using.
 func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that every node's Replicated tables must be
@@ -171,11 +159,10 @@ func (Domain) GatesSeatAdmission() bool { return false }
 // record, and every instant it stores is the broker's.
 func (Domain) ClaimsIdentity() bool { return true }
 
-// FeedGroup is the code log's wake feed ([FeedGroup]): a record about a change
-// wakes the seats its routing tells (feed.go), so the log's trim waits on the
-// feed's acknowledgement — a record that feed has not acknowledged is one no
-// seat has been woken for yet — and a stopped feed holds back this log and no
-// other.
+// FeedGroup is the code log's wake feed ([FeedGroup]): a change's record wakes
+// the seats its routing tells (feed.go), so the log's trim waits on the feed's
+// acknowledgement (an unacknowledged record has woken no seat yet), and a
+// stopped feed holds back this log and no other.
 func (Domain) FeedGroup() string { return FeedGroup }
 
 // Evictions is every eviction this log's applied rows hold — what the trim
@@ -217,9 +204,8 @@ func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]state
 }
 
 // evictionsSQL is every eviction on this log, in node order: the whole of
-// code_evictions, which holds a row for each node ever evicted from the code
-// log — as many as the fleet has evicted, whatever its repositories hold —
-// so it is the one table a statement here reads by a scan (plan_test.go
+// code_evictions, one row per node ever evicted, bounded by the fleet rather
+// than the repositories — so the one table read here by a scan (plan_test.go
 // registers it, and the read gate's scanOK states the bound).
 const evictionsSQL = `SELECT node_id, at, by, from_position, readmitted_position
 	FROM code_evictions ORDER BY node_id`

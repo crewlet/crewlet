@@ -14,45 +14,20 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// A REPOSITORY'S MIRRORS AND ITS IMPORT: what of another host a repository
-// follows, publishes to, or is filled from — each a remote at another host, a
-// URL read by the one rule the dial reads it by ([gitref.ParseRemoteURL]) and
-// a credential that is ONE WHOLE ${VAR} REFERENCE, recorded as the reference
-// and resolved only when the remote is dialed, from the secret store and then
-// the environment (M6-D17). A token written into one would be a secret at rest
-// on every record of the repository's settings, which every data node keeps
-// and every backup carries; the reference is a pointer, as a configuration's
-// is.
+// A REPOSITORY'S MIRRORS AND ITS IMPORT, each a remote at another host:
+//   - a PULL MIRROR ([RepoSettings.MirrorFrom]) is imported first whenever it becomes one
+//     ([repoRemotes.startsImport]), then moves only by its home's syncs: a push or a change's
+//     write is refused [RefusalRepoMirrored] ([ChangeRefusalRepoMirrored]);
+//   - a PUSH MIRROR ([RepoSettings.MirrorTo]) pushes as a seat that reads the repository
+//     ([MirrorSeatRefusal]), never a bot, and never seats' branches ([gitref.PatternReachesSeats]);
+//   - an IMPORT ([CreateRepo.Import]) fills it at its create, [RepoStatusImporting] until done, taking
+//     no write, not even an expunge ([RefusalRepoImporting]).
 //
-//   - A PULL MIRROR ([RepoSettings.MirrorFrom]) is imported from its source
-//     FIRST, whenever it becomes one — when it is created, and when a
-//     settings record names a source an existing repository does not follow
-//     yet ([repoRemotes.startsImport]) — it is [RepoStatusImporting] until its
-//     import is done — and then moves only by the syncs its home makes from
-//     the source: every push and every write of a change's lifecycle is
-//     refused [RefusalRepoMirrored] ([ChangeRefusalRepoMirrored]).
-//   - A PUSH MIRROR ([RepoSettings.MirrorTo]) pushes the refs it names to a
-//     repository at another host, as one seat's own identity there — a seat
-//     that reads the repository ([MirrorSeatRefusal]), never a bot — and never
-//     a seat's own branches ([gitref.PatternReachesSeats]).
-//   - An IMPORT ([CreateRepo.Import]) fills a repository from another host
-//     when it is created, and is read by its create alone: it is
-//     [RepoStatusImporting] until the import is done, and takes no write
-//     meanwhile ([RefusalRepoImporting]) — not even an expunge.
-//
-// WHO SETS ONE IS A PERSON, OR THE CONFIGURATION (U49 a): a pull mirror and an
-// import dial another host, and a push mirror sends the company's code to one,
-// so an agent asking for any of them is refused not_permitted whatever its
-// grant on the repository ([lifecycleRefusal]). A scratch repository takes
-// none: it is its seat's own experiment.
-//
-// AND ITS CREDENTIAL IS ONE AN ADMINISTRATOR DECLARED FOR ITS HOST
-// (code.remote_credentials): a person's request naming any other is refused
-// not_permitted ([remoteCredentialRefusal]), a declaration naming one is
-// refused by the configuration's validation, and the dial sends no other.
-//
-// BASE FORMAT ([RecordVersion]): the domain landed on main with these fields,
-// so every build that meets a record carrying them reads them.
+// Only a person or the configuration sets one, as each dials another host or sends it the company's code
+// (an agent is refused not_permitted whatever its grant: U49 a, [lifecycleRefusal]), never on a scratch
+// repository, with a credential code.remote_credentials declares for that host ([remoteCredentialRefusal]).
+
+// BASE FORMAT ([RecordVersion]): every build that meets these mirror and import fields reads them.
 
 // MirrorSource is the repository a PULL MIRROR follows ([RepoSettings.MirrorFrom]):
 // the one it is imported from when it becomes a mirror, and synced from after.
@@ -78,11 +53,9 @@ type MirrorTarget struct {
 	// handle: a seat that reads the repository ([MirrorSeatRefusal]).
 	As string `json:"as"`
 	// Refs are the ref patterns it pushes (gitref's protection patterns), each
-	// once and at most [MaxMirrorRefs], none reaching a seat's own namespace
-	// ([gitref.PatternReachesSeats]) — and none for the default: the
-	// repository's default branch and refs/tags/*, read against the default
-	// branch the repository has when it pushes, so a rename of that branch
-	// moves what it pushes with it.
+	// once, at most [MaxMirrorRefs], none reaching a seat's own namespace
+	// ([gitref.PatternReachesSeats]). None means the default branch and
+	// refs/tags/*, read at each push so a rename of the branch moves with it.
 	Refs []string `json:"refs,omitempty"`
 }
 
@@ -136,13 +109,12 @@ func (m MirrorTarget) equal(o MirrorTarget) bool {
 	return m.URL == o.URL && m.Credential == o.Credential && m.As == o.As && slices.Equal(m.Refs, o.Refs)
 }
 
-// remoteInvalid is why a remote — its URL and its credential, required where
-// needCredential says so — is none a record carries, or "": a URL at most
-// [MaxRemoteURLBytes] that the dial reads ([gitref.ParseRemoteURL]), and a
-// credential that is ONE WHOLE ${VAR} REFERENCE of at most
-// [MaxCredentialRefBytes] — with nothing around it, so the reference a record
-// carries is the one a resolve reads. The sentence never quotes the
-// credential: one that is not a reference is a token.
+// remoteInvalid is why a remote is none a record carries, or "": a URL of at most
+// [MaxRemoteURLBytes] the dial reads ([gitref.ParseRemoteURL]), and a credential
+// (required where needCredential) that is ONE WHOLE ${VAR} REFERENCE of at most
+// [MaxCredentialRefBytes], nothing around it, resolved only at the dial (M6-D17):
+// a token would sit at rest in every settings record and every backup. The
+// sentence never quotes the credential: one that is not a reference is a token.
 func remoteInvalid(url, credential string, needCredential bool) string {
 	switch {
 	case url == "":
@@ -170,23 +142,17 @@ func remoteInvalid(url, credential string, needCredential bool) string {
 }
 
 // MirrorSeatRefusal is why the seat as may not be the one a push mirror of
-// repo pushes as, or "": a seat roster holds that reads the repository — a
-// PERSON'S seat reads every one where the person holding it uses Gitlet
-// (ADR-0088, ADR-0110), and an agent's what its grant on it reads ([GrantOf]),
-// judged on repo as it stands, its owner and its visibility. noGitlet is the
-// identity directory's answer for a person's seat, read by the caller before
-// it decides: the seat is held by nobody, by a person who may not act, or by
-// one not given the gitlet app — whose code a mirror pushing as them would
-// publish under an identity the company withheld it from.
+// repo pushes as, or "": a roster seat that reads repo as it stands — a
+// person's seat every repository where its holder uses Gitlet (ADR-0088,
+// ADR-0110), an agent's what its grant reads ([GrantOf]). noGitlet is the
+// identity directory's answer for a person's seat, read by the caller: held by
+// nobody, by a person who may not act, or by one not given the gitlet app.
 //
-// THE ONE JUDGEMENT of a push mirror's seat: a person's settings change and a
-// person's create judge it here, a repository code.repos declares is held to
-// it by the configuration's own reading of the same rule (config's
-// CodeRepo.mirrorSeatReads, which the engine holds to this one — for the
-// chart alone, since a configuration reads no identity directory), and a push
-// mirror asks it again before each push, of the chart and the directory it
-// then reads, since a later revision of the chart may take the seat's read
-// away and an administrator may take the person's app.
+// THE ONE JUDGEMENT of a push mirror's seat: a person's settings change and
+// create; code.repos through config's CodeRepo.mirrorSeatReads, held to this
+// one on the chart alone (a configuration reads no identity directory); and the
+// mirror before each push, since the chart may take the seat's read away and an
+// administrator the person's app.
 func MirrorSeatRefusal(as string, repo RepoRef, roster Roster, noGitlet bool) string {
 	if roster == nil {
 		return "this node holds no chart to judge a push mirror's seat by"
@@ -212,19 +178,17 @@ func MirrorSeatRefusal(as string, repo RepoRef, roster Roster, noGitlet bool) st
 }
 
 // remoteCredentialRefusal is why req names a credential that code.remote_credentials
-// (declared) does not declare for its remote's host, or "": a create's
-// import, pull mirror or push mirror, or a mirror a settings change sets —
-// every remote a request carries a credential for, whoever asks it.
+// (declared) does not declare for its remote's host, or "": every remote a
+// create or a settings change carries a credential for, whoever asks.
 //
-// GITLET SENDS A CREDENTIAL'S VALUE TO ITS REMOTE'S HOST, resolved on
-// the repository's home Gitlet node from the secret store and then that node's
-// environment, so a reference nothing bounded would let whoever may create a
-// repository — every member of the company — have that node send any value
-// it can resolve to a host of their choosing. An administrator declares which
-// variable may go to which host, and this decide holds every request to it
-// before anything is recorded; the dial holds it again under the table its
-// node has then (config.CodeRemoteCredentials.Refusal, the one judgement).
-// A seat is refused every mirror and import before this ([mirrorsAsked]).
+// The home node resolves a credential from its secret store, then its
+// environment, and sends the value to the remote's host, so an unbounded
+// reference would let any member who may create a repository send any value it
+// resolves to a host of their choosing. An administrator declares which
+// variable may go to which host; this holds a request to it before anything is
+// recorded; the dial holds it again under its node's table then
+// (config.CodeRemoteCredentials.Refusal, the one judgement). A seat is refused
+// every mirror and import before this ([mirrorsAsked]).
 func remoteCredentialRefusal(req LifecycleRequest, declared config.CodeRemoteCredentials) string {
 	type remote struct{ field, url, credential string }
 	var asked []remote
@@ -256,12 +220,9 @@ func remoteCredentialRefusal(req LifecycleRequest, declared config.CodeRemoteCre
 	return ""
 }
 
-// ImportingDetail is the sentence of a write refused repo_importing: which
-// repository, that it is being imported, and when it takes the write. ONE
-// SPELLING for every place that refuses one (ADR-0008) — the push decide,
-// Gitlet at a push's advertisement and at its request, an engine write's
-// landing, an expunge's decide and a change's — where a person's git prints it
-// as the reason a push was refused.
+// ImportingDetail is the sentence of a write refused repo_importing. ONE
+// SPELLING for every place that refuses one (ADR-0008), since a person's git
+// prints it as the reason a push was refused.
 func ImportingDetail(name string) string {
 	return fmt.Sprintf("repository %s is being imported from another host, and takes no write until its "+
 		"import is done: fetch it meanwhile, and push once it is", name)
@@ -289,24 +250,18 @@ func (r repoRemotes) restoredStatus(s RepoSettings) RepoStatus {
 	return s.status()
 }
 
-// startsImport is the import a settings record carrying s starts on a
-// repository whose mirrors are r: from s's PULL MIRROR'S SOURCE where the
-// repository follows none yet, or another URL — and nil where s names no pull
-// mirror, or the one the repository follows already (a credential changed
-// alone is the same source). The apply starts it only on an ACTIVE repository
-// (mirrorImportSQL); an archived one becomes no pull mirror, and one being
-// imported keeps the source its import fetches.
+// startsImport is the import a settings record carrying s starts on a repository whose
+// mirrors are r: from s's pull mirror's source where the repository follows none or another
+// URL, else nil (a credential changed alone is the same source). The apply starts it only on an
+// ACTIVE repository (mirrorImportSQL): an archived one becomes no pull mirror, and one being
+// imported keeps its import's source.
 //
-// M6-D16: A PULL MIRROR IS IMPORTED FIRST, whenever it becomes one, never only
-// when it is created. An import brings a source's whole history in CHUNKS —
-// packs cut at CompactPackBytes before the refs that need them, MaxImportRefs
-// refs a chunk, each at the next import_seq, so an attempt that dies resumes
-// from the rows — behind the importing fence that keeps every write, the
-// compactor and an expunge off what is half landed. A sync is sized for what
-// a source moved since the last: its fetch is given the deadline of one
-// push's bytes (code.limits.max_push_bytes, gitproc.RemoteDeadline), so an
-// established upstream made the source of an existing repository, with a
-// history past that, could never be brought in by syncs alone.
+// M6-D16: A PULL MIRROR IS IMPORTED FIRST, whenever it becomes one: an import
+// lands the whole history in chunks resuming from the rows (CompactPackBytes
+// packs before the refs needing them, MaxImportRefs refs, each at the next
+// import_seq) behind the importing fence that keeps writes, the compactor and an
+// expunge off what is half landed; a sync's fetch gets one push's deadline
+// (code.limits.max_push_bytes, gitproc.RemoteDeadline), too little for a long history.
 func (r repoRemotes) startsImport(s RepoSettings) *ImportSource {
 	switch {
 	case s.MirrorFrom == nil:
@@ -362,15 +317,13 @@ func remotesIn(ctx context.Context, tx *sql.Tx, id string) (repoRemotes, error) 
 	return out, nil
 }
 
-// remoteColumns is the settings' two mirrors and an import as their
-// code_repos columns hold them — mirror_from, mirror_to and import_source:
-// each its JSON, or the empty string for none.
+// remoteColumns is the settings' mirrors and an import as code_repos holds them
+// in mirror_from, mirror_to and import_source: each its JSON, or "" for none.
 //
-// EACH MARSHALLED AS ITS OWN TYPE, never through one generic helper: every
-// file under internal/gitlet is walked by the cache's writer gate
-// (cache.TestNothingButSyncWritesACache), which refuses a value it cannot
-// type handed to a callee it cannot type either — and a *T of a type
-// parameter, handed to json.Marshal, is both.
+// EACH MARSHALLED AS ITS OWN TYPE, never through one generic helper: the cache's
+// writer gate (cache.TestNothingButSyncWritesACache) walks this package and
+// refuses a value it cannot type handed to a callee it cannot type, as a type
+// parameter's *T handed to json.Marshal is.
 func remoteColumns(s RepoSettings, imports *ImportSource) (from, to, imported string, err error) {
 	var b []byte
 	if s.MirrorFrom != nil {
@@ -411,11 +364,9 @@ func remoteOf[T any](column string) (*T, error) {
 const remotesSQL = `SELECT mirror_from, mirror_to, import_source != '' AND imported_at = 0
 	FROM code_repos WHERE id = ?`
 
-// MirroredDetail is the sentence of a write refused repo_mirrored: which
-// repository, that it is a pull mirror — set by code.repos for a repository it
-// declares, by a person's tool for one a tool made — and where its writes go
-// instead. One spelling for every place that refuses one, as [ImportingDetail]
-// is.
+// MirroredDetail is the sentence of a write refused repo_mirrored, naming where
+// its writes go by who set the mirror (code.repos, or a person's tool). One
+// spelling for every place that refuses one, as [ImportingDetail] is.
 func MirroredDetail(name string, managedBy ManagedBy) string {
 	if managedBy == ManagedTools {
 		return fmt.Sprintf("repository %s is a pull mirror: it moves only by Gitlet's syncs from its "+

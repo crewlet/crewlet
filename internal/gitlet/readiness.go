@@ -11,98 +11,21 @@ import (
 	"strings"
 )
 
-// A CHANGE'S MERGE READINESS: whether a live change may merge, judged as
-// PRECONDITIONS over the rows ONE snapshot holds and the chart ONE epoch holds
-// ([ReadinessOf]) — never a workflow somebody has to remember to run, and never
-// a decision of the tracker's: what it counts are the change's own review
-// objects, its reviews' verdicts and its findings (PLAN's "the merge gate
-// counts review objects, never ADR-0023 decisions").
+// A change's merge readiness: PRECONDITIONS the pure [ReadinessOf] judges over
+// one snapshot's rows and one epoch's chart — never a workflow somebody must
+// remember to run, never a tracker decision: it counts the change's own review
+// objects, never ADR-0023 decisions. Each precondition, how an approval carries
+// and whom each waits on are docs/concepts/gitlet.md, "Merge readiness"; the
+// gate's kinds join them in [JudgeGate] (gatejudge.go), approval only if asked.
 //
-// # M4's preconditions
-//
-// One a kind ([PreconditionKinds]), each met, unmet or still being computed
-// by the engine:
-//
-//   - DRAFT: the change is open for review, not a draft — which its owner, a
-//     principal that maintains the repository or a person clears.
-//   - FACTS: its head revision's facts against its current target are
-//     recorded ([Revise]) — computing until its home reads them.
-//   - APPROVAL: ONE COUNTED APPROVAL — an ELIGIBLE reviewer's STANDING
-//     verdict (code_participants.verdict: the latest of their reviews that
-//     judges) approving the head revision, or an earlier revision the head
-//     carries unchanged, by either of two CARRY-FORWARD kinds: its CODE
-//     ([ChangeClassNoCodeChange]: both revisions' recorded base and head
-//     trees equal, so the code a merge would bring is the same byte for
-//     byte, however their histories differ — and whatever their patch ids
-//     say, an omitted one included), or its DIFF (X02: both revisions'
-//     recorded patch ids equal, neither empty nor omitted — the same lines
-//     changed among the same neighbours, wherever a rebase put them).
-//     Eligible is a person — who maintains
-//     every repository — or a seat the deciding chart lets review the
-//     repository ([AccessReview]); NEVER AN AUTHOR, whose review of their own
-//     change counts for nothing, and who becomes one by pushing a revision
-//     after approving it. A reviewer's later request for changes REPLACES
-//     their standing verdict, withdrawing their approval and holding nothing
-//     else: what a merge counts is approvals and standing blockers (P8
-//     decisions[13]). An approval of an earlier revision is COMPUTING while the
-//     head's facts against its target are not recorded — the carry is decided
-//     by them — and one of an earlier revision whose own facts were never
-//     recorded never carries: a home measures the head revision alone, so
-//     those facts will never be read.
-//   - BLOCKER: no blocker STANDS (S40, conversation.go): an open one, and one
-//     an author answered resolved, won't fix or disputed, each holds the change
-//     back until its raiser's dismissal or later review, a maintainer's
-//     dismissal or a person's clears it. Each standing blocker is NAMED, the
-//     oldest raised first, with WHO CAN CLEAR IT ([ClearedBy]): its raiser,
-//     the seat the chart lets maintain the repository, any person — at most
-//     [MaxReadinessBlockers] of them, the rest counted.
-//   - MERGEABLE: its head revision's recorded mergeability ([Mergeability])
-//     against its current target is clean — whatever the target did since,
-//     the detail saying which tip it is "as of"; unmet on a conflict;
-//     computing while its home has merged no such revision, or decided
-//     nothing within its deadline.
-//
-// THE MERGE GATE ([JudgeGate], gatejudge.go) is what every reader and every
-// decide of a change's merge asks: these five, and the kinds the branch's gate
-// imposes, through the same [Readiness] — where the approval above is a
-// precondition only of a change whose target's gate asks one.
-//
-// # Whom it waits on
-//
-// Each unmet precondition names whom it waits on ([Precondition.WaitsOn]):
-// a draft and a conflict its owner; an approval the reviewers asked who may
-// give one — its owner, to ask one, where nobody is; a blocker its owner while
-// one is open, and each answered one's raiser, who judges the answer. The
-// FIRST — the first unmet precondition in kind order, else the first
-// computing one — is the readiness's one-sentence summary ([Readiness.First]),
-// and a change whose first unmet precondition waits on persons alone WAITS ON
-// A PERSON ([Readiness.WaitsPerson]): the listing of what persons have in
-// front of them (needs=person).
-//
-// # Judged on every read, and stored once a record judges it
-//
-// Every read of a change judges its readiness again — the change read and
-// each row of a listing, in the read's one transaction against its one chart
-// — so no reader trusts an answer older than its snapshot. A mergeability
-// record's decide judges it too, over its own snapshot with the merge it
-// records ([ReadinessRows.With]), and STAMPS the answer on the record, which
-// the applier stores (code_mergeability.ready and waits_person) beside the
-// versions of the inputs it was judged at and the activation of the chart
-// that judged it: what a wake that a change became ready reads, what the
-// readiness=ready listing seeks ([ReadinessBucket]), and what the
-// needs=person listing seeks. A change whose inputs moved since — its row
-// (code_changes.version), its conversation's readiness inputs
-// (code_conversations.readiness_version), its head's checks, or the chart, a
-// later one held by its home — is due a REFRESH from its home
-// (changesdue.go), which records the answer again over the merge the row
-// holds, running no merge; and a change that ends stores no answer
-// (clearReadiness). A stored answer is still as of the record that stored
-// it — which is why no reader of a change's readiness reads it.
+// Every read judges it again, so no reader trusts an answer older than its
+// snapshot. A mergeability record's decide stamps it ([ReadinessRows.With]) for
+// the wake and the readiness=ready and needs=person seeks; a home REFRESHes a
+// stale stamp (changesdue.go), an ended change stores none (clearReadiness),
+// and a stamp is as of its record, so no reader of a change's readiness reads it.
 
-// PreconditionKind is one thing a live change must be before it merges: a
-// precondition its readiness judges ([ReadinessOf], [JudgeGate]). A closed
-// set ([PreconditionKinds]), in the order a readiness lists them and reads its
-// first unmet one in.
+// PreconditionKind is one thing a live change must be before it merges
+// ([ReadinessOf], [JudgeGate]): a closed set, ordered by [PreconditionKinds].
 type PreconditionKind string
 
 const (
@@ -138,12 +61,11 @@ const (
 	PreconditionQueue PreconditionKind = "queue"
 )
 
-// PreconditionKinds is the closed set, in the order a readiness lists them:
-// THE ORDER A CHANGE MOVES THROUGH — it is opened, measured, reviewed by each
-// kind of approval its gate asks, cleared of its blockers, checked, merged,
-// and merged by somebody — so a readiness's first unmet precondition is the
-// earliest thing standing in its way, never whether this asker may merge a
-// change that still waits on its review.
+// PreconditionKinds is the closed set in THE ORDER A CHANGE MOVES THROUGH —
+// opened, measured, approved as its gate asks, cleared of blockers, checked,
+// merged, merged by somebody — so a readiness's first unmet precondition is the
+// earliest thing in its way, never whether this asker may merge a change still
+// waiting on its review.
 func PreconditionKinds() []PreconditionKind {
 	return []PreconditionKind{PreconditionDraft, PreconditionFacts, PreconditionApproval,
 		PreconditionHumanApproval, PreconditionOwnersApproval, PreconditionBlocker, PreconditionCheck,
@@ -161,9 +83,8 @@ const (
 	PreconditionMet PreconditionState = "met"
 	// PreconditionUnmet is one it does not, which waits on somebody.
 	PreconditionUnmet PreconditionState = "unmet"
-	// PreconditionComputing is one the engine has not judged yet — a
-	// revision's facts or its merge its home has not recorded — which waits
-	// on nobody.
+	// PreconditionComputing is one the engine has not judged yet (facts or a
+	// merge its home has not recorded), which waits on nobody.
 	PreconditionComputing PreconditionState = "computing"
 )
 
@@ -214,12 +135,10 @@ type Blocker struct {
 }
 
 // MaxReadinessBlockers is the most standing blockers one readiness names,
-// the oldest raised first — SIXTEEN, what a person or a seat acts on next and
-// reads down a list of; a change holding more is read a page of findings at a
-// time (its `findings` part), and the readiness counts the rest. At about two
-// hundred bytes a named blocker, sixteen keep a listed change's readiness
-// near three kilobytes however many blockers stand, so a page of changes is
-// cut by its byte budget at their bound, never by one change's blockers.
+// oldest raised first; it counts the rest, which the `findings` part pages.
+// Sixteen is a list somebody acts down, and at about 200 bytes a blocker keeps
+// a listed change's readiness near 3 KB, so a page of changes is cut by its
+// byte budget, never by one change's blockers.
 const MaxReadinessBlockers = 16
 
 // Precondition is one thing a change must be before it merges, judged: its
@@ -236,12 +155,9 @@ type Precondition struct {
 	// clear it; BlockersOmitted is how many more stand.
 	Blockers        []Blocker `json:"blockers,omitempty"`
 	BlockersOmitted int64     `json:"blockers_omitted,omitempty"`
-	// Queue is a queue precondition's entry: the change's LIVE entry in its
-	// target's merge queue, where it stands and its place, as the read that
-	// judged the gate found it over the change's own index — nil on every
-	// other kind. What a dequeue names the entry by, so the read that showed
-	// the change queued is the one read a dequeue makes, never a walk of the
-	// queue for an id that read already held.
+	// Queue is a queue precondition's LIVE entry in its target's merge queue,
+	// as the read that judged the gate found it — nil on every other kind. A
+	// dequeue names the entry from it, never walking the queue for its id.
 	Queue *QueuedFacts `json:"queue,omitempty"`
 	// Detail is one sentence of where it stands and, unmet, what clears it.
 	Detail string `json:"detail"`
@@ -262,10 +178,8 @@ type Readiness struct {
 func (r Readiness) Ready() bool { return r.Total > 0 && r.Met == r.Total }
 
 // WaitsPerson reports a readiness whose FIRST UNMET precondition waits on
-// persons alone: a change a person must move before it can merge. One that
-// waits on a seat too — a reviewer either of whom may approve, an open
-// blocker its seat owner answers — or on nobody named, or on nothing but the
-// engine, does not.
+// persons alone. One that waits on a seat too, on nobody named, or only on the
+// engine does not.
 func (r Readiness) WaitsPerson() bool {
 	for _, p := range r.Preconditions {
 		if p.State != PreconditionUnmet {
@@ -368,11 +282,9 @@ type RecordedMerge struct {
 	Conflicts int64
 }
 
-// With is r as a mergeability record leaves it: the merge the record carries
-// in place of the row's — what the record's decide judges the readiness over,
-// so the answer it stamps is the one its own apply makes true. A REFRESH
-// carries no merge of its own: it judges the merge the row holds, and leaves r
-// as it is.
+// With is r with the record's merge in place of the row's, so the readiness
+// its decide stamps is the one its own apply makes true. A REFRESH carries no
+// merge and leaves r as it is.
 func (r ReadinessRows) With(m Mergeability) ReadinessRows {
 	if m.Refresh {
 		return r
@@ -382,12 +294,11 @@ func (r ReadinessRows) With(m Mergeability) ReadinessRows {
 	return r
 }
 
-// ReadinessOf is a change's readiness — see this file's head — judged over
-// rows, one snapshot's, and the chart r, one epoch's: PURE, reading nothing
-// else, so a decide and a read that hold the same rows and chart answer the
-// same readiness. An approver's eligibility and the repository's maintainers
-// are the chart's ([GrantOf]); a nil chart lets no seat review or maintain,
-// which no caller of a judgment that counts asks it to.
+// ReadinessOf is a change's readiness (this file's head) over one snapshot's
+// rows and one epoch's chart r: PURE, so a decide and a read holding the same
+// rows and chart agree. Eligibility and maintainers are the chart's
+// ([GrantOf]); a nil chart lets no seat review or maintain, so no caller whose
+// judgment counts passes one.
 func ReadinessOf(rows ReadinessRows, r Roster) Readiness {
 	j := newReadinessJudge(rows, r)
 	return j.readiness([]Precondition{j.draft(), j.facts(), j.approval(), j.blocker(), j.mergeable()})
@@ -408,10 +319,7 @@ func newReadinessJudge(rows ReadinessRows, r Roster) readinessJudge {
 		owner: Party{Handle: rows.Change.Owner, Kind: rows.Change.OwnerKind}}
 }
 
-// readiness is pre — each precondition judged, in [PreconditionKinds]' order —
-// as the readiness that lists them: how many are met of how many, and the
-// FIRST sentence, the first unmet precondition's, else the first computing
-// one's, else that the change is ready.
+// readiness is pre, judged in [PreconditionKinds]' order, as a [Readiness].
 func (j readinessJudge) readiness(pre []Precondition) Readiness {
 	out := Readiness{Total: len(pre), Preconditions: pre}
 	for _, p := range pre {
@@ -458,15 +366,13 @@ func (j readinessJudge) facts() Precondition {
 			target)}
 }
 
-// approvalTally is which approvals count on a change's head revision, by the
-// one rule every approval a merge counts is held to — M4's approval and the
-// gate's person's and owners' approvals alike ([JudgeGate]): an ELIGIBLE
-// reviewer's standing verdict, NEVER AN AUTHOR's, approving the head revision
-// (onHead), or an earlier revision whose code the head holds unchanged
-// (unchanged, the latest such revision unchangedFrom) or whose diff it carries
-// unchanged (carried, from carriedFrom) — and pending, an approval of an
-// earlier revision waiting on the head's facts against its current target,
-// which say whether it carries.
+// approvalTally is which approvals count on the head revision, by the one rule
+// M4's approval and the gate's person's and owners' approvals share
+// ([JudgeGate]): an ELIGIBLE reviewer's standing verdict, NEVER AN AUTHOR's,
+// approving the head (onHead), or an earlier revision whose code (unchanged,
+// latest unchangedFrom) or diff (carried, latest carriedFrom) the head holds
+// unchanged. pending is an earlier approval waiting on the head's facts against
+// its current target, which say whether it carries.
 type approvalTally struct {
 	onHead, unchanged, carried []Party
 	unchangedFrom, carriedFrom int64
@@ -487,8 +393,7 @@ func (t approvalTally) counted() []Party {
 	return out
 }
 
-// tally is which of the change's approvals count on its head revision — see
-// [approvalTally].
+// tally is the change's [approvalTally].
 func (j readinessJudge) tally() approvalTally {
 	n := j.rows.Change.Revision
 	head, current := j.headFacts()
@@ -505,9 +410,8 @@ func (j readinessJudge) tally() approvalTally {
 		switch {
 		case a.Revision > n, !recorded, !from.carries():
 			// NEVER CARRIES: a revision past the head is none the change has,
-			// and one whose code no recorded trees and whose diff no recorded
-			// id name can never be shown to be the head's — its home
-			// measures the head alone.
+			// and one with neither recorded trees nor an identified patch id
+			// can never be shown the head's — its home measures the head alone.
 		case !current:
 			t.pending = true
 		case head.sameCode(from):
@@ -632,8 +536,8 @@ func (j readinessJudge) mergeable() Precondition {
 			"into it", n, target, abbrev(m.TargetOID), m.Conflicts, plural(m.Conflicts, "path", "paths"),
 			j.owner.named())
 	default:
-		// UNKNOWN, or a state a later build records: no merge this build
-		// can read as decided, so it is the home's to merge again.
+		// UNKNOWN, or a later build's state: nothing this build reads as
+		// decided, so the home merges again.
 		p.State = PreconditionComputing
 		p.Detail = fmt.Sprintf("revision %d's merge into %s as of %s decided nothing within its deadline: the "+
 			"repository's home Gitlet node merges it again", n, target, abbrev(m.TargetOID))
@@ -663,8 +567,8 @@ func (j readinessJudge) factsOf(n int64) (RevisionPatch, bool) {
 func (j readinessJudge) author(p Party) bool { return slices.Contains(j.rows.Authors, p) }
 
 // eligible reports p one whose approval counts, author or not: a person, who
-// maintains every repository, or a seat the chart lets review the
-// repository. A party of a kind this build does not name counts nothing.
+// maintains every repository, or a seat the chart lets review it. A party of
+// a kind this build does not name counts nothing.
 func (j readinessJudge) eligible(p Party) bool {
 	switch p.Kind {
 	case PartyPerson:
@@ -728,19 +632,14 @@ type readinessSubject struct {
 	row  changeRow
 }
 
-// readinessRowsIn reads what each change of subjects' readiness judges, in
-// tx — ONE snapshot — in one statement a kind of row over every change at
-// once, each driven from the list of the changes' ids and a seek of a key an
-// element, so a page of changes costs a page's handful of statements and
-// never a handful a change ([readinessStatements]): the conversations'
-// counters, the authors, the standing verdicts that approve, the standing asks
-// and the mergeabilities; then the facts of each head revision and of each
-// revision an approval stands on, driven from the list of those (change,
-// revision) pairs; and the standing blockers of the changes holding any,
-// driven from the list of those, the oldest raised first and at most
-// [MaxReadinessBlockers] a change, each change's a range of the partial index
-// that holds them alone up to the cut of the few holding more, read first
-// beside them. The answer is subjects' order.
+// readinessRowsIn reads what each of subjects' readiness judges, in tx — ONE
+// snapshot — one statement a kind of row over the whole page, so a page costs
+// [readinessStatements] at most, never a handful a change: the counters,
+// authors, approving verdicts, standing asks and mergeabilities by change id;
+// the facts of each head and each revision an approval stands on, by (change,
+// revision); and the standing blockers, oldest first and at most
+// [MaxReadinessBlockers] a change, a range of their partial index up to a cut
+// read first for the few holding more. The answer is in subjects' order.
 func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubject) ([]ReadinessRows, error) {
 	out := make([]ReadinessRows, len(subjects))
 	if len(subjects) == 0 {
@@ -848,11 +747,9 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 		}); err != nil {
 		return nil, err
 	}
-	// THE STANDING BLOCKERS of the changes whose counters say they hold any:
-	// for the few holding more than a readiness names, the place of the last
-	// one it names, MaxReadinessBlockers in, read first ([blockerCutsSQL]);
-	// then every change's blockers up to its cut, one statement over them all
-	// ([standingBlockersSQL]).
+	// THE STANDING BLOCKERS of the changes whose counters hold any: the cut of
+	// the few holding more than a readiness names first ([blockerCutsSQL]),
+	// then every change's up to its cut in one statement ([standingBlockersSQL]).
 	cuts := map[string]int64{}
 	var blocked, crowded []string
 	for i := range out {
@@ -885,8 +782,7 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 	}
 	bounds := make([][2]any, len(blocked))
 	for k, id := range blocked {
-		// A CHANGE WITH NO CUT is one whose blockers all fit: its counter
-		// says no more than a readiness names stand, or the walk for its cut
+		// NO CUT: all its blockers fit, by its counter or by a cut walk that
 		// found fewer standing than the counter says.
 		cut, cutting := cuts[id]
 		if !cutting {
@@ -916,9 +812,8 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 		return nil, err
 	}
 	// THE OLDEST RAISED FIRST, AND NO MORE THAN A READINESS NAMES: the
-	// statement names no order, and a cut is a position, which every blocker
-	// one review raised shares — so a crowded change's read may hold the
-	// rest of its cut's review too, which are left here.
+	// statement names no order, and a cut is a position every blocker of one
+	// review shares, so a crowded change's read may hold the rest of that review.
 	for i := range out {
 		slices.SortFunc(out[i].Blockers, func(a, b StandingBlocker) int {
 			if c := cmp.Compare(raised[a.FindingID], raised[b.FindingID]); c != 0 {
@@ -932,23 +827,19 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 }
 
 // readinessStatements is the most statements [readinessRowsIn] issues for a
-// page of changes, however many changes the page holds: the counters, the
-// authors, the approvals, the asks, the mergeabilities, the facts, the cuts
-// of the changes holding more blockers than a readiness names, and the
-// standing blockers.
+// page, whatever it holds: one a kind of row, the blockers' cuts issued only
+// where a change holds more than a readiness names.
 const readinessStatements = 8
 
-// lastBlockerOffset is MaxReadinessBlockers-1 SPELLED IN THE STATEMENT, the
-// place of the last blocker a readiness names: the pinned driver applies a
-// BOUND offset of a correlated scalar subquery to the first row it is
-// evaluated for alone, and reads every later row's first entry, which a test
-// holds this build's statement clear of; a test holds the two equal.
+// lastBlockerOffset is MaxReadinessBlockers-1 SPELLED IN THE STATEMENT: the
+// pinned driver applies a BOUND offset of a correlated scalar subquery only to
+// the first row it evaluates, reading every later row's first entry, which a
+// test holds this statement clear of; a test holds the two equal.
 const lastBlockerOffset = "15"
 
 // readinessEach runs one of [readinessRowsIn]'s statements over args, handing
-// each row to each: its scan reads the row's columns after the change's id
-// into dest and answers the index of the change the row is of — a row of a
-// change the read did not ask is one no statement here answers, and an error.
+// each row to each: its scan reads the columns after the change's id into dest
+// and answers the change's index; a row of a change not asked is an error.
 func readinessEach(ctx context.Context, tx queryer, what, query string, args []any, at map[string]int,
 	each func(scan func(dest ...any) (int, error)) error) error {
 
@@ -982,25 +873,19 @@ const blockersKey = "code_findings_blockers_idx"
 
 // standingBlockers is the predicate code_findings_blockers_idx is partial on,
 // spelled as the index declares it — the pinned planner takes a partial index
-// only for a statement that implies its predicate in its own words — and the
-// states [FindingState.Stands] names, which a test holds the two to.
+// only for a statement implying its predicate in its own words — and the
+// states [FindingState.Stands] names; a test holds the two equal.
 const standingBlockers = `severity = 'blocker' AND state IN ('open', 'resolved', 'wont_fix', 'disputed')`
 
-// A readiness's reads, each registered in plan_test.go: the counters, the
-// authors, the standing verdicts that approve, the standing asks and the
-// mergeabilities of a list of changes, each driven from the list of their ids
-// and a seek of a key an element — the asks through the reviewers' key NAMED
-// ([reviewersKey] says why); the facts of a list of (change, revision) pairs,
-// a seek of their key a pair; the cut of each of a list of changes — the
-// position of its MaxReadinessBlockers-th oldest standing blocker, a
-// correlated scalar subquery walking the partial index that holds them alone
-// that many entries in (the pinned planner reads every finding of the company
-// to answer a `rowid IN` subquery naming a change's first sixteen); and the
-// standing blockers of a list of (change, cut) bounds, each change's a range
-// of that index up to its cut. So a change holding a thousand blockers costs
-// the read sixteen entries for its cut and at most MaxReadinessBlockers +
-// MaxFindingsPerReview - 1 rows, the rest of its cut's review the most it
-// reads past what it names — never its thousand.
+// A readiness's reads, each registered in plan_test.go and driven from a JSON
+// list with a seek of a key an element: the per-change kinds by change id (the
+// asks through [reviewersKey], NAMED, which says why), the facts by (change,
+// revision). A cut is a correlated scalar subquery walking the blockers'
+// partial index MaxReadinessBlockers entries in — the pinned planner reads
+// every finding of the company for a `rowid IN` subquery naming the first
+// sixteen — and the standing blockers are each change's range of that index up
+// to its cut. So a change holding a thousand blockers costs sixteen entries for
+// its cut and at most MaxReadinessBlockers + MaxFindingsPerReview - 1 rows.
 const (
 	readinessCountersSQL = `SELECT v.change_id, v.open_blockers FROM json_each(?) AS j
 		CROSS JOIN code_conversations AS v WHERE v.change_id = CAST(j.value AS TEXT)`

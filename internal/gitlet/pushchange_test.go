@@ -66,19 +66,16 @@ func (n *node) body(id string) string {
 	return body
 }
 
-// A PUSH OPENS ITS CHANGE IN ITS OWN RECORD: a seat's push of its branch asking
-// for a change appends ONE record, which moves the branch and opens the change
-// at the head it set — numbered from the repository's next, into its default
-// branch, the seat its owner and first author, the push its first revision,
-// opened at the record's position with the turn and the executor that
-// pushed it — and the answer names the change by its number, read from its
-// row, as does the push's outcome asked of it. The next change the repository
-// opens takes the next number.
+// A PUSH OPENS ITS CHANGE IN ITS OWN RECORD: a seat's push asking for a change
+// appends ONE record, which moves the branch and opens the change at its new
+// head: the repository's next number, into its default branch, the seat its
+// owner and first author, the push its first revision, at the record's
+// position, with the turn and executor that pushed. The answer and the push's
+// outcome name it by its number; the next change takes the next number.
 //
-// Mutations: open the change in a record of its own after the push's, and the
-// push appends two records and the change is opened at another position; open
-// it without the push's launch, and the change says no executor's launch
-// opened it.
+// Mutations: open the change in a record after the push's, and the push
+// appends two and the change opens elsewhere; open it without the push's
+// launch, and the change says no executor's launch opened it.
 func TestAPushOpensItsChangeInItsOwnRecord(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -123,8 +120,8 @@ func TestAPushOpensItsChangeInItsOwnRecord(t *testing.T) {
 		t.Fatalf("the change's authors are %+v, want its pusher from revision 1: %+v", got, want)
 	}
 
-	// THE OUTCOME OF THE PUSH, asked of its change, names it — what a
-	// receiver whose push was answered pending reads once it lands.
+	// The outcome asked of its change names it: what a receiver answered
+	// pending reads once the push lands.
 	out, err := n.reader.PushOutcome(ctx, gitlet.OutcomeQuery{RepoID: repo, PushID: p.PushID, At: res.Position,
 		Change: true})
 	if err != nil || !out.Found || out.Opened != 1 {
@@ -143,11 +140,9 @@ func TestAPushOpensItsChangeInItsOwnRecord(t *testing.T) {
 }
 
 // A PUSH TO AN OPEN HEAD NAMES ITS CHANGE: a push asking for a change from a
-// branch that already heads a live change revises that one — its next
-// revision, made by the push — and opens no other, whatever its options ask:
-// the answer names the change it moved, by its number, its title and target
-// as they were. The same push answered again, from the row its record wrote,
-// opens nothing either.
+// branch already heading a live change revises that one and opens no other,
+// whatever its options ask: the answer names it by its number, its title and
+// target as they were.
 //
 // Mutation: open a change whatever the branch heads, and the branch heads
 // two live changes.
@@ -181,11 +176,10 @@ func TestAPushToAnOpenHeadNamesItsChange(t *testing.T) {
 	}
 }
 
-// A CHANGE A PUSH OPENED IS NAMED WHEN THE PUSH IS ASKED AGAIN: a proposal of a
-// push that already landed — forwarded twice, or decided again by another
-// node after its answer was lost — is answered from its row, and the change
-// it opened by the id the push derives, read from the change's row: no round
-// of the second batch decided its change, and the rows say what it opened.
+// A CHANGE A PUSH OPENED IS NAMED WHEN THE PUSH IS ASKED AGAIN: a push that
+// already landed (forwarded twice, or its answer lost) is answered from its
+// row, and its change by the id the push derives, read from the change's row,
+// since no round of the second batch decided it.
 func TestAPushAskedAgainNamesTheChangeItOpened(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -215,11 +209,10 @@ func TestAPushAskedAgainNamesTheChangeItOpened(t *testing.T) {
 
 // A CHANGE THE PUSH'S RULES REFUSE LANDS THE PUSH: a target that is the source,
 // no live target, a source at its target's commit and a source that did not
-// move — refused, or already where the push set it — each answer the push's
-// change with its code and a sentence, one of PushChangeRefusals, while the
-// push lands as one that asked for nothing, and no change is opened. The
-// pushes run in order on one repository, each from where the one before left
-// it: main at A, feature at B.
+// move (refused, or already there) each answer the change with a code of
+// PushChangeRefusals and a sentence, while the push lands as one that asked
+// for nothing and no change is opened. The cases run in order on one
+// repository, starting from main at A, feature at B.
 func TestARefusedChangeLandsItsPush(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -280,13 +273,11 @@ func TestARefusedChangeLandsItsPush(t *testing.T) {
 	}
 }
 
-// ONE RECORD OPENS ITS CHANGES IN ITS ENTRIES' ORDER: a record whose entries
-// open a change, revise it and open another applies them in order — the
-// first numbered the repository's next and the second the one after, each
-// at version 1 however many of the record's entries moved it, the push that
-// opened it its first revision and the later push its second, the record's
-// position on every row — and moves the repository's next number past both.
-// An entry asking to open a change on a branch that already heads one, which
+// ONE RECORD OPENS ITS CHANGES IN ITS ENTRIES' ORDER: entries that open a
+// change, revise it and open another apply in order: numbered next and next+1,
+// each at version 1 however many entries moved it, the opening push its first
+// revision, the record's position on every row, and the next number moved
+// past both. An entry opening a change on a branch already heading one, which
 // no decide forms, applies its push and opens nothing.
 //
 // Mutation: open a change before its entry's own moves, and the push that
@@ -326,8 +317,7 @@ func TestOneRecordOpensItsChangesInItsEntriesOrder(t *testing.T) {
 		t.Fatalf("the repository's next change is %d, want 3", next)
 	}
 
-	// A RECORD NO DECIDE FORMS: the branch heads web!1, so the entry's
-	// change is no change to open.
+	// A record no decide forms: the branch already heads web!1.
 	fourth := entry(uuid.Must(uuid.NewV7()).String(), set(featureRef, oidOf("D"), oidOf("E")))
 	fourth.Change = &gitlet.ChangeOption{Target: mainRef, Title: "Three"}
 	n.push(repo, fourth)
@@ -340,11 +330,10 @@ func TestOneRecordOpensItsChangesInItsEntriesOrder(t *testing.T) {
 	}
 }
 
-// A PUSH'S CHANGE IS READ FROM THE CHANGE NAMESPACE: `change` asks for one, its
-// four options shape it, every other option is read by nobody, the options
-// shape nothing without `change`, and a key it does not read, a value its
-// field refuses or a key given twice is no change — in words that name the
-// option, never echoing a key a client spelled long.
+// A PUSH'S CHANGE IS READ FROM THE CHANGE NAMESPACE: `change` asks for one,
+// its four options shape it and nothing without it, every other option is
+// read by nobody, and an unread key, a refused value or a key given twice is
+// refused in words naming the option, never echoing a long or raw key.
 func TestTheChangeOptionsAreReadFromTheChangeNamespace(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -405,10 +394,9 @@ func TestTheChangeOptionsAreReadFromTheChangeNamespace(t *testing.T) {
 	}
 }
 
-// THE GUIDE NAMES EVERY OPTION OF A CHANGE: a person learns what a push may ask
-// of a change from the guide's "Open a change from a push", so every option
-// Gitlet reads is in its table, as a push spells it, and the table
-// names no `change` option it does not read.
+// THE GUIDE NAMES EVERY OPTION OF A CHANGE: the guide's "Open a change from a
+// push" table holds every option Gitlet reads, as a push spells it, and no
+// `change` option it does not read.
 //
 // Mutation: drop the guide's change.draft row and this fails naming it.
 func TestTheGuideNamesEveryChangeOption(t *testing.T) {
@@ -440,13 +428,11 @@ func TestTheGuideNamesEveryChangeOption(t *testing.T) {
 	}
 }
 
-// A DELIVERED CHANGE IS ALWAYS TITLED: whatever the commit its branch was
-// delivered at says, and whatever that branch is named — any name git
-// accepts — the title a change opened without one takes is one an open
-// accepts (gitlet.TitleProblem finds nothing): the subject where it can title
-// it, else the branch's name made a title, never raw — a C1 control
-// character git and gitref admit is a line break to a title — else the
-// commit's id.
+// A DELIVERED CHANGE IS ALWAYS TITLED: whatever its commit says and whatever
+// its branch is named (any name git accepts), an untitled change takes a title
+// gitlet.TitleProblem accepts: the subject where it can, else the branch's name
+// made a title, never raw (a C1 control git and gitref admit breaks a title's
+// line), else the commit's id.
 //
 // Mutations: fall back to the branch's name raw — the names holding U+0085
 // are no titles, red; answer the name made a title even where it is empty —
@@ -478,12 +464,11 @@ func TestADeliveredChangeIsAlwaysTitled(t *testing.T) {
 	}
 }
 
-// AN UNTITLED CHANGE IS MEASURED AT ITS WIDEST TITLE: a push's receiver asks
-// whether its record has room for the change before it has read the title it
-// fills in (that read runs beside the upload), so a change whose options
-// named no title is measured, never refused for it, and measured as wide as
-// any title it may be given — MaxChangeTitleBytes JSON spells six times over
-// — so the title filled in later never takes a record past its room.
+// AN UNTITLED CHANGE IS MEASURED AT ITS WIDEST TITLE: the receiver asks for
+// room before reading the title it fills in, so an untitled change is never
+// refused for it and is measured as wide as any title (MaxChangeTitleBytes,
+// each byte JSON spells in six): the title filled in later never takes a
+// record past its room.
 //
 // Mutation: measure an untitled change with its title left empty — it is
 // measured narrower than a change of the widest title, red.
@@ -517,11 +502,10 @@ func TestAnUntitledChangeIsMeasuredAtItsWidestTitle(t *testing.T) {
 	}
 }
 
-// A CHANGE IS OPENED FROM THE PUSH'S ONE BRANCH: the one command that sets a
-// branch — a create or an update under refs/heads/ — beside any tag, and
-// whatever became of it; a push of no branch, or one that only deletes
-// branches, has no source, and one of several branches is ambiguous, naming
-// them.
+// A CHANGE IS OPENED FROM THE PUSH'S ONE BRANCH: the one command that creates
+// or updates a branch, beside any tag and whatever became of it; a push of no
+// branch or only deletions has no source, and one of several is ambiguous,
+// naming them.
 func TestAChangeIsOpenedFromThePushsOneBranch(t *testing.T) {
 	t.Parallel()
 	refused := update(featureRef, oidOf("B"), oidOf("C"))
@@ -561,17 +545,14 @@ func TestAChangeIsOpenedFromThePushsOneBranch(t *testing.T) {
 }
 
 // A BOX'S PUSH OPENS ITS CHANGE ON ITS RUN'S WORK ITEM (M4-decisions D34): a
-// coding box's `git push -o change` names the item its run was charged to by
-// its identity — stamped from the run's row by the box's admission
-// (RunProvenance.WorkID, .WorkProject) — and the change it opens carries that
-// item, its tracker, id, key and project, in the one shape the turn's own
-// code_open_change and the engine's open at the run's collection give it; a
-// push that names its item by tracker and key alone, the history's label,
-// opens one carrying none.
+// coding box's `git push -o change` carries its run's item by identity, which
+// the box's admission stamps (RunProvenance.WorkID, .WorkProject), and the
+// change it opens carries that item (tracker, id, key, project) in the shape
+// code_open_change and the engine's open at collection give it; a push naming
+// its item by tracker and key alone (the history's label) opens one with none.
 //
-// Mutations: leave the push's work item off the change its entry opens
-// (changeBook.open), and the box's change carries none — red; leave its
-// project off, and the change carries the item without it — red.
+// Mutations: leave the work item off the change its entry opens
+// (changeBook.open) — red; leave its project off — red.
 func TestABoxPushOpensItsChangeOnTheRunsWorkItem(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

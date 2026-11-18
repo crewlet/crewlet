@@ -13,10 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A CHANGE'S STATES AND HOW IT MERGED ARE CLOSED SETS, in the order the lists a
-// validator and the dashboard's contract read answer them: each value valid, a
-// value this build never wrote not, and the live states the first two — the
-// ones a push to the source still revises.
+// A CHANGE'S STATES AND HOW IT MERGED ARE CLOSED SETS, in the order a
+// validator and the dashboard's contract read them: each value valid, one no
+// build wrote not, and the live states the first two.
 func TestAChangesStatesAreAClosedSet(t *testing.T) {
 	t.Parallel()
 	if want := []gitlet.ChangeState{"draft", "open", "closed", "merged"}; !slices.Equal(gitlet.ChangeStates(), want) {
@@ -45,10 +44,9 @@ func TestAChangesStatesAreAClosedSet(t *testing.T) {
 }
 
 // A LANDING IS SPELLED AS THE MERGE OF ITS ROUTE IS: a landing row's kind and
-// the merged_via of the change it landed name the queue, a direct merge and a
-// push with one word each, so a reader of the landings beside the change rows
-// — the REST reads, the dashboard, a target_broken event's kind — meets one
-// vocabulary, never a landing policy's name for a route that has none.
+// its change's merged_via name each route with one word, so every reader of
+// both (the REST reads, the dashboard, a target_broken event's kind) meets one
+// vocabulary.
 //
 // Mutation: spell LandedQueue "pre_land" again — red.
 func TestALandingIsSpelledAsTheMergeOfItsRoute(t *testing.T) {
@@ -73,27 +71,17 @@ func TestALandingIsSpelledAsTheMergeOfItsRoute(t *testing.T) {
 }
 
 // EVERY CHANGE TABLE IS CLASSIFIED, AND HELD TO THE CLASS ITS MIGRATION
-// STATES. The rows a change is kept in — code_changes, and every code table
-// that names a change by a change_id — are found from the schema rather than
-// listed, so a change table a later migration adds is held here too: the
-// domain's table map gives each a class, and one sentence of the `-- Class:`
-// paragraph of the migration that last creates it names the table and that
-// class, as every replicated migration since Gitlet's states its
-// tables'. Each is held to its own class, never to one class for all: a table
-// whose rows each node ages out by a horizon of its own is divergent — carried
-// in a snapshot, outside the identity claim — and its migration says so.
+// STATES. The change tables (code_changes and every code table with a
+// change_id) are found from the schema, so a later one is held too, each to
+// its own class in the domain's table map, stated by one sentence of the
+// `-- Class:` paragraph of the migration that last creates it: one each node
+// ages by its own horizon is divergent, outside the identity claim. The
+// repository's (a change's row, body, authors, revisions) and conversation's
+// are reproducible, or two nodes could answer web!42 differently.
 //
-// THE REPOSITORY'S OWN ARE REPRODUCIBLE. What the records on a repository's
-// subject write of a change — its row, its body, its authors and its
-// revisions — is rebuilt by a replay from zero and compared by the identity
-// claim, never a node's own: two data nodes that disagreed about a change's
-// number or its head would answer web!42 differently. A replicated table that
-// a change's own subject writes joins the list with the commit that lands it.
-//
-// Mutation: leave a change table out of the domain's inventory; state another
-// class for it in its migration, even in a paragraph whose next sentence
-// states this class of another table; or name a repository table the
-// inventory does not reproduce — and this fails.
+// Mutation: leave a change table out of the inventory, state another class in
+// its migration (even in a paragraph whose next sentence states this one of
+// another table), or name a repository table the inventory does not reproduce.
 func TestEveryChangeTableIsClassified(t *testing.T) {
 	t.Parallel()
 	namesAChange := regexp.MustCompile(`[(,]\s*change_id\s`)
@@ -149,12 +137,10 @@ func classWord(class statelog.TableClass) string {
 	return class.String()
 }
 
-// statesClass reports whether one sentence of a `-- Class:` paragraph names
-// table and says word — ONE SENTENCE rather than the paragraph, because a
-// paragraph that classes several tables states each table's class beside its
-// name: 0086's says its three change tables are reproducible and, in the next
-// sentence, that code_repos stays so, and a paragraph-wide match would still
-// pass with the first sentence calling them anything else.
+// statesClass reports whether ONE SENTENCE of a `-- Class:` paragraph names
+// table and says word: a paragraph classing several tables states each beside
+// its name (0086's, its change tables, then code_repos), so a paragraph-wide
+// match would pass a sentence calling a table anything else.
 func statesClass(paragraph, table, word string) bool {
 	named := regexp.MustCompile(`\b` + regexp.QuoteMeta(table) + `\b`)
 	for _, sentence := range strings.Split(paragraph, ". ") {
@@ -166,9 +152,8 @@ func statesClass(paragraph, table, word string) bool {
 }
 
 // classOf is the `-- Class:` paragraph of the replicated migration that LAST
-// creates table — the shape the table has, where a later migration created it
-// again — each line without its comment marker, or "" when that migration has
-// none.
+// creates table (the table's current shape), each line without its comment
+// marker, or "" when that migration has none.
 func classOf(t *testing.T, table string) string {
 	t.Helper()
 	stated, found := "", false
@@ -199,10 +184,9 @@ func classOf(t *testing.T, table string) string {
 	return stated
 }
 
-// changeShape is one change a case seeds: how many revisions and authors it
-// holds, what its body weighs — 0 for none, and so no body row — how many
-// notices this node holds of it, and how many more its count states that a
-// sweep took (code_changes.notices is their sum).
+// changeShape is one change a case seeds: its revisions and authors, its body's
+// weight (0 for no body row), the notices this node holds of it, and how many
+// more a sweep took (code_changes.notices is their sum).
 type changeShape struct{ revisions, authors, body, notices, swept int }
 
 // changesOf is count changes of shape.
@@ -215,19 +199,15 @@ func changesOf(count int, shape changeShape) []changeShape {
 }
 
 // seedChanges writes a repository's changes straight into a node's estate,
-// numbered from 1 in the order given, each with the revisions, the authors and
-// the body and the notices its shape names — the bulk a purge has to clear,
-// which opening change by change would spend minutes on and assert nothing
-// more by. It answers the changes' ids.
+// numbered from 1, each with its shape's revisions, authors, body and notices
+// (the bulk a purge clears, which opening one by one would take minutes for no
+// more coverage), and answers their ids.
 //
 // A BODY ROW STANDS FOR THE WIDTH ITS CHANGE STATES, as seedWeighed's push
-// rows do: a purge weighs a body by its change's body_bytes and never reads
-// the body, so a case weighs mebibytes without writing them — a body row
-// carries the width itself only up to a kilobyte.
-//
-// A NOTICE is a person's, the j-th of its change at log_seq j+1 and read by
-// one of sixteen readers named after the repository (noticeReader), so a
-// case tells one repository's inboxes from another's.
+// rows do: a purge weighs a body by body_bytes and never reads it, so a case
+// weighs mebibytes while writing at most a kilobyte. A NOTICE is a person's,
+// the j-th of its change at log_seq j+1, read by one of the repository's
+// sixteen readers (noticeReader), so a case tells repositories' inboxes apart.
 func (n *node) seedChanges(repoID string, shapes []changeShape) []string {
 	n.t.Helper()
 	ctx := n.t.Context()
@@ -310,21 +290,17 @@ func (n *node) changeRows(repoID string) (changes, revisions, authors, bodies in
 		n.count(`SELECT COUNT(*) FROM code_change_bodies WHERE change_id LIKE ?`, prefix)
 }
 
-// A PURGE REMOVES A REPOSITORY'S CHANGES, each whole and its row last, counted
-// toward its parts: a part takes the changes that fit it whole and cuts only
-// the one it stops at — oldest revisions first, its body and row left for
-// later — never more than PurgePartRows rows, and the purge removes the rest,
-// leaving no revision, author or body of a change whose row is gone, and
-// nothing of a neighbour's.
+// A PURGE REMOVES A REPOSITORY'S CHANGES, each whole and its row last: a part
+// takes the changes that fit it whole and cuts only the one it stops at
+// (oldest revisions first, body and row left for later), never past
+// PurgePartRows rows, and the purge removes the rest, orphaning no dependent
+// and leaving a neighbour's changes alone.
 //
-// Mutation: leave the revisions, the authors, the bodies or the changes out of
-// the bounded count, and that case's purge is one record deleting more than a
-// part may; leave the bodies out of the walk's count, and a part of bodied
-// changes deletes past PurgePartRows; drop a part's delete of the whole
-// changes' revisions or bodies, or the final purge's of the revisions, the
-// authors or the bodies, and rows are left behind; delete the changes before
-// their dependents in the final purge, and the dependents are orphaned; cut a
-// change newest revision first, and the oldest revision outlives the part.
+// Mutation: leave revisions, authors, bodies or changes out of the bounded
+// count (one record deletes more than a part may); leave bodies out of the
+// walk's count (a part deletes past PurgePartRows); drop a part's or the final
+// purge's delete of a dependent (rows left behind); delete changes before their
+// dependents (orphans); cut newest revision first (the oldest outlives the part).
 func TestAPurgeRemovesARepositorysChanges(t *testing.T) {
 	t.Parallel()
 	// TEN CHANGES OF ONE REVISION, ONE AUTHOR AND A BODY fit the first part
@@ -414,12 +390,10 @@ func TestAPurgeRemovesARepositorysChanges(t *testing.T) {
 }
 
 // A PURGE IS BOUNDED BY WHAT ITS CHANGES' BODIES WEIGH, in one budget with its
-// pushes: a repository whose few changes carry wide bodies is purged in parts,
-// each taking whole changes only while its wide rows — the push rows first,
-// then the bodies — weigh under PurgePartBytes, and the final purge, whose
-// statements are unbounded, is formed only once what is left weighs no more
-// than that. A change's body is the one wide value it keeps, and deleting it
-// frees overflow pages a count of rows does not see.
+// pushes: a part takes whole changes only while its wide rows (pushes, then
+// bodies) weigh under PurgePartBytes, and the unbounded final purge waits until
+// what is left weighs no more. A body is a change's one wide value, its
+// overflow pages invisible to a row count.
 //
 // Mutation: leave the bodies' weight out of the bounded count, and the purge
 // is one record over every body; take a part's changes by their rows alone,
@@ -429,8 +403,7 @@ func TestAPurgeIsBoundedByWhatItsChangesWeigh(t *testing.T) {
 	t.Parallel()
 	// TEN CHANGES OF A REVISION, AN AUTHOR AND AN 8 MiB BODY: 80 MiB in forty
 	// rows, far under PurgePartRows. A part takes changes until their bodies
-	// reach PurgePartBytes — four — and the purge takes what is left once it
-	// weighs no more than that.
+	// reach PurgePartBytes (four), and the purge takes what is left.
 	const width = 8 << 20
 	for name, tc := range map[string]struct {
 		// pushes is how many push rows of width bytes the repository holds,

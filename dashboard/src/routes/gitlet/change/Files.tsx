@@ -60,6 +60,7 @@ import { fmtCount, plural } from "~/lib/format.ts";
 import { useReviewDrafts } from "~/lib/reviewDrafts.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
+import { spellPosition } from "~/protocol/session.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type {
   CodeChangeAnswer,
@@ -70,7 +71,7 @@ import type {
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { FileTree, type FileBadges } from "../FileTree.tsx";
 import { FIND_LIMIT, Matched } from "../repo/GoToFile.tsx";
-import { FileStack, fileKey, matchPath, type StackJump } from "./FileStack.tsx";
+import { FileStack, fileKey, matchPath, type StackHeadSlot, type StackJump } from "./FileStack.tsx";
 import { findingStands } from "./FindingAnswer.tsx";
 import { FinishReview } from "./ReviewDialog.tsx";
 import {
@@ -84,6 +85,7 @@ import {
   usePagedFindingPaths,
   usePagedFindings,
 } from "./reads.ts";
+import { useViewedMarks, ViewedMarksContext, ViewedProgress, ViewedToggle } from "./Viewed.tsx";
 import "~/styles/gitlet.css";
 
 /** The page's width from which the tree sits beside the stack (the sheet's 720 px fold). */
@@ -200,6 +202,22 @@ export function Files({
     [findings.items, placed, comments.items, drafting, drafted, add, remove, update, clear, thread],
   );
   const listed = pagedFiles.items;
+  // THE READER'S VIEWED FILES, marked at the position the listing was read at: a viewed file is folded.
+  const position = files.data?.position;
+  const marks = useViewedMarks({
+    change,
+    listed,
+    seen: position ? spellPosition(position) : "",
+  });
+  // THE TOGGLE READS THE MARKS from context, so its control and each head stay put across reads.
+  const viewedControl = useCallback((f: CodeDiffFile) => <ViewedToggle file={f} />, []);
+  const headSlot = useMemo<StackHeadSlot>(
+    () => ({
+      control: viewedControl,
+      foldedByHost: (f) => !f.path_b64 && marks.viewed.has(f.path),
+    }),
+    [viewedControl, marks.viewed],
+  );
   // WHAT THE FILTERS KEEP: the words a path holds, the extensions shown, and
   // the files with a standing finding.
   const findingPaths = usePagedFindingPaths(change);
@@ -223,12 +241,21 @@ export function Files({
   const shownExts = listParam(extParam).map(tokenExt);
   const only = listParam(onlyParam);
   const byFindings = only.includes("findings") && pathsRead;
+  // UNVIEWED IS HELD until every mark is read: a partial read would keep a viewed file.
+  const byUnviewed = only.includes("unviewed") && marks.read === "read";
+  const unviewedHeld =
+    typeof marks.read === "object"
+      ? marks.read.refused
+      : marks.read === "reading"
+        ? "Still reading your viewed files."
+        : undefined;
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   const keeps = (f: CodeDiffFile) =>
     words.every((w) => f.path.toLowerCase().includes(w)) &&
     (shownExts.length === 0 || shownExts.includes(extOf(f.path))) &&
-    (!byFindings || standing.has(f.path));
-  const filtering = words.length > 0 || shownExts.length > 0 || byFindings;
+    (!byFindings || standing.has(f.path)) &&
+    (!byUnviewed || !marks.viewed.has(f.path) || Boolean(f.path_b64));
+  const filtering = words.length > 0 || shownExts.length > 0 || byFindings || byUnviewed;
   const visible = filtering ? listed.filter(keeps) : listed;
   const clearFilters = () => {
     setQ("");
@@ -400,6 +427,14 @@ export function Files({
             active={since !== null}
           />
           <GoToChanged files={listed} onGo={go} />
+          {live && marks.read === "read" && listed.length > 0 && (
+            <ViewedProgress
+              viewed={marks.viewed.size}
+              listed={listed.length}
+              changed={files.data?.diff?.total}
+              more={pagedFiles.more}
+            />
+          )}
           <span className="code-files-bar__end">
             <span className="code-files-bar__layout">
               <SegmentedControl
@@ -473,6 +508,8 @@ export function Files({
                       only={only}
                       onOnly={(next) => setOnly(next.join(","))}
                       withFindings={listed.filter((f) => standing.has(f.path)).length}
+                      unviewed={listed.length - marks.viewed.size}
+                      unviewedHeld={unviewedHeld}
                       findingsHeld={
                         pathsRefused !== null
                           ? refusedWords("Findings by file are unavailable", pathsRefused)
@@ -525,32 +562,35 @@ export function Files({
                 {pagedFiles.pageError && <PageFailed error={pagedFiles.pageError} />}
               </FilesPane>
             )}
-            <FileStack
-              change={change}
-              head={head}
-              rev={rev}
-              since={since}
-              moved={diffMoved}
-              files={visible}
-              lead={
-                <>
-                  {unchanged && (
-                    <p className="muted" role="status">
-                      {since !== null
-                        ? `${file} is not among the files changed since revision ${since}.`
-                        : `${file} is not among the files revision ${rev} changes.`}
-                    </p>
-                  )}
-                  {showing}
-                </>
-              }
-              indexOf={indexOf}
-              layout={layout === "split" ? "split" : "unified"}
-              notes={notes}
-              jump={jump}
-              onCurrent={setCurrent}
-              foot={loadMoreFiles && <span>{loadMoreFiles}</span>}
-            />
+            <ViewedMarksContext.Provider value={marks}>
+              <FileStack
+                change={change}
+                head={head}
+                rev={rev}
+                since={since}
+                moved={diffMoved}
+                files={visible}
+                lead={
+                  <>
+                    {unchanged && (
+                      <p className="muted" role="status">
+                        {since !== null
+                          ? `${file} is not among the files changed since revision ${since}.`
+                          : `${file} is not among the files revision ${rev} changes.`}
+                      </p>
+                    )}
+                    {showing}
+                  </>
+                }
+                indexOf={indexOf}
+                layout={layout === "split" ? "split" : "unified"}
+                notes={notes}
+                jump={jump}
+                onCurrent={setCurrent}
+                foot={loadMoreFiles && <span>{loadMoreFiles}</span>}
+                headSlot={headSlot}
+              />
+            </ViewedMarksContext.Provider>
           </div>
         </QueryState>
       </Stack>
@@ -711,7 +751,7 @@ function GoToChanged({
   );
 }
 
-/** Filter options: the diff's own extensions and With findings, each a checkbox. */
+/** Filter options: the diff's own extensions, With findings and Unviewed, each a checkbox. */
 function FilterOptions({
   exts,
   shown,
@@ -720,6 +760,8 @@ function FilterOptions({
   onOnly,
   withFindings,
   findingsHeld,
+  unviewed,
+  unviewedHeld,
   narrowing,
   onClear,
 }: {
@@ -732,6 +774,9 @@ function FilterOptions({
   withFindings: number;
   /** Why With findings is held, where finding_paths was refused. */
   findingsHeld: string | undefined;
+  unviewed: number;
+  /** Why Unviewed is held, while the marks are read or where they were refused. */
+  unviewedHeld: string | undefined;
   narrowing: boolean;
   onClear: () => void;
 }) {
@@ -782,6 +827,14 @@ function FilterOptions({
             disabled={findingsHeld !== undefined}
             checked={only.includes("findings") && findingsHeld === undefined}
             onCheckedChange={(on) => toggleOnly("findings", on)}
+          />
+          <Checkbox
+            size="sm"
+            label={`Unviewed ${fmtCount(unviewed)}`}
+            description={unviewedHeld}
+            disabled={unviewedHeld !== undefined}
+            checked={only.includes("unviewed") && unviewedHeld === undefined}
+            onCheckedChange={(on) => toggleOnly("unviewed", on)}
           />
         </fieldset>
         <Button size="small" variant="ghost" onClick={onClear} disabled={!narrowing}>

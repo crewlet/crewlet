@@ -1470,7 +1470,8 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		return builtin.WorkDeps{}
 	}
 	return builtin.WorkDeps{
-		Reader: halves.reader,
+		Reader:       halves.reader,
+		ArtifactLink: e.ArtifactLink,
 		// ONE WRITER PER ACTOR: the party is the immutable seat the tool surface
 		// bound, never anything a model can name. Its provenance carries the
 		// turn's write log ([builtin.Actor.Provenance]).

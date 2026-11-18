@@ -46,18 +46,13 @@ func gateFieldNames(t *testing.T) map[string]string {
 	return out
 }
 
-// EVERY FIELD OF A MERGE GATE IS JUDGED FOR LOOSENING, or named neutral. A
-// seat may tighten a gate and never loosen one (ADR-0088), so a field ADDED to
-// MergeGate that LoosenedBy skips is one every unit's lead may switch off
-// unseen — and a value added to a ranked field's closed set, one it may lower
-// to. So the cases are keyed by field — Landing's own fields among them — and
-// held to the struct's fields by reflection: each opened alone is ONE
-// loosening, whose phrase names the field as a request spells it, and closed
-// back is none, while a neutral field moved either way is none. Each ranked
-// field's every pair of known values is decided here, so a value added to its
-// closed set fails until it is; and a value this build does not know fails
-// closed on either side. A human path is kept only by its own glob with an
-// unless naming nothing more.
+// EVERY FIELD OF A MERGE GATE IS JUDGED FOR LOOSENING, or named neutral: a
+// seat may tighten a gate, never loosen it (ADR-0088), so a field or ranked
+// value LoosenedBy skips is one every unit's lead may lower unseen. Cases are
+// held to the struct by reflection: each opened alone is ONE loosening naming
+// its request spelling, closed back (or neutral) none. Every pair of a ranked
+// field's values is decided here, an unknown value fails closed both ways, and
+// a human path is kept only by its own glob with an unless naming no more.
 //
 // Mutations: treat agents_edit_checks turned on as neutral — its case opens
 // nothing, red; rank merge_by only among the values this build knows — the
@@ -202,15 +197,12 @@ func spelledAll[T ~string](values []T) []string {
 }
 
 // A GATE CHANGE NAMES EVERY FIELD OF A GATE, by the gate's own spelling, and
-// sets exactly the one it names. A field added to MergeGate that GateChange
-// cannot name is one no tool can set — a gate a declaration can state, a
-// person's assistant could never make — and GateChangeFields is what a tool
-// takes, so the three are held to one another: every MergeGate field has a
-// GateChange field of its Go name and JSON key (Landing's through
-// LandingChange), GateChange has those and its removal alone, and
-// GateChangeFields lists exactly their keys in MergeGate's order. Then a
-// change of each field, decoded from its JSON as a tool's call is, changes
-// that field of a gate and leaves every other as it was.
+// sets exactly the one it names: a MergeGate field GateChange cannot name is
+// one no tool can set. So every MergeGate field has a GateChange field of its
+// Go name and JSON key (Landing's through LandingChange), GateChange has those
+// and Remove alone, GateChangeFields (what a tool takes) lists their keys in
+// MergeGate's order, and each field's change, decoded as a tool's call is,
+// changes that field alone.
 //
 // Mutation: leave agents_edit_checks out of applyTo — its change leaves the
 // gate as it was, red.
@@ -305,15 +297,12 @@ func asObject(t *testing.T, g MergeGate) map[string]any {
 }
 
 // A PROTECT CHANGE NAMES EVERY PUSH CONTROL, by the rule's own spelling, and
-// sets exactly the one it names. A control added to PushRule that
-// ProtectChange cannot name is one no tool can change — and one a change of
-// any other field could not keep — and ProtectControlFields is what a tool
-// takes, so the three are held to one another: every PushRule field but its
-// pattern has a ProtectChange field of its Go name and JSON key, and
-// ProtectControlFields lists exactly their keys in PushRule's order. Then a
-// change of each control, decoded from its JSON as a tool's call is, resolved
-// against a rule the snapshot holds, changes that control and keeps every
-// other, the gate included — and a change naming none keeps the rule whole.
+// sets exactly the one it names: a PushRule control ProtectChange cannot name
+// is one no tool can change, nor a change of another field keep. So every
+// PushRule field but Pattern has a ProtectChange field of its Go name and JSON
+// key, ProtectControlFields lists their keys in PushRule's order, and each
+// control's change, decoded as a tool's call and resolved against a held rule,
+// changes it alone, gate kept; a change naming none keeps the rule whole.
 //
 // Mutation: leave allow_delete out of ProtectChange.rule — its change leaves
 // the rule as it was, red.

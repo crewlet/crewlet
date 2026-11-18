@@ -5,13 +5,11 @@ import (
 	"testing"
 )
 
-// THE SETTINGS COMPARISON READS EVERY FIELD BUT THE ACTIVATION. Under the
-// activation fence it is the one thing deciding whether a declared change
-// reaches the log, so a field it skips is a change every activation drops
-// silently — and a field ADDED to RepoSettings without a clause here is the
-// same bug arriving later. So the cases are keyed by field name and held to
-// the struct's own fields by reflection: a new field fails this test until it
-// is given a variant, and with it a clause.
+// THE SETTINGS COMPARISON READS EVERY FIELD BUT THE ACTIVATION: under the
+// activation fence it alone decides whether a declared change reaches the log,
+// so a skipped field is a change every activation drops silently. The cases are
+// keyed by field name and held to RepoSettings' fields by reflection, so a new
+// field fails here until it is given a variant, and with it a clause.
 func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 	t.Parallel()
 	base := RepoSettings{
@@ -36,9 +34,8 @@ func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 		"Protections": func(s *RepoSettings) {
 			s.Protections = []Protection{{PushRule: PushRule{Pattern: "refs/heads/main", DirectPush: DirectNone}}}
 		},
-		// A GLOB ADDED TO THE ONE OWNER, the change a slice comparison of
-		// the owners alone would miss had their globs been compared by
-		// count or by first element.
+		// A GLOB ADDED TO THE ONE OWNER, which comparing globs by count or by
+		// first element would miss.
 		"PathOwners": func(s *RepoSettings) {
 			s.PathOwners = []PathOwner{{Owner: Owner{Kind: OwnerUnit, Ref: "ENG"}, Paths: []string{"docs/**",
 				"web/**"}}}

@@ -34,8 +34,7 @@ func (s ChangeSort) Valid() bool { return slices.Contains(ChangeSorts(), s) }
 const MaxSpokenScanned = 1_000
 
 // The live changes by state and last move, every repository's or one's, and one repository's
-// conversations by when somebody last spoke (replicated "A live change is listed by when it last
-// moved").
+// conversations by when somebody last spoke (replicated 0173).
 const (
 	changesLiveMovedKey       = "code_changes_live_updated_idx"
 	changesRepoLiveMovedKey   = "code_changes_repo_live_updated_idx"

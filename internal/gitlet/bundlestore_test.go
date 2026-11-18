@@ -24,10 +24,9 @@ import (
 )
 
 // A BUNDLE IS LAID OUT FROM THE FILES A GIT WROTE: each section's size from
-// its file and the object count from the index's fan-out — its LAST entry,
-// which counts every object, never the first, which counts those whose id
-// begins 00 — under the id and the checksum its writer names, with the object
-// unnamed until the bytes are stored. A file missing fails it, naming which.
+// its file, the object count from the index fan-out's LAST entry (the first
+// counts only ids beginning 00), the id and checksum its writer names, and no
+// object until the bytes are stored. A missing file fails it, naming which.
 func TestLayBundleReadsTheThreeFilesAGitWrote(t *testing.T) {
 	t.Parallel()
 	packPath, b := written(t)
@@ -53,11 +52,10 @@ func TestLayBundleReadsTheThreeFilesAGitWrote(t *testing.T) {
 	}
 }
 
-// AN INDEX'S HEADER IS READ ONCE, and what cannot be read is refused naming
-// the file: the count is the fan-out's last entry and the file is left at the
-// first object id, where the host's id stream reads on; a header cut short, a
-// bad magic, another version, a count past 1<<31 and no file at all are each
-// refused, with no file left open.
+// AN INDEX'S HEADER IS READ ONCE: the count is the fan-out's last entry and
+// the file is left at the first object id, where the host's id stream reads
+// on; a short header, a bad magic, another version, a count past 1<<31 and no
+// file are each refused naming the file, with no file left open.
 func TestOpenIdxReadsTheCountAndRefusesWhatItCannotRead(t *testing.T) {
 	t.Parallel()
 	packPath, b := written(t)
@@ -119,15 +117,14 @@ func TestOpenIdxReadsTheCountAndRefusesWhatItCannotRead(t *testing.T) {
 }
 
 // EVERY NODE NAMES A COMPACTION'S OUTPUTS ALIKE, IN EVERY BUILD: an output's
-// id is a pure function of the compaction's id and the output's place — no
-// clock, no randomness, nothing of the node — so the build that names the
-// outputs and the committer that checks them agree without asking each other.
-// The literals were computed apart from this package (SHA-256 over an empty
-// name, the compaction's id and the place, each closed by a zero byte, laid
-// out as a UUIDv7 at the compaction id's millisecond), so a change to what
-// the digest takes, in what order, or at which instant fails here rather than
-// as two builds of one rolling upgrade refusing each other's outputs. An id
-// that carries no instant names its outputs at the Unix epoch, and as alike.
+// id is a pure function of the compaction's id and its place, so the builder
+// and the committer that checks it agree without asking. The literals were
+// computed apart from this package (SHA-256 over an empty name, the
+// compaction's id and the place, each closed by a zero byte, laid out as a
+// UUIDv7 at the compaction id's millisecond), so a change to the digest's
+// inputs, order or instant fails here rather than as two builds of a rolling
+// upgrade refusing each other's outputs. An id with no instant names its
+// outputs at the Unix epoch.
 func TestEveryNodeNamesACompactionsOutputsAlike(t *testing.T) {
 	t.Parallel()
 	const compaction = "01a1753a-6eab-7a1b-8c3d-4e5f60718293" // minted 2026-10-25T22:42:06.123Z
@@ -148,11 +145,9 @@ func TestEveryNodeNamesACompactionsOutputsAlike(t *testing.T) {
 	}
 }
 
-// A COMPACTION'S OUTPUTS TAKE IDS OF THEIR OWN, AT ITS INSTANT: one id a
-// place, and none another compaction's, each in the shape every stored pack's
-// id has — a bare UUIDv7 in its canonical spelling, as a push's — and
-// carrying the instant the compaction's id carries, never the clock of the
-// call that derives it.
+// A COMPACTION'S OUTPUTS TAKE IDS OF THEIR OWN, AT ITS INSTANT: one a place,
+// none another compaction's, each a canonical UUIDv7 as every stored pack's
+// is, carrying the compaction id's instant, never the deriving call's clock.
 func TestACompactionsOutputsTakeIDsOfTheirOwnAtItsInstant(t *testing.T) {
 	t.Parallel()
 	minted := time.Date(2026, 10, 25, 22, 42, 6, 123_000_000, time.UTC)
@@ -186,9 +181,9 @@ func stored(t *testing.T) (*objstore.Store, *memobj.Backend) {
 	return store, backend
 }
 
-// A BUNDLE IS STORED AS IT WAS LAID OUT: the three files back to back, under
-// the bundle's content type, read back whole through the store's own check,
-// and the row it would name holds to the seal every installing cache reads.
+// A BUNDLE IS STORED AS IT WAS LAID OUT: the three files back to back, read
+// back whole through the store's own check, and the row it would name holds
+// to the seal every installing cache reads.
 func TestStoreBundleStoresWhatItLaysOut(t *testing.T) {
 	t.Parallel()
 	packPath, b := written(t)
@@ -232,12 +227,11 @@ func mustSeal(t *testing.T, ref gitlet.PackRef, body []byte) gitlet.BundleSeal {
 	return s
 }
 
-// A BUNDLE ITS OWN SEAL REFUSES is stored and never named: the reverse index's
-// magic is the case because only the seal reads it — every size still matches
-// what the object count says. The bytes are in the store, under the key the
-// refusal names for whoever logs it, the row the writer holds is left naming
-// nothing, and the refusal is the seal's (ErrBadBundle) rather than a store
-// that failed.
+// A BUNDLE ITS OWN SEAL REFUSES is stored and never named: the reverse
+// index's magic is damaged because only the seal reads it, every size still
+// matching the object count. The bytes stay under the key the refusal names,
+// the writer's row names nothing, and the refusal is the seal's
+// (ErrBadBundle), not a store failure.
 func TestStoreBundleRefusesASealItsRuleRefuses(t *testing.T) {
 	t.Parallel()
 	packPath, b := written(t)
@@ -279,9 +273,9 @@ func TestStoreBundleRefusesASealItsRuleRefuses(t *testing.T) {
 	}
 }
 
-// recording is a Putter that reads what it is handed `chunk` bytes a Read, as
-// a backend takes its parts, noting how many bytes it had before each one,
-// and keeps it in memory — or answers refuse, having read nothing.
+// recording is a Putter that reads `chunk` bytes a Read, as a backend takes
+// its parts, noting the bytes it had before each, and keeps them in memory,
+// or answers refuse having read nothing.
 type recording struct {
 	chunk  int
 	refuse error
@@ -318,19 +312,14 @@ func (p *recording) Put(ctx context.Context, r io.Reader, limit int64, m objstor
 
 // THE STORE IS HANDED THE BUNDLE UNDER ITS OWN BOUND: the put runs under
 // UploadDeadline of the bundle's size, limited at that size and typed as a
-// bundle; the hit is asked before EVERY read the store makes, at the bytes
-// handed over so far, and an error from it ends the upload as that error with
-// nothing named; and a store with no room is answered as the store said it
-// (objstore.Full), for the caller to name the room.
+// bundle; the hit is asked before EVERY store read, at the bytes handed over,
+// and its error ends the upload with nothing named; a full store is answered
+// as it said (objstore.Full), for the caller to name the room. The bound is
+// read in a synctest bubble, whose clock does not move while StoreBundle
+// reads files (nothing in it durably blocks), so the put's deadline is
+// exactly the call's start plus the bound.
 //
-// The bound is read IN A BUBBLE, whose clock moves only while every goroutine
-// of it is durably blocked — and nothing StoreBundle does blocks so: it reads
-// files and the store reads it — so the deadline the put is handed is the
-// instant the call began plus the bound, exactly, however long the runner
-// takes over the files.
-//
-// Mutation: bound the put by UploadDeadline less a second — red at the
-// deadline.
+// Mutation: bound the put by UploadDeadline less a second.
 func TestStoreBundleHandsTheStoreTheBundleUnderItsBound(t *testing.T) {
 	t.Parallel()
 	packPath, b := written(t)

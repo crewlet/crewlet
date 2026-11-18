@@ -13,9 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// WHOM A CHANGE RECORD REACHED (apply_notices.go): the applier writes one row
-// per recipient of every routed record, within each recipient's horizon, and
-// says after the commit whose inbox it moved.
+// WHOM A CHANGE RECORD REACHED (apply_notices.go).
 
 // storedBefore has n apply every record as stored age before the harness's
 // batch instant, whatever the broker stamped it.
@@ -78,11 +76,10 @@ func wantNotices(t *testing.T, n *node, p statelog.Position) []string {
 	return out
 }
 
-// EVERY ROUTED RECORD WRITES ONE ROW PER RECIPIENT: an open mentioning a person
-// and a seat, an ask for review, a comment, a review, a merging push — each
-// record's notices are exactly the recipients its routing tells, each once,
-// a person's marked a person's, at the record's own position; nobody's of
-// their own write; and a record that tells nobody writes none.
+// EVERY ROUTED RECORD WRITES ONE ROW PER RECIPIENT: an open, an ask, a
+// comment, a review and a merging push each write exactly the recipients their
+// routing tells, once, a person's marked a person's, at the record's position;
+// none of their own write; and a record that tells nobody writes none.
 //
 // Mutation: write a row for the record's actor too, or one per concern before
 // the precedence's add-once, and a record's rows are not its recipients.
@@ -130,11 +127,9 @@ func TestEveryRoutedRecordWritesOneRowPerRecipient(t *testing.T) {
 }
 
 // A SEAT'S NOTICES AGE OUT AT THE TURN-DETAIL HORIZON: a record forty days old
-// when its batch applies it is past a seat's horizon (store.EventHistory,
-// thirty days) and inside a person's (the company's inbox horizon, a year by
-// default), so it writes the person's notice and not the seat's; and the
-// node's sweep of each kind deletes only its own kind's rows past their
-// cutoff.
+// is past a seat's horizon (thirty days) and inside a person's (a year by
+// default), so it writes the person's notice alone; and each kind's sweep
+// deletes only its own kind's rows past their cutoff.
 //
 // Mutation: hold a seat's notice to the person's horizon → the forty-day
 // record writes the seat's; sweep every kind at one cutoff → the person's
@@ -188,9 +183,8 @@ func TestSeatRowsAgeOutAtTheTurnDetailHorizon(t *testing.T) {
 }
 
 // A RECORD PAST ITS HORIZON WRITES NO ROW: one stored longer ago than a
-// person's inbox horizon when its batch applies it — a replay of a log a year
-// and more old — writes no notice for anybody, so a replay rebuilds no inbox
-// the sweep would delete.
+// person's inbox horizon when its batch applies it writes no notice, so a
+// replay rebuilds no inbox the sweep would delete.
 //
 // Mutation: date the horizon from the record's own instant rather than the
 // batch's → the record writes its notices.
@@ -210,11 +204,10 @@ func TestARecordPastItsHorizonWritesNoRow(t *testing.T) {
 	}
 }
 
-// THE CODE APPLIER ANNOUNCES WHOSE INBOX MOVED: after a committed batch whose
-// notices it wrote, the applier tells its listener one movement a recipient —
-// the code domain as its source, a notice each, the change and the reason,
-// timed from the broker's instant the record was stored, which the socket's
-// push is timed from — and a batch that wrote none tells nothing.
+// THE CODE APPLIER ANNOUNCES WHOSE INBOX MOVED: after a committed batch that
+// wrote notices, its listener hears one movement a recipient (source code, the
+// change, the reason, timed at the record's broker instant, which the socket's
+// push is timed from); a batch that wrote none tells nothing.
 //
 // Mutation: announce from inside the transaction, or drop the source, and the
 // movements are not these.
@@ -262,21 +255,17 @@ func TestTheCodeApplierAnnouncesWhoseInboxMoved(t *testing.T) {
 	}
 }
 
-// noticeCount is the count change keeps of its notices on n
-// (code_changes.notices).
+// noticeCount is change's code_changes.notices on n.
 func noticeCount(t *testing.T, n *node, change string) int {
 	t.Helper()
 	return n.count(`SELECT notices FROM code_changes WHERE id = ?`, change)
 }
 
-// A CHANGE COUNTS EVERY NOTICE ITS RECORDS MAY WRITE: each record about it adds
-// every handle it tells — what its routing concerns and hears — whether or not
-// the recipient's horizon let this node write the row, so the count is a
-// function of the records alone and the same on every node, and never below
-// the rows this node holds: an open a year and more old when its batch
-// applies it writes no row and still counts its two mentions, and an ask
-// applied an hour after it was stored writes its one and counts it. An edit
-// that tells nobody counts nothing.
+// A CHANGE COUNTS EVERY NOTICE ITS RECORDS MAY WRITE, whether or not the
+// horizon let this node write the row, so the count is the same on every node
+// and never below its rows: an open past every horizon writes no row and still
+// counts its two mentions, an ask an hour old writes and counts its one, and an
+// edit that tells nobody counts nothing.
 //
 // Mutation: count only the rows the horizon let the apply write, or count
 // nothing, and the change's count is not what its records may write.
@@ -318,30 +307,18 @@ func TestAChangeCountsEveryNoticeItsRecordsMayWrite(t *testing.T) {
 	}
 }
 
-// A PURGE REMOVES ITS CHANGES' NOTICES WITHIN ITS PARTS: a change's notices
-// are charged to the part that removes them by the count the change keeps of
-// them, so no record deletes more than PurgePartRows of a repository's
-// changes' rows and notices together, a part cuts the change it stops at
-// through its notices oldest first and takes exactly what it charged off its
-// count, the final purge forms only once the counts left fit one part — and
-// the purge leaves no notice of the repository behind, announces every inbox
-// it took one out of, and touches no other repository's.
+// A PURGE REMOVES ITS CHANGES' NOTICES WITHIN ITS PARTS, charged by count: no
+// record deletes more than PurgePartRows; a cut takes the oldest and exactly
+// its charge off the count; the final purge forms once the counts left fit a
+// part; and the purge leaves no notice of the repository, announces every
+// inbox it moved, and touches no other's. Ten changes of forty notices fit
+// the first part (430 rows); the next holds PurgePartRows+100 and counts 50
+// more a sweep took, so the part cuts its revision, author and 2 568 oldest;
+// the purge takes the 532 left (counted 582), its row and five small changes.
 //
-// The repository's ten changes of forty notices fit the first part whole, 430
-// rows; the change after them holds PurgePartRows+100 notices and counts 50
-// more a sweep took, so the part cuts it — its revision, its author and the
-// 2 568 oldest of its notices, filling PurgePartRows — and the purge takes the
-// 532 notices left (counted 582), its row and the five small changes after
-// it, thirteen rows each.
-//
-// Mutation: leave a change's notices out of what a part charges, and the
-// first part deletes every notice in one record; leave them out of the
-// decide's bounded count, and the purge is one record over all of them;
-// remove no notice of a change taken whole, or none of the cut one, and
-// notices outlive their changes or the purge's one record takes thousands;
-// take the cut's notices off its count by none, and the parts are not these;
-// cut them newest first, and the
-// oldest outlive the part; note no removal, and no inbox is told it moved.
+// Mutation: leave notices out of a part's charge or the decide's bounded
+// count, remove none of a whole or cut change, take none off the cut's count,
+// cut newest first, or note no removal, and the parts or movements differ.
 func TestAPurgeRemovesItsChangesNoticesWithinItsParts(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

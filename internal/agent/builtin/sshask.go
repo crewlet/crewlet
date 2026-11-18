@@ -130,7 +130,9 @@ func (t *askToOperate) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if asked := turn.Org.Role(person); asked == nil || asked.Kind != org.KindHuman {
 		return failed(t.Name() + ": `ask` is a person's handle: only a person approves a command."), nil
 	}
-	question := fmt.Sprintf("May %s run a command on %s as %s?", handle, h.ID, h.Users.Operate)
+	question := decision.FittingQuestion(
+		fmt.Sprintf("May %s run a command on %s as %s?", handle, h.ID, h.Users.Operate),
+		fmt.Sprintf("May this agent run a command on %s as %s?", h.ID, h.Users.Operate))
 	var body strings.Builder
 	fmt.Fprintf(&body, "%s asks to run this command on the server `%s` (%s, port %d) as `%s`, once.\n\n"+
 		"**Command**\n\n%s", handle, h.ID, h.Address, h.PortOrDefault(), h.Users.Operate, codeBlock(a.command))

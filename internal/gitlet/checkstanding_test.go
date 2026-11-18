@@ -324,10 +324,9 @@ func TestTheStandingCountsAreBoundedAndSaySo(t *testing.T) {
 // commit its change no longer heads; one checked for a branch its change does not merge into; a
 // tip's at a commit its branch moved from; a bisection's; a candidate's of an entry its change
 // queued again after; one of a candidate the entry is no longer tested by; and a candidate's for
-// main of an entry whose change was then retargeted to release. Each of these
-// does: the head's, of the live change at that head whichever change queued it (web!4 closed and
-// web!5 opened at its head); the tip's; and the candidate's of an entry ejected while its change
-// is open.
+// main of an entry whose change was then retargeted to release. Each of these does: the head's,
+// of the live change at that head whichever change queued it (web!4 closed and web!5 opened at its
+// head); the tip's; and the candidate's of an entry ejected while its change is open.
 //
 // Mutations: drop the head's branch test and retargeted stands; drop the entry's newest test and
 // old-entry stands; drop the candidate's test and old-train stands; drop the candidate's branch
@@ -431,7 +430,7 @@ func TestACandidatesRowNamesItsEntrysChange(t *testing.T) {
 
 // STANDING IS REFUSED WHERE IT MEANS NOTHING: beside a change, a commit, a branch, latest, an end,
 // an attempt, on a check read, and an order this build does not know, each naming its field; a
-// window's start beside a repository is refused without Standing, as today, and taken with it.
+// window's start beside a repository is refused without Standing and taken with it.
 //
 // Mutation: relax the plain listing's start rule for every listing and the repository's start is
 // taken without Standing.

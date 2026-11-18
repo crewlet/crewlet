@@ -9,10 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// seedEndedLogged writes count failed check rows of repoID straight into a
-// node's estate, each ended at the instant at and each with the log a failed
-// run keeps — in two statements, so a benchmark seeds a step's worth of rows
-// in two writes rather than one a row.
+// seedEndedLogged writes count failed check rows of repoID, each ended at at
+// with a failed run's log, straight into a node's estate in two statements
+// rather than one a row.
 func (n *node) seedEndedLogged(repoID string, at time.Time, count int) {
 	n.t.Helper()
 	ended, overdue := store.EncodeTime(at), store.EncodeTime(at.Add(600*time.Second))
@@ -34,19 +33,16 @@ func (n *node) seedEndedLogged(repoID string, at time.Time, count int) {
 
 // BenchmarkChecksSweepStep is ONE STEP OF THE RETENTION PASS'S CHECKS SWEEP on
 // the round-trip harness's real log and estate: Store.ChecksSweep deciding,
-// appending its record and waiting for its own apply — the duration the pass's
-// pacer measures and waits twice after, and what a pass's budget is spent in —
-// over a repository of its own each iteration, its failed checks seeded
-// outside the timer, each with its log, ended past the history by the grace:
+// appending and waiting for its own apply (what the pass's pacer measures and
+// waits twice after, and its budget is spent in), each iteration over a fresh
+// repository whose logged failed checks, seeded outside the timer, ended past
+// the history by the grace:
 //
-//   - rows=8: a sweep of a few rows, what a pass takes of a repository whose
-//     few checks stopped ending;
-//   - rows=500: CheckHorizonRows, the most rows one step removes, and their
-//     500 logs.
+//   - rows=8: a repository whose few checks stopped ending;
+//   - rows=500: CheckHorizonRows, the most one step removes, with 500 logs.
 //
 // limits.go's RetentionPassBudget reasons from it beside
-// BenchmarkRetireSweepStep, and doc.go's measured section records the
-// figures.
+// BenchmarkRetireSweepStep; doc.go's measured section records the figures.
 func BenchmarkChecksSweepStep(b *testing.B) {
 	gitlet.Quiet(b)
 	old := harnessAt.Add(-gitlet.CheckHistory - gitlet.CheckSweepGrace - time.Hour)

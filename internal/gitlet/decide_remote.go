@@ -18,90 +18,17 @@ import (
 )
 
 // AN IMPORT AND A PULL MIRROR, LANDED: what a repository's home fetched from
-// another host reaches the repository as records of their own on its subject —
-// an import's CHUNKS ([ImportChunk]) and its END ([ImportDone]), and a pull
-// mirror's SYNCS ([MirrorSync]) — each proposed to the repository's committer
-// ([Committer.ProposeImport], [Committer.ProposeMirrorSync]) and decided by it
-// in ONE snapshot, alone, through the repository's one queue, as a
-// compaction's and an expunge's are (S27: one writer of a repository's
-// subject). Never gathered with pushes: a record carries one op.
-//
-// # One apply of a push
-//
-// A chunk and a sync move refs onto objects as a push does, so each lands as
-// ONE push — its push row `via import` or `via mirror`, by the engine's own
-// account ([PrincipalSystem]), its push id the record's own id — through the
-// one apply every push takes ([Applier.landPushes]): the refs and their
-// counters, the tombstones, a code_ref_drops row for every command that
-// leaves an object (M6-D2: what an expunge's grace keeps), whatever live
-// change its commands move, and the horizons. Its packs are the record's, kind
-// import or mirror, several to a record where a push carries one, so its push
-// row names no single pack. A sync that moves nothing lands no push at all.
-//
-// # What the decide holds each to
-//
-// Against the rows of one snapshot, in this order; the first rule that fails
-// is the answer, and none of them writes anything. Every record's first rule
-// is the repository: absent, deleted or being purged is repo_deleted, in the
-// sentence of the state it is in ([RepoGone]).
-//
-// A CHUNK — ONLY IN ITS TURN:
-//
-//  1. the repository importing — else stale: its import ended, or never
-//     began;
-//  2. its Seq the repository's import_seq plus one — else stale: a chunk
-//     landed twice, or out of order, would set refs onto objects whose packs
-//     a chunk before it has not landed;
-//  3. every command's Old the ref as the rows hold it — else stale: no write
-//     but the import's moves an importing repository, so a ref elsewhere is
-//     a chunk built over rows that are not the repository's;
-//
-// and then, as a push is judged (the push decide's own working state): a
-// create beside a live ref git cannot hold with it is ref_conflict; the live
-// refs past MaxRefsPerRepo repo_refs; every pack a bundle [PackRef.Check]
-// admits, its key minted within objstore.RecordWithin (pack_too_large,
-// upload_expired); and the repository's live bytes with the packs past
-// code.limits.repo_max_bytes repo_size. A blob past code.limits.max_blob_bytes
-// is judged where the blobs are read — by the home that fetched them, as a
-// push's receiver judges one (host's land) — which ends the import with
-// [ImportDone.Error] rather than proposing the chunk. Each refuses the whole
-// chunk, unrecorded: an import's chunk lands whole or not at all, and a
-// limit's refusal is the home's to end the import on.
-//
-// AN END: the repository importing at import_seq Seq — else stale — and its
-// DefaultBranch, where set, a branch the rows hold while the default branch
-// the repository declares is one they do not — else stale: the declared one
-// is kept wherever the import brought it.
-//
-// A SYNC:
-//
-//  1. the repository active — importing is repo_importing, since its first
-//     fill is its import's; archived is repo_archived — and a pull mirror —
-//     else stale: a settings change took its source away;
-//  2. its DropEpoch the repository's — else expunging, recorded nowhere
-//     (M6-D4): its packs were cut against objects an expunge may since have
-//     left dropping, and its home's next round builds again over a copy at
-//     the new epoch;
-//  3. every command's Old the ref as the rows hold it — else stale: the next
-//     round reads the source and the repository again;
-//
-// and then the chunk's push rules, whole.
-//
-// A SYNC THAT MOVES NOTHING — no command and no pack ([MirrorSync.Current]):
-// its home fetched the source and found the mirror level with it — is held to
-// rule 1 alone, since it names no object an expunge could leave dropping and
-// no ref that could have moved, and records only its instant
-// (mirror_synced_at). Without it a quiet source's mirror would keep the
-// instant of its last move for good, and sit at the head of `mirrors_due`,
-// least recently synced first, for ever: the listing's stop at the first
-// mirror synced within MirrorInterval would never bound it, and every Gitlet
-// node would page every quiet mirror on every backstop, fetching each from
-// its source again wherever its memory of the last attempt was lost.
-//
-// THE RECORD'S ROWS are counted as a push entry's ([entryRows]) with the
-// record's packs and the changes its commands move ([changeBook]); a record
-// past MaxRecordRows is the builder's bug — MaxImportRefs and MaxImportPacks
-// keep one from forming — and refused before any record ([ErrRecordCap]).
+// another host lands as records on the repository's subject — an import's
+// chunks ([ImportChunk]) and end ([ImportDone]), a pull mirror's syncs
+// ([MirrorSync]) — each proposed to its committer ([Committer.ProposeImport],
+// [Committer.ProposeMirrorSync]) and decided alone in one snapshot through the
+// repository's one queue, as a compaction's and an expunge's are (S27), never
+// gathered with pushes: a record carries one op. A chunk or a sync lands as ONE
+// push through the apply every push takes ([Applier.landPushes]): its push row
+// `via import` or `via mirror`, by [PrincipalSystem], its push id the record's;
+// its packs (kind import or mirror, several to a record) named by no push row; a
+// code_ref_drops row per command leaving an object (M6-D2). A sync that moves
+// nothing lands no push. The rules are [decideRemote]'s.
 
 // remoteWrite is one import chunk, import end or mirror sync as the committer
 // queues it: exactly one set, which [ImportProposal.Validate] and
@@ -116,21 +43,18 @@ type remoteWrite struct {
 	doneID string
 }
 
-// Validate refuses a proposal no committer could decide ([ErrInvalidProposal],
-// naming the field), before it is queued: anything but exactly one of a chunk
-// and an end; a repository id that is no repository's in its canonical
+// Validate refuses, before it is queued and naming the field
+// ([ErrInvalidProposal]), a proposal no committer could decide: anything but
+// exactly one of a chunk and an end; a repository id not in its canonical
 // spelling; a chunk whose id is no bare UUIDv7, whose node config does not
-// admit or whose Seq is below one, whose packs number past MaxImportPacks or
-// are not each the bundle [PackRef.Check] admits under its derived id
-// ([DeriveOutputPackID]), which carries neither a pack nor a command — a
-// chunk of packs alone is one, landing what a later chunk's refs need — and
-// whose commands number past MaxImportRefs, or are not what a receiver may
-// send ([validCommands]) with
-// no result yet, or name a ref no push may ([StatelessRefusal]) or a seat's
-// namespace, which only a seat's own push may set; an end whose node config
-// does not admit, whose Seq is below zero, whose DefaultBranch is not a
-// branch's name, or whose Error is past one sentence; and a proposal past
-// what one record may carry.
+// admit, whose Seq is below one, that carries neither a pack nor a command (packs
+// alone land what a later chunk's refs need), whose packs pass MaxImportPacks or
+// are not each what [PackRef.Check] admits under [DeriveOutputPackID]'s id, or
+// whose commands pass MaxImportRefs, are not what a receiver may send
+// ([validCommands]) undecided, or name a ref no push may ([StatelessRefusal]) or
+// a seat's namespace (only a seat's own push may); an end whose node config does
+// not admit, whose Seq is below zero, whose DefaultBranch is no branch's name or
+// whose Error is past one sentence; and a proposal past what one record may carry.
 func (p ImportProposal) Validate() error {
 	_, err := p.write().measure()
 	return err
@@ -276,13 +200,12 @@ func (w remoteWrite) encoded() (int, error) {
 	return len(encoded), nil
 }
 
-// Fitted is p's chunk as ONE record carries it — its packs, and its commands
-// cut to the most of them, from the first, that fit beside the packs —
-// held to every rule of [ImportProposal.Validate], each pack measured and
-// checked AS STORED though it may only be laid out ([LayBundle]), so a home
-// cuts and checks a step before it uploads a byte of it, and the committer's
-// own Validate, after the upload, measures the same record. An end, or a
-// proposal carrying no chunk, is p as Validate judges it.
+// Fitted is p's chunk as ONE record carries it — its packs, and the most of its
+// commands, from the first, that fit beside them — held to every rule of
+// [ImportProposal.Validate] with each pack measured AS STORED though it may only
+// be laid out ([LayBundle]): a home cuts and checks a step before uploading a
+// byte, and the committer's Validate after the upload measures the same record.
+// An end, or a proposal carrying no chunk, is p as Validate judges it.
 func (p ImportProposal) Fitted() (ImportProposal, error) {
 	if p.Chunk == nil || p.Done != nil {
 		return p, p.Validate()
@@ -308,21 +231,15 @@ func (p MirrorSyncProposal) Fitted() (MirrorSyncProposal, error) {
 }
 
 // fitted is how many of w's commands, from the first, its record carries: at
-// most MaxImportRefs, and the most whose encoding ([remoteWrite.encoded])
-// stays within EntryRoom beside every pack w carries — with w cut to them
-// valid by every rule of [remoteWrite.measure], its packs as stored.
-//
-// THE COUNT ALONE IS NO BOUND ON THE BYTES: JSON spells `&`, `<` and `>` in
-// six bytes each, so some six hundred refs at MaxRefNameBytes pass EntryRoom
-// where MaxImportRefs allows a thousand, and a chunk cut by its count alone
-// would be refused ErrInvalidProposal at every attempt — after its packs were
-// uploaded — for as long as the source held such refs. The encoding grows
-// with every command, so the first count past EntryRoom is found by halving:
-// about ten encodings of a record of at most EntryRoom bytes.
-//
-// A record whose first command will not fit beside no pack is an error, never
-// a record of none: a home cutting by this would otherwise land nothing for
-// ever.
+// most MaxImportRefs, and the most whose encoding ([remoteWrite.encoded]) stays
+// within EntryRoom beside every pack, w cut to them valid by every rule of
+// [remoteWrite.measure], its packs as stored. THE COUNT ALONE DOES NOT BOUND THE
+// BYTES: JSON spells `&`, `<` and `>` in six bytes each, so some six hundred refs
+// at MaxRefNameBytes pass EntryRoom, and a chunk cut by count would be refused
+// at every attempt, after its upload. The encoding grows with every command, so
+// the cut is found by halving (about ten encodings). A packless record whose
+// first command alone does not fit is an error, never a record of none, which
+// would land nothing for ever.
 func (w remoteWrite) fitted() (int, error) {
 	w = w.asStored()
 	packs, cmds := w.moves()
@@ -505,19 +422,14 @@ func validMoves(what, repoID, idField, id, node string, packs []PackRef, cmds []
 	return nil
 }
 
-// ProposeImport decides one import record — a chunk or the import's end — as
-// a batch of its own in the repository's queue and answers what became of it,
-// on the queue's terms ([Committer.ProposeExpunge]): a full queue or a node
-// holding its bytes busy at once, a proposal whose caller's deadline leaves
-// too little for a batch and its answer busy undecided, a stopping committer
-// [ErrNotServing], and a proposal that is not one [ErrInvalidProposal]. ctx
-// bounds only this caller's wait.
-//
-// A CHUNK'S OPERATION ID IS ITS OWN — its ChunkID, minted for the attempt — and
-// an end's one this committer mints: each is idempotent by its Seq's
-// precondition, so its home asks a runner-up the same proposal after this
-// node went silent, and a record that landed meanwhile answers it stale. A
-// chunk's applied is answered from its push row, never from the decision.
+// ProposeImport decides one import record — a chunk or the import's end — as a
+// batch of its own in the repository's queue, on the queue's terms
+// ([Committer.ProposeExpunge]); ctx bounds only this caller's wait. A chunk's
+// operation id is its ChunkID, minted for the attempt, and an end's one this
+// committer mints: each is idempotent by its Seq's precondition, so its home may
+// ask a runner-up the same proposal after this node went silent, and a record
+// landed meanwhile answers stale. A chunk's applied is answered from its push
+// row, never from the decision.
 func (c *Committer) ProposeImport(ctx context.Context, p ImportProposal) (SyncResult, error) {
 	w := p.write()
 	if w.done != nil {
@@ -556,9 +468,16 @@ type remoteDecision struct {
 	version int64
 }
 
-// decideRemote is one round's decision of w over the rows tx holds — see this
-// file's head for the rules, in their order. Pure over (the rows, w,
-// retention, limits, now).
+// decideRemote is one round's decision of w over the rows tx holds, pure over
+// (the rows, w, retention, limits, now): the first rule that fails is the
+// answer, and none writes. Every record first: an absent, deleted or purging
+// repository is repo_deleted ([RepoGone]). A CHUNK lands only in its turn — the
+// repository importing and its Seq import_seq plus one, else stale: one landed
+// twice or out of order would set refs onto objects whose packs have not landed
+// — then [decideMoves]. An END is [decideImportDone]'s. A SYNC needs the
+// repository active (importing is repo_importing, archived repo_archived) and a
+// pull mirror, else stale; then its DropEpoch the repository's, and
+// [decideMoves].
 func decideRemote(ctx context.Context, tx *sql.Tx, w remoteWrite, retention time.Duration, limits Limits,
 	now time.Time) (remoteDecision, error) {
 
@@ -612,14 +531,17 @@ func decideRemote(ctx context.Context, tx *sql.Tx, w remoteWrite, retention time
 	case !repo.mirrored:
 		return stale("%s follows no source: a settings change took its pull mirror away", repo.name)
 	case m.Current():
-		// LEVEL WITH ITS SOURCE: no object for an epoch to judge and no
-		// ref to be stale — see this file's head.
+		// LEVEL WITH ITS SOURCE: no object for an epoch to judge and no ref
+		// to be stale, so it records only mirror_synced_at. Without it a quiet
+		// source's mirror would head `mirrors_due` for ever, past
+		// MirrorInterval's stop, and every Gitlet node would page and fetch it
+		// again on every backstop.
 		d.payload = m
 		return d, nil
 	case m.DropEpoch != repo.dropEpoch:
-		// M6-D4: CHECKED AGAINST AN EPOCH ITS PACKS NO LONGER MEAN, and
-		// recorded nowhere — its home builds again over a copy at the new
-		// epoch.
+		// M6-D4: ITS PACKS WERE CUT against objects an expunge may since have
+		// left dropping, so it is recorded nowhere and its home builds again
+		// over a copy at the new epoch.
 		d.refusal, d.detail = RefusalExpunging, fmt.Sprintf("an expunge of %s's unreachable objects moved "+
 			"its drop epoch to %d after this sync's packs were cut at %d: nothing was decided; %s", repo.name,
 			repo.dropEpoch, m.DropEpoch, w.again())
@@ -636,7 +558,9 @@ func decideRemote(ctx context.Context, tx *sql.Tx, w remoteWrite, retention time
 }
 
 // decideImportDone is an end's rules over the repository's row as repo holds
-// it.
+// it: the repository importing at import_seq Seq, and its DefaultBranch, where
+// set, a branch the rows hold while the default branch the repository declares
+// is not — else stale: the declared one is kept wherever the import brought it.
 func decideImportDone(ctx context.Context, tx *sql.Tx, e ImportDone, repo pushRepo,
 	d remoteDecision) (remoteDecision, error) {
 
@@ -672,12 +596,18 @@ func decideImportDone(ctx context.Context, tx *sql.Tx, e ImportDone, repo pushRe
 	return d, nil
 }
 
-// decideMoves is a chunk's and a sync's rule 3 and the push rules after it
-// over the repository's row as repo holds it and the rows tx holds: its
-// commands decided ok, or the refusal of the whole record and its sentence.
-// The refs are judged by the push decide's own working state ([working]),
-// read for these commands alone, so a create is held to the refs around it
-// exactly as a push's is.
+// decideMoves is a chunk's and a sync's rules after the repository's: its
+// commands decided ok, or the whole record refused, unrecorded. Every command's
+// Old must be the ref as the rows hold it, else stale (a chunk: no write but the
+// import's moves an importing repository; a sync: its next round reads both
+// again). Then the push rules, by the push decide's own working state
+// ([working]): ref_conflict, repo_refs, every pack [PackRef.Check] admits with
+// its key minted within objstore.RecordWithin (pack_too_large, upload_expired),
+// and repo_size (code.limits.repo_max_bytes). A blob past
+// code.limits.max_blob_bytes is the fetching home's to judge, ending the import
+// with [ImportDone.Error]. A record past MaxRecordRows is the builder's bug,
+// refused before any record ([ErrRecordCap]): MaxImportRefs and MaxImportPacks
+// keep one from forming.
 func decideMoves(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, packs []PackRef,
 	cmds []Command, limits Limits, now time.Time) ([]Command, Refusal, string, error) {
 
