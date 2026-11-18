@@ -766,3 +766,37 @@ func TestASavesOutcomeLandsWithinItsLife(t *testing.T) {
 		}
 	})
 }
+
+// A NEWER BUILD'S LEDGER IS LOGGED ONCE A LAUNCH: a seat whose save ledger a
+// newer build owns takes no save, and its job's first offer says why at Warn;
+// every offer after it says so at Debug alone.
+//
+// Mutation: log the newer build's ledger at Debug alone, or at Warn on every
+// offer.
+func TestANewerBuildsLedgerIsLoggedOnceALaunch(t *testing.T) {
+	logs := captureLogs(t)
+	inBubble(t, func(t *testing.T) {
+		ledger := memory.NewFleet()
+		rig, _, _ := savingRig(t, ledger, newTakerStore())
+		rig.launchKept(t, "t1")
+		writeLedger(t, ledger, "swe", []byte(`{"v":2,"entries":[]}`))
+		for offer := range 2 {
+			rig.now = rig.now.Add(rigSaveInterval)
+			if !offerOf(t, rig, "t1") {
+				t.Fatalf("the premise: offer %d of a due job started no save", offer+1)
+			}
+			// THE TASK LOGS once its offer's wait has ended.
+			synctest.Wait()
+		}
+		warned := 0
+		for line := range strings.Lines(logs.String()) {
+			if strings.Contains(line, "executor_session_not_kept") && strings.Contains(line, "newer build") {
+				warned++
+			}
+		}
+		if warned != 1 {
+			t.Errorf("two offers beside a newer build's ledger logged it %d times at Warn, want once for the "+
+				"launch", warned)
+		}
+	})
+}

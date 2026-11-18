@@ -3,6 +3,7 @@ package sandbox
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -204,8 +205,9 @@ type saveOutcome struct {
 	// pacedUntil is where a paced save is due again.
 	pacedUntil time.Time
 	// unplaced names the step a failure came at before the save's place was
-	// asked ("handed", "pack", "scrub", "take"), which no stamp's line logs;
-	// "" for every other outcome.
+	// asked ("handed", "pack", "scrub", "take"), or "ledger" for a seat whose
+	// save ledger a newer build owns, which takes no save until it is gone:
+	// what no stamp's line logs. "" for every other outcome.
 	unplaced string
 }
 
@@ -317,9 +319,12 @@ func (c *Coordinator) saveInHand(duty context.Context, job saveJob, out saveOutc
 	if why != "" {
 		return end(saveNotYet, why)
 	}
-	room, why := c.seatSaveRoom(c.life, row.AgentHandle, policy.SeatBudget)
-	if why != "" {
-		return end(saveNotYet, why)
+	room, err := c.seatSaveRoom(c.life, row.AgentHandle, policy.SeatBudget)
+	if err != nil {
+		if errors.Is(err, errNewerLedger) {
+			out.unplaced = "ledger"
+		}
+		return end(saveNotYet, err.Error())
 	}
 	if job.drainEnd.IsZero() {
 		if until, paced := paceSave(row, job, room, c.now()); paced {
@@ -796,14 +801,14 @@ func (c *Coordinator) runSave(job saveJob, memo *saveMemo, running *saveRun) {
 		memo.last, memo.failures, memo.mark = start, 0, out.streamed
 	}
 	failures, due := memo.failures, memo.due(job.interval)
-	unlogged := out.class == saveFailed && out.unplaced != "" && !memo.logged[out.unplaced]
+	unlogged := out.unplaced != "" && !memo.logged[out.unplaced]
 	if unlogged {
 		memo.logged[out.unplaced] = true
 	}
 	c.saves.mu.Unlock()
 	<-c.saves.slots
 	close(running.ended)
-	if out.class != saveFailed || out.unplaced == "" {
+	if out.unplaced == "" {
 		return
 	}
 	level := slog.LevelDebug

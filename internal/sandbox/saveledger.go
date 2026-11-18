@@ -150,19 +150,19 @@ func (l saveLedger) counts(id uuid.UUID) bool {
 
 // seatSaveRoom is rule 8's read: what seat's live saves leave of budget, or
 // why no save of the seat is taken now (its ledger unreadable, unanswered or a
-// newer build's).
-func (c *Coordinator) seatSaveRoom(ctx context.Context, seat string, budget int64) (int64, string) {
+// newer build's, [errNewerLedger]).
+func (c *Coordinator) seatSaveRoom(ctx context.Context, seat string, budget int64) (int64, error) {
 	read, cancel := context.WithTimeout(ctx, saveLedgerWait)
 	defer cancel()
 	raw, _, err := c.saves.ledger.SaveLedger(read, seat)
 	if err != nil {
-		return 0, fmt.Sprintf("the seat's save ledger could not be read: %v", err)
+		return 0, fmt.Errorf("the seat's save ledger could not be read: %w", err)
 	}
 	ledger, err := readSaveLedger(raw)
 	if err != nil {
-		return 0, err.Error()
+		return 0, err
 	}
-	return budget - ledgerHeld(ledger.live(c.now())), ""
+	return budget - ledgerHeld(ledger.live(c.now())), nil
 }
 
 // chargeSave appends entry to seat's ledger before the save's stamp, the
