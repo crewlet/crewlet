@@ -52,18 +52,17 @@ export function stubCodeEngine(answers: Record<string, (url: URL) => Response>):
 }
 
 /**
- * Mount `screen` at `hash`, inside the frame every Gitlet screen reads through,
- * and answer the store its socket reports to — for a case that takes the
- * socket away and back.
+ * Mount `screen` at `hash` as `viewer` (an admin by default), inside the frame every Gitlet screen
+ * reads through; returns the store its socket reports to, for a case that takes it away and back.
  */
-export function mountCode(hash: string, screen: ReactNode): Store {
+export function mountCode(hash: string, screen: ReactNode, viewer: unknown = ADMIN_VIEWER): Store {
   location.hash = hash;
   const store = new Store();
   store.applyOrg(CODE_ORG);
   store.setConnected(true);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-    what === "viewer" ? Promise.resolve(ADMIN_VIEWER) : new Promise(() => {});
+    what === "viewer" ? Promise.resolve(viewer) : new Promise(() => {});
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>

@@ -3334,6 +3334,180 @@
   }
 }
 
+/* ---- Gitlet › Queue (`routes/gitlet/Queue.tsx`, `queue/`) ---------------- */
+
+.code-queue__repo {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+  text-decoration: none;
+}
+
+.code-queue__repo:hover {
+  text-decoration: underline;
+}
+
+.code-queue__required {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.code-queue__required strong {
+  color: var(--color-text-primary);
+}
+
+/* THE SPINE'S MARKS: a node and the place badges, each a circle in the card's ground. */
+.code-queue__node,
+.code-queue__place {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--code-list-spine);
+  block-size: var(--code-list-spine);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
+}
+
+.code-queue__place {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.code-queue__base {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+.code-queue__oid {
+  padding: 0 var(--spacing-1);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+.code-queue__subject {
+  color: var(--color-text-secondary);
+}
+
+.code-queue__ref {
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-secondary);
+}
+
+.code-queue__by {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--spacing-1);
+}
+
+/* AN ENTRY'S FACTS IN COLUMNS: the state, the checks cell, Take out, aligned down the box. */
+.code-queue__facts {
+  display: grid;
+  grid-template-columns: 6rem 17rem auto;
+  align-items: center;
+  gap: var(--spacing-4);
+}
+
+.code-queue__checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: normal;
+}
+
+.code-queue__line {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr);
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-queue__mark {
+  display: flex;
+  min-width: 0;
+}
+
+/* A bar takes no width of its own, so it fills the mark's column. */
+.code-queue__mark > * {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.code-queue__words strong {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+
+.code-queue__note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.code-queue__open {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.code-queue__refused {
+  margin: 0;
+  font-weight: var(--font-weight-medium);
+}
+
+/* THE PHONE: the facts drop under the entry's words, the state and Take out on one line. */
+@container code-list (width < 640px) {
+  .code-list--boxes .code-list__row {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "lead body" "lead facts" "lead below";
+  }
+
+  .code-list--boxes .code-list__facts {
+    margin-block-start: var(--spacing-2);
+    white-space: normal;
+  }
+
+  .code-queue__facts {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas: "state . out" "checks checks checks";
+    inline-size: 100%;
+    gap: var(--spacing-2);
+  }
+
+  .code-queue__state {
+    grid-area: state;
+  }
+
+  .code-queue__cell {
+    grid-area: checks;
+  }
+
+  .code-queue__out {
+    grid-area: out;
+  }
+}
+
 /* ---- A change's row (`routes/gitlet/ChangeRow.tsx`) ---------------------- */
 
 .code-change-tags {

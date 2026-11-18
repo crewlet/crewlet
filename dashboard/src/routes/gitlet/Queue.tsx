@@ -1,107 +1,71 @@
 /**
- * Gitlet › Queue: the merge queues of the company's gated branches — what each
- * holds, in the order it lands them, what is being tested on what, and what
- * a queue put out lately and why.
- *
- * # A band per repository and branch
- *
- * A queue is one branch's (`code_queue` rows carry their repository and
- * target), so the screen draws a BAND for each, its entries in queue order:
- * the place, the change, who enqueued it, where it stands, the train base it
- * is tested on, a meter of the required checks of what it is tested in, and
- * how long it has been in the queue against the slowest of those checks'
- * declared timeouts — the queue waits for its slowest required check.
- *
- * # One read of checks per candidate, shared by its entries
- *
- * A candidate tests a batch of entries at once (up to `batch`, 4 unset), so
- * its tip's checks are the same answer for every entry it holds: the band
- * asks `code_checks` ONCE per candidate's tip and hands the rows to each of
- * its entries' meter and timer. Asked per entry and per cell, a queue at its
- * deepest — 8 candidates of 8 changes — would be 128 reads every half minute
- * for every reader watching it, sixteen times the 8 that answer it. Each is
- * asked of the tip FOR THE BAND'S BRANCH at each check's LATEST attempt
- * (`lib/useLatestChecks.ts`): what each check stands at is the engine's to
- * answer, one row a check, never a screen's to rebuild from a page of the
- * attempts' history, which cut a rerun from its earlier attempt.
- *
- * # Every repository's live entries, one repository's detail
- *
- * Unnarrowed, the engine answers every repository's live entries the reader
- * may read, and no trains: what a train tests and what a queue ejected are a
- * NAMED repository's (`repo=`), as the engine answers them, on its first page.
- * So the meter, the train base and the ejections appear once a repository is
- * chosen, and the screen says so rather than drawing them empty.
- *
- * # A page at a time, like every code listing
- *
- * The engine answers fifty entries a page, and one branch's queue may hold
- * up to 1 024 waiting (`gitlet.MaxQueueEntries`), so Load more follows `next`
- * through the pager every code listing shares (`lib/usePaged.ts`), each page
- * joined to the one before it. Each page answers the trains of the
- * targets it reaches, so the bands draw every page's.
- *
- * # Ejected, in the danger tone, with what the engine found
- *
- * An entry the queue put out in the last day is drawn under its band in the
- * danger tone with the reason in words, and the required checks that failed
- * on what it was tested in or the paths its merge conflicted on — never a
- * guess at who is to blame.
+ * Gitlet › Queue: a box per repository's target branch, its train base and its entries on a spine,
+ * read with `trains=true` in every scope; a tip's checks and a repository's gates are asked once.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Button,
-  Callout,
-  Card,
-  EmptyState,
-  EmptyValue,
-  NoticeList,
-  SegmentedMeter,
-  Skeleton,
-  Tag,
-  VisuallyHidden,
-  TableEntityCell,
-} from "@crewlethq/ui";
-import { ListOrderedGlyph } from "@crewlethq/icons/glyphs";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { href, useParam } from "~/app/router.tsx";
-import { PageFailed, QueryState } from "~/components/common.tsx";
-import { DequeueButton } from "./change/ChangeWrites.tsx";
-import { useNow } from "~/lib/clock.ts";
-import { changePath, changeRef, isRepoName, refName, shortOID } from "~/lib/code.ts";
-import {
-  ejectReasonWord,
-  longestTimeout,
-  queueBands,
-  queueStateWord,
-  requiredMeter,
-  type QueueBand,
-  type QueuePlace,
-} from "~/lib/checks.ts";
-import { fmtElapsed, plural } from "~/lib/format.ts";
-import { useSeatBadgeOf, type SeatBadge } from "~/lib/seats.ts";
+import { Callout, EmptyState, Skeleton } from "@crewlethq/ui";
+import { ListOrderedGlyph, XGlyph } from "@crewlethq/icons/glyphs";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import { useParam } from "~/app/router.tsx";
+import { QueryState } from "~/components/common.tsx";
+import { changeRef, isRepoName, refName } from "~/lib/code.ts";
+import { queueBands, type QueueBand, type QueuePlace } from "~/lib/checks.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useLatestChecks } from "~/lib/useLatestChecks.ts";
 import { usePaged } from "~/lib/usePaged.ts";
-import type { CodeCheckRow, CodeEjectedRow, CodeParty, CodeQueueAnswer } from "~/protocol/index.ts";
+import type { CodeQueueAnswer, CodeRuleGate } from "~/protocol/index.ts";
+import { useBranchDetail } from "./branchDetail.ts";
+import { DequeueButton } from "./change/ChangeWrites.tsx";
 import { CHECKS_POLL_MS } from "./checks/CheckList.tsx";
-import { REPO_PARAM } from "./paths.ts";
+import { CodeList, type CodeListGroup } from "./CodeList.tsx";
+import { REPO_PARAM, changeObject } from "./paths.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
-import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
-import { plainSeat } from "~/app/frame/cells.tsx";
+import {
+  BaseRow,
+  BoxHead,
+  BoxNote,
+  EntryChecks,
+  EntryMeta,
+  EntryState,
+  PlaceBadge,
+  RequiredChecks,
+  type GateRead,
+  type TipRead,
+} from "./queue/Box.tsx";
+import { gateAsksApproval, gateChecks } from "./queue/words.ts";
 
-/**
- * How often the queues are read again: HALF A MINUTE, the checks listings'
- * pace — a queue moves when a check ends, and the code log pushes nothing to
- * the dashboard.
- */
+/** A queue moves when a check ends, at the checks listings' pace. */
 const QUEUE_POLL_MS = CHECKS_POLL_MS;
+
+/** Reads held by key as their readers report them; a key no longer listed is let go. */
+function useHeld<V>(
+  keys: readonly string[],
+): [ReadonlyMap<string, V>, (key: string, value: V) => void] {
+  const [held, setHeld] = useState<ReadonlyMap<string, V>>(() => new Map());
+  const hold = useCallback(
+    (key: string, value: V) => setHeld((now) => new Map(now).set(key, value)),
+    [],
+  );
+  useEffect(() => {
+    setHeld((now) => {
+      const kept = [...now].filter(([key]) => keys.includes(key));
+      return kept.length === now.size ? now : new Map(kept);
+    });
+  }, [keys]);
+  return [held, hold];
+}
+
+/** A read of rules, or its refusal's sentence. */
+type Rules<T> = { value: T } | { refused: string };
 
 export function Queue() {
   const [repo, setRepo] = useParam(REPO_PARAM, "", "filter");
   const named = repo !== "" && isRepoName(repo);
-  const params = useMemo(() => (named ? { repo } : {}), [named, repo]);
+  const params = useMemo(
+    () => (named ? { repo, trains: "true" } : { trains: "true" }),
+    [named, repo],
+  );
   const read = useCodeQuery("code_queue", params, {
     pollMs: QUEUE_POLL_MS,
     enabled: repo === "" || named,
@@ -114,9 +78,7 @@ export function Queue() {
     (r) => r.entry_id,
     (a: CodeQueueAnswer) => a.next ?? "",
   );
-  // EVERY PAGE'S TRAINS: a page answers the trains of the targets it
-  // reaches, and an entry is matched to the first that names it — the
-  // newest page's, which is read first and polled.
+  // A page answers the trains of the targets it reaches; an entry takes the first that names it.
   const bands = useMemo(
     () =>
       queueBands(
@@ -127,16 +89,67 @@ export function Queue() {
     [paged.items, paged.answers],
   );
 
+  const tipOf = useMemo(
+    () =>
+      new Map(
+        bands.flatMap((b) =>
+          b.places.flatMap((p) => (p.candidate ? [[p.candidate.tip_oid, b] as const] : [])),
+        ),
+      ),
+    [bands],
+  );
+  const tipKeys = useMemo(() => [...tipOf.keys()], [tipOf]);
+  const repos = useMemo(() => [...new Set(bands.map((b) => b.repo))], [bands]);
+  const boxKeys = useMemo(() => bands.map((b) => b.key), [bands]);
+  const [tips, holdTip] = useHeld<TipRead>(tipKeys);
+  const [gates, holdGates] = useHeld<Rules<readonly CodeRuleGate[]>>(repos);
+  const [rules, holdRules] = useHeld<Rules<readonly string[]>>(boxKeys);
+
+  const gateOf = useCallback(
+    (band: QueueBand): GateRead => {
+      const g = gates.get(band.repo);
+      const r = rules.get(band.key);
+      if (g && "refused" in g) return { checks: null, refusal: g.refused, approval: true };
+      if (r && "refused" in r) return { checks: null, refusal: r.refused, approval: true };
+      if (!g || !r) return { checks: undefined, approval: true };
+      return {
+        checks: gateChecks(r.value, g.value),
+        approval: gateAsksApproval(r.value, g.value),
+      };
+    },
+    [gates, rules],
+  );
+
+  const bandOf = useMemo(
+    () => new Map(bands.flatMap((b) => b.places.map((p) => [p.row.entry_id, b] as const))),
+    [bands],
+  );
+  const groups = useMemo<CodeListGroup<QueuePlace>[]>(
+    () =>
+      bands.map((band, index) => {
+        const gate = gateOf(band);
+        // The base of the train holding the box's first entry: its lowest ordinal.
+        const train = band.places
+          .flatMap((p) => (p.candidate ? [p.candidate] : []))
+          .sort((a, b) => a.ordinal - b.ordinal)[0];
+        return {
+          key: band.key,
+          heading: <BoxHead band={band} atLeast={paged.more && index === bands.length - 1} />,
+          aside: <RequiredChecks gate={gate} />,
+          first: train && (
+            <BaseRow repo={band.repo} branch={refName(band.target).name} base={train.base_oid} />
+          ),
+          last: <BoxNote band={band} approval={gate.approval} />,
+          rows: band.places,
+        };
+      }),
+    [bands, gateOf, paged.more],
+  );
+
   return (
     <>
       <PageToolbar>
         <RepoPicker size="sm" repo={repo} onChoose={setRepo} every="Every repository" />
-        {repo === "" && (
-          <span className="t-caption">
-            Every repository’s queues; choose one for its trains, its checks and what it put out
-            lately.
-          </span>
-        )}
       </PageToolbar>
       {repo !== "" && !named ? (
         <Callout variant="warning">
@@ -145,8 +158,28 @@ export function Queue() {
         </Callout>
       ) : (
         <>
+          {[...tipOf].map(([tip, band]) => (
+            <TipChecks key={tip} repo={band.repo} oid={tip} target={band.target} onRead={holdTip} />
+          ))}
+          {repos.map((name) => (
+            <RepoGates key={name} repo={name} onRead={holdGates} />
+          ))}
+          {bands.map((band) => (
+            <BranchRules
+              key={band.key}
+              box={band.key}
+              repo={band.repo}
+              branch={refName(band.target).name}
+              onRead={holdRules}
+            />
+          ))}
           {read.loading && !read.data && (
             <Skeleton variant="text" rows={6} label="Loading the queues" />
+          )}
+          {read.error === "bad_params" && (
+            <p className="code-queue__refused">
+              Every queue’s trains are unavailable on this fleet yet.
+            </p>
           )}
           <QueryState
             error={read.error}
@@ -160,291 +193,115 @@ export function Queue() {
                 title={
                   named ? `No queue of ${repo} holds a change` : "No merge queue holds a change"
                 }
-                description="A change joins its branch’s queue when it is enqueued to merge into a branch whose gate requires checks; it leaves when it lands, or the queue puts it out."
+                description="A change joins its branch’s queue from its merge box when the branch’s gate requires checks, and leaves when it lands or is taken out."
               />
             ) : (
-              <div className="col gap-4">
-                {bands.map((b) => (
-                  <Band key={b.key} band={b} detailed={named} />
-                ))}
-              </div>
+              <CodeList<QueuePlace>
+                look="boxes"
+                groups={groups}
+                rowKey={(p) => p.row.entry_id}
+                aria-label="Merge queues"
+                peek={(p) => changeObject(p.row.repo, p.row.number)}
+                lead={(p) => <PlaceBadge place={p.row.place} />}
+                title={(p) => p.row.title || changeRef(p.row.repo, p.row.number)}
+                titleAfter={(p) =>
+                  p.row.title ? (
+                    <span className="code-queue__ref mono">
+                      {changeRef(p.row.repo, p.row.number)}
+                    </span>
+                  ) : null
+                }
+                meta={(p) => <EntryMeta band={bandOf.get(p.row.entry_id)!} place={p} />}
+                facts={(p) => {
+                  const band = bandOf.get(p.row.entry_id)!;
+                  return (
+                    <div className="code-queue__facts">
+                      <span className="code-queue__state">
+                        <EntryState state={p.row.state} />
+                      </span>
+                      <div className="code-queue__cell">
+                        <EntryChecks
+                          band={band}
+                          place={p}
+                          gate={gateOf(band)}
+                          tip={p.candidate ? tips.get(p.candidate.tip_oid) : undefined}
+                        />
+                      </div>
+                      <span className="code-queue__out">
+                        <DequeueButton
+                          changeRef={changeRef(p.row.repo, p.row.number)}
+                          target={refName(band.target).name}
+                          queued
+                          label="Take out"
+                          leadingIcon={<XGlyph size="sm" />}
+                        />
+                      </span>
+                    </div>
+                  );
+                }}
+                paged={paged}
+                moreLabel="Load more queued changes"
+              />
             )}
           </QueryState>
-          {(paged.more || paged.pageError) && (
-            <div className="row gap-2 wrap">
-              {paged.more && (
-                <Button
-                  size="small"
-                  variant="secondary"
-                  onClick={paged.next}
-                  disabled={paged.paging}
-                  loading={paged.paging}
-                >
-                  Load more
-                </Button>
-              )}
-              {paged.pageError && <PageFailed error={paged.pageError} />}
-            </div>
-          )}
         </>
       )}
     </>
   );
 }
 
-/** One branch's queue: its live entries in queue order, then what it put out. */
-function Band({ band, detailed }: { band: QueueBand; detailed: boolean }) {
-  const seatBadge = useSeatBadgeOf();
-  const title = `${band.repo} · ${refName(band.target).name}`;
-  // THE CANDIDATES' TIPS, each read once ([TipChecks]) and its rows held
-  // here, by tip, for every entry the candidate tests.
-  const tips = useMemo(
-    () => [...new Set(band.places.flatMap((p) => (p.candidate ? [p.candidate.tip_oid] : [])))],
-    [band.places],
-  );
-  const [checksOf, setChecksOf] = useState<ReadonlyMap<string, readonly CodeCheckRow[]>>(
-    () => new Map(),
-  );
-  const hold = useCallback(
-    (tip: string, rows: readonly CodeCheckRow[]) =>
-      setChecksOf((held) => new Map(held).set(tip, rows)),
-    [],
-  );
-  // A TIP NO CANDIDATE HOLDS ANY MORE is let go: a train that ended took its
-  // candidates with it, and a screen left open all day would otherwise keep
-  // the checks of every candidate the queue ever built.
-  useEffect(() => {
-    setChecksOf((held) => {
-      const kept = [...held].filter(([tip]) => tips.includes(tip));
-      return kept.length === held.size ? held : new Map(kept);
-    });
-  }, [tips]);
-  // A candidate's required checks as its entries read them — its tip's,
-  // checked for this band's branch — undefined until its tip answers.
-  const checksFor = (p: QueuePlace) =>
-    p.candidate ? checksOf.get(p.candidate.tip_oid) : undefined;
-  return (
-    <section aria-label={`The queue of ${title}`}>
-      {tips.map((tip) => (
-        <TipChecks key={tip} repo={band.repo} oid={tip} target={band.target} onRows={hold} />
-      ))}
-      <Card>
-        <Card.Header>
-          <Card.Title>{title}</Card.Title>
-          <span className="t-caption">{plural(band.places.length, "change")} queued</span>
-        </Card.Header>
-        {band.places.length > 0 && (
-          <DataGrid<QueuePlace>
-            // A GRID PER BRANCH, each its own key: unnamed, every branch's grid
-            // read one column set, so a column hidden in one hid it in all.
-            name={`queue-${band.repo}:${refName(band.target).name}`}
-            rows={band.places}
-            rowKey={(p) => p.row.entry_id}
-            // QUEUE ORDER IS THE ENGINE'S, the order it lands them.
-            serverSorted
-            aria-label={`Queued into ${title}`}
-            columns={[
-              {
-                key: "place",
-                header: "#",
-                shrink: true,
-                align: "right",
-                cell: (p) => <span className="mono">{p.row.place}</span>,
-              },
-              {
-                key: "change",
-                header: "Change",
-                phoneLead: true,
-                cell: (p) => (
-                  <a className="t-link mono" href={href(changePath(p.row.repo, p.row.number))}>
-                    {changeRef(p.row.repo, p.row.number)}
-                  </a>
-                ),
-              },
-              {
-                key: "by",
-                header: "Enqueued by",
-                shrink: true,
-                cell: (p) => (
-                  <Party party={p.row.enqueued_by} seat={seatBadge(p.row.enqueued_by.handle)} />
-                ),
-              },
-              {
-                key: "state",
-                header: "State",
-                shrink: true,
-                cell: (p) =>
-                  p.row.state === "testing" ? (
-                    <Tag variant="info">{queueStateWord(p.row.state)}</Tag>
-                  ) : (
-                    <Tag appearance="outline">{queueStateWord(p.row.state)}</Tag>
-                  ),
-              },
-              {
-                key: "base",
-                header: "Train base",
-                shrink: true,
-                drop: 2,
-                cell: (p) =>
-                  p.candidate ? (
-                    <a
-                      className="t-link mono"
-                      href={href(["gitlet", "repos", p.row.repo, "commits", p.candidate.base_oid])}
-                      title={p.candidate.base_oid}
-                    >
-                      {shortOID(p.candidate.base_oid)}
-                    </a>
-                  ) : (
-                    <EmptyValue label={detailed ? "Not yet tested" : "Choose a repository"} />
-                  ),
-              },
-              {
-                key: "checks",
-                header: "Required checks",
-                floor: "10rem",
-                drop: 1,
-                cell: (p) =>
-                  p.candidate ? (
-                    <CandidateChecks rows={checksFor(p)} />
-                  ) : (
-                    <EmptyValue label={detailed ? "Not yet tested" : "Choose a repository"} />
-                  ),
-              },
-              {
-                key: "elapsed",
-                header: "In the queue",
-                shrink: true,
-                align: "right",
-                cell: (p) => <Elapsed place={p} rows={checksFor(p)} />,
-              },
-              {
-                key: "actions",
-                header: <VisuallyHidden>Actions</VisuallyHidden>,
-                action: true,
-                shrink: true,
-                // A ROW OF THE QUEUE IS IN IT: the press is held only by who
-                // the reader is, and the engine says who may.
-                cell: (p) => (
-                  <DequeueButton
-                    changeRef={changeRef(p.row.repo, p.row.number)}
-                    target={refName(band.target).name}
-                    queued
-                    label="Take out"
-                  />
-                ),
-              },
-            ]}
-          />
-        )}
-        {band.ejected.length > 0 && <Ejected repo={band.repo} rows={band.ejected} />}
-      </Card>
-    </section>
-  );
-}
-
-/** Who enqueued an entry: their face and name, a seat by its own and a person by theirs. */
-function Party({ party, seat }: { party: CodeParty; seat: SeatBadge }) {
-  return (
-    <TableEntityCell
-      {...plainSeat({
-        ...seat,
-        name: seat.name || party.handle,
-        kind: seat.kind ?? (party.kind === "person" ? "human" : "agent"),
-      })}
-      title={party.kind === "person" ? "A person" : "A seat"}
-    />
-  );
-}
-
-/**
- * The checks of one candidate's tip for the band's branch, each at its latest
- * attempt, asked once for every entry it tests: nothing drawn, its rows
- * handed to the band ([Band]) once every page of them has answered.
- */
+/** A candidate tip's checks for its branch at their latest attempts, read once for its entries. */
 function TipChecks({
   repo,
   oid,
   target,
-  onRows,
+  onRead,
 }: {
   repo: string;
   oid: string;
   target: string;
-  onRows: (tip: string, rows: readonly CodeCheckRow[]) => void;
+  onRead: (tip: string, read: TipRead) => void;
 }) {
-  const { rows } = useLatestChecks({ repo, oid, target }, QUEUE_POLL_MS);
+  const { rows, error, detail } = useLatestChecks({ repo, oid, target }, QUEUE_POLL_MS);
   useEffect(() => {
-    if (rows) onRows(oid, rows);
-  }, [rows, oid, onRows]);
+    if (rows || error) onRead(oid, { rows, error, detail });
+  }, [rows, error, detail, oid, onRead]);
   return null;
 }
 
-/**
- * The required checks of what an entry is tested in — its candidate's tip,
- * checked for its branch — as one meter: passed, failed, running, the rest
- * not yet a verdict. `rows` is undefined until the tip's checks answer.
- */
-function CandidateChecks({ rows }: { rows: readonly CodeCheckRow[] | undefined }) {
-  if (!rows) return <span className="muted">…</span>;
-  const meter = requiredMeter(rows);
-  if (meter.total === 0) return <span className="muted">none queued yet</span>;
-  return (
-    <SegmentedMeter
-      size="compact"
-      segments={meter.parts}
-      total={meter.total}
-      remainderLabel="not yet a verdict"
-    />
-  );
-}
-
-/**
- * How long an entry has been in the queue, against the slowest declared
- * timeout of the required checks it is tested in (`rows`, its candidate's,
- * where it is being tested): read HERE against the one clock, so a tick
- * re-renders this cell alone.
- */
-function Elapsed({
-  place,
-  rows,
+/** A repository's rules' merge gates, read once for its boxes. */
+function RepoGates({
+  repo,
+  onRead,
 }: {
-  place: QueuePlace;
-  rows: readonly CodeCheckRow[] | undefined;
+  repo: string;
+  onRead: (repo: string, read: Rules<readonly CodeRuleGate[]>) => void;
 }) {
-  const now = useNow();
-  const elapsed = fmtElapsed(now - Date.parse(place.row.enqueued_at));
-  const timeout = longestTimeout(rows ?? []);
-  if (timeout === 0) return <span>{elapsed}</span>;
-  return (
-    <span title="The slowest required check's declared timeout">{`${elapsed} of ${fmtElapsed(timeout * 1000)}`}</span>
-  );
+  const read = useCodeQuery("code_repo", { name: repo, gates: true });
+  useEffect(() => {
+    if (read.error) onRead(repo, { refused: read.detail ?? read.error });
+    else if (read.data) onRead(repo, { value: read.data.repo?.gates ?? [] });
+  }, [read.error, read.detail, read.data, repo, onRead]);
+  return null;
 }
 
-/** What the queue put out lately, each in the danger tone with what the engine found. */
-function Ejected({ repo, rows }: { repo: string; rows: readonly CodeEjectedRow[] }) {
-  return (
-    <Callout
-      variant="danger"
-      role="group"
-      aria-label="Put out lately"
-      title={`${plural(rows.length, "change")} put out of the queue in the last day`}
-    >
-      <NoticeList
-        notices={rows.map((e) => ({
-          key: e.entry_id,
-          subject: changeRef(repo, e.number),
-          title: ejectReasonWord(e.reason),
-          lines: [
-            ...((e.checks?.length ?? 0) > 0 ? [{ subject: "Failed", items: e.checks! }] : []),
-            ...((e.paths?.length ?? 0) > 0 ? [{ subject: "Conflicted on", items: e.paths! }] : []),
-          ],
-          action: (
-            <a className="t-link" href={href(changePath(repo, e.number))}>
-              Open the change
-            </a>
-          ),
-        }))}
-      />
-    </Callout>
-  );
+/** The rule patterns the engine matched to a box's branch. */
+function BranchRules({
+  box,
+  repo,
+  branch,
+  onRead,
+}: {
+  box: string;
+  repo: string;
+  branch: string;
+  onRead: (box: string, read: Rules<readonly string[]>) => void;
+}) {
+  const detail = useBranchDetail(repo, branch);
+  const patterns = detail.row?.protection?.patterns;
+  useEffect(() => {
+    if (detail.error) onRead(box, { refused: detail.detail ?? detail.error });
+    else if (!detail.loading) onRead(box, { value: patterns ?? [] });
+  }, [detail.error, detail.detail, detail.loading, patterns, box, onRead]);
+  return null;
 }
