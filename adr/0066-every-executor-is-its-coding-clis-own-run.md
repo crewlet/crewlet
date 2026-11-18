@@ -70,8 +70,13 @@ session is refused for its size alone, since a seat with no capped window
 protects no budget by refusing it. What bounds a continued run's every request
 is its harness's own compaction: Claude Code's at the window Claude Code holds
 the run's model to, at most the pin (`sandbox.ClaudeCodeWindow`), and OpenCode's
-near its model's own window, which the engine cannot set without knowing that
-window.
+at the point its box's catalog and documents set for the run's model, which a
+continuation's launch reads in that box
+([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)).
+The engine's own OpenCode document sets no `compaction` key: an operator's own
+setting in the box is what that read finds, and the engine's document does not
+outrank a box's managed settings, so a key there would move nothing it could
+rely on.
 
 **A model's limit reads the same on this road**
 ([ADR-0064](0064-a-model-at-its-limit-parks-the-seats-it-holds-and-a-seat-says-one-steady-thing.md)).

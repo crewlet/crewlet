@@ -109,6 +109,64 @@
 // packed on demand for its read alone too, by the run's own end's rule: the
 // capture is the job's own script's, which nothing else writes.
 //
+// # An OpenCode continuation's first request, judged in its box
+//
+// OpenCode compacts a session before a request where its count of it reaches
+// the point its box sets for the run's model: the model's limit, read off the
+// box's catalog and documents, less a buffer. Only the box the run is handed
+// can say that point, so the launch asks it there ([Runner.ReadOpenCodePoint],
+// opencodepoint.go), in ONE exec under the run's own environment, the
+// engine's own document set aside as the run's script sets it aside
+// (OPENCODE_CONFIG_CONTENT), in the run's working directory: the box's login
+// imported first, as the run's script imports it before its server reads a
+// provider's credential; `opencode --version` where the launch has no
+// release; `api model.list` and `api config.get` each answered into a file,
+// since a pipe cuts OpenCode's output at 64 KiB on 2.0.32 and 2.1.4; and a
+// listing of every plugin folder a release of the set reads. Each answer is
+// held to 4 MiB and removed from the box once read: config.get answers a
+// document's references resolved, so nothing it answered is logged or kept
+// but the values the point is decided by and the plugins' names.
+//
+// THE POINT BY THE BOX'S RELEASE ([openCodePointAt]), read in each release's
+// shipped code and measured at its boundaries: the model's limit (the smaller
+// of its input and context limits from 2.2.7, else its input limit, else its
+// context limit), less a buffer the highest document sets below it (a `"N%"`
+// share on 2.2.7 and 2.3.0; on 2.0.32 any buffer), else less the larger of
+// the release's share of it (a tenth on 2.0.32, fifteen hundredths after) and
+// 16,000 tokens once the limit is twice that. `compaction.auto: false` skips
+// every compaction but a manual one, the provider's refusal included, so the
+// session is sent whole whatever its count.
+//
+// NO POINT, EACH A MARK ([sandbox.PointMark]), wherever the read cannot prove
+// what OpenCode will do: a box release outside the set or other than the
+// writer's ([openCodeCountRead]: no pair has been measured); a plugin other
+// than the engine's own, by a document or a folder, or a configuration
+// directory the listing did not cover, since a plugin runs in the server and
+// can compact the session or add to it before the first request, which no
+// read of a release's hooks rules out; a provider's contextManagement option;
+// a model nothing states the limit of (OpenCode's default record holds it to
+// 200,000 tokens, which may not be its server's window: stated means a
+// document states its limit, or the catalog listed it, which its record's
+// release time says unless a document set that time); a zero limit with
+// compaction on (OpenCode's point is then infinite, and only the provider's
+// refusal compacts it); a native compaction; a model the catalog does not
+// list; a launch whose model names no provider; a read that failed.
+//
+// AND, IN THE BOX THAT HOLDS THE SESSION'S COPY, WHAT IT HANDS OVER FIRST
+// ([openCodeBoxBytes]). There OpenCode tells the session every context source
+// that changed since its last request in that box, each at most its whole
+// render: the run's own instructions and every instruction file it discovers
+// (the global AGENTS.md, an AGENTS.md on the way up from the working
+// directory, and, read as a superset, every CLAUDE.md beside them), with a
+// removal sentence for each directory it walks; the run's skills and the
+// guidance of the MCP servers the run's bridge serves it, which the engine
+// knows; the date and the environment. A box document that adds a source the
+// read cannot size (MCP servers, skills, instruction entries, references,
+// Code Mode, an experimental key) and an MCP server the box dials itself,
+// whose instructions only it knows, are no point there. After an import into
+// another box OpenCode keeps no record of what it handed the session before,
+// and hands nothing.
+//
 // # A run ends on request
 //
 // The read that takes a stopped or lost job's session, or that of a job still

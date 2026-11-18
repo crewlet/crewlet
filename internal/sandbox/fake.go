@@ -722,6 +722,13 @@ type FakeRunner struct {
 	// holdingsAsks is every ask a reading was handed, in order.
 	holdingsAsks []HoldingsAsk
 
+	// Point, when set, is what a read of a box's OpenCode point answers
+	// ([FakeRunner.ReadOpenCodePoint]); unset, every read is an error, a box
+	// that could not be asked. Set it before the launch that reads.
+	Point func(PointAsk) (OpenCodePoint, error)
+	// pointAsks is every ask a read of a point was handed, in order.
+	pointAsks []PointAsk
+
 	// The job's live account: what it has said, under which origin and
 	// from which source. See [FakeRunner.Say].
 	account string
@@ -1361,6 +1368,29 @@ func (r *FakeRunner) Started() []RunRequest {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.started)
+}
+
+var _ PointReader = (*FakeRunner)(nil)
+
+// ReadOpenCodePoint records ask and answers [FakeRunner.Point] of it, an error
+// where it is unset.
+func (r *FakeRunner) ReadOpenCodePoint(_ context.Context, _ Sandbox, ask PointAsk) (OpenCodePoint, error) {
+	r.mu.Lock()
+	r.pointAsks = append(r.pointAsks, ask)
+	point := r.Point
+	r.mu.Unlock()
+	if point == nil {
+		return OpenCodePoint{}, errors.New("fake: this runner reads no OpenCode point")
+	}
+	return point(ask)
+}
+
+// PointAsks is every ask a read of a box's OpenCode point was handed, in
+// order.
+func (r *FakeRunner) PointAsks() []PointAsk {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.pointAsks)
 }
 
 var _ mainThreadReader = (*FakeRunner)(nil)

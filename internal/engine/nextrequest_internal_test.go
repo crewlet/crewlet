@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -127,5 +128,47 @@ func TestTheFloorReadsTheMembersRate(t *testing.T) {
 				t.Errorf("a launch on %s is held to a context of %d, want %d", model, floor.context, want)
 			}
 		})
+	}
+}
+
+// THE FLOOR COUNTS THE SUMMARIZED BRIEF. A launch that judges an OpenCode
+// session's first request in its box may hand it the brief told as a session
+// that may be a summary, the longer one, so the floor is the longest of every
+// brief the launch may hand, on the kept path and in place alike; and the
+// summarized brief is never dropped alone: a session whose summarized brief no
+// window carries is not continued, rather than continued with the held brief a
+// box may refuse to prove whole.
+//
+// Mutation: leave the summarized brief out of either floor, or drop it alone,
+// and a case goes red.
+func TestTheFloorCountsTheSummarizedBrief(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Engineer", DeclaredHandle: "swe"}
+	l := &agentLauncher{engine: &Engine{}, seat: seat, turn: &turnctx.Turn{RunID: "run-1", Seat: seat}}
+	member := harnessProvider(t, chainMember{key: "head", agent: executor.OpenCodeName, model: "stub/m"})
+	summarized := strings.Repeat("told again ", 4000)
+	want := harness.EstimateTokens(summarized)
+	kept := runner.AgentRunRequest{Brief: "start", Session: &runner.SessionContinuation{Brief: "carry on",
+		Replaced: "carry on elsewhere", Summarized: &runner.SummarizedTelling{Brief: "short", Replaced: summarized},
+		Basis: runner.SessionBasis{LaunchSeq: 1, CaptureSeq: 1, SessionID: "s-1", Harness: executor.OpenCodeName,
+			ContextTokens: 10_000}}}
+	if _, floor := l.continuedFloor(t.Context(), kept, member, true); floor.brief != want {
+		t.Errorf("a kept capture's launch is held to a brief of %d, want the summarized one's %d", floor.brief,
+			want)
+	}
+	inPlace := runner.AgentRunRequest{Brief: "start", Continue: &runner.Continuation{SessionID: "s-1",
+		Brief: "carry on", Summarized: summarized, ContextTokens: 10_000}}
+	if _, floor := l.continuedFloor(t.Context(), inPlace, member, true); floor.brief != want {
+		t.Errorf("an in-place launch is held to a brief of %d, want the summarized one's %d", floor.brief, want)
+	}
+	claude := harnessProvider(t, chainMember{key: "head", agent: executor.ClaudeCodeName, model: "claude-opus-5-5"})
+	huge := kept
+	session := *kept.Session
+	session.Basis.Harness = executor.ClaudeCodeName
+	session.Summarized = &runner.SummarizedTelling{Brief: "short", Replaced: strings.Repeat("x", 4_000_000)}
+	huge.Session = &session
+	if got, _ := l.continuedFloor(t.Context(), huge, claude, true); got.Session != nil {
+		t.Errorf("a session whose summarized brief no window carries is continued with %+v, want not continued",
+			got.Session)
 	}
 }

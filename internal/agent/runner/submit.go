@@ -6,6 +6,23 @@
 // it, and collected back into the same turn for the reviewer (ADR-0066;
 // agentrun.go).
 //
+// A RELAUNCH THAT CONTINUES A SESSION JUDGES ITS FIRST REQUEST
+// (firstrequest.go): whether the session's harness may compact it before it
+// reads the brief, which leaves its model a summary, so it is told as a
+// session that may be one. Claude Code's here, against the window the seat's
+// chain may hold its model to. OpenCode's in the box the launch gets
+// (firstRequest.byBox): OpenCode compacts at a point its box's catalog and
+// documents set for the run's model, which the runner, writing its briefs
+// before any box exists, cannot read; so where the session's count has a
+// bound it hands the launch both tellings, the held one picked and the
+// summarized one beside it, and the launch hands the held one only where the
+// box's point proves it whole (internal/sandbox's OpenCodePoint.SendsWhole).
+// A brief told by a reading of what the session holds is judged on its own
+// brief on either harness, never by the held one's verdict: it drops held
+// calls and may add sections of its own, so it is ordered against neither
+// default, and it may ride beside the summarized telling, a shorter brief
+// that sends whole where the held one compacts.
+//
 // It is the wiring between four things that each know nothing about the
 // others: the prompt builder, the tool registry, the provider chain, and the
 // turn loop's [turn.Phases] contract. Everything here is plumbing plus the one

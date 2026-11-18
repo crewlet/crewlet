@@ -213,10 +213,10 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		Through: through, NoteCursor: captured.NoteCursor,
 		Interrupted: captured.Interrupted, Home: captured.Home, ContextTokens: continued.Context,
 		NextRequest: continued.NextRequest, KeptTurn: continued.KeptTurn,
-		// AND WHAT CLAUDE CODE COUNTS THE CAPTURE'S SESSION AT, as its take
-		// read its archive whole: what the kept path's first request is judged
-		// by.
-		Count: captured.ResumedCount,
+		// AND WHAT ITS HARNESS COUNTS THE CAPTURE'S SESSION AT, as its take
+		// read its archive whole, with the provider an OpenCode count's reply
+		// was answered by: what the kept path's first request is judged by.
+		Count: captured.ResumedCount, CountProvider: captured.CountProvider,
 		// AND THE READS AT OR BELOW IT THE SESSION HOLDS ONLY AS ITS JOB'S
 		// BRIEF'S COUNT, which the brief continuing it tells.
 		Owed: slices.Clone(captured.Omitted),
@@ -587,6 +587,10 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 	if x := s.Exact; x != nil {
 		out.Exact = &sandbox.ExactTelling{Resumer: x.Resumer, Brief: x.Brief, Replaced: x.Replaced, Told: x.Told}
 	}
+	if x := s.Summarized; x != nil {
+		out.Summarized = &sandbox.SummarizedTelling{Brief: x.Brief, Replaced: x.Replaced, Told: x.Told}
+		out.Count, out.CountProvider = s.Count, s.CountProvider
+	}
 	return out
 }
 
@@ -598,5 +602,5 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 func sessionDecision(d sandbox.LaunchDecision) runner.SessionDecision {
 	return runner.SessionDecision{Continues: d.Brief.Continues(), Kept: d.Kept, Base: d.Base,
 		NewBox: d.Brief == sandbox.BriefContinuedNewBox || d.Brief == sandbox.BriefContinuedConversation,
-		Exact:  d.Exact}
+		Exact:  d.Exact, Summarized: d.Summarized}
 }

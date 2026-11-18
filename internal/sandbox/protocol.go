@@ -182,6 +182,31 @@
 // takes the archive streamed rather than whole ([Sandbox.WriteStream]). See
 // carry.go.
 //
+// AND AN OPENCODE CONTINUATION'S FIRST REQUEST IS JUDGED IN ITS BOX. OpenCode
+// compacts a session before a request, a continued run's first among them,
+// where its count of the session with the brief reaches the point its box's
+// configuration sets for the run's model: the model's limit less a buffer.
+// Unlike Claude Code's window, that point is not the engine's to pin: it is
+// read off the model catalog and the documents of the box the run is handed,
+// which the relaunch's briefs are written before. So the runner builds both
+// tellings where the session's count has a bound, the held one and the one
+// told as a session that may be a summary, and the launch, once it has the
+// box, asks the box for its point ([PointReader]) and hands the held telling
+// only where the count's bound, the brief and what the box hands over before
+// it sit strictly below that point ([OpenCodePoint.SendsWhole]); anywhere
+// else, and wherever the point cannot be read, it hands the summarized one
+// ([SessionContinuation.Summarized], [Continuation.Summarized]). What the box
+// hands over before the brief is charged only in the box that holds the
+// session's copy ([PointAsk.Sources]): there OpenCode tells the session every
+// context source that changed since its last request in that box (its
+// instruction files, the run's own instructions, the skill and MCP server
+// listings, the date and the environment), each at most its whole render,
+// where after an import into another box it starts afresh and hands none. A
+// box document that adds a source the read cannot size is no point
+// ([PointBoxSources]). A box whose release is not the writer's is no point
+// either: no pair of differing releases has been measured. See
+// opencodefirst.go.
+//
 // See docs/concepts/code-sandbox.md.
 package sandbox
 

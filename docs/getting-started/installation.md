@@ -84,7 +84,9 @@ limit sentences on 2.1.303 and 2.1.310; take a newer one when
 packed in another box only on 2.1.310 or later (OpenCode 2.0.32; an OpenCode
 session is counted for its launch's floor only as 2.0.32, 2.1.4, 2.2.7 or 2.3.0
 writes it, a set and never a range, and a session another release wrote is held
-to its newest request's input), and packs and restores one with `tar`, `gzip`
+to its newest request's input; its first request is judged only in a box of the
+release that wrote it, every other continuation of it told as one that may be a
+summary), and packs and restores one with `tar`, `gzip`
 and a POSIX userland — `find`, `ls`, `wc`, `sed`, `grep`, `head`, `tail`,
 `cksum` and `touch` among its tools, and a `sleep` that takes a tenth of a second — all of which the published image,
 built on `debian:trixie-slim`, carries for a `direct` cell, and a `container`

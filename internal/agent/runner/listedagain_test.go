@@ -43,9 +43,12 @@ func digested(call runner.BridgedCall) runner.BridgedCall {
 }
 
 // openCodeKept is the turn's kept session of an OpenCode job, cut off, saved
-// at the round's first call.
+// at the round's first call, counted far from any point on the stub
+// provider's reply, its restart its launch's: its relaunch hands the held
+// telling, the launch judging it in its box.
 var openCodeKept = runner.SessionBasis{LaunchSeq: 1, CaptureSeq: 1, SessionID: "s-1", Harness: "opencode",
-	Through: 1, NoteCursor: 1, Home: "/boxes/4f2a/home", Interrupted: true, ContextTokens: 40000}
+	Through: 1, NoteCursor: 1, Home: "/boxes/4f2a/home", Interrupted: true, ContextTokens: 40000,
+	Count: far, CountProvider: "stub"}
 
 // listedAgainSection is the section that lists again the one held call
 // slack_post({"channel":"C1","text":"hi"}).
@@ -495,6 +498,7 @@ func TestAHeldCallLikeALateCallIsListedAgainForEveryHarness(t *testing.T) {
 	for harness, carry := range map[string]func(*runner.Resume){
 		"opencode": func(r *runner.Resume) {
 			r.HarnessEnd, r.Run.Harness, r.BasisRestart = sandbox.HarnessEndOwnRun, "opencode", new("")
+			r.Count, r.CountProvider = far, "stub"
 		},
 		sandbox.ClaudeCodeHarness: copyOf(sandbox.HarnessEndOwnRun, far),
 	} {
@@ -624,7 +628,7 @@ func TestAnOpenCodeRelaunchWithNoCallsAlikeIsToldAsMainTellsIt(t *testing.T) {
 	t.Parallel()
 	late := digested(numbered("slack_post", map[string]any{"channel": "C1", "text": "a late post"}, 3, 3))
 	late.Late = true
-	kept := lostRelaunch(t, openCodeKept, runner.Resume{Bridged: []runner.BridgedCall{
+	kept := lostRelaunch(t, openCodeKept, runner.Resume{BasisRestart: new(""), Bridged: []runner.BridgedCall{
 		digested(numbered("slack_post", map[string]any{"channel": "C1", "text": "the held post"}, 1, 1)),
 		digested(numbered("slack_post", map[string]any{"channel": "C1", "text": "a later post"}, 2, 2)),
 		late,
@@ -641,6 +645,7 @@ func TestAnOpenCodeRelaunchWithNoCallsAlikeIsToldAsMainTellsIt(t *testing.T) {
 	}, carry: func(r *runner.Resume) {
 		answered("use main")(r)
 		r.HarnessEnd, r.Run.Harness, r.BasisRestart = sandbox.HarnessEndOwnRun, "opencode", new("")
+		r.Count, r.CountProvider = far, "stub"
 	}})
 	if inPlace != mainInPlaceOpenCode {
 		t.Errorf("an OpenCode copy whose harness ended its own run, with no calls alike, is told\n%s\n"+

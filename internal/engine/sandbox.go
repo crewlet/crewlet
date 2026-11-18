@@ -1826,12 +1826,14 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal,
 		// relaunch is held to in place of the measure where it holds a figure
 		// ([runner.Resume.NextRequest]).
 		NextRequest: in.Run.Launch.NextRequest(),
-		// AND WHAT CLAUDE CODE COUNTS THAT COPY AT, as the read that collected
-		// the job found it, and the restart the job's launch handed it, which
-		// the copy's own and a capture of the job are compared with: a
+		// AND WHAT ITS HARNESS COUNTS THAT COPY AT, as the read that
+		// collected the job found it, with the provider an OpenCode count's
+		// reply was answered by, and the restart the job's launch handed it,
+		// which the copy's own and a capture of the job are compared with: a
 		// relaunch judges whether the session reaches its first request whole
 		// by them ([runner.Resume.Count], [runner.Resume.BasisRestart]).
-		Count: in.Run.Launch.ResumedCount, BasisRestart: in.Run.Launch.RestartBasis(),
+		Count: in.Run.Launch.ResumedCount, CountProvider: in.Run.Launch.CountProvider,
+		BasisRestart: in.Run.Launch.RestartBasis(),
 		// AND THE TURN'S LEADS AS THE RESUME READ THEM BESIDE ITS ROW, opened,
 		// those its job's brief told marked: a relaunch continuing that job's
 		// session where it may lack the brief tells them again

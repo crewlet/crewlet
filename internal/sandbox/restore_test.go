@@ -413,7 +413,7 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 				req.Continue = &Continuation{SessionID: "sess-ask", Brief: "carry on in the box you left"}
 			}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false)
+				rig.runner, tc.reused, false, RunSources{})
 			t.Cleanup(got.release)
 			wantBrief := map[BriefKind]string{BriefContinued: "carry on in the box you left",
 				BriefContinuedNewBox: "carry on in a box that replaced yours", BriefFresh: "the fresh brief"}[tc.want]
@@ -504,7 +504,7 @@ func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
 			}
 			req.Continue = &Continuation{SessionID: "sess-ask", Brief: "carry on in the box you left"}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false)
+				rig.runner, tc.reused, false, RunSources{})
 			t.Cleanup(got.release)
 			if got.kind != tc.kind || got.session != tc.session {
 				t.Fatalf("the launch hands a %s brief and session %q, want a %s brief and %q", got.kind,

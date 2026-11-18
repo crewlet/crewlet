@@ -2,6 +2,7 @@ package mcpbridge_test
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -136,6 +137,21 @@ func TestEachServerIsServedUnderItsOwnNameBeneathTheJob(t *testing.T) {
 	}
 	if instructions != "" {
 		t.Errorf("jira's endpoint says it is for %q, where the company described it as nothing", instructions)
+	}
+}
+
+// A LAUNCH IS HANDED WHAT EACH BRIDGED SERVER SAYS IT IS FOR, as its endpoint
+// says it: OpenCode lists a session's MCP servers' instructions among the
+// context it hands over before a continued run's first request, so the launch
+// charges them. A server the company described as nothing says nothing.
+//
+// Mutation: hand the launch every server whatever it says, or none, and this
+// goes red.
+func TestALaunchIsHandedWhatEachBridgedServerSaysItIsFor(t *testing.T) {
+	t.Parallel()
+	want := map[string]string{"github": "The company's code host: its repositories, issues and pull requests."}
+	if got := mcpbridge.Guidance(serversSurface(t)); !maps.Equal(got, want) {
+		t.Errorf("Guidance = %q, want %q", got, want)
 	}
 }
 

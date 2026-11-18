@@ -452,23 +452,6 @@ func TestTheToldRecordFollowsTheTellingHanded(t *testing.T) {
 	}
 }
 
-// AN OPENCODE SESSION IS NEVER JUDGED BY CLAUDE CODE'S THRESHOLD: no count of
-// Claude Code's describes another harness's session, so its copy is told as it
-// was.
-//
-// Mutation: judge every harness's session, and this goes red.
-func TestAnOpenCodeSessionIsNeverJudgedByClaudeCodesThreshold(t *testing.T) {
-	t.Parallel()
-	brief := inPlaceOf(t, guarded{basis: inBoxBasis, bridged: []runner.BridgedCall{earlierCall},
-		carry: func(r *runner.Resume) {
-			answered("use main")(r)
-			r.HarnessEnd, r.Run.Harness, r.BasisRestart = sandbox.HarnessEndOwnRun, "opencode", new("")
-		}})
-	if strings.Contains(brief, prompts.MayCompactSession) || strings.Contains(brief, "an earlier issue") {
-		t.Errorf("an OpenCode copy is judged by Claude Code's threshold:\n%s", brief)
-	}
-}
-
 // A SEND-BACK'S KEPT CONTINUATION IS JUDGED TOO: a review's send-back continues
 // the job's kept capture, and its verdict is asked on the review's lead.
 //

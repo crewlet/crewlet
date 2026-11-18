@@ -299,6 +299,17 @@ type Continuation struct {
 	// them ([Resume.Owed], [SessionBasis.Owed]): a session holds what its brief
 	// told, never what its budgets left out.
 	Told, Fresh sandbox.BriefTold
+
+	// Summarized is the copy's brief told as a session that may be a
+	// summary, beside Brief, where the launch judges its first request in the
+	// box ([firstRequest.byBox]), and SummarizedTold what it told of the
+	// round: handed where the box's point does not prove Brief whole. ""
+	// elsewhere. Count and CountProvider are the job's record's count of the
+	// copy and its reply's provider ([Resume.Count]), which it is judged by.
+	Summarized     string
+	SummarizedTold sandbox.BriefTold
+	Count          *sandbox.ResumedCount
+	CountProvider  string
 }
 
 // inPlaceNextRequest is the estimate of the next request of the copy a job's
@@ -336,6 +347,12 @@ type SessionDecision struct {
 	// False where the launch handed the brief told by the save point, or
 	// continues no kept session.
 	Exact bool
+
+	// Summarized says the brief the launch handed is the one told as a
+	// session that may be a summary ([SessionContinuation.Summarized],
+	// [Continuation.Summarized]): the box's point did not prove the held one
+	// whole, so the run's guard arms nothing.
+	Summarized bool
 }
 
 // SessionContinuation is how a launch continues a session in whatever box it
@@ -369,6 +386,24 @@ type SessionContinuation struct {
 	// to every other box, and drops it alone where the seat's budget cannot
 	// carry it but carries the rest (internal/engine's continuedFloor).
 	Exact *ExactTelling
+
+	// Summarized is the briefs told as a session that may be a summary,
+	// beside Brief and Replaced, where the launch judges the first request
+	// in its box ([firstRequest.byBox]): handed where that box's point does
+	// not prove the brief it would hand sends the session whole. Never
+	// dropped alone: the floor counts it as it counts Brief. Count and
+	// CountProvider are what the launch judges by ([keptCount]).
+	Summarized    *SummarizedTelling
+	Count         *sandbox.ResumedCount
+	CountProvider string
+}
+
+// SummarizedTelling is a kept path's briefs told as a session that may be a
+// summary ([SessionContinuation.Summarized]): Brief for the box the session
+// was last worked in, Replaced for any other, and what they told of the round.
+type SummarizedTelling struct {
+	Brief, Replaced string
+	Told            sandbox.BriefTold
 }
 
 // ExactTelling is a relaunch's briefs told by a reading of what the kept
@@ -482,12 +517,15 @@ type SessionBasis struct {
 	// Zero where no capture estimated one.
 	NextRequest sandbox.NextRequest
 
-	// Count is what Claude Code counts the kept capture's session at before
-	// its next request, as the take read its archive's main thread whole
+	// Count is what the session's harness counts the kept capture's session
+	// at before its next request, as the take read its archive whole
 	// (sandbox.SessionCapture.ResumedCount): what the kept path's first
 	// request is judged by ([firstRequest], [keptCount]). Nil where the
 	// capture counted nothing, which reads as a session that may compact.
-	Count *sandbox.ResumedCount
+	// CountProvider is the provider of the reply an OpenCode count is
+	// anchored on (sandbox.SessionCapture.CountProvider), "" for any other.
+	Count         *sandbox.ResumedCount
+	CountProvider string
 
 	// Window is what the seat's executor chain may hold a Claude Code run to:
 	// the least standard window over its Claude Code members, on each one's
@@ -999,8 +1037,21 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// notes, what the copy may lack of those the turn has read and the ones
 	// this brief is the first to read ([Runner.inPlaceNotes]).
 	lead := carry.continuation(fence)
-	picked, inPlaceHolds := inPlace.led(ctx, r, lead)
+	picked, inPlaceHolds, summed := inPlace.led(ctx, r, lead)
 	continued := picked.led(lead)
+	// AND, WHERE THE LAUNCH JUDGES THE COPY'S FIRST REQUEST IN ITS BOX, the
+	// copy told as a session that may be a summary, which it hands where the
+	// box's point does not prove the held brief whole.
+	var summarized string
+	var summarizedTold sandbox.BriefTold
+	var count *sandbox.ResumedCount
+	var countProvider string
+	if summed != nil {
+		summarized = summed.led(lead)
+		summarizedTold = sandbox.BriefTold{Omitted: summed.omitted, Own: own, Told: summed.told.refs,
+			ToldUnread: summed.told.unread}
+		count, countProvider = r.cfg.Resume.Count, r.cfg.Resume.CountProvider
+	}
 	// A FRESH RUN'S BRIEF is the round's own, the turn's answers that carried
 	// its work on before, what became of the run before it (what it asked and
 	// was told, or how it was cut off) and every call of the round so far: it
@@ -1043,7 +1094,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	reseed = r.namingKeptSession(reseed, basis, built)
 	briefs.fresh = reseed
 	if inPlaceSession != "" {
-		briefs.inPlace = continued
+		briefs.inPlace, briefs.inPlaceSummarized = continued, summarized
 	}
 	decided := &launchDecided{}
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
@@ -1078,6 +1129,9 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			Told: sandbox.BriefTold{Omitted: picked.omitted, Own: own, Told: picked.told.refs,
 				ToldUnread: picked.told.unread},
 			Fresh: sandbox.BriefTold{Omitted: freshOmitted, Own: own},
+			// AND THE SAME COPY TOLD AS A SESSION THAT MAY BE A SUMMARY, with
+			// the count the launch judges the held brief by in its box.
+			Summarized: summarized, SummarizedTold: summarizedTold, Count: count, CountProvider: countProvider,
 		},
 		Session:    briefs.kept,
 		Decided:    r.sessionDecided(ctx, emit, state.Round, system, surface, caps, briefs, decided),

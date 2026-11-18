@@ -484,7 +484,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// opened, which the job's calls are numbered after.
 		bridgeFrom int
 	)
-	result, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
+	result, err := coordinator.Launch(ctx, manager, withRunSources(req, sandbox.LaunchRequest{
 		Turn:       ref,
 		ReadBox:    e.boxUnread(ctx, company, handle, cell),
 		Spec:       spec,
@@ -572,7 +572,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// [sandbox.LaunchRequest.Fence]: a stop that lands while this
 		// launch is being built either finds the row or is refused here.
 		Fence: req.Fence,
-	})
+	}))
 	holds.settle(err)
 	if err != nil {
 		if recorded == "" {
@@ -796,8 +796,11 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		}
 	}
 	if c := req.Continue; c != nil && c.SessionID != "" && inBox {
+		// THE LONGER OF ITS TWO BRIEFS, never the summarized one dropped
+		// alone: it is what the launch hands where the box's point does not
+		// prove the held one whole ([runner.Continuation.Summarized]).
 		inPlace := static.continuing(continuedContext(c.NextRequest, c.ContextTokens, model),
-			harness.EstimateTokens(c.Brief))
+			max(harness.EstimateTokens(c.Brief), harness.EstimateTokens(c.Summarized)))
 		if inPlaceWhy = carried(inPlace); inPlaceWhy == "" {
 			floor = floor.atLeast(inPlace)
 		}
@@ -889,13 +892,19 @@ func (l *agentLauncher) refusedIn() []sandbox.BudgetWindow {
 // [runner.SessionContinuation.Exact], since which box the launch gets, and
 // which release that box's harness answers, are the launch's to learn), or the
 // session its conversation's last turn left, in its one; static where s names
-// neither. The kept capture's context is its harness's estimate of its next
-// request at model's rate where the capture holds one ([continuedContext]).
+// neither. And the two told as a session that may be a summary, which the
+// launch hands where its box's point does not prove the others whole
+// ([runner.SessionContinuation.Summarized]), never dropped alone. The kept
+// capture's context is its harness's estimate of its next request at model's
+// rate where the capture holds one ([continuedContext]).
 func keptFloor(static launchFloor, s *runner.SessionContinuation, model string) launchFloor {
 	switch {
 	case s.Basis.Continues():
 		brief := max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced))
 		if x := s.Exact; x != nil {
+			brief = max(brief, harness.EstimateTokens(x.Brief), harness.EstimateTokens(x.Replaced))
+		}
+		if x := s.Summarized; x != nil {
 			brief = max(brief, harness.EstimateTokens(x.Brief), harness.EstimateTokens(x.Replaced))
 		}
 		return static.continuing(continuedContext(s.Basis.NextRequest, s.Basis.ContextTokens, model), brief)
@@ -1148,6 +1157,17 @@ func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait tim
 	return opening
 }
 
+// withRunSources is out with the run's own context sources off req, which a
+// launch charges an OpenCode continuation in the box that holds its copy
+// (internal/sandbox's RunSources): what each server the run's bridge serves
+// says it is for. Set beside [agentLauncher.launch]'s literal rather than in
+// it, since that literal is the launch's decisions (member, cell, reach,
+// environment, login), which crewlet-operator mirrors, and a source is none.
+func withRunSources(req runner.AgentRunRequest, out sandbox.LaunchRequest) sandbox.LaunchRequest {
+	out.MCPGuidance = mcpbridge.Guidance(req.Surface)
+	return out
+}
+
 // sandboxContinuation is the runner's carry-on of an asking run in the sandbox
 // layer's terms, nil for every other launch — with the read its briefs were
 // built from, past which the job's opening marks the round's calls late
@@ -1158,6 +1178,10 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 	}
 	out := &sandbox.Continuation{SessionID: c.SessionID, Brief: c.Brief, BriefRead: c.BriefRead,
 		Told: c.Told, Fresh: c.Fresh}
+	if c.Summarized != "" {
+		out.Summarized, out.SummarizedTold = c.Summarized, c.SummarizedTold
+		out.Count, out.CountProvider = c.Count, c.CountProvider
+	}
 	switch {
 	case c.SignInReplaced:
 		out.Reason = sandbox.FollowUpSignInReplaced
