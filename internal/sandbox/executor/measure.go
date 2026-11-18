@@ -96,9 +96,9 @@ type contextMeter struct {
 // newContextMeter starts a meter for an archive of layout holding session,
 // written by release (the box's word on its harness's release,
 // [sandbox.SessionArchive.Version]), read within ctx, the take's own: a take
-// cut short ends the walk, whose count is then unread. Its walk is under the
-// take's large, which it gives back as it ends: it drains the take's last
-// byte, so it is the take's last reader.
+// cut short ends the walk, whose count is then unread; ctx also ends its wait
+// for the take's large slot, which its walk holds a line past the base at a
+// time, as the take's scrub holds its pieces ([passBudget]).
 func newContextMeter(ctx context.Context, layout archiveLayout, session, release string,
 	large *passBudget) *contextMeter {
 
@@ -106,7 +106,6 @@ func newContextMeter(ctx context.Context, layout archiveLayout, session, release
 	m := &contextMeter{pw: pw, done: make(chan struct{})}
 	go func() {
 		defer close(m.done)
-		defer large.release()
 		var (
 			n     int64
 			count *sandbox.ResumedCount

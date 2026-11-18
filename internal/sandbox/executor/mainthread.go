@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 
@@ -46,13 +47,20 @@ type threadReading interface {
 // after it.
 //
 // HELD TO A BASE, past it ONE SLOT (the package doc's "A collection's read of
-// a thread"): the walk takes large's slot before it hands on a byte of a line
+// a thread"): the walk holds large's slot before it hands on a byte of a line
 // past [collectionBaseLineBytes] ([lineRun]), or reads a line after a reading
 // holds more than [collectionBaseRecords] records ([recordKeeper]); a wait
-// its ctx ends ends the walk with ctx's error. Its caller gives large back.
+// its ctx ends ends the walk with that error ([errLargeWait]). A walk whose
+// readings keep records keeps the slot, which its caller gives back
+// ([passBudget.release]); any other holds it for the line alone.
 func walkThread(ctx context.Context, r io.Reader, maxBytes int64, large *passBudget, readings ...threadReading) {
-	escalate := func() error { return large.escalate(ctx) }
-	reader := newThreadReader(&lineRun{r: r, escalate: escalate}, maxBytes)
+	gate := large.gate(ctx)
+	if keepsRecords(readings) {
+		gate.drop = nil
+	}
+	run := &lineRun{r: r, gate: gate}
+	defer run.done()
+	reader := newThreadReader(run, maxBytes)
 	for _, reading := range readings {
 		if asker, ok := reading.(takeAsker); ok {
 			asker.ask(reader)
@@ -84,7 +92,7 @@ func walkThread(ctx context.Context, r io.Reader, maxBytes int64, large *passBud
 			return
 		}
 		if !escalated && keepsPastBase(readings) {
-			if err := escalate(); err != nil {
+			if err := gate.hold(); err != nil {
 				ended(false, err)
 				return
 			}
@@ -104,6 +112,17 @@ type recordKeeper interface {
 // refusal as its own: the receipts' ([hookReading]).
 type takeAsker interface {
 	ask(reader *threadReader)
+}
+
+// keepsRecords reports whether a reading keeps records from line to line, so
+// what it holds of a line past the base outlives that line.
+func keepsRecords(readings []threadReading) bool {
+	for _, reading := range readings {
+		if _, ok := reading.(recordKeeper); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // keepsPastBase reports whether a reading holds more than
@@ -135,28 +154,39 @@ const collectionBaseRecords = 1 << 13
 const CollectionLargeReadsAtOnce = 1
 
 // collectionLargeReads holds a slot for each pass past its base, at most
-// [CollectionLargeReadsAtOnce], taken through [passBudget.escalate].
+// [CollectionLargeReadsAtOnce], taken through [passBudget.hold].
 var collectionLargeReads = make(chan struct{}, CollectionLargeReadsAtOnce)
 
-// passBudget is one pass's claim on [collectionLargeReads]: none while the
-// pass is within its base, which no token holds, and ONE slot from the first
-// escalate on, however often it is asked, until release. A take's scrub and
-// its meter are one pass and share one budget, so escalate is safe from both
-// goroutines, each waiting within its own ctx. The zero value holds nothing.
+// passBudget is one pass's claim on [collectionLargeReads]: none while every
+// piece the pass holds is within its base, which no token holds, and ONE slot
+// while it holds any piece past it ([passBudget.hold]), given back with the
+// last [passBudget.drop], or by [passBudget.release] at the end of a pass that
+// keeps what it read. A take's scrub and its meter are one pass and share one
+// budget, each waiting within its own ctx: with two, the scrub's write would
+// wait on the meter and the meter on the slot the scrub holds. The zero value
+// holds nothing.
 type passBudget struct {
 	mu   sync.Mutex
 	took func()
+	// holds is how many pieces past the base the pass holds now.
+	holds int
 	// taking closes once the wait for the slot now in flight ends.
 	taking chan struct{}
 }
 
-// escalate takes the pass's one large slot, waiting for it, or for the wait
-// another user of the pass has in flight, for as long as ctx lasts and holding
-// nothing while it waits; a no-op once it is held.
-func (b *passBudget) escalate(ctx context.Context) error {
+// errLargeWait is a pass whose wait for the large slot ended with its ctx: a
+// failure of the read, never a reading of what it read, so a fallback that
+// reads a rewrite's failure as "not JSON" passes it on.
+var errLargeWait = errors.New("executor: the wait for the large read slot ended")
+
+// hold holds the pass's one large slot for one more piece, waiting for it, or
+// for the wait another user of the pass has in flight, for as long as ctx
+// lasts and holding nothing while it waits.
+func (b *passBudget) hold(ctx context.Context) error {
 	for {
 		b.mu.Lock()
 		if b.took != nil {
+			b.holds++
 			b.mu.Unlock()
 			return nil
 		}
@@ -166,7 +196,7 @@ func (b *passBudget) escalate(ctx context.Context) error {
 			case <-taking:
 				continue
 			case <-ctx.Done():
-				return ctx.Err()
+				return fmt.Errorf("%w: %w", errLargeWait, ctx.Err())
 			}
 		}
 		taking := make(chan struct{})
@@ -174,39 +204,79 @@ func (b *passBudget) escalate(ctx context.Context) error {
 		b.mu.Unlock()
 		took, err := takeSlot(ctx, collectionLargeReads)
 		b.mu.Lock()
-		b.took, b.taking = took, nil
+		b.taking = nil
+		if err == nil {
+			b.took, b.holds = took, b.holds+1
+		}
 		b.mu.Unlock()
 		close(taking)
-		return err
+		if err != nil {
+			return fmt.Errorf("%w: %w", errLargeWait, err)
+		}
+		return nil
 	}
 }
 
-// release gives back the slot the pass took, if it took one: at the pass's
-// end, once nothing reads under it.
+// drop gives back one piece's hold, and the slot with the last.
+func (b *passBudget) drop() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.holds > 0 {
+		b.holds--
+	}
+	if b.holds == 0 && b.took != nil {
+		b.took()
+		b.took = nil
+	}
+}
+
+// release gives back the slot the pass holds, whatever its pieces: at the end
+// of a pass that keeps what it read ([walkThread]), once nothing reads under it.
 func (b *passBudget) release() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.holds = 0
 	if b.took != nil {
 		b.took()
 		b.took = nil
 	}
 }
 
-// lineRun is a member's reader that calls escalate BEFORE it hands on a byte
-// of a line past [collectionBaseLineBytes], counting the bytes since the last
-// break; past that it only passes bytes through. Beneath a bufio reader, its
-// read-ahead may escalate a line early, never late, and the line primitive
-// above it ([readLine]) stays the one copy. An escalate error is its own.
+// pieceGate is one reader's way to its pass's slot: hold waits within the
+// reader's ctx; drop is nil where a hold is kept to the pass's end.
+type pieceGate struct {
+	hold func() error
+	drop func()
+}
+
+// gate is b's gate for a reader waiting within ctx.
+func (b *passBudget) gate(ctx context.Context) pieceGate {
+	return pieceGate{hold: func() error { return b.hold(ctx) }, drop: b.drop}
+}
+
+// lineRun is a member's reader that holds gate BEFORE it hands on a byte of a
+// line past [collectionBaseLineBytes], counting the bytes since the last break,
+// and drops it at the next read once that line's break has passed: beneath a
+// bufio reader, that read comes only once the reader above has taken the line
+// whole and is done with it. Read-ahead may hold early, never late, and the
+// line primitive above it ([readLine]) stays the one copy. A hold's error is
+// its own; done drops what it still holds.
 type lineRun struct {
-	r        io.Reader
-	escalate func() error
-	run      int
-	past     bool
+	r    io.Reader
+	gate pieceGate
+	run  int
+	// held is whether it holds the gate; open, whether the line it holds for
+	// has not yet broken.
+	held, open bool
 }
 
 func (l *lineRun) Read(p []byte) (int, error) {
+	if l.held && !l.open && l.gate.drop != nil {
+		l.gate.drop()
+		l.held = false
+	}
 	n, err := l.r.Read(p)
-	if l.past {
+	if l.held && l.gate.drop == nil {
 		return n, err
 	}
 	for rest := p[:n]; ; {
@@ -217,16 +287,29 @@ func (l *lineRun) Read(p []byte) (int, error) {
 			l.run += brk
 		}
 		if l.run > collectionBaseLineBytes {
-			if escErr := l.escalate(); escErr != nil {
-				return 0, escErr
+			if !l.held {
+				if holdErr := l.gate.hold(); holdErr != nil {
+					return 0, holdErr
+				}
+				l.held = true
 			}
-			l.past = true
-			return n, err
+			l.open = true
+			if l.gate.drop == nil {
+				return n, err
+			}
 		}
 		if brk < 0 {
 			return n, err
 		}
-		l.run, rest = 0, rest[brk+1:]
+		l.open, l.run, rest = false, 0, rest[brk+1:]
+	}
+}
+
+// done drops the gate where the run still holds it and drops at all.
+func (l *lineRun) done() {
+	if l.held && l.gate.drop != nil {
+		l.gate.drop()
+		l.held = false
 	}
 }
 

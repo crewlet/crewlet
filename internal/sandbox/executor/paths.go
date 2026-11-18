@@ -91,14 +91,27 @@
 //
 // A pass over a session's main thread ([walkThread]) — a collection's read of
 // its job's copy ([ClaudeCode]'s readMainThread) and a take, its scrub and
-// its meter one pass — holds no token while it stays within its BASE, and
-// takes ONE slot of a pool of its own ([CollectionLargeReadsAtOnce],
-// [passBudget]) before it holds more, keeping it to the pass's end. Its
-// triggers: a line past [collectionBaseLineBytes] ([lineRun], beneath the
-// line reader, so read-ahead escalates early and never late), and a reading
-// keeping more than [collectionBaseRecords] records ([recordKeeper], the
-// chain). The take's scrub holds its pieces to the same base: a line, a JSON
-// token, and a stretch of short lines a redaction holds ([scrubBounds]).
+// its meter one pass — holds no token while what it holds stays within its
+// BASE, and holds ONE slot of a pool of its own ([CollectionLargeReadsAtOnce],
+// [passBudget]) while it holds more. Its triggers: a line past
+// [collectionBaseLineBytes] ([lineRun], beneath the line reader, so read-ahead
+// holds early and never late), and a reading keeping more than
+// [collectionBaseRecords] records ([recordKeeper], the chain). The take's
+// scrub holds its pieces to the same base: a line, a JSON document holding a
+// token past it (its decoder keeps that token's buffer to the document's end),
+// and a stretch of short lines a redaction holds ([scrubBounds]).
+//
+// HELD PER PIECE, KEPT ONLY WHERE A READING KEEPS RECORDS: a pass whose
+// readings keep records (the collection's chain, which may keep a long line's
+// facts) keeps the slot from its first hold to its end; every other reader,
+// the take's scrub and meter and a collection's count alone, holds it for its
+// piece past the base and drops it once done with it, the slot going back with
+// the pass's last hold. Kept to a take's end, the process's only slot would be
+// held for its whole scrub and spool, minutes, while its box's stream and every
+// take behind it waited. The scrub and the meter share one budget: with two,
+// the scrub's write would wait on the meter and the meter on the slot the
+// scrub holds. A wait its reader's context ends is [errLargeWait], a failure
+// of the read, never a reading of it. A take's Close ends both readers' waits.
 //
 // THE TWO COEFFICIENTS are the layer's own worst measurements over their own
 // bounds ([threadChain], THE BOUNDS and THE COLLECTION'S PASS): the chain at
