@@ -167,7 +167,7 @@
 // [passBudget]) while it holds more. A walk's triggers: a line whose facts
 // charge the meter past [collectionBaseLineCharge] ([threadReader.Gate]), and
 // a reading keeping more than [collectionBaseRecords] records ([recordKeeper],
-// the chain).
+// the chain, counted by every item it files, its call ids among them).
 //
 // THE LINE'S TRIGGER IS ITS FACTS' CHARGE ([lineMeter]), the measure the layer
 // bounds a line's hold by, never its length: what no reader reads of a line is
@@ -208,9 +208,12 @@
 //
 // THE BASE: a line's facts charging 1.5 MiB hold 1.9 MiB at most, 2.2 MiB with
 // the reader's buffers, two thousand times the 753 bytes the facts of any
-// probe line hold; and 2^13 records, at 344 bytes 2.7 MiB, a thread of about
-// 16 MiB at the 2,053 bytes a line probe P6 measured, eight times a day's
-// session. With the count's carry, a pass at its base holds about 5.1 MiB at
+// probe line hold; and 2^13 of the chain's items (its records, retraction
+// prefixes, kept uuids and call ids), each at most the 344 bytes a record holds
+// with its call, 2.7 MiB: a thread of at least 4,096 records, about 8 MiB at
+// the 2,053 bytes a line probe P6 measured, four times a day's session, since
+// a thread of ordinary calls files one id a record at most. Its records alone
+// would let a few records file the bound's calls with no slot. With the count's carry, a pass at its base holds about 5.1 MiB at
 // its worst, by no token, so a typical collection never waits, nor one over
 // the census's longest lines (67,871 lines in 9,434 real threads, the longest
 // 2,002,134 bytes; each of the 28 threads holding a line past 256 KiB had a

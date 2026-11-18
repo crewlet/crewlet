@@ -1121,6 +1121,12 @@ func (c *threadChain) callID(key [32]byte, carried bool) chainCallID {
 	return id
 }
 
+// items is how many items the chain holds: what [threadChainMaxRecords]
+// counts (records, retraction prefixes, kept uuids) and the call-id
+// occurrences [threadChainMaxCalls] counts, each at most the 344 bytes a
+// record holds with its call at both bounds.
+func (c *threadChain) items() int { return c.filed + len(c.occurs) }
+
 // passBound makes the thread whyBound, drops what the chain filed, and files
 // nothing more.
 func (c *threadChain) passBound() chainHandle {

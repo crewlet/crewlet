@@ -432,6 +432,50 @@ func TestALineOrAChainPastTheBaseWaitsForTheLargeSlot(t *testing.T) {
 	}
 }
 
+// A CHAIN OF FEW RECORDS AND MANY CALLS PAST THE BASE KEEPS THE SLOT: with the
+// slot held elsewhere, a walk whose chain files lines of 256 results each, every
+// line's facts within [collectionBaseLineCharge], waits as the chain's items,
+// its call ids among them, pass [collectionBaseRecords] at line 32, before the
+// next line; freed, it reads every later line holding the slot.
+//
+// Mutation: count the chain's records alone ([chainReading.records]) and the
+// walk reads every line with no slot.
+func TestAChainOfManyCallsPastTheBaseKeepsTheSlot(t *testing.T) {
+	const calls = 256
+	before := collectionBaseRecords/(calls+1) + 1
+	lines := make([]string, before+2)
+	for k := range lines {
+		lines[k] = slotSmallest(k+1, calls)
+	}
+	if c := lineCharge(t, lines[0]); c > collectionBaseLineCharge {
+		t.Fatalf("a line of %d results charges %d bytes, past the base's %d", calls, c, collectionBaseLineCharge)
+	}
+	free := holdLargeSlot(t)
+	ctx := newSlotWait(t.Context())
+	var r slotReading
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		walkThread(ctx, strings.NewReader(cntThread(lines...)), threadPlainMax, testPass(t),
+			&chainReading{c: newThreadChain("")}, &r)
+	}()
+	waits(t, ctx, done, "a chain of many calls")
+	if len(r.lines) != before {
+		t.Errorf("the walk waits for the slot having handed %d lines, want %d", len(r.lines), before)
+	}
+	free()
+	<-done
+	if r.ended != nil || len(r.lines) != len(lines) {
+		t.Fatalf("freed, the walk read %d lines and ended %v, want %d and its end", len(r.lines), r.ended,
+			len(lines))
+	}
+	for i := before; i < len(r.held); i++ {
+		if r.held[i] != 1 {
+			t.Errorf("line %d was read with %d large slots held, want the walk's one", r.lines[i], r.held[i])
+		}
+	}
+}
+
 // waits holds the case to a walk run beside it, done as it ends, that waits on
 // ctx for a slot before it ends.
 func waits(t *testing.T, ctx *slotWait, done <-chan struct{}, name string) {
@@ -902,29 +946,39 @@ func TestAReaderWhoseSharedWaitEndsWaitsOnItsOwn(t *testing.T) {
 
 // WHAT A COLLECTION'S PASS COSTS AT ITS BASE, the figures
 // [collectionBaseLineCharge] and [collectionBaseRecords] are stated by (the
-// package doc's "A collection's read of a thread"): a main thread of
-// [collectionBaseRecords] records, the chain filing each, one a user's line
-// whose facts charge [collectionBaseLineCharge] exactly in the shape that holds
-// the most a charged byte ([resultsCharging]), and the last a reply the count
-// anchors on; read by the chain and the count in the one walk, as a collection
-// reads it, under a pass that must take no slot. What is held at most is read
-// off the runtime's GC trace as BenchmarkAThreadChainAtItsBounds says:
+// package doc's "A collection's read of a thread"): a main thread whose chain
+// files [collectionBaseRecords] items, each a record but for the call ids of
+// its last two lines, one a user's line whose facts charge
+// [collectionBaseLineCharge] exactly in the shape that holds the most a
+// charged byte ([resultsCharging]), the last a reply the count anchors on;
+// read by the chain and the count in the one walk, as a collection reads it,
+// under a pass that must take no slot. What is held at most is read off the
+// runtime's GC trace as BenchmarkAThreadChainAtItsBounds says:
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkACollectionPassAtItsBase$' -benchtime 1x -benchmem
 func BenchmarkACollectionPassAtItsBase(b *testing.B) {
+	results := func(n int) string {
+		head, tail, _ := strings.Cut(benchRecord(benchOf(n-2), benchMain, "user",
+			`"message":{"role":"user","content":[@]},`, n-1, n-1), "@")
+		return resultsCharging(b, head, tail, collectionBaseLineCharge)
+	}
+	// The chain files each result's id and the anchor's call beside the records.
+	calls := strings.Count(results(collectionBaseRecords), `"tool_result"`) + 1
+	n := collectionBaseRecords - calls
 	t := benchWrite(b, filepath.Join(b.TempDir(), "thread.jsonl"), func(t *benchThread) {
-		n := collectionBaseRecords
 		for k := 1; k < n-1; k++ {
 			parent := benchRoot
 			if k > 1 {
 				parent = benchOf(k - 1)
 			}
 			t.record(benchRecord(parent, benchMain, "assistant", benchReply(fmt.Sprintf("msg_%08d", k),
-				benchCall(fmt.Sprintf("toolu_%08d", k))), k, k))
+				`[{"type":"text","text":"done"}]`), k, k))
 		}
-		head, tail, _ := strings.Cut(benchRecord(benchOf(n-2), benchMain, "user",
-			`"message":{"role":"user","content":[@]},`, n-1, n-1), "@")
-		t.record(resultsCharging(b, head, tail, collectionBaseLineCharge))
+		line := results(n)
+		if got := strings.Count(line, `"tool_result"`) + 1; got != calls {
+			b.Fatalf("the user's line carries %d calls with the anchor's, want %d", got, calls)
+		}
+		t.record(line)
 		t.record(benchRecord(benchOf(n-1), benchMain, "assistant", `"message":{"id":"msg_anchor",`+
 			`"model":"claude-sonnet-4-5","usage":{`+benchUsage+`},"type":"message","role":"assistant","content":`+
 			benchCall(fmt.Sprintf("toolu_%08d", n))+`,"stop_reason":"tool_use"},`, n, n))
@@ -943,12 +997,12 @@ func BenchmarkACollectionPassAtItsBase(b *testing.B) {
 	runtime.ReadMemStats(&after)
 	fmt.Fprintf(os.Stderr, "base-bench: the read ends\n")
 	b.ReportMetric(float64(t.bytes)/(1<<20), "thread-MiB")
-	b.ReportMetric(float64(read.c.handles), "records")
+	b.ReportMetric(float64(read.c.items()), "items")
 	b.ReportMetric(float64(int64(after.HeapAlloc)-int64(before.HeapAlloc))/(1<<20), "live-MiB")
 	benchCountRead(b, read)
-	if read.c.handles != collectionBaseRecords || read.c.past || read.count.tokens != 2 || read.escalated {
-		b.Fatalf("the chain filed %d records, past its bound %t, the count anchors at %d and the pass took the "+
-			"large slot %t; want %d, false, 2 and false", read.c.handles, read.c.past, read.count.tokens,
+	if read.c.items() != collectionBaseRecords || read.c.past || read.count.tokens != 2 || read.escalated {
+		b.Fatalf("the chain holds %d items, past its bound %t, the count anchors at %d and the pass took the "+
+			"large slot %t; want %d, false, 2 and false", read.c.items(), read.c.past, read.count.tokens,
 			read.escalated, collectionBaseRecords)
 	}
 	runtime.KeepAlive(read)

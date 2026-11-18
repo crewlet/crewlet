@@ -193,9 +193,9 @@ func (r *benchChain) refused(broken *threadLineError) { r.c.Unread(broken) }
 // end keeps what ended the walk: nil at the thread's end.
 func (r *benchChain) end(_ bool, err error) { r.err = err }
 
-// records is how many records the chain filed, which the walk holds to its
-// base ([recordKeeper]).
-func (r *benchChain) records() int { return r.c.handles }
+// records is how many items the chain holds, which the walk holds to its
+// base ([recordKeeper], [chainReading.records]).
+func (r *benchChain) records() int { return r.c.items() }
 
 // benchReadThread reads file into a chain of agent's in one walk, then End;
 // where count is set, the resumed count reads the same walk after the chain,

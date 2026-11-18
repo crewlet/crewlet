@@ -2124,9 +2124,10 @@ and measures its session, holding no slot while what it holds stays within its
 base: of each line read, the facts its readers keep, charged up to 1.5 MiB
 whatever the line's length, so a long line of few facts (a large file read into
 the thread) takes none; for a collection that keeps the thread's records (its
-hook receipts), 2^13 records; and for the take's scrub, which holds each line,
-JSON value or stretch of text whole, 256 KiB of it, four times the longest line
-of 99 in 100 real threads: about 5 MiB a read at its worst. A read past its
+hook receipts), 2^13 of the records and call ids it files; and for the take's
+scrub, which holds each line, JSON value or stretch of text whole, 256 KiB of
+it, four times the longest line of 99 in 100 real threads: about 5 MiB a read
+at its worst. A read past its
 base waits for the node's one large-read slot (`CollectionLargeReadsAtOnce`), a
 pool apart from the transcripts' two, so a person paging a transcript never
 delays a turn's collection. A take holds it while it holds that piece, and a

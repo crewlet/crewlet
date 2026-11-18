@@ -101,7 +101,8 @@ func walkThread(ctx context.Context, r io.Reader, maxBytes int64, large *passBud
 }
 
 // recordKeeper is a reading that keeps records from line to line (the chain
-// in a collection's pass): records is how many it holds now.
+// in a collection's pass): records is how many it holds now, every item it
+// keeps of them counted ([threadChain.items]).
 type recordKeeper interface {
 	records() int
 }
@@ -125,7 +126,7 @@ func keepsRecords(readings []threadReading) bool {
 }
 
 // keepsPastBase reports whether a reading holds more than
-// [collectionBaseRecords] records.
+// [collectionBaseRecords] records, as [recordKeeper] counts them.
 func keepsPastBase(readings []threadReading) bool {
 	for _, reading := range readings {
 		if keeper, ok := reading.(recordKeeper); ok && keeper.records() > collectionBaseRecords {
@@ -145,9 +146,10 @@ func keepsPastBase(readings []threadReading) bool {
 // collection's read of a thread" has the measurement.
 const collectionBaseLineCharge = 3 << 19
 
-// collectionBaseRecords is the most records a pass's readings keep before it
-// takes the large slot: 2^13, about 2.7 MiB of the chain at End's peak, a
-// thread of some 16 MiB of ordinary lines (the package doc, as above).
+// collectionBaseRecords is the most a pass's readings keep before it takes the
+// large slot, in the chain's items ([threadChain.items]), its call ids among
+// them: 2^13, at most 2.7 MiB at End's peak, a thread of at least 4,096
+// records, some 8 MiB of ordinary lines (the package doc, as above).
 const collectionBaseRecords = 1 << 13
 
 // CollectionLargeReadsAtOnce is how many passes past their base this process

@@ -464,9 +464,9 @@ returned before the take: a collection is handed back uncounted, its run of
 failed collections ended, the hand-back's own write recording how the job's
 harness ended; a stop's and a loss's ending are kept and asked again. The read
 of a thread past its base, a line whose facts charge past 1.5 MiB whatever its
-length or 2^13 records kept, waits for one large-read slot of a pool apart from
-the transcripts' (internal/sandbox/executor's "A collection's read of a
-thread"), inside the read's own 15 seconds.
+length or 2^13 records and call ids kept, waits for one large-read slot of a
+pool apart from the transcripts' (internal/sandbox/executor's "A collection's
+read of a thread"), inside the read's own 15 seconds.
 
 **Why not read it with a mark.** A take that records the read and marks it when
 its answer is lost still says read for every loss the engine cannot see: a
