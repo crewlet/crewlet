@@ -164,7 +164,7 @@ var excessInventory = map[string]int{
 	"internal/logging":                              226,
 	"internal/maintenance":                          306,
 	"internal/mattermost":                           345,
-	"internal/mcp":                                  483,
+	"internal/mcp":                                  480,
 	"internal/mcprelay":                             5,
 	"internal/node":                                 377,
 	"internal/notify":                               860,

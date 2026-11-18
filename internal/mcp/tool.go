@@ -185,6 +185,7 @@ var _ Callable = (*Tool)(nil)
 //
 // The caller holds the bridge's lock.
 func (s *server) toolsFor(defs []toolDef) (filed []*Tool, blocked []*Definition, refused []RefusedTool) {
+	spec := *s.spec()
 	kept := make(map[string]*Tool, len(s.tools))
 	for _, t := range s.tools {
 		kept[t.raw] = t
@@ -193,19 +194,19 @@ func (s *server) toolsFor(defs []toolDef) (filed []*Tool, blocked []*Definition,
 	for _, def := range defs {
 		// Levels match the SERVER's name, before the prefix: an operator
 		// setting them has the server's listing in front of them.
-		if s.spec.Levels.Blocks(def.Name) {
-			d := definitionOf(def, s.spec)
+		if spec.Levels.Blocks(def.Name) {
+			d := definitionOf(def, spec)
 			blocked = append(blocked, &d)
 			continue
 		}
-		name := s.spec.ToolPrefix + def.Name
+		name := spec.ToolPrefix + def.Name
 		if reason := nameRefusal(name); reason != "" {
 			refused = append(refused, RefusedTool{Name: name, Reason: reason})
-			s.b.log.Warn("mcp_tool_refused", "server", s.spec.Name, "tool", name,
-				"reason", string(reason), "detail", reason.Sentence(name, s.spec.ToolPrefix))
+			s.b.log.Warn("mcp_tool_refused", "server", spec.Name, "tool", name,
+				"reason", string(reason), "detail", reason.Sentence(name, spec.ToolPrefix))
 			continue
 		}
-		fresh := newTool(s, def, s.spec)
+		fresh := newTool(s, def, spec)
 		if old, ok := kept[def.Name]; ok && old.sameAs(fresh) {
 			out = append(out, old)
 			continue
@@ -214,6 +215,14 @@ func (s *server) toolsFor(defs []toolDef) (filed []*Tool, blocked []*Definition,
 	}
 	sortRefused(refused)
 	return out, blocked, refused
+}
+
+// fileLocked files defs, the session's latest listing, under the server's
+// current spec, and keeps it for a refile. The caller holds the bridge's lock.
+func (s *server) fileLocked(defs []toolDef) {
+	s.listing = defs
+	s.tools, s.blocked, s.refused = s.toolsFor(defs)
+	s.unlisted = unlistedOverrides(*s.spec(), defs)
 }
 
 // sameAs reports whether two tools would put the same thing in front of a
@@ -351,12 +360,12 @@ func (t *Tool) Unreviewed() bool {
 
 // Instance is the full instance name of the server serving this tool —
 // "github::Engineer" for a per-role child. It identifies the PROCESS.
-func (t *Tool) Instance() string { return t.srv.spec.Name }
+func (t *Tool) Instance() string { return t.srv.spec().Name }
 
 // Server is the bare server name, which is what the model is shown and what it
 // types into list_mcp_server_tools. Two seats' children of one template are
 // the same server to a reader.
-func (t *Tool) Server() string { return ServerName(t.srv.spec.Name) }
+func (t *Tool) Server() string { return ServerName(t.srv.spec().Name) }
 
 // Origin is this tool's entry in the tool-origin grammar, ready for whatever
 // registry the caller keeps. See origin.go.
@@ -364,10 +373,14 @@ func (t *Tool) Origin() string { return Origin(t.Server()) }
 
 // CallBound is the longest one call of the tool runs: its server's request
 // timeout, at which the client cuts a call that has not answered
-// ([DefaultRequestTimeout] unless the server's entry sets its own). What a
+// ([DefaultRequestTimeout] unless the server's entry sets its own), after the
+// longest it waits for its server's replacement ([Spec.replaceBound]). What a
 // box's harness is told to wait for a call to the tool, beside the rest
 // (internal/api/mcpbridge's Bridge.CallTimeout).
-func (t *Tool) CallBound() time.Duration { return t.srv.spec.requestTimeout() }
+func (t *Tool) CallBound() time.Duration {
+	spec := t.srv.spec()
+	return spec.replaceBound() + spec.requestTimeout()
+}
 
 // Call runs the tool on its server.
 //
@@ -381,12 +394,16 @@ func (t *Tool) CallBound() time.Duration { return t.srv.spec.requestTimeout() }
 // A server that is NOT RUNNING — down and being restarted, or stopped by its
 // owner — is refused by the engine in its own words rather than by whatever
 // error a dead pipe produces, and so is a call whose session ended under it.
-// See server.refusal.
+// See server.refusal. One its owner is replacing hands the call on (replace.go).
 func (t *Tool) Call(ctx context.Context, args map[string]any) (Result, error) {
-	c := t.srv.live()
-	if c == nil || c.gone() {
-		return t.srv.refusal(t, c, false), nil
+	c, h := t.srv.enter()
+	if h != nil {
+		return t.handedOn(ctx, args, h)
 	}
+	if c == nil {
+		return t.srv.refusal(t, t.srv.lastClient(), false), nil
+	}
+	defer t.srv.leave()
 	blocks, err := c.callTool(ctx, t.raw, args)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -399,7 +416,7 @@ func (t *Tool) Call(ctx context.Context, args map[string]any) (Result, error) {
 			return t.srv.refusal(t, c, true), nil
 		}
 		return Result{
-			Output: fmt.Sprintf("MCP tool error (%s/%s): %v", t.srv.spec.Name, t.raw, err),
+			Output: fmt.Sprintf("MCP tool error (%s/%s): %v", t.srv.spec().Name, t.raw, err),
 			Failed: true,
 		}, nil
 	}

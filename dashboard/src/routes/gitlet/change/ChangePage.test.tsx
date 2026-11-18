@@ -24,6 +24,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { blobAnswer, inkedLine } from "~/test/codeScreens.tsx";
+import { NearBy } from "~/test/nearBy.ts";
 import { engineJson } from "~/test/engineAnswer.ts";
 import { withDerived } from "~/test/org.ts";
 import { settled } from "~/test/settle.ts";
@@ -31,11 +32,12 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { ChangePage } from "./ChangePage.tsx";
 import { EDIT_MOVED } from "./Description.tsx";
-import { FOLD_FROM_LINES } from "./FileStack.tsx";
+import { FOLD_FROM_LINES } from "../FileStack.tsx";
 import { NOT_AUTHOR_RESOLVE } from "./Finding.tsx";
 import { CHECKS_POLL_MS } from "../checks/CheckList.tsx";
 import { NOT_KEPT_MEASURED } from "./Merge.tsx";
 import { CHANGE_POLL_MS } from "./reads.ts";
+import { viewedDigests } from "./viewed.ts";
 
 beforeEach(() => sessionStorage.clear());
 afterEach(() => {
@@ -2088,7 +2090,7 @@ test.each([
     .getAllByRole("button", { name: "Reply" })
     .find((b) => b.getAttribute("aria-expanded") === null)!;
   await waitFor(() => expect(reply.getAttribute("title")).toBe(reason));
-  for (const name of ["Resolve", /^Answer the finding/]) {
+  for (const name of ["Resolve", /^Answer the finding/, "Viewed: app.go"]) {
     const held = screen.getByRole("button", { name });
     expect(held.getAttribute("title"), String(name)).toBe(reason);
   }
@@ -2809,36 +2811,6 @@ function diffAsked() {
   };
 }
 
-/** A stand-in IntersectionObserver whose sections come near only when a case says so. */
-class NearBy {
-  static made: NearBy[] = [];
-  targets: Element[] = [];
-  constructor(private readonly said: IntersectionObserverCallback) {
-    NearBy.made.push(this);
-  }
-  observe(el: Element) {
-    this.targets.push(el);
-  }
-  unobserve() {}
-  disconnect() {
-    this.targets = [];
-  }
-  takeRecords() {
-    return [];
-  }
-  /** Say the sections of `paths` came within one view. */
-  static near(...paths: string[]) {
-    for (const o of NearBy.made) {
-      const entries = o.targets
-        .filter((t) => paths.includes((t as HTMLElement).dataset.path ?? ""))
-        .map(
-          (target) => ({ target, isIntersecting: true }) as unknown as IntersectionObserverEntry,
-        );
-      if (entries.length > 0) act(() => o.said(entries, o as unknown as IntersectionObserver));
-    }
-  }
-}
-
 /** Sections come near only when a case says so. */
 function holdSectionsFar() {
   NearBy.made = [];
@@ -3521,6 +3493,405 @@ test("going to a file a filter hides clears the filters", async () => {
   fireEvent.keyDown(field, { key: "Enter" });
   await section("web/src/product/Shell.tsx");
   expect(new URLSearchParams(location.hash.split("?")[1]).has("q")).toBe(false);
+});
+
+/** A viewed key as Gitlet writes one, and its bytes. */
+const VIEWED_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+const VIEWED_KEY_BYTES = Uint8Array.from({ length: 32 }, (_, i) => i);
+/** The stack's files, each with the mode a mark names. */
+const VIEWED_FILES = STACK_FILES.map((f) => ({ ...f, new_mode: "100644" }));
+/** A reader who may mark files viewed. */
+const MARKER = { ...VIEWER, acts: [...VIEWER.acts, "code_mark_viewed"] };
+const PAGE_GO = "internal/render/page.go";
+const STREAM_GO = "internal/render/stream.go";
+
+/** A mark of a file at a state, as the engine keeps it (the digest's own correctness is viewed.test.ts's). */
+function viewedRow(path: string, oid?: string, mode?: string) {
+  const d = viewedDigests(VIEWED_KEY_BYTES, {
+    path,
+    status: oid ? "M" : "D",
+    new_oid: oid,
+    new_mode: mode,
+  });
+  return { path_digest: d.path, file_digest: d.file, at: "2026-11-18T09:00:00Z" };
+}
+
+/** The stack's engine holding the reader's `marks`, which each applied press changes; `act` answers a press. */
+function stubViewed({
+  marks = [],
+  files = VIEWED_FILES,
+  change,
+  viewed,
+  act = () => json({ outcome: "applied" }),
+}: {
+  marks?: ReturnType<typeof viewedRow>[];
+  files?: readonly Record<string, unknown>[];
+  change?: Record<string, unknown> | (() => Record<string, unknown>);
+  viewed?: (url: URL) => Promise<Response> | Response;
+  act?: () => Promise<Response> | Response;
+} = {}) {
+  const held = new Map(marks.map((r) => [r.path_digest, r]));
+  const acted = stubStack({
+    files,
+    ...(change ? { change } : {}),
+    parts: {
+      viewed:
+        viewed ??
+        (() =>
+          json({
+            position: POSITION,
+            level: "session",
+            viewed: [...held.values()],
+            ...(held.size > 0 ? { viewed_key: VIEWED_KEY } : {}),
+          })),
+    },
+  });
+  const fetched = globalThis.fetch as ReturnType<typeof vi.fn>;
+  const engine = fetched.getMockImplementation()! as (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetched.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (!url.pathname.startsWith("/operator/act/")) return engine(input, init);
+    const { args } = JSON.parse(String(init?.body)) as {
+      args: { viewed?: { path: string; blob_oid?: string; mode?: string }[]; unviewed?: string[] };
+    };
+    acted.push({ tool: url.pathname.split("/operator/act/")[1] ?? "", args });
+    const answer = await act();
+    if (answer.ok) {
+      for (const f of args.viewed ?? []) {
+        const row = viewedRow(f.path, f.blob_oid, f.mode);
+        held.set(row.path_digest, row);
+      }
+      for (const path of args.unviewed ?? []) held.delete(viewedRow(path).path_digest);
+    }
+    return answer;
+  });
+  return acted;
+}
+
+/** A file's Viewed toggle. */
+const toggle = (path: string) => screen.findByRole("button", { name: `Viewed: ${path}` });
+
+/** Whether a file's section draws its body, or its head alone. */
+const bodyOf = (path: string) =>
+  document.querySelector(`section[data-path="${CSS.escape(path)}"] .code-file__body`);
+
+// A MARK AT THE STATE SHOWN reads viewed, a viewed file starts folded, and the
+// toolbar counts it. Mutation: match on the path digest alone, and case 2's moved file reads viewed.
+test("a file marked at the blob shown reads viewed, folded and counted", async () => {
+  stubViewed({ marks: [viewedRow(PAGE_GO, "n1", "100644")] });
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const page = await toggle(PAGE_GO);
+  await waitFor(() => expect(page.getAttribute("aria-pressed")).toBe("true"));
+  expect(bodyOf(PAGE_GO)).toBeNull();
+  expect((await toggle(STREAM_GO)).getAttribute("aria-pressed")).toBe("false");
+  expect(bodyOf(STREAM_GO)).not.toBeNull();
+  expect(screen.getByText("1 of 5 viewed")).toBeTruthy();
+  const meter = screen.getByRole("meter", { name: "Files viewed" });
+  expect(meter.getAttribute("aria-valuetext")).toBe("1 of 5 files viewed");
+});
+
+// A MARK OF ANOTHER BLOB is no mark: a file a revision changed reads unviewed again.
+test("a file whose blob moved since its mark reads unviewed and unfolded", async () => {
+  stubViewed({ marks: [viewedRow(PAGE_GO, "n0", "100644")] });
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const page = await toggle(PAGE_GO);
+  await waitFor(() => expect(page.getAttribute("title")).toBeNull());
+  expect(page.getAttribute("aria-pressed")).toBe("false");
+  expect(bodyOf(PAGE_GO)).not.toBeNull();
+});
+
+// ONE PRESS, ONE MARK of the file at its state and the listing's position, and
+// nothing moves before the engine answers. Mutation: flip the toggle on press.
+test("pressing Viewed marks the file at its state, and it folds once the engine answers", async () => {
+  let answer: (r: Response) => void = () => {};
+  const acted = stubViewed({ act: () => new Promise<Response>((done) => (answer = done)) });
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const stream = await toggle(STREAM_GO);
+  await waitFor(() => expect(stream.getAttribute("title")).toBeNull());
+  stream.focus();
+  fireEvent.click(stream);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]!.args).toEqual({
+    change: "web!42",
+    viewed: [{ path: STREAM_GO, blob_oid: "n2", mode: "100644" }],
+    seen: "CREWLET_CODE_LOG@1:12",
+  });
+  expect(stream.getAttribute("aria-busy")).toBe("true");
+  expect(stream.getAttribute("aria-pressed")).toBe("false");
+  expect(bodyOf(STREAM_GO)).not.toBeNull();
+  answer(json({ outcome: "applied" }));
+  await waitFor(() => expect(stream.getAttribute("aria-pressed")).toBe("true"));
+  expect(bodyOf(STREAM_GO)).toBeNull();
+  expect(document.activeElement).toBe(stream);
+});
+
+// THE TAKE-BACK names the path alone, and the file unfolds once the read says so.
+test("pressing Viewed on a viewed file takes the mark back and unfolds it", async () => {
+  const acted = stubViewed({ marks: [viewedRow(PAGE_GO, "n1", "100644")] });
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const page = await toggle(PAGE_GO);
+  await waitFor(() => expect(page.getAttribute("aria-pressed")).toBe("true"));
+  fireEvent.click(page);
+  await waitFor(() => expect(page.getAttribute("aria-pressed")).toBe("false"));
+  expect(acted.map((a) => a.args)).toEqual([
+    { change: "web!42", unviewed: [PAGE_GO], seen: "CREWLET_CODE_LOG@1:12" },
+  ]);
+  expect(bodyOf(PAGE_GO)).not.toBeNull();
+});
+
+// A DELETION HAS NO BLOB: the tool takes neither id nor mode for it.
+// Mutation: send the listing's mode for a deletion, and the args carry it.
+test("a deleted file is marked with neither blob nor mode", async () => {
+  const legacy = {
+    path: "web/src/legacy.ts",
+    status: "D",
+    added: 0,
+    deleted: 3,
+    old_oid: "o7",
+    old_mode: "100644",
+  };
+  const acted = stubViewed({ files: [...VIEWED_FILES, legacy] });
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const gone = await toggle(legacy.path);
+  await waitFor(() => expect(gone.getAttribute("title")).toBeNull());
+  fireEvent.click(gone);
+  await waitFor(() => expect(gone.getAttribute("aria-pressed")).toBe("true"));
+  expect(acted[0]!.args.viewed).toEqual([{ path: legacy.path }]);
+});
+
+// THE ENGINE'S REFUSAL is said under the head, never in it, and nothing moves.
+// Mutation: draw the refusal beside the toggle, and the head's end holds it.
+test("a refused mark is said under the head, and the toggle stays as it was", async () => {
+  stubViewed({
+    act: () =>
+      json(
+        { error: "conflict", detail: "web!42 is merged, and a change keeps viewed files no more." },
+        409,
+      ),
+  });
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const stream = await toggle(STREAM_GO);
+  await waitFor(() => expect(stream.getAttribute("title")).toBeNull());
+  fireEvent.click(stream);
+  const section = await screen.findByRole("region", { name: STREAM_GO });
+  const said = await within(section).findByText(/keeps viewed files no more/);
+  expect(said.closest(".code-file__refusal")).not.toBeNull();
+  expect(said.closest(".code-file__head")).toBeNull();
+  expect(stream.getAttribute("aria-pressed")).toBe("false");
+  expect(bodyOf(STREAM_GO)).not.toBeNull();
+});
+
+// AN ENDED CHANGE KEEPS NO MARKS: every toggle is drawn, held with why.
+// Mutation: hide the toggle on a closed change, and it is not found.
+test("a closed change draws every toggle held with its sentence", async () => {
+  const acted = stubViewed({ change: detail({ state: "closed" }) });
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const page = await toggle(PAGE_GO);
+  expect(page.getAttribute("aria-disabled")).toBe("true");
+  expect(page.getAttribute("title")).toBe(
+    "web!42 is closed: a change keeps viewed files only while it is a draft or open.",
+  );
+  fireEvent.click(page);
+  await settled();
+  expect(acted).toHaveLength(0);
+  expect(screen.queryByRole("meter", { name: "Files viewed" })).toBeNull();
+});
+
+// A FLEET THAT DOES NOT ANSWER THE MARKS holds the toggles and Unviewed with why,
+// and counts nothing. Mutation: count while refused, and "0 of 5 viewed" is drawn.
+test("a fleet that does not answer the marks holds the toggles and Unviewed", async () => {
+  stubViewed({ viewed: () => json({ error: "bad_params", detail: "unknown part" }, 400) });
+  mount("#/gitlet/repos/web/changes/42?tab=files&only=unviewed", MARKER);
+  const page = await toggle(PAGE_GO);
+  await waitFor(() =>
+    expect(page.getAttribute("title")).toBe("Viewed files are unavailable on this fleet yet."),
+  );
+  expect(screen.queryByText(/of 5 viewed/)).toBeNull();
+  expect(sectionPaths()).toHaveLength(5);
+  fireEvent.click(screen.getByRole("button", { name: "Filter options" }));
+  const held = (await screen.findByRole("checkbox", { name: /^Unviewed/ })) as HTMLInputElement;
+  expect(held.disabled).toBe(true);
+  expect(held.checked).toBe(false);
+  expect(
+    within(screen.getByRole("dialog", { name: "Filter options" })).getByText(
+      "Viewed files are unavailable on this fleet yet.",
+    ),
+  ).toBeTruthy();
+});
+
+// UNVIEWED KEEPS THE FILES NOT VIEWED in the stack and the tree, and counts them.
+// Mutation: filter the tree only, and the stack keeps five sections.
+test("Unviewed keeps the files not viewed and counts them", async () => {
+  stubViewed({ marks: [viewedRow(PAGE_GO, "n1", "100644")] });
+  mount("#/gitlet/repos/web/changes/42?tab=files&only=unviewed", MARKER);
+  await waitFor(() => expect(sectionPaths()).toHaveLength(4));
+  expect(sectionPaths()).not.toContain(PAGE_GO);
+  expect(treePaths()).toHaveLength(4);
+  expect(treePaths()).not.toContain(PAGE_GO);
+  expect(screen.getAllByText("Showing 4 of 5 files").length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole("button", { name: "Filter options" }));
+  const box = (await screen.findByRole("checkbox", { name: "Unviewed 4" })) as HTMLInputElement;
+  expect(box.checked).toBe(true);
+});
+
+// A PATH GIT CANNOT SPELL AS TEXT is refused by the engine, so it is held first.
+test("a path that is not text is held", async () => {
+  const odd = {
+    path: "assets/caf�.svg",
+    path_b64: "YXNzZXRzL2NhZukuc3Zn",
+    status: "M",
+    added: 1,
+    deleted: 0,
+    new_oid: "n8",
+    new_mode: "100644",
+  };
+  stubViewed({ files: [...VIEWED_FILES, odd] });
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const held = await toggle(odd.path);
+  await waitFor(() =>
+    expect(held.getAttribute("title")).toBe("Only a file whose path is text can be marked viewed."),
+  );
+});
+
+// THE MARKS ARE READ WHOLE before a file reads viewed: a partial read would call
+// a viewed file unviewed. Mutation: stop at the first page, and page.go never reads viewed.
+test("the marks are read to their last page before a file reads viewed", async () => {
+  let second: (r: Response) => void = () => {};
+  stubViewed({
+    viewed: (url) => {
+      const at = { position: POSITION, level: "session", viewed_key: VIEWED_KEY };
+      if (url.searchParams.get("cursor") === "v:1") {
+        return new Promise<Response>((done) => {
+          second = done;
+        }).then(() => json({ ...at, viewed: [viewedRow(PAGE_GO, "n1", "100644")] }));
+      }
+      return json({ ...at, viewed: [viewedRow(STREAM_GO, "n0", "100644")], next: "v:1" });
+    },
+  });
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const page = await toggle(PAGE_GO);
+  await waitFor(() =>
+    expect(changeAsked.some((u) => u.searchParams.get("cursor") === "v:1")).toBe(true),
+  );
+  expect(page.getAttribute("title")).toBe("Still reading your viewed files.");
+  expect(page.getAttribute("aria-pressed")).toBe("false");
+  second(json({}));
+  await waitFor(() => expect(page.getAttribute("aria-pressed")).toBe("true"));
+  expect(bodyOf(PAGE_GO)).toBeNull();
+});
+
+// THE READER MAY UNFOLD A VIEWED FILE without taking the mark back.
+// Mutation: unmark on unfold, and a code_mark_viewed is sent.
+test("a viewed file the reader unfolds stays viewed", async () => {
+  const acted = stubViewed({ marks: [viewedRow(PAGE_GO, "n1", "100644")] });
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const page = await toggle(PAGE_GO);
+  await waitFor(() => expect(page.getAttribute("aria-pressed")).toBe("true"));
+  fireEvent.click(screen.getByRole("button", { name: `Unfold ${PAGE_GO}` }));
+  await waitFor(() => expect(bodyOf(PAGE_GO)).not.toBeNull());
+  expect(page.getAttribute("aria-pressed")).toBe("true");
+  await settled();
+  expect(acted).toHaveLength(0);
+});
+
+// A PRESS OF VIEWED FOLDS even a viewed file the reader unfolded: the host's fold
+// moving drops the reader's choice. Mutation: keep the reader's choice, and page.go stays open.
+test("marking a file the reader had unfolded folds it again", async () => {
+  stubViewed({ marks: [viewedRow(PAGE_GO, "n1", "100644")] });
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const page = await toggle(PAGE_GO);
+  await waitFor(() => expect(page.getAttribute("aria-pressed")).toBe("true"));
+  fireEvent.click(screen.getByRole("button", { name: `Unfold ${PAGE_GO}` }));
+  await waitFor(() => expect(bodyOf(PAGE_GO)).not.toBeNull());
+  fireEvent.click(page);
+  await waitFor(() => expect(page.getAttribute("aria-pressed")).toBe("false"));
+  expect(bodyOf(PAGE_GO)).not.toBeNull();
+  fireEvent.click(page);
+  await waitFor(() => expect(page.getAttribute("aria-pressed")).toBe("true"));
+  expect(bodyOf(PAGE_GO)).toBeNull();
+});
+
+// A NEW BLOB UNFOLDS a viewed file the reader folded: it reads unviewed again.
+// Mutation: keep the reader's choice, and page.go stays folded.
+test("a revision that moves a folded viewed file's blob unfolds it", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let version = 5;
+  const files = VIEWED_FILES.map((f) => ({ ...f }));
+  stubViewed({
+    marks: [viewedRow(PAGE_GO, "n1", "100644")],
+    files,
+    change: () => detail({ version }),
+  });
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const page = await toggle(PAGE_GO);
+  await waitFor(() => expect(page.getAttribute("aria-pressed")).toBe("true"));
+  fireEvent.click(screen.getByRole("button", { name: `Unfold ${PAGE_GO}` }));
+  fireEvent.click(await screen.findByRole("button", { name: `Fold ${PAGE_GO}` }));
+  await waitFor(() => expect(bodyOf(PAGE_GO)).toBeNull());
+  files[0] = { ...files[0]!, new_oid: "n9" };
+  version = 6;
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(page.getAttribute("aria-pressed")).toBe("false"));
+  expect(bodyOf(PAGE_GO)).not.toBeNull();
+});
+
+/** The stack's sections placed at `tops` in a scroller, each with a scrollIntoView spy. */
+function placeSections(tops: Record<string, number>) {
+  const scroller = document.body.appendChild(document.createElement("div"));
+  scroller.id = "screen-scroll";
+  const spies = new Map<string, ReturnType<typeof vi.fn>>();
+  for (const r of document.querySelectorAll<HTMLElement>("section[data-path]")) {
+    r.getBoundingClientRect = () => ({ top: tops[r.dataset.path!] ?? 0 }) as DOMRect;
+    const spy = vi.fn();
+    r.scrollIntoView = spy;
+    spies.set(r.dataset.path!, spy);
+  }
+  return { spies, done: () => scroller.remove() };
+}
+
+// A PRESS ON A STUCK HEAD keeps the reader's place: the folded file's head comes
+// to the top. Mutation: never keep the place, and stream.go is not scrolled to.
+test("pressing Viewed on a stuck head brings the folded file to the top", async () => {
+  stubViewed();
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const stream = await toggle(STREAM_GO);
+  await waitFor(() => expect(stream.getAttribute("title")).toBeNull());
+  const placed = placeSections({ [PAGE_GO]: -900, [STREAM_GO]: -500 });
+  stream.focus();
+  fireEvent.click(stream);
+  await waitFor(() => expect(bodyOf(STREAM_GO)).toBeNull());
+  expect(placed.spies.get(STREAM_GO)).toHaveBeenCalledWith({ block: "start" });
+  expect(placed.spies.get(PAGE_GO)).not.toHaveBeenCalled();
+  placed.done();
+});
+
+// MARKS THAT LAND LATE never scroll: a reader already past a viewed file stays
+// where they are. Mutation: keep the place for every fold, and page.go is scrolled to.
+test("marks read after the reader scrolled past a viewed file do not scroll", async () => {
+  let release: () => void = () => {};
+  const held = new Promise<void>((done) => (release = done));
+  stubViewed({
+    viewed: () =>
+      held.then(() =>
+        json({
+          position: POSITION,
+          level: "session",
+          viewed_key: VIEWED_KEY,
+          viewed: [viewedRow(PAGE_GO, "n1", "100644")],
+        }),
+      ),
+  });
+  mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
+  const page = await toggle(PAGE_GO);
+  await waitFor(() => expect(page.getAttribute("title")).toBe("Still reading your viewed files."));
+  const placed = placeSections({ [PAGE_GO]: -900, [STREAM_GO]: -500 });
+  release();
+  await waitFor(() => expect(bodyOf(PAGE_GO)).toBeNull());
+  expect(placed.spies.get(PAGE_GO)).not.toHaveBeenCalled();
+  placed.done();
 });
 
 // A DRAFT IS A DASHED CARD EDITED IN PLACE, keeping its id. Mutation: let Edit

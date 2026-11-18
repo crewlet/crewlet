@@ -157,8 +157,10 @@ ref moved, as you:
 - **Branches**: **New branch** at a branch, a tag or a commit
   (`code_create_branch`), and **Delete** at the head the row shows
   (`code_delete_branch`), after a confirmation;
-- a commit's page: **Revert** and **Cherry-pick** onto a branch you choose
-  (`code_revert`, `code_cherry_pick`); a conflict commits nothing.
+- a commit's page bar: **Browse files**, **Revert** and **Cherry-pick** onto
+  a branch you choose (`code_revert`, `code_cherry_pick`); a conflict commits
+  nothing. A commit's page says how it was pushed and how it landed, with the
+  gate it merged through.
 
 Its protection rules are set on its **Settings** tab ([Protecting a
 branch](#protecting-a-branch)), and it is deleted and restored there too
@@ -539,7 +541,8 @@ Files changed) sends them all as ONE review with your summary: a
 review and every finding it raises are one record, never half there. A seat
 reviews with `code_review_change`. Anybody who reviews the repository, and
 any person, may review, never an author of the change. Edit a draft where it stands; filter the files by name, extension or findings,
-and press `t` to go to a file.
+and press `t` to go to a file. Mark a file **Viewed** to fold it until a revision changes it,
+and filter to the Unviewed ones.
 
 - **A request for changes stands until its reviewer reviews again.** A push
   answers none: the reviewer's next review, approving or asking again, does.

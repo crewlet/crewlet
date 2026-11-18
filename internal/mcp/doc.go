@@ -76,6 +76,15 @@
 //     server process, because the credentials in its environment are one
 //     seat's identity. See instance.go.
 //
+// # Replacing a server
+//
+// Only what the process runs from restarts it ([Spec.sameProcess]); a tool's
+// prefix, level or hints refile it in place ([Bridge.Refile]). A restart
+// ([Bridge.Restart]) stops the old process before starting the new, so a seat's
+// child never runs twice, but drops no call: those in flight finish first, and
+// one made meanwhile waits and is made on the replacement if it lists the tool
+// unchanged, else refused unsent (replace.go). [Tool.CallBound] counts the wait.
+//
 // The wire vocabulary (content blocks, hints, tool defs) is this package's
 // own, not the SDK's. Nothing outside here should have to know which SDK the
 // engine speaks MCP with, and the SDK's typed surface is lossy in one place

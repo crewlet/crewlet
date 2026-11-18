@@ -67,7 +67,7 @@ func TestSpecDefaults(t *testing.T) {
 	}
 }
 
-func TestSameProcessAndSameCatalogue(t *testing.T) {
+func TestOnlyWhatTheProcessRunsFromIsTheProcess(t *testing.T) {
 	t.Parallel()
 	base := Spec{
 		Name: "github", Transport: TransportHTTP,
@@ -80,7 +80,7 @@ func TestSameProcessAndSameCatalogue(t *testing.T) {
 	same.Headers = map[string]string{"Authorization": "Bearer a"}
 	same.Levels = Levels{Tools: map[string]Level{"noisy": LevelBlocked}}
 	same.AnnotationOverrides = map[string]Annotations{"gh_create_pr": {ReadOnly: No}}
-	if !base.SameProcess(same) || !base.SameCatalogue(same) {
+	if !base.sameProcess(same) || !base.equal(same) {
 		t.Fatal("an identically-valued copy compared as different")
 	}
 	// AN UNSET DEFAULT IS NOT ALLOW: it leaves each tool at the level its
@@ -88,7 +88,7 @@ func TestSameProcessAndSameCatalogue(t *testing.T) {
 	// catalogue.
 	allowing := same
 	allowing.Levels = Levels{Default: LevelAllow, Tools: map[string]Level{"noisy": LevelBlocked}}
-	if base.SameCatalogue(allowing) {
+	if base.equal(allowing) {
 		t.Fatal("a default of allow compared as the same catalogue as no default")
 	}
 
@@ -97,12 +97,12 @@ func TestSameProcessAndSameCatalogue(t *testing.T) {
 	// on serving with the credential the operator has just revoked.
 	rotated := same
 	rotated.Headers = map[string]string{"Authorization": "Bearer b"}
-	if base.SameProcess(rotated) {
+	if base.sameProcess(rotated) {
 		t.Fatal("a changed Authorization header compared as the same process")
 	}
 	movedURL := same
 	movedURL.URL = "https://elsewhere.example/mcp"
-	if base.SameProcess(movedURL) {
+	if base.sameProcess(movedURL) {
 		t.Fatal("a changed url compared as the same process")
 	}
 
@@ -111,27 +111,34 @@ func TestSameProcessAndSameCatalogue(t *testing.T) {
 	// different catalogue.
 	reannotated := same
 	reannotated.AnnotationOverrides = map[string]Annotations{"gh_create_pr": {ReadOnly: Yes}}
-	if !base.SameProcess(reannotated) {
+	if !base.sameProcess(reannotated) {
 		t.Fatal("an annotation override is not a property of the process")
 	}
-	if base.SameCatalogue(reannotated) {
+	if base.equal(reannotated) {
 		t.Fatal("a changed annotation override compared as the same catalogue: the edit would silently do nothing")
 	}
 
 	reprefixed := same
 	reprefixed.ToolPrefix = "github_"
-	if !reprefixed.SameProcess(base) || base.SameCatalogue(reprefixed) {
+	if !reprefixed.sameProcess(base) || base.equal(reprefixed) {
 		t.Fatal("a prefix renames every tool without touching the child")
 	}
 	reblocked := same
 	reblocked.Levels = Levels{}
-	if !reblocked.SameProcess(base) || base.SameCatalogue(reblocked) {
+	if !reblocked.sameProcess(base) || base.equal(reblocked) {
 		t.Fatal("a tool's level changes the catalogue, not the child")
 	}
 	blockedByDefault := same
 	blockedByDefault.Levels = Levels{Default: LevelBlocked, Tools: map[string]Level{"noisy": LevelBlocked}}
-	if !blockedByDefault.SameProcess(base) || base.SameCatalogue(blockedByDefault) {
+	if !blockedByDefault.sameProcess(base) || base.equal(blockedByDefault) {
 		t.Fatal("a default level changes the catalogue, not the child")
+	}
+	// A NEW SIGNER IS A NEW PROCESS, as a new grant is: the comparison is
+	// every field but the filing ones, so no field is forgotten.
+	signed := same
+	signed.Signer = &fakeSigner{}
+	if base.sameProcess(signed) {
+		t.Fatal("a changed request signer compared as the same process")
 	}
 }
 

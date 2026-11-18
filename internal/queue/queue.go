@@ -894,12 +894,12 @@ type EventQueue interface {
 	// and ack per partition. A failing partition never blocks or replays
 	// a different one.
 	//
-	// On a laned topic a drain takes the priority lane's mail first, and a
-	// partition holding a priority event is dispatched ahead of every other
-	// ([OrderForDispatch]). The partition holds what the drain took: an event
-	// of it deeper on the topic than the drain's cap is delivered in its own
-	// turn once the topic reaches it, exactly once (the drain window is the
-	// bound of what one turn is handed; see lane.go).
+	// On a laned topic a drain takes the lane's mail first and again before
+	// each partition ([JoinLane]), and a partition holding a priority event is
+	// dispatched ahead of every other ([OrderForDispatch]). The partition holds
+	// what the drain took: an event of it deeper on the topic than the drain's
+	// cap is delivered in its own turn once the topic reaches it, exactly once
+	// (the drain window is the bound of what one turn is handed; see lane.go).
 	//
 	// opts is read live on every cycle, so a config reload changes
 	// linger and batch size with no re-subscription.
@@ -1586,6 +1586,20 @@ func eventType(ev *events.Event) string {
 		return ""
 	}
 	return ev.Type
+}
+
+// JoinLane is what a drain has left to dispatch once lane mail that landed
+// mid-drain joins it: partitioned and ordered again, so the lane's partitions
+// run next and an event the drain held under the same key joins their turn.
+func JoinLane[T any](rest []Partition[T], lane []T, key BatchKeyFunc, eventOf func(T) *events.Event) []Partition[T] {
+	if len(lane) == 0 {
+		return rest
+	}
+	var items []T
+	for _, p := range rest {
+		items = append(items, p.Items...)
+	}
+	return OrderForDispatch(PartitionByKey(append(items, lane...), key, eventOf), eventOf)
 }
 
 // OrderForDispatch establishes BOTH levels of ordering a drained batch

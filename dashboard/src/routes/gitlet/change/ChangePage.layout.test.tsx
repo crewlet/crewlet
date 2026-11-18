@@ -439,6 +439,54 @@ test("a file's head keeps its counts on its first line with a long path, at 820 
   expect(Math.abs(middle(counts) - path.first)).toBeLessThan(6);
 });
 
+// VIEWED SITS WITH THE COUNTS at the head's first line's end, however long the path.
+// Mutation: let the head's end wrap, and the toggle drops below the counts.
+test("a head keeps Viewed and its counts on its first line at 820 px with a long path", async () => {
+  await page.viewport(820, 800);
+  mount(820, FILES);
+  const content = await stacked();
+  const head = content.querySelectorAll(".code-file__head")[3]!;
+  const path = lineMiddles(head.querySelector("h3")!);
+  expect(path.lines).toBeGreaterThan(1);
+  const viewed = [...head.querySelectorAll("button")].find((b) =>
+    b.getAttribute("aria-label")?.startsWith("Viewed:"),
+  )!;
+  expect(Math.abs(middle(viewed) - path.first)).toBeLessThan(6);
+  expect(Math.abs(middle(viewed) - middle(head.querySelector(".code-diffstat")!))).toBeLessThan(2);
+  expect(head.scrollWidth).toBeLessThanOrEqual(head.clientWidth);
+});
+
+// THE PROGRESS SITS IN THE FILES' TOOLBAR: beside Go to file on a wide page, its words
+// alone on a phone. Mutation: give the words a fixed width, and the phone's toolbar overflows.
+test("the files' toolbar holds the progress at 1440 px and 390 px", async () => {
+  for (const width of [1440, 390]) {
+    await page.viewport(width, 800);
+    mount(width, FILES);
+    const content = await stacked();
+    const bar = content.querySelector<HTMLElement>(".code-files-bar")!;
+    const viewed = await eventually(() => {
+      const box = bar.querySelector<HTMLElement>(".code-files-bar__viewed");
+      expect(box?.firstElementChild?.textContent).toBe("0 of 5 viewed");
+      return box!;
+    });
+    const band = bar.getBoundingClientRect();
+    const box = viewed.getBoundingClientRect();
+    expect(box.left).toBeGreaterThanOrEqual(band.left - 0.5);
+    expect(box.right).toBeLessThanOrEqual(band.right + 0.5);
+    expect(overflowing(bar)).toEqual([]);
+    const meter = viewed.querySelector<HTMLElement>(".code-files-bar__meter")!;
+    if (width === 1440) {
+      const find = bar.querySelector(".code-files-bar__find")!;
+      expect(Math.abs(middle(viewed) - middle(find))).toBeLessThan(4);
+      expect(meter.getBoundingClientRect().width).toBeGreaterThan(0);
+    } else {
+      expect(getComputedStyle(meter).display).toBe("none");
+    }
+    flushSync(() => root?.unmount());
+    host?.remove();
+  }
+});
+
 // ON A PHONE A RENAME'S HEAD STARTS WITH ITS PATH beside the fold, and its copy
 // follows the path's last word. Mutation: make the lead a wrapping row, and the
 // fold stands alone on the first line.
