@@ -944,6 +944,36 @@ test.each([
   expect(acted).toHaveLength(0);
 });
 
+// THE PAGE BAR HOLDS BROWSE FILES, REVERT AND CHERRY-PICK, the writes drawn
+// for every reader and held with the reason. Mutation: draw Revert under the
+// header, outside the page bar.
+test.each([
+  [
+    "an anonymous reader",
+    { login: "", grants: [], handle: "", owner: "", name: "", acts: [], anonymous: true },
+    WRITE_REASONS.anonymous,
+  ],
+  ["a person the engine does not serve", { ...VIEWER, acts: [] }, WRITE_REASONS.not_served],
+])(
+  "the page bar holds Browse files, Revert and Cherry-pick, held for %s",
+  async (_who, viewer, reason) => {
+    const { acted } = stubEngine();
+    mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`, viewer);
+
+    const browse = await screen.findByRole("link", { name: "Browse the files at 0123456" });
+    expect(browse.getAttribute("href")).toBe(`#/gitlet/repos/web?ref=${SHA}`);
+    const bar = browse.closest<HTMLElement>(".page-actions")!;
+    expect(bar).not.toBeNull();
+    for (const name of ["Revert", "Cherry-pick"]) {
+      const write = within(bar).getByRole("button", { name });
+      await waitFor(() => expect(write.getAttribute("title")).toBe(reason));
+      fireEvent.click(write);
+    }
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(acted).toHaveLength(0);
+  },
+);
+
 // A COMMIT IS REVERTED ON A BRANCH CHOSEN, at the head that branch's listing
 // showed: one code_revert, the commit whole, nothing on the first press.
 // Mutation: drop expected_head, send the short id, or send before the dialog's

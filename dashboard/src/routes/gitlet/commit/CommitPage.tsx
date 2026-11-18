@@ -1,8 +1,9 @@
 /** One commit's page by its whole id: its header, its provenance in sentences (`Provenance.tsx`),
  *  and every file it changed as one stack, against its first parent (a root commit's against git's
- *  empty tree). */
+ *  empty tree). Its page bar holds Browse files, Revert and Cherry-pick (`CommitWrites.tsx`). */
 
 import {
+  ButtonLink,
   Copyable,
   EmptyState,
   EmptyValue,
@@ -11,8 +12,9 @@ import {
   Tag,
   VisuallyHidden,
 } from "@crewlethq/ui";
-import { BotGlyph, GitMergeGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
+import { BotGlyph, FileCodeGlyph, GitMergeGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
+import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { EMPTY_TREE, commitPath, isRepoName, repoPath, shortOID } from "~/lib/code.ts";
@@ -22,6 +24,7 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeCommitAnswer } from "~/protocol/index.ts";
 import { mergeTitle, provenanceOf, subjectOf } from "../repo/History.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
+import { repoHref } from "../paths.ts";
 import { Byline, useWhoName } from "../ui.tsx";
 import { CommitWrites } from "./CommitWrites.tsx";
 import { DiffFiles, type DiffAgainst } from "./DiffFiles.tsx";
@@ -67,8 +70,19 @@ export function CommitPage({ repo, sha }: { repo: string; sha: string }) {
   const base = parents[0] ?? (c.parent_count ? "" : EMPTY_TREE);
   return (
     <Stack gap={4}>
+      <PageActions>
+        <ButtonLink
+          size="small"
+          variant="secondary"
+          leadingIcon={<FileCodeGlyph size="sm" />}
+          href={repoHref(repo, { ref: c.oid })}
+          aria-label={`Browse the files at ${shortOID(c.oid)}`}
+        >
+          Browse files
+        </ButtonLink>
+        <CommitWrites repo={repo} sha={c.oid} subject={subjectOf(c)} />
+      </PageActions>
       <CommitHeader repo={repo} answer={answer} />
-      <CommitWrites repo={repo} sha={c.oid} subject={subjectOf(c)} />
       <Provenance answer={answer} />
       <section aria-label="What it changed" className="code-section">
         <VisuallyHidden as="h2">What it changed</VisuallyHidden>

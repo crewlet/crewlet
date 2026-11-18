@@ -9168,7 +9168,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   saying the totals, **Filter files** narrowing the tree and the stack (`q=`).
   The file `file=` names opens the stack at it, its pages read on until they
   list it, and `line=` is marked and revealed in its section. A change's revisions link
-  their heads here. Under the header, **Revert** and **Cherry-pick**
+  their heads here. In the page bar, **Browse files** opens the tree at
+  this commit, and **Revert** and **Cherry-pick**
   (`code_revert`, `code_cherry_pick`) each make one new commit on a branch
   the person chooses from the repository's branches, with the head that
   listing showed as `expected_head` and git's own message unless one is
