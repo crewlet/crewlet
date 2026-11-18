@@ -2385,15 +2385,13 @@ func TestAMarkedNoteIsDeliveredWhereALaterLaunchToldItAgain(t *testing.T) {
 }
 
 // A NOTE A TAKE NEVER HANDED OVER IS TOLD AGAIN BY THE NEXT LAUNCH, THROUGH THE
-// REAL TURN, AND DELIVERED THERE. A review's take of a note landed and its
-// answer was lost, and its settle marked the read unanswered. The review sends the
-// round back: the relaunch's runner names the marked note told again, its
-// launcher hands that to the launch, and the launch's write records the note
-// read by the job it opens, told again, at the take's own place among the
-// reads; the run is handed its brief with the note in it. The review then
-// accepts, and the turn's ending reports the note delivered at that brief,
-// told again, once. Its twin, a hook's serve the job's session lacks, leaves
-// the note waiting, so the review reads it at its first round, once.
+// REAL TURN, AND DELIVERED THERE. A review's take of a note landed, its answer
+// lost and its read marked unanswered; the review sends the round back, the
+// relaunch's runner names the note told again, its launcher hands that on, and
+// the launch's write records it read by the job it opens, told again, at the
+// take's place; the run's brief holds it. The review accepts, and the ending
+// reports it delivered at that brief, told again, once. Its twin, a hook's
+// serve the job's session lacks, leaves the note for the review's first round.
 //
 // Mutation: drop the notes told again from the runner's request, from the
 // launcher's hand-over or from the launch's write, or report the note as
