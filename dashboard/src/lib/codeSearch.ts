@@ -1,7 +1,5 @@
-/**
- * A code search's answer as Gitlet › Search and ⌘K's Code scope draw it: by repository and file,
- * each line addressed at the commit its repository was searched at, and the coverage in words.
- */
+/** A code search's answer as Gitlet › Search and ⌘K's Code scope draw it: files of blocks, the
+ *  matches marked, facets, and what was searched in words. */
 
 import type { CodeSearchAnswer } from "~/contract/code.ts";
 import { plural } from "./format.ts";
@@ -101,73 +99,125 @@ export function hitAt(
 
 /** What a search covered, in words: the tone, the lead sentence and one line per gap. */
 export interface CoverageNotes {
-  /** `warning` where lines may be missing — a repository unanswered, or the answer cut. */
+  /** `warning` where lines may be missing: a repository unanswered, or the answer cut. */
   variant: "info" | "warning";
-  lead: string;
+  lead: SearchLead;
   notes: string[];
 }
 
-/** A set of repositories, by name — the first the engine lists, and how many more. */
+/** A set of repositories in words: "web and api", "docs, wiki and 3 more", or "2 repositories". */
 function named(set: RepoSet): string {
   const names = set.names ?? [];
   const more = set.count - names.length;
-  if (names.length === 0) return "";
-  return more > 0 ? `${names.join(", ")} and ${more} more` : names.join(", ");
+  if (names.length === 0) return plural(set.count, "repository", "repositories");
+  if (more > 0) return `${names.join(", ")} and ${more} more`;
+  return names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
-function counted(set: RepoSet): string {
-  const list = named(set);
-  const head = plural(set.count, "repository", "repositories");
-  return list ? `${head} (${list})` : head;
+/** The search's lead sentence in parts, so the count can be drawn strong and the ref in mono. */
+export interface SearchLead {
+  /** "14 matching lines", "At least 14 matching lines", or "" where nothing matched. */
+  count: string;
+  /** What follows the count, up to the revision. */
+  rest: string;
+  /** The ref the address names, "" for each repository's default branch, or null where the
+   *  phrase names one with `ref:`, so the sentence names no revision. */
+  ref: string | null;
+}
+
+/** A `ref:` word in the phrase: a token check, not a reading of the grammar. */
+const PHRASE_REF = /(^|\s)ref:\S/;
+
+/** What was found and on what: lines, files and repositories, "at least" where a count is short. */
+export function searchLine(
+  groups: readonly RepoHits[],
+  coverage: Pick<Coverage, "searched" | "truncated">,
+  ref: string,
+  q = "",
+): SearchLead {
+  const on = ref || (PHRASE_REF.test(q) ? null : "");
+  const files = groups.flatMap((g) => g.files);
+  if (files.length === 0) {
+    const searched = plural(coverage.searched, "repository", "repositories");
+    return { count: "", rest: `No line matched in ${searched}`, ref: on };
+  }
+  const lines = matchingLines(files);
+  const words = plural(lines.count, "matching line");
+  return {
+    count: lines.exact && !coverage.truncated ? words : `At least ${words}`,
+    rest: ` in ${plural(files.length, "file")} across ${plural(groups.length, "repository", "repositories")}`,
+    ref: on,
+  };
 }
 
 /**
- * The coverage of an answer in words, every set the engine names that is not
- * empty: what was searched, then what was left unanswered — which makes it a
- * warning — then what was read another way or left out by the search's own
- * terms.
+ * The coverage of an answer in words, every set the engine names that is not empty: first what
+ * may be missing, which makes it a warning, then what was read another way or left out by the
+ * search's own terms.
  */
-export function coverageNotes(coverage: Coverage): CoverageNotes {
+export function coverageNotes(
+  coverage: Coverage,
+  groups: readonly RepoHits[] = [],
+  ref = "",
+  q = "",
+): CoverageNotes {
   const notes: string[] = [];
   let missing = false;
-  const unanswered = (set: RepoSet, why: string) => {
-    if (set.count <= 0) return;
+  const warn = (note: string) => {
     missing = true;
-    notes.push(`Not searched: ${counted(set)}, ${why}.`);
+    notes.push(note);
   };
-  unanswered(coverage.building, "the Gitlet node asked was still building its index");
-  unanswered(coverage.stale, "the Gitlet node asked was behind the code log or the configuration");
+  const one = (set: RepoSet) => set.count === 1;
+  if (coverage.building.count > 0) {
+    warn(
+      `Not searched: ${named(coverage.building)}, the Gitlet node asked was still building ${one(coverage.building) ? "its" : "their"} index.`,
+    );
+  }
+  if (coverage.stale.count > 0) {
+    warn(
+      `Not searched: ${named(coverage.stale)}, the Gitlet node asked was behind the code log or the configuration.`,
+    );
+  }
   for (const gap of coverage.not_answering ?? []) {
     if (gap.repos.count <= 0) continue;
-    missing = true;
-    notes.push(
-      `Not searched: ${counted(gap.repos)}, Gitlet node ${gap.node} did not answer${gap.why ? ` (${gap.why})` : ""}.`,
+    warn(
+      `Not searched: ${named(gap.repos)}, Gitlet node ${gap.node} did not answer${gap.why ? ` (${gap.why})` : ""}.`,
     );
   }
-  unanswered(coverage.not_permitted, "a Gitlet node judged you may not read them now");
+  if (coverage.not_permitted.count > 0) {
+    warn(
+      `Not searched: ${named(coverage.not_permitted)}, a Gitlet node judged you may not read ${one(coverage.not_permitted) ? "it" : "them"} now.`,
+    );
+  }
   if (coverage.truncated) {
-    missing = true;
-    notes.push(
-      "Lines may be missing: a repository’s search stopped at its limit, or the answer was cut at the most lines it holds.",
+    warn(
+      "Lines may be missing: the answer holds the most lines one search answers. Narrow it with repo: or path:.",
     );
   }
-  if (coverage.not_indexed.count > 0) {
-    notes.push(
-      `Read with git grep, no index answering for the commit: ${counted(coverage.not_indexed)} (the same lines, read more slowly).`,
+  if (coverage.past_limit.count > 0) {
+    warn(
+      `Past the limit: ${named(coverage.past_limit)}, named after the last line shown. Narrow the search with repo: or path: to reach them.`,
     );
   }
-  if (coverage.grep_not_named.count > 0) {
+  const ni = coverage.not_indexed;
+  if (ni.count > 0) {
     notes.push(
-      `Left out: ${counted(coverage.grep_not_named)}, searched only when a repo: filter names them.`,
+      one(ni)
+        ? `${named(ni)} was read with git grep: its index was not ready, so the same lines came more slowly.`
+        : `${named(ni)} were read with git grep: their indexes were not ready, so the same lines came more slowly.`,
+    );
+  }
+  const grep = coverage.grep_not_named;
+  if (grep.count > 0) {
+    const lone = one(grep) ? (grep.names ?? [])[0] : undefined;
+    notes.push(
+      lone
+        ? `${lone} is not indexed: name it with repo:${lone} to search it.`
+        : `${named(grep)} ${one(grep) ? "is" : "are"} not indexed: name ${one(grep) ? "it" : "one"} with repo: to search it.`,
     );
   }
   if (coverage.no_ref.count > 0) {
-    notes.push(`Nothing to search at the ref named in ${counted(coverage.no_ref)}.`);
-  }
-  if (coverage.past_limit.count > 0) {
-    notes.push(
-      `Past the limit: ${counted(coverage.past_limit)}, named after the last line shown. Narrow the search with repo: or path: to reach them.`,
-    );
+    notes.push(`Nothing to search at ${ref || "the ref named"} in ${named(coverage.no_ref)}.`);
   }
   if (coverage.skipped_files > 0) {
     notes.push(
@@ -176,8 +226,59 @@ export function coverageNotes(coverage: Coverage): CoverageNotes {
   }
   return {
     variant: missing ? "warning" : "info",
-    lead: `Searched ${plural(coverage.searched, "repository", "repositories")}.`,
+    lead: searchLine(groups, coverage, ref, q),
     notes,
+  };
+}
+
+/** Directories a path facet lists, the largest first; the rest are counted under them. */
+export const FACET_PATHS = 8;
+
+/** One facet row: what it narrows to, and how many matching lines the answer holds there. */
+export interface FacetRow {
+  key: string;
+  count: number;
+}
+
+/** The answer's matching lines by repository and by directory, counted from what came back. */
+export interface Facets {
+  all: number;
+  repos: FacetRow[];
+  /** Each directory as a `path:` pattern names it, without its trailing `/**`. */
+  paths: FacetRow[];
+  /** Directories past the ones listed. */
+  morePaths: number;
+  /** Why the counts are a floor: the answer was cut, or a file's total was not answered. */
+  partial: "cut" | "no total" | null;
+}
+
+export function facetsOf(
+  groups: readonly RepoHits[],
+  coverage: Pick<Coverage, "truncated">,
+): Facets {
+  let partial: Facets["partial"] = coverage.truncated ? "cut" : null;
+  const repos: FacetRow[] = [];
+  const dirs = new Map<string, number>();
+  for (const g of groups) {
+    const lines = matchingLines(g.files);
+    if (!lines.exact) partial ??= "no total";
+    repos.push({ key: g.repo, count: lines.count });
+    for (const f of g.files) {
+      const dir = dirOf(f.path).slice(0, -1);
+      // A root file counts in All only, and a path that is not UTF-8 has no pattern to name it.
+      if (!dir || f.pathB64) continue;
+      dirs.set(dir, (dirs.get(dir) ?? 0) + (f.total ?? f.lines.length));
+    }
+  }
+  const paths = [...dirs]
+    .map(([key, count]) => ({ key, count }))
+    .sort((a, b) => b.count - a.count || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return {
+    all: repos.reduce((n, r) => n + r.count, 0),
+    repos,
+    paths: paths.slice(0, FACET_PATHS),
+    morePaths: Math.max(0, paths.length - FACET_PATHS),
+    partial,
   };
 }
 

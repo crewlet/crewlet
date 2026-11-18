@@ -161,7 +161,11 @@ test("says the coverage where nothing matched, rather than only that nothing did
   stub({ hits: [], coverage: { ...coverage, building: { count: 2, names: ["web", "api"] } } });
   mountCode("#/gitlet/search?q=needle", <Search />);
   expect(await screen.findByText("No line matches “needle”")).toBeTruthy();
-  expect(screen.getByText(/Not searched: 2 repositories \(web, api\)/)).toBeTruthy();
+  expect(
+    screen.getByText(
+      "Not searched: web and api, the Gitlet node asked was still building their index.",
+    ),
+  ).toBeTruthy();
 });
 
 // A reconnect is not a new search: each open tab asking again is one more scatter to every node.
@@ -412,7 +416,7 @@ test("Show N more unanswered for the repository says why, beside its Retry", asy
   fireEvent.click(within(file).getByRole("button", { name: "Show 1 more matching line" }));
   expect(
     await within(file).findByText(
-      "These lines could not be read: Not searched: 1 repository (web), Gitlet node g2 did not answer (busy).",
+      "These lines could not be read: Not searched: web, Gitlet node g2 did not answer (busy).",
     ),
   ).toBeTruthy();
   expect(within(file).getByRole("button", { name: "Retry" })).toBeTruthy();
@@ -533,4 +537,191 @@ test("a gap's lines refused say so in its place", async () => {
       "These lines are unavailable: end_line: past the end of the file.",
     ),
   ).toBeTruthy();
+});
+
+/** The text of the line above the results. */
+const summary = () => document.querySelector(".code-search-summary")?.textContent;
+
+// Mutation: keep the old "Left out" sentence, or draw the quiet line as a Callout.
+test("the line says what was found and on what, quietly, with how to search docs", async () => {
+  stub(STORY);
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  await screen.findByRole("article", { name: MW });
+  expect(summary()).toBe(
+    "14 matching lines in 5 files across 2 repositories, on their default branches. docs is not indexed: name it with repo:docs to search it.",
+  );
+  expect(screen.getByText("14 matching lines").tagName).toBe("STRONG");
+  expect(document.querySelector(".crewlet-callout")).toBeNull();
+});
+
+// Mutation: say the default branches whatever ref: the phrase names.
+test("the line names no revision where the phrase names one with ref:", async () => {
+  stub(STORY);
+  mountCode("#/gitlet/search?q=Flush(%20ref%3Av2", <Search />);
+  await screen.findByRole("article", { name: MW });
+  expect(summary()).toBe(
+    "14 matching lines in 5 files across 2 repositories. docs is not indexed: name it with repo:docs to search it.",
+  );
+});
+
+test("the line names the ref searched at, in mono", async () => {
+  stub(STORY);
+  mountCode("#/gitlet/search?q=Flush(&ref=v2026.11.2", <Search />);
+  await screen.findByRole("article", { name: MW });
+  expect(summary()).toMatch(
+    /^14 matching lines in 5 files across 2 repositories, at v2026\.11\.2\./,
+  );
+  expect(screen.getByText("v2026.11.2").className).toBe("mono");
+});
+
+// Mutation: keep the quiet form where the answer was cut.
+test("a cut search says so in the warning form, its lead counted at least", async () => {
+  stub({ ...STORY, coverage: { ...STORY.coverage, truncated: true } });
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  await screen.findByRole("article", { name: MW });
+  expect(summary()).toBeUndefined();
+  const callout = document.querySelector(".crewlet-callout")!;
+  expect(callout.textContent).toContain(
+    "At least 14 matching lines in 5 files across 2 repositories, on their default branches.",
+  );
+  expect(callout.textContent).toContain("Lines may be missing:");
+  expect(callout.textContent).toContain("docs is not indexed");
+});
+
+/** A facet's rows, as each link's name and count. */
+const facetRows = (name: string) =>
+  within(screen.getByRole("navigation", { name }))
+    .getAllByRole("link")
+    .map((a) =>
+      /^(.*), (\d+) matching lines/
+        .exec(a.textContent ?? "")!
+        .slice(1)
+        .join(" "),
+    );
+
+// Mutation: narrow the hits in hand rather than asking the engine.
+test("the facets count each repository and directory, and a press narrows on the engine", async () => {
+  const asked = stub(STORY);
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  await screen.findByRole("article", { name: MW });
+  expect(facetRows("Narrow by repository")).toEqual(["All 14", "api 5", "web 9"]);
+  expect(facetRows("Narrow by path")).toEqual([
+    "internal/server 7",
+    "internal/http 5",
+    "internal/render 2",
+  ]);
+  const repos = screen.getByRole("navigation", { name: "Narrow by repository" });
+  const all = within(repos).getByRole("link", { name: /^All/ });
+  expect(all.getAttribute("aria-current")).toBe("page");
+  const web = within(repos).getByRole("link", { name: /^web/ });
+  expect(new URLSearchParams(web.getAttribute("href")!.split("?")[1]).get("repo")).toBe("web");
+
+  const before = history.length;
+  fireEvent.click(web);
+  await settled(() => asked.length);
+  expect(asked.some((u) => u.searchParams.get("repo") === "web")).toBe(true);
+  expect(history.length).toBe(before);
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("repo")).toBe("web");
+});
+
+// Mutation: send the directory without its "/**".
+test("a path facet asks for its directory and reads as current", async () => {
+  const asked = stub(STORY);
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  await screen.findByRole("article", { name: MW });
+  const paths = screen.getByRole("navigation", { name: "Narrow by path" });
+  fireEvent.click(within(paths).getByRole("link", { name: /^internal\/http/ }));
+  await settled(() => asked.length);
+  expect(asked.some((u) => u.searchParams.get("path") === "internal/http/**")).toBe(true);
+  // The answer to the narrowed search draws the facets again.
+  const row = () =>
+    within(screen.getByRole("navigation", { name: "Narrow by path" })).getByRole("link", {
+      name: /^internal\/http/,
+    });
+  expect(row().getAttribute("aria-current")).toBe("page");
+  // Pressed again, the current row clears its narrowing.
+  expect(new URLSearchParams(row().getAttribute("href")!.split("?")[1]).has("path")).toBe(false);
+});
+
+// Mutation: mark the facets partial only where a repository was past the limit.
+test("the facets are marked partial when the answer was cut", async () => {
+  stub({ ...STORY, coverage: { ...STORY.coverage, truncated: true } });
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  await screen.findByRole("article", { name: MW });
+  for (const name of ["Narrow by repository", "Narrow by path"]) {
+    const tag = within(screen.getByRole("navigation", { name })).getByText("Partial");
+    expect(tag.closest("[title]")!.getAttribute("title")).toBe(
+      "Counted from the lines answered: the answer was cut, so some lines are not counted.",
+    );
+  }
+});
+
+// Mutation: say the answer was cut where only a file's total is missing.
+test("the facets say why they are partial where a file's total was not answered", async () => {
+  stub({ hits: MORE_HITS.filter((h) => h.path === MW), tips: { web: WEB }, coverage });
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  await screen.findByRole("article", { name: MW });
+  const repos = screen.getByRole("navigation", { name: "Narrow by repository" });
+  expect(within(repos).getByText("Partial").closest("[title]")!.getAttribute("title")).toBe(
+    "Counted from the lines answered: a file’s total was not answered.",
+  );
+});
+
+/** A facet's rows as each link reads. */
+const facetWords = (name: string) =>
+  within(screen.getByRole("navigation", { name }))
+    .getAllByRole("link")
+    .map((a) => a.textContent);
+
+// Mutation: count All, or a directory outside the path searched, from the narrowed answer.
+test("a narrowed search counts no row its answer cannot total", async () => {
+  stub(STORY);
+  mountCode("#/gitlet/search?q=Flush(&repo=web&path=internal%2Fserver%2F**", <Search />);
+  await screen.findByRole("article", { name: MW });
+  const [all, ...repos] = facetWords("Narrow by repository");
+  expect(all).toBe("All");
+  expect(repos.every((r) => /matching lines/.test(r ?? ""))).toBe(true);
+  const [server, http, render] = facetWords("Narrow by path");
+  expect(server).toMatch(/^internal\/server, 7 matching lines/);
+  expect([http, render]).toEqual(["internal/http", "internal/render"]);
+});
+
+test("the facets are not marked partial when every total came back", async () => {
+  stub(STORY);
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  await screen.findByRole("article", { name: MW });
+  expect(screen.queryByText("Partial")).toBeNull();
+});
+
+// Mutation: count a file at the root under a directory of its own.
+test("a file at the root counts in All and in no path row", async () => {
+  stub({
+    hits: [
+      hit("web", "Makefile", 3, "\tgo run ./cmd Flush()", { total: 2 }),
+      hit("web", "cmd/main.go", 9, "\tw.Flush()", { total: 1 }),
+    ],
+    tips: { web: WEB },
+    coverage,
+  });
+  mountCode("#/gitlet/search?q=Flush(", <Search />);
+  await screen.findByRole("article", { name: "Makefile" });
+  expect(facetRows("Narrow by repository")).toEqual(["All 3", "web 3"]);
+  expect(facetRows("Narrow by path")).toEqual(["cmd 1"]);
+});
+
+// Mutation: drop the words inside the filters.
+test("the filters say what they are and their defaults", async () => {
+  stub({ hits: [], coverage });
+  mountCode("#/gitlet/search", <Search />);
+  const repo = await screen.findByRole("combobox", { name: "Repository" });
+  const path = screen.getByRole("textbox", { name: "Path" });
+  const ref = screen.getByRole("textbox", { name: "Branch, tag or commit" });
+  const field = (el: HTMLElement) => el.closest(".code-search-filter")!;
+  expect(field(repo).textContent).toContain("Repository:");
+  expect(repo.getAttribute("placeholder")).toBe("All");
+  expect(field(path).textContent).toContain("Path:");
+  expect(path.getAttribute("placeholder")).toBe("every path");
+  expect(field(ref).textContent).toContain("Ref:");
+  expect(ref.getAttribute("placeholder")).toBe("default branches");
+  expect(screen.getByText("A line matches within itself. Regex is RE2.")).toBeTruthy();
 });

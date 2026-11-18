@@ -3,26 +3,37 @@
  * address; asked over REST at no floor when Search is pressed, never per keystroke or on a reconnect.
  */
 
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, type ReactNode } from "react";
 import {
   Button,
   Callout,
+  Disclosure,
   EmptyState,
-  FormField,
   Input,
   NoticeList,
   SegmentedControl,
   Skeleton,
 } from "@crewlethq/ui";
-import { SearchGlyph } from "@crewlethq/icons/glyphs";
+import { FolderGlyph, GitBranchGlyph, SearchGlyph, SquareCodeGlyph } from "@crewlethq/icons/glyphs";
 import { useDraft, useNavigator, useParam } from "~/app/router.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { QueryState } from "~/components/common.tsx";
 import { CODE_SEARCH_MODES } from "~/contract/code.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
+import type { CodeSearchAnswer } from "~/contract/code.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { Facets } from "./search/Facets.tsx";
 import { Results } from "./search/Results.tsx";
-import { coverageNotes, groupHits, SEARCH_CONTEXT, SEARCH_PER_FILE } from "~/lib/codeSearch.ts";
+import {
+  coverageNotes,
+  facetsOf,
+  groupHits,
+  SEARCH_CONTEXT,
+  SEARCH_PER_FILE,
+  type RepoHits,
+  type SearchLead,
+} from "~/lib/codeSearch.ts";
 import "~/styles/gitlet.css";
 
 /** Each mode, as the bar offers it. */
@@ -43,6 +54,19 @@ function asMode(raw: string): (typeof CODE_SEARCH_MODES)[number] {
 
 /** "Every repository" in the bar's picker: no `repo=` at all. */
 const EVERY_REPO = "";
+
+/** Below this width of the page the facets fold above the results. */
+const FACETS_FOLD = 720;
+
+/** A filter's words inside its field, before its value. */
+function Lead({ icon, words }: { icon: ReactNode; words: string }) {
+  return (
+    <span className="code-search-filter__lead">
+      {icon}
+      {words}
+    </span>
+  );
+}
 
 export function Search() {
   // `/` FOCUSES THIS SCREEN'S PHRASE rather than opening the palette over it.
@@ -77,6 +101,8 @@ export function Search() {
   const groups = useMemo(() => (answer.data ? groupHits(answer.data) : []), [answer.data]);
   const again = answer.refetch;
   const search = useMemo(() => ({ q, mode, ref, again }), [q, mode, ref, again]);
+  const grid = useRef<HTMLDivElement>(null);
+  const narrow = useNarrowerThan(grid, FACETS_FOLD, groups.length > 0);
 
   return (
     <>
@@ -94,7 +120,13 @@ export function Search() {
             aria-label="Search the company’s code"
             ref={box}
             leading={<SearchGlyph size="sm" />}
-            placeholder="A name, a string or a pattern (repo:, path: and ref: filter it)"
+            trailing={
+              <span className="code-search-grammar t-caption" aria-hidden="true">
+                <span className="mono">repo:</span> <span className="mono">path:</span>{" "}
+                <span className="mono">ref:</span> narrow it
+              </span>
+            }
+            placeholder="A name, a string or a pattern"
             value={typedQ}
             onChange={(e) => setTypedQ(e.target.value)}
           />
@@ -116,36 +148,45 @@ export function Search() {
             Search
           </Button>
         </div>
-        {/* ONE ROW OF LABELLED FILTERS under the phrase, each its own size:
-            a placeholder alone was gone once typed, and each field took a row. */}
         <div className="code-search-filters">
           <div className="code-search-filter">
-            <RepoPicker repo={repo} onChoose={setRepo} every="Every indexed repository" />
+            <RepoPicker
+              repo={repo}
+              onChoose={setRepo}
+              every="All"
+              size="sm"
+              leading={<Lead icon={<SquareCodeGlyph size="xs" />} words="Repository:" />}
+            />
           </div>
-          <FormField label="Path" className="code-search-filter">
-            {(field) => (
-              <Input
-                id={field.id}
-                width="full"
-                spellCheck={false}
-                placeholder="internal/"
-                value={typedPath}
-                onChange={(e) => setTypedPath(e.target.value)}
-              />
-            )}
-          </FormField>
-          <FormField label="Branch, tag or commit" className="code-search-filter">
-            {(field) => (
-              <Input
-                id={field.id}
-                width="full"
-                spellCheck={false}
-                placeholder="main"
-                value={typedRef}
-                onChange={(e) => setTypedRef(e.target.value)}
-              />
-            )}
-          </FormField>
+          <div className="code-search-filter">
+            <Input
+              inputSize="sm"
+              width="full"
+              appearance="reference"
+              aria-label="Path"
+              spellCheck={false}
+              leading={<Lead icon={<FolderGlyph size="xs" />} words="Path:" />}
+              placeholder="every path"
+              value={typedPath}
+              onChange={(e) => setTypedPath(e.target.value)}
+            />
+          </div>
+          <div className="code-search-filter">
+            <Input
+              inputSize="sm"
+              width="full"
+              appearance="reference"
+              aria-label="Branch, tag or commit"
+              spellCheck={false}
+              leading={<Lead icon={<GitBranchGlyph size="xs" />} words="Ref:" />}
+              placeholder="default branches"
+              value={typedRef}
+              onChange={(e) => setTypedRef(e.target.value)}
+            />
+          </div>
+          <p className="code-search-rule t-caption muted">
+            A line matches within itself. Regex is RE2.
+          </p>
         </div>
       </form>
 
@@ -153,7 +194,7 @@ export function Search() {
         <EmptyState
           icon={<SearchGlyph size="xl" />}
           title="Search the company’s code"
-          description="Every repository you read that keeps a search index, or the ones a repo: filter names. A line matches within itself; regex is RE2."
+          description="Every repository you read that keeps a search index, or one a repo: filter names."
         />
       ) : (
         <>
@@ -166,20 +207,24 @@ export function Search() {
             detail={answer.detail}
             loading={answer.loading}
           >
-            {answer.data && (
-              <>
-                <SearchCoverage coverage={answer.data.coverage} />
-                {groups.length === 0 ? (
+            {answer.data &&
+              (groups.length === 0 ? (
+                <>
+                  <SearchCoverage coverage={answer.data.coverage} groups={groups} search={search} />
                   <EmptyState
                     icon={<SearchGlyph size="xl" />}
                     title={`No line matches “${q}”`}
-                    description="In what was searched: the note above says what that was."
+                    description="In what was searched: the line above says what that was."
                   />
-                ) : (
-                  <Results groups={groups} asked={search} />
-                )}
-              </>
-            )}
+                </>
+              ) : (
+                <div
+                  className={narrow ? "code-search code-search--narrow" : "code-search"}
+                  ref={grid}
+                >
+                  <Found data={answer.data} groups={groups} narrow={narrow} search={search} />
+                </div>
+              ))}
           </QueryState>
         </>
       )}
@@ -187,12 +232,76 @@ export function Search() {
   );
 }
 
-/** What the search covered, above the lines it found — on every answer. */
-export function SearchCoverage({ coverage }: { coverage: Parameters<typeof coverageNotes>[0] }) {
-  const notes = coverageNotes(coverage);
+/** The facets beside the coverage line and the files, or folded above them on a narrow page. */
+function Found({
+  data,
+  groups,
+  narrow,
+  search,
+}: {
+  data: CodeSearchAnswer;
+  groups: readonly RepoHits[];
+  narrow: boolean;
+  search: Parameters<typeof Results>[0]["asked"];
+}) {
+  const facets = useMemo(() => facetsOf(groups, data.coverage), [groups, data.coverage]);
   return (
-    <Callout variant={notes.variant} title={notes.lead}>
-      <NoticeList notices={notes.notes.map((n) => ({ key: n, title: n }))} />
-    </Callout>
+    <>
+      {narrow ? (
+        <Disclosure title="Narrow by repository or path" size="compact" headingLevel="none">
+          <Facets facets={facets} />
+        </Disclosure>
+      ) : (
+        <Facets facets={facets} />
+      )}
+      <div className="code-search-main">
+        <SearchCoverage coverage={data.coverage} groups={groups} search={search} />
+        <Results groups={groups} asked={search} />
+      </div>
+    </>
+  );
+}
+
+/** The lead in its words: the count strong and the ref in mono. */
+function LeadWords({ lead }: { lead: SearchLead }) {
+  return (
+    <>
+      {lead.count ? <strong>{lead.count}</strong> : null}
+      {lead.rest}
+      {lead.ref ? (
+        <>
+          , at <span className="mono">{lead.ref}</span>
+        </>
+      ) : lead.ref === "" ? (
+        ", on their default branches"
+      ) : null}
+      .
+    </>
+  );
+}
+
+/** What the search found and covered: one quiet line, or a warning where lines may be missing. */
+export function SearchCoverage({
+  coverage,
+  groups,
+  search,
+}: {
+  coverage: CodeSearchAnswer["coverage"];
+  groups: readonly RepoHits[];
+  search: { q: string; ref: string };
+}) {
+  const notes = coverageNotes(coverage, groups, search.ref, search.q);
+  if (notes.variant === "warning") {
+    return (
+      <Callout variant="warning" title={<LeadWords lead={notes.lead} />}>
+        <NoticeList notices={notes.notes.map((n) => ({ key: n, title: n }))} />
+      </Callout>
+    );
+  }
+  return (
+    <p className="code-search-summary t-body">
+      <LeadWords lead={notes.lead} />
+      {notes.notes.map((n) => ` ${n}`).join("")}
+    </p>
   );
 }
