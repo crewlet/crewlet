@@ -231,13 +231,11 @@ func TestAnAppThatIsNotInstalledIssuesNothing(t *testing.T) {
 // A REFUSED MINT SAYS WHY AND CARRIES NO TOKEN, AND IS HELD FOR ITS WAIT,
 // NEVER FOR THE HOUR.
 //
-// A refusal that lasts is one a person ends at GitHub: an installation that
-// has not approved a permission the seat asks for, or one that is suspended.
-// Every reader of the seat's token asked GitHub again on every read: each
-// running box's poll every fifteen seconds and the nudges after a submit,
-// every launch, every inbound delivery. Held for the wait its place in a run
-// of refusals earns, one refusing installation costs one request per wait
-// however many ask. A success forgets it, and a new key is a new question.
+// A refusal that lasts is one a person ends at GitHub (an unapproved
+// permission, a suspended installation); asked again on every read, each costs
+// a request. Held for the wait its place in a run of refusals earns, one
+// installation costs one request per wait. A success forgets it, and a new
+// key is a new question.
 //
 // Mutation: drop the held-refusal return in Token and the reads inside the
 // wait ask GitHub; count every refusal as the first and the second wait does

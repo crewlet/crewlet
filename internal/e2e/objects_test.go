@@ -166,25 +166,17 @@ func TestASeatOnAStatelessNodeWritesAFileTheDataNodeServes(t *testing.T) {
 }
 
 // A NODE THAT HOLDS NO DATA, IN A MAINTENANCE MODE, READS A FILE AND HANDS OUT
-// NO WRITER. The mode is the node's promise that it starts nothing that
-// writes, and a write it routes to a data node is one it starts — so it hands
-// no tracker writer to any surface, as a data node in the mode does not, while
-// a read is served as on any node: the file's row through a data node, its
-// bytes from the store the fleet shares.
+// NO WRITER. The mode promises the node starts nothing that writes, and a
+// write it routes to a data node is one it starts, so it hands no tracker
+// writer to any surface while a read is served (the row through a data node,
+// the bytes from the shared store). A writer handed out would stream up to a
+// gibibyte into the object store before a data node refused the row.
 //
-// Such a node used to be handed the router's writer all the same, the data
-// node's mode taken to be that node's to answer for. In a capacity window, with
-// every data node in the mode too, a write streamed up to a gibibyte into the
-// object store before a data node refused the row, as `unavailable` a client
-// retries; beside a data node in normal mode, as here, it simply landed.
-//
-// ASKED OF THE ENGINE, NOT OVER HTTP, because a node without `data` serves no
-// API: `ingress` needs `data`, so `crewlet run` builds none of the routes there
-// (no config surface either — no identity directory to ask who holds a seat),
-// and what the mode decides is what the engine hands every surface built per
-// request. Where those surfaces ARE built, on a data node in the mode, the
-// halves it hands the human write surface are internal/api's
-// TestAMaintenanceNodeServesAFilesBytesAndWritesNone.
+// ASKED OF THE ENGINE, NOT OVER HTTP: a node without `data` serves no API, and
+// the mode decides what the engine hands every surface built per request.
+// Where those ARE built, on a data node in the mode, internal/api's
+// TestAMaintenanceNodeServesAFilesBytesAndWritesNone holds the halves handed
+// the human write surface.
 func TestAStatelessNodeInAMaintenanceModeServesAFileAndTakesNone(t *testing.T) {
 	t.Parallel()
 	logs.attribute(t)

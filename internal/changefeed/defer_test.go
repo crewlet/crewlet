@@ -280,13 +280,11 @@ func TestTheDeferralBacksOffFromTwoSecondsToTheAckWindow(t *testing.T) {
 // A RECORD HANDED BACK FOR AN HOUR IS KEPT WHOLE AS A DEAD LETTER, AND ONLY
 // THEN ACKED.
 //
-// The broker keeps a delayed nak in the consumer's pending set, and a thousand
-// pending records stall every new wake of the domain, so the feed stops
-// handing back a record no node read in its hour. It keeps it first — its
-// sealed frame, byte for byte, and where it came from — under the feed's own
-// subject, and acks it only once the keep returned: an ack before it is a wake
-// lost between the two. A record a second short of the hour is still handed
-// back.
+// A thousand delayed naks pending stall every new wake of the domain, so the
+// feed stops handing back a record no node read in its hour. It keeps it
+// first (sealed frame byte for byte, and its origin) under the feed's own
+// subject and acks only once the keep returned: an earlier ack is a wake lost
+// between the two. A record a second short of the hour is still handed back.
 //
 // Mutation: ack before the keep, and the ack finds nothing kept; dead-letter
 // below the age, and the younger record is kept.
@@ -353,18 +351,15 @@ func TestARecordHandedBackForAnHourIsKeptWholeAndOnlyThenAcked(t *testing.T) {
 // A RECORD WHOSE DEAD LETTER WAS ALREADY KEPT IS ACKNOWLEDGED, AND NEITHER
 // KEPT NOR COUNTED AGAIN.
 //
-// A keep waits as long as its frame takes to cross the node's link, so it can
-// outlast the delivery's acknowledgement window, and the record is then handed
-// to a peer past its hour too. Both keeps name the record's identity, so the
-// queue keeps one entry and answers the keep that lands second already kept:
-// the record is settled there as well, and the one record let go is counted
-// once, by whichever node takes its dead-letter claim — here the node whose
-// keep stored the entry, which took the claim first.
+// A keep can outlast the delivery's acknowledgement window, and the record is
+// then handed to a peer past its hour too. Both keeps name the record's
+// identity, so the queue keeps one entry and answers the second already kept:
+// the record is settled there too and counted once, by whichever node takes
+// its dead-letter claim (here the first keeper).
 //
 // Mutation: count every keep answered stored or already kept without taking
-// the claim, and the peer counts the record dead-lettered a second time; name
-// a keep by its delivery rather than its record, and the store holds two
-// entries.
+// the claim, and the peer counts it a second time; name a keep by its delivery
+// rather than its record, and the store holds two entries.
 func TestARecordWhoseDeadLetterWasAlreadyKeptIsAcknowledgedAndNotCountedAgain(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -461,20 +456,15 @@ func captureLogs(t *testing.T) *syncBuffer {
 // A DEAD LETTER WHOSE STORING KEEP ANSWERED AN ERROR IS COUNTED ONCE, BY THE
 // KEEP ANSWERED NEXT.
 //
-// A keep can store its entry and still answer an error, its answer lost on the
-// way back, and its node then hands the record back, claiming and counting
-// nothing. The record's next keep is answered already kept, and it is the keep
-// that takes the record's dead-letter claim: it counts the record and logs its
-// line. Counted by the answer instead, the record would sit in CREWLET_DLQ
-// with no count and no line at all. The line says an earlier keep stored the
-// entry and no more, since an operator's discard or a feed start's replay may
-// have dropped it by then.
-//
-// NOT PARALLEL: it reads the process's log, which [logging.Configure] owns.
+// A keep can store its entry yet answer an error, so its node hands the
+// record back counting nothing. The next keep is answered already kept, takes
+// the dead-letter claim, and counts and logs (counted by the answer, the
+// record would sit uncounted in CREWLET_DLQ). NOT PARALLEL: it reads the
+// process's log, which [logging.Configure] owns.
 //
 // Mutation: count only a keep answered stored, and the record is counted
-// nowhere and its line never logged; give the line a stored keep's detail, and
-// it promises an entry that may be gone.
+// nowhere; give the line a stored keep's detail, and it promises an entry that
+// may be gone.
 func TestADeadLetterWhoseStoringKeepAnsweredAnErrorIsCountedOnce(t *testing.T) {
 	logs := captureLogs(t)
 	f := newFleet(t)
@@ -685,14 +675,10 @@ func TestARecordItsEstateDatesNothingForIsNeverDeadLettered(t *testing.T) {
 // A DEAD LETTER'S HEADER IS ONE BOUNDED LINE OF ASCII, so a record at its
 // log's ceiling is still kept, frame and all.
 //
-// The tracker's and the code log's records may be as large as the transport
-// carries, and the entry's body is the record's frame whole, so what the
-// header may cost is what the transport leaves beside a frame at the ceiling
-// once the queue has framed the keep. Its fields are bounded however long the
-// error a node met, every byte past the ASCII escaped — the header crosses the
-// wire as a header of the message, one line of ASCII — and it reads back as
-// what was kept. A header a newer build kept, one with no version, none at all
-// and bytes that are no header are refused.
+// The header may cost only what the transport leaves beside a frame at the
+// ceiling. Its fields are bounded however long the error, every byte past the
+// ASCII escaped, and it reads back as kept. A newer build's header, one with
+// no version, none at all and non-header bytes are refused.
 //
 // Mutation: stop cutting the detail, and the header outgrows the room beside
 // the frame; leave a rune past the ASCII unescaped, and the queue refuses the
@@ -831,17 +817,10 @@ func keptRecord(clk *clock) changefeed.Record {
 
 // A REPLAY DERIVES A KEPT RECORD'S WAKE ONCE, AND DROPS ITS ENTRY.
 //
-// Two entries can hold the same record, under its one identity (keepID), only
-// when its keeps are further apart than the window the broker holds the
-// identity for: a restart rebuilds the window from the entries still held, so
-// it forgets only a dropped entry's identity and never leaves two. So the case
-// keeps the record twice that far apart on the twin's clock, which a bubble
-// moves. The feed's start publishes the first entry's
-// wake through the claim a delivery passes and drops the entry; the second is
-// the same record, whose wake this replay has just settled, so it is dropped
-// with nothing published again — never left as though the claim this replay
-// took were a peer's — and its frame never read. The wake carries the record's
-// own place, as a delivered one does.
+// Two entries hold one record (keepID) only when its keeps are further apart
+// than the broker's identity window, so the case keeps it twice that far on
+// the bubble's clock. The start publishes the first entry's wake and drops
+// it; the second, already settled, is dropped unpublished and unread.
 //
 // Mutation: settle each entry alone, and the second is left as though a peer
 // held the claim this replay took; leave an entry whose wake was published,

@@ -40,20 +40,12 @@ const (
 // A KEEP ACROSS A SLOW LINK KEEPS ONE ENTRY, WHICHEVER NODE IS HANDED THE
 // RECORD.
 //
-// The real broker and the real group, whose acknowledgement window is thirty
-// seconds. A node whose connection to the broker crosses a link carrying 128
-// KiB a second — a leaf of a member here, the link linktest slows, standing
-// for a data node on an external broker, whose feed's keeps cross the network
-// the same way — keeps a record's 5 MiB frame, which takes about forty
-// seconds to cross. The record is past the age, so that node's feed keeps it
-// and acks it once the keep returns; meanwhile a member's node pulls the same
-// group, as every data node of a fleet does, so the record is handed to it
-// once the first delivery's window lapses, and it keeps the record too.
-// Nothing the first node sends while its keep crosses reaches the broker
-// before the keep's own last byte, so nothing it could say would keep the
-// record from the peer: the second keep is made harmless instead. Both name
-// the record's identity, the dead letters hold ONE entry of it, and the
-// record is settled.
+// The real broker and group (thirty-second acknowledgement window). A leaf
+// across a link slowed to 128 KiB a second (a data node on an external broker)
+// keeps a 5 MiB frame, about forty seconds to cross, so a member's node is
+// handed the record when the first window lapses and keeps it too. Nothing
+// the first node sends precedes its keep's last byte, so the second keep is
+// made harmless instead: both name the record's identity, one entry is held.
 //
 // Mutation: send a keep without its identity's message id, and the broker
 // keeps the peer's copy and the leaf's as two entries.

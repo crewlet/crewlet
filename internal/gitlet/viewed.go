@@ -171,24 +171,24 @@ func viewedKeyIn(ctx context.Context, tx *sql.Tx, repoID string) (ViewedKey, boo
 // validate refuses a gesture no node could decide, naming the field.
 func (g ViewedGesture) validate() error {
 	if validRepoID("files.repo_id", g.RepoID) != nil {
-		return fmt.Errorf("%w: files.repo_id: %q is not a repository's id", ErrInvalid, g.RepoID)
+		return refusedf("%w: files.repo_id: %q is not a repository's id", ErrInvalid, g.RepoID)
 	}
 	if bareUUIDv7("files.change_id", g.ChangeID) != nil {
-		return fmt.Errorf("%w: files.change_id: %q is not a change's id", ErrInvalid, g.ChangeID)
+		return refusedf("%w: files.change_id: %q is not a change's id", ErrInvalid, g.ChangeID)
 	}
 	if n := len(g.Viewed) + len(g.Unviewed); n < 1 || n > MaxViewedPerMark {
-		return fmt.Errorf("%w: files: a gesture names 1 to %d files", ErrInvalid, MaxViewedPerMark)
+		return refusedf("%w: files: a gesture names 1 to %d files", ErrInvalid, MaxViewedPerMark)
 	}
 	named := make(map[string]bool, len(g.Viewed)+len(g.Unviewed))
 	check := func(field, p string) error {
 		if !utf8.ValidString(p) {
-			return fmt.Errorf("%w: %s: not valid UTF-8", ErrInvalid, field)
+			return refusedf("%w: %s: not valid UTF-8", ErrInvalid, field)
 		}
 		if why := validGitPath(p, false); why != "" {
-			return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why)
+			return refusedf("%w: %s: %s", ErrInvalid, field, why)
 		}
 		if named[p] {
-			return fmt.Errorf("%w: %s: %q is named twice; a gesture names each file once", ErrInvalid, field, p)
+			return refusedf("%w: %s: %q is named twice; a gesture names each file once", ErrInvalid, field, p)
 		}
 		named[p] = true
 		return nil
@@ -205,7 +205,7 @@ func (g ViewedGesture) validate() error {
 			return fmt.Errorf("%w: %s.mode: %q is not a mode git gives a file, six octal digits", ErrInvalid,
 				field, f.Mode)
 		case (f.BlobOID == "") != (f.Mode == ""):
-			return fmt.Errorf("%w: %s: a file is marked with its new side's object id and mode, or with "+
+			return refusedf("%w: %s: a file is marked with its new side's object id and mode, or with "+
 				"neither where the revision deletes it", ErrInvalid, field)
 		}
 	}

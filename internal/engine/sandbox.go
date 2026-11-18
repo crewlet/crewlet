@@ -1803,6 +1803,16 @@ func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle stri
 	return &sandbox.HeldError{Refusal: refusal, Err: err}
 }
 
+// roundTellings is the tellings of bridged's round among tellings
+// ([sandbox.BridgeLog.Told]), as the runner credits them.
+func roundTellings(bridged sandbox.BridgeLog, tellings []sandbox.CallTelling) []runner.Telling {
+	var out []runner.Telling
+	for _, t := range bridged.Told(tellings) {
+		out = append(out, runner.Telling{Appended: t.Appended, Place: t.Place, Hook: t.Hook})
+	}
+	return out
+}
+
 // runnerResume is the collection a resumed segment's runner takes, read off the
 // run's row and the resume's own input: what the run did, where, under which
 // entry, and what carries it on. steered is every note the turn has read
@@ -1835,6 +1845,13 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal,
 		// its box holds them only as that count, so a relaunch carrying the
 		// round on in that box tells them ([runner.Resume.Owed]).
 		Owed: in.Run.Launch.OmittedCalls(),
+		// AND THE LATE CALLS IT COUNTED SO, which that copy is credited no
+		// telling of ([runner.Resume.LateOwed]).
+		LateOwed: in.Run.Launch.LateOmittedCalls(),
+		// AND THE LATE CALLS OF THE LOG'S ROUND A JOB'S SESSION TOOK, off the
+		// row: a continuation of a session holding one is not told it again
+		// ([runner.Resume.Tellings]).
+		Tellings: roundTellings(in.Bridged, in.Run.Steer.Tellings),
 		// AND WHAT THE COPY IN ITS BOX CARRIED, off the job's own record as the
 		// read that collected it measured its newest request, or as the record
 		// carried it along the copy's lineage: a relaunch carrying the round on

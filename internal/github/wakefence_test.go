@@ -14,16 +14,13 @@ import (
 // labelled as what it is and, only where the payload says one person wrote
 // every word of it, by whom.
 //
-// A comment, a review and an issue's or pull request's description reached the
-// seat's user message bare, and on a public repository anybody writes them. A
-// comment just created and a review are their writer's alone, and so is an
-// item's body on the event that opened it; an edited comment and a description
-// on any later event are nobody's the payload can name — the person who assigns
-// an issue did not write its description — which the fence labels `external`.
-// A writer whose account a seat holds reads as that colleague.
+// A comment just created, a review, and an item's body on the event that
+// opened it are their writer's alone; an edited comment and a description on
+// any later event are nobody's the payload can name, which the fence labels
+// `external`. A writer a seat holds reads as that colleague.
 //
 // Mutation: stamp the actor as the author and the assigner is named as the
-// description's writer; stamp no author and the colleague's fresh comment reads
+// description's writer; stamp no author and a colleague's fresh comment reads
 // as nobody's; render the raw body and the probe is outside every fence.
 func TestACodeHostWakeFencesWhatSomebodyWrote(t *testing.T) {
 	t.Parallel()

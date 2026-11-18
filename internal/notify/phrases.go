@@ -11,14 +11,12 @@ import (
 // # The rule every line here follows
 //
 // A phrase says the agent is BUSY and nothing else. It never claims a fact
-// about this particular turn — not what the agent is doing, not what it has
-// found, not how far along it is — because the line is drawn from a pool
-// before any of that is known, and a reader cannot tell a decorative claim
-// from a reported one. "is thinking it through" is safe; "is reading your
-// ticket" is a lie eight times out of nine.
+// about this turn (what the agent is doing, has found, how far along it is):
+// the line is drawn from a pool before any of that is known, and a reader
+// cannot tell a decorative claim from a reported one. "is thinking it
+// through" is safe; "is reading your ticket" is a lie eight times out of nine.
 //
-// The built-ins lean on the engine's own name; a company running Crewlet
-// will want its own, and overrides layer per phase.
+// Overrides layer per phase.
 
 // DefaultPhase names the pool a phase with none of its own falls back to.
 const DefaultPhase = "default"

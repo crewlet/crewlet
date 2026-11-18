@@ -63,19 +63,15 @@ func TestPresenceOmitsStatusWhenTheNodeHasNone(t *testing.T) {
 }
 
 // A PRESENCE TOO LARGE FOR ITS BOUND IS PUBLISHED WITHOUT ITS STATUS, and said.
-// The store refuses a Meta past coord.MaxLeaseMetaBytes; a beat that sent one
-// would renew nothing, and the node would leave its peers' count over a
-// display column. So the status goes, as a hook that did not answer goes —
-// the placement half is renewed, with the withdrawal and the Gitlet budget a
-// slow control plane must never drop for a beat — and an ERROR line names the
-// size, the bound and the remedy. No legal configuration reaches it; a status
-// hook handing over a thousand alarm marks, where the table holds one a kind,
-// does.
+// The store refuses a Meta past coord.MaxLeaseMetaBytes and a refused beat
+// renews nothing, so the status goes as an unanswered hook's does: the placement
+// half is renewed, with the withdrawal and the Gitlet budget, and an ERROR line
+// names the size, the bound and the remedy. Only a status handing over a
+// thousand alarm marks reaches it.
 //
-// Mutation: publish the whole presence whatever its size and the store
-// refuses it — no presence lease at all, red; rebuild the placement half
-// without the withdrawal or the budget, red; drop the line, or its size, and
-// its arm is red.
+// Mutation: publish the whole presence whatever its size, red; rebuild the
+// placement half without the withdrawal or the budget, red; drop the line, or
+// its size, and its arm is red.
 func TestAPresenceTooLargeForItsBoundIsPublishedWithoutItsStatus(t *testing.T) {
 	t.Parallel()
 	marks := make([]coord.AlarmMark, 1000)
@@ -429,15 +425,11 @@ func (c *countingHints) PreferredResources(ctx context.Context, class coord.Clas
 // does not pay it.
 //
 // Placement hints live in the epochs bucket, which has NO TTL and is never
-// pruned — it holds a record for every resource the deployment has ever
-// leased, so it is the largest thing a node reads and it grows for the life
-// of the deployment. The sweep runs every five seconds. Reading all of it to
-// sort a list of fewer than two elements — which has exactly one order — is
-// the whole of that cost for none of its benefit, and it lands hardest on a
-// node whose remaining candidates are all in acquire backoff, which is the
-// state the backoff exists to calm. The hint orders seats WITHIN a placement
-// group, so it is the groups' candidates that have to number two or more, not
-// the pass's.
+// pruned, so it is the largest thing a node reads, every five seconds. Reading
+// it to sort fewer than two elements is all cost, and lands hardest on a node
+// whose candidates are all in acquire backoff. The hint orders seats WITHIN a
+// placement group, so it is the groups' candidates that must number two or
+// more, not the pass's.
 func TestTheSweepReadsNoHintsWhenThereIsNothingToOrder(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)

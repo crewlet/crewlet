@@ -509,8 +509,9 @@ func (d *claudeEvents) Result() sandbox.Result {
 }
 
 // claudeSteerPrefix opens the `system/informational` line a hook of the run's
-// own prints as it hands the model a note ([ClaudeHookAnswer]): the event that
-// fired it, then the line's own opening (measured on 2.1.263 and 2.1.310).
+// own prints as it hands the model a note or a late call ([ClaudeHookAnswer]):
+// the event that fired it, then the line's own opening (measured on 2.1.263
+// and 2.1.310).
 var claudeSteerPrefix = regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` +
 	claudeEventFinish + `) says: crewlet: `)
 
@@ -531,9 +532,9 @@ func claudeSteerLine(subtype string, raw json.RawMessage) (string, bool) {
 }
 
 // claudeSteerSaid is what the run's own hook said as it handed the model a
-// note — the content after the event's opening, AS THE HARNESS RECORDED IT,
-// less the take's token, cut here alone ([withoutTakeToken]) — and false for
-// any other system message. ONE READING for the live transcript
+// note or a late call — the content after the event's opening, AS THE HARNESS
+// RECORDED IT, less the take's token, cut here alone ([withoutTakeToken]) — and
+// false for any other system message. ONE READING for the live transcript
 // ([claudeSteerLine]) and a captured session's ([ReadTranscript]). Neither
 // redaction nor a bound is here, because each applies its own: the live view
 // redacts the whole and cuts a line; the session reader redacts and bounds an

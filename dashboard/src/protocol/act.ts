@@ -58,6 +58,7 @@ import {
   type CaveatAction,
 } from "./writeOutcome.ts";
 import type { Remedy } from "./remedy.ts";
+import { refusedFieldSentence } from "./refusedFields.ts";
 
 /** A change the dashboard may make: a key of `contract/actions.ts`. */
 export type ActionTool = keyof typeof ACTIONS;
@@ -133,6 +134,8 @@ export type ActResult =
        * words — the merge controls — reads this, never the sentence.
        */
       hostRefusal: string;
+      /** The field an `invalid` refusal named (`writeOutcome.ts`), or none. */
+      fields: string[];
       /**
        * On a refusal on AUTHORITY, the grants any ONE of which would have
        * admitted the caller — read from the answer, never named by a screen.
@@ -259,5 +262,11 @@ function refusalOf(
     floors.written(domain, null, refreshes);
   }
   const { lookAgain: _lookAgain, ...refused } = failed;
-  return { ...refused, tool, opId };
+  // THE VALUE REFUSED, named: the class's "Check what was entered" blames the
+  // person for a value they may never have entered ([refusedFieldSentence]).
+  const named =
+    refused.code === "invalid" && refused.detail === "" && refused.fields.length > 0
+      ? refusedFieldSentence(tool, refused.fields)
+      : null;
+  return { ...refused, ...(named ? { sentence: named } : {}), tool, opId };
 }

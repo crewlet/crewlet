@@ -112,18 +112,11 @@ func TestABlockWithNothingReadableIsSkipped(t *testing.T) {
 
 // A WHOLE `Authorization` HEADER IS READ AS THE PAIR THAT REBUILDS IT.
 //
-// Both product clients construct their own header from (email, token): an
-// empty email selects `Bearer <token>`, a present one selects
-// `Basic base64(email:token)`. So what this lookup owes them is the pair, not
-// the text somebody typed.
-//
-// The Basic case was stored whole, in the token, with no email — the exact
-// shape that selects the BEARER scheme. Every seat configured that way sent
-// `Authorization: Bearer Basic <payload>`, was refused by Jira and Confluence
-// alike, and reported an identity failure over a credential that was perfectly
-// good. Asserted here through [jira.AuthOf], which is the header the client
-// actually sends, because the old case asserted the stored token and a stored
-// token is not what authenticates anything.
+// Both product clients build their header from (email, token): an empty email
+// selects `Bearer <token>`, a present one `Basic base64(email:token)`. So the
+// lookup owes them the pair. A Basic header stored whole in the token would
+// select the BEARER scheme and send `Bearer Basic <payload>`. Asserted through
+// [jira.AuthOf], the header the client actually sends, not the stored token.
 func TestAWholeAuthorizationHeaderRebuildsTheHeaderItCameFrom(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

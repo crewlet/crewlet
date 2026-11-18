@@ -279,24 +279,15 @@ func (s settler) Parse(context.Context, types.RawWebhook, *notify.Registry) ([]n
 // settleInbound returns once every delivery published to n's inbound edge
 // before it was called has been handled.
 //
-// FOR A DELIVERY THAT LEAVES NO RECORD. A parser that routes a delivery to
-// nobody — a green pipeline, a username no seat holds — is acked with nothing
-// published at all (internal/notify: "most webhooks concern nobody here"), so
-// there is no record of its own to wait for. So this publishes one more
-// delivery behind it and waits for THAT one's record: the service handles one
-// node's deliveries one at a time in the order they were published, which
-// [TestTheInboundEdgeHandlesOneNodesDeliveriesInOrder] holds, so once the last
-// is recorded every one before it was handled.
+// FOR A DELIVERY THAT LEAVES NO RECORD: a parser routing one to nobody is acked
+// with nothing published (internal/notify). So this publishes one more behind
+// it and waits for THAT one's record; deliveries are handled in order
+// ([TestTheInboundEdgeHandlesOneNodesDeliveriesInOrder]), so every earlier one
+// was handled. It goes TO A HUMAN SEAT, skipped by name at INFO: an unparsed
+// source would warn, which reads as a fault in a failing case's output.
 //
-// TO A HUMAN SEAT, from a source of its own: a source nothing parses would do
-// for the order, but the service warns about one as an integration wired at
-// the edge and nowhere else, and every settle wrote that warning into the run's
-// output and into any failing case's window, where it reads as a fault. A human
-// seat is skipped by name and logged at INFO.
-//
-// ONE NODE ONLY. The inbound group is fleet-wide, and on a fleet the delivery
-// under test and this one may be handled by different members, in either
-// order.
+// ONE NODE ONLY: the inbound group is fleet-wide, so on a fleet the delivery
+// under test and this one may be handled by different members, in either order.
 func settleInbound(t *testing.T, n *node) {
 	t.Helper()
 	source := "e2e-settle-" + uuid.NewString()
@@ -526,17 +517,13 @@ func (v *orderedVendor) recorded() []string {
 // THE INBOUND EDGE HANDLES ONE NODE'S DELIVERIES ONE AT A TIME, IN THE ORDER
 // THEY WERE PUBLISHED.
 //
-// Held here because the negative cases rest on it rather than because the
-// queue contract promises it: a delivery a parser routes to nobody leaves no
-// record, so those cases publish one more delivery behind it and wait for THAT
-// one's ([settleInbound]). That proves the first was handled only if nothing is
-// handled before what was published ahead of it — on a consumer that handled
-// deliveries side by side, the settling one could be recorded while the one
-// under test was still being decided, and every such case would be back to
-// asserting an absence at an arbitrary moment.
+// Held here because the negative cases rest on it ([settleInbound]), not
+// because the queue contract promises it: a consumer handling deliveries side
+// by side could record the settling one while the one under test is still
+// being decided.
 //
 // The first delivery's handling is held until the second's starts, or for
-// [holdFirst]: a consumer that handled the two side by side starts the second
+// [holdFirst]: a consumer handling the two side by side starts the second
 // inside that hold, and the log shows it before the first ended.
 func TestTheInboundEdgeHandlesOneNodesDeliveriesInOrder(t *testing.T) {
 	t.Parallel()

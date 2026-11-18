@@ -56,6 +56,20 @@ export function verdictItems(
   ];
 }
 
+/**
+ * Why a review is held as saying nothing: changes asked or a comment with no summary or finding.
+ */
+export function saysNothing(
+  verdict: CodeVerdict,
+  summary: string,
+  findings: number,
+): string | null {
+  if (verdict === "approve" || summary.trim() !== "" || findings > 0) return null;
+  return verdict === "request_changes"
+    ? "Say what to change: write a summary, or draft a finding on its lines."
+    : "Write the comment, or draft a finding on its lines.";
+}
+
 /** What each verdict's dialog is called, and what its press says it did. */
 const VERDICT_TITLES: Readonly<Record<string, { title: string; done: string }>> = {
   approve: { title: "Approve", done: "Approved" },
@@ -87,7 +101,7 @@ export function ReviewDialog({
   const words = VERDICT_TITLES[verdict] ?? { title: "Review", done: "Reviewed" };
   const held =
     read.findings !== null
-      ? undefined
+      ? (saysNothing(verdict, summary, drafts.length + carries.length) ?? undefined)
       : read.error === null
         ? "Reading your standing findings…"
         : "Your standing findings were not read: a review sent now would supersede those it leaves out.";

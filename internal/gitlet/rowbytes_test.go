@@ -131,6 +131,12 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 		var reviewer ReviewerRow
 		fill(rng, reflect.ValueOf(&reviewer).Elem())
 		check("reviewer", reviewer, reviewer.encodedBytes())
+		var move ChangeMove
+		fill(rng, reflect.ValueOf(&move).Elem())
+		check("move", move, move.encodedBytes())
+		var entry ChangeQueueEntry
+		fill(rng, reflect.ValueOf(&entry).Elem())
+		check("queue entry", entry, entry.encodedBytes())
 
 		var comment CommentRow
 		fill(rng, reflect.ValueOf(&comment).Elem())

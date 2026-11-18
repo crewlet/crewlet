@@ -100,28 +100,15 @@ func resultHolding(results []string, words ...string) string {
 
 // AN EXECUTOR READS ITS SEAT'S SESSION OVER THE BRIDGE (#519).
 //
-// With the company the node runs activated as the fleet's revision, which is
-// what a capture asks whether to keep a session, a seat's first turn runs its
-// executor in a real box, whose harness — the stand-in of codingcli_test.go —
-// files its transcript where Claude Code does; the run's collection keeps that
-// session in the object store, and the turn's end names it on the executor
-// log. Another seat keeps a session of its own, its ask holding the same word.
-// The seat's next turn, on another conversation, has its executor call
-// `list_sessions` with a word of the first turn's ask, `read_session` with that
-// word as `match`, and `read_session` of the other seat's turn and of a turn
-// nobody has — each over the run's own bridge, under the run's token: the
-// listing finds the first turn and not the other seat's, the read hands back
-// the first run's brief fenced as a kept session's words, and the other seat's
-// turn is not found, in the very words a turn nobody has gets, sent to the
-// listing. That the node holding the seat answers a bridged call as the run's
-// seat whatever the request carried is the bridge's own case
-// (mcpbridge.TestABridgedCallActsAsTheRunsSeatBehindTheGuard); this is the
-// seat's reads end to end.
-//
-// Mutation: leave the session tools off the seat's registry, and the run's
-// calls are refused: no listing, read or not-found answer ever comes back; read
-// a turn's row past its own seat (`agent_handle >= ?`), and the other seat's
-// session is found.
+// A first turn's stand-in harness files its transcript; another seat keeps a
+// session whose ask holds the same word. The next turn, on another
+// conversation, calls `list_sessions`, `read_session` with `match`, and
+// `read_session` of the other seat's turn and of a turn nobody has, over the
+// bridge: only the first turn is listed, its brief comes back fenced, and the
+// other seat's turn is not found, as a nobody's turn. Acting as the run's seat
+// is mcpbridge.TestABridgedCallActsAsTheRunsSeatBehindTheGuard.
+// Mutation: leave the session tools off the registry and every call is refused;
+// read a row past its own seat (`agent_handle >= ?`) and the other's is found.
 func TestAnExecutorReadsItsSeatsSessionOverTheBridge(t *testing.T) {
 	t.Parallel()
 	n := startCoding(t, codingModeWork)

@@ -9,16 +9,12 @@ import (
 //
 // # Why a set rather than "the" driver
 //
-// A company can run more than one chat surface, and a turn is triggered by
-// exactly one of them. A caller holding a single driver would either raise
-// the indicator on the wrong backend or, more likely, raise it on none: the
-// driver refuses a trigger whose `transport` key is not its own, so an
-// engine that handed out the FIRST chat backend it wired would leave every
-// turn on the second one silently unindicated.
-//
-// The dispatch needs no rules of its own because [StatusDriver.Begin]
-// already answers nil for a conversation it does not own. So this walks the
-// drivers and keeps whichever one claims the trigger — at most one can.
+// A company can run several chat surfaces, and a turn is triggered by exactly
+// one. A driver refuses a trigger whose `transport` key is not its own, so
+// handing out the FIRST backend wired would leave every turn on the second
+// silently unindicated. [StatusDriver.Begin] already answers nil for a
+// conversation it does not own, so this walks the drivers and keeps the one
+// that claims the trigger; at most one can.
 type Statuses struct{ drivers []*StatusDriver }
 
 // NewStatuses collects the drivers a node is running.
@@ -75,21 +71,15 @@ func (s *Statuses) Rejoin(handle, turnID string) *StatusSession {
 
 // Release drops ONE turn's hold on its indicator, wherever that hold is.
 //
-// It is what the engine calls when a turn that was kept alive has STOPPED
-// without ending: a detached executor that parked on a question is waiting
-// on a person, not working, and an indicator still saying "is thinking…" over
-// that wait is worse than no indicator at all.
+// The engine calls it when a kept-alive turn has STOPPED without ending: an
+// executor parked on a question waits on a person, and "is thinking…" over
+// that wait is worse than no indicator.
 //
-// [Statuses.Rejoin] then [StatusSession.End] rather than a clear of its own,
-// which is the whole of it: the hold is reference-counted by turn id, so a
-// second turn holding the same thread — a queued follow-up, a colleague's ask
-// — keeps ITS indicator and only the last hold takes the indicator down. A
-// driver-level clear would have taken that second turn's indicator with it.
-//
-// A hold this node does not have answers a nil session whose End is a no-op,
-// which is the honest outcome where the park landed on a node that is not the
-// one that raised the indicator: that node cleared it when it released the
-// seat ([Statuses.ClearFor]).
+// [Statuses.Rejoin] then [StatusSession.End], not a clear of its own: holds
+// are reference-counted by turn id, so a second turn in the thread keeps ITS
+// indicator and only the last hold takes it down. A hold this node lacks
+// answers a nil session whose End is a no-op: the node that raised it cleared
+// it on releasing the seat ([Statuses.ClearFor]).
 func (s *Statuses) Release(ctx context.Context, handle, turnID string) {
 	s.Rejoin(handle, turnID).End(ctx, false)
 }
