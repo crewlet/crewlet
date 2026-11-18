@@ -3693,11 +3693,6 @@
   padding: 0;
 }
 
-.code-file__diff > .crewlet-diff-view__body {
-  border: 0;
-  border-radius: 0;
-}
-
 .code-file__outdated,
 .code-file__unplaced {
   padding: var(--spacing-2);

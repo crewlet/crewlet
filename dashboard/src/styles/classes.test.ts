@@ -600,7 +600,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-diff-view__body",
-    why: "uilet's DiffView writes it on the box its lines sit in. styles/gitlet.css drops its border and rounding where a change's file card holds the diff (`.code-file__diff`, the DiffView's `className`), so the lines run flush under the file's head. Another rule about OUR composition of the package's component.",
+    why: "uilet's DiffView writes it on the box its lines sit in. styles/frame.css drops its border and rounding where a change's file card holds the diff (`.code-file__diff`, the DiffView's `className`), so the lines run flush under the file's head; the shell's sheet, since a lazy one may carry no kit rule. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
