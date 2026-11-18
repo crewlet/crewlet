@@ -57,7 +57,10 @@ function figureWords(l: ModelLimit): string {
 
 /** How much of a window is used, in words: its figure, else its state. */
 function usedWords(l: ModelLimit): string {
-  return figureWords(l) || { ok: "within its limit", warning: "near its limit", reached: "reached" }[l.state];
+  return (
+    figureWords(l) ||
+    { ok: "within its limit", warning: "near its limit", reached: "reached" }[l.state]
+  );
 }
 
 /** One window as the kit draws it, named by its whole sentence. */
@@ -71,7 +74,13 @@ export function limitWindow(l: ModelLimit, now: number): LimitWindow {
     used: l.used ?? undefined,
     figure: l.used === null ? LIMIT_STATE[l.state] : undefined,
     note: whenWords(l, now, false),
-    name: [`${label} limit`, STATE_WORDS[l.state], figureWords(l), when, l.stale ? `as of ${relTime(l.seen, now)}` : ""]
+    name: [
+      `${label} limit`,
+      STATE_WORDS[l.state],
+      figureWords(l),
+      when,
+      l.stale ? `as of ${relTime(l.seen, now)}` : "",
+    ]
       .filter(Boolean)
       .join(", "),
   };
@@ -107,10 +116,15 @@ export function UsageLimitsCell({ model }: { model: ModelView }) {
   const now = useNow();
   const describedBy = useId();
   const limits = model.entry.limits;
-  if (limits.length === 0) return <LimitMeters label={`Usage limits of ${model.key}`} windows={[]} empty={NO_LIMITS} />;
+  if (limits.length === 0)
+    return <LimitMeters label={`Usage limits of ${model.key}`} windows={[]} empty={NO_LIMITS} />;
   return (
     <Tooltip content={<LimitDetail limits={limits} now={now} />} placement="top">
-      <a className="models-limits" href={href(["settings", "models", model.key])} aria-describedby={describedBy}>
+      <a
+        className="models-limits"
+        href={href(["settings", "models", model.key])}
+        aria-describedby={describedBy}
+      >
         <LimitMeters
           label={`Usage limits of ${model.key}`}
           windows={limits.map((l) => limitWindow(l, now))}

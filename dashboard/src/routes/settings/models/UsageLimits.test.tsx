@@ -27,7 +27,13 @@ function limit(over: Partial<ModelLimit> & Pick<ModelLimit, "window">): ModelLim
   };
 }
 
-const FIVE_HOUR = limit({ window: "session", hours: 5, used: 0.83, state: "warning", resets_at: at(300) });
+const FIVE_HOUR = limit({
+  window: "session",
+  hours: 5,
+  used: 0.83,
+  state: "warning",
+  resets_at: at(300),
+});
 const WEEKLY = limit({ window: "weekly", hours: 168, used: 0.41, resets_at: at(60 * 24 * 3) });
 const OPUS = limit({ window: "model", hours: 168, model: "opus", state: "reached", until: at(90) });
 
@@ -64,14 +70,24 @@ test("each bar's name carries its state, its exact figure and the absolute reset
 
 test("a window known only by its state says the state, never a percentage", () => {
   const w = limitWindow(OPUS, MODELS_NOW);
-  expect(w).toMatchObject({ state: "refusing", used: undefined, figure: "Reached", note: "until 13:30" });
+  expect(w).toMatchObject({
+    state: "refusing",
+    used: undefined,
+    figure: "Reached",
+    note: "until 13:30",
+  });
   expect(w.name).toBe("Weekly Opus limit, reached, sitting out until 13:30 UTC");
 });
 
 test("a window that turned over since it was heard says so, and a stale one says how old it is", () => {
-  const over = limitWindow(limit({ window: "weekly", hours: 168, resets_at: at(-30), seen: at(-120), stale: true }), MODELS_NOW);
+  const over = limitWindow(
+    limit({ window: "weekly", hours: 168, resets_at: at(-30), seen: at(-120), stale: true }),
+    MODELS_NOW,
+  );
   expect(over).toMatchObject({ figure: "OK", note: "reset at 11:30" });
-  expect(over.name).toBe("Weekly limit, OK, turned over since it was last heard, reset at 11:30 UTC, as of 2h ago");
+  expect(over.name).toBe(
+    "Weekly limit, OK, turned over since it was last heard, reset at 11:30 UTC, as of 2h ago",
+  );
 });
 
 function mount(admin = true) {
@@ -92,13 +108,19 @@ function mount(admin = true) {
 }
 
 const row = (key: string) =>
-  screen.getAllByRole("row").find((r) => r.querySelector(".models-entry-cell .mono")?.textContent === key)!;
+  screen
+    .getAllByRole("row")
+    .find((r) => r.querySelector(".models-entry-cell .mono")?.textContent === key)!;
 
 test("the list's Usage limits column draws a bar per window, says when one is stale, and None reported", () => {
   mount();
   expect(screen.getByRole("columnheader", { name: /Usage limits/ })).toBeTruthy();
   const group = within(row("opus-main")).getByRole("group", { name: "Usage limits of opus-main" });
-  expect(within(group).getAllByRole("meter").map((m) => m.getAttribute("aria-label"))).toEqual([
+  expect(
+    within(group)
+      .getAllByRole("meter")
+      .map((m) => m.getAttribute("aria-label")),
+  ).toEqual([
     "5-hour limit, near its limit, 83% used, resets 17:00 UTC",
     "Weekly limit, OK, 41% used, resets Sun, Nov 1, 12:00 UTC",
   ]);
