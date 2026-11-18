@@ -4543,7 +4543,10 @@ is asked. For a holder, a repository they
 may not read is simply absent from its rows. Its open
 changes (`code_changes?owner=&state=open`, the owner's listing, which the
 engine keeps one state at a time), with **Open in Gitlet** for Gitlet › Changes
-narrowed to the owner, where the other states are; the reviews it gave
+narrowed to the owner, where the other states are; the reviews asked of it
+(`code_changes?needs=review&reviewer=`, the live changes whose ask of it
+stands), with **Open in Gitlet** for Gitlet › Changes waiting on its review;
+the reviews it gave
 (`code_reviews?reviewer=`, newest first), each row the change it judged, the
 verdict in words (a verdict is a judgement, not a state, so it carries no
 hue), the revision, the findings it raised and when, opening that change's
