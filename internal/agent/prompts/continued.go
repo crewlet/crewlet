@@ -1237,33 +1237,34 @@ const KeyKeptSession = "kept_session"
 // id, `match` finding a word in it. turn is the engine's record, defused by the
 // caller.
 //
+// THIS TURN'S IS KEPT ONLY UNTIL THIS RUN FIRST SAVES ITS OWN, which replaces it
+// on the turn's row, so the run is told to read it before then; no time is
+// given, which pacing or a failed save would make false. The last turn's is
+// another row, which nothing this turn keeps replaces.
+//
 // A SCHEDULE'S FIRE IS TOLD IN THE SCHEDULE'S WORDS (fire), as [BuildNextTurn]
-// and the endings block tell it: the session its schedule's last fire left, or
-// this fire's earlier launches'. Everywhere else in its brief a run its
-// schedule woke is told of fires, and "this conversation's last turn" beside
-// them names a turn nothing else in the brief speaks of.
+// and the endings block tell it: elsewhere in its brief a run its schedule woke
+// is told of fires, and "this conversation's last turn" would name a turn
+// nothing else there speaks of.
 //
 // ONE SENTENCE, AND ONLY HERE: a standing sentence about the session tools
-// would ride every request of every run and say what their descriptions say,
-// and this is the one place a model cannot know a session it could read
-// exists — a launch that could not continue the turn's own, or the one its
-// conversation's last turn left.
+// would ride every request of every run and repeat their descriptions; this is
+// the one place a model cannot know a session it could read exists.
 //
-// NEVER WHY IT IS NOT CONTINUED. Why a launch continues no session is said in
-// words for the log, and they quote what said no: a store's or a router's
-// error, a refused capture's reason, which carries what a box printed. Told
-// to the run in the engine's own voice, they put what a box wrote outside any
-// fence and an error meant for an operator into a vendor model's prompt; and
-// what the run can do about it is the same whatever the reason — read what
-// that session did.
+// NEVER WHY IT IS NOT CONTINUED: the log's words quote what said no (a store's
+// or a router's error, a box's output); told in the engine's voice, they would
+// put a box's words outside any fence and an operator's error into a vendor
+// model's prompt, and what the run can do is the same whatever the reason:
+// read what that session did.
 func KeptSession(turn string, thisTurn, fire bool) string {
 	said := nextTurnWordsFor(NextTurn{Fire: fire})
-	whose, what := "This "+said.whole+"'s last "+said.turn, "it did"
+	whose, read := "This "+said.whole+"'s last "+said.turn, ". Read what it did"
 	if thisTurn {
-		whose, what = "This "+said.turn+"'s earlier launches", "they did"
+		whose = "This " + said.turn + "'s earlier launches"
+		read = ", kept until this run first saves its own. Until then, read what they did"
 	}
-	return keptSessionHeader + "\n" + whose + " worked in a session this run does not continue. Read what " +
-		what + " with `" + toolname.ReadSession + "`, turn_id `" + turn + "`; `match` finds a word in it."
+	return keptSessionHeader + "\n" + whose + " worked in a session this run does not continue" + read +
+		" with `" + toolname.ReadSession + "`, turn_id `" + turn + "`; `match` finds a word in it."
 }
 
 // NextTurn is where the session a conversation's last turn left ends and the

@@ -189,8 +189,10 @@ schedule's fire, in the schedule's words: that its last fire did), and that
 which is the log's to say. Only where the seat is offered `read_session`, and
 never in the continuation a session reads; a relaunch that cannot take up the
 turn's own kept session names that one the same way, a round lost a second
-time included, and a relaunch of a turn that has kept nothing names the head
-its first launch froze only where the turn's row was read holding it.
+time included, and says it is kept only until the run first saves its own,
+which takes its place on the turn's row; a relaunch of a turn that has kept
+nothing names the head its first launch froze only where the turn's row was
+read holding it.
 
 ---
 
