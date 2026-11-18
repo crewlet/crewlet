@@ -456,6 +456,31 @@ func TestAGrantIsBoundedByTheParentsOwnTools(t *testing.T) {
 	}
 }
 
+// THE EXECUTOR ASKS IN ITS HARNESS'S SPELLING. It delegates from its harness,
+// which shows it the engine's tools under a prefix of its own, so the names it
+// passes are that harness's (`mcp__crewlet__read_file`). Compared verbatim,
+// every one was refused and the worker went without the tools it was sent
+// for. A prefixed name still reaches no tool the grant refuses.
+//
+// Mutation: compare the asked name verbatim, and every prefixed name is
+// rejected.
+func TestAGrantReadsAToolNameInItsHarnesssSpelling(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	g := subagent.Permit(w.snapshot, []string{"read_file"},
+		[]string{"mcp__crewlet__read_file", "crewlet_read_file", "mcp__crewlet__web_search"})
+
+	if !slices.Contains(g.Active, "read_file") || slices.Contains(g.Active, "mcp__crewlet__read_file") {
+		t.Errorf("active = %v, want read_file under the engine's own name", g.Active)
+	}
+	if n := slices.Index(g.Active, "read_file"); slices.Index(g.Active[n+1:], "read_file") >= 0 {
+		t.Errorf("one tool asked in two spellings was granted twice: %v", g.Active)
+	}
+	if !slices.Equal(g.Rejected, []string{"mcp__crewlet__web_search"}) {
+		t.Errorf("rejected = %v, want the tool the parent lacks, as it was asked", g.Rejected)
+	}
+}
+
 func TestAGrantRefusesTheEngineControlDenylist(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -3372,5 +3397,33 @@ func TestTheDelegateSchemaIsOneTheCheckKeeps(t *testing.T) {
 	tool, _ := toolFixture(t, &provider{name: "sub"})
 	if bad := tools.UnsupportedSchema(tool.Parameters()); len(bad) > 0 {
 		t.Errorf("delegate advertises what the check cannot keep: %v", bad)
+	}
+}
+
+// A WORKER IS TOLD ITS ROUNDS, AND ITS LAST ONE. A worker that spent every
+// round reading ended `no_result` with most of its answer in hand; told its
+// cap up front, and before its last round to submit what it has, it answers.
+//
+// Mutation: hand the worker's loop no last-round note, and it reads on to its
+// cap and ends with no result.
+func TestAWorkerIsToldToSubmitBeforeItsLastRound(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req modelView) (llmtest.Response, error) {
+		for _, m := range req.Messages {
+			if m.Role == llm.RoleUser && m.Content == prompts.SubagentLastRound {
+				return answer("four of five found", 2, 2), nil
+			}
+		}
+		return callTool("read_file", map[string]any{"path": "a"}, 2, 2), nil
+	}}
+	tk := task("t1", "read_file")
+	tk.MaxTurns = 3
+	res := one(t, baseConfig(t, w, p), subagent.Request{Tasks: []subagent.Task{tk}})
+	if res.Status != subagent.StatusOK || res.Output["result"] != "four of five found" {
+		t.Fatalf("result = %q %+v, want the partial answer submitted", res.Status, res.Output)
+	}
+	if !strings.Contains(res.SystemPrompt.Text, "You have up to 3 rounds of tool calls.") {
+		t.Errorf("the worker was not told its round cap: %q", res.SystemPrompt.Text)
 	}
 }

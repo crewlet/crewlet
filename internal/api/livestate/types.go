@@ -368,7 +368,7 @@ type Overlay struct {
 
 	// LastError is nil once the seat does real work again. It says WHY a
 	// seat stopped, rather than leaving a call on screen that never
-	// answers.
+	// answers. A worker's or a judge's failure is never it ([ownFailure]).
 	LastError *ErrorInfo `json:"last_error"`
 
 	// Budget is nil when there is no meter, which covers two situations
@@ -463,7 +463,8 @@ type LiveTurn struct {
 	// failed is whether any event of this turn so far was a failure — the
 	// rule a stored turn row applies ([types.Failed] per event), so the
 	// outcome the live projection records when the turn ends is the one a
-	// seeded row states for the same turn. Internal, never on the wire.
+	// seeded row states for the same turn. A worker's or a judge's event is
+	// never one ([ownFailure]). Internal, never on the wire.
 	failed bool
 }
 
@@ -476,8 +477,9 @@ const (
 	OutcomeCompleted TurnOutcome = "completed"
 	// OutcomeFailed — the turn ended and at least one of its events was a
 	// failure: a failed phase, an unavailable provider, a breached guard,
-	// a lost executor. The same rule the turn list's `failed` applies, so
-	// a turn seeded from the store and one watched live say the same.
+	// a lost executor. Never a worker's or a judge's ([ownFailure]). The
+	// same rule the turn list's `failed` applies, so a turn seeded from the
+	// store and one watched live say the same.
 	OutcomeFailed TurnOutcome = "failed"
 	// OutcomeStopped — a PERSON ended the turn: a pause with `stop_running`
 	// reached it at a round, or ended the executor it was parked on. Not a

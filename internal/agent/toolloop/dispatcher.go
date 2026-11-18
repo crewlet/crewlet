@@ -69,8 +69,8 @@ type dstate int
 const (
 	// stateOpen is a phase still working.
 	stateOpen dstate = iota
-	// statePausing is a run ended for a person's note, which the next run
-	// reads as a user message.
+	// statePausing is a run ended for a note the next run reads as a user
+	// message: a person's, or [Config.LastRoundNote].
 	statePausing
 	// stateRelist is a run ended over an activation its harness would never see.
 	stateRelist
@@ -582,6 +582,10 @@ func (d *dispatcher) reviewLocked(t *observedTurn) {
 		// have all come, the run ends before the harness can make another
 		// request — at once, where none of them is the host's.
 		d.decideLocked(stateExhausted, t.round)
+	case t.round == d.cfg.MaxRounds-1 && len(t.calls) > 0 && d.cfg.LastRoundNote != "":
+		// THE NEXT ROUND IS THE LAST: the run ends here so the next one
+		// reads [Config.LastRoundNote] first.
+		d.decideLocked(statePausing, t.round)
 	}
 	if len(t.calls) > 0 && d.cfg.Steer != nil && d.cfg.Steer.Waiting() {
 		// A NOTE WAITING while the model asks for more: the response's

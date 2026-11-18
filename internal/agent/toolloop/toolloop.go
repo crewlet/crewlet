@@ -1225,6 +1225,11 @@ type Config struct {
 	// its answer exactly as a loop that declared none.
 	TerminateAfter []string
 
+	// LastRoundNote is said to the model as a user message before its last
+	// round: a run that would go on into it ends once the calls of the round
+	// before are answered, as for a person's note. Empty says nothing.
+	LastRoundNote string
+
 	// CorrectivesSpent is how many finishing correctives the run of
 	// declines this invocation CONTINUES has already been sent — by an
 	// earlier invocation of the same phase, the withheld one its caller
@@ -1383,6 +1388,7 @@ func Run(ctx context.Context, cfg Config) (_ *Result, err error) {
 	emptyAnswers := 0
 	terminated, exhausted := false, false
 	withheld := ""
+	lastNoted := false
 
 	// state is the loop's record as it stands, the one shape every exit and
 	// every publish is built from — so a field added to the Result cannot
@@ -1487,6 +1493,12 @@ func Run(ctx context.Context, cfg Config) (_ *Result, err error) {
 				msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: note.Message})
 				steers = append(steers, SteerMark{Round: next, ID: note.ID})
 			}
+			rec.Unlock()
+		}
+		if cfg.LastRoundNote != "" && !lastNoted && d.roundsUsed() == cfg.MaxRounds-1 {
+			lastNoted = true
+			rec.Lock()
+			msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: cfg.LastRoundNote})
 			rec.Unlock()
 		}
 		d.reopen()
