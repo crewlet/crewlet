@@ -892,10 +892,11 @@ func (w *Waiter) isBusy(turnID string) bool {
 
 // newStint is a stint of the duty for a pass under ctx to hold
 // ([Waiter.stint]): made off the waiter's life, so it outlives the pass that
-// made it, or off ctx before Start. Its caller holds w.mu.
+// made it, and off ctx's values alone before Start, as [Waiter.rowContext]
+// is, so no pass leaves a child of its context behind. Its caller holds w.mu.
 func (w *Waiter) newStint(ctx context.Context) (context.Context, context.CancelFunc) {
 	if w.life == nil {
-		return context.WithCancel(ctx)
+		return context.WithCancel(context.WithoutCancel(ctx))
 	}
 	return context.WithCancel(w.life)
 }
