@@ -2,15 +2,11 @@
 // comes back.
 //
 // EVERY CASE HERE IS ABOUT THIS LAYER and not about the reader underneath it.
-// The rules about rooms, cursors and unread ranges are certified in
-// internal/chatlet against a real estate; what is decided HERE is who the viewer
-// is, what reaches the reader, how a refusal is classified, and what the wire
-// carries — and each of those has failed silently somewhere in this tree
-// before: a filter honoured on one transport, a level that was a label, a
-// refusal rendered as a broken server.
-//
-// So the assertions are mostly about the REQUEST the surface built and the
-// JSON it produced, which is the half a canned answer would otherwise hide.
+// Rooms, cursors and unread ranges are certified in internal/chatlet against a
+// real estate; what is decided HERE is who the viewer is, what reaches the
+// reader, how a refusal is classified, and what the wire carries. So the
+// assertions are mostly about the REQUEST the surface built and the JSON it
+// produced, the half a canned answer would otherwise hide.
 
 package queries_test
 

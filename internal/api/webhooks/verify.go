@@ -17,22 +17,14 @@ import (
 
 // The provider signature schemes. THREE schemes in four functions, over the
 // five routes that verify a shared secret: GitHub's prefixed hex, Atlassian's
-// identically-shaped X-Hub-Signature (the same scheme, so verifyAtlassian
-// delegates; Jira and Confluence then share that one function), Slack's v0
-// basestring, and GitLab's Standard-Webhooks base64.
+// identically-shaped X-Hub-Signature (verifyAtlassian delegates; Jira and
+// Confluence share it), Slack's v0 basestring, and GitLab's Standard-Webhooks
+// base64. The Forge relay verifies an invocation JWT instead (forge.go).
 //
-// Counted as schemes rather than as functions on purpose — what a reader is
-// usually checking here is whether a provider's shape is handled, not how
-// many func literals it took. The sixth route, the Forge relay, is not one of
-// them: it verifies an invocation JWT against Atlassian's published keys
-// rather than an HMAC, and lives in forge.go.
-//
-// Every one of them decodes the presented signature and compares BYTES with
-// hmac.Equal. Comparing the hex or base64 TEXT instead would make the check
-// case- and padding-sensitive, so a provider that spelled its digest in
-// uppercase would fail a signature that is arithmetically correct — and the
-// comparison would still have to be constant-time, which text comparison in Go
-// is not.
+// Every one decodes the presented signature and compares BYTES with
+// hmac.Equal. Comparing the hex or base64 TEXT would be case- and
+// padding-sensitive (an uppercase digest would fail an arithmetically correct
+// signature) and Go's text comparison is not constant-time.
 
 // replayWindow bounds how far a signed request's own timestamp may be from
 // now, for the two schemes that carry one.
@@ -143,12 +135,10 @@ func verifyGitLab(body []byte, secret, id, timestamp, signature string, now time
 // keys on the decoded bytes — so a secret this engine reads any other way
 // simply computes a different HMAC and refuses every delivery.
 //
-// That is why a malformed one is reported rather than used verbatim. The
-// old behaviour keyed on the printable string, which cannot match anything
-// GitLab produces: it turned "your secret is not a whsec_ value" into an
-// endless stream of signature mismatches, indistinguishable from an attack,
-// with nothing anywhere naming the encoding. Answering false makes the
-// route say `no_webhook_secret` instead, which is the true statement.
+// That is why a malformed one is reported rather than keyed on verbatim: the
+// printable string matches nothing GitLab produces, turning "your secret is
+// not a whsec_ value" into endless signature mismatches that look like an
+// attack. Answering false makes the route say `no_webhook_secret` instead.
 func gitlabKey(secret string) ([]byte, bool) { return whsec.Key(secret) }
 
 // withinWindow reports whether a signed decimal-seconds timestamp is close
@@ -185,22 +175,15 @@ func equalHex(presented string, want []byte) bool {
 
 // verifyToken compares a shared token constant-time.
 //
-// The check for every provider that CANNOT sign a body, and there are two:
-// Datadog attaches headers with fixed values only, so nothing varies with the
-// payload to sign, and Confluence Cloud attaches nothing at all and delivers
-// only what was written into its URL. For both, the token IS the
-// authentication, which is why the compare is constant-time and why the
-// config documents it as a signing key.
+// The check for the two providers that CANNOT sign a body: Datadog attaches
+// fixed-value headers only, and Confluence Cloud delivers only what was written
+// into its URL. The token IS the authentication, hence constant-time.
 //
-// ONE FUNCTION rather than one per provider, because a constant-time compare
-// written twice is how one of the two stops being constant-time. It is named
-// for what it does rather than for a third-party app, so a third provider in the same
-// position reaches for it instead of copying it.
+// ONE FUNCTION, because a constant-time compare written twice is how one copy
+// stops being constant-time.
 //
-// The body is taken and ignored so this fits the same shape as its
-// neighbours; a scheme that cannot read the payload is exactly the fact worth
-// keeping visible at the call site. An empty secret never reaches here:
-// [Receiver.authenticate] answers 503 before calling any scheme.
+// The body is taken and ignored to fit its neighbours' shape. An empty secret
+// never reaches here: [Receiver.authenticate] answers 503 first.
 func verifyToken(_ []byte, secret, token string) bool {
 	if token == "" {
 		return false

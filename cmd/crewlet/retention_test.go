@@ -1116,16 +1116,15 @@ func TestARefusedEvictionNamesTheFlagThatForcesIt(t *testing.T) {
 // A REFUSAL'S `wait` SAYS WHAT THAT REFUSAL WAITS ON, NOT WHAT ITS VERB USUALLY
 // DOES.
 //
-// Three refusals carry `wait`, each for something different. Rendered by the
-// verb, either gesture refused `not_publishing` was sent to a lease or a
-// position that had nothing to do with the capacity window it was waiting out.
-// Each is rendered here by the route's own renderer from the engine's own
-// error, so the codes this command switches on are the codes a node sends —
-// and a refusal that carries no `wait` carries none of their lines.
+// Three refusals carry `wait`, each for something different; rendered by the
+// verb, `not_publishing` was sent to a lease or position unrelated to the
+// capacity window it was waiting out. Each is rendered here by the route's own
+// renderer from the engine's own error, so the codes this command switches on are
+// the codes a node sends, and a refusal with no `wait` gets none of their lines.
 //
-// AND A 503 GATE REFUSAL IS THE NODE'S ANSWER, not "this node cannot serve
-// that": a readmission whose register nobody could read is the judgement's
-// own answer, and its hint says how to get past it.
+// A 503 GATE REFUSAL IS THE NODE'S ANSWER, not "this node cannot serve that": a
+// readmission whose register nobody could read is the judgement's own answer, and
+// its hint says how to get past it.
 func TestAGateRefusalsWaitNamesWhatItWaitsOn(t *testing.T) {
 	t.Parallel()
 	node := newFakeRetentionNode(t)

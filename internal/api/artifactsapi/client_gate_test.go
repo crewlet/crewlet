@@ -23,23 +23,16 @@ import (
 
 // THE DASHBOARD SPEAKS THE ARTIFACTS' VOCABULARY, IN THE ENGINE'S ORDER.
 //
-// The gallery filters by kind and scope and sorts by what the listing sorts
-// by, the share dialog grants the roles a share may hold to the audiences a
-// share may name, the viewer embeds a frame by the origin mode the engine
-// minted it in, and the history and the company trail word every op a history
-// row is filed under. Every one of those is a closed set the engine owns, so
-// the contract declares each once (`contract/artifacts.ts`,
-// `contract/artifactsworkspace.ts`, and `contract/brand.ts` for a brand kit's)
-// and this holds it: a value the engine grew that the
-// dashboard lacks is a kind it cannot draw or a role nobody can grant; one the
-// dashboard keeps that the engine dropped is a choice every write refuses.
-// The ORDER is held too, because the role ladder is an order (each includes
-// the ones before it) and the dashboard draws the others in the engine's.
-// contractFile is the dashboard module a gated name is declared in: a brand
-// kit's rows in `contract/brand.ts`, which only the brand's lazy screens read;
-// what the frame reads ([frameRows]) in `contract/artifacts.ts`, which is in
-// the entry; and every other artifacts row in `contract/artifactsworkspace.ts`,
-// which only the artifacts workspace reads.
+// Kinds, scopes, sorts, share roles and audiences, origin modes and history ops
+// are closed sets the engine owns, declared once in the dashboard contract
+// (`contract/artifacts.ts`, `contract/artifactsworkspace.ts`, `contract/brand.ts`)
+// and held here: a value the engine grew that the dashboard lacks cannot be
+// drawn or granted; one the engine dropped is a choice every write refuses. The
+// ORDER is held too: the role ladder is an order.
+//
+// contractFile is the module a gated name is declared in: a brand kit's rows in
+// `brand.ts` (lazy screens only); [frameRows] in `artifacts.ts` (in the entry);
+// every other row in `artifactsworkspace.ts`.
 func contractFile(name string) string {
 	switch {
 	case strings.HasPrefix(name, "BRAND_"):

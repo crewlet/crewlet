@@ -16,17 +16,14 @@ import (
 // EVERY TYPE THE PROJECTION BRANCHES ON IS A TYPE THE ENGINE PUBLISHES.
 //
 // A branch on a name nothing publishes is dead code that reads as coverage:
-// this package's own tests synthesise the envelopes they apply, so such a
-// branch passes here while being unreachable in production. The projection
-// carried three until the retired task-lifecycle types were removed, and the
-// seat state they moved was unreachable the whole time. The registry is the
-// list of what exists, and internal/engine asserts that everything in it has a
-// publisher, so a name here that is not in the registry is a branch nothing
-// can reach.
+// this package's tests synthesise the envelopes they apply, so it passes here
+// while unreachable in production. The registry lists what exists and
+// internal/engine asserts everything in it has a publisher, so a name here
+// outside the registry is a branch nothing can reach.
 //
-// The maps are read directly, and the branches outside them (an `env.Type`
-// compared with a literal, or switched on) are read from this package's own
-// source, so a new branch is covered without being listed here.
+// The maps are read directly, and branches outside them (an `env.Type`
+// compared or switched on) are read from this package's source, so a new
+// branch is covered without being listed here.
 func TestEveryTypeTheProjectionReadsIsRegistered(t *testing.T) {
 	t.Parallel()
 	known := map[string]bool{}

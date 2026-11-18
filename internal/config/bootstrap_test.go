@@ -122,19 +122,14 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"token id whose login is past the bound", "api:\n  auth:\n    tokens:\n      - {id: " +
 			strings.Repeat("a", 59) + ", token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
 
-		// A CORS ALLOW-LIST IS COMPARED AGAINST THE BROWSER'S `Origin`
-		// HEADER, both put in a browser's spelling, and that header is always
-		// `scheme://host[:port]` with no path and no trailing slash. Every shape below is one an
-		// operator plausibly writes and either no browser can ever send —
-		// accepted, it is an allow-list that looks configured and a fetch
-		// that fails in a console this engine never sees — or, carrying
-		// more than an origin, one that would admit every page of its host,
-		// since the rest is dropped before the comparison.
-		// THE WILDCARD IS REFUSED RATHER THAN HONOURED, and the refusal
-		// says what honouring it would expose: it was this field's own
-		// previous default, and what it does is let any site a logged-in
-		// operator visits read LLM transcripts, diary entries and the
-		// whole event stream.
+		// A CORS ALLOW-LIST IS COMPARED AGAINST THE BROWSER'S `Origin` HEADER,
+		// always `scheme://host[:port]`: no path, no trailing slash. Each shape
+		// below is one no browser sends (an allow-list that looks configured
+		// and fails silently) or carries more than an origin, which would
+		// admit every page of its host once the rest is dropped.
+		// THE WILDCARD IS REFUSED, not honoured: it would let any site a
+		// logged-in operator visits read LLM transcripts, diary entries and
+		// the whole event stream.
 		{"wildcard origin", "api:\n  auth:\n    allowed_origins: ['*']\n", "api.auth.allowed_origins[0]", ErrShape},
 		{"origin with no scheme", "api:\n  auth:\n    allowed_origins: [ops.example.com]\n", "api.auth.allowed_origins[0]", ErrShape},
 		{"origin with a trailing slash", "api:\n  auth:\n    allowed_origins: ['https://ops.example.com/']\n", "api.auth.allowed_origins[0]", ErrShape},
@@ -380,24 +375,18 @@ func TestAPeerTheServerCannotDialIsRefused(t *testing.T) {
 	}
 }
 
-// A FLEET URL CARRIES NO CREDENTIAL. A fleet's broker credentials are derived
-// from secrets.keys (ADR-0094): the engine writes each route's userinfo itself,
-// and a leaf link presents an nkey, beside which a URL's userinfo would be sent
-// in clear. So a userinfo in a peer or a leaf URL — `user:pass@` or a bare
-// `token@`, with a scheme or without one — is refused at that element, and no
-// sentence the document produces quotes any of it: not the refusal, not a
-// rule that counts the entry beside it, and not an advisory.
+// A FLEET URL CARRIES NO CREDENTIAL. Broker credentials derive from
+// secrets.keys (ADR-0094) and a leaf link presents an nkey, beside which
+// userinfo would go in clear. So userinfo in a peer or leaf URL (`user:pass@`
+// or bare `token@`, scheme or not) is refused there, and no sentence the
+// document produces quotes it.
 //
 // WITHOUT A SCHEME is the case a parse misses: `ops:s3cret@host:6222` parses
-// as the scheme `ops` with no userinfo, `s3cret@host:6222` does not parse, and
-// neither does a userinfo beside a mistyped port — and each was refused by a
-// shape sentence quoting the entry whole. An entry that is this node's own
-// route is discounted from the member count, whose sentence named it whole.
+// as scheme `ops`, `s3cret@host:6222` does not parse, nor does a mistyped
+// port. This node's own route is discounted from the member count.
 //
-// Mutation: read the userinfo off url.Parse of the entry as written → the
-// schemeless and unparseable rows are refused for their shape, quoting the
-// credential, red. Quote a discounted or misshapen entry as written → the
-// own-route row and the advisory row print it, red.
+// Mutation: read userinfo off url.Parse, or quote a discounted or misshapen
+// entry → the schemeless, own-route and advisory rows go red.
 func TestAFleetURLCarriesNoCredential(t *testing.T) {
 	t.Parallel()
 	const kv = "coordination:\n  type: embedded-kv\n"

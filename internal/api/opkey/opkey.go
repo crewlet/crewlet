@@ -39,6 +39,16 @@
 // a token's label or a session's lineage: a rename moves the first, a
 // rotation the second and a step-up the third, and each would have turned one
 // person's retry into a second write.
+//
+// # One header, one encoding
+//
+// The header's literal is declared here and nowhere else: a walk
+// (TestTheHeaderIsDeclaredOnce) refuses it in any other non-test file. A
+// request is encoded one way ([Canonical]), and the two digests over it differ
+// only in length and domain: [Digest] keeps sixteen hex digits to step a key
+// by, [RequestDigest] the full hash under its own domain for the Dashboard
+// Assistant's approval and exec grant (ADR-0051), so neither can stand in for
+// the other.
 package opkey
 
 import (
@@ -62,27 +72,17 @@ import (
 const Header = "Idempotency-Key"
 
 // Key is the request's operation key: the caller's own where they sent one,
-// held to [statelog.CheckCallerOpID], and one minted at now where they did
-// not — either way SCOPED by the request's principal ([scope]) — and the
-// answer then hands it back, so a retry can send it. It answers false once
-// it has written the refusal ([Refuse]).
+// held to [statelog.CheckCallerOpID], else minted at now, SCOPED by the
+// principal ([scope]) and handed back for a retry. It answers false once it
+// has written the refusal ([Refuse]).
 //
-// # An operation id the engine's grammar minted, both ways
-//
-// The publisher vouches for a retry by the INSTANT its operation id carries
-// ([statelog.OpMintedAt]), against the point the node's operation ledger may
-// have lost rows from. A key outside the grammar carries none and reads as
-// minted at the epoch, before every loss the ledger will ever have: once it
-// had swept anything, every such write was answered `unknown` without being
-// published, on the first attempt and on every retry. So a fresh key is minted
-// through [statelog.NewOpID], and a caller's is refused naming the rule rather
-// than ignored: ignoring it published under a fresh id, which is the double
-// write the key was sent to prevent. The scoped key keeps the instant of the
-// key it was scoped from, so the ledger vouches for it exactly as long.
-//
-// BARE OF ANY VERB: the key is what a caller holds, and every id a write is
-// published under is derived from it and named by the surface. Its one name
-// is the scope's tag, which is what lets a retry send it back unchanged.
+// The publisher vouches for a retry by the INSTANT the id carries
+// ([statelog.OpMintedAt]) against where the ledger may have lost rows. A key
+// outside the grammar reads as minted at the epoch, so after any sweep its
+// write was answered `unknown` unpublished. So a fresh key comes from
+// [statelog.NewOpID], and a caller's is refused naming the rule, never
+// ignored: that published under a fresh id, the double write the key exists to
+// prevent. The scoped key keeps the instant it was scoped from.
 func Key(w http.ResponseWriter, r *http.Request, now time.Time) (string, bool) {
 	given := strings.TrimSpace(r.Header.Get(Header))
 	if given == "" {
@@ -142,24 +142,15 @@ func keyRefusal(err error, required bool) string {
 
 // scope is key as the operation of the principal on ctx: derived from the
 // principal's ID and the key, at the key's own instant, and NAMED by a tag of
-// that ID — unless key already carries the tag, which is this principal's
-// retry of a key an earlier answer handed them.
+// that ID, unless key already carries it (this principal's retry).
 //
-// # Why the tag, and why it is safe to trust
-//
-// The answer hands the SCOPED key back, and a retry sends it as the header:
-// scoped again, it would be another operation, and the retry a second write.
-// So a key already bearing this principal's tag is taken as it is. Nothing is
-// trusted that matters: the tag is compared with the REQUESTER's own, so a key
-// bearing anybody else's — sent by somebody who copied it — is scoped again
-// under the sender, and names an operation of theirs that no write of the
-// key's owner ever had. Forging a key bearing your own tag reaches only your
-// own operations.
-//
-// A REQUEST NOBODY RESOLVED is scoped by the nil ID, which no principal holds.
-// It does not reach here behind the request guard, and a write with no
-// principal is refused by every surface before it is made; the scope only has
-// to keep such a key apart from every real caller's.
+// The answer hands the SCOPED key back, and scoped again it would be another
+// operation, a second write. So a key bearing this principal's tag is taken as
+// it is. The tag is compared with the REQUESTER's own, so a key bearing
+// anybody else's is scoped again under the sender, naming an operation no
+// write of its owner ever had; forging your own tag reaches only your own
+// operations. A REQUEST NOBODY RESOLVED is scoped by the nil ID, which no
+// principal holds; it never gets here behind the request guard.
 func scope(ctx context.Context, key string) string {
 	id := uuid.Nil
 	if p, how := iam.From(ctx); how == iam.Resolved {
@@ -218,13 +209,9 @@ func refuseWith(w http.ResponseWriter, detail string) {
 // the change arrives. Never under a fresh key, which is a second change if the
 // first landed.
 //
-// THE RETRY IS PART OF THE KEY'S RULE, so it is said here rather than by each
-// surface: /iam and the human write surface each wrote both sentences
-// for themselves, and the copies had drifted — "the SAME operation id" beside
-// "the SAME key", and one surface putting the unvouched sentence after the
-// ordinary one as though both were true. The field that tells an unknown from
-// a refusal is [httpjson.UnknownOutcome]'s; this is only the sentence beside
-// it.
+// THE RETRY IS PART OF THE KEY'S RULE, so it is said here, once, rather than
+// by each surface. The field that tells an unknown from a refusal is
+// [httpjson.UnknownOutcome]'s; this is only the sentence beside it.
 func UnknownDetail(unvouched bool) string {
 	if unvouched {
 		return "This node can't confirm this change yet. Check whether it " +
@@ -241,43 +228,25 @@ func UnknownDetail(unvouched bool) string {
 // first sent, or the key was sent with another request. Nothing was written,
 // and a new key settles it where no wait would.
 //
-// THE FRAMEWORK'S OWN REFUSAL IS NEVER SAID BESIDE IT. It names the operation,
-// the subject it landed on and the one this request is about, broker paths a
-// person cannot act on, and /iam answered it after the directory's own
-// sentinel. One sentence for every surface that takes a key, for
-// [UnknownDetail]'s reason: the operator's surface answered it in a sentence
-// of its own, and the two would have drifted as UnknownDetail's copies did.
-//
-// IN A PERSON'S WORDS (ADR-0060), where [UnknownDetail] is the rule a client
-// retries by: every surface that answers it answers a person, and one who
-// pressed a button again never chose the key, so it says what moved and what
-// to do rather than which key to replace. The answer's `field` names [Header],
-// which is what a client changes.
+// THE FRAMEWORK'S OWN REFUSAL IS NEVER SAID BESIDE IT (it names broker paths a
+// person cannot act on); one sentence serves every surface that takes a key.
+// It is IN A PERSON'S WORDS (ADR-0060), where [UnknownDetail] is what a client
+// retries by: who pressed a button again never chose the key, so it says what
+// moved, not which key to replace. The answer's `field` names [Header].
 const Reused = "What this change was about moved since it was first sent, " +
 	"so nothing was written. Look again, then make the change."
 
-// Digest is what binds a write's operation to its request: the path (the
-// object), the query and the decoded body, in a form one request always
-// produces — the body re-encoded from its decoded value, so the same fields
-// in another order or spacing are the same request ([Canonical] is the one
-// encoding). asks is the decoded body, nil for a route that takes none.
+// Digest binds a write's operation to its [Canonical] request.
+// A key alone is not the operation: the ledger answers an operation it holds
+// BEFORE the write is decided ([statelog.Result.Collapsed]), so a write under
+// the bare key made the same key sent with ANOTHER request answer `applied`
+// with nothing written, a change reported made and silently dropped. Stepped
+// by this digest, a request is the same operation however often it is sent.
 //
-// # Why a key alone is not the operation
-//
-// The ledger answers an operation it already holds BEFORE the write is
-// decided ([statelog.Result.Collapsed]), so a write published under the key
-// itself made the same key sent with ANOTHER request the first request's
-// operation: answered `applied` from the ledger, with nothing of the second
-// written — a change reported as made and silently dropped. Stepped by this
-// digest, the same request is the same operation however often it is sent,
-// and any other request under the key is an operation of its own.
-//
-// SIXTEEN HEX DIGITS, 64 bits of SHA-256: it tells an accidental change of
-// request apart with certainty, which is all it is for — a caller can mint any
-// key it likes, so this is not a credential — in an id that is published in
-// every record and ledger row the write makes. An error is a body that decoded
-// and will not encode: a type the surface declared wrongly, never the
-// caller's to fix.
+// SIXTEEN HEX DIGITS, 64 bits of SHA-256: enough to tell an accidental change
+// of request apart with certainty (a caller can mint any key, so it is no
+// credential), in an id published in every record and ledger row. An error is
+// a body that will not encode: a type the surface declared wrongly.
 func Digest(r *http.Request, asks any) (string, error) {
 	canon, err := Canonical(r.URL.Path, r.URL.Query(), asks)
 	if err != nil {

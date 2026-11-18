@@ -29,26 +29,16 @@ import (
 
 // THE RESTART THE LINE ASKS FOR IS THE CURE, HOWEVER STALE THE FILE.
 //
-// A revision that moves a native backend says native_backend_needs_restart and
-// asks for a restart. That is the cure only if the restarted node BOOTS on the
-// revision: one that booted on its stale -company file built its runtime from
-// the file, applied the store's revision at its first tick, and said the line
-// again — at every restart, for ever. So the node here restarts exactly as
-// `crewlet run crewlet.yaml -company company.yaml` does, with the live switch
-// in its store and the original file on its command line, and its first tick
-// says nothing.
-//
-// THE CONTROL boots the same node on the stale file, as `crewlet run` used
-// to, and hears the line at that first tick: without it, a first tick that
-// said nothing for any reason would pass here. It is also the node a live
-// switch leaves behind, so it is where the answer its readers get is held:
-// the tracker named as awaiting a restart, and a question about it refused
-// as `native_backend_needs_restart` rather than as a tracker the company does
-// not run. Mutation: answer [queries.ErrUnknown] for every absent half again
-// (internal/api's `nativeAbsent`), and the control fails.
-//
-// NOT PARALLEL: it swaps the process-wide logger to hear the engine's line.
-// See [TestMain].
+// A revision that moves a native backend says native_backend_needs_restart. That
+// cures only if the restarted node BOOTS on the revision: one booted on its stale
+// -company file applied the store's revision at its first tick and said the line
+// again, at every restart. So the node restarts as
+// `crewlet run crewlet.yaml -company company.yaml` does, and its first tick says
+// nothing. THE CONTROL boots it on the stale file and hears the line, so a silent
+// tick for another reason cannot pass; it is also the node a live switch leaves
+// behind, whose tracker is refused as `native_backend_needs_restart`. Mutation:
+// answer [queries.ErrUnknown] for every absent half (internal/api's
+// `nativeAbsent`), and the control fails. NOT PARALLEL: it swaps the logger.
 func TestARestartAfterALiveSwitchSaysNothingAtTheFirstTick(t *testing.T) {
 	logs := &jsonLines{}
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)

@@ -7,25 +7,18 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 )
 
-// The six endpoints. Each one is the same five steps in the same order —
-// read, answer readiness, AUTHENTICATE, parse, accept — and each differs only
-// in the credential it checks and how it names the event. They are written out
-// rather than driven from a table because what varies between them is the part
-// worth reading, and a table would bury it in optional hooks.
+// The six endpoints. Each is the same five steps — read, answer readiness,
+// AUTHENTICATE, parse, accept — differing in credential and event name. Written
+// out, not table-driven: what varies is the part worth reading.
 //
 // # Nothing unverified is decoded
 //
-// The raw body has to be buffered before the gate — the signature is over it,
-// so there is no reading it afterwards — and that cost is unavoidable and
-// bounded by MaxBodyBytes. Decoding it is not. Parsing first handed an
-// unauthenticated caller a JSON unmarshal and a map several times the size of
-// what they sent, on every request, for nothing: not one of these routes
-// reads a body field before its gate.
+// The raw body is buffered before the gate (the signature is over it), bounded
+// by MaxBodyBytes. Parsing first would hand an unauthenticated caller a JSON
+// unmarshal and a map several times the size of what they sent.
 //
-// Two parse first and genuinely must. Slack reads `type` to answer readiness
-// and to echo the url_verification handshake, which is deliberately answered
-// without a signature; Forge reads `eventType` for the same readiness answer.
-// Both say so at the line.
+// Two parse first and must: Slack reads `type` for readiness and the
+// unsigned url_verification handshake, Forge reads `eventType` for readiness.
 
 func (r *Receiver) github(w http.ResponseWriter, req *http.Request) {
 	// PER SEAT WHEN ADDRESSED TO ONE. GitHub delivers to every app
@@ -74,21 +67,16 @@ func (r *Receiver) github(w http.ResponseWriter, req *http.Request) {
 
 // githubSecret is what a delivery to this path could have been signed with.
 //
-// THE SEAT'S OWN APP FIRST. A GitHub App has one bot identity, so an agent
-// that acts as itself holds an app of its own, and GitHub generated that app
-// its own signing secret at conversion time and returned it once. Verifying
-// those deliveries against `integrations.github.webhook_secret` checks them
-// against a DIFFERENT app's key, or against nothing at all in a company that
-// only ever created per-agent apps: every delivery refused with a 503, while
-// GitHub's hook page shows the app healthy.
+// THE SEAT'S OWN APP FIRST: an agent's app has its own signing secret.
+// Checking its deliveries against `integrations.github.webhook_secret` uses a
+// DIFFERENT app's key, or nothing in a company of per-agent apps: every
+// delivery 503s while GitHub's hook page shows the app healthy.
 //
-// THE ORGANIZATION'S OTHERWISE, because the same path serves a second
-// deployment: one organization-wide app whose deliveries are pointed at a
-// seat. That app has only the organization's secret, and it is the only
-// credential its deliveries can carry.
+// THE ORGANIZATION'S OTHERWISE: an organization-wide app pointed at a seat has
+// only the organization's secret.
 //
-// Empty when neither is set, which [Receiver.authenticate] reads as "cannot
-// verify" and answers 503 to, never as "nothing to verify".
+// Empty when neither is set: [Receiver.authenticate] answers 503, never
+// "nothing to verify".
 func githubSecret(s Secrets, handle string) string {
 	if handle != "" {
 		if secret := s.GitHubSeat[handle]; secret != "" {
@@ -162,31 +150,18 @@ func (r *Receiver) gitlab(w http.ResponseWriter, req *http.Request) {
 			req.Header.Get("webhook-id"), req.Header.Get("webhook-timestamp"),
 			signature, now)
 	}
-	// ONE SCHEME. A delivery without a valid signature is refused, and
-	// there is NO FALLBACK TO THE PLAINTEXT X-Gitlab-Token. A delivery that
-	// carries no `webhook-signature` comes from a hook given its key in
-	// GitLab's `token` attribute rather than `signing_token`, so the
-	// instance is doing exactly as asked: GitLab signs from 19.1 onward
-	// whenever a hook has a signing token, and this engine's provisioner
-	// sets one.
+	// ONE SCHEME: a delivery without a valid signature is refused, with NO
+	// FALLBACK TO THE PLAINTEXT X-Gitlab-Token. A delivery with no
+	// `webhook-signature` comes from a hook given its key as `token` rather
+	// than `signing_token`; GitLab signs from 19.1 whenever a hook has one,
+	// and this engine's provisioner sets it. A fallback would accept a weaker
+	// bearer string and be reachable by omitting the signature header: a
+	// downgrade attack.
 	//
-	// A fallback would authenticate the sender with a bearer string
-	// GitLab's own documentation calls weaker and not recommended, over a
-	// payload it says nothing about — and it would be reachable by an
-	// attacker simply omitting the signature header, which is the shape a
-	// downgrade attack takes. Its absence is the point: there is no path
-	// here that verifies anything but an HMAC over the body.
-	//
-	// A SECRET THAT CANNOT BE A KEY IS NOTHING TO VERIFY WITH.
-	//
-	// GitLab's signing token is whsec_<standard base64>, and it always keys
-	// on the decoded bytes. A value shaped any other way cannot produce a
-	// matching HMAC for any delivery, so treating it as a credential turns
-	// "your secret is mistyped" into an endless run of signature
-	// mismatches — 401s that read as an attack. Answered here rather than
-	// inside the comparison because it is the 503 case by this package's
-	// own rule: the sender's request is fine, and what is missing is on
-	// this side.
+	// A SECRET THAT CANNOT BE A KEY IS NOTHING TO VERIFY WITH. The signing
+	// token is whsec_<standard base64>, keyed on the decoded bytes; any other
+	// shape matches no delivery, turning a mistyped secret into 401s that read
+	// as an attack. Answered as the 503 case: what is missing is on this side.
 	secret := r.secrets().GitLab
 	if _, usable := gitlabKey(secret); secret != "" && !usable {
 		log.Error("gitlab_signing_secret_malformed", "source", "gitlab",
@@ -349,18 +324,12 @@ func (r *Receiver) slack(w http.ResponseWriter, req *http.Request) {
 	secret, known := secrets[handle]
 	if !known || secret == "" {
 		// A SEAT WITH NO APP IS ANSWERED EXACTLY AS A SIGNATURE THAT DID
-		// NOT MATCH — the same 401, the same code, and the same HMAC paid
-		// first. The map is populated, so this is not a node with nothing
-		// to check against (that is the 503 above); but a code of its own
-		// here was a roster: an unsigned POST to every name a company
-		// might use answered one code where a seat has a Slack app and
-		// another where it does not, and a check that skipped the HMAC
-		// said the same thing in its timing. So the decoy is checked on
-		// the path the known seat's key is — an empty signature pays
-		// nothing on either — and its answer is DISCARDED: no delivery to
-		// a seat with no app is ever accepted, whatever it was signed
-		// with. The log is where an operator learns which check failed,
-		// as it is for every other refusal on this edge.
+		// NOT MATCH — the same 401, the same code, the same HMAC paid first.
+		// A code of its own, or a skipped HMAC showing in timing, would be a
+		// roster of which handles have a Slack app. So the decoy is checked
+		// as a known seat's key is (an empty signature pays nothing on
+		// either) and its answer DISCARDED: no delivery to a seat with no
+		// app is accepted. The log tells an operator which check failed.
 		_ = signature != "" && check.verify(raw, slackDecoy(), signature)
 		log.Warn("slack_webhook_unknown_handle", "handle", handle,
 			"detail", "no seat by this handle has a Slack signing secret here; "+
@@ -388,32 +357,17 @@ func (r *Receiver) slack(w http.ResponseWriter, req *http.Request) {
 	}, slackOK)
 }
 
-// confluenceCloud is the route Confluence CLOUD delivers to, one hook per
-// event, and the second route here whose credential is not a signature.
+// confluenceCloud is the route Confluence CLOUD delivers to, the second whose
+// credential is not a signature: a token in the query, compared constant-time.
+// A shared route with the HMAC one would have two secrets and no way to say
+// which a 503 was about.
 //
-// # Why a second route rather than a second credential on the first
+// A Cloud payload names no event, so one hook is registered per event with it
+// in the path, and the route stamps it onto the body under the key the parser
+// reads: no Cloud branch in the parser.
 //
-// Confluence Cloud attaches no signature to a delivery and delivers only what
-// was written into the URL it was registered with. So the credential is a
-// token in the query, compared constant-time exactly as Datadog's header is.
-// A single route accepting EITHER a valid HMAC OR a valid token would be a
-// route with two secrets and no way to say which one a 503 was about, and
-// it would let a Data Center operator believe their signed hook was what a
-// Cloud delivery had been checked against.
-//
-// # Why the event is in the path
-//
-// A Cloud payload names no event. Which one fired is known only from which
-// hook was registered for it, so the provisioner registers one hook per event
-// with the event in the path, and this route stamps it back onto the body
-// under the key the parser already reads. The parser then needs no Cloud
-// branch at all.
-//
-// # What is never logged
-//
-// The query string. The token is the whole authentication and it rides in
-// the URL, so every log line and every stored event row here is built from
-// the path and the body and never from the request's URL as a whole.
+// The query string is NEVER LOGGED: the token rides in the URL, so log lines
+// and event rows are built from the path and the body, never the whole URL.
 func (r *Receiver) confluenceCloud(w http.ResponseWriter, req *http.Request) {
 	raw, ok := r.body(w, req)
 	if !ok {

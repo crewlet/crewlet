@@ -28,146 +28,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// `crewlet gitlet import -local` — another host's repository, pushed from this
-// machine into one Gitlet serves. Without -local the NODE imports
-// (codeimportnode.go): it creates the repository and its home fetches the
-// source. This is the import for a source only this machine can reach — a
-// forge on the operator's own network, behind their VPN or their credentials
-// — into a repository that already exists.
+// `crewlet gitlet import -local` pushes another host's repository from this
+// machine into an existing one Gitlet serves, for a source only this machine
+// reaches; without -local the NODE imports (codeimportnode.go). The operator's
+// git pushes as the token's person, so every push rule holds: an import IS pushes.
 //
-// # Client-side, and as the person
-//
-// The operator's git clones the source with the operator's own credentials,
-// proxy and network, and pushes it to the node as the person the token is
-// bound to, through the ordinary push path: every rule a push is held to — the
-// limits, the protections, the blob limit, git's fsck — holds for an import
-// because an import IS pushes, and the repository's push history names that
-// person for each. The engine dials nothing for it.
-//
-// # Steps, each MEASURED before it is pushed
-//
-// One push carries at most code.limits.max_push_bytes — receive.maxInputSize
-// refuses a pack past it, having read it — so a larger history goes in steps:
-// the default branch first, along its first-parent history, each step a
-// FAST-FORWARD of the branch itself, so no temporary ref ever exists; then
-// every other branch and tag in batches, each as many refs as one push's
-// record holds ([importer.recordHolds]). Each step is held to the limit itself:
-// what a step pushes is the pack it was measured as, byte for byte, so no
-// margin below it is left for anything to fill (below, "The pack a step
-// measured is the pack it pushes").
-//
-// A STEP IS SENT WHOLE (`git push --no-thin`), SO WHAT IT SENDS IS WHAT THE
-// NODE STORES. A thin pack — git's default — holds deltas against objects the
-// node already has, and the node's receive-pack completes it (index-pack
-// --fix-thin) by appending every such base WHOLE: the stored pack is larger
-// than the one sent, by an amount the client never sees. The node holds what
-// it STORES to two limits — a push's bundle (the pack, its .idx and its .rev)
-// to gitlet.MaxPackBytes, refused pack_too_large, and the repository's packs to
-// code.limits.repo_max_bytes, refused repo_size — so a plan that measured the
-// thin pack could not keep either: measured on this repository's own history
-// cut into eleven steps, the thin packs sent 40.1 MB and the node stored
-// 74.4 MB. Sent whole, a step's pack is the stored pack byte for byte —
-// index-pack has nothing to append — and its .idx and .rev follow from its
-// object count, so the import knows what each step stores before it is sent
-// ([importStep.stored]). It is also SMALLER stored: a whole pack keeps the
-// object a delta could not reach whole, where --fix-thin appends that delta's
-// base again though an earlier step already stored it — the same eleven steps
-// whole store 68.5 MB. The price is twofold. The bytes the node would have
-// appended are uploaded instead (68.5 MB sent against 40.1 MB), and the node
-// no longer spends its own cores compressing them. And a step stores at most
-// what it may send — the limit — where a thin step sent under the limit
-// could store up to gitlet.MaxPackBytes: whole steps are smaller and more of
-// them, fewest with code.limits.max_push_bytes at its ceiling, which an import
-// of a large history should run under. A JUDGEMENT for whole steps: exact
-// rather than approximate accounting — a thin step's completion appends
-// objects compressed by the node's zlib, which the operator's need not be —
-// and no base stored twice, against the steps a thin plan saves between the
-// limit and gitlet.MaxPackBytes, a quarter of a gibibyte at the ceiling.
-//
-// A STEPPED HISTORY STORES MORE THAN ONE PACK OF IT, whatever the steps send:
-// every step keeps whole what its deltas cannot reach in the steps before it,
-// so the files a step touches are stored again in full at each step. This
-// repository's history, 34.0 MB as one pack, stores 68.5 MB in eleven steps
-// and 78.6 MB in forty-two — so the import takes the largest steps the limit
-// allows, and holds the repository's stored total to repo_max_bytes as it
-// goes ([importPlanner.hold]).
-//
-// A STEP'S SIZE IS MEASURED, NEVER ESTIMATED. `git rev-list --disk-usage`
-// sizes a range by the bytes its objects take in the source's own pack, which
-// is a different number from the pack a push of the range sends. A history a
-// forge has packed stores the newest version of a file whole and each older
-// version as a delta against the newer one — deltas the push of an older
-// range cannot use, since their bases are not sent yet — so the steps of such
-// a history pack to MORE than their estimate. Measured on this repository's
-// own history, packed by `git gc --aggressive` and cloned as a forge serves
-// it: its first twenty commits estimate at 9.0 MB and pack to 20.2 MB, 2.24
-// times as much — so a plan cut on estimates, with a tenth of headroom, has
-// its first push refused.
-// The estimate is a traversal, a hundred times cheaper than building a pack
-// (0.03 s against 2.4 s for one 12 MB range), so it CHOOSES where a step
-// ends; then the step's pack is BUILT — pack-objects --revs, against the refs
-// the node will hold, under the operator's own pack settings, its threads
-// among them — into a repository of the step's own ([importer.stepRepo]); and
-// a step past the limit is cut shorter in proportion and built again
-// ([importPlanner]). Every push is PINNED to the pack it was measured as,
-// whatever the operator's push configuration says ([importPushConfig],
-// [importSendConfig]).
-//
-// # The pack a step measured is the pack it pushes
-//
-// git push builds the pack it sends, and a pack built twice is not the same
-// pack: pack-objects' delta search splits its work among threads that take
-// work from each other as each finishes, and a file's versions split across
-// two threads cost one more of them stored whole. Built ten times at four
-// threads, one range of a history packed as a forge packs one — sixteen files
-// of 40 to 55 KiB — came to 895 KiB five times and to 1003–1057 KiB the
-// other five, four of them past 1 MiB (git 2.56, two cores, measured): a step
-// measured under a code.limits.max_push_bytes of 1 MiB was pushed past it,
-// and the node's index-pack refused it having read it all, `[remote rejected]
-// (unpacker error)` for its `pack exceeds maximum allowed size`. No margin
-// covers that — one split costs a whole version of the largest file the step
-// touches — and the tenth below the limit this held each step to did not.
-//
-// So a step's pack is built ONCE, and what the import measures and what its
-// push sends are two COPIES of that build: pack-objects again, from the
-// step's repository, with no delta search (pack.window=0), which takes every
-// object as the build stored it and has nothing left to choose, on any
-// number of threads — the same pack, byte for byte, whichever process copies
-// it, the push's own included, so long as each is handed the step's tips in
-// the order git push hands them ([importStep.news]; importSendConfig says how
-// the copy is kept to the step's pack). The step is pushed from its
-// repository, which is then removed. The copy is the build's objects in
-// another order, so it is the copy that is measured — the order moves each
-// delta's offset, written in one to five bytes ([importOrderSlack]).
-//
-// Each step's delta search runs once, where the push used to run a second:
-// the copies are a pass over bytes already compressed, and indexing the
-// build — what lets a copy find its objects — resolves its deltas without
-// searching for any, and reads nothing of the clone ([importer.borrow]). The
-// price is room: the import's working directory holds a step's pack until it
-// is pushed, beside the clone.
-//
-// THE NEXT STEP IS BUILT WHILE THIS ONE IS PUSHED, in a repository of its own:
-// a push's upload, the node's indexing of it and its commit leave this
-// machine's cores idle while the next build uses them — and a push that fails
-// ends the planning at once ([importer.execute]). So the working directory
-// holds at most two steps' packs at a time: the one being pushed, at most the
-// limit, and the next one's build, at most twice it ([importMeasureCap]).
-//
-// A MERGE THAT BRINGS IN MORE THAN A STEP is stepped from the other side: a
-// first-parent walk meets the whole history a merge's other parent brings in
-// as that one commit, so the walk pauses there and steps that parent's own
-// history first, on a branch of the source that reaches it
-// ([importPlanner.bringIn]).
-//
-// # Resuming
-//
-// A failed step is safe to run again: each is `--atomic`, so it lands whole or
-// not at all, and the same command reads what the repository already holds and
-// pushes only the rest. A branch the node holds at an earlier commit of the
-// source's history is a step that already landed, continued from there; a ref
-// the node holds at a value the source's history does not reach is not a
-// resumed import of the same history, and is refused.
+// A step is MEASURED, never estimated: the estimate only picks where it ends,
+// the pack is built once and the measured copy is the pushed one, so no margin
+// below max_push_bytes is needed (importSendConfig, importPlanner). Steps push
+// `--no-thin` (the node completes a thin pack with whole bases, storing more
+// than measured), fast-forward, and are `--atomic` so a re-run resumes; a ref
+// held where the source's history does not reach is refused. A stepped history
+// stores more than one pack: the total is held to repo_max_bytes (importPlanner.hold).
 
 // codeImportUsage is the import's two synopses: the node's, and -local's.
 const codeImportUsage = "usage: crewlet gitlet import <source-url> <name> [<config.yaml>] [-api URL] " +
@@ -459,8 +331,7 @@ func (imp *importer) run(ctx context.Context, dryRun bool) error {
 	}
 	// The import's working directory is the system's temporary one
 	// ($TMPDIR), which needs room for the source and for two steps' packs
-	// at once (the package doc's "The pack a step measured is the pack it
-	// pushes").
+	// at once (importer.borrow, importer.execute).
 	tmp, err := os.MkdirTemp("", "crewlet-import-")
 	if err != nil {
 		return fmt.Errorf("make the import's working directory: %w", err)
@@ -678,36 +549,18 @@ const importProbeRef = "refs/heads/crewlet-import-probe"
 // it, since it refuses before it reads anything.
 const importProbeWait = nodeRequestTimeout
 
-// checkPushAccess asks the node, before the source is cloned, what a push's
-// first request asks — whether this token may push to the repository — so a
-// token that may not (one bound to nobody, or every caller where
-// api.auth.disabled is set) is refused in seconds, in the node's own words,
-// rather than at the first step after the whole source has been downloaded.
+// checkPushAccess asks the node, before the source is cloned, whether this
+// token may push to the repository, so a token that may not (bound to nobody,
+// or every caller where api.auth.disabled is set) is refused in seconds in the
+// node's words, not after the source is downloaded.
 //
-// ASKED THROUGH GIT, as every step is: a `git push --dry-run` from an empty
-// repository (probe) of a deletion, which makes the push's first request —
-// the node's advertisement of what it would take, or the refusal git prints
-// as `remote error: …` — and sends nothing. Through the same credential as
-// the steps, so the answer is the one they will get; and through git rather
-// than an HTTP request of this command's own, because which requests are
-// pushes is the API's one classifier's to say (auth.GitAccess) and git's to
-// spell.
-//
-// BEST EFFORT IN TIME: the node answers an advertisement once its copy of the
-// repository is current, which for a large repository on a node holding no
-// copy yet is a sync of every pack, longer than the probe waits
-// (importProbeWait). An answer that does not come in time is no refusal: the
-// first step's push asks again and waits as git waits, and the sync the probe
-// began has warmed the copy it is answered from.
-//
-// ANY OTHER FAILURE STOPS THE IMPORT, QUOTED AS GIT SAID IT — and never read
-// as the token's. The node's own refusal reaches git as `remote error:` with
-// its sentence (a token bound to nobody, an archived repository); a draining
-// node's 503, a node serving no git routes, a TLS or proxy failure on git's
-// side are git's own lines. Every one of them would refuse the first step
-// too, after the whole source had been downloaded, and git's words already
-// say which it is, in the operator's language: telling them apart here would
-// mean reading git's messages, which git translates.
+// ASKED THROUGH GIT with the steps' credential: a `git push --dry-run` of a
+// deletion from an empty repository (probe) makes the push's first request and
+// sends nothing; auth.GitAccess, not an HTTP request of this command's own,
+// says which requests are pushes. Best effort in time: a node with no copy yet
+// may sync past importProbeWait, which is no refusal (the first step asks
+// again). Any other failure stops the import QUOTED AS GIT SAID IT, never read
+// as the token's: git's translated words already say which.
 func (imp *importer) checkPushAccess(ctx context.Context, probe string) error {
 	if _, err := imp.g.run(ctx, imp.g.environ, "", "init", "--bare", "--quiet", probe); err != nil {
 		return err
@@ -734,68 +587,35 @@ func (imp *importer) checkPushAccess(ctx context.Context, probe string) error {
 		imp.name, err)
 }
 
-// importPushConfig and importPushFlags PIN every push of an import — each
-// step and the probe — to the push its plan measured, whatever the
-// operator's own push configuration says. Each one names a setting that
-// changes what a push carries, or whether git will make it at all:
-//
-//   - push.pushOption, cleared (an empty value empties the list): Gitlet
-//     reads a change from a push's options, so a `change` the operator
-//     keeps there for their own pushes would open a change from every step
-//     that pushes one branch alone — an import's steps are history, never a
-//     proposal — and a forge's (ci.skip) means nothing here;
-//   - push.negotiate=false: a negotiation is a fetch from the node before
-//     each push, which can only shrink the pack against the measurement and
-//     costs the node an upload-pack a step;
-//   - --no-signed: push.gpgSign asks for a push certificate Gitlet does
-//     not advertise, which git refuses;
-//   - --no-recurse-submodules: push.recurseSubmodules looks for each pushed
-//     gitlink's commit on a submodule's remote, which a bare clone has none
-//     of;
-//   - --no-thin: the pack the node stores is the pack sent (the package doc);
-//   - --porcelain: the lines a step's outcome is read from ([importer.push]);
-//     --no-verify: the operator's pre-push hooks are for their own pushes, and
-//     one that uploads elsewhere (git-lfs's) would fail every step.
-//
-// A step's push also runs under [importSendConfig], which makes the pack it
-// sends a copy of the pack its step was built as. The operator's own pack.*
-// settings are deliberately NOT pinned beyond that: they shape the one build
-// of a step's pack — its delta search's window, depth, threads and memory —
-// and every copy of it after is the same pack whatever they are.
-//
-// push.followTags needs no pin: it adds the annotated tags the PUSHING
-// repository's refs hold at a commit the push carries — refs the plan never
-// batched, and 1 001 tags on one commit took a step past the 1 000 commands a
-// push may carry, refused on every run — and a step is pushed from a
-// repository of its own, which holds no ref at all ([importer.stepRepo]), as
-// the probe's does.
+// importPushConfig and importPushFlags PIN every push of an import (each step
+// and the probe) to the push its plan measured, whatever the operator's push
+// configuration says. push.pushOption is cleared (Gitlet reads a change from
+// push options, and an import's steps are history, never a proposal);
+// push.negotiate=false (a fetch first can only shrink the pack against the
+// measurement); --no-signed, --no-recurse-submodules (a bare clone has no
+// submodule remotes) and --no-verify (an operator's pre-push hooks, git-lfs's,
+// would fail every step); --no-thin (the stored pack is the sent one);
+// --porcelain, the lines a step's outcome is read from ([importer.push]). The
+// operator's pack.* settings are not pinned, since they shape only the one build
+// ([importSendConfig]). push.followTags needs none: a step is pushed from a
+// repository holding no ref ([importer.stepRepo]), so no tag is added.
 var (
 	importPushConfig = []string{"push.pushOption=", "push.negotiate=false"}
 	importPushFlags  = []string{"push", "--porcelain", "--no-verify", "--no-thin", "--no-signed",
 		"--no-recurse-submodules"}
 )
 
-// importSendConfig is what every COPY of a step's pack runs under — the one
-// its measurement counts ([importer.sent]) and the one its push sends:
-//
-//   - pack.window=0: NO DELTA SEARCH, so pack-objects takes every object as
-//     the step's build stored it and has nothing left to choose, on any number
-//     of threads — which is what makes the copy the measurement counts and
-//     the push's own the same pack, byte for byte (the package doc's "The
-//     pack a step measured is the pack it pushes" says why a second search
-//     is not);
-//   - core.multiPackIndex=false, pack.useBitmaps=false and
-//     pack.allowPackReuse=false: the copy takes each object from the step's
-//     own pack, the one its search built, rather than from the clone the
-//     step's repository borrows from — whose multi-pack-index, read before any
-//     pack, and whose bitmapped pack, walked or copied whole, would each hand
-//     pack-objects the clone's copy of an object first. Each of those is a
-//     copy no less exact, but of an object a forge stored as a delta against
-//     one the step does not send, so stored whole: the pack the step's search
-//     shrank is the one sent.
-//
-// On the command line, so they outrank whatever the operator's configuration
-// or environment sets.
+// importSendConfig is what every COPY of a step's pack runs under: the one its
+// measurement counts ([importer.sent]) and the one its push sends. A pack built
+// twice differs (delta-search threads split a file's versions, and one split
+// costs a whole version: 895 KiB or 1003-1057 KiB for one range), so a step is
+// built ONCE and both are copies of it, which must be the same pack byte for
+// byte. pack.window=0 gives no delta search, so every object is taken as the
+// build stored it, on any number of threads; core.multiPackIndex,
+// pack.useBitmaps and pack.allowPackReuse false take each object from the
+// step's own pack, not the borrowed clone's copy (stored whole where a forge
+// stored a delta against an unsent object). On the command line, so they
+// outrank the operator's configuration and environment.
 var importSendConfig = []string{"pack.window=0", "core.multiPackIndex=false", "pack.useBitmaps=false",
 	"pack.allowPackReuse=false"}
 
@@ -894,12 +714,12 @@ func (imp *importer) inspect(ctx context.Context) (importSource, error) {
 	// pack of the whole history, built by the pack-objects every step runs —
 	// the clone is the source's upload-pack's — with every delta the history
 	// offers, where a step may only delta against what it carries itself. So
-	// the steps store at least about this much, and in practice more (the
-	// package doc), and a source already past the limit here is refused before
-	// anything is pushed. What the repository holds already is not added: on a
-	// resumed import it is these objects, stored by the steps that landed. Not
-	// a bound the steps are held to: that is [importPlanner.hold], step by
-	// step, on what each stores.
+	// the steps store at least about this much, and in practice more (a step
+	// stores whole what its deltas cannot reach earlier), and a source already
+	// past the limit here is refused before anything is pushed. What the
+	// repository holds already is not added: on a resumed import it is these
+	// objects, stored by the steps that landed. Not a bound the steps are held
+	// to: that is [importPlanner.hold], step by step, on what each stores.
 	if limit := imp.repo.Limits.RepoMaxBytes; packed > limit {
 		findings = append(findings, fmt.Sprintf("the source's history packs to %s as one pack, past "+
 			"code.limits.repo_max_bytes (%s) before the steps of an import store more than one pack does: raise "+
@@ -1292,16 +1112,13 @@ func (imp *importer) held(ctx context.Context, oids map[string]bool) (map[string
 // descends from it: a branch an import continues, rather than one something
 // else was pushed to.
 //
-// ASKED BOUNDED IN PARALLEL: git has no form that asks merge-base
-// --is-ancestor of many pairs at once, and an import run again to bring over
-// what a source still in use has gained finds every branch somebody pushed to
-// at an earlier value — up to gitlet.MaxRefsPerRepo of them, which one process
-// after another at 5–10 ms each made most of a minute before the first
-// estimate. Each question reads the clone alone, so they are independent:
-// GOMAXPROCS at a time, the cores this command may use. A ref found not to
-// descend stops every question about a ref AFTER it in the source's order —
-// the refusal names the first — while those before it are still answered,
-// since one of them may be the first; and nothing is left running on return.
+// ASKED BOUNDED IN PARALLEL: git has no merge-base --is-ancestor of many pairs,
+// and a re-run finds every branch at an earlier value, up to
+// gitlet.MaxRefsPerRepo, at 5-10 ms each in series. The questions read the
+// clone alone, so GOMAXPROCS run at a time. A ref found not to descend stops
+// every question about a ref AFTER it in the source's order (the refusal names
+// the first) while those before it are still answered; nothing is left running
+// on return.
 func (imp *importer) descendants(ctx context.Context, refs []sourceRef, theirs map[string]string,
 	held map[string]bool) ([]bool, error) {
 
@@ -1419,19 +1236,15 @@ func (s *importStep) stored() int64 {
 
 // news is the values the step moves its refs to, as pack-objects --revs reads
 // them, IN THE ORDER GIT PUSH HANDS THEM TO ITS OWN: the refs remote holds
-// first, by name, then the refs the step creates, in the step's order.
-// send-pack feeds its pack-objects the new value of each ref it updates as it
-// walks the refs the node advertised — in the node's order, which is by name —
-// and then of each ref it creates, in the order the push names them.
+// first, by name (the node's advertised order), then the refs the step
+// creates, in the step's order.
 //
-// The order is the copy's to match, since the copy is the pack the push sends
-// only when it is handed the same revisions in the same order ([importer.sent]):
-// a copy writes the objects in the order its walk meets them, and the walk
-// meets two tips of one commit time in the order it was handed them. A step
-// that updated b, which the node held, and created a, which names before it,
-// at two commits of one second, copied in the step's own order and in the
-// push's, made two packs of one size and two checksums (git 2.53, measured);
-// and where the order moves a delta further from its base, the size moves too.
+// The copy is the pack the push sends only when handed the same revisions in
+// the same order ([importer.sent]): a walk meets two tips of one commit time
+// in the order handed. A step updating b (held) and creating a (names before
+// it) at two commits of one second made two packs of one size and two
+// checksums in the two orders (git 2.53), and an order moving a delta further
+// from its base moves the size too.
 func (s *importStep) news(remote *remoteRefs) []string {
 	news := make([]string, 0, len(s.cmds))
 	updated := make([]importCmd, 0, len(s.cmds))
@@ -1494,21 +1307,16 @@ type firstParentWalk struct {
 
 // importPlanner cuts the refs still to push into steps, ONE AT A TIME, each
 // planned against the refs the repository will hold once every step before it
-// lands (remote), so the next step can be planned while this one is pushed.
+// lands (remote), so the next can be planned while this one is pushed.
 //
-// HOW A STEP IS CUT: by estimate, as far as the estimate fits the limit —
-// scaled by ratio, how much larger than their estimates the last steps packed
-// (never below one: a step is never planned past the limit on the strength
-// of an estimate that overstated an earlier one) — found by a search that
-// starts from the last step's length (furthest), because a history packs much
-// alike from one step to the next. Then, unless this is a dry run, MEASURED:
-// a step whose pack is past the limit, or whose stored bundle is past what
-// one push may store, is cut back to where its own measurement says it fits,
-// and measured again, until it fits or is one commit or one ref, which is
-// refused past the limit — or, for a merge, has the history it brings in
-// stepped first. A dry run, which measures nothing, takes that last turn
-// where a merge's estimate is past the limit, so it plans what the import
-// would push.
+// A step is cut by estimate as far as it fits the limit scaled by ratio (how
+// much larger than their estimates the last steps packed, never below one),
+// searched from the last step's length (furthest). Unless a dry run it is then
+// MEASURED: a pack past the limit, or a stored bundle past what one push may
+// store, is cut back to where its measurement fits and measured again, until it
+// fits or is one commit or ref, refused past the limit (a merge instead has the
+// history it brings in stepped first). A dry run measures nothing and takes that
+// turn where a merge's estimate passes the limit.
 type importPlanner struct {
 	imp    *importer
 	remote *remoteRefs
@@ -1591,14 +1399,12 @@ func (p *importPlanner) take(ctx context.Context) (*importStep, error) {
 // walkTo is ref advanced along tip's first-parent history from what the
 // repository will hold, or nil when there is nothing to advance through.
 //
-// A BRANCH THE REPOSITORY HOLDS ALREADY is advanced only through the commits
-// that DESCEND from the value it holds, since every step is a fast-forward of
-// it. Where that value reached tip through a merge's second parent — a branch
-// merged in, a source that moved on with a merge since the last run — the
-// first-parent history past what the repository holds BEGINS with commits
-// that do not descend from it, and a step to one of them was refused as
-// non-fast-forward on every run. The first descendant's step carries them
-// instead ([importer.firstDescendant]). The value it holds must be an
+// A BRANCH THE REPOSITORY HOLDS ALREADY is advanced only through commits that
+// DESCEND from its held value, since every step fast-forwards it. Where that
+// value reached tip through a merge's second parent, the first-parent history
+// past it BEGINS with commits that do not descend from it, and a step to one
+// was refused as non-fast-forward on every run; the first descendant's step
+// carries them ([importer.firstDescendant]). The held value must be an
 // ancestor of tip, which [importer.resume] holds of the source's own value
 // and [importPlanner.carrier] of a merge's parent.
 func (p *importPlanner) walkTo(ctx context.Context, ref, tip string) (*firstParentWalk, error) {
@@ -1756,35 +1562,18 @@ func (p *importPlanner) walkStep(ctx context.Context) (*importStep, error) {
 	}
 }
 
-// bringIn steps the history a merge brings in BEFORE the merge, where the
-// merge alone is past what a step may carry. A first-parent walk meets a
-// whole other line of history — a long-lived branch merged back, a `git merge
-// --allow-unrelated-histories` or a `git subtree add` of another repository —
-// as the ONE commit that merges it, which no step of the walk can split, and
-// the commit itself is usually small: its size is that history's. So the
-// planner steps THAT HISTORY — the first-parent history of a parent the
-// repository will not hold, to that parent and no further — on a branch of
-// the source still to be pushed that reaches it ([importPlanner.carrier]),
-// taken out of its turn: the walk waits at the merge (suspended), the history
-// is walked in steps of its own, the merge is then a step of what is left,
-// and the branch goes back to its turn to be pushed on from the parent. Every
-// step is a fast-forward of that branch, since the branch's own value
-// descends from the parent; the repository gets no ref it would not have got,
-// and none it would have got later than the import's end.
-//
-// WHAT IS WALKED IS THE PARENT'S HISTORY, NEVER THE BRANCH'S OWN. A branch's
-// first-parent history can meet the very merge it was taken for — every
-// branch created after the merge reaches the parent THROUGH it — or a merge of
-// its own of what the paused walk is about to push: walked to its own value,
-// each branch above the merge met the merge again, measured once more at up to
-// twice the limit, until the import was refused naming the last of them. No
-// first-parent history of the parent holds the merge, which descends from it,
-// and nothing on it is what the paused walk is about to push.
-//
-// It answers whether it took one, and otherwise the parents the repository
-// lacks. Where every parent is held, the commit's own bytes are the step's
-// and nothing can split it; where a parent the repository lacks has no branch
-// to carry it, the caller's refusal names it ([importPlanner.mergeTooLarge]).
+// bringIn steps the history a merge brings in BEFORE the merge, where the merge
+// alone is past what a step may carry: a first-parent walk meets another line
+// of history (a branch merged back, an unrelated-histories merge, a subtree
+// add) as the ONE commit that merges it, which no step can split. The planner
+// steps the first-parent history of a parent the repository will not hold, on a
+// branch still to be pushed that reaches it ([importPlanner.carrier]), out of
+// its turn (the walk is suspended at the merge). It walks THE PARENT'S HISTORY,
+// never the branch's own, which can meet this merge again (every branch created
+// after it reaches the parent through it). It answers whether it took one, and
+// otherwise the parents the repository lacks: where all are held nothing can
+// split the commit; where one has no carrier the caller's refusal names it
+// ([importPlanner.mergeTooLarge]).
 func (p *importPlanner) bringIn(ctx context.Context, step *importStep) (bool, []string, error) {
 	merge := step.cmds[0]
 	parents, err := p.imp.parents(ctx, merge.oid)
@@ -1829,32 +1618,17 @@ func (p *importPlanner) bringIn(ctx context.Context, step *importStep) (bool, []
 	return false, lacking, nil
 }
 
-// carrier is where the queue holds the branch the history of parent — a
-// parent of merge the repository will not hold — is stepped on, or -1 where
-// no branch can carry it. A carrier is a branch, since its steps are
-// fast-forwards; one whose value in the source reaches parent, so it goes on
-// from there by fast-forwards too; and one the repository does not hold, or
-// holds at an ancestor of parent, which its steps then descend from
-// ([importPlanner.walkTo]).
-//
-// ONE THAT REACHES PARENT WITHOUT THE MERGE IS TAKEN FIRST — vendor, where
-// main merged vendor — so the history lands on the branch whose history it
-// is. Only where none does is it carried by one that reaches it through the
-// merge, as every branch created after the merge does: such a branch goes on
-// to its own value from the parent all the same, and a source with no branch
-// left on the merged-in history imports without one. Either is the first in
-// the source's order, so a run resumed after a failed step takes the one the
-// failed run took.
-//
-// THE HELD ONES ARE ASKED BOUNDED IN PARALLEL, as [importer.descendants] asks
-// its questions and for its reason: an import run again to bring over what a
-// source still in use has gained finds every branch at an earlier value, and
-// every branch since that merged main back reaches the parent while the
-// repository holds it at a commit from before the merge — up to
-// gitlet.MaxRefsPerRepo questions ahead of the first that can carry it, at
-// 5–10 ms each one after another. An eligible candidate stops every question
-// about a candidate after it, those before it are still answered, since one
-// of them may be the first, and nothing is left running on return.
+// carrier is where the queue holds the branch the history of parent (a parent
+// of merge the repository will not hold) is stepped on, or -1 where none can: a
+// branch whose source value reaches parent and which the repository does not
+// hold or holds at an ancestor of parent ([importPlanner.walkTo]). One reaching
+// parent WITHOUT the merge is taken first (vendor, where main merged vendor), so
+// the history lands on the branch it belongs to; else one reaching it through
+// the merge. Either is the first in the source's order, so a resumed run takes
+// the one the failed run took. The held ones are asked BOUNDED IN PARALLEL as
+// [importer.descendants] asks, for its reason (up to gitlet.MaxRefsPerRepo
+// questions at 5-10 ms each): an eligible candidate stops every question about
+// a later one, earlier ones are still answered, nothing is left running.
 func (p *importPlanner) carrier(ctx context.Context, parent, merge string) (int, error) {
 	reach, err := p.imp.branchesContaining(ctx, parent, "")
 	if err != nil {
@@ -2028,26 +1802,15 @@ var importWidestNode = strings.Repeat("n", 64)
 // recordHolds is how many of refs, in order, one push carries by the room its
 // record has for them: at least one, and up to all of them.
 //
-// THE NODE HOLDS A PUSH'S REF UPDATES TO ITS RECORD before anything of the push
-// runs (gitlet.Proposal.ValidateCommands): one push's entry in the code log's
-// record takes at most gitlet.EntryRoom, about 1 MiB, with every field the
-// push's work could add at its largest, and a push past it is refused whole —
-// "push them in parts". A thousand plain refs of the longest take under half
-// of that, but a ref whose characters the log spells in six bytes each (`&`,
-// `<`, `>`) costs up to six times its length, so some six hundred such refs
-// fill a push's record — and an import that batched them by count alone had
-// every such batch refused, on every run. So the batch is cut by the domain's
-// own rule, asked as the node will ask it: the person the node records
-// ([gitletImportPrincipal]) and the widest node id that may receive it. A
-// command's two ids are spelled at one width whatever they hold, so each
-// command is asked as a create of its value; the rule takes every command
-// forced and refused at its widest, so what the node decides of it never
-// widens it past what this answered. Every step is a push git sends, so it is
-// asked as one (gitlet.ViaGit), which its record's entry names too.
-//
-// None fitting is no ref's fault: one update of the longest ref a push may
-// carry takes under two kibibytes, so the person's own id or handle fills the
-// record, and no push of theirs can land.
+// THE NODE HOLDS A PUSH'S REF UPDATES TO ITS RECORD before anything runs
+// (gitlet.Proposal.ValidateCommands): a push's entry in the code log takes at
+// most gitlet.EntryRoom, about 1 MiB, and a push past it is refused whole. A ref
+// of characters the log spells in six bytes (`&`, `<`, `>`) fills it at some six
+// hundred, so batching by count alone had every such batch refused. So the batch
+// is cut by the domain's rule as the node asks it: the recorded person
+// ([gitletImportPrincipal]), the widest node id, each command as a create at
+// one width, as a git push (gitlet.ViaGit). None fitting is no ref's fault: the
+// person's own id or handle fills the record, and no push of theirs can land.
 func (imp *importer) recordHolds(refs []queuedRef) (int, error) {
 	var refusal error
 	fits := func(n int) (bool, error) {
@@ -2102,19 +1865,18 @@ func (p *importPlanner) walkInstead(ctx context.Context) (*importStep, error) {
 // larger than their estimates the last steps packed.
 func (p *importPlanner) target() float64 { return float64(p.budget) / p.ratio }
 
-// settle measures step — in a dry run, takes its estimate — and answers 0
-// when it may be pushed, or else the estimate its range must come under to
-// fit: the step's own estimate scaled down by how far its measurement passed
-// the bound it passed furthest — its pack past the limit, or its stored
-// bundle past what one push may store (importer.maxStored) — and a sixteenth
-// below that.
+// settle measures step (in a dry run, takes its estimate) and answers 0 when
+// it may be pushed, else the estimate its range must come under to fit: its
+// own estimate scaled down by how far its measurement passed the bound it
+// passed furthest (its pack past the limit, or its stored bundle past
+// importer.maxStored), and a sixteenth below that.
 //
-// MEASURED IS COPIED: the step's pack is built once ([importer.build]), and a
-// build that may fit is measured as the copy its push will send
-// ([importer.sent]); a step that fits keeps its repository for that push, and
-// one that does not is dropped. A build too far past the limit to fit as its
-// copy ([importOrderSlack]), or stopped at its cap, is cut on its own size,
-// and never indexed or copied.
+// MEASURED IS COPIED: the pack is built once ([importer.build]), and a build
+// that may fit is measured as the copy its push will send ([importer.sent]); a
+// step that fits keeps its repository for that push, one that does not is
+// dropped. A build too far past the limit to fit as its copy
+// ([importOrderSlack]), or stopped at its cap, is cut on its own size and
+// never indexed or copied.
 func (p *importPlanner) settle(ctx context.Context, step *importStep) (float64, error) {
 	if !p.exact {
 		step.size = step.estimate
@@ -2410,8 +2172,7 @@ func (imp *importer) build(ctx context.Context, step *importStep, remote *remote
 // importSendConfig, counted and thrown away. That copy is the
 // pack the push's own pack-objects writes, byte for byte, since neither has
 // anything to choose and both are handed the step's tips in one order
-// ([importStep.news]; the package doc's "The pack a step measured is the
-// pack it pushes"). Uncapped: it is the build's objects, at most
+// ([importStep.news], importSendConfig). Uncapped: it is the build's objects, at most
 // importOrderSlack past the build, which settle copies only within the limit.
 func (imp *importer) sent(ctx context.Context, step *importStep, remote *remoteRefs) (int64, error) {
 	if _, err := imp.g.call(ctx, gitCall{env: imp.g.environ, gitDir: step.repo}, "index-pack",
@@ -2456,19 +2217,14 @@ func (imp *importer) stepRepo(ctx context.Context) (string, error) {
 // (objects/info/alternates), for the copy's walk and the push to read below
 // what the step sends.
 //
-// ONCE THE BUILD IS INDEXED, NEVER BEFORE: index-pack checks every object of
-// the pack it indexes that its repository already holds against that copy,
-// byte for byte, reading it whole — a check for a SHA-1 collision — and one
-// object at a time, under a lock its threads share. Every object of a step's
-// build is the clone's, so a repository that borrowed the clone first had its
-// index read the whole build back out of the clone's packs, delta chains and
-// all, for a comparison that cannot fail.
+// ONLY ONCE THE BUILD IS INDEXED: index-pack compares each object its pack
+// shares with its repository byte for byte, one at a time under a shared lock.
+// Every object of a build is the clone's, so borrowing first made the index
+// read the whole build back out of the clone for a comparison that cannot fail.
 //
-// BY ITS ABSOLUTE PATH: git reads a relative alternate against the borrowing
-// repository's own objects directory, never against the directory the import
-// runs in, and the working directory is under $TMPDIR, which an operator
-// points at a volume with room for the import and may name relative to where
-// they run it.
+// BY ABSOLUTE PATH: git reads a relative alternate against the borrowing
+// repository's objects directory, not the import's, and $TMPDIR may be
+// relative to where the operator runs it.
 func (imp *importer) borrow(repo string) error {
 	objects, err := filepath.Abs(filepath.Join(imp.clone, "objects"))
 	if err == nil {
@@ -2589,20 +2345,15 @@ type planned struct {
 // execute pushes every step, planning and measuring each while the one before
 // it is pushed, and answers what it pushed.
 //
-// ONE PUSH AT A TIME, and none of it left running: each step is a
-// fast-forward from the one before it, so it waits for that one's outcome; and
-// the step in flight is waited for on every path out, a refusal of the plan
-// included — its outcome is reported before the plan's, since it may have
-// landed.
+// One push at a time, none left running: each step fast-forwards from the one
+// before, so it waits for that outcome, and the step in flight is waited for on
+// every path out (its outcome is reported before a refusal of the plan, since
+// it may have landed).
 //
-// A PUSH THAT FAILS ENDS THE PLANNING AT ONCE. The next step is planned on a
-// goroutine of its own, under a context of its own, while this one is pushed;
-// whichever of the two answers first is read first. A push refused in a
-// second — a protected branch, a token bound to nobody, the network — cancels
-// the planning, which ends its git processes (operatorGit.call), and is
-// reported once the planning has returned, so no git outlives the import: the
-// refusal used to wait for the next step's estimates and every build of its
-// pack, minutes of CPU at a gibibyte's step, spent on a step never pushed.
+// A push that fails ends the planning at once: the next step is planned on a
+// goroutine under its own context, and a refused push cancels it, ending its git
+// processes (operatorGit.call), and is reported once planning has returned, so
+// no git outlives the import and no CPU goes to a step never pushed.
 func (imp *importer) execute(ctx context.Context, p *importPlanner) (importDone, error) {
 	var (
 		done     importDone
@@ -2668,20 +2419,16 @@ func (imp *importer) execute(ctx context.Context, p *importPlanner) (importDone,
 }
 
 // push is one step's `git push --porcelain --atomic`, pinned to the push its
-// plan measured (importPushConfig, importPushFlags) and sent from the step's
-// own repository as a copy of the pack it was built as (importSendConfig), and
-// read from its own lines: every ref it names landed, or the step did not. The
-// step's repository goes once the push has ended, however it ended.
+// plan measured (importPushConfig, importPushFlags), sent from the step's own
+// repository as a copy of its build (importSendConfig), and read from its own
+// lines: every ref it names landed, or the step did not. The repository goes
+// once the push has ended, however it ended.
 //
-// --atomic so a step lands whole or not at all, which is what lets a re-run
-// read the repository and resume. The refspecs are on the command line: at
-// most gitlet.MaxCommandsPerPush of at most 296 bytes each (an id, a colon, a
-// ref of gitlet.MaxRefNameBytes) is under 300 KB, inside the argument limit of
-// both platforms this binary is built for (1 MiB on darwin, 2 MiB on linux).
-//
-// A LINE FOR A REF THE STEP DID NOT NAME is a push that carried more than its
-// plan — what an unpinned setting of the operator's did — and is said, though
-// what it moved has landed.
+// --atomic so a step lands whole or not at all, which lets a re-run resume. The
+// refspecs are on the command line: at most gitlet.MaxCommandsPerPush of 296
+// bytes each is under 300 KB, inside the argument limit of both platforms (1 MiB
+// darwin, 2 MiB linux). A line for a ref the step did not name is a push that
+// carried more than its plan (an unpinned operator setting), and is said.
 func (imp *importer) push(ctx context.Context, step *importStep) stepOutcome {
 	defer step.drop()
 	args := append(slices.Clone(importPushFlags), "--atomic")

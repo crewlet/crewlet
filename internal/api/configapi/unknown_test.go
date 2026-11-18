@@ -12,18 +12,15 @@ import (
 
 // A write made by this build keeps what this build cannot represent.
 //
-// Every case seeds a document as a NEWER peer would have written it, carrying
-// keys no field of this build decodes: at the root, inside a KEYED block
-// (`providers.llm.zulu`) and on each member of a LIST whose members can name
-// themselves (`mcp_servers`). It then writes through a route the way an
-// operator or the dashboard does, and reads the stored bytes back, because the
-// struct is exactly what cannot show the loss.
+// Every case seeds a document as a NEWER peer would have written it, with keys
+// no field of this build decodes: at the root, inside a KEYED block
+// (`providers.llm.zulu`) and on each member of a LIST whose members name
+// themselves (`mcp_servers`). It writes through a route and reads the stored
+// bytes back, because the struct cannot show the loss.
 //
-// A SEAT AND A UNIT are matched the same way, anywhere in the document, and
-// [config.CarryUnknown]'s own suite holds those levels — a seat moved into a
-// unit, a unit moved under another. `mcp_servers` stands in for them here
-// because the property that matters is the same: its members are matched by
-// IDENTITY rather than by position, so a reordered list is still the test.
+// A SEAT AND A UNIT are matched the same way and [config.CarryUnknown]'s suite
+// holds those levels. `mcp_servers` stands in for them: members matched by
+// IDENTITY rather than position, so a reordered list is still the test.
 
 // newerPeerDoc is the fixture every case extends: two providers and two MCP
 // servers, so a reorder has something to get wrong.
@@ -149,21 +146,13 @@ func TestAPatchNamingNoArrayKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 
 // A PATCH KEEPS EVERY LIST IT DID NOT NAME EXACTLY AS IT WAS STORED.
 //
-// The merge wrote this build's encoding of the WHOLE company back over the
-// stored document, which replaced every list in it whatever the patch named,
-// and the carry could bring back only what it could match.
-//
-// # The limit, and where it is held
-//
-// A list whose members have NO identity — a seat's `schedules` — genuinely
-// loses what a newer build wrote on each when a patch replaces it, which the
-// API reference states. [TestAPatchWritesBackOnlyWhatItNamed] holds that rule
-// against a schema written for the purpose rather than against whichever
-// fields this build happens to have today.
-//
-// What is shown here is the half that is about the MERGE rather than about
-// matching: a patch naming one key of one block must leave every list it never
-// mentioned exactly as the bytes hold it.
+// Writing this build's encoding of the WHOLE company over the stored document
+// replaced every list whatever the patch named, restoring only what the carry
+// could match. A list whose members have NO identity (a seat's `schedules`)
+// loses what a newer build wrote when a patch replaces it, as the API
+// reference states; [TestAPatchWritesBackOnlyWhatItNamed] holds that. Here is
+// the MERGE half: a patch naming one key of one block leaves every list it
+// never mentioned exactly as stored.
 func TestAPatchKeepsEveryListItDidNotName(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)

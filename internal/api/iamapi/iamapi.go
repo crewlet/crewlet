@@ -35,6 +35,59 @@
 // than as a failure — a state a caller renders, not an outage they retry. A
 // removed person has nothing left to open: the removal erased their sealed
 // values from every row.
+// The Opener is required: without one every person would render as sealed.
+//
+// # Reads are scoped, and a seat is not a secret
+//
+// GET /iam/seats (iam.seats.read) shows every human seat's name and kind to
+// anybody the guard resolved, since the org chart already shows them; who holds
+// a seat is shown only to an admin and the holder, and open invitations and
+// ?unheld=true are admin's alone (ADR-0033: one `directory` class, no separate
+// reader). The seats come from one snapshot (iamdomain.Reader.SeatClaims,
+// folded by ClaimsBySeat), and two rows on one seat are a 503, never a pick.
+// GET /iam/node-tokens lists this node's Tier A token labels, never values,
+// joined to their directory rows and marked company_writer per
+// api.auth.company_writers (ADR-0030).
+//
+// # Nothing is conferred by default, and nobody edits their own grants
+//
+// grants is required on a create and an invitation, because a default would be
+// a decision nobody saw being made. The directory write has no self path: the
+// mount names no object and the verb's class ignores one, and the record layer
+// refuses it a third time, since a caller may not confer a grant they do not
+// hold. A person is never created or invited without a seat (ADR-0032): the
+// missing seat is 400 seat_required before any key is read or link minted.
+// A seat an open invitation holds is 409 naming it in the invitation field,
+// the id its DELETE takes, never in the sentence; a node running no company
+// is 409 no_active_revision (iamdomain.ErrNoCompany), not a 503 no wait clears.
+//
+// # A create is named by its key
+//
+// The person and the invitation are derived from the operation's key
+// (iamdomain.CreatedPersonID, Blinder.InvitationID), so the retry an unknown
+// answer asks for names what the first attempt may have created and hands back
+// the same link. The key must be a uuid7, and the same key on another body is
+// 409. A create is one record under a step of its key bound to the request:
+// every create shares the directory's one subject, and the ledger answers an
+// operation it holds before any decide runs. A mint and a password reset read
+// no key, since a replay could not hand back a secret the first attempt showed
+// once.
+//
+// # A refusal is answered by what lifts it
+//
+// iamdomain.Refusal: a missing permission is 403 unauthorized naming the grants
+// (authz.RefusalFields); the record's own rule is 403 forbidden with no reason,
+// because told to ask an administrator, an administrator was misled. A bare
+// ErrRefused is an unclassified 500. Every 503 takes its hint from
+// auth.RetryIdentity over its cause, none where no wait clears it; an AST gate
+// refuses a bare 503.
+//
+// # A mint's owner is the route's
+//
+// ?person= or the caller, never a body field, or anybody could mint on anybody
+// by asking about themselves. A request that presented a machine token may not
+// mint, since the token would renew itself with nobody present; it revokes only
+// machine tokens, never its owner's password or second factor.
 package iamapi
 
 import (
@@ -129,22 +182,16 @@ type Writer interface {
 
 // Authority hands this surface one party's [Writer].
 //
-// A FUNCTION rather than a writer, because the author of an identity record
-// is a property of the WRITER and never of the call — an authentication trail
-// whose author field is chosen by the caller is not a trail — so a surface
-// serving many parties takes one writer each.
+// A FUNCTION rather than a writer: the author of an identity record belongs to
+// the WRITER, never the call (a trail whose author the caller chooses is not a
+// trail), so a surface serving many parties takes one each.
 //
-// THE GRANTS TRAVEL WITH THE PARTY, and they are not this package's opinion:
-// internal/iamdomain refuses a record the party may not author and refuses
-// conferring a grant the party does not hold, so a handler that somehow
-// skipped its own check still cannot make somebody an administrator.
+// THE GRANTS TRAVEL WITH THE PARTY: internal/iamdomain refuses a record the
+// party may not author and a grant it does not hold, so a handler that skipped
+// its own check still cannot make somebody an administrator.
 //
-// THE PARTY IS THE PRINCIPAL, WHOLE — the engine's writer derives from it the
-// name records carry and the credential beside it ([iam.ActorFor]), the
-// grants, and the principal's own id, which is what a gesture decided on WHO
-// is making it asks: a person's token is theirs alone to mint. That id used
-// to travel as a field of the mint the handler filled in, which made the
-// domain's rule exactly as strong as this one route.
+// THE PARTY IS THE PRINCIPAL, WHOLE ([iam.ActorFor] derives the recorded name,
+// credential and grants from it): never a field the handler fills in.
 type Authority func(principal iam.Principal) Writer
 
 // Opener opens one of a person's sealed values — [iamdomain.Sealer], over this

@@ -140,15 +140,11 @@ func TestANewCallsVersionsArePastEveryOneHandedOut(t *testing.T) {
 }
 
 // A CALL BUILT AGAIN UNDER THE SAME KEY IS NEWER THAN THE ONE BEFORE IT. A
-// parked turn's resume that runs again — held until its seat's budget has room
-// for the relaunch its reviewer sent back, or retried after an attempt that
-// broke — collects the same run into the same turn and round, so its review
-// opens again under the turn, phase and iteration of the attempt before it,
-// whose completion cleared the call. Counted per call, the rebuilt call's
-// versions began again at one, and a tab that missed the push clearing the
-// call and the first push after it — the hub drops a slow tab's oldest
-// envelopes — took every later push for one overtaken by the copy it held: it
-// kept the earlier attempt's review and asked for nothing.
+// parked turn's resume that runs again reopens its review under the same
+// turn, phase and iteration, whose completion cleared the call. Counted per
+// call, the rebuilt call's versions restarted at one, and a tab that missed
+// the clearing push took later pushes for stale ones: it kept the earlier
+// attempt's review and asked for nothing.
 //
 // Mutation: number a call of its own from one again, and the later attempt's
 // versions are below the earlier attempt's.
@@ -261,14 +257,12 @@ func TestARunEndingMovesTheRunsAlone(t *testing.T) {
 }
 
 // THE SEAT'S CALL SEQUENCE MOVES WITH EVERY CHANGE TO ITS CALL — a call
-// beginning, a round folded into it, its freezing as failed, and its clearing
-// by every path that clears one — and with nothing else. It is what a tab
-// orders the `live_call` slot by across calls and across a clear, because a
-// `live_call` answer can reach the tab after a push the engine generated later
-// ([livestate.Overlay.LiveCallSeq]): a clear that left the sequence where it
-// was is undone by any answer read a moment before it. The row a push carries
-// holds it beside a null call too, or the clearing push would carry nothing to
-// order by. A clear with nothing to clear moves nothing.
+// beginning, a round folded in, its freezing as failed, and every path that
+// clears one — and with nothing else. A tab orders the `live_call` slot by it,
+// because an answer can arrive after a later push
+// ([livestate.Overlay.LiveCallSeq]): a clear that left it unmoved is undone by
+// an answer read just before. The row holds it beside a null call too. A clear
+// with nothing to clear moves nothing.
 //
 // Mutation: clear a call at any one of these paths without advancing the
 // sequence (`agent.liveCall = nil`), or leave the sequence off the row, and

@@ -14,45 +14,26 @@ import (
 // A write sent under an operation this command names.
 //
 // # One rule, written once
-//
-// Every command here whose write carries an operation key — `worklet purge`,
-// `seats pause` and `resume`, the retention gestures, every write `crewlet
-// chat` makes and every write `crewlet artifacts` makes — mints that key
-// before it asks and meets the same answers that do not say "done": no
-// answer at all, and a 503 that is an unknown this node
-// can settle, an unknown it cannot, or a refusal that wrote nothing. What to
-// do about each is the ENGINE's rule rather than any one command's — the retry
-// is the same operation, through this node or another, and never a fresh id —
-// so it is said here. It was written out in `worklet purge` and again in `seats`,
-// and the copies had already parted: `seats` told an operator whose write had
-// been REFUSED, and so had written nothing, to run it again "to find out"
-// whether it landed, and held a pasted -op-id to the rule only after trimming
-// it where `worklet purge` refused the same id for its trailing newline.
-//
-// `crewlet iam` mints its writes' operations here too, finishes an answer that
-// never came with the same retry ([keyedWrite.retry]), and fails a 2xx whose
-// outcome leaves the write open by the same rule ([keyedWrite.confirmed]). The
-// 503s its node answers are read by its own renderer ([iamRefusal]), because
-// the identity directory's answers carry fields no other surface does — the
-// changes that landed before a refusal, a mint whose route reads no key —
-// beside the same rule.
+// Every command whose write carries an operation key (`worklet purge`, `seats
+// pause` and `resume`, the retention gestures, `crewlet chat` and `crewlet
+// artifacts` writes) mints that key before it asks and meets the same answers
+// that do not say "done": no answer, or a 503 that is an unknown this node can
+// settle, one it cannot, or a refusal that wrote nothing. What to do about each
+// is the ENGINE's rule, not any command's (the retry is the same operation,
+// through this node or another, never a fresh id), so it is said here once.
+// `crewlet iam` mints here too ([keyedWrite.retry], [keyedWrite.confirmed]) but
+// renders its own 503s ([iamRefusal]), whose fields no other surface carries.
 
 // operationFor is the operation a write is sent under: the -op-id the operator
-// brought, held to the rule the node holds a caller's id to, or one minted
-// here, now, under name.
-//
-// MINTED HERE, BEFORE THE REQUEST. A write whose answer never came may well
-// have landed, and the key it was sent under is the only handle on it: minted
-// by the node, it was lost with the answer, and the only way on was a second
-// write under a fresh one. It is minted as the node would mint it
+// brought, held to the rule the node holds a caller's id to, or one minted here,
+// now, under name. MINTED HERE, BEFORE THE REQUEST. A write whose answer never came may have
+// landed, and its key is the only handle on it: a node-minted key was lost with
+// the answer, leaving a second write under a fresh one. Minted as the node would
 // ([statelog.NewOpID]), carrying the instant a node judges the retry by.
-//
-// AND ONE THE OPERATOR BROUGHT IS HELD TO THE RULE EVERY SURFACE HOLDS IT TO
-// ([statelog.CheckCallerOpID]) before anything is sent, and sent as given: the
-// node refuses an id it did not mint, or one altered on the way back, `400
-// op_id_invalid` — refused here, the error names the flag rather than a header
-// or a query parameter this command composed. Trimmed first, because an id
-// pasted from a terminal carries the newline it was copied with.
+// AN OPERATOR'S ID IS CHECKED ([statelog.CheckCallerOpID]) before anything is
+// sent, and sent as given: the node refuses one it did not mint, or one altered
+// on the way back, `400 op_id_invalid`, and here the error names the flag.
+// Trimmed first: an id pasted from a terminal carries its newline.
 func operationFor(name, given string) (string, error) {
 	given = strings.TrimSpace(given)
 	if given == "" {
@@ -132,27 +113,18 @@ func (k keyedWrite) retry() string {
 		"this %s rather than a second one", k.operation, k.gesture)
 }
 
-// settle is err as the command reports it, saying how to finish the write
-// wherever err leaves its outcome open, and err unchanged everywhere else. An
-// answer that came back 2xx is [keyedWrite.confirmed]'s.
-//
-// FOUR ANSWERS, and they send an operator four ways:
-//
-//   - NO ANSWER: the node may have finished the write after the connection
-//     went, so the retry is under the same operation — said on stderr, beside
-//     the transport's own error.
+// settle is err as the command reports it, saying how to finish the write where
+// err leaves its outcome open (a 2xx is [keyedWrite.confirmed]'s). FOUR ANSWERS:
+//   - NO ANSWER: the node may have finished the write, so retry under the same
+//     operation, said on stderr.
 //   - AN UNKNOWN THIS NODE CAN SETTLE: the same request again here.
-//   - AN UNKNOWN IT CANNOT (`unvouched`): its operation ledger cannot vouch for
-//     the operation, so it answers the same way until the write reaches it —
-//     the retry goes through another node, under the same id.
-//   - A 503 REFUSAL NAMING THE OPERATION: nothing was written, and once the
-//     node can take it the retry is still under the same id, so every attempt
-//     stays the one operation.
+//   - AN UNKNOWN IT CANNOT (`unvouched`): its ledger cannot vouch for the
+//     operation, so retry through another node, under the same id.
+//   - A 503 REFUSAL NAMING THE OPERATION: nothing was written; retry under the
+//     same id once the node can take it.
 //
-// ONLY A 503. It is the one class a retry of the same request can clear; a
-// reused key's 409 is a write the key already made to something else, which
-// the node's own sentence sends to a NEW key, and offering this one again would
-// be refused for ever.
+// ONLY A 503: a reused key's 409 means that key already wrote something else, so
+// the node sends it to a NEW key; this one would be refused for ever.
 func (k keyedWrite) settle(stderr io.Writer, err error) error {
 	if err == nil {
 		return nil

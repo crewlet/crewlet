@@ -12,35 +12,27 @@ import (
 // The budgets answer: the CEILINGS the engine enforces against, paired with the
 // DURABLE counters it enforces with, window by window.
 //
-// Every scope states ALL THREE calendar windows — the day, the ISO week and the
-// month on the company's clock — with what it has spent in each, because what a
-// seat spent this week is a fact whether or not a ceiling is written for the
-// week. A window a ceiling caps also carries its `limit`, its refusal stamp and
-// the engine's `state` (ok, near or refusing); one nothing caps carries no
-// `limit` at all, never 0, which would state a range of nothing that is already
-// full. The windows are built by [engine.BudgetWindows], the one implementation
-// the live `budget_meters` frame is built from too, so the answer and the push
-// never state one counter two ways; and `near_fraction` is served beside them,
-// so a surface that draws a threshold mark draws the engine's.
+// Every scope states ALL THREE calendar windows (day, ISO week, month on the
+// company's clock) with what it has spent in each, capped or not. A capped
+// window also carries `limit`, refusal stamp and the engine's `state` (ok,
+// near, refusing); an uncapped one has no `limit`, never 0, which would state
+// a range of nothing already full. [engine.BudgetWindows] also builds the live
+// `budget_meters` frame, so answer and push never state one counter two ways.
 //
-// So `durable: false` means UNREADABLE, never zero: a company drawn at 0% of
-// its budget when the truth is that nobody looked is the lie this shape exists
-// to avoid, and every window list is empty rather than a list of zeroes.
-//
-// THE ASSISTANT'S PER-PERSON CEILINGS (`assistant.token_budget`) ride the same
-// answer as `assistant`, because they are what a person's Dashboard Assistant
-// question is refused by and the Budgets screen is where they are raised: its
-// three windows carry the ceiling every person is held to, and `used` is the
-// VIEWER's own spend against it. `counted` says whether that figure is real: a
-// person's spend is counted on a scope of their own only while the company
-// caps it ([engine.AssistantBudget]), and a caller who is not a person has no
-// assistant spend at all, so where `counted` is false every `used` is a zero
-// nobody measured, and a screen draws no figure.
+// `durable: false` means UNREADABLE, never zero: a company drawn at 0% when
+// nobody looked is the lie this shape avoids, so every window list is empty.
 
 // budgets answers the whole budget surface.
 //
 // Registered only beside a company source, so [Sources.Company] is never nil
 // here; what can be nil is the epoch it returns.
+//
+// THE ASSISTANT'S PER-PERSON CEILINGS (`assistant.token_budget`) ride the same
+// answer as `assistant`: its three windows carry the ceiling every person is
+// held to and `used` is the VIEWER's own spend. `counted` says whether that is
+// real: a person's spend is counted only while the company caps it
+// ([engine.AssistantBudget]), and a non-person has none, so where `counted` is
+// false every `used` is a zero nobody measured and a screen draws no figure.
 func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 	// WHO IS ASKING decides the `assistant` block's figures, so a caller this
 	// node could not CHECK is refused as the node's condition, never answered

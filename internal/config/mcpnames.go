@@ -14,24 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// WHAT AN MCP SERVER ENTRY MAY NAME: its own name, the prefix of its tools,
-// the headers or variables it is started with, and the address it is dialled
-// at.
+// WHAT AN MCP SERVER ENTRY MAY NAME: its own name, its tools' prefix, the
+// headers or variables it is started with, and the address it is dialled at.
 //
-// Each was accepted as written and failed further on, where nobody was
-// looking: a header name with a space in it failed every request the server's
-// client sent, a variable name with a dot reached a child that could not read
-// it, a server name with a slash could not be named in an address, and an
-// address carrying a password was published on every read of the server's
-// row. So each is refused where it is written, with what to write instead.
+// Each used to be accepted and fail further on, where nobody looked: a header
+// name with a space failed every request, a variable name with a dot reached a
+// child that could not read it, a slash could not be named in an address, and an
+// address with a password was published on every read of the server's row.
 //
-// ADMISSION RULES ([Company.ValidateAdmission]): a stored revision that breaks
-// one still applies, and is warned about, because nothing about running
-// depends on a name being well formed. Two of them are also held where the
-// engine acts on the value, since a document cannot always show it: a tool's
-// name is held to [harnessprofile.ToolNameMax] where the MCP bridge files it, and
-// an address written with a ${VAR} in it is judged once that resolves, before
-// the server is dialled ([MCPAddressProblem]).
+// ADMISSION RULES ([Company.ValidateAdmission]): a stored revision breaking one
+// still applies, with a warning. Two are also held where the engine acts: a
+// tool's name against [harnessprofile.ToolNameMax] where the MCP bridge files
+// it, and an address with a ${VAR} once resolved ([MCPAddressProblem]).
 
 // MaxMCPServerName is the most characters a server's name may hold.
 //
@@ -179,19 +173,14 @@ func (m *MCPServer) keyProblem(key string) string {
 // address, or "" when it will. It never quotes the address, which can carry a
 // secret once a ${VAR} in it resolves.
 //
-// HTTPS, OR PLAIN HTTP TO A HOST ON NO PUBLIC NETWORK: every request to a
-// tool server carries its credentials (an Authorization header, a seat's own
-// token), and plain http to the public internet hands them to every network
-// on the way. A server on this host or a private network is the operator's
-// own to run unencrypted ([MCPPrivateHost]). No user name or password in the
-// address: the address is published wherever the server is shown (its row on
-// `GET /mcp-servers`, a config read, every log line naming it), and a
-// credential belongs in a header, where the engine keeps it out of all of
-// them.
+// HTTPS, OR PLAIN HTTP TO A HOST ON NO PUBLIC NETWORK: every request carries
+// credentials, so plain http over the public internet exposes them; a private
+// host ([MCPPrivateHost]) is the operator's to run unencrypted. No user name or
+// password in the address: it is published wherever the server is shown (`GET
+// /mcp-servers`, config reads, logs), so a credential belongs in a header.
 //
-// EXPORTED for the engine, which judges an address written with a ${VAR} in it
-// once that resolves, before it dials the server or hands it to a box: the
-// document can only be judged where the address is written out.
+// EXPORTED for the engine, which judges an address written with a ${VAR} once
+// that resolves, before dialling it or handing it to a box.
 func MCPAddressProblem(address string) string {
 	u, err := url.Parse(address)
 	switch {
@@ -211,21 +200,17 @@ func MCPAddressProblem(address string) string {
 }
 
 // MCPPrivateHost reports whether host names a machine no public network routes
-// to: an address httpx.Public does not route (a loopback, private, link-local
-// or reserved one), or a name that resolves nowhere on the internet. A one-label name (a container's or a pod's service
-// name), localhost, and the suffixes set aside for private use: `.localhost`
-// (RFC 6761), `.local` (RFC 6762, and a Kubernetes cluster's
-// `svc.cluster.local`), `.home.arpa` (RFC 8375) and `.internal` (reserved by
-// ICANN for private networks).
+// to: an address httpx.Public does not route (loopback, private, link-local or
+// reserved), or a name that resolves nowhere public: a one-label name (a
+// container's or pod's service name), localhost, and the suffixes set aside for
+// private use: `.localhost` (RFC 6761), `.local` (RFC 6762, Kubernetes
+// `svc.cluster.local`), `.home.arpa` (RFC 8375) and `.internal` (ICANN).
 //
-// BY WHAT THE ADDRESS SAYS, not what it resolves to: the rule is about the
-// operator's own address, which names where they run the server, and a public
-// name that resolves to a private address today can resolve to anything
-// tomorrow.
+// BY WHAT THE ADDRESS SAYS, not what it resolves to: a public name resolving to
+// a private address today can resolve to anything tomorrow.
 //
-// EXPORTED as the one reading of an MCP server's address the engine makes
-// beside the dial: the rule above, and a server's page warning that a box in a
-// cloud cell cannot reach a server on a private network (internal/api/queries).
+// EXPORTED as the engine's one reading of an address beside the dial, and for a
+// server page's cloud-cell warning (internal/api/queries).
 func MCPPrivateHost(host string) bool {
 	if ip, err := netip.ParseAddr(host); err == nil {
 		// httpx.Public is the one rule of which addresses the public internet

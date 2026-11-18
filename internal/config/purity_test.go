@@ -12,27 +12,16 @@ import (
 
 // VALIDATION IS A PURE FUNCTION OF THE DOCUMENT, and this is what says so.
 //
-// # Why it needs a gate at all
+// `crewlet validate` checks one file on a laptop with no broker, coordination
+// store or database, which makes it usable before a deployment exists. Nothing
+// in the type system says so: a rule checking a handle against a running
+// node's directory would compile and pass every test against a running
+// engine. This layer checks the document's own shape and consistency; a
+// reference resolving to nothing is REPORTED by [Company.DanglingRefs].
 //
-// `crewlet validate` checks one file, on a laptop, with no broker, no
-// coordination store and no database — that is the whole of what makes it
-// usable before a deployment exists. Nothing in the type system says so: a
-// validation rule that wanted to check a handle against a running node's
-// directory would compile perfectly, pass every test written against a running engine, and
-// turn the one command an operator runs BEFORE they have an engine into one
-// that needs one.
-//
-// The rule is that this layer checks the document's own shape and its internal
-// consistency, and a reference that resolves to nothing is REPORTED by
-// [Company.DanglingRefs] rather than refused.
-//
-// # What it walks
-//
-// The call graph reachable from the validation entry points, inside this
-// package, looking for a parameter or a call that could only come from a
-// running system. It is a source walk because the fault is a shape rather
-// than a behaviour: a validation that took a context still validates, it just
-// cannot be run where it has to be.
+// It walks the call graph reachable from the validation entry points, in this
+// package, for a parameter or call that could only come from a running
+// system: a source walk, because the fault is a shape, not a behaviour.
 func TestValidationTakesNoContextNoStoreAndNoSQL(t *testing.T) {
 	t.Parallel()
 

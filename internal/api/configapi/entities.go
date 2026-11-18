@@ -22,41 +22,15 @@ import (
 // The config's addressable collections — what the dashboard's Config room
 // edits one at a time instead of sending the whole document back.
 //
-// # Why per entity at all, when PUT /config exists
+// A whole-document write makes every edit company-wide, a concurrent edit
+// anywhere in it the editor's to lose; one entity narrows what a write claims.
+// Not a patch format addressing list members (RFC 6902, a merge key): a patch
+// addresses by STRUCTURE, and a role's index moves when anything above it does.
 //
-// The whole-document write is the honest primitive and it stays. But it makes
-// every edit a company-wide one: a founder renaming one seat's goal sends back
-// a document carrying every other seat, every provider and every integration,
-// and a concurrent edit anywhere in it is theirs to lose. Editing one entity
-// narrows what a write claims to have changed, which is what makes the
-// revision summary mean something and what makes two people editing different
-// parts of the company safe.
-//
-// Why not a patch format that addresses list members instead — RFC 6902, or a
-// merge key — is the question this shape invites, and the answer is worth
-// stating rather than leaving to be re-derived: a patch addresses by
-// STRUCTURE, and a handle is deliberately not structural. A role's position in
-// a unit's list is not its identity, so a patch that named it by index would
-// rewrite a different seat the moment anything above it moved.
-//
-// # It is the same write underneath
-//
-// An entity PUT is not a patch protocol. It opens the active revision,
-// SPLICES the entity in, restores masks against that same revision, validates
-// the WHOLE document and stores a new revision — identical to PUT /config
-// from that line on. A change that would leave the company invalid is refused
-// even when the entity itself is fine, because a seat naming a provider that
-// no longer exists is exactly the kind of break a per-entity surface invites.
-//
-// # A seat is addressed by its handle and a unit by its key
-//
-// Both are IMMUTABLE: a seat's agent id, its mailbox and its memory derive
-// from its handle, and every `manages:` entry, unit `lead:` and root seat
-// `unit:` names a seat or a unit by them. A display name is only ever an edit
-// of a name — every seat's handle and every unit's key is written into the
-// document on every write ([config.MintIdentities]), so nothing derives either
-// from a name a body changed. Changing a handle or a
-// key is a removal and a creation, made through the whole document.
+// An entity PUT SPLICES into the active revision, restores masks, validates
+// the WHOLE document (a seat naming a vanished provider is refused though the
+// entity is fine) and stores a revision. A seat is addressed by its handle and
+// a unit by its key, both IMMUTABLE ([ErrIdentityMismatch]).
 const (
 	EntityRoles        = "roles"
 	EntityUnits        = "units"
@@ -553,20 +527,14 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 
 // putEntity replaces one entity and stores the resulting document.
 //
-// Through the entity draft ([entityDraft]), with the refusals an HTTP caller
-// needs spelled out: which entity was missing, which one a create found, and
-// why a rename is not an edit.
+// Through the entity draft ([entityDraft]).
 //
-// With `dry_run=true` it is the same request, checked in the same order, that
-// stores and activates nothing — exactly as the whole-document writes are.
-// An entity write needs its check MORE than they do, not less: its caller
-// never sees the rest of the document, so the whole-company validation behind
-// the splice is the only place it can learn that a provider fine on its own
-// leaves the company invalid, or that a ceiling it raised now sits above the
-// company's own (a warning, which only a check can show before the save).
-// One answer differs from the write's: a seat or unit sent back unchanged is
-// checked for its lead, where the write is refused as a re-publish
-// (admission.go).
+// `dry_run=true` is the same request, checked in the same order, storing
+// nothing. An entity write needs it MORE than a whole-document one: its caller
+// never sees the rest, so whole-company validation is the only place to learn
+// a provider leaves the company invalid. One answer differs: a seat or unit
+// sent back unchanged is checked for its lead, where the write is refused as a
+// re-publish (admission.go).
 func (s *Service) putEntity(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.refusedManaged(w, r) {
@@ -1016,23 +984,14 @@ func sorted(in []string) []string {
 // decodeEntity decodes one entity body STRICTLY, and places every failure
 // where the entity sits in the document, at.
 //
-// Unknown fields are refused, which is the same rule Tier B's document parser
-// has and for the same reason: a mistyped setting that silently did nothing is
-// the failure this build refuses to have. `json.Unmarshal` does the opposite:
-// it drops what it does not recognise, so a `PUT /config/llm-providers/zulu`
-// carrying `"modell"` would answer 201 and store the provider with its model
-// silently gone. This is the surface most likely to be hand-edited in a
-// hurry, so it is the worst place to accept a typo quietly.
+// Unknown fields are refused, as Tier B's parser does: `json.Unmarshal` drops
+// them, so `"modell"` in a `PUT /config/llm-providers/zulu` would answer 201
+// with the model gone, on the surface most hand-edited in a hurry.
 //
 // READ BY THE DOCUMENT'S OWN READER ([config.ParseMember]) and placed in the
-// document, because a refusal's problems are located in the document the
-// entity is spliced into, like the validation that follows. A strict JSON
-// decoder refused the same typo naming the key and no place, as a problem of
-// no kind, so it could not be put beside the field it was about.
-//
-// It also closes the one hole a whole-document write does not have: the body
-// key that carries a revision summary is lifted out before this runs, and a
-// route that forgot to lift it would be caught here rather than storing it.
+// document, since problems are located in the document the entity is spliced
+// into; a strict JSON decoder named the key and no place. It also catches a
+// route that forgot to lift out the body key carrying the revision summary.
 func decodeEntity[T any](raw submitted, at config.Path) (T, error) {
 	var out T
 	read := func() error { return config.ParseMember(raw.text, &out) }

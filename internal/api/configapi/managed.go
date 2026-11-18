@@ -11,62 +11,28 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A MANAGED COMPANY DOCUMENT — ADR-0030.
+// A MANAGED COMPANY DOCUMENT (ADR-0030). Tier A's `api.auth.company_writers`
+// names the Tier A tokens that alone may change the document, for a deployment
+// whose source (GitOps, an operator) replaces the active revision at every
+// reconcile, so a person's edit here would silently vanish.
 //
-// Tier A's `api.auth.company_writers` names the Tier A tokens that alone may
-// change the company document, for a deployment where something other than a
-// person is its source: a GitOps pipeline, a Kubernetes operator rendering it
-// from custom resources. Such a system replaces the active revision with its
-// own at every reconcile, so a person's edit made here lasted until then and
-// nothing said so. The refusal is the saying.
+// THE CREDENTIAL, NEVER THE AUTHOR: a write is judged by its credential
+// ([iam.Actor.OperatorID]; a Tier A bearer's is `token:<id>`, read by
+// [config.APIAuth.MayWriteCompany]). Sessions and owner-acting machine tokens
+// name other credentials, so all are refused, a unit's lead included.
 //
-// THE CREDENTIAL, NEVER THE AUTHOR. A write is judged by the credential it
-// came through ([iam.Actor.OperatorID]), and a Tier A bearer's is its own
-// login, `token:<id>`: a listed id is admitted by that and by nothing else
-// ([config.APIAuth.MayWriteCompany], the one reading of the list). A person's
-// session, a machine token acting as its owner and a session exchanged from a
-// Tier A token each name another credential, so every one of them is refused
-// while the document is managed — a unit's lead writing inside their own
-// subtree included, because their edit is exactly the one the managing
-// system's next reconcile overwrites.
-//
-// IT COMPOSES WITH THE AUTHORITY TABLE, in a fixed order: the route's policy
-// decides first (admin, or `config.org.write` for whoever could lead a unit),
-// so a caller who could never write is told the permission they lack;
-// then this list, so a caller who could is told the document is managed; then
-// the org-chart reach a lead's write is admitted on (admission.go); and only
-// then is the body read. Neither replaces the other: the table says who may
-// change the company, and this says that nobody but its source may change it
-// HERE.
-//
-// ENFORCED HERE AND NOWHERE ELSE, because this package is the one write path
-// onto the document: every route on this surface, `/setup` (through
-// [Service.Apply] and [Service.ApplyEntity]), and the engine's own writes all
-// reach [Service.prepare], which asks [Service.Authorize] before it reads
-// anything. Each HTTP route that changes the document asks it FIRST, before
-// it reads the body, its summary or the revision it names
-// ([Service.refusedManaged]): the refusal depends on the credential alone, so
-// a non-writer is answered it whatever it sent rather than first being told
-// to fix a body no fix would let through. A surface that has a side effect
-// BEFORE its write — `/setup` seals a credential first, creates a GitHub App
-// first, queues a teardown first — asks Authorize itself, earlier, so the
-// refusal comes before the side effect rather than after it; the check in
-// prepare stays the backstop for every programmatic caller.
-//
-// WHAT COUNTS AS CHANGING THE DOCUMENT is every write that stores different
-// bytes or re-points the fleet at another revision: PUT, PATCH, an entity
-// write, a revert, a /setup connect or disconnect. A dry run of any of them is
-// refused alike, since a check exists to answer what the write would. NOT a
-// reload, which re-publishes the active revision's own bytes: it is the gesture
-// that completes a credential rotation, and a rotation — a leaked key, now — is
-// exactly the break-glass a person must keep when the managing system cannot
-// know it is needed. The secret store is outside the rule for the same reason;
-// both stay open to whoever the authority table admits to them. And NOT the
-// engine's own writes ([iam.ActorSystem]): the rule is about which credentials
-// may write, and the engine presents none.
+// ORDER: the route's policy first (a caller who could never write is told the
+// permission they lack), then this list, then a lead's reach (admission.go).
 
 // ManagedError reports a change to a managed company document through a
 // credential the deployment does not let make one.
+//
+// A CHANGE is every write that stores different bytes or re-points the fleet:
+// PUT, PATCH, an entity write, a revert, a /setup connect or disconnect, and a
+// dry run of any of them. NOT a reload, which re-publishes the active bytes: it
+// completes a credential rotation, the break-glass a person must keep when the
+// managing system cannot know it is needed (the secret store is outside the
+// rule likewise). NOT the engine's own writes ([iam.ActorSystem]).
 type ManagedError struct {
 	// By is the refused party: the author, its kind and the credential the
 	// write came through, which is what the list was asked about.
@@ -119,9 +85,13 @@ func tokensPhrase(ids []string) string {
 // [*ManagedError] when it may not.
 //
 // THE ENGINE'S OWN WRITES PASS: an [iam.ActorSystem] write presents no
-// credential, and the rule is which credentials may write. Every other party
-// — whatever surface it came through — is judged by
-// [config.APIAuth.MayWriteCompany], the one reading of the list.
+// credential. Every other party is judged by [config.APIAuth.MayWriteCompany].
+//
+// ENFORCED HERE AND NOWHERE ELSE: this package is the one write path onto the
+// document, and [Service.prepare] asks it before reading anything. A surface
+// with a side effect BEFORE its write (/setup seals a credential, creates a
+// GitHub App) asks it earlier, so the refusal precedes the effect; prepare's
+// check stays the backstop for programmatic callers.
 func (s *Service) Authorize(by iam.Actor) error {
 	// THROUGH A TYPED POINTER, never returned as the error itself: a nil
 	// *ManagedError in an error interface is not nil.
@@ -143,7 +113,8 @@ func (s *Service) managedRefusal(by iam.Actor) *ManagedError {
 // refusedManaged answers this request's credential the managed refusal when
 // it may not change the company document, and reports whether it did. Every
 // route that changes the document asks it before anything else its handler
-// does; see the package's note on where this is enforced.
+// does: the refusal depends on the credential alone, so a non-writer is not
+// first told to fix a body no fix would let through.
 func (s *Service) refusedManaged(w http.ResponseWriter, r *http.Request) bool {
 	managed := s.managedRefusal(attributionOf(r))
 	if managed == nil {

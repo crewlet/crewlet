@@ -2,29 +2,16 @@ package api_test
 
 // THE CRAWL — what a browser fetches after the server hands it the shell.
 //
-// A browser does not stop at the files the shell names. The entry module
-// imports chunks, a lazy screen is an `import()` of another, and beside each of
-// those Vite writes a PRELOAD LIST (`__vite__mapDeps`) naming everything the
-// lazy chunk needs, its own stylesheet included, which the browser fetches
-// before it runs the chunk. A stylesheet asks for its faces. Each of those is a
-// request that can answer 404 or the wrong type, and each failure is invisible
-// until a reader opens the one screen that asks: a lazy chunk the embed does
-// not carry leaves every other screen working.
+// A browser follows more than the files the shell names: imports, lazy
+// `import()`s, each lazy chunk's PRELOAD LIST (`__vite__mapDeps`, its
+// stylesheet included) and a stylesheet's faces. Any can 404 or carry the
+// wrong type, unseen until a reader opens the one screen that asks.
 //
-// So the crawl follows every way the build writes a reference, and it does it
-// against the SERVER, never the disk: the tree on disk is not the tree the
-// binary embeds, and a type the server gets wrong is a failure the disk cannot
-// show. Its own behaviour is certified below over a stand-in bundle shaped like
-// Rolldown's real output, because the real build proves nothing about the
-// crawler: a crawler that never followed an `import()` would report every file
-// it did reach as clean, and only TestEveryFileUnderAssetsIsReachedFromTheShell
-// would notice the lazy half missing. The stand-in names what each reference
-// form must reach, exactly.
-//
-// The crawl is also what the SIZE BUDGET is measured over
-// (TestTheDashboardFitsItsBudget), through initialLoad below, which splits
-// what it reached into what a reader waits for before the first paint and
-// what a screen fetches later.
+// So the crawl follows every reference form the build writes, against the
+// SERVER, never the disk (not the tree the binary embeds). It is certified
+// below over a stand-in bundle shaped like Rolldown's output, because the real
+// build proves nothing about it: a crawler that never followed an `import()`
+// would report every file it reached as clean. initialLoad feeds the SIZE BUDGET.
 
 import (
 	"bytes"
@@ -170,18 +157,13 @@ type embedded struct {
 // embeddedDashboard is built in TestMain, before any case runs, and every case
 // about the dashboard the binary embeds reads it.
 //
-// ONCE because the crawl is a deterministic function of the embedded tree and
-// the handlers, and six cases each building an app and crawling it paid six
-// times for the same answer: a level-9 gzip of every file the shell reaches —
-// the server compresses an asset on its first serve — and a pass of the
-// reference patterns over every module, minutes of the suite under the race
-// detector. In TestMain rather than behind a sync.OnceValues, because the
-// cases that arrived while the first one was still crawling would each sit on
-// a parallel slot doing nothing until it finished. What each case asserts is
-// unchanged and still read off the server's own answers; what is no longer
-// exercised six times is an app's FIRST serve of each asset, which
-// dashboard_test.go's own cases cover, revalidation and gzip negotiation
-// included.
+// ONCE because the crawl is deterministic in the embedded tree and the
+// handlers, and repeating it per case costs a level-9 gzip of every reached
+// file plus a pass of the reference patterns over every module: minutes under
+// the race detector. In TestMain, not a sync.OnceValues, so cases arriving
+// mid-crawl do not hold parallel slots idle. Cases still assert on the
+// server's own answers; an app's FIRST serve of each asset is covered by
+// dashboard_test.go, revalidation and gzip negotiation included.
 var embeddedDashboard embedded
 
 // crawl is crawlDashboard with no test to report through: everything it finds
@@ -538,12 +520,11 @@ func TestEveryFileUnderAssetsIsReachedFromTheShell(t *testing.T) {
 // imports — is fetched only when a screen asks for it, or in an idle moment
 // after the first one is up.
 //
-// It is derived from the bodies rather than from the route the crawl first
-// reached a file by, because that route is an accident of breadth-first order:
-// a module the entry names in an `import()` and a vendor chunk imports
-// statically is dequeued as a dynamic import, yet the browser has it before
-// the first paint all the same. The faces are not here: a woff2 is fetched when
-// text first needs it, never recompressed, and has a budget of its own.
+// It is derived from the bodies, not from the route the crawl first reached a
+// file by: that is an accident of breadth-first order, and a module the entry
+// `import()`s that a vendor chunk imports statically is dequeued as dynamic
+// yet needed before the first paint. The faces are not here: a woff2 is
+// fetched when text first needs it, never recompressed, with its own budget.
 func initialLoad(c crawled) map[string]bool {
 	bodies := map[string][]byte{}
 	for _, f := range c.files {

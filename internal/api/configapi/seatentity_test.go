@@ -204,13 +204,10 @@ func storedMember(t *testing.T, s *surface, path ...any) map[string]any {
 // A UNIT WRITE STORES THE IDENTITY OF EVERYTHING IT ADDS.
 //
 // A unit's body is read on its own and spliced into the stored form, and
-// neither reader writes an identity down. A seat added inside a unit was
-// stored with no handle: read back it took what its name derived, and the
-// first correction to that name, sent through PUT /config, derived another —
-// a new agent id, an empty mailbox, an empty memory, and the old mailbox
-// retired after the grace. A team added there was refused for having no key,
-// by a rule whose sentence says one is minted on import, as the whole-document
-// write mints it.
+// neither reader writes an identity down. A seat added in a unit was stored
+// with no handle, so renaming it through PUT /config derived another: a new
+// agent id, an empty mailbox and memory. A team added there was refused for
+// having no key, though the whole-document write mints one.
 //
 // The control is the read before the write: the fixture has neither member.
 // Mutation: drop the mint from the entity draft and the write is refused for

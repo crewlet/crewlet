@@ -30,7 +30,9 @@
 // launch, each failure's sentence, the headers and variables a credential goes
 // in, what removing it takes with it) and the catalogue with the community
 // registry the company names searched; anybody else reads a member's reading
-// of each, built from its own types, which names none of that.
+// of each, built from its own types, which names none of that. A member's
+// catalogue is the curated half alone: the registry is the company's
+// configuration and a search a request to it.
 //
 // # A gesture is audited, refusals included
 //
@@ -48,6 +50,42 @@
 // build does not read is a `reason` beside it rather than an error in its
 // place. Only search text this build will not send is the caller's to
 // change, answered `400 bad_params`.
+//
+// # What decides each route
+//
+// The catalogue sits outside `/mcp-servers/`, whose next segment is any name a
+// company gives a server, so no detail is shadowed by it; the two tests that
+// name no saved server (`/mcp-checks`, `/mcp-probe`) sit outside it alike.
+// A restart and a saved server's check are `tools.retry` and `tools.check`
+// (admin at any recency, the assistant on approval); a restart answers `202`
+// with the request as recorded, and a saved server's check is recorded as its
+// latest, which the detail answers as `last_check`. A draft check is decided
+// as the write it stands for (`config.write` and `secrets.write`) before its
+// body is read, and a probe as `config.write` on top, since it dials the
+// caller's address. A draft's values are read through the variable the values
+// route would store them under ([config.Company.MCPValueSlot]) and held to the
+// same rule (checkValue), so a key that route refuses is refused here, and
+// nothing is recorded. The tools route is `config.write` with `dry_run=true`
+// as a check, a change of the tools it names written as one revision; it answers the levels it leaves, with every level no live
+// listing names as `unlisted`, kept and said. The values route needs
+// `secrets.write` plus `config.write`, never the assistant: it tests the value
+// with its entry as the fleet's active revision states it (activeEntry), so a
+// value stored right after its entry's write is tested before any node has
+// applied it, seals it write-only, then points the key or re-activates
+// (ADR-0070); the detail lists `values` by name. The OAuth start and delete are `secrets.write`, a step-up, each audited,
+// the start answering the authorization address once; the sign-in read is
+// `config.read` and never carries it.
+//
+// # The detail
+//
+// The detail is built off the fleet's MCP listings (ADR-0074), each
+// instance's health read from the nodes holding one at query time, and the
+// removal's dependants; an unreadable listing is `503` with the publisher's
+// beat as `Retry-After`, never a server with no tools. The member's reading is
+// built from types of its own copied field by field, so a field added to the
+// admin's answer reaches no member by default. The tool budget
+// ([queries.MCPToolBudget], a constant on the answer, never configured) is the
+// administrator's alone and stays a registry question.
 package mcpapi
 
 import (

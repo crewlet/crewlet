@@ -16,28 +16,16 @@ import (
 
 // A VERSION THE REQUEST STATED AS AN If-Match HEADER IS HTTP'S PRECONDITION,
 // and a stale one is answered as HTTP answers a failed one: `412
-// version_moved` (RFC 9110 §13.1.1), the status a project file's write and an
-// artifact's publish answer a moved version with. The SAME version stated in
-// the body is the tool's own argument, refused `409 stale_version` by the one
-// class mapping every transport shares — the act route's, which the dashboard
-// writes through, included. A route that takes the header was answering its
-// failure 409, so the one surface where a person's HTTP client sent the
-// standard precondition was the one that did not answer it the standard way.
+// version_moved` (RFC 9110 §13.1.1), as a file write and an artifact publish
+// do. The SAME version in the body is the tool's own argument, refused
+// `409 stale_version` by the class mapping every transport shares.
 //
-// Every route that folds the header is a row, and each refused for something
-// else under the header is still that refusal: only a stale version changes.
-//
-// EITHER WAY THE ANSWER IS A PERSON'S (ADR-0060): what the call was about and
-// its code's own sentence, every sentence it carries worded for a person, and
-// the tool's own sentence told to the model that made the request, where one
-// did, and to nobody else (internal/modelnote), exactly as a refusal of a
-// version stated in the body is: the header moves the status of a stale
-// version, and nothing about who hears which words.
-//
-// Mutation: answer a conditioned call through [operator.FailTool], or fold the
-// header without saying so, and every header row answers 409; leave the
-// model's half out of [operator.FailToolIfMatched] and every header row's
-// model hears nothing.
+// The answer is a person's (ADR-0060) and the tool's sentence goes only to the
+// model that made the request (internal/modelnote): the header moves the
+// status, not who hears what.
+// Mutation: answer through [operator.FailTool], or fold the header silently,
+// and every row answers 409; omit the model's half of
+// [operator.FailToolIfMatched] and the model hears nothing.
 func TestAVersionTheHeaderStatedIsAFailedPrecondition(t *testing.T) {
 	t.Parallel()
 	stale := func(r *rig) { r.writes.err = worklet.ErrStaleVersion }

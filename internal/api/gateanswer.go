@@ -15,22 +15,11 @@ import (
 // gesture is past its judgement: one entry per identity-claiming log, and
 // whether every one of them now holds the record.
 //
-// # One typed value, because the shape had three hand copies
-//
-// The route built this out of maps, the command line's tests built their own
-// copy "as the route renders it", and the dashboard declared a third in
-// TypeScript. The three had already drifted — the test copy sent a position for
-// an unknown log that no node sends, and the dashboard still read a top-level
-// outcome the route stopped writing, so every answer it got rendered as "no
-// acknowledgement". The route renders through [RenderGate] and nothing else;
-// the command line's tests serve what it returns; and the dashboard's suite
-// reads the golden file this package's test writes from it
-// (`internal/api/testdata/gate_answer.json`), so a change here is a failing
-// test on both sides until each follows it.
-//
-// EXPORTED only so a test in another package can serve the real rendering —
-// the command line's fake node is the one that did not. Nothing outside the
-// module can import it.
+// One typed value, because hand copies drift: the route renders through
+// [RenderGate] only, the command line's tests serve what it returns, and the
+// dashboard's suite reads the golden file this package's test writes
+// (`internal/api/testdata/gate_answer.json`), so a change here fails a test on
+// both sides. EXPORTED only so another package's test can serve the rendering.
 type GateAnswer struct {
 	Node    string `json:"node"`
 	Evicted bool   `json:"evicted"`
@@ -164,23 +153,15 @@ func (g GateRefusal) Write(w http.ResponseWriter) {
 // RenderGateRefusal renders err if it is one of the gate's refusals, reporting
 // false for anything else — a failure the route answers `500 gate_failed`.
 //
-// EVERY REFUSAL CARRIES ITS REMEDY AS `actions` BESIDE `hint`: what to do as a
-// closed set ([statelog.GateAction]) and the sentence saying why in no
-// surface's vocabulary. `force` among the actions is what tells a surface with
-// no -force flag — the dashboard — to offer the control that sends
-// `force=true`; before it, the only word for it was a sentence naming the flag.
+// EVERY REFUSAL CARRIES ITS REMEDY AS `actions` BESIDE `hint`: a closed set
+// ([statelog.GateAction]) plus a sentence in no surface's vocabulary. `force`
+// tells a surface with no -force flag, the dashboard, to offer `force=true`.
+// Each also carries the `op_id` it was sent under: `retry_same_op` means the
+// same request with it, and nothing was written under it, so reusing it and
+// minting another are both safe.
 //
-// AND THE OPERATION IT WAS SENT UNDER, as `op_id`, on every refusal that
-// carries actions: `retry_same_op` means the same request with the answer's
-// `op_id`, and a refusal that carried none sent a reader looking for a value
-// the body did not hold. Nothing was written under it, so reusing it and
-// minting another are both safe — carrying it is what makes "the same request"
-// something a client can read off the answer rather than remember.
-//
-// A MAP OF FACTS rather than a struct for one reason: a readmission refusal
-// carries numbers whose zero is a real value — a node that never published, a
-// position of zero — and an omitempty struct would drop the facts the refusal
-// is about.
+// A MAP OF FACTS rather than a struct: a readmission refusal carries numbers
+// whose zero is real (a node that never published), and omitempty would drop them.
 func RenderGateRefusal(node, opID string, err error) (GateRefusal, bool) {
 	var readmission *statelog.ReadmissionRefusal
 	var eviction *statelog.EvictionRefusal

@@ -1153,19 +1153,11 @@ func TestACursorTheTrackerRefusesIsBadParams(t *testing.T) {
 
 // A READ NO COPY COULD ANSWER IS "COME BACK", NEVER "ASK SOMETHING ELSE".
 //
-// The tracker is read through the estate router, as a seat's tools read it, so
-// a copy out of service, a peer restarting or no data node live at all reaches
-// this surface as the router's own refusal. The answers that read what is left
-// of a failure as a refusal of the request — a view's expansion, the activity
-// gate — told a caller to change a question nothing was wrong with, with a
-// 400; and the registry answered a 500 where a screen should try again.
-//
-// AND SO IS EVERY OTHER CONDITION OF THIS NODE the tools' own rule names
-// (builtin.Condition): a router that could not even send the request because
-// this node's queue is not live, a store held closed while it adopts a peer's
-// snapshot, a read that ran out of time. This surface kept a second, shorter
-// list of its own, and a view's expansion that met any of those told a caller
-// its question was malformed.
+// A copy out of service, a restarting peer or no live data node reaches this
+// surface as the router's refusal; reading that as a refusal of the request
+// tells a caller to change a sound question with a 400. AND SO IS EVERY OTHER
+// CONDITION OF THIS NODE (builtin.Condition): a queue not live, a store closed
+// while it adopts a snapshot, a read that ran out of time. No shorter list here.
 //
 // Mutation: put the old three-sentinel list back in unavailableHere and the
 // queue, store and deadline cases go red; drop the ErrUnserved arm from
@@ -1365,17 +1357,14 @@ func TestAProjectDetailClassesWhatIsMissing(t *testing.T) {
 
 // A STRIP IS PERSONALISED BY THE CALLER AND BY NOBODY ELSE.
 //
-// `viewer=` used to select WHOSE pins and personal views order the strip, and
-// nothing checked it: on a node with anonymous reads a caller could take the
-// handles out of `org` and page through every seat's pinned views. The
-// parameter is gone — the strip is ordered by the caller's own record — so
-// there is no handle to check and nothing to refuse.
+// There is no `viewer=` to select WHOSE pins and personal views order the
+// strip (a caller could page through every seat's pins by handle): the strip
+// is ordered by the caller's own record.
 //
 // A CALLER WITH NO SEAT GETS THEIR OWN STRIP TOO, under the name their record
-// is kept under — the login `set_pins` and `save_work_view` write with. It was
-// read under no name at all, so an unbound caller's assistant pinned views
-// their strip never showed. And a strip is about a CONTAINER, so a caller the
-// engine can name nothing for still gets the shared one, never a refusal.
+// is kept under, the login `set_pins` and `save_work_view` write with. And a
+// strip is about a CONTAINER, so a caller the engine can name nothing for
+// still gets the shared one, never a refusal.
 func TestAStripIsPersonalisedByTheCallerAlone(t *testing.T) {
 	t.Parallel()
 
@@ -1826,17 +1815,12 @@ func handedWhole(f statelog.Freshness) []bound { return handed(f.MaxLag, f.MaxLa
 // EVERY QUESTION ON THIS SURFACE RESOLVES THE CALLER'S OWN FRESHNESS, and the
 // one that did not was twelve of the thirteen.
 //
-// `work_items` read `read_level` because it is the question that goes through
-// the query grammar. Every other one wrote a hardcoded `stale` into its query
-// and never looked at the key at all — so a caller asking a project listing
-// for a linearizable answer was served this node's rows and told, in the
-// answer's own `read_level` field, that it came back linearizable. A level
-// that never downgrades silently is the whole contract; a surface that
-// silently ignored the ask broke it through the other door.
+// A caller asking for a linearizable answer must not be served this node's rows
+// under a `read_level` saying they were: a level never downgrades silently,
+// and silently ignoring the ask breaks that too.
 //
-// The case is written as a WALK over the questions rather than one assertion
-// per reader, because the defect was never in one of them: it was that adding
-// the fourteenth question would inherit whatever the thirteenth typed.
+// The case WALKS the questions rather than asserting per reader, because a
+// new question would otherwise inherit whatever the last one typed.
 func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 	t.Parallel()
 	for _, tc := range sessionQuestions {
@@ -1910,26 +1894,12 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 
 // AND THE STALENESS BOUND REACHES THE READER, in both of its units.
 //
-// A bound refused where it is inconsistent and dropped where it is not is a
-// bound that never bounded anything — the defect `max_lag_seconds` was fixed
-// for on the board, and `max_lag_seq` was left in beside it, and which every
-// other question here had in both units because none of them read either key.
-// A tile declaring "at most twenty seconds behind" and rendering whatever came
-// back is a live screen showing an hour-old answer.
+// THE POINT READS AND THE PAGE READS TOO: the bound is about this node's LAG,
+// and a row is as far behind as a board.
 //
-// THE POINT READS AND THE PAGE READS TOO. They handed over the level alone,
-// on the claim that a single row has no set for a bound to be enforced
-// against — but the bound is about this node's LAG, and a row is exactly as
-// far behind as a board.
-//
-// A WALK OVER [sessionQuestions], the one table of the questions this surface
-// serves at a caller's floor, rather than a list of its own: this walk kept
-// one, which stopped growing while the surface did, and `company_feed` — the
-// first answer read from two logs, each half handed an ask of its own
-// ([statelog.Freshness.On]) — was one it never asked, so a half that dropped
-// the bound passed this walk and every other case in the package. And EVERY
-// READER a question reads is held to it, one per log it reads: both halves of
-// the feed, each where its own stub recorded it.
+// A WALK OVER [sessionQuestions], the one table, not a list of its own (it went
+// stale, and a half of `company_feed` ([statelog.Freshness.On]) dropped the
+// bound unnoticed). EVERY READER a question reads is held to it, one per log.
 //
 // Mutation: build the feed's halves as `Freshness{Level: f.Level}` in
 // [statelog.Freshness.On] and `company_feed` goes red here, for both halves.
@@ -1987,19 +1957,14 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 // AND THE FLOOR REACHES EVERY QUESTION, at every level it may be asked at.
 //
 // `min_position` is what a write's answer carries, handed back: a caller that
-// created a task through the operator MCP and redraws the board over this
-// surface names the position and is served nothing from before it. A question
-// that parsed the key and dropped it would answer identically — same rows,
-// same `read_level` — which is the shape the staleness bounds already shipped
-// in, so the walk is over every question rather than the one that goes
-// through the grammar.
+// created a task and redraws the board is served nothing from before it. A
+// question that parsed the key and dropped it would answer identically (same
+// rows, same `read_level`), so the walk is over every question.
 //
 // AND EVERY FLOOR REACHES IT, not the first: `min_position` repeats once per
-// log, and a question that read one log handed its reader only the floor it
-// found first would drop a second the caller named — a floor on another log,
-// which the reader refuses as the request's mistake
-// ([TestASingleLogReadRefusesAnotherLogsFloor]), and which a reader never
-// handed it cannot refuse.
+// log, and a reader handed only the first would never refuse a floor on
+// another log as the request's mistake
+// ([TestASingleLogReadRefusesAnotherLogsFloor]).
 func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 	t.Parallel()
 	want := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711}
@@ -2089,18 +2054,13 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 
 // THE VIEWER IS THE CALLER, AND NOT A PARAMETER AT ALL.
 //
-// It was one, and `workItems` read it out of the bag and deleted the key again
-// before handing the rest to `ExpandedQuery` — because `viewer` is not in
-// `worklet.QueryKeys` and `checkKeys` refuses a key nothing parses. Which left
-// exactly one honest value for the parameter and made every other one a free
-// choice of whose queue to render, on a surface where `preset=my_queue`,
-// `preset=priorities` and `f.<slug>=me` all resolve against it.
+// A typed viewer would be a free choice of whose queue to render, since
+// `preset=my_queue`, `preset=priorities` and `f.<slug>=me` resolve against it.
+// `viewer` is not in `worklet.QueryKeys`, so `checkKeys` refuses it.
 //
-// It is the principal's own seat now. What this case keeps is the half that
-// still has to hold: the value reaches the EXPANSION as a viewer, because a
-// fix that dropped the parameter without threading the caller's seat would
-// make `me` and every personal preset resolve to nobody — a quieter wrong
-// answer than the refusal it replaced.
+// The viewer must reach the EXPANSION as the caller's own seat: dropping the
+// parameter without threading it would make `me` and every personal preset
+// resolve to nobody, a quieter wrong answer than the refusal.
 func TestTheViewerIsTheCallersOwnSeat(t *testing.T) {
 	w := &stubWork{}
 	if _, err := askAsSeat(t, queries.Sources{Work: w}, "ada", "work_items",
@@ -2249,16 +2209,12 @@ func TestEverySavedViewIsTheCallersAndCountedOnlyForARecord(t *testing.T) {
 
 // AN ASKED PERSON READS THE ITEM WITHOUT THE TRACKER, and nobody else does
 // (ADR-0033, `get_work_item`'s asked arm). A person kept off the tracker may
-// read the one item an OPEN ask on it names them on — so they can read what
-// they were asked and answer it — and only the item says whether one does: it
-// is read, the ask resolved through the same thread read the answer they
-// would post is resolved by, and the item decided again. A tracker holder is
-// decided before anything is read, and never asks the thread.
+// read the one item an OPEN ask names them on; only the item says whether one
+// does, so it is read, the ask resolved through the answer's own thread read,
+// and the item decided again. A tracker holder never asks the thread.
 //
-// A MISSING ITEM IS THE SAME REFUSAL as one they were not asked on, to
-// somebody without Worklet, so the refusal is no oracle for which keys
-// exist; and a thread this node cannot read is unavailable, never "you were not
-// asked".
+// A MISSING ITEM IS THE SAME REFUSAL as one they were not asked on (no oracle
+// for keys); an unreadable thread is unavailable, never "you were not asked".
 //
 // Mutation: answer the detail on the first ErrUnresolved without the probe, and
 // bo reads ana's item; return ErrNotFound for a missing item before deciding,

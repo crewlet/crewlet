@@ -361,16 +361,10 @@ func literal(value string) string { return value }
 
 // A ${VAR} REACHES THE VERIFIER AS ITS VALUE, never as the reference.
 //
-// Secrets live in the config as references — verbatim in the stored payload,
-// resolved at construction, which is what makes rotating one a change to the
-// environment rather than to the company. This consumer did not resolve, and
-// the result was seven routes verifying against the literal string
-// "${GITLAB_SIGNING_SECRET}": every delivery from every third-party app refused, with
-// the third-party app's settings page showing a healthy hook. Measured against a real
-// GitLab.
-//
-// Worse than the outage is what the literal IS. A config field the dashboard
-// renders is not a secret, so a forged delivery would have verified against a
+// Secrets are references in the config, resolved at construction. A consumer
+// that did not resolve would verify against the literal string
+// "${GITLAB_SIGNING_SECRET}", refusing every delivery, and a config field the
+// dashboard renders is no secret: a forged delivery would verify against a
 // string an attacker could read.
 func TestEveryVerifierGetsAResolvedSecret(t *testing.T) {
 	t.Parallel()

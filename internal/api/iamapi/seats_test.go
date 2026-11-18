@@ -75,15 +75,10 @@ func part(row map[string]any, name string) map[string]any {
 
 // THE SEAT LISTING IS EVERY HUMAN SEAT OF THE RUNNING COMPANY AND WHAT HOLDS IT.
 //
-// It is what creating, inviting or moving a person onto a seat reads: a seat a
-// suspended person holds is held — suspending somebody is not giving their seat
-// away — and so is a seat an OPEN invitation names, which nothing else may take
-// until it is redeemed, cancelled or lapses. An invitation that has aged out at
-// this node's clock holds nothing. A binding to a seat the company does not hold
-// lists nothing, since the listing is of seats; `GET /iam/check` is where that
-// binding is reported. The `unheld` filter is the seats nothing holds — no
-// holder and no invitation — which are the ones a create, an invitation or a
-// move may name.
+// A seat a suspended person holds is held, and so is one an OPEN invitation
+// names; an invitation aged out at this node's clock holds nothing. A binding to
+// a seat the company does not hold lists nothing (`GET /iam/check` reports it).
+// `unheld` is the seats with no holder and no invitation.
 //
 // Mutation: list a seat an invitation holds as unheld, or ask the directory at
 // any clock but the surface's own, and the support or sales rows go red; drop
@@ -139,15 +134,12 @@ func TestIamSeatsListsHumanSeatsAndWhatHoldsThem(t *testing.T) {
 
 // EVERYBODY SEES WHO HOLDS EACH SEAT, AND ONLY AN ADMIN SEES THEIR LOGIN.
 //
-// The org chart is everybody's overview (ADR-0033), and so is who sits in each
-// of its human seats — drawn by the name they go by. What identifies their
-// ACCOUNT — the directory id, the login a sign-in form takes, how far through
-// enrolment they are — is the directory's: an admin reads it, and so does the
-// holder about themselves. An OPEN INVITATION carries the address it was sent
-// to, so it is an admin's alone, and so is `?unheld=true`, the helper every
-// admin gesture that puts somebody on a seat picks from — refused anybody else
-// naming admin. A name this keyring cannot open is `sealed`, never an empty
-// name a screen would draw as a vacant seat.
+// Who sits in each human seat, by name, is everybody's overview (ADR-0033). What
+// identifies their ACCOUNT (directory id, login, enrolment stage) is an admin's
+// and the holder's about themselves. An OPEN INVITATION carries its address, so
+// it is an admin's alone, as is `?unheld=true`, refused anybody else naming
+// admin. A name this keyring cannot open is `sealed`, never an empty name a
+// screen would draw as a vacant seat.
 //
 // Mutations: send the login to every reader and the colleague's view of the
 // founder goes red; drop the holder-about-themselves arm and bob's own row

@@ -8,13 +8,12 @@ import (
 // EVERY COLLECTION STATES HOW A MEMBER OF IT IS LISTED, READ, REPLACED AND
 // ADDED, in the stored tree as well as the struct.
 //
-// The route table mounts a read and a write for every kind it lists, so a
-// member left nil is not a narrower collection: it is a nil function called
-// inside a request. The ONE exception is the create-only write, and only for
-// the collections whose members have a place in the company the path cannot
-// name — a seat in a unit, a unit under its parent: they state neither create
-// nor place, both together, and are answered [ErrNotCreatable]. A kind that
-// states one and not the other is a half-built create.
+// The route table mounts a read and a write for every kind it lists, so a nil
+// member is a nil function called inside a request. The ONE exception is the
+// create-only write, for collections whose members have a place the path
+// cannot name (a seat in a unit, a unit under its parent): they state neither
+// create nor place, and are answered [ErrNotCreatable]. A kind stating one
+// and not the other is a half-built create.
 //
 // Mutation: drop any one of the four members every kind needs, or one of the
 // create pair from llm-providers, and this fails.

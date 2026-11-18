@@ -48,31 +48,15 @@ type LinkHost struct {
 
 // linkHosts answers where the company's own apps live in a browser: the base
 // a person opens a pull request, a channel or an issue at, per configured app.
+// The `integrations` answer is an administrator's; THIS IS THE LEAST A READER
+// NEEDS, AND IT IS EVERYBODY'S: a kind and a base address per app and a code
+// host's OWNERS ([codeOwners]), no repository, credential or health.
 //
-// WHY IT EXISTS. The dashboard draws a vendor's mark beside a link to that
-// vendor and turns a bare `owner/repo#14` into a link, and both need the
-// company's hosts: an Enterprise Server, a self-hosted GitLab or Mattermost
-// and a Jira site live at addresses no rule can guess. The `integrations`
-// answer holds them, and it is an administrator's, for the reason its
-// registration gives: it is a map of what is configured and what is not.
-//
-// SO THIS IS THE LEAST A READER NEEDS, AND IT IS EVERYBODY'S: a kind and a
-// base address per app the company configured, and a code host's OWNERS (its
-// organizations or top-level groups, [codeOwners]). No repository, project or
-// team (which repositories a company works in is the integration's
-// business), no credential, no enabled flag and no health. Every reader of
-// the company's work already reads these hosts and owners in the links and
-// references its agents write.
-//
-// THE ADDRESS IS REDUCED TO WHERE A BROWSER GOES: scheme, host, port and a
-// path prefix, with any user information, query and fragment dropped, and a
-// scheme other than http or https refused outright. An operator who wrote a
-// credential into an instance URL has made a mistake this answer must not
-// publish to every reader.
-//
-// RESOLVED through the serving node's chain ([Sources.Env]), as every caller
-// that builds a link from these fields resolves them, so a host written as a
-// `${VAR}` is the host the engine itself links to, never the reference.
+// THE ADDRESS IS REDUCED TO WHERE A BROWSER GOES: scheme, host, port and path
+// prefix, with user information, query and fragment dropped and a scheme other
+// than http or https refused, so a credential an operator wrote into an
+// instance URL is never published. RESOLVED through the serving node's chain
+// ([Sources.Env]): a `${VAR}` host is the host the engine links to.
 func (s Sources) linkHosts(_ context.Context, _ Params) (any, error) {
 	company, _ := s.Company()
 	hosts := []LinkHost{}

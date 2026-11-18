@@ -182,17 +182,11 @@ func TestEveryWriteCarriesItsKeysInstant(t *testing.T) {
 // AN UNKNOWN THIS NODE CANNOT SETTLE SENDS THE CLIENT ELSEWHERE; ONE IT CAN
 // SENDS IT BACK HERE.
 //
-// Both are 503 with the key, and they differ in the one thing a client acts on:
-// a lost acknowledgement is settled by the same request here, so it says when;
-// an unvouched one was not published, and the same request here answers the
-// same way until the change reaches this node — so it carries no Retry-After,
-// says `unvouched`, and names another node. Held on a tool-backed route, whose
-// tool reports the unknown as a failed result, and on a write this surface
-// makes itself.
-//
-// Both say `outcome: "unknown"` — on the tool-backed route too, whose tool
-// reports the unknown as a failed result carrying no receipt, and which
-// answered one with no outcome at all.
+// Both are 503 with the key and `outcome: "unknown"`, and differ in what a
+// client acts on: a lost acknowledgement is settled by the same request here,
+// so it says when; an unvouched one was not published and answers the same
+// here until the change reaches this node, so it carries no Retry-After, says
+// `unvouched` and names another node. Held on tool-backed and own writes.
 //
 // Mutation: drop the unvouched arm and the second case carries a Retry-After;
 // write the unknown through UnavailableWith and the tool-backed row lacks its
@@ -247,11 +241,10 @@ func TestAnUnvouchedUnknownSaysAnotherNodeCanAnswer(t *testing.T) {
 //
 // The estate's router asks every data node under the request's operation, and
 // each that stayed silent may have run it, so it answers
-// [estate.ErrOutcomeUnknown]. Told it as the estate unserved — `503
-// unavailable` and no outcome — a client read "nothing ran" and sent the
-// request again under a NEW key: a second purge, a second item. The answer is
-// the unknown every lost acknowledgement gets, settled by the same request
-// under the same key, and in fixed words, since the router's names the nodes.
+// [estate.ErrOutcomeUnknown]. As `503 unavailable` with no outcome a client
+// reads "nothing ran" and resends under a NEW key: a second purge. The answer
+// is the unknown every lost acknowledgement gets, settled by the same request
+// under the same key, in fixed words, since the router's names the nodes.
 //
 // Mutation: drop ClassifyWrite's unknown arm and the purge's row goes red;
 // drop writeFailure's and the tool-backed row does.
@@ -358,20 +351,12 @@ func TestAStoppedSubtreeSaysHowToFinishItHere(t *testing.T) {
 
 // A STOPPED MOVE IS FINISHED ON THIS SURFACE BY THE SAME KEY, AND SAYS SO.
 //
-// move_work_item answers a move whose root landed and whose walk stopped with
-// the root's receipt and an instruction for a seat or the operator's
-// assistant — the same arguments, or the same `op_id`, neither of which this
-// route takes. What finishes it here is the same Idempotency-Key: a new one
-// is refused, because the root is already in the target and that operation's
-// ledger never put it there. Where this node cannot vouch for the step it
-// stopped at, the same key here stops there again, and the answer sends the
-// client to another node or to the Worklet duty; where a task in the trash
-// holds the walk, to its restore.
-//
-// AND IT SAYS WHERE THE KEY IS. These requests send none, so the key is the
-// one the surface minted and answers as `op_id`: told only to repeat "the SAME
-// Idempotency-Key", a client that never sent one resends without it — a new
-// operation, which is exactly the one that is refused.
+// move_work_item's instruction for a seat names `op_id`, which this route does
+// not take. Here the same Idempotency-Key finishes the move; a new one is
+// refused, since the root is already in the target and that ledger never put
+// it there. Where this node cannot vouch for the stopped step, the answer sends
+// the client to another node or the Worklet duty (a trashed task, its restore).
+// A client that sent no key is told where it is: its minted key, as `op_id`.
 //
 // Mutation: drop moveStoppedHere and every case names the tool's own remedy;
 // drop the op_id clause and the three cases lack it.
@@ -549,17 +534,13 @@ func TestAnUnknownStillSaysWhatItWasAbout(t *testing.T) {
 
 // ONE KEY IS ONE OPERATION ONLY FOR ONE REQUEST.
 //
-// The ledger answers an operation it already holds before the write is
-// decided, so an id derived from the key, the verb and the object alone made
-// the same key sent with ANOTHER request the first request's operation:
-// answered `applied`, with nothing of the second written — a card dropped
-// elsewhere, a remark rewritten, a purge for another reason, each reported as
-// made and silently dropped. The tools behind the other routes already put a
-// digest of their arguments in every id they derive, and the knowledge base
-// binds every id to what its write says (internal/doclet holds that); the
-// writes this surface makes itself are held to the same rule here: the same
-// request under the same key is the same operation (the retry), and any other
-// request under it is another.
+// The ledger answers an operation it holds before the write is decided, so an
+// id from the key, verb and object alone made the same key sent with ANOTHER
+// request answer `applied` with nothing of the second written. Tools already
+// digest their arguments into every id (the knowledge base too, held by
+// internal/doclet); the writes this surface makes itself follow the same rule:
+// the same request under the same key is the retry, any other is another
+// operation.
 //
 // Mutation: drop the arguments from [keyedOp] and every row goes red.
 func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
@@ -701,14 +682,12 @@ func TestAWriteThisSurfaceMakesIsKeyedByTheOneRule(t *testing.T) {
 // THE KNOWLEDGE BASE IS HANDED THE REQUEST'S OPERATION: the caller's key,
 // scoped by who sent it, and nothing derived from the request beside that.
 //
-// It binds every operation it derives to what the write says — the title, the
-// body, the reason — so the same key sent with another request is another
-// operation there (internal/doclet's own suite holds that). Bound here as well,
-// through the request's arguments, it was a second binding of one rule that
-// could only drift from the first, over a key the store then dated and
-// derived from: this surface's job is to hand over the request's operation —
-// the same one the answer names as `op_id`, which is what lets the trail find
-// every write by the key the caller holds.
+// It binds every operation it derives to what the write says (title, body,
+// reason), so the same key with another request is another operation there
+// (internal/doclet's suite holds that). Binding here too would be a second
+// copy of one rule that could only drift: this surface hands over the request's
+// operation, the one the answer names as `op_id`, so the trail finds every
+// write by the key the caller holds.
 //
 // Mutation: bind the key to the request here again and every row goes red.
 func TestTheKnowledgeBaseIsHandedTheRequestsOperation(t *testing.T) {

@@ -46,25 +46,15 @@ type BoxStep struct {
 // SeatBoxes is every box a seat's executor can launch in, seat by seat in the
 // order [Company.EachRole] walks them, placed as the engine places each one.
 //
-// ONE BOX PER SEAT PER CELL ITS EXECUTOR CAN LAND IN. Every agent seat's
-// executor is its harness's own run, and a launch takes the first member of
-// the seat's executor chain that can run it and is not sitting out on its
-// node — so any runner-capable member may be the one launched, and each is
-// placed by its own `run_in`, else the catalogue's default
-// ([SandboxProvider.RunIn]). Two members in one cell open the same kind of
-// box, so the cell is counted once, under the first of them. Each box is
-// given the engine-wide steps followed by the seat's own, which is what the
-// engine's runEnvironment builds for it.
+// ONE BOX PER SEAT PER CELL ITS EXECUTOR CAN LAND IN. A launch takes the first
+// chain member that can run it and is not sitting out on its node, so any
+// runner-capable member may be it, placed by its own `run_in`, else the
+// catalogue's default ([SandboxProvider.RunIn]). Members in one cell open the
+// same box, counted once. Each gets the engine-wide steps, then the seat's own.
 //
 // A SECOND RESOLUTION OF THE ENGINE'S only in its placing: the chain is
-// [phase.Resolve]'s, the call the engine launches through, so the two cannot
-// disagree about which entries a seat reaches. The rest — the cell each box
-// falls to, and the steps and their order — is held to the engine's own
-// launch path by a case in internal/engine, since a table here would agree
-// with this function whatever the engine did.
-//
-// Nothing when the company configures no sandbox: no box exists, and the
-// seats that would need one are refused on their own.
+// [phase.Resolve]'s. Cells and step order are held to the engine's launch path
+// by a case in internal/engine; a table here would agree whatever it did.
 func (c *Company) SeatBoxes() iter.Seq[SeatBox] {
 	return func(yield func(SeatBox) bool) {
 		catalogue := c.Providers.Sandbox
@@ -148,19 +138,15 @@ func setupFileRefused(cell Placement, file string) bool {
 // e2bRefusesSetupFile reports whether an E2B box's own agent (envd) refuses
 // to write a setup file at file, judged on the path alone.
 //
-// That agent expands a leading "~" to the home of the account every template
-// runs as, joins a relative path onto that home, and creates the file
-// wherever the result is — missing directories included, an absolute path
-// outside the home too. It refuses two shapes. A path starting "~name" (the
-// same tilde test as [hostbox.InHome]'s) is one it will not expand, and the
-// write fails. And a path naming a DIRECTORY is answered "path is a
-// directory". Only some directories are certain without seeing the template:
-// the home itself and every directory above it, which exist in every box.
-// Any other one a path could name — /tmp, /etc — is the template's, so a
-// document cannot be judged on it, and the box says so at setup.
+// The agent expands a leading "~" to the template account's home, joins a
+// relative path onto it, and creates the file wherever the result is. It
+// refuses a path starting "~name" (the tilde test of [hostbox.InHome]) and a
+// path naming a DIRECTORY. Only the home and every directory above it are
+// certainly directories without seeing the template; any other (/tmp, /etc) is
+// the template's, so the box says so at setup instead.
 //
-// Judged on the box's own paths, which are Linux paths whatever the engine
-// host is, so with package path rather than filepath.
+// Box paths are Linux paths whatever the engine host is: package path, not
+// filepath.
 func e2bRefusesSetupFile(file string) bool {
 	resolved := file
 	switch {
@@ -185,41 +171,17 @@ func e2bRefusesSetupFile(file string) bool {
 }
 
 // validateSetupFileHomes refuses a setup step that writes a file a box it is
-// applied to would refuse.
+// applied to would refuse. A direct box writes only inside its home, a
+// container box only under its home mount, each refusing at provisioning;
+// E2B takes almost any path ([e2bRefusesSetupFile]).
 //
-// A direct box writes a setup file only inside its own home, and a container
-// box only under its home mount, and each refuses anything else when the box
-// is provisioned — a refusal that fails the acquisition and tears the box
-// down. So a document whose step names /usr/local/bin for a seat whose
-// executor runs `direct` validated cleanly and then failed every box that
-// seat opened, at setup, long after the write. The reference example shipped exactly that.
-// An E2B box takes almost any path, and refuses the few shapes
-// [e2bRefusesSetupFile] names the same way.
+// THE LOCAL BOXES' OWN RULE, NOT A COPY: paths are judged by [hostbox.InHome],
+// which both call. Not judged: the host's links and an E2B template's
+// directories. Boxes are found as the engine places them ([Company.SeatBoxes]).
 //
-// THE LOCAL BOXES' OWN RULE, NOT A COPY OF IT: a path is judged by
-// [hostbox.InHome], which both local boxes call before they touch a file, so
-// what this refuses and what they refuse cannot drift apart. What it cannot
-// judge is the host's half — a link an existing directory on the engine host
-// holds — which only the box can see; nor, in an E2B box, a directory the
-// template made. And a seat's boxes are found the way the engine places them
-// ([Company.SeatBoxes]), so a step is judged in every cell it actually
-// reaches, and in no other: an engine-wide step that writes /usr/local/bin is
-// fine in a company whose seats all run in E2B.
-//
-// AN ERROR, NOT A WARNING. A warning is for what is VALID and worth knowing;
-// a step whose file no box it reaches will ever write is not valid, and a
-// warning would leave that seat's code work broken for good behind a line in
-// a log most deployments never read.
-//
-// AN ADMISSION RULE, not a runnable one: the company runs, and only the boxes
-// that step reaches fail — so a stored revision that keeps such a step is
-// applied and warned about, as [LLMProvider.validateCredentials] is, rather
-// than taking a node off the fleet's epoch.
-//
-// One problem per file and cell, at the file's entry in the step that writes
-// it, naming the first seat whose box it fails and how many more it fails
-// too: an engine-wide step reaches every seat, and a problem per seat would
-// bury the one line to change under the seats that inherit it.
+// AN ERROR, NOT A WARNING, yet AN ADMISSION RULE: a stored revision keeping
+// such a step is applied and warned about, as [LLMProvider.validateCredentials] is.
+// One problem per file and cell, naming the first seat and how many more.
 func (c *Company) validateSetupFileHomes() error {
 	if c.Providers.Sandbox.Enabled() && c.Providers.Sandbox.Fake {
 		// The double writes nothing anywhere, so it refuses nothing.

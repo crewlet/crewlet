@@ -20,18 +20,13 @@ import (
 // VOUCH FOR.
 //
 // The publisher vouches for a retry by the instant its operation id carries,
-// against the point this node's operation ledger may have lost rows from — and
-// a session subject's rows go after an hour ([iamdomain.SessionOpsRetention]).
-// Every id here was `session:<lineage>`, `logout:<lineage>`, `totp:<person>:…`
-// and the like, which carry no instant and read as minted at the epoch: within
-// an hour of the first sweep every sign-in, sign-out and factor change was
-// answered `unknown` without being published. And a close derived from the
-// session it closes carries the instant that session BEGAN — days ago for a
-// week-long one — which the hour's sweep has already passed; so each close is
-// held to an instant no earlier than the request's own.
-//
-// Mutation: derive any of these from the lineage it names, or from a prefix,
-// and its row goes red.
+// against where this node's ledger may have lost rows; a session subject's rows
+// go after an hour ([iamdomain.SessionOpsRetention]). An id like
+// `session:<lineage>` carries no instant, reads as minted at the epoch, and
+// would be answered `unknown` unpublished after the first sweep. A close
+// derived from its session carries the instant that session BEGAN, long swept;
+// so each close is held to an instant no earlier than the request's own.
+// Mutation: derive any id from the lineage or a prefix and its row goes red.
 func TestEveryIdentityWriteHereCarriesAnInstantItsLedgerCanVouchFor(t *testing.T) {
 	t.Parallel()
 	floor := clock.Add(-time.Minute)
@@ -159,12 +154,11 @@ func enrolApp(t *testing.T, r *signInRig) *httptest.ResponseRecorder {
 // A WRITE THAT LANDED AS A COPY THIS CALL CANNOT PROVE IS ITS OWN IS NOT BUILT
 // ON.
 //
-// The framework answers a retry of an operation that had already landed from
-// its ledger, before this call's decide runs ([statelog.Result.Collapsed]) —
-// so what the decide computed describes a decision nothing published: a second
-// factor's verdict, a factor or a set of recovery codes this call formed, the
-// counters a session's bearer carries. Each is answered as the unknown it is
-// to this call: 503 with the operation, no session, no cookie, no codes, and
+// A retry of an operation that already landed is answered from the ledger
+// before this call's decide runs ([statelog.Result.Collapsed]), so what the
+// decide computed (a factor verdict, a factor or recovery codes, a bearer's
+// counters) describes a decision nothing published. Each is answered as the
+// unknown it is: 503 with the operation, no session, cookie or codes, and
 // nothing announced.
 //
 // Mutation: read any of these as landed and its row opens a session, shows the

@@ -20,46 +20,28 @@ import (
 
 // The executors answer: every detached executor the engine still holds.
 //
-// THE LIVE PROJECTION IS THE WRONG SOURCE for this question, in two ways. It
-// is in memory, so it starts empty after a restart; and it sweeps an entry
-// after hours, while a run parked on a question can legitimately wait days for
-// a person to answer. The states that most need somebody were therefore the
-// ones least likely to be on screen — and a `reseed` run (its pause expired,
-// its box reclaimed, its work safe on a pushed branch) had no surface at all.
-// It looked exactly like work that had finished.
+// THE LIVE PROJECTION IS THE WRONG SOURCE: it is in memory, empty after a
+// restart, and sweeps an entry after hours while a run parked on a question can
+// wait days. A `reseed` run would have no surface and look finished.
 //
-// The fleet's run record is the durable one, and this reads it — every node's
-// runs, not this node's, because a run is recovered by whichever node owns its
-// seat and a per-node read drew a board that disagreed with itself depending on
-// which node answered.
+// This reads the fleet's durable run record, every node's runs, because a run
+// is recovered by whichever node owns its seat and a per-node read would
+// disagree with itself.
 //
-// What it deliberately does NOT return is the execute state, the serialised
-// Execute conversation. It is by far the largest column in the row, and every
-// prompt in it is already reachable through the event store — shipping it to a
-// board that renders one line per run would be a page-weight problem in
-// exchange for nothing.
+// It deliberately does NOT return the serialised Execute conversation: the
+// row's largest column, its prompts already reachable through the event store.
 
 // PendingRuns is the durable record an executors answer reads.
 //
-// Declared here rather than imported as a concrete store so this package
-// depends on the shape, and so the memory twin answers it too.
+// NO STATUS FILTER: a run's record is deleted once its ending is finished, so
+// [sandbox.Active] is every status a record can hold; a run whose ending is
+// decided but unfinished stays on the board (`ending`). A `done` or `failed`
+// filter would be structurally empty and read as "nothing failed". How a run
+// ENDED is on the event stream: `executor_failed` names the reason,
+// `executor_stopped` the person.
 //
-// ONE METHOD AND NO STATUS FILTER, because there is nothing left to filter: a
-// run's record is deleted once its ending is finished, so [sandbox.Active] is
-// every status a record can hold and "every run this store holds" and "the
-// active ones" name one set. A run whose ending is decided and not yet finished
-// — waiting for its turn's captures to settle and the executor log to take its
-// turn's end — is still on the board, saying so (`ending`). A `status=`
-// parameter selecting `done` or `failed` would be a question whose answer is
-// structurally empty — worse than absent, because an empty board reads as
-// "nothing failed" rather than "this is not where that is recorded". How a run
-// ENDED is on the event stream: the resumed turn's own events, an
-// `executor_failed` naming the reason, or a `executor_stopped` naming the
-// person who stopped it.
-//
-// AND ONE RUN BY ITS TURN, which `executor_tail` reads to learn whose seat a
-// run is before it shows anybody that seat's transcript — the record is the
-// only thing that names it.
+// Get reads one run by its turn: `executor_tail` learns whose seat a run is
+// from the record before showing that seat's transcript.
 type PendingRuns interface {
 	ListActive(ctx context.Context) ([]sandbox.PendingRun, error)
 	Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
@@ -74,24 +56,15 @@ type ExecutorTails interface {
 
 // executorTail answers `executor_tail{turn_id, launch_id}`: the tail of that
 // launch while it runs, `launching` while its box is being made, `not_running`
-// with the record's own status once it is not, `box_paused` for a running
-// record whose box is paused, `box_gone` for one whose box is gone for good,
-// or the owning node NAMED where it did not answer (`owner_silent`).
+// with the record's status once it is not, `box_paused`, `box_gone`, or the
+// owning node NAMED where it did not answer (`owner_silent`).
 //
-// BOTH IDS ARE REQUIRED. A run is one execution of a turn and a turn can launch
-// more than one job; a request naming only the turn would show whichever job
-// its row holds now, which is a different job from the span a person clicked
-// the moment a second launch replaces the first.
-//
-// BY CURSOR: `epoch`, `after` and `digest` say what the asker holds — all
-// three absent for one holding nothing yet — and the answer carries what it
-// lacks, or a reset. A cursor's offset is a whole number of bytes, refused by
-// name otherwise.
-//
-// DECIDED ON THE RUN'S SEAT, as its trail: what a harness prints is its
-// transcript, so it is read by whoever reads the seat's trail — its lead, or
-// an admin — and never by everybody the run's status reaches. See
-// [Sources.mayTail].
+// BOTH IDS ARE REQUIRED: a turn-only request would show another job once a
+// second launch replaces the first. BY CURSOR: `epoch`, `after` and `digest`
+// say what the asker holds (all absent for nothing yet); the offset is whole
+// bytes. DECIDED ON THE RUN'S SEAT, as its trail: a harness's output is its
+// transcript, read by the seat's lead or an admin, never by everybody the
+// run's status reaches. See [Sources.mayTail].
 func (s Sources) executorTail(ctx context.Context, p Params) (any, error) {
 	turnID := strings.TrimSpace(p.String("turn_id"))
 	launchID := strings.TrimSpace(p.String("launch_id"))
@@ -112,13 +85,10 @@ func (s Sources) executorTail(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	if gone {
-		// NO RECORD NAMES THE RUN, so nothing says whose it is — and
-		// nothing is left to show: a settled run's record is deleted, and
-		// a launch with no record is `not_running` with no status, which
-		// is exactly what the tail reader answers for one. Answered here
-		// rather than by asking it, because its own read of the record is
-		// a moment later than this one and could find a record this
-		// decision never saw.
+		// NO RECORD NAMES THE RUN: nothing says whose it is, and a settled
+		// run's record is deleted, so `not_running` with no status is what
+		// the tail reader would answer. Answered here because its own read
+		// is later and could find a record this decision never saw.
 		return sandbox.TailAnswer{Outcome: sandbox.TailNotRunning,
 			TurnID: turnID, LaunchID: launchID}, nil
 	}
@@ -131,31 +101,15 @@ func (s Sources) executorTail(ctx context.Context, p Params) (any, error) {
 // mayTail decides whether the caller may read the live output of the run of
 // turnID, and reports a run no record names as gone.
 //
-// # The company-wide trail first, then the run's seat
-//
-// Whoever reads the COMPANY-WIDE trail ([authz.ActionAuditRead]) reads every
-// run's, and is decided before anything is read: the table answers that
-// without a record, and the tail reader's own read of the record is the one
-// that counts for them. Anybody else is decided on the run's SEAT
-// ([authz.ActionSeatTrailRead] — its lead), which only the run's record names,
-// so it is read here: a seat a turn's run belongs to never changes, which is
-// what makes deciding on this read and tailing on the reader's a moment later
-// the same decision.
-//
-// A NODE WITH NO RUN RECORD TO READ decides nothing but the company-wide
-// trail, and refuses with that decision: it can establish no seat a caller
-// might lead.
-//
-// # A caller who leads nobody is refused before the record is read
-//
-// The seat verb is decided FIRST on a run nobody has resolved to a seat yet
-// ([authz.Object.Unresolved], under [unresolvedRunSeat]), as a steer is: the
-// only admission left past the company-wide trail is leading whoever the run
-// turns out to belong to, so a caller who leads nobody — an unbound service
-// account or token, a person with no reports — is refused there, and only a
-// caller the table tells to resolve ([authz.ErrUnresolved]) has the record
-// read for them. Read first, a run store that could not answer told every
-// such caller to come back to a refusal no answer of it could change.
+// The COMPANY-WIDE trail ([authz.ActionAuditRead]) reads every run's, decided
+// first without a record; a node with no run record decides nothing else and
+// refuses with that. Anybody else is decided on the run's SEAT
+// ([authz.ActionSeatTrailRead], its lead), which only the record names and
+// never changes, so this read and the tail reader's later one agree. That verb
+// is decided FIRST on an unresolved run ([authz.Object.Unresolved], under
+// [unresolvedRunSeat]): a caller who leads nobody is refused there, and only
+// one told to resolve ([authz.ErrUnresolved]) has the record read, so a
+// failing run store never sends them to a refusal it cannot change.
 func (s Sources) mayTail(ctx context.Context, turnID string) (gone bool, err error) {
 	principal, how := iam.From(ctx)
 	if how == iam.Unknown {
@@ -209,24 +163,15 @@ const unresolvedRunSeat = "(unresolved)"
 // executorRows answers the board, or — with `audience=<name>` — the runs whose
 // question is put to that one person and still waits for them ([putTo]).
 //
-// THE NAME IS A RECORD'S, resolved as every personal read here resolves one
-// ([iam.OwnerOf]): the caller's own with no name or one of theirs, a person's
-// LOGIN to the seat the identity directory binds them to — never read as a
-// seat's handle — and anything else as the seat it names. The directory is
-// asked only once [authz.ActionPersonRead] admits looking — the caller's own,
-// their lead's or an admin's, each with the tracker, since whose queue
-// somebody is on is the tracker's question — so a caller who leads nobody
-// filters by a seat's handle and cannot read the directory off this filter. NO SCOPE RULE beyond that, unlike the tracker's personal
-// reads: the unfiltered board already carries every run's audience to anybody
-// who may read it, so a narrower answer reveals nothing the wider one did not.
+// THE NAME IS A RECORD'S ([iam.OwnerOf]): the caller's own with no name, a
+// person's LOGIN resolved to their seat through the identity directory (never
+// read as a handle), anything else as the seat it names. The directory is
+// asked only once [authz.ActionPersonRead] admits looking. NO SCOPE RULE
+// beyond that: the unfiltered board carries every audience. A run whose
+// question resolved to nobody is nobody's by this filter.
 //
-// A run whose question resolved to nobody carries no audience, and is
-// therefore nobody's by this filter — which is the truth about it: nobody was
-// recorded as the one its question was put to.
-//
-// EVERY RUN'S STATUS IS EVERYBODY'S, and what it was asked, asked back and
-// answered is its seat's trail — see [runKeys] for the split, and
-// [Sources.runReach] for who reads which.
+// EVERY RUN'S STATUS IS EVERYBODY'S; what it was asked and answered is its
+// seat's trail: see [runKeys] and [Sources.runReach].
 func (s Sources) executorRows(ctx context.Context, p Params) (any, error) {
 	runs, err := s.Sandbox.ListActive(ctx)
 	if err != nil {
@@ -297,18 +242,14 @@ func (s Sources) runReach(ctx context.Context) func(sandbox.PendingRun) livestat
 // putTo reports whether a run's question is put to this record and is still
 // waiting for it.
 //
-// STILL WAITING, because "what is waiting on me" is the question this answers:
-// a run whose question already has its answer recorded ([sandbox.StatusAnswered])
-// or is being resumed with it keeps the audience it was asked of, and listing
-// it would put a question the person already answered back in front of them;
-// and a run whose ending is decided is over, whatever status it was ended in,
-// and takes no answer. The home screen's decisions ask the same things,
-// through this.
+// STILL WAITING, because "what is waiting on me" is the question: an answered
+// ([sandbox.StatusAnswered]) or resuming run keeps its audience, and an
+// answered question must not be shown again; a run whose ending is decided
+// takes no answer. The home screen's decisions ask the same, through this.
 //
-// ONE RECORD, never a set of identities: a run's audience is recorded as seat
-// handles, and the name a caller asked about is resolved to the one record it
-// names before anything is compared ([Sources.audienceOf], [iam.OwnerOf]). An
-// empty record — a login nobody holds a seat by — is put nothing.
+// ONE RECORD, never a set of identities: audiences are seat handles, and a
+// caller's name is resolved to one record first ([Sources.audienceOf],
+// [iam.OwnerOf]). An empty record is put nothing.
 func putTo(run sandbox.PendingRun, record string, delegating func(sandbox.PendingRun) bool) bool {
 	return record != "" && run.Ending == nil && slices.Contains(sandbox.Awaiting, run.Status) &&
 		slices.Contains(run.AudienceHandles, record) && !delegating(run)
@@ -505,24 +446,15 @@ var runKeys = map[string]runShown{
 	"needs_you":           runStatus, // whether it waits on the reader: [runanswer.Waiting.NeedsYou]
 }
 
-// serialiseRun is one executor's row as reader r receives it: [runRow],
-// with every key [runKeys] does not show them left out — absent rather than
-// empty, because an empty task is a value a board would draw — and
-// `body_withheld` saying whether the body was.
+// serialiseRun is one executor's row as reader r receives it: [runRow], with
+// every key [runKeys] does not show them left out (absent rather than empty,
+// because an empty task is a value a board would draw) and `body_withheld`
+// saying whether the body was. A KEY THE TABLE DOES NOT NAME IS WITHHELD:
+// left out is the direction a mistake has to fail in.
 //
-// A KEY THE TABLE DOES NOT NAME IS WITHHELD, which the walk keeps unreachable:
-// left out is the direction a mistake here has to fail in.
-//
-// calls is the run's log as [PendingRuns.BridgeLog] read it, and the zero
-// value for a reader shown no body, whose answer never carries a call.
-//
-// AND WHERE IT STANDS FOR THE READER ([Sources.waiting]): whom it is put to,
-// whether it is put to them, whether they may answer it, and whether it waits
-// on them — the facts `decisions` lists a run by, stated on the row so every
-// screen that draws a parked run reads them rather than deciding "needs you"
-// itself. The board that drew every parked run as the reader's own told a
-// sign-in no question is ever put to that one was, beside a Home and an Inbox
-// that rightly listed none.
+// calls is the run's log as [PendingRuns.BridgeLog] read it, the zero value
+// for a reader shown no body. The row also states where the run stands for
+// the reader ([Sources.waiting]), so no screen decides "needs you" itself.
 func serialiseRun(run sandbox.PendingRun, calls sandbox.BridgeLog, r livestate.Reach,
 	opened runOpened, waiting runanswer.Waiting) map[string]any {
 
@@ -892,38 +824,14 @@ func answeredAt(answer *sandbox.RecordedAnswer) string {
 // answerableInChat reports whether a reply on a chat surface could ever reach
 // this run.
 //
-// A run started by a task assignment or an A2A wake stored NOTHING: its
-// trigger names neither key, [notify.ConversationIdentityOfAll] answers "" for
-// a partition like that rather than inventing one, and [notify.Stamp] declines
-// an empty value, so both of the row's conversation columns are empty. A run a
-// schedule's fire started stored the SCHEDULE'S conversation
-// ([notify.ScheduleConversation]), so its next fire continues its session —
-// a conversation nobody writes into, which every later fire of the schedule
-// carries and the dispatcher never offers a parked run as a reply. Neither is
-// answerable through any chat surface, and telling somebody to "reply in the
-// thread" would send them to a thread that does not exist.
-//
-// The per-event `event:` fallback is a different thing in a different place:
-// [notify.KeyOf] mints it at READ time, for the broker's partition function,
-// which has to give an event that names no conversation a partition of its
-// own. It is not written onto a row from here. [notify.Derived] refuses it as
-// well as the empty string, which is what keeps this column honest for a row
-// whose key was minted that way by somebody else — a peer, or a writer this
-// package does not know about.
-//
-// ASKED OF THE CONVERSATION the run reports back to and is answered on, never
-// of the partition beside it. The question a person reading this board has is
-// "is there a thread I can answer in", which is a property of the durable
-// conversation; the partition is an inbox-grouping artefact with no surface
-// anybody could reply to. The two are derivable or not TOGETHER on every
-// source — a chat event naming a channel yields both, one naming none yields
-// neither — so the verdict is the same either way; what this states is that
-// the column answers the same question the resume path does.
-//
-// [notify.Derived] answers exactly that, and this had its own copy of the
-// prefix to answer it with — so a rename of the fallback's namespace would
-// have left this route confidently offering a thread that does not exist, and
-// a schedule's conversation would have read as one somebody could reply into.
+// A task assignment's or A2A wake's run stored NOTHING: no key names a
+// conversation, so [notify.ConversationIdentityOfAll] answers "". A
+// schedule's run stored the SCHEDULE'S conversation
+// ([notify.ScheduleConversation]), which nobody writes into. Neither is
+// answerable, and "reply in the thread" would name a thread that does not
+// exist. It asks of the durable conversation, never the partition;
+// [notify.Derived] also refuses the `event:` fallback [notify.KeyOf] mints at
+// READ time, so a row a peer keyed that way stays honest.
 func answerableInChat(conversation string) bool {
 	return notify.Derived(conversation)
 }

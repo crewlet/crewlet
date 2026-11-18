@@ -776,27 +776,16 @@ var outrankRoutes = []outrankRoute{
 }
 
 // A SINK THE COMPANY'S STORE OUTRANKS IS REFUSED BEFORE THE VENDOR, where the
-// store holds a name the run can mint into.
+// store holds a name the run can mint into: the engine resolves ${VAR} from
+// the store first, so an -env-file or -print value minted for a stored name is
+// never read. Each provisioner, through a running node and on the fleet's
+// store reached directly alike, refuses such a run naming the store, the
+// names, the sink and -secret-store, reaching no vendor, printing only the
+// route line, writing no env file and nothing through the node.
 //
-// The engine resolves every ${VAR} from the store before its environment, so a
-// value an -env-file or -print run mints for a name the store holds is never
-// read: the vendor holds the new value and the engine goes on with the stored
-// one — a seat's earlier token retired under it, a hook re-keyed with a key
-// the engine does not hold. So each provisioner, through a running node and on
-// the fleet's store reached directly with the engine stopped alike, refuses
-// such a run naming the store, the names, the sink and -secret-store, and:
-//
-//   - no vendor is reached — every vendor address here fails the case on any
-//     request, and Slack's run, whose vendor is no address this case can
-//     name, writes no ledger, which its first step at Slack would;
-//   - nothing is printed but the run's route line: not its plan;
-//   - no env file is written, and nothing is written through the node.
-//
-// Mutation: let refuseOutranked through, and every row goes red; leave the
-// seats' tokens out of what GitLab, Mattermost or Slack can mint into, or the
-// flag for a fresh value out of a webhook secret's, and that row does; count
-// Slack's signing secret only where an install runs, and the -no-install row
-// does.
+// Mutation: let refuseOutranked through and every row goes red; leave seats'
+// tokens or a fresh webhook secret out of what can be minted, or count Slack's
+// signing secret only where an install runs, and that row does.
 func TestASinkTheStoreOutranksIsRefusedBeforeTheVendor(t *testing.T) {
 	t.Parallel()
 	const public = "-public-url=https://crewlet.example.com"
