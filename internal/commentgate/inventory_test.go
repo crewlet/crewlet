@@ -62,7 +62,7 @@ var excessInventory = map[string]int{
 	"internal/artifactspike":                        41,
 	"internal/artifactupload":                       58,
 	"internal/artifactupload/lint":                  13,
-	"internal/assistant":                            68,
+	"internal/assistant":                            60,
 	"internal/assistant/assistanttest":              5,
 	"internal/assistant/cards":                      50,
 	"internal/assistant/catalog":                    247,
