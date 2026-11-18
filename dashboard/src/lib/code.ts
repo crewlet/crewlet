@@ -295,52 +295,8 @@ export const CHANGE_STATE_FILTERS: readonly { value: string; label: string }[] =
 /** A need a listing of changes asks about (`contract/code.ts`). */
 export type ChangeNeed = (typeof CHANGE_NEEDS)[number];
 
-/**
- * What each need lists, in words — keyed on the contract's set, so a need the
- * engine grows is a type error here until it has its words.
- */
-const CHANGE_NEED_WORDS: Readonly<Record<ChangeNeed, string>> = {
-  review: "Waiting on a review",
-  fix: "Waiting on a fix",
-  me: "Waiting on me",
-  person: "Waiting on a person",
-};
-
-/**
- * The listing's needs a reader picks from: none first — the listing narrowed
- * by nothing it waits on — then ME, the question a reader opens Gitlet with,
- * then the rest in the engine's order.
- */
-export const CHANGE_NEED_FILTERS: readonly { value: string; label: string }[] = [
-  { value: "", label: "Waiting on anybody" },
-  { value: "me", label: CHANGE_NEED_WORDS.me },
-  ...CHANGE_NEEDS.filter((need) => need !== "me").map((need) => ({
-    value: need,
-    label: CHANGE_NEED_WORDS[need],
-  })),
-];
-
 /** A window a listing of changes narrows to (`contract/code.ts`). */
 export type ChangeWindow = (typeof CHANGE_WINDOWS)[number];
-
-/**
- * What each window lists, in words — keyed on the contract's set, so a window
- * the engine grows is a type error here until it has its words.
- */
-const CHANGE_WINDOW_WORDS: Readonly<Record<ChangeWindow, string>> = {
-  "24h": "Moved in the last day",
-  "7d": "Moved in the last week",
-  "30d": "Moved in the last month",
-};
-
-/**
- * The listing's windows a reader picks from: none first — the listing
- * narrowed by no instant — then the engine's, shortest first.
- */
-export const CHANGE_WINDOW_FILTERS: readonly { value: string; label: string }[] = [
-  { value: "", label: "Any time" },
-  ...CHANGE_WINDOWS.map((window) => ({ value: window, label: CHANGE_WINDOW_WORDS[window] })),
-];
 
 /** Whether a string is a window the engine lists by. */
 export function isChangeWindow(value: string): value is ChangeWindow {
