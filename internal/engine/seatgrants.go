@@ -69,7 +69,8 @@ func (e *Engine) publishGrantChanged(ctx context.Context, g grantEvent) {
 
 // grantSetting is a grant as an event names it.
 func grantSetting(g seataccess.Grant) types.GrantSetting {
-	return types.GrantSetting{ID: g.ID, Permission: g.Permission, Scope: g.Scope, ExpiresAt: g.ExpiresAt}
+	return types.GrantSetting{ID: g.ID, Permission: g.Permission, Scope: g.Scope, ExpiresAt: g.ExpiresAt,
+		Target: g.Target}
 }
 
 // grantSettings is [grantSetting] over a list, nil for none.

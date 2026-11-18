@@ -618,8 +618,9 @@ export function cloudflareGrantsAnswer(): AccessAnswer {
 
 /**
  * Scaleway whose catalogue offers grants beside a level: Kubernetes full
- * access on projects, and support tickets on the Organization; SRE holds
- * Kubernetes full access on its own projects for good.
+ * access on projects, support tickets on the Organization, and a bucket's
+ * settings for one change of at most four hours; SRE holds Kubernetes full
+ * access on its own projects for good.
  */
 export function scalewayGrantsAnswer(): AccessAnswer {
   const answer = scalewayAnswer();
@@ -640,6 +641,15 @@ export function scalewayGrantsAnswer(): AccessAnswer {
           name: "SupportTicketsReadOnly",
           group: "Support",
           scope_kind: "account",
+        },
+        {
+          id: "ObjectStorageBucketsWrite",
+          name: "ObjectStorageBucketsWrite",
+          group: "Storage",
+          scope_kind: "project",
+          write: true,
+          note: "It changes a bucket's ACL and visibility, and also changes their lifecycle rules, which can expire and delete objects.",
+          max_hours: 4,
         },
       ],
       grant_scope: [SCW_PROD, SCW_STAGING],

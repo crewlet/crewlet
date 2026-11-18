@@ -6111,6 +6111,23 @@
             "array",
             "null"
           ]
+        },
+        "target": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,254}$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "What the change the agent asked the grant for changes, as the integration names it (a Scaleway bucket), which the engine copies from the request; absent for one a person added.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
         }
       },
       "type": [
