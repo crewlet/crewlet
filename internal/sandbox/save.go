@@ -356,7 +356,14 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 	if !held {
 		return end(saveNotYet, takerUnheld)
 	}
+	// ONE PACK AT A TIME in a box that shares the node's memory
+	// ([Coordinator.sharedPack]), given back as the pack returns.
+	give, err := c.packSlot(duty, row)
+	if err != nil {
+		return end(saveStoodDown, err.Error())
+	}
 	archive, err := saver.PackSave(duty, box, hold.holder)
+	give()
 	switch {
 	case err != nil:
 		out.unplaced = "pack"

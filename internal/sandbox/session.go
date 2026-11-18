@@ -1441,8 +1441,16 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	if err != nil {
 		return nil, refuse(calls, err.Error())
 	}
+	// ONE PACK AT A TIME in a box that shares the node's memory
+	// ([Coordinator.sharedPack]): a take packs on demand, and its pack is
+	// made once TakeSession returns, before the stream the spool reads.
+	give, err := c.packSlot(ctx, current)
+	if err != nil {
+		return nil, refuse(calls, takeRefusal(ctx, err))
+	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
 		MaxBytes: executorkeep.SessionMaxBytes})
+	give()
 	if err != nil {
 		return nil, refuse(calls, takeRefusal(ctx, err))
 	}
