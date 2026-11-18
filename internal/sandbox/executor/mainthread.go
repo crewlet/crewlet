@@ -37,9 +37,9 @@ type threadReading interface {
 	end(torn bool, err error)
 }
 
-// walkThread reads r, one thread member, a whole line at a time within maxBytes
-// ([newThreadReader], which checks ctx before each line), handing each line to
-// every reading in order and each reading's end once. It goes on past a refused
+// walkThread reads r, one thread member, a line at a time within maxBytes,
+// handing each line to every reading in order and each reading's end once,
+// ctx heard through [threadReader.Next] alone. It goes on past a refused
 // line, so a reading that tolerates one (the floor's figure) reads every line
 // after it.
 func walkThread(ctx context.Context, r io.Reader, maxBytes int64, readings ...threadReading) {

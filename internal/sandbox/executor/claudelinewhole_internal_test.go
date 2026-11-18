@@ -1,7 +1,9 @@
 package executor
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"encoding/json/jsontext"
 	"errors"
@@ -10,15 +12,89 @@ import (
 	"unicode/utf8"
 )
 
-// A line's facts ([lineFacts]) are filled off ONE decode of the whole line
-// ([threadWire], [decodeThreadLine]): the head held to its types ([headOf]),
-// then each frame its record's type reads, walked by [eachElement] ([factsOf]).
-// Every small value is read by the layer's one rule of it ([blockCallOf],
-// [sendTargetOf], [answerOf], [replacedID], [batchEntryID],
-// [threadRetracted.entry], [threadPreserved.list]...), and every text property
-// by its streaming automaton (claudelinetext.go), so what is filled is what any
-// reading by those rules fills. Only a refused line is read again, to class it
-// ([refusedFault]).
+// THE DIFFERENTIAL'S ORACLE: a line read whole and decoded once
+// ([decodeThreadLine]), which the layer's one scanner pass is held to line by
+// line (claudelinescan_internal_test.go). Its facts are filled by the layer's
+// own rules of each small value and its own automata, so the two readings
+// differ in how a line is read, never in what is read of it. A member is read
+// by [wholeReader].
+
+// wholeReader reads a member a whole line at a time through the scrub's
+// [readLine], each line decoded whole: the member's ends the layer's reader
+// is held to ([TestTheReaderEndsAMemberAsTheWholeReaderDoes]). It holds no line
+// bound, which the layer has none of, only the member's.
+type wholeReader struct {
+	r              *bufio.Reader
+	maxBytes, left int64
+	n              int
+	torn           bool
+	end            error
+}
+
+// newWholeReader reads r, one member, within maxBytes.
+func newWholeReader(r io.Reader, maxBytes int64) *wholeReader {
+	maxBytes = max(maxBytes, 0)
+	return &wholeReader{r: bufio.NewReaderSize(wholeSource{r}, lineChunkBytes), maxBytes: maxBytes, left: maxBytes}
+}
+
+// wholeSource tags every error of a member's reader but its end, so one that
+// wraps the scrub's bound is never read as the member's bound.
+type wholeSource struct{ r io.Reader }
+
+// Read reads the member's reader, tagging every error but io.EOF.
+func (s wholeSource) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		err = &wholeSourceError{err: err}
+	}
+	return n, err
+}
+
+// wholeSourceError is an error of a member's reader ([wholeSource]).
+type wholeSourceError struct{ err error }
+
+func (e *wholeSourceError) Error() string { return e.err.Error() }
+
+// Next is the member's next whole line, as [threadReader.Next] answers it.
+func (t *wholeReader) Next(ctx context.Context) (threadLine, error) {
+	if t.end != nil {
+		return threadLine{}, t.end
+	}
+	if err := ctx.Err(); err != nil {
+		t.end = err
+		return threadLine{}, err
+	}
+	raw, err := readLine(t.r, int(t.left))
+	var source *wholeSourceError
+	switch {
+	case errors.As(err, &source):
+		t.end = source.err
+		return threadLine{}, t.end
+	case errors.Is(err, errScrubBound):
+		t.end = fmt.Errorf("%w: the member runs past the %d bytes it is read within", errThreadBound, t.maxBytes)
+		return threadLine{}, t.end
+	case errors.Is(err, io.EOF):
+		t.torn, t.end = len(raw) > 0, io.EOF
+		return threadLine{}, io.EOF
+	case err != nil:
+		t.end = err
+		return threadLine{}, err
+	}
+	t.left -= int64(len(raw))
+	t.n++
+	return decodeThreadLine(t.n, raw[:len(raw)-1])
+}
+
+// Torn reports whether the member ended in a piece with no break.
+func (t *wholeReader) Torn() bool { return t.torn }
+
+// lineBytesOf is the byte facts of raw, a whole line, its break dropped,
+// read as its bytes stream past ([lineBytes]).
+func lineBytesOf(raw []byte) threadBytes {
+	var l lineBytes
+	l.write(raw)
+	return l.facts()
+}
 
 // threadWire is a whole line as [wireDecode] leaves it: the raw of every key
 // this layer reads, by its exact name, so an absent key is nil and a null one
@@ -349,22 +425,6 @@ var utf8ByteOrderMark = []byte{0xef, 0xbb, 0xbf}
 // [TestALineThatIsNoRecordSaysHowTheLoadReadsIt] fails where a Go release
 // words it otherwise.
 const jsontextMaxDepth = "exceeded max depth"
-
-// kindOf is raw, a refused record's `type`, as the [recordKind] it names, the
-// layer's own string; the zero kind for anything else, so no string the box
-// wrote is held.
-func kindOf(raw json.RawMessage) recordKind {
-	kind, err := wireRequiredString("type", raw)
-	if err != nil {
-		return ""
-	}
-	for _, k := range recordKinds {
-		if string(k) == kind {
-			return k
-		}
-	}
-	return ""
-}
 
 // messageContent is a message whose `content` is content, its blocks of kind
 // call its calls.

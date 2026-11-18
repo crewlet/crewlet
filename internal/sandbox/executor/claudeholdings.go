@@ -91,10 +91,11 @@ import (
 // of a subagent's thread filters retractions, so a subagent's thread holding
 // one is not whole. RULE 4, THE LOGGED RESULT: a call is held only through its
 // one result, whose is_error is the log's failure and whose text
-// ([resultText]) matches the log's output by digest, whole or by length and
-// opening ([sandbox.CallRecords.Whole], [sandbox.HoldingsOpeningBytes]). It
-// meets rule 3: a result written without the call's outcome (a resume's, a
-// stopped harness's) never carries the log's text, so no mark is read.
+// ([lineDecoder.resultContent]) matches the log's output by digest, whole or
+// by length and opening ([sandbox.CallRecords.Whole],
+// [sandbox.HoldingsOpeningBytes]). It meets rule 3: a result written without
+// the call's outcome (a resume's, a stopped harness's) never carries the log's
+// text, so no mark is read.
 
 // RULE 2, A SUBAGENT CUT OFF WITH THE SESSION: a call in a subagent's thread is
 // held only where the subagent is reported ([holdingsWalk.unreported]) and the
@@ -114,7 +115,7 @@ import (
 //     hands under every variant ([textNotice]); each SendMessage to it its
 //     result did not refuse ([holdingsWalk.leg]) by a notification. AN ANSWER
 //     CARRYING A HANDBACK ANSWERS NO LEG, nor does any answer of a leg one of
-//     whose answers does ([carriesHandback], [textHandback]).
+//     whose answers does ([lineDecoder.toolResult], [textHandback]).
 //  4. NO UNSEEN LEG: its file starts no more legs ([legStart]) than the main
 //     thread gave it.
 //  5. EVERY LEG FINISHED along every order its own load hands
@@ -126,13 +127,14 @@ import (
 // been, the safe direction, condition 4 the backstop of the last.
 
 // THE BOUNDS: the plaintext and what read members hand out at
-// [threadPlainMax], a line at [threadLineMax], the model at
-// [threadChainMaxRecords] and [threadChainMaxCalls], a metadata at
-// [holdingsMetaMaxBytes], the ask at [sandbox.MaxBridgeCalls], subagents at
-// [holdingsMaxAgents], legs at [holdingsMaxLegs]; every id kept is one the
-// call-id rule holds ([holdingsWalk.leg], [subagentMetaOf]), since an id is the
-// box's word, as long as a line. MEASURED (BenchmarkAReadingAtItsBounds, whose
-// doc says how): the worst, a line of the smallest results at its bound after a
+// [threadPlainMax], read in one reader's buffers, a line's facts at
+// [threadLineMax], the model at [threadChainMaxRecords] and
+// [threadChainMaxCalls], a metadata at [holdingsMetaMaxBytes], the ask at
+// [sandbox.MaxBridgeCalls], subagents at [holdingsMaxAgents], legs at
+// [holdingsMaxLegs]; every id kept is one the call-id rule holds
+// ([holdingsWalk.leg], [subagentMetaOf]), since an id is the box's word, as
+// long as [threadValueMax]. MEASURED (BenchmarkAReadingAtItsBounds, whose doc
+// says how): the worst, a line of the smallest results at its bound after a
 // main thread at both of the model's bounds, holds 102 MiB live and peaks at
 // 181 MiB in 1.7 s, within the about 133 MiB a seat's read for words holds at
 // its worst ([SeatTranscriptReadsAtOnce]); an ordinary session reads in 68 ms.
@@ -449,7 +451,7 @@ type legFact struct {
 	// results is how many counted results name it; resultRec, resultLine,
 	// failed, completed, agent and refused are the first's: its record, its
 	// line, its is_error, and what its record's own toolUseResult says where
-	// the record holds that one result alone ([agentAnswer]).
+	// the record holds that one result alone ([answerOf]).
 	results    int
 	resultRec  int32
 	resultLine int
@@ -459,7 +461,7 @@ type legFact struct {
 	refused    bool
 	// handback is whether a record of a result of it, or a task notification
 	// of it, carries a handback: no answer of the leg is then its subagent's
-	// report ([carriesHandback], [textHandback]).
+	// report ([lineDecoder.toolResult], [textHandback]).
 	handback bool
 	// answered is whether the request a resumed session sends pairs the
 	// first call with the first result, by the pairing rule
@@ -583,8 +585,6 @@ func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 	lines := w.reader(member)
 	chain, pairing := newThreadChain(""), &holdingsPairing{}
 	for {
-		// ctx is asked before each line ([threadReader.Next]), and an error
-		// of its is the walk's to answer ([holdingsWalk.failed]).
 		line, err := lines.Next(ctx)
 		switch {
 		case errors.Is(err, io.EOF):

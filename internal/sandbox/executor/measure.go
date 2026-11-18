@@ -76,9 +76,9 @@ import (
 // and a line the layer refuses counts nothing.
 //
 // ITS PACE: the walk is fed by the pipe the take writes into, so a meter slower
-// than the scrub would hold the take up inside its wait. The walk decodes each
-// line whole into its head and every fact the layer's readers read
-// ([decodeThreadLine]), a message's blocks and their results among them, which
+// than the scrub would hold the take up inside its wait. The walk reads each
+// line in one pass into its head and every fact the layer's readers read
+// ([threadReader.Next]), a message's blocks and their results among them, which
 // neither of the walk's readings reads, beside the scrub's rewrite, gzip and
 // checksum of the same bytes (BenchmarkTheMeterAtItsBounds measures both): at
 // the plaintext a 32 MiB archive holds, the meter took 1.4 s where the scrub

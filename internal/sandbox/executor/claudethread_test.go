@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"math"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -581,42 +579,52 @@ func ctPadded(n int) string {
 	return head + strings.Repeat("x", n-len(head)-len(tail)) + tail
 }
 
-// A LINE OR A MEMBER PAST ITS BOUND ENDS THE READING: a line one byte longer
-// than the take's scrub would hold, or a member one byte longer than its
-// reader's bound, ends it with errThreadBound, saying which of the two it ran
-// past, and the reading stays over, the record after the line never read. A
-// member past its bound is past it EVEN WHERE THE BOUND FALLS RIGHT AFTER A
-// LINE BREAK, where a member metered by io.LimitReader would end cleanly and
-// read as whole. A line or a member AT its bound reads whole, and the bounds
-// are the take's scrub's own.
+// A LINE OR A MEMBER PAST ITS BOUND ENDS THE READING: a line whose facts pass
+// [threadLineMax], a line holding a value it reads whole one byte past
+// [threadValueMax], or a member one byte longer than its reader's bound, ends
+// it with errThreadBound, saying which of the three it ran past, and the
+// reading stays over, the record after the line never read. A member past its
+// bound is past it EVEN WHERE THE BOUND FALLS RIGHT AFTER A LINE BREAK, where a
+// member metered by io.LimitReader would end cleanly and read as whole. A
+// value or a member AT its bound reads whole, the member's bound is the take's
+// scrub's own, and a 9 MiB line of a value no reader reads is no bound's.
 //
-// Mutation: skip a line past the bound and read on, and the record after it
-// is read; meter the member with io.LimitReader, and a member past its bound
-// by a break, a record or a line ends cleanly; swap the two bounds' words, and
-// a line past its bound reads as a member past its.
+// Mutation: read a line past a bound as a refused line and read on, and the
+// record after it is read; meter the member with io.LimitReader, and a member
+// past its bound by a break, a record or a line ends cleanly; swap two bounds'
+// words, and a line past one reads as past the other.
 func TestALineOrAMemberPastItsBoundEndsTheReading(t *testing.T) {
 	t.Parallel()
-	kept := boundsFor(executorkeep.SessionMaxBytes)
-	if threadLineMax != kept.piece || threadPlainMax != kept.plain {
-		t.Errorf("a thread is read within %d bytes a line and %d a member, the take's scrub within %d and %d",
-			threadLineMax, threadPlainMax, kept.piece, kept.plain)
+	if kept := boundsFor(executorkeep.SessionMaxBytes); threadPlainMax != kept.plain {
+		t.Errorf("a thread's member is read within %d bytes, the take's scrub within %d", threadPlainMax, kept.plain)
+	}
+	// valued is a brief whose uuid, as written, is n bytes long.
+	valued := func(n int) string { return ctBrief(strings.Repeat("u", n-2)) }
+	// called is a reply of n calls, whose facts pass the bound before its
+	// bytes do.
+	called := func(n int) string {
+		return ctAssistant(ctUUID(1), ctUUID(2), "["+strings.Repeat(`{"type":"tool_use","id":"toolu_1",`+
+			`"name":"Bash","input":{}},`, n-1)+`{"type":"tool_use","id":"toolu_1","name":"Bash","input":{}}]`)
 	}
 	brief := ctBrief(ctUUID(1))
 	head := ctThread(ctEnqueue, brief)
 	n := int64(len(head))
 	// What the error of a reading past a bound says it ran past.
-	const line, member = "a line runs past", "the member runs past"
+	const value, facts, member = "a value is read whole within", "facts are held within", "the member runs past"
 	for name, tc := range map[string]struct {
 		text     string
 		maxBytes int64
 		lines    int
 		past     string
 	}{
-		"a line at its bound, its break included": {
-			text: ctPadded(threadLineMax) + ctThread(brief), maxBytes: threadPlainMax, lines: 2},
-		"a line a byte past its bound, a record after it": {
-			text: ctThread(ctEnqueue) + ctPadded(threadLineMax+1) + ctThread(brief), maxBytes: threadPlainMax,
-			lines: 1, past: line},
+		"a 9 MiB line of a value no reader reads, a record after it": {
+			text: ctPadded(9<<20) + ctThread(brief), maxBytes: threadPlainMax, lines: 2},
+		"a value at its bound": {text: ctThread(valued(threadValueMax), brief), maxBytes: threadPlainMax, lines: 2},
+		"a value a byte past its bound, a record after it": {
+			text: ctThread(ctEnqueue, valued(threadValueMax+1), brief), maxBytes: threadPlainMax, lines: 1,
+			past: value},
+		"a line whose facts pass their bound, a record after it": {
+			text: ctThread(ctEnqueue, called(200_000), brief), maxBytes: threadPlainMax, lines: 1, past: facts},
 		"a member at its bound": {text: head, maxBytes: n, lines: 2},
 		"a member a byte past its bound, which falls right after a break": {
 			text: head + "\n", maxBytes: n, lines: 2, past: member},
@@ -659,7 +667,7 @@ func TestALineOrAMemberPastItsBoundEndsTheReading(t *testing.T) {
 // Mutation: read a reader's error as the member's end, the half record before
 // it its torn piece, and each reading ends with io.EOF; take a reader's error
 // that wraps the scrub's bound for the layer's own, and the archive that
-// inflated past its reading ends as a line past its bound.
+// inflated past its reading ends as a member past its bound.
 func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 	t.Parallel()
 	reset := errors.New("read: connection reset by peer")
@@ -694,34 +702,11 @@ func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 	}
 }
 
-// ctTrace is what r hands out reading one member to its end with ctx, as
-// text: each line as Next hands it (its place, its size, the bytes it holds
-// and its first ones, and everything its accessors read ([ctAll]), or, where
-// it is no record, its place, fault and size), then what ended the reading,
-// what one more Next answered, and whether the member ended torn.
-func ctTrace(ctx context.Context, r *threadReader) string {
-	var b strings.Builder
-	for {
-		line, err := r.Next(ctx)
-		var broken *threadLineError
-		switch {
-		case err == nil:
-			fmt.Fprintf(&b, "line %d: %d bytes, %d of them its own, beginning %q\n%s", line.N, line.Size,
-				line.Bytes.Len(), line.Bytes.Head(), ctAll(line))
-		case errors.As(err, &broken):
-			fmt.Fprintf(&b, "line %d is no record: fault %q, size %d\n", broken.N, broken.Fault, broken.Size)
-		default:
-			_, again := r.Next(ctx)
-			fmt.Fprintf(&b, "ended by %v, then %v, torn %t\n", err, again, r.Torn())
-			return b.String()
-		}
-	}
-}
-
 // A READING ENDS AT THE LINE ITS CONTEXT ENDED: Next asks its context before
-// each line, so once a caller's context has ended the next Next answers its
-// error and hands no more lines, and the reading stays over, whatever context
-// a later Next is handed. The lines before it were each read whole.
+// each piece a line takes, so once a caller's context has ended the next Next
+// answers its error and hands no more lines, and the reading stays over,
+// whatever context a later Next is handed. The lines before it were each read
+// whole.
 //
 // Mutation: ask no context in Next, and the line after the end is read; or
 // answer a context's end for its own Next alone, and a later one reads on.
@@ -745,61 +730,11 @@ func TestAReadingEndsAtTheLineItsContextEnded(t *testing.T) {
 	}
 }
 
-// A RESET READER READS AS A FRESH ONE: one reader reads a session's members one
-// after another ([threadReader.Reset]), so a member read after another reads
-// exactly as a fresh reader reads it, its lines numbered from 1, its bound its
-// own, ended only by what ends it, and torn only where it is, whatever the
-// member before it left: a torn piece, the member's bound, a line that is no
-// record, an error of its reader, or a context that ended. The next member is
-// read to its end, and again within a bound it passes, which ends its reading
-// before its end could say whether it is torn.
-//
-// Mutation: keep any of what a reading leaves across Reset (how it ended, how
-// many lines it read, its torn piece, what of its bound it took), and the
-// member after it reads otherwise.
-func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
-	t.Parallel()
-	brief := ctBrief(ctUUID(1))
-	next := ctThread(ctBrief(ctUUID(2)), "[1]", ctBrief(ctUUID(3)))
-	within := int64(len(next)) + 1
-	ended, cancel := context.WithCancel(t.Context())
-	cancel()
-	// text is a member that hands out body.
-	text := func(body string) func() io.Reader {
-		return func() io.Reader { return strings.NewReader(body) }
-	}
-	for name, tc := range map[string]struct {
-		before   func() io.Reader
-		maxBytes int64
-		ctx      context.Context
-	}{
-		"a torn member":           {text(ctThread(brief, brief) + `{"type":"user"`), threadPlainMax, t.Context()},
-		"a member past its bound": {text(ctThread(brief, brief)), int64(len(brief)) + 3, t.Context()},
-		"a member holding a line that is no record": {text(ctThread(brief, "[1]", brief, brief)), within,
-			t.Context()},
-		"a member whose reader failed": {func() io.Reader {
-			return io.MultiReader(strings.NewReader(ctThread(brief, brief)), iotest.ErrReader(io.ErrUnexpectedEOF))
-		}, within, t.Context()},
-		"a reading whose context ended": {text(ctThread(brief, brief)), within, ended},
-	} {
-		for _, bound := range []int64{within, within - 2} {
-			r := newThreadReader(tc.before(), tc.maxBytes)
-			ctTrace(tc.ctx, r)
-			r.Reset(strings.NewReader(next), bound)
-			got := ctTrace(t.Context(), r)
-			if want := ctTrace(t.Context(), newThreadReader(strings.NewReader(next), bound)); got != want {
-				t.Errorf("after %s, the next member read within %d bytes reads as\n%swant it read as a fresh "+
-					"reader reads it\n%s", name, bound, got, want)
-			}
-		}
-	}
-}
-
 // A HEAD IS REFUSED BY ITS KEYS' KINDS ALONE: each head key, of every kind a
 // JSON value is, refuses the head with the same error whether its reading
 // hands the rule the key's value or only its kind, as a reading that keeps a
 // value too long to keep still knows its kind, and both say what the line's
-// own decode says of the same key on a user record. A boolean's value is its
+// reading says of the same key on a user record. A boolean's value is its
 // kind, so a head of kinds alone reads `isSidechain` and `replacesSpan` as the
 // whole one does.
 //
@@ -841,14 +776,14 @@ func TestAHeadIsRefusedByItsKeysKindsAlone(t *testing.T) {
 			if key == "type" {
 				line = `{"type":` + value + `}`
 			}
-			_, decodeErr := decodeThreadLine(1, []byte(line))
+			_, readErr := newThreadReader(strings.NewReader(line+"\n"), threadPlainMax).Next(t.Context())
 			var refused *threadLineError
-			if errors.As(decodeErr, &refused) {
-				decodeErr = refused.Err
+			if errors.As(readErr, &refused) {
+				readErr = refused.Err
 			}
-			if fmt.Sprint(kindsErr) != fmt.Sprint(wholeErr) || fmt.Sprint(wholeErr) != fmt.Sprint(decodeErr) {
-				t.Errorf("%s of %s: its kind alone gives %v, its value %v, and the line's decode %v; want one "+
-					"error", key, value, kindsErr, wholeErr, decodeErr)
+			if fmt.Sprint(kindsErr) != fmt.Sprint(wholeErr) || fmt.Sprint(wholeErr) != fmt.Sprint(readErr) {
+				t.Errorf("%s of %s: its kind alone gives %v, its value %v, and the line's reading %v; want one "+
+					"error", key, value, kindsErr, wholeErr, readErr)
 				continue
 			}
 			if wholeErr == nil && (ctSidechain(kinds) != ctSidechain(whole) || kinds.ReplacesSpan != whole.ReplacesSpan) {
@@ -876,7 +811,7 @@ type ctRefusal struct {
 }
 
 // ctBrokenLines is the lines that are not one record, or one whose head key
-// is of the wrong type, as [TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything]
+// is of the wrong type, as [TestEveryLineIsReadToItsEndBeforeAnythingReadsIt]
 // reads them among records, by name.
 func ctBrokenLines() map[string]ctRefusal {
 	brief := ctBrief(ctUUID(1))
@@ -915,8 +850,8 @@ func ctBrokenLines() map[string]ctRefusal {
 	}
 }
 
-// EVERY WHOLE LINE IS DECODED INTO ITS HEAD BEFORE ANYTHING READS IT: a line
-// that is not one record (two values, one cut short, a value that is no
+// EVERY LINE IS READ TO ITS END BEFORE ANYTHING READS IT: a line that is not
+// one record (two values, one cut short, a value that is no
 // object) or one whose head key is of the wrong type (`type`, `subtype` and
 // `agentId` strings, `parentUuid` null or a string, `isSidechain` a boolean,
 // and a user record's `replacesSpan` a boolean, as the brief's here) is a
@@ -927,14 +862,14 @@ func ctBrokenLines() map[string]ctRefusal {
 // refused head's type names where it names one the load reads, and how many
 // bytes the line takes, its break included.
 //
-// Mutation: decode only the lines that name a hook or a call, and every
-// broken line here reads as a record, and the records' heads as nothing; read
+// Mutation: read only the lines that name a hook or a call, and every broken
+// line here reads as a record, and the records' heads as nothing; read
 // replacesSpan by its text alone, and one that is a string or null reads as a
 // record; read every refused line as one that yields the load nothing, and
 // the lines cut short, followed by more or led by a NUL read so; or hold a
 // refused head's type off the seven kinds the load reads, and a type that is
 // a number names one.
-func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
+func TestEveryLineIsReadToItsEndBeforeAnythingReadsIt(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
 	summary := ctSummary(ctUUID(1), ctUUID(2))
@@ -988,36 +923,6 @@ func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 			"want false, true, true and false", main)
 	}
 }
-
-// fewestAllocations is the fewest heap objects of fewestCalls calls of read,
-// after a warm-up, at GOMAXPROCS one.
-func fewestAllocations(read func()) uint64 {
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-	read()
-	fewest := uint64(math.MaxUint64)
-	var before, after runtime.MemStats
-	for range fewestCalls {
-		runtime.ReadMemStats(&before)
-		read()
-		runtime.ReadMemStats(&after)
-		fewest = min(fewest, after.Mallocs-before.Mallocs)
-	}
-	return fewest
-}
-
-// fewestCalls: under -race sync.Pool drops a quarter of puts, so a call costs
-// only its own objects where none of its pool round trips was dropped, and a
-// line's decode into its facts ([decodeThreadLine]) makes about nineteen: of
-// 5,000 calls of the one TestALineThatIsNoRecordSaysHowTheLoadReadsIt
-// measures, 22 cost only its own 39 objects, one in 230, and 23 more cost one
-// to three over them. So the fewest of 2,000 misses the floor about once in
-// 7,000 measures (e^-8.8), and comes out three or more over it about e^-18 of
-// the time: forty measures of 2,000, of each of the three that test takes,
-// all came out at the floor, where of forty of 200 the decode's reached it in
-// eleven and came out up to six over it. Still, no claim compares two such
-// counts exactly: it allows the measure what the race detector can add, and
-// asks for less than the cost of what it refutes.
-const fewestCalls = 2000
 
 // ctDeep is a user record whose one key holds lists nested to levels in all.
 func ctDeep(levels int) string {
@@ -1074,9 +979,9 @@ func ctRefusedLines(t *testing.T) map[string]ctRefusal {
 // one nested 10,000 deep reads as a record. Each says the bytes it takes, its
 // break included, a carriage return before it among them, and hands its
 // reader what a reader of those bytes reads of them but the break
-// ([threadBytes]), as a record's line does. NO LINE'S
-// ACCEPTANCE CHANGES: a line the decode takes is decoded once, at the cost
-// of that one decode and its head, the classifier never run on it.
+// ([threadBytes]), as a record's line does. NO LINE IS READ TWICE OR HELD: a
+// line refused for each of five faults past a MiB of a value no reader reads
+// costs its reader at most 16 KiB more than its twin of a KiB.
 //
 // Not parallel: the allocation count is the process's.
 //
@@ -1086,10 +991,9 @@ func ctRefusedLines(t *testing.T) map[string]ctRefusal {
 // led by a NUL reads as a syntax error; drop the depth check, and a value
 // nested too deep reads as yielding nothing; hold a refused head's type as
 // written, and a summary's names a kind; count a line's size without its
-// break; hand a refused line's reader no byte facts, from any one of the
-// three refusals, and the lines it refuses there hand none; or classify every
-// line, refused or not, and a line the decode takes costs the classifier's
-// decoder too.
+// break; hand a refused line's reader no byte facts, and the lines it
+// refuses hand none; or copy each piece of a line as it is read, and a
+// refused line of a MiB costs its reader a MiB more than its twin.
 func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 	for name, tc := range ctRefusedLines(t) {
 		got := ctRead(ctThread(tc.line), threadPlainMax)
@@ -1116,30 +1020,28 @@ func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 		t.Error("the zero fault, the zero kind or a kind the load keeps no record of reads as valid")
 	}
 
-	// READ ONCE, held by what reading the line again costs, never by an exact
-	// count ([fewestCalls]): the cheapest second read the load has is the
-	// classifier's own decoder over the line ([refusedFault], four objects
-	// with or without the race detector, where a second whole decode is nine),
-	// above the one to three the race detector's pools were measured to add.
-	// A line the decode takes costs less than its one decode, its head and the
-	// facts its accessors read ([factsOf]) with that second read on top, or it
-	// was read again.
-	good := []byte(ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn))
-	read := fewestAllocations(func() { _, _ = decodeThreadLine(1, good) })
-	decode := fewestAllocations(func() {
-		var w threadWire
-		_ = wireDecode(good, &w)
-		h, _ := w.head()
-		_ = factsOf(&w, h)
-	})
-	again := fewestAllocations(func() { _ = refusedFault(good) })
-	if again < 4 {
-		t.Fatalf("reading the line again costs %d allocations, fewer than the race detector's pools can add to a "+
-			"measure: the claim below would not tell a line read again", again)
-	}
-	if read >= decode+again {
-		t.Errorf("a line the decode takes costs %d allocations, and its one decode and its head %d, with %d more "+
-			"for reading it again: the line is read again", read, decode, again)
+	ctx := t.Context()
+	// warm is a record, which a reader is warmed on before each measure.
+	warm := scanLine(scanLit(`{"type":"user","x":"` + strings.Repeat("x", 1<<10) + `"}`))
+	for fault, tc := range map[lineFault]struct{ head, tail string }{
+		faultSyntax:    {`{"type":"user","x":"`, `",]`},
+		faultTrailing:  {`{"type":"user","x":"`, `"} x`},
+		faultPrefix:    {`{"type":"user","x":"`, ``},
+		faultHead:      {`{"type":"user","x":"`, `","isSidechain":"no"}`},
+		faultNotObject: {`["`, `"]`},
+	} {
+		line := func(n int) []scanPart { return scanLine(scanLit(tc.head), scanRun('x', n), scanLit(tc.tail)) }
+		twinCost, _, twinErr := scanAllocated(ctx, warm, line(1<<10), 3)
+		cost, _, err := scanAllocated(ctx, warm, line(1<<20), 2)
+		var refused, twinRefused *threadLineError
+		if !errors.As(err, &refused) || !errors.As(twinErr, &twinRefused) || refused.Fault != fault ||
+			twinRefused.Fault != fault {
+			t.Fatalf("a line refused as %s reads as %v, its twin as %v; want both refused so", fault, err, twinErr)
+		}
+		if cost > twinCost+16<<10 {
+			t.Errorf("a line of a MiB refused as %s costs its reader %d bytes, and its twin of a KiB %d: more than "+
+				"16 KiB more", fault, cost, twinCost)
+		}
 	}
 }
 
@@ -4513,18 +4415,19 @@ func TestAReplysUsageIsWhatClaudeCodeCountsItByOrAnError(t *testing.T) {
 	}
 }
 
-// A REPLY'S ITERATIONS COST ITS USAGE AN ENTRY AT A TIME: Usage reads a
-// usage's iterations an entry at a time and keeps a copy of one entry, the
-// last it may count, so a list of listBytes of entries none of which it
-// counts costs it no more allocations than a list of one, and no more bytes
-// than a few copies of the line, which its decodes of the message and the
-// usage make.
+// A REPLY'S ITERATIONS COST ITS USAGE AN ENTRY AT A TIME: Usage reads the
+// usage its line keeps an entry at a time and keeps a copy of one entry, the
+// last it may count, so a usage near [threadValueMax] of entries none of
+// which it counts costs it no more allocations than a list of one, and no
+// more bytes than a few copies of the usage. A usage past [threadValueMax] is
+// no reading at all: the line ends it ([errThreadBound]).
 //
 // Not parallel: the counts are the process's, and a parallel test's
 // allocations would be counted with this one's.
 //
 // Mutation: decode the list whole, or collect its entries, before its last is
-// found, and a long list costs an allocation or more for every entry.
+// found, and a long list costs an allocation or more for every entry; drop
+// the bound on a value read whole, and the line past it reads.
 func TestAReplysIterationsCostItsUsageAnEntryAtATime(t *testing.T) {
 	const (
 		head = `{"type":"assistant","message":{"role":"assistant","content":[],"usage":{"input_tokens":3,` +
@@ -4533,8 +4436,15 @@ func TestAReplysIterationsCostItsUsageAnEntryAtATime(t *testing.T) {
 	)
 	usage := func(l threadLine) func() { return func() { _, _, _ = l.Usage() } }
 	one := ctLine(t, head+"1"+tail)
-	longRecord := ctListRecord(t, head, "1", tail, listBytes)
+	// The usage of a line of threadValueMax bytes is within its bound by the
+	// keys around it.
+	longRecord := ctListRecord(t, head, "1", tail, threadValueMax)
 	long := ctLine(t, longRecord)
+	past := ctRead(ctThread(ctListRecord(t, head, "1", tail, threadValueMax+1<<10)), threadPlainMax)
+	if len(past.lines) != 0 || !errors.Is(past.end, errThreadBound) {
+		t.Errorf("a usage past %d bytes reads as %d lines, ended by %v; want none, and %v", threadValueMax,
+			len(past.lines), past.end, errThreadBound)
+	}
 	for name, l := range map[string]threadLine{"a list of one": one, "a long list": long} {
 		if u, ok, err := l.Usage(); !ok || err != nil || u.Input != 3 {
 			t.Fatalf("%s of entries no harness counts says its request took %+v (%t), %v; want its usage's own", name,
@@ -4727,110 +4637,80 @@ func ctKeysRecord(t *testing.T, head string, key func(i int) string, tail string
 	return head + keys.String() + strings.Repeat(" ", room-keys.Len()) + tail, n
 }
 
-// A CONTENT LIST COSTS ONE BLOCK AT A TIME: a message's content and a reply's
-// applied context edits are read a block at a time, each held to its type as
-// it is read. So a list refused at its first block costs what a list of that
-// block alone costs, however many follow it: no allocation more, and no byte
-// more than the copies of the list its reader makes as it decodes the record
-// around it (Message, read as its line is decoded ([factsOf]), two, the
-// message's and its content's; ToolResultsCleared, read off the report its
-// line's facts keep, one, its edits'), never a header and a copy for each
-// element, nor a slice of them, before the first is checked. A line at the
-// layer's bound holding four million `1`s, or a list of empty objects, shows
-// it. The walk itself, with
-// nobody keeping what it hands out, costs the same for a long list as for a
-// list of one, in allocations and in bytes: it never collects the elements.
-// And a list read to its end leaves held what Message says it does, a call
-// for each call block and nothing of any other block, nor of the list: for a
-// list of the smallest blocks of a kind no reader names nothing a block, and
-// for one of the smallest results each call's fields, at most a quarter over
-// for append's growth, and the bytes of each id.
+// A CONTENT LIST COSTS ONE BLOCK AT A TIME: a message's content is read a
+// block at a time in its line's one pass, each held to its type as it is read,
+// and a reply's applied context edits a block at a time off the report its
+// line keeps. So a content list refused at its first block costs its line's
+// reading what a list of that block alone costs, however many follow it, at 8
+// MiB of `1`s or of empty objects: at most 16 KiB more, never a copy of the
+// list nor a header for each element. An edits list near [threadValueMax]
+// costs ToolResultsCleared no more allocations than one of one block, and no
+// more bytes than two copies of the list. The walk itself, with nobody keeping
+// what it hands out, costs the same for a long list as for a list of one, in
+// allocations and in bytes: it never collects the elements. And a list read to
+// its end leaves held what Message says it does, a call for each call block
+// and nothing of any other block, nor of the list: for a list of the smallest
+// blocks of a kind no reader names nothing a block, and for one of the
+// smallest results each call's fields, the array at most twice them for its
+// doubling, and the bytes of each id.
 //
 // Not parallel: the counts are the process's, and a parallel test's
 // allocations would be counted with this one's.
 //
-// Mutation: decode a message's content, or a reply's edits, whole before its
-// first block is checked, and a list at the bound costs millions of
-// allocations more than a list of one; collect its blocks or its edits before
-// the first is checked, size its calls from the list's length, or have the
-// walk collect the list before it hands out the first element, and it costs
-// from several times to tens of times the line more, in a few allocations;
-// keep a copy of the content in the message, and a list read to its end holds
-// that copy beside its calls; keep a kind for each block, as a list of them,
-// and a list of blocks that are no call holds a header for each.
+// Mutation: copy each piece of the line as it is read, or read on past a
+// list's first refused block, and a refused list of 8 MiB costs megabytes
+// more than a list of one; decode the edits whole before the first is
+// checked, and they cost thousands of allocations more; have the walk collect
+// the list before it hands out the first element, and it costs several times
+// the list more; grow a message's array of calls to twice what it charges,
+// and a list read to its end holds more than twice its calls.
 func TestAContentListCostsOneBlockAtATime(t *testing.T) {
-	// slack is how many more allocations a list at the bound may cost than a
-	// list of one, though it reads no more of it. The count is the process's,
-	// and the bound's copy of its content can set off a collection while it
-	// is measured, which empties the process's pools (fmt's printers, the
-	// decoders): the call goes on to build what it takes from them afresh, a
-	// few allocations each, eleven in all where measured. Under the race
-	// detector a pool also drops a quarter of what is put in it. A whole
-	// decode costs millions more.
+	ctx := t.Context()
+	// slack is how many more allocations a long list's edits may cost than a
+	// list of one, though they read no more of it: a collection while it is
+	// measured empties the process's pools (fmt's printers, the decoders),
+	// which the call builds afresh, eleven allocations in all where measured,
+	// and the race detector drops a quarter of what is put in a pool.
 	const slack = 64
-	// decoded is record, decoded whole as a thread's line ([decodeThreadLine]).
-	decoded := func(record []byte) threadLine {
-		l, err := decodeThreadLine(1, record)
-		if err != nil {
-			t.Fatalf("a line of %d bytes, decoded whole, is no record: %v", len(record)+1, err)
+	user := `{"type":"user","message":{"role":"user","content":`
+	for name, element := range map[string]string{"numbers": "1", "empty objects": "{}"} {
+		line := func(n int) []scanPart { return scanLine(scanLit(user), scanList(element, n), scanLit(`}}`)) }
+		n := (8 << 20) / (len(element) + 1)
+		oneCost, _, oneErr := scanAllocated(ctx, line(1), line(1), 3)
+		cost, read, err := scanAllocated(ctx, line(1), line(n), 2)
+		if _, refused := read.Message(); oneErr != nil || err != nil || refused == nil {
+			t.Fatalf("a content list of %d %s reads as %v, its message %v, and one of one as %v; want records whose "+
+				"message is refused", n, name, err, refused, oneErr)
 		}
-		return l
-	}
-	// A MESSAGE IS READ AS ITS LINE IS DECODED ([factsOf]): what it costs is
-	// its line's whole decode and then Message.
-	message := func(record []byte) func() error {
-		return func() error {
-			_, err := decoded(record).Message()
-			return err
+		if cost > oneCost+16<<10 {
+			t.Errorf("a content list of %d %s, refused at its first block, costs its line's reading %d bytes, and a "+
+				"list of one %d: more than 16 KiB more", n, name, cost, oneCost)
 		}
 	}
-	// ToolResultsCleared reads the report its line's facts keep: what it
-	// costs is the read alone, of a line decoded before it is measured.
-	cleared := func(record []byte) func() error {
-		l := decoded(record)
+	reply := `{"type":"assistant","message":{"role":"assistant","content":[],"context_management":{"applied_edits":[`
+	// cleared reads the report a reply's line keeps: what it costs is the
+	// read alone, of a line read before it is measured.
+	cleared := func(record string) func() error {
+		l := ctLine(t, record)
 		return func() error {
 			_, err := l.ToolResultsCleared()
 			return err
 		}
 	}
-	user := `{"type":"user","message":{"role":"user","content":[`
-	reply := `{"type":"assistant","message":{"role":"assistant","content":[],"context_management":{"applied_edits":[`
-	for name, tc := range map[string]struct {
-		head, element, tail string
-		// read is what is measured of a record: its read, from what is
-		// decoded of it before it is measured.
-		read func(record []byte) func() error
-		// copies is how many copies of the list its reader makes as it decodes
-		// the record around it, measured: Message the message's and its
-		// content's, and ToolResultsCleared its edits'. A list may cost
-		// those and ONE LINE MORE, so a reader that makes a copy more still
-		// passes, where a slice of the list's elements, or a header for each,
-		// costs several lines.
-		copies uint64
-	}{
-		"a message's content of numbers":       {head: user, element: "1", tail: `]}}`, read: message, copies: 2},
-		"a message's content of empty objects": {head: user, element: "{}", tail: `]}}`, read: message, copies: 2},
-		"a reply's applied edits of numbers":   {head: reply, element: "1", tail: `]}}}`, read: cleared, copies: 1},
-	} {
-		fullRecord := []byte(ctListRecord(t, tc.head, tc.element, tc.tail, threadLineMax))
-		one, full := tc.read([]byte(tc.head+tc.element+tc.tail)), tc.read(fullRecord)
-		if len(fullRecord) != threadLineMax-1 || one() == nil || full() == nil {
-			t.Fatalf("%s: a line of %d bytes whose first block is none reads with no error", name, len(fullRecord)+1)
-		}
-		fewObjects, fewBytes := allocationsOf(func() { _ = one() })
-		manyObjects, manyBytes := allocationsOf(func() { _ = full() })
-		if manyObjects > fewObjects+slack {
-			t.Errorf("%s: refused at its first block, a list at the line's bound costs %d allocations, and a list "+
-				"of one %d", name, manyObjects, fewObjects)
-		}
-		if manyBytes > fewBytes+(tc.copies+1)*uint64(threadLineMax) {
-			t.Errorf("%s: refused at its first block, a list at the line's bound costs %d bytes, and a list of one "+
-				"%d: more than %d copies of the line and one line more", name, manyBytes, fewBytes, tc.copies)
-		}
+	edits := ctListRecord(t, reply, "1", `]}}}`, threadValueMax-64)
+	one, full := cleared(reply+`1]}}}`), cleared(edits)
+	if one() == nil || full() == nil {
+		t.Fatalf("an edits list whose first block is none reads with no error")
+	}
+	oneObjects, oneBytes := allocationsOf(func() { _ = one() })
+	fullObjects, fullBytes := allocationsOf(func() { _ = full() })
+	if fullObjects > oneObjects+slack || fullBytes > oneBytes+2*uint64(len(edits)) {
+		t.Errorf("refused at its first block, an edits list of %d bytes costs %d allocations and %d bytes, and a "+
+			"list of one %d and %d: more than a copy of the list more", len(edits), fullObjects, fullBytes,
+			oneObjects, oneBytes)
 	}
 
-	// A list of listBytes shows per element what one at the bound costs, in an
-	// eighth of the time, which the race detector multiplies.
+	// The walk of a list of listBytes, the stream's and a kept report's.
 	oneList := json.RawMessage(`[1]`)
 	longList := json.RawMessage(ctListRecord(t, "[", "1", "]", listBytes))
 	elements := 0
@@ -4868,9 +4748,11 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 		"blocks of a kind no reader names": {element: `{"type":"x"}`},
 		"the smallest results":             {element: `{"type":"tool_result","tool_use_id":"a"}`, own: 1, calls: true},
 	} {
-		record := []byte(ctListRecord(t, user, tc.element, `]}}`, listBytes))
+		// Half of listBytes: a line of the smallest results holds about 25,000
+		// calls within threadLineMax, and this one holds half of them.
+		record := []byte(ctListRecord(t, user+"[", tc.element, `]}}`, listBytes/2))
 		read := func() any {
-			m, _ := decoded(record).Message()
+			m, _ := ctLine(t, string(record)).Message()
 			return m
 		}
 		m, err := ctLine(t, string(record)).Message()
@@ -4883,7 +4765,7 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 				m.Blocks().Len(), len(m.Calls()), err, blocks, calls)
 		}
 		fields := calls * (uint64(unsafe.Sizeof(threadCall{})) + tc.own)
-		if held, limit := heldBy(read), fields*5/4+heldSlack; held > limit {
+		if held, limit := heldBy(read), fields*2+heldSlack; held > limit {
 			t.Errorf("%s: a list of %d bytes read to its end holds %d bytes, more than its %d calls of %d blocks "+
 				"take: %d", name, len(record)+1, held, calls, blocks, limit)
 		}

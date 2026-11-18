@@ -1816,14 +1816,23 @@ func TestAThreadPastTheChainsBoundIsCannotTell(t *testing.T) {
 		rcChain(t, "", prompt, tc.line).expectCannotTell(t, name, tc.why)
 	}
 
-	calling := func(calls int) string {
-		return rcReply(1, 2, "msg_a", 1000, `[{"type":"tool_use","id":"c","name":"B"}`+
-			strings.Repeat(`,{"type":"tool_use","id":"c","name":"B"}`, calls-1)+`]`)
+	// calling is the prompt, then calls tool_use blocks in replies of at most
+	// 16,384 each, which a line's facts hold within [threadLineMax].
+	calling := func(calls int) []string {
+		lines := []string{prompt}
+		for n := 1; calls > 0; n++ {
+			each := min(calls, 1<<14)
+			calls -= each
+			lines = append(lines, rcReply(n, n+1, fmt.Sprintf("msg_%d", n), 1000*n,
+				`[{"type":"tool_use","id":"c","name":"B"}`+
+					strings.Repeat(`,{"type":"tool_use","id":"c","name":"B"}`, each-1)+`]`))
+		}
+		return lines
 	}
-	if why, _ := rcChain(t, "", prompt, calling(threadChainMaxCalls)).c.Unknown(); why == whyBound {
+	if why, _ := rcChain(t, "", calling(threadChainMaxCalls)...).c.Unknown(); why == whyBound {
 		t.Error("a thread at the bound of its call ids is past it")
 	}
-	rcChain(t, "", prompt, calling(threadChainMaxCalls+1)).expectCannotTell(t, "call ids past the bound", whyBound)
+	rcChain(t, "", calling(threadChainMaxCalls+1)...).expectCannotTell(t, "call ids past the bound", whyBound)
 
 	c := newThreadChain("")
 	r := newThreadReader(strings.NewReader(ctThread(prompt, retracting(threadChainMaxRecords-2),

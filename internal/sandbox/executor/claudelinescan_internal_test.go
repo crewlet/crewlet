@@ -20,13 +20,13 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE DIFFERENTIAL: a line read in one scanner pass ([scanReader]) answers
+// THE DIFFERENTIAL: a line read in one scanner pass ([threadReader]) answers
 // what the whole decode answers of it ([decodeThreadLine]): record or refused,
 // the fault, the kind of record a refused head names, the size, whether the
 // error is errNotOneRecord (a refused head's in its own words), the byte facts,
 // and for a record its head, every fact and every accessor's answer, an error
 // by its text and a list by what it replays. Both bounds are raised
-// ([scanReader.valueMax], [scanReader.meterMax]), since the whole decode has
+// ([threadReader.valueMax], [threadReader.meterMax]), since the whole decode has
 // neither; [TestALinesFactsAreHeldToTheBound] holds them. A line whose last
 // type reads a frame passed over for an earlier type ends the reading, which
 // the differential models from the line's keys in order ([scanWant]).
@@ -199,11 +199,11 @@ func scanBytes(b threadBytes) string {
 		b.keyed, b.key[:], b.marks)
 }
 
-// scanReading is what a [scanReader] made of a member: each answer of each
+// scanReading is what a [threadReader] made of a member: each answer of each
 // line, in order, read to the member's end BEFORE any is printed, so a line
 // that shared a buffer with a later one reads otherwise; then what ended the
 // reading, what one more Next answered, and whether the member ended torn.
-func scanReading(ctx context.Context, r *scanReader) []string {
+func scanReading(ctx context.Context, r *threadReader) []string {
 	type read struct {
 		line threadLine
 		err  error
@@ -224,20 +224,20 @@ func scanReading(ctx context.Context, r *scanReader) []string {
 	}
 }
 
-// checkScanReadsAsDecode reads text, split at its breaks, with a [scanReader]
+// checkScanReadsAsDecode reads text, split at its breaks, with a [threadReader]
 // taking at most chunk bytes of it at a time, its bounds on a value and on a
 // line's facts raised, and holds each line it reads to what the whole decode
 // reads of the same line ([scanWant]): the same answer ([scanAnswer]), or the
 // same end of the reading where the pass passes over a frame the line's type
 // reads. The lines are read as one member up to each line that ends a
 // reading, the lines after it as the next member of the same reader
-// ([scanReader.Reset]); and the last member's end is torn exactly where a
+// ([threadReader.Reset]); and the last member's end is torn exactly where a
 // piece with no break ends it.
 func checkScanReadsAsDecode(t testing.TB, text []byte, chunk int) {
 	t.Helper()
 	pieces := bytes.Split(text, []byte("\n"))
 	lines, rest := pieces[:len(pieces)-1], pieces[len(pieces)-1]
-	r := newScanReaderSize(bytes.NewReader(nil), 0, chunk)
+	r := newThreadReaderSize(bytes.NewReader(nil), 0, chunk)
 	r.valueMax, r.meterMax = math.MaxInt, math.MaxInt
 	for from := 0; ; {
 		// The member: the lines up to the first a reading ends at, or to the
@@ -1003,7 +1003,7 @@ func TestALateFaultBeatsWhatTheLineSaidBeforeIt(t *testing.T) {
 				text += "\n"
 			}
 			maxBytes := cmp.Or(tc.maxBytes, threadPlainMax)
-			r := newScanReader(strings.NewReader(text), maxBytes)
+			r := newThreadReader(strings.NewReader(text), maxBytes)
 			if line, err := r.Next(t.Context()); err != nil || line.Head.Type != recordUser {
 				t.Fatalf("%s: the brief before the line reads as %q, %v", name, line.Head.Type, err)
 			}
@@ -1052,7 +1052,7 @@ func TestALineIsReadAlikeInAnyPieces(t *testing.T) {
 	t.Parallel()
 	lines := append(byteFactLines(t), scanAcrossAFill()...)
 	text := append(bytes.Join(lines, []byte("\n")), '\n')
-	want := scanReading(t.Context(), newScanReader(bytes.NewReader(text), threadPlainMax))
+	want := scanReading(t.Context(), newThreadReader(bytes.NewReader(text), threadPlainMax))
 	if len(want) != len(lines)+1 {
 		t.Fatalf("the corpus reads as %d answers, want one a line and its end", len(want))
 	}
@@ -1065,7 +1065,7 @@ func TestALineIsReadAlikeInAnyPieces(t *testing.T) {
 			if name == "a byte at once" && chunk != 17 && chunk != lineChunkBytes {
 				continue
 			}
-			got := scanReading(t.Context(), newScanReaderSize(member(bytes.NewReader(text)), threadPlainMax, chunk))
+			got := scanReading(t.Context(), newThreadReaderSize(member(bytes.NewReader(text)), threadPlainMax, chunk))
 			for i := range min(len(got), len(want)) {
 				if got[i] != want[i] {
 					t.Fatalf("pieces of %d bytes at most, the member read %s: answer %d reads\n%swant\n%s", chunk,
@@ -1134,7 +1134,7 @@ func TestAReadingStopsWithinAFillOfItsContext(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		member := &endlessLine{head: brief + opening, size: int64(len(brief)) + 64<<20,
 			cancelAt: int64(len(brief)) + 1<<20, cancel: cancel}
-		r := newScanReader(member, threadPlainMax)
+		r := newThreadReader(member, threadPlainMax)
 		if line, err := r.Next(ctx); err != nil || line.Head.Type != recordUser {
 			t.Fatalf("%s: the brief before the long line reads as %q, %v", name, line.Head.Type, err)
 		}
@@ -1152,17 +1152,18 @@ func TestAReadingStopsWithinAFillOfItsContext(t *testing.T) {
 	}
 }
 
-// A RESET READER ON THE SCANNER READS AS A FRESH ONE ([scanReader.Reset]):
-// its lines numbered from 1, its bound its own, ended and torn only by what
-// ends or tears it, whatever the member before it left: a torn piece, the
-// member's bound, a value past its bound, a line that is no record, an error
-// of its reader, or an ended context. One reader reads a thousand members
-// allocating what each line costs, never its buffers (its member reader's and
-// its scanner's, 64 KiB each) again. Not parallel: the allocation count is the
-// process's.
+// A RESET READER READS AS A FRESH ONE ([threadReader.Reset]): one reader
+// reads a session's members one after another, each with its lines numbered
+// from 1, its bound its own, ended and torn only by what ends or tears it,
+// whatever the member before it left: a torn piece, the member's bound, a
+// value past its bound, a line that is no record, an error of its reader, or
+// an ended context. One reader reads a thousand members allocating what each
+// line costs, never its buffers (its member reader's and its scanner's, 64 KiB
+// each) again. Not parallel: the allocation count is the process's.
 //
-// Mutation: keep how a reading ended across Reset; make a scanner a member.
-func TestAResetReaderOnTheScannerReadsAsAFreshOne(t *testing.T) {
+// Mutation: keep how a reading ended, or how many lines it read, across
+// Reset; make a scanner a member.
+func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 	brief := ctBrief(ctUUID(1))
 	next := ctThread(ctBrief(ctUUID(2)), "[1]", ctBrief(ctUUID(3)))
 	within := int64(len(next)) + 1
@@ -1188,11 +1189,11 @@ func TestAResetReaderOnTheScannerReadsAsAFreshOne(t *testing.T) {
 		"a reading whose context ended": {text(ctThread(brief, brief)), within, ended},
 	} {
 		for _, bound := range []int64{within, within - 2} {
-			r := newScanReader(tc.before(), tc.maxBytes)
+			r := newThreadReader(tc.before(), tc.maxBytes)
 			scanReading(tc.ctx, r)
 			r.Reset(strings.NewReader(next), bound)
 			got := strings.Join(scanReading(t.Context(), r), "")
-			if want := strings.Join(scanReading(t.Context(), newScanReader(strings.NewReader(next), bound)), ""); got != want {
+			if want := strings.Join(scanReading(t.Context(), newThreadReader(strings.NewReader(next), bound)), ""); got != want {
 				t.Errorf("after %s, the next member read within %d bytes reads as\n%swant it read as a fresh "+
 					"reader reads it\n%s", name, bound, got, want)
 			}
@@ -1203,7 +1204,7 @@ func TestAResetReaderOnTheScannerReadsAsAFreshOne(t *testing.T) {
 	// another goroutine allocates meanwhile counts against no claim, held
 	// below an eighth of what a fresh reader's buffers take.
 	member := ctThread(brief)
-	r := newScanReader(strings.NewReader(""), 0)
+	r := newThreadReader(strings.NewReader(""), 0)
 	const members = 1000
 	walk := func() {
 		for range members {
@@ -1225,7 +1226,7 @@ func TestAResetReaderOnTheScannerReadsAsAFreshOne(t *testing.T) {
 		each = min(each, (after.TotalAlloc-before.TotalAlloc)/members)
 	}
 	runtime.ReadMemStats(&before)
-	fresh := newScanReader(strings.NewReader(member), threadPlainMax)
+	fresh := newThreadReader(strings.NewReader(member), threadPlainMax)
 	runtime.ReadMemStats(&after)
 	runtime.KeepAlive(fresh)
 	if buffers := after.TotalAlloc - before.TotalAlloc; buffers < 2*lineChunkBytes || each >= buffers/8 {
@@ -1250,7 +1251,7 @@ func TestAReaderKeepsNoScratchALineOfLongValuesGrew(t *testing.T) {
 	long := `"` + strings.Repeat("x", threadValueMax-2) + `"`
 	held := func(member string) uint64 {
 		return heldBy(func() any {
-			r := newScanReader(strings.NewReader(member), threadPlainMax)
+			r := newThreadReader(strings.NewReader(member), threadPlainMax)
 			for {
 				_, err := r.Next(ctx)
 				var broken *threadLineError
@@ -1302,7 +1303,7 @@ func scanEnds(ctx context.Context, r interface {
 	}
 }
 
-// THE SCAN READER ENDS A MEMBER AS THE OLD READER DOES ([threadReader]): a
+// THE READER ENDS A MEMBER AS THE WHOLE READER DOES ([wholeReader]): a
 // member of records, refused lines and trailing data, read within every bound
 // from none to two bytes past its length (so at, before and after each break),
 // with each tail a member can end in (none, NULs, a whole record, a lone CR, a
@@ -1314,18 +1315,18 @@ func scanEnds(ctx context.Context, r interface {
 // Mutation: count no line's break against the member's bound; read a wrapped
 // io.EOF as the reader's error both where a piece is taken and where the line
 // ends, each of which alone reads it as the member's end.
-func TestTheScanReaderEndsAMemberAsTheOldReaderDoes(t *testing.T) {
+func TestTheReaderEndsAMemberAsTheWholeReaderDoes(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	brief := ctBrief(ctUUID(1))
 	member := ctThread(brief, "[1]", brief, `{"type":7}`, "\x00"+brief, brief+" x", brief)
 	mismatches := 0
 	compare := func(what string, read func() io.Reader, bound int64) {
-		want := scanEnds(ctx, newThreadReader(read(), bound))
+		want := scanEnds(ctx, newWholeReader(read(), bound))
 		for _, chunk := range []int{16, lineChunkBytes} {
-			if got := scanEnds(ctx, newScanReaderSize(read(), bound, chunk)); got != want {
+			if got := scanEnds(ctx, newThreadReaderSize(read(), bound, chunk)); got != want {
 				if mismatches++; mismatches <= 3 {
-					t.Errorf("%s, within %d bytes, in pieces of %d, reads as\n%swant it read as the old reader "+
+					t.Errorf("%s, within %d bytes, in pieces of %d, reads as\n%swant it read as the whole reader "+
 						"reads it\n%s", what, bound, chunk, got, want)
 				}
 			}
@@ -1351,7 +1352,7 @@ func TestTheScanReaderEndsAMemberAsTheOldReaderDoes(t *testing.T) {
 		}
 	}
 	if mismatches > 3 {
-		t.Errorf("%d readings in all read otherwise than the old reader's", mismatches)
+		t.Errorf("%d readings in all read otherwise than the whole reader's", mismatches)
 	}
 }
 
@@ -1420,7 +1421,7 @@ func (g *scanGenerated) Read(p []byte) (int, error) {
 
 // scanRead is what a fresh reader reads of the line parts make.
 func scanRead(ctx context.Context, parts []scanPart) (threadLine, error) {
-	return newScanReader(&scanGenerated{parts: parts}, threadPlainMax).Next(ctx)
+	return newThreadReader(&scanGenerated{parts: parts}, threadPlainMax).Next(ctx)
 }
 
 // scanAllocated is the fewest bytes a reading in one pass allocates from its
@@ -1438,7 +1439,7 @@ func scanAllocated(ctx context.Context, warm, parts []scanPart, runs int) (uint6
 		before, after runtime.MemStats
 	)
 	for range runs {
-		r := newScanReader(&scanGenerated{parts: warm}, threadPlainMax)
+		r := newThreadReader(&scanGenerated{parts: warm}, threadPlainMax)
 		if _, err = r.Next(ctx); err != nil {
 			return 0, threadLine{}, fmt.Errorf("the line it was warmed on: %w", err)
 		}

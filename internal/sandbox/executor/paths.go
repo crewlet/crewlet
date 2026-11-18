@@ -33,39 +33,108 @@
 // large degrades only itself. See stream.go for the reasons, and what each
 // used to cost.
 //
-// # A Claude Code thread is read a whole line at a time
+// # A Claude Code thread is read a line at a time, holding what its readers read
 //
-// A reader that decides something from what a Claude Code session recorded,
-// rather than showing it to a person, reads the session's threads through one
-// layer (claudethread.go): a member named exactly ([claudeMainThread],
-// [claudeSubagentThread], [claudeSubagentMeta], [claudePrecompact], and
-// [claudeMemberOf] back), never by [claudeThread], which takes any session's
-// file for the main thread; a whole line at a time through the scrub's own
-// [readLine] at the scrub's own bounds, a last piece with no break never a
-// line, and a line or a member past its bound the end of the reading, never a
-// skip; every whole line decoded into its head before anything reads it, with
-// no keyword prefilter, every value as the harness's own JSON.parse reads it,
-// under one set of options ([threadDecoding]: every key exactly as written,
-// never matched by case as encoding/json matches a struct's fields, a key
-// written twice by its last value, and a string's invalid UTF-8 or lone
-// surrogate as the replacement character, never refused), and `parentUuid`
-// handed over as written, since the harness's bookkeeping carries none and only
-// a root carries null; a list a box wrote read an element at a time
-// ([eachElement]), never decoded whole before its first element is checked,
-// and an object whose keys are open, as a map's are, a key at a time
-// ([eachKey]), never decoded into a map of every key first; a key only one
-// reader reads held to its type in that reader's accessor; and no id handed
-// out as a call's but by [threadMessage.Calls], an attachment's `toolUseID`
-// only as a key ([threadLine.AttachmentToolUseID]), since a PostToolUse
-// hook's firing carries the id of the call it followed, and a task
-// notification's `<tool-use-id>` as the leg its text claims
-// ([threadMessage.Notification]), matched only against a call read. The
-// take's context meter (measure.go) reads the main
-// thread through the layer too, in one walk of its whole lines
+// A person's transcript (transcript.go) shows a session as well as it can,
+// and a line it cannot read is an entry saying so. A reader that DECIDES
+// something from what a session recorded (that a hook's note reached the
+// model, that a call's result is held) cannot: one record it misreads is a
+// wrong answer, not a gap on a page. Every such reader (the one that confirms
+// a hook's note reached the model, the one that tells a relaunch which of its
+// calls a kept session holds, and the one that bounds what a continued
+// session's harness counts before its first request, at a take's context
+// meter and in the read that collects a job, [resumedReading]) reads a Claude
+// Code thread through one layer (claudethread.go), so the rules it is read by
+// are held once, each in one walk of a thread's lines that every reading of it
+// shares ([walkThread]). The launch floor's figure at the meter
+// ([contextReading]), which decides nothing of what the session recorded,
+// reads a thread's replies through the layer too, off the last main-thread
+// reply's usage, so every reading of a thread reads a reply's usage by one
+// rule ([threadLine.Usage]). The rules:
+//
+//   - A MEMBER IS NAMED EXACTLY ([claudeMainThread], [claudeSubagentThread],
+//     [claudeSubagentMeta], [claudePrecompact], and [claudeMemberOf] the other
+//     way), never by [claudeThread], which takes any session's file for the
+//     main thread: a reader that decides something of one session must never
+//     read another session's file as it.
+//   - A LINE AT A TIME, IN ONE SCANNER PASS THAT NEVER HOLDS IT
+//     ([threadReader]), so a line of any length costs its reader what its
+//     readers read of it: Claude Code keeps no bound on a line (a whole-PDF
+//     Read writes 55,924,056 bytes on one). A last piece with no break is
+//     never a line: it is a write its harness never finished, or the NULs GNU
+//     tar fills a member out with when it shrank as it was packed, and a
+//     reader that read it would take half a record for one. The box cuts
+//     exactly that piece away before a harness resumes the session
+//     ([claudeSessionGate]'s torn), but for two files it leaves as they are:
+//     one that holds no whole line, and every subagent's thread in a box that
+//     has no find. There a reader reads less than the harness may, and what it
+//     leaves is never a whole record, so it holds nothing a reader counts.
+//   - PAST A BOUND, THE READING IS OVER, with nothing skipped, since a reader
+//     that skipped a line would decide from a thread with a hole in it, and it
+//     stays over: a member past its reader's bound, EVEN WHERE THE BOUND FALLS
+//     RIGHT AFTER A LINE BREAK (metered with io.LimitReader, a member past its
+//     bound would read as whole, the lines past the cut neither read nor
+//     missed); a line whose facts pass [threadLineMax]; a line holding a value
+//     it reads whole past [threadValueMax]; and a line whose type turns after a
+//     frame the pass passed over for it (the type's gate, below). Each fails
+//     closed: a reader turns a thread with a hole in it into no reading or
+//     cannot tell, never a false hold.
+//   - A MEMBER'S READER'S ERROR ENDS THE READING AS IT IS, never as the
+//     member's end nor as a bound: a reader that meters a kept archive's
+//     plaintext with the take's scrub's own meter fails with the scrub's bound
+//     once the archive inflates past a reading, and that is its error, in its
+//     own words.
+//   - THE CONTEXT IS THE ONE PLACE A READING'S CALLER IS HEARD: asked before
+//     each piece of at most [lineChunkBytes] a line takes, so a reading
+//     overruns its caller's wait by one piece whatever the line's length, and
+//     its callers ask none of their own between lines.
+//   - EVERY LINE IS READ TO ITS END before anything reads it, with no keyword
+//     prefilter, a late fault beating what its head said ([threadHead]): a
+//     line no keyword marks can still be no record (a write that tore into
+//     another), and a reader that passed it unread would decide from the
+//     thread around it as though it were whole.
+//   - A LIST IS READ AN ELEMENT AT A TIME AND AN OBJECT A KEY AT A TIME, in
+//     the line's one pass: each frame keeps only what its readers ask, each
+//     element is held to its type as it is read, and a value no reader reads
+//     is passed over unheld, so no list or object a box wrote is ever held
+//     whole.
+//   - EVERY VALUE IS READ AS CLAUDE CODE'S OWN JSON.parse READS IT, under
+//     [jsonscan], whose grammar is encoding/json/jsontext's under the options
+//     the package's other readers decode by ([threadDecoding]): a key exactly
+//     as written, never matched by case as encoding/json matches a struct's
+//     fields; a key written twice by its last value; and a string's invalid
+//     UTF-8 or lone surrogate as the replacement character, never as no
+//     record.
+//   - ABSENT IS NOT NULL: `parentUuid` is handed over as written
+//     ([threadHead.Parent]), within [threadValueMax], since the harness's
+//     bookkeeping carries none and only a root carries null.
+//   - A KEY ONLY ONE READER READS IS HELD IN THAT READER'S ACCESSOR, so a
+//     release that reshapes it costs that reader alone ([threadLine]); only
+//     the bounds above fail a whole line.
+//   - A MESSAGE THAT DOES NOT DECODE IS ITS LINE'S: a reader that decides from
+//     a thread's messages asks [threadLine.Message] of every user and
+//     assistant record of that thread, and takes its error as that line's, no
+//     record, as it takes a *threadLineError, never as a line with no calls.
+//   - A HOOK'S FIRING IS NEVER A CALL'S ID: no id leaves the layer AS an id
+//     but a call's, through [threadMessage.Calls], and an attachment's
+//     `toolUseID` leaves it only as a key ([threadLine.AttachmentToolUseID]),
+//     since a PostToolUse hook's firing carries the id of the call it followed.
+//     An id written inside a record's text (a tool's output, a call's input)
+//     never leaves it as bytes: of a call's input, a result's text, a record's
+//     own toolUseResult and a message's text the layer hands out only the facts
+//     it reads of them ([threadCall], [threadLine.HandsBack],
+//     [threadLine.AgentAnswer], [threadMessage.NamesHandback]). A task
+//     notification's `<tool-use-id>`, the text's own claim, leaves it as the
+//     leg it names ([threadMessage.Notification]), which its one reader matches
+//     only against legs whose call it read.
+//
+// What these rules were measured on is Claude Code 2.1.310 and 2.1.322, driven
+// as the engine drives a box's executor, and 2.1.118 beside 2.1.310 for a hook
+// that follows one call (a skill's). The take's context meter (measure.go)
+// reads the main thread through the layer in one walk of its lines
 // ([walkThread]): it decides what a continuation of the capture is told, by
 // what Claude Code counts the session at ([resumedReading]), and reads the
-// launch floor's figure, the last request's input, off the last main-thread
-// reply's usage by the rule the count reads it by ([contextReading]).
+// launch floor's figure ([contextReading]).
 //
 // What Claude Code's resume hands its model of such a thread, which of its
 // records and in what order, is modelled once, by [threadChain]
@@ -85,13 +154,10 @@
 //
 // # A thread line is read in one scanner pass, never held
 //
-// The scan reader (claudelinescan.go, [scanReader]) reads a member a line at a
-// time as [threadReader] does and answers each line as it does, but reads it
-// through [jsonscan] in ONE PASS that never holds the line, so a line of any
-// length costs what its readers read of it: Claude Code keeps no bound on a
-// line (a whole-PDF Read writes 55,924,056 bytes on one). Until it takes the
-// old reader's place, a differential holds it to the whole decode line by
-// line (claudelinescan_internal_test.go).
+// The reader (claudelinescan.go, [threadReader]) reads a line through
+// [jsonscan] in ONE PASS that never holds it. A differential holds the pass to
+// a decode of the whole line, line by line, as a test's oracle
+// (claudelinescan_internal_test.go).
 //
 // A LINE IS ITS OWN READER ([lineSource]): it ends at the break and hands the
 // scanner the line without it, so the scanner reads one JSON text a line.
@@ -105,22 +171,22 @@
 //
 // NOTHING OF A LINE COMMITS BEFORE ITS BREAK AND THE SCANNER'S END OF IT, and
 // a piece the member ends with no break commits nothing. Then the line is
-// judged in the order Claude Code's load reads it ([scanReader.commit]): a
+// judged in the order Claude Code's load reads it ([threadReader.commit]): a
 // fault of the grammar first, wherever it lies (a NUL or a byte order mark
 // first is faultLead, a cut value faultPrefix, too deep faultDepth, more after
-// the value faultTrailing, else faultSyntax), since the whole decode reads the
-// whole value before its head; then one value that is no object; then the head,
-// each key by its last occurrence; then the bounds below; only then a record,
-// each frame settled to its type ([settle]). So a late fault beats what the
-// line said before it, and a line past a bound is classed exactly where its
-// grammar or head refuses it: past a bound the pass keeps scanning, holding
-// nothing more.
+// the value faultTrailing, else faultSyntax), since Claude Code's load parses
+// the whole value before it reads its head; then one value that is no object;
+// then the head, each key by its last occurrence; then the bounds below; only
+// then a record, each frame settled to its type ([settle]). So a late fault
+// beats what the line said before it, and a line past a bound is classed
+// exactly where its grammar or head refuses it: past a bound the pass keeps
+// scanning, holding nothing more.
 //
-// EVERY MEMBER IS READ BY ITS DECODED NAME, exactly, case kept, as the whole
-// decode reads a key under [threadDecoding] (`"type"` is `type`; `"Type"`
-// no key the layer reads), and a key written twice by its last value,
-// wholesale: each occurrence replaces what the one before it left, a frame's
-// all of it, never merged with it.
+// EVERY MEMBER IS READ BY ITS DECODED NAME, exactly, case kept, as
+// [threadDecoding] reads a key (`"type"` is `type`; `"Type"` no key the layer
+// reads), and a key written twice by its last value, wholesale: each
+// occurrence replaces what the one before it left, a frame's all of it, never
+// merged with it.
 //
 // EVERY VALUE IS READ BY ONE OF THREE MEANS, or passed over unheld
 // ([jsonscan.Scanner.Skip]). A small value the layer's own code decodes (a
@@ -134,8 +200,8 @@
 // has been met. A text its readers ask a property of STREAMS into the
 // automaton that answers it at any length ([textSays], [textNotice],
 // [textHandback], [textResult]). A list is read an element at a time by the
-// layer's one rule of an element, up to the first it refuses, as
-// [eachElement] hands it; an entry read by its first characters (a
+// layer's one rule of an element, up to the first it refuses, the rest passed
+// over; an entry read by its first characters (a
 // retraction's, a kept uuid) is read one byte past them
 // ([lineDecoder.opening]), and a skill's name streams into its UTF-16 length
 // and whether its bytes were UTF-8 ([jsonscan.Scanner.InvalidUTF8]).
@@ -156,18 +222,31 @@
 // every copy. What a line allocates and drops (a refused block's strings, an
 // error's text) is not charged: a line of many blocks costs time, not memory.
 //
+// EIGHT MEBIBYTES, a constant of its own and never the scrub's piece
+// ([scrubPieceMaxBytes]), which bounds what the scrub holds of a line rather
+// than what a reader keeps of one. Every legitimate line's facts are KiBs:
+// its readers keep a block's kind, a call's id, name and target, a result's
+// length and digests, a few small values, never a value's text. So a reading's
+// coincident worst is the resume's model of the thread at its bounds
+// ([threadChain]) beside one line's facts at the bound and the reader's fixed
+// buffers. A larger bound would serve only lines no release writes: what this
+// one refuses is a
+// line of tiny calls by the tens of thousands, a value read whole past
+// [threadValueMax] (an id, a uuid, a usage), or a type that turns after a
+// frame passed over for it, each failing toward no reading or cannot tell.
+//
 // # A run's harness session, carried between boxes
 //
 // Every run names the harness session it works in before the harness starts
-// ([Harness.Session]), records which it took up ([Paths.SessionRecord]), and packs
-// it once the harness exits ([Paths.SessionCapture], [Runner.OpenCapture]); a run
-// handed a session packed in another box restores it before its harness takes it
-// up, never over a box whose own copy already holds that archive
-// ([Paths.SessionDigests]), and starts a session of its own, saying why, where
-// it can do neither. Whether a box can continue a carried session at all is
-// its harness's release, asked of the box ([Runner.CheckCarry]).
-// What each harness's archive holds, and never holds, is the harness's own: see
-// carry.go, [ClaudeCode] and [OpenCode].
+// ([Harness.Session]), records which it took up ([Paths.SessionRecord]), and
+// packs it once the harness exits ([Paths.SessionCapture],
+// [Runner.OpenCapture]); a run handed a session packed in another box restores
+// it before its harness takes it up, never over a box whose own copy already
+// holds that archive ([Paths.SessionDigests]), and starts a session of its
+// own, saying why, where it can do neither. Whether a box can continue a
+// carried session at all is its harness's release, asked of the box
+// ([Runner.CheckCarry]). What each harness's archive holds, and never holds,
+// is the harness's own: see carry.go, [ClaudeCode] and [OpenCode].
 //
 // A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
 // it, by the pack the run's own end makes held to a stricter rule — every file
