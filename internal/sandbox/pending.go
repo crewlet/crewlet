@@ -1938,8 +1938,10 @@ type PendingRun struct {
 	BoxAnswered bool `json:"-"`
 
 	// BoxHarnessEnd is TRANSIENT as well: how the job's harness ended as THIS
-	// claim's read of its box found it, where a step after the read handed the
-	// claim back before the read's own record of it ([Release.HarnessEnd]).
+	// claim's read of its box found it, set with BoxAnswered, so every hand-back
+	// after the read records it in its own write ([Release.HarnessEnd]). A lost
+	// job's leaves it empty: its row's loss record already says the job is over
+	// ([PendingRun.Lost]), and no release clears it.
 	BoxHarnessEnd HarnessEnd `json:"-"`
 
 	// Deadline is when the turn that launched this run stops being worked

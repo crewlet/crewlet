@@ -2350,13 +2350,14 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (PendingRun, 
 	// THE BOX ANSWERED, which ends the run of failed collections behind this
 	// one whatever a later step does: a step after the read that the store
 	// does not answer, or that this node cuts short, hands the claim back
-	// uncounted with that run ended ([Release.BoxAnswered]). Marked here, at
-	// the box's answer, and not once this read returns: what the run pushed is
-	// read after it, and a read this node cut short there is one of those
-	// steps. And the delivery the attempt is made for knows it, so it reads
-	// no row for what the host's store says (renew.go): that host read the
-	// row through its store to license this read.
-	run.BoxAnswered = true
+	// uncounted with that run ended ([Release.BoxAnswered]), its harness's end
+	// in that write ([Release.HarnessEnd]). Marked here, at the box's answer,
+	// and not once this read returns: what the run pushed is read after it,
+	// and a read this node cut short there is one of those steps. And the
+	// delivery the attempt is made for knows it, so it reads no row for what
+	// the host's store says (renew.go): that host read the row through its
+	// store to license this read.
+	run.BoxAnswered, run.BoxHarnessEnd = true, result.HarnessEnd
 	readTheBox(ctx)
 	if ended {
 		result = endedAtDeadline(result, run.Deadline, run.Question)
