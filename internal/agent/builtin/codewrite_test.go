@@ -1726,3 +1726,26 @@ func TestTheCodeWriteGuidanceNamesTheCodeWrites(t *testing.T) {
 		}
 	}
 }
+
+// A CODE TOOL'S ARGUMENT REFUSAL NAMES THE ARGUMENT AS A VALUE beside its
+// class, so the act route answers which value was refused (ADR-0060) without
+// the sentence, which stays the model's: an owner in no shape an owner takes
+// is refused invalid, naming `owner`, and nothing is sent.
+//
+// Mutation: refuse it with failed and the cause names no field.
+func TestACodeToolsArgumentRefusalNamesTheArgument(t *testing.T) {
+	t.Parallel()
+	writer := &codeWrites{}
+	reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
+	got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeCreateRepoTool,
+		map[string]any{"name": "lab", "owner": "eng"})
+	var named interface{ RefusedField() string }
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid || !errors.As(got.Cause, &named) ||
+		named.RefusedField() != "owner" {
+		t.Fatalf("an owner in no shape answered %q as %s (cause %v), want invalid naming owner", got.Output,
+			tools.RefusalOf(got), got.Cause)
+	}
+	if _, sent := writer.asked(); len(sent) != 0 {
+		t.Fatalf("a refused owner sent %+v, want nothing", sent)
+	}
+}

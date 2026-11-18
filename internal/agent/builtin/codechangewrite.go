@@ -152,9 +152,10 @@ func (d CodeDeps) mentionsOf(tool string, texts ...string) ([]string, *tools.Res
 func expectedVersionArg(tool string, args map[string]any) (int64, *tools.Result) {
 	v := int64(argInt(args, "expected_version", 0))
 	if v < 1 {
-		r := failed(fmt.Sprintf("%s needs `expected_version`: the change's `version` as %s answered it — a "+
-			"write is held to the change you read, so one that moved since is not changed under you.", tool,
-			CodeGetChangeTool))
+		r := failedArg("expected_version",
+			fmt.Sprintf("%s needs `expected_version`: the change's `version` as %s answered it — a "+
+				"write is held to the change you read, so one that moved since is not changed under you.", tool,
+				CodeGetChangeTool))
 		return 0, &r
 	}
 	return v, nil
@@ -166,7 +167,7 @@ func expectedVersionArg(tool string, args map[string]any) (int64, *tools.Result)
 func branchArg(tool, arg string, args map[string]any) (string, *tools.Result) {
 	branch := strings.TrimPrefix(strings.TrimSpace(argString(args, arg)), branchRoot)
 	if !gitref.ValidBranch(branch) {
-		r := failed(fmt.Sprintf("%s needs `%s`: a branch's name as refs/heads/ holds it (`main`, "+
+		r := failedArg(arg, fmt.Sprintf("%s needs `%s`: a branch's name as refs/heads/ holds it (`main`, "+
 			"`seats/<handle>/fix`) — %q is not one git takes.", tool, arg, clip(branch)))
 		return "", &r
 	}
@@ -441,17 +442,17 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 func reviewersArg(tool, arg string, args map[string]any, asker gitlet.Principal) ([]string, *tools.Result) {
 	handles := argStrings(args, arg)
 	if len(handles) > gitlet.MaxReviewersPerChange {
-		r := failed(fmt.Sprintf("%s: `%s` names %d reviewers, past the %d a change asks at once.", tool, arg,
+		r := failedArg(arg, fmt.Sprintf("%s: `%s` names %d reviewers, past the %d a change asks at once.", tool, arg,
 			len(handles), gitlet.MaxReviewersPerChange))
 		return nil, &r
 	}
 	for _, h := range handles {
 		switch {
 		case !org.ValidHandle(h):
-			r := failed(fmt.Sprintf("%s: `%s` names %q, which is no seat's handle.", tool, arg, clip(h)))
+			r := failedArg(arg, fmt.Sprintf("%s: `%s` names %q, which is no seat's handle.", tool, arg, clip(h)))
 			return nil, &r
 		case h == asker.Seat:
-			r := failed(fmt.Sprintf("%s: `%s` names %s, who writes the change: an author's review of their own "+
+			r := failedArg(arg, fmt.Sprintf("%s: `%s` names %s, who writes the change: an author's review of their own "+
 				"change counts for nothing. Name others.", tool, arg, h))
 			return nil, &r
 		}

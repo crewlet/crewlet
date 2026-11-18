@@ -138,6 +138,22 @@ func refused(code tools.Refusal, msg string) tools.Result {
 // [refused] or [refusedBy].
 func failed(msg string) tools.Result { return refused(tools.RefusalInvalid, msg) }
 
+// failedArg is [failed] for a refusal of ONE argument, carrying its name as a
+// value beside the class ([argRefused]): a surface answering a person says
+// which value was refused in its own words (ADR-0060), and the model reads
+// the sentence, which names it too.
+func failedArg(field, msg string) tools.Result {
+	return tools.Result{Output: msg, Failed: true, Cause: tools.Classify(tools.RefusalInvalid, argRefused(field))}
+}
+
+// argRefused is the argument a tool refused, by the name the call spells it.
+type argRefused string
+
+func (a argRefused) Error() string { return "builtin: refused argument " + string(a) }
+
+// RefusedField is the argument, as a surface outside the tools asks it of a cause's chain.
+func (a argRefused) RefusedField() string { return string(a) }
+
 // refusedBy is [refused] for a refusal something underneath decided — a read
 // that found nothing, a write the log refused — carrying that error BENEATH
 // the class ([tools.Classify]), so a caller branching on the domain's own

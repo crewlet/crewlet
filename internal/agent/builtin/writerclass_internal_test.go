@@ -359,6 +359,9 @@ var domainErrors = map[string]map[string]classRow{
 		"ChartRefusal": {err: &gitlet.ChartRefusal{},
 			why: "the deciding chart's refusal of whom a write is made for, answered only inside the class its " +
 				"holder gives it, ErrInvalidProposal on a committer and ErrInvalid on a Gitlet node, which class it"},
+		"FieldRefused": {err: &gitlet.FieldRefused{},
+			why: "the field a refusal names, carried beside the sentinel it wraps, ErrInvalid or ErrInvalidProposal, " +
+				"which class it"},
 		"ErrInvalidLayer": {err: gitlet.ErrInvalidLayer, why: "a published layer a Gitlet node built wrong, the cache's fault"},
 		"ErrBadLayer":     {err: gitlet.ErrBadLayer, why: "a stored layer that is not what its row says, a fault of the store"},
 		"ErrBadBundle":    {err: gitlet.ErrBadBundle, why: "a stored pack that is not what its row says, a fault of the store"},

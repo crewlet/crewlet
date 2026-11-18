@@ -348,7 +348,7 @@ func sideArg(tool, field string, raw string) (gitlet.Side, *tools.Result) {
 		return gitlet.SideNew, nil
 	}
 	if !side.Valid() {
-		r := failed(fmt.Sprintf("%s: %s is %s (old is the revision's base and new its head), not %q.", tool, field,
+		r := failedArg(field, fmt.Sprintf("%s: %s is %s (old is the revision's base and new its head), not %q.", tool, field,
 			words.Or(gitlet.Sides()), clip(string(side))))
 		return "", &r
 	}
@@ -359,7 +359,7 @@ func sideArg(tool, field string, raw string) (gitlet.Side, *tools.Result) {
 func revisionArg(tool string, args map[string]any) (int64, *tools.Result) {
 	n := int64(argInt(args, "revision", 0))
 	if n < 0 {
-		r := failed(fmt.Sprintf("%s: `revision` counts from 1; leave it out for the change's latest.", tool))
+		r := failedArg("revision", fmt.Sprintf("%s: `revision` counts from 1; leave it out for the change's latest.", tool))
 		return 0, &r
 	}
 	return n, nil
@@ -370,13 +370,13 @@ func revisionArg(tool string, args map[string]any) (int64, *tools.Result) {
 func handlesArg(tool, arg string, args map[string]any) ([]string, *tools.Result) {
 	handles := argStrings(args, arg)
 	if len(handles) > gitlet.MaxReviewersPerChange {
-		r := failed(fmt.Sprintf("%s: `%s` names %d, past the %d a change asks at once.", tool, arg, len(handles),
+		r := failedArg(arg, fmt.Sprintf("%s: `%s` names %d, past the %d a change asks at once.", tool, arg, len(handles),
 			gitlet.MaxReviewersPerChange))
 		return nil, &r
 	}
 	for _, h := range handles {
 		if !org.ValidHandle(h) {
-			r := failed(fmt.Sprintf("%s: `%s` names %q, which is no seat's handle.", tool, arg, clip(h)))
+			r := failedArg(arg, fmt.Sprintf("%s: `%s` names %q, which is no seat's handle.", tool, arg, clip(h)))
 			return nil, &r
 		}
 	}
