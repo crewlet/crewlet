@@ -1443,3 +1443,40 @@ test("the rail's phase strip says when the engine decided for the reviewer", asy
   expect(await screen.findByText("undecided, sent back")).toBeTruthy();
   expect(screen.queryByText("sent the turn back for another round")).toBeNull();
 });
+
+// A TURN THAT PARKED IS READ AT ITS END: it completes once per segment, and the page
+// reads the newest, never a middle segment whose review sent the work back.
+// Mutation: read the first completion of each type, and the page says nothing landed.
+test("a parked turn's outcome and account are its last segment's", async () => {
+  const segment = (at: string, outcome: string, summary: string, suspended: boolean) => [
+    event({
+      type: "agent_turn_completed",
+      timestamp: at,
+      payload: { turn_id: TURN, failed: false, decision: outcome, suspended },
+    }),
+    event({
+      type: "turn_completed",
+      timestamp: at.replace(/Z$/, ".5Z"),
+      payload: {
+        turn_id: TURN,
+        review_outcome: outcome,
+        plan_summary: summary,
+        suspended,
+        duration_ms: 1000,
+      },
+    }),
+  ];
+  mount({
+    events: [
+      phase("2026-09-13T10:00:30Z", 30_000),
+      ...segment("2026-09-13T10:01:00Z", "self_iterate", "", true),
+      ...segment("2026-09-13T10:30:00Z", "self_iterate", "Nothing landed this turn.", true),
+      ...segment("2026-09-13T10:50:00Z", "done", "Artifact published as versions 5 to 8.", false),
+    ],
+  });
+  expect(
+    (await screen.findAllByText(/Artifact published as versions 5 to 8/)).length,
+  ).toBeGreaterThan(0);
+  expect(screen.queryByText(/Nothing landed this turn/)).toBeNull();
+  expect(screen.getAllByText("done").length).toBeGreaterThan(0);
+});
