@@ -258,6 +258,8 @@ test("a row's time is said after its state word and its duration in short", asyn
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
   const { list } = await mountBoard();
   await afterMicrotasks();
+  // ONE TICK FIRST, so the shared clock reads the faked one.
+  await act(async () => void vi.advanceTimersByTime(1_000));
   const facts = (key: string) => rowOf(list, key).querySelector(".code-list__facts")!.textContent;
   expect(facts(API_E2E_KEY)).toBe("1m 52sended 20 minutes ago");
   const running = `web:e2e:1:${sha("c44b0d1")}:refs/heads/main`;
@@ -266,8 +268,6 @@ test("a row's time is said after its state word and its duration in short", asyn
     expect(m, facts(running) ?? "").not.toBeNull();
     return Number(m![1]) * 60 + Number(m![2]);
   };
-  // ONE TICK FIRST, so the shared clock reads the faked one.
-  await act(async () => void vi.advanceTimersByTime(1_000));
   const before = seconds();
   await act(async () => void vi.advanceTimersByTime(2_000));
   expect(seconds()).toBe(before + 2);
