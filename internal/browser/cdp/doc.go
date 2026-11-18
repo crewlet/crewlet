@@ -82,7 +82,23 @@
 // past ReadLimit, a backlog past a bound — ends the connection, so what a page
 // can make arrive there, a request gate's paused requests among it, can end
 // its whole browser, and a caller that must not let it listens for that on
-// the page's own session instead. Each bound's reason is at its definition.
+// the page's own session instead.
+//
+// [ReadLimit] is 16 MiB because the largest answer the render asks for by
+// design is a screenshot of its widest viewport, 1920 by 900 CSS pixels at a
+// device scale of 1 (internal/artifacts' Render bounds): at worst a PNG of its
+// raw RGBA pixels, 6.6 MiB, about 8.8 MiB once base64 has carried it, and
+// 16 MiB is that and more than half again. Nothing holds every other answer or
+// event under it, since a page makes its own as large as it likes — a console
+// line, an exception, or a paused request, which carries its body (on Chromium
+// 157, measured on 2026-11-11, a POST of 40 MiB was paused as an event of
+// 97.9 MB, 2.3 times its body, so a POST of about 7 MiB passes ReadLimit) —
+// so a caller that listens for them, as the render does on its page's own
+// session, meets [ErrMessageTooBig] there when a page passes it: a page that
+// POSTs that much while it renders ends its own page session, and a render
+// refuses every write anyway. The websocket library's own limit, 32 KiB by
+// default, is lifted: a message past ReadLimit is read through, never
+// refused. Each other bound's reason is at its definition.
 //
 // # The floor
 //

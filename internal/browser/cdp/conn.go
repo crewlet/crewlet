@@ -13,39 +13,14 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
-// ReadLimit is the largest message a connection reads whole, 32 MiB. A larger
-// one ends nothing but what it is for. It is read through and let go of as it
-// streams past, kept only as far as routing it needs — the id or the method
-// Chromium writes first, and the session it writes last — and then an answer
-// that large fails its own call with [ErrMessageTooBig], an event that large
-// ends its own session with it when a listener of that session asked for it,
-// and any other is dropped, as an event no listener asked for always is. The
-// connection and its other sessions go on: a page can provoke such a message
-// at will — a console line or a call of a binding, once its session has
-// enabled Runtime, or a document whose accessibility tree is long — and so
-// what it provokes ends at most its own session. The browser's own session
-// ([Conn.Browser]), which no target owns, ends only with its connection, so an
-// event past ReadLimit that one of its listeners asked for ends the
-// connection. A page can provoke one there too: a request paused by a gate on
-// the browser's session carries the request's body, so a POST of tens of
-// megabytes passes ReadLimit (on Chromium 157, measured on 2026-11-11, a POST
-// of 40 MiB was paused as an event of 97.9 MB), and ends its whole browser. A
-// caller that must not let a page do that listens for such events on the
-// page's own session rather than the browser's.
-//
-// 32 MiB is what the largest answer the browser asks for by design needs: a
-// screenshot, which its screenshot tool holds to 2,000 pixels on its long edge
-// at its source (crewlet/crewlet#804), is at worst a 16 MB PNG, about 21.3 MiB
-// once base64 has carried it, and 32 MiB is that and half again. Nothing holds
-// every other answer under it: an accessibility tree has no bound at its
-// source, since Accessibility.getFullAXTree's depth bounds how deep the tree
-// goes and never how many nodes come back (on Chromium 157, measured on
-// 2026-11-11, a table of 4,000 rows of six cells answered 26.8 MiB and one of
-// 6,000 rows passed this limit), so a caller that asks for one, or listens for
-// an event a page can make as large, holds it below ReadLimit itself or meets
-// ErrMessageTooBig. The websocket library's own limit, 32 KiB by default, is
-// lifted: a message past ReadLimit is read through, never refused.
-const ReadLimit = 32 << 20
+// ReadLimit is the largest message a connection reads whole, 16 MiB: the
+// render's largest answer, a screenshot of its widest viewport, and more than
+// half again (the package doc's "The bounds" argues it). A larger message is
+// read through, kept only as far as routing it needs, and ends only what it is
+// for — the call it answers with [ErrMessageTooBig], or the session whose
+// listener asked for the event, and on the browser's own session the
+// connection ([Conn.Browser]) — while one no listener asked for is dropped.
+const ReadLimit = 16 << 20
 
 // envelopeBytes is how much of a message past ReadLimit the reader keeps to
 // route it, of its start and of its end each: Chromium writes an answer's id

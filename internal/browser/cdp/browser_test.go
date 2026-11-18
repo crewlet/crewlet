@@ -265,14 +265,14 @@ func launch(t testing.TB, chrome, transport string) *cdp.Conn {
 	return chromiumtest.Dial(t, chromiumtest.LaunchPort(t, chrome))
 }
 
-// A SCREENSHOT-SIZED MESSAGE CROSSES BOTH TRANSPORTS: a 21 MiB answer, the
-// size of the largest screenshot the browser asks for, arrives over the pipe
-// and over the socket, and a 33 MiB one, past ReadLimit, fails its own call
-// with ErrMessageTooBig and nothing else: the same page answers the next call,
-// and the connection is open. On the newest arm alone: the floor adds nothing
-// to a claim about this client's transports.
+// A SCREENSHOT-SIZED MESSAGE CROSSES BOTH TRANSPORTS: a 9 MiB answer, the
+// largest screenshot the render asks for once base64 has carried it, arrives
+// over the pipe and over the socket, and one a mebibyte past ReadLimit fails
+// its own call with ErrMessageTooBig and nothing else: the same page answers
+// the next call, and the connection is open. On the newest arm alone: the
+// floor adds nothing to a claim about this client's transports.
 //
-// Mutations: ReadLimit = 16 << 20, and the 21 MiB answer fails its call — red;
+// Mutations: ReadLimit = 8 << 20, and the 9 MiB answer fails its call — red;
 // end the connection at a message past ReadLimit, and the page's next call
 // fails — red.
 func TestAScreenshotSizedMessageCrossesBothTransports(t *testing.T) {
@@ -282,15 +282,16 @@ func TestAScreenshotSizedMessageCrossesBothTransports(t *testing.T) {
 			ctx := bounded(t)
 			c := launch(t, chrome, transport)
 			page := openPage(ctx, t, c)
-			got, err := evaluate(ctx, page, "'x'.repeat(21 << 20)")
+			got, err := evaluate(ctx, page, "'x'.repeat(9 << 20)")
 			if err != nil {
-				t.Fatalf("a 21 MiB answer: %v", err)
+				t.Fatalf("a 9 MiB answer: %v", err)
 			}
-			if len(got) != 21<<20+2 {
-				t.Fatalf("a 21 MiB answer arrived as %d bytes", len(got))
+			if len(got) != 9<<20+2 {
+				t.Fatalf("a 9 MiB answer arrived as %d bytes", len(got))
 			}
-			if _, err := evaluate(ctx, page, "'x'.repeat(33 << 20)"); !errors.Is(err, cdp.ErrMessageTooBig) {
-				t.Fatalf("a 33 MiB answer: %v, want ErrMessageTooBig", err)
+			past := fmt.Sprintf("'x'.repeat(%d)", cdp.ReadLimit+1<<20)
+			if _, err := evaluate(ctx, page, past); !errors.Is(err, cdp.ErrMessageTooBig) {
+				t.Fatalf("an answer a mebibyte past ReadLimit: %v, want ErrMessageTooBig", err)
 			}
 			if got, err := evaluate(ctx, page, "1 + 1"); err != nil || string(got) != "2" {
 				t.Fatalf("the page whose answer passed ReadLimit then answered %s, %v", got, err)
