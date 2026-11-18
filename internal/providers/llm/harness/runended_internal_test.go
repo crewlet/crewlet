@@ -33,15 +33,13 @@ const spentLine = `{"type":"result","subtype":"success","is_error":true,"api_err
 	`"result":"You've hit your 5-hour limit · resets 4:30pm (America/Vancouver)"}`
 
 // AN EXECUTOR RUN THAT SPENT THE PLAN SITS ITS ENTRY OUT, ON THE VENDOR'S WORD
-// AND NOTHING ELSE. The run is the harness's own, so nothing a call on this host reads ever
-// saw its limit: the next launch on the entry — a reviewer's send-back an hour
-// into the same window — walked into the same spent plan. Read through the
-// same classification every call takes, by the profile each harness ships with:
-// Claude Code's result line by its status first, then its report where its
-// answer should be, or in the error of a run it said failed; OpenCode's typed
-// failure event, whose payload the runner collects as the run's error. A
-// model's answer that merely MENTIONS a limit, and an error that is no limit,
-// bench nothing.
+// AND NOTHING ELSE. The run is the harness's own, so no call on this host saw
+// its limit, and the next launch on the entry walked into the same spent plan.
+// It is read through the classification every call takes, by each harness's
+// profile: Claude Code's result line by its status first, then its report where
+// its answer should be or in a failed run's error; OpenCode's typed failure
+// event, collected as the run's error. An answer that merely MENTIONS a limit,
+// and an error that is no limit, bench nothing.
 //
 // Mutation: hand RunEnded's classification no terminal event, and Claude Code
 // 2.1.312's spent plan benches nothing.
@@ -140,15 +138,12 @@ func TestARunsResetIsReadAgainstWhenItsEndingWasFirstRead(t *testing.T) {
 
 // AN ENDING READ AGAIN IS THE SAME REPORT. A completion held on a limit is
 // collected again when its hold lifts, and every collection reads the job's
-// ending. Dated by the reading, the ending opened a fresh window each time,
-// and one that named no reset stepped the backoff as a probe that met the limit
-// again would: the resume that waited out a minute found the entry benched for
-// two before any call was made, then five, then fifteen, for good, and one
-// whose vendor named a reset days out was benched afresh every hour. Dated by
-// its first collection, the second reading falls in the window the first
-// opened, which is over: it sits nothing out, says so, and leaves the backoff
-// where the first reading put it. A report made after the window is the next
-// probe's, and takes the next step.
+// ending. Dated by the reading, each opened a fresh window and a reset-less one
+// stepped the backoff as a probe meeting the limit again would, benching the
+// entry longer before any call was made. Dated by its first collection, the
+// second reading falls in the window the first opened, which is over: it sits
+// nothing out and leaves the backoff where the first put it. A report after the
+// window is the next probe's, and takes the next step.
 //
 // Mutation: date the window by the provider's clock in bench, and the second
 // reading sits the entry out again.

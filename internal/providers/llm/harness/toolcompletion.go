@@ -9,25 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// toolCompletion turns a finished run with tools into an answer or a
-// classified failure — after reporting, on EVERY outcome, what the run cost
-// that nothing has reported yet ([recordReader.settle]).
+// toolCompletion turns a finished run with tools into an answer or a classified
+// failure, after reporting on EVERY outcome what the run cost that nothing has
+// reported yet ([recordReader.settle]). Unlike [Provider.completion]:
 //
-// # What is different from a text function's ([Provider.completion])
-//
-//   - A run the host ended is an answer of what it did, not a failure: the
-//     host decided, and the run's record is the tool loop's to read.
-//   - A run its harness's own turn cap ended is an answer stopped at the cap
-//     ([llm.StopCap]), where the profile can tell one ([harnessprofile.Cap]).
-//   - A run that never listed the host's tools had none, which is the harness or
-//     its configuration failing rather than a model that called none.
-//   - The answer is the model's LAST response's prose where the record shows
-//     the requests — the earlier ones were the host's, observed as the run
-//     went — and the profile's answer path otherwise.
-//   - NOTHING THE RUN PRINTED IS QUOTED IN AN ERROR. Its output carries every
-//     call's arguments and every tool's result, and an error is shown and
-//     logged wherever the failure goes; what a failure says is stderr and the
-//     harness's own failure events by field ([harnessprofile.MCP.FailureEvents]).
+//   - A run the host ended, or its harness's turn cap ended ([llm.StopCap],
+//     where [harnessprofile.Cap] can tell), is an answer of what it did.
+//   - A run that never listed the host's tools had none: the harness or its
+//     configuration failed, not a model that called none.
+//   - The answer is the LAST response's prose where the record shows requests.
+//   - NOTHING THE RUN PRINTED IS QUOTED IN AN ERROR: it carries every call's
+//     arguments and tool result. A failure says stderr and the harness's failure
+//     events by field ([harnessprofile.MCP.FailureEvents]).
 func (p *Provider) toolCompletion(
 	ctx context.Context, res *rawResult, usageDoc string, t *toolRun, connected bool,
 ) (*llm.Completion, error) {

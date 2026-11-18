@@ -23,20 +23,14 @@ import (
 // and how long the end of a call waits for its harness's group and for every
 // holder of its output to let go.
 //
-// The timeout has already fired, so the call is lost either way; this decides
-// only whether the tree gets to flush. Five seconds is enough for a Node
-// runtime to run its exit handlers and close its sockets, and short enough
-// that a wedged child does not hold the seat's concurrency slot for a
-// meaningful fraction of the next call. Same figure the sandbox uses for the
-// same reason. It is the end's bound for the same reason it was WaitDelay's
-// for the pipes: one figure governs a holder's grace, so nothing about a held
-// stream's timing changed when the pipes went.
+// The timeout has already fired, so this decides only whether the tree gets to
+// flush. Five seconds lets a Node runtime run its exit handlers and close its
+// sockets, yet keeps a wedged child from holding the seat's concurrency slot
+// through much of the next call. The sandbox uses the same figure.
 //
-// Every provider [New] builds carries it as [Provider.termGrace], which is
-// what every child this package starts is given — a seat's call, the doctor's
-// version probe and the credential commands alike — so one figure governs
-// them all and the suite can witness a kill without sitting out five seconds
-// of it.
+// Every provider [New] builds carries it as [Provider.termGrace], given to
+// every child this package starts, so the suite can witness a kill without
+// waiting it out.
 const termGrace = 5 * time.Second
 
 // stderrTail is how many lines of a failed child's stderr are reported.
@@ -47,27 +41,17 @@ const termGrace = 5 * time.Second
 // of the log budget for every other seat. Same figure the MCP supervisor uses.
 const stderrTail = 50
 
-// maxOutput is how much of one stream of a child the engine answers for.
-//
-// Every place it counts is that one question, so it is one figure: two would
-// let the room and the bound disagree.
-//
-//   - The bound on ONE ANSWER ([oneAnswer]): past it the run is ended and
-//     refused. 32 MiB is far above any real completion — the largest observed
-//     is under 2 MiB — and far below what would put the engine under memory
-//     pressure with max_concurrent processes running, since the end reads it
-//     whole.
-//   - What a stream READ TO ITS END keeps ([readToEnd]): the first 32 MiB of
-//     a run's record and of every stderr, which is what is classified at the
-//     end, as the capped buffers before the captures kept. The record itself
-//     is read past it: it can be tens of megabytes for a long run, and no cap
-//     in the engine bounds a legitimate one.
-//   - The room every file capture is given on its volume at its start, and
-//     kept ahead of the reader, so that no write within the bound fails for
-//     room: a Node runtime drops the count a short write to a file returns,
-//     and would lose the tail of an answer to a full volume silently.
-//   - How far a writer may run ahead of the engine's reading before the run
-//     is ended: a pipe held the writer back, and a file does not.
+// maxOutput is how much of one stream of a child the engine answers for; one
+// figure, so the room and the bound cannot disagree. It is:
+//   - the bound on ONE ANSWER ([oneAnswer]), past which the run is ended: far
+//     above any real completion (largest seen under 2 MiB), far below memory
+//     pressure at max_concurrent processes, since the end reads it whole;
+//   - what a stream READ TO ITS END keeps ([readToEnd]); the record is read
+//     past it;
+//   - the room each file capture is given at its start (a Node runtime drops a
+//     short write's count, so a full volume silently loses an answer's tail);
+//   - how far a writer may run ahead of the reader (a file, unlike a pipe,
+//     does not hold it back).
 const maxOutput = 32 << 20
 
 // invocation is one harness call, fully resolved.
@@ -255,23 +239,14 @@ func (r *rawResult) unfinished() string {
 
 // run executes one invocation, its output captured into files of its own
 // ([startChild]), terminating the whole process TREE when its call ends
-// first, and when something the harness left behind outlives it past the
-// grace.
+// first or something the harness left behind outlives it past the grace (its
+// Node or Bun helpers would keep the seat's memory and sockets).
 //
-// The tree, not the process: a harness is a launcher over a Node or Bun
-// runtime that forks helpers, and signalling only the process Go started
-// leaves those holding the seat's memory and its network sockets.
-//
-// AN ERROR MEANS NO CHILD RAN: an invocation refused before the fork, output
-// files the host would not give (a volume with no room for them, a filesystem
-// without locks per open file), a binary exec could not start, or a child
-// whose process identity could not be read, ended as it started
-// ([recordGroup]), with nothing of its run read. Everything that happened to
-// a child that did start — its exit, the deadline, its output past its bound,
-// a stream something it left behind still held, a wait that failed — is in
-// the result, because only the caller can say what each means, and a caller
-// that read every error as "could not start" stopped a seat's fallback chain
-// on a harness that had printed a whole answer and exited 0
+// AN ERROR MEANS NO CHILD RAN: refused before the fork, output files the host
+// would not give, a binary exec could not start, or a child whose identity
+// could not be read ([recordGroup]). Whatever happened to a child that did
+// start is in the result: reading every error as "could not start" stopped a
+// seat's fallback chain on a harness that printed a whole answer and exited 0
 // ([Provider.Complete]).
 func run(ctx context.Context, in invocation) (*rawResult, error) {
 	// A MISSING ENVIRONMENT IS NOT AN EMPTY ONE. os/exec hands a child whose
@@ -374,16 +349,12 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	// and that grace is the end's.
 	letGoBy = ch.letGoBy(letGoBy)
 
-	// GATED ON THE CONTEXT ENDING, not on the deadline specifically.
-	// cmd.Cancel and WaitDelay fire on cancellation exactly as they do on a
-	// timeout, so both leave the same survivor — but the reap only ran for
-	// the timeout. On the one path where nothing else comes back for it,
-	// shutdown, a forking Node or Bun subtree holding this seat's workspace
-	// and sockets outlived the engine: os/exec's WaitDelay kill reaches the
-	// immediate process, never the group.
-	//
-	// res.timedOut keeps its narrower meaning — harness.go classifies a
-	// deadline as KindTimeout and a cancellation is not one.
+	// GATED ON THE CONTEXT ENDING, not on the deadline: cancellation leaves
+	// the same survivor as a timeout, and at shutdown nothing else comes back
+	// for a forking Node or Bun subtree holding the seat's workspace and
+	// sockets, since os/exec's WaitDelay kill reaches only the immediate
+	// process. res.timedOut keeps its narrower meaning: harness.go classifies
+	// a deadline as KindTimeout, a cancellation not.
 	//
 	// AFTER WAIT HAS REAPED THE HARNESS, so the group is killed only while it
 	// is still the one recorded at the start: see [harnessGroup.signal].
@@ -492,20 +463,14 @@ type extracted struct {
 	failed bool
 
 	// located reports that the profile FOUND where this harness puts its
-	// answer: a declared text path resolved to a string — empty or not —
-	// or the output mode makes the whole of stdout the answer.
+	// answer: a declared text path resolved to a string, empty or not, or the
+	// output mode makes the whole of stdout the answer.
 	//
-	// THREE-VALUED EXTRACTION, and it has to be. "The model answered with
-	// nothing" and "this profile does not describe this harness's output" are
-	// different facts about a run, and collapsing them into an empty
-	// string is what made a Claude Code telemetry envelope — session id,
-	// millisecond timings, a token breakdown, `"result":""` — render on a
-	// dashboard as the sentence an agent had spoken. The fallback that
-	// did it read `if out.text == "" { out.text = stdout }`, which cannot
-	// tell the two apart because [firstString] returned "" for both.
-	//
-	// Set by [extract] only; there is no other constructor, which is why
-	// the false zero value is not a claim about anything.
+	// THREE-VALUED: "the model answered with nothing" and "this profile does
+	// not describe this harness's output" are different facts, and collapsing
+	// them into an empty string (a fallback to stdout on empty text) rendered a
+	// Claude Code telemetry envelope as the sentence an agent had spoken.
+	// Set by [extract] only, so the false zero value claims nothing.
 	located bool
 }
 
@@ -691,18 +656,15 @@ func (o usageOutcome) String() string {
 }
 
 // applyUsageReport overlays a vendor's SEPARATE usage report on what stdout
-// said, for a profile whose harness writes one or prints one to a usage command —
-// see [harnessprofile.Profile.UsageFileArgs] and [harnessprofile.Profile.UsageArgs] —
+// said, for a profile whose harness writes one or prints one to a usage command
+// ([harnessprofile.Profile.UsageFileArgs], [harnessprofile.Profile.UsageArgs]),
 // and says what it made of it.
 //
-// BOTH PROMPT COUNTS COME FROM THE FILE OR NEITHER DOES. A partial overlay
-// would pair one source's input count with another's output count, and the
-// sum is what a budget is charged. The two cache figures are not part of that
-// test: a provider that caches nothing reports neither, and zero is the true
-// answer there.
-//
-// Taking nothing leaves the counts to whatever stdout reported, which for a
-// harness that reports none there is the estimate.
+// BOTH PROMPT COUNTS COME FROM THE FILE OR NEITHER DOES: a partial overlay
+// would pair one source's input with another's output, and the sum is what a
+// budget is charged. The cache figures are exempt: a provider that caches
+// nothing reports neither, and zero is true. Taking nothing leaves the counts
+// to stdout, or to the estimate.
 func (e *extracted) applyUsageReport(p harnessprofile.Profile, raw string) usageOutcome {
 	if !p.ReadsUsageReport() || strings.TrimSpace(raw) == "" {
 		return usageNoReport
@@ -761,22 +723,18 @@ func textOf(p harnessprofile.Profile, doc map[string]any) (string, bool) {
 	return firstString(doc, p.TextPaths)
 }
 
-// classifyFailureEvents is the [harnessprofile.MarkerScopeEvents] scope: every
-// stdout line decoded, only those whose discriminator names one of the harness's
-// own failure events kept, and each sentinel compared by EQUALITY with the
-// string at the profile's marker path in such an event.
+// classifyFailureEvents is the [harnessprofile.MarkerScopeEvents] scope: each
+// stdout line decoded, only the harness's own failure events kept, and each
+// sentinel compared by EQUALITY with the string at the marker path in one.
 //
-// NEVER A SUBSTRING SEARCH, which is what this scope was first: OpenCode 2
-// prints a tool call's arguments as the model's own raw JSON object, so a
-// model can put any sentinel on stdout spelled exactly as the harness spells it,
-// on a healthy call. What it cannot do is change the type of the event its
-// words arrive in, or move them to where the path points in an event of the
-// failure type — the harness writes those. A line that does not decode, has no
+// NEVER A SUBSTRING SEARCH: OpenCode 2 prints a tool call's arguments as the
+// model's own raw JSON, so a model can put any sentinel on stdout on a healthy
+// call. It cannot change the type of the event its words arrive in, nor reach
+// the marker path of a failure-type event. A line that does not decode, has no
 // discriminator, or whose class is not a string is no failure report.
 //
-// Limit markers before auth markers, the precedence the text scopes keep.
-// The matched event's whole line is what the operator is shown: it carries
-// the provider's own message beside the class.
+// Limit markers before auth markers, as the text scopes do. The operator is
+// shown the matched event's whole line.
 func classifyFailureEvents(p harnessprofile.Profile, stdout string) (markerHit, bool) {
 	type failure struct{ class, line string }
 	var failures []failure
@@ -894,17 +852,15 @@ func members(node any) []any {
 // firstString reads the answer out of a decoded document, and reports whether
 // any declared path RESOLVED at all.
 //
-// The bool is the whole point, and it is not the same as a non-empty return:
-// a path that resolved to "" says the harness answered with nothing, a path that
-// resolved to nothing says this profile no longer describes this harness. Callers
-// that collapse the two hand a vendor's telemetry back as the model's words —
-// see [extracted.located].
+// The bool differs from a non-empty return: a path resolving to "" means the
+// harness answered with nothing, one resolving to nothing means the profile no
+// longer describes the harness; collapsing them hands telemetry back as the
+// model's words ([extracted.located]).
 //
-// A resolved-but-empty path does NOT stop the walk: `text_paths` is a list
-// precisely so a vendor that moved the field between releases needs no
-// override, and cursor-agent's `[["result"], ["response"]]` depends on an
-// empty `result` falling through to `response`. So the first NON-EMPTY hit
-// wins, and an all-empty walk still reports located.
+// A resolved-but-empty path does NOT stop the walk: `text_paths` is a list so
+// a vendor that moved a field needs no override, and cursor-agent's
+// `[["result"], ["response"]]` relies on an empty `result` falling through.
+// The first NON-EMPTY hit wins; an all-empty walk still reports located.
 func firstString(doc map[string]any, paths []harnessprofile.Path) (string, bool) {
 	located := false
 	for _, path := range paths {

@@ -137,21 +137,17 @@ func (p *piRecorder) end(script fakeScript, _ fakeUsage, last string) int {
 }
 
 // PI'S RUN IS READ FROM ITS OWN SESSION FILE, AND ITS HOME STARTS NO SERVER OF ITS
-// OWN. A run with tools keeps its session in its own directory, where the harness
-// appends each message as it completes — each response's prose, calls and
-// counts, the prompt less its cached part — and prints the plain answer as a
-// text function does. The server is registered by an extension the run loads
-// by its path; the agent directory's mcp.json, whose servers the harness starts
-// whenever its MCP support is on, is the profile's own, empty, whatever was
-// there. The harness sends no id with a call, so a call is joined by name and
-// arguments; the host is told the harness waits the profile's 600 seconds for a
-// call, re-reads the list when told it changed, and makes a response's calls
-// at once.
+// OWN. A run with tools keeps its session in its own directory, the harness appending
+// each message as it completes (prose, calls, counts, the prompt less its cached
+// part), and prints the plain answer. The server is registered by an extension loaded
+// by path; the agent directory's mcp.json, whose servers the harness starts when MCP
+// is on, is the profile's own, empty, whatever was there. The harness sends no id
+// with a call, so a call is joined by name and arguments; the host is told it waits
+// 600 seconds, re-reads the list when told it changed, and runs a response's calls at once.
 //
-// Mutation: drop the route's --session-dir, and no record is read; drop the
-// mcp.json seed, and the planted server starts (the fake fails the run); read
-// the record's input as the whole prompt, and the run is charged 100 tokens
-// less than it spent.
+// Mutation: drop --session-dir and no record is read; drop the mcp.json seed and the
+// planted server starts; read the record's input as the whole prompt and the run is
+// charged 100 tokens less than it spent.
 func TestPisRunIsReadFromItsOwnSessionFile(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "pi", routeCase, func(c *Config) { c.Auth = Auth{Mode: AuthSubscription} })

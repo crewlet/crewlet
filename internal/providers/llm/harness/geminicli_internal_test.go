@@ -239,14 +239,13 @@ func TestGeminiSignsInWithWhatTheModeNames(t *testing.T) {
 }
 
 // A KEY CALL BEHIND A GATEWAY STAYS ON ITS KEY, AND A LOGIN CALL ON ITS LOGIN.
-// Naming no sign-in in its settings, the harness takes one from its environment,
-// where GOOGLE_GEMINI_BASE_URL — an operator's gateway in front of the API —
-// outranks GEMINI_API_KEY and selects a sign-in 0.65.0 refuses: exit 41,
-// "Invalid auth method selected", before any request (measured through the
-// engine). Settings outrank the environment, so the home a key call runs in
-// names the key sign-in, and the home a subscription call runs in names none,
-// leaving GOOGLE_GENAI_USE_GCA to pick the login — the key sign-in there would
-// send it to a key it does not have.
+// Naming no sign-in in its settings, the harness takes one from its
+// environment, where GOOGLE_GEMINI_BASE_URL (an operator's gateway) outranks
+// GEMINI_API_KEY and selects a sign-in 0.65.0 refuses: exit 41, "Invalid auth
+// method selected". Settings outrank the environment, so a key call's home
+// names the key sign-in, and a subscription call's names none, leaving
+// GOOGLE_GENAI_USE_GCA to pick the login; the key sign-in there would send it
+// to a key it does not have.
 //
 // Mutation: drop the profile's key_seed_files, and the key home names no
 // sign-in; put its content in seed_files instead, and the login home names the

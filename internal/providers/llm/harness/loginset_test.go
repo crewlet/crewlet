@@ -377,24 +377,16 @@ func TestASignInIsWrittenAsTheWholeLoginItLeft(t *testing.T) {
 
 // A FILE A SIGN-IN REMOVED GOES BACK ONLY FROM THE LOGIN IT WAS SEEDED FROM.
 // Its harness renewed the token and removed config.toml. No harness's removal reaches
-// the shared directory — a harness that dropped a file is no reason to log the
-// fleet out of the login it was seeded with — so the shared login's
-// config.toml stays beside the new token while it is still that login's: the
-// copy the sign-in was seeded with, or that copy as a seat refreshed it while
-// the sign-in ran, which is the same login, newer. A config.toml an operator's
-// write put there while the sign-in ran is not that login's: it is another
-// sign-in's, and kept it made the shared login one sign-in's token beside
-// another's config.toml. It is dropped, as a file the sign-in never held is,
-// leaving the login the sign-in left. Bytes cannot tell the last two apart —
-// each is a config.toml that is not the seed — so the operator's write is the
-// one that moved the operator epoch.
+// the shared directory (the fleet stays logged in), so config.toml stays beside the new
+// token while it is still that login's: the seeded copy, or that copy as a seat
+// refreshed it meanwhile. One an operator's write put there while the sign-in ran is
+// another sign-in's: kept, it made one sign-in's token beside another's config.toml,
+// so it is dropped. Bytes cannot tell the two apart; the operator epoch does.
 //
-// Mutation: carry a login as the files the home holds alone, and the first two
-// cases lose config.toml; keep only a copy whose bytes are the seed's, and the
-// second loses the seat's refresh; keep whatever the shared directory holds of
-// a file the home was seeded with, or read the epoch the seed is judged by when
-// the sign-in ends rather than with the seed, and the third keeps the
-// operator's config.toml.
+// Mutation: carry the files the home holds alone and the first two cases lose
+// config.toml; keep only a copy with the seed's bytes and the second loses the seat's
+// refresh; keep whatever the shared directory holds, or read the epoch when the sign-in
+// ends rather than with the seed, and the third keeps the operator's config.toml.
 func TestAFileASignInRemovedGoesBackOnlyFromTheLoginItWasSeededFrom(t *testing.T) {
 	t.Parallel()
 	token := `{"token":"signed-in"}`
@@ -448,21 +440,17 @@ func TestAFileASignInRemovedGoesBackOnlyFromTheLoginItWasSeededFrom(t *testing.T
 	}
 }
 
-// THE OPERATOR EPOCH TELLS A SEAT'S REFRESH FROM ANOTHER SIGN-IN, written by the
-// writers themselves rather than by hand: a sign-in seeded from one login, whose
-// harness renewed the token and removed config.toml, is carried out after a real
-// writer replaced the shared config.toml while it ran. A seat's refresh moves no
-// epoch and is the seeded login, newer, so its config.toml stays beside the new
-// token; `-from-host`, and a logout followed by an import, move it, so theirs is
-// another sign-in's and is dropped. Judged by bytes alone, the seat's refresh
-// was dropped with them, and a sign-in that happened to overlap a seat's call
-// logged the fleet out of the file it removed.
+// THE OPERATOR EPOCH TELLS A SEAT'S REFRESH FROM ANOTHER SIGN-IN, exercised through the
+// real writers: a sign-in seeded from one login, whose harness removed config.toml, is
+// carried out after a writer replaced the shared config.toml while it ran. A seat's
+// refresh moves no epoch and is the seeded login, newer, so its config.toml stays;
+// `-from-host`, and a logout then an import, move it, so theirs is dropped. Judged by
+// bytes alone the seat's refresh was dropped too, logging the fleet out of the file.
 //
-// Mutation: drop every removed file's copy that is not the seed's, or seed a
-// sign-in with no epoch, and the seat's case loses config.toml; keep every copy
-// whatever the epoch says, and the other two keep the other sign-in's
-// config.toml; move no epoch in -from-host, and its case does; in neither a
-// logout nor an import, and the last does.
+// Mutation: drop every removed file's copy that is not the seed's, or seed a sign-in
+// with no epoch, and the seat's case loses config.toml; keep every copy whatever the
+// epoch says and the other two keep the other sign-in's; move no epoch in -from-host,
+// or in neither a logout nor an import, and that case does.
 func TestTheOperatorEpochTellsASeatsRefreshFromAnotherSignIn(t *testing.T) {
 	t.Parallel()
 	token := `{"token":"signed-in"}`
@@ -539,20 +527,18 @@ func TestTheOperatorEpochTellsASeatsRefreshFromAnotherSignIn(t *testing.T) {
 	}
 }
 
-// AN OPERATOR'S WRITE IS COUNTED BEFORE IT LANDS. Every reader of the operator
-// epoch takes an unmoved one as proof that no operator's write landed — a login
-// a failed export kept is carried out over the shared one, and a file a sign-in
-// removed goes back as the shared login holds it — so the epoch moves before the
-// write it counts. Moved after, a write killed between the two, or kept by a
-// power loss that lost the epoch, landed uncounted. Neither can be stopped on
-// cue here, so the order is read off an epoch that cannot be moved: an
-// operator's write behind it writes nothing. A logout is the exception, by
-// design: what an operator relies on it for is the removal, so it removes the
-// login it could not count, and says so.
+// AN OPERATOR'S WRITE IS COUNTED BEFORE IT LANDS. Every reader of the operator epoch
+// takes an unmoved one as proof that no operator's write landed (a pending login is
+// carried out over the shared one; a removed file goes back as the shared login holds
+// it), so the epoch moves before the write it counts: moved after, a write killed
+// between the two, or kept by a power loss that lost the epoch, landed uncounted. Neither
+// can be stopped on cue, so the order is read off an epoch that cannot be moved: an
+// operator's write behind it writes nothing. A logout is the exception, by design: it
+// removes the login it could not count, and says so.
 //
-// Mutation: move the epoch after the write in -from-host or in an import, and
-// that case writes its login though its epoch could not move; move none in a
-// logout, and it reports a removal it did not count as counted.
+// Mutation: move the epoch after the write in -from-host or an import and that case
+// writes though its epoch could not move; move none in a logout and it reports a
+// removal it did not count as counted.
 func TestAnOperatorsWriteIsCountedBeforeItLands(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -795,19 +781,17 @@ var loginScripts = map[string]hostboxtest.Script{
 	}},
 }
 
-// runLoginWriter is a process of its own — a `crewlet llm` command, an engine
-// running seats — writing the shared login by one of its writers, with the
-// kill matrix's observer on every write its workspace makes
-// ([hostboxtest.Writer]), for [TestNoWriterKilledPartWayLeavesHalfALogin] to
-// kill at each step. After the setup, each writer makes two writes:
+// runLoginWriter is a process of its own (a `crewlet llm` command, an engine running
+// seats) writing the shared login by one of its writers, with the kill matrix's
+// observer on every write ([hostboxtest.Writer]), for
+// [TestNoWriterKilledPartWayLeavesHalfALogin] to kill at each step. After the setup
+// each writer makes two writes:
 //
-//   - import-logout: the setup imports a login; then a logout, and the same
-//     import again;
-//   - adopt: the setup runs `-from-host` from the first of two homes; then from
-//     the second, and from the first again;
-//   - carry: the setup imports a login; then two calls of a seat, each seeded
-//     with the shared login, its home rewritten to the other login, and
-//     carried back by its release.
+//   - import-logout: the setup imports a login; then a logout, and the import again;
+//   - adopt: the setup runs `-from-host` from the first of two homes; then from the
+//     second, and from the first again;
+//   - carry: the setup imports a login; then two calls of a seat, each seeded with
+//     the shared login, its home rewritten to the other login, carried back by release.
 func runLoginWriter(op string) {
 	fail := func(err error) {
 		fmt.Fprintln(os.Stderr, err)
@@ -880,21 +864,18 @@ func runLoginWriter(op string) {
 	w.Done()
 }
 
-// NO WRITER KILLED AT ANY STEP LEAVES HALF A LOGIN. Each writer of the shared
-// login — an import and a logout, `-from-host`, a seat's carry — runs in a
-// process of its own and is killed at every step of the writes its script
-// makes, one process per step, on the kill matrix ([hostboxtest]): what the
-// directory holds is judged exactly, then read as the next process reads it,
-// and every time it is the whole login the interrupted write committed. Written
-// a file at a time, a kill between two renames left one sign-in's token beside
-// another's config.toml, or one file of a login the logout was removing.
+// NO WRITER KILLED AT ANY STEP LEAVES HALF A LOGIN. Each writer of the shared login
+// (an import and a logout, `-from-host`, a seat's carry) runs in a process of its own,
+// killed at every step of its script's writes on the kill matrix ([hostboxtest]); what
+// the directory holds is judged exactly, then read as the next process reads it, and
+// is always the whole login the interrupted write committed. Written a file at a time,
+// a kill between two renames left one sign-in's token beside another's config.toml.
 //
-// Mutation: write the login a file at a time in any one writer — the restore,
-// the logout, `-from-host` or the carry — and its script makes more writes than
-// it has logins; write the install record in a write of its own, and the
-// import's and `-from-host`'s do too; read the login's files without finishing
-// a write left standing, and a kill inside a write reads half of each; hand the
-// write no observer, and the run reaches no step.
+// Mutation: write the login a file at a time in any one writer and its script makes
+// more writes than it has logins; write the install record in a write of its own and
+// the import's and `-from-host`'s do too; read the files without finishing a write
+// left standing and a kill inside a write reads half of each; hand the write no
+// observer and the run reaches no step.
 func TestNoWriterKilledPartWayLeavesHalfALogin(t *testing.T) {
 	t.Parallel()
 	homes := []string{t.TempDir(), t.TempDir()}
@@ -944,22 +925,17 @@ func credentialsDirOf(t *testing.T, state string) string {
 	return p.ws.CredentialsDir()
 }
 
-// A LOGIN WRITE THAT COMMITTED IS WRITTEN, though the disk refused one of its
-// files: its journal landed, so it is the login of record and the next reader
-// puts it in place — and the steps that follow a write follow it. Reported as
-// a write that failed, `-from-host` left the logout standing, so the configured
-// bundle stayed held back from a directory holding a login; and a logout
-// reported the login it had removed as still there. (The operator epoch has
-// moved either way: each moves it before its write ([Workspace.bumpLoginEpoch]).)
+// A LOGIN WRITE THAT COMMITTED IS WRITTEN, though the disk refused one of its files:
+// its journal landed, so it is the login of record and the steps after a write follow
+// it. Reported as failed, `-from-host` left the logout standing, so the bundle stayed
+// held back from a directory holding a login, and a logout reported the login it
+// removed as still there. (The epoch moves before either write.)
 //
-// Each is a writer that reads nothing first, so something in the way of one
-// shared file stops the write after its journal lands — a writer that reads
-// the login first is refused by the same obstacle before it writes.
+// Each is a writer that reads nothing first, so an obstacle in one shared file stops
+// the write after its journal lands; a writer that reads first is refused before it writes.
 //
-// NOT PARALLEL: it reads the process's log.
-//
-// Mutation: answer a write that committed and could not be put in place as a
-// failure in writeLoginLocked, and both cases are red.
+// NOT PARALLEL: it reads the process's log. Mutation: answer a write that committed
+// and could not be put in place as a failure in writeLoginLocked, and both cases are red.
 func TestALoginWriteThatCommittedIsWrittenThoughAFileWasRefused(t *testing.T) {
 	logs := captureLogs(t)
 	inTheWay := func(t *testing.T, path string) {
