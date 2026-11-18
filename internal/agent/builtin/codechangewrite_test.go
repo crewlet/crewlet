@@ -192,6 +192,44 @@ func TestOpenChangeRequestsItsReviewersAsAStep(t *testing.T) {
 	}
 }
 
+// A SOURCE ITS TARGET ALREADY HOLDS IS NO CHANGE: feature's head is in main's
+// history, so the open is refused no_difference, as one at main's own commit
+// is, and nothing is written; the committer's decide, which reads rows, would
+// see two tips that differ and open a change its home marks merged at once.
+// A source main does not hold opens as before.
+//
+// Mutation: skip the history read, and the open is sent.
+func TestAnOpenOfASourceItsTargetHoldsIsRefused(t *testing.T) {
+	t.Parallel()
+	writer := &codeWrites{}
+	host := newGitletHost()
+	host.held = map[string][]string{"refs/heads/main": {featureOID}}
+	reg := codeRegistry(t, writeDeps(host, writer))
+	got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeOpenChangeTool, openArgs())
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid || !strings.Contains(got.Output, "no_difference") ||
+		!strings.Contains(got.Output, "refs/heads/main already holds every commit of refs/heads/feature") {
+		t.Fatalf("an open of a source main holds answered %q as %s, want no_difference", got.Output,
+			tools.RefusalOf(got))
+	}
+	if changes, _ := writer.changesAsked(); len(changes) != 0 {
+		t.Fatalf("an open of a source main holds sent %+v, want nothing written", changes)
+	}
+	_, _, gits := host.asked()
+	if len(gits) != 1 || gits[0].Kind != gitlet.GitLandedIn || gits[0].LandedIn.Commit != featureOID ||
+		gits[0].LandedIn.Target != "refs/heads/main" || gits[0].LandedIn.TargetOID != mainOID {
+		t.Fatalf("the open read %+v, want one landed_in of feature's head in main", gits)
+	}
+
+	open := newGitletHost()
+	if got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(open, writer)), writerTurn(t),
+		builtin.CodeOpenChangeTool, openArgs()); got.Failed {
+		t.Fatalf("an open of a source main does not hold answered %q", got.Output)
+	}
+	if changes, _ := writer.changesAsked(); len(changes) != 1 {
+		t.Fatalf("an open of a source main does not hold sent %d opens, want one", len(changes))
+	}
+}
+
 // opIDsOf and opIDsOfConverse are the operations a list of writes was made
 // under.
 func opIDsOf(ps []gitlet.ChangeProposal) []string {

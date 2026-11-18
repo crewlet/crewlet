@@ -1738,7 +1738,7 @@ A write that is refused appends nothing, and says why in one sentence:
 | `change_not_found` | The repository holds no such change |
 | `not_permitted` | The asker may not make the write: an open by one who may not push the source branch, saying what the asker holds and what would admit it; any other write by one who neither owns the change nor maintains the repository, nor is a person |
 | `stale` | The change is at another version than the write was formed against |
-| `same_ref`, `no_source`, `no_target`, `no_difference` | The source and target are one branch; the source or the target is not a live branch; the source is at its target's commit |
+| `same_ref`, `no_source`, `no_target`, `no_difference` | The source and target are one branch; the source or the target is not a live branch; the source is at its target's commit, or (asked through `code_open_change`, which reads the branches' histories before it writes, since the committer reads rows alone) its target already holds every commit of it |
 | `change_exists` | The source branch already heads a live change, which the sentence names |
 | `change_closed`, `change_merged` | An edit, a draft's state or a retarget of a closed change, which is reopened first; any write but an open of a merged change, which stays merged |
 | `busy`, `not_applied`, `unavailable` | The committer did not reach the write in time, or the code log refused it or dropped it on every node: nothing was decided, and the write is sent again |
