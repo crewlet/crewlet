@@ -95,7 +95,7 @@ function staleCaption(limits: readonly ModelLimit[], now: number): string | unde
 
 /** Each window's use and exact reset on a line (the tooltip's `lines`), then when heard. */
 function LimitDetail({ limits, now }: { limits: readonly ModelLimit[]; now: number }) {
-  const heard = new Set(limits.map((l) => ago(l.seen, now)));
+  const heard = new Set(limits.map((l) => `Heard ${ago(l.seen, now)}`));
   const each = heard.size > 1;
   return (
     <>
@@ -107,7 +107,7 @@ function LimitDetail({ limits, now }: { limits: readonly ModelLimit[]; now: numb
             .join(", ")}
         </span>
       ))}
-      {each ? null : <span>Heard {[...heard][0]}</span>}
+      {each ? null : <span>{[...heard][0]}</span>}
     </>
   );
 }
