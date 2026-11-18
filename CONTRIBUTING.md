@@ -145,11 +145,29 @@ week](#the-playwright-mcp-pin-is-checked-every-week)). `make check`'s
 `playwright-mcp-test`, the recipe's and the weekly check's own suite, needs
 `openssl`, `gzip` and `tar` beside `curl` and the SHA-256 tool.
 
+**The floor Node.** A box brings its own Node, and the box helper supports
+Node `internal/browser/boxhelper.MinNodeMajor` (22) or newer, so a case of the
+helper is handed that floor's newest release as well as your own node
+(`internal/browser/boxhelper/boxhelpertest`'s `Floor` and `Node`): every make
+target that runs the whole suite depends on `make node`, which fetches the
+release [`scripts/node-pin.env`](scripts/node-pin.env) pins, checked against
+its SHA-256 for your platform, with [`scripts/node.sh`](scripts/node.sh) —
+`curl`, `xz` and the SHA-256 tool, about 31 MB of download, keeping
+`bin/node` and its licence (125 MB) in `~/.cache/crewlet/node`
+(`CREWLET_NODE_CACHE` moves it) — and names it in `CREWLET_TEST_NODE_FLOOR`
+(the Makefile's `NODE_FLOOR_ENV`). A one-package loop names it by hand, as
+two statements:
+`floor=$(scripts/node.sh floor) && CREWLET_TEST_NODE_FLOOR="$floor" go test ./internal/browser/boxhelper/...`
+— a bare `go test` without it skips those cases, saying so, and runs the rest.
+A floor named there is held to `MinNodeMajor`'s major by what it answers to
+`--version`, asked without `NODE_OPTIONS`. `make check`'s `node-test`, the
+recipe's and the weekly check's own suite, needs GnuPG beside those.
+
 **A current Node** (npm ships with it) for the dashboard — its build output is
 committed, so building and running the ENGINE needs neither, but changing the
 dashboard, running `internal/e2e`'s client replay or the probes of OpenCode's
-plugins does. Nothing in the tree pins a node version; CI installs the
-latest — see *Which node* under
+plugins does. Nothing in the tree pins the node you install, the suite's floor
+(above) aside; CI installs the latest — see *Which node* under
 [A skip is not a pass](#a-skip-is-not-a-pass). **Docker** only for the vendor
 loops below; the engine itself needs no services.
 
@@ -212,11 +230,13 @@ scripts/check-signoff_test.sh  # ... and that gate's own suite
 scripts/git-pin_test.sh        # the git recipe's and the pin check's own suite (git-test)
 scripts/chromium-pin_test.sh   # the Chromium recipe's and the pin check's own suite (chromium-test)
 scripts/playwright-mcp-pin_test.sh  # the Playwright MCP recipe's and the pin check's own suite (playwright-mcp-test)
+scripts/node-pin_test.sh       # the floor Node's recipe's and the pin check's own suite (node-test)
 go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
 make git         # the pinned gits, built once a machine (both test targets need it)
 make chromium    # the pinned Chromiums, fetched once a machine (both test targets need them)
+make node        # the pinned floor Node, fetched once a machine (both test targets need it)
 make test        # the suite, minus the packages that run alone, on the node pin, four at a time
 make test-solo   # ... and those, at -p 1, with a runner to themselves
 # then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
@@ -720,6 +740,18 @@ What follows are the prerequisites that legitimately vary by machine.
   open) nor a workflow's `with:`. A number nobody moves does not hold a
   version steady — it just goes quietly out of date while looking deliberate.
 
+  **The one exception is the suite's floor Node**,
+  [`scripts/node-pin.env`](scripts/node-pin.env): the oldest Node the box
+  helper supports, which a case of the helper is handed beside the node you
+  install. It is pinned because something moves it: a weekly check holds it
+  to the newest patch of its major and fails from 60 days before that major's
+  end of life (see [The floor Node is checked every
+  week](#the-floor-node-is-checked-every-week)). Without it the suite would
+  prove the helper on the newest Node alone, while every image may bring the
+  oldest the helper accepts. It is fetched by `make node` beside the node CI
+  installs, never installed in its place, so everything above holds for the
+  dashboard and every other suite.
+
   The cost is worth knowing before you hit it: a new Node major reaches CI
   with no commit behind it, so the `dashboard` check can go red on a day nobody
   changed anything. If that happens, the fix is `lts/*` in `ci.yml`'s
@@ -1204,12 +1236,13 @@ that a value in it changes what the engine *does*, not merely that it parses.
 ## Dependency updates
 
 Dependabot watches every dependency manifest this repository has, and opens a
-pull request when any of them has a newer release. The git, Chromium and
-Playwright MCP pins are no manifests Dependabot reads — a source tarball, a
-Chrome for Testing build, and npm tarballs the engine embeds, which no
-Dependabot entry may move — so a workflow of this repository's own watches
-them instead (and the tool servers the docs and the examples launch are not in
-a manifest either: a test holds them — see below):
+pull request when any of them has a newer release. The git, Chromium,
+Playwright MCP and floor Node pins are no manifests Dependabot reads — a source
+tarball, a Chrome for Testing build, npm tarballs the engine embeds, which no
+Dependabot entry may move, and a Node release — so a workflow of this
+repository's own watches them instead (and the tool servers the docs and the
+examples launch are not in a manifest either: a test holds them — see
+below):
 
 | Surface | Watched by | What it covers |
 |---|---|---|
@@ -1221,6 +1254,7 @@ a manifest either: a test holds them — see below):
 | `scripts/git-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the gits the engine image builds and the suite runs |
 | `scripts/chromium-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the Chromiums the suite drives |
 | `scripts/playwright-mcp-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the Playwright tree the box helper embeds |
+| `scripts/node-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the oldest Node the box helper supports |
 
 Dependabot keeps a version moving once it is in the tree; **choosing one in
 the first place goes the same direction — take the newest release, and pin it
@@ -1316,18 +1350,22 @@ worth knowing:
   with the pin: they hold the registry and the signing identity (and the
   release workflow the Releases), and a version tag is a ref its owner can move
   under them.
-- **The git, Chromium and Playwright MCP pins are watched by a workflow
-  rather than Dependabot**, and a bump of any arrives as an issue rather than
-  a pull request: every Monday [`pins.yml`](.github/workflows/pins.yml) asks
-  kernel.org whether each git pin is still the newest release of its series,
-  Chrome for Testing whether each Chromium pin is the release its rule names,
-  and the npm registry whether the Playwright MCP pin is `@playwright/mcp`'s
-  latest release, and keeps ONE issue per pin file, `git pin behind upstream`,
-  `chromium pin behind upstream` or `playwright mcp pin behind upstream`,
-  naming what moved — see [The git pin is checked every
+- **The git, Chromium, Playwright MCP and floor Node pins are watched by a
+  workflow rather than Dependabot**, and a bump of any arrives as an issue
+  rather than a pull request: every Monday
+  [`pins.yml`](.github/workflows/pins.yml) asks kernel.org whether each git
+  pin is still the newest release of its series, Chrome for Testing whether
+  each Chromium pin is the release its rule names, the npm registry whether
+  the Playwright MCP pin is `@playwright/mcp`'s latest release, and nodejs.org
+  whether the floor Node is the newest patch of its major, and keeps ONE issue
+  per pin file, `git pin behind upstream`, `chromium pin behind upstream`,
+  `playwright mcp pin behind upstream` or `node pin behind upstream`, naming
+  what moved — see [The git pin is checked every
   week](#the-git-pin-is-checked-every-week), [The Chromium pin is checked
-  every week](#the-chromium-pin-is-checked-every-week) and [The Playwright MCP
-  pin is checked every week](#the-playwright-mcp-pin-is-checked-every-week).
+  every week](#the-chromium-pin-is-checked-every-week), [The Playwright MCP
+  pin is checked every week](#the-playwright-mcp-pin-is-checked-every-week)
+  and [The floor Node is checked every
+  week](#the-floor-node-is-checked-every-week).
 - **goreleaser itself floats within its major.** Every goreleaser step in
   `.github/workflows/release.yml` asks for `version: "~> v2"`, the newest v2
   on each run, because Dependabot bumps the action's ref but never a `with:`
@@ -1638,8 +1676,9 @@ themselves needs a token beside the two the Dependabot workflows hold — a new
 credential, which the workflow does not take. It holds `contents: read` and
 `issues: write` and no secret, and the git pin is one leg of its matrix, each
 other pin another, under its own issue (see [The Chromium pin is checked every
-week](#the-chromium-pin-is-checked-every-week) and [The Playwright MCP pin is
-checked every week](#the-playwright-mcp-pin-is-checked-every-week)).
+week](#the-chromium-pin-is-checked-every-week), [The Playwright MCP pin is
+checked every week](#the-playwright-mcp-pin-is-checked-every-week) and [The
+floor Node is checked every week](#the-floor-node-is-checked-every-week)).
 
 **Making the bump** is a pull request of its own:
 
@@ -1797,7 +1836,8 @@ patch, skip a platform whose zip is missing, take a listing's answer unchecked
 — fails it. Like the git suite it runs itself a second time, by a relative
 path under a `CDPATH` naming another `scripts/`, in a hostile environment.
 Nothing holds the workflow file itself: read its `permissions:`, each leg's
-issue title and the git leg's key step on any diff that touches it.
+issue title and the key step of the git and Node legs on any diff that touches
+it.
 
 ### The Playwright MCP pin is checked every week
 
@@ -1865,6 +1905,81 @@ skip a signature's verification, accept another key id, take a dist-tag
 unchecked — fails it. Like the git suite it runs itself a second time, by a
 relative path under a `CDPATH` naming another `scripts/`, in a hostile
 environment.
+
+### The floor Node is checked every week
+
+[`scripts/node-pin.env`](scripts/node-pin.env) pins the oldest Node the box
+helper supports, the newest release of Node
+`internal/browser/boxhelper.MinNodeMajor`, by version and the SHA-256 of its
+tarball on each of the four platforms the engine is released for. No release
+carries it — the engine image has no Node — so a bump changes what the suite
+certifies and nothing a deployment runs. The `floor Node` leg of
+[`pins.yml`](.github/workflows/pins.yml) runs
+[`scripts/node-pin-check.sh`](scripts/node-pin-check.sh) beside the other legs
+every Monday:
+
+- **The pin moves to the newest patch of its major**, read from nodejs.org's
+  release index; a prerelease or any line whose version is not three numbers
+  is never one.
+- **The major is held to its support window.** From 60 days before the floor's
+  major reaches its end of life in nodejs/Release's `schedule.json`, the check
+  fails as for a pin behind, naming the next even major's newest release:
+  raising the floor is a change to `MinNodeMajor`, the oldest Node a box must
+  carry, in the same pull request (`TestTheFloorNodeIsTheMajorItStandsFor`
+  fails while the two disagree), never a bump, and the report titles it
+  `build(deps): raise node's floor from <a> to <b>`, each a major.
+- **Every release it proposes is one a releaser signed.** It verifies the
+  release's `SHASUMS256.txt` against the Node releasers' keys,
+  [`scripts/node-release-keys.asc`](scripts/node-release-keys.asc), imported
+  into a GnuPG home of its own and refused unless it holds exactly the primary
+  keys whose fingerprints the script pins; then it downloads each platform's
+  tarball and requires its SHA-256 to be the one that signed list names. A
+  signature by a key the file does not hold is refused naming it.
+- **An answer is a version or a date, or nothing**: of the index only lines of
+  three numbers are read, and of the schedule only an end of life of the form
+  `YYYY-MM-DD`.
+
+Exit 1 opens or updates ONE issue, `node pin behind upstream` (labelled
+`dependencies`, found by that exact title), with that report as its body, and
+fails the leg; exit 0 closes it; exit 2 — the index, the schedule or a download
+refused, a signature that does not verify or by a key the file does not hold, a
+tarball that is not the signed one, a pin ahead of the index — fails the leg
+and leaves the issue as it was.
+
+**Making the bump** is a pull request of its own: replace the pin's lines in
+`scripts/node-pin.env` with the ones the issue names
+(`scripts/node-pin-check.sh` prints them again by hand), run `make node` —
+it fetches the new build and refuses a tarball that is not the digest — then
+`make check`, and title the pull request as the report does: `build(deps):
+bump node's floor from <a> to <b>`, or for a raise `build(deps): raise node's
+floor from <a> to <b>`.
+
+**The keys are checked in the same run.** Some releasers' keys or their
+signing subkeys expire, and a release signed after that with the key extended
+cannot verify against the file's copy, so every run would fail with exit 2.
+The leg's last step, `scripts/node-pin-check.sh key`, reads for every pinned
+key when it stops signing, by the git key's rule (the latest expiry among its
+valid signing subkeys, bounded by the primary's own), and fails the run from
+60 days before any key's date, naming each such key, whether or not the pin is
+behind. To refresh the file, read the active releasers' keys from
+[nodejs/release-keys](https://github.com/nodejs/release-keys) (its README's
+"Active releasers keys", which the "Release keys" section of Node's own README
+must list too), put their `keys/<fingerprint>.asc` files in
+`scripts/node-release-keys.asc` and their fingerprints in the list
+`scripts/node-pin-check.sh` pins — leaving out a key upstream no longer lists,
+or one that has lapsed and that its releaser has not extended — run the check
+and `key` again, and land it as `build(deps): refresh node's release signing
+keys`.
+
+[`scripts/node-pin_test.sh`](scripts/node-pin_test.sh) (`make node-test`, in
+`make check` and ci.yml's `build + vet`) is the own suite of the check and of
+the recipe: it runs both against a stand-in nodejs.org tree, release schedule
+and releasers' keys it makes for itself, so it reads no network and fetches no
+Node, and every case it holds a mutation to — accept gpg's exit status without
+its `GOODSIG`, skip the keyring's comparison, take the downloaded tarball's
+digest unchecked against the signed list, read an index line unchecked — fails
+it. Like the git suite it runs itself a second time, by a relative path under a
+`CDPATH` naming another `scripts/`, in a hostile environment.
 
 ## Releasing
 

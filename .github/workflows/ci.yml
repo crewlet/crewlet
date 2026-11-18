@@ -94,13 +94,14 @@ concurrency:
 # rather than on the commit are saved only when that changes: the modules
 # (0.27 GB), the pinned gits (0.06 GB), the pinned Chromiums (0.30 GB, both
 # linux64 builds as actions/cache stores them, tar and zstd, measured from a
-# development machine's cache) and npm's cache (0.04 GB). `caches`, at the end
-# of the run, then deletes every entry a newer one of its kind supersedes. So
-# the repository holds one set, 3.36 GB in 15 entries after that run and 3.66
-# GB in 16 with the Chromiums', and a push's saves take it to about 6.6 GB
-# until that job runs, 6.9 GB on the push that moves a Chromium pin or the
-# layout of its recipe; the third end-to-end shard puts both about 0.3 GB
-# higher, still clear of the 10 GB.
+# development machine's cache), the floor Node (0.04 GB, its linux-x64 build
+# measured the same way) and npm's cache (0.04 GB). `caches`, at the end of the
+# run, then deletes every entry a newer one of its kind supersedes. So the
+# repository holds one set, 3.36 GB in 15 entries after that run and 3.70 GB in
+# 17 with the Chromiums' and the floor Node's, and a push's saves take it to
+# about 6.6 GB until that job runs, 6.9 GB on the push that moves a Chromium pin
+# or the layout of its recipe; the third end-to-end shard puts both about 0.3
+# GB higher, still clear of the 10 GB.
 #
 # Nothing here can make a test pass that should fail. A build-cache entry is
 # keyed by an action ID that hashes the inputs, the flags (-race), the
@@ -260,6 +261,14 @@ jobs:
       # openssl and sha256sum, all on the runner image.
       - name: the Playwright MCP recipe's and the pin check's own suite
         run: scripts/playwright-mcp-pin_test.sh
+      # The own suite of the floor Node's recipe (scripts/node.sh) and of its
+      # weekly pin check (scripts/node-pin-check.sh) — `make node-test` — for
+      # the git suite's reasons, against a stand-in nodejs.org tree, release
+      # schedule and releasers' keys under file://, so it fetches no Node and
+      # reads no network. It needs curl, xz, tar, GnuPG and sha256sum, all on
+      # the runner image.
+      - name: the floor Node's recipe's and the pin check's own suite
+        run: scripts/node-pin_test.sh
       # Only what this job created or used, by the epoch above. Without the
       # prune, every save would carry forward everything the restored cache
       # held, and the go command only trims entries five days unused — so each
@@ -389,7 +398,9 @@ jobs:
       # and `uses:` refs; it bumps neither `engines.node` (dependabot-core
       # #11243, open) nor a workflow's `with:`. A pin here would not stay put,
       # it would just go quietly out of date, and the dashboard's toolchain
-      # tracks current Node anyway.
+      # tracks current Node anyway. The one exception is the suite's floor
+      # Node, scripts/node-pin.env, which a weekly check moves (pins.yml) and
+      # which no job installs: `make node` fetches it beside this one.
       #
       # The cost is real and worth knowing: a new Node major lands here with
       # no commit, so this job can go red on a day nobody changed anything.
@@ -760,6 +771,27 @@ jobs:
         with:
           path: ${{ env.CREWLET_CHROMIUM_CACHE }}
           key: chromium-${{ runner.os }}-${{ runner.arch }}-l${{ steps.chromium-key.outputs.layout }}.${{ steps.chromium-key.outputs.pins }}
+      # THE FLOOR NODE. Both test targets depend on `make node`, which
+      # fetches the Node scripts/node-pin.env pins into CREWLET_NODE_CACHE (the
+      # Makefile's `##@ The floor Node`), and name it (NODE_FLOOR_ENV). Cached
+      # as the Chromiums are and for their reasons, keyed on the pin file's
+      # NODE_FLOOR_ lines and the recipe's `layout=` line alone, which are all
+      # that names a build: without it every shard of every run would download
+      # 31 MB from nodejs.org.
+      - &node-cache-dir
+        name: name the floor Node's cache directory, and read what names its build
+        id: node-key
+        run: |
+          echo "CREWLET_NODE_CACHE=$HOME/.cache/crewlet/node" >> "$GITHUB_ENV"
+          echo "layout=$(sed -n 's/^layout=\([0-9][0-9]*\)$/\1/p' scripts/node.sh)" >> "$GITHUB_OUTPUT"
+          echo "pins=$(grep '^NODE_FLOOR_' scripts/node-pin.env | sha256sum | cut -c1-64)" >> "$GITHUB_OUTPUT"
+      - &node-restore
+        name: restore the floor Node main fetched
+        id: node
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CREWLET_NODE_CACHE }}
+          key: node-${{ runner.os }}-${{ runner.arch }}-l${{ steps.node-key.outputs.layout }}.${{ steps.node-key.outputs.pins }}
       # NODE, because this half runs internal/sandbox/executor's probe of
       # the OpenCode notes plugin the engine embeds, which drives the plugin
       # under plain `node` against a stand-in of the bridge's notes route — and
@@ -822,6 +854,13 @@ jobs:
         with:
           path: ${{ env.CREWLET_CHROMIUM_CACHE }}
           key: chromium-${{ runner.os }}-${{ runner.arch }}-l${{ steps.chromium-key.outputs.layout }}.${{ steps.chromium-key.outputs.pins }}
+      # The floor Node, by the same rule.
+      - name: save the floor Node
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.node.outputs.cache-hit != 'true' && strategy.job-index == 0
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CREWLET_NODE_CACHE }}
+          key: node-${{ runner.os }}-${{ runner.arch }}-l${{ steps.node-key.outputs.layout }}.${{ steps.node-key.outputs.pins }}
       # What this shard ran and how long each package took: the aggregate job
       # holds it against the plan, and `test weights` merges it. Only a shard
       # that passed hands one on, as only a run that passed is kept.
@@ -971,23 +1010,25 @@ jobs:
       # other here and nowhere else, so a missing node fails rather than skips.
       #
       # `latest` for the reason the `dashboard gates` job above states at
-      # length: no node version is pinned anywhere in the tree, because
-      # Dependabot moves neither a workflow `with:` nor an `engines` field, so
-      # a pin would go quietly out of date rather than stay put. No npm and no
-      # install here — this only needs a node. (It does NOT have to match the
-      # dashboard jobs: what runs here is the COMMITTED bundle, not their fresh
-      # output.)
+      # length: no node version is pinned anywhere in the tree but the suite's
+      # floor Node, which a weekly check moves, because Dependabot moves
+      # neither a workflow `with:` nor an `engines` field, so a pin would go
+      # quietly out of date rather than stay put. No npm and no install here —
+      # this only needs a node. (It does NOT have to match the dashboard jobs:
+      # what runs here is the COMMITTED bundle, not their fresh output.)
       - uses: actions/setup-node@v7
         with:
           node-version: latest
-      # The pinned gits and Chromiums, as in the race shards above, whose
-      # comments say why. Restored here and never saved: the first race shard
-      # is their one saver.
+      # The pinned gits and Chromiums and the floor Node, as in the race shards
+      # above, whose comments say why. Restored here and never saved: the first
+      # race shard is their one saver.
       - *git-cache-dir
       - *git-restore
       - *git-deps
       - *chromium-cache-dir
       - *chromium-restore
+      - *node-cache-dir
+      - *node-restore
       - name: this shard of the packages that run alone
         env:
           TEST_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
@@ -1269,8 +1310,8 @@ jobs:
   # so the repository holds one set rather than whatever eviction leaves. An
   # entry's kind is its key without the last part, which is the commit for an
   # entry saved on every push and the hash of what it holds for the rest (the
-  # modules, the pinned gits, the pinned Chromiums, npm's cache, the test
-  # weights). Only main's entries of the kinds this file saves are listed,
+  # modules, the pinned gits, the pinned Chromiums, the floor Node, npm's
+  # cache, the test weights). Only main's entries of the kinds this file saves are listed,
   # newest first, and the first of each kind is kept. So no kind is ever
   # emptied, and a job that failed, and therefore saved nothing, keeps the
   # entry it saved last.
@@ -1308,7 +1349,7 @@ jobs:
           kept=0 count=0
           while IFS=$'\t' read -r id key size; do
             case "$key" in
-              gobuild-*|gomod-*|git-*|chromium-*|test-weights-*|golangci-lint-*|npm-*) ;;
+              gobuild-*|gomod-*|git-*|chromium-*|node-*|test-weights-*|golangci-lint-*|npm-*) ;;
               *) continue ;;
             esac
             kind="${key%-*}-"

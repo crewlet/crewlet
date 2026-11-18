@@ -11,6 +11,16 @@ import (
 	"github.com/crewlet/crewlet/internal/browser"
 )
 
+// MinNodeMajor is the oldest Node major the box helper supports, and so the
+// oldest a box may run the tree on: 22, the oldest release line Node's project
+// still maintains, Node 20 having reached its end of life on 2026-04-30
+// (nodejs/Release's schedule.json). Named as internal/browser's
+// MinChromiumMajor is, and never a "node floor", which in this tree is git's
+// floor for a Gitlet node. The floor's pinned release (scripts/node-pin.env)
+// moves with it, which boxhelpertest's TestTheFloorNodeIsTheMajorItStandsFor
+// holds, and the package doc says why that one Node version is pinned.
+const MinNodeMajor = 22
+
 // pw is the tree's two tarballs, byte for byte as the registry serves them.
 //
 //go:embed pw/*.tgz

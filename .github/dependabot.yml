@@ -10,18 +10,20 @@
 # omission: a manifest with no entry never produces a pull request, which
 # looks exactly like a manifest with nothing to update.
 #
-# Three surfaces have no entry: scripts/git-pin.env, the gits the engine image
+# Four surfaces have no entry: scripts/git-pin.env, the gits the engine image
 # builds and the suite runs, each a source tarball named by version and
-# SHA-256, and scripts/chromium-pin.env, the Chromiums the suite drives, each a
-# Chrome for Testing build named by version and a SHA-256 per platform, which no
-# ecosystem reads; and scripts/playwright-mcp-pin.env, the npm tarballs of the
-# Playwright tree the box helper embeds, which no entry may move, since that
-# tree is code for a seat's box and a bump is read and run before it
-# lands. .github/workflows/pins.yml watches all three instead, every week, and
-# keeps one issue per pin file rather than opening a pull request when a pin is
+# SHA-256, scripts/chromium-pin.env, the Chromiums the suite drives, each a
+# Chrome for Testing build named by version and a SHA-256 per platform, and
+# scripts/node-pin.env, the oldest Node the box helper supports, a Node
+# release named the same way, which no ecosystem reads; and
+# scripts/playwright-mcp-pin.env, the npm tarballs of the Playwright tree the
+# box helper embeds, which no entry may move, since that tree is code for a
+# seat's box and a bump is read and run before it lands.
+# .github/workflows/pins.yml watches all four instead, every week, and keeps
+# one issue per pin file rather than opening a pull request when a pin is
 # behind (CONTRIBUTING.md, "The git pin is checked every week", "The Chromium
-# pin is checked every week" and "The Playwright MCP pin is checked every
-# week").
+# pin is checked every week", "The Playwright MCP pin is checked every week"
+# and "The floor Node is checked every week").
 #
 # Security updates are separate — they come from published advisories, are
 # switched on in the repository settings rather than here, and are not held
@@ -90,8 +92,10 @@ updates:
   # cannot install is a bump that never opens, and nothing reports it — this
   # entry just keeps looking like a surface with nothing to update.
   # dependabot-core#13722 is the devEngines case, #12535 / #13741 the
-  # engine-strict one. ci.yml installs `latest`; no node version is pinned
-  # anywhere in the tree, so there is nothing here to keep in step.
+  # engine-strict one. ci.yml installs `latest`, and no node version is
+  # pinned for the dashboard, so there is nothing here to keep in step: the
+  # one Node the tree pins, scripts/node-pin.env, is the box helper's floor
+  # for the suite, which no job installs and pins.yml moves.
   #
   # THE REACT FAMILY MOVES AS ONE PULL REQUEST, and it is the reason there is
   # a `groups:` key here at all: it is the one family where a split bump is

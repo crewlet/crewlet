@@ -29,7 +29,11 @@
 # Chrome for Testing builds scripts/chromium-pin.env pins, which `make
 # chromium` fetches once a machine, and a machine without curl, unzip or a
 # SHA-256 tool is told so by name rather than handed its own Chrome (`##@ The
-# pinned Chromiums`).
+# pinned Chromiums`). So is its floor Node: every target that runs the whole
+# suite names the build of the oldest Node the box helper supports, which
+# scripts/node-pin.env pins and `make node` fetches once a machine, and a
+# machine without curl, xz or a SHA-256 tool is told so by name (`##@ The
+# floor Node`).
 #
 # THE BUILT DASHBOARD IS COMMITTED, and that is deliberate rather than lazy:
 # `go build ./...` and `go install …@latest` must work on a clean checkout with
@@ -257,8 +261,8 @@ COMPANY ?=
 
 .PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer ssh-held-words objects-answer broker-answer assistant-fixtures retention-alarms \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
-        check fmt-check tidy-check signoff-check signoff-test git-test chromium-test playwright-mcp-test vet lint test test-norace test-cross test-solo \
-        require-npm bench git test-gitproc test-capture chromium playwright-mcp \
+        check fmt-check tidy-check signoff-check signoff-test git-test chromium-test playwright-mcp-test node-test vet lint test test-norace test-cross test-solo \
+        require-npm bench git test-gitproc test-capture chromium node playwright-mcp \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -522,6 +526,33 @@ CHROMIUM_ENV = chromium_newest="$$(scripts/chromium.sh newest)" || exit 1; \
 	chromium_floor="$$(scripts/chromium.sh floor)" || exit 1; \
 	export CREWLET_TEST_CHROMIUM="$$chromium_newest" CREWLET_TEST_CHROMIUM_FLOOR="$$chromium_floor";
 
+##@ The floor Node
+
+# THE OLDEST NODE THE BOX HELPER SUPPORTS, the newest release of Node
+# internal/browser/boxhelper.MinNodeMajor, fetched from the official tarball
+# scripts/node-pin.env pins by version and per-platform SHA-256, by
+# scripts/node.sh, once a machine, into a per-user cache (CREWLET_NODE_CACHE,
+# by default ~/.cache/crewlet/node; a pin bump, or a change to how the recipe
+# lays a build out, is a new build beside the old). boxhelpertest hands it to
+# a case of the helper beside the machine's own node, so what the case asserts
+# holds on the oldest Node a box may carry (boxhelper's package doc). About 31
+# MB of download and 125 MB kept, once; after that node.sh finds the build and
+# answers at once. Named for what it fetches, as `git` and `chromium` are,
+# never `node-floor`, which names git's floor for a Gitlet node (GIT_PINS).
+node: ## fetch the pinned floor Node, the oldest the box helper supports (scripts/node-pin.env; needs curl and xz)
+	@scripts/node.sh floor >/dev/null
+
+# THE FLOOR NODE EVERY TARGET THAT RUNS THE WHOLE SUITE NAMES, in
+# CREWLET_TEST_NODE_FLOOR, which internal/browser/boxhelper/boxhelpertest
+# reads, from scripts/node.sh, which a target's `node` prerequisite has
+# already fetched. A STATEMENT, as CHROMIUM_ENV's are and for its reason, held
+# in floor_node, since GIT_ENV's node_floor, earlier on the same recipe line,
+# is git's. Not NODE_ENV, the name the Node ecosystem reads: make exports a
+# variable that came from the environment to every recipe, so a developer's
+# exported NODE_ENV would reach npm and Vite holding this recipe text.
+NODE_FLOOR_ENV = floor_node="$$(scripts/node.sh floor)" || exit 1; \
+	export CREWLET_TEST_NODE_FLOOR="$$floor_node";
+
 ##@ The pinned Playwright MCP
 
 # THE PLAYWRIGHT TREE FOR A SEAT'S OWN BROWSER, @playwright/mcp and the
@@ -548,12 +579,12 @@ playwright-mcp: ## fetch the pinned playwright mcp tree into the helper's packag
 # it exported.
 #
 # SUITE_ENV is what the whole suite runs under: the requirement, the pinned
-# gits and the pinned Chromiums. `test`, `test-solo` and `test-norace` start
-# with it, and depend on `git` and `chromium` to have built and fetched what it
-# names; `test-gitproc` and `bench`, which run gitproc's own suite and the
-# benchmarks, start with REQUIRED and GIT_ENV.
+# gits, the pinned Chromiums and the floor Node. `test`, `test-solo` and
+# `test-norace` start with it, and depend on `git`, `chromium` and `node` to
+# have built and fetched what it names; `test-gitproc` and `bench`, which run
+# gitproc's own suite and the benchmarks, start with REQUIRED and GIT_ENV.
 REQUIRED = export CREWLET_REQUIRE_PREREQUISITES=1;
-SUITE_ENV = $(REQUIRED) $(GIT_ENV) $(CHROMIUM_ENV)
+SUITE_ENV = $(REQUIRED) $(GIT_ENV) $(CHROMIUM_ENV) $(NODE_FLOOR_ENV)
 
 # THE TWO TEST HALVES RUN IN THE RECIPE, one after the other, and everything
 # else stays a prerequisite — which is about correctness rather than tidiness.
@@ -602,7 +633,7 @@ SUITE_ENV = $(REQUIRED) $(GIT_ENV) $(CHROMIUM_ENV)
 # environment and a sub-make inherits the parent's command line, so a value
 # exported in the shell or given to `make check` would run one shard of each
 # half and print that every gate passed.
-check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test playwright-mcp-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test playwright-mcp-test node-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@status=0; \
 	$(MAKE) test TEST_SHARD= || status=1; \
 	$(MAKE) test-solo TEST_SHARD= || status=1; \
@@ -707,6 +738,20 @@ chromium-test: ## run the Chromium recipe's and the pin check's own suite (ci: b
 playwright-mcp-test: ## run the playwright mcp recipe's and the pin check's own suite (ci: build + vet)
 	@scripts/playwright-mcp-pin_test.sh
 
+# The OWN SUITE of the floor Node's recipe (scripts/node.sh) and of its weekly
+# pin check (scripts/node-pin-check.sh), for git-test's reasons: shell no Go
+# test reaches, each failing silently where it matters — a recipe that unpacks
+# over a Node another checkout's suite is running, or prints something above
+# the path a make target exports as the suite's floor; a check that calls the
+# pin current because it read nothing, proposes a release no releaser signed,
+# or carries an index's words into the issue it reports to. It runs the real
+# scripts against a stand-in nodejs.org tree, release schedule and releasers'
+# keys of its own, so it fetches no Node and reads no network, then runs
+# itself once more, by a relative path, under a developer's most hostile
+# environment. It needs curl, xz, tar, GnuPG and sha256sum (or shasum).
+node-test: ## run the floor node's recipe's and the pin check's own suite (ci: build + vet)
+	@scripts/node-pin_test.sh
+
 vet: ## run go vet (ci: build + vet)
 	$(GO) vet ./...
 
@@ -786,7 +831,7 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # prebuilt at the default -p first, as the solo half is (PREBUILD, below).
 PARALLEL_HALF_PACKAGES := 4
 
-test: require-node git chromium ## the suite, minus the packages that run alone (ci: test (race))
+test: require-node git chromium node ## the suite, minus the packages that run alone (ci: test (race))
 	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, a TEST_SHARD it could not deal, or go list failing)" >&2; exit 1; }
 	$(call PREBUILD,$(GOTESTBUILD),$(PARALLEL_PKGS))
 	$(SUITE_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS)
@@ -833,7 +878,7 @@ test: require-node git chromium ## the suite, minus the packages that run alone 
 # share action IDs — and $(2) the packages.
 PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(2) > /dev/null
 
-test-solo: require-node git chromium ## the packages that need a runner to themselves (ci: end-to-end gates)
+test-solo: require-node git chromium node ## the packages that need a runner to themselves (ci: end-to-end gates)
 	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, a TEST_SHARD it could not deal, go list failing, or no package importing internal/solo)" >&2; exit 1; }
 	$(call PREBUILD,$(GOTESTBUILD),$(SOLO_PKGS))
 	$(SUITE_ENV) $(TIMED_SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
@@ -863,7 +908,7 @@ test-solo: require-node git chromium ## the packages that need a runner to thems
 # runs them: `override` beats a TEST_SHARD from the command line or the
 # environment.
 test-norace: override TEST_SHARD =
-test-norace: require-node git chromium ## the full suite without -race (faster; not a gate)
+test-norace: require-node git chromium node ## the full suite without -race (faster; not a gate)
 	@$(SUITE_ENV) status=0; \
 	echo "==> parallel partition"; \
 	{ $(call PREBUILD,,$(PARALLEL_PKGS)) && $(GO) test $(GOTESTRUN) -p $(PARALLEL_HALF_PACKAGES) $(PARALLEL_PKGS); } || status=1; \

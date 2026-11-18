@@ -38,4 +38,20 @@
 // (scripts/playwright-mcp-pin-check.sh) holds the pin to @playwright/mcp's
 // latest release, proposing a bump only over tarballs whose integrity npm's
 // registry key signed.
+//
+// # The floor Node
+//
+// A box brings its own Node, and the helper's contract with every image is
+// Node [MinNodeMajor] or newer. So boxhelpertest hands a case of the helper
+// two Nodes: the machine's own, at or above that major, and the floor's
+// newest release, which scripts/node-pin.env pins by version and per-platform
+// SHA-256 and `make node` (scripts/node.sh) fetches. Without the floor's run
+// the suite would prove the newest Node alone, and a floor that only CI ran
+// would let a developer's `make check` pass on code the floor rejects: the git
+// and Chromium floors take the same posture. It is the one Node version the
+// tree names (CONTRIBUTING.md, "Which node"), because a weekly check moves it:
+// .github/workflows/pins.yml's leg (scripts/node-pin-check.sh) holds the pin
+// to the newest patch of its major, verifying each release it proposes
+// against the Node releasers' signing keys, and fails from 60 days before the
+// major's end of life, naming the next even major's release.
 package boxhelper
