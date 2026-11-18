@@ -8475,9 +8475,15 @@ that can.
     holds — every figure read from the answer or the view's own count, never
     spelled on the screen. A delta that does not follow what the view holds is
     never spliced in: the view keeps its text and asks for a reset.
-  - **It follows the end unless the reader scrolled up.** At the bottom (within
-    about a line, `FOLLOW_SLACK_PX`) the block scrolls to each new line;
-    anywhere else it stays where they put it.
+  - **It reads as calls, results and words**: `lib/activity.ts` parses
+    `internal/activityline`'s grammar and `components/ActivityLog.tsx` draws it
+    as the kit's `ToolCallLog`, each call a row with its tool, key argument,
+    result and duration, consecutive lookups folded, a cut input one click away.
+    The executor's page, the trace's launch span, a parked turn's executor card
+    and a phase card's Activity fold all draw it so.
+  - **It follows the end unless the reader scrolled up**, then offers Jump to
+    latest; a collected record opens at its start. A raw error stream stays a
+    code block that follows its end within about a line (`FOLLOW_SLACK_PX`).
   - Bytes the owner holds back until their redaction is settled — a line not
     finished, a private key whose end has not been written — are counted
     under the block rather than shown.
