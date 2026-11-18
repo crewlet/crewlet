@@ -270,9 +270,9 @@ func TestAContinuationOfAJobCutOffAfterTellingALeadAgainIsStillToldIt(t *testing
 // off, which the cut-off section of every later brief says again; after its
 // provider refused the session its job continued, the account of a run that did
 // nothing, which no later session lacks. Of the carries, only a person's answer
-// is a lead. So such a relaunch hands its launch no lead of its own, with the
+// is a lead. So such a relaunch hands its launch no lead of its carry, with the
 // fresh brief or with its copy's, for the run to keep and a later brief to tell
-// again.
+// again: its fresh brief opens with the turn's task alone.
 //
 // Mutation: give a loss's, a replaced sign-in's or a refusal's carry a lead, and
 // its row goes red.
@@ -286,9 +286,10 @@ func TestACarryInTheEnginesOwnWordsKeepsNoLead(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			carried := freshRelaunch(t, resume, buildOpts{}).Continue
-			if len(carried.Fresh.Own) != 0 || len(carried.Told.Own) != 0 {
-				t.Errorf("the relaunch hands on leads of its own, %+v with the fresh brief and %+v with its "+
-					"copy's, want none", carried.Fresh.Own, carried.Told.Own)
+			if fresh := carried.Fresh.Own; len(fresh) != 1 || fresh[0].Kind != sandbox.LeadKindFresh ||
+				len(carried.Told.Own) != 0 {
+				t.Errorf("the relaunch hands on leads %+v with the fresh brief and %+v with its copy's, want "+
+					"the fresh brief's task alone and none of its carry", carried.Fresh.Own, carried.Told.Own)
 			}
 		})
 	}
@@ -795,12 +796,13 @@ func TestAHeldCallsLeadKeepsWhatItReturnedAsItsRowSealedIt(t *testing.T) {
 			t.Fatalf("%s: Resume: %v", attempt, err)
 		}
 		again := launcher.last(t)
-		for name, told := range map[string]sandbox.BriefTold{"its copy's": again.Continue.Told,
-			"the fresh brief's": again.Continue.Fresh} {
-			if len(told.Own) != 1 || told.Own[0].Answer == nil || told.Own[0].Answer.Held == nil {
-				t.Fatalf("%s: %s leads are %+v, want the held call's answer", attempt, name, told.Own)
+		// THE FRESH BRIEF OPENS WITH THE TURN'S TASK FIRST, the answer after it.
+		for name, told := range map[string][]sandbox.Lead{"its copy's": again.Continue.Told.Own,
+			"the fresh brief's": again.Continue.Fresh.Own[1:]} {
+			if len(told) != 1 || told[0].Answer == nil || told[0].Answer.Held == nil {
+				t.Fatalf("%s: %s leads are %+v, want the held call's answer", attempt, name, told)
 			}
-			held := told.Own[0].Answer.Held
+			held := told[0].Answer.Held
 			if held.Tool != "tr_close_issue" || held.Choice != sandbox.HeldOnce ||
 				held.Outcome != sandbox.LeadHeldMade || held.Result == nil || held.Result.Result != "sealed: closed #7" {
 				t.Errorf("%s: %s lead keeps the call as %+v, want it made, its result as the row sealed it",

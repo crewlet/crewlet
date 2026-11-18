@@ -269,6 +269,13 @@ type LaunchRequest struct {
 	// restore.go.
 	Session *SessionContinuation
 
+	// FreshOwn is the leads Brief opened with of its own where no Continue
+	// names them ([Continuation.Fresh]): a turn's first launch and a
+	// send-back, whose fresh brief opens with the turn's task
+	// ([LeadKindFresh]). Kept for the job whichever brief the launch hands
+	// its run ([BriefLeads.Fresh]). Nil keeps none.
+	FreshOwn []Lead
+
 	// Base is the read the turn's FIRST launch made of its conversation — the
 	// head the turn's launches continue while it has kept no session of its
 	// own, and the turns the read handed out that the turn's brief told
@@ -637,6 +644,15 @@ func (c *Coordinator) sealLeads(ctx context.Context, turnID string, opened Pendi
 		out = append(out, kept)
 	}
 	return out
+}
+
+// freshOwn is the leads the launch's fresh brief opened with of its own: its
+// continuation's ([Continuation.Fresh]), else the request's own.
+func (r LaunchRequest) freshOwn() []Lead {
+	if r.Continue != nil {
+		return r.Continue.Fresh.Own
+	}
+	return r.FreshOwn
 }
 
 // toldBounded reports why r carries a set of calls a brief left out longer
@@ -1066,6 +1082,14 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// completion marker nothing is ever going to write.
 	briefOmitted, freshOmitted := continued.omitted(req)
 	ownLeads := c.sealLeads(ctx, req.Turn.TurnID, opened, continued.told.Own)
+	// AND, BESIDE A BRIEF THAT CONTINUES A SESSION, THE FRESH BRIEF'S: its box
+	// starts a session of its own on that brief where its restore fails, and
+	// that session's task is then this job's fresh lead (protocol.go). A lead
+	// both briefs open with is taken in once, as the handed brief's.
+	var freshLeads []KeptLead
+	if continued.kind.Continues() {
+		freshLeads = c.sealLeads(ctx, req.Turn.TurnID, opened, req.freshOwn())
+	}
 	if err := store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), CommandID: handle.CommandID,
 		Placement: string(req.Spec.Placement), Node: c.node,
@@ -1093,7 +1117,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// of a run that ended carries that run's name, which is what lets the
 		// take refuse it.
 		Leads: BriefLeads{Run: opened.LeadsRun, Job: opened.LaunchID, Counted: opened.LeadsAppended,
-			Own: ownLeads, Told: slices.Clone(continued.told.Told),
+			Own: ownLeads, Fresh: freshLeads, Told: slices.Clone(continued.told.Told),
 			ToldUnread: slices.Clone(continued.told.ToldUnread)},
 		// AND WHAT THE SESSION IT HANDED ITS RUN CARRIED, along that
 		// session's lineage, for the read that collects the job to keep

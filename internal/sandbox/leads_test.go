@@ -190,9 +190,8 @@ func TestALeadUnderAKeyThisNodeLacksIsKeptForANodeThatHoldsIt(t *testing.T) {
 // asking job's box, a session of its own where that box was reclaimed, the
 // turn's kept capture in a box that replaced its own, and a send-back's
 // continuation of it each record theirs; a copy whose resume could not read
-// the run's leads marks the earlier one by the number its brief handed on; and
-// a turn's first launch, whose fresh brief opens with nothing a session lacks,
-// takes and marks none.
+// the run's leads marks the earlier one by the number its brief handed on. A
+// first launch's fresh brief is TestAFreshLaunchKeepsItsTaskLead's.
 //
 // Mutation: hand every launch the fresh brief's leads, take no lead of the
 // brief's own, mark none the brief told again, or drop the numbers it handed
@@ -298,20 +297,6 @@ func TestALaunchMarksTheLeadsTheBriefItHandedTold(t *testing.T) {
 			})
 		})
 	}
-	t.Run("a turn's first launch", func(t *testing.T) {
-		t.Parallel()
-		rig := newWaiterRig(t)
-		if _, err := rig.launchVia(ctx, rig.manager, launchReq("t1")); err != nil {
-			t.Fatalf("a first launch: %v", err)
-		}
-		row := rig.getIn(ctx, "t1")
-		read, err := rig.pending.Leads(ctx, row)
-		if err != nil || len(read.Kept) != 0 || read.Cut != 0 || len(row.Launch.LeadMarks) != 0 ||
-			row.LeadsAppended != 0 {
-			t.Errorf("a first launch's fresh brief kept leads %+v with %d cut, marked %v and counted %d, %v; want "+
-				"none", read.Kept, read.Cut, row.Launch.LeadMarks, row.LeadsAppended, err)
-		}
-	})
 }
 
 // A TAKE KEEPS EACH LEAD ONCE, NUMBERED AS IT WAS TAKEN. The attach that names a
@@ -339,7 +324,7 @@ func TestATakeKeepsEachLeadOnceNumberedAsItWasTaken(t *testing.T) {
 	}
 	part := leadsPart{Run: "run-1", Leads: []KeptLead{small("job-1", 1), small("job-2", 2)}, Appends: 2}
 	own := small("job-3", 0)
-	next, marks, grew := part.took([]KeptLead{own},
+	next, marks, grew := part.took([]KeptLead{own}, nil,
 		[]LeadRef{{Job: "job-1", Kind: LeadKindAnswer}, {Job: "job-9", Kind: LeadKindAnswer}}, nil)
 	if jobs, numbers := numbered(next.Leads); !slices.Equal(jobs, []string{"job-1", "job-2", "job-3"}) ||
 		!slices.Equal(numbers, []int{1, 2, 3}) || next.Appends != 3 || !grew || !slices.Equal(marks, []int{1, 3}) {
@@ -347,7 +332,7 @@ func TestATakeKeepsEachLeadOnceNumberedAsItWasTaken(t *testing.T) {
 			"marks for job-1, told again, and job-3, its own, and none for job-9, which the part does not keep",
 			jobs, numbers, next.Appends, grew, marks)
 	}
-	again, marks, grew := next.took([]KeptLead{own}, nil, nil)
+	again, marks, grew := next.took([]KeptLead{own}, nil, nil, nil)
 	if jobs, numbers := numbered(again.Leads); len(jobs) != 3 || !slices.Equal(numbers, []int{1, 2, 3}) ||
 		again.Appends != 3 || grew || !slices.Equal(marks, []int{3}) {
 		t.Errorf("the same lead taken again keeps %v numbered %v (%d taken, grew %v) and marks %v; want nothing "+
@@ -361,14 +346,14 @@ func TestATakeKeepsEachLeadOnceNumberedAsItWasTaken(t *testing.T) {
 		return lead
 	}
 	full := leadsPart{Run: "run-1", Leads: []KeptLead{big("job-1", 1), big("job-2", 2)}, Appends: 2}
-	dropped, marks, _ := full.took([]KeptLead{big("job-3", 0)}, []LeadRef{{Job: "job-1", Kind: LeadKindAnswer}},
+	dropped, marks, _ := full.took([]KeptLead{big("job-3", 0)}, nil, []LeadRef{{Job: "job-1", Kind: LeadKindAnswer}},
 		nil)
 	if jobs, numbers := numbered(dropped.Leads); !slices.Equal(jobs, []string{"job-2", "job-3"}) ||
 		!slices.Equal(numbers, []int{2, 3}) || !slices.Equal(marks, []int{3}) {
 		t.Fatalf("past the bound the part keeps %v numbered %v and marks %v; want job-1 dropped and unmarked "+
 			"though told again, job-3 numbered 3 and marked", jobs, numbers, marks)
 	}
-	later, _, _ := dropped.took([]KeptLead{big("job-4", 0)}, nil, nil)
+	later, _, _ := dropped.took([]KeptLead{big("job-4", 0)}, nil, nil, nil)
 	if jobs, numbers := numbered(later.Leads); !slices.Equal(jobs, []string{"job-3", "job-4"}) ||
 		!slices.Equal(numbers, []int{3, 4}) || later.Appends != 4 {
 		t.Errorf("the next take keeps %v numbered %v with %d taken; want job-4 numbered 4, past every lead "+
@@ -395,13 +380,13 @@ func TestALeadABriefCouldNotReadIsMarkedByItsNumber(t *testing.T) {
 	}
 	// THE PART AS A TAKE PAST ITS BOUND LEFT IT: the first lead dropped.
 	part := leadsPart{Run: "run-1", Leads: []KeptLead{small("job-2", 2), small("job-3", 3)}, Appends: 3}
-	next, marks, grew := part.took([]KeptLead{small("job-4", 0)}, nil, []int{1, 3, 9})
+	next, marks, grew := part.took([]KeptLead{small("job-4", 0)}, nil, nil, []int{1, 3, 9})
 	if !slices.Equal(marks, []int{3, 4}) || !grew || next.Appends != 4 || len(next.Leads) != 3 {
 		t.Errorf("the take marks %v (grew %v, %d taken, %d kept); want 3, which the brief could not read and the "+
 			"part keeps, and 4, its own, and neither 1, which the bound dropped, nor 9, which it never took",
 			marks, grew, next.Appends, len(next.Leads))
 	}
-	alone, marks, grew := part.took(nil, nil, []int{2})
+	alone, marks, grew := part.took(nil, nil, nil, []int{2})
 	if !slices.Equal(marks, []int{2}) || grew || alone.Appends != 3 || len(alone.Leads) != 2 {
 		t.Errorf("a take of numbers alone marks %v (grew %v, %d taken, %d kept); want 2 marked and nothing taken",
 			marks, grew, alone.Appends, len(alone.Leads))
@@ -426,7 +411,7 @@ func TestTheLeadsTheRunKeepsAreHeldToTheirShareWithTheCutSaid(t *testing.T) {
 			Sealed: bytes.Repeat([]byte("a"), third)}
 	}
 	part := leadsPart{Run: "run-1", Leads: []KeptLead{lead("job-1", 3), lead("job-2", 4)}, Appends: 4}
-	got, _, _ := part.took([]KeptLead{lead("job-3", 0)}, nil, nil)
+	got, _, _ := part.took([]KeptLead{lead("job-3", 0)}, nil, nil, nil)
 	var jobs []string
 	for _, kept := range got.Leads {
 		jobs = append(jobs, kept.Job)
@@ -445,7 +430,7 @@ func TestTheLeadsTheRunKeepsAreHeldToTheirShareWithTheCutSaid(t *testing.T) {
 			Appended: i + 1, Sealed: []byte("s")})
 	}
 	past, _, _ := many.took([]KeptLead{{Kind: LeadKindAnswer, Job: "job-newest", Seq: 2, Sealed: []byte("s")}},
-		nil, nil)
+		nil, nil, nil)
 	if n := len(past.Leads); n != MaxKeptLeads || past.Leads[0].Job != "job-1" ||
 		past.Leads[n-1].Job != "job-newest" || past.Appends != MaxKeptLeads+1 {
 		t.Errorf("past its count the part keeps %d leads from %s to %s with %d taken; want %d, the oldest "+
@@ -613,7 +598,7 @@ func TestALaterBuildsKeysInTheLeadsPartSurviveATake(t *testing.T) {
 		t.Fatal(err)
 	}
 	next, _, grew := part.took([]KeptLead{{Kind: LeadKindAnswer, Job: "job-2", Seq: 2, Round: 1,
-		Sealed: []byte("sealed")}}, nil, nil)
+		Sealed: []byte("sealed")}}, nil, nil, nil)
 	if !grew {
 		t.Fatal("the take took nothing in")
 	}
@@ -677,7 +662,7 @@ func TestTheCountOfKeptLeadsNeverDropsALeadTheirBytesWouldKeep(t *testing.T) {
 // Mutation: leave a known kind or outcome off its list, and a check goes red.
 func TestEveryLeadKindAndOutcomeIsValid(t *testing.T) {
 	t.Parallel()
-	for _, k := range []LeadKind{LeadKindAnswer, LeadKindReview, LeadKindTask} {
+	for _, k := range []LeadKind{LeadKindAnswer, LeadKindReview, LeadKindTask, LeadKindFresh} {
 		if !k.Valid() {
 			t.Errorf("lead kind %q is not valid", k)
 		}
@@ -712,6 +697,7 @@ func TestOnlyALeadOfANamedJobInItsKindsShapeIsSealedOrOpened(t *testing.T) {
 		"naming no place":             {Kind: LeadKindAnswer, Job: "job-1", Round: 1, Answer: words},
 		"an answer carrying a task":   {Kind: LeadKindAnswer, Job: "job-1", Seq: 1, Answer: words, Task: &LeadTask{}},
 		"a task without its facts":    {Kind: LeadKindTask, Job: "job-1", Seq: 1},
+		"a fresh task with an answer": {Kind: LeadKindFresh, Job: "job-1", Seq: 1, Answer: words, Task: &LeadTask{}},
 		"a review carrying an answer": {Kind: LeadKindReview, Job: "job-1", Seq: 1, Round: 1, Answer: words},
 	} {
 		if kept, err := rigLeads().Seal("t1", lead); err == nil {
@@ -769,7 +755,7 @@ func TestALeadThePartCannotWriteIsDroppedAndCounted(t *testing.T) {
 		t.Fatal("the encoder writes a lead whose carried key is not JSON; the case needs one it cannot")
 	}
 	own := KeptLead{Kind: LeadKindAnswer, Job: "job-2", Seq: 2, Round: 1, Sealed: []byte("sealed")}
-	got, marks, _ := leadsPart{Run: "run-1", Leads: []KeptLead{broken}, Appends: 1}.took([]KeptLead{own},
+	got, marks, _ := leadsPart{Run: "run-1", Leads: []KeptLead{broken}, Appends: 1}.took([]KeptLead{own}, nil,
 		[]LeadRef{broken.Ref()}, nil)
 	if len(got.Leads) != 1 || got.Leads[0].Job != "job-2" || got.Appends != 2 || !slices.Equal(marks, []int{2}) {
 		t.Errorf("the part keeps %+v with %d taken and marks %v; want the lead it can write, job-2, numbered 2 "+

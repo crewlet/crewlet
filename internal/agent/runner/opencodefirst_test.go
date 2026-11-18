@@ -177,29 +177,37 @@ func TestAnOpenCodeRestartInTheJobVoidsWhatItsBriefToldHeld(t *testing.T) {
 // box is OpenCode's alone: a Claude Code session is judged by its window here,
 // as before, on both paths, and its continuation carries no summarized
 // telling and no count for a launch to judge by; near its threshold it is
-// told as a summary, far from it as held.
+// told as a summary, which tells the fresh task the run keeps, and far from it
+// as held, which does not.
 //
 // Mutation: read Claude Code's first request as the box's to judge, and a
 // case goes red.
 func TestAClaudeCodeContinuationIsToldAsOnMain(t *testing.T) {
 	t.Parallel()
+	keeps := func(r *runner.Resume) { r.Leads = []runner.ResumeLead{{Lead: freshOf("job-1", 1)}} }
 	for name, tc := range map[string]struct {
 		count   *sandbox.ResumedCount
 		summary bool
 	}{"near its threshold": {count: near, summary: true}, "far from it": {count: far}} {
 		kept := guarded{basis: keptClaude(tc.count, false), bridged: []runner.BridgedCall{earlierCall},
-			prep: copyOf(sandbox.HarnessEndOwnRun, tc.count)}.relaunch(t)
+			prep: func(r *runner.Resume) {
+				copyOf(sandbox.HarnessEndOwnRun, tc.count)(r)
+				keeps(r)
+			}}.relaunch(t)
 		if s := kept.Session; s == nil || s.Summarized != nil || s.Count != nil || s.CountProvider != "" ||
-			strings.Contains(s.Replaced, prompts.MayCompactSession) != tc.summary {
+			strings.Contains(s.Replaced, prompts.MayCompactSession) != tc.summary ||
+			strings.Contains(s.Replaced, freshHeading) != tc.summary {
 			t.Errorf("%s: the kept path hands %+v, want its window's verdict alone", name, s)
 		}
 		inPlace := guarded{basis: inBoxBasis, bridged: []runner.BridgedCall{earlierCall},
 			carry: func(r *runner.Resume) {
 				answered("use main")(r)
 				copyOf(sandbox.HarnessEndOwnRun, tc.count)(r)
+				keeps(r)
 			}}.relaunch(t)
 		if c := inPlace.Continue; c.Summarized != "" || c.Count != nil || c.CountProvider != "" ||
-			strings.Contains(c.Brief, prompts.MayCompactSession) != tc.summary {
+			strings.Contains(c.Brief, prompts.MayCompactSession) != tc.summary ||
+			strings.Contains(c.Brief, freshHeading) != tc.summary {
 			t.Errorf("%s: the copy is handed %+v, want its window's verdict alone", name, c)
 		}
 	}

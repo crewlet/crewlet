@@ -484,7 +484,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// opened, which the job's calls are numbered after.
 		bridgeFrom int
 	)
-	result, err := coordinator.Launch(ctx, manager, withRunSources(req, sandbox.LaunchRequest{
+	result, err := coordinator.Launch(ctx, manager, withRunsOwn(req, sandbox.LaunchRequest{
 		Turn:       ref,
 		ReadBox:    e.boxUnread(ctx, company, handle, cell),
 		Spec:       spec,
@@ -1157,14 +1157,17 @@ func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait tim
 	return opening
 }
 
-// withRunSources is out with the run's own context sources off req, which a
-// launch charges an OpenCode continuation in the box that holds its copy
-// (internal/sandbox's RunSources): what each server the run's bridge serves
-// says it is for. Set beside [agentLauncher.launch]'s literal rather than in
-// it, since that literal is the launch's decisions (member, cell, reach,
-// environment, login), which crewlet-operator mirrors, and a source is none.
-func withRunSources(req runner.AgentRunRequest, out sandbox.LaunchRequest) sandbox.LaunchRequest {
+// withRunsOwn is out with what req says of the run itself beside the launch's
+// decisions: its own context sources, which a launch charges an OpenCode
+// continuation in the box that holds its copy (internal/sandbox's RunSources),
+// what each server the run's bridge serves says it is for; and the leads its
+// fresh brief opened with, which the launch keeps for its job. Set beside
+// [agentLauncher.launch]'s literal rather than in it, since that literal is the
+// launch's decisions (member, cell, reach, environment, login), which
+// crewlet-operator mirrors, and neither is one.
+func withRunsOwn(req runner.AgentRunRequest, out sandbox.LaunchRequest) sandbox.LaunchRequest {
 	out.MCPGuidance = mcpbridge.Guidance(req.Surface)
+	out.FreshOwn = req.FreshOwn
 	return out
 }
 

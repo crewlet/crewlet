@@ -23,6 +23,18 @@
 // default, and it may ride beside the summarized telling, a shorter brief
 // that sends whole where the held one compacts.
 //
+// A SESSION THE RUN STARTED OF ITS OWN IS TOLD ITS TASK AGAIN where it may be a
+// summary (leads.go): every launch whose run may start a session on its fresh
+// brief hands that brief's task as a lead of its own kind (freshLead,
+// [AgentRunRequest.FreshOwn], [Continuation.Fresh]), which the run keeps beside
+// its record, and a continuation that may be a summary, told every lead the run
+// keeps, tells it under [prompts.FreshTaskAgain]. The turn's ask is told ONCE a
+// section (oneAsk): every launch keeps a fresh lead, and a base continuation a
+// task lead too, each rendering the ask and its closed rounds' ledger, so told
+// each, a summary would be handed that ledger as many times as the turn
+// launched. A task lead that opens here tells it, with where the turn began;
+// else the newest fresh lead, whose brief rendered the most closed rounds.
+//
 // It is the wiring between four things that each know nothing about the
 // others: the prompt builder, the tool registry, the provider chain, and the
 // turn loop's [turn.Phases] contract. Everything here is plumbing plus the one

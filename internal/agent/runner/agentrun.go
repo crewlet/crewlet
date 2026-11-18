@@ -194,6 +194,12 @@ type AgentRunRequest struct {
 	// seat's budget unable to carry it — starts fresh with Brief.
 	Session *SessionContinuation
 
+	// FreshOwn is the leads Brief opened with of its own where Continue is
+	// nil: a turn's first launch and a send-back, whose fresh brief opens a
+	// session of the run's own with the turn's task (freshLead). The launch
+	// keeps them whichever brief it hands its run (sandbox.LaunchRequest.FreshOwn).
+	FreshOwn []sandbox.Lead
+
 	// Decided is told how the launch decided its run takes up a session —
 	// the turn's kept capture, the job before's own copy in its box, or none
 	// ([SessionDecision]) — once the launch has its box and before the run
@@ -785,6 +791,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		Notes:      fresh,
 		Retold:     r.retold(),
 		Session:    briefs.kept,
+		FreshOwn:   freshLead(round, history, notes),
 		Decided:    r.sessionDecided(ctx, emit, round, system, surface, caps, briefs, decided),
 		Started:    r.sessionStarted(ctx, emit, round, system, surface, caps, briefs, decided),
 		Surface:    surface,
@@ -1128,7 +1135,10 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// could not read.
 			Told: sandbox.BriefTold{Omitted: picked.omitted, Own: own, Told: picked.told.refs,
 				ToldUnread: picked.told.unread},
-			Fresh: sandbox.BriefTold{Omitted: freshOmitted, Own: own},
+			// The fresh one opens with the turn's task besides, which a session
+			// its run starts on it may lack once a compaction summarizes it.
+			Fresh: sandbox.BriefTold{Omitted: freshOmitted,
+				Own: append(freshLead(state.Round, history, ""), own...)},
 			// AND THE SAME COPY TOLD AS A SESSION THAT MAY BE A SUMMARY, with
 			// the count the launch judges the held brief by in its box.
 			Summarized: summarized, SummarizedTold: summarizedTold, Count: count, CountProvider: countProvider,

@@ -207,6 +207,19 @@
 // either: no pair of differing releases has been measured. See
 // opencodefirst.go.
 //
+// AND A SESSION THE RUN STARTS OF ITS OWN KEEPS ITS TASK. A fresh brief opens a
+// session with the turn's task, and a later continuation of that session that
+// may be a summary may lack it as surely as a cut-off copy lacks its brief. So
+// every launch whose run may start a session on its fresh brief keeps that
+// brief's task beside the run's record as a lead of its own kind
+// ([LeadKindFresh]): a turn's first launch ([LaunchRequest.FreshOwn]), a
+// relaunch handed its fresh brief ([Continuation.Fresh]), and one whose handed
+// brief continues a session, whose box may start one of its own after a failed
+// restore ([BriefLeads.Fresh]). That last is kept unmarked: the brief the job's
+// run read did not tell it, so no continuation of a session that run did not
+// start on it is told it as a lead its brief told, while a continuation that
+// may be a summary is told every lead the run keeps (leads.go).
+//
 // See docs/concepts/code-sandbox.md.
 package sandbox
 

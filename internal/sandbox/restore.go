@@ -1582,13 +1582,14 @@ func (l continuedLaunch) omitted(req LaunchRequest) (brief, fresh []int) {
 }
 
 // freshLaunch is a launch that continues no session: what its fresh brief told
-// of the round it carries on where it carries one on, and nothing where it
-// does not (a turn's first launch, a send-back), whose request names no
-// continuation to read it off.
+// of the round it carries on where it carries one on, and only the leads it
+// opened with where it does not (a turn's first launch, a send-back), whose
+// request names no continuation to read them off ([LaunchRequest.FreshOwn]).
 func freshLaunch(req LaunchRequest) continuedLaunch {
 	// A SESSION OF THE RUN'S OWN restarts nowhere yet: its basis is known, and
 	// is none.
-	launch := continuedLaunch{brief: req.Brief, kind: BriefFresh, restart: new(""), release: func() {}}
+	launch := continuedLaunch{brief: req.Brief, kind: BriefFresh, restart: new(""), release: func() {},
+		told: BriefTold{Own: req.FreshOwn}}
 	if req.Continue != nil {
 		launch.told = req.Continue.Fresh
 	}

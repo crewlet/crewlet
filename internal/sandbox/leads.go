@@ -79,10 +79,15 @@ const (
 	// session its conversation's last turn left, recomposed with the closed
 	// rounds its brief rendered ([LeadTask]).
 	LeadKindTask LeadKind = "task"
+	// LeadKindFresh is the turn's task as a fresh brief told it to a session
+	// of the run's own, recomposed as a task lead is ([LeadTask]): kept by
+	// every launch whose run may start a session on that brief
+	// ([LaunchRequest.FreshOwn], [BriefLeads.Fresh]).
+	LeadKindFresh LeadKind = "fresh"
 )
 
-// LeadKinds are the three.
-var LeadKinds = []LeadKind{LeadKindAnswer, LeadKindReview, LeadKindTask}
+// LeadKinds are the four.
+var LeadKinds = []LeadKind{LeadKindAnswer, LeadKindReview, LeadKindTask, LeadKindFresh}
 
 // Valid reports whether k is one of [LeadKinds]. A lead a newer build sealed may
 // name one this build does not know, read as the value it is: kept as sealed
@@ -160,8 +165,8 @@ type Lead struct {
 	Seq   int64
 	Round int
 
-	// Answer is an answer lead's source, Task a task lead's own facts; a
-	// review keeps neither.
+	// Answer is an answer lead's source, Task a task or fresh lead's own
+	// facts; a review keeps neither.
 	Answer *LeadAnswer
 	Task   *LeadTask
 
@@ -267,8 +272,8 @@ type LeadHeld struct {
 	Result *HeldKept `json:"result"`
 }
 
-// LeadTask is a task lead's own facts; the rest is recomposed from the turn's
-// records.
+// LeadTask is a task or fresh lead's own facts; the rest is recomposed from the
+// turn's records.
 type LeadTask struct {
 	// Rounds is the last of the closed rounds the brief's prior-work block
 	// rendered, by its number, zero for none: the task is told again with the
@@ -357,7 +362,13 @@ type BriefLeads struct {
 	// ([LeadSeal.Seal]); Told the earlier leads it told again, by name; and
 	// ToldUnread the earlier ones it was to tell again and could not read, by
 	// their numbers ([BriefTold.ToldUnread]), marked as Told is.
+	//
+	// Fresh is the leads the launch's fresh brief opened with, beside a brief
+	// that continues a session: taken in after Own, a lead Own holds left as
+	// Own's, and never marked, since the brief the run read did not tell them
+	// (protocol.go).
 	Own        []KeptLead
+	Fresh      []KeptLead
 	Told       []LeadRef
 	ToldUnread []int
 }
@@ -448,18 +459,20 @@ func (p *leadsPart) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// took is p once it took in own, the leads a brief opened with of its own:
-// each once by its identity ([KeptLead.Ref]), one already kept left as it is,
-// a new one numbered as taken ([KeptLead.Appended]); the whole held to its
-// bounds ([heldLeads]); with marks, the numbers of every lead the brief told
-// that p then keeps, its own, those told names and those toldUnread numbers,
-// ascending, and grew, whether it took anything in.
+// took is p once it took in own, the leads a brief opened with of its own,
+// and then fresh, the fresh brief's beside it ([BriefLeads.Fresh]): each once
+// by its identity ([KeptLead.Ref]), one already kept left as it is, a new one
+// numbered as taken ([KeptLead.Appended]); the whole held to its bounds
+// ([heldLeads]); with marks, the numbers of every lead the brief told that p
+// then keeps, its own, those told names and those toldUnread numbers,
+// ascending, never one of fresh's; and grew, whether it took anything in.
 //
 // A TOLD LEAD THE PART DOES NOT KEEP IS NOT MARKED: it is counted under
 // Appends, past the bound, or the part lost it, which a reader counts against
 // the row ([PendingStore.Leads]). The names and the numbers are looked up in
 // sets, so a take of every lead the part keeps, told again, stays linear.
-func (p leadsPart) took(own []KeptLead, told []LeadRef, toldUnread []int) (next leadsPart, marks []int, grew bool) {
+func (p leadsPart) took(own, fresh []KeptLead, told []LeadRef, toldUnread []int) (next leadsPart, marks []int,
+	grew bool) {
 	next = p
 	next.Leads = slices.Clone(p.Leads)
 	named := make(map[LeadRef]bool, len(own)+len(told))
@@ -470,12 +483,14 @@ func (p leadsPart) took(own []KeptLead, told []LeadRef, toldUnread []int) (next 
 	for _, n := range toldUnread {
 		numbered[n] = true
 	}
-	kept := make(map[LeadRef]bool, len(next.Leads)+len(own))
+	kept := make(map[LeadRef]bool, len(next.Leads)+len(own)+len(fresh))
 	for _, lead := range next.Leads {
 		kept[lead.Ref()] = true
 	}
-	for _, lead := range own {
-		named[lead.Ref()] = true
+	for i, lead := range slices.Concat(own, fresh) {
+		if i < len(own) {
+			named[lead.Ref()] = true
+		}
 		if kept[lead.Ref()] {
 			continue
 		}

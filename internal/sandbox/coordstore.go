@@ -1794,7 +1794,8 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 	// writes anything: the launch then abandons its box, as for any refused
 	// attach.
 	var took leadsTaken
-	if box.CommandID != "" && (len(box.Leads.Own) > 0 || len(box.Leads.Told) > 0 || len(box.Leads.ToldUnread) > 0) {
+	if box.CommandID != "" && (len(box.Leads.Own) > 0 || len(box.Leads.Fresh) > 0 || len(box.Leads.Told) > 0 ||
+		len(box.Leads.ToldUnread) > 0) {
 		if took, err = s.takeLeads(ctx, turnID, box.Leads, fence); err != nil {
 			return fmt.Errorf("sandbox: attach box %s to run %s: %w", box.SandboxID, turnID, err)
 		}
@@ -1953,7 +1954,7 @@ func (s *CoordStore) takeLeads(ctx context.Context, turnID string, b BriefLeads,
 		// part with and the store kept it; a take that only tells earlier
 		// leads again writes nothing, and leaves the other run's part to the
 		// next take that has one.
-		if err == nil && taken.landed && len(b.Own) > 0 {
+		if err == nil && taken.landed && len(b.Own)+len(b.Fresh) > 0 {
 			log.InfoContext(ctx, "sandbox_leads_part_replaced", "turn_id", turnID, "run", b.Run,
 				"replaced_run", foreign.run, "undecoded", foreign.undecoded)
 		}
@@ -2001,7 +2002,7 @@ func (s *CoordStore) takeLeadsOnce(ctx context.Context, turnID string, b BriefLe
 				}
 			}
 			part.Appends = max(part.Appends, b.Counted)
-			next, marks, grew := part.took(b.Own, b.Told, b.ToldUnread)
+			next, marks, grew := part.took(b.Own, b.Fresh, b.Told, b.ToldUnread)
 			taken = leadsTaken{marks: marks, appends: next.Appends}
 			if !grew {
 				return nil, nil
