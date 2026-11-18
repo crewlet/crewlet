@@ -1647,7 +1647,7 @@ Four tables hold a change, on every data node:
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_changes` | each change | Its number and title; its state; its source and target branches; the head of its latest revision; who opened it — a seat, or a person by the human seat they hold, with the credential they used; the work item it carries; when it was opened, closed and merged, and how; and how many bytes its description holds |
+| `code_changes` | each change | Its number and title; its state; its source and target branches; the head of its latest revision; who opened it — a seat, or a person by the human seat they hold, with the credential they used; the work item it carries; when it was opened, closed and merged, and how; who closed it, while it is closed; and how many bytes its description holds |
 | `code_change_bodies` | each change with a description | Its description, up to 32 KiB |
 | `code_change_authors` | each of its authors | Who wrote the change: whoever opened it, and everyone whose push moved its head, each from the revision they first wrote. An author's approval of their own change counts for nothing |
 | `code_revisions` | each time its head moved while it was live | The new head, who pushed it and the push that did. Revision 1 is the source branch's head when the change was opened — made by the push that opened it, for a change a push opened, and otherwise by whoever opened it, by no push — and a reopen's revision its head when the change was reopened, made by whoever reopened it |
@@ -1689,7 +1689,7 @@ them. Six writes:
 | Edit | Sets its title (one line, at most 256 bytes), its description (at most 32 KiB) or the work item it carries | Its owner, a principal that maintains the repository, and any person |
 | Draft | Makes a live change a draft, or a draft ask to be merged | The same |
 | Retarget | Moves its target to another live branch | The same |
-| Close | Closes it without merging it, with a reason of at most 1 KiB | The same |
+| Close | Closes it without merging it, with a reason of at most 1 KiB, keeping who closed it (`closed_by`, a seat by its handle or a person by their human seat) until a reopen clears it | The same |
 | Reopen | Opens a closed change again, at its source branch's head now — a revision of its own, made by whoever reopened it, where the branch moved while the change was closed | The same |
 
 - **A number is the apply's.** The record that opens a change takes the
@@ -1822,7 +1822,8 @@ moves — and each push of a record sees what the ones before it did.
   read it — who is told nothing of it ([The home's change
   work](#the-homes-change-work)).
 - **Deleting the source branch closes the change**: `closed`, its reason
-  `source_deleted` — after the same push's merges, so a push that sets the
+  `source_deleted`, closed by whoever pushed the deletion (nobody, for a push
+  nobody made: an import's or a mirror's) — after the same push's merges, so a push that sets the
   target to the head and deletes the branch leaves the change merged.
   Reopening it needs the branch pushed again.
 - **Every change one record moves counts one version**, however many of its

@@ -2470,9 +2470,15 @@ type ChangeRow struct {
 	// at (MergeOID).
 	ClosedAt    time.Time `json:"closed_at,omitzero"`
 	CloseReason string    `json:"close_reason,omitempty" untrusted:"name"`
-	MergedAt    time.Time `json:"merged_at,omitzero"`
-	MergedVia   MergedVia `json:"merged_via,omitempty"`
-	MergeOID    string    `json:"merge_oid,omitempty"`
+	// ClosedBy is who closed it, while it is closed: a close record's
+	// principal, or the pusher whose push deleted its source (SourceDeleted),
+	// a seat's handle or a person's human seat, ClosedByKind which. Each ""
+	// for a push nobody made (an import's, a mirror's).
+	ClosedBy     string    `json:"closed_by,omitempty"`
+	ClosedByKind PartyKind `json:"closed_by_kind,omitempty"`
+	MergedAt     time.Time `json:"merged_at,omitzero"`
+	MergedVia    MergedVia `json:"merged_via,omitempty"`
+	MergeOID     string    `json:"merge_oid,omitempty"`
 	// MergedBy is who merged it through its gate, a merge record's principal
 	// ([Merge]): a seat's handle or a person's human seat, MergedByKind which;
 	// MergedOperatorID the credential a person used; OverrideReason a person's

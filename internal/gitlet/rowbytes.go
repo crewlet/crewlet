@@ -826,6 +826,12 @@ func (r ChangeRow) members() int {
 	if r.CloseReason != "" {
 		n += field("close_reason", stringBytes(r.CloseReason), false)
 	}
+	if r.ClosedBy != "" {
+		n += field("closed_by", stringBytes(r.ClosedBy), false)
+	}
+	if r.ClosedByKind != "" {
+		n += field("closed_by_kind", stringBytes(string(r.ClosedByKind)), false)
+	}
 	if !r.MergedAt.IsZero() {
 		n += field("merged_at", timeBytes(r.MergedAt), false)
 	}

@@ -1225,9 +1225,14 @@ type changeRow struct {
 	// change was closed and merged at, each set exactly while it is.
 	closedAt    sql.NullInt64
 	closeReason string
-	mergedAt    sql.NullInt64
-	mergedVia   MergedVia
-	mergeOID    string
+	// closedBy and closedByKind are who closed it: a close record's principal,
+	// or the pusher of the push that deleted its source, "" for a push nobody
+	// made. Both "" but while it is closed.
+	closedBy     string
+	closedByKind PartyKind
+	mergedAt     sql.NullInt64
+	mergedVia    MergedVia
+	mergeOID     string
 	// mergedBy and mergedByKind are who merged it through its gate — a merge
 	// record's principal, a seat by its handle or a person by their human
 	// seat — and mergedOperator the credential a person merged with;
@@ -1253,14 +1258,15 @@ type changeRow struct {
 // scanChange reads one row [changeColumns] spells.
 func scanChange(scan func(...any) error) (changeRow, error) {
 	var r changeRow
-	var state, ownerKind, backend, via, mergedByKind string
+	var state, ownerKind, backend, via, mergedByKind, closedByKind string
 	err := scan(&r.id, &r.repoID, &r.number, &r.title, &r.bodyBytes, &state, &r.source, &r.target, &r.head,
 		&r.revision, &r.owner, &ownerKind, &r.operator, &backend, &r.work.ID, &r.work.Key, &r.work.Project,
-		&r.turn, &r.run, &r.openedAt, &r.opened, &r.closedAt, &r.closeReason, &r.mergedAt, &via, &r.mergeOID,
-		&r.mergedBy, &mergedByKind, &r.mergedOperator, &r.overrideReason, &r.version, &r.position, &r.updatedAt)
+		&r.turn, &r.run, &r.openedAt, &r.opened, &r.closedAt, &r.closeReason, &r.closedBy, &closedByKind,
+		&r.mergedAt, &via, &r.mergeOID, &r.mergedBy, &mergedByKind, &r.mergedOperator, &r.overrideReason,
+		&r.version, &r.position, &r.updatedAt)
 	r.state, r.ownerKind, r.work.Backend, r.mergedVia = ChangeState(state), PartyKind(ownerKind),
 		types.WorkBackend(backend), MergedVia(via)
-	r.mergedByKind = PartyKind(mergedByKind)
+	r.mergedByKind, r.closedByKind = PartyKind(mergedByKind), PartyKind(closedByKind)
 	return r, err
 }
 
@@ -1345,8 +1351,9 @@ const (
 	// of the change scan one row alike.
 	changeColumns = `id, repo_id, number, title, body_bytes, state, source_ref, target_ref, head_oid, revision,
 		owner, owner_kind, owner_operator_id, work_backend, work_id, work_key, work_project, created_turn,
-		created_run, opened_at, opened_position, closed_at, close_reason, merged_at, merged_via, merge_oid,
-		merged_by, merged_by_kind, merged_operator_id, override_reason, version, position, updated_at`
+		created_run, opened_at, opened_position, closed_at, close_reason, closed_by, closed_by_kind, merged_at,
+		merged_via, merge_oid, merged_by, merged_by_kind, merged_operator_id, override_reason, version, position,
+		updated_at`
 	changeRowSQL = `SELECT ` + changeColumns + ` FROM code_changes WHERE id = ?`
 	// changesNamedSQL is the changes a list names, each by its key, driven
 	// from the list ([changeRowsIn]).

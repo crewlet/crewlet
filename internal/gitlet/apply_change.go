@@ -161,6 +161,7 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 		}
 		next.state, next.closeReason = ChangeStateClosed, p.Reason
 		next.closedAt = sql.NullInt64{Int64: at.at(), Valid: true}
+		next.closedBy, next.closedByKind = p.By.party()
 	case ChangeReopen:
 		if row.state != ChangeStateClosed {
 			return changeNotApplied(ctx, at, repoID, changeID, "a reopen takes a closed change, and it is "+
@@ -170,6 +171,7 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 			return changeNotApplied(ctx, at, repoID, changeID, "who reopened it names no seat")
 		}
 		next.state, next.closeReason, next.closedAt = ChangeStateOpen, "", sql.NullInt64{}
+		next.closedBy, next.closedByKind = "", ""
 		// The source moved while closed: its head now is a revision of its
 		// own, made by the reopen.
 		if p.Head != row.head {
@@ -310,8 +312,8 @@ func writeChanges(ctx context.Context, tx store.Execer, maxVariables int, w chan
 			return []any{r.id, r.repoID, r.number, r.title, r.bodyBytes, string(r.state), r.source, r.target,
 				r.head, r.revision, r.owner, string(r.ownerKind), r.operator, string(r.work.Backend), r.work.ID,
 				r.work.Key, r.work.Project, r.turn, r.run, r.openedAt, r.opened, r.closedAt, r.closeReason,
-				r.mergedAt, string(r.mergedVia), r.mergeOID, r.mergedBy, string(r.mergedByKind), r.mergedOperator,
-				r.overrideReason, r.version, r.position, r.updatedAt}
+				r.closedBy, string(r.closedByKind), r.mergedAt, string(r.mergedVia), r.mergeOID, r.mergedBy,
+				string(r.mergedByKind), r.mergedOperator, r.overrideReason, r.version, r.position, r.updatedAt}
 		})
 	return err
 }
@@ -444,7 +446,8 @@ const (
 		revision = excluded.revision, version = excluded.version,
 		position = excluded.position, updated_at = excluded.updated_at`
 	changeStateMoved changeWrite = `ON CONFLICT (id) DO UPDATE SET state = excluded.state,
-		closed_at = excluded.closed_at, close_reason = excluded.close_reason, head_oid = excluded.head_oid,
+		closed_at = excluded.closed_at, close_reason = excluded.close_reason, closed_by = excluded.closed_by,
+		closed_by_kind = excluded.closed_by_kind, head_oid = excluded.head_oid,
 		revision = excluded.revision, version = excluded.version,
 		position = excluded.position, updated_at = excluded.updated_at`
 	changeMerged changeWrite = `ON CONFLICT (id) DO UPDATE SET state = excluded.state,
@@ -494,5 +497,6 @@ const (
 	// insertChangesSQL and changeValuesSQL are [writeChanges]' statement, a
 	// chunk each: every column [changeColumns] names, in its order.
 	insertChangesSQL = `INSERT INTO code_changes (` + changeColumns + `) VALUES `
-	changeValuesSQL  = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	changeValuesSQL  = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		?, ?)`
 )
