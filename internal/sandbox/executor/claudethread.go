@@ -1977,22 +1977,18 @@ func (l threadLine) SourceToolAssistantUUID() ([16]byte, bool) {
 	return uuidBytes(source)
 }
 
-// uuidBytes is s as the 16 bytes of a LOWERCASE CANONICAL UUID, and true: 36
-// characters, a hyphen at 8, 13, 18 and 23 and a lowercase hex digit at every
-// other place, whatever its version and variant. False for every other
-// string, one of an uppercase digit among them: Claude Code keys a thread's
-// records by their uuids as written, so only this form maps a uuid's 16 bytes
-// to one string and back.
+// uuidBytes is s, a string or the bytes a streaming reader holds (a string
+// made of them would cost an allocation an entry), as the 16 bytes of a
+// LOWERCASE CANONICAL UUID, and true: 36 characters, a hyphen at 8, 13, 18 and
+// 23 and a lowercase hex digit elsewhere, whatever its version and variant.
+// False for every other string, one of an uppercase digit among them: Claude
+// Code keys a thread's records by their uuids as written, so only this form
+// maps 16 bytes to one string and back.
 //
-// BYTES, NOT CLAUDE.md'S uuid.UUID, though they are as wide: uuid.Parse also
-// reads a uuid of uppercase digits, of no hyphens, in braces or behind a
-// urn:uuid: prefix, each a string Claude Code's load holds apart from the
-// lowercase one, so a type whose parse its readers would reach for would
-// merge records the load keeps apart.
-//
-// A STRING OR ITS BYTES: a reader that reads an entry as it streams holds its
-// first bytes in a buffer of its own, and a string made of them would cost it
-// an allocation an entry.
+// BYTES, NOT CLAUDE.md'S uuid.UUID, though as wide: uuid.Parse also reads
+// uppercase digits, no hyphens, braces or a urn:uuid: prefix, each a string
+// Claude Code's load holds apart from the lowercase one, so a type whose parse
+// its readers would reach for would merge records the load keeps apart.
 func uuidBytes[T ~string | ~[]byte](s T) ([16]byte, bool) {
 	var u [16]byte
 	if len(s) != 36 {

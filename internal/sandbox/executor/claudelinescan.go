@@ -16,114 +16,23 @@ import (
 	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
-// A THREAD LINE READ IN ONE SCANNER PASS, NEVER HELD.
-//
-// The reader here ([scanReader]) reads a member of a Claude Code session a
-// line at a time as [threadReader] does, and answers each line as it does: a
-// record with its head, its byte facts and its facts ([threadLine]), a
-// [*threadLineError] classed as Claude Code's load reads the line, or what
-// ended the reading. It reads each line through [jsonscan] in ONE PASS that
-// never holds the line, where [threadReader] holds the whole line and
-// decodes it ([decodeThreadLine]), so a line of any length costs what its
-// readers read of it: Claude Code keeps no bound on a line (a whole-PDF Read
-// writes 55,924,056 bytes on one). Nothing calls it yet: it is held to the
-// whole decode, line by line, by the differential in
-// claudelinescan_internal_test.go, before it takes that reader's place.
-//
-// A LINE IS ITS OWN READER ([lineSource]), which ends at the line's break and
-// hands the scanner the line without it, so the scanner reads one JSON text
-// a line: its break is no blank of the value, and a value cut at the break
-// is a value cut at the text's end. Every byte the source hands the scanner,
-// and every byte it reads past a fault to reach the break, passes first
-// through the member's meter and through the line's byte facts
-// ([lineBytes]), a tee of the raw bytes, never of the tokens: a pattern a
-// reader of bytes reads can begin inside a name, through an escaped quote,
-// which no token says ([threadBytes]). The context of the Next in progress is
-// asked before each piece the source takes of the member, at most
-// [lineChunkBytes], so a reading overruns its caller's wait by one piece,
-// whatever the line's length.
-//
-// NOTHING OF A LINE COMMITS BEFORE ITS BREAK AND THE SCANNER'S END OF IT
-// (io.EOF, or the fault that ends it): what the pass reads lives in the
-// line's fresh facts and the reader's own scratch until then, and a piece
-// the member ends with no break commits nothing whatever the scanner made of
-// it. Then the line is judged in the order Claude Code's load reads it
-// ([scanReader.commit]): a fault of the grammar first, wherever in the line
-// it lies, since the whole decode reads the whole value before it reads the
-// head; then one value that is no object; then the head; then the bounds
-// the reading holds a line to; and only then a record. So a fault late in a
-// line beats what the line said before it, and a line past a bound is still
-// classed exactly where its grammar or its head refuses it: past a bound the
-// pass keeps scanning, holding nothing more.
-//
-// EVERY MEMBER IS READ BY ITS DECODED NAME, exactly, case kept, as the whole
-// decode reads a key under [threadDecoding]: `"\u0074ype"` is `type`, and
-// `"Type"` is no key the layer reads. A key written twice is read by its
-// last value, wholesale: each occurrence of a key the pass reads replaces
-// what the one before it left, a frame's all of it (a second `message`, a
-// block's second `content`), never merged with it.
-//
-// EVERY VALUE IS READ BY ONE OF THREE MEANS, or passed over unheld. A small
-// value a reader decodes by the layer's own code (a uuid, a timestamp, a
-// message's usage, a block's id) is CAPTURED as written, within
-// [threadValueMax], the bytes a json.RawMessage of the whole decode holds
-// ([jsonscan.Scanner.Capture]): copied into the line's facts where an
-// accessor reads it, or held in the reader's own buffers until its object
-// ends where the rule that decides the object reads it (a block's type, a
-// send's target). A container its readers walk is a FRAME, read member by
-// member, which keeps only what its readers ask of it (a message's kind, its
-// blocks counted by kind, its calls) and decides each object by the layer's
-// one rule of it ([blockCallOf]) once the object ends, when every key of it
-// has been met. A text its readers ask a property of (a prompt, a task
-// notification, a tool's result) STREAMS, read a piece at a time into the
-// automaton that answers exactly at any length ([textSays], [textNotice],
-// [textHandback], [textResult]), and is never held. Every other member is
-// passed over, validated and held nowhere ([jsonscan.Scanner.Skip]). A value
-// the pass captures that passes its bound fails the line closed, never read
-// as a guess.
-//
-// A LIST ITS READERS WALK is read an element at a time, each element by the
-// layer's one rule of it as it ends (a replacement's [replacedID], a batch
-// entry's [batchEntryID], a withheld memory's [withheldKept]), in order, up to
-// the first the rule refuses, which is the list's error, every element after
-// it passed over (still counted where its reader counts every element, as a
-// replacement record's is): what a walk of the list hands its reader
-// ([eachElement]). An entry a reader reads by its first characters alone (a
-// retraction's, a kept record's uuid) is read no further than one byte past
-// them ([lineDecoder.opening]), and a skill's name streams into its length in
-// UTF-16 code units and whether its bytes as written were UTF-8
-// ([jsonscan.Scanner.InvalidUTF8]), so no entry is held whole.
-//
-// A RECORD'S TYPE GATES ITS FRAMES ([gates]). A frame whose accessors answer
-// on records of some types alone (a message, on a user's or an assistant's;
-// an attachment, on an attachment record's; a compaction's metadata, on a
-// system record's) is passed over unread where the `type` the line wrote
-// before it is a string naming none of them ([lineDecoder.admits]): an
-// api-request-blob writes its type first, and then a message that repeats a
-// whole request, its media among it. A record's type is known only at its
-// end, though (an assistant record writes its message before its type), so a
-// frame met before any type, or after one that is no string, is read; a line
-// whose last type reads a frame the pass passed over for an earlier one fails
-// closed, never read as a record that holds no such frame; and a frame the
-// last type, or its subtype, does not read is dropped at the commit
-// ([settle]). Which kind of call a message's blocks make turns on the type
-// too (a user's results, an assistant's uses), so the pass keeps both kinds
-// and the commit keeps the type's.
+// A THREAD LINE READ IN ONE SCANNER PASS, NEVER HELD: [scanReader] answers
+// each line as [threadReader] does, through [jsonscan], without holding the
+// line, so a line of any length costs what its readers read of it. Why a tee
+// of the raw bytes, why nothing commits before the break, the order a line is
+// judged in, names by their decoded text and last occurrence, the three means
+// a value is read by, the type's gate and the meter: the package doc, "A
+// thread line is read in one scanner pass, never held".
 
 // threadValueMax is the most of one value the layer reads whole: a raw value
 // it keeps for an accessor to decode (a uuid, a timestamp, a reply's usage,
 // an attachment's type), or one it decides as its object ends (a call's id, a
 // tool's name), as written. PAST IT, THE LINE FAILS CLOSED
 // ([errThreadBound]): a reader never reads a guess, and a line no release
-// writes costs its reading, never a false hold.
-//
-// 64 KiB: the scanner's own read buffer, so a capture holds a reader at most
-// twice that for its life ([jsonscan.Scanner.Capture]), and 160 times the
-// longest such value of any probe thread, a reply's usage of 402 bytes (the
-// next, a compaction's preserved segment, 153). What a reader reads of a
-// longer value it reads streamed ([threadMessage.Says], a result's digests
-// [threadResultText]) or by its prefix (a retraction's,
-// [threadLine.Retracted]), and those have no such bound.
+// writes costs its reading, never a false hold. 64 KiB: the scanner's own read
+// buffer, and 160 times the longest such value of any probe thread, a reply's
+// usage of 402 bytes. A longer value is read streamed ([threadMessage.Says],
+// [threadResultText]) or by its prefix ([threadLine.Retracted]), unbounded.
 const threadValueMax = 64 << 10
 
 // errLineMember is a line that runs past what is left of its member's bound
@@ -192,25 +101,17 @@ func (t *scanReader) Reset(r io.Reader, maxBytes int64) {
 	t.n, t.torn, t.end = 0, false, nil
 }
 
-// Next is the member's next WHOLE line, one that ends in "\n", read without
-// its break in one scanner pass. It answers:
-//
-//   - io.EOF at the member's end. A last piece with no break is never a line,
-//     whatever the scanner made of it ([threadReader.Next] says why);
-//     [scanReader.Torn] says it was there.
-//   - errThreadBound once the member runs past the reader's bound, EVEN
-//     WHERE THE BOUND FALLS RIGHT AFTER A LINE BREAK, once a value the line
-//     keeps runs past [threadValueMax] or its facts past [threadLineMax],
-//     or once a line's type reads a frame the pass passed over for the type
-//     the line wrote before it. The reading is over, and stays over.
-//   - a *threadLineError for a whole line that is not one record, classed as
-//     Claude Code's load reads it ([scanReader.commit]): the reader stays
-//     usable.
-//   - any error of the member's reader, AS IT IS, which ends the reading.
-//   - ctx's error once ctx has ended, asked before each piece of the member
-//     the line takes, so a reading overruns its caller's wait by one piece
-//     ([lineChunkBytes]) at most, whatever the line's length. The reading is
-//     over, and stays over, whatever context a later Next is handed.
+// Next is the member's next WHOLE line, read without its break in one
+// scanner pass, answered as [threadReader.Next] answers it: io.EOF at the
+// member's end, a last piece with no break never a line ([scanReader.Torn]);
+// a *threadLineError for a whole line that is no record, the reader still
+// usable; and, each ending the reading for good, errThreadBound once the
+// member runs past its bound (EVEN RIGHT AFTER A BREAK), once the pass captures
+// a value past [threadValueMax] (a replaced occurrence or a frame the final
+// type drops among them) or the facts run past [threadLineMax], or once the
+// line's type reads a frame passed over for an earlier type; the member's
+// reader's error as it is; and ctx's error, asked before each piece the line
+// takes, so a reading overruns its caller's wait by one [lineChunkBytes].
 func (t *scanReader) Next(ctx context.Context) (threadLine, error) {
 	if t.end != nil {
 		return threadLine{}, t.end
@@ -250,27 +151,15 @@ func (t *scanReader) Torn() bool { return t.torn }
 
 // commit is the line just read, whole and ended by its break, scanned what
 // the pass answered (nil where the line was one JSON value) and facts what it
-// filled, judged IN THE ORDER CLAUDE CODE'S LOAD READS IT, the first that
-// holds answering:
-//
-//  1. A fault of the grammar ([jsonscan.Error]), wherever it lies: a NUL or a
-//     byte order mark first is faultLead, any other byte the grammar refuses
-//     or a line of blanks alone faultSyntax, a value cut at the break
-//     faultPrefix, one nested too deep faultDepth, more after the value
-//     faultTrailing. Its Err is errNotOneRecord where the line opened no
-//     object, as the whole decode's, else the scanner's own words.
-//  2. One value that is no object: faultNotObject, errNotOneRecord.
-//  3. A head the head's rule refuses ([headOf]), judged on each key's last
-//     occurrence and under the last `type`: faultHead, its Type the kind of
-//     record that `type` names ([kindOf]).
-//  4. A value past [threadValueMax], facts past [threadLineMax] ([lineMeter]),
-//     or a frame the record's type reads passed over for the type before it
-//     ([lineDecoder.passedOver]): errThreadBound, and the reading is over.
-//  5. Else the record, each frame settled to its type
-//     ([settle]).
-//
-// Steps 1 to 3 come before the bound, so a line past it is classed exactly
-// where its grammar or its head refuses it.
+// filled, judged IN THE ORDER CLAUDE CODE'S LOAD READS IT (the package doc
+// says why), the first that holds answering: a fault of the grammar wherever
+// it lies ([scanFault]), its Err errNotOneRecord where the line opened no
+// object, else the scanner's words; one value that is no object; a head the
+// head's rule refuses ([headOf]) under each key's last occurrence, its Type
+// the kind the last `type` names ([kindOf]); a value past [threadValueMax],
+// facts past [threadLineMax] or a frame passed over for an earlier type
+// ([lineDecoder.passedOver]), errThreadBound, ending the reading; else the
+// record, each frame settled to its type ([settle]).
 func (t *scanReader) commit(scanned error, facts *lineFacts) (threadLine, error) {
 	size, read := int(t.src.n+1), t.src.bytes.facts()
 	refused := func(err error, fault lineFault, kind recordKind) (threadLine, error) {
@@ -386,8 +275,8 @@ func (s *lineSource) reset(ctx context.Context, r *bufio.Reader, left int64) {
 }
 
 // Read reads the line's next bytes into p, up to its break: io.EOF once the
-// line has ended at its break, and what ended it otherwise once it has. It
-// never answers no bytes with no error.
+// line has ended at its break, and what ended it otherwise once it has. For a
+// p of at least one byte it never answers no bytes with no error.
 func (s *lineSource) Read(p []byte) (int, error) {
 	for len(s.pending) == 0 {
 		switch {
@@ -487,17 +376,16 @@ var recordRaws = [...]struct {
 }
 
 // lineMeter is what one line's facts may still take of [threadLineMax], a
-// bound in sum, since a bound on each value lets a line of a million tiny
-// calls hold a million calls: left, the bytes the pass may still allocate
-// for them; over, whether a charge found too few left, after which every
+// bound in sum (the package doc says why): left, the bytes the pass may still
+// keep for them; over, whether a charge found too few left, after which every
 // charge is refused and the pass holds nothing more of the line. EVERY
-// ALLOCATION FOR THE FACTS IS CHARGED as it is made: a kept raw or string by
+// ALLOCATION THE FACTS KEEP IS CHARGED as it is made: a kept raw or string by
 // its length (a string right after its decode, so the meter passes its bound
-// by one value's decode at most), an array a list grows through by its
-// capacity times its element's size, before it is made ([grow]). NOTHING IS
-// REFUNDED: what an occurrence a later one replaced allocated stays charged,
-// so the meter bounds what a line allocates, and so what it holds. Not
-// charged: the facts' own struct and the reader's buffers, kept across lines.
+// by one value's decode at most), an array by its capacity times its
+// element's size, before it is made ([grow]). NOTHING IS REFUNDED, so the
+// meter bounds what the line's facts keep, every copy of a value counted. Not
+// charged: the facts' struct, the reader's buffers, and what the pass makes
+// and drops (a refused block's strings, a frame's error).
 type lineMeter struct {
 	left int
 	over bool

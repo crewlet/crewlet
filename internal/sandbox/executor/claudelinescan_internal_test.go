@@ -24,15 +24,12 @@ import (
 // what the whole decode answers of it ([decodeThreadLine]): record or refused,
 // the fault, the kind of record a refused head names, the size, whether the
 // error is errNotOneRecord (a refused head's in its own words), the byte facts,
-// and for a record its head, every fact the line's accessors read and every
-// answer each accessor gives, an error by its text and a list by what it
-// replays. Values and facts are read at any length here: both bounds are
-// raised ([scanReader.valueMax], [scanReader.meterMax]), since the whole
-// decode has neither; [TestALinesFactsAreHeldToTheBound] holds them.
-// Where the pass passes a frame over for the type a line wrote before it and
-// the line's last type reads it, the reading ends there, which the whole
-// decode, reading the line whole, never needs: the differential models it
-// from the line's keys in order ([scanWant]).
+// and for a record its head, every fact and every accessor's answer, an error
+// by its text and a list by what it replays. Both bounds are raised
+// ([scanReader.valueMax], [scanReader.meterMax]), since the whole decode has
+// neither; [TestALinesFactsAreHeldToTheBound] holds them. A line whose last
+// type reads a frame passed over for an earlier type ends the reading, which
+// the differential models from the line's keys in order ([scanWant]).
 
 // scanAnswer is what a reading answered of one line, line and err, as text:
 // for a record, its place, its size, its head, every small value the pass
@@ -344,42 +341,13 @@ func scanPassedOver(raw []byte, frame string, types ...string) bool {
 }
 
 // A LINE READ IN ONE SCANNER PASS IS READ AS ITS WHOLE DECODE READS IT: every
-// line of the corpus ([scanCorpus]) answers, read in one pass, what the whole
-// decode answers ([scanAnswer]): record or refused, the fault, the kind of
-// record a refused head names, the size, whether the error is
-// errNotOneRecord, the byte facts, the head, every fact the line keeps and
-// every answer of every accessor, errors by their text and lists by what they
-// replay; and a line whose type reads a frame the pass passed over for the
-// type before it ends the reading there. The corpus is read as one member to each line that
-// ends a reading, so nothing of a line reaches the next, each line's answer
-// printed only once every line of its member is read; whole and in pieces of
-// 17 bytes, so every token of a short line meets a piece's edge somewhere.
-//
-// Mutation: keep a key's first occurrence rather than its last; classify a
-// line that is no object before the scanner's end of it; hand the scanner the
-// line's break; compare names whatever their case; read on past a fault
-// without reading the line to its break; keep a line's parent in the pass's
-// buffer, which the next line's overwrites; read a byte order mark as a
-// fault of syntax; give errNotOneRecord to a line that opened an object; name
-// no kind for a refused head; drop what of a piece the scanner had no room
-// left for; keep what a message, a content or a block read before a later
-// occurrence or a later block; decide a block at its type, before the keys
-// after it; read on after a block the rule refused; keep the calls of one
-// kind only as the blocks are read, or of both at the commit; read a text
-// no further than its first piece, or a result's list past its first
-// element; leave a notification's last line unread; pass no message over
-// for the type before it, or read a line whose type reads one passed over
-// as a record; keep what a payload's earlier occurrence read, or what the
-// object before it held for its rule; read a skill's name as UTF-8 whatever
-// its bytes, or no further than its first piece, or count no names past the
-// listing's bound; read a listing that lacks its names as one not kept, or
-// a content that is no list as a list of strings; check a kept list's
-// entries before its anchor, or keep a first `uuids` past a second; read an
-// entry's opening to its last byte that matters and none past it; read a
-// retraction's entries past one that is no string, or count a replacement
-// only until one fails its rule; read a null batch as none; gate only a
-// message by the type before it, or end only on a passed-over message; keep
-// a system record's frame its subtype does not read.
+// line of the corpus ([scanCorpus]) answers what the whole decode answers
+// ([scanAnswer]), and a line whose type reads a frame passed over for the type
+// before it ends the reading there. The corpus is read as one member to each
+// line that ends a reading, so nothing of a line reaches the next, each answer
+// printed only once its member is read; whole and in pieces of 17 bytes, so
+// every token of a short line meets a piece's edge somewhere. The mutations
+// it kills are listed in the commits that built the pass.
 func TestTheScanReadsEveryLineAsTheDecodeReadsIt(t *testing.T) {
 	t.Parallel()
 	lines := scanCorpus(t)
@@ -736,22 +704,15 @@ func scanMessageLines() [][]byte {
 }
 
 // scanPayloadLines is records whose payloads and lists hold what their
-// readers read at its edges: a leg's result's answer and its handback in
-// every shape, beside a file's base64 longer than a piece; an attachment of
-// every type its shape rule reads, each rule met and missed, skill listings
-// at the count's and the name's bound in UTF-16 code units, a long name whose
-// bytes are no UTF-8 where it ends, where it begins and beside a name the
-// rule refuses after it, and a name of U+FFFD written as bytes and as an
-// escape; withheld memories of every entry the rule refuses, a key of an
-// entry written twice; a compaction's kept list refused at an entry after
-// those before it, at its anchor whatever comes first, and of entries one
-// byte either side of a uuid, an escaped one, one past ASCII and one longer
-// than a piece; retractions of the same entries about a uuid's first 24
-// characters, on every record that reads them and one that does not;
-// replacements and a batch's entries refused after one that was read,
-// written twice, and of every kind; and each frame on a record of a type
-// that does not read it, and after a type that does not read it on a record
-// whose last type does.
+// readers read at its edges: a leg's result and its handback in every shape
+// beside a base64 longer than a piece; an attachment of every type its shape
+// rule reads, met and missed, skill listings at both bounds and names whose
+// bytes are no UTF-8; withheld memories of every refused entry; kept lists
+// refused at an entry or the anchor, entries about a uuid's length, escaped,
+// past ASCII and longer than a piece; retractions about a uuid's first 24
+// characters; replacements and batch entries refused after one read, written
+// twice and of every kind; and each frame on a record of a type that does not
+// read it, or after such a type on a record whose last type does.
 func scanPayloadLines() [][]byte {
 	u := ctUUID
 	quote := func(s string) string {
@@ -984,20 +945,16 @@ var scanSeeds = []string{
 }
 
 // A LATE FAULT BEATS WHAT THE LINE SAID BEFORE IT: a line is judged only once
-// the scanner has read it to its break, a fault of its grammar first wherever
-// it lies, so a head refused early and then data after the value is
-// trailing, a value cut at the break after it a prefix and a NUL in a string
-// after it a syntax error; a list is no object, and a list followed by more
-// is trailing; a value past its bound followed by more is trailing, one
-// followed by a refused head is that head, and only a line whose grammar and
-// head are whole fails at the bound, which ends the reading. A last piece
-// with no break commits nothing whatever it holds, and a member's bound
-// falling inside a line ends the reading there. Each holds of a line of a few
-// bytes and of one past 8 MiB, the bound the whole line was read within.
+// the scanner has read it to its break, a grammar fault first wherever it
+// lies: a head refused early, then data after the value, is trailing; a value
+// cut at the break a prefix; a NUL after it syntax; a list no object; a value
+// past its bound followed by more trailing, by a refused head that head. Only
+// a line whose grammar and head are whole fails at the bound. A last piece
+// with no break commits nothing, and a member's bound inside a line ends the
+// reading. Each holds of a line of a few bytes and of one past 8 MiB.
 //
-// Mutation: answer the line before the scanner reads to its end, and the
-// head fault and the bound beat the data after them; or commit a piece the
-// member ends with no break, and the torn record reads as a line.
+// Mutation: answer the line before the scanner reads to its end; commit a
+// piece the member ends with no break.
 func TestALateFaultBeatsWhatTheLineSaidBeforeIt(t *testing.T) {
 	t.Parallel()
 	brief := ctThread(ctBrief(ctUUID(1)))
@@ -1189,21 +1146,16 @@ func TestAReadingStopsWithinAFillOfItsContext(t *testing.T) {
 	}
 }
 
-// A RESET READER ON THE SCANNER READS AS A FRESH ONE: one reader reads a
-// session's members one after another ([scanReader.Reset]), so a member read
-// after another reads exactly as a fresh reader reads it, its lines numbered
-// from 1, its bound its own, ended only by what ends it, and torn only where it
-// is, whatever the member before it left: a torn piece, the member's bound, a
-// value past its bound, a line that is no record, an error of its reader, or
-// a context that ended. And one reader reads a thousand members, one after
-// another, allocating for each what the member's line costs, never its
-// buffers again: a fresh reader's buffers are its member reader's and its
-// scanner's, 64 KiB each.
+// A RESET READER ON THE SCANNER READS AS A FRESH ONE ([scanReader.Reset]):
+// its lines numbered from 1, its bound its own, ended and torn only by what
+// ends or tears it, whatever the member before it left: a torn piece, the
+// member's bound, a value past its bound, a line that is no record, an error
+// of its reader, or an ended context. One reader reads a thousand members
+// allocating what each line costs, never its buffers (its member reader's and
+// its scanner's, 64 KiB each) again. Not parallel: the allocation count is the
+// process's.
 //
-// Not parallel: the allocation count is the process's.
-//
-// Mutation: keep how a reading ended across Reset, and the member after it
-// reads as ended; or make a scanner each member, and each member costs one.
+// Mutation: keep how a reading ended across Reset; make a scanner a member.
 func TestAResetReaderOnTheScannerReadsAsAFreshOne(t *testing.T) {
 	brief := ctBrief(ctUUID(1))
 	next := ctThread(ctBrief(ctUUID(2)), "[1]", ctBrief(ctUUID(3)))
