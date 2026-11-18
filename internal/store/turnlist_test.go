@@ -1019,3 +1019,74 @@ func TestATurnStoppedOnAnotherNodeIsStoppedWhenTheHalvesFold(t *testing.T) {
 		}
 	}
 }
+
+// A WORKER'S FAILURE IS ITS OWN, not its turn's. A worker the executor
+// delegated to publishes its record nested under the execute phase
+// (`host_phase`), and the run reads its failure as an answer and goes on; the
+// turn that completes did not fail, and the seat's last turn seeded from this
+// row says so as the live projection does.
+//
+// Mutation: fold every failed row into the turn's failure, nested ones
+// included, and the turn reads failed with the worker's reason.
+func TestANestedRecordsFailureIsNotItsTurns(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	payload := func(v map[string]any) json.RawMessage {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	tags := func(turn string, failed bool) map[string]string {
+		out := map[string]string{"turn_id": turn, "agent_role": "Dev", "agent_id": "id-dev"}
+		if failed {
+			out["failed"] = "true"
+		}
+		return out
+	}
+	for _, rec := range []store.EventRecord{
+		{ID: "w-p0", Type: "agent_phase_completed", Time: at, Tags: tags("worked", true),
+			Payload: payload(map[string]any{"turn_id": "worked", "phase": "subagent",
+				"host_phase": "execute", "failed": true, "error_kind": "no_result",
+				"error": "the worker never submitted"})},
+		{ID: "w-p1", Type: "agent_phase_completed", Time: at.Add(time.Second),
+			Tags:    tags("worked", false),
+			Payload: payload(map[string]any{"turn_id": "worked", "phase": "execute"})},
+		{ID: "w-done", Type: "agent_turn_completed", Time: at.Add(2 * time.Second),
+			Tags: tags("worked", false), Payload: payload(map[string]any{"turn_id": "worked"})},
+		{ID: "f-p0", Type: "agent_phase_completed", Time: at.Add(time.Minute),
+			Tags: tags("broke", true),
+			Payload: payload(map[string]any{"turn_id": "broke", "phase": "execute",
+				"failed": true, "error_kind": "timeout", "error": "write timed out"})},
+	} {
+		rec.Category, rec.Actor = "lifecycle", "Dev"
+		if err := log.Append(t.Context(), rec); err != nil {
+			t.Fatalf("append %s: %v", rec.ID, err)
+		}
+	}
+
+	rows, err := log.Turns(t.Context(), store.TurnQuery{AgentID: "id-dev"})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	got := map[string]store.Turn{}
+	for _, row := range rows {
+		got[row.TurnID] = row
+	}
+	if w := got["worked"]; w.Failed || w.Error != "" || w.ErrorKind != "" {
+		t.Errorf("turn with a failed worker = failed %v, %q (%q), want clean", w.Failed, w.Error, w.ErrorKind)
+	}
+	if b := got["broke"]; !b.Failed || b.ErrorKind != "timeout" {
+		t.Errorf("turn whose own phase failed = failed %v, kind %q, want failed timeout", b.Failed, b.ErrorKind)
+	}
+	yes := true
+	failed, err := log.Turns(t.Context(), store.TurnQuery{AgentID: "id-dev", Failed: &yes})
+	if err != nil {
+		t.Fatalf("Turns(failed=true): %v", err)
+	}
+	if len(failed) != 1 || failed[0].TurnID != "broke" {
+		t.Errorf("failed=true selected %+v, want broke alone", failed)
+	}
+}

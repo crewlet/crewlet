@@ -6807,7 +6807,7 @@ two-state toggle where `failed=` has THREE values — every turn, only the ones
 that carried a failure, only the clean ones — and "absent" is the default an
 operator opens the screen for. **The axis is not narrowed by failure**, and
 its subtitle says so while `failed=` is set: "carried a failure" is a fact
-about a whole turn (any of its records failed), while the axis counts
+about a whole turn (any of its own records failed), while the axis counts
 completion records, each with only its own flag — narrowed that way it would
 count a different set of turns from the list under the same heading, so it
 stays every turn with the failed share at each bar's foot.
