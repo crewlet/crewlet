@@ -3,10 +3,22 @@
  * of sentences on the reader's days, each day counted by the engine (`push_days`).
  */
 
-import { Fragment, memo, useId, useMemo, useState } from "react";
-import { Button, Callout, EmptyState, IconTile, RelativeTime, Skeleton, Tag } from "@crewlethq/ui";
+import { Fragment, memo, useId, useMemo, useState, type ReactNode } from "react";
+import {
+  AvatarStack,
+  Button,
+  Callout,
+  EmptyState,
+  IconTile,
+  RelativeTime,
+  Select,
+  Skeleton,
+  Tag,
+  type SelectOption,
+} from "@crewlethq/ui";
 import {
   BotGlyph,
+  CalendarGlyph,
   GitBranchGlyph,
   KeyGlyph,
   PackageGlyph,
@@ -14,9 +26,10 @@ import {
   TagGlyph,
   UploadGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href, useParam } from "~/app/router.tsx";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { AgoTime } from "~/components/AgoTime.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { useNow } from "~/lib/clock.ts";
+import { useClock, useNow } from "~/lib/clock.ts";
 import {
   PUSH_HISTORY_DAYS,
   commandWord,
@@ -27,18 +40,21 @@ import {
   type OutcomeCount,
 } from "~/lib/code.ts";
 import { fmtBytes, fmtCount, fmtDate, fmtDateTime, plural, readerDay } from "~/lib/format.ts";
+import { zone } from "~/lib/prefs.ts";
+import { useOrgIndex, useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import {
   queryErrorCode,
   type CodePushCommand,
+  type CodePushers,
   type CodePushRow,
   type CodePushesAnswer,
 } from "~/protocol/index.ts";
 import { spellPosition } from "~/protocol/session.ts";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
-import { useDayBounds } from "./activity.tsx";
 import { ChangeRefPill } from "./ChangeRow.tsx";
 import { CodeList, useDayGroups, type ListDay } from "./CodeList.tsx";
 import { REPO_PARAM, commitHref, compareHref, repoHref } from "./paths.ts";
@@ -46,14 +62,17 @@ import {
   credentialWords,
   dayAside,
   dayCounts,
+  pusherParams,
   pushSubject,
   pushWords,
   type PushPart,
 } from "./pushWords.ts";
+import { PUSHER_DAYS } from "./activity.tsx";
+import { usePushActivity } from "./railParts.tsx";
 import { REFUSED_CODES, refusalSentence } from "./repo/marks.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
 import { BranchChip, Face, GITLET, useWhoName } from "./ui.tsx";
-import { COUNTED_DAYS } from "./when.ts";
+import { WHEN, dayBoundsFor, sinceOf } from "./when.ts";
 import "~/styles/gitlet.css";
 
 /** How often the newest page is read again: the code log has no push to the dashboard. */
@@ -77,27 +96,23 @@ const VIA_WORDS: Readonly<Record<string, string>> = {
 
 export function Pushes() {
   const [repo, setRepo] = useParam(REPO_PARAM, "", "filter");
-  const named = repo !== "" && isRepoName(repo);
+  const picker = <RepoPicker size="sm" repo={repo} onChoose={setRepo} />;
+  if (repo !== "" && isRepoName(repo)) return <PushHistory repo={repo} toolbarLead={picker} />;
 
   return (
     <>
-      <PageToolbar>
-        <RepoPicker size="sm" repo={repo} onChoose={setRepo} />
-      </PageToolbar>
-
+      <PageToolbar>{picker}</PageToolbar>
       {repo === "" ? (
         <EmptyState
           icon={<UploadGlyph size={32} />}
           title="Choose a repository"
           description="A push history is kept with its repository: choose one above, or open one from Repositories."
         />
-      ) : !named ? (
+      ) : (
         <Callout variant="warning">
           “{repo}” is not a repository’s name: one is lowercase letters, digits and hyphens,
           beginning and ending with a letter or a digit, at most 63 in all.
         </Callout>
-      ) : (
-        <PushHistory repo={repo} />
       )}
     </>
   );
@@ -136,13 +151,36 @@ function historyRefused(error: string | null, refusal: unknown, detail?: string)
 }
 
 /**
- * One repository's pushes, newest first, a page at a time, under day headings. `repo` is a name a
- * repository can have (`isRepoName`).
+ * One repository's pushes, newest first, a page at a time, under day headings, narrowed on the
+ * engine by who pushed (`by=`) and when (`when=`). `repo` is a name a repository can have.
  */
-export function PushHistory({ repo }: { repo: string }) {
-  const bounds = useDayBounds(COUNTED_DAYS);
-  const base = useMemo(() => ({ name: repo, brief: true }), [repo]);
-  // THE DAY COUNTS RIDE THE FIRST PAGE, one snapshot with its rows; older pages ask none.
+export function PushHistory({ repo, toolbarLead }: { repo: string; toolbarLead?: ReactNode }) {
+  const [by, setBy] = useParam("by", "", "filter");
+  const [when, setWhen] = useParam("when", "", "filter");
+  const nav = useNavigator();
+  const whoName = useWhoName();
+  // THE READER'S DAY, read again only when it turns, so the first page's key holds all day.
+  const today = useClock((t) => readerDay(t));
+  const inZone = zone();
+  const activity = usePushActivity(repo, PUSHES_POLL_MS);
+  const seats = usePusherChoices(activity.read.data?.repo?.pushers, by);
+  const kind = by === "" ? "" : (pusherParams(by, seats.kindOf).pusher_kind ?? "");
+  const since = sinceOf(when, today);
+  const base = useMemo(
+    () => ({
+      name: repo,
+      brief: true,
+      ...(kind ? { pusher_kind: kind } : {}),
+      ...(kind && kind !== "gitlet" ? { pusher: by } : {}),
+      ...(since ? { since } : {}),
+    }),
+    [repo, kind, by, since],
+  );
+  // THE DAY COUNTS RIDE THE FIRST PAGE, one snapshot with its rows; never beside a pusher.
+  const bounds = useMemo(
+    () => (by === "" ? dayBoundsFor(when, today, inZone) : []),
+    [by, when, today, inZone],
+  );
   const params = useMemo(
     () => (bounds.length > 0 ? { ...base, day_bounds: bounds.join(",") } : base),
     [base, bounds],
@@ -171,23 +209,71 @@ export function PushHistory({ repo }: { repo: string }) {
     });
   }, [rows, runs, counted]);
   const refused = historyRefused(paged.error, paged.refusal, first.detail);
+  const filtered = by !== "" || when !== "";
+  const narrowed = `${by ? ` by ${by === "gitlet" ? "Gitlet" : whoName(by)}` : ""}${
+    when ? ` ${WHEN.find((w) => w.value === when)?.words ?? when}` : ""
+  }`;
+  const scannedTo = paged.more ? paged.answers.at(-1)?.push_scan?.to : undefined;
+  const clear = (
+    <Button size="small" variant="secondary" onClick={() => nav.filter({ by: null, when: null })}>
+      Clear filters
+    </Button>
+  );
+
+  const toolbar = (
+    <PageToolbar>
+      {toolbarLead}
+      <Select
+        size="sm"
+        width="auto"
+        value={by}
+        onChange={(value) => setBy(String(value))}
+        options={seats.options}
+        ariaLabel="Pushed by"
+        searchable
+        active={by !== ""}
+      />
+      <span title="By the time each push landed.">
+        <Select
+          size="sm"
+          width="auto"
+          value={when}
+          onChange={(value) => setWhen(String(value))}
+          options={WHEN.map((w) => ({
+            value: w.value,
+            label: w.label,
+            leading: <CalendarGlyph size="sm" />,
+          }))}
+          ariaLabel="Pushed"
+          active={when !== ""}
+        />
+      </span>
+    </PageToolbar>
+  );
 
   if (first.error === "not_found") {
     return (
-      <EmptyState
-        icon={<UploadGlyph size={32} />}
-        title={`No repository named “${repo}”`}
-        description={first.detail ?? "It is not declared, or it has been purged."}
-      />
+      <>
+        {toolbar}
+        <EmptyState
+          icon={<UploadGlyph size={32} />}
+          title={`No repository named “${repo}”`}
+          description={first.detail ?? "It is not declared, or it has been purged."}
+        />
+      </>
     );
   }
   return (
     <>
+      {toolbar}
       {paged.loading && rows.length === 0 && refused === null && (
         <Skeleton variant="text" rows={6} label={`Loading the pushes to ${repo}`} />
       )}
       {refused !== null ? (
-        <Callout variant="warning">{refused}</Callout>
+        <div className="code-pushes-refused">
+          <Callout variant="warning">{refused}</Callout>
+          {filtered && clear}
+        </div>
       ) : (
         <QueryState
           error={paged.error}
@@ -197,10 +283,16 @@ export function PushHistory({ repo }: { repo: string }) {
           empty={
             rows.length > 0 || paged.more
               ? undefined
-              : {
-                  title: `Nobody has pushed to ${repo} yet`,
-                  hint: "A push is listed once its record applies: the refs it moved, who pushed and what it brought.",
-                }
+              : filtered
+                ? {
+                    title: `No push${narrowed}`,
+                    hint: `Clear the filters to read every push to ${repo}.`,
+                    action: clear,
+                  }
+                : {
+                    title: `Nobody has pushed to ${repo} yet`,
+                    hint: "A push is listed once its record applies: the refs it moved, who pushed and what it brought.",
+                  }
           }
         >
           <div className="code-pushes-feed">
@@ -218,7 +310,7 @@ export function PushHistory({ repo }: { repo: string }) {
               below={(p) => <PushBelow push={p} repo={repo} />}
               paged={paged}
               moreLabel="Load older pushes"
-              foot={footOf(rows.length, paged.more)}
+              foot={footOf(rows.length, paged.more, narrowed, scannedTo)}
             />
           </div>
         </QueryState>
@@ -227,13 +319,98 @@ export function PushHistory({ repo }: { repo: string }) {
   );
 }
 
-/** Under the rows: how many are loaded, and at the end how long the history keeps. */
-function footOf(count: number, more: boolean) {
+/**
+ * Under the rows: how many are loaded (and narrowed how), how far a narrowed read looked, and at
+ * the end how long the history keeps.
+ */
+function footOf(count: number, more: boolean, narrowed: string, scannedTo?: string): ReactNode {
+  const loaded =
+    count === 0 ? "" : `${plural(count, "push", "pushes")}${narrowed} loaded, newest first`;
+  if (scannedTo) {
+    return (
+      <>
+        {loaded && `${loaded}. `}Looked back to <AgoTime value={scannedTo} />; Load older looks
+        further.
+      </>
+    );
+  }
   if (count === 0) return null;
-  const loaded = `${plural(count, "push", "pushes")} loaded, newest first`;
-  return more
-    ? loaded
-    : `${loaded}. That is every push the history keeps: the last ${PUSH_HISTORY_DAYS} days.`;
+  if (more || narrowed) return loaded;
+  return `${loaded}. That is every push the history keeps: the last ${PUSH_HISTORY_DAYS} days.`;
+}
+
+/** Whom the seat filter offers: who pushed here, most first, then every other seat of the chart. */
+function usePusherChoices(pushers: CodePushers | undefined, by: string) {
+  const index = useOrgIndex();
+  const badge = useSeatBadgeOf();
+  return useMemo(() => {
+    const top = pushers?.top ?? [];
+    const kinds = new Map(
+      top.map((p) => [p.kind === "gitlet" ? "gitlet" : (p.handle ?? ""), p.kind]),
+    );
+    const kindOf = (handle: string) =>
+      kinds.get(handle) ??
+      (index.byHandle.has(handle)
+        ? index.byHandle.get(handle)!.kind === "human"
+          ? "person"
+          : "agent"
+        : undefined);
+    const faces = top
+      .filter((p) => p.kind !== "gitlet" && p.handle)
+      .slice(0, 3)
+      .map((p) => {
+        const seat = badge(p.handle!);
+        return { id: p.handle!, ...seatBadge(seat.name || p.handle!, seat.kind, seat.avatar) };
+      });
+    const option = (value: string, group?: string, hint?: number): SelectOption => {
+      const name = value === "gitlet" ? "Gitlet" : badge(value).name || value;
+      return {
+        value,
+        label: name,
+        text: `${name} ${value}`,
+        leading: <Face who={value === "gitlet" ? GITLET : value} />,
+        ...(group ? { group } : {}),
+        ...(hint !== undefined ? { hint: fmtCount(hint) } : {}),
+      };
+    };
+    const all: SelectOption = {
+      value: "",
+      label: "All seats",
+      ...(faces.length > 0
+        ? { leading: <AvatarStack members={faces} max={3} size="xs" decorative /> }
+        : {}),
+    };
+    const seats = [...index.seats].sort((a, b) => a.name.localeCompare(b.name));
+    let options: SelectOption[];
+    if (pushers) {
+      const named = top.filter((p) => p.kind === "gitlet" || p.handle);
+      const pushed = new Set(named.map((p) => (p.kind === "gitlet" ? "gitlet" : p.handle!)));
+      const here = `Pushed here in ${PUSHER_DAYS} days`;
+      options = [
+        all,
+        ...named.map((p) => option(p.kind === "gitlet" ? "gitlet" : p.handle!, here, p.pushes)),
+        ...(pushers.omitted
+          ? [
+              {
+                // NO HANDLE HOLDS A SPACE, so this line can never be a seat's value.
+                value: " more",
+                label: `and ${fmtCount(pushers.omitted)} more who pushed less`,
+                description: "Type a name to choose one",
+                disabled: true,
+                group: here,
+              },
+            ]
+          : []),
+        ...seats
+          .filter((s) => !pushed.has(s.handle))
+          .map((s) => option(s.handle, "Every other seat")),
+      ];
+    } else {
+      options = [all, option("gitlet"), ...seats.map((s) => option(s.handle))];
+    }
+    if (by !== "" && !options.some((o) => o.value === by)) options.push({ value: by, label: by });
+    return { options, kindOf };
+  }, [pushers, by, index, badge]);
 }
 
 /** The subject's face: a seat's or a person's, Gitlet's mark, or a credential bound to no seat. */

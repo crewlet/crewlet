@@ -3693,6 +3693,14 @@
   gap: var(--spacing-1);
 }
 
+/* A REFUSED HISTORY: the engine's sentence, then Clear filters while narrowed. */
+.code-pushes-refused {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
 .code-push-stored {
   display: flex;
   align-items: center;

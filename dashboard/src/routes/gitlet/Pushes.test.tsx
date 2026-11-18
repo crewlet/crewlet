@@ -208,8 +208,34 @@ const LISTING = {
   level: "stale",
 };
 
+/** Who pushed to web over 30 UTC days, most first, and four who pushed less. */
+const PUSHERS = {
+  from: "2026-10-17T00:00:00Z",
+  until: "2026-11-16T00:00:00Z",
+  top: [
+    { kind: "agent", handle: "frontend", pushes: 88 },
+    { kind: "agent", handle: "backend", pushes: 49 },
+    { kind: "agent", handle: "sre", pushes: 29 },
+    { kind: "gitlet", pushes: 23 },
+    { kind: "agent", handle: "cto", pushes: 14 },
+    { kind: "person", handle: "jane", pushes: 6 },
+  ],
+  omitted: 4,
+  omitted_pushes: 5,
+};
+
+/** The facts read (pushers and a 30-day spark), refused for anything else. */
+const FACTS = (url: URL) =>
+  url.searchParams.get("repo_facts") === "true"
+    ? json({
+        repo: { name: "web", spark: Array<number>(30).fill(2), pushers: PUSHERS },
+        position: POSITION,
+        level: "stale",
+      })
+    : json({}, 404);
+
 /** The engine's REST answers, by path; every request made. */
-function stubFetch(history: (url: URL) => Response) {
+function stubFetch(history: (url: URL) => Response, repo: (url: URL) => Response = FACTS) {
   const asked: URL[] = [];
   vi.stubGlobal(
     "fetch",
@@ -219,6 +245,7 @@ function stubFetch(history: (url: URL) => Response) {
       if (url.pathname === "/auth/session") return new Promise<Response>(() => {});
       if (url.pathname === "/query/code_repos") return Promise.resolve(json(LISTING));
       if (url.pathname === "/query/code_pushes") return Promise.resolve(history(url));
+      if (url.pathname === "/query/code_repo") return Promise.resolve(repo(url));
       return Promise.resolve(json({}, 404));
     }),
   );
@@ -693,4 +720,155 @@ test("leaving a repository's history and coming back starts it from its newest p
   expect(screen.getByText("2 pushes loaded, newest first")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Load older pushes" })).toBeTruthy();
   expect(histories(asked).filter((u) => u.searchParams.get("cursor") === "c3")).toHaveLength(1);
+});
+
+/** The seat filter's options, as the list draws them. */
+function seatOptions() {
+  fireEvent.click(screen.getByRole("button", { name: "Pushed by" }));
+  return screen.getAllByRole("option").map((o) => o.textContent);
+}
+
+// A SEAT IS NARROWED ON THE ENGINE, by its kind and handle, and asks no day counts: they count
+// every pusher. Mutation: send day_bounds beside a pusher, and the first request carries them.
+test("by= narrows on the engine and asks no day counts", async () => {
+  atTheStory();
+  const four = STORY.filter((p) => p.actor === "frontend");
+  const asked = stubFetch((url) => pageOf(url, four));
+  mount("#/gitlet/pushes?repo=web&by=frontend");
+  const feed = await feedOf();
+  const first = newest(asked)[0]!.searchParams;
+  expect([first.get("pusher_kind"), first.get("pusher"), first.has("day_bounds")]).toEqual([
+    "agent",
+    "frontend",
+    false,
+  ]);
+  expect(headings(feed)).toEqual(["Today4 loaded"]);
+  expect(screen.getByText("4 pushes by Frontend Engineer loaded, newest first")).toBeTruthy();
+
+  cleanup();
+  const jane = stubFetch((url) => pageOf(url, [STORY[6]!]));
+  mount("#/gitlet/pushes?repo=web&by=jane");
+  await feedOf();
+  expect(newest(jane)[0]!.searchParams.get("pusher_kind")).toBe("person");
+
+  cleanup();
+  const gitlet = stubFetch((url) => pageOf(url, [STORY[5]!]));
+  mount("#/gitlet/pushes?repo=web&by=gitlet");
+  await feedOf();
+  const asks = newest(gitlet)[0]!.searchParams;
+  expect([asks.get("pusher_kind"), asks.has("pusher")]).toEqual(["gitlet", false]);
+});
+
+// A WINDOW STARTS AT THE READER'S MIDNIGHT and its day counts lie inside it.
+// Mutation: start the window at now less seven days, and since is 14:00 on Nov 9.
+test("when= narrows from the reader's midnight and every bound lies inside it", async () => {
+  atTheStory();
+  const asked = stubFetch((url) => pageOf(url, STORY));
+  mount("#/gitlet/pushes?repo=web&when=7d");
+  const feed = await feedOf();
+  const first = newest(asked)[0]!.searchParams;
+  const bounds = first.get("day_bounds")!.split(",");
+  expect(first.get("since")).toBe("2026-11-10T00:00:00.000Z");
+  expect(bounds).toHaveLength(8);
+  expect([bounds[0], bounds.at(-1)]).toEqual(["2026-11-10T00:00:00Z", "2026-11-17T00:00:00Z"]);
+  expect(headings(feed)).toEqual(["Today8", "Yesterday2 of 13"]);
+  expect(
+    screen.getByText("10 pushes in the last 7 days loaded, newest first", { exact: false }),
+  ).toBeTruthy();
+});
+
+// A NARROWED PAGE READS A BOUNDED STRETCH: one that read short says how far back it looked.
+// Mutation: draw the empty state while `next` is set, and "No push" is drawn.
+test("a narrowed page that read short says how far back it looked, and Load older looks on", async () => {
+  atTheStory();
+  const twoDaysAgo = minutesAgo(2 * 24 * 60);
+  const asked = stubFetch((url) =>
+    url.searchParams.get("cursor") === "c1"
+      ? pageOf(url, [STORY[9]!])
+      : pageOf(url, [], { next: "c1", push_scan: { to: twoDaysAgo } }),
+  );
+  mount("#/gitlet/pushes?repo=web&by=sre");
+  const more = await screen.findByRole("button", { name: "Load older pushes" });
+  const note = () => document.querySelector(".code-list__note")?.textContent;
+  expect(note()).toBe("Looked back to 2 days ago; Load older looks further.");
+  expect(screen.queryByText(/No push/)).toBeNull();
+  fireEvent.click(more);
+  await screen.findByText("1 push by Site Reliability Engineer loaded, newest first");
+  const older = histories(asked).find((u) => u.searchParams.get("cursor") === "c1")!;
+  expect([older.searchParams.get("pusher"), older.searchParams.has("day_bounds")]).toEqual([
+    "sre",
+    false,
+  ]);
+});
+
+// WHOM THE FILTER OFFERS is who pushed here, most first, then every other seat by name.
+// Mutation: sort the pushers by name, and Backend Engineer leads.
+test("the seat options are who pushed, most first, then any seat by name", async () => {
+  atTheStory();
+  stubFetch((url) => pageOf(url, STORY));
+  mount("#/gitlet/pushes?repo=web&by=reviewer");
+  await feedOf();
+  await afterMicrotasks();
+  expect(seatOptions()).toEqual([
+    "All seats",
+    "reviewer",
+    "Frontend Engineer 88",
+    "Backend Engineer 49",
+    "Site Reliability Engineer 29",
+    "Gitlet 23",
+    "CTO 14",
+    "JFJane Founder 6",
+    "and 4 more who pushed lessType a name to choose one",
+  ]);
+
+  cleanup();
+  stubFetch(
+    (url) => pageOf(url, STORY),
+    () => json({ error: "unavailable" }, 503),
+  );
+  mount("#/gitlet/pushes?repo=web");
+  await feedOf();
+  await afterMicrotasks();
+  expect(seatOptions()).toEqual([
+    "All seats",
+    "Gitlet",
+    "Backend Engineer",
+    "CTO",
+    "Frontend Engineer",
+    "JFJane Founder",
+    "Site Reliability Engineer",
+  ]);
+});
+
+// Mutation: clear only by=, and the window stays in the address.
+test("a narrowed history with nothing says so, and Clear filters clears who and when", async () => {
+  atTheStory();
+  stubFetch((url) => pageOf(url, []));
+  mount("#/gitlet/pushes?repo=web&by=frontend&when=7d");
+  expect(
+    await screen.findByRole("heading", {
+      name: "No push by Frontend Engineer in the last 7 days",
+    }),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+  await afterMicrotasks();
+  expect(location.hash).toBe("#/gitlet/pushes?repo=web");
+});
+
+// AN OLDER FLEET REFUSES A FILTER, and Clear filters beside the refusal is the way back.
+// Mutation: drop Clear filters beside the refusal, and a narrowed reader has no way back.
+test("a narrowed history the fleet refuses offers Clear filters beside the refusal", async () => {
+  atTheStory();
+  stubFetch(() =>
+    json({ error: "bad_params", detail: "pusher_kind is not a key this node reads" }, 400),
+  );
+  mount("#/gitlet/pushes?repo=web&by=frontend&when=7d");
+  expect(
+    await screen.findByText(
+      "Pushes are unavailable on this fleet yet: pusher_kind is not a key this node reads.",
+    ),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+  await afterMicrotasks();
+  expect(location.hash).toBe("#/gitlet/pushes?repo=web");
 });
