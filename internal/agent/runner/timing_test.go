@@ -22,14 +22,11 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// WHAT A PHASE RECORD SAYS ABOUT ITS TIME AND ITS CACHE, on the wire.
-//
-// The tool loop measures every round and every call; these hold the runner to
-// carrying those measurements onto the events a dashboard reads — folded
-// across an extension exactly as the rounds themselves are, since a timeline
-// whose numbers are on a different scale from the ledger beside it is a second
-// ledger that disagrees with the first. The loop's cases run on the onboarding
-// pass, the one engine-driven phase an extension reaches.
+// WHAT A PHASE RECORD SAYS ABOUT ITS TIME AND ITS CACHE, on the wire: the
+// tool loop's measurements carried onto the events a dashboard reads, folded
+// across an extension as the rounds are, so the timeline never disagrees with
+// the ledger beside it. The loop's cases run on onboarding, the one
+// engine-driven phase an extension reaches.
 
 // cached is a round that also reports a prompt-cache share.
 func cached(r llmtest.Response, read, write int) llmtest.Response {
@@ -96,9 +93,8 @@ func TestAPhaseRecordCarriesItsRoundsCallsAndCache(t *testing.T) {
 
 func TestAnExtensionKeepsRoundNumbersAndMovesTheCap(t *testing.T) {
 	t.Parallel()
-	// A two-round cap, extended by the step (4) under a ceiling of 8: the
-	// record states the cap the phase ENDED under, not the one it began
-	// with, and the ceiling it could have reached.
+	// A two-round cap, extended by the step (4) under a ceiling of 8: the record
+	// states the cap the phase ENDED under and the ceiling it could have reached.
 	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		persist(t, "a", "one"),
 		persist(t, "b", "two"),
@@ -138,8 +134,7 @@ func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 	r := extendableRunner(t, prov, pub, alwaysExtend{})
 	onboard(t, r)
 
-	// The opening frame already states the cap, before the model has
-	// answered once.
+	// The opening frame states the cap before the model has answered once.
 	if open := openingFrame(t, pub, "onboarding"); open.MaxRounds != 2 || open.RoundCeiling != 8 {
 		t.Errorf("the opening frame states max %d / ceiling %d, want 2 / 8", open.MaxRounds, open.RoundCeiling)
 	}
@@ -149,9 +144,8 @@ func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 	cap := 0
 	for _, frame := range frames {
 		round := frame.RoundNum + 1
-		// THE CAP IN FORCE WHEN THE FRAME WAS PUBLISHED: the budget's 2
-		// until the judge grants more, the 6 the extension moved it to
-		// after — never back, and never 2 on a round past the budget.
+		// THE CAP IN FORCE WHEN THE FRAME WAS PUBLISHED: 2 until the judge grants
+		// more, then 6, never back, and never 2 on a round past the budget.
 		if frame.MaxRounds < cap {
 			t.Errorf("a round-%d frame states max %d after one stated %d", round, frame.MaxRounds, cap)
 		}
@@ -163,10 +157,9 @@ func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 		if frame.RoundStartedAt.IsZero() {
 			t.Errorf("a round-%d frame names no start", round)
 		}
-		// A frame carries every round the phase has finished, on the
-		// phase's scale: every one before the round it is on, and that
-		// round too once its response has been read — while its request
-		// is still out, the frame names it and has no timing for it yet.
+		// A frame carries every round the phase has finished, on the phase's
+		// scale: each before its own, and its own once the response is read;
+		// while the request is out, the frame names that round untimed.
 		if n := len(frame.Rounds); n != round && n != round-1 {
 			t.Errorf("a round-%d frame carries %d timed rounds", round, n)
 		}
@@ -191,8 +184,7 @@ func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 	if last := frames[len(frames)-1]; last.MaxRounds != 6 {
 		t.Errorf("the phase's last frame states max %d, want the extended 6", last.MaxRounds)
 	}
-	// Every call announced WHILE it ran — the three calls this phase made,
-	// in order.
+	// Every call announced WHILE it ran: the phase's three calls, in order.
 	want := []string{toolname.ReflectAndPersist, toolname.ReflectAndPersist, toolname.MarkOnboarded}
 	if !slices.Equal(running, want) {
 		t.Errorf("running calls announced = %v, want %v", running, want)
@@ -200,17 +192,15 @@ func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 }
 
 // A COLLECTED RUN'S RECORD STATES ITS OWN SEGMENT, BOTH SEGMENTS' TIME, AND
-// ITS LAUNCH. The segment that collects a run starts when the collection does —
-// not at the launch, on another node perhaps a day before — but the record is
-// the phase's only completion, so its duration is the phase's: the launching
-// segment's span, carried on the park, plus the collection's, and never the
-// run between them, which is the run's own fact on the record of the box it ran
-// in. And one turn can launch more than once, so the record names the launch it
-// collected.
+// ITS LAUNCH. The collecting segment starts when the collection does, not at
+// the launch (perhaps a day before, on another node), but the record is the
+// phase's only completion, so its duration is the launching segment's span,
+// carried on the park, plus the collection's: never the run between, which
+// the box's own record states. A turn can launch more than once, so the
+// record names the launch it collected.
 //
 // Mutation: drop the launch's span from the park, and the record measures the
-// collection alone — under a millisecond, which every reader draws as an
-// executor that took no time.
+// collection alone: under a millisecond, an executor that took no time.
 func TestACollectedRunStatesItsOwnSegmentAndLaunch(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -242,15 +232,12 @@ func TestACollectedRunStatesItsOwnSegmentAndLaunch(t *testing.T) {
 }
 
 // A COLLECTED RUN STATES ONE TIMED ROUND, OVER THE RUN, AND PLACES ITS CALLS.
-//
-// The engine's whole exchange with the run is one request — the launch — and
-// one answer — the collection — so the record states one round of one, from
-// the launch's instant to the collection's, and every bridged call on it at
-// the instant and for the span the bridge measured, naming who answered. A
-// record that said "one round" and timed none was a timeline with a hole in
-// it, and a call with no start is one no timeline can place. The round
-// carries no tokens: the run's spend is on each launch's own
-// `executor_collected` record.
+// The engine's exchange with the run is one request (the launch) and one
+// answer (the collection), so the record states one round of one, timed from
+// launch to collection, with every bridged call at the instant and span the
+// bridge measured, naming who answered: an untimed round or call is one no
+// timeline can place. The round carries no tokens: the run's spend is on each
+// launch's own `executor_collected` record.
 //
 // Mutations: leave the round untimed, state no cap, or drop the calls'
 // measurement on the way to the record, and this goes red.
@@ -338,13 +325,10 @@ func TestARunWithNoLaunchInstantLeavesItsRoundUntimed(t *testing.T) {
 	}
 }
 
-// A RUN'S WORKERS NEST UNDER THE ROUND ITS CALLS ARE ON.
-//
-// The run's delegate call arrives over the bridge, where no engine loop is
-// iterating to say which round it is in; the run's record puts every call it
-// made on its one round, so a worker it spawned has to name that round, or a
-// reader places it under no call at all. And under the ITERATION it was
-// launched in, since a self-iterating turn launches once per round.
+// A RUN'S WORKERS NEST UNDER THE ROUND ITS CALLS ARE ON, and the ITERATION
+// it was launched in (a self-iterating turn launches once per round). The
+// delegate call arrives over the bridge, where no engine loop counts rounds,
+// so a worker that names no round sits under no call.
 //
 // Mutation: leave the spawner's round unstated, and both the worker and the
 // batch name round 0.
@@ -411,10 +395,10 @@ func TestARunsWorkersNestUnderTheRunsRound(t *testing.T) {
 	}
 }
 
-// workerProvider plays a delegated worker that submits at once — the one
-// model a run's delegate call reaches through the engine, since the run's own
-// rounds are its harness's. Anything else asking it is a fixture wired wrong, and
-// is refused rather than handed a worker's answer.
+// workerProvider plays a delegated worker that submits at once: the one model
+// a run's delegate call reaches through the engine (the run's own rounds are
+// its harness's). Anything else asking it is a fixture wired wrong, and is
+// refused.
 type workerProvider struct{}
 
 func (workerProvider) Model() string { return "scripted" }

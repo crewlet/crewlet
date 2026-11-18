@@ -29,36 +29,18 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE ATLAS'S WRITE TOOLS: how a person changes what the company's atlas says
-// (ADR-0126, ADR-0127). Each is one claim, or a short run of them, on the
-// atlas's log in the person's own name, so it outranks every inference and
-// keeps the claim it replaces as the entry's history.
-//
-// # Decided on what the person reads
-//
-// Every write reads the atlas first, as its caller reads it (Gitlet only for a
-// holder of `gitlet`, the log's claims at the person's own level), and plans
-// from that: the claims to record, or nothing where what was asked already
-// holds. The entries a write names are read at their version BEFORE the atlas
-// is, and every claim is recorded on that version, so a change somebody made
-// after the read refuses the write rather than being written over.
-//
-// # What a person may not change here
-//
-// A fact the company's settings or the engine's own records declare is
-// changed where it is declared, never here: the two share the top rank, and a
-// claim beside a declaration would decide by whichever was newer. So is an
-// entry the engine itself names (a server the SSH settings declare, a tool
-// server, a model, a Gitlet repository), which is never added by hand. And a
-// Gitlet repository is changed only by a holder of `gitlet` who can read it,
-// since the atlas is never a way round another permission.
-//
-// # Never an agent's
-//
-// The authority table refuses every one of these to an agent (humanOnly), the
-// atlas's writer refuses a claim no person made, and no seat's registry holds
-// them: an agent records only what a call of its own turn showed it, through a
-// tool of its own.
+// THE ATLAS'S WRITE TOOLS (ADR-0126, ADR-0127): each is one claim, or a short
+// run, on the atlas's log in the person's own name, outranking every inference
+// and keeping the replaced claim as history. A write plans on the atlas as its
+// caller reads it (Gitlet only for a `gitlet` holder, claims at the person's
+// level), records nothing where the ask already holds, and records each claim on
+// its entry's version read BEFORE the atlas, so a change made after the read
+// refuses the write. A fact the settings or the engine's records declare is
+// changed where declared: both share the top rank, so a claim beside it would win
+// by being newer. An entry the engine names (an SSH server, tool server, model or
+// Gitlet repository) is never added by hand, and a Gitlet repository changes only
+// for a `gitlet` holder who can read it: the atlas never gets round a permission.
+// No agent may use these (humanOnly; the writer refuses a claim no person made).
 
 // The tools' names, each its authority row's action.
 const (
@@ -177,13 +159,11 @@ type atlasPlan struct {
 	said  map[string]any
 }
 
-// atlasStep is one record: a claim, an entry's purge or a value's.
-//
-// A STEP IS NAMED BY ITS VERB AND A SHORT DIGEST of what tells it apart from
-// the call's other steps of that verb (key), never by an entry's id or a
-// handle written out: a step's operation is the call's and the name, and an
-// id the caller brought back leaves a name little more than fifty bytes
-// ([statelog.MaxCallerOpIDBytes]).
+// atlasStep is one record: a claim, an entry's purge or a value's. It is named
+// by its verb and a short digest of what tells it from the call's other steps
+// of that verb (key), never an id or handle written out: its operation is the
+// call's plus the name, and a caller's id leaves the name little more than
+// fifty bytes ([statelog.MaxCallerOpIDBytes]).
 type atlasStep struct {
 	name   string
 	key    string
@@ -253,20 +233,14 @@ func (n *atlasNow) entries() []atlas.Entry {
 }
 
 // unread refuses a change decided on something a source could not say just
-// now. A CHANGE IS DECIDED ON WHAT THE ATLAS HOLDS ABOUT THE ENTRIES IT
-// TOUCHES: a source this node serves that answered in part, and that can
-// state a fact of one of them ([gather.SourceName.Claims]), may hold the very
-// fact the write would claim beside, or the entry the plan read as absent.
-//
-// AND ON NOTHING ELSE. A source that says nothing of those entries holds
-// nothing the write could collide with, so its failing is no reason to refuse:
-// held to every source read in full, one unreachable Gitlet node or one
-// record store behind stopped every person's add, correction and ownership
-// change in the atlas, of entries that source never names. A source that
-// only joins health and use states no fact, and never refuses a write.
-//
-// One this node does not serve, and Gitlet where the caller may not read it,
-// hold nothing the write may touch.
+// now: a source this node serves that answered in part and can state a fact of
+// an entry the plan touched ([gather.SourceName.Claims]) may hold the very fact
+// the write would claim beside, or the entry the plan read as absent. ONLY
+// THOSE refuse: a source that names none of those entries holds nothing to
+// collide with, and refusing on any partial source lets one unreachable Gitlet
+// node stop every write in the atlas. A source that only joins health and use
+// states no fact; one this node does not serve, and Gitlet where the caller may
+// not read it, hold nothing the write may touch.
 func (n *atlasNow) unread() *tools.Result {
 	for _, c := range n.coverage {
 		if c.Complete || c.Reason == gather.ErrNoSource.Error() || c.Source == gather.SourceGitlet && !n.gitlet {
@@ -293,7 +267,7 @@ func unreadSource(tool string, source gather.SourceName) *tools.Result {
 	return &r
 }
 
-// sourceWords names a source that states facts as a person reads it.
+// sourceWords names a fact-stating source in a person's words.
 func sourceWords(source gather.SourceName) string {
 	switch source {
 	case gather.SourceGitlet:
@@ -1032,12 +1006,10 @@ func planAdd(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 			"retired. Bring it back with %s.", n.tool, ref, AtlasRestoreTool)), caveat.AtlasEntryExists(true))
 		return atlasPlan{}, &r
 	}
-	// AN ADD THAT STOPPED PART OF THE WAY IS FINISHED BY THE SAME CALL: where
-	// the caller's own claim already stands on the entry, what the call still
-	// says of it and the atlas does not is recorded, and an add that would
-	// record nothing is refused as the second add it is.
-	// THE CALLER'S OWN ADD, not any claim of theirs: a person who corrected a
-	// fact on an entry an integration reports has not added it.
+	// AN ADD STOPPED PART OF THE WAY IS FINISHED BY THE SAME CALL: where the
+	// caller's own add stands (not any claim: correcting a fact on an entry an
+	// integration reports is no add), what the call says and the atlas does not
+	// is recorded, and an add recording nothing is refused as a second add.
 	mine := found && slices.ContainsFunc(n.recorded, func(c atlas.Claim) bool {
 		return c.Subject == ref && c.Facet.Kind == atlas.FacetExists && c.Source == n.person && !c.Denied
 	})
@@ -1524,12 +1496,10 @@ func planOwner(n *atlasNow, a map[string]any) (atlasPlan, *tools.Result) {
 	} else {
 		plan.said["owner"] = string(want.External) + ":" + want.Name
 	}
-	// THE OWNER A PERSON NAMED BEFORE IS WITHDRAWN, and so is one an
-	// integration only suggested: an owner is one seat or one unit, and a
-	// person's word on it is the whole of it. One the settings or Gitlet
-	// declare is changed there.
-	// THE NEW OWNER FIRST: a write stopped part of the way leaves two owners
-	// shown, never none.
+	// EVERY OTHER OWNER IS WITHDRAWN, a person's or an integration's
+	// suggestion: an owner is one seat or one unit, and a person's word is the
+	// whole of it; one the settings or Gitlet declare refuses the write. THE NEW
+	// OWNER FIRST: a write stopped part of the way leaves two owners, never none.
 	kept := false
 	var unown []atlasStep
 	for _, ed := range m.entry.Relations {

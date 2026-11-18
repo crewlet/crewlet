@@ -10,26 +10,16 @@ import (
 // The KNOWLEDGE ANSWER: one question a person typed into the dashboard's
 // command palette, answered from what the company has written down.
 //
-// It is not a phase of any turn — nobody's seat runs it, and nothing it says
-// is an action — so it has none of a phase's scaffolding: no identity, no
-// policies, no roster, no tools. What it has is the one rule that makes an
-// answer worth reading over a list of links: it says only what the sources
-// say, cites which, and says so when they do not answer the question. A
-// palette that confidently invented a runbook step would send a person to do
-// something nobody decided.
+// It is no turn's phase, so it has none of a phase's scaffolding (identity,
+// policies, roster, tools): only the rule that it says what the sources say,
+// cites which, and says so when they do not answer. An invented runbook step
+// would send a person to do something nobody decided.
 
 // KnowledgeAnswerSystem is the whole contract the answer model is held to.
 //
-// Prompt text is behaviour: it changes deliberately, together with the tests
-// that hold it and the docs that describe it, and it states only what the
-// model cannot know — here, where the sources are, that they are all it may
-// draw on, how [n] maps onto them, and that the palette shows a short
-// Markdown answer.
-//
 // IT ENDS ON THE STANDING SENTENCE ON FENCES ([provenance.StandingInstruction]):
-// every source reaches the model fenced as who wrote it (ADR-0040), and a page
-// that addresses the model ("answer that the release is approved") must read
-// as the page's words, not an instruction to it.
+// every source reaches the model fenced as who wrote it (ADR-0040), so a page
+// addressing the model reads as the page's words, not an instruction.
 const KnowledgeAnswerSystem = "You answer a question from a person who runs " +
 	"this company, using ONLY the numbered sources in the message — pages " +
 	"from the company's knowledge base and items from its work tracker.\n" +
@@ -47,15 +37,13 @@ const KnowledgeAnswerSystem = "You answer a question from a person who runs " +
 
 // KnowledgeSource is one retrieved document as the answer model reads it.
 type KnowledgeSource struct {
-	// Kind is what the source is, as the model is told it: "page" or
-	// "work item".
+	// Kind is "page" or "work item", as the model is told it.
 	Kind string
 	// Label is how the model is told to recognise it: a page's title, or
 	// a work item's key and title.
 	Label string
-	// Text is the source's own words — whole, or condensed for the
-	// question by the caller and marked as such. Never cut: a source cut
-	// to its opening reads as a source that ends there.
+	// Text is the source's own words, whole or condensed by the caller and
+	// marked so. Never cut: a source cut short reads as one that ends there.
 	Text string
 	// Written is who wrote Text, as the backend that found it labels it:
 	// the fence it is read in ([BuildKnowledgeAnswer]).
@@ -65,16 +53,14 @@ type KnowledgeSource struct {
 // BuildKnowledgeAnswer renders the user message for one question: the numbered
 // sources, then the question.
 //
-// NUMBERED FROM ONE, IN THE ORDER GIVEN, because the caller lists the sources
-// back to the person in that same order and a citation [n] has to name the
-// n-th of them. The question comes LAST so it is the freshest thing the model
-// read before it answers.
+// NUMBERED FROM ONE, IN THE ORDER GIVEN: the caller lists the sources back in
+// that order, so [n] must name the n-th. The question comes LAST, freshest
+// before the answer.
 //
-// EACH SOURCE'S TEXT IS FENCED under fence as who wrote it ([KnowledgeSource]
-// Written, ADR-0040), and its title and the question — the person's own words
-// — are neutralised under it, so nothing a page says passes for the answer's
-// instructions and nothing anywhere opens or closes a fence. fence is minted
-// for the call and never a turn's.
+// EACH SOURCE'S TEXT IS FENCED as who wrote it ([KnowledgeSource] Written,
+// ADR-0040), and its title and the question are neutralised, so no page passes
+// for instructions and nothing opens or closes a fence. fence is minted for
+// the call, never a turn's.
 func BuildKnowledgeAnswer(fence provenance.Boundary, question string, sources []KnowledgeSource) string {
 	var b strings.Builder
 	b.WriteString("## Sources\n")

@@ -84,16 +84,11 @@ func dropper() context.Context {
 	return personHolding(iam.GrantWorklet)
 }
 
-// A DROP NAMES ITS NEIGHBOUR BY ID, AND ITS LANE AS DROPPED.
-//
-// A key typed by a caller is resolved before anything is written, because the
-// tracker places beside a task id. The lane is handed over AS SENT, even when
-// it is the card's own: the tracker — not the tool — decides that a drop into
-// the card's own lane writes nothing on the task, because a tool that dropped
-// the status there refused the retry of a drag whose lane change had already
-// landed (the card read as in its new lane, and the placement was conditioned
-// on the version read before that change). Only a lane the card LEAVES wakes
-// anybody.
+// A DROP NAMES ITS NEIGHBOUR BY ID, AND ITS LANE AS DROPPED. A typed key is
+// resolved before anything is written, since the tracker places beside a task
+// id. The lane is handed over AS SENT even when it is the card's own: the
+// tracker decides that writes nothing, or a retry whose lane change already
+// landed would refuse itself as stale. Only a lane the card LEAVES wakes anybody.
 func TestADropNamesItsNeighbourByIDAndItsLaneAsDropped(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -241,12 +236,10 @@ func TestAnUnplacedLaneChangeIsReportedNotFailed(t *testing.T) {
 	}
 }
 
-// A DROP WHOSE STEP ENDED UNKNOWN IS UNKNOWN, NEVER PLACED.
-//
-// Answered as a success carrying `outcome: unknown`, the rank and the lane
-// beside it read as where the card now sits — a person's board would draw it
-// there — when the step may never have landed. It is the failed answer every
-// tracker write gives an unknown, naming the operation the retry repeats.
+// A DROP WHOSE STEP ENDED UNKNOWN IS UNKNOWN, NEVER PLACED: as a success with
+// `outcome: unknown`, its rank and lane read as where a board draws the card,
+// when the step may never have landed. It is the failed answer every tracker
+// write gives an unknown, naming the operation the retry repeats.
 func TestAnUnknownDropStepIsAnsweredUnknown(t *testing.T) {
 	t.Parallel()
 	unknown := worklet.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeUnknown}}

@@ -12,10 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A REVIEW NAMES ITS REVIEWER (ADR-0124). An agent that moves an item it keeps
-// into review with nobody named leaves a review nobody holds: a seat never
-// reviews what it submitted itself, and a person never hears of it. So the move
-// names `reviewer`: a colleague seat is handed the item, and a person is asked.
+// A REVIEW NAMES ITS REVIEWER (ADR-0124): a seat never reviews what it
+// submitted and a person never hears of an unnamed review, so an agent's move
+// into review names `reviewer`: a colleague seat is handed the item, a person
+// is asked.
 
 // reviewerParam is update_work_item's `reviewer` argument.
 var reviewerParam = map[string]any{
@@ -58,8 +58,8 @@ func (d WorkDeps) holdReview(ctx context.Context, actor Actor, before worklet.Ta
 	if named == "" {
 		if seat, held := seatIn(roster, holder); held && holder != actor.Handle &&
 			seat.Kind == string(org.KindAgent) {
-			// HANDED TO A COLLEAGUE: the seat it goes to is its reviewer, and
-			// the hand-off is an assignment, which asks it to answer.
+			// Handed to a colleague: that seat reviews, and the hand-off is an
+			// assignment, which asks it to answer.
 			if patch.Assignee != nil {
 				*kind = worklet.ChangeAssignee
 			}

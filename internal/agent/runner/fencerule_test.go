@@ -11,11 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// A LAUNCHED RUN IS TOLD WHAT A FENCE IS, in the standing instructions its harness
-// is launched with, whether the run is the round's first or carries on one a
-// person's answer reached: every foreign word it reads, in its brief or from
-// its tools over the bridge, is inside a fence, and a fence means something
-// only to a model told what (ADR-0040).
+// A LAUNCHED RUN IS TOLD WHAT A FENCE IS in its harness's standing
+// instructions, as the round's first run and as one carried on after a
+// person's answer: every foreign word it reads is fenced, and a fence means
+// something only to a model told what (ADR-0040).
 //
 // Mutation: drop the untrusted-text section from the executor's prompt and
 // both launches are red.

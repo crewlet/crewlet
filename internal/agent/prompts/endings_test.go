@@ -12,15 +12,11 @@ import (
 )
 
 // HOW A CONVERSATION'S EARLIER TURNS ENDED IS FENCED UNDER THE TURN'S TOKEN.
-// Every account in it somebody else wrote — what the turn was asked, what its
-// reviewer said landed, what its executor said blocked it, a stop's reason, and
-// the engine's accounts of what failed and what was not kept, which quote what
-// a box or a store said — is a fence of the token of the segment that rendered
-// the block, labelled as an earlier turn's account, at the least trust, naming
-// its writer where the record does. A marker any of them carries, of this
-// token or another's, opens and closes nothing; the name of whoever stopped
-// the turn is defused in place; and the engine's own words — the outcome, the
-// review's word, the delivery and the answer — are said in its own sentences.
+// Every account somebody else wrote, the engine's quoting ones included, is a
+// fence of the rendering segment's token, labelled as an earlier turn's
+// account at the least trust, naming its writer where the record does. A
+// marker of any token in them opens and closes nothing, the stopper's name is
+// defused in place, and the engine's own facts are said in its own sentences.
 //
 // Mutation: render any account bare, under another token, or with a trust a
 // writer earns, or leave a marker in a name, and a check goes red.
@@ -83,16 +79,12 @@ func TestAConversationsEndingsAreFencedUnderTheTurnsToken(t *testing.T) {
 	}
 }
 
-// THE ENDINGS KEEP THE NEWEST WHOLE AND COUNT THE REST. The block holds what a
-// turn's brief can carry: the head — the turn whose session the next turn
-// continues — always, then the conversation's other ended turns, the newest
-// first, each whole, until the next would not fit; the rest are counted, with
-// the ones the read itself left out. It never cuts a turn inside, and it tells
-// its turns in the order they ended. What it answers is what it told, which is
-// what the turn's end absorbs: a turn left out is not told and stays for the
-// next turn. A head whose accounts alone would not fit is told without them,
-// saying so, and the block stays within its bound whatever is recorded. A
-// conversation with no ended turn tells nothing.
+// THE ENDINGS KEEP THE NEWEST WHOLE AND COUNT THE REST. The head always, then
+// the others newest first, each whole, until the next would not fit; the rest
+// counted with those the read left out, told in the order they ended. It
+// answers exactly the turns it told. A head whose accounts alone would not fit
+// is told without them, saying so, within the bound; no ended turn tells
+// nothing.
 //
 // Mutation: cut a turn inside, drop the head for a newer turn, fill from the
 // oldest, answer a turn the block left out, or miscount, and a check goes red.
@@ -105,7 +97,7 @@ func TestTheEndingsKeepTheNewestWholeAndCountTheRest(t *testing.T) {
 		turns = append(turns, TurnEnding{Turn: fmt.Sprintf("t-%d", i), Outcome: "completed",
 			EndedAt: time.Date(2026, 10, 1, 9, i, 0, 0, time.UTC), CompletedWork: account})
 	}
-	// THE HEAD IS THE OLDEST: a turn that ran beside it ended after it.
+	// The head is the oldest: a turn that ran beside it ended after it.
 	block, told := BuildConversationEndings(b, ConversationEndings{Seat: "cto", Head: "t-0", Turns: turns,
 		Omitted: 3})
 	if len(block) > EndingsMaxBytes {
@@ -142,7 +134,7 @@ func TestTheEndingsKeepTheNewestWholeAndCountTheRest(t *testing.T) {
 		t.Errorf("the block does not tell its turns in the order they ended")
 	}
 
-	// A HEAD WHOSE ACCOUNTS ALONE WOULD NOT FIT is told without them.
+	// A head whose accounts alone would not fit is told without them.
 	huge := TurnEnding{Turn: "t-head", Outcome: "failed", CompletedWork: strings.Repeat("x", 2*EndingsMaxBytes)}
 	block, told = BuildConversationEndings(b, ConversationEndings{Head: "t-head", Turns: []TurnEnding{huge}})
 	if len(block) > EndingsMaxBytes || !slices.Equal(told, []string{"t-head"}) ||
@@ -155,12 +147,9 @@ func TestTheEndingsKeepTheNewestWholeAndCountTheRest(t *testing.T) {
 	}
 }
 
-// THE BLOCK FITS ITS SHARE OF THE RUN RECORD AS THE RECORD ENCODES IT. Every
-// park of the turn carries the block frozen, written by encoding/json, which
-// spells `<`, `>` and `&` in six bytes each and a line break in two — and an
-// account that quotes code is made of them. So the block is held to its bound
-// as encoded: of accounts that double in the encoding, it tells half the
-// turns it would as rendered text, the head among them and the rest counted.
+// THE BLOCK FITS ITS SHARE OF THE RUN RECORD AS THE RECORD ENCODES IT: of
+// accounts quoting code, which roughly double in JSON, it tells about half the
+// turns it would as rendered text, the head among them, the rest counted.
 //
 // Mutation: measure the block as it renders rather than as it encodes, and it
 // tells every turn and takes about twice its bound of the record.
@@ -189,13 +178,10 @@ func TestTheEndingsFitTheirShareOfTheRunRecordAsEncoded(t *testing.T) {
 	}
 }
 
-// A SCHEDULE'S EARLIER FIRES ARE TOLD IN ITS WORDS, WITHIN THE SAME BOUND. A
-// schedule is a conversation of each seat that runs it, every turn of it a
-// fire, so its block is headed as the schedule's earlier fires, each told as a
-// fire and the ones left out counted as fires, held to the block's bound as
-// encoded; a conversation's block says none of it. And the lead of a run that
-// continues the session the schedule's last fire left says a new fire of the
-// schedule begins, which the schedule firing again woke — never a message.
+// A SCHEDULE'S EARLIER FIRES ARE TOLD IN ITS WORDS, WITHIN THE SAME BOUND:
+// headed, told and counted as fires, and a conversation's block says none of
+// it. The lead of a run continuing the last fire's session says a new fire
+// begins, woken by the schedule firing again, never a message.
 //
 // Mutation: tell a schedule's block or lead in a conversation's words, or a
 // conversation's in a schedule's, and a check goes red.

@@ -68,8 +68,8 @@ func withdrawRigAuthorized(t *testing.T, runs map[string]sandbox.PendingRun,
 }
 
 // A SEAT WITHDRAWS ITS OWN HELD CALL AS DENY, saying why: the call is never
-// made, the run is carried on told it withdrew it, and the answer names the
-// call and the question it withdraws, given by the seat itself.
+// made, the run carries on told it withdrew it and why, and the answer, given
+// by the seat itself, names the call and the question it withdraws.
 //
 // Mutation: deliver the withdrawal without the held call's id and the seat
 // holding the run records no answer to the call.

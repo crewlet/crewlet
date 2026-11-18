@@ -8,16 +8,13 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A NULL REACHES NO BUILTIN AS A VALUE, on the path every call takes
-// (ADR-0059): the surface's entry makes the call's canonical arguments,
-// leaving a null out, before tools.Invoke checks the call and runs the tool.
-// A builtin names what a call changes by the arguments it sends, and handed a
-// null it read one as a value: update_work_item unassigned the item for a
-// null `assignee`, and save_page emptied the page for a null `body` and, for a
-// null `title`, asked a rename (refusing a colleague who leads nothing) and
-// renamed the page "<nil>". The controls send each argument as a value, which
-// is a change, so an argument left alone is told apart from one the tool
-// stopped reading.
+// A NULL REACHES NO BUILTIN AS A VALUE (ADR-0059): on every call the surface's
+// entry leaves a null out of the canonical arguments before tools.Invoke runs
+// the tool. A builtin names what a call changes by the arguments it sends, so a
+// null read as a value is an unasked change: update_work_item unassigning for a
+// null `assignee`, save_page emptying the page for a null `body` or renaming it
+// "<nil>" for a null `title`. The controls send each argument as a value, a
+// change, so an argument left alone is told apart from one the tool ignores.
 //
 // Mutation: hand a null on from the entry (toolargs.Of) and each case makes
 // the change it was not asked for.

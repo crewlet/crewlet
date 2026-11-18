@@ -125,14 +125,9 @@ func parked(t *testing.T, turnID, status string) sandbox.PendingRun {
 }
 
 // AN ANSWER IS DELIVERED AS THE PERSON WHO GAVE IT, naming the question it
-// answers, and the caller is told `pending`: the node holding the seat records
-// and resumes it, and this one cannot say what that became. The question (the
-// job the run held when it asked) is what keeps an answer that reaches the
-// seat late from resuming the run as the answer to a later question. And the
-// caller is told the question and the answer's own id, which is what it reads
-// the run's record against to learn what became of the answer: recorded on
-// that question, let go of among its declined answers, or overtaken by a new
-// one.
+// answers (so a late one never resumes the run on a later question), and the
+// caller is told `pending`, since only the node holding the seat can say what
+// became of it, with the question and the answer's id to read the record by.
 func TestAnswerExecutorDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.T) {
 	t.Parallel()
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusReseed)}}
@@ -209,12 +204,10 @@ func TestAnswerExecutorThatMayHaveLandedAnswersUnknown(t *testing.T) {
 	}
 }
 
-// AN ANSWER IS HELD TO THE PAGE ITS QUESTION IS: it rides beside the question,
-// on the run's row and then in the prompt of the run it carries on, which that
-// run's harness reads again at every step. One as long as the longest
-// question is delivered whole; one a byte longer is refused `invalid`, with
-// nothing delivered, and the refusal says how long it is — rounded up, so a
-// byte past the bound never reads as the bound itself — what the bound is, and
+// AN ANSWER IS HELD TO THE PAGE ITS QUESTION IS, since the run's harness
+// rereads it at every step. One as long as the longest question is delivered
+// whole; one a byte longer is refused `invalid`, nothing delivered, saying its
+// size (rounded up, so a byte past never reads as the bound), the bound, and
 // where the detail goes instead.
 //
 // Mutation: hold an answer to a byte past the page, and one a byte longer than
@@ -253,10 +246,9 @@ func TestAnAnswerIsHeldToThePageItsQuestionIs(t *testing.T) {
 	}
 }
 
-// A RUN'S QUESTION IS ITS REQUESTER'S TO ANSWER, or its seat's lead's — and
-// nobody else's. The requester leads nobody and is admitted as themselves (the
-// run's row names their seat by its handle); the CTO's
-// lead is admitted as its lead; a colleague who is neither is refused with the
+// A RUN'S QUESTION IS ITS REQUESTER'S TO ANSWER, or its seat's lead's, and
+// nobody else's. The requester, who leads nobody, is admitted as themselves;
+// the CTO's lead as its lead; a colleague who is neither is refused with the
 // authority's own answer, and nothing reaches the seat's inbox.
 func TestARunIsAnsweredByItsRequesterOrItsSeatsLead(t *testing.T) {
 	t.Parallel()
@@ -294,14 +286,9 @@ func TestARunIsAnsweredByItsRequesterOrItsSeatsLead(t *testing.T) {
 }
 
 // A QUESTION ANSWERED ALREADY REFUSES THE NEXT ANSWER, AND SAYS WHOSE IT WAS.
-// The first recorded answer wins; a person answering after it is told it was
-// answered, by whom and when, and nothing is delivered. Four people answering
-// one run used to be told `pending` four times while three of the answers went
-// nowhere they could see.
-//
-// WHOSE, AS THE ANSWER'S SEAL SAYS: the answerer is kept nowhere else, so an
-// answer whose seal does not open on this node is "someone else's" rather than
-// a guess.
+// The first recorded answer wins; a later one is told by whom and when, and
+// nothing is delivered. Whose is the seal's word alone: an answer whose seal
+// does not open here is "someone else's" rather than a guess.
 //
 // Mutation: name the answerer off anything but the opened seal, and the
 // unopened case names somebody.
@@ -384,12 +371,10 @@ func decided(t *testing.T, turnID string) sandbox.PendingRun {
 	return run
 }
 
-// A CHOICE IS AN OPTION OF THE QUESTION IT ANSWERS, and is delivered as one: by
-// its id, beside any words, so the run reads the option it named. A choice the
-// question does not offer is refused before anything is delivered, naming the
-// options it does, and so is a choice on an open question: the run would be
-// told it chose something nobody offered. An answer is a choice or words, and
-// never neither.
+// A CHOICE IS AN OPTION OF THE QUESTION IT ANSWERS, delivered by its id beside
+// any words. A choice the question does not offer, or any choice on an open
+// question, is refused before anything is delivered, naming the options there
+// are. An answer is a choice or words, and never neither.
 //
 // Mutation: deliver without checking the choice against the run's decision,
 // and the unoffered choice reaches the seat.
@@ -433,11 +418,10 @@ func TestAnswerExecutorDeliversAChoiceOfTheQuestionsOwnOptions(t *testing.T) {
 	}
 }
 
-// AN ANSWER IS TO THE QUESTION THE PERSON READ. It names that question by the
-// job that asked it, and a run that has moved on to another question since
-// refuses it, in words that say to read the question again, rather than taking
-// it (a choice by id above all) as the answer to a question nobody showed them.
-// One naming no question is refused before anything is read.
+// AN ANSWER IS TO THE QUESTION THE PERSON READ, named by the job that asked
+// it: a run that has moved on since refuses it, saying to read the question
+// again, rather than take it (a choice by id above all) for a question nobody
+// showed them. One naming no question is refused before anything is read.
 //
 // Mutation: deliver against the row's own launch whatever the call named, and
 // the answer to the old question resumes the run on the new one.
@@ -465,11 +449,10 @@ func TestAnAnswerIsToTheQuestionItsPersonRead(t *testing.T) {
 	}
 }
 
-// A HELD CALL IS NEVER ANSWERED HERE (ADR-0077): answer_executor asks whether
-// the caller may answer the run, which its requester may, and a call held for
-// approval is a seat lead's or an administrator's to answer, through
-// `POST /mcp-approvals/{id}`, which also writes the level Always allow sets.
-// So the tool refuses it as forbidden, names the route, and delivers nothing.
+// A HELD CALL IS NEVER ANSWERED HERE (ADR-0077): it is a seat lead's or an
+// admin's to approve through `POST /mcp-approvals/{id}`, not the requester's
+// this tool admits, so it is refused as forbidden, naming the route, and
+// nothing is delivered.
 //
 // Mutation: drop the held-call refusal, and the requester's answer is
 // delivered.

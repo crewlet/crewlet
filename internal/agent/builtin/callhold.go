@@ -28,27 +28,15 @@ import (
 // CallHold records a call an executor's run makes to a tool at Needs approval
 // as the question its job parks on, in the shape a run's own ask is recorded
 // (ADR-0068, ADR-0077): the [tools.Holder] an executor's surface is built with,
-// and no other.
+// and no other. The run PARKS, as on `ask_and_wait`, rather than waits: an
+// answer may take days, which no harness tool call outlasts, and the seat is
+// freed meanwhile. `POST /mcp-approvals/{id}` carries the run on with the call
+// made (`once`, `always`) or refused (`deny`).
 //
-// # Why the run parks rather than waits
-//
-// A person may take minutes or days to answer, and a headless harness cannot
-// wait inside one tool call for that long, nor should the seat be held while
-// it does. So the call is recorded on the run's row (the tool, its server, its
-// definition's digest, the work item and the arguments sealed under the fleet
-// keyring), the harness is told to end its turn, and the collection parks the
-// run on the question with the seat freed, exactly as it parks on
-// `ask_and_wait`. The answer, by `POST /mcp-approvals/{id}`, carries the run
-// on with the call made (`once`, `always`) or refused (`deny`).
-//
-// # What the question says, and what it does not
-//
-// Who called which tool on which server, and why it waits. NEVER THE
-// ARGUMENTS: the question, its context and its decision are what the Inbox
-// shows the run's audience and what the answered record keeps, and the
-// arguments are the run's own business, often a credential's worth. They ride
-// the row sealed, and are opened only for a person who may approve the call
-// (internal/api/queries) and for the resume that makes it.
+// The question NEVER CARRIES THE ARGUMENTS: it is what the Inbox shows the
+// run's audience and the answered record keeps, and arguments are often a
+// credential's worth. They ride the run's row sealed under the fleet keyring,
+// opened only for a person who may approve (internal/api/queries) and the resume.
 type CallHold struct {
 	desk   HeldDesk
 	seal   *sandbox.CallSeal
@@ -313,13 +301,10 @@ func (h *CallHold) sealArgs(ctx context.Context, runID string, held *sandbox.Hel
 			"asked: its arguments could not be sealed", "Call it again."), false
 	}
 	if sandbox.HeldArgsFit(sealed) != nil {
-		// PAST WHAT THE RUN'S ROW CARRIES OF A HELD CALL (sandbox's
-		// MaxHeldArgsBytes): a call held for approval never reaches its
-		// server, so nothing else bounds its arguments, and the row that
-		// carries them is one value of the coordination store, held to what a
-		// key holds. Refused while the run can still act on it, with the size
-		// named — never recorded and refused by the store, which no call made
-		// again would get past.
+		// PAST WHAT THE RUN'S ROW CARRIES (sandbox.MaxHeldArgsBytes): a held
+		// call never reaches its server, so only the row, one coordination
+		// store value, bounds its arguments. Refused now, its size named, while
+		// the run can still split it: recorded, the store refuses every retry.
 		return refused(tools.RefusalInvalid, fmt.Sprintf("%s was not called, and nothing was asked: "+
 			"a call that waits for a person's approval may carry at most %d KiB of arguments, "+
 			"sealed, and this one carries %d KiB. Split it into smaller calls, or shorten what it "+

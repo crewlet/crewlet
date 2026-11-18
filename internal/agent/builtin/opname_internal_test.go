@@ -10,14 +10,10 @@ import (
 )
 
 // A TRACKER OPERATION NAMES ITS OBJECT IN ONE STEP OF ITS ID, IN EVERY ARM,
-// AND THE VERB STAYS READABLE BESIDE IT.
-//
-// In the grammar a dot begins a step and a name is bounded, and an object is
-// whatever the call wrote about: a task's id, but also a file's path, which
-// may hold dots, spaces and a kilobyte of anything. Written into the name as
-// itself, `file-ENG/docs/a.md` read as the name `file-ENG/docs/a` with a step
-// `md`, and the statelog's own rule then escaped the whole name — so a reader
-// of the ledger could no longer tell a file write from any other.
+// AND THE VERB STAYS READABLE BESIDE IT. In the grammar a dot begins a step and
+// a name is bounded, and an object may be a file path with dots, spaces and a
+// kilobyte of anything: written raw, statelog escapes the whole name and the
+// ledger can no longer tell a file write from any other.
 //
 // Mutation: name the operation from the bare object, and every arm's name
 // for a path is one escaped segment with no verb in it.
@@ -65,9 +61,9 @@ func TestATrackerOperationNamesItsObjectInOneStep(t *testing.T) {
 	}
 }
 
-// AN OPERATOR'S OPERATION NAMES ITS CALL IN ONE READABLE STEP — the tool and
-// the arguments' digest, joined by a dash rather than the dot that begins a
-// step, which had the whole name escaped and the tool lost from the ledger.
+// AN OPERATOR'S OPERATION NAMES ITS CALL IN ONE READABLE STEP: the tool and the
+// arguments' digest joined by a dash, since a dot begins a step and would have
+// the whole name escaped.
 //
 // Mutation: join the two with a dot, and the name no longer says which tool
 // it was minted for.

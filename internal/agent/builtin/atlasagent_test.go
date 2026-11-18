@@ -18,8 +18,7 @@ import (
 )
 
 // reachCompany is acme with two servers, web-1 on a public address and db-1
-// on a private one, and an agent, sre, whose SSH access reaches web-1 alone;
-// a host name on a private network; and a deployment in a declared zone.
+// on a private one, and an agent, sre, whose SSH access reaches web-1 alone.
 func reachCompany(t *testing.T) (builtin.AtlasSettings, *org.Organization) {
 	t.Helper()
 	on := true

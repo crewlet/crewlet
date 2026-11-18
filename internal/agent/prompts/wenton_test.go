@@ -8,23 +8,17 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// A NEXT TURN ON A SESSION ITS TURN WENT PAST IS TOLD SO. The lead of a run that
-// continues the session its conversation's last turn left says where the
-// session ends: through that turn, which ended at its instant, where the
-// session is the turn's last word; up to the session, kept while the turn still
-// worked at the instant it was kept, what the turn did after it not above,
-// where the turn's end said it went on past it — saying too where that turn was
-// then lost; and, where the turn was lost and its end said nothing of going
-// on, through it, the session perhaps not holding the last of what it did —
-// each saying how that turn ended is told below, and a schedule's fire in the
-// schedule's words.
+// A NEXT TURN ON A SESSION ITS TURN WENT PAST IS TOLD SO. The lead says where
+// the session ends: through the turn, at its end, when the session is its last
+// word; up to the session kept while the turn still worked, at that instant,
+// its later work not above, when the turn went on past it (and lost, if so);
+// through a lost turn that said nothing of going on, the session perhaps
+// lacking its last work. Each says how the turn ended is told below, a fire in
+// the schedule's words.
 //
-// Mutation: tell every base through its turn's end, and the went-on leads say
-// so; let a lost turn's lead come before the went-on one, and a turn that went
-// on past its session and was then lost is told through it; tell a lost turn
-// the went-on lead, and it is said to have gone on past a session it may not
-// have; leave out the instant the session was kept, and the run cannot tell
-// where it ends.
+// Mutation: tell every base through its turn's end; check lost before went-on;
+// tell a lost turn the went-on lead; or drop the instant kept: a check goes
+// red.
 func TestANextTurnOnASessionItsTurnWentPastIsToldSo(t *testing.T) {
 	t.Parallel()
 	ended := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
@@ -80,16 +74,13 @@ func TestANextTurnOnASessionItsTurnWentPastIsToldSo(t *testing.T) {
 	}
 }
 
-// A CUT-OFF SESSION IS SAID TRUE OF A SAVE AND OF A STOP. A session its
-// harness was cut off in is one taken while the harness still worked — a job its
-// box would not end, packed as it stood — or one taken as or after it was
-// stopped; a run that continues either, a relaunch of its turn or its
-// conversation's next turn, is told it may end mid-call in words true of both,
-// never that its harness was stopped when it may never have been.
+// A CUT-OFF SESSION IS SAID TRUE OF A SAVE AND OF A STOP. A cut-off session
+// was taken while its harness still worked (a box that would not end, packed
+// as it stood) or as or after it stopped; a run continuing either is told it
+// may end mid-call in words true of both, never that its harness was stopped.
 //
-// Mutation: say it was saved only as or after its harness was stopped, as it
-// once did, or leave the section off a next turn's cut-off base, and a check
-// goes red.
+// Mutation: say it was saved only as or after a stop, or leave the section off
+// a next turn's cut-off base, and a check goes red.
 func TestACutOffSessionIsSaidTrueOfASaveAndOfAStop(t *testing.T) {
 	t.Parallel()
 	for _, said := range []string{"saved while its harness was still working", "or as or after it was stopped",
@@ -108,22 +99,16 @@ func TestACutOffSessionIsSaidTrueOfASaveAndOfAStop(t *testing.T) {
 }
 
 // A COPY CUT OFF IN ITS BOX IS TOLD SO WITHOUT A SAVE, AND ONE NOTHING SAYS OF
-// IS NOT TOLD IT WAS. The copy of a session its job's own box holds is continued
-// in place with no capture behind it, so where its job's record says its
-// harness was cut off it is told what a cut-off session is — it may end in the
-// middle of a call, and may not show the last of what its run did — and nothing
-// of a save, which that copy never had: a kept capture's section says it was
-// saved while its harness worked or as it stopped. Where the record says nothing
-// of how its harness ended — an older build collected the job, or the record did
-// not land — it is told the same of what it may then lack, but only that it may
-// have been cut off: never that it was stopped, killed or ended on an error,
-// which nobody saw. And the header the calls follow under says why the session
-// may show only some of them in no words of its own, the section before it
-// saying it, so it asserts nothing of a copy nothing was recorded of.
+// IS NOT TOLD IT WAS. A copy in its job's own box continues with no capture, so
+// one whose record says it was cut off is told it may end mid-call and lack its
+// run's last work, and nothing of a save. One whose record says nothing (an
+// older build, a record that did not land) is told the same lack, but only
+// that it may have been cut off, never stopped, killed or failed. The calls'
+// header asserts no cut-off of its own.
 //
-// Mutation: tell the copy the kept capture's section, drop either clause, tell a
-// copy nothing was recorded of that it was cut off, or say in the calls' header
-// that the session was cut off, and a check goes red.
+// Mutation: tell the copy the kept capture's section, drop either clause, tell
+// an unrecorded copy it was cut off, or say so in the calls' header, and a
+// check goes red.
 func TestACopyCutOffInItsBoxIsToldSoWithoutASave(t *testing.T) {
 	t.Parallel()
 	for section, said := range map[string][]string{
@@ -152,21 +137,15 @@ func TestACopyCutOffInItsBoxIsToldSoWithoutASave(t *testing.T) {
 }
 
 // THE NOTES A SESSION MAY HAVE BEEN CUT OFF FROM ARE TOLD AGAIN AS NOTES IT MAY
-// ALREADY SHOW, AND COUNTED. Each note says it stands for the rest of the turn,
-// so a session that holds one and reads it again could do twice what it asks:
-// the notes told again are headed as notes the session may not show, a note
-// shown both above and there being one note, sent once; and they are counted,
-// since the notes the brief is the first to read follow them in the same form.
-// Those are said to be ones the turn had not read before the message, never new
-// to the session: which notes the turn has read is its record's word, and a
-// harness can be handed a note before the record says so. Nor are the notes
-// told again said to be every note the turn has read: a session whose harness
-// ended its own run is told them from a read its harness was never handed on,
-// and holds every one before. None told again says nothing.
+// ALREADY SHOW, AND COUNTED, so a note held twice is done once: one shown above
+// and below is ONE note; the count separates them from the later notes, which
+// are ones the turn had not read, never "new" (a harness can hold a note before
+// the record says so). Nor are they "every note" the turn read: a harness that
+// ended its own run lacks only the last read's. None says nothing.
 //
-// Mutation: drop the header, its one-note sentence or its count, call the notes
-// after them new, call the notes told again every note the turn read, or say
-// something where there is no note, and a check goes red.
+// Mutation: drop the header, its one-note sentence or its count, call the
+// later notes new, call these every note the turn read, or say something where
+// there is no note, and a check goes red.
 func TestNotesToldAgainAreOnesTheSessionMayAlreadyShow(t *testing.T) {
 	t.Parallel()
 	if got := NotesReadAgain(nil); got != "" {
@@ -196,14 +175,11 @@ func TestNotesToldAgainAreOnesTheSessionMayAlreadyShow(t *testing.T) {
 	}
 }
 
-// A LOST TURN'S ENDING NAMES NO BOX IT MAY STILL HAVE. A turn ends lost wherever
-// no frame of it saw it end — a job lost with its box, a resume that broke, a
-// seat removed, an end never recorded and ended by the retention duty a day
-// after — and only the first of those lost a box: the account of how the
-// conversation's earlier turns ended says the engine ended it, and leaves what
-// ended it to the engine's own failure beside it, never that its executor's box
-// or host was lost, which the lead of the next turn on its session and that
-// failure would both contradict.
+// A LOST TURN'S ENDING NAMES NO BOX IT MAY STILL HAVE. A turn is lost
+// wherever nothing saw it end (a lost box, a broken resume, a removed seat, a
+// retention duty ending an unrecorded end), and only the first lost a box: the
+// ending says the engine ended it and leaves the cause to its failure, never
+// a lost box or host.
 //
 // Mutation: say a lost turn was lost with its executor's box or host, and the
 // account of a turn the retention duty ended says it.
@@ -222,11 +198,9 @@ func TestALostTurnsEndingNamesNoBoxItMayStillHave(t *testing.T) {
 }
 
 // A SESSION THAT MAY COMPACT IS TOLD WHY, AND NEVER THAT IT WAS CUT OFF. A
-// continuation Claude Code may hand its model as a summary, at its first request
-// or as its job worked, is told everything again: the section before that says
-// why (a summary of everything before its last reply), that the session may
-// still show all of it, and that each is one message, call or note. It says
-// nothing of a cut-off run, since the session may be whole.
+// continuation Claude Code may summarize is told everything again, after a
+// section saying why, that the session may still show it all, and that each is
+// one message, call or note; nothing of a cut-off, since it may be whole.
 //
 // Mutation: tell it the cut-off copy's words, or drop the clause that it may
 // still show them, and a check goes red.

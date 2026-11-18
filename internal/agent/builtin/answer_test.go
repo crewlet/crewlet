@@ -10,19 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY ANSWER SHAPE FITS THE CEILING AT ITS OWN MAXIMUM, and this is the
-// measurement the design asked for and the tree did not have.
-//
-// A tool answer is read by a MODEL: every byte lands in a context window
-// beside the system prompt, the conversation and whatever the turn has already
-// accumulated. The caps that keep these shapes small are scattered across the
-// packages that own them — a comment page here, a history limit there, an
-// option list somewhere else — and nothing measured the COMPOSED result until
-// this. A shape that grew past the ceiling would not fail anywhere: it would
-// quietly spend most of a turn's budget on one call.
-//
-// The maxima below are the engine's own declared caps, so this goes red when a
-// cap is raised without the shape that carries it being reconsidered.
+// EVERY ANSWER SHAPE FITS THE CEILING AT ITS OWN MAXIMUM. The caps that keep
+// these shapes small are scattered across the packages that own them, and a
+// COMPOSED shape past the ceiling fails nowhere: it quietly spends most of a
+// turn's context on one call. The maxima are the engine's declared caps, so
+// this goes red when a cap is raised without its shape being reconsidered.
 func TestEveryToolAnswerFitsToolAnswerBytes(t *testing.T) {
 	t.Parallel()
 	whole := maximalDetail()
@@ -41,19 +33,16 @@ func TestEveryToolAnswerFitsToolAnswerBytes(t *testing.T) {
 		// raised past this would leave a thread page — which always
 		// carries at least one whole comment — too heavy to send.
 		{"get_work_item(comment=…)", oneWholeComment(whole)},
-		// THE DESCRIPTION, WHOLE, which is now a part of its own: a body
-		// at [worklet.MaxBody] beside a page holding one comment at its
-		// cap is a full answer before anything else is said, so the two
-		// can only both be whole if each can be asked for alone.
+		// THE DESCRIPTION, WHOLE, as a part of its own: a body at
+		// [worklet.MaxBody] beside one comment at its cap is a full
+		// answer, so both are whole only if each can be asked for alone.
 		{"get_work_item(include=body)", onlyBody(whole)},
 		{"get_work_catalogue", maximalCatalogue()},
-		// THE PROJECT LISTING AS A SEAT PAGES IT. Its own cap is the
-		// SCREEN's — two hundred rows, ≈ 93 KiB here, refused for weight
-		// so the tool asks for [worklet.MaxProjectsPerToolAnswer] and
-		// says `total` beside `truncated`. Nothing measured this until
-		// the row grew a field, and what a cap that does not fit buys a
-		// model is not a large answer but advice to narrow and no
-		// projects at all.
+		// THE PROJECT LISTING AS A SEAT PAGES IT. The SCREEN's cap of two
+		// hundred rows (≈ 93 KiB here) would be refused, leaving a model
+		// no projects at all, so the tool asks for
+		// [worklet.MaxProjectsPerToolAnswer] and says `total` beside
+		// `truncated`.
 		{"list_projects", maximalProjects()},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -74,23 +63,15 @@ func TestEveryToolAnswerFitsToolAnswerBytes(t *testing.T) {
 	}
 }
 
-// AND THE WHOLE OF A MAXIMAL ITEM IS OVER THE CEILING, which is not a defect
-// but the case the ceiling exists for — stated here so it is a measured fact
-// rather than an assumption.
+// AND THE WHOLE OF A MAXIMAL ITEM IS OVER THE CEILING: not a defect but the
+// case the ceiling exists for, measured rather than assumed. Its honest answer
+// is the refusal naming `include`, not a truncation a model reads as the
+// whole; what must hold is the case above, that every part a caller can
+// narrow TO fits.
 //
-// A task carrying twenty long comments, fifty history rows and sixty-four
-// links is genuinely too much for one answer, and the honest response is the
-// refusal that names `include` rather than a truncation a model would read as
-// the whole. What must hold is the case above: every part a caller can narrow
-// TO fits, so the advice works.
-//
-// IT FAILS WHEN THE ITEM FITS, which is the opposite arm of the same assertion
-// and the reason this is a test rather than a note. It was written with a
-// t.Skipf on that arm and a t.Logf on the other, so NO INPUT could turn it red:
-// a ceiling raised past the maximal shape would have made the refusal path dead
-// code and this would have reported a pass either way. The shape to copy is
-// internal/store/capability_test.go, which fails when its measurement moves in
-// EITHER direction.
+// IT FAILS WHEN THE ITEM FITS, never skips: a ceiling raised past the maximal
+// shape leaves the refusal path dead code (as internal/store/capability_test.go
+// fails when its measurement moves in EITHER direction).
 func TestAMaximalItemIsRefusedRatherThanTruncated(t *testing.T) {
 	t.Parallel()
 	encoded, err := builtin.EncodeAnswer(maximalDetail())
@@ -181,12 +162,9 @@ func maximalDetail() worklet.TaskDetail {
 }
 
 // maximalProjects is a seat's page of projects, each row generous rather than
-// typical.
-//
-// NOTHING CAPS A PROJECT'S PROSE — its name, purpose and unit are the org
-// chart's own text — so "maximal" here is a measured row with room in it: a
-// purpose of a hundred and twenty characters is three times what a company
-// writes, and the whole point of the page size is that it holds even so.
+// typical: NOTHING CAPS A PROJECT'S PROSE (it is the org chart's own text), so
+// a 120-character purpose, three times what a company writes, stands in for
+// the maximum, and the page size must hold even so.
 func maximalProjects() worklet.ProjectListing {
 	at := time.Date(2026, 3, 4, 9, 0, 0, 0, time.UTC)
 	out := worklet.ProjectListing{
@@ -265,14 +243,11 @@ func itoa(n int) string {
 	return string(digits)
 }
 
-// A TOOL ANSWER CARRIES WHAT A PERSON WROTE AS THEY WROTE IT.
-//
-// The standard encoder escapes `<`, `>` and `&` for JSON spliced into an HTML
-// page, and a tool answer is spliced into nothing: its reader is a model, shown
-// `if a < b && c > d` as six-byte escapes it has to decode back into the code
-// it is reasoning about, each one five more bytes of the turn's context and of
-// the answer's ceiling. And the answer ends where its value does, with no
-// newline the encoder appends.
+// A TOOL ANSWER CARRIES WHAT A PERSON WROTE AS THEY WROTE IT. The standard
+// encoder escapes `<`, `>` and `&` for JSON spliced into HTML; a tool answer's
+// reader is a model, which would have to decode each six-byte escape, five
+// more bytes of context and ceiling apiece. And the answer ends where its
+// value does, with no newline the encoder appends.
 func TestAToolAnswerCarriesMarkupAsWritten(t *testing.T) {
 	t.Parallel()
 	const said = `if a < b && c > d { return "<ok>" }`

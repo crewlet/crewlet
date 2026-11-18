@@ -20,20 +20,17 @@ import (
 const keptHeader = "## A kept session this run does not continue"
 
 // A FRESH BRIEF NAMES THE KEPT SESSION ITS LAUNCH DOES NOT CONTINUE, which its
-// model cannot otherwise know is there to read: where the launch's probe read a
-// kept session — the conversation's last turn's, or the turn's own earlier
-// launches' — and the run's surface carries read_session, the brief a run that
-// starts a session of its own is handed says whose it is and to read it with
-// read_session under its turn id — never why it is not continued, which the
-// probe words for the log and may quote what a box printed — and the
-// continuation itself, which the session reads, says nothing of it. With no
-// kept session, or no read_session on the surface, the brief says nothing. A
-// schedule's fire is told it in the schedule's words, as its lead is: its
-// schedule's last fire, or this fire's earlier launches.
+// model cannot otherwise know is there: where the probe read a kept session
+// (the conversation's last turn's, or the turn's earlier launches') and the
+// surface carries read_session, a run starting its own session is told whose it
+// is and to read it with read_session under its turn id. Never why it is not
+// continued: the probe words that for the log and may quote what a box printed.
+// A continuation says nothing of it, nor does a brief lacking either. A fire is
+// told it in its schedule's words (its last fire's, or its earlier launches').
 //
-// Mutation: say it whatever the probe read, or whatever the surface carries,
-// tell the run the probe's reason, say it inside the continuation, or tell a
-// fire in a conversation's words, and a case goes red.
+// Mutation: say it whatever the probe read or the surface carries, tell the
+// probe's reason, say it in the continuation, or tell a fire in a
+// conversation's words, and a case goes red.
 func TestAFreshBriefNamesTheKeptSessionItDoesNotContinue(t *testing.T) {
 	t.Parallel()
 	turnsOwn := "the turn's own job was lost before anything of it was kept"
@@ -117,16 +114,15 @@ func TestAFreshBriefNamesTheKeptSessionItDoesNotContinue(t *testing.T) {
 }
 
 // A RELAUNCH'S RESEED NAMES THE KEPT SESSION IT DOES NOT CONTINUE, as a first
-// launch's fresh brief does: a lost job's round carried on in a session of its
-// own is told the turn's kept session it could read — and so is a round lost a
-// second time, which continues no session, its kept session being the only
-// record of what its jobs did in their boxes — never why it is not continued;
-// and neither continuation, the kept one or the one in the job's own box, says
-// anything of it.
+// launch's fresh brief does: a lost job's round reseeded in a session of its own
+// is told the turn's kept session, as is a round lost twice, which continues
+// none and whose kept session is the only record of what its jobs did; never
+// why it is not continued, and neither continuation (kept or in the job's box)
+// names it.
 //
-// Mutation: leave the reseed as it was, name the session only where the round
-// may be continued, tell the run the probe's reason, or name the session
-// inside a continuation, and a case goes red.
+// Mutation: leave the reseed unnamed, name the session only where the round may
+// be continued, tell the probe's reason, or name it inside a continuation, and a
+// case goes red.
 func TestAReseedNamesTheKeptSessionItDoesNotContinue(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}

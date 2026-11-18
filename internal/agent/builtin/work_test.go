@@ -32,8 +32,7 @@ type fakeTracker struct {
 	answer *worklet.Answer
 
 	// query is the last one the list tool built, so a case can assert
-	// what a model's ARGUMENTS became — which is the half of this tool
-	// nothing looked at while it dropped a filter and refused a flag.
+	// what a model's ARGUMENTS became.
 	query worklet.Query
 
 	// params is what the tool handed the grammar, before it was parsed.
@@ -49,8 +48,7 @@ type fakeTracker struct {
 	reads []statelog.Freshness
 
 	// wants is the last DetailWants a detail read was given, so a case can
-	// assert what a model's arguments BECAME rather than only that the call
-	// came back.
+	// assert what a model's arguments BECAME.
 	wants worklet.DetailWants
 
 	created []worklet.Task
@@ -116,10 +114,9 @@ type fakeTracker struct {
 	projectWarnings []caveat.Caveat
 
 	// declaredTypes and declaredFields are the catalogue as the WRITE
-	// tools composed it, which is the half of those verbs that lives in
-	// this package: the tracker's own suite certifies what it does with a
-	// declaration, and nothing else can say what a model's arguments
-	// BECAME.
+	// tools composed it, the half of those verbs this package owns; the
+	// tracker's own suite certifies what it does with a declaration, and
+	// only this one what a model's arguments became.
 	declaredTypes  [][]worklet.TaskType
 	declaredFields [][]worklet.FieldDef
 	tagEdits       []worklet.TagEdit
@@ -287,11 +284,9 @@ func (f *fakeTracker) Person(_ context.Context, q worklet.PersonQuery,
 }
 
 // Thread answers what the fake was TOLD to answer, and records the query.
-//
-// A REAL SEAM RATHER THAN A ZERO VALUE: the comment tool's ask handling is
-// decided by what comes back from here — who is in the thread, which open ask
-// was inferred, whose question is being answered — so a stub returning nothing
-// would let every one of those arms pass while doing nothing at all.
+// It is a real seam, not a zero value: the comment tool's ask handling turns
+// on who is in the thread and which open ask was inferred, so a stub
+// returning nothing would let every one of those arms pass doing nothing.
 func (f *fakeTracker) Thread(_ context.Context, q worklet.ThreadQuery,
 	fresh statelog.Freshness) (worklet.ResolvedThread, error) {
 
@@ -311,8 +306,6 @@ func (f *fakeTracker) Thread(_ context.Context, q worklet.ThreadQuery,
 	return out, nil
 }
 
-// as records the actor and hands back a writer bound to it, which is the
-// tracker's own rule: a writer acts as exactly one party.
 // The PROJECT seam, which [builtin.ProjectReader] asserts for: a reader that
 // answers the task questions and not these is a build with no Worklet,
 // and the registration turns on exactly that.
@@ -348,6 +341,8 @@ func (f *fakeTracker) MyWork(_ context.Context, q worklet.MyWorkQuery,
 	return f.myWork, f.readErr
 }
 
+// as records the actor and hands back a writer bound to it, which is the
+// tracker's own rule: a writer acts as exactly one party.
 func (f *fakeTracker) as(actor builtin.Actor) builtin.WorkWriter {
 	f.actors = append(f.actors, actor)
 	return f
@@ -687,12 +682,9 @@ func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 	}
 }
 
-// IDENTITY COMES FROM THE TURN, NEVER FROM ARGUMENTS. A model that could name
-// its own actor could file work as anybody.
-//
-// AND A MODEL THAT TRIES IS TOLD, rather than filing under the turn's seat as
-// though it had asked for that: an argument the tool does not read is refused
-// by name, so the forged call writes nothing at all.
+// IDENTITY COMES FROM THE TURN, NEVER FROM ARGUMENTS: a model that could name
+// its own actor could file work as anybody. An argument the tool does not read
+// is refused by name, so the forged call writes nothing at all.
 func TestAWriteIsAttributedToTheTurnsSeat(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -794,9 +786,8 @@ func TestAWriteAnswersWithThePositionItLandedAt(t *testing.T) {
 	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
 		t.Fatalf("the answer is not json: %v", err)
 	}
-	// THE FAKE LANDS EVERY CREATE AT S@1:11, and the answer says so in
-	// the parseable form rather than as three numbers a caller would
-	// have to reassemble.
+	// THE FAKE LANDS EVERY CREATE AT S@1:11, and the answer says so in the
+	// parseable form rather than as three numbers to reassemble.
 	if answer["position"] != "S@1:11" {
 		t.Errorf("the answer carries position %v, want %q — a write that "+
 			"does not say where it landed leaves its caller nothing to "+
@@ -953,14 +944,12 @@ func TestAFailedReadIsNotAnEmptyResult(t *testing.T) {
 	}
 }
 
-// A READ REFUSED FOR WHAT IT ASKED IS NOT "TRY AGAIN".
-//
-// A feed's cursor that is not a position, a cursor or `since` from another
-// log, a text search wider than the feed scans, a floor on another log: each
-// is refused the same on every attempt, so the sentence that told a model the
-// tracker could not be read "right now" sent it round with the same arguments.
-// The refusal says the arguments are what has to change. The control is the
-// case above, where the store itself failed and trying again is right.
+// A READ REFUSED FOR WHAT IT ASKED IS NOT "TRY AGAIN". A feed's cursor that
+// is not a position, a cursor or `since` from another log, a text search wider
+// than the feed scans, a floor on another log: each is refused the same on
+// every attempt, so the refusal says the arguments are what has to change.
+// The control is the case above, where the store failed and trying again is
+// right.
 func TestARequestTheTrackerRefusedIsNotToldToTryAgain(t *testing.T) {
 	t.Parallel()
 	for _, refusal := range []error{
@@ -991,9 +980,8 @@ func TestARequestTheTrackerRefusedIsNotToldToTryAgain(t *testing.T) {
 
 // A CURSOR THE TRACKER REFUSES IS DROPPED, NEVER RETRIED. A listing sorted by
 // the org chart or the type catalogue refuses a cursor minted before either
-// was edited, and the same cursor is refused on every attempt, so the tool
-// names the argument to drop: `cursor` on a listing, `comments_cursor` on an
-// item. It was a node's failure once, and the model was told to try again.
+// was edited, on every attempt, so the tool names the argument to drop:
+// `cursor` on a listing, `comments_cursor` on an item.
 //
 // Mutation: drop either tool's ErrBadCursor arm and its case goes red.
 func TestARefusedCursorIsToldToBeDropped(t *testing.T) {
@@ -1073,13 +1061,10 @@ func TestAFailedWriteSaysSo(t *testing.T) {
 }
 
 // A CREATE WHOSE OUTCOME IS UNKNOWN IS NEVER REPORTED AS FILED, NOR AS NOT
-// MADE, and what it tells the caller to do is what a repeat would actually be.
-//
-// The answer used to be the create's receipt with `outcome: unknown` in it: a
-// key the seat read as its item's — a gap in the numbering if the task step
-// never landed — or, where the ledger could not vouch for the operation, the
-// default failure's "The change was NOT made" about an item the first run
-// filed, after which the seat reworded the call and filed a duplicate.
+// MADE, and what it tells the caller to do is what a repeat would actually be:
+// a receipt's key reads as the item's even if the task step never landed, and
+// "NOT made" about an item a first run filed makes the seat reword the call
+// and file a duplicate.
 func TestACreateWhoseOutcomeIsUnknownIsNeverReportedAsFiled(t *testing.T) {
 	t.Parallel()
 	lostAck := worklet.WriteResult{
@@ -1192,12 +1177,10 @@ func TestAReferenceIsResolvedRatherThanStoredAsTyped(t *testing.T) {
 	}); got.Failed {
 		t.Fatalf("the duplicate link failed: %s", got.Output)
 	}
-	// A GESTURE, AND NEVER THE WHOLE SET. [worklet.TaskPatch]'s
-	// collections are carried whole, so stating this one edge as the
-	// collection deleted every other relation the item had — and the
-	// `waiting_on` edges are the expensive half, because their mirrors on
-	// the blockers survive and the repair scans for a missing mirror from
-	// the AUTHORED end, which is the row that was deleted.
+	// A GESTURE, AND NEVER THE WHOLE SET: [worklet.TaskPatch]'s collections
+	// are carried whole, so this one edge as the collection would delete every
+	// other relation the item has — and a deleted `waiting_on` edge leaves its
+	// mirror on the blocker, which the repair cannot find from the AUTHORED end.
 	gesture := trk.patched[0].Relate
 	if trk.patched[0].Relations != nil {
 		t.Fatalf("the tool stated the whole relation set %v, which is every "+
@@ -1232,12 +1215,10 @@ func TestAReferenceIsResolvedRatherThanStoredAsTyped(t *testing.T) {
 	}
 }
 
-// A SUBTASK FILES INTO ITS PARENT'S PROJECT when the call names none.
-//
-// The default was the CALLER's team, so a seat breaking down a colleague's
-// item filed every piece of it in its own project — on neither project's
-// board, and refused by the tracker now that a subtask has to live in its
-// parent's project. A plain item still takes the caller's team.
+// A SUBTASK FILES INTO ITS PARENT'S PROJECT when the call names none: filed
+// in the caller's team it would be on neither project's board, and the
+// tracker refuses a subtask outside its parent's project. A plain item still
+// takes the caller's team.
 func TestASubtaskFilesIntoItsParentsProjectByDefault(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1264,14 +1245,11 @@ func TestASubtaskFilesIntoItsParentsProjectByDefault(t *testing.T) {
 	}
 }
 
-// EVERY INERT EDGE ONE CALL STATES TRAVELS IN ONE GESTURE.
-//
-// A patch carries exactly one relation gesture and the writer resolves it
-// against the item's own rows. Two arms composing two gestures means whichever
-// ran last wins and the other's edges are silently gone — and two arms
-// composing one gesture and one whole SET is worse still: the writer refuses
-// the pair outright, so a model that named a link and a duplicate in one call
-// was told its own arguments were a programming error.
+// EVERY INERT EDGE ONE CALL STATES TRAVELS IN ONE GESTURE. A patch carries
+// exactly one relation gesture: two arms composing two gestures means the
+// last wins and the other's edges are silently gone, and one gesture plus one
+// whole SET is refused by the writer outright, as a programming error the
+// model cannot fix.
 func TestOneCallsLinkAndDuplicateBothSurvive(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1304,8 +1282,8 @@ func TestOneCallsLinkAndDuplicateBothSurvive(t *testing.T) {
 }
 
 // A DUPLICATE LINK COMES OFF THE WAY AN ASSIGNEE DOES: null or "" clears the
-// item's own duplicate edges. `duplicate_of` only ever added one, so a link
-// drawn by mistake stayed on both tasks for good.
+// item's own duplicate edges, or a link drawn by mistake stays on both tasks
+// for good.
 func TestADuplicateLinkIsTakenOffByAnEmptyDuplicateOf(t *testing.T) {
 	t.Parallel()
 	for _, cleared := range []any{nil, "", "  "} {
@@ -1428,16 +1406,11 @@ func TestTheTrackerWritesAreClassifiedAsSharedWrites(t *testing.T) {
 }
 
 // EVERY ARGUMENT A MODEL SENDS REACHES THE GRAMMAR, under the grammar's own
-// name.
-//
-// The tool's arguments are the MODEL's vocabulary and the query keys are the
-// transport's, so the two are translated — and a translation nothing checks is
-// one that silently stops translating. Both halves of this tool's table were
-// wrong at once: `text` was copied through under its own name, which the
-// grammar does not read, so every text search returned an unfiltered list; and
-// `open_only` named two "status groups" that do not exist, so the parser
-// refused the whole call and the commonest filter a model reaches for failed
-// every time.
+// name. The tool's arguments are the model's vocabulary and the query keys the
+// transport's, and a translation nothing checks silently stops translating:
+// `text` copied through under its own name, which the grammar does not read,
+// returns an unfiltered list, and an `open_only` naming groups that do not
+// exist makes the parser refuse the whole call.
 func TestEveryListArgumentReachesTheGrammar(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1487,15 +1460,11 @@ func TestEveryListArgumentReachesTheGrammar(t *testing.T) {
 	}
 }
 
-// NO SEAT HOLDS AN OPERATOR-ONLY TOOL.
-//
-// Each of them is a decision a PERSON makes about how the company runs: what
-// its vocabulary is, how a tab strip is arranged, what somebody's queue and
-// inbox are. A seat given any of them is a seat editing
-// the rules it is judged by — and the two that would matter most are the
-// catalogue (a create refused for an undeclared type is a signal a person
-// needs to see, not one the seat should widen away) and the person record (a
-// seat is not a human; it has a mailbox rather than an inbox).
+// NO SEAT HOLDS AN OPERATOR-ONLY TOOL. Each is a decision a PERSON makes about
+// how the company runs — its vocabulary, a tab strip, somebody's queue and
+// inbox — so a seat holding one edits the rules it is judged by: a create
+// refused for an undeclared type is a signal a person must see, and a seat
+// has a mailbox, not an inbox.
 //
 // The guard is STRUCTURAL rather than a list kept here, because a list beside
 // the registry is the thing that stops matching it.
@@ -1561,12 +1530,10 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	}
 }
 
-// A SEAT IS NOT TOLD A POPULATED BOARD IS EMPTY.
-//
-// A grouped answer has no flat rows by construction, and the empty message
-// asked only about those — so a board with five columns came back as "No work
-// items match that filter", and a seat that believed it would file the
-// duplicate.
+// A SEAT IS NOT TOLD A POPULATED BOARD IS EMPTY. A grouped answer has no
+// flat rows by construction, so an empty message that asked only about those
+// would call a board of five columns empty, and a seat believing it would
+// file the duplicate.
 func TestAGroupedAnswerIsNotReportedAsEmpty(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1591,12 +1558,9 @@ func TestAGroupedAnswerIsNotReportedAsEmpty(t *testing.T) {
 	}
 }
 
-// AND A BOARD OF EMPTY COLUMNS IS EMPTY.
-//
-// A closed axis carries every column the query admits whether or not anything
-// is in it, so "the answer has groups" stopped meaning "the answer has work":
-// a seat handed three columns at zero and told nothing would read them as a
-// board and go looking for the rows.
+// AND A BOARD OF EMPTY COLUMNS IS EMPTY. A closed axis carries every column
+// the query admits, full or not, so a seat handed three columns at zero and
+// told nothing would read them as a board and go looking for the rows.
 func TestABoardWhoseEveryColumnIsEmptyIsReportedEmpty(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1618,14 +1582,11 @@ func TestABoardWhoseEveryColumnIsEmptyIsReportedEmpty(t *testing.T) {
 	}
 }
 
-// EVERY OPERATOR TOOL ANSWERS WITHOUT A TURN.
-//
-// The operator surface calls through Callable.Call, which passes a nil turn,
-// and supplies its own Actor because there is no seat to derive one from. Four
-// reads opened with `turn.RequireSeat()` BEFORE consulting that Actor, so the
-// whole read half of /operator/mcp refused every call while the writes beside
-// them worked — and a catalogue whose reads all fail is one an assistant stops
-// trusting entirely.
+// EVERY OPERATOR TOOL ANSWERS WITHOUT A TURN. The operator surface calls
+// through Callable.Call with a nil turn and supplies its own Actor, so a tool
+// calling `turn.RequireSeat()` before consulting that Actor refuses every
+// operator call — and a catalogue whose reads all fail is one an assistant
+// stops trusting.
 //
 // The guard is structural: it calls EVERY tool the surface serves, so a tool
 // added later with the same prelude fails here rather than in production.
@@ -1716,16 +1677,11 @@ func (f *fakeTracker) Depend(_ context.Context, _ string,
 	}}, nil
 }
 
-// EVERY FILTER THIS TOOL DECLARES REACHES THE QUERY, and the ones a seat
-// could not ask for at all were most of the grammar.
-//
-// The board's query language compiles forty-odd keys, every one indexed and
-// reachable from the dashboard and the REST route, and this tool forwarded
-// ten. So a seat could not ask for the bugs, for what is due this week, for
-// what moved since yesterday, for the subtasks of one item, for what it filed
-// or follows — or for a page after the first, which is the one that makes a
-// long answer usable at all. It also could not name a CUSTOM FIELD, which is
-// the whole point of a company declaring one.
+// EVERY FILTER THIS TOOL DECLARES REACHES THE QUERY. The board's grammar
+// compiles forty-odd indexed keys, reachable from the dashboard and the REST
+// route, and a seat needs them too: the type, a due window, what moved since,
+// the subtasks of an item, what it filed or follows, a page after the first,
+// and the company's CUSTOM FIELDS.
 func TestEveryDeclaredFilterReachesTheQuery(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1758,13 +1714,10 @@ func TestEveryDeclaredFilterReachesTheQuery(t *testing.T) {
 	}
 }
 
-// A PAGING ARGUMENT NEEDS A PAGE TO COME FROM.
-//
-// `cursor` tells a caller to pass "the `next_cursor` from a previous call",
-// and this tool was the one reader of the query grammar that never put one in
-// its answer — the REST route beside it has always passed it on. An argument
-// whose only source is an answer the tool does not give is an argument nobody
-// can use.
+// A PAGING ARGUMENT NEEDS A PAGE TO COME FROM. `cursor` asks for "the
+// `next_cursor` from a previous call", so the answer carries one, as the REST
+// route's does: an argument whose only source is an answer the tool does not
+// give is one nobody can use.
 func TestTheListAnswerCarriesTheCursorItsOwnArgumentAsksFor(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1786,13 +1739,10 @@ func TestTheListAnswerCarriesTheCursorItsOwnArgumentAsksFor(t *testing.T) {
 }
 
 // A REFERENCE ARGUMENT IS RESOLVED TO AN ID, and `parent` is matched against
-// `parent_id`, which holds one.
-//
-// A model types the key it read. Forwarded raw, `parent: ENG-1` compares a key
-// against an id column and answers an EMPTY LIST with no error — which reads
-// as "that item has no subtasks" rather than as a refusal, so nobody finds out.
-// It is the same failure `references` carries its own comment about in the
-// parser, two lines from where this one is read.
+// `parent_id`, which holds one. A model types the key it read, and forwarded
+// raw, `parent: ENG-1` compares a key against an id column and answers an
+// EMPTY LIST with no error — "no subtasks" rather than a refusal, so nobody
+// finds out (the failure `references` describes in the parser).
 func TestTheParentFilterIsResolvedToAnID(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1810,14 +1760,11 @@ func TestTheParentFilterIsResolvedToAnID(t *testing.T) {
 	}
 }
 
-// A PATCH WHOSE ONLY ARGUMENT IS A CUSTOM FIELD OR A RE-ROUTE IS A WRITE.
-//
-// The emptiness check decides whether the write is issued at all, so a field
-// it does not see is a call that answers `outcome: applied` and changes
-// nothing — the one failure a seat cannot detect, because there is no error
-// to read and no history row to notice is missing. Both of these were in that
-// state: `fields` and `routing_unit` were the two arms of the argument parser
-// the hand-written list of patch fields had never been extended for.
+// A PATCH WHOSE ONLY ARGUMENT IS A CUSTOM FIELD OR A RE-ROUTE IS A WRITE. The
+// emptiness check decides whether the write is issued at all, so a field it
+// does not see answers `outcome: applied` and changes nothing — the one
+// failure a seat cannot detect, with no error to read and no history row
+// missing.
 func TestAFieldsOnlyUpdateIsNotSilentlyDropped(t *testing.T) {
 	t.Parallel()
 	for name, args := range map[string]map[string]any{
@@ -1844,14 +1791,11 @@ func TestAFieldsOnlyUpdateIsNotSilentlyDropped(t *testing.T) {
 	}
 }
 
-// OPENING ONE COMMENT IS A READ A MODEL CAN REACH, AND A WRONG ID SAYS SO.
-//
-// The thread page carries EXCERPTS — twenty bodies at their full length is ten
-// times the ceiling on one tool answer — and that is only honest while the
-// rest is one call away. It was not: the excerpt was documented as a pointer
-// to a `comment:` argument this tool never had, so a body past 2 KiB could not
-// be recovered by any seat through any tool. These two cases are the argument
-// and the refusal that make the excerpt a pointer rather than a loss.
+// OPENING ONE COMMENT IS A READ A MODEL CAN REACH, AND A WRONG ID SAYS SO. The
+// thread page carries EXCERPTS (twenty whole bodies are ten times the ceiling
+// on one tool answer), which is honest only while the rest is one call away:
+// these cases are the `comment` argument and the refusal that make an excerpt
+// past 2 KiB a pointer rather than a loss.
 func TestOneCommentCanBeOpenedWholeAndAWrongIDSaysHow(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1903,13 +1847,10 @@ func TestOneCommentCanBeOpenedWholeAndAWrongIDSaysHow(t *testing.T) {
 	}
 }
 
-// THE DESCRIPTION IS WHOLE OR ABSENT, NEVER CUT.
-//
-// It used to be cut to four kilobytes on every read, with a `body: true`
-// argument to get the rest — and a model that did not think to ask acted on
-// the opening of a spec as the spec. A default read now carries it whole; a
-// read that names other parts does not carry it at all, and SAYS so with its
-// size, so an item with a description never reads as one without.
+// THE DESCRIPTION IS WHOLE OR ABSENT, NEVER CUT: a model acts on the opening
+// of a cut spec as the spec. A default read carries it whole; a read naming
+// other parts carries none of it and SAYS so with its size, so an item with a
+// description never reads as one without.
 func TestADescriptionIsWholeOrSaidToBeLeftOut(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1953,14 +1894,10 @@ func TestADescriptionIsWholeOrSaidToBeLeftOut(t *testing.T) {
 	}
 }
 
-// WHEN A TASK IS DUE AND HOW BIG IT IS.
-//
-// All four columns have existed since migration 0002, the query grammar
-// filters on every one and sorts on three, a row's `overdue` flag is derived
-// from the due date, and every total is a sum over the sizing pair. NOTHING
-// COULD SET ANY OF THEM — so an estimate could never exist, and both the
-// overdue predicate and every size total were dead surface that looked like
-// an empty company.
+// WHEN A TASK IS DUE AND HOW BIG IT IS. The query grammar filters on all four
+// columns, a row's `overdue` flag derives from the due date and every total
+// sums the sizing pair, so a tool that could not set them would leave all of
+// that dead surface that looks like an empty company.
 func TestACreateSetsWhenAndHowBig(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1996,10 +1933,10 @@ func TestACreateSetsWhenAndHowBig(t *testing.T) {
 }
 
 // A TASK IS FILED INTO THE LANE IT WAS FILED FROM. A board lane's "+" names
-// the lane's status, and a create that could only land in `todo` made that two
-// writes, the second free to fail after the first had filed the task in the
-// wrong column. The group travels with the status, and an unknown status is
-// refused by name rather than filed as `todo`.
+// the lane's status, and a create that could only land in `todo` would make
+// that two writes, the second free to fail after the first filed the task in
+// the wrong column. The group travels with the status, and an unknown status
+// is refused by name rather than filed as `todo`.
 func TestACreateStartsInTheStatusItNames(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -2038,9 +1975,9 @@ func TestACreateStartsInTheStatusItNames(t *testing.T) {
 
 // WHO A CREATE WAS FILED TO IS THE TRACKER'S ANSWER, never the argument. A
 // create naming nobody goes to the project's default assignee, which only the
-// create's own snapshot decides — so an answer echoing the empty argument
-// told a model, and a person's surface, that the work went to triage while it
-// sat on a colleague's queue.
+// create's own snapshot decides, so echoing the empty argument would tell a
+// model, and a person's surface, the work went to triage while it sat on a
+// colleague's queue.
 func TestACreatesAnswerNamesWhoTheTrackerFiledItTo(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -2102,8 +2039,8 @@ func TestADueDateTakesTheRelativeWordsTheFilterTakes(t *testing.T) {
 // alone" and "this has no due date any more" are different edits, and a tool
 // that could only say the first makes a date impossible to remove.
 //
-// Mutation: clear the due date with a pointer at the zero instant, as
-// applyToPatch did, and the patch carries no flag.
+// Mutation: clear the due date in applyToPatch with a pointer at the zero
+// instant and the patch carries no flag.
 func TestAnUpdateSetsAndClearsTheSchedule(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -2129,8 +2066,8 @@ func TestAnUpdateSetsAndClearsTheSchedule(t *testing.T) {
 	}
 	cleared := trk.patched[len(trk.patched)-1]
 	// A CLEAR IS ITS FLAG, not an absent field — nil on a patch means "not
-	// named" — and never the zero instant, which is no date (the patch
-	// type's doc says why it is no longer one).
+	// named" — and never the zero instant, which is no date (the patch type's
+	// doc says why).
 	if !cleared.ClearDue || cleared.DueAt != nil || cleared.ClearStart {
 		t.Errorf("a cleared due date is (clear_due %v, due_at %v, clear_start %v), want the "+
 			"due date's flag alone", cleared.ClearDue, cleared.DueAt, cleared.ClearStart)
@@ -2165,18 +2102,12 @@ func TestTheSchedulingValuesAreRefusedRatherThanStoredWrong(t *testing.T) {
 	}
 }
 
-// AN UNREADABLE SIZE IS REFUSED, NOT READ AS ZERO.
-//
-// This is the date rule above applied to the half of `readSchedule` that was
-// not written to it. Each of these fields is a POINTER because its zero is a
-// setting — zero minutes and zero points both mean UNESTIMATED — so a
-// value the parser could not read became `&0`, the write succeeded, and the
-// answer said `applied` while the estimate had been WIPED. A model reads that
-// as having set one.
-//
-// `"2 days"` is the case that makes it more than a missed refusal: the reader
-// was `fmt.Sscanf("%d")`, which takes the leading integer and stops, so a
-// two-day estimate was stored as two MINUTES with nothing to say so.
+// AN UNREADABLE SIZE IS REFUSED, NOT READ AS ZERO: the date rule above,
+// applied to the rest of `readSchedule`. Each field is a POINTER because its
+// zero is a setting (zero minutes or points means UNESTIMATED), so an
+// unreadable value read as `&0` would answer `applied` while WIPING the
+// estimate. `"2 days"` guards against a reader that takes the leading integer
+// (`fmt.Sscanf("%d")`) and stores a two-day estimate as two MINUTES.
 func TestAnUnreadableSizeIsRefusedRatherThanReadAsZero(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -2248,12 +2179,11 @@ func TestAnExplicitZeroEstimateIsSet(t *testing.T) {
 	}
 }
 
-// A SIZE THAT IS NOT A NUMBER IS REFUSED, and NaN is the one that gets past a
-// range check by definition: every comparison with it is false, so the
-// `points < 0` guard said nothing about it and it reached the writer. An
-// infinity passed the same guard honestly. Neither is a value a total's
-// figures can be summed from, and JSON cannot encode either — so the failure
-// would have surfaced somewhere downstream with no memory of who typed it.
+// A SIZE THAT IS NOT A NUMBER IS REFUSED, and NaN gets past a range check by
+// definition: every comparison with it is false, so `points < 0` says nothing
+// about it, and an infinity passes the same guard. Neither can be summed into
+// a total nor encoded in JSON, so the failure would surface downstream with no
+// memory of who typed it.
 func TestANonFiniteSizeIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -2265,10 +2195,9 @@ func TestANonFiniteSizeIsRefused(t *testing.T) {
 		{"points as an infinity", "points", "Inf"},
 		{"points as a spelled-out infinity", "points", "infinity"},
 		{"points as a negative infinity", "points", "-Inf"},
-		// `int(+Inf)` is not defined by the language: it lands on the
-		// platform's minimum int, which the negative check then refused
-		// as a NEGATIVE estimate — the right answer for the wrong reason,
-		// naming a sign nobody typed.
+		// `int(+Inf)` is undefined by the language and lands on the minimum int,
+		// which the negative check would refuse as NEGATIVE: the right answer for
+		// the wrong reason, naming a sign nobody typed.
 		{"an infinite estimate", "estimate_minutes", math.Inf(1)},
 		{"a NaN estimate", "estimate_minutes", math.NaN()},
 	} {
@@ -2290,13 +2219,10 @@ func TestANonFiniteSizeIsRefused(t *testing.T) {
 	}
 }
 
-// THE UPDATE SCHEMA ADMITS THE NULL ITS OWN DESCRIPTION PROMISES.
-//
-// Clearing a date or a size is done by passing null; `readSchedule`
-// reads it and the description says so. The declared type said `string` and
-// `integer` alone, so a caller that VALIDATES against this schema refuses the
-// null before the tool is reached — a gesture documented, implemented, and
-// unreachable through any strict client.
+// THE UPDATE SCHEMA ADMITS THE NULL ITS OWN DESCRIPTION PROMISES. Clearing a
+// date or a size is done by passing null, and a caller that VALIDATES against
+// a schema declaring `string` or `integer` alone refuses the null before the
+// tool is reached.
 //
 // A CREATE STAYS NON-NULLABLE, because a create has nothing to clear: a null
 // there is a value nobody meant rather than an instruction.
@@ -2342,19 +2268,15 @@ func TestOnlyTheUpdateSchemaAcceptsANullClear(t *testing.T) {
 	}
 }
 
-// A SCHEDULE EDIT REACHES THE WAKE IT ANNOUNCES.
+// A SCHEDULE EDIT REACHES THE WAKE IT ANNOUNCES. The notification's deltas
+// (`TaskDeltas`) compare the task this tool READ with a snapshot of it with
+// the patch applied, so a snapshot that missed the schedule fields would
+// announce every date, estimate and size a seat moved as a change that
+// changed nothing.
 //
-// The notification's deltas are computed between the task this tool READ and
-// a snapshot of it with the patch applied. That snapshot was a field-by-field
-// reimplementation of the writer's own merge, and it never learned the
-// schedule fields — so the durable row took the new due date while the
-// snapshot kept the old one, `TaskDeltas` compared a task against itself on
-// exactly those fields, and every date, estimate and size a seat moved
-// arrived as a change that changed nothing.
-//
-// The snapshot is the writer's merge now, so this asserts the CONSEQUENCE
-// rather than the copy: a test over the field list would pass again the day
-// somebody adds a field to the patch and forgets it, which is the bug.
+// The snapshot is the writer's merge, so this asserts the CONSEQUENCE rather
+// than the copy: a test over the field list would pass again the day somebody
+// adds a field to the patch and forgets it.
 func TestASceduleEditReachesTheNotification(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -2391,13 +2313,11 @@ func TestASceduleEditReachesTheNotification(t *testing.T) {
 	}
 }
 
-// A CREATE ASKED TWICE UNDER ONE SEED FILES ONE ITEM.
-//
-// The operation a create is published under names the new item's id, so an
-// id minted fresh per call made every retry a fresh OPERATION: a redelivered
-// turn filed its item twice, and so did an HTTP create retried under its
-// Idempotency-Key after an `unknown`. The ledger that exists to recognise the
-// second arrival never saw one.
+// A CREATE ASKED TWICE UNDER ONE SEED FILES ONE ITEM. The operation a create
+// is published under names the new item's id, so an id minted fresh per call
+// makes every retry a fresh OPERATION the ledger never recognises: a
+// redelivered turn, or an HTTP create retried under its Idempotency-Key after
+// an `unknown`, files its item twice.
 //
 // The controls are the two things one seed must still tell apart: a
 // different item asked for in the same run, and a call with no seed at all.
@@ -2458,14 +2378,11 @@ func TestACreateRetriedUnderOneSeedFilesOnce(t *testing.T) {
 }
 
 // A CREATE THAT NAMES NO PROJECT IS ONE OPERATION WHEREVER ITS DEFAULT POINTS.
-//
 // The default is read from the chart when the call runs, so it can move
-// between a turn and its re-run — the seat moved to another team, or the
-// parent a subtask defaults to moved to another project. The operation was
-// named for the project the default resolved to, so the re-run derived a
-// second operation and filed a second item for one request. The call is what
-// the operation is; the project it NAMES stays part of it, as the control
-// shows.
+// between a turn and its re-run (the seat changed team, a subtask's parent
+// moved project), and an operation named for the resolved project would file
+// a second item. The call is the operation; a project it NAMES stays part of
+// it, as the control shows.
 func TestACreateRerunAfterItsDefaultMovedFilesOnce(t *testing.T) {
 	t.Parallel()
 	file := func(home string, args map[string]any) (string, string) {

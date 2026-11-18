@@ -18,32 +18,22 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A PERSON'S MARKS OVER THEIR CODE NOTICES: the operator tool
-// `code_mark_inbox`, the code log's half of what `mark_inbox` is on
-// Worklet's. A person's inbox is composed from every native domain's notices,
-// and each domain keeps the marks over its own on its own log
-// (internal/inbox): a position is a coordinate on ONE stream, so a gesture
-// crossing two logs would be two decides that cannot be one. So each domain's
-// marks are written by a verb of its own, and a screen's "mark all read" sends
-// both.
+// code_mark_inbox: a person's marks over their code notices, the code log's
+// half of Worklet's mark_inbox. Each domain keeps the marks over its own notices
+// on its own log (internal/inbox): a position is a coordinate on ONE stream, so a
+// gesture across two logs cannot be one decide, and a screen's "mark all read"
+// sends both. One gesture, read by the shared parser ([gestureOf]), decided by
+// Gitlet on the person's own record (gitlet.Marks).
 //
-// ONE GESTURE, NEVER THE LISTS — the arguments mark_inbox takes, read by the
-// one parser ([gestureOf]) over Gitlet's reasons — decided by Gitlet
-// on the person's own record (gitlet.Marks).
-//
-// THE CALLER'S FLOOR TRAVELS WITH THE GESTURE (`seen`): a mark is decided by
-// whichever data node the router reaches, which may be behind the one the
-// inbox page was read from, and a decide below a notice's record finds no row
-// for it — a refusal of a notice the person was just shown. So the caller says
-// how far it has read the code log, the decide waits for that position, and a
-// node that cannot reach it hands the mark to the next one (gitlet.MarkWrite's
-// Seen) rather than refusing what is merely late.
-//
-// THE OPERATOR CATALOGUE'S ALONE, and a PERSON'S: a seat has no inbox to mark
-// — it is woken, never shown a list — and a person's marks are their own,
-// which the authority table holds (authz.ActionCodeMarkInbox: own record,
-// human-only) and Gitlet's writer holds again, refusing a mark of
-// anybody else's record whatever admitted it.
+// The caller's floor travels with the gesture (`seen`): the deciding data node
+// may be behind the one the inbox was read from, and would refuse a notice the
+// person was just shown. The decide waits for that position, and a node that
+// cannot reach it hands the mark on (gitlet.MarkWrite's Seen).
+
+// The operator catalogue's alone, and a person's: a seat has no inbox (it is
+// woken, never shown a list), and both the authority table
+// (authz.ActionCodeMarkInbox: own record, human-only) and Gitlet's writer
+// refuse a mark of anybody else's record.
 
 // CodeMarkInboxTool is the tool's name — its authority row's action.
 const CodeMarkInboxTool = string(authz.ActionCodeMarkInbox)
@@ -179,15 +169,12 @@ func (t *codeMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return answer, nil
 }
 
-// markFloor is a mark's `seen` argument as a position on stream, the log of
-// the domain the mark is decided on, called logName in a refusal that ends
-// with hint, what to pass instead: the zero position where the call names
-// none, or why it is not one. ONE PARSER FOR EVERY MARK'S FLOOR (the inbox
-// tools and code_mark_viewed), since the floor is the same claim over any
-// log. A position on another log is refused here rather than waited for: a
-// coordinate on one domain's log says nothing of how far another's was read,
-// and each writer would refuse it anyway (gitlet.MarkWrite.Validate,
-// worklet.Writer.MarkInbox).
+// markFloor is a mark's `seen` as a position on stream, the deciding domain's
+// log (logName in a refusal ending with hint): the zero position when the call
+// names none, or why it is not one. The one parser for every mark's floor (the
+// inbox tools, code_mark_viewed). A position on another log is refused, not
+// waited for: it says nothing of how far this log was read, and each writer
+// refuses it anyway (gitlet.MarkWrite.Validate, worklet.Writer.MarkInbox).
 func markFloor(args map[string]any, stream, logName, hint string) (statelog.Position, string) {
 	raw := strings.TrimSpace(argString(args, "seen"))
 	if raw == "" {

@@ -28,9 +28,8 @@ func refusedResume(t *testing.T, with func(*runner.Resume)) (*runner.Runner, *pl
 }
 
 // A ROUND WHOSE CONTINUED SESSION ITS PROVIDER REFUSED IS CARRIED ON IN A FRESH
-// ONE: the same round relaunched, continuing no session in its box and none
-// the turn kept (the session is what was refused), recorded as the one
-// relaunch a refusal gets, and told why it starts over.
+// ONE: relaunched continuing no session (the session is what was refused),
+// recorded as a refusal's one relaunch, and told why it starts over.
 //
 // Mutation: collect the round instead ([Resume.carriedRound]), let the carry
 // take up the kept session, or leave the relaunch unmarked, and it goes red.

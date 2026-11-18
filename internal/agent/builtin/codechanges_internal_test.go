@@ -9,31 +9,17 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY CHANGE TOOL NAMES THE ACCESS IT NEEDS: the one table of what each
-// change tool's call needs on the change's repository, of its caller and of
-// the colleague a turn reads for, holds a row for every change tool — the
-// reads and the writes — and for nothing else, so a change tool added without
-// a row, or a row left behind by one removed, fails here rather than serving
-// whoever messaged a seat at an access nobody named. And a READ's row is
-// read: the node that answers a read judges the colleague it is made for at
-// read and nothing else (gitlet.JudgeRead, through the ceiling every question of
-// it carries), so a read naming more would be a need no read holds anybody to.
-// A WRITE's row is the access the deciding node holds the colleague its turn
-// works for to (gitlet.ChangeProposal.CeilingNeeds,
-// gitlet.ConversationWrite.CeilingNeeds), the two one rule — but for a write
-// that is a branch move alone, a rebase, which the Gitlet node holds the
-// colleague to as every branch write (gitlet.EngineWrite.Ceiling, Grant.Under on
-// the one ref it moves, the seat's own work spared): a rule of the push and
-// no access its decide reads, so its row is read, the least that admits it.
+// EVERY CHANGE TOOL NAMES THE ACCESS IT NEEDS: changeToolNeeds has a row for
+// every change read and write and nothing else, so no tool serves at an access
+// nobody named. A read's row is read, all its answering node judges
+// (gitlet.JudgeRead). A write's row is what its decide holds the colleague to
+// (CeilingNeeds), but a branch move's is read: the Gitlet node holds it to the
+// push's rule (gitlet.EngineWrite.Ceiling). belowWriteNeeds offers a write at
+// no less than its decide's access and below write (CodeWritesWithheld).
 //
-// And what a seat whose tier caps it below write is offered of the writes
-// (belowWriteNeeds, CodeWritesWithheld) needs at least what the write's decide
-// holds a colleague to, and less than write.
-//
-// Mutations: a change tool's row dropped — a read's or a write's; a row naming
-// a tool that is not one; a read's row raised to review; the review's row, or
-// the decide's need for a review, lowered to read; the rebase's row raised to
-// review; the review offered below write at read → red.
+// Mutations: a row dropped or naming no tool; a read's row or the rebase's
+// raised to review; the review's row or its decide's need lowered to read; the
+// review offered below write at read → red.
 func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 	t.Parallel()
 	every := slices.Concat(ChangeToolNames(), ChangeWrites())
@@ -64,9 +50,8 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 			t.Errorf("changeToolNeeds names %s, which is no change tool", name)
 		}
 	}
-	// A WRITE'S ROW IS THE ACCESS ITS DECIDE HOLDS A COLLEAGUE TO in a turn
-	// that colleague woke (gitlet.WriteCeiling): the committer reads it from the
-	// write the tool sends, so the two cannot be allowed to disagree.
+	// A WRITE'S ROW IS WHAT ITS DECIDE HOLDS A COLLEAGUE TO (gitlet.WriteCeiling):
+	// the committer reads it from the write the tool sends, so the two must agree.
 	sends := map[string]interface{ CeilingNeeds() gitlet.Access }{
 		CodeOpenChangeTool:       gitlet.ChangeProposal{Open: &gitlet.ChangeOpen{}},
 		CodeUpdateChangeTool:     gitlet.ChangeProposal{Edit: &gitlet.ChangeEdit{}},
@@ -79,9 +64,8 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 	}
 	// The change writes a Gitlet node decides as a branch move, and nothing else.
 	pushes := []string{CodeRebaseChangeTool, CodeRevertChangeTool}
-	// And the writes whose deciding node judges its asker's merge authority
-	// from its own chart (M5-D2) — and a requester's by the same relation,
-	// never by an access this table names.
+	// The writes whose deciding node judges merge authority from its own chart
+	// (M5-D2), never by an access this table names.
 	merging := []string{CodeMergeChangeTool, CodeDequeueChangeTool}
 	for _, name := range ChangeWrites() {
 		write, ok := sends[name]
@@ -103,11 +87,9 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 				changeToolNeeds[name], write.CeilingNeeds())
 		}
 	}
-	// AND WHAT A SEAT BELOW WRITE IS OFFERED of them (belowWriteNeeds): a
-	// change write, needing of the seat no less than its decide holds a
-	// colleague to — the relation beyond the access being the seat's own,
-	// which below write authors nothing — and less than write, the one tier
-	// that is offered every write whatever this table says.
+	// AND WHAT A SEAT BELOW WRITE IS OFFERED (belowWriteNeeds): a change write,
+	// at no less than its decide holds a colleague to and less than write, the
+	// one tier offered every write whatever this table says.
 	for name, need := range belowWriteNeeds {
 		switch {
 		case !slices.Contains(ChangeWrites(), name):
@@ -122,9 +104,8 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 }
 
 // EVERY ID create_work_item MINTS IS ONE A LISTING TAKES AS NAMED: the code
-// tools list a Worklet item's changes by its id with no read of the tracker
-// only where worklet.IsTaskID takes the id, so an id minted in another
-// spelling would cost every such listing the read it is spared.
+// tools skip the tracker read for a Worklet id only where worklet.IsTaskID
+// takes it, so an id minted in another spelling costs every listing a read.
 //
 // Mutation: createdTaskID spelling its uuid in upper case → red.
 func TestACreatedItemsIDIsOneAListingTakesAsNamed(t *testing.T) {

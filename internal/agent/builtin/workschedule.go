@@ -9,60 +9,23 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// When a task is due and how big it is.
+// When a task is due and how big it is: the work tools' writes of `start_at`,
+// `due_at`, `estimate_min` and `points`, which the board filters, sorts and
+// totals on.
 //
-// # These were filterable, sortable, reportable — and unwritable
+// A date is written in the tokens `due=` filters on ([period.Resolve]), so the
+// two spellings cannot drift apart.
 //
-// `tracker_tasks` has carried `start_at`, `due_at`, `estimate_min` and
-// `points` since migration 0002. The query grammar filters on all four and
-// sorts on three; a row's `overdue` flag is derived from `due_at`; a total is
-// a sum over `points` or `estimate_min`; and the `overdue` preset and the
-// `due=` date tokens are documented surface.
-//
-// NOTHING COULD SET ANY OF THEM. `create_work_item` accepted none and
-// `update_work_item` accepted none.
-//
-// The consequences were silent and total, which is why nothing reported it: a
-// due date could not exist, so `due=overdue` matched nothing and the overdue
-// flag was never true, and an estimate could not exist, so every total was
-// zero for a team that had sized all of its work.
-//
-// The write path was complete the whole time: [worklet.TaskPatch] carries all
-// four and the applier writes the rows. What was missing was the few lines of
-// tool surface that reach it.
-//
-// # One grammar for a date, shared with the filter that reads it
-//
-// A due date is set with the same tokens `due=` already filters on —
-// [period.Resolve]: an instant, a calendar date, `+7d`, `today`, `eow`.
-// A second spelling here would be the copy that stops matching, and it would
-// make a model that can ask for "everything due this week" unable to say "due
-// this week" about one task.
-//
-// # `null` clears, and a missing key changes nothing
-//
-// The difference is the reason every one of these is a pointer on the patch:
-// "leave the due date alone" and "this task has no due date any more" are
-// different edits, and a tool that could only express the first would make a
-// date impossible to take back off.
+// A null clears a value and a missing key leaves it, which is why each is a
+// pointer on the patch: otherwise a date could never be taken back off.
 
-// scheduleSchema is the five parameters, declared once for both tools, and an
-// update's wait.
-//
-// ONE DECLARATION because a create that accepts a due date and an update that
-// does not is the same bug one step later — which is the shape the two tools
-// were actually in, both at zero.
+// scheduleSchema is the five parameters, declared once for both tools so a
+// create and an update cannot accept different ones, and an update's wait.
 func scheduleSchema(update bool) map[string]any {
 	clears := ""
-	// THE TYPE ADMITS THE NULL THE DESCRIPTION PROMISES. An update's five
-	// fields are cleared by passing null — [readSchedule] reads it, and
-	// `clears` below tells the model so — but the type said `string` and
-	// `integer` alone, and a caller that VALIDATES against this schema
-	// refuses the null before the tool is ever reached. The gesture was
-	// documented, implemented, and unreachable through any strict client.
-	//
-	// The union is on the UPDATE only: a create has nothing to clear, so
-	// a null there is a value nobody meant rather than an instruction.
+	// An update's type admits null, the clear [readSchedule] reads: a client
+	// that validates against the schema would otherwise refuse it before the
+	// tool. A create has nothing to clear, so a null there is no instruction.
 	nullable := func(t string) any { return t }
 	if update {
 		clears = " null clears it."
@@ -122,18 +85,13 @@ type schedule struct {
 	// WaitReason is a wait's reason, read with `wait_until` into Start.
 	WaitReason *string
 
-	// Cleared names the keys that were explicitly set to null, which a
-	// create ignores — a new task has nothing to clear — and an update
-	// turns into a zero value on the patch.
+	// Cleared names the keys explicitly set to null: a create ignores them,
+	// an update clears them on the patch.
 	Cleared map[string]bool
 }
 
-// readSchedule reads the five, refusing anything it cannot resolve BY NAME.
-//
-// REFUSED RATHER THAN DROPPED. A date this grammar cannot read is the one
-// argument where silently ignoring it is worst: the write succeeds, the answer
-// says `applied`, and the task simply has no due date — which a model reads as
-// having set one.
+// readSchedule reads the five, refusing BY NAME anything it cannot resolve:
+// a dropped date would answer `applied`, which a model reads as having set one.
 func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 	tool string) (schedule, string) {
 
@@ -162,18 +120,15 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 				worklet.Sentence(err))
 		}
 		if anchor.At.IsZero() {
-			// THE ZERO INSTANT IS NO DATE, and the tracker refuses one
-			// ([worklet.TaskPatch.CheckDates]) in words about the
-			// patch's own fields: said here, it is said in this tool's.
+			// The tracker refuses the zero instant too
+			// ([worklet.TaskPatch.CheckDates]), but in the patch's words.
 			return out, fmt.Sprintf("%s was given `%s` %q, which is the zero instant "+
 				"(January of year one) and no date: name a real one.", tool, key, clip(token))
 		}
 		at := anchor.At
 		*target = &at
-		// A TOKEN THAT NAMED A DAY SETS THE ALL-DAY FLAG, so a renderer
-		// shows "16 April" rather than "16 April, 00:00" for a date
-		// nobody gave a time to. It rides the DUE date alone, which is
-		// the only one the flag is about.
+		// A token naming a day sets the due date's all-day flag, so it
+		// renders as "16 April" rather than "16 April, 00:00".
 		if key == "due" {
 			allDay := anchor.AllDay
 			out.DueAllDay = &allDay
@@ -281,11 +236,9 @@ func (s schedule) applyToTask(task *worklet.Task) {
 
 // applyToPatch writes what an UPDATE was given, cleared keys included.
 //
-// A CLEARED DATE IS ITS FLAG ([worklet.TaskPatch.ClearStart],
-// [worklet.TaskPatch.ClearDue]), never a value: nil on a patch means "not
-// named" — the whole point of the pointer — and a date has no empty value to
-// point at, since the zero instant is a date in year one (the patch type's doc
-// says why it is no longer that).
+// A cleared date is its flag ([worklet.TaskPatch.ClearStart],
+// [worklet.TaskPatch.ClearDue]): nil on a patch means "not named", and a date
+// has no empty value (the patch type's doc).
 func (s schedule) applyToPatch(patch *worklet.TaskPatch) bool {
 	touched := false
 	if s.Start != nil {

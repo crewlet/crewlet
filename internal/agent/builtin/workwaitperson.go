@@ -12,11 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A WAIT ON A PERSON IS AN ASK (ADR-0122). An agent that sets an item aside
-// until a date while the reason names a person waits on that person with
-// nothing in their Inbox: the date passes whether or not they answered, and
-// they never learn they were waited on. So such a wait is refused unless the
-// agent already holds an open ask to that person on the item.
+// A WAIT ON A PERSON IS AN ASK (ADR-0122): a dated wait whose reason names a
+// person puts nothing in their Inbox, and the date passes whether or not they
+// answered. So it is refused unless the agent holds an open ask to that person
+// on the item.
 
 // checkWaitOnPerson refuses an agent's `wait_until` whose `wait_reason` names a
 // person it has no open ask to on the item, and nil for every other write.

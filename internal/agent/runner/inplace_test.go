@@ -23,12 +23,11 @@ import (
 )
 
 // WHAT A ROUND CARRIED ON IN ITS JOB'S OWN BOX TELLS THE SESSION THERE. A
-// person's answer or a replaced sign-in that takes up no kept capture of the job
-// continues the copy of the session the job's box holds, which holds every call
-// the job made and every note it read only where its harness ended its own run
-// ([runner.Resume.HarnessEnd]): a harness killed, crashed or told to stop can
-// make a call and have it answered before it writes the call to its record, and
-// no copy is known to hold the message its job was handed.
+// person's answer or a replaced sign-in that takes up no kept capture continues
+// the session copy in the job's box, which holds every call and note of the job
+// only where its harness ended its own run ([runner.Resume.HarnessEnd]): a
+// harness killed, crashed or stopped can have a call answered before recording
+// it, and no copy is known to hold the brief its job was handed.
 
 // cutOffHeader opens the calls a session cut off is told it may not show.
 const cutOffHeader = "## Calls this run made that the session above may not show"
@@ -42,9 +41,8 @@ const heldSubmissionLine = "A `" + toolname.SubmitWork + "` the session above sh
 	" work's submission: the work was carried on after it. When your work is done, call `" +
 	toolname.SubmitWork + "` yourself."
 
-// inBoxCarry is what carries a round on in its job's own box: name says which,
-// set puts it on the resume, its job's box kept or gone, and lead is what the
-// brief it is carried on with opens with.
+// inBoxCarry is what carries a round on in its job's own box: set puts it on
+// the resume, the box kept or gone, and lead is what its brief opens with.
 type inBoxCarry struct {
 	name string
 	set  func(r *runner.Resume, boxKept bool)
@@ -77,12 +75,10 @@ var inBoxCarries = []inBoxCarry{
 		}},
 }
 
-// inPlaceBrief is the brief carry carries a round on with in its job's own box —
-// the launcher continuing no kept session — where the job's session opened once
-// the round held from calls, boxKept says its box is still there, and with tells
-// the resume what else the job's record says: the round's calls, the notes the
-// turn read, how its harness ended. box is where the turn's notes wait, nil for
-// none.
+// inPlaceBrief is the brief carry continues a round with in its job's own box
+// (no kept session), the job's session opened once the round held from calls.
+// with sets the rest of the job's record (calls, notes read, harness end); box
+// holds the waiting notes, nil for none.
 func inPlaceBrief(t *testing.T, carry inBoxCarry, boxKept bool, from int, box runner.SteerSource,
 	with func(*runner.Resume)) string {
 
@@ -112,24 +108,17 @@ func inPlaceBrief(t *testing.T, carry inBoxCarry, boxKept bool, from int, box ru
 }
 
 // A ROUND CARRIED ON IN ITS JOB'S BOX IS TOLD IT WAS CUT OFF AND EVERY CALL OF THE
-// ROUND. Where the job's record does not say its harness ended its own run, the
-// session in its box is told, after what carries it on — a replaced sign-in or a
-// person's answer alike — that it was cut off where the record says so, and that
-// it may have been where the record says nothing (an older build collected the
-// job, or the record did not land) or says it in a word this build does not
-// know, in words that say nothing of a save, whether or not any call is listed;
-// and then, under the header of a session cut off, EVERY CALL OF THE ROUND, with
-// every call the log dropped from its middle counted: never only the job's own,
-// since the copy is not known to hold the job's brief, which told the round's
-// calls before the job's own. A job whose harness ended its own run is told none
-// of it, its copy holding them all; nor is one whose box is gone, which no launch
-// continues in.
+// ROUND. Unless the record says the harness ended its own run, the session is
+// told after what carries it on that it was cut off (the record says so) or may
+// have been (the record says nothing, or a word this build does not know), never
+// of a save, listed calls or not; then, under the cut-off header, every call of
+// the round, the log's dropped ones counted. Never only the job's own: the copy
+// may lack the job's brief, which told the earlier ones. A harness that ended its
+// own run is told none of it, nor is a job whose box is gone.
 //
-// Mutation: tell nothing in place, tell only the job's own calls where it made
-// one, tell the calls where the harness ended its own run or its box is gone,
-// tell them under the header of a session saved where it ends, leave the cut-off
-// section off, say it only where a call is listed, or say the copy was cut off
-// where its record says nothing, and a case goes red.
+// Mutation: tell nothing, only the job's own calls, the calls on an own-run end
+// or a gone box, them under the saved-session header, no cut-off section, it only
+// where a call is listed, or "cut off" on a silent record, and a case goes red.
 func TestARunCarriedOnInItsBoxIsToldTheCallsItsCopyMayLack(t *testing.T) {
 	t.Parallel()
 	earlier := numbered("jira_create", map[string]any{"summary": "an earlier job's issue"}, 1, 1)
@@ -230,14 +219,12 @@ func TestARunCarriedOnInItsBoxIsToldTheCallsItsCopyMayLack(t *testing.T) {
 }
 
 // AN APPROVED CALL CARRIED ON IN ITS BOX IS TOLD FIRST, AND THEN WHAT ITS COPY MAY
-// LACK. A person's answer that approves a held call makes the call and carries
-// the round on in the asking job's own box, its brief led by what the call
-// returned; where the job's record does not say its harness ended its own run,
-// what the copy may lack follows that lead — the cut-off section, then every
-// call of the round — never ahead of it.
+// LACK. An answer approving a held call makes it and carries the round on in the
+// asking job's box, its brief led by what the call returned; unless the harness
+// ended its own run, the cut-off section and the round's calls follow that lead.
 //
-// Mutation: tell an answer's copy nothing in place, or tell what it may lack
-// ahead of what carries it on, and the case goes red.
+// Mutation: tell the copy nothing, or what it may lack ahead of the lead, and
+// the case goes red.
 func TestAnApprovedCallCarriedOnInItsBoxIsToldFirstThenWhatItsCopyMayLack(t *testing.T) {
 	t.Parallel()
 	r, tool, _, launcher, _ := heldCarry(t, heldState(), []runner.BridgedCall{skillLoad()})
@@ -265,28 +252,17 @@ func TestAnApprovedCallCarriedOnInItsBoxIsToldFirstThenWhatItsCopyMayLack(t *tes
 }
 
 // A ROUND CARRIED ON IN ITS JOB'S BOX IS TOLD AGAIN EVERY NOTE THE TURN HAS READ.
-// A copy whose harness was cut off may lack its job's last take of the notes,
-// recorded read before its answer reached the harness, and is not known to hold
-// its job's brief, which told the notes the session it continued lacked — an
-// earlier job's among them — beside the ones it was the first to read. No record
-// says from where that brief told them, so where the job's record does not say
-// its harness ended its own run the session in its box is told again, after the
-// calls of the round and before the notes waiting for it, every note the turn
-// has read, once each, in the order read, under a header that counts them and
-// says a note shown both above and there is one note — a second copy of one,
-// unheaded, would read as a note of its own; the notes waiting follow, once. A
-// copy whose harness ended its own run holds them all, and is told only the
-// notes waiting — but for a read the record marks unanswered, a take whose
-// answer never reached its harness: the copy lacks that note and holds the
-// answered ones after it, so it is told every note from that read on, under the
-// same header, and none before.
+// A cut-off copy may lack its job's last take (recorded read before the answer
+// reached the harness) and its brief, which told notes from a point no record
+// keeps. So unless the harness ended its own run, it is told again every note
+// the turn read, once each in order, after the round's calls and before the
+// waiting notes, under a header that counts them and says a note shown twice is
+// one (unheaded, a copy reads as new). An own-run copy is told the waiting
+// notes, plus, so headed, every note from its first read marked unanswered on.
 //
-// Mutation: tell the notes from the job's first read, tell none, tell them where
-// the harness ended its own run with every take answered, leave a read marked
-// unanswered untold where it did, tell them from the last read marked rather
-// than the first, tell the notes before it, tell them without their header,
-// after the waiting notes, or a second time with no header, and a case goes
-// red.
+// Mutation: start at the job's first read or the last unanswered one, tell none,
+// tell them on an all-answered own run, skip an unanswered read or tell earlier
+// notes, unheaded, after the waiting ones, or twice: a case goes red.
 func TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
 	t.Parallel()
 	read := func(id, text string, order int, boundary types.SteerBoundary, launch string) steer.Read {
@@ -376,16 +352,13 @@ func TestARunCarriedOnInItsBoxIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
 }
 
 // A ROUND CARRIED ON IN ITS JOB'S BOX ARMS THE JOB'S OWN LOADS ONLY WHERE ITS
-// HARNESS ENDED ITS OWN RUN. The copy in the job's box holds the skills the job's
-// launch armed, the session it continued having held their bodies before the
-// job began, and the job's own loads only where its harness wrote every call it
-// made: one cut off may never have written the load, which it is told as a call
-// it may lack, so the skill is loaded again before a call it covers — the safe
-// direction, never a call admitted on a body its session may not hold.
+// HARNESS ENDED ITS OWN RUN. The copy holds the skills its launch armed, and the
+// job's own loads only where its harness recorded every call: a cut-off one may
+// not hold the load, so the skill is loaded again before a call it covers rather
+// than a call admitted on a body the session may lack.
 //
-// Mutation: arm the job's own loads whatever its harness's end, and the cut-off
-// row is admitted; arm a cut-off copy with nothing, and the launch's own skill
-// is refused.
+// Mutation: arm the job's loads whatever the end, and the cut-off row is
+// admitted; arm a cut-off copy with nothing, and the launch's skill is refused.
 func TestARunCarriedOnInItsBoxArmsItsJobsLoadsOnlyWhereItsHarnessEndedItsOwnRun(t *testing.T) {
 	t.Parallel()
 	inBox := runner.SessionBasis{Why: "the newest capture of the job was not kept: refused"}
@@ -428,21 +401,16 @@ func TestARunCarriedOnInItsBoxArmsItsJobsLoadsOnlyWhereItsHarnessEndedItsOwnRun(
 
 // A ROUND CARRIED ON IN ITS JOB'S BOX LAUNCHES NOTHING WHEN THE CALLS ITS COPY MAY
 // LACK FILL THE WINDOW, AND CHARGES NOTHING FOR THEM WHERE THE BOX IS GONE.
-// Telling the copy the round's calls rewrites a payload past its budget with the
-// seat's auxiliary model, charged to the turn's counters, and that rewrite can
-// take the window past its ceiling: the relaunch asks the meter once every
-// rewrite its briefs make is spent, before anything is launched, so a run the
-// rewrite left no room for is never launched and paid for whole past the
-// ceiling. Where the job's box is gone no launch continues in it, so its calls
-// are neither rewritten nor charged, and the relaunch is not refused for a brief
-// nothing would send. The copy's harness ended its own run, and the call it
-// lacks is a read its job's brief counted without listing it: the fresh brief
-// beside it, which tells the round from its start, counts that read past its
-// own read cap too, so the rewrite is the copy's brief's alone.
+// Telling the copy the round's calls rewrites an over-budget payload with the
+// seat's auxiliary model, charged to the turn, so the relaunch asks the meter
+// after every brief's rewrite is spent and before launching: a run left no room
+// is never launched and paid for past the ceiling. A gone box continues nothing,
+// so its calls are neither rewritten nor charged, and the relaunch not refused.
+// The own-run copy lacks a read its job's brief counted unlisted, which the
+// fresh brief also counts past its read cap: the rewrite is the copy's alone.
 //
-// Mutation: build the calls the copy may lack after the relaunch asks the meter,
-// and the run whose box is kept is launched; build them whether or not the box
-// is kept, and the run whose box is gone is charged and refused.
+// Mutation: build the copy's calls after the meter is asked, and the kept-box
+// run launches; build them whatever the box, and the gone-box run is refused.
 func TestARunCarriedOnInItsBoxLaunchesNothingWhenTheCallsItsCopyMayLackFillTheWindow(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -459,8 +427,8 @@ func TestARunCarriedOnInItsBoxLaunchesNothingWhenTheCallsItsCopyMayLackFillTheWi
 			launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
 			parked, _ := launched.Suspended()
 			parked.State.ActiveTools = req.Surface.Active()
-			// TWELVE READS THE COPY HOLDS, and ONE ITS JOB'S BRIEF COUNTED
-			// WITHOUT LISTING IT, its argument past the ledger's value budget.
+			// The reads the copy holds, and one its job's brief counted unlisted,
+			// its argument past the ledger's value budget.
 			var bridged []runner.BridgedCall
 			for n := 1; n <= ledger.MaxReadCalls; n++ {
 				bridged = append(bridged, numbered("slack_history", map[string]any{"channel": fmt.Sprintf("C%d", n)},
@@ -493,17 +461,14 @@ func TestARunCarriedOnInItsBoxLaunchesNothingWhenTheCallsItsCopyMayLackFillTheWi
 }
 
 // A ROUND CARRIED ON IN ITS JOB'S BOX IS TOLD A NOTE ITS HARNESS WAS SERVED AS
-// ONE IT MAY ALREADY SHOW. A note the run's bridge served the job's OpenCode
-// harness is recorded read only once the harness confirms delivering it, so the
-// copy in the job's box may hold one the record says still waits: it is told
-// it under the header of notes it may already show, with every note waiting
-// before it — the order read kept — and the notes after it plainly; where its
-// harness was cut off, after every note the turn has read, under the same
-// header.
+// ONE IT MAY ALREADY SHOW. A note served to the job's OpenCode harness is
+// recorded read only once delivery is confirmed, so the copy may hold one the
+// record says waits: it and every waiting note before it go, in order, under
+// the header of notes it may already show, those after it plainly; on a cut-off
+// copy, after every note the turn read, under the same header.
 //
-// Mutation: tell a served note plainly, take the notes after it under the
-// header, or tell it apart from the notes the turn has read where the copy was
-// cut off, and a case goes red.
+// Mutation: tell a served note plainly, head the notes after it, or split it
+// from the turn's read notes on a cut-off copy, and a case goes red.
 func TestARunCarriedOnInItsBoxIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.T) {
 	t.Parallel()
 	read := steer.Read{Note: steer.Note{ID: "read", Text: "the note the job's take read", By: "founder"},
@@ -558,21 +523,17 @@ func TestARunCarriedOnInItsBoxIsToldANoteItsHarnessWasServedAsOneItMayAlreadySho
 }
 
 // A CUT-OFF COPY IS TOLD ITS EARLIER SUBMIT_WORK DOES NOT STAND. A run may
-// submit and then ask, since its gate refuses a submission after its question
-// and never a question after a submission, and every call a brief tells was
-// made before the relaunch it opens: the asking job's own calls fall below the
-// cut its answer's opening takes, and a round refused on a replaced sign-in
-// whose calls since its last answer hold a submission is collected on it
-// rather than carried on, so the one such a carry tells was made before an
-// earlier answer. Neither is the submission of the work the relaunch carries
-// on. The copy a job's own box holds, its harness cut off, is told every call
-// of the round, the submission among them as `→ success`; so right after those
-// calls it is told, once, that the submission does not stand and that it makes
-// its own, under a person's answer and a replaced sign-in alike. A submission
-// the bridge refused is told as any failed call, without the line.
+// submit then ask (its gate refuses only a submission after a question), and
+// every call a brief tells predates its relaunch: the asking job's own fall
+// below its answer's cut, and a replaced sign-in with a submission since the
+// last answer is collected on it, so one such a carry tells predates an earlier
+// answer. Neither submits the work carried on. A cut-off copy, told the round's
+// calls with the submission as `→ success`, is told right after them, once and
+// under either carry, that it does not stand and to make its own. A refused
+// submission is told as any failed call, without the line.
 //
-// Mutation: never say a successful submission is among the calls, or say it
-// of a refused one too, and a case goes red.
+// Mutation: never say it of a successful submission, or say it of a refused one
+// too, and a case goes red.
 func TestACutOffCopyIsToldItsEarlierSubmitWorkDoesNotStand(t *testing.T) {
 	t.Parallel()
 	const notStanding = "does NOT stand as this work's submission: the work was carried on after it."
@@ -583,9 +544,8 @@ func TestACutOffCopyIsToldItsEarlierSubmitWorkDoesNotStand(t *testing.T) {
 	}
 	asked := numbered(toolname.AskAndWait, map[string]any{"question": "the job's own question"}, 2, 2)
 	posted := numbered("slack_post", map[string]any{"text": "a post after the answer"}, 3, 3)
-	// EACH CARRY'S OWN ROUND: a person's answer to the job that submitted and
-	// then asked; and a replaced sign-in refusing the job that answer opened,
-	// whose own call is a post, the submission before the answer's cut.
+	// Each carry's round: an answer to the job that submitted then asked; a
+	// replaced sign-in on the job that answer opened, whose own call is a post.
 	rounds := map[string]struct {
 		from, answered int
 		after          []runner.BridgedCall
@@ -635,24 +595,17 @@ func TestACutOffCopyIsToldItsEarlierSubmitWorkDoesNotStand(t *testing.T) {
 }
 
 // A COPY HOLDING ITS EARLIER SUBMIT_WORK IS TOLD IT DOES NOT STAND. A run may
-// submit and then ask, or call a tool that waits for a person's approval, its
-// harness then ending its own run as the result parking it tells it to; and a
-// job its answer opened in that session may have its sign-in replaced. The
-// copy in the box then shows the submission answered "submitted", while the
-// cut the answer's opening takes falls past it, so it is no submission of the
-// work the relaunch carries on. That copy holds every call of the round and is
-// told none of them, so its brief was what carries it on alone, which says to
-// finish the task as it asks. It is told FIRST, right after that lead and
-// before any late call, once, that the submission the session shows does not
-// stand and that it makes its own: under a person's answer, a held call's
-// answer and a replaced sign-in alike. A submission the bridge refused is no
-// submission, and nothing is said of it. A late one, or one nobody waited for,
-// is held at no point: it is told in the late calls' section under the line on
-// a late submission, and never under this one.
+// submit, then ask or call a tool awaiting approval, its harness ending its own
+// run; a job its answer opened may then have its sign-in replaced. The copy
+// shows the submission "submitted" though it falls before the answer's cut. It
+// holds every call of the round and is told none, its brief otherwise only the
+// lead, which says to finish the task. So it is told right after that lead and
+// before any late call, once, that the submission does not stand and to make
+// its own, under all three carries. A refused submission gets nothing; a late
+// or abandoned one was never held, and is told under the late calls' line.
 //
 // Mutation: never say a held submission does not stand, say it of a refused,
-// a late or an abandoned one, or say it after the late calls, and a case goes
-// red.
+// late or abandoned one, or after the late calls, and a case goes red.
 func TestACopyHoldingItsEarlierSubmitWorkIsToldItDoesNotStand(t *testing.T) {
 	t.Parallel()
 	const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"
@@ -664,10 +617,8 @@ func TestACopyHoldingItsEarlierSubmitWorkIsToldItDoesNotStand(t *testing.T) {
 	asked := numbered(toolname.AskAndWait, map[string]any{"question": "the job's own question"}, 2, 2)
 	posted := numbered("slack_post", map[string]any{"text": "a post after the answer"}, 3, 3)
 	answer := inBoxCarryNamed(t, "a person's answer")
-	// saysHeld fails t unless brief, the copy's whole brief, lists no call of
-	// the round and, where said, ends with the line that the submission the
-	// session shows does not stand, said once after what carries it on; where
-	// not said, nothing of a submission.
+	// saysHeld fails t unless brief lists no call of the round and, where said,
+	// ends with the held-submission line once; where not, says nothing of one.
 	saysHeld := func(t *testing.T, brief string, said bool) {
 		t.Helper()
 		if strings.Contains(brief, "the asking job's submission") || strings.Contains(brief, cutOffHeader) {
@@ -684,9 +635,7 @@ func TestACopyHoldingItsEarlierSubmitWorkIsToldItDoesNotStand(t *testing.T) {
 				"stand:\n%s", brief)
 		}
 	}
-	// EACH CARRY'S OWN ROUND: a person's answer to the job that submitted and
-	// then asked; and a replaced sign-in refusing the job that answer opened in
-	// the same session, whose own call is a post.
+	// Each carry's round, as in TestACutOffCopyIsToldItsEarlierSubmitWorkDoesNotStand.
 	rounds := map[string]struct {
 		from, answered int
 		after          []runner.BridgedCall
@@ -715,15 +664,15 @@ func TestACopyHoldingItsEarlierSubmitWorkIsToldItDoesNotStand(t *testing.T) {
 		}
 		t.Run("a held call's answer"+made, func(t *testing.T) {
 			t.Parallel()
-			// THE JOB SUBMITTED, THEN CALLED A TOOL THAT WAITS FOR A PERSON'S
-			// APPROVAL, which an attempt at the answer made.
+			// The job submitted, then called a tool awaiting approval, which an
+			// attempt at the answer made.
 			brief := laterAttemptBrief(t, runner.SessionBasis{}, sandbox.HarnessEndOwnRun, []runner.BridgedCall{
 				submission(failed), heldFor("tr_close_issue", 2, 2), approvedFor("tr_close_issue", "held-1", 3, 3),
 			}, nil)
 			saysHeld(t, brief, !failed)
 		})
 	}
-	// A LATE SUBMISSION, AND ONE NOBODY WAITED FOR, ARE HELD AT NO POINT.
+	// A late or abandoned submission is held at no point.
 	for name, mark := range map[string]func(*runner.BridgedCall){
 		"a late submission":              func(c *runner.BridgedCall) { c.Late = true },
 		"a submission nobody waited for": func(c *runner.BridgedCall) { c.Abandoned = true },

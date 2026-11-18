@@ -25,10 +25,9 @@ func maintains(asker gitlet.Principal, repo gitlet.RepoRef) gitlet.Grant {
 		repo, nil)
 }
 
-// launchTurn is agent-cto's turn as a launch is made in one: a run id that is
-// a UUID, as every turn's is, which the run's own branch is named by, and the
-// holds every engine-built turn keeps — a launch holds the run's own branch
-// on them before anything durable of it exists.
+// launchTurn is agent-cto's turn as a launch makes one: a UUID run id, which
+// names the run's own branch, and the holds a launch puts that branch on
+// before anything durable of it exists.
 func launchTurn(t *testing.T) *turnctx.Turn {
 	t.Helper()
 	turn := codeTurn(t)
@@ -38,11 +37,10 @@ func launchTurn(t *testing.T) *turnctx.Turn {
 }
 
 // A RUN'S REPOSITORIES ARE READ FOR WHOEVER WOKE ITS TURN (M3-decisions U40
-// a): a launch's resolution reads as the code tools read — every read of the
-// repository and its refs carries the colleague seat the turn acts for, for
-// the node that answers to judge that seat's grant too — so a box is never
-// given a repository its requester could not read; and a turn a stranger woke
-// is refused before anything is read, holding nothing.
+// a): every read of the repository and its refs carries the colleague seat
+// the turn acts for, so a box is never given a repository its requester could
+// not read; a turn a stranger woke is refused before any read, holding
+// nothing.
 //
 // Mutation: resolve the repositories as the seat alone (callerOn skipped) →
 // the reads carry no ceiling and the stranger's turn reads, red.
@@ -91,10 +89,10 @@ func TestARunsRepositoriesAreReadForWhoeverWokeItsTurn(t *testing.T) {
 	}
 }
 
-// launchRoster is the chart a launch's precheck judges in these cases:
-// agent-cto, full_access in eng — site's owning unit — writes site; agent-ceo,
-// full_access in another unit, reads it (visibility company) and owns its own
-// namespace there; neither leads anything.
+// launchRoster is the chart a launch's precheck judges here: agent-cto,
+// full_access in eng (site's owning unit), writes site; agent-ceo, full_access
+// in another unit, reads it (visibility company) and owns its own namespace
+// there; neither leads.
 type launchRoster struct{}
 
 func (launchRoster) Seat(handle string) (gitlet.RosterSeat, bool) {
@@ -116,12 +114,11 @@ func charted(asker gitlet.Principal, repo gitlet.RepoRef) gitlet.Grant {
 }
 
 // A RUN'S PUSHES ARE DECIDED FOR WHOEVER WOKE ITS TURN TOO (M3-decisions U40
-// a, its write half for an executor): in a turn a colleague seat woke, the
-// run's grants name that seat for Gitlet's box admission to hold the
-// box to, and the launch prechecks the same rule — `access: write` on a branch
-// the colleague could not push is refused naming why, an access left out
-// there is read, and the seat's own branch stays write, its own work. A turn
-// a person woke, or nobody, names no ceiling and pushes what the seat may.
+// a): a colleague's turn names that seat as the ceiling Gitlet's box admission
+// holds the box to, and the launch prechecks it: `access: write` on a branch
+// the colleague could not push is refused naming why, an access left out there
+// is read, and the seat's own branch stays write. A turn a person or nobody
+// woke names no ceiling and pushes what the seat may.
 //
 // Mutations: the precheck judged on the seat's grant alone (no Under) → the
 // colleague's write of main is given write, red; RunRepos.Ceiling left empty →
@@ -171,12 +168,11 @@ func TestARunsPushesAreDecidedForWhoeverWokeItsTurn(t *testing.T) {
 }
 
 // A CHECKOUT FOR A CREDENTIAL WRITES ONLY ITS SEAT'S OWN WORK (ADR-0110): a
-// credential acting as no seat pushes to no repository itself, so a run its
-// turn launched may push the seat's own work alone, as Gitlet's box admission
-// holds its box to — and the checkout prechecks the same rule: `access: write`
-// on a branch outside the seat's own namespace, which the seat itself may
-// push, is refused in the credential's words, an access left out there is
-// read, and the seat's own branch stays write.
+// credential acting as no seat pushes nowhere itself, and the checkout
+// prechecks what Gitlet's box admission holds its run to: `access: write`
+// outside the seat's own namespace, though the seat may push there, is
+// refused in the credential's words, an access left out there is read, and
+// the seat's own branch stays write.
 //
 // Mutation: the precheck ignoring a credential — main is given to write, red.
 func TestACheckoutForACredentialWritesOnlyItsSeatsOwnWork(t *testing.T) {
@@ -214,14 +210,11 @@ func TestACheckoutForACredentialWritesOnlyItsSeatsOwnWork(t *testing.T) {
 	}
 }
 
-// A RUN'S CHECKOUT CARRIES WHOM ITS TURN WORKS FOR (ADR-0109): what the box
-// pushes, and the change the run's collection opens, are the turn's writes
-// made late, so the run's grants carry whom the turn works for as every code
-// write the turn's own tools make states it — the carrier composed from the
-// turn's own ceiling, never one derived again from its requester: a colleague's
-// seat for a colleague's ask, the seat a person holds for theirs, a credential
-// acting as no seat with the apps its writes carried and this node holds it
-// to, and nobody for a turn nobody woke.
+// A RUN'S CHECKOUT CARRIES WHOM ITS TURN WORKS FOR (ADR-0109): the box's
+// pushes and the change its collection opens are the turn's writes made late,
+// so they carry the turn's own carrier, never one re-derived from its
+// requester: a colleague's seat, the seat a person holds, a credential acting
+// as no seat with the apps this node holds it to, or nobody.
 //
 // Mutation: ResolveRunRepos leaving the carrier off — every row but nobody's,
 // red.
@@ -259,10 +252,9 @@ func TestARunsCheckoutCarriesWhomItsTurnWorksFor(t *testing.T) {
 	}
 }
 
-// A LAUNCH READS EVERY REF OF A REPOSITORY IN ONE QUERY — the run's branch, a
-// base named as a ref and the default branch — at the seat's level, one
-// barrier a repository; a base given as an id is expanded by one read by
-// object id, floored at what the launch had read.
+// A LAUNCH READS EVERY REF OF A REPOSITORY IN ONE QUERY, one barrier a
+// repository; a base given as an id is expanded by one read by object id,
+// floored at what the launch had read.
 //
 // Mutation: a query a ref → two resolves for one repository, red.
 func TestALaunchReadsARepositorysRefsInOneQuery(t *testing.T) {
@@ -291,11 +283,10 @@ func TestALaunchReadsARepositorysRefsInOneQuery(t *testing.T) {
 	}
 }
 
-// A CHECKOUT SAYS WHERE THE RUN'S BRANCH STANDS: beside each grant, the head
-// its branch had as the resolution read it — what a box that lost its clone
-// continues from where its job holds the grant already — whatever base the
-// request named, and none for a branch nothing was pushed to yet, though that
-// grant starts from the default branch's head.
+// A CHECKOUT SAYS WHERE THE RUN'S BRANCH STANDS: beside each grant, its
+// branch's head as read (what a box that lost its clone continues from),
+// whatever base the request named, and none for a branch nothing was pushed
+// to yet, though that grant starts from the default branch's head.
 //
 // Mutations: no head reported → the pushed branch's, red; the grant's base
 // reported as its head → the named base's and the unpushed branch's, red.
@@ -336,9 +327,9 @@ func changeAt(state gitlet.ChangeState) *gitlet.ChangeDetail {
 		Repo: "site", Ref: "site!3"}}
 }
 
-// hostWithChange is Gitlet holding site and its change number 3 in
-// state — its row to a read in brief, its detail to any other — answering a
-// read of any other number not found.
+// hostWithChange is Gitlet holding site and its change number 3 in state
+// (its row to a brief read, its detail to any other), any other number not
+// found.
 func hostWithChange(state gitlet.ChangeState) *gitletHost {
 	host := newGitletHost()
 	host.changes = func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
@@ -354,22 +345,17 @@ func hostWithChange(state gitlet.ChangeState) *gitletHost {
 	return host
 }
 
-// A RUN ON A CHANGE STARTS FROM ITS HEAD (M4-decisions D33): a repository named
-// with a `change` — by its number, or its reference — is given the run on the
-// change's own source branch, from the head that branch holds, and names the
-// change on the run's grant, so its pushes revise it and its collection names
-// it; the change is read once, LINEARIZABLE — a run must not start from a
-// change a node behind still shows open — and as its ROW ALONE
-// (gitlet.ReadQuery.Brief beside DetailOnly): no revision of it read, and none
-// of its description, authors, conversation, mergeability or readiness,
-// since a launch needs only its branch; and a closed or a
-// merged one is refused before a box costs anything, as is a change of
-// another repository and one the repository does not hold.
+// A RUN ON A CHANGE STARTS FROM ITS HEAD (M4-decisions D33): a `change`, by
+// number or reference, gives the run the change's source branch from its
+// head and names the change on the grant, so its pushes revise it. The change
+// is read once, LINEARIZABLE (never a change a node behind still shows open),
+// as its ROW ALONE (gitlet.ReadQuery.Brief beside DetailOnly), since a launch
+// needs only its branch. A closed or merged change, another repository's, or
+// one the repository does not hold is refused before a box costs anything.
 //
-// Mutations: start from the default branch rather than the change's — the
-// base is main's, red; read the change stale — red; read it with a page of
-// its revisions — red; read its detail (changeOf) — red; let a merged change
-// through — red.
+// Mutations: start from the default branch — main's base, red; read the
+// change stale, with a page of its revisions, or its detail (changeOf) — red;
+// let a merged change through — red.
 func TestARunOnAChangeStartsFromItsHead(t *testing.T) {
 	t.Parallel()
 	for _, named := range []string{"3", "site!3"} {
@@ -432,13 +418,12 @@ func TestARunOnAChangeStartsFromItsHead(t *testing.T) {
 	}
 }
 
-// A LAUNCH RESOLVES A RUN'S ASK TO OPEN A CHANGE (M4-decisions D33): the
-// branch it proposes into is the one it names, else the repository's default
-// branch, whole on the run's grant beside its title and whether it is a
-// draft — resolved in the launch's one ref query, so a target that does not
-// exist is refused before a box costs anything — and an ask that proposes the
-// run's branch into itself, names a title no change may carry, or comes to a
-// run that may not push its branch is refused.
+// A LAUNCH RESOLVES A RUN'S ASK TO OPEN A CHANGE (M4-decisions D33): its
+// target, named or the default branch, goes whole on the grant beside its
+// title and draft flag, resolved in the launch's one ref query so a missing
+// target is refused before a box costs anything; an ask into the run's own
+// branch, with a title no change may carry, or from a run that may not push
+// its branch is refused.
 //
 // Mutation: leave the target unresolved when none is named — the grant's
 // target is empty, red.

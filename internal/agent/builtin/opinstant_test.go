@@ -11,23 +11,16 @@ import (
 )
 
 // A RE-RUN OF ONE UNIT OF WORK WRITES UNDER THE SAME OPERATION ID AND THE SAME
-// MINT INSTANT — the instant the work BEGAN, never the instant of the run.
-//
-// The state log refuses to decide again an operation its node's ledger cannot
-// vouch for, which is one minted before the ledger's watermark — the point
-// before which it may have lost rows to its sweep — whose row it does not
-// hold. A re-run comes
-// after the loss it is judged against by construction, so an id carrying the
-// RUN's clock is one a re-run after a loss publishes a second time — which is
-// exactly how the operation ledger was defeated while every writer stamped its
-// own clock beside the id.
+// MINT INSTANT: the instant the work BEGAN, never the run's. The state log
+// refuses to decide again an operation minted before its ledger's watermark
+// whose row it lacks; an id carrying the RUN's clock would read a re-run after
+// a loss as new, and publish it a second time.
 func TestARerunReusesTheOperationIDAndItsMintInstant(t *testing.T) {
 	t.Parallel()
 	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
 
-	// Two runs of ONE trigger: a redelivery re-derives the work key and
-	// the instant it began from the same events, under a run id of its
-	// own minted hours later — which is the clock that must not leak in.
+	// Two runs of ONE trigger: a redelivery re-derives the work key and its
+	// instant, under a run id minted hours later, whose clock must not leak in.
 	attempt := func(minted time.Time) *turnctx.Turn {
 		tn := workTurn(t)
 		tn.RunID = statelog.NewOpID(minted, "")
@@ -67,9 +60,9 @@ func TestARerunReusesTheOperationIDAndItsMintInstant(t *testing.T) {
 	}
 }
 
-// AND A RUN WITH NO UNIT OF WORK CARRIES THE RUN'S OWN START, which its id holds
-// — the same choice [builtin.Actor.OperationSeed] makes for the seed, so the
-// seed and its instant are always one identity.
+// AND A RUN WITH NO UNIT OF WORK CARRIES THE RUN'S OWN START, the same choice
+// [builtin.Actor.OperationSeed] makes, so the seed and its instant are always
+// one identity.
 func TestARunWithNoWorkKeyCarriesItsOwnStart(t *testing.T) {
 	t.Parallel()
 	started := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
@@ -88,13 +81,11 @@ func TestARunWithNoWorkKeyCarriesItsOwnStart(t *testing.T) {
 	}
 }
 
-// A PAGE WRITE MADE FROM A TURN CARRIES THE INSTANT THE TURN'S WORK BEGAN, so
-// the knowledge base derives its operation id from the same identity the
-// tracker's writes use — every page write, not only a comment: a create, a
-// save, the rename a save makes and a comment edit each derive an operation
-// from the key, and one carrying no instant is read as older than every loss
-// the ledger has had, so a keyed page write on a node whose ledger ever lost a
-// row would answer `unknown` for ever.
+// A PAGE WRITE MADE FROM A TURN CARRIES THE INSTANT THE TURN'S WORK BEGAN, as
+// the tracker's do: every page write (a comment, a create, a save, the rename a
+// save makes, a comment edit) derives its operation from the key, and a key
+// with no instant is read as older than every ledger loss, so it would answer
+// `unknown` for ever on a node whose ledger ever lost a row.
 func TestAPageWriteCarriesTheTurnsInstant(t *testing.T) {
 	t.Parallel()
 	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
@@ -117,9 +108,8 @@ func TestAPageWriteCarriesTheTurnsInstant(t *testing.T) {
 		t.Fatalf("the page writes reached the knowledge base with %d keys, want 5",
 			len(kb.keys))
 	}
-	// EACH KEY IS AN ID THE ENGINE'S GRAMMAR MINTED, at the instant the
-	// work began — the store derives every write's id from it and the
-	// instant rides along.
+	// EACH KEY IS AN ID THE ENGINE'S GRAMMAR MINTED, at the instant the work
+	// began: the store derives every write's id from it.
 	for i, key := range kb.keys {
 		at, ok := statelog.OpMintedAt(key)
 		if !ok || !at.Equal(began) || statelog.CheckCallerOpID(key) != nil {
@@ -130,17 +120,12 @@ func TestAPageWriteCarriesTheTurnsInstant(t *testing.T) {
 	}
 }
 
-// A TURN REBASED PAST THE LEDGER MINTS EVERY WRITE AT ITS REBASE — the
-// tracker's and the knowledge base's, whichever identity the ids are seeded
-// from.
-//
-// The engine rebases a turn whose identity started longer ago than the
-// operation ledger can vouch for (turnctx.Turn.RebasedTo) — a trigger
-// dispatched a month late, a turn resumed a month after it parked: an
-// operation minted at that start, with its row swept, is answered `unknown`
-// and never published on any node. So the rebase has to reach every id a tool
-// derives, and it outranks BOTH starts — the work's, and the run's own where
-// there is no work key — because either is as old as the other.
+// A TURN REBASED PAST THE LEDGER MINTS EVERY WRITE AT ITS REBASE, the tracker's
+// and the knowledge base's alike. The engine rebases a turn that started longer
+// ago than the ledger can vouch for (turnctx.Turn.RebasedTo), since an
+// operation minted at that start, its row swept, is answered `unknown` on every
+// node. The rebase outranks BOTH starts, the work's and the run's own, as
+// either can be that old.
 func TestARebasedTurnMintsEveryWriteAtItsRebase(t *testing.T) {
 	t.Parallel()
 	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
@@ -188,9 +173,8 @@ func TestARebasedTurnMintsEveryWriteAtItsRebase(t *testing.T) {
 }
 
 // call drives a seat-callable tool under the given turn, as a caller holding
-// every grant: these cases are about the operation a write carries, and a
-// rename asked of a container this fixture holds no chart for is otherwise
-// undecidable rather than refused or allowed.
+// every grant: a rename of a container this fixture holds no chart for is
+// otherwise undecidable.
 func call(t *testing.T, reg *tools.Registry, turn *turnctx.Turn, name string,
 	args map[string]any) tools.Result {
 

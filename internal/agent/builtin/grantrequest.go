@@ -19,12 +19,11 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// request_access's second form: one permission at an integration beside the
-// agent's level, from the integration's live catalogue (a Cloudflare
-// permission group). The engine stores the request, posts it as a decision
-// whose grant options carry the request's id, and a person answers by
-// previewing and saving the grant; the agent is told its new access on its
-// next turn, and its credential keeps its value.
+// request_access's second form: one permission beside the agent's level, from
+// the integration's live catalogue. The engine stores the request and posts it
+// as a decision whose grant options carry its id; a person answers by saving
+// the grant, the agent learns its new access next turn, and its credential
+// keeps its value.
 
 // GrantDesk is the engine's half of an agent's request for one grant and of
 // its answer.
@@ -113,8 +112,8 @@ func (t *requestAccess) requestGrant(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	check := opts
 	if entry.Unavailable != "" {
-		// STILL ASKED, saying what the provisioner must hold first: the
-		// person who grants it is the one who can add it at the vendor.
+		// STILL ASKED, naming what the provisioner must hold first: the person
+		// who grants it can add it at the vendor.
 		i := slices.IndexFunc(check.Grants, func(e seataccess.GrantEntry) bool { return e.ID == permission })
 		check.Grants = slices.Clone(check.Grants)
 		check.Grants[i].Unavailable = ""
@@ -137,7 +136,7 @@ func (t *requestAccess) requestGrant(ctx context.Context, turn *turnctx.Turn, ar
 		AsSeat: true, Turn: turn, Where: RequestAccessTool,
 	})
 	if err != nil || res.Failed {
-		// NOTHING ASKED, so nothing kept: a stored request nobody can answer
+		// Nothing asked, so nothing kept: a stored request nobody can answer
 		// would only wait out its month.
 		if werr := desk.Withdraw(context.WithoutCancel(ctx), req.ID); werr != nil {
 			err = errors.Join(err, werr)

@@ -35,102 +35,69 @@ import (
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
-// The turn engine's telemetry: what a phase tells the rest of the company
-// while and after it runs.
+// The turn engine's telemetry. Nothing else publishes an agent_* event and the
+// live projection keys on these three, so a silent phase leaves its seat idle
+// on screen and no durable record:
+//   - agent_phase_started: which phase, before the first provider call.
+//   - agent_turn_progress: the in-flight view, NOT persisted (the completed
+//     event supersedes it); published once the model has spoken, before each
+//     call (`running_call`) and once the tools return.
+//   - agent_phase_completed: the durable record.
 //
-// This is the ONLY source of everything a dashboard shows about a working
-// seat. Nothing else publishes an agent_* event, and the live projection keys
-// on exactly these three types — so a phase that runs silently is a phase that
-// leaves the seat rendered as idle for its whole duration and leaves no
-// durable record that it ever happened.
-//
-// Three events, and each answers a question the others cannot:
-//
-//   - agent_phase_started — WHICH phase, now. Published before the first
-//     provider call, so a seat that is thinking says so; the completed event
-//     is minutes away and carries nothing until it fires.
-//   - agent_turn_progress — the round-by-round in-flight view. NOT persisted:
-//     it is superseded by the completed event, and keeping every round would
-//     make the event log mostly intermediate states of rows it also holds
-//     finished. Published TWICE per round and ONCE PER CALL — once the model
-//     has spoken, before its tools run; before each call, naming it as
-//     `running_call`; and once they return — so what the model said reaches
-//     a screen without waiting on the slowest tool, and the slowest tool is
-//     on the screen while it is slow.
-//   - agent_phase_completed — the durable record: the prompts verbatim, the
-//     response, the tools, the tokens, the decision.
-//
-// TELEMETRY NEVER FAILS THE WORK. Every publish here is fire-and-log: the
-// phase has already run, its deliveries have already fired, and a broker that
-// refuses an event must not turn finished work into a failed turn. The same
-// rule the sub-agent batch publisher states, for the same reason.
+// TELEMETRY NEVER FAILS THE WORK: every publish is fire-and-log, since the
+// phase and its deliveries have already happened.
 
-// Turn identifies the turn a runner is running.
-//
-// Per-turn, like the task and the conversation beside it: a runner is built
-// per turn (see Company.RunnerFor), so these are configuration, not state.
+// Turn identifies the turn a runner is running: configuration, not state,
+// since a runner is built per turn (Company.RunnerFor).
 type Turn struct {
-	// RunID names THIS EXECUTION of the turn — see [turnctx.Turn.RunID]
-	// and ADR-0017. It is the `turn_id` on every event published below,
-	// and it is minted fresh per run, so a redelivered trigger's second
-	// attempt writes its own phase records rather than landing on top of
-	// the first attempt's.
+	// RunID names THIS EXECUTION of the turn ([turnctx.Turn.RunID],
+	// ADR-0017): the `turn_id` on every event below, minted per run so a
+	// redelivered trigger's retry writes its own phase records.
 	RunID string
 
-	// WorkKey is the unit of work this run is doing — stable across a
-	// re-run, empty for a turn with no ledgerable trigger. Carried on
-	// every event beside RunID so a reader can ask "every attempt at this
-	// trigger" without the two identities having to be one value.
+	// WorkKey is the unit of work, stable across re-runs, empty for a turn
+	// with no ledgerable trigger; beside RunID so a reader can ask for
+	// every attempt at one trigger.
 	WorkKey string
 
 	// AgentID is the seat's derived agent id, so a consumer can resolve the
 	// seat without the org.
 	AgentID string
 
-	// Trigger is what woke this turn. It rides on EVERY phase event
-	// because a live row that has no completed phase yet must still be
-	// able to show its source.
+	// Trigger is what woke this turn, on EVERY phase event so a live row
+	// with no completed phase can still show its source.
 	Trigger types.Trigger
 
-	// ConversationKey is which conversation this turn served — the durable
-	// CONVERSATION IDENTITY, never the inbox partition key beside it
-	// ([notify.Prompt.ConversationIdentity]), so a direct message's phases
-	// are one thread however the messages in it were threaded. It is the
-	// only way to ask the store for one thread's phases: without it a phase
-	// response is addressable by agent and time alone.
+	// ConversationKey is the durable CONVERSATION IDENTITY this turn served,
+	// never the inbox partition key ([notify.Prompt.ConversationIdentity]),
+	// so a direct message's phases are one thread; it is the only way to
+	// ask the store for one thread's phases.
 	ConversationKey string
 
 	// Trace is the span context stamped on every event this turn emits.
 	Trace events.TraceContext
 
-	// Context is what the turn IS — the acting seat above all — passed to
-	// every tool that asks for it. See internal/agent/turnctx.
-	//
-	// Here rather than as a second field on Config because the two are one
-	// fact: a runner built for a turn has an identity, and splitting it
-	// across two config fields is two places for them to disagree about
-	// which turn this is.
+	// Context is what the turn IS, the acting seat above all, passed to every
+	// tool that asks (internal/agent/turnctx). Here rather than on Config so
+	// a runner's turn identity lives in one place.
 	Context *turnctx.Turn
 }
 
-// emitter publishes one turn's phase telemetry.
-//
-// A zero publisher is valid and publishes nothing, which is the embedded case
-// a test drives directly and the sub-agent case where the parent phase is
-// already the visible one. The TALLY still runs: the turn-level event is the
-// engine's to publish, and it must be able to report what the turn spent even
-// on a node whose phases are silent.
+// emitter publishes one turn's phase telemetry. A zero publisher publishes
+// nothing (a test, or a sub-agent whose parent phase is the visible one), but
+// the TALLY still runs: the engine publishes the turn-level event and must
+// report the turn's spend even when its phases are silent.
 type emitter struct {
 	pub  queue.Publisher
 	turn Turn
 	role string
 	// handle is the seat's handle, for the events that name the seat as
-	// well as its role — a person's note to it among them.
+	// well as its role (a person's note to it among them).
 	handle string
 	tally  *Spend
 
-	// onPhase is the working indicator's hook, or nil. See
-	// [Config.OnPhase]; it is called from [emitter.started].
+	// onPhase is the working indicator's hook ([Config.OnPhase]), or nil,
+	// called from [emitter.started].
 	onPhase func(phase.Phase)
 
 	// mu guards the delegation counters on tally, which several workers
@@ -138,9 +105,8 @@ type emitter struct {
 	mu *sync.Mutex
 
 	// hostIteration is the Execute round a NESTED phase belongs to, so a
-	// dashboard groups a sub-agent under the round that spawned it rather
-	// than beside the turn's own phases. Zero on the emitter every
-	// ordinary phase uses, which never reads it.
+	// dashboard groups a sub-agent under it; zero, and unread, on an
+	// ordinary phase's emitter.
 	hostIteration int
 }
 
@@ -166,23 +132,17 @@ func (r *Runner) emitter() emitter {
 	}
 }
 
-// Spend is what one turn's phases cost, accumulated as they complete.
+// Spend is what one turn's phases cost, accumulated as they complete, so the
+// turn-level event reports the SAME numbers the phase events did: an
+// engine-side sum would be a second derivation that drifts.
 //
-// It exists so the turn-level event reports the SAME numbers the phase events
-// did. The alternative — the engine summing what it can see — is a second
-// derivation of one fact, and the two drift the moment a phase is added, a
-// rescue fires, or an extension runs the loop twice.
-//
-// One lock, and only the delegation counters need it. A turn's phases run in
-// sequence on one goroutine and the engine reads this after turn.Run has
-// returned, so the per-phase fields need nothing — but WORKERS RUN
-// CONCURRENTLY, several of them reporting into the same tally from their own
-// goroutines, and an unguarded += there is a data race the detector finds on
-// the first fan-out.
+// Only the delegation counters need the lock: phases run in sequence on one
+// goroutine and the engine reads after turn.Run returns, but WORKERS RUN
+// CONCURRENTLY into the same tally.
 type Spend struct {
-	// The model that actually served each phase, which is not necessarily
-	// the configured one: a fallback chain records who answered, and for
-	// the executor the member of its chain the launch picked.
+	// The model that actually served each phase, not necessarily the
+	// configured one: whom a fallback chain's call landed on, or the chain
+	// member an executor launch picked.
 	ExecuteModel string
 	ReviewModel  string
 
@@ -190,85 +150,56 @@ type Spend struct {
 	OutputTokens int
 
 	// CacheRead and CacheWrite are the prompt cache's share of InputTokens
-	// across the turn's own phases — a breakdown of it, never an addition.
-	// Summed from the same phase records the token totals are, for the
-	// same reason: the turn's number and its phases' numbers are one fact.
+	// over the turn's own phases: a breakdown, never an addition.
 	CacheRead  int
 	CacheWrite int
 
-	// Response is the last phase's text — what the turn produced, for the
-	// single-phase summary a dashboard shows before anyone expands it.
+	// Response is the last phase's text, for the summary a dashboard shows
+	// before anyone expands the turn.
 	Response string
 
 	// ToolExecutions is the turn's calls as its phases' records list them,
-	// in order across phases, and ElidedCalls the calls those records do not
-	// list, by tool: each phase's held to its share as its own record holds
-	// it ([keptExecutions]), so the turn holds no more of a phase's calls than
-	// its record does. [Spend.Calls] is the list the turn's record carries.
+	// in order, and ElidedCalls those they do not list, by tool: each
+	// phase's held to its share as its own record holds it
+	// ([keptExecutions]). [Spend.Calls] is what the turn's record carries.
 	ToolExecutions []types.ToolExecution
 	ElidedCalls    []types.ElidedCalls
 
-	// ExecuteTools and AllTools are the tool NAMES, split the way the
-	// learning workers reason about them and accumulated differently on
-	// purpose.
-	//
-	// ExecuteTools keeps only the LAST round: the earlier rounds were
-	// re-attempted work the agent itself judged incomplete, and a skill
-	// drafted from their calls would be drafted from a sequence the agent
-	// then chose not to stand behind. AllTools accumulates across every
-	// round, because some calls are a fact about the WHOLE turn — the
-	// reflect dispatcher reads it to see that the agent already wrote its
-	// own memory, and a later round that did not call reflect_and_persist
-	// again does not undo that.
-	//
-	// Two fields where the three-phase engine had two phases to split on:
-	// the executor's rounds are now the only place either fact can come
-	// from, so the split has to be made explicitly rather than fall out of
-	// which phase ran.
+	// ExecuteTools and AllTools are the tool NAMES the learning workers read.
+	// ExecuteTools keeps only the LAST round: earlier rounds were work the
+	// agent judged incomplete, and a skill must not be drafted from calls it
+	// did not stand behind. AllTools accumulates every round, because some
+	// calls are a fact about the whole turn (the reflect dispatcher sees the
+	// agent already wrote its memory).
 	ExecuteTools []string
 	AllTools     []string
 
-	// Outcome is the executor's own last word on the turn — delivered,
-	// no_action, blocked, or the engine-written `incomplete`. The LAST
-	// one, because a turn that looped ends on the account it stood behind.
+	// Outcome is the executor's last word: delivered, no_action, blocked, or
+	// the engine-written `incomplete`. The LAST one, the account a looping
+	// turn stood behind.
 	Outcome string
 
-	// Workers, WorkerInput and WorkerOutput count what this turn
-	// DELEGATED: how many tasks ran and what they cost between them, split
-	// the way every other token figure is — because a cache's share and a
-	// provider's price both differ between input and output, and a sum
-	// cannot be split back.
-	//
-	// KEPT SEPARATE from InputTokens/OutputTokens above, and deliberately.
-	// A worker's tokens are already charged through the shared meter, so
-	// folding them into the turn's own totals would report them twice and
-	// make the phase events stop summing to the turn's number. What they
-	// answer instead is the question the phase numbers cannot: how much of
-	// a turn's cost was fan-out, which is the first thing to look at when
-	// a seat's spend jumps and its own rounds did not.
+	// Workers, WorkerInput and WorkerOutput count what this turn DELEGATED,
+	// split like every token figure (cache share and price differ by
+	// direction). KEPT OUT of InputTokens/OutputTokens: the shared meter
+	// already charged them, so folding them in would count them twice and
+	// break the phase events' sum. They answer how much of a turn was fan-out.
 	Workers      int
 	WorkerInput  int
 	WorkerOutput int
 
-	// Judged, JudgeInput and JudgeOutput count the round-cap extension
-	// judge: how many times a phase ran out of rounds and asked for more,
-	// and what those calls cost between them — split the way every other
-	// token figure is, because a task's charge adds them to its own input
-	// and output (ADR-0022).
-	//
-	// Kept out of the turn's own totals for the same reason a worker's are —
-	// the judge's spend goes through the shared meter, so folding it in
-	// would report it twice and stop the phase events summing to the turn's
-	// number. What it answers instead is a question the phase numbers
-	// cannot: whether a seat's cost is its work or its arguing about
-	// whether to keep working.
+	// Judged, JudgeInput and JudgeOutput count the round-cap extension judge's
+	// calls and their cost, split because a task's charge adds them to its
+	// own input and output (ADR-0022). Kept out of the turn's totals for
+	// Workers' reason; they answer whether a seat's cost is its work or its
+	// arguing for more rounds.
 	Judged      int
 	JudgeInput  int
 	JudgeOutput int
 
-	// Rounds is the provider rounds the turn's completed phases ran, as
-	// each phase record states them — one for each executor run collected,
-	// whose turns are its harness's own.
+	// Rounds is the provider rounds the turn's completed phases ran, as each
+	// record states them (one per collected executor run, whose turns are its
+	// harness's own).
 	Rounds int
 
 	// SentBack is how many reviews returned the work for another pass: the
@@ -276,47 +207,35 @@ type Spend struct {
 	SentBack int
 
 	// Reviews is how many review phases completed, and Unaccepted how many
-	// of them decided anything but done.
-	//
-	// With SentBack, what the record that ENDS the turn states about its
-	// reviews ([types.TurnTally]) — this segment's share of it, which a
-	// segment that parks hands on to the one that ends the turn. Counted
-	// here, off the phase records as they complete, because this is the one
-	// place every review of a segment passes: summed later from the records
-	// in a node's event log, a turn whose records two data nodes kept
-	// between them was counted short on one and not at all on the other.
+	// decided anything but done. With SentBack, this segment's share of what
+	// the turn-ending record states ([types.TurnTally]), handed on by a
+	// segment that parks. Counted here as records complete, the one place
+	// every review passes: summed later from event logs, a turn whose records
+	// two data nodes split is miscounted.
 	Reviews    int
 	Unaccepted int
 
 	// Tools is this segment's calls to MCP servers' tools, per (server,
-	// tool): every completed phase's and every delegated worker's, an
-	// executor run's as its bridge recorded them. Like Reviews, it is what
-	// the record that ends the turn states ([types.TurnTally.Tools]), this
-	// segment's share of it, counted here for Reviews' reason: off the
-	// executions themselves, as each phase completes.
+	// tool): every completed phase's and delegated worker's, a run's as its
+	// bridge recorded them. Its share of [types.TurnTally.Tools], counted
+	// here for Reviews' reason.
 	Tools []types.ToolTally
 
 	// Refusals is this segment's refused calls per (server, tool, class), the
 	// engine's own tools included ([types.TurnTally.Refusals]).
 	Refusals []types.RefusalTally
 
-	// Review is the notes of the NEWEST review that sent the work back —
-	// what the reviewer asked for on the pass that followed. The LAST one,
-	// because a turn sent back twice was answered on the second request;
-	// empty when no review sent it back. A task's turn card quotes it
-	// beside the send-back, which without it is a count of objections
-	// nobody can read.
+	// Review is the notes of the NEWEST review that sent the work back (a
+	// turn sent back twice was answered on the second), empty if none did.
+	// A task's turn card quotes it beside the send-back count.
 	Review string
 
 	// Phases are the phases that completed, in the order each first ran.
 	Phases []string
 
-	// FailedIn is the phase whose record came back FAILED — the newest one,
-	// since a failure ends the turn — and empty when none did (a turn a
-	// person stopped did not fail, nor one that broke outside every phase).
-	// Phases lists a failed phase too, because its record completed; a
-	// task's turn card reads this to mark THAT chip rather than drawing a
-	// tick on every phase beside a "failed" pill that names none.
+	// FailedIn is the newest phase whose record came back FAILED, empty when
+	// none did (a stopped turn, or one that broke outside every phase).
+	// Phases lists it too, so a task's turn card reads this to mark THAT chip.
 	FailedIn string
 }
 
@@ -327,10 +246,9 @@ func (s Spend) Calls() RecordCalls {
 	return keptExecutions(s.ToolExecutions, s.ElidedCalls)
 }
 
-// Total is the turn's own token count — what its PHASES spent, and what the
-// phase events sum to. It does not include what its workers or its extension
-// judgements cost; both are metered separately and reported in their own
-// fields, for the reason those fields state.
+// Total is the turn's own token count: what its PHASES spent, which the phase
+// events sum to. Workers and extension judgements are reported in their own
+// fields ([Spend.Workers]).
 func (s Spend) Total() int { return s.InputTokens + s.OutputTokens }
 
 // WorkerTokens is what the turn's delegated workers cost between them.
@@ -339,37 +257,30 @@ func (s Spend) WorkerTokens() int { return s.WorkerInput + s.WorkerOutput }
 // JudgeTokens is what the turn's extension judgements cost between them.
 func (s Spend) JudgeTokens() int { return s.JudgeInput + s.JudgeOutput }
 
-// recordWorker folds one finished delegated task into the tally.
-//
-// UNDER THE LOCK, unlike record: workers run concurrently.
+// recordWorker folds one finished delegated task into the tally, UNDER THE
+// LOCK: workers run concurrently.
 func (s *Spend) recordWorker(mu *sync.Mutex, res subagent.Result) {
 	mu.Lock()
 	defer mu.Unlock()
 	s.Workers++
 	s.WorkerInput += res.InputTokens
 	s.WorkerOutput += res.OutputTokens
-	// ITS CALLS ARE THE TURN'S: a worker reaches its seat's MCP servers
-	// with the seat's grant, so a server's count without them would miss
-	// every call a fan-out made.
+	// ITS CALLS ARE THE TURN'S: a worker reaches the seat's MCP servers on
+	// the seat's grant.
 	s.Tools = types.SumToolTallies(s.Tools, toolTallies(res.Executions))
 	s.Refusals = types.SumRefusals(s.Refusals, refusalTallies(res.Executions))
 }
 
-// recordJudge folds one extension judgement into the turn's tally.
-//
-// No lock, like record and unlike recordWorker: the judge is called from the
-// phase's own goroutine, between tool-loop invocations.
+// recordJudge folds one extension judgement into the turn's tally. No lock:
+// the judge runs on the phase's own goroutine, between tool-loop invocations.
 func (s *Spend) recordJudge(d extension.Decision) {
 	s.Judged++
 	s.JudgeInput += d.InputTokens
 	s.JudgeOutput += d.OutputTokens
 }
 
-// Spend reports what this turn has cost so far.
-//
-// Read under the lock the workers write through, because the engine reads it
-// on the turn's own goroutine while a worker from a fan-out that outlived its
-// tool call could still be reporting.
+// Spend reports what this turn has cost so far, under the workers' lock: a
+// worker from a fan-out that outlived its tool call may still be reporting.
 func (r *Runner) Spend() Spend {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -414,7 +325,7 @@ func (s *Spend) record(rec phaseRecord, calls RecordCalls) {
 	s.Refusals = types.SumRefusals(s.Refusals, refusalTallies(rec.Result.Executions))
 	if rec.Phase == phase.Execute {
 		names := toolNames(rec.Result.Executions)
-		// REPLACED, not appended — see the field's own note.
+		// REPLACED, not appended: see [Spend.ExecuteTools].
 		s.ExecuteTools = names
 		s.AllTools = append(s.AllTools, names...)
 		if rec.Decision != "" {
@@ -424,13 +335,10 @@ func (s *Spend) record(rec phaseRecord, calls RecordCalls) {
 }
 
 // toolTallies counts a phase's calls to MCP servers' tools, per (server,
-// tool), each in exactly one outcome ([types.ToolTally]).
-//
-// BY WHOSE TOOL THE CALL NAMED ([toolloop.Execution.Source]), not by who
-// answered it, so a call the engine refused before any tool ran is counted
-// against the server it was for, in the outcome [mcp.OutcomeOf] files it in.
-// A builtin's call, and a name nothing registered, is no server's and is not
-// counted.
+// tool), each in exactly one outcome ([types.ToolTally]). Counted by whose
+// tool the call NAMED ([toolloop.Execution.Source]), not who answered, so a
+// call refused before any tool ran counts against its server, in the outcome
+// [mcp.OutcomeOf] gives it. Builtins and unregistered names are not counted.
 func toolTallies(execs []toolloop.Execution) []types.ToolTally {
 	var out []types.ToolTally
 	for _, ex := range execs {
@@ -448,8 +356,8 @@ func toolTallies(execs []toolloop.Execution) []types.ToolTally {
 			t.Failed = 1
 		case mcp.CallAnswered:
 		}
-		// ONLY WHAT WAS MEASURED, for the wire row's reason
-		// ([toolExecutions]): an untimed call adds no time and no instant.
+		// ONLY WHAT WAS MEASURED ([toolExecutions]): an untimed call adds no
+		// time and no instant.
 		if !ex.StartedAt.IsZero() {
 			t.TotalMS = ex.Duration.Milliseconds()
 			t.LastAt = ex.StartedAt.UTC()
@@ -475,11 +383,9 @@ func refusalTallies(execs []toolloop.Execution) []types.RefusalTally {
 	return types.SumRefusals(out)
 }
 
-// toolNames is the called tools in order, including repeats.
-//
-// REPEATS KEPT, because the sequence is what skill synthesis clusters on:
-// "search, read, read, read, reply" and "search, read, reply" are different
-// procedures, and a set would render them identical.
+// toolNames is the called tools in order, REPEATS KEPT: skill synthesis
+// clusters on the sequence, and "search, read, read, reply" is a different
+// procedure from "search, read, reply".
 func toolNames(execs []toolloop.Execution) []string {
 	if len(execs) == 0 {
 		return nil
@@ -491,27 +397,21 @@ func toolNames(execs []toolloop.Execution) []string {
 	return out
 }
 
-// on reports whether anything is listening. Checked by the callers that would
-// otherwise do real work — copying a message list, marshalling arguments — to
-// build an event nobody receives.
+// on reports whether anything is listening, so callers skip the work of
+// building an event nobody receives.
 func (e emitter) on() bool { return e.pub != nil }
 
-// started opens a phase, and publishes the opening progress round with it.
-//
-// The two go together because they answer one question between them: started
-// says WHICH phase, and the round with RoundNum -1 carries the prompt the
-// phase is working, so the live view can show what the agent was asked while
-// it is still answering. Consumers read RoundNum+1 as "rounds so far", which
-// is why the sentinel is -1 and not 0 — a 0 would claim a round had finished.
+// started opens a phase and publishes its opening progress round: started says
+// WHICH phase, and the round carries the prompt, so the live view shows what
+// the agent was asked while it answers. That round's RoundNum is -1 because
+// consumers read RoundNum+1 as "rounds so far"; 0 would claim a finished one.
 func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 	system, user prompts.Prompt, surface *tools.Surface, caps roundCaps,
 ) {
-	// BEFORE THE PUBLISHER GATE, and off the same `ph` the event below
-	// carries. The working indicator is not telemetry: a runner whose phases
-	// are silent — a test, an embedded runner, a node whose broker refused
-	// every publish — still has a person watching a chat thread, so gating
-	// this on whether anything is listening to the stream would be gating a
-	// reader's own view on the engine's observability. See [Config.OnPhase].
+	// BEFORE THE PUBLISHER GATE, off the same `ph` as the event: the working
+	// indicator is not telemetry, and a silent runner (a test, an embedded
+	// runner, a broker refusing every publish) still has a person watching
+	// its thread. See [Config.OnPhase].
 	if e.onPhase != nil {
 		e.onPhase(ph)
 	}
@@ -533,21 +433,19 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 	e.promptSize(ctx, ph, iteration, system.Text, user.Text, surface)
 }
 
-// prompted publishes a phase's opening progress round — the prompt its model
-// is sent ([emitter.started]) — on its own: what an executor launch publishes
-// once it has decided how its run takes up a session, where the run is handed
-// a prompt other than the one its started record carries — a continuation of
-// the session the relaunch follows, or a relaunch's own brief — so the live
-// view states what the run was sent. The opening round of the same phase
-// again, which the live view reads as that phase's prompt.
+// prompted publishes a phase's opening progress round ([emitter.started]) on
+// its own: an executor launch's, once it knows the run is handed a prompt
+// other than its started record's (a session continuation or a relaunch's
+// brief), so the live view, which reads that round as the phase's prompt,
+// states what the run was sent.
 func (e emitter) prompted(ctx context.Context, ph phase.Phase, iteration int,
 	system, user prompts.Prompt, caps roundCaps,
 ) {
 	if !e.on() {
 		return
 	}
-	// HELD TO A RECORD'S SHARE OF EACH PROMPT, part by part (keptPrompt): the
-	// frame is sent once, and the prompt the model was sent is not changed.
+	// HELD TO A RECORD'S SHARE OF EACH PROMPT, part by part (keptPrompt); the
+	// prompt the model was sent is not changed.
 	system, user = keptPrompt(system), keptPrompt(user)
 	e.publish(ctx, events.New(types.AgentTurnProgress{
 		Agent:     e.turn.AgentID,
@@ -558,9 +456,8 @@ func (e emitter) prompted(ctx context.Context, ph phase.Phase, iteration int,
 		Iteration: iteration,
 		Trigger:   e.turn.Trigger,
 		Prompt:    user.Text,
-		// EACH MESSAGE WITH ITS OUTLINE, so the live view draws the
-		// prompt's parts from the frame that assembled them rather than
-		// from the text's own headings — see [types.PromptSection].
+		// EACH MESSAGE WITH ITS OUTLINE, so the live view draws its parts
+		// from the frame that built them, not its headings ([types.PromptSection]).
 		PromptMessages: []types.PromptMessage{
 			{Role: string(llm.RoleSystem), Content: system.Text, Sections: promptSections(ctx, ph, system)},
 			{Role: string(llm.RoleUser), Content: user.Text, Sections: promptSections(ctx, ph, user)},
@@ -576,19 +473,12 @@ func (e emitter) prompted(ctx context.Context, ph phase.Phase, iteration int,
 
 // skillsInjected records what a prompt's tool-skill catalogue offered: one
 // `knowledge_read` with `via: skill_injected` per rendered catalogue, naming
-// the page behind each skill it listed.
-//
-// A READ, because the catalogue line IS page content — the summary an author
-// wrote on the skill's page, in front of the model — and a knowledge base that
-// counted only the bodies loaded would report the pages every phase is shown
-// as the ones nobody reads.
-//
-// ONE EVENT PER RENDER, listing its pages, and never one per skill: the
-// catalogue's size belongs in the event's page list rather than in the event
-// stream, which is the reason internal/learning keeps its own per-offer stamp
-// off the stream entirely. Rendered nothing, recorded nothing. Nothing is
-// recorded for a runner with no publisher — a sub-agent's own runner, a test —
-// or with no turn to name a seat by.
+// the page behind each skill it listed. A READ, because a catalogue line is
+// the page's own summary in front of the model; counting only loaded bodies
+// would report the pages every phase sees as unread. ONE EVENT PER RENDER,
+// never per skill, so the catalogue's size stays off the stream (why
+// internal/learning keeps its per-offer stamp off it). Nothing is recorded for
+// an empty render, a runner with no publisher, or one with no turn.
 func (e emitter) skillsInjected(ctx context.Context, ph phase.Phase, offerings [][]skills.Skill) {
 	if !e.on() || e.turn.Context == nil {
 		return
@@ -627,12 +517,10 @@ type roundCaps struct {
 	ceiling int
 }
 
-// capsOf states a phase's allowance for the round cap it is running under.
-//
-// The ceiling is the extension policy's where extensions are on, and NEVER
-// below the cap itself: with extensions off the phase cannot be granted a
-// round beyond the cap, and a ceiling below the cap would tell a reader the
-// phase had overrun a limit it never had.
+// capsOf states a phase's allowance for the round cap it is running under. The
+// ceiling is the extension policy's when extensions are on, NEVER below the
+// cap: a lower ceiling would tell a reader the phase overran a limit it never
+// had.
 func capsOf(policy extension.Policy, maxRounds int) roundCaps {
 	ceiling := maxRounds
 	if policy.Enabled {
@@ -641,10 +529,8 @@ func capsOf(policy extension.Policy, maxRounds int) roundCaps {
 	return roundCaps{max: maxRounds, ceiling: ceiling}
 }
 
-// workItem is the item the turn is charged to as the turn knows it now, or nil.
-//
-// A COPY, so an event built from it never aliases the turn's own value: the
-// turn is the one thing a phase's publishers share.
+// workItem is the item the turn is charged to as the turn knows it now, or
+// nil: a COPY, so an event never aliases the turn every publisher shares.
 func (e emitter) workItem() *types.WorkItem {
 	if e.turn.Context == nil || e.turn.Context.WorkItem == nil {
 		return nil
@@ -653,58 +539,35 @@ func (e emitter) workItem() *types.WorkItem {
 	return &item
 }
 
-// promptSize measures the prompt a phase is about to send.
+// promptSize measures the prompt a phase is about to send, from
+// [emitter.started]: the one frame holding the FINAL prompt.
 //
-// Published from [emitter.started] because that is the one frame holding the
-// FINAL prompt — after every section builder, every prefetch and every ledger
-// have had their say. Anywhere earlier measures a draft.
-//
-// THE SURFACE IS TAKEN, NOT ITS DEFINITIONS, and rendered inside the [emitter.on]
-// guard above: [tools.Surface.ToolDefs] clones every active tool's schema, and
-// a runner with no publisher — every sub-agent, and every test driving one
-// directly — would otherwise pay that render to build an event nobody
-// receives. The call is safe from here: ToolDefs takes the surface's lock only
-// to clone the active name list and has released it before it looks a tool up,
-// and neither caller of started holds that lock.
-//
-// THE ARRAY IS COUNTED FOR EVERY PHASE, although none puts it in the prompt
-// text: a phase on this host has its harness list the definitions from its
-// session, and the executor's run from the MCP bridge in its box, and the
-// harness's own model is billed for every one of them either way, so leaving them
-// out would report the most tool-heavy phase as the slimmest.
-//
-// The token figure is approximate by construction and says so in its field
-// name: a real count needs the vendor's own tokenizer, which differs per model
-// and would make this event a provider call. The size fields ride along so
-// anyone comparing builds can apply their own ratio rather than inheriting
-// this one.
-//
-// MEASURED IN BYTES, which is what len() of a Go string is — see
-// [types.PromptSize] for why bytes rather than characters.
+// It takes the surface and renders [tools.Surface.ToolDefs] only past the
+// [emitter.on] guard, since ToolDefs clones every schema and a silent runner
+// (every sub-agent, every test) would pay for nothing. Safe here: ToolDefs
+// releases the surface's lock before looking a tool up, and no caller of
+// started holds it. The tool array is counted for EVERY phase, though none
+// puts it in the prompt text: the harness's model is billed for it. The token
+// figure is approximate (a real count needs each vendor's tokenizer, a
+// provider call); the byte fields let a reader apply their own ratio. Bytes,
+// not characters: see [types.PromptSize].
 func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int,
 	system, user string, surface *tools.Surface,
 ) {
 	if !e.on() {
 		return
 	}
-	// Every phase in this package builds its surface before it opens, so a
-	// nil one is not a state the engine reaches — but this runs on the
-	// turn's own goroutine, where a nil dereference takes the seat down
-	// rather than the measurement, and a telemetry frame is the last place
-	// worth discovering that from.
+	// No phase reaches here with a nil surface, but a nil dereference on the
+	// turn's goroutine would take the seat down rather than the measurement.
 	var defs []llm.ToolDef
 	if surface != nil {
 		defs = surface.ToolDefs()
 	}
 	m, err := measurePrompt(system, user, defs)
 	if err != nil {
-		// The row still goes out, short its tool term, and it is worth
-		// more than a phase with no measurement at all — whatever could not
-		// be encoded here is what the provider call after it is about to
-		// reject for the same reason. The log line is the only place that
-		// says WHICH tool came up short, because the row itself cannot: a
-		// tool_bytes of 0 beside a non-zero tool_count is visible, and
-		// nothing more.
+		// Published anyway, short its tool term: what failed to encode here
+		// the provider call is about to reject. Only this log names WHICH
+		// tool; the row shows just tool_bytes 0 beside a non-zero tool_count.
 		log.WarnContext(ctx, "prompt_size_measure_failed", "phase", ph,
 			"turn_id", e.turn.RunID, "error", err)
 	}
@@ -723,13 +586,11 @@ func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int,
 	}, e.traceFor(ctx)))
 }
 
-// bytesPerToken is the ratio the approximate count uses. Four is the figure
-// both built-in providers' own documentation gives for English text — stated
-// there as characters per token, which is the same number here because the
-// prose and JSON a prompt is made of is overwhelmingly ASCII, where one
-// character is one byte. This number exists to make prompt growth comparable
-// across builds rather than to bill anybody — the real count is on the
-// completed phase, from the provider.
+// bytesPerToken is the approximate count's ratio: both built-in providers'
+// docs give four characters per token for English, and a prompt's prose and
+// JSON are overwhelmingly ASCII, so four bytes. It makes prompt growth
+// comparable across builds; the billed count is the provider's, on the
+// completed phase.
 const bytesPerToken = 4
 
 // promptMeasure is one prompt's size, by component.
@@ -745,40 +606,24 @@ func (m promptMeasure) approximateTokens() int {
 	return (m.system + m.user + m.tools) / bytesPerToken
 }
 
-// measurePrompt sizes what a phase is about to send.
-//
-// PURE OVER VALUES, in the shape internal/textindex and internal/search use
-// for the same reason: arithmetic that can only be exercised through a live
-// runner is arithmetic nobody re-measures.
-//
-// THE TEXT IS MEASURED WHATEVER THE TOOLS DO: a tool term that cannot be
-// encoded comes back as the error beside a measure whose text terms are
-// whole, because the caller publishes the row either way and a term zeroed
-// because a different term could not be encoded is a number nobody can
-// interpret.
+// measurePrompt sizes what a phase is about to send, PURE OVER VALUES so it is
+// tested without a live runner. The text terms are whole whatever the tools
+// do: an unencodable tool term comes back as the error beside them, since the
+// caller publishes the row either way.
 func measurePrompt(system, user string, defs []llm.ToolDef) (promptMeasure, error) {
 	m := promptMeasure{system: len(system), user: len(user), toolCount: len(defs)}
-	// Not named `tools`: this file imports the package of that name, and a
-	// local that shadows it is a compile error waiting for the next line
-	// added here.
+	// Not named `tools`: that would shadow the imported package.
 	size, err := toolDefBytes(defs)
 	m.tools = size
 	return m, err
 }
 
-// toolDefBytes is the compact JSON size of a tool-definition array.
-//
-// COMPACT, and ONE CANONICAL SHAPE rather than any vendor's own: this object
-// per tool, whoever serves the phase. Marshalling [llm.ToolDef] itself would
-// measure its Go field names, and measuring each backend's real array would
-// make "is the prompt getting smaller" unanswerable the moment a fallback
-// chain moved a seat between providers — which is the question this figure
-// exists for.
-//
-// WHICH MAKES IT A FLOOR, stated on [types.PromptSize.ToolBytes] where a
-// reader of the row will find it: the model is sent MORE than this. Its harness
-// reads the definitions over MCP, annotations and all, and hands them to its
-// model in its own vendor's wrapping.
+// toolDefBytes is the compact JSON size of a tool-definition array in ONE
+// CANONICAL SHAPE ([toolDefWire]), not [llm.ToolDef]'s Go field names nor a
+// vendor's real array: a fallback moving a seat between providers would
+// otherwise change the figure, and "is the prompt getting smaller" is what it
+// answers. It is a FLOOR ([types.PromptSize.ToolBytes]): the harness reads the
+// definitions over MCP, annotations and all, and wraps them its own way.
 func toolDefBytes(defs []llm.ToolDef) (int, error) {
 	if len(defs) == 0 {
 		return 0, nil
@@ -791,10 +636,8 @@ func toolDefBytes(defs []llm.ToolDef) (int, error) {
 	}
 	encoded, err := json.Marshal(wire)
 	if err != nil {
-		// NAME THE TOOL a person has to fix, which the array's own error
-		// cannot: json reports the offending Go type and there are as
-		// many of those as there are schemas on the surface. One pass per
-		// tool on a path that is already failing.
+		// NAME THE TOOL to fix: json's error names only a Go type. One pass
+		// per tool, on a path already failing.
 		for _, d := range defs {
 			if _, each := json.Marshal(d.Parameters); each != nil {
 				return 0, fmt.Errorf("measuring the tool definitions: the parameters "+
@@ -815,27 +658,17 @@ type toolDefWire struct {
 }
 
 // fallback records one hand-off inside a phase's provider chain — a call's,
-// or the executor launch's pick of the member that takes its run.
-//
-// Wired at the places a chain is walked — a phase's calls, a worker's, and
-// the launch through [AgentRunRequest.OnFallback] — because the chain itself
-// must not publish: it is handed to a sub-agent and to every phase alike, and a
-// provider that knew about the event stream would have to be given a turn id
-// it has no business holding. [chain.Options.OnFallback] exists for exactly
-// this, and for a while nothing wired it — so the type was registered,
-// categorised, documented and asserted in tests while no code path could
-// produce one. An event nobody publishes reads, from every screen, as a
-// company whose providers never fail.
-//
-// Fire-and-log like every publish here: a hand-off the operator cannot see is
-// worse than one they cannot see published, and neither is worth failing a
-// turn that is still running on the next provider.
+// or the executor launch's pick of the member that takes its run. Wired where
+// a chain is walked (a phase's calls, a worker's, the launch via
+// [AgentRunRequest.OnFallback]) through [chain.Options.OnFallback], because
+// the chain is shared with sub-agents and every phase and must not hold a
+// turn id. Unpublished, every screen shows providers that never fail.
 func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f chain.Fallback) {
 	if !e.on() {
 		return
 	}
 	// WHEN THE HEAD IS BACK, where its vendor said: what a screen showing
-	// the seat carried onto its fallback names.
+	// the seat on its fallback names.
 	var resets *time.Time
 	var fromCLI string
 	var fromSubscription bool
@@ -856,9 +689,8 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 		WorkKey:   e.turn.WorkKey,
 		Iteration: iteration,
 		Phase:     types.Phase(ph),
-		// Carried through verbatim, EMPTY To included: the chain writes
-		// "" for its last member on purpose, and substituting a
-		// placeholder would name a provider that does not exist.
+		// Verbatim, EMPTY To included: the chain writes "" for its last
+		// member, and a placeholder would name a provider that does not exist.
 		FromProviderKey: f.From,
 		ToProviderKey:   f.To,
 		ErrorKind:       f.Kind.String(),
@@ -895,19 +727,11 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		Iteration: iteration,
 		Model:     res.Model,
 		Trigger:   e.turn.Trigger,
-		// NO PROMPT. It is sent once, on the opening frame, and the live
-		// projection carries it forward from there — exactly as it already
-		// carries the trigger.
-		//
-		// It was the largest thing on this event by a wide margin and the
-		// one thing on it that never changes: a seat with a 30 KB system
-		// prompt republished the whole of it five times a second, for the
-		// length of every phase, to every open dashboard. Past
-		// [queue.MaxPayloadBytes] the publish is refused outright, this
-		// publisher logs and moves on, and the live row simply stops for
-		// the rest of the phase with nothing on screen to say why — which
-		// is likeliest at the tail of exactly the long phases somebody is
-		// watching.
+		// NO PROMPT: sent once on the opening frame, and the live projection
+		// carries it forward as it does the trigger. Republished five times a
+		// second it is the largest thing here, and past
+		// [queue.MaxPayloadBytes] the publish is refused and the live row
+		// silently stops for the rest of the phase.
 		Response:         tail(res.Text),
 		InputTokens:      res.InputTokens,
 		OutputTokens:     res.OutputTokens,
@@ -925,9 +749,8 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		RunningElided:    runningElided,
 		Invocations:      rounds.Invocations,
 		WorkItem:         e.workItem(),
-		// RoundsUsed is 1-based and RoundNum is 0-based; see the sentinel
-		// above. Subtracting rather than counting separately keeps the two
-		// from ever disagreeing about which round this is.
+		// RoundsUsed is 1-based, RoundNum 0-based ([openingRound]); derived,
+		// so the two never disagree.
 		RoundNum:       res.RoundsUsed - 1,
 		ToolExecutions: calls.Rows,
 		CallsElided:    calls.Elided,
@@ -937,12 +760,9 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 	}, e.traceFor(ctx)))
 }
 
-// phaseRecord is what a completed phase reports.
-//
-// Assembled by each phase rather than by runPhase, because the fields that
-// distinguish a phase from a bare loop run — the decision it reached, whether
-// its submit tool had to be rescued — are known only after its payload is
-// decoded, and runPhase returns before that happens.
+// phaseRecord is what a completed phase reports, assembled by each phase
+// rather than runPhase: its decision and whether its submit tool was rescued
+// are known only once its payload is decoded, after runPhase returns.
 type phaseRecord struct {
 	Phase     phase.Phase
 	Iteration int
@@ -954,12 +774,9 @@ type phaseRecord struct {
 	Result    toolloop.Result
 	Exhausted bool
 
-	// Elapsed is the phase's wall clock, as [Runner.runPhase] measured it.
-	//
-	// Carried through rather than read here: this record is assembled after
-	// the phase's payload is decoded, so a clock read at this point would
-	// fold a different amount of the caller's own work into the number on
-	// every path — and the executor's decode is the largest of them.
+	// Elapsed is the phase's wall clock as [Runner.runPhase] measured it,
+	// carried rather than read here: a clock read after the payload decode
+	// (the executor's is the largest) would fold the caller's work in.
 	Elapsed time.Duration
 
 	// StartedAt is when THIS SEGMENT of the phase began, UTC — see
@@ -971,12 +788,9 @@ type phaseRecord struct {
 	Caps roundCaps
 
 	// Decision is the phase's structured verdict: the executor's outcome,
-	// the reviewer's decision, "done" on a marked onboarding pass.
-	//
-	// A STRING rather than either enum, deliberately: this is the wire
-	// shape of a telemetry record, and the phases put genuinely different
-	// sets in it — [turn.Outcome] and [phase.Decision]. Callers render
-	// their own through String().
+	// the reviewer's decision, "done" on a marked onboarding pass. A STRING
+	// because the phases put different enums in it ([turn.Outcome],
+	// [phase.Decision]); callers render theirs through String().
 	Decision string
 
 	// Rescued marks a phase whose submit tool never fired, so its payload
@@ -988,11 +802,9 @@ type phaseRecord struct {
 	// missing tools.
 	Notes string
 
-	// Available is the tools whose schemas were actually passed in the
-	// call — what the model could invoke. Catalogue is the rest of what it
-	// could reach, by discovery and with no schemas: sending every MCP
-	// server's tool definitions is what made a turn expensive, and
-	// discovery is what replaced it. The two are disjoint.
+	// Available is the tools whose schemas were passed in the call;
+	// Catalogue the rest it could reach by discovery, without schemas
+	// (every server's definitions would make a turn expensive). Disjoint.
 	Available []string
 	Catalogue []string
 
@@ -1009,32 +821,23 @@ type phaseRecord struct {
 	// see [phaseResult.RunElided].
 	RunElided []ledger.Elided
 
-	// Failed and Err describe a phase that died instead of finishing. The
-	// rest of the record is then PARTIAL rather than absent: a phase that
-	// raises used to publish nothing at all, leaving a dashboard showing an
-	// in-flight call with no response and no reason.
+	// Failed and Err describe a phase that died instead of finishing; the
+	// rest of the record is then PARTIAL rather than absent, so a dashboard
+	// shows why the call it drew in flight never answered.
 	Failed bool
 	Err    error
 }
 
 // judged reports one round-cap extension judgement, as a phase nested under
-// the phase that ran out of rounds.
-//
-// THE JUDGE IS A MODEL CALL, and it was the only one in the engine that
-// nothing recorded: no phase event, so no card under the Execute round that
-// fired it and no row in the token breakdown; no span, though the turn-engine
-// doc promised `agent.turn.judge`; and no charge, because it runs outside the
-// tool loop where every other call is metered. `types.PhaseJudge` was declared,
-// read by the dashboard's nested-call grouping, and produced by nobody.
-//
-// What that cost is the question an operator actually asks: a company whose
-// judge model is misconfigured and rescues every phase looked exactly like one
-// whose phases genuinely deserved no extension. The only trace was a log line.
+// the phase that ran out of rounds. THE JUDGE IS A MODEL CALL outside the
+// tool loop's metering, so without this record it has no card, no row in the
+// token breakdown and no charge, and a misconfigured judge rescuing every
+// phase looks like phases that deserved no extension.
 func (e emitter) judged(ctx context.Context, host phase.Phase, iteration, hostRound int,
 	granted int, d extension.Decision, began time.Time, took time.Duration,
 ) {
-	// Tallied first, as everywhere here: the tally is the turn's own
-	// accounting and must not depend on whether anyone is listening.
+	// Tallied first, as everywhere here: the turn's own accounting must not
+	// depend on whether anyone is listening.
 	e.tally.recordJudge(d)
 	if !e.on() {
 		return
@@ -1049,12 +852,12 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration, hostRo
 		TurnID:   e.turn.RunID,
 		WorkKey:  e.turn.WorkKey,
 		Phase:    types.PhaseJudge,
-		// NESTED under the phase that asked, which is what the dashboard's
-		// grouping already expects of every non-turn phase.
+		// NESTED under the phase that asked, as the dashboard's grouping
+		// expects of every non-turn phase.
 		HostPhase:     types.Phase(host),
 		HostIteration: iteration,
-		// The round the host phase had reached when it ran out: the judge
-		// sits AFTER it on a timeline, not beside the phase's first round.
+		// The round the host had reached when it ran out: the judge sits
+		// AFTER it on a timeline.
 		HostRound:        hostRound,
 		Iteration:        iteration,
 		Model:            d.Model,
@@ -1067,43 +870,26 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration, hostRo
 		CacheWriteTokens: d.CacheWrite,
 		StartedAt:        began.UTC(),
 		WorkItem:         e.workItem(),
-		// The verdict and the judge's own wording for it. `Notes` is the
-		// reason: it is what makes a rescue readable, and on the failure
-		// paths it is the only thing that names what went wrong.
+		// `Notes` is the judge's reason: what makes a rescue readable, and on
+		// failure the only thing naming what went wrong.
 		Decision: verdict,
 		Notes:    keptText(d.Reason, notesBytes),
-		// HOW LONG THE JUDGEMENT COST. A judge runs in the middle of a
-		// phase that has already been running for minutes, so a slow cheap
-		// model here is a stall the phase's own duration absorbs without
-		// naming. Until this event carried its own measurement there was
-		// nothing to name it with: a nested phase publishes no
-		// agent_phase_started, so the two-event reconstruction every
-		// consumer did could never produce a duration for one.
+		// ITS OWN DURATION: a slow judge is a stall its host phase's duration
+		// absorbs unnamed, and a nested phase publishes no
+		// agent_phase_started to subtract from.
 		DurationMS:      int(took / time.Millisecond),
 		ConversationKey: e.turn.ConversationKey,
 	}, e.traceFor(ctx)))
 }
 
 // subagentCompleted closes ONE sub-agent, as a phase nested under the Execute
-// round that spawned it.
-//
-// The subagent package produces a Result on every path a child can end on
-// precisely so the caller's phase event cannot be missing — and the spawn tool
-// is that caller. Without this a fan-out is invisible: its tokens are charged,
-// its model calls happened, and nothing in the event store or the dashboard
-// says a sub-agent ran at all. That is exactly how a subsystem stays broken
-// unnoticed.
-//
-// Its tokens do NOT join the parent's own phase totals: they are already
-// charged through the shared meter, and adding them there would report them
-// twice and make the turn's phase numbers stop summing to its total. They are
-// counted SEPARATELY — see Spend.Workers — which is what answers "how much of
-// this turn was fan-out", a question the phase numbers cannot.
+// round that spawned it. subagent produces a Result on every path a child can
+// end on so this record cannot be missing; without it a fan-out's tokens are
+// charged and nothing says it ran. Its tokens stay OUT of the parent's phase
+// totals and are counted in [Spend.Workers], for that field's reason.
 func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
-	// COUNTED FIRST, and on every path — including the ones that never
-	// reached a model and the runs with no publisher at all. A task that
-	// timed out still ran, and a fan-out reported as three workers when
-	// four were started hides exactly the one worth looking at.
+	// COUNTED FIRST, on every path, publisher or not: a task that timed out
+	// still ran, and a short worker count hides the one worth looking at.
 	if e.tally != nil && e.mu != nil {
 		e.tally.recordWorker(e.mu, res)
 	}
@@ -1127,34 +913,22 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		TurnID:   e.turn.RunID,
 		WorkKey:  e.turn.WorkKey,
 		Phase:    types.PhaseSubagent,
-		// THE ROUND THIS RAN IN, and it was left at zero.
-		//
-		// A phase's identity is (turn, phase, iteration) plus the task id
-		// that distinguishes one worker of a fan-out from the next, and
-		// task ids are only unique WITHIN one delegate call — `plan`
-		// refuses a repeat there and nothing constrains the next round.
-		// So a self-iterating turn that delegated a task named the same
-		// thing twice produced two records under one identity, and the
-		// dashboard's merge kept whichever arrived last: a worker, its
-		// prompt, its tools and its failure were simply not on the page.
-		// Iteration is what tags which round fired the trio, and a nested
-		// phase belongs to the round that spawned it.
+		// THE ROUND THIS RAN IN: identity is (turn, phase, iteration) plus a
+		// task id unique only WITHIN one delegate call (`plan` refuses a
+		// repeat there), so without it a task id reused in a later round
+		// collides and the dashboard's merge keeps only one record.
 		Iteration: e.hostIteration,
-		// NESTED under the phase that spawned it, so a dashboard groups
-		// it beneath that Execute round rather than rendering it as a
-		// standalone sibling of the turn's own phases.
+		// NESTED under the Execute round that spawned it, not a sibling of
+		// the turn's own phases.
 		HostPhase:     types.PhaseExecute,
 		HostIteration: e.hostIteration,
-		// And the ROUND whose delegate call spawned it — which is how a
-		// worker is placed under its call rather than anywhere in the
-		// phase. Only the executor's run delegates, over the bridge, and
-		// every call it makes is on the run's one round ([runRound]), so
-		// that is the round every worker names. See
-		// [subagent.Config.Round].
+		// And the ROUND whose delegate call spawned it, placing the worker
+		// under its call: only the executor's run delegates, and all its
+		// calls are on the run's one round ([runRound],
+		// [subagent.Config.Round]).
 		HostRound: runRound,
-		// WHICH task and WHICH template. A call of eight otherwise
-		// produces eight records distinguishable only by their prompts,
-		// and the one an operator is looking for is the one that failed.
+		// WHICH task and template: a call of eight is otherwise told apart
+		// only by prompts.
 		Worker:         res.Worker,
 		TaskID:         res.ID,
 		Model:          res.Model,
@@ -1168,11 +942,9 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		ToolExecutions: calls.Rows,
 		CallsElided:    calls.Elided,
 		ElidedCalls:    calls.ByTool,
-		// Published beside the executions, on the round number they share.
-		// A worker's card is the same round ledger as the turn's own phases
-		// and reads it the same way; without this half of the pair, every
-		// delegated worker rendered as bare tool rows with nothing that
-		// asked for them.
+		// Beside the executions, on the round number they share: a worker's
+		// card reads the same round ledger as the turn's phases, and without
+		// narration shows bare tool rows.
 		RoundNarration:   keptNarration(rounds.Narration, narrationBytes),
 		Rounds:           rounds.Rounds,
 		RoundsElided:     rounds.Elided,
@@ -1187,32 +959,23 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		RoundCeiling: res.MaxRounds,
 		StartedAt:    utcOrZero(res.StartedAt),
 		WorkItem:     e.workItem(),
-		// THE WORKER'S OWN WALL CLOCK, off the result. A fan-out of eight
-		// runs its tasks in parallel under one wall-clock cap, so "which
-		// worker was slow" is the question a delegate call raises and the
-		// only one its records could not answer — a nested phase publishes
-		// no start, so there was never a second instant to subtract.
+		// THE WORKER'S OWN WALL CLOCK: a fan-out runs in parallel under one
+		// cap, so which worker was slow is the question, and a nested phase
+		// publishes no start to subtract.
 		DurationMS:           int(res.Elapsed / time.Millisecond),
 		ToolsAvailable:       available,
 		ToolsAvailableElided: availableElided,
-		// The grant's refusals, which is what Notes is documented to
-		// carry for this phase. A child that asked for a tool it could
-		// not have is the first thing to look at when its answer is thin.
+		// The grant's refusals, Notes' documented content for this phase:
+		// the first thing to check when a child's answer is thin.
 		Notes: keptText(rejectedNote(res.Rejected), notesBytes),
-		// The task's own status — ok / no_result / timed_out / skipped —
-		// which is the one field that says what became of it. It is a
-		// phase's structured verdict, so it rides the same field the
-		// executor's outcome and the reviewer's decision do.
+		// The task's status (ok / no_result / timed_out / skipped) is its
+		// structured verdict, so it rides Decision like the executor's outcome.
 		Decision:        string(res.Status),
 		ConversationKey: e.turn.ConversationKey,
 		Failed:          res.Failed(),
-		// A CHILD'S failure text, which is the one field on this event
-		// whose length is set by something the parent does not control.
-		// Bounded only so the event can be published — one over the
-		// queue's ceiling is refused and this publisher logs and moves
-		// on, so an unbounded child error costs the operator the whole
-		// record rather than its tail. The parent phase's own error is
-		// carried the same way; see events.MaxDiagnosticBytes.
+		// A child's failure text, sized by nothing the parent controls:
+		// clipped so the event stays publishable, since one over the queue's
+		// ceiling is refused and the whole record lost (events.MaxDiagnosticBytes).
 		Error:     events.ClipDiagnostic(res.Error),
 		ErrorKind: string(res.Status),
 	}
@@ -1274,13 +1037,11 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		RoundCeiling:     rec.Caps.ceiling,
 		StartedAt:        utcOrZero(rec.StartedAt),
 		WorkItem:         e.workItem(),
-		// WHICH ROUND WAS EXPENSIVE, which is the question the token total
-		// makes a reader ask and could not answer. Zero where the phase ran
-		// no loop in this process — see [types.AgentPhaseCompleted].
+		// WHICH ROUND WAS EXPENSIVE, the question the token total raises.
+		// Zero where the phase ran no loop here ([types.AgentPhaseCompleted]).
 		DurationMS: int(rec.Elapsed / time.Millisecond),
-		// Off the loop's own count rather than a re-derivation from the
-		// narration: a round that answered nothing records no narration
-		// at all, so there is nothing downstream to count it from.
+		// Off the loop's own count: a round that answered nothing records no
+		// narration to count it from.
 		EmptyAnswerRounds:    rec.Result.EmptyAnswers,
 		Decision:             rec.Decision,
 		RescueFired:          rec.Rescued,
@@ -1292,10 +1053,9 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ConversationKey:      e.turn.ConversationKey,
 		Failed:               rec.Failed,
 	}
-	// THE RUN AN EXECUTOR WAS, named on the record that collected it: the
-	// harness, the box, what it delivered and which launch it was. Nothing else
-	// says where the phase ran — the phase does (see
-	// [types.AgentPhaseCompleted.Harness]).
+	// THE RUN AN EXECUTOR WAS, on the record that collected it: harness, box,
+	// deliveries, launch. Only the phase says where it ran
+	// ([types.AgentPhaseCompleted.Harness]).
 	if rec.Run.Sandboxed() {
 		ev.Harness = rec.Run.Harness
 		ev.SandboxID = rec.Run.SandboxID
@@ -1307,13 +1067,10 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.LaunchID = rec.Run.LaunchID
 	}
 	if rec.Err != nil {
-		// The 2000-character cut this used to carry landed on exactly the
-		// errors worth reading: an exhausted provider chain naming what
-		// each attempt refused, a wrapped chain whose cause is at its end.
-		// What is left is a DELIVERY GUARANTEE, not a content budget —
-		// an event over the queue's ceiling is refused and this publisher
-		// logs and moves on, so an unbounded error would reach the
-		// operator not shortened but ABSENT. See events.MaxDiagnosticBytes.
+		// Clipped as a DELIVERY GUARANTEE, not a content budget: an event over
+		// the queue's ceiling is refused and the error ABSENT; a tighter cut
+		// would cost the errors worth reading (a wrapped chain's cause is at
+		// its end). See events.MaxDiagnosticBytes.
 		ev.Error = events.ClipDiagnostic(rec.Err.Error())
 		ev.ErrorKind = ErrorKind(rec.Err)
 	}
@@ -1329,10 +1086,10 @@ type keptPhase struct {
 }
 
 // kept is what the phase's record keeps of its rounds and its calls: its
-// loop's calls, or its run's as the bridge recorded them, those of a round
-// past the window tallied with the ones the list drops and the ones a
-// collected run's own record dropped first ([phaseResult.RunElided]). Kept
-// once, for its record and the turn's, which lists what this one does.
+// loop's calls, or its run's as the bridge recorded them, tallying a round's
+// past the window with those the list drops and those a collected run's record
+// dropped first ([phaseResult.RunElided]). Kept once, for its record and the
+// turn's, which lists what this one does.
 func (rec phaseRecord) kept() keptPhase {
 	rounds := keptRounds(recordRounds{
 		Rounds:      phaseRounds(rec.Result.Rounds),
@@ -1368,32 +1125,22 @@ func runTally(elided []ledger.Elided) []types.ElidedCalls {
 // no failure.
 const StoppedKind = "stopped"
 
-// ErrorKind names a failure's CLASS, for the one-word reason a dashboard
-// prints beside a failed phase or turn — ONE classifier for both records, so a
-// turn that died of its phase's failure says the same word on both rather than
-// the turn's record falling back to a generic word the phase's never uses.
-//
-// The classified kinds are the ones an operator can act on: rotate a key,
-// raise a cap, wait out a provider, mend the host. Everything else is
-// [types.ErrorKindUnclassified], deliberately. The tempting alternative is to
-// name the failure's own type, and in Go that is a lie: a wrapped error's type
-// is *fmt.wrapError whatever went wrong underneath, so the field would carry
-// the same meaningless token for every unclassified failure while looking
-// specific. One honest generic beats a specific-looking constant.
-//
-// A CONDITION OF THE ENVIRONMENT is its own kind, by the classification every
-// tool and API answer reads ([builtin.ConditionKind]): a coordination store
-// that did not answer, no data node serving, a busy store, a queue down, a
-// full or failing disk, a coding sandbox's class, a deadline. Read here by a
-// switch of its own, each of those was `error`, the word that means the
-// engine's own defect.
+// ErrorKind names a failure's CLASS, the one word a dashboard prints beside a
+// failed phase or turn: ONE classifier for both, so they say the same word.
+// Classified kinds are ones an operator can act on (rotate a key, raise a cap,
+// wait out a provider, mend the host); the rest are
+// [types.ErrorKindUnclassified], never the error's Go type, which for a
+// wrapped error is *fmt.wrapError whatever happened. A CONDITION OF THE
+// ENVIRONMENT (store unreachable, no data node, queue down, disk, sandbox
+// class, deadline) is its own kind via [builtin.ConditionKind], never
+// `error`, the word for the engine's own defect.
 func ErrorKind(err error) string {
 	var provider *llm.Error
 	var contained *panics.Failure
 	switch {
 	case errors.As(err, &contained):
-		// A PANIC IS ITS OWN REPORT, whatever it was wrapped in, so nothing that
-		// counts unclassified failures counts it a second time.
+		// A PANIC IS ITS OWN REPORT whatever wraps it, so nothing counting
+		// unclassified failures counts it twice.
 		return types.ErrorKindPanicked
 	case errors.As(err, &provider):
 		return provider.Kind.String()
@@ -1410,11 +1157,9 @@ func ErrorKind(err error) string {
 	return types.ErrorKindUnclassified
 }
 
-// publish sends one event, or logs why it could not.
-//
-// The event's SOURCE is the seat's role name. The payloads carry a role of
-// their own, but the envelope's source is what an actor-less consumer
-// attributes by — without it every phase in the company renders as "system".
+// publish sends one event, or logs why it could not. Its SOURCE is the seat's
+// role name: an actor-less consumer attributes by the envelope, and would
+// otherwise render every phase as "system".
 func (e emitter) publish(ctx context.Context, ev *events.Event) {
 	ev.Source = e.role
 	if err := e.pub.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
@@ -1424,25 +1169,13 @@ func (e emitter) publish(ctx context.Context, ev *events.Event) {
 }
 
 // toolExecutions renders the loop's executions in the wire shape consumers
-// read: name, arguments, result, success.
-//
-// An open map rather than a struct, matching types.ToolExecution, and the one
-// place in this catalogue that stays loose on purpose — a producer that starts
-// recording one more thing must not need every reader recompiled before that
-// thing can be seen.
-//
-// Arguments go out as a JSON STRING, and it is the string rather than the map
-// because the payload rides a store and a socket that keep it as text: a map
-// decoded and re-encoded there loses the one thing a transcript cannot make
-// up, which is a number too wide for a float64. The provider layer decodes a
-// model's arguments through json.Number precisely so that an id survives, and
-// a second pass through the default decoder is where it stops surviving.
-//
-// It is NOT about key order, which two earlier readings of this comment took
-// it for: `encodeArgs` marshals a Go map, and encoding/json sorts those, so
-// the order the model emitted is already gone before the string is formed.
-// The ledger's elision does not depend on it either — `ledger.fitArguments`
-// admits by serialised cost and breaks ties by name, and says so.
+// read: name, arguments, result, success. An open map, like
+// types.ToolExecution, so a producer recording one more thing needs no reader
+// recompiled. Arguments go out as a JSON STRING because a store and a socket
+// keep the payload as text, and a map decoded and re-encoded there loses a
+// number too wide for a float64 (the provider layer decodes through
+// json.Number to keep it). Not for key order: `encodeArgs` marshals a Go map,
+// which encoding/json sorts, and `ledger.fitArguments` does not depend on it.
 func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 	if len(execs) == 0 {
 		return nil
@@ -1456,19 +1189,16 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 			"success":   !ex.Failed,
 			"round":     ex.Round,
 		}
-		// ONLY WHAT WAS MEASURED. An execution nobody timed — a call
-		// whose arguments did not parse, answered rather than run, on
-		// this host or over the executor's bridge — has no start, and
-		// writing `duration_ms: 0` for it would state an instant call.
-		// Absent is the honest spelling of "not recorded", and it is the
-		// one every reader already treats that way.
+		// ONLY WHAT WAS MEASURED: an untimed execution (arguments that did
+		// not parse, answered rather than run) has no start, and
+		// `duration_ms: 0` would state an instant call. Absent means "not
+		// recorded" to every reader.
 		if !ex.StartedAt.IsZero() {
 			row["started_at"] = ex.StartedAt.UTC().Format(time.RFC3339Nano)
 			row["duration_ms"] = int(ex.Duration / time.Millisecond)
 		}
-		// The call's own id, which tells two calls of one response apart
-		// — a harness may run them side by side — and is what a live row's
-		// running call is matched to once it settles.
+		// The call's own id tells two calls of one response apart (a harness
+		// may run them side by side) and matches a live row's running call.
 		if ex.CallID != "" {
 			row["call_id"] = ex.CallID
 		}
@@ -1627,17 +1357,11 @@ func utcOrZero(t time.Time) time.Time {
 
 // promptSections renders a prompt's outline in its wire shape, or nil.
 //
-// NIL FOR A MAP THAT DOES NOT TILE ITS TEXT: the wire contract is that every
-// map a reader receives can be sliced by, and a reader that finds none falls
-// back to the prompt's own headings. Publishing a broken one would hand every
-// reader the obligation to check it, and would publish a map this node already
-// knows is wrong.
-//
-// AND SAID SO, at warn. No builder in this tree produces a map that fails to
-// tile; the one way a valid build fails the check is text that is not UTF-8
-// (external content a vendor sent), and either way every screen silently drew
-// this prompt from its headings instead — a builder regression that degraded
-// them all would otherwise have no symptom anybody could find.
+// NIL FOR A MAP THAT DOES NOT TILE ITS TEXT: every map a reader receives can be
+// sliced by, and a reader finding none falls back to the prompt's headings.
+// Logged at warn: no builder here produces such a map (non-UTF-8 vendor text is
+// the one way), so a builder regression would otherwise degrade every screen
+// silently.
 func promptSections(ctx context.Context, ph phase.Phase, p prompts.Prompt) []types.PromptSection {
 	if len(p.Sections) == 0 {
 		return nil
@@ -1658,15 +1382,10 @@ func promptSections(ctx context.Context, ph phase.Phase, p prompts.Prompt) []typ
 }
 
 // roundNarration renders the loop's per-round model turns in the wire shape
-// consumers read: round, content, and `declined` on a round that
-// answered in prose where the phase had to end in a call.
-//
-// The round number matches the one on that round's tool executions, which is
-// the whole contract — it is what lets a reader interleave the two lists into
-// one chronological ledger without a second ordering rule.
-//
-// `declined` is written only when true, so absent means no — the reading every
-// reader gives an omitted flag.
+// consumers read: round, content, and `declined` (only when true) on a round
+// that answered in prose where the phase had to end in a call. The round
+// number matches its tool executions', which lets a reader interleave the two
+// lists without a second ordering rule.
 func roundNarration(narr []toolloop.Narration) []types.RoundNarration {
 	if len(narr) == 0 {
 		return nil
@@ -1685,12 +1404,9 @@ func roundNarration(narr []toolloop.Narration) []types.RoundNarration {
 	return out
 }
 
-// partialRound renders the round currently being written, or nil.
-//
-// Nil rather than an empty object when there is nothing in flight, so
-// `omitempty` drops the key entirely: a consumer reads "absent" as "no round
-// is open", and an empty object would read as "a round is open and has said
-// nothing", which is a different fact.
+// partialRound renders the round currently being written, or nil rather than
+// an empty object, so `omitempty` drops the key: absent reads as "no round is
+// open", empty as "open and silent".
 func partialRound(p *toolloop.Partial) map[string]any {
 	if p == nil {
 		return nil
@@ -1713,17 +1429,11 @@ func partialRound(p *toolloop.Partial) map[string]any {
 	return out
 }
 
-// liveExecutions is the round's tool calls with their OUTPUT held to its tail.
-//
-// Only on the live event: this is the copy that is republished five times a
-// second for the length of the phase, and the phase's record keeps each
-// result's opening, whole within its share. A tool result is routinely the
-// largest thing on the frame — a knowledge search, a file read — and it is
-// already final: the reader opens it on the completed record.
-//
-// The arguments, the names and the list itself are held where the frame keeps
-// the list to its share ([liveList]): an argument's largest values left out
-// with the cut said, never JSON cut in the middle, which no consumer can parse.
+// liveExecutions is the round's tool calls with their OUTPUT held to its tail,
+// on the live event only: it is republished five times a second, a result is
+// often the frame's largest thing, and the record keeps each result's
+// opening. Arguments, names and the list are held where the frame keeps its
+// share ([liveList]), never as JSON cut mid-way.
 func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
 	out := toolExecutions(execs)
 	for _, row := range out {
@@ -1737,22 +1447,13 @@ func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
 	return out
 }
 
-// partialTail bounds how much of a round in flight goes on the wire.
-//
-// The whole accumulated text is republished five times a second — deltas
-// cannot be sent instead, because the socket hub drops the OLDEST frame when a
-// client falls behind and a consumer that had missed one would splice the
-// remaining fragments into nonsense. Republishing the accumulation is
-// therefore the correct shape for a lossy channel, and it is also quadratic in
-// the length of the round: a thirteen-thousand-character round costs
-// a seat about four megabytes over its life, times every open dashboard.
-//
-// The tail is what a reader is actually watching — text appears at the END —
-// and the full text arrives moments later on the round's own narration, which
-// is authoritative anyway. Four thousand BYTES — what the frame costs, so the
-// unit is the wire's — is roughly two screens of English at this type size
-// (fewer characters of a script whose characters take more bytes), so nothing
-// a reader could have been mid-way through is cut.
+// partialTail bounds, in BYTES (the wire's unit), how much of a round in
+// flight goes on the wire. The whole accumulation is republished five times a
+// second, not deltas, because the socket hub drops the OLDEST frame and spliced
+// fragments would be nonsense; that is quadratic in the round's length. The
+// tail is what a reader watches, and the round's narration brings the full
+// text moments later. 4000 bytes is about two screens of English, so nothing
+// a reader is mid-way through is cut.
 const partialTail = 4000
 
 // tail is the last partialTail bytes of text, marked when it elides — the
@@ -1761,16 +1462,10 @@ const partialTail = 4000
 // counted against the bound.
 func tail(text string) string { return textcut.Tail(text, partialTail) }
 
-// encodeArgs renders a call's arguments as JSON text, falling back to nothing
-// rather than to a Go-syntax dump: an argument map that will not marshal is
-// one no consumer could have parsed either way, and "%v" of it would put an
-// unquoted credential-shaped value on a screen that expects JSON.
-//
-// The encoding itself is [tools.RecordArgs], shared with the bridged-run log
-// because the two are one rule; what stays here is the EMPTY spelling. `{}`
-// rather than "" because a phase event records a call that took no arguments,
-// which is a real call, and the transcript shows the document it was made
-// with.
+// encodeArgs renders a call's arguments as JSON text ([tools.RecordArgs], one
+// rule with the bridged-run log), `{}` when empty or unmarshalable: a call
+// with no arguments is real and shown with its document, and a "%v" dump could
+// put an unquoted credential-shaped value on a screen expecting JSON.
 func encodeArgs(args map[string]any) string {
 	if len(args) == 0 {
 		return "{}"
@@ -1782,17 +1477,10 @@ func encodeArgs(args map[string]any) string {
 	return raw
 }
 
-// traceFor is the trace an event this emitter publishes belongs to.
-//
-// The ACTIVE span when there is one — which inside runPhase is the phase's own
-// span, so each phase becomes its own node in the trace tree rather than every
-// event in a turn sharing one id and collapsing onto it.
-//
-// The TURN's trace otherwise, and that fallback is the whole reason this is a
-// function. tracing.TraceOf mints a fresh root when no span is open, which is
-// correct for a publisher that would otherwise have no trace at all and wrong
-// here: an event published from a detached goroutine would leave its turn's
-// trace and start a second one nobody looks at.
+// traceFor is the trace an event belongs to: the ACTIVE span (inside runPhase
+// the phase's own, so each phase is its own trace node), else the TURN's.
+// tracing.TraceOf alone would mint a fresh root with no span open, moving an
+// event from a detached goroutine to a trace nobody looks at.
 func (e emitter) traceFor(ctx context.Context) events.TraceContext {
 	if tracing.Active(ctx) {
 		return tracing.TraceOf(ctx)

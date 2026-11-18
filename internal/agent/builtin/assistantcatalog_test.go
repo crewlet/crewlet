@@ -15,19 +15,16 @@ import (
 
 // EVERY CURATED WRITE EXECUTES AS AN OPERATOR TOOL IT CAN STAND ON.
 //
-// Walked over the operator catalogue with every half on. A row of the
-// catalogue's exposure table naming an operator tool this build does not serve
-// is a curated write that fails on every call; a row's tool is never a proven
-// read; and its verb is one the authority table lets an approval carry. Every
-// other operator tool is the person's own through the generic change, on the
-// act route, decided by its own verb (ADR-0052). And each catalogue write that
-// executes as an operator tool is held to it: the destructive hint its tier is
-// derived from is the tool's own annotation, and every argument the model may
-// send is one the act tool declares, of the same type, so an approved request
-// is one the tool reads whole, `removes` aside, which admits a removal the
-// preview found and is never sent. Mutation: name an operator tool that is
-// not served, mark update_task not destructive, or declare an argument
-// create_work_item does not take, and this fails.
+// Walked over the operator catalogue with every half on. An exposure row's
+// tool is served (else the write fails on every call), never a proven read,
+// and its verb one an approval may carry; every other operator tool is the
+// person's own through the generic change, decided by its own verb
+// (ADR-0052). A catalogue write's tier derives from its tool's destructive
+// hint, and every argument it sends is one the tool declares, of the same
+// type, so the tool reads an approved request whole (`removes` aside: it
+// admits a removal the preview found and is never sent). Mutation: name an
+// operator tool that is not served, mark update_task not destructive, or
+// declare an argument create_work_item does not take, and this fails.
 func TestEveryCuratedWriteExecutesAsAnOperatorTool(t *testing.T) {
 	t.Parallel()
 	served := map[string]map[string]any{}
@@ -97,13 +94,12 @@ func TestEveryCuratedWriteExecutesAsAnOperatorTool(t *testing.T) {
 
 // A CURATED CHAT WRITE TAKES WHAT THE ROOM TAKES.
 //
-// The catalogue may not import internal/chatlet, a domain's writer, so the bounds
-// its chat writes hold their arguments to are copies of the domain's, held to
-// it here: a body, a topic or a purpose the schema admits is one the room
-// stores, and a list of links, members or people one it takes, each link as
-// long as the room takes one. Mutation: bound a chat write's body by the
-// catalogue's own body bound, a link by a name's, or let a direct message reach
-// one person more than a conversation holds, and this fails.
+// The catalogue may not import internal/chatlet, a domain's writer, so its
+// chat writes' bounds are copies of the domain's, held to it here: whatever
+// body, topic, purpose, link or list the schema admits, the room takes.
+// Mutation: bound a chat write's body by the catalogue's own body bound, a
+// link by a name's, or let a direct message reach one person more than a
+// conversation holds, and this fails.
 func TestACuratedChatWriteTakesWhatTheRoomTakes(t *testing.T) {
 	t.Parallel()
 	bound := func(tool, arg, key string) any {
@@ -150,12 +146,10 @@ func TestACuratedChatWriteTakesWhatTheRoomTakes(t *testing.T) {
 // THE ASSISTANT SAYS WHO A CHAT MESSAGE WAKES, AND THE CAP IT STATES IS THE
 // ROOM'S.
 //
-// A model left to guess told a person the agents in a room "read room
-// messages on their next turn", which is false: an agent that is not woken
-// never reads the message. So the tool that posts and the tool that reads a
-// room both state the routing, and the number of agents one `@channel` asks
-// is a copy of the domain's cap the catalogue may not import, held to it
-// here. Mutation: drop the paragraph from either tool, or move
+// An agent that is not woken never reads the message, so a model left to
+// guess misleads the person: the tools that post to and read a room both state
+// the routing, and the `@channel` cap is the catalogue's copy of the domain's,
+// held to it here. Mutation: drop the paragraph from either tool, or move
 // chatlet.MaxCollectiveRecipients without the catalogue's copy, and this
 // fails.
 func TestTheAssistantSaysWhoAChatMessageWakes(t *testing.T) {

@@ -10,15 +10,13 @@ import (
 )
 
 // A DROPPED LATE CALL IS TOLD PAST EVERY SAVE POINT, UNDER THE LATE CALLS'
-// WORDS. A long round's log drops from its middle, and a dropped call keeps its
-// identity alone, so neither its mark nor its number; the log counts the late
-// ones it drops instead (sandbox.BridgeLog.LateElided), and a continuation of
-// the round is told how many under the late calls' own words whatever its save
-// point — here a session saved after every call the log took, which the tally
-// alone would tell nothing — and never as calls its own run made after it was
-// saved, which no late call is. A session saved before the dropped middle is
-// told the calls dropped past its point under those words as well, a dropped
-// late call among them by its number: an over-count, never an under-count.
+// WORDS. A call dropped from a long log's middle keeps neither its mark nor its
+// number, so the log counts the late ones it drops (sandbox.BridgeLog.LateElided)
+// and every continuation is told that count under the late calls' words, even
+// one saved after every call, whom the tally alone tells nothing, and never as
+// calls its own run made after the save. A session saved before the dropped
+// middle is also told the calls dropped past its point, a dropped late call
+// among them by its number: an over-count, never an under-count.
 //
 // Mutation: hand the continuation's telling no count of the dropped late calls,
 // or count them among the calls dropped after the save, and a case goes red.

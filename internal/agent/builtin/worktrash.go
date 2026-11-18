@@ -14,36 +14,22 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The trash, as an operator reaches it.
+// The trash, as an operator reaches it. No seat holds these: a seat that could
+// hide work it did not want would duck it leaving only an absence, where every
+// other way (a status, a reassignment, a comment) leaves a trace a person reads.
+// A restore is its inverse, an operator's for the same reason. Neither is a
+// facet of `update_work_item`, which refuses a removed task ("restore it
+// first"): a freeze an ordinary field write lifts is not a freeze.
 //
-// # Why no seat holds these
-//
-// A removal hides a task from every list in the company, and a seat that could
-// hide work it did not want to do would be marking its own homework in the one
-// way nobody notices: the board simply has one fewer item on it. Every other
-// way a seat can duck work leaves a trace a person reads — a status, a
-// reassignment, a comment — and this one leaves an absence.
-//
-// A restore is its inverse and is an operator's for the same reason. Neither is
-// a facet of `update_work_item`, because that verb refuses a removed task
-// outright ("restore it first"), and a freeze anybody can lift with an ordinary
-// field write is not a freeze.
-//
-// # And why they are not `purge`
-//
-// A removal is REVERSIBLE AT ANY AGE and destroys nothing — the rows stay, the
-// history answers, and `list_work_items` with `removed: true` is the trash. A
-// purge destroys every row on every data node and has no inverse; it is a harness
-// gesture with a typed confirmation and a required reason for that reason
-// alone. Somebody reaching for "delete" should land here.
+// Nor are they `purge`: a removal is reversible at any age and destroys nothing
+// (`list_work_items` with `removed: true` is the trash), while a purge destroys
+// every row on every data node, so it alone is a harness gesture with a typed
+// confirmation and a required reason. Somebody reaching for "delete" lands here.
 
 // TrashWriter is the write side of the trash, declared by the consumer.
-//
-// A RESTORE CAN BE ASKED TO BRING THE ITEM BACK ALONE, which is how a caller
-// admitted only as the item's author restores it: the tracker refuses that
-// with [worklet.ErrRestoresOthers] when the removal took other tasks with it,
-// decided by the writer that reads what went with it rather than by a read
-// here that could race it.
+// RestoreTask's alone is how a caller admitted only as the item's author
+// restores it: the tracker refuses it with [worklet.ErrRestoresOthers] when the
+// removal took other tasks, decided by the writer rather than a racing read here.
 type TrashWriter interface {
 	RemoveTask(ctx context.Context, opID, id, project string, subtree bool,
 		notify *worklet.Notify) (worklet.WriteResult, error)
@@ -52,9 +38,8 @@ type TrashWriter interface {
 }
 
 // trashObject is a task as the trash's verbs are decided on it
-// ([authz.ClassTidy]): its project, whose lead tidies it, and — with author —
-// its reporter, who tidies their own item. The reporter is set once, at the
-// create, so it is who filed the item and nobody a later edit named.
+// ([authz.ClassTidy]): its project, whose lead tidies it, and, with author, its
+// reporter, set once at the create, so who filed it and nobody an edit named.
 func trashObject(task worklet.Task, author bool) authz.Object {
 	o := authz.Object{Kind: authz.KindTask, Container: task.Project}
 	if author {
@@ -147,19 +132,17 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case err != nil:
 		return readFailure(ctx, worklet.RemoveWorkItemTool, err), nil
 	}
-	// THE ROW DECIDES — the project it is filed under and who filed it,
-	// read off the stored task — see the `inTool` entries in
-	// authority.go for why the gate could not ask.
+	// The stored task's project and reporter decide; the `inTool` entries in
+	// authority.go say why the gate could not ask.
 	if denied := t.deps.mayWrite(ctx, authz.ActionWorkRemove,
 		trashObject(before.Task, true)); denied != nil {
 		return *denied, nil
 	}
 	subtree := argBool(args, "subtree")
 	if subtree {
-		// AN AUTHOR TIDIES THEIR OWN ITEM AND NOTHING BELOW IT. The items
-		// under it may be anybody's, so taking them out with it is the
-		// project lead's or an admin's — asked again without the author
-		// arm, which is what that sentence means as a decision.
+		// An author tidies their own item and nothing below it, which may be
+		// anybody's: a subtree is the lead's or an admin's, asked again
+		// without the author arm.
 		whole := t.deps.decide(ctx, authz.ActionWorkRemove, trashObject(before.Task, false))
 		switch {
 		case whole == nil:
@@ -169,17 +152,16 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"out to put this item in the trash on its own.")
 			return refusal, nil
 		default:
-			// THIS NODE COULD NOT TELL whether the caller leads the
-			// project: the table's own answer, with no note telling an
-			// author to drop a subtree a lead may well be entitled to.
+			// This node could not tell whether the caller leads the project:
+			// the table's answer, with no note telling an author to drop a
+			// subtree a lead may be entitled to.
 			return authorityRefusal(worklet.RemoveWorkItemTool, whole), nil
 		}
 	}
 
 	after := before.Task
-	// THE WAKE'S OWN SNAPSHOT SHOWS THE TASK AS REMOVED, which is what the
-	// `removed` change kind is about — a wake whose After still looked live
-	// would describe the state the removal left behind.
+	// The wake's After shows the task removed, the state the `removed` change
+	// kind describes.
 	after.Removed = &worklet.Tombstone{
 		By: actor.Handle, Kind: actor.Kind, At: t.deps.now(),
 	}
@@ -268,10 +250,8 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if ref == "" {
 		return failed(worklet.RestoreWorkItemTool + " needs an `item` — a key like ENG-42, or an id."), nil
 	}
-	// THE REMOVED HALF IS WHAT THIS READS. A restore is about a task that
-	// is by definition out of every ordinary list, so the detail read is
-	// the only way to reach it — and it answers for a removed task, which
-	// is what makes the trash readable from both ends.
+	// The detail read is the only one that answers for a removed task, which
+	// is out of every list.
 	before, err := t.deps.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, worklet.ErrNoTask):
@@ -284,23 +264,20 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		trashObject(before.Task, true)); denied != nil {
 		return *denied, nil
 	}
-	// WHETHER THIS CALLER MAY BRING BACK WHAT WENT WITH IT. A restore brings
-	// back exactly what its removal took, and an author restores their own
-	// item and nothing below it — so a caller the table admits only as the
-	// item's author restores it ALONE, and the tracker refuses that when
-	// the gesture that put it in the trash took others with it.
+	// A restore brings back exactly what its removal took, and an author
+	// restores their own item and nothing below it: a caller admitted only as
+	// the author restores it alone, which the tracker refuses when the removal
+	// took others with it.
 	whole := t.deps.decide(ctx, authz.ActionWorkRestore, trashObject(before.Task, false))
 	if whole != nil && !errors.Is(whole, ErrRefused) {
-		// THIS NODE COULD NOT TELL whether the caller leads the project,
-		// and guessing "alone" would refuse a lead whatever the trash
-		// holds: the honest answer is the one the table gave.
+		// This node could not tell whether the caller leads the project, and
+		// guessing "alone" would refuse a lead: give the table's answer.
 		return authorityRefusal(worklet.RestoreWorkItemTool, whole), nil
 	}
 	alone := whole != nil
-	// A LIVE ITEM IS NOT REFUSED HERE, because it is exactly what a restore
-	// that stopped part of the way through leaves: the root is back and
-	// what went with it is not, and this call is how that is finished. The
-	// tracker says when there is truly nothing to bring back.
+	// A live item is not refused: a restore stopped part way leaves the root
+	// back and the rest not, and this call finishes it. The tracker says when
+	// nothing is left to bring back.
 
 	after := before.Task
 	after.Removed = nil
@@ -313,16 +290,15 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	var stopped *worklet.SubtreeStopped
 	switch {
 	case errors.Is(err, worklet.ErrRestoresOthers):
-		// FORBIDDEN, on the table's own refusal of the whole gesture: the
-		// item is the caller's to restore and what went with it is not.
+		// Forbidden, on the table's refusal of the whole gesture: the item is
+		// the caller's to restore and what went with it is not.
 		refusal := authorityRefusal(worklet.RestoreWorkItemTool, whole)
 		refusal.Output += " " + authorDetail(err) + " " + authorAloneNote("restore",
 			"Ask the project's lead or an admin to restore it.")
 		return refusal, nil
 	case errors.Is(err, worklet.ErrNothingToRestore):
-		// CONFLICT: the item's state, not the argument, is what refuses
-		// this — somebody restored it, and what went with it, between the
-		// caller's read and now.
+		// Conflict: the item's state refuses this; somebody restored it and
+		// what went with it since the caller's read.
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s is not in "+
 			"the trash, and nothing is in the trash with it, so there is "+
 			"nothing to restore.", before.Named())), nil
@@ -347,25 +323,16 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}, before), actor))
 }
 
-// subtreeStopped answers a subtree removal or restore whose ROOT landed and
-// whose walk over the rest did not finish.
+// subtreeStopped answers a subtree removal or restore whose root landed and
+// whose walk over the rest did not finish. Not a failure: the named item did
+// move, so "not made" would be false. Not a success: the tasks with it are
+// split across the trash. So it is the root's receipt with the walk's count and
+// what finishes it, as `dependencies_failed` answers a create whose item landed.
 //
-// # Why it is not a failure, and not a success either
-//
-// The item the caller named IS in the trash, or out of it — so "the change was
-// NOT made", which is what this answered, was false about the one thing the
-// caller asked about by name, and a retry was refused because the restored
-// root was no longer in the trash. And the gesture is NOT done: the tasks that
-// go with it are split across the trash. So the answer is the root's receipt
-// with the walk's own count beside it and what finishes it, the shape
-// `dependencies_failed` gives a create whose item landed.
-//
-// EITHER VERB FINISHES WHEN MADE AGAIN, under the same operation or a new one
-// — a task already where the gesture leaves it is nothing to do. The one stop
-// that differs is a step this node's ledger cannot vouch for: the same
-// operation stops at the same task here every time, and only a new one decides
-// it afresh — which the operator's surface, the only one these two tools are
-// served on, gets by leaving the op_id out.
+// Either verb finishes when made again, under the same operation or a new one,
+// except at a step this node's ledger cannot vouch for: the same operation
+// stops there every time, so only a new one (op_id left out, which the
+// operator's surface these tools are served on allows) decides it afresh.
 func (d WorkDeps) subtreeStopped(ctx context.Context, actor Actor, tool string,
 	item worklet.TaskDetail, done string, got worklet.WriteResult,
 	stopped *worklet.SubtreeStopped) (tools.Result, error) {

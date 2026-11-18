@@ -208,9 +208,9 @@ func TestLoadingAToolSkillRecordsItsPage(t *testing.T) {
 	}
 }
 
-// A READ WITH NO SEAT IS NOT A SEAT'S READ. The operator surface serves the
-// same tools to a person, whose actions its own audit records; a knowledge_read
-// with no agent would count toward every "read by agents" total.
+// A READ WITH NO SEAT IS NOT A SEAT'S READ: the operator surface serves the
+// same tools to a person, audited on its own, and a knowledge_read with no
+// agent would count toward every "read by agents" total.
 func TestAReadOutsideATurnRecordsNothing(t *testing.T) {
 	t.Parallel()
 	out := &recordingTelemetry{}

@@ -17,26 +17,21 @@ import (
 // A2AAskTool is the tool's wire name.
 const A2AAskTool = toolname.A2AAsk
 
-// Asker is what this tool needs from the A2A service.
-//
-// An interface so the tool can be built and tested without a broker, and so
-// the builtin package does not become a second place that knows how a channel
-// is opened.
+// Asker is what this tool needs from the A2A service: an interface, so the
+// tool is tested without a broker and builtin never learns how a channel opens.
 type Asker interface {
 	Open(ctx context.Context, ask a2a.Ask) (string, error)
 }
 
 // a2aAsk asks one colleague one question.
 //
-// ONE ASK, ONE ANSWER, THEN CLOSED — which is what stops a volley. Two agents
-// that can keep replying to each other will, and a company where every turn
-// can spawn an unbounded conversation has no bound on what a single trigger
-// costs. The reply does not charge delegation depth; the ask does.
+// ONE ASK, ONE ANSWER, THEN CLOSED: two agents that can keep replying to each
+// other will, leaving no bound on what one trigger costs. The ask charges
+// delegation depth; the reply does not.
 //
-// It does NOT wait for the answer. The target is woken on its own inbox and
-// answers in its own turn, on whichever node owns its seat — so blocking here
-// would hold a seat open across a network hop for work that may take minutes.
-// The answer arrives as a wake on this seat's inbox, which is a later turn.
+// It does NOT wait for the answer: the target answers in its own turn, on
+// whichever node owns its seat, so blocking would hold a seat open across a
+// network hop for minutes. The answer is a later wake on this seat's inbox.
 type a2aAsk struct {
 	svc Asker
 	// env resolves the chart's `${VAR}` contacts ([Deps.Env]).
@@ -102,18 +97,15 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 			"not your plan and not your conversation — so say what you need in full."), nil
 	}
 
-	// RESOLVED, not trusted. A model writes the handle it remembers, and an
-	// ask sent to a handle that does not exist is a turn spent waiting for
-	// an answer that can never come — with nothing failing.
+	// RESOLVED, not trusted: an ask to a handle nobody holds waits for an
+	// answer that never comes, with nothing failing.
 	resolved, refusal := t.resolve(turn, target)
 	if refusal != nil {
 		return *refusal, nil
 	}
 	if resolved.Kind == string(org.KindHuman) {
-		// A human seat is addressable and never spawned, so no turn will
-		// ever answer this channel. Saying so, and saying what to do
-		// instead, is the difference between a redirected agent and one
-		// that waits forever.
+		// A human seat is never spawned, so no turn would answer: say so,
+		// and what to do instead, or the agent waits forever.
 		return failed(fmt.Sprintf(
 			"%s (%s) is a human teammate, so "+A2AAskTool+" cannot reach them — "+
 				"no turn answers on their behalf. Mention them on a shared "+
@@ -121,17 +113,16 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 			resolved.Name, resolved.Handle)), nil
 	}
 	if resolved.Handle == seat.Handle() {
-		// A channel to yourself has no responder: the answering side
-		// decides who replies by comparing the woken seat against the
-		// requester, so a self-ask wakes this seat, is read as an incoming
-		// ANSWER, and is never replied to — a turn spent on nothing.
+		// The answering side decides who replies by comparing the woken seat
+		// with the requester, so a self-ask is read as an incoming ANSWER
+		// and never replied to.
 		return failed(A2AAskTool + " cannot address your own seat."), nil
 	}
 
-	// WHOEVER THIS TURN WORKS FOR, from the call's own bound ceiling: the
-	// colleague works for them too, never for this seat alone (ADR-0109).
-	// A turn whose ceiling cannot be composed asks nobody, since an ask
-	// carrying nobody would be worked for this seat, every app.
+	// WHOEVER THIS TURN WORKS FOR, from the call's bound ceiling: the
+	// colleague works for them too (ADR-0109). A turn whose ceiling cannot be
+	// composed asks nobody: an ask carrying nobody is worked for this seat,
+	// every app.
 	ceiling, err := ceilingOf(ctx, turn, seat.Handle(), t.requesters)
 	if err != nil {
 		return refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),
@@ -142,43 +133,30 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 	id, err := t.svc.Open(ctx, a2a.Ask{
 		Requester: seat.Handle(), Target: resolved.Handle, Brief: brief,
 		SenderRole: seat.Name,
-		// The chain travels so the answering seat can refuse past the cap
-		// rather than discovering the loop at runtime — an A2A ask is a
-		// delegation, and an unbounded one is how two agents ask each
-		// other the same question until a budget runs out.
-		//
-		// THIS TURN'S OWN DEPTH, unincremented: a2a.Service.Open adds the
-		// hop, because it is the chokepoint every ask goes through.
-		// Adding one here too charged two per hop against a limit of
-		// three, so the FIRST reply a colleague sent back could not be
-		// answered — a two-message exchange died as an engine guard
-		// breach. The config field says it plainly: a turn triggered by
-		// another agent inherits its depth plus one.
+		// The chain travels so the answering seat refuses past the cap
+		// rather than two agents asking each other until a budget runs out.
+		// THIS TURN'S OWN DEPTH, unincremented: a2a.Service.Open, the
+		// chokepoint every ask passes, adds the hop, and adding it here too
+		// would charge two per hop.
 		DelegationDepth: turn.Depth,
 		DelegationChain: append(append([]string(nil), turn.Chain...), seat.Handle()),
-		// THIS RUN, and the unit of work behind it. The run id is what the
-		// three audit records this ask publishes are read back by — the
-		// turn query is `WHERE turn_id = ?` — and what the target's wake
-		// points at as its parent. The work key rides along so the
-		// work-key filter answers with a run's whole record rather than
-		// only its phases. See ADR-0017.
+		// THIS RUN: the ask's three audit records are read back by its id
+		// (`WHERE turn_id = ?`) and the target's wake names it as parent;
+		// the work key lets the work-key filter answer with the run's whole
+		// record rather than only its phases (ADR-0017).
 		TurnID:  turn.RunID,
 		WorkKey: turn.WorkKey,
 		// AND THE ITEM THIS TURN IS ON, which the answering turn inherits:
-		// help given on a task is work on it, and the colleague's own
-		// trigger names no item — this ask is the only thing that knows
-		// which one. Nil when this turn is on nothing, and then the
-		// answering turn is on nothing either.
+		// help on a task is work on it, and only this ask knows which task.
+		// Nil when this turn is on nothing.
 		WorkItem: turn.WorkItem, WorkItemBasis: turn.WorkItemBasis,
-		// AND WHOEVER THIS TURN WORKS FOR, composed from the ceiling above
-		// and never from this call's arguments.
+		// From the ceiling above, never from this call's arguments.
 		WorkingFor: workingForOf(ceiling),
 	})
 	switch {
 	case errors.Is(err, a2a.ErrSelfChannel), errors.Is(err, a2a.ErrNotAnAgent):
-		// THE TARGET'S FAULT, and the service's sentence names why: the
-		// checks above catch both first, so this arm is a chart that moved
-		// between the resolve and the open.
+		// THE TARGET'S FAULT: the checks above catch both first, so this arm
+		// is a chart that moved between the resolve and the open.
 		why := "they do not hold an agent's seat"
 		if errors.Is(err, a2a.ErrSelfChannel) {
 			why = "an ask has two parties, and that seat is yours"
@@ -214,9 +192,8 @@ func (t *a2aAsk) resolve(turn *turnctx.Turn, target string) (colleague.Seat, *to
 	case 1:
 		return found[0].Seat, nil
 	}
-	// EVERY candidate. The handle the model wants is as likely to sort past
-	// a cap as before it, and a truncated ambiguity list leaves it choosing
-	// between options that do not include the answer.
+	// EVERY candidate: the wanted handle is as likely to sort past a cap,
+	// leaving the model to choose among options that exclude it.
 	var names []string
 	for _, c := range found {
 		names = append(names, c.Seat.Handle)

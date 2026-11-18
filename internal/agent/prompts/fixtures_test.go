@@ -8,10 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// The reference company these tests build prompts for: a two-seat engineering
-// team with a lead, a mission and vision, two policies, and a seat wired to two
-// MCP servers. Every prompt assertion in this package is written against it, so
-// changing the fixture moves every expected string at once.
+// The reference company: a two-seat team with a lead, mission, vision, two
+// policies and a seat wired to two MCP servers. Every prompt assertion here is
+// written against it, so changing it moves every expected string at once.
 func acme() *org.Organization {
 	o := &org.Organization{
 		Name:     "Acme",
@@ -51,13 +50,9 @@ func acme() *org.Organization {
 	return o
 }
 
-// seatIn is the seat with this HANDLE in org o. It panics on a missing one
-// because a fixture that names a seat the chart does not have is a broken
-// test, not a case worth branching on.
-//
-// THE HANDLE rather than the display name, which is what
-// [org.Organization.Role] resolves: a name is prose that gets renamed, and a
-// lookup by one goes dark the moment somebody does.
+// seatIn is the seat with this HANDLE in org o (what [org.Organization.Role]
+// resolves; a display name gets renamed). It panics on a missing one: that is
+// a broken fixture, not a case.
 func seatIn(o *org.Organization, handle string) Seat {
 	role := o.Role(handle)
 	if role == nil {
@@ -70,9 +65,8 @@ func engineer() Seat { return seatIn(acme(), "eng") }
 
 func lead() Seat { return seatIn(acme(), "lead") }
 
-// noEnv resolves nothing. Every fixture uses it so a roster's contact
-// identities never depend on the process environment the whole test binary
-// shares — a ${VAR} in a fixture resolves the same on a laptop and in CI.
+// noEnv resolves nothing, so a fixture's ${VAR} never depends on the test
+// binary's shared environment and resolves the same on a laptop and in CI.
 func noEnv(string) (string, bool) { return "", false }
 
 // mixedAcme is the same company with a human seat holding the lead role —
@@ -104,14 +98,12 @@ func mixedAcme() *org.Organization {
 	return o
 }
 
-// fakeCatalogue is a stand-in for the engine's tool-skill registry: the two
-// methods prompt assembly needs, with the same trigger semantics (a skill
-// fires when the surface carries its tool or its MCP server) and the same
-// phase scoping.
+// fakeCatalogue stands in for the tool-skill registry, with its trigger
+// semantics (a skill fires when the surface carries its tool or MCP server)
+// and phase scoping.
 //
-// It answers in INSERTION order on purpose. The real registry sorts by key,
-// and a fake that also sorted would certify nothing about the sort this
-// package does for itself.
+// It answers in INSERTION order on purpose: the real registry sorts, and a
+// fake that also sorted would certify nothing about this package's own sort.
 type fakeCatalogue struct {
 	skills []fakeSkill
 	vars   map[string]string
@@ -154,15 +146,12 @@ func (c *fakeCatalogue) Render(text string) string {
 	return text
 }
 
-// profiledReports is a lead with n direct reports, each carrying the kind of
-// profile a real company writes — two sentences of background, a goal and
-// three responsibilities — and every other seat held by a human, so both
-// renderings of a roster member are exercised.
+// profiledReports is a lead with n direct reports, each with a realistic
+// profile, every other one human so both roster renderings are exercised.
 //
-// IT IS THE FIXTURE THE ROSTER ALLOWANCE WAS MEASURED AGAINST. The prose
-// below is what rosterAllowanceTokens' per-profile figures were read off, and
-// what every roster number in budget_test.go is a measurement of: editing it
-// moves all of them at once.
+// IT IS THE FIXTURE THE ROSTER ALLOWANCE WAS MEASURED AGAINST:
+// rosterAllowanceTokens' per-profile figures and every roster number in
+// budget_test.go are measurements of this prose, so editing it moves them all.
 func profiledReports(n int) *org.Organization {
 	lead := &org.Role{
 		Name:           "Engineering Lead",
@@ -192,9 +181,8 @@ func profiledReports(n int) *org.Organization {
 		} else {
 			report.DeclaredHandle = fmt.Sprintf("report-%03d", i)
 		}
-		// THE HANDLE, which is what a manages entry resolves. A human
-		// report declares none, so it takes the slug of its own name —
-		// the same value org.Role.Handle derives.
+		// THE HANDLE is what a manages entry resolves; a human report
+		// declares none, so org.Role.Handle derives it from the name.
 		lead.Manages = append(lead.Manages, report.Handle())
 		roles = append(roles, report)
 	}
@@ -212,6 +200,5 @@ func profiledReports(n int) *org.Organization {
 }
 
 // bigLead is the seat every roster-allowance case is written against: a lead
-// whose team cannot possibly fit, so all three rungs of the ladder are
-// reachable and none of them is reached by accident.
+// whose team cannot fit, so all three rungs of the ladder are reachable.
 func bigLead(n int) Seat { return seatIn(profiledReports(n), "lead") }

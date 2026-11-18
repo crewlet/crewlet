@@ -11,43 +11,24 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// WHO A WRITE MADE THROUGH A CREDENTIAL IS RECORDED AS.
+// WHO A WRITE MADE THROUGH A CREDENTIAL IS RECORDED AS. A seat's writes are
+// attributed from its TURN ([actorFor]); the two request surfaces (the
+// operator's assistant over MCP, a person at the HTTP write surface) from the
+// PRINCIPAL, through this one conversion, which is [iam.ActorFor]'s.
 //
-// # One conversion, for every surface that has a request rather than a turn
-//
-// A seat's writes are attributed from its TURN ([actorFor]); everybody else's
-// — the operator's assistant over MCP, a person at the HTTP write surface —
-// from the PRINCIPAL the request resolved to. There are two such surfaces and
-// one answer, so the answer lives here, beside the Actor it produces, rather
-// than in either of them.
-//
-// # And the answer is [iam.ActorFor]'s
-//
-// A person bound to a seat writes AS THAT SEAT, with kind `human`; a
-// credential nobody is bound through writes as its own LOGIN, with kind
-// `operator`. The seat half is the one that was missing, and its absence was
-// not cosmetic: the operator surface recorded every person under their TOKEN
-// id, so the tracker's own "do not wake the author" rule compared a seat
-// handle against a token name, never matched, and every write a person made
-// woke them about it — the assignee editing their own task was paged for
-// having done so.
-//
-// The login half is the WHOLE login, `token:ops` and never `ops`. The colon is
-// what keeps it out of the seat namespace (a seat handle cannot carry one), so
-// stripping it — which is what the bare token id did — hands a machine a name a
-// seat can also hold, and every own-record rule that compares names would then
-// admit a credential into the record of the seat that shares its spelling.
+// A person bound to a seat writes AS THAT SEAT, kind `human`, so the tracker's
+// "do not wake the author" rule recognises them. A credential nobody is bound
+// through writes as its WHOLE login, kind `operator`: `token:ops`, never `ops`,
+// because the colon keeps it out of the seat namespace, and a stripped name
+// would pass every own-record rule of the seat that shares its spelling.
 
 // ActorOf is how a principal is written down on a work record.
 //
 // TOTAL, as [iam.ActorFor] is: every principal comes back as one of the
-// tracker's four kinds. The credential is recorded again as OperatorID —
-// [iam.ActorFor]'s own: the machine token a principal acts through
-// (`pat:<id>`), or the login it acted under — so "what did this credential
-// do" is a question an audit answers without reasoning about kinds, for a
-// bound person too, whose author is the seat. It used to be the login alone,
-// which recorded a person's own token as the person: every item their
-// assistant filed was indistinguishable from one they filed themselves.
+// tracker's four kinds. OperatorID records the credential again (the machine
+// token acted through, `pat:<id>`, else the login), so an audit answers "what
+// did this credential do" without reasoning about kinds, and a bound person's
+// assistant's writes stay distinguishable from their own.
 func ActorOf(p iam.Principal) Actor {
 	a := iam.ActorFor(p)
 	return Actor{
@@ -56,13 +37,13 @@ func ActorOf(p iam.Principal) Actor {
 	}
 }
 
-// PageActorOf is [ActorOf] for the knowledge base, which records the SAME
-// author under the SAME name — the audit feed reads both histories side by
-// side, and one person under two names there is two people.
+// PageActorOf is [ActorOf] for the knowledge base, under the SAME name: the
+// audit feed reads both histories side by side, and one person under two
+// names there is two people.
 //
-// AN ERROR FOR THE ONE KIND THE KNOWLEDGE BASE HAS NO WORD FOR: the engine's
-// own principal. Nothing writes a page as the engine, and recording such a
-// write as an operator or a person would put somebody's name on housekeeping.
+// AN ERROR FOR THE ENGINE'S OWN PRINCIPAL, which Doclet has no kind for:
+// recording it as an operator or a person would put somebody's name on
+// housekeeping.
 func PageActorOf(p iam.Principal) (doclet.Actor, error) {
 	a := iam.ActorFor(p)
 	kind := doclet.AuthorKind(a.Kind)
@@ -74,19 +55,15 @@ func PageActorOf(p iam.Principal) (doclet.Actor, error) {
 		Apps: iam.ActorApps(p)}, nil
 }
 
-// ChatActorOf is [ActorOf] for chat, which records the SAME author under the
-// SAME name, for [PageActorOf]'s reason: one person under two names across
-// the histories an audit reads side by side is two people.
+// ChatActorOf is [ActorOf] for chat, under the SAME name, for [PageActorOf]'s
+// reason.
 //
-// AN ERROR FOR THE ENGINE'S OWN PRINCIPAL, although chat HAS a word for it
-// ([chatlet.AuthorSystem]): that kind is the engine NARRATING a room — somebody
-// joined, the room was archived — which the store writes from its own
-// records, never a tool call. A tool call made as the engine would put a
-// narration where a speaker belongs, a line nobody said and nobody can answer.
-//
-// A CREDENTIAL ACTING AS ITSELF CONVERTS, to [chatlet.AuthorOperator]: it is a
-// real author of what is not said in a room's voice, and the store refuses it
-// every gesture that is ([chatlet.Actor] says which), naming the remedy.
+// AN ERROR FOR THE ENGINE'S OWN PRINCIPAL, although chat has
+// [chatlet.AuthorSystem]: that kind is the engine NARRATING a room from its own
+// records, and a tool call made as it would put a line nobody said where a
+// speaker belongs. A credential acting as itself converts to
+// [chatlet.AuthorOperator]; the store refuses it every gesture in a room's
+// voice ([chatlet.Actor] says which).
 func ChatActorOf(p iam.Principal) (chatlet.Actor, error) {
 	a := iam.ActorFor(p)
 	kind := chatlet.AuthorKind(a.Kind)
@@ -101,10 +78,9 @@ func ChatActorOf(p iam.Principal) (chatlet.Actor, error) {
 // PrincipalActor is [WorkDeps.Actor] for a surface whose caller is on the
 // request's context.
 //
-// AN ERROR RATHER THAN A FALLBACK NAME when nobody resolved: this is reached
-// inside a tool call, where there is a caller waiting for an answer and the
-// honest one is that the write did not happen. A row written as "anonymous"
-// would be a write nobody made.
+// AN ERROR RATHER THAN A FALLBACK NAME when nobody resolved: the caller is
+// told the write did not happen, where a row written as "anonymous" would be
+// a write nobody made.
 func PrincipalActor(ctx context.Context, _ *turnctx.Turn) (Actor, error) {
 	p, err := resolvedPrincipal(ctx)
 	if err != nil {

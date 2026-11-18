@@ -10,12 +10,11 @@ import (
 )
 
 // A REBASE IS ONE ENGINE WRITE OF THE CHANGE'S SOURCE: code_rebase_change of
-// site!7 at the head its caller read is one rebase_change of the change's
-// source branch, named by its number, as the calling seat in its turn, a
-// write every party takes, answered with the commit its branch moved to
-// and the head it moved from. A conflict is answered with its paths, fenced,
-// nothing changed; a rebase of a merge, invalid; and a head that is no whole
-// id is refused before anything is asked.
+// site!7 at the head its caller read is one rebase_change of its source
+// branch, naming the change, as the calling seat in its turn, answered with
+// the commit the branch moved to and the head it moved from. A conflict is
+// answered with its paths, fenced, nothing changed; a rebase of a merge,
+// invalid; a head that is no whole id is refused before anything is asked.
 //
 // Mutation: rebase the change's target rather than its source → red.
 func TestARebaseIsOneEngineWriteOfTheSource(t *testing.T) {
@@ -67,10 +66,8 @@ func TestARebaseIsOneEngineWriteOfTheSource(t *testing.T) {
 	}
 }
 
-// A REBASE OF AN ENDED CHANGE IS A CONFLICT, as a merge of one is and every
-// code tool's write of one: the change is in a state that refuses the rebase
-// until somebody reopens it, or for good once merged, which internal/mcp's one
-// rule classes conflict, never invalid; nothing is written.
+// A REBASE OF AN ENDED CHANGE IS A CONFLICT, as every code tool's write of
+// one is (builtin.mergeRefusalClass), never invalid; nothing is written.
 //
 // Mutation: refuse it as invalid again → red.
 func TestARebaseOfAnEndedChangeIsAConflict(t *testing.T) {
