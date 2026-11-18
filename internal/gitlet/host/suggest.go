@@ -15,34 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// AN APPLY_SUGGESTIONS' BUILD: findings' suggestions put in place of the lines
-// they are anchored to, in the files of the change's head the write lands on —
-// ALL OR NONE, each placed by THE ONE RULE a finding is shown by
-// (gitlet.Reanchor), so a suggestion is spliced exactly where a reader was
-// shown its finding.
-//
-// FIRST, WHERE EACH SUGGESTION'S LINES ARE NOW, from the build's one read of
-// what the paths are at the head (building.paths): a file gone from the head,
-// or no regular file there, has no lines to put anything in — OUTDATED. A
-// suggestion read in the head's own blob is where it was read. Every other is
-// placed by ONE `git diff-pairs -z -p -U0` in the copy over every distinct
-// pair of blobs — the one its lines were read in, and the head's — numbered
-// rather than named, as the re-anchoring read feeds it (internal/gitlet/query),
-// its hunks fed to each suggestion's placing AS THEY STREAM (gitlet.Placing):
-// what the build holds is a placing a suggestion and a header's window of the
-// line git is writing, never a diff's hunks, whose count grows with the two
-// files. A hunk that touched a suggestion's lines, or a pair git calls binary,
-// is OUTDATED, and so is every suggestion of a file holding fewer lines than
-// it names, which the splice finds. Two suggestions whose placed lines
-// overlap are an OVERLAP. Either refuses the whole write, naming every
-// finding: nothing a reviewer did not see is put anywhere.
-//
-// THEN THE COMMIT, as a commit_files' — one edit a file, of every file a
-// suggestion rewrites — with each file READ THROUGH ITS SPLICES as it streams
-// out of the batch that reads it (spliceStream), the lines a suggestion
-// replaces left out and its text put in their place: one forward pass over
-// splices sorted and apart, which is a bottom-up splice's answer with no file
-// held whole, at whatever size the repository's blobs bound it to.
+// An apply_suggestions' build puts findings' suggestions in place of their
+// anchored lines in the files at the change's head, ALL OR NONE, each placed
+// by the rule a finding is shown by (gitlet.Reanchor), so it lands exactly
+// where a reader was shown its finding. A suggestion read in the head's own
+// blob is where it was read; every other is placed by ONE `git diff-pairs`
+// over the distinct (read, head) blob pairs, its hunks fed to the placings as
+// they stream (gitlet.Placing), so no diff is held. A file gone or not regular
+// at the head, a hunk touching the lines, a binary pair or a file shorter
+// than the lines (found by the splice) is OUTDATED, and overlapping placed
+// lines an OVERLAP; either refuses the whole write, naming every finding. The
+// commit, a commit_files' of one edit a file, reads each file through its
+// splices as it streams (spliceStream): one forward pass, no file held whole.
 
 // splice is one suggestion as it is put in a file: its finding, the lines of
 // the head's file it replaces — placed, 1-based and inclusive — and its text.
@@ -52,9 +36,8 @@ type splice struct {
 	text       string
 }
 
-// suggestedFiles is one edit of every file a suggestion rewrites, sorted: what
-// the build reads at the head and plans, each file read through its splices
-// rather than an edit's text.
+// suggestedFiles is one edit of every file a suggestion rewrites, sorted; each
+// is read through its splices, not from an edit's text.
 func suggestedFiles(ss []gitlet.SuggestionOp) []gitlet.FileOp {
 	var paths []string
 	for _, s := range ss {
@@ -115,12 +98,10 @@ func outdatedSentence(outdated []string) string {
 		"and apply those still in place", strings.Join(outdated, "; "), toolname.CodeGetChange)
 }
 
-// place is where each suggestion's lines are in the head's file, by path,
-// sorted by where they start — and every suggestion whose lines changed since
-// they were read, named: one read in the head's own blob where it was read,
-// and every other placed from ONE diff-pairs over the distinct pairs of the
-// blob it was read in and the head's, its hunks fed to the pair's placings
-// as they stream.
+// place is each suggestion's placed lines in the head's file, by path and
+// sorted by start, and every suggestion whose lines changed since they were
+// read, named. diff-pairs is handed its pairs numbered rather than named, as
+// internal/gitlet/query feeds the re-anchoring read; pairNamed reads them back.
 func (b *building) place(ctx context.Context, paths map[string]object) (map[string][]splice, []string, error) {
 	ss := b.wr.w.Suggestions
 	placings := make([]gitlet.Placing, len(ss))
@@ -225,12 +206,11 @@ func pairNamed(line []byte, n int) (int, bool) {
 	return at, true
 }
 
-// overlapping names every suggestion of a file whose placed lines overlap
-// another's, each file's splices sorted by where they start: each beside the
-// one before it whose lines reach furthest, which it overlaps wherever it
-// overlaps any — so every finding in an overlap is named, in at most one
-// sentence a suggestion. Comparing neighbours alone would miss the third of a
-// range that holds two apart: it overlaps the range, never its neighbour.
+// overlapping names every suggestion whose placed lines overlap another's in
+// its file, each sorted splice compared with the earlier one reaching
+// furthest, so every finding in an overlap is named in at most one sentence
+// each. Comparing neighbours alone misses 5-6 after 1-10 and 2-3: it overlaps
+// only the first.
 func overlapping(spliced map[string][]splice) []string {
 	var out []string
 	for _, p := range slices.Sorted(maps.Keys(spliced)) {
@@ -249,14 +229,11 @@ func overlapping(spliced map[string][]splice) []string {
 	return out
 }
 
-// headerWindow is how much of each line of diff-pairs' patch output the
-// placement keeps: every line it acts on is a header — "diff --git a/<n>
-// b/<n>", "Binary files …", and a hunk's "@@ -a,b +c,d @@" followed by at
-// most the eighty bytes of function context git's xdiff writes after it — so
-// 256 bytes holds each whole, and a line of a file's content, which a hunk
-// carries after a + or a - and which is never a header, is never held whole,
-// however long. gitlet.ParseHunk reads a header's numbers and nothing after its
-// closing @@.
+// headerWindow is how much of each diff-pairs output line placement keeps.
+// Every line it acts on is a header ("diff --git a/<n> b/<n>", "Binary files
+// …", or "@@ -a,b +c,d @@" plus at most the 80 bytes of function context
+// xdiff appends), so 256 bytes holds each whole while a content line is never
+// held whole, however long; gitlet.ParseHunk reads nothing past the closing @@.
 const headerWindow = 256
 
 // headerLines is a Cmd.Stdout handing each line of a patch to fn as it ends,
@@ -309,13 +286,12 @@ func (h *headerLines) close() error {
 	return h.err
 }
 
-// spliceStream is a file read through an apply's splices into its new blob: a
-// line inside a splice's range is left out, and the splice's text written once
-// its range's last line has been read — with a newline where that line had
-// one and none where it was the file's unterminated last — every other line
-// written as it came. Splices sorted and apart, so it reads the file once and
-// holds none of it: git's binary test's first 8 000 bytes are looked at as
-// they pass, and nothing is kept.
+// spliceStream is a file read through an apply's splices into its new blob:
+// a line in a splice's range is left out and the splice's text written once
+// the range's last line is read, ending in a newline only if that line did;
+// every other line passes through. Splices are sorted and apart, so it reads
+// the file once and holds none of it, git's binary test (the first
+// editBinaryHead bytes) looked at as they pass.
 type spliceStream struct {
 	out     io.Writer
 	splices []splice

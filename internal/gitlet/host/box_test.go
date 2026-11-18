@@ -149,7 +149,7 @@ func boxRow(t *testing.T, c *gitlettest.Case, ref string) gitlet.PushRow {
 	return newest
 }
 
-// boxRing is a keyring of the one key id → material.
+// boxRing is a keyring of keys, signing with the one whose id is active.
 func boxRing(active string, keys ...runtoken.KeyMaterial) runtoken.Material {
 	return runtoken.Material{ActiveID: active, Keys: keys}
 }
@@ -393,22 +393,18 @@ func (r eveRoster) Seat(handle string) (gitlet.RosterSeat, bool) {
 	return r.Roster.Seat(handle)
 }
 
-// A BOX IS GIVEN ONLY ITS GRANTS: what its run was given, by name, held to
-// what its seat may (gitlet.Grant.Within) — on a node that serves the company's
-// configuration, which alone judges a grant.
+// A BOX IS GIVEN ONLY ITS GRANTS: its run's grants by name, held to its seat's
+// (gitlet.Grant.Within), judged only on a node current with the configuration:
 //
-//   - a node confirmed behind the configuration answers every request past
-//     the repository 503 behind_config, judging no grant;
-//   - a repository the run was not given, 403 not_granted;
-//   - a read grant's push, 403 read_only;
-//   - a seat that reads nothing of a `visibility: unit` repository, 403
+//   - a node behind the configuration: 503 behind_config, judging no grant;
+//   - a repository not given: 403 not_granted; a read grant's push: read_only;
+//   - a seat reading nothing of a `visibility: unit` repository: 403
 //     not_permitted, whatever its run was given;
-//   - a lead's run given write deletes no branch and forces none, which its
-//     seat may and its run may not, each refused not_permitted per ref.
+//   - a lead's run given write deletes and forces no branch (its seat may, its
+//     run may not): not_permitted per ref.
 //
-// Mutations: drop the behind_config check — the box admitted on a stale
-// chart — red; Within answering the seat's grant — the lead's deletion lands
-// — red.
+// Mutations: drop the behind_config check — admitted on a stale chart — red;
+// Within answering the seat's grant — the lead's deletion lands — red.
 func TestABoxIsGivenOnlyItsGrants(t *testing.T) {
 	t.Parallel()
 	var current atomic.Bool
@@ -486,16 +482,15 @@ func TestABoxIsGivenOnlyItsGrants(t *testing.T) {
 	})
 }
 
-// A BOX WORKS FOR WHOEVER WOKE ITS TURN (M3-decisions U40 (a)): a run whose
-// turn a colleague seat woke (host.BoxRun.Ceiling) has its box held to that
-// colleague's grant as well as its seat's (gitlet.Grant.Under) — a branch eve,
-// who only reads the repository, could not create is refused per ref,
-// not_permitted, in the ceiling's words, while the seat's own branch lands, its
-// own work; and a repository eve reads nothing of is not fetched for her. A
-// run no colleague bounds creates what its seat may.
+// A BOX WORKS FOR WHOEVER WOKE ITS TURN (M3-decisions U40 (a)): a run a
+// colleague seat woke (host.BoxRun.Ceiling) is held to that colleague's grant
+// as well as its seat's (gitlet.Grant.Under): a branch eve, who only reads,
+// could not create is refused per ref, not_permitted, in the ceiling's words,
+// while the seat's own branch lands; a repository eve reads nothing of is not
+// fetched for her. A run no colleague bounds creates what its seat may.
 //
-// Mutation: the admission ignoring the run's ceiling — the branch eve could
-// not create lands, and the repository she reads nothing of is fetched — red.
+// Mutation: the admission ignoring the ceiling — eve's uncreatable branch lands
+// and her unreadable repository is fetched — red.
 func TestABoxWorksForWhoeverWokeItsTurn(t *testing.T) {
 	t.Parallel()
 	c := newCase(t, gitlettest.SoloOptions{
@@ -550,31 +545,18 @@ func TestABoxWorksForWhoeverWokeItsTurn(t *testing.T) {
 	}
 }
 
-// A BOX A CREDENTIAL'S TURN LAUNCHED PUSHES ONLY ITS SEAT'S OWN WORK
-// (ADR-0110): a credential acting as no seat — a pipeline's token holding the
-// Gitlet permission — pushes to no repository itself, so a run its turn
-// launched, whose row names the credential as whom it works for
-// (host.BoxRun.WorkingFor), has its box held to the credential's own grant as
-// well as its seat's: it fetches the repository its run was given, as the
-// credential reads every repository, pushes under the seat's own namespace,
-// and is refused, in the credential's words, a branch outside it that the seat
-// itself may push — as a run no credential bounds pushes it. And the closed
-// ends: a box whose row names a stranger is shown nothing, and neither is one
-// whose row names whom it works for as no checkout writes it — the zero kind,
-// which names none, or a credential naming no app — since no build writes
-// either, by the rule every carrier is held to (gitlet.RunCarrierInvalid); and
-// one whose row names whom it works for by a kind this build does not know — a
-// newer build's run — is answered 503 carrier_unknown, judged by no bound this
-// node could only guess at: told that a node of a newer build judges its
-// request, and that the harness's push, or fetch, again reaches one.
+// A BOX A CREDENTIAL'S TURN LAUNCHED PUSHES ONLY ITS SEAT'S OWN WORK (ADR-0110):
+// a credential acting as no seat pushes to no repository itself, so a box whose
+// run works for one (host.BoxRun.WorkingFor) is held to its grant as well as
+// the seat's: it fetches, pushes under the seat's namespace, and is refused, in
+// the credential's words, a branch outside it that the seat may push. Closed
+// ends: a stranger, the zero kind and a credential naming no app are shown
+// nothing (gitlet.RunCarrierInvalid); a kind this build does not know is 503
+// carrier_unknown: a newer build's node judges it, which a retry reaches.
 //
-// Mutations: the admission ignoring a credential's carrier — the branch outside
-// the seat's own work lands, red; a kind this build does not know judged as
-// nobody — the newer build's box is served, red; a push told to fetch again —
-// red; the admission's own check of the kind back in place of the one rule
-// (gitlet.KindUnknownToThisBuild) — the zero kind is told to come back to a
-// newer build, red; a carrier no checkout writes left unrefused — the
-// stranger's box, and the zero kind's, are shown the repository, red.
+// Mutations, each red: ignore the credential's carrier; serve an unknown kind
+// as nobody; tell a push to fetch again; check the kind in the admission, not
+// gitlet.KindUnknownToThisBuild; leave a carrier no checkout writes unrefused.
 func TestABoxACredentialsTurnLaunchedPushesOnlyItsSeatsOwnWork(t *testing.T) {
 	t.Parallel()
 	c, _ := boxCase(t, gitlettest.SoloOptions{})
@@ -642,16 +624,14 @@ func TestABoxACredentialsTurnLaunchedPushesOnlyItsSeatsOwnWork(t *testing.T) {
 	}
 }
 
-// A BOX PUSH CARRIES WHOM ITS RUN WORKS FOR (ADR-0109): a coding box's push is
-// its run's turn's write made late, so the Gitlet node hands its committer the
-// push made for whom the run's row says that turn works for
-// (host.BoxRun.WorkingFor) — a colleague's seat, a person's, a credential
-// acting as no seat with its apps — and the push lands carrying it, its entry
-// at the carrier's version; a run that works for its own seat pushes made for
-// nobody, and its entry carries nothing, at the base version.
+// A BOX PUSH CARRIES WHOM ITS RUN WORKS FOR (ADR-0109): a box's push is its
+// run's turn's write made late, so it reaches its committer, and lands, made
+// for whom the run's row says the turn works for (host.BoxRun.WorkingFor) — a
+// colleague's seat, a person's, a credential with its apps — its entry at the
+// carrier's version; a run working for its own seat pushes made for nobody, at
+// the base version.
 //
-// Mutation: the git push's landing stating nobody for a box — every push
-// reaches its committer, and lands, made for nobody, red.
+// Mutation: the git push's landing stating nobody for a box — red.
 func TestABoxPushCarriesWhomItsRunWorksFor(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -718,18 +698,15 @@ func TestABoxPushCarriesWhomItsRunWorksFor(t *testing.T) {
 }
 
 // A BOX PUSH FOR A CARRIER ITS BUILD DOES NOT KNOW IS ASKED OF ITS COMMITTER
-// (ADR-0109's roll; git's Q-D): a run's row another build wrote may name, in
-// whom its turn works for, an app this build does not know. The Gitlet node's
-// own check of the push before its upload is this build's, which cannot judge
-// that app, so it asks the push's committer rather than refuse it: the push
-// reaches it made for the credential as the row names it, and the estate's
-// walk takes it to a data node of the build that knows the app, or answers that
-// the fleet's builds differ (internal/estate's
-// TestAnInProcessCommitterAnswersAStoredCarriersUnknownAppAsAnotherBuild). This
-// fleet's one data node is of this build, so nothing lands.
+// (ADR-0109's roll; git's Q-D): a run's row another build wrote may name an app
+// this build does not know. The node's own pre-upload check cannot judge it,
+// so it asks the committer rather than refuse: the estate's walk takes the push
+// to a data node of a build that knows the app, or answers that the builds
+// differ (internal/estate's
+// TestAnInProcessCommitterAnswersAStoredCarriersUnknownAppAsAnotherBuild).
+// This fleet's one data node is of this build: nothing lands.
 //
-// Mutation: the landing refusing a carrier it cannot read before it asks — the
-// push is never asked of its committer, red.
+// Mutation: the landing refusing a carrier it cannot read before it asks — red.
 func TestABoxPushForACarrierItsBuildDoesNotKnowIsAskedOfItsCommitter(t *testing.T) {
 	t.Parallel()
 	asked := &carriers{}
@@ -789,21 +766,18 @@ func TestAnUngrantedNameCostsTheLogNothing(t *testing.T) {
 	}
 }
 
-// A BOX KEEPS THE NAME IT WAS GIVEN: its run's grant is the repository's id
-// and its remote the name its launch gave it, which nothing in the box
-// changes, so
+// A BOX KEEPS THE NAME IT WAS GIVEN: its grant is the repository's id and its
+// remote the name its launch gave it, which nothing in the box changes, so
 //
-//   - a name a rename left redirecting serves the box the repository under
-//     its new name: its advertisement answered, never 302 Found, and its push
-//     landed, never refused as a person's is to tell them the new name;
-//   - a name that now names another repository is refused not_granted,
-//     decided through the barrier: a session read naming another repository
-//     is read again LINEARIZABLE, and a box whose session read lagged is
-//     admitted where the barrier finds the repository it was given.
+//   - a name a rename left redirecting serves the repository: its advertisement
+//     answered, never 302, its push landed, never refused as a person's is;
+//   - a name now naming another repository is refused not_granted, decided
+//     through the barrier: a session read naming another is read again
+//     LINEARIZABLE, and a box whose session read lagged is admitted where the
+//     barrier finds the repository it was given.
 //
 // Mutations: refuse a box's push at a redirecting name, as admit refuses a
-// person's — the push at the old name is refused — red; decide another
-// repository on the session read — the lagging box is refused — red.
+// person's — red; decide on the session read — the lagging box is refused — red.
 func TestABoxKeepsTheNameItWasGiven(t *testing.T) {
 	t.Parallel()
 	until := time.Now().Add(gitlet.RedirectWindow).UTC().Truncate(time.Second)
@@ -973,15 +947,10 @@ func TestABoxReadsAtItsRunsFloor(t *testing.T) {
 }
 
 // A BOX IS SHOWN NOTHING ITS FLOOR DOES NOT HOLD: an `ls-refs` served past the
-// run's floor raises the floor to the position it is served at BEFORE the
-// answer's first byte — while the raise is held, no answer reaches the box —
-// and a raise that fails refuses the answer 503, floor_unraised, the box to
-// retry.
-//
-// Every byte of an ls-refs's answer is upload-pack's, so none has been
-// written while upload-pack has not been handed to the pool: read off the
-// node's own record of the git it ran (host.RecordGit) while the raise is
-// held, inside the request.
+// run's floor raises the floor to its serving position BEFORE the answer's
+// first byte, and a raise that fails refuses it 503, floor_unraised, to retry.
+// Every byte of the answer is upload-pack's, so the order is read off the
+// node's record of the git it ran (host.RecordGit) while the raise is held.
 //
 // Mutation: raise after writing the answer — upload-pack ran before the
 // raise, red.
@@ -1096,13 +1065,13 @@ func TestABoxPushRaisesItsFloorAndIsNotAudited(t *testing.T) {
 }
 
 // A BOX'S PUSH HOLDS EVERY SEAT BRANCH IT PUSHES (M3-decisions M3-O61): a box
-// pushes as its run, not as a turn, so before anything of its push is stored
-// or proposed, the seat branches it names that its run's row does not hold
-// yet are held there, in one write — here its own namespace's `b`, never
-// granted, beside `a`, its granted branch, which the row holds already. A
-// person's push holds nothing. A hold the run store refuses for the row's
-// bound is 403 holds_full, and one it could not write 503 holds_unwritten —
-// each with nothing stored and the branch not moved.
+// pushes as its run, not a turn, so before anything of its push is stored or
+// proposed, the seat branches it names that its run's row does not yet hold
+// are held there in one write (`b`, never granted, beside `a`, which the row
+// already holds).
+// A person's push holds nothing. A hold refused for the row's bound is 403
+// holds_full, one not written 503 holds_unwritten, each storing nothing and
+// moving no branch.
 //
 // Mutations: skip adm.holdRefs → b's key is never held, red; hold after the
 // proposal → b has landed when the hold is asked, red.
@@ -1198,12 +1167,11 @@ func TestABoxPushNamesItsRun(t *testing.T) {
 	}
 }
 
-// A BOX'S PUSH ON AN ITEM WITH A LONG KEY LANDS: a work key a vendor wrote
-// past the bound — a GitLab merge request's, nesting its project's whole path
-// — and that project's path itself are fitted where the host stamps them
-// (gitlet.FitProvenance), so the run's every push is not refused as an invalid
-// proposal for a label it never chose; the two ids are the engine's own and
-// stamped whole.
+// A BOX'S PUSH ON AN ITEM WITH A LONG KEY LANDS: a vendor's work key past the
+// bound (a GitLab merge request's, nesting its project's path) and that path
+// are fitted where the host stamps them (gitlet.FitProvenance), so the run's
+// pushes are not refused as invalid proposals for a label it never chose; the
+// two ids are the engine's own and stamped whole.
 //
 // Mutations: stamp the key raw, or the project raw — the push is refused as
 // an invalid proposal — red.
@@ -1228,20 +1196,17 @@ func TestABoxPushOnAnItemWithALongKeyLands(t *testing.T) {
 	}
 }
 
-// A BOX CANNOT PUSH THE ENGINE'S COMMITTER: a coding box's push whose pack
-// holds a commit committed as the engine — the fixture signer's
-// engine@seats.invalid, written as the engine writes it or in any other case,
-// since a reader takes either for the engine — that the repository does not
-// already hold is refused forged_committer, naming the commit, on the ref it
-// sends. Its pack is read before its upload begins, so nothing reaches the
-// object store, nothing is proposed and no ref moves; and its one record — its
-// code_push line, since a box's push is no operator_acted — names the refusal
-// and the run. The control: a person's push of the same commit lands, as a
-// branch pushed back from a clone or an export imported again does.
+// A BOX CANNOT PUSH THE ENGINE'S COMMITTER: a box's pack holding a commit
+// committed as the engine (the fixture signer's engine@seats.invalid, in any
+// case, since a reader takes either for the engine) that the repository does
+// not already hold is refused forged_committer on its ref, naming the commit.
+// The pack is read before its upload, so nothing is stored, proposed or moved;
+// its one record, its code_push line (a box's push is no operator_acted), names
+// the refusal and the run. The control: a person's push of it lands.
 //
-// Mutations: drop the committer's check — the box's push lands, red; compare
-// the address byte for byte — the mixed-case row lands, red; upload the
-// bundle before the check — the upload is reached, red.
+// Mutations: drop the committer's check — the push lands, red; compare the
+// address byte for byte — the mixed-case row lands, red; upload before the
+// check — the upload is reached, red.
 func TestABoxCannotPushTheEnginesCommitter(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, committer string }{
@@ -1298,20 +1263,17 @@ func TestABoxCannotPushTheEnginesCommitter(t *testing.T) {
 	}
 }
 
-// A BOX STORES NO COMMIT AS THE ENGINE BESIDE A REFUSED UPDATE: what a box's
-// push is judged by is its PACK, never only the commits its updates still
-// standing introduce. A box sends an ordinary commit to its own branch beside
-// a commit committed as the engine sent to main, which takes a person's push
-// alone: main is refused protected_direct, and its commit is in the pack all
-// the same — stored with the branch, the repository would hold it, and a later
-// push naming it would bring back a commit "the repository already holds". So
-// the whole push is refused forged_committer, storing and proposing nothing;
-// and the commit, still nobody's, is refused again when the box sends it on
-// its own.
+// A BOX STORES NO COMMIT AS THE ENGINE BESIDE A REFUSED UPDATE: a box's push is
+// judged by its PACK, not only by the commits its standing updates introduce.
+// Its own branch sent beside an engine-committed commit to main (refused
+// protected_direct) still carries that commit in the pack; stored, a later push
+// naming it would pass as one the repository already holds. So the whole push
+// is refused forged_committer, storing and proposing nothing, and the commit
+// sent alone is refused again.
 //
-// Mutation: judge the commits the standing updates introduce (the listing,
-// as first specified) rather than the pack — the branch lands with the
-// engine's commit in its bundle, and the second push lands that commit, red.
+// Mutation: judge the standing updates' commits rather than the pack — the
+// branch lands with the engine's commit in its bundle, and the second push
+// lands that commit, red.
 func TestABoxStoresNoCommitAsTheEngineBesideARefusedUpdate(t *testing.T) {
 	t.Parallel()
 	e := &recording{}
@@ -1355,17 +1317,13 @@ func TestABoxStoresNoCommitAsTheEngineBesideARefusedUpdate(t *testing.T) {
 	}
 }
 
-// A BOX MAY PUSH BACK AN ENGINE COMMIT THE REPOSITORY HOLDS: a seat branch
-// whose one commit the engine built for a tool write is deleted — here by the
-// seat's own tool, as alike by its expiry or a person's push — and a box of a
-// run launched since pushes the branch back from a checkout made before the
-// deletion. The commit is committed as the engine and no ref reaches it, so
-// the box's git sends it and the push introduces it, as its row says; but
-// the repository holds it, the host's own write it accepted once, so the
-// push lands.
+// A BOX MAY PUSH BACK AN ENGINE COMMIT THE REPOSITORY HOLDS: a seat branch at a
+// commit the engine built for a tool write is deleted, and a box launched since
+// pushes it back from an older checkout. No ref reaches the commit, so the push
+// introduces it, as its row says; but the repository holds it, the host's own
+// write, so the push lands.
 //
-// Mutation: skip the held check, refusing every commit committed as the
-// engine — the push is refused forged_committer, red.
+// Mutation: skip the held check — the push is refused forged_committer, red.
 func TestABoxMayPushBackAnEngineCommitTheRepositoryHolds(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"README.md": "one\n"})
@@ -1391,13 +1349,10 @@ func TestABoxMayPushBackAnEngineCommitTheRepositoryHolds(t *testing.T) {
 }
 
 // A BOX BRINGS BACK A BOUNDED HISTORY OF THE ENGINE'S COMMITS A PUSH: a pack
-// holding more commits committed as the engine than one push is asked about
-// (host.MaxEngineCommits) is refused forged_committer even where the
-// repository holds every one — past the bound the host asks about none — and
-// told to push the history in parts; and the parts land, since once a part
-// has landed a ref reaches it, and the box's git sends only the rest. Here
-// the history is a person's, which a person may push as git carries it, and
-// its branch deleted since.
+// holding more engine-committed commits than host.MaxEngineCommits is refused
+// forged_committer even where the repository holds every one (past the bound
+// the host asks about none), and told to push in parts; the parts land, since
+// a landed part is reachable and the box's git sends only the rest.
 //
 // Mutation: answer a push past the bound by its first MaxEngineCommits alone
 // — the whole history lands at once, red.
@@ -1635,11 +1590,10 @@ func TestNeitherTransportTakesTheOthersCredential(t *testing.T) {
 	}))
 	t.Cleanup(signedIn.Close)
 
-	// EACH SERVER IS ASKED THROUGH ITS OWN CLIENT, never http.DefaultClient:
-	// every httptest.Server.Close in the binary sweeps the process-global
-	// pool, and a bodyless answer sits in it while its caller still waits
-	// (internal/httpx/httpxtest). And do fails the test it is handed, since a
-	// subtest calling its parent's Fatal ends the binary rather than the case.
+	// EACH SERVER IS ASKED THROUGH ITS OWN CLIENT, never http.DefaultClient,
+	// whose pool every httptest.Server.Close in the binary sweeps under a
+	// waiting caller (internal/httpx/httpxtest). do fails the test it is
+	// handed: a subtest calling its parent's Fatal ends the binary.
 	type server struct {
 		url    string
 		client *http.Client
@@ -1770,8 +1724,7 @@ func TestEveryBoxIsOneSpoolCredential(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", host.UploadPackRequestType)
 	req.Header.Set("Git-Protocol", v2)
-	// The server's own client: http.DefaultClient's pool is swept by every
-	// httptest.Server.Close in the binary (internal/httpx/httpxtest).
+	// The server's own client, never http.DefaultClient (internal/httpx/httpxtest).
 	resp, err := runsLogin.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)

@@ -12,30 +12,16 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// A MERGED CHANGE REVERTED, ON THE GITLET NODE (gitlet.WriteRevertChange, M5-D25):
-// the change read in the build's copy's snapshot, its merge placed against
-// the target it was merged onto, ONE three-way merge undoing it onto the
-// target's tip, and ONE commit on a NEW branch, landed as one push whose
-// record opens "Revert <repo>!<n>" into the same target (landing.Change) —
-// so the revert is a change of its own, gated, reviewed and merged as any
-// is, and never a move of the target.
+// A merged change is reverted on the Gitlet node (gitlet.WriteRevertChange,
+// M5-D25) as ONE commit on a NEW branch, landed as one push whose record opens
+// "Revert <repo>!<n>" into the same target (landing.Change): a change of its
+// own, gated, reviewed and merged as any is, never a move of the target.
 //
-// WHAT THE MERGE BROUGHT IN is its merge_oid against the target before it:
-//
-//   - a MERGE COMMIT's first parent — the target it was built onto — which is
-//     git's `revert -m 1`;
-//   - a SQUASH's one parent, the same target, which is a plain revert;
-//   - a FAST-FORWARD, whose merge_oid is the change's own head, its RANGE:
-//     from the base its head revision's facts recorded (the merge-base of its
-//     target and its head, D-REVISIONS), since its head's first parent is the
-//     change's own previous commit, not the target.
-//
-// One rule undoes all three — merge-tree with the merge_oid as the base,
-// the tip as ours and the target before it as theirs — so a range reverts as
-// ONE commit, the change's whole effect, as a reviewer reads a revert.
-// Nothing reads which method merged it: a merge commit has two parents, and a
-// fast-forward's merge_oid is its head, which the rows say alone. A change a
-// person merged by a push is placed the same way.
+// One rule undoes a merge commit, a squash and a fast-forward alike:
+// merge-tree with the merge_oid as base, the target's tip as ours and the
+// target before the merge as theirs (revertBase places it). So a
+// fast-forward's whole range reverts as one commit; a plain revert of its head
+// would leave its earlier commits in, its first parent being the change's own.
 
 // revertChange is a revert_change's build: the change and its merge placed
 // ([revertBase]), the merge undone onto the target's tip, the change the push
@@ -46,11 +32,9 @@ func (b *building) revertChange(ctx context.Context) (string, gitlet.EngineWrite
 	wr := b.wr
 	s, w := wr.s, wr.w
 	repo := wr.synced.Repo
-	// THE COPY'S OWN SNAPSHOT OR LATER: its caller read the change merged
-	// at a floor the copy was synced past, so the merge_oid is in it. Its
-	// detail and its HEAD REVISION alone, a first page one revision long:
-	// a revert reads the head revision's facts (revertBase) and no other,
-	// and a whole page is up to 200 revisions' touched paths.
+	// The copy holds merge_oid: the change was read merged at a floor the copy
+	// is synced past. Limit 1: only the head revision's facts are read
+	// (revertBase), and a whole page is up to 200 revisions' touched paths.
 	ans, err := s.o.Estate.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadChange, Asker: w.Principal, Repo: repo.Name,
 		Change: w.Change, Limit: 1, Fresh: statelog.FloorAt(statelog.ReadSession, wr.synced.Position)})
 	named := gitlet.ChangeRef(repo.Name, w.Change)
@@ -118,12 +102,13 @@ const (
 	revertedRange       = "fast-forward"
 )
 
-// revertBase is the target a change's merge was made onto — what reverting
-// it restores ([revertChange]'s doc) — and how it was merged: the merge
-// commit's first parent, a squash's one parent, or a fast-forward's recorded
-// base; or the sentence of a merge the rows cannot place yet. parents are the
-// merge_oid's, and revisions the change's first page of them, newest first —
-// its head revision, the one revertChange reads.
+// revertBase is the target a change's merge was made onto, which reverting it
+// restores, and how it was merged: a merge commit's or a squash's first
+// parent, or a fast-forward's base as its head revision's facts recorded it
+// (D-REVISIONS); else the sentence refusing a merge the rows cannot place yet.
+// parents are the merge_oid's; revisions the change's first page, newest first.
+// The method is read from the merge_oid's shape, never recorded, so a change
+// a person merged by a push is placed the same way.
 func revertBase(named string, c *gitlet.ChangeDetail, revisions []gitlet.RevisionRow, parents []string) (string,
 	string, string) {
 

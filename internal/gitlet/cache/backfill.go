@@ -17,92 +17,48 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE BACKFILL: one closed loop a node (Start), behind the serving, that does
-// for the indexes of pushes (provenance.go) what no round does, one step at a
-// time, each step one incarnation's:
+// The backfill: one loop a node (Start), behind the serving, doing for the
+// index of pushes (provenance.go) what no round does, one incarnation's step
+// at a time, in this order (backfillDue):
 //
-//  1. CHECK the runs a previous process left — or a rebuild linked unvouched
-//     — against their own trailers, a read slot a piece, before anything maps
-//     one: a reader meanwhile is answered without the index. A run that fails
-//     goes on the copy's repair mark, whose round drops the index.
-//  2. MERGE ProvenanceMergeWidth adjacent runs as one (mergeDue): the
-//     cheapest such span that is BALANCED — no run of it holding more than
-//     ProvenanceMergeFactor times the others together — so the runs folds of
-//     a push or two write merge eight at a time where a pair at a time they
-//     merged on nearly every push, runs grow geometrically as they merge, and
-//     each push is written O(log n) times over its life, whatever sizes the
-//     folds, the gap's pages and the history's write, and at whichever end;
-//     or, at MaxProvenanceRuns with no such span, the cheapest pair whatever
-//     their sizes, so a round's fold finds room.
-//  3. Read one page of the GAP a full round passed over — EVERY holder,
-//     bounded by the pushes made while the node was down — ascending, at the
-//     SESSION floor of the gap's end, so whichever data node answers holds
-//     every push in it.
-//  4. Read one page of a repository's HISTORY, down to the start of the push
-//     history the rows keep, only where it is WANTED (Cache.WantHistory): read
-//     by the repository's effective home alone, once per fleet, and only for a
-//     repository a seat asked about (M3-decisions M3-O20).
-//  5. Ask the rows for their oldest push once every HorizonEvery — every
-//     holder — and drop what the index holds below it, so the index holds the
-//     push history the rows do and never grows past it.
-//
-// Within a kind of step, the most recently used repository first: the ones
-// people are asking about. The step is taken from the backfill's SCHEDULE
-// (schedule.go), which every change to a copy's work keeps — never from a
-// walk of every copy under the lock every request takes, which at 10 000
-// copies held it up to 127 ms a step, on every push of every repository: a
-// pick costs the copies whose work changed since the last, and O(log n) in
-// the rest.
-//
-// # Every read is at a floor the index has already seen
-//
-// A page is read at SESSION, its floor a position this cache already read —
-// the gap's end for the gap, the index's From for the history and the
-// horizon — never at stale: a data node behind the log holds a PREFIX of the
-// rows, and a page read from one would hold a range's pushes partly, which a
-// run then claims to hold whole — a commit introduced in the missing part
-// answered with no push, a landing searched over moves with one missing and
-// named for the wrong push. At a floor the index has seen, every push the page
-// ranges over is on the answering node.
-//
-// # A page is cut where a record ends
-//
-// Group commit lands up to gitlet.MaxPushesPerRecord pushes in one record, at one
-// position, and a page — bounded by its rows and its bytes — can end inside
-// one. A run is complete over its range, so a page that ends inside a record
-// leaves that record's pushes to the next page, whose range starts below it;
-// and where every row of a page is at one position, the next page is read on
-// from its cursor until the record ends, so no record is ever split across
-// two runs — at most MaxPushesPerRecord pushes held.
-//
-// # Paced by the fleet
-//
-// After each page the loop waits BackfillIdle × ⌈live Gitlet nodes ÷ live data
-// nodes⌉ × the page's own duration, the counts read from the fleet's
-// placements again after every page (Options.Fleet). Every Gitlet node backfills
-// from the data nodes, so its share of them is that ratio: one Gitlet node a data
-// node holds at most a third of one reader of each, and the fleet's backfills
-// hold under half of one however many Gitlet nodes share them — the serving keeps
-// the rest. Counts that cannot be read are waited on and read again, never
-// paced on a guess.
-//
-// # A step that fails waits on its own repository
-//
-// A step that fails — a page the estate could not serve, a run that could
-// not be written or merged — is taken again only once its REPOSITORY's
-// retry window ends, the window doubling from BackfillRetry to
-// BackfillRetryCeiling with each failure of it in a row
-// (entry.bfRetryAt), and the backfill meanwhile takes every other
-// repository's steps. Sharing one wait, the repository picked first — the
-// one used most recently — was picked again after every wait, so the rows of
-// one repository the data nodes could not serve held every other copy's gap
-// open; and a failed merge, answered as a step done, was taken again at once,
-// for ever. Only failures that SPAN repositories — two or more in a row with
-// none succeeding between — make the loop itself wait, doubling the same
-// way: the estate unreachable, or a disk refusing every write, never a
-// stream of failures as fast as the copies can fail them. A run the index
-// names that is gone from the disk is LOST, as a full round finds one lost
-// (indexFull): its check asks the repair round that makes the index anew.
+//  1. CHECK the runs a previous process left, or a rebuild linked unvouched,
+//     against their trailers (checkRuns); until then readers go without it.
+//  2. MERGE runs (mergeDue), so each push is written O(log n) times.
+//  3. Read a page of the GAP a full round passed over, on every holder.
+//  4. Read a page of HISTORY, only where Cache.WantHistory marks it wanted:
+//     once per fleet, by the repository's home (M3-decisions M3-O20).
+//  5. Every HorizonEvery, drop what lies below the rows' oldest push, so the
+//     index never outgrows the push history the rows keep (horizonPage).
+
+// Within a kind, the most recently used repository first. The step comes from
+// the SCHEDULE (schedule.go), never a walk of every copy under the lock every
+// request takes: a pick costs the copies whose work changed since the last,
+// and O(log n) in the rest.
+
+// EVERY READ IS AT A FLOOR THE INDEX HAS SEEN: SESSION at the gap's end, or at
+// the index's From for history and horizon, never stale. A data node behind
+// the log holds a PREFIX of the rows, and a page from it would hold a range's
+// pushes in part, which a run then claims to hold whole.
+
+// A PAGE IS CUT WHERE A RECORD ENDS: group commit lands up to
+// gitlet.MaxPushesPerRecord pushes at one position, and a run is complete over
+// its range, so a page ending inside a record leaves it to the next page, and
+// a page of one position is read on until the record ends (introducedRead).
+
+// PACED BY THE FLEET: after each page the loop waits BackfillIdle × ⌈live
+// Gitlet nodes ÷ live data nodes⌉ × the page's duration (fleetRatio), the
+// counts read again after every page (Options.Fleet), so the fleet's
+// backfills hold under half of one reader of each data node. Counts that
+// cannot be read are waited on, never guessed.
+
+// A FAILED STEP WAITS ON ITS OWN REPOSITORY: it is taken again once that
+// repository's window ends (entry.bfRetryAt, doubling from BackfillRetry to
+// BackfillRetryCeiling) while every other repository's steps go on: one
+// shared wait let one repository's unservable rows hold every gap open, and a
+// failed merge answered as done was taken again for ever. Only failures
+// spanning repositories (backfillStreak) make the loop itself wait: the
+// estate unreachable, or a disk refusing every write. A run the index names
+// that is gone from the disk is LOST, and its check asks the repair round.
 
 // backfillWork is a kind of step, in the order the loop takes them.
 type backfillWork uint8
@@ -115,15 +71,14 @@ const (
 	workHorizon
 )
 
-// backfillJitter spreads each failure's wait across a fifth of itself either
-// way — the code reconciler's spread for its retries (engine's
-// codeReposRetryJitter) — so the Gitlet nodes of a fleet whose data nodes failed
-// together do not ask them again on the same second.
+// backfillJitter spreads each failure's wait a fifth either way, the code
+// reconciler's spread (engine's codeReposRetryJitter), so Gitlet nodes whose
+// data nodes failed together do not ask them again on the same second.
 const backfillJitter = 0.2
 
 // backfillTask is one step the backfill picked: the incarnation, PINNED as no
-// use, and the index it was picked from — by its making (gen) and as it stood
-// (rec) — so a step commits only into the index it read.
+// use, and the index it was picked from, by generation (gen) and as it stood
+// (rec), so a step commits only into the index it read.
 type backfillTask struct {
 	e    *entry
 	inc  *incarnation
@@ -136,11 +91,10 @@ type backfillTask struct {
 	unchecked []provenanceRun
 }
 
-// backfillDone is what one step did: its kind (work), of which repository
-// (repo), and anything at all (did); a page read in page — what the loop
-// then owes a pace; a step that failed (err), whose repository waits retry
-// before the next; or nothing due, and when the next step falls due by time
-// (next, zero for none).
+// backfillDone is what one step did: its kind and repository, whether it did
+// anything, a page read's duration (the pace the loop owes), its failure and
+// the retry its repository waits; or, with nothing due, when the next step
+// falls due by time (zero for none).
 type backfillDone struct {
 	work  backfillWork
 	repo  string
@@ -151,19 +105,18 @@ type backfillDone struct {
 	retry time.Duration
 }
 
-// backfillStreak is the backfill's failed steps in a row since one last
-// succeeded: how many, the repository the first was of, and how many have
-// failed since they spanned two repositories or more — what the loop as a
-// whole waits on.
+// backfillStreak is the failed steps in a row: how many, the first's
+// repository, and how many failed since they spanned two repositories, which
+// the loop as a whole waits on.
 type backfillStreak struct {
 	n      int
 	first  string
 	spread int
 }
 
-// fail counts a failed step of repo and answers how many failures in a row
-// the loop itself waits on: none while every one is of one repository, which
-// its own window holds back while the others' steps go on.
+// fail counts a failed step of repo and answers how many failures the loop
+// itself waits on: none while all are of one repository, which its own
+// window holds back.
 func (s *backfillStreak) fail(repo string) int {
 	switch {
 	case s.n == 0:
@@ -183,13 +136,11 @@ func (c *Cache) kickBackfill() {
 	}
 }
 
-// backfiller is the backfill's loop, until ctx ends or the cache stops: a
-// step at a time while any is due, the pace a page owes paid before the next
-// step, and — with nothing due — parked, holding nothing of the directory,
-// until it is kicked or the next step falls due by time: a horizon, or the
-// end of a repository's retry window. A wait for a pace or after failures
-// that span repositories is not cut short by a kick: new work is no reason
-// to read the estate sooner.
+// backfiller is the backfill's loop until ctx ends or the cache stops: a step
+// at a time, each page's pace paid before the next, and with nothing due,
+// parked, holding nothing of the directory, until a kick or the next step's
+// time (a horizon, a retry window's end). A kick never cuts short a pace or a
+// wait after failures: new work is no reason to read the estate sooner.
 func (c *Cache) backfiller(ctx context.Context) {
 	var (
 		// unpaced is the fleet's counts unreadable in a row.
@@ -257,8 +208,8 @@ func (c *Cache) backfillRetry(failures int) time.Duration {
 	return backoff.Jitter(backoff.Doubling(failures, BackfillRetry, BackfillRetryCeiling), backfillJitter)
 }
 
-// fleetRatio is ⌈live Gitlet nodes ÷ live data nodes⌉ as the fleet's placements
-// count them now, each count at least one: a node with no fleet is both.
+// fleetRatio is ⌈live Gitlet nodes ÷ live data nodes⌉ from the fleet's
+// placements now, each count at least one: a node with no fleet is both.
 func (c *Cache) fleetRatio() (int, error) {
 	git, data, err := c.fleet()
 	if err != nil {
@@ -268,9 +219,8 @@ func (c *Cache) fleetRatio() (int, error) {
 	return (git + data - 1) / data, nil
 }
 
-// backfillWait waits d — none at zero, unless kickable, which then waits for a
-// kick alone — or for a kick where kickable, and answers false once ctx ends
-// or the cache stops.
+// backfillWait waits d, or a kick where kickable (a kick alone at d zero), and
+// answers false once ctx ends or the cache stops.
 func (c *Cache) backfillWait(ctx context.Context, d time.Duration, kickable bool) bool {
 	var wake <-chan time.Time
 	switch {
@@ -299,12 +249,11 @@ func (c *Cache) backfillWait(ctx context.Context, d time.Duration, kickable bool
 	return true
 }
 
-// backfillStep takes the next step due and does it — under ctx and the
-// cache's lifetime, which Stop ends — and answers what it did. A step that
-// fails opens or widens its repository's retry window, and one that succeeds
-// closes it (entry.bfRetryAt); a step its context ended does neither. And
-// whatever it did, its copy is marked once it has (backfillDirty), in the
-// hold that moves its window: a step is a change to the copy's work.
+// backfillStep does the next step due, under ctx and the cache's lifetime
+// (Stop ends it), and answers what it did. A failure widens its repository's
+// retry window and a success closes it (entry.bfRetryAt); a step its context
+// ended does neither. Either way its copy is marked (backfillDirty) in the
+// hold that moves the window: a step changes the copy's work.
 func (c *Cache) backfillStep(ctx context.Context) (done backfillDone) {
 	t, next := c.nextBackfill()
 	if t == nil {
@@ -360,12 +309,11 @@ func (c *Cache) backfillStep(ctx context.Context) (done backfillDone) {
 	return backfillDone{did: true, page: took}
 }
 
-// backfillStored writes down what a step committed into t's index — the
-// incarnation's state, which names its runs — and the runs the index no
-// longer names go with it (persist). A state that could not be written leaves
-// them where they are, named by the state on the disk, which a restart reads,
-// and waiting for the next state any writer writes; a retired incarnation's
-// state is not written at all, its directory leaving with its last pin.
+// backfillStored persists the incarnation's state, which names its runs, after
+// a step committed into t's index, and the runs it no longer names go with it.
+// A state that cannot be written leaves them named by the state on the disk
+// until any writer writes the next; a retired incarnation's is not written,
+// its directory leaving with its last pin.
 func (c *Cache) backfillStored(ctx context.Context, t *backfillTask) {
 	t.e.mu.Lock()
 	retiredInc := t.inc.retired || t.inc.discarded
@@ -380,12 +328,12 @@ func (c *Cache) backfillStored(ctx context.Context, t *backfillTask) {
 	c.setGauges()
 }
 
-// nextBackfill picks the next step due — the first kind of step any copy has
-// due, and among those the most recently used, from the schedule's queues
-// (schedule.go) once every copy marked since the last pick is placed again —
-// pinned as no use; or nil, and when the next step falls due by time alone
-// (zero for none). The copy the queues put first is looked at once more
-// under its own lock, and that look, never the queue, is what it pins.
+// nextBackfill picks the next step due, pinned as no use: the first kind any
+// copy has due, most recently used first, from the schedule's queues
+// (schedule.go) once every copy marked since the last pick is placed again;
+// or nil, and when the next falls due by time (zero for none). The queues'
+// first copy is looked at again under its own lock, and that look, never the
+// queue, is what it pins.
 func (c *Cache) nextBackfill() (*backfillTask, time.Time) {
 	s := &c.sched
 	s.pick.Lock()
@@ -407,9 +355,8 @@ func (c *Cache) nextBackfill() (*backfillTask, time.Time) {
 			e.mu.Unlock()
 			return t, time.Time{}
 		}
-		// Its work moved since it was placed, and a mark of it is on its
-		// way or already here: placed as this look says, or left to the
-		// next pick's look at the mark.
+		// Its work moved since it was placed, so a mark of it is pending:
+		// placed as this look says, or left to the next pick's look.
 		s.mu.Lock()
 		s.placeLooked(e, d)
 		s.mu.Unlock()
@@ -418,9 +365,8 @@ func (c *Cache) nextBackfill() (*backfillTask, time.Time) {
 }
 
 // dueWork is a look at one copy's backfill (backfillDue): the first kind of
-// step it has due, or none and when its next falls due by time alone (zero
-// for never), with its last use, whether it counts as behind, and what a step
-// of it takes.
+// step due, or none and when the next falls due by time (zero for never), its
+// last use, whether it counts as behind, and what a step of it takes.
 type dueWork struct {
 	work   backfillWork
 	when   time.Time
@@ -435,20 +381,18 @@ type dueWork struct {
 	unchecked uint64
 }
 
-// The look marks a record's runs in one machine word each, so a record holds
-// at most 64: a compile error past it.
+// The look marks a record's runs in one machine word, so a record holds at
+// most 64: a compile error past it.
 const _ uint64 = 1 << (MaxProvenanceRuns - 1)
 
-// backfillDue looks at e's backfill: the first step its current index has due
-// — a check of the runs no vouch is held for, a merge, a page of its gap, a
-// page of its history where it is wanted, its horizon — or none and when its
-// next falls due: its horizon, or the end of its retry window, before which
-// it has none (entry.bfRetryAt); nothing at all for a copy the backfill does
-// not work on (dead, with no converged current incarnation, keeping no
-// index). e.mu is held. It reads no disk and allocates nothing: a run is
-// unchecked when no vouch is held for its name — a vouch held for another
-// identity than the file has is forgotten by the reader that meets it
-// (mapRun), which marks the copy.
+// backfillDue looks at e's backfill: the first step its current index has
+// due, in the backfill's order, or none and when the next falls due (its
+// horizon, or its retry window's end, before which it has none); nothing for
+// a copy the backfill does not work on (dead, no converged current
+// incarnation, no index). e.mu is held. It reads no disk and allocates
+// nothing: a run is unchecked when no vouch is held for its name, and a vouch
+// for another identity than the file's is forgotten by the reader that meets
+// it (mapRun), which marks the copy.
 func (c *Cache) backfillDue(e *entry, now time.Time) dueWork {
 	inc := e.current
 	if e.dead || inc == nil || inc.retired || !inc.converged || inc.record() == nil {
@@ -491,12 +435,10 @@ func (d dueWork) task(e *entry) *backfillTask {
 	return t
 }
 
-// runMarks is which of rec's runs inc holds a vouch for, and which none and
-// no failed check either — those a check reads (a run whose check failed
-// waits for the repair round that drops the index, and is not checked again
-// meanwhile) — one bit each by their index in rec.Runs; e.mu is held. Each
-// run's name is spelled into a buffer of the stack, so the look allocates
-// nothing.
+// runMarks is which of rec's runs inc holds a vouch for, and which neither a
+// vouch nor a failed check (those a check reads: a failed one waits for the
+// repair round that drops the index), a bit each by index in rec.Runs; e.mu is
+// held. Names are spelled into a stack buffer, so it allocates nothing.
 func runMarks(inc *incarnation, rec *provenanceState) (vouched, unchecked uint64) {
 	var buf [runRelBytes]byte
 	for i, r := range rec.Runs {
@@ -512,23 +454,18 @@ func runMarks(inc *incarnation, rec *provenanceState) (vouched, unchecked uint64
 	return vouched, unchecked
 }
 
-// mergeDue is the runs of rec, [lo, hi) by their index, the backfill merges
-// next — adjacent, on one side of its gap, each one vouched holds a bit for —
-// or hi zero for none:
+// mergeDue is the runs of rec, [lo, hi) by index, the backfill merges next
+// (adjacent, on one side of its gap, each vouched), or hi zero for none:
 //
 //  1. the cheapest span of ProvenanceMergeWidth runs that is BALANCED: none
 //     holding more than ProvenanceMergeFactor times the others together;
-//  2. with rec at MaxProvenanceRuns and no such span, the cheapest adjacent
-//     pair whatever their sizes, so a fold finds room.
+//  2. at MaxProvenanceRuns with no such span, the cheapest adjacent pair
+//     whatever their sizes, so a fold finds room.
 //
-// A merge is never of fewer runs than the width, so the runs folds of a push
-// or two write merge once eight of them stand side by side, not on nearly
-// every push; and never one a run dominates, so no run is rewritten for less
-// than half its own pushes again. Balance asks nothing of where a run lies or
-// how its neighbours compare one to one: a pair rule — two neighbours within
-// a factor of each other — met runs of every size a burst of pushes folds,
-// each beside one it is not within a factor of, and the index filled to its
-// bound, where every fold's merge rewrote a run whatever its size.
+// The width keeps the small runs folds write from merging on nearly every
+// push; balance keeps a run from being rewritten for under half its own pushes
+// again. Not a pair rule (neighbours within a factor): a burst's runs of every
+// size met none, and the index filled to its bound.
 func mergeDue(rec *provenanceState, vouched uint64) (int, int) {
 	best, cost := -1, int64(0)
 spans:
@@ -556,18 +493,16 @@ spans:
 	return 0, 0
 }
 
-// checkRuns holds every run of t no vouch is held for to its own trailer
-// (CheckRunTrailer), one piece at a time under a read slot that waits its turn
-// however long, as the scrub's does (scrubHold) — nobody waits on it. A run
-// that passes is vouched for; one that fails, or whose read fails, goes on the
-// copy's repair mark at the identity it failed at, with a repair round asked,
-// which drops the index (dropDamaged: eventFailedCheck) — never under a check
-// of the repository, whose release asks the round again. A run gone from the
-// disk while its index still names it is LOST, and goes on the mark the same
-// way, as a full round's indexFull makes an index anew over a run it finds
-// gone: answered "replaced", its check found it unchecked again at once, and
-// took it again, for ever. One its index no longer names — retired since the
-// check was picked — decides nothing.
+// checkRuns holds each unvouched run of t to its trailer (CheckRunTrailer), a
+// piece at a time under a read slot that waits its turn however long, as the
+// scrub's does (scrubHold): nobody waits on it. A run that passes is vouched;
+// one that fails or cannot be read goes on the copy's repair mark at the
+// identity it failed at, and a repair round is asked, which drops the index
+// (dropDamaged: eventFailedCheck), never under a check of the repository,
+// whose release asks the round again. A run gone while its index names it is
+// LOST and goes on the mark too, as indexFull treats one: answered "replaced",
+// it would be found unchecked and taken again for ever. One its index no
+// longer names decides nothing.
 func (c *Cache) checkRuns(ctx context.Context, t *backfillTask) {
 	p := c.pieces(c.scrubHold)
 	began := time.Now()
@@ -581,8 +516,8 @@ func (c *Cache) checkRuns(ctx context.Context, t *backfillTask) {
 	for _, r := range t.unchecked {
 		rel := runRel(r.N)
 		path := filepath.Join(t.inc.dir, rel)
-		// Counted as what its declaration names a check of its files by
-		// (Owned.File), as every derived file's is.
+		// Counted under its declaration's file kind (Owned.File), as every
+		// derived file's check is.
 		kind := fileKind("")
 		if _, o := c.image.owner(rel); o != nil {
 			kind = fileKind(o.File)
@@ -629,9 +564,9 @@ func (c *Cache) checkRuns(ctx context.Context, t *backfillTask) {
 	}
 }
 
-// namesRun reports whether t's incarnation's index names run r now: a run
-// number is never taken twice in an incarnation (allocRun), so a run named is
-// the file the check read. e.mu is not held.
+// namesRun reports whether t's incarnation's index names run r now; a run
+// number is never reused in an incarnation (allocRun), so a run named is the
+// file the check read. e.mu is not held.
 func (c *Cache) namesRun(t *backfillTask, r provenanceRun) bool {
 	t.e.mu.Lock()
 	defer t.e.mu.Unlock()
@@ -639,8 +574,8 @@ func (c *Cache) namesRun(t *backfillTask, r provenanceRun) bool {
 	return rec != nil && rec.named(r.N)
 }
 
-// backfillPage reads and commits one page of t's work — the gap, the history
-// or the horizon — and answers the read's failure.
+// backfillPage reads and commits one page of t's gap, history or horizon,
+// and answers the read's failure.
 func (c *Cache) backfillPage(ctx context.Context, t *backfillTask) error {
 	switch t.work {
 	case workGap:
@@ -654,12 +589,11 @@ func (c *Cache) backfillPage(ctx context.Context, t *backfillTask) error {
 // pos is p as a position on the code log.
 func pos(p int64) statelog.Position { return statelog.Unpack(topics.CodeLogStream, p) }
 
-// introducedRead is the backfill's read of q's pushes, at SESSION with floor
-// as its floor: pages read on from their cursors until the rows hold more than
-// one position or the read ends — so the pushes of every position but the
-// last are whole — and answered with whether the read goes on past them. A
-// repository the rows no longer hold, read at a floor that held it, is
-// purged: gitlet.ErrRepoNotFound.
+// introducedRead reads q's pushes at SESSION over floor, page after page
+// until the rows hold more than one position or the read ends, so every
+// position's pushes but the last are whole, and answers whether the read goes
+// on. gitlet.ErrRepoNotFound at a floor that held the repository means it was
+// purged.
 func (c *Cache) introducedRead(ctx context.Context, q gitlet.IntroducedQuery, floor int64) ([]gitlet.IntroducedRow,
 	bool, error) {
 
@@ -703,9 +637,9 @@ func inOrder(a, b gitlet.IntroducedRow, descending bool) bool {
 	return c < 0
 }
 
-// backfillRow holds one row a read of q answered to what a run encodes and
-// q's range — a position on the code log inside it, moves naming refs and
-// object ids, commits that are object ids — before anything is written of it.
+// backfillRow holds a row of q's read to what a run encodes and to q's range
+// (a code-log position inside it, moves of refs to object ids, commits that
+// are object ids) before anything of it is written.
 func backfillRow(row gitlet.IntroducedRow, q gitlet.IntroducedQuery) error {
 	p := row.Position
 	switch {
@@ -720,8 +654,8 @@ func backfillRow(row gitlet.IntroducedRow, q gitlet.IntroducedQuery) error {
 }
 
 // gapPage reads one page of t's gap, (GapFrom, GapThrough] ascending, and
-// commits what it read whole: a run over (GapFrom, the last position read
-// whole], the gap moved up past it — closed where the read ended.
+// commits a run over (GapFrom, the last position read whole], moving the gap
+// up past it, closed where the read ended.
 func (c *Cache) gapPage(ctx context.Context, t *backfillTask) error {
 	from, through := t.rec.GapFrom, t.rec.GapThrough
 	rows, more, err := c.introducedRead(ctx, gitlet.IntroducedQuery{RepoID: t.e.id, After: pos(from),
@@ -753,10 +687,10 @@ func (c *Cache) gapPage(ctx context.Context, t *backfillTask) error {
 	return c.commitPage(ctx, t, from, upTo, rows, moveGap)
 }
 
-// historyPage reads one page of t's history — every push at or below From,
-// newest first — and commits what it read whole: a run over (the lowest
-// position read whole less one, From], From moved down to it; where the read
-// ended, Complete, with the oldest push the rows hold.
+// historyPage reads one page of t's history (pushes at or below From, newest
+// first) and commits a run over (the lowest position read whole less one,
+// From], moving From down to it; where the read ended, Complete, with the
+// oldest push the rows hold.
 func (c *Cache) historyPage(ctx context.Context, t *backfillTask) error {
 	from := t.rec.From
 	rows, more, err := c.introducedRead(ctx, gitlet.IntroducedQuery{RepoID: t.e.id, Before: pos(from + 1),
@@ -792,11 +726,11 @@ func (c *Cache) historyPage(ctx context.Context, t *backfillTask) error {
 	return c.commitPage(ctx, t, newFrom, from, rows, moveFrom)
 }
 
-// horizonPage asks the rows for the oldest push they keep — one row of an
-// ascending read from the log's start — and commits it as t's index's horizon:
-// every run wholly at or below it retired at once, and From raised to just
-// below it, which the next merge drops the records of; From then IS the start
-// of what the rows keep, so the index is Complete.
+// horizonPage asks the rows for their oldest push (one row of an ascending
+// read) and commits it as t's index's horizon: every run wholly at or below it
+// retired, and From raised to just below it (the next merge drops the records
+// below From), so From IS the start of what the rows keep and the index is
+// Complete.
 func (c *Cache) horizonPage(ctx context.Context, t *backfillTask) error {
 	read := gitlet.ReadQuery{Kind: gitlet.ReadIntroduced, Limit: 1,
 		Introduced: &gitlet.IntroducedQuery{RepoID: t.e.id},
@@ -824,9 +758,8 @@ func (c *Cache) horizonPage(ctx context.Context, t *backfillTask) error {
 			return true
 		}
 		next.Oldest = oldest
-		// Never past Through, which only a round moves: a horizon above it —
-		// every push the index could hold expired — leaves an index of
-		// nothing, still level with its incarnation.
+		// Never past Through, which only a round moves: a horizon above it
+		// leaves an empty index, still level with its incarnation.
 		if floor := min(oldest-1, next.Through); floor > next.From {
 			next.From, next.Complete = floor, true
 			next.Runs = slices.DeleteFunc(next.Runs, func(r provenanceRun) bool { return r.Through <= floor })
@@ -845,12 +778,11 @@ func (c *Cache) horizonPage(ctx context.Context, t *backfillTask) error {
 	return nil
 }
 
-// commitPage writes rows — a page's pushes read whole over (from, through], in
-// log order — as one run and commits it into t's index with change, which
-// also says where the read leaves the index; with no rows, change alone. A
-// change that no longer applies — the index moved under the read in a way the
-// read did not see — is thrown away with its run, and the next step reads
-// again from the index as it stands.
+// commitPage writes rows (a page's pushes read whole over (from, through], in
+// log order) as one run and commits it into t's index with change, which moves
+// the index past the read; with no rows, change alone. A change that no longer
+// applies, the index having moved under the read, is thrown away with its run,
+// and the next step reads again.
 func (c *Cache) commitPage(ctx context.Context, t *backfillTask, from, through int64, rows []gitlet.IntroducedRow,
 	change func(next *provenanceState) bool) error {
 
@@ -887,9 +819,8 @@ func (c *Cache) commitPage(ctx context.Context, t *backfillTask, from, through i
 	return nil
 }
 
-// backfillGone drops t's index: the rows no longer hold its repository,
-// asked at a floor that held it — purged, which the repository's next round
-// reads at the log's head and takes the copy out of the cache for.
+// backfillGone drops t's index of a repository purged (absent at a floor that
+// held it); its next round, read at the log's head, takes the copy out.
 func (c *Cache) backfillGone(ctx context.Context, t *backfillTask, why error) {
 	c.log.Info("code_cache_provenance_dropped", "repo", t.e.id, "incarnation", t.inc.n, "why", why.Error())
 	if c.dropIndex(t.e, t.inc, t.gen) {

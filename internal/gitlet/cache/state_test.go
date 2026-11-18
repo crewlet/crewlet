@@ -20,9 +20,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// stateDoc is the state file as this suite writes and reads it: the on-disk
-// format, spelled out here rather than borrowed from the package, so a change
-// to the format is a change a case sees.
+// stateDoc is the on-disk state file, spelled out here rather than borrowed
+// from the package, so a change to the format is one a case sees.
 type stateDoc struct {
 	Format        int                   `json:"format"`
 	RepoID        string                `json:"repo_id"`
@@ -43,8 +42,7 @@ type stateDoc struct {
 }
 
 // derivedDoc is one declared derived file as the state records it, keyed by
-// its declaration's name (cache.DerivedMidx, cache.DerivedGraph,
-// cache.DerivedProvenance).
+// its declaration's name.
 type derivedDoc struct {
 	Bytes  int64  `json:"bytes"`
 	Covers int    `json:"covers"`
@@ -53,14 +51,14 @@ type derivedDoc struct {
 	Provenance *provenanceDoc `json:"provenance,omitempty"`
 	// Cohorts is the memo's record: only its entry carries one.
 	Cohorts []cohortDoc `json:"cohorts,omitempty"`
-	// Layers is an installed published chain's record — the ids its chain
-	// file lists — which only the two chains' entries carry.
+	// Layers is the ids an installed published chain's file lists; only the
+	// two chains' entries carry it.
 	Layers []string `json:"layers,omitempty"`
-	// Tip is the node's tip commit-graph layer, which only the commit-graph
-	// chain's entry carries: the line its chain file lists after Layers.
+	// Tip is the node's tip commit-graph layer, the chain file's line after
+	// Layers; only the commit-graph chain's entry carries it.
 	Tip string `json:"tip,omitempty"`
-	// TipOver is the digest of the tail the last tip write covered, on the
-	// same entry.
+	// TipOver is the digest of the tail the last tip write covered, on Tip's
+	// entry.
 	TipOver string `json:"tip_over,omitempty"`
 }
 
@@ -70,8 +68,7 @@ type cohortDoc struct {
 	Bytes int64  `json:"bytes"`
 }
 
-// provenanceDoc is the index of pushes' record as the state holds it — every
-// position packed.
+// provenanceDoc is the index of pushes' record, every position packed.
 type provenanceDoc struct {
 	Stream     time.Time `json:"stream"`
 	From       int64     `json:"from"`
@@ -98,9 +95,9 @@ type provenanceDoc struct {
 func (doc stateDoc) midx() derivedDoc  { return doc.Derived[string(cache.DerivedMidx)] }
 func (doc stateDoc) graph() derivedDoc { return doc.Derived[string(cache.DerivedGraph)] }
 
-// overPacks is the state's derived files built over the packs — every entry
-// but the index of pushes' and the tag index's, which every full round makes,
-// and which a case about the packs' files does not ask about.
+// overPacks is the state's derived files built over the packs: every entry but
+// the index of pushes' and the tag index's, which every full round makes and
+// no case about the packs' files asks about.
 func (doc stateDoc) overPacks() map[string]derivedDoc {
 	out := map[string]derivedDoc{}
 	for name, d := range doc.Derived {
@@ -141,11 +138,10 @@ func readStateDoc(t testing.TB, dir string) stateDoc {
 	return doc
 }
 
-// aState is a state with every field set: the maintainer's multi-pack-index
-// over the three packs with its bitmap, and its commit-graph, a pack an
-// expunge's begin left dropping in its dropping view — 700 of the disk's bytes
-// and none of the packs an index covers — and pack files a compaction retired
-// below the position still leaving the directory.
+// aState is a state with every field set: a multi-pack-index over the three
+// packs with its bitmap, a commit-graph, a pack an expunge's begin left in its
+// dropping view (700 of the disk's bytes, none of the packs an index covers),
+// and pack files a compaction retired below the position still leaving.
 func aState(id string) stateDoc {
 	doc := stateDoc{
 		Format:        2,
@@ -172,9 +168,8 @@ func aState(id string) stateDoc {
 	return doc
 }
 
-// formatOne is a state of format 1 — the layout before each derived file was
-// recorded by its declaration, the maintainer's files one struct of their own
-// — as the build that wrote it spelled it.
+// formatOne is a state of format 1 (each derived file not yet recorded by its
+// declaration) as the build that wrote it spelled it.
 func formatOne(id string) string {
 	return `{"format":1,"repo_id":"` + id + `","stream_created":"2026-10-01T09:00:00Z",` +
 		`"position":{"stream":"` + topics.CodeLogStream + `","generation":2,"seq":4711},"repo":{"id":"` + id + `"},` +
@@ -184,14 +179,12 @@ func formatOne(id string) string {
 }
 
 // A STATE OF ANOTHER BUILD'S FORMAT IS THAT BUILD'S: what its directory means
-// is for it to say, so the incarnation goes and the repository starts cold —
-// format 1, the layout before each derived file was recorded by its
-// declaration, as much as a format 3 a later build might write. A state this
-// build cannot read at all — cut short, of format zero, another repository's,
-// or recording a derived file as no declaration of this build's could leave
-// it — says nothing, and the incarnation is KEPT with no state: its first
-// round reads the whole answer and reuses what is installed, where throwing
-// it away would download it again. A derived file the state recorded and
+// is for it to say, so the incarnation goes and the repository starts cold,
+// format 1 as much as a format 3 a later build might write. A state this build
+// cannot read at all (cut short, format zero, another repository's, or
+// recording a derived file as no declaration of this build's could leave it)
+// says nothing, and the incarnation is KEPT with no state: its first round
+// reuses what is installed rather than downloading it again. A derived file
 // this build does not declare would be bytes a boot counts that no
 // declaration's files make up.
 func TestAStateOfAnotherFormatIsDiscarded(t *testing.T) {
@@ -220,14 +213,12 @@ func TestAStateOfAnotherFormatIsDiscarded(t *testing.T) {
 		"a7e5b3d6-0f5c-4a6e-9d7b-6c9f1e3a4b58": func(doc *stateDoc) {
 			doc.Derived[string(cache.DerivedGraph)] = derivedDoc{Bytes: -1, Covers: 3, Step: string(cache.StepGraph)}
 		},
-		// Packs covered by an index no write made: only a write sets what
-		// an index covers, so read as it stands the maintainer would take
+		// Packs covered by an index no write made: the maintainer would take
 		// it for an index it need not write.
 		"b8f6c4e7-1a6d-4b7f-8e8c-7d0a2f4b5c69": func(doc *stateDoc) {
 			doc.Derived[string(cache.DerivedMidx)] = derivedDoc{Bytes: 400, Covers: 3}
 		},
-		// A memo of bytes and no cohorts: the record a build that kept the memo
-		// in one directory wrote, whose bytes no cohort of this build's holds.
+		// A memo of bytes and no cohorts: no cohort of this build's holds them.
 		"c9a7d5f8-2b7e-4c8a-9f9d-8e1b3a5c6d70": func(doc *stateDoc) {
 			doc.Derived[string(cache.DerivedMemo)] = derivedDoc{Bytes: 8192, Step: string(cache.StepMemo)}
 		},
@@ -277,10 +268,9 @@ func TestAStateOfAnotherFormatIsDiscarded(t *testing.T) {
 				Layers: []string{id, id}}
 		},
 		// The node's tip on a declaration that keeps none; a tip alone recorded
-		// by the install, which wrote no line of that chain file; a tip over
-		// layers recorded by the tip's write, which wrote none of them; a tip
-		// that is no checksum; and a tip that is a layer of the chain beneath
-		// it.
+		// by the install, which writes no tip; layers recorded by the tip's write,
+		// which writes none; a tip that is no checksum; and a tip that is a
+		// layer of the chain beneath it.
 		"f8d6a4c7-1e6b-4f7d-8c8a-7b0e2d4f5a69": func(doc *stateDoc) {
 			midx := doc.midx()
 			midx.Tip = strings.Repeat("3", 40)
@@ -358,12 +348,10 @@ func TestAStateOfAnotherFormatIsDiscarded(t *testing.T) {
 }
 
 // WHAT A STATE SAYS IS WHAT THE NEXT BOOT KNOWS, field for field: a boot reads
-// nothing but the disk, so a field the state drops is a fact every restart
-// forgets — each derived file's bytes among them, or the budget would
-// undercount every warm cache after a restart, the bytes of its dropping
-// view, or the node's dropping total would read zero until each copy's next
-// full round, and the last maintenance run, or every repository would be due
-// at once after one.
+// only the disk, so a field the state drops is forgotten at every restart —
+// derived files' bytes (the budget undercounts every warm cache), the dropping
+// view's bytes (the node's dropping total reads zero until each copy's next
+// full round), the last maintenance run (every repository is due at once).
 func TestTheStateIsWhatTheNextBootKnows(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -416,18 +404,15 @@ func TestTheStateIsWhatTheNextBootKnows(t *testing.T) {
 }
 
 // A DERIVED FILE GONE FROM UNDER ITS STATE IS FORGOTTEN by the first full
-// round, and only the bytes still on disk are counted. dropFor moves a
-// derived file into trash/ and the state that records it is renamed in only
-// at the round's end, so a process killed between the two leaves a state
-// naming a multi-pack-index with its bitmap and a commit-graph over a
-// directory that holds neither: a boot restores that record, and the first
-// full round's measure is the one thing that corrects it. Kept, the
-// maintainer would read the copy as indexed, bitmapped and graphed, and
-// serve it with none of the three until MidxPacks more packs arrived — and
-// with no graph, a push dated before its parent walks every commit. A part
-// left beside no main file (a bitmap a killed writer left with no index) is
-// counted in the declaration's entry, since it is bytes the budget holds, and
-// never read as made.
+// round, and only the bytes still on disk are counted. dropFor moves a derived
+// file into trash/ and the state is renamed in only at the round's end, so a
+// process killed between them leaves a state naming an index, its bitmap and a
+// commit-graph the directory lacks; a boot restores that record and only the
+// first full round's measure corrects it. Kept, the maintainer would serve the
+// copy with none of the three until MidxPacks more packs arrived, and with no
+// graph a push dated before its parent walks every commit. A part beside no
+// main file (a bitmap a killed writer left) is counted in its declaration's
+// entry, since the budget holds its bytes, and never read as made.
 func TestADerivedFileGoneFromUnderItsStateIsForgotten(t *testing.T) {
 	t.Parallel()
 	for _, arm := range []struct {
@@ -460,9 +445,8 @@ func TestADerivedFileGoneFromUnderItsStateIsForgotten(t *testing.T) {
 					"with its bitmap and the graph", made.Derived)
 			}
 
-			// What a process killed after dropFor's moves and before the
-			// round's state was renamed in leaves: the files gone, the state
-			// as it was.
+			// A process killed between dropFor's moves and the state's rename:
+			// the files gone, the state as it was.
 			c.Stop(context.Background())
 			packDir := filepath.Join(dir, "objects", "pack")
 			var kept int64
@@ -535,10 +519,9 @@ func TestADerivedFileGoneFromUnderItsStateIsForgotten(t *testing.T) {
 	}
 }
 
-// A ROUND'S STATE IS RENAMED IN ONLY PAST sync.state, and a write that stops
-// there leaves the old state whole and nothing in tmp/: a crash between the
-// two is the case the crash matrix holds a sync at, and the state is never
-// half written.
+// A ROUND'S STATE IS RENAMED IN ONLY PAST sync.state, and a write stopped
+// there leaves the old state whole and nothing in tmp/: the crash matrix holds
+// a sync at that point, and the state is never half written.
 func TestARoundsStateIsRenamedInPastItsFaultPoint(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)

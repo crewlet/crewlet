@@ -17,11 +17,10 @@ import (
 )
 
 // shapeDamage is damage of an incarnation the pool refuses for its shape
-// (gitproc.ErrRepoShape) — a disk that damaged a file, or something outside
-// the engine that edited the directory or planted a file in it — each under
-// the gitproc.ShapeRule it breaks. moved says the damage took the packs out of
-// the incarnation's image, so its repair downloads them again; nothing else
-// is.
+// (gitproc.ErrRepoShape): a disk that damaged a file, or something outside
+// the engine that edited the directory or planted a file in it, under the
+// gitproc.ShapeRule it breaks. moved says the damage took the packs out of the
+// incarnation's image, so its repair downloads them again; nothing else does.
 type shapeDamage struct {
 	name  string
 	rule  gitproc.ShapeRule
@@ -94,21 +93,17 @@ func refusedFor(t *testing.T, err error, rule gitproc.ShapeRule, inAlternate boo
 }
 
 // EVERY SHAPE THE POOL REFUSES IS REPAIRED IN PLACE, WITH NO DOWNLOAD. A
-// directory the pool refuses — for a process run in it, and for a push's
-// scratch that leans on it — is read whole by a full round in place: the
-// sweep puts config right and moves a commondir, an alternates file or a
-// linked objects directory out, reusing every pack the incarnation holds. The
-// same incarnation answers, git runs there and in a scratch over it again,
-// and the object store is asked for nothing — but where the damage took the
-// packs themselves out of the image. Counted once under shape, logged
-// code_cache_reshaped, and no rebuild refused. The damages are held to
-// gitproc.ShapeRules in both directions, so a rule the pool gains is one this
-// test must repair.
+// directory the pool refuses, for a process in it and for a push's scratch
+// over it, is read whole in place by a full round: the sweep puts config
+// right and moves a commondir, an alternates file or a linked objects
+// directory out, reusing every pack. The same incarnation answers, git runs
+// there and in a scratch again, and nothing is downloaded unless the damage
+// moved the packs. Counted once under shape, logged code_cache_reshaped, no
+// rebuild refused; the damages are held to gitproc.ShapeRules both ways.
 //
-// Mutations: answer Rebuild(shape) with a rebuild, and the incarnation is the
-// next one and every pack is fetched again; have the image admit any file in
-// objects/info (imaged), and the alternates file is kept and git is still
-// refused after the round.
+// Mutations: answer Rebuild(shape) with a rebuild, and every pack is fetched
+// again; have the image admit any file in objects/info (imaged), and git is
+// still refused after the round.
 func TestEveryShapeThePoolRefusesIsRepairedInPlace(t *testing.T) {
 	t.Parallel()
 	covered := map[gitproc.ShapeRule]bool{}
@@ -199,21 +194,17 @@ func TestEveryShapeThePoolRefusesIsRepairedInPlace(t *testing.T) {
 	}
 }
 
-// A SYNC WHOSE OWN GIT FINDS DAMAGE IS ANSWERED BY ITS REPAIR. A delta that
-// sets a tag peels it in the incarnation; when the pool refuses the
-// directory's shape there, the incarnation is read whole in place by the
-// round queued behind it and the sync is answered by that round, with no
-// download; when the peel finds an object a row names gone from the packs,
-// the sync is answered by the repair a request's would get: a forced round of
-// the same incarnation that installs again the pack the copy LOST — one GET,
-// counted `stored` — never a rebuild downloading every pack. Answered with
-// the failure instead, every sync after it met the same directory and failed
-// the same way until a restart.
+// A SYNC WHOSE OWN GIT FINDS DAMAGE IS ANSWERED BY ITS REPAIR, never its
+// failure, which every later sync would meet until a restart. A delta that
+// sets a tag peels it in the incarnation: a shape the pool refuses there is
+// read whole in place by the round queued behind it, with no download; an
+// object a row names gone from the packs gets a request's repair, a forced
+// round of the same incarnation that installs again the pack the copy LOST
+// (one GET, counted `stored`), never a rebuild downloading every pack.
 //
 // Mutations: answer a round's damage as its failure (damagedRound), and the
 // sync fails with the git error; ask a round's missing object a whole rebuild
-// (damagedRound's askRebuild), and the sync is answered by a new incarnation
-// that downloaded every pack.
+// (damagedRound's askRebuild), and a new incarnation downloads every pack.
 func TestASyncWhoseOwnGitFindsDamageIsAnsweredByItsRepair(t *testing.T) {
 	t.Parallel()
 	for name, d := range map[string]struct {
@@ -285,24 +276,17 @@ func TestASyncWhoseOwnGitFindsDamageIsAnsweredByItsRepair(t *testing.T) {
 }
 
 // A SHAPE THE SWEEP DID NOT END IS REBUILT, under a rebuild's rules. When the
-// very round that swept the incarnation meets the pool's refusal again —
-// something rewriting the directory behind the sweep, met by the sweep's own
-// hold to the pool's check or by the round's peel — the repair is a rebuild
-// into the next incarnation, counted under shape; and another such refusal
-// inside the cooldown is refused by the cooldown, never by the unchanged
-// rule: a shape refusal proves something wrote into the directory.
-//
-// The refusal is COUNTED AND LOGGED BEFORE IT IS ANSWERED, as Rebuild's own
-// is, so a caller it wakes reads both. Its log line is kept late here, in a
-// synctest bubble: only once every other goroutine of the case is durably
-// blocked (synctest.Wait) — so a caller the refusal answered first has read
-// the log before the line lands, however late it ran, and one it answers
-// after reads the line kept.
+// round that swept the incarnation meets the pool's refusal again (something
+// rewriting the directory behind the sweep, met by the sweep's own check or
+// the round's peel), the repair is a rebuild into the next incarnation,
+// counted under shape; another inside the cooldown is refused by the
+// cooldown, never the unchanged rule: a shape refusal proves a write. It is
+// COUNTED AND LOGGED BEFORE IT IS ANSWERED (its line held by synctest.Wait).
 //
 // Mutations: drop tidy's hold to gitproc.CheckShape, and the round behind the
-// sweep answers a directory the pool refuses; answer a swept round's shape
-// refusal in place too (damagedRound), and the repair never ends; answer the
-// round's refusal before reporting it (Cache.run), and its line is missing.
+// sweep answers a refused directory; answer a swept round's refusal in place
+// (damagedRound), and the repair never ends; answer before reporting
+// (Cache.run), and the line is missing.
 func TestAShapeTheSweepDidNotEndIsRebuilt(t *testing.T) {
 	t.Parallel()
 	for name, arm := range map[string]struct {
@@ -320,12 +304,11 @@ func TestAShapeTheSweepDidNotEndIsRebuilt(t *testing.T) {
 				w := newSyncWorld(t, onMemory)
 				w.logs.logging = func(msg string) {
 					if msg == "code_cache_rebuild_refused" {
-						// Kept once every other goroutine of the case is
-						// durably blocked — the caller parked on its answer,
-						// or one answered first done reading the log. The
-						// round reports the refusal holding no lock
-						// (Cache.run), and reports it once, so nothing
-						// queues behind the hold and no other Wait meets it.
+						// Kept until every other goroutine is durably blocked:
+						// a caller answered first has read the log, one
+						// answered after reads the line. The round reports
+						// the refusal once, holding no lock (Cache.run), so
+						// nothing queues behind the hold.
 						synctest.Wait()
 					}
 				}

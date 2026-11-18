@@ -23,8 +23,7 @@ import (
 )
 
 // THE RUN FORMAT (provrun.go) AND THE VIEW OVER IT (provenance.go), read back
-// from bytes in memory: no cache, no git — a run is a function of the push
-// rows it is built from.
+// from bytes in memory: no cache, no git, since a run is a function of its rows.
 
 // runPusher is who the suite's synthetic pushes are made by.
 var runPusher = gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "token:ceo", Seat: "ceo"}
@@ -73,14 +72,10 @@ func runKeyed(t testing.TB, from, through int64, rows []gitlet.IntroducedRow,
 	return f
 }
 
-// MOVES DECODE ONLY WHAT IS PROBED. A landed-in search over the busiest
-// branch of the large model — hundreds of thousands of moves in the window —
-// probes a few dozen: the view over the runs is found by a binary search a run,
-// its length, its segments, its gap and every move's position are read off
-// fixed-width records, and a move and its push are decoded only when At asks
-// for that one. Over 100 000 moves in three runs: nothing decoded for the
-// view, its segments, its gaps and a binary search of its positions, and one
-// decode an At.
+// MOVES DECODE ONLY WHAT IS PROBED, so a landed-in search over a busy branch
+// costs a few dozen decodes: over 100 000 moves in three runs, the view, its
+// segments, its gaps and a binary search of its positions (all read off
+// fixed-width records) decode nothing, and each At decodes its one move.
 //
 // Mutation: decode the range into a slice as Moves cuts it — the count is
 // 100 000.
@@ -133,10 +128,10 @@ func TestMovesDecodesOnlyWhatIsProbed(t *testing.T) {
 }
 
 // TWO REFS SHARING A KEY KEEP THEIR OWN MOVES. A run files a ref's moves under
-// the first eight bytes of its name's SHA-256, and two refs of one repository
-// share them about once in a billion at the most refs a repository holds: each
-// is then an ordinal of the key, found by its name, so its moves stay its own
-// — in a run, in a merge of two, and for a ref the run holds no move of.
+// the first eight bytes of its name's SHA-256, which two refs share about once
+// in a billion at the most refs a repository holds; each is then an ordinal
+// of the key, found by its name, so its moves stay its own: in a run, in a
+// merge of two, and for a ref with none.
 //
 // Mutation: find a ref by its key alone (refOrdinal answering the key's first
 // ordinal) — b's view holds a's moves.
@@ -192,11 +187,10 @@ func TestTwoRefsSharingAKeyKeepTheirOwnMoves(t *testing.T) {
 }
 
 // A RUN ANSWERS WHAT IT WAS BUILT FROM: every commit its pushes introduced
-// answers the push — the newest of two listing one — with the principal and
-// the way the row named; and the moves of one ref that one record's pushes
-// landed, decided one after another by group commit, come back in the order
-// they landed, which their values spell, whatever order their push ids sort
-// in.
+// answers the push (the newest of two listing one) with the row's principal
+// and way; and one ref's moves that one record's pushes landed by group commit
+// come back in the order they landed, which their values chain, whatever
+// order their ids sort in.
 //
 // Mutation: order a record's moves by their push ids (chainMoves keeping the
 // pushes' order) — the second landing comes back first.
@@ -243,9 +237,9 @@ func TestARunAnswersWhatItWasBuiltFrom(t *testing.T) {
 }
 
 // A MERGE KEEPS EVERY PUSH ABOVE ITS FLOOR, AND NOTHING BELOW. Two adjacent
-// runs merge into one that answers exactly what the two answered above the
-// floor it is given — the rows' horizon — with each push renumbered and every
-// move and commit pointing at it, and nothing at or below the floor.
+// runs merge into one answering exactly what they answered above the floor
+// (the rows' horizon), each push renumbered and every move and commit
+// pointing at it.
 //
 // Mutation: renumber the second run's pushes from zero (base[1] = 0) — its
 // moves name the first run's pushes.
@@ -294,14 +288,11 @@ func TestAMergeKeepsEveryPushAboveItsFloor(t *testing.T) {
 	}
 }
 
-// A MERGE IS THE RUN ITS KEPT ROWS BUILD, byte for byte: of any number of
-// adjacent runs, over histories whose pushes share refs across the runs and
-// move refs of their own, land several pushes at one position — two of them
-// moving one ref, which their chain orders — bring a commit back that an
-// earlier push introduced, and file their refs under a handful of keys, so
-// every key is shared by many names; at any floor, from below the first run
-// to inside the last. The merge streams one key at a time, and the run built
-// whole from the rows above the floor is what it must write.
+// A MERGE IS THE RUN ITS KEPT ROWS BUILD, byte for byte, though it streams one
+// key at a time: of any number of adjacent runs, at any floor from below the
+// first run to inside the last, over histories (historyOf) whose refs are
+// shared across runs, chained within a record, reintroduce commits, and fall
+// under a handful of keys so every key is shared by many names.
 //
 // Mutation: keep a ref whose every move is at or below the floor (refGroups
 // keeping every name) — the merged run names refs its rows do not move.
@@ -366,11 +357,10 @@ func TestAMergeIsTheRunItsKeptRowsBuild(t *testing.T) {
 }
 
 // historyOf is a synthetic history of n pushes from base: records of one to
-// three pushes at one position, each push moving one or two refs — one of a
-// few shared by the whole history, or one of its own — two pushes of a
-// record now and then moving one ref one after the other, and now and then
-// introducing a commit an earlier push introduced. It answers the rows in
-// (position, push id) order, and the index of each record's first row.
+// three pushes at one position, each moving one or two refs (a shared one or
+// its own), now and then two of a record chaining one ref, and now and then
+// reintroducing an earlier commit. It answers the rows in (position, push id)
+// order, and the index of each record's first row.
 func historyOf(rng *rand.Rand, base int64, n int) ([]gitlet.IntroducedRow, []int) {
 	value := map[string]string{}
 	oid := 0
@@ -439,18 +429,16 @@ func historyOf(rng *rand.Rand, base int64, n int) ([]gitlet.IntroducedRow, []int
 	return rows, records
 }
 
-// A MERGE HOLDS ONE KEY'S REFS, NOT A RUN'S. The refs of two runs — every
-// name either holds, a repository whose every push moves a ref of its own
-// holding as many as it has pushes — are merged a key at a time, so what a
-// merge allocates does not grow with them: four times the refs cost the merge
-// no more than a megabyte more. Held whole by name, as the first merge held
-// them, the refs of 40 000 pushes cost some 20 MB, 519 bytes a ref.
+// A MERGE HOLDS ONE KEY'S REFS, NOT A RUN'S. A run can hold a ref per push, so
+// a merge reads refs a key at a time and its allocation does not grow with
+// them: four times the refs cost no more than a megabyte more, where holding
+// 40 000 pushes' refs whole by name costs some 20 MB.
 //
-// Not parallel: it reads what the process allocated across the merge, which
-// a case running beside it would add to.
+// Not parallel: it reads the process's allocations, which a case beside it
+// would add to.
 //
-// Mutation: hold every input's names in maps across the merge (mergeRuns'
-// first shape) — four times the refs allocate some 15 MB more.
+// Mutation: hold every input's names in maps across the merge — four times
+// the refs allocate some 15 MB more.
 func TestAMergeHoldsOneKeysRefsNotARunsRefs(t *testing.T) {
 	alloc := func(pushes int) uint64 {
 		t.Helper()
@@ -479,20 +467,14 @@ func TestAMergeHoldsOneKeysRefsNotARunsRefs(t *testing.T) {
 	}
 }
 
-// THE MERGE POLICY KEEPS AN INDEX SMALL AND MERGES IT SELDOM. An index's runs
-// merged as the backfill merges them, to quiescence after every run written,
-// by mergeDue's rule alone, in three shapes: 100 000 folds of one push each —
-// a repository whose every push is synced on its own, a run a fold; 100 000
-// folds of one to twenty, a burst's; and a history read back below the index,
-// 1 200 pages of 7 500 pushes, with 20 000 one-push folds above it. Merged a
-// pair at a time whenever two neighbours were within a factor of two, the
-// one-push folds merged once a push, four syncs and a state write each on
-// every node holding the copy, and the bursts — runs of every size, each
-// beside one it is not within a factor of — filled the index to its bound,
-// where every fold's merge rewrote whatever pair was cheapest, some 200
-// times a push. Eight balanced runs a merge, each shape merges at most once
-// in four pushes, rewrites each push under 2·log₂ n times, and holds its
-// index eight runs clear of MaxProvenanceRuns.
+// THE MERGE POLICY KEEPS AN INDEX SMALL AND MERGES IT SELDOM, a merge costing
+// every node holding the copy four syncs and a state write. Merging by mergeDue
+// alone (ProvenanceMergeWidth balanced runs) after every run written, 100 000
+// one-push folds, 100 000 folds of one to twenty, or 1 200 history pages of
+// 7 500 pushes below 20 000 one-push folds merge at most once in four pushes,
+// rewrite each push under 2·log₂ n times, and stay ProvenanceMergeWidth runs
+// clear of MaxProvenanceRuns. Merging any pair within a factor of two fails:
+// one-push folds merge every push, and bursts fill the index to its bound.
 //
 // Mutation: merge the cheapest eight runs whether or not they are balanced
 // (mergeDue's balance test dropped) — a large run is rewritten for every few
@@ -564,13 +546,10 @@ func TestTheMergePolicyKeepsAnIndexSmallAndMergesItSeldom(t *testing.T) {
 }
 
 // THE BOUND UNMAPS THE RUN LET GO LONGEST AGO, AND NEVER ONE HELD. A mapping
-// past the node's bound on mapped runs makes room by unmapping an idle one —
-// the one its last reader let go before every other's — so the runs of the
-// copies people are reading stay mapped; a mapping a reader holds is never
-// taken from under it, so a bound every reader holds whole refuses the next
-// mapping rather than exceed itself; and a run its index stops naming is
-// unmapped at its last release, never kept idle for a reader that will not
-// come.
+// past the node's bound unmaps the idle run let go first, so the copies people
+// are reading stay mapped; a held mapping is never taken, so a bound readers
+// hold whole refuses the next mapping (errMapsFull); and a run its index stops
+// naming is unmapped at its last release, not kept idle.
 //
 // Mutation: evict from the idle list's head (the most recently let go) — the
 // first run let go is still held, and the last is gone.
@@ -627,14 +606,12 @@ func TestTheBoundUnmapsTheRunLetGoLongestAgo(t *testing.T) {
 	}
 }
 
-// EVERY PUSH PRINCIPAL AND WAY HAS A RUN CODE. A run names a push's way and
-// its principal's kind by a code of one table each, so a kind or a way a later
-// build adds to gitlet's closed sets is a code here — or a run could not be
-// written for a push of it, and its round's fold would leave the index a gap.
-// Each code is distinct and none is zero, and a push of each round-trips — a
-// seat's with the run behind it, a coding box's run and harness among
-// it, each field at its bound and unlike the others, so a field written under
-// another's tag, or a length past one byte's uvarint, reads back wrong.
+// EVERY PUSH PRINCIPAL AND WAY HAS A RUN CODE, distinct and non-zero, or a
+// push of a kind or way a later build adds to gitlet's closed sets builds no
+// run and its round's fold leaves the index a gap. A push of each round-trips
+// with every field at its bound and unlike the others (a seat's run, a coding
+// box's run and harness among it), so a field written under another's tag, or
+// a length past one byte's uvarint, reads back wrong.
 //
 // Mutations: drop the agent's code — a seat's push builds no run; write no
 // work key into a run (pushPayload skipping tag 5) — a seat's push reads back
@@ -687,11 +664,10 @@ func TestEveryPushPrincipalAndWayHasARunCode(t *testing.T) {
 	}
 }
 
-// AN INDEX'S RECORD NO WRITE LEAVES IS REFUSED, so a state file holding one is
-// no state this cache wrote: runs out of order, overlapping, in the gap, past
-// the range or empty; a gap outside the range or an empty one; a number taken
-// twice or past Next; more runs than MaxProvenanceRuns; bytes that are not the
-// runs'.
+// AN INDEX'S RECORD NO WRITE LEAVES IS REFUSED, as no state this cache wrote:
+// runs out of order, overlapping, in the gap, past the range or empty; a gap
+// outside the range or empty; a number taken twice or past Next; more runs
+// than MaxProvenanceRuns; bytes that are not the runs'.
 //
 // Mutation: drop the overlap case from check — the overlapping record passes.
 func TestAnIndexsRecordNoWriteLeavesIsRefused(t *testing.T) {

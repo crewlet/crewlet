@@ -16,28 +16,17 @@ import (
 )
 
 // A RENAMED REPOSITORY'S OLD NAME SERVES A CLONE, AND TELLS A PUSH ITS NEW
-// NAME. A rename leaves the old name redirecting to the repository for
-// gitlet.RedirectWindow:
-//
-//   - a fetch's advertisement is 302 Found to the same path and query under
-//     the new name. A client presenting its credential up front
-//     (http.extraHeader, a CI checkout's shape) meets it on its first
-//     request, so git rebases onto the new name and says so (`redirecting
-//     to`);
-//   - a person's git, whose credential helper answers the challenge its
-//     anonymous first request meets, is redirected only on the retry — which
-//     git follows WITHOUT rebasing — so it POSTs its fetch to the old name,
-//     and that POST is served: the clone works either way;
+// NAME, for gitlet.RedirectWindow:
+//   - a fetch's advertisement is 302 Found to its path and query under the
+//     new name. A client sending its credential up front (http.extraHeader,
+//     as CI does) rebases and says `redirecting to`; a person's git,
+//     redirected only on its challenged retry, which git follows WITHOUT
+//     rebasing, POSTs its fetch to the old name, and that POST is served;
 //   - a push is refused at its advertisement, in the 404 git prints, naming
-//     the new name and when the old one stops serving clones, and nothing is
-//     pushed; a push's POST at the old name, which no git sends after that
-//     refusal, is the same 404.
+//     the new name and the redirect's end; nothing is pushed.
 //
-// Mutations: refuse a fetch's POST at the old name (a redirect-only old name)
-// — the person's clone fails `RPC failed; HTTP 404`, red; redirect a push's
-// advertisement like a fetch's — the person's push is redirected and POSTs to
-// the old name, where git prints no reason, red; admit a push at the old name
-// — it lands, red.
+// Mutations: refuse the old name's fetch POST (the person's clone fails),
+// redirect a push's advertisement (git prints no reason), or admit the push.
 func TestARenamedRepositorysOldNameRedirectsAClone(t *testing.T) {
 	until := time.Now().Add(gitlet.RedirectWindow).UTC().Truncate(time.Second)
 	e := &recording{resolve: func(ctx context.Context, inner host.Estate, q gitlet.ResolveQuery) (gitlet.RepoRef, error) {

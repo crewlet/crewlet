@@ -201,6 +201,13 @@ type keyWindow struct {
 	first bool
 }
 
+// reset makes l a line of no bytes read yet, as its zero value is, keeping
+// the buffers its comparisons and windows grew: one reader's tee serves
+// every line it reads ([lineSource]).
+func (l *lineBytes) reset() {
+	*l = lineBytes{cmps: l.cmps[:0], keys: l.keys[:0]}
+}
+
 // write reads p, the line's next bytes, its break never among them.
 func (l *lineBytes) write(p []byte) {
 	base := l.out.n

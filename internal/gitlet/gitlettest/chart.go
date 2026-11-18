@@ -13,12 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE FIXTURE CHART every topology judges a seat by unless a case names its
-// own: the unit ENG — the owner of every case's repository (Settings) — led by
-// `lead`, holding the seats `alice` (full_access) and `bob` (read_only), and
-// the human seat `pat`, whose person holds a token of the fleet's like every
-// person's (Credentials). The company's clock is UTC and its identity domain
-// unset (seats.invalid).
+// The fixture chart every topology judges a seat by unless a case names its
+// own. Its unit owns every case's repository (Settings); the human seat pat's
+// person holds a fleet token like every person's (Credentials). The company's
+// clock is UTC and its identity domain unset (seats.invalid).
 
 // The fixture chart's unit and seats.
 const (
@@ -107,12 +105,11 @@ func FixtureSeatRules() (gitlet.SeatRules, bool) {
 	return gitlet.SeatRules{Roster: FixtureRoster(), Zone: time.UTC}, true
 }
 
-// FixtureSigner signs an engine-built commit as the engine's signer does over
-// a chart whose roles state no name of their own and no email address: the
-// seat's handle as its author's name, `<handle>@seats.invalid` as its address,
-// and the engine, `Crewlet <engine@seats.invalid>`, as its committer. A
-// principal naming no seat of the fixture chart signs nothing, as a node whose
-// chart holds no such seat signs nothing (gitlet.ErrNotServing).
+// FixtureSigner signs an engine-built commit as the engine's signer does when
+// roles state no name or email: the seat's handle as author name,
+// `<handle>@seats.invalid` as its address, `Crewlet <engine@seats.invalid>` as
+// committer. A principal naming no fixture seat signs nothing, as a node whose
+// chart lacks the seat does (gitlet.ErrNotServing).
 type FixtureSigner struct{}
 
 // The fixture signer's committer, as the engine's own signs every commit with
@@ -133,25 +130,24 @@ func (FixtureSigner) Sign(p gitlet.Principal) (host.Signature, error) {
 }
 
 // Author names any seat handle as a commit's author the way Sign names an
-// acting one — a handle the fixture chart does not hold too, as the engine's
-// signer names a seat that left.
+// acting one, a handle the chart does not hold too, as the engine's signer
+// names a seat that left.
 func (FixtureSigner) Author(handle string) (string, string, error) {
 	return handle, FixtureAuthorEmail(handle), nil
 }
 
-// Committer is the address the fixture signer commits as — the one a coding
-// box's pack may hold no new commit of.
+// Committer is the address the fixture signer commits as, which a coding box's
+// pack may hold no new commit of.
 func (FixtureSigner) Committer() (string, error) { return FixtureCommitterEmail, nil }
 
 // FixtureAuthorEmail is the address the fixture signer names a seat's commit
 // by.
 func FixtureAuthorEmail(seat string) string { return seat + "@" + config.DefaultCodeIdentityDomain }
 
-// FixturePeople is the identity directory as the fixture's change writers ask
-// it who holds a human seat (gitlet.People): every seat held by an active person
-// using every app, as the fixture's person `pat` is — so an ask for review
-// naming a person is decided by the chart alone unless a case names its own
-// people, as a case about a person without Gitlet does.
+// FixturePeople is the identity directory the fixture's change writers ask who
+// holds a human seat (gitlet.People): every seat's holder is an active person
+// using every app, so a review ask naming a person is decided by the chart
+// alone unless a case names its own people.
 type FixturePeople struct{}
 
 // Requester is seat's holder: an active person holding every app.

@@ -65,13 +65,12 @@ func TestARebuildReplacesTheDirectoryUnderItsReaders(t *testing.T) {
 }
 
 // MANY FAILURES ON ONE CACHE COST ONE REBUILD: ten requests failing on one
-// damaged directory at once share one rebuild — one whole read and one
-// download of each pack — and a request that failed on an incarnation already
-// replaced is answered from the current one with no rebuild at all.
+// damaged directory at once share one whole read and one download of each
+// pack, and a request that failed on an incarnation already replaced is
+// answered from the current one with no rebuild.
 //
-// Driven through the whole rebuild itself (cache.RebuildWhole): a request
-// reaches it only once its in-place round and its scrub found nothing to
-// fetch again (TestARequestsPackDamageIsRepairedInPlaceFirst).
+// Driven through cache.RebuildWhole: a request reaches it only after its
+// in-place round and scrub (TestARequestsPackDamageIsRepairedInPlaceFirst).
 func TestManyFailuresOnOneCacheCostOneRebuild(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -153,16 +152,13 @@ func TestManyFailuresOnOneCacheCostOneRebuild(t *testing.T) {
 	failed.Release()
 }
 
-// A REBUILD IS NOT REPEATED WHERE IT CANNOT HELP: a rebuild re-downloads the
-// whole repository, and one that did not end a failure will not end it from
-// the same rows — every byte verified on the way in makes the same directory,
-// and the damage is the object store's or the rows', which verify names. So
-// a rebuild's product that fails again is refused for as long as it holds
-// what that rebuild read, however long ago that was; once its rows have
-// moved, it waits RebuildCooldown from the last attempt, twice as long after
-// the next, and so on. Every refusal is counted, and logged at most once a
-// cooldown, so whether the window is ever reached is measured rather than
-// guessed.
+// A REBUILD IS NOT REPEATED WHERE IT CANNOT HELP: a rebuild that did not end a
+// failure will not end it from the same rows (every byte verified on the way in
+// makes the same directory; the damage is the store's or the rows', which
+// verify names). So a rebuild's product that fails again is refused while it
+// holds what that rebuild read; once its rows move, it waits RebuildCooldown
+// from the last attempt, doubling each time. Every refusal is counted, and
+// logged at most once a cooldown.
 func TestARebuildIsNotRepeatedWhereItCannotHelp(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -233,12 +229,11 @@ func TestARebuildIsNotRepeatedWhereItCannotHelp(t *testing.T) {
 	}
 }
 
-// WHAT THE MAINTAINER WRITES ENDS WHAT A REBUILD READ: a rebuild's product is
-// refused another only while it holds exactly what that rebuild read, and the
-// maintainer's index, bitmap and commit-graph are files no rebuild wrote — one
-// of them damaged as it was written is damage a rebuild repairs. So once a run
-// has written into the product, the next rebuild of it waits only its line's
-// window, however long nobody has pushed.
+// WHAT THE MAINTAINER WRITES ENDS WHAT A REBUILD READ: the maintainer's index,
+// bitmap and commit-graph are files no rebuild wrote, and damage in one is
+// damage a rebuild repairs. So once a run has written into a rebuild's
+// product, the next rebuild of it waits only its line's window, however long
+// nobody has pushed.
 func TestWhatTheMaintainerWritesEndsWhatARebuildRead(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -271,16 +266,13 @@ func TestWhatTheMaintainerWritesEndsWhatARebuildRead(t *testing.T) {
 }
 
 // A LINE OF REBUILDS ENDS WHEN THE ASKING STOPS: the cache never sees a
-// request succeed, so a day with no rebuild asked of a repository is the sign
-// the last one ended its failure, and the next ask is new damage — its window
-// RebuildCooldown, not the one earlier incidents grew. Three incidents a quiet
-// day apart, each repaired, then an attempt the estate fails transiently: the
-// next is refused inside the cooldown and allowed at it, where a line that
-// counted every rebuild the process ever made would wait eight times as long.
+// request succeed, so a quiet day (RebuildQuiet) with no rebuild asked means the
+// last one ended its failure, and the next ask is new damage, its window
+// RebuildCooldown. Three incidents a quiet day apart, then a transient failure:
+// the next waits one cooldown, not the eight a lifetime count would.
 //
-// Driven through the whole rebuild itself (cache.RebuildWhole): a request
-// reaches it only once its in-place round and its scrub found nothing to
-// fetch again (TestARequestsPackDamageIsRepairedInPlaceFirst).
+// Driven through cache.RebuildWhole: a request reaches it only after its
+// in-place round and scrub (TestARequestsPackDamageIsRepairedInPlaceFirst).
 func TestALineOfRebuildsEndsWhenTheAskingStops(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -330,12 +322,11 @@ func TestALineOfRebuildsEndsWhenTheAskingStops(t *testing.T) {
 }
 
 // DAMAGE NO REBUILD ENDS IS RETRIED ONCE A DAY, HOWEVER OFTEN IT IS ASKED
-// ABOUT: a product failing again holds exactly what its rebuild read, and is
-// refused while it does — a request every few minutes, or every few hours,
-// is the failure going on, never a quiet that ends the line. But not for
-// ever: the store can come to hold what it lacked and a directory be damaged
-// on its own disk, so a day after the attempt — the one download a day the
-// backoff's cap prices — it is rebuilt again.
+// ABOUT: a product failing again holds exactly what its rebuild read and is
+// refused while it does; repeated asks are the failure going on, never a quiet
+// that ends the line. But the store can come to hold what it lacked, or the
+// directory be damaged on its own disk, so RebuildBackoffCap (a day) after the
+// attempt it is rebuilt again.
 func TestDamageNoRebuildEndsIsRetriedOnceADay(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -428,12 +419,11 @@ func TestARefusedRebuildIsLoggedOnceACooldown(t *testing.T) {
 }
 
 // A FAILED REBUILD KEEPS THE OLD CACHE: the incarnation it was building goes
-// into trash/ and the one it would have replaced is still current and still
-// serving — and the attempt started the cooldown, success or not.
+// into trash/, the one it would have replaced still serves, and the attempt
+// started the cooldown.
 //
-// Driven through the whole rebuild itself (cache.RebuildWhole): a request
-// reaches it only once its in-place round and its scrub found nothing to
-// fetch again (TestARequestsPackDamageIsRepairedInPlaceFirst).
+// Driven through cache.RebuildWhole: a request reaches it only after its
+// in-place round and scrub (TestARequestsPackDamageIsRepairedInPlaceFirst).
 func TestAFailedRebuildKeepsTheOldCache(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -473,15 +463,13 @@ func TestAFailedRebuildKeepsTheOldCache(t *testing.T) {
 }
 
 // A FAILED REBUILD ANSWERS ONLY ITS OWN CALLERS: a sync queued before the
-// rebuild was asked for rides the rebuilt round when it succeeds — a whole
-// read at the log's head answers anything — but when the rebuild fails, the
-// incarnation it would have replaced is still current and still serving, and
-// the sync is answered from it by an ordinary round rather than told of
-// somebody else's failed repair.
+// rebuild was asked rides the rebuilt round when it succeeds (a whole read at
+// the log's head answers anything); when it fails, the sync is answered by an
+// ordinary round from the incarnation still serving, never told of somebody
+// else's failed repair.
 //
-// Driven through the whole rebuild itself (cache.RebuildWhole): a request
-// reaches it only once its in-place round and its scrub found nothing to
-// fetch again (TestARequestsPackDamageIsRepairedInPlaceFirst).
+// Driven through cache.RebuildWhole: a request reaches it only after its
+// in-place round and scrub (TestARequestsPackDamageIsRepairedInPlaceFirst).
 func TestAFailedRebuildAnswersOnlyItsOwnCallers(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -622,19 +610,18 @@ func TestARebuildReasonIsTheHostsToGive(t *testing.T) {
 	s.Release()
 }
 
-// DAMAGE REASON READS WHAT GIT NAMED: the parts of the repository a run's
-// trace2 reports named (gitproc.Damage), never its words. Damage in derived
-// files ALONE — a multi-pack-index, a commit-graph, a chunk-format file of
-// either — is RebuildDerived, dropped in place, and its Drops name which:
-// the index, the graph, or both for a chunk-format message, which names
-// neither file. Derived damage beside a pack's is the pack's (corrupt), an
-// object git could not find is missing — a bare sentinel, the peel's own,
-// included — the pool's refusal of the shape is shape, and anything else,
-// `not our ref` among it, is no repair.
+// DAMAGE REASON READS WHAT GIT NAMED: the parts a run's trace2 named
+// (gitproc.Damage), never its words. Damage in derived files alone (a
+// multi-pack-index, a commit-graph, a chunk-format file of either) is
+// RebuildDerived, and Drops names which: the index, the graph, or both for a
+// chunk-format message, which names neither. Derived damage beside a pack's is
+// corrupt; an absent object is missing, the peel's bare sentinel included; the
+// pool's shape refusal is shape; anything else, `not our ref` among it, is no
+// repair.
 //
 // Mutations: Derived() true when ANY part is derived (the index-and-pack row
-// reads derived); Drops() of PartChunk the index alone (the chunk row keeps
-// the graph); Began not carried (the began row reads zero).
+// reads derived); Drops() of PartChunk the index alone (the chunk row keeps the
+// graph); Began not carried (the began row reads zero).
 func TestDamageReasonReadsWhatGitNamed(t *testing.T) {
 	t.Parallel()
 	exit := func(kind error, damage *gitproc.Damage) error {

@@ -55,9 +55,9 @@ type fixture struct {
 	pushes int
 }
 
-// fixtureProcesses is every fixture's git pool's read lane: four, so the
-// maintenance lane is two slots and the maintainer keeps one of them, on any
-// machine — what a case judging a compaction's admission counts on.
+// fixtureProcesses is every fixture's git pool's read lane: four, so on any
+// machine the maintenance lane is two slots and the maintainer keeps one, which
+// a case judging a compaction's admission counts on.
 const fixtureProcesses = 4
 
 // newFixture is a fleet holding an empty gitlettest.RepoName.
@@ -107,7 +107,7 @@ func (x *fixture) push(sizes ...int) string {
 	return head
 }
 
-// pushes makes n pushes, each of sizes.
+// pushN makes n pushes, each of sizes.
 func (x *fixture) pushN(n int, sizes ...int) {
 	x.t.Helper()
 	for range n {
@@ -159,9 +159,9 @@ func (s served) Expunge(ctx context.Context, p gitlet.ExpungeProposal) (gitlet.E
 }
 
 // maintainers answers every question of which repositories this node
-// maintains with maintains for every one asked, or err, and records the
-// charges it was asked by, in the order of the ids they were asked for; and
-// this node is listed among the Gitlet nodes, whatever it answers.
+// maintains with maintains for each, or err, recording the charges asked in
+// the order of their ids; this node is listed among the Gitlet nodes whatever
+// it answers.
 type maintainers struct {
 	maintains bool
 	err       error
@@ -186,9 +186,9 @@ func (m maintainers) MaintainerOf(charges map[string]int64) (map[string]bool, er
 
 func (maintainers) Listed() (bool, error) { return true, nil }
 
-// askedMaintainers is a compactor's maintainers that records every question it
-// is asked — the ids of each, sorted, one entry a listing read — and answers
-// maintains for every one while maintains is set; this node is listed.
+// askedMaintainers is a compactor's maintainers that records every question
+// (its ids sorted, one entry a listing read) and answers maintains for each
+// while maintains is set; this node is listed.
 type askedMaintainers struct {
 	mu        sync.Mutex
 	maintains bool
@@ -232,10 +232,9 @@ func (x *fixture) compactorOf(edit func(*compact.Options)) (*compact.Compactor, 
 		x.t.Fatal(err)
 	}
 	l := &logs{}
-	// A CLOCK A DEBOUNCE AHEAD OF THE WALL'S, so a publication pass takes the
-	// pushes a case has just made for a burst that has settled
-	// (compact.PublishDebounce): a case about the cadence itself judges
-	// compact.Due, or hands its own clock.
+	// A CLOCK A DEBOUNCE AHEAD OF THE WALL'S, so a publication pass takes a
+	// case's fresh pushes as a settled burst (compact.PublishDebounce); a case
+	// about the cadence judges compact.Due or hands its own clock.
 	o := compact.Options{Cache: x.node().Cache(), Objects: x.store, Estate: served{x.fleet},
 		Maintainers: maintainers{maintains: true}, NodeID: x.node().ID(), Limits: gitlet.DefaultLimits, Metrics: rec,
 		Logger: l.logger(), Now: func() time.Time { return time.Now().Add(compact.PublishDebounce) }}
@@ -251,10 +250,9 @@ func (x *fixture) compactorOf(edit func(*compact.Options)) (*compact.Compactor, 
 }
 
 // compactWhileBusy is c's compaction of cand, asked again while it answers
-// busy: the node's maintainer keeps the one slot of the maintenance lane a
-// compaction may take for a moment at a time (a commit-graph after a sync), so
-// a case — or a benchmark's arm — that judges something else waits it out, for
-// a minute at the most.
+// busy, for a minute at most: the node's maintainer briefly takes the
+// compaction's one maintenance slot (a commit-graph after a sync), which a
+// case or benchmark arm judging something else waits out.
 func compactWhileBusy(t testing.TB, c *compact.Compactor, cand gitlet.CompactionCandidate) (compact.Outcome, error) {
 	t.Helper()
 	deadline := time.Now().Add(time.Minute)
@@ -455,11 +453,11 @@ func noMemoryToPublish(cache.Synced, int64, int64, gitlet.Limits) (*cache.Admiss
 		cache.ErrNoMemory)
 }
 
-// listed is a compactor's reads of Gitlet with every due listing
-// answered for gitlettest.RepoName at the floor of one live pack, and its live
-// packs shown as livePacks where that is set: a repository a listing names
-// whatever its plan makes of it — at the pack bound, or with fewer packs than
-// a production listing's floor — without pushing as many.
+// listed is a compactor's reads of Gitlet with every due listing answering
+// gitlettest.RepoName at the floor of one live pack, its live packs shown as
+// livePacks where set: a repository listed whatever its plan makes of it (at
+// the pack bound, or under a production listing's floor) without pushing as
+// many.
 type listed struct {
 	compact.Estate
 	mu        sync.Mutex
@@ -492,10 +490,9 @@ func (l *listed) showPacks(n int64) {
 	l.livePacks = n
 }
 
-// recordingStore is a compactor's object store with every put recorded — its
-// size and the key it minted — and held by hold, where hold is set, before it
-// reaches the store; a put answered by refuse, where that is set, never
-// reaches it; and every Stat counted.
+// recordingStore is a compactor's object store that records every put's size
+// and minted key, holds a put by hold where set before it reaches the store,
+// answers it by refuse where set without reaching it, and counts every Stat.
 type recordingStore struct {
 	*objstore.Store
 	mu     sync.Mutex

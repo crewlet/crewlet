@@ -2877,6 +2877,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.DelegatedRequests == nil {
 		d.DelegatedRequests = e.readDelegatedRequests
 	}
+	if d.StaleAssignments == nil {
+		d.StaleAssignments = e.dropStaleAssignments
+	}
 	if d.Observe == nil {
 		d.Observe = e.observe
 	}

@@ -15,13 +15,12 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 )
 
-// A TREE IS LISTED BY ITS ID, AS GIT LISTS IT. The root of a commit, one of
-// its directories, the same recursively, and a tree named by its own id or an
-// abbreviation of it: every entry once, in git's own order and with git's own
-// modes, ids and sizes — the person's own git listing the same objects is the
-// oracle — and paged at a 1 KiB knob, the pages concatenate to the listing,
-// each within its bound and each carrying the whole listing's Total. A path
-// naming a file, or nothing, is no directory.
+// A TREE IS LISTED BY ITS ID, AS GIT LISTS IT: a commit's root or directory,
+// recursively or not, and a tree named by its id or an abbreviation list every
+// entry once in git's order, modes, ids and sizes (the person's git is the
+// oracle). Paged at 1 KiB, the pages concatenate to the listing, each within
+// its bound and carrying the whole Total. A path naming a file, or nothing, is
+// no directory.
 func TestATreeIsListedByItsOid(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -117,16 +116,14 @@ func TestATreeIsListedByItsOid(t *testing.T) {
 	})
 }
 
-// A LISTING'S PAGE ENDS BEFORE AN ENTRY TOO LONG FOR ANY PAGE, as it ends
-// before one too wide for its room: the entries before it are a page whose
-// Next names it, and only a read asking from it is refused, naming the
-// narrowing. An entry whose record is past what a listing's record holds
-// (gitproc.MaxLine beside gitlet.MaxGitPathBytes) is past a page too — here a
-// file 24 directories of 3 000-byte names deep — and a read refused at it
-// whatever its page held left every entry before it unreadable by any page.
+// A LISTING'S PAGE ENDS BEFORE AN ENTRY TOO LONG FOR ANY PAGE, as before one
+// too wide for its room: the entries before it are a page whose Next names it,
+// and only a read from it is refused, naming the narrowing. Here the entry is
+// past a listing record's bound (gitproc.MaxLine beside gitlet.MaxGitPathBytes):
+// a file 24 directories of 3 000-byte names deep.
 //
-// Mutation: refuse the read at an entry past a record's bound whatever its
-// page holds — the first page is refused.
+// Mutation: refuse the read at such an entry whatever its page holds — the
+// first page is refused, and no page reaches the entries before it.
 func TestAListingPageEndsBeforeAnEntryTooLongForAnyPage(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())

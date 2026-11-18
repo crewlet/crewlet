@@ -13,42 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// Poll is one pass of the compaction loop:
-//
-//  1. LIST every repository holding gitlet.CompactMinMerge live packs or more —
-//     the `compaction_due` read, every page, MOST LIVE PACKS FIRST, read at
-//     STALE: the router carries this node's own compactions as a floor on
-//     every code read it sends (estate.CodeSeam.Compact raises it), so the
-//     listing sees what this node landed, and a listing a moment behind the
-//     head costs at most a repository planned a poll late — a compaction
-//     syncs at its repository's own version and its committer holds every
-//     input to the rows.
-//  2. MAINTAINERS, judged against ONE LISTING of who serves git and what each
-//     Gitlet node advertises ([Compactor.maintainedOf]) for every listed
-//     repository the pass must judge — each it may plan, and each at the
-//     bound — so a repository this node does not maintain costs the pass its
-//     share of one listing, and one its maintainer remembers as not due a
-//     lookup.
-//  3. BEHIND: every listed repository at gitlet.MaxPacksPerRepo that this node
-//     maintains is what the alarm reading names — judged before the memory and
-//     whatever its compaction decides, because at the bound a refused push
-//     records nothing, so the repository's version stands still and a reading
-//     taken only of what reached a compaction would clear while every push is
-//     refused.
-//  4. THE STORE'S ROOM, read once a pass, and only while a repository is held
-//     back for a full store and the pass may compact ([Compactor.releaseHeld]).
-//  5. Every listed repository in the listing's order, until the next tick
-//     would begin: skipped when a plan of it was found not due at its version
-//     and cap ([memo]), when it is held back for a full store, or when this
-//     node is not its MAINTAINER for its maintenance's charge
-//     ([Compactor.PlacedBy]) — the charge every loop is placed by, so one node writes all of a repository's
-//     packs; and COMPACTED otherwise, one at a time. A placement this node
-//     cannot read compacts nothing that pass — a compactor that cannot tell
-//     does none of a maintainer's work rather than guess — logged once a pass.
-//
-// A listing that fails is the pass's error, and the alarm reading is left as
-// the last pass found it. The pass is logged code_compaction_pass, at DEBUG
-// unless it compacted, refused or failed something.
+// Poll is one pass of the compaction loop: LIST every repository at
+// gitlet.CompactMinMerge live packs or more ([Compactor.listDue]); judge who
+// maintains them off one listing ([Compactor.maintainedOf]); set the BEHIND
+// reading before any memo or compaction, since at the bound a refused push
+// moves no version ([Compactor.behindOf]); read the store's room only while a
+// repository is held back ([Compactor.releaseHeld]); then compact the listed
+// ones in order, one at a time, until the next tick, skipping one not due at
+// its version and cap ([memo]), one held back, and one this node does not
+// maintain at its [Compactor.PlacedBy] charge. An unreadable placement
+// compacts nothing that pass rather than guess, logged once. A failed listing
+// is the pass's error and keeps the alarm reading. Logged
+// code_compaction_pass, at DEBUG unless it compacted, refused or failed one.
 func (c *Compactor) Poll(ctx context.Context) (PollReport, error) {
 	began := c.now()
 	var report PollReport
@@ -108,20 +84,21 @@ func (c *Compactor) Poll(ctx context.Context) (PollReport, error) {
 	return report, nil
 }
 
-// PlacedBy is the charge a repository of liveObjects live objects is asked
-// who maintains it by: the largest any of its maintainer's steps may be
-// admitted at under the current epoch's limits
-// (cache.Cache.MaintenanceCharge) — one question for every loop, so its
-// compactions, its publications and its expunges, the three writers of its
-// packs, are placed on one node, and on one whose own admissions hold every
-// one of them.
+// PlacedBy is the charge a repository of liveObjects live objects is placed
+// by: the largest any maintainer step may be admitted at under the current
+// epoch's limits (cache.Cache.MaintenanceCharge). One charge for every loop,
+// so its packs' three writers (compactions, publications, expunges) land on
+// one node whose admissions hold each of them.
 func (c *Compactor) PlacedBy(liveObjects int64) int64 {
 	return c.o.Cache.MaintenanceCharge(liveObjects, c.o.Limits())
 }
 
-// listDue is every repository the `compaction_due` listing names, every page.
-// A listing pages by Gitlet's page bounds, so a company of the most
-// repositories it may declare is one or two reads.
+// listDue is every page of the `compaction_due` listing, most live packs
+// first, read at STALE: the router floors every code read at this node's own
+// compactions (estate.CodeSeam.Compact), and a listing behind the head costs
+// at most a repository planned a poll late, since a compaction syncs at its
+// repository's version and its committer holds every input to the rows.
+// Gitlet's page bounds make the largest company one or two reads.
 func (c *Compactor) listDue(ctx context.Context) ([]gitlet.CompactionCandidate, error) {
 	q := gitlet.ReadQuery{Kind: gitlet.ReadCompactionDue, MinPacks: c.bounds.minMerge,
 		Fresh: statelog.Freshness{Level: statelog.ReadStale}}
@@ -139,15 +116,12 @@ func (c *Compactor) listDue(ctx context.Context) ([]gitlet.CompactionCandidate, 
 	}
 }
 
-// forget drops the compaction loop's memories of a repository the listing no
-// longer names — a not-due plan, a hold for a full store — so each is bounded
-// by the repositories the company holds at CompactMinMerge packs or more: one
-// that fell below it, or was deleted, is planned from its rows if it comes
-// back. A halved CAP is kept for the compactor's life (M3-decisions M3-O29):
-// it is a fact about what the repository's packs make of a build, which a
-// repository compacted below the listing's floor does not change, and
-// forgotten it would cost the repository a failed build each time it grew
-// back.
+// forget drops the compaction loop's memories (a not-due plan, a full-store
+// hold) of a repository the listing no longer names, bounding them by the
+// repositories listed; one that comes back is planned from its rows. A halved
+// CAP is kept for the compactor's life (M3-decisions M3-O29): it is a fact of
+// the repository's packs, which falling below the listing's floor does not
+// change, and forgotten it would cost a failed build each time it grew back.
 func (c *Compactor) forget(listed []gitlet.CompactionCandidate) {
 	named := make(map[string]bool, len(listed))
 	for _, cand := range listed {
@@ -168,20 +142,17 @@ func (c *Compactor) forget(listed []gitlet.CompactionCandidate) {
 }
 
 // maintainedOf is which listed repositories this node maintains, off ONE
-// LISTING of who serves git and what each Gitlet node advertises: asked of every
-// repository the pass must judge — each at the pack bound, whose alarm it
-// raises whatever its plan, and each it may plan — each by the charge it is
-// placed by ([Compactor.PlacedBy]), and of no other, so a repository its
-// maintainer remembers as not due costs the pass a lookup and nothing more. An
-// error is UNKNOWN for every one of them, never "maintains none".
+// listing of who serves git and what each Gitlet node advertises, asked only
+// of those the pass must judge (each at the pack bound, whose alarm it raises
+// whatever its plan, and each not remembered as not due), each at its
+// [Compactor.PlacedBy] charge. An error is UNKNOWN for all, never "maintains
+// none".
 //
-// ONE LISTING, NEVER ONE A REPOSITORY: only a repository's maintainer ever
-// plans it, so only its maintainer remembers it as not due, and on every other
-// Gitlet node every listed repository is judged at every pass — a pass asking who
-// maintains a repository once a repository read the presence view, decoded
-// every node's lease and sorted the Gitlet nodes ten thousand times a minute on a
-// node maintaining an eighth of ten thousand repositories, to learn it
-// maintained none of the rest.
+// ONE LISTING, NEVER ONE A REPOSITORY: only a maintainer remembers a
+// repository as not due, so every other Gitlet node judges every listed one
+// each pass, and a lookup per repository (the presence view read, every lease
+// decoded, the nodes sorted) ran ten thousand times a minute to learn it
+// maintained none of them.
 func (c *Compactor) maintainedOf(listed []gitlet.CompactionCandidate) (map[string]bool, error) {
 	ask := map[string]int64{}
 	for _, cand := range listed {
@@ -195,11 +166,10 @@ func (c *Compactor) maintainedOf(listed []gitlet.CompactionCandidate) (map[strin
 	return c.o.Maintainers.MaintainerOf(ask)
 }
 
-// behindOf is every listed repository at the pack bound this node maintains,
-// as maintained judged them. With who maintains them unknown, one keeps its
-// place in the reading where the last pass named it — unknown is not "no
-// longer behind", and an alarm cleared by a placement this node could not read
-// would go silent exactly while every push to the repository is refused.
+// behindOf is every listed repository at the pack bound this node maintains.
+// With maintainers unknown, one the last pass named stays: an alarm cleared by
+// a placement this node could not read would go silent exactly while every
+// push to the repository is refused.
 func (c *Compactor) behindOf(listed []gitlet.CompactionCandidate, maintained map[string]bool,
 	unknown error) []behindRepo {
 
@@ -249,30 +219,17 @@ func (c *Compactor) isHeld(l loop, repoID string) bool {
 	return ok
 }
 
-// releaseHeld reads, once, whether the object store now has room for any
-// repository loop l holds back since the store refused an upload of it for
-// room (objstore.ErrFull), and answers the ones this pass may build again.
-//
-// NEVER RETRIED AS A BLIP, which is the full store's contract: a build refused
-// for room builds nothing and uploads nothing again until the store shows the
-// room. Room comes back when an operator makes it or the collector deletes
-// what nothing names — neither of which moves a repository's version, so the
-// hold is NEVER a memory at the version, which would keep an idle repository
-// from ever compacting, or publishing, again. On a store that holds a byte
-// reservation (the fleet's own bucket on the broker), a repository is released
-// once the reservation's room left holds what its build would store, the
-// smallest first, each counted against the room the next is held to. A
-// provider's bucket reserves nothing and can say nothing of its room, so the
-// only way to learn of it is a write: one held repository — the smallest — is
-// let through once [collect.CollectInterval] has passed since the loop's last
-// refusal, the soonest the collector, the one thing in the engine that frees
-// room in such a bucket, can have made any; its upload stored, every hold of
-// every loop is released ([Compactor.stored]). So a full provider's bucket
-// costs a node one build a loop an hour, never one a repository a poll. A
-// failed read of the room holds every repository back for the pass. On either
-// store, a repository's own hold in a loop goes once that loop's own upload of
-// it is stored: the refusal it was held back for is answered, and a later
-// refusal sets an estimate of its own.
+// releaseHeld reads once whether the object store now has room for any
+// repository loop l holds back for objstore.ErrFull, and answers the ones this
+// pass may build again (package doc, "The uploads, and a store with no room").
+// The hold is never a memory at the version, which room coming back does not
+// move. A store with a byte reservation releases holds smallest first while
+// the room left holds their estimates. A provider's bucket says nothing of its
+// room, so its smallest hold goes through once [collect.CollectInterval] (the
+// collector frees such room, nothing else) has passed since the loop's last
+// refusal, and its upload stored releases every hold ([Compactor.stored]): one
+// build a loop an hour, never one a repository a poll. A failed read holds
+// every repository back for the pass.
 func (c *Compactor) releaseHeld(ctx context.Context, l loop) (map[string]bool, error) {
 	c.mu.Lock()
 	type hold struct {
@@ -325,27 +282,14 @@ func (c *Compactor) holdFull(l loop, repoID string, estimate int64) {
 // stored is a build of loop l — a compaction's outputs, or a publication's
 // layer and repack outputs — of repoID whose uploads the store took.
 //
-// ITS OWN HOLD GOES, WHATEVER THE STORE: the refusal loop l held repoID back
-// for is answered by these very uploads, stored, and a refusal of a later
-// build of it sets an estimate of its own. Kept, the estimate of the build a
-// full store first refused went on holding the repository back for as long as
-// the loop's listing named it — on a store that holds a reservation nothing
-// else drops a hold of a repository still listed, and one that keeps
-// gitlet.CompactMinMerge full packs, or that a capped roll leaves listed, is in
-// the compaction's listing for good — so once the room fell back below that
-// first build's size, as the uploads just stored and a day of retired inputs
-// make usual, every later build of it, however small, was skipped at every
-// pass, until its pushes were refused compaction_behind; and the stale
-// estimate was charged against the room every other held repository is
-// released by. Another loop's hold of it stays: its estimate is another
-// build's.
-//
-// THE REST, by what the store says of its room. On a provider's bucket, which
-// says nothing of it, a write it takes is the one way this node learns the
-// room came back, so every repository any loop holds back for it is
-// released. On a store that holds a reservation the room is read every pass
-// instead ([Compactor.releaseHeld]) — one build's uploads taken say nothing of
-// a larger one's — and no other hold is released here.
+// ITS OWN HOLD GOES, WHATEVER THE STORE: these uploads answer the refusal it
+// was held for. Kept, the first build's estimate would hold back every later,
+// smaller build of a repository still listed until its pushes were refused
+// compaction_behind. Another loop's hold stays: its estimate is another
+// build's. On a provider's bucket a write taken is the only sign room came
+// back, so every hold of every loop goes; a reservation's room is read every
+// pass instead ([Compactor.releaseHeld]), since one build's uploads say nothing
+// of a larger one's.
 func (c *Compactor) stored(ctx context.Context, l loop, repoID string) {
 	c.mu.Lock()
 	delete(c.held[l].repos, repoID)

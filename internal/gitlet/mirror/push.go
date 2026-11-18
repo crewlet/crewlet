@@ -23,16 +23,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// pushBatch is the most refspecs one `git push` of a push mirror carries:
-// gitlet.MaxImportRefs, the refs one record of an import carries — a thousand
-// refspecs of a 40-hex id and a ref name is some hundred kilobytes of argv,
-// far inside every platform's argument limit, where a repository's whole tag
-// set in one argv would not be. A push of more moves the rest in the next.
+// pushBatch is the most refspecs one `git push` carries: a thousand refspecs
+// are some hundred kilobytes of argv, far inside every platform's argument
+// limit, where a repository's whole tag set would not be.
 const pushBatch = gitlet.MaxImportRefs
 
 // DefaultRefs are the refs a push mirror that names none pushes: the
-// repository's default branch, read when it pushes — so a rename of that
-// branch moves what it pushes with it — and every tag.
+// repository's default branch, read when it pushes so a rename moves with it,
+// and every tag.
 func DefaultRefs(defaultBranch string) []string {
 	return []string{"refs/heads/" + defaultBranch, "refs/tags/*"}
 }
@@ -44,19 +42,18 @@ type pushed struct {
 }
 
 // level is what a push mirror's last attempt left the other host level with,
-// as a digest ([coverage]), and when it read — or pushed — the other host so:
-// what lets a nudge that moved nothing the mirror covers end without dialing
-// ([Mirrors.stillLevel]). A digest rather than the refs themselves: a mirror
-// of a repository of gitlet.MaxRefsPerRepo refs would keep megabytes here.
+// as a digest ([coverage]), and when it read or pushed it so
+// ([Mirrors.stillLevel]). A digest, not the refs: gitlet.MaxRefsPerRepo refs
+// would keep megabytes here.
 type level struct {
 	digest [sha256.Size]byte
 	at     time.Time
 }
 
-// coverage is the digest of what a push mirror holds the other host to: the
-// other host's URL, the patterns it covers — a pattern added can delete
-// refs there with nothing of the copy's moving — every covered ref with the
-// commit it is to hold, and every branch held back.
+// coverage is the digest of what a push mirror holds the other host to: its
+// URL, its patterns (an added pattern can delete refs there with nothing of
+// the copy's moving), every covered ref with its commit, and every branch
+// held back.
 func coverage(url string, patterns []string, want map[string]string, waiting []string) [sha256.Size]byte {
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\x00", url)
@@ -77,12 +74,9 @@ func coverage(url string, patterns []string, want map[string]string, waiting []s
 }
 
 // stillLevel reports whether key's push mirror covers what its last attempt
-// left the other host level with (sum), read so within an interval of now:
-// a nudge that moved nothing it covers — a seat's push to its own branches,
-// a check's result, a change's record — then dials nobody, where it dialed
-// the other host once a [PushPace] while the repository was busy. Once an
-// interval the other host is read again whatever moved, so a writer there
-// that is not the mirror is undone within gitlet.MirrorInterval.
+// left the other host level with (sum), read so within an interval of now,
+// so a nudge that moved nothing it covers dials nobody. The interval bound
+// undoes a writer there that is not the mirror within gitlet.MirrorInterval.
 func (m *Mirrors) stillLevel(key mirrorKey, sum [sha256.Size]byte, now time.Time) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -105,17 +99,10 @@ func (m *Mirrors) unlevel(key mirrorKey) {
 	delete(m.levels, key)
 }
 
-// push is one attempt of repoID's PUSH MIRROR (M6-D16): the push mirror and
-// the repository's green rows read in one snapshot (`mirror_push`), this
-// node's copy synced at or past it, the seat it pushes as judged against the
-// chart this node holds (gitlet.MirrorSeatRefusal), the refs it covers chosen —
-// each protected branch at its GREEN commit, and held where it has none, every
-// other ref at its tip — and, unless they are what the last attempt left the
-// other host level with within an interval ([Mirrors.stillLevel]), compared
-// with what the other host holds (`ls-remote`), and the difference pushed,
-// forced, from a scratch over the copy's incarnation. A nil error is a mirror
-// the other host now holds level, or found or was left level; the push's
-// account is published (code_mirror_pushed) where it moved anything.
+// push is one attempt of repoID's PUSH MIRROR (M6-D16; package doc, "The push
+// mirror follows green"). A nil error is a mirror the other host now holds
+// level, or found or was left level; the push's account is published
+// (code_mirror_pushed) only where it moved anything.
 func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor statelog.Position) (err error) {
 	outcome := "current"
 	defer func() {
@@ -139,15 +126,13 @@ func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor state
 		return fmt.Errorf("mirror: read %s's push mirror: %w", repoID, err)
 	}
 	if len(ans.Mirrors) == 0 || ans.Mirrors[0].To == nil {
-		// The push mirror was removed, or the repository with it: nothing is
-		// owed, and nothing more is remembered of it here.
+		// Removed, or its repository: nothing is owed or remembered.
 		m.forget(mirrorKey{repo: repoID, out: true})
 		return nil
 	}
 	to := *ans.Mirrors[0].To
-	// THE COPY AT OR PAST THE READ: every green commit the read names was
-	// landed at or before the position it answered at, so a copy synced
-	// there holds it.
+	// Every green commit the read names landed at or before its position, so
+	// a copy synced there holds it.
 	s, err := m.o.Cache.Sync(ctx, repoID, statelog.FloorAt(statelog.ReadSession, ans.Position))
 	if err != nil {
 		return fmt.Errorf("mirror: sync %s: %w", repoID, err)
@@ -176,9 +161,8 @@ func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor state
 	}
 	key, sum, read := mirrorKey{repo: repoID, out: true}, coverage(to.URL, patterns, want, waiting), m.now()
 	if m.stillLevel(key, sum, read) {
-		// NOTHING IT COVERS MOVED since the other host was last level with
-		// it, an interval ago at most: a nudge from a seat's push, a check's
-		// result or a change's record dials nobody.
+		// Nothing it covers moved since the other host was last level with
+		// it, an interval ago at most.
 		return nil
 	}
 	remote, err := m.o.Dial(ctx, to.URL, to.Credential)
@@ -211,16 +195,12 @@ func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor state
 	return nil
 }
 
-// covered is the refs of the copy s the push mirror covers — patterns, its
-// own or [DefaultRefs] — each with the commit the other host is to hold: a
-// branch a protection rule of the repository protects at its GREEN row's
-// commit, the newest whose required checks passed, and none where it has no
-// green row — it is waiting, held where the other host has it; every
-// other ref — an unprotected branch, a tag — at what the copy holds. A
-// protected branch is the one whose every move leaves a landing row
-// (internal/gitlet's pushlandings.go), so the green row is what a mirror of it
-// follows; an unprotected branch moves with no landing and no green, so a
-// green row it kept from a protection since removed is never followed.
+// covered is the refs of the copy s that patterns cover, each with the commit
+// the other host is to hold: a protected branch at its GREEN row's commit, or
+// waiting where it has none; every other ref at the copy's tip (package doc,
+// "The push mirror follows green"). Protection alone decides: an unprotected
+// branch moves with no landing, so a green row it kept from a protection
+// since removed is never followed.
 func (m *Mirrors) covered(ctx context.Context, s cache.Synced, patterns []string, green []gitlet.GreenRow) (
 	want map[string]string, waiting []string, err error) {
 
@@ -262,18 +242,15 @@ func protected(rules []gitlet.PushRule, ref string) bool {
 	return slices.ContainsFunc(rules, func(r gitlet.PushRule) bool { return gitref.MatchPattern(r.Pattern, ref) })
 }
 
-// remoteRefs is every ref the other host holds that the push mirror covers —
-// patterns, its own or [DefaultRefs] — and the object each names: ONE
-// `ls-remote --refs` (peeled tags left out, so a tag is the object its ref
-// names, as the copy's for-each-ref lists it) of the ARMS the patterns reach,
-// `--branches` and `--tags` — a push mirror's patterns are refs/heads/ or
-// refs/tags/ globs alone (config's validateMirrorRefs) — which protocol v2
-// sends the other host as its ref prefixes, so a forge's refs/pull/* and the
-// like are never advertised to the mirror at all. A pattern argument would
-// not do it: ls-remote matches one against each ref's tail on the client,
-// after the whole advertisement has come. STREAMED (gitproc.Lines), never
-// captured: what the other host holds under the arms grows with it, past
-// what a capture holds (gitproc.CaptureMax, 1 MiB).
+// remoteRefs is every ref the other host holds that patterns cover, with the
+// object each names: ONE `ls-remote --refs` (peeled tags left out, so a tag is
+// its ref's object, as the copy's for-each-ref lists it) of the arms the
+// patterns reach, `--branches` and `--tags` (config's validateMirrorRefs
+// allows no others), which protocol v2 sends as ref prefixes, so a forge's
+// refs/pull/* is never advertised. A
+// pattern argument would not do it: ls-remote matches it on the client, after
+// the whole advertisement. STREAMED (gitproc.Lines), never captured: the list
+// grows with the other host, past gitproc.CaptureMax.
 func (m *Mirrors) remoteRefs(ctx context.Context, remote gitproc.Remote, patterns []string) (map[string]string,
 	error) {
 
@@ -313,11 +290,10 @@ func (m *Mirrors) remoteRefs(ctx context.Context, remote gitproc.Remote, pattern
 	return out, nil
 }
 
-// diffRefs is the refspecs that bring the other host, holding have, level
-// with want — each ref it holds at another object, or not at all, set
-// (`<oid>:<ref>`), and each covered ref it holds that the copy no longer has
-// deleted (`:<ref>`), a waiting branch never: it is the copy's still, held
-// back — in the order of their refs, and the account of what they move.
+// diffRefs is the refspecs, in ref order, that bring the other host from have
+// level with want — `<oid>:<ref>` for each ref it holds at another object or
+// not at all, `:<ref>` for each it holds that want lacks, a waiting branch
+// never deleted (it is held back) — and the account of what they move.
 func diffRefs(want map[string]string, waiting []string, have map[string]string) ([]string, pushed) {
 	var (
 		specs []string
@@ -340,10 +316,9 @@ func diffRefs(want map[string]string, waiting []string, have map[string]string) 
 }
 
 // pushBatch pushes specs, forced, to remote from the scratch sc over the copy
-// s — never from the copy itself, which only a sync writes — with
-// `--porcelain`, whose every line names a ref and what became of it, so a ref
-// the other host rejected (a protection there, a hook) is named in the error
-// rather than read from a sentence.
+// s, never from the copy, which only a sync writes. `--porcelain` names each
+// ref's fate, so a ref the other host rejected (a protection, a hook) is named
+// in the error rather than read from a sentence.
 func (m *Mirrors) pushBatch(ctx context.Context, s cache.Synced, sc *cache.Scratch, remote gitproc.Remote,
 	specs []string) error {
 
@@ -393,12 +368,12 @@ func (m *Mirrors) announcePushed(ctx context.Context, ev types.CodeMirrorPushed)
 }
 
 // personWithoutGitlet is whether the seat a push mirror pushes as is a
-// person's whom the identity directory says uses no Gitlet — held by nobody,
-// by a person who may not act, or by one not given the app — read before
-// every push (gitlet.MirrorSeatRefusal, ADR-0110); false for an agent's seat and
-// a handle the chart lacks, which the chart alone judges. A directory that
-// cannot answer fails the attempt, which the next one asks again: never a
-// push published as somebody nobody could say may read it.
+// person's whom the identity directory says uses no Gitlet (held by nobody,
+// by one who may not act, or by one not given the app), read before every
+// push (gitlet.MirrorSeatRefusal, ADR-0110); false for an agent's seat or a
+// handle the chart lacks, which the chart alone judges. A directory that
+// cannot answer fails the attempt: never a push published as somebody nobody
+// could say may read it.
 func (m *Mirrors) personWithoutGitlet(ctx context.Context, as string, roster gitlet.Roster) (bool, error) {
 	if roster == nil {
 		return false, nil

@@ -577,6 +577,9 @@ var contract = []Entry{
 	{"SeatActivity", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
 	{"StoppedReason", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
 
+	// activity.ts
+	{"ACTIVITY_TAGS", ReadLiteral, "internal/activityline.TestTheDashboardReadsEveryTag"},
+
 	// steer.ts
 	{"STEER_NOTE_MAX_RUNES", ReadScalar, "internal/agent/steer.TestTheDashboardBoundsANoteAtTheEnginesCap"},
 	{"STEER_READS", ReadLiteral, "internal/agent/steer.TestTheDashboardKnowsWhenANoteIsRead"},

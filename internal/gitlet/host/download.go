@@ -27,9 +27,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// GET /git/{repo}/-/raw and /-/archive.zip: a file's bytes and a commit's ZIP,
-// served inert (ADR-0153). Lookups run in the read lane; the stream runs in the
-// transfer lane under the credential's share, a large ZIP in an archive place.
+// GET /git/{repo}/-/raw and /-/archive.zip (package doc, "A file's bytes and a
+// commit's ZIP are served inert beside git"). A lookup runs in the read lane.
 
 // The query keys each download takes, a closed set: any other key is refused.
 var (
@@ -114,8 +113,8 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request, admit admitter
 		return
 	}
 	if r.Method == http.MethodHead {
-		// The dashboard's probe of the route: answered before any repository
-		// is read and before any git runs.
+		// The dashboard's probe of the route: answered before any
+		// repository read or git.
 		w.Header().Set("Allow", http.MethodGet)
 		auth.GitText(w, http.StatusMethodNotAllowed, "a download is a GET")
 		return
@@ -160,8 +159,8 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request, admit admitter
 	}
 	d := &downloading{s: s, w: w, r: r, adm: adm, kind: kind, commit: at.commit, start: start,
 		out: newSink(w, "", s.now)}
-	// ITS USE OF THE REPOSITORY, counted however the answer ends: one git
-	// process that read it here, and its bytes out (Server.served).
+	// Counted however the answer ends: one git process read the
+	// repository, and its bytes out (Server.served).
 	defer func() { s.served(adm, d.out, cache.Use{Fetches: 1}) }()
 	if kind == types.FetchedRaw {
 		d.raw(ctx, &synced, q, at)

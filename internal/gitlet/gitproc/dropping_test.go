@@ -13,17 +13,16 @@ import (
 )
 
 // THE DROPPING VIEW IS NAMED WHERE IT IS SERVED, AND NOWHERE ELSE: a process
-// that names a cache's dropping view (Cmd.Dropping) reads it as
-// GIT_ALTERNATE_OBJECT_DIRECTORIES and nothing more; a process leaning on an
-// alternate that holds one — a push's scratch — reads no alternate object
-// directory and holds every commit its alternate's commit-graph names to the
-// objects it can reach (GIT_COMMIT_GRAPH_PARANOIA); and a process leaning on
-// an alternate that holds none, or running in a cache without naming its
-// view — the maintainer's — is handed neither.
+// naming a cache's dropping view (Cmd.Dropping) gets it as
+// GIT_ALTERNATE_OBJECT_DIRECTORIES and nothing more; one leaning on an
+// alternate that holds a view (a push's scratch) gets no alternate object
+// directory and holds its alternate's commit-graph to the objects it can
+// reach (GIT_COMMIT_GRAPH_PARANOIA); one leaning on an alternate with none, or
+// in a cache without naming its view (the maintainer), gets neither.
 //
-// Mutations: set the paranoia only where an alternate is named, whatever it
-// holds, and the scratch over a cache with no dropping view carries it; drop
-// it, and the scratch over one with a view carries none.
+// Mutations: set the paranoia wherever an alternate is named, and the scratch
+// over a cache with no view carries it; drop it, and the scratch over one with
+// a view carries none.
 func TestTheDroppingViewIsNamedWhereItIsServed(t *testing.T) {
 	t.Parallel()
 	p := fakePool(t, "exec env", gitproc.Options{})
@@ -60,12 +59,12 @@ func TestTheDroppingViewIsNamedWhereItIsServed(t *testing.T) {
 }
 
 // A DROPPING VIEW NO CALL MAY NAME IS REFUSED before any git starts: with no
-// repository, beside an alternate, as any other path than the repository's
-// own DroppingDir (ErrInvalid) — and one that is not there, a link (wherever
-// it leads) or a file is the repository's shape (ShapeDropping), which the
-// pool holds every repository to whether or not its call names the view, so
-// a planted link refuses every process in the cache, a push's scratch leaning
-// on it among them.
+// repository, beside an alternate, or as any path but the repository's own
+// DroppingDir (ErrInvalid). A named view that is not there, and a link
+// (wherever it leads) or a file at DroppingDir, break the repository's shape
+// (ShapeDropping); the link and file rule holds whether or not the call names
+// the view, so a planted link refuses every process in the cache, a push's
+// scratch leaning on it among them.
 //
 // Mutations: accept a view beside an alternate, and the scratch runs with it;
 // skip checkDropping's link rule, and the link is served.
@@ -157,13 +156,11 @@ func TestADroppingViewNoCallMayNameIsRefused(t *testing.T) {
 	}
 }
 
-// GIT READS A DROPPING OBJECT ONLY THROUGH THE VIEW: an object a cache holds
-// in its dropping view alone is read by a process that names the view —
-// wherever the cache lies, a directory whose name holds the list's separator
-// and a double quote among them — and by none other; and a push's scratch
-// leaning on the cache reads neither the object nor the commit the cache's
-// commit-graph still names, as git would through the graph had it not been
-// told to hold the graph to the objects. On each of the node's gits.
+// GIT READS A DROPPING OBJECT ONLY THROUGH THE VIEW, on each of the node's
+// gits: an object only in a cache's dropping view is read by a process naming
+// the view (even where the cache's path holds the list's separator and a
+// double quote) and by no other; and a push's scratch leaning on the cache
+// reads neither it nor the commit the cache's commit-graph still names.
 //
 // Mutations: write the view's path into the variable unquoted, and git splits
 // it at the separator and reads nothing; drop the scratch's paranoia, and
@@ -175,10 +172,9 @@ func TestGitReadsADroppingObjectOnlyThroughTheView(t *testing.T) {
 		client := gittest.NewClientWith(t, git)
 		work := client.Init(t)
 		kept := client.Commit(t, work, map[string]string{"a.txt": "a\n"}, "kept")
-		// THE DROPPED COMMIT names the kept one's tree: an amended message,
-		// so the one object the cache does not serve outside its view is the
-		// commit itself, and a walk that takes the commit from a graph finds
-		// everything below it.
+		// The dropped commit names the kept one's tree, so it is the one
+		// object served only through the view, and a walk taking it from a
+		// graph finds everything below it.
 		dropped := client.Commit(t, work, nil, "dropped")
 
 		parent := t.TempDir()

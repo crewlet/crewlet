@@ -32,62 +32,42 @@ import (
 // indexed listing a Gitlet node a minute, as [Poll] is the compaction loop's.
 const PublishPoll = time.Minute
 
-// The publication's cadence — when a repository's tail is worth a layer
-// ([Due]). Each states its reason; the ones MEASURED are BenchmarkMidx's arms
-// in internal/gitlet/cache — git 2.56.0, one bounded run of each arm
-// (-benchtime 1x, one count) on two E-cores of an Intel Core Ultra 7 265U,
-// 2026-10-29, over gittest.History's composition at 100 MB and a gigabyte.
+// The publication's cadence ([Due]). The MEASURED values are BenchmarkMidx's
+// arms (internal/gitlet/cache's layers_bench_test.go; package doc,
+// "Measured"), over gittest.History at 100 MB and a gigabyte.
 const (
 	// PublishPacks is a tail worth a publication by its PACKS: a pack outside
-	// the chain costs every request that reaches it a walk of its own
-	// commits and trees — the own-mode index's reason for cache.MidxPacks,
-	// moved to the layer that replaces it. SIXTY-FOUR, MEASURED
-	// (stale=k/mode=chain, pushes of 4 KiB beside a published root; and
-	// step=publish/layer=tail, the publication over sixty-four of them):
-	// counting a clone's objects through the chain costs about 0.14 ms a
-	// pack outside it at 100 MB and 0.07 ms at the gigabyte, against a
-	// publication of 0.66 s and 9.9 s — so a repository published every M
-	// pushes, each of its sixteen requests a push paying M/2 packs' walk, is
-	// cheapest at M = √(2T/qδ): 25 at 100 MB and 129 at the gigabyte. A
-	// JUDGMENT CALL between the two: sixty-four, near their geometric middle
-	// (57), costs each about a quarter to a half past its own least, where
-	// either least would cost the other end nearly three times its own; past
-	// a minute's build the duty cycle binds before it anyway.
+	// the chain costs every request that reaches it a walk of its own commits
+	// and trees (cache.MidxPacks's reason). MEASURED (stale=k/mode=chain;
+	// step=publish/layer=tail): a pack outside the chain costs a clone's count
+	// 0.14 ms at 100 MB and 0.07 ms at the gigabyte, against a publication of
+	// 0.66 s and 9.9 s, so publishing every M pushes, sixteen requests a push,
+	// is cheapest at M = √(2T/qδ): 25 and 129. Sixty-four, near their
+	// geometric middle (57), is a JUDGMENT CALL costing each end a quarter to
+	// a half past its least, where either least costs the other end nearly
+	// three times its own; past a minute's build the duty cycle binds first.
 	PublishPacks = 64
 	// PublishShare is a tail worth a publication by its SHARE of the
-	// repository's objects: the tail's objects are walked, never read off the
-	// bitmap, and packed by every clone that reaches them — so a SMALL
-	// repository is published once its tail holds a sixty-fourth of its
-	// objects. SIXTY-FOURTH, MEASURED (share=…: a clone of main with the
-	// history's last 1, 4 and 16 of its 64 pushes outside a published root):
-	// a sixty-fourth added nothing a run shows to a clone at 100 MB (0.64 s
-	// either way) and at the gigabyte (6.53 s against 6.60), a sixteenth a
-	// quarter (0.79 against 0.64 s; 8.40 against 6.60 s), and a quarter more
-	// than doubled it (1.42 s; 14.7 s) — so the largest share whose tail adds
-	// at most a tenth to a clone at both sizes is the sixty-fourth. 16, the
-	// provisional share this replaced, priced a tail by a count of its
-	// objects (0.09 s at a sixteenth of 219 679 objects), not by the clone
-	// that also packs them. A share alone does not bound a large repository's
-	// tail: PublishTailObjects does.
+	// repository's objects: a tail's objects are walked, never read off the
+	// bitmap, and packed by every clone that reaches them. MEASURED (share=…:
+	// a clone with the last 1, 4 and 16 of 64 pushes outside a published
+	// root): a sixty-fourth added nothing a run shows at 100 MB (0.64 s) or
+	// the gigabyte (6.53 s against 6.60), a sixteenth a quarter, and a quarter
+	// more than doubled it, so the sixty-fourth is the largest share adding at
+	// most a tenth to a clone at both sizes. A share alone does not bound a
+	// large repository's tail: PublishTailObjects does.
 	PublishShare = 64
-	// PublishTailObjects is a tail worth a publication by its OBJECTS, the
-	// ABSOLUTE bound: a tail's cost is its objects, never its share — every
+	// PublishTailObjects is the ABSOLUTE bound on a tail's OBJECTS: every
 	// clone, the installer's canary and the node's tip commit-graph walk every
-	// object outside the chain, at most gitproc.WalkPerObject an object, plus
-	// gitproc.TransferBytesPerObject of a clone's memory each — so this many
-	// objects cost a clone at most a second of walk and some 21 MiB. A
-	// sixty-fourth of the largest repository the defaults admit, some 60
-	// million objects, is 940 000: 10 s of walk added to every clone of it,
-	// while compaction keeps such a tail to a few dozen packs and PublishPacks
-	// never fires there. A repository is due at whichever of the share and
-	// this bound its tail reaches first. MEASURED (tail=…, at the gigabyte:
-	// a quarter of it, it, and four times it outside a published root): the
-	// canary walks a tail object in 2.7–3.3 µs and the tip's write in
-	// 1.1–2.8, and a clone pays 11.0 µs for each, packing included (the line
-	// through the three clones: 7.28, 7.83 and 11.0 s), which is
-	// gitproc.WalkPerObject's own figure, so the bound stays a second over it
-	// — the clone at the bound ran 1.23 s past the chained clone with no tail
-	// (6.60 s) in its one run.
+	// object outside the chain, at most gitproc.WalkPerObject each plus
+	// gitproc.TransferBytesPerObject of a clone's memory, so this many cost a
+	// clone at most a second of walk and some 21 MiB. A sixty-fourth of the
+	// largest repository the defaults admit would add 10 s to every clone, a
+	// tail compaction keeps under PublishPacks. Due at whichever of the share
+	// and this its tail reaches first. MEASURED (tail=…, at the gigabyte): the
+	// canary walks a tail object in 2.7–3.3 µs, the tip's write in 1.1–2.8,
+	// and a clone pays 11.0 µs, packing included, gitproc.WalkPerObject's own
+	// figure; the clone at the bound ran 1.23 s past one with no tail.
 	PublishTailObjects = int64(time.Second / gitproc.WalkPerObject)
 	// PublishDebounce is how long a burst of pushes stands still before its
 	// tail is published once, rather than a layer for each of its pushes —
@@ -100,60 +80,34 @@ const (
 	// which PublishMinInterval already paces. KEPT.
 	PublishMaxWait = 10 * time.Minute
 	// PublishMinInterval is the least time between two publications of one
-	// repository, and between two REPAIRS — cache.MidxMinInterval's reason: a
-	// layer's build walks the whole history. TEN MINUTES, the larger of ten
-	// minutes and ten times a publication at 5 GB, as cache.MidxMinInterval
-	// is set beside its run: a later publication (step=publish/layer=tail)
-	// took 0.66 s at 100 MB and 9.9 s at the gigabyte, its walk of the
-	// history growing faster than the bytes, which at the gigabyte's growth
-	// is about a minute at 5 GB — ten minutes within that extrapolation's
-	// error, since the 5 GB arm (under CREWLET_BENCH_LARGE) has not run on
-	// the machine these did. A JUDGMENT CALL on that figure, and a safe one:
-	// past a minute's build PublishDutyCycle holds the repository to a tenth
-	// of the maintainer's time whatever this says.
+	// repository, and between two REPAIRS: a layer's build walks the whole
+	// history (cache.MidxMinInterval's reason). TEN MINUTES, the larger of ten
+	// minutes and ten times a publication at 5 GB: step=publish/layer=tail
+	// took 0.66 s at 100 MB and 9.9 s at the gigabyte, the walk growing faster
+	// than the bytes, so about a minute at 5 GB by extrapolation (the 5 GB
+	// arm, under CREWLET_BENCH_LARGE, has not run there). A JUDGMENT CALL, and a
+	// safe one: past a minute's build PublishDutyCycle binds anyway.
 	PublishMinInterval = 10 * time.Minute
 	// PublishDutyCycle holds a repository's publications to at most a tenth
-	// of the time of the node that runs them: the next waits this many times
-	// the last one's build, where that is longer than PublishMinInterval —
-	// cache.MidxDutyCycle's reason. KEPT. EVERY BUILD this node begins is
-	// held to it, the ones that do not land as well as the ones that do
-	// ([Compactor.paced]): a build's time is spent whatever its record
-	// becomes.
+	// of its node's time: the next waits this many times the last one's
+	// build, where that is longer than PublishMinInterval (cache.MidxDutyCycle's
+	// reason). KEPT. Every build this node begins is held to it, landed or not
+	// ([Compactor.paced]): its time is spent whatever its record becomes.
 	PublishDutyCycle = 10
 )
 
-// Due reports whether c's tail should be published at now, from its row and
-// tailSince — when this node's publication loop first listed the tail —
-// alone, before anything is synced:
+// Due reports whether c's tail should be published at now, judged from its
+// row and tailSince (when this node first listed the tail) before any sync:
+// the tail holds a pack; it is WORTH one (never published, PublishPacks
+// packs, or the fewer of a PublishShare-th of the objects and
+// PublishTailObjects); it has SETTLED (PublishDebounce since the last push,
+// or PublishMaxWait since the later of tailSince and the last publication);
+// and the DUTY CYCLE allows it (the longer of PublishMinInterval and
+// PublishDutyCycle times the last build, since the last publication).
 //
-//   - the tail holds a pack: the live packs are past the published ones;
-//   - it is WORTH a publication: the repository was never published, or its
-//     tail holds PublishPacks packs, or a PublishShare-th of the repository's
-//     objects or PublishTailObjects objects, whichever is fewer;
-//   - it has SETTLED: it stood still PublishDebounce since its last push, or
-//     the tail has waited PublishMaxWait — since the later of tailSince and
-//     the last publication, which every pack of a tail it left behind came
-//     after;
-//   - the DUTY CYCLE allows it: PublishMinInterval, or PublishDutyCycle times
-//     the last publication's build, whichever is longer, since the last
-//     publication.
-//
-// THE CEILING RUNS FROM THE TAIL'S START, NEVER FROM THE LAST PUBLICATION
-// ALONE: PublishMaxWait is PublishMinInterval, so a ceiling counted from the
-// last publication would have passed whenever the duty cycle allowed one, and
-// the debounce would hold nothing back — a burst of pushes into a repository
-// idle since its last publication would be published at its first pack, its
-// other packs left in the tail for a whole duty cycle, as long as a
-// publication's build allows (hours for the largest). The row holds no clock
-// of the tail's own, and the listing a pass reads names a repository only
-// while it holds a tail, so a pass's first sighting of it is the tail's start
-// to within one PublishPoll — a memory of this node's, which a restart or a
-// new maintainer starts again, costing at most one ceiling more.
-//
-// The tail's counts are the last publication's recount against the live ones
-// (gitlet.PublicationCandidate), so a tail may hold a pack pushed again
-// byte-identical to a published one and nothing to publish, which only the
-// plan tells.
+// The ceiling never runs from the last publication alone: PublishMaxWait is
+// PublishMinInterval, so a burst would be published at its first pack. A tail
+// may be a re-pushed published pack, which only the plan finds empty.
 func Due(c gitlet.PublicationCandidate, tailSince, now time.Time) bool {
 	tailPacks, tailObjects := c.LivePacks-c.PublishedPacks, c.LiveObjects-c.PublishedObjects
 	never := c.PublishedAt.IsZero()
@@ -183,38 +137,18 @@ type PublishReport struct {
 	Listed, Damaged, Maintained, Due, Published, Refused, Failed int
 }
 
-// PublishPass is one pass of the PUBLICATION loop:
-//
-//  1. LIST every repository holding a pack no published layer covers — the
-//     `publication_due` read, every page, LEAST RECENTLY PUBLISHED FIRST, at
-//     STALE for the compaction listing's reason (the router carries this
-//     node's own writes as a floor on every code read it sends) — and every
-//     repository whose copy on this node holds a layer this node refused
-//     (cache.Cache.Damaged), which only its maintainer's REPAIR replaces: an
-//     idle repository whose layer the store lost is in no due listing.
-//  2. MAINTAINERS, judged against ONE LISTING of who serves git and what each
-//     Gitlet node advertises ([Compactor.maintainedOfPublications]), for every
-//     repository the pass may publish, by its maintenance's charge
-//     ([Compactor.PlacedBy]), as the compaction loop judges its own: a
-//     placement this node cannot read publishes nothing that pass, logged
-//     once.
-//  3. THE STORE'S ROOM, read once a pass, and only while a repository is held
-//     back for a full store and the pass may publish
-//     ([Compactor.releaseHeld]).
-//  4. Every repository in that order, until the next tick would begin: one a
-//     plan found nothing to publish in at its version is skipped unless it is
-//     damaged; one held back for a full store is skipped until the room is
-//     there; one whose last build here did not land waits out that build's
-//     pace ([Compactor.paced]); a REPAIR is due at once, paced by
-//     PublishMinInterval since its last publication; any other is held to
-//     [Due] — each judged by its row, and by when this node first listed its
-//     tail, before anything is synced; one this node does not maintain is
-//     skipped; and every other is PUBLISHED ([Compactor.Publish]), one at a
-//     time.
-//
-// A listing that fails is the pass's error. The pass is logged
-// code_publication_pass, at DEBUG unless it published, refused or failed
-// something.
+// PublishPass is one pass of the PUBLICATION loop. It LISTS every repository
+// with a tail (`publication_due`, every page, least recently published first,
+// at STALE for the compaction listing's reason) and every one whose copy here
+// holds a layer this node refused (cache.Cache.Damaged), which only a REPAIR
+// replaces and no due listing names once idle. It judges MAINTAINERS off ONE
+// listing ([Compactor.maintainedOfPublications]), publishing nothing when it is
+// unread; reads the store's room once ([Compactor.releaseHeld]); and until the
+// next tick PUBLISHES ([Compactor.Publish]), one at a time, each repository not
+// remembered empty (a repair excepted), held for a full store, paced
+// ([Compactor.paced]), short of [Due] or [Compactor.repairDue], or maintained
+// elsewhere. A failed listing is the pass's error; code_publication_pass logs
+// at DEBUG unless the pass published, refused or failed.
 func (c *Compactor) PublishPass(ctx context.Context) (PublishReport, error) {
 	began := c.now()
 	var report PublishReport
@@ -291,15 +225,12 @@ func (c *Compactor) PublishPass(ctx context.Context) (PublishReport, error) {
 	return report, nil
 }
 
-// maintainedOfPublications is which repositories of the pass's listing this
-// node maintains, off ONE LISTING of who serves git and what each Gitlet node
-// advertises, as the compaction loop judges its own ([Compactor.maintainedOf]):
-// asked of every repository the pass may publish — each but one a plan found
-// nothing to publish in at its version, which is no repair — each by the
-// charge it is placed by ([Compactor.PlacedBy]). An error is UNKNOWN for every
-// one of them, never "maintains none". The rules that turn on the clock — a
-// repair's pace, [Due] — are left to the pass, which reads the clock at each
-// repository, so a repository due part way through it is one it judged.
+// maintainedOfPublications is which listed repositories this node maintains,
+// off ONE listing of who serves git, as [Compactor.maintainedOf] judges the
+// compaction loop's: asked of each the pass may publish (a repair, or one not
+// remembered empty) by its charge ([Compactor.PlacedBy]). An error is UNKNOWN
+// for all of them, never "maintains none". The clock's rules ([Due], a
+// repair's pace) stay with the pass, which reads the clock at each repository.
 func (c *Compactor) maintainedOfPublications(listed []gitlet.PublicationCandidate,
 	damaged map[string]bool) (map[string]bool, error) {
 
@@ -333,12 +264,10 @@ func (c *Compactor) listPublications(ctx context.Context) ([]gitlet.PublicationC
 	}
 }
 
-// forgetPublications drops the publication loop's memories of a repository the
-// pass no longer names — a plan that found nothing to publish, a hold for a
-// full store, the pace of a build that did not land — so each is bounded by
-// the repositories with a tail or a refused layer: one whose tail a
-// publication covered, or that was deleted, is planned from its rows if it
-// comes back.
+// forgetPublications drops the loop's memories (nothing to publish, a
+// full-store hold, a failed build's pace) of every repository the pass no
+// longer names, bounding them by the repositories with a tail or a refused
+// layer; one that comes back is planned from its rows.
 func (c *Compactor) forgetPublications(named []gitlet.PublicationCandidate) {
 	in := make(map[string]bool, len(named))
 	for _, cand := range named {
@@ -363,14 +292,14 @@ func (c *Compactor) forgetPublications(named []gitlet.PublicationCandidate) {
 	}
 }
 
-// sightTails records at, the pass's start, as the first sighting of the tail
-// of every repository the due listing names that this node had not sighted
-// yet, forgets every sighting of one it no longer names — its tail published,
-// or itself deleted — so that its next tail is sighted afresh, and answers
-// every sighting: what [Due]'s ceiling runs from. A repository listed without
-// a pause, its tail never emptying, keeps its sighting, which its last
-// publication then bounds from below. The due listing alone is sighted, never
-// a repository listed for a refused layer alone, which holds no tail.
+// sightTails answers when this node first sighted each listed repository's
+// tail, what [Due]'s ceiling runs from: at for one not sighted before, and a
+// sighting is forgotten once the listing no longer names it, so the next tail
+// is sighted afresh. The row holds no clock of the tail's own, so this is
+// within one PublishPoll of its start; a restart or a new maintainer starts it
+// again, costing at most one ceiling more. A tail that never empties keeps its
+// sighting, which its last publication bounds from below. Only the due
+// listing is sighted, never a repository listed for a refused layer alone.
 func (c *Compactor) sightTails(listed []gitlet.PublicationCandidate, at time.Time) map[string]time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -406,41 +335,25 @@ func (c *Compactor) rememberNothing(cand gitlet.PublicationCandidate) {
 }
 
 // repairDue reports whether a REPAIR of cand may be built at now: at most one
-// a PublishMinInterval since the repository's last publication — so a store
-// that keeps losing what is published costs a repository one publication a
-// PublishMinInterval, never one a pass. A repair this node built that did not
-// land is held back by that build's pace, as every build is
-// ([Compactor.paced]).
+// a PublishMinInterval since the last publication, so a store that keeps
+// losing layers costs one publication an interval, never one a pass. A repair
+// that did not land is paced besides ([Compactor.paced]).
 func (c *Compactor) repairDue(cand gitlet.PublicationCandidate, now time.Time) bool {
 	return cand.PublishedAt.IsZero() || now.Sub(cand.PublishedAt) >= PublishMinInterval
 }
 
-// paced reports whether this node's last build of a publication of repoID —
-// one that did not land: it failed, was refused, or its record is not known
-// applied — holds the repository back at now: until PublishMinInterval, or
-// PublishDutyCycle times that build's length, whichever is longer, has passed
-// since it began. The duty cycle [Due] holds a repository's publications to
-// by its row, which only a record that applies moves.
+// paced reports whether this node's last build of a publication of repoID
+// that did not land (failed, refused, or not known applied) holds it back at
+// now: until the longer of PublishMinInterval and PublishDutyCycle times that
+// build's length has passed since it began, the duty cycle [Due] reads off
+// the row, which only an applied record moves. Unpaced, a failing repository,
+// least recently published, heads every pass and is rebuilt back to back,
+// and no other repository the node maintains is published again.
 //
-// EVERY BUILD THIS NODE BEGINS IS PACED: a build that did not land moves no
-// row, and the due listing is least recently published first, so without this
-// the repository it failed for was the first candidate of every pass — and
-// where its build ran past PublishPoll, as the largest repositories' builds
-// do, the pass ended after it and the ticker's buffered tick began the next at
-// once, rebuilding that one repository back to back for as long as it failed:
-// every other repository the node maintains never published again, each tail
-// past PublishTailObjects served unbitmapped, and a maintenance slot and up to
-// the publication's whole charge spent on builds that failed. Paced, a
-// repository whose publication keeps failing costs its maintainer at most a
-// tenth of its time, and the pass goes on to the next.
-//
-// A NODE-LOCAL PACE, NEVER A MEMORY AT THE VERSION: a refusal for memory is
-// no build (its admission refused it before any began) and is still never
-// remembered (M3-decisions M3-O26), and a full store's hold stays its own
-// ([Compactor.releaseHeld]) — a build the store refused for room waits for
-// both, the room and its pace, so a reservation whose room comes and goes
-// around a build's estimate never has the repository rebuilt at every pass.
-// A restart forgets it, costing one build more.
+// A NODE-LOCAL PACE, NEVER A MEMORY AT THE VERSION: a memory refusal is no
+// build and never remembered (M3-decisions M3-O26), and a full store's hold
+// stays its own ([Compactor.releaseHeld]), so a build refused for room waits
+// for both. A restart forgets it, costing one build more.
 func (c *Compactor) paced(repoID string, now time.Time) bool {
 	c.mu.Lock()
 	last, ok := c.built[repoID]
@@ -457,71 +370,18 @@ var (
 	errNoBitmap      = errors.New("compact: git wrote the layer without a bitmap")
 )
 
-// Publish plans and runs ONE publication of cand — a repository this node
-// maintains, as the `publication_due` listing named it or its cache found it
-// damaged — and answers what became of it: the unit a suite drives, and what
-// every pass runs one at a time. Nothing is retried inside it, as in
-// [Compactor.Compact]; its error is the one that failed or refused it.
-//
-// Throughout, cand.ID is the REPOSITORY and the publication's own id — the
-// compaction record's, its scratch's and every repack output's derivation —
-// is minted at its build.
-//
-//  1. SYNC at session, floored at the repository's version the listing read,
-//     for the compaction's reason: the committer holds the chain and every
-//     pack to its own snapshot (decide rules 6a–6g).
-//  2. PLAN ([planLayer]) over the copy's chain (cache.Cache.Chain) and its
-//     live packs: nothing to publish is remembered at the listing's version,
-//     a layer still at the installer answers `waiting` and is planned again
-//     at the next pass, and a layer too large is refused and remembered. A
-//     layer to build RESERVES every pack it covers ([Compactor.reserve]):
-//     from then on a compaction of the repository runs beside it and merges
-//     only the packs pushed since, which the layer neither names nor needs —
-//     so a publication of minutes never holds back the merges that keep its
-//     own repository under the pack bound. Until then, its sync and its
-//     plan, a compaction of the repository answers busy; and a publication
-//     asked while a compaction of its repository is running answers busy
-//     itself, since its plan would cover that merge's inputs
-//     ([Compactor.claimPublication]).
-//  3. ADMIT the build to the maintenance lane (cache.Cache.AdmitPublication),
-//     charged at the largest of its steps': busy is the next poll's, and a
-//     charge the node's memory cannot hold is refused `memory` and NEVER
-//     remembered — the budget is read again at every pass, and the next pass
-//     asks whether this node is still the maintainer, which is how a larger
-//     node takes the repository over (M3-decisions M3-O26). Once admitted —
-//     never before, so a refused attempt asks the store nothing — the base
-//     the layer is written over is held to the object store's copy, its parts
-//     asked at once, and a base the store lost is replaced with every layer
-//     above it, that plan's charge held in the same slot in place of the
-//     first's ([Compactor.admitOverItsBase]).
-//  4. BUILD the repack first, where the plan has one — over a store of
-//     exactly its inputs, as a compaction's is ([Compactor.repack]) — and
-//     hold it to a compaction's count and bundle rules BEFORE the layer is
-//     written over its outputs ([Compactor.repackChecked]); then, in a
-//     scratch of its own whose chain files name EXACTLY the layers it is
-//     written over (cache.Cache.NewLayerScratch), the repack's outputs
-//     gathered into it ([gather]), the multi-pack-index layer with its
-//     bitmap over every pack the layer covers, and its commit-graph layer
-//     with every changed-path filter, each written once. Then
-//     the layer is laid out (gitlet.LayLayer) and the whole proposal held to
-//     every rule its committer will, before any byte is stored. THE ADMISSION
-//     IS RELEASED HERE, once the build's last git step has ended — the
-//     uploads, the proposal and the adoption run no git, and holding a
-//     publication's charge through an upload the store paces would idle the
-//     node's maintenance for every other repository (M3-decisions M3-O29,
-//     M3-O40). The scratch, and its pin of the incarnation, stay to the end.
-//  5. UPLOAD every part of the layer and every repack output at once
-//     ([uploadAll]); a store with no room refuses the publication `store_full`
-//     and holds the repository back until it has the room.
-//  6. PROPOSE one compaction carrying the layer, and answer what the
-//     committer decided: applied adopts the outputs and the layer into this
-//     node's cache by link — so the node that built them downloads none —
-//     and forgets the repository's memory.
-//
-// EVERY BUILD IT BEGINS IS PACED until one lands: its start and its length
-// are kept, and the publication pass holds the repository back by them
-// whatever became of the build ([Compactor.paced]) — the duty cycle a landed
-// publication's row holds it to.
+// Publish plans and runs ONE publication of cand (a repository this node
+// maintains, listed due or found damaged) and answers what became of it,
+// retrying nothing inside, as [Compactor.Compact]. cand.ID is the REPOSITORY;
+// the publication's own id is minted at its build. It SYNCS at session,
+// floored at the listed version (package doc); PLANS ([planLayer]) and
+// RESERVES what the layer covers ([Compactor.reserve]); ADMITS the build and
+// holds its base to the store's copy ([Compactor.admitOverItsBase]); BUILDS
+// it ([Compactor.buildLayer]), releasing the admission once its last git step
+// ends, before the uploads (package doc, "The builds' bounds"); UPLOADS
+// ([Compactor.uploadLayer]); and PROPOSES one compaction carrying the layer,
+// adopted by link once applied. Every build it begins is paced until one
+// lands ([Compactor.paced]).
 func (c *Compactor) Publish(ctx context.Context, cand gitlet.PublicationCandidate) (Outcome, error) {
 	c.publishing.Lock()
 	defer c.publishing.Unlock()
@@ -628,29 +488,15 @@ func (c *Compactor) buildable(cand gitlet.PublicationCandidate, p layerPlan, ver
 }
 
 // admitOverItsBase admits a publication of p to the maintenance lane
-// (cache.Cache.AdmitPublication, charged at the largest of its steps'; a
-// refusal is [Compactor.admissionRefused]'s) and then holds the base it is
-// written over to the object store's copy ([Compactor.heldBase]), answering
-// the admission, and the chain and the plan the build runs over — or a nil
-// admission, and what became of the publication.
-//
-// NEVER BUILT OVER A BASE THE STORE LOST: this node installed its own layers
-// from the files it wrote, so its copy holds a layer the store may no longer
-// hold — and a layer written over it would be one no node that fetches its
-// chain can install either. Such a base is replaced with every layer above it:
-// the plan is made again over the layers below the loss ([lostFrom]), held to
-// what a plan builds again, reserved, and its charge held in the admission's
-// own slot in place of the first's (cache.Admission.RechargePublication) — a
-// larger layer, or a repack its gathered packs now need, may pass the first
-// plan's charge, and a release and a second admission would wake the
-// maintainer between them, which could take the slot and leave the repair
-// busy at every pass a busy node gives it.
-//
-// THE STORE IS ASKED ONCE THE ADMISSION IS GRANTED: an attempt refused busy (a
-// moment's state, asked again at the next pass) or for memory (never
-// remembered, asked again at every pass) asks it nothing, where it asked for
-// every part of the base at every attempt before. The admission is the
-// node's, in memory; the questions hold its slot for about one first byte.
+// (cache.Cache.AdmitPublication; a refusal is [Compactor.admissionRefused]'s),
+// then holds its base to the object store's copy ([Compactor.heldBase]),
+// answering the admission and the chain and plan the build runs over, or a
+// nil admission and the publication's outcome. A base the store lost is
+// replaced with every layer above it ([lostFrom]): replanned, reserved, and
+// recharged in the SAME slot (cache.Admission.RechargePublication), since a
+// release and a second admission would wake the maintainer, which could take
+// the slot and leave the repair busy at every pass. The store is asked only
+// once admitted, so an attempt refused busy or for memory asks it nothing.
 func (c *Compactor) admitOverItsBase(ctx context.Context, cand gitlet.PublicationCandidate, s cache.Synced,
 	chain cache.Chain, live []gitlet.PackRow, p layerPlan, cap int64, limits gitlet.Limits) (*cache.Admission,
 	cache.Chain, layerPlan, Outcome, error) {
@@ -702,10 +548,9 @@ func (c *Compactor) admissionRefused(cand gitlet.PublicationCandidate, err error
 		c.log.Debug("code_publication_busy", "repo", cand.Name, "error", err)
 		return OutcomeBusy, err
 	case errors.Is(err, cache.ErrNoMemory):
-		// NEVER REMEMBERED (M3-decisions M3-O26): the node's budget is read
-		// again at every pass, and the next pass asks whether this node is
-		// still the maintainer — how a larger Gitlet node takes the repository
-		// over. The cache logged it once for the incarnation.
+		// NEVER REMEMBERED (M3-decisions M3-O26): the next pass reads the
+		// budget again and asks again who maintains it, which is how a larger
+		// Gitlet node takes it over. The cache logged it once.
 		c.publishRefusal(reasonMemory)
 		return OutcomeRefused, err
 	}
@@ -713,32 +558,17 @@ func (c *Compactor) admissionRefused(cand gitlet.PublicationCandidate, err error
 }
 
 // heldBase is how many of rows[:base], from the root, the object store still
-// holds every part of — base where it holds them all — or the store's error
-// where it could not be read: the answer a walk of the parts in chain order
-// gives, the first part the store lacks or holds at another size ending it at
-// that part's layer, and the first it could not read failing it.
-//
-// WHY THE MAINTAINER ASKS: every other Gitlet node fetches a layer's parts and
-// refuses one the store lost (`missing`), but the maintainer installs its own
-// layer from the files it wrote (cache.Cache.AdoptLayer), so its copy holds a
-// layer the store may have lost since — a restore, which carries no layer, or
-// a bucket's own deletion — and its own copy alone would never say so. Built
-// over it, a new layer is one no node fetching the chain can install either,
-// so a publication is held to the store's copy of its base before anything is
-// built. A part whose bytes the store changed in place is no size of another,
-// and is found by the nodes that fetch it (`corrupt`), whose repair waits for
-// this node's own copy to meet it.
-//
-// THE PARTS ARE ASKED AT ONCE, cache.FetchConcurrency at a time — the width a
-// sync already holds against the same store. On S3, the production store,
-// every request waits a first byte of 20 to 100 ms: asked one after another,
-// a large repository's chain of ten to twenty layers, its root several parts
-// of a gibibyte, cost 0.3 to 2 s an attempt, and the most a base may hold —
-// gitlet.MaxPublishedLayers layers of gitlet.MaxLayerParts parts, 512 — up to 50 s,
-// a large share of a small repository's whole publication and of a pass cut at
-// PublishPoll. At once, it costs about one first byte for every sixteen parts.
-// The answer is the walk's: every part up to the first that is not held or not
-// read is asked to the end, and none past it is begun once that one is known.
+// holds every part of (base where it holds all), or the store's error: what a
+// walk in chain order answers, ended at the layer of the first part missing or
+// of another size, failed by the first it could not read. The maintainer
+// installs its own layers from its files (cache.Cache.AdoptLayer), so its copy
+// never shows a layer the store lost since (a restore, a bucket's deletion),
+// and a layer built over it no fetching node could install. A part changed in
+// place at its size is found by the nodes that fetch it (`corrupt`). Parts are
+// asked AT ONCE, cache.FetchConcurrency at a time as a sync is: one by one,
+// S3's 20–100 ms first byte cost a full base's 512 parts
+// (gitlet.MaxPublishedLayers × gitlet.MaxLayerParts) up to 50 s of a pass cut
+// at PublishPoll. None past the first lost or unread part begins once known.
 func (c *Compactor) heldBase(ctx context.Context, rows []gitlet.LayerRow, base int) (int, error) {
 	type part struct {
 		layer int
@@ -903,13 +733,11 @@ func (c *Compactor) layerCapFailed(cand gitlet.PublicationCandidate, p planned, 
 		"input_bytes", p.packBytes(), "next_cap", c.capFor(cand.ID), "at_floor", atFloor)
 }
 
-// writeLayer writes p's layer under a fresh publication id and lays it out into
-// the publication its committer would be asked to decide: its repack first,
-// where it has one, built and held to its rules in a merge's scratch of its
-// own ([Compactor.repackChecked]); then the layer's scratch, the repack's
-// outputs gathered into it ([gather]); then the layer over them
-// ([Compactor.writeLayerIn]). On an error nothing it made is left, and the
-// outcome is the publication's.
+// writeLayer writes p's layer under a fresh publication id and lays it out
+// into the proposal its committer decides: the repack first, where it has one
+// ([Compactor.repackChecked]), its outputs gathered into the layer's scratch
+// ([gather]), then the layer over them ([Compactor.writeLayerIn]). On an
+// error nothing it made is left, and the outcome is the publication's.
 func (c *Compactor) writeLayer(ctx context.Context, cand gitlet.PublicationCandidate, s cache.Synced,
 	adm *cache.Admission, chain cache.Chain, p layerPlan, cap int64, limits gitlet.Limits) (layerBuilt, Outcome,
 	error) {
@@ -1051,24 +879,17 @@ type repacked struct {
 	plan planned
 }
 
-// repackChecked builds a publication's repack of p — the non-full packs its
-// layer gathers — and holds it to a compaction's rules BEFORE THE LAYER IS
-// WRITTEN over its outputs: cut as a compaction's build is
-// ([bounds.cutFor]), the plan capped again at that cut's [InputByteCap]; its
-// own COUNT held to what one record retires and adds — past it, nothing is
-// uploaded and the repository's cap is halved; and every output to the
-// BUNDLE RULE, built ONCE more at the densest offender's own ratio in a fresh
-// merge's scratch, the plan capped again at that cut's byte cap, a second miss
-// halving the cap too. It answers the repack that passed, whose merge's
-// scratch is the caller's to remove once its outputs are gathered; on an error
-// nothing it made is left, and the outcome is the publication's.
-//
-// THE RULES READ THE REPACK'S OUTPUTS ALONE, so they are held before the
-// multi-pack-index layer and its bitmap — a walk of the repository's whole
-// history, minutes and up to the publication's whole charge at the largest
-// repository — and the commit-graph layer are written: held after them, an
-// output past either rule threw a finished bitmap away, and the bundle rule's
-// rebuild wrote the whole layer twice.
+// repackChecked builds a publication's repack of p (the non-full packs its
+// layer gathers) and holds it to a compaction's rules BEFORE THE LAYER IS
+// WRITTEN: the rules read the outputs alone, and the layer's bitmap walks the
+// whole history, so an output failing them after would waste it. Cut as a
+// compaction's build is ([bounds.cutFor]) and capped at that cut's
+// [InputByteCap]; past its COUNT (what one record retires and adds) nothing
+// is uploaded and the cap halves; past the BUNDLE RULE it is built ONCE more
+// at the densest offender's ratio in a fresh merge's scratch, capped again, a
+// second miss halving the cap. The passing repack's merge's scratch is the
+// caller's to remove once gathered; on an error nothing it made is left, and
+// the outcome is the publication's.
 func (c *Compactor) repackChecked(ctx context.Context, cand gitlet.PublicationCandidate, s cache.Synced, cid string,
 	adm *cache.Admission, p planned, cap int64, limits gitlet.Limits) (repacked, Outcome, error) {
 
@@ -1122,22 +943,15 @@ func (c *Compactor) repackCountHolds(cand gitlet.PublicationCandidate, rp repack
 	return OutcomeFailed, errOutputs
 }
 
-// repack builds a publication's repack of p — the non-full packs its layer
-// gathers, at cut — in a MERGE'S SCRATCH OF ITS OWN, leaning on a store of
-// exactly p's inputs (cache.Cache.NewMergeScratch) as a compaction's build
-// does ([Compactor.pack]), and lays its outputs out under the publication
-// cid's derived ids, holding the merge's scratch to exactly what the build
-// printed ([lay]). On an error the merge's scratch is gone; otherwise it is
-// the caller's.
-//
-// NEVER IN THE LAYER'S SCRATCH, which links every pack of the copy: there
-// `--stdin-packs`, filling in its name hashes, walked from the inputs' commits
-// down the repository's whole history, as a compaction's build over the
-// incarnation did — about 3.5 µs an object of the history on the node pin, a
-// parsed object kept for each — while the repack's charge and its deadline
-// follow its inputs, so past a few million objects every publication that
-// repacked ran out its repack's deadline and failed, at every pass that
-// planned it.
+// repack builds a publication's repack of p at cut in a MERGE'S SCRATCH OF
+// ITS OWN, over a store of exactly p's inputs (cache.Cache.NewMergeScratch),
+// as a compaction's build does ([Compactor.pack]), and lays its outputs out
+// under cid's derived ids, holding the scratch to exactly what the build
+// printed ([lay]). On an error the scratch is gone; otherwise it is the
+// caller's. NEVER IN THE LAYER'S SCRATCH, which links every pack: there
+// `--stdin-packs` walks the whole history while the repack's charge and
+// deadline follow its inputs (package doc, "A merge makes no reachability
+// judgement").
 func (c *Compactor) repack(ctx context.Context, s cache.Synced, cid string, adm *cache.Admission, p planned,
 	cut int64, limits gitlet.Limits) (repacked, error) {
 

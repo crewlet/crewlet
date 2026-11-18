@@ -157,8 +157,10 @@ ref moved, as you:
 - **Branches**: **New branch** at a branch, a tag or a commit
   (`code_create_branch`), and **Delete** at the head the row shows
   (`code_delete_branch`), after a confirmation;
-- a commit's page: **Revert** and **Cherry-pick** onto a branch you choose
-  (`code_revert`, `code_cherry_pick`); a conflict commits nothing.
+- a commit's page bar: **Browse files**, **Revert** and **Cherry-pick** onto
+  a branch you choose (`code_revert`, `code_cherry_pick`); a conflict commits
+  nothing. A commit's page says how it was pushed and how it landed, with the
+  gate it merged through.
 
 Its protection rules are set on its **Settings** tab ([Protecting a
 branch](#protecting-a-branch)), and it is deleted and restored there too
@@ -1441,6 +1443,10 @@ landed a commit](../concepts/gitlet.md#which-push-landed-a-commit)).
 On a repository's **Commits** tab the dashboard narrows the history to one
 seat's pushes and to recent days, and searches commit messages; each commit
 shows its checks and the change it landed with.
+
+**Gitlet › Pushes** (`#/gitlet/pushes?repo=web`) reads a repository's pushes as sentences by
+day, each day saying how many of its pushes are shown; narrow it by who pushed and when, and its
+rail shows who pushes there and the branches' protection.
 
 ### Working in a clone
 

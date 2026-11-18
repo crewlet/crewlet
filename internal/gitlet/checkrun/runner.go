@@ -24,11 +24,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// Estate is the code log as a runner and a home's sweep reach it — the
-// router's code seam satisfies it: the engine's own reads of the checks
-// (`checks_queued`, `check_box`, `checks_running`) and the writes of an
-// attempt's claim and ending, each decided by the repository's checks writer
-// on its committing data node.
+// Estate is the code log as a runner and a home's sweep reach it (the
+// router's code seam): the reads of the checks (`checks_queued`, `check_box`,
+// `checks_running`) and an attempt's claim and ending, each decided by the
+// repository's checks writer on its committing data node.
 type Estate interface {
 	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
 	Checks(ctx context.Context, r gitlet.ChecksRequest) (gitlet.ChecksResult, error)
@@ -41,47 +40,42 @@ type Order interface {
 	GitOrder(repoID string) ([]string, error)
 }
 
-// Boxes is this node's sandbox catalogue as a check's box is made from it —
-// internal/sandbox's Manager satisfies it: a box with no harness, the
-// cells the CURRENT catalogue configures (Placements, the only ones a new box
-// is made in), and the backend a remote box is killed through (Provider, which
-// also answers a cell the catalogue dropped, for the boxes already on it).
+// Boxes is this node's sandbox catalogue (sandbox.Manager): a box with no
+// harness, the cells the CURRENT catalogue configures (Placements, the only
+// ones a new box is made in), and the backend a remote box is killed through
+// (Provider, which also answers a dropped cell, for the boxes already on it).
 type Boxes interface {
 	AcquireBox(ctx context.Context, spec sandbox.Spec, setup []sandbox.SetupStep) (sandbox.Sandbox, error)
 	Placements() []sandbox.Placement
 	Provider(placement sandbox.Placement) (sandbox.Provider, error)
 }
 
-// Tokens mints a check's box's credential: Gitlet's CheckTokens, which
-// this package reaches through the engine rather than importing the host. The
-// token names the attempt and the repository's name the box is given, and is
-// valid for timeout and gitlet.CheckBoxGrace more; an error names why none is
-// minted.
+// Tokens mints a check's box's credential: Gitlet's CheckTokens, reached
+// through the engine rather than by importing the host. The token names the
+// attempt and the repository and is valid for timeout plus
+// gitlet.CheckBoxGrace.
 type Tokens interface {
 	Mint(attempt gitlet.CheckKey, repo string, timeout time.Duration) (string, error)
 }
 
-// Uploader stores a failed run's kept log as one object — the fleet's object
-// store (objstore.Store) satisfies it: at most limit bytes of r under a key
-// minted for it, answered with what the attempt's code_check_logs row names it
-// by, and objstore.ErrFull where the store has no room, which the ending then
-// goes without.
+// Uploader stores a failed run's kept log as one object (objstore.Store): at
+// most limit bytes of r, answered with what the attempt's code_check_logs row
+// names it by, or objstore.ErrFull where the store has no room, which the
+// ending then goes without.
 type Uploader interface {
 	Put(ctx context.Context, r io.Reader, limit int64, m objstore.PutMeta) (objstore.Object, error)
 }
 
-// Nudges is the code log's watch as a runner hears of new check records — the
-// engine adapts the home's: nudge is called, one call at a time, for every
-// record on a repository's checks subject and every moment the watch may have
-// missed one, and stop ends it.
+// Nudges is the code log's watch, which the engine adapts from the home's:
+// nudge is called, one call at a time, for every record on a repository's
+// checks subject and every moment the watch may have missed one; stop ends it.
 type Nudges interface {
 	Watch(ctx context.Context, filter string, nudge func()) (stop func(), err error)
 }
 
-// Company is the epoch a check runs under, read at every walk and every
-// attempt — never captured, since an apply replaces it: the company's
-// configuration (code.checks, the cells it allows) and the resolution of a
-// ${VAR} reference in its check secrets.
+// Company is the epoch a check runs under, read at every walk and attempt,
+// never captured, since an apply replaces it: the company's configuration and
+// the resolver of a ${VAR} reference in its check secrets.
 type Company struct {
 	Config  *config.Company
 	Resolve func(value string) (string, []string)
@@ -106,53 +100,46 @@ type Timing struct {
 	// Renew is how often a remote check's slot is renewed and its box's
 	// minutes charged: [RemoteSlotRenew].
 	Renew time.Duration
-	// End is how long a run's ending may be read from its box — its exit
-	// status, reports, summary, tail and kept log: [EndPolls] polls, which
-	// the home's sweep counts into its patience ([SweepPolls]).
+	// End is how long a run's ending may be read from its box: [EndPolls]
+	// polls, which the home's sweep counts into its patience ([SweepPolls]).
 	End time.Duration
 }
 
 // The production cadences.
 const (
 	// CheckPoll is sandbox.DefaultPollInterval, FIFTEEN SECONDS: the
-	// executors' waiter's cadence, so a box is asked about at one rate
-	// whatever runs in it — what a check's ending is late by at most, which
-	// a check of minutes does not notice, and one call to the box, one to
-	// its TTL and one read of its row a box every fifteen seconds.
+	// executors' waiter's cadence, so a box is polled at one rate whatever
+	// runs in it. An ending is at most that late, which a check of minutes
+	// does not notice, for three calls a box (its job, its TTL, its row).
 	CheckPoll = sandbox.DefaultPollInterval
 
 	// ClaimStagger is TWO SECONDS: the wait of each rank of a repository's
 	// git order past the one before it. JUDGMENT, about ten times a healthy
-	// claim's round — a record decided and applied on the repository's
-	// committing data node, milliseconds — so the node ranked before has
-	// claimed an attempt before the next one looks, and a home that cannot
-	// (its container cells full, or none) hands its attempt to the runner-up
-	// two seconds late, which a check of minutes does not notice.
+	// claim's round (milliseconds), so the node ranked before has claimed
+	// before the next one looks, and a home that cannot claim hands its
+	// attempt on two seconds late, which a check of minutes does not notice.
 	ClaimStagger = 2 * time.Second
 
 	// WalkGap is ONE SECOND: the least time between two walks of the queue,
 	// however many records nudge the runner meanwhile. Half a ClaimStagger,
-	// so a node's claim lands within half a stagger of when its rank falls
-	// due, while a burst of a thousand check records — a push fanning out a
-	// file's checks, the claims and endings they bring — costs a node one
-	// read of the queue a second rather than one a record.
+	// so a claim lands within half a stagger of when its rank falls due,
+	// while a burst of check records costs a node one read of the queue a
+	// second rather than one a record.
 	WalkGap = time.Second
 
 	// WalkBackstop is CheckPoll: the longest a runner goes without walking
-	// the queue, so a nudge the watch lost — a gap, its consumer gone —
-	// delays a queued check by fifteen seconds at most, and an idle fleet
-	// reads the queue four times a minute a Gitlet node.
+	// the queue, so a nudge the watch lost delays a queued check fifteen
+	// seconds at most, and an idle Gitlet node reads the queue four times a
+	// minute.
 	WalkBackstop = CheckPoll
 
 	// WalkPage is how many queued attempts one read of the walk takes: 256,
-	// JUDGMENT — a Gitlet node claims at most its free cells' worth of attempts
-	// a walk, a few dozen, and finds them among the attempts ranked to it,
-	// about one in each of its fleet's Gitlet nodes; 256 is a walk of one read
-	// a cell on a fleet of up to a few nodes with a queue of a hundred, and a
-	// page of definitions (a few hundred bytes each) of under a hundred KiB.
-	// It holds because a walk reads only the cells it has room in and stops
-	// reading each the moment its room is spent (Runner.walk), so a walk
-	// pages on only while it has room for what it reads.
+	// JUDGMENT. A Gitlet node claims at most its free cells' worth a walk (a
+	// few dozen), among the attempts ranked to it, about one in each Gitlet
+	// node of its fleet; 256 is one read a cell for a fleet of a few nodes
+	// and a queue of a hundred, a page of definitions under a hundred KiB.
+	// It holds because a walk reads only cells it has room in and stops each
+	// once its room is spent (Runner.walk).
 	WalkPage = 256
 )
 
@@ -187,14 +174,12 @@ type Options struct {
 	// CREWLET_BOX_GIT_URL, as sandbox.ParseBoxURL read it: a public
 	// listener and /box/git.
 	GitBase string
-	// CodeBase is where a check's box reads its commit without a clone —
-	// the same listener and the route the API serves a check's reads under
-	// (internal/api/auth's BoxGitletPrefix) — and CREWLET_CHECK_API is it and
-	// the repository's name. GIVEN, NEVER SPELLED HERE: the route is the
-	// API's, which this package does not import, and a copy of its spelling
-	// here was one nothing held to the route, a rename of which would have
-	// answered every check's read 404 with only a live run to show it. The
-	// engine builds it from the route itself.
+	// CodeBase is where a check's box reads its commit without a clone: the
+	// same listener and the API's route for a check's reads (internal/api/
+	// auth's BoxGitletPrefix); CREWLET_CHECK_API is it plus the repository's
+	// name. GIVEN, NEVER SPELLED HERE: the engine builds it from the route
+	// itself, so a rename of the route cannot leave every check's read
+	// answering 404.
 	CodeBase string
 	// Slots is how many checks this node runs at once in container cells:
 	// gitlet.max_checks as config.Gitlet.MaxChecksFor resolved it, 0 none.
@@ -435,29 +420,13 @@ var stale = statelog.Freshness{Level: statelog.ReadStale}
 // node has room in. It answers the earliest instant an attempt it read falls
 // due at this node's rank, zero for none.
 //
-// IT READS ONLY WHAT IT CAN ACT ON. The queue is read by the cell each
-// attempt's definition names ([gitlet.ChecksQueuedQuery], one seek of
-// code_checks_queued_idx each), and only for the cells this node can claim in
-// NOW: ones the company lets a check run in (config.Company.CheckCell, against
-// the epoch the walk runs under), that this node's CURRENT catalogue
-// configures — never a backend kept only for the boxes already on a cell the
-// catalogue dropped — and that have room: a container slot free under
-// gitlet.max_checks, or a remote cell no cap has held back this walk. A cell
-// whose room runs out mid-walk stops being read. So a node whose container
-// slots are full reads nothing of the container backlog, whatever else its
-// catalogue holds, and one cell's backlog never costs a walk in another: read
-// whole, the queue was paged to its end at every walk of every Gitlet node with
-// room in any cell, each claiming nothing it read, the fleet's reads growing
-// with its Gitlet nodes times its queue.
-//
-// The attempts naming a cell the company does not allow — or none, where it
-// resolves none — are ended unrun by the node whose turn it is, which needs no
-// room; they are read beside the cells this node has room in, or where it can
-// claim in no cell at all, so a node with every cell full reads nothing.
-//
-// OLDEST QUEUED FIRST across the lanes it reads — a cell's own name and the
-// default resolving to it compete for the same slots — merged a page at a
-// time by the queue's own order.
+// IT READS ONLY WHAT IT CAN ACT ON (package doc, "Every Gitlet node runs
+// checks, ranked per repository"): a lane per cell (Runner.lanes), each read
+// only while its cell has room (Runner.room). The lane of attempts no cell
+// runs, ended unrun by the node whose turn it is, is read only while some
+// cell has room or the node has no cell. Lanes merge oldest queued first, by
+// the queue's own order, since a cell's own name and the default resolving
+// to it compete for the same slots.
 func (r *Runner) walk(ctx context.Context) time.Time {
 	company, ok := r.o.Company()
 	if !ok || company.Config == nil || company.Config.CodeBackendFor() != config.CodeGitlet {
@@ -548,10 +517,10 @@ func (r *Runner) fill(ctx context.Context, l *lane) error {
 }
 
 // lanes is what a walk under company may read: a lane for every cell an
-// attempt's definition may name, and one for naming none, each resolved to
-// the cell it runs in — where this node's catalogue configures that cell, and
-// said once and left unread where it does not — or to no cell, for the
-// attempts the company runs nowhere; and the cells those lanes run in.
+// attempt's definition may name and one for naming none, each resolved to the
+// cell it runs in where this node's catalogue configures it (said once and
+// left unread where not), or to no cell for the attempts the company runs
+// nowhere; and the cells those lanes run in.
 func (r *Runner) lanes(company *config.Company, w *walking) ([]*lane, map[config.Placement]bool) {
 	var (
 		lanes []*lane
@@ -587,13 +556,11 @@ func queuedBefore(a, b gitlet.CheckRow) bool {
 // it listed, and whether a remote cap has held a check back.
 type walking struct {
 	// configured is the cells this node's CURRENT catalogue configures
-	// (sandbox.Manager.Placements), read once a walk: the only cells a new
-	// box is made in, and never one the catalogue dropped, whose backend
-	// the manager keeps only for the boxes already on it.
+	// (sandbox.Manager.Placements), read once a walk: never a dropped cell,
+	// whose backend the manager keeps only for the boxes already on it.
 	configured map[config.Placement]bool
 	// ranks is this node's place in each repository's git order, read once
-	// a walk a repository, so a walk ranks every attempt of one against one
-	// reading.
+	// a walk, so every attempt of a repository is ranked against one reading.
 	ranks map[string]int
 	// remoteHeld is a remote (e2b) check left queued by a cap, or by a store
 	// that could not say: the walk tries no further remote check, since the
@@ -623,11 +590,10 @@ func (r *Runner) rank(w *walking, repoID string) int {
 // where that is still to come, and zero otherwise.
 func (r *Runner) consider(ctx context.Context, company Company, w *walking, c gitlet.RunnableCheck) time.Time {
 	if c.Def == nil {
-		// NO DEFINITION, NOTHING TO RUN: every queued attempt carries the
-		// one it was queued under — only one errored at its dispatch
-		// carries none, and it ends as it is queued (gitlet.CheckQueued), and
-		// a person's CI queues nothing (gitlet.QueueReasons) — so this is a
-		// row no runner could run, skipped rather than dereferenced.
+		// NO DEFINITION, NOTHING TO RUN: only an attempt errored at its
+		// dispatch carries none, and it is queued already ended
+		// (gitlet.CheckQueued); a person's CI queues nothing
+		// (gitlet.QueueReasons). Skipped rather than dereferenced.
 		return time.Time{}
 	}
 	at := r.rank(w, c.RepoID)
@@ -784,12 +750,11 @@ func (r *Runner) Held(cell config.Placement) int {
 }
 
 // claim asks for c claimed by this node at started, and answers whether this
-// node holds it: applied with this node the holder the join kept — or,
-// appended and not yet known to have applied where the writer answered, read
-// back at the claim's position. A claim refused, lost to another runner, or
-// one whose holder could not be read back starts no box: an attempt this node
-// holds and runs nothing for is ended by the home's sweep once its claim has
-// outlived its check's timeout.
+// node holds it: applied with this node the holder the join kept, or,
+// appended and not yet known applied, read back at the claim's position. A
+// claim refused, lost or unreadable starts no box (package doc, "The claim
+// before the box"); an attempt held with nothing run is ended by the home's
+// sweep once its claim outlives its check's timeout.
 func (r *Runner) claim(ctx context.Context, c gitlet.RunnableCheck, cell config.Placement, started time.Time) bool {
 	res, err := r.o.Estate.Checks(ctx, gitlet.ChecksRequest{OpID: statelog.NewOpID(started, "code_check_claim"),
 		Started: &gitlet.CheckStarted{CheckKey: c.CheckKey, Runner: r.o.NodeID,

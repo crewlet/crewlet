@@ -270,16 +270,56 @@
 // never more than half the cores the node's reads and transfers share. Any
 // other wait longer than [SlotWait] is [ErrBusy].
 //
-// One transfer may use more than one core: a push's receive-pack — the one that
-// receives a pack, never the push's advertisement (--advertise-refs), which
-// runs no index-pack — is LENT up to [MaxLentCores] of the read lane's free
-// cores, less the one its own thread runs on, as threads for the index-pack a
-// person waits on — sized when it starts, so a loaded node lends nothing; never
-// holding the read slots it was sized by, so no read waits for a loan and the
-// push's own hook never queues behind its own receive-pack; and repaid as soon
-// as the call site says the index-pack is done ([Cmd.Indexed], without which a
-// push's receive-pack is refused), so a push's hook, upload and record wait
-// hold no loan (lane.go says why each matters).
+// # Lending a push cores
+//
+// Every process runs at pack.threads=1, a slot being a core, except in the one
+// phase that both threads and has a person waiting: a push's receive-pack
+// running index-pack over the pack just pushed. MEASURED with git 2.43 on four
+// vCPUs: a 97 MB pack indexes in 12.1 s on one thread and 6.4 s on four; a
+// 37 MB pack in 2.8 s on one, 2.2 s on two, 1.9 s on three and 1.8 s on four.
+// The receiving phase before delta resolution is single-threaded whatever the
+// setting, so the curve is flat past three and [MaxLentCores] is 3. Never
+// upload-pack: pack-objects holds pack.windowMemory PER THREAD, which
+// [TransfersPerProcess] counts once. Never a push's advertisement
+// (receive-pack --advertise-refs): it runs no index-pack, so a loan would sit
+// on up to three cores while its client reads the refs and the push's POST
+// would be lent nothing; cmd.go's receivePackOptions tells the two apart
+// exactly.
+//
+// Memory: index-pack held 12 MiB at one thread and 23 MiB at four on the 37 MB
+// pack, 25 and 48 MiB on the 97 MB one. The bound is larger: index-pack caps
+// its delta base cache at core.deltaBaseCacheLimit TIMES its threads, so each
+// lent thread may hold up to 96 MiB (git's default) more than
+// TransfersPerProcess counts. Loans never exceed the read lane's width, so a
+// node's worst case grows by under 96 MiB a core (about 900 MiB a core rather
+// than 800), as TransfersPerProcess's doc says.
+//
+// Sized when the receive-pack starts: the READ lane's free cores (those neither
+// a held read nor an earlier loan claims) LESS ONE for the receive-pack's own
+// thread, which resolves deltas too. Lent every free core, a push would run a
+// thread more than there are free cores, raising the cache cap for no speed.
+// An idle four-core node lends three, a two-core node one, a one-core or
+// loaded node none.
+//
+// Lent, never held: a loan holds only its COUNT, which later loans are sized
+// against, never the read slots. Held, those slots would sit idle through the
+// client's upload (hours at the transfer floor) and the engine's hook, so a
+// few slow pushes would close the read lane with the CPU idle, and the push's
+// own hook reads would queue behind its own receive-pack. A read that takes a
+// lent core shares it with the loan's threads; the overcommit is bounded by
+// the loans out.
+//
+// Repaid at [Cmd.Indexed]: pack.threads is fixed at process start, so unrepaid
+// a loan's count would cover the whole run. Every push's receive-pack call site
+// closes Cmd.Indexed when the proc-receive hook first reaches its relay
+// (receive-pack starts the hook only after index-pack exits), so the
+// object-store upload (up to 1.25 GiB) and the wait for the record hold no
+// loan. A push's receive-pack without Indexed is refused on every node, even
+// one with nothing to lend: a call site that forgot it would park every loan
+// through upload and record wait, so later pushes would index on one core,
+// while its own tests, on a node with nothing to lend, still passed. The gauge
+// crewlet.code.git.lent_cores shows the cores lent now, so pushes indexing on
+// one core because loans are parked in slow uploads are seen.
 //
 // # Every process ends, and so does everything it started
 //
@@ -387,7 +427,9 @@
 // and errors.Is reaches every kind the run named ([Trace.Kinds]), so a
 // question about one is never answered by another that outranks it — a force
 // check's missing old commit beside a multi-pack-index git reads around is
-// still a stale update.
+// still a stale update. Beside damage to a pack, its index or its reverse
+// index it is that damage's, since the commit may be in the pack git could
+// not read ([Damage.Derived] tells the two; internal/gitlet/host decides).
 //
 // It costs git's write of each event and its read of /proc for its ancestry:
 // MEASURED against the build before it, a warm fetch's four processes take
@@ -401,7 +443,31 @@
 // reader here costs 1.4 µs for a healthy fetch's stream, 5.2 µs for one
 // carrying three error events and 40 µs to skip a 390 KB echo
 // (BenchmarkTraceSink). That is the price of a classification no request can
-// steer; the next section has the pool's own arms re-measured.
+// steer; "Measured" has the pool's own arms re-measured.
+//
+// # Formats left out of the table
+//
+// Formats read from git's source and deliberately not rows of formatTable
+// (classify.go), each for its reason:
+//
+//   - `invalid commit position. commit-graph is likely corrupt`: every path a
+//     commit position from a file reaches it by is checked first and reported
+//     as `invalid parent position %u`, a row.
+//   - `commit-graph overflow generation data is too small`: it needs a
+//     generation-overflow chunk, which a test-sized repository never has, and
+//     building one by hand is building the file.
+//   - `unable to read index` (show-index's), `missing %s %s` and `broken link
+//     from`: fsck's findings, written to its stdout, not reported.
+//   - `could not find object in pack %s at offset %lu in MIDX`: a BUG
+//     pack-objects reports, dying of SIGABRT, only beside `bad offset for
+//     revindex` (a row) and the run's crash ([Result.Crashed]).
+//   - `object %s is a %s, not a %s` and `unable to parse object: %s`: a
+//     healthy repository prints both, for an id of the wrong type and for a
+//     name that is no object.
+//   - `unable to find all commit-graph files` and `unable to find all
+//     multi-pack index files`: a reader racing git's own split or incremental
+//     write prints them of a healthy repository
+//     (TestNoRowIsAFormatARequestWrites).
 //
 // # Measured
 //
@@ -528,8 +594,8 @@ type Options struct {
 
 	// MaxProcesses is the size of the READ lane — one core a slot — and
 	// twice the MAINTENANCE lane's, rounded up; 0 is runtime.GOMAXPROCS(0);
-	// negative is refused. Passed RAW from configuration: this is the one
-	// place its default is resolved, and [Pool.Slots] reports the result.
+	// negative is refused. Passed RAW from configuration: its default is
+	// resolved only here, and [Pool.Slots] reports the result.
 	MaxProcesses int
 
 	// MaxTransfers is the size of the TRANSFER lane (upload-pack,
@@ -539,13 +605,12 @@ type Options struct {
 	// MaxProcesses.
 	MaxTransfers int
 
-	// Memory is the node's memory in bytes, which the TRANSFER lane's
-	// default is bounded by: 0 — the engine's setting — reads the node's
-	// own at New, the least of its physical memory and its cgroups' limits
-	// ([Pool.Memory] answers it, [Pool.ReadMemory] reads it again), and New
-	// refuses a node whose memory cannot be read; above zero is that figure,
-	// held for the pool's life, so a suite sizes a lane without the machine
-	// it runs on; negative is refused.
+	// Memory is the node's memory in bytes, which bounds the TRANSFER
+	// lane's default: 0 (the engine's setting) has New read the node's own,
+	// the least of its physical memory and its cgroups' limits ([Pool.Memory],
+	// [Pool.ReadMemory]), refusing a node whose memory cannot be read; above
+	// zero is held for the pool's life, so a suite sizes a lane independent
+	// of its machine; negative is refused.
 	Memory int64
 
 	// Home is HOME for every process: absolute; created when absent; its
@@ -556,49 +621,34 @@ type Options struct {
 	// (component gitlet.gitproc).
 	Logger *slog.Logger
 
-	// Metrics is where the pool records crewlet.code.git.wait (how long
-	// each admission waited for its lane), crewlet.code.git.processes (the
-	// processes running in each class), crewlet.code.git.lent_cores (the
-	// read lane's cores lent to pushes' receive-packs right now) and
-	// crewlet.code.git.cpu (the CPU each run's process tree spent, by its
-	// class, recorded whole as the run ends); nil records nothing.
+	// Metrics records crewlet.code.git.wait (each admission's wait for its
+	// lane), crewlet.code.git.processes (running processes by class),
+	// crewlet.code.git.lent_cores (read-lane cores lent to receive-packs now)
+	// and crewlet.code.git.cpu (each run's process-tree CPU by class,
+	// recorded whole as the run ends); nil records nothing.
 	Metrics *metrics.Recorder
 }
 
 // TransfersPerProcess is how many transfers the TRANSFER lane admits for
 // every slot of the READ lane when Options.MaxTransfers is 0.
 //
-// FOUR, A MEMORY BOUND RATHER THAN A CPU ONE: a transfer spends a core only
-// while pack-objects counts and compresses or index-pack resolves deltas, and
-// otherwise waits on its client, on the object store or on its record. What
-// it holds for its whole life is memory — the delta window (pack.windowMemory,
-// twice the blob limit: 100 MiB at the defaults), the delta base cache
-// (core.deltaBaseCacheLimit, git's default 96 MiB) and the object list
-// ([TransferBytesPerObject] an object of a whole repository, MEASURED) —
-// [TransferMemory], 224 MiB, for a repository of about 120 000 objects. Four a
-// core is 896 MiB a core at that; a receive-pack lent cores ([MaxLentCores])
-// raises its index-pack's base-cache cap by core.deltaBaseCacheLimit a lent
-// thread (git caps it at the limit times its threads), and the loans out
-// never reach the read lane's width. That is inside the 2 GiB a vCPU of even
-// the compute-optimised instance shapes ([CoreMemory]; general-purpose ones
-// give 4) with the store and the broker beside it; when every transfer IS
-// CPU-bound (fast clients on the same network) the scheduler shares the cores
-// four ways and a clone is slower, never refused. And because it is a memory
-// bound, a node with less memory than that a core — a container limited in
-// memory and not in CPU sees its host's every core — runs one transfer for
-// every [TransferShare] it has rather than four a core (memory.go). A
-// judgment call, and one the operator's own setting overrides.
-//
-// What it does NOT bound is a transfer of a repository of millions of
-// objects, which holds [TransferBytesPerObject] an object whatever its
-// slot: no lane knows which repository a slot will serve.
+// FOUR IS A MEMORY BOUND: a transfer spends a core only while it compresses
+// or resolves deltas, but holds [TransferMemory] for its life. Four a core is
+// 896 MiB a core, inside [CoreMemory] with the store and the broker beside
+// it; a receive-pack's lent cores ([MaxLentCores]) add
+// core.deltaBaseCacheLimit each, never past the read lane's width. CPU-bound
+// transfers share the cores, slower but never refused; a node with less
+// memory a core runs one per [TransferShare] (memory.go). A repository of
+// millions of objects is not bounded ([TransferBytesPerObject]): no lane knows
+// which repository a slot serves. The operator's setting overrides it.
 const TransfersPerProcess = 4
 
 // Pool runs git processes. It holds no goroutine and needs no Close: every
 // goroutine it starts is started and joined by one Run.
 type Pool struct {
-	// git is the binary. THE FIELD'S NAME MATTERS: the exec gate finds this
-	// package's one exec of git by the word git in its first argument.
+	// git is the binary. KEEP ITS NAME: the exec gate (exec_gate_test.go)
+	// finds this package's one exec of git by the word git in its first
+	// argument.
 	git     string
 	version Version
 
@@ -608,27 +658,25 @@ type Pool struct {
 
 	read, maint, transfer *lane
 
-	// memory is the node's memory the lanes were sized by, and fixedMemory
-	// whether Options.Memory gave it, so ReadMemory answers it again
-	// rather than reading the node.
+	// memory is the node's memory the lanes were sized by; fixedMemory says
+	// Options.Memory gave it, so ReadMemory answers it rather than reading
+	// the node.
 	memory      Memory
 	fixedMemory bool
 
 	// slotWait, killGrace, remoteStall and captureMax are SlotWait,
-	// KillGrace, TransferStall (what a remote run's TCP keepalive is derived
-	// from: Remote.config) and CaptureMax; fields so the suite can scale them
-	// (export_test.go).
+	// KillGrace, TransferStall (Remote.config derives a remote run's TCP
+	// keepalive from it) and CaptureMax, as fields so the suite can scale
+	// them (export_test.go).
 	slotWait, killGrace, remoteStall time.Duration
 	captureMax                       int
 
 	// now, grace and draining are the suite's seams (export_test.go), New
-	// setting each to the machine's own: now is the clock a run's Began and
-	// Took are read from; grace arms the wait kill makes between SIGTERM and
-	// SIGKILL, answering the channel that ends it and the Stop that frees
-	// it; and draining, nil outside a case, is told each stream the drain
-	// begins to wait for. Through them a case states the instants a run is
-	// stamped with, holds the grace the pool armed, and waits a run into its
-	// drain — none of which anything a run reports shows.
+	// setting each to the machine's own: now is the clock of a run's Began
+	// and Took; grace arms kill's wait between SIGTERM and SIGKILL, answering
+	// the channel that ends it and the Stop that frees it; draining, nil
+	// outside a case, is told each stream the drain begins to wait for. A
+	// case uses them for what no run's report shows.
 	now      func() time.Time
 	grace    func(time.Duration) (<-chan time.Time, func() bool)
 	draining func(stream string)
@@ -652,10 +700,9 @@ type observer struct{ fn func(Ran) }
 
 // Ran is one run as the pool reports it to its observer ([Pool.Observe]):
 // where its process ran, what it loads, and how it ended. NEVER THE [Cmd]: an
-// observer has no use for a run's arguments, and one handed them could run
-// them again — every Cmd that reaches git is one its call spells, which the
-// cache's writers gate holds (a Cmd handed to a function value is a finding
-// there).
+// observer handed one could run it again, and the cache's writers gate holds
+// that every Cmd reaching git is spelled by its call (a Cmd handed to a
+// function value is a finding there).
 type Ran struct {
 	// Dir and Alternate are the run's Cmd.Dir and Cmd.Alternate: the
 	// directory it ran in, and the one alternate it was handed, if any.
@@ -671,33 +718,25 @@ type Ran struct {
 }
 
 // Repairer is an opaque name for the caller that repairs what a run fails
-// with before its first byte ([Cmd.Repairer]), minted by whoever observes the
-// pool — the code cache names each reader it hands a directory to — and
-// carried by the pool to its observer as it was given, never read. Zero names
-// nobody.
-//
-// The pool carries it rather than the observer guessing from the directory
-// because one directory has many readers at once: two requests over one
-// cache copy each repair their own failure, and what one of them reports is
-// that one's to repair.
+// with before its first byte ([Cmd.Repairer]), minted by the pool's observer
+// (the code cache names each reader it hands a directory to) and carried to
+// it unread. Zero names nobody. It is carried, not guessed from the
+// directory, because one directory has many readers at once, each repairing
+// its own failure.
 type Repairer uint64
 
-// Observe installs fn as the pool's OBSERVER: called with what every run ran
-// and how it ended — [Pool.Run] and [Reserved.Run] alike, success or failure,
-// once its process has run — and never for a call refused before a process
-// started (a refusal of the call itself, a shape among them, or the lane's
-// [ErrBusy]), which no process reported. It is called on the run's own
-// goroutine before the run returns, so it must never block: what it decides
-// it hands to work of its own.
+// Observe installs fn as the pool's OBSERVER, called with what every run ran
+// and how it ended ([Pool.Run] and [Reserved.Run], success or failure) once
+// its process has run, and never for a call refused before a process started
+// (the call, its shape or the lane's [ErrBusy]). It runs on the run's
+// goroutine before the run returns, so it must never block.
 //
-// ONE OBSERVER AT A TIME, and every run reports to it, because a call site
-// that had to remember to hand its result to the cache would be a call site
-// that forgets: the cache repairs a derived file whatever process named it
-// damaged, and the processes that read around damage — git warns and answers
-// from the packs — are the ones whose callers never look. A second Observe
-// while one is installed is [ErrInvalid]; unobserve removes the one this call
-// installed, once, waiting for no run (a run already past its report keeps
-// the observer it read).
+// ONE OBSERVER, which every run reports to: a call site that had to hand its
+// result to the cache would forget, and the processes that read around
+// damage (git warns and answers from the packs) are the ones whose callers
+// never look. A second Observe while one is installed is [ErrInvalid];
+// unobserve removes this call's observer, once, waiting for no run (one past
+// its report keeps the observer it read).
 func (p *Pool) Observe(fn func(Ran)) (unobserve func(), err error) {
 	o := &observer{fn: fn}
 	if !p.observing.CompareAndSwap(nil, o) {
@@ -766,63 +805,49 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 		git:     git,
 		home:    home,
 		ceiling: filepath.Dir(home),
-		// The table every process starts from, in this order; Run adds
-		// GIT_DIR or GIT_CEILING_DIRECTORIES, GIT_PROTOCOL, the
-		// configuration, the call site's two variables and — for a
-		// commit-tree alone — the identity its call names (Cmd.Identity).
-		// It holds no identity of its own: no GIT_AUTHOR_* or
-		// GIT_COMMITTER_* variable and no EMAIL, so a commit's names and
-		// dates are never the node's.
+		// The table every process starts from; Run adds GIT_DIR or
+		// GIT_CEILING_DIRECTORIES, GIT_PROTOCOL, the configuration, the call
+		// site's two variables and, for a commit-tree alone, Cmd.Identity. It
+		// holds no GIT_AUTHOR_*, GIT_COMMITTER_* or EMAIL, so a commit's
+		// names and dates are never the node's.
 		baseEnv: []string{
 			// git runs its own subcommands from its exec-path; PATH is
 			// what a hook's interpreter resolves by.
 			"PATH=" + os.Getenv("PATH"),
-			// An empty directory the pool owns. Nothing git would read
-			// there is read even when something writes into it later:
-			// the configuration by GIT_CONFIG_GLOBAL below, the
-			// attributes by the base's core.attributesFile (cmd.go).
+			// An empty directory the pool owns, never read even if written
+			// later: GIT_CONFIG_GLOBAL below and the base's
+			// core.attributesFile (cmd.go) point git elsewhere.
 			"HOME=" + home,
-			// The host's system configuration — wherever the git was
-			// built to read it (`git var GIT_CONFIG_SYSTEM`; the image's
-			// reads /etc/gitconfig) — is not the engine's.
+			// The host's system configuration (`git var
+			// GIT_CONFIG_SYSTEM`) is not the engine's.
 			"GIT_CONFIG_NOSYSTEM=1",
 			// Overrides both ~/.gitconfig and $XDG_CONFIG_HOME/git/config.
 			"GIT_CONFIG_GLOBAL=/dev/null",
-			// The host's system attributes are the host's too (`git var
-			// GIT_ATTR_SYSTEM`; the image's reads /etc/gitattributes), and
-			// the variable above does not reach them (traced on git 2.43:
-			// a process with GIT_CONFIG_NOSYSTEM still opens the file).
-			// pack-objects' delta search asks a path's `delta` attribute,
-			// so a host's `* -delta`, written for something else
-			// entirely, would write undeltified every delta a repack
-			// recomputes — 12.5 times the bytes, measured (the package
-			// doc) — though the deltas a clone or fetch reuses are sent
-			// as stored.
+			// Nor its system attributes (`git var GIT_ATTR_SYSTEM`), which
+			// GIT_CONFIG_NOSYSTEM does not reach: a host's `* -delta` would
+			// have every repack write its deltas whole (package doc, "A git
+			// process is configured by the engine and by nothing else").
 			"GIT_ATTR_NOSYSTEM=1",
 			// Nothing ever prompts.
 			"GIT_TERMINAL_PROMPT=0",
 			// A refs/replace/ ref can never change what an object id means.
 			"GIT_NO_REPLACE_OBJECTS=1",
-			// info/grafts rewrites parents and shallow truncates history;
-			// a path that can never exist (ENOTDIR) disables each, without
-			// the deprecation hint /dev/null itself prints. Shallow clones
-			// still work: upload-pack and receive-pack pass their own
-			// temporary shallow files.
+			// info/grafts rewrites parents and shallow truncates history; a
+			// path that can never exist (ENOTDIR) disables each without the
+			// deprecation hint /dev/null prints. Shallow clones still work:
+			// upload-pack and receive-pack pass their own shallow files.
 			"GIT_GRAFT_FILE=/dev/null/grafts",
 			"GIT_SHALLOW_FILE=/dev/null/shallow",
-			// The classification table reads git's format strings, which
-			// are the translated ones: under C, gettext answers each with
-			// its msgid, the English git's source spells.
+			// The classification table matches git's format strings as its
+			// source spells them: under C, gettext answers each with its msgid.
 			"LC_ALL=C",
-			// THE TRACE2 EVENT STREAM, on fd 3 — ExtraFiles[0], the pipe
-			// Run reads (trace.go). Set for EVERY run, never a call site's
-			// option: one that forgot it would turn a damaged cache back
-			// into a permanent failure with nothing saying so. Nothing a
-			// configuration file holds moves or enriches it (trace2 reads
-			// its settings from the environment first, then from system
-			// and global configuration only, both off above), and the
-			// environment is built, so GIT_TRACE2_CONFIG_PARAMS and
-			// GIT_TRACE2_ENV_VARS are never set.
+			// THE TRACE2 EVENT STREAM, on fd 3 (ExtraFiles[0], the pipe Run
+			// reads: trace.go). Set for EVERY run, never a call site's
+			// option: one that forgot it would turn a damaged cache into a
+			// silent permanent failure. No file moves or enriches it: trace2
+			// reads only the environment and the system and global
+			// configuration (both off above), and the built environment
+			// never sets GIT_TRACE2_CONFIG_PARAMS or GIT_TRACE2_ENV_VARS.
 			"GIT_TRACE2_EVENT=3",
 			// No time, file or line on an event: the classification reads
 			// none of them, and they are 30% of the bytes.
@@ -835,12 +860,10 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 		fixedMemory: o.Memory > 0,
 		read:        newLane(ClassRead, cpuSlots),
 		maint:       newLane(ClassMaintenance, (cpuSlots+1)/2),
-		// THE TRANSFER LANE GRANTS BY SHARE (share.go), on the pool's own
-		// clock, charging a held slot the share of a core it stands for on
-		// the shape just resolved — the cores over the slots, at most one
-		// (occupancyRate) — capping a coding box's class at half the lane's
-		// width (ShareClass.Cap), and recording each class's standing into
-		// the pool's recorder.
+		// THE TRANSFER LANE GRANTS BY SHARE (share.go): a held slot is
+		// charged the share of a core it stands for on this shape
+		// (occupancyRate), and a coding box's class is capped at half
+		// the lane (ShareClass.Cap).
 		transfer: newShareLane(transferSlots, newShareBook(time.Now, int(transferSlots),
 			occupancyRate(cpuSlots, transferSlots), o.Metrics)),
 		slotWait:    SlotWait,
@@ -868,12 +891,10 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	if !found.AtLeast(NodeMinVersion) {
 		return nil, &ErrTooOld{Path: git, Found: found, Floor: FloorNode}
 	}
-	// A git that writes no event stream can classify no failure: every
-	// damaged cache would be answered as git's own failure, silently, and
-	// every git since 2.22 writes one — so one at or above the floor that
-	// does not is refused rather than run. Asked AFTER the floor, because a
-	// git below 2.22 writes no stream either, and the floor's refusal names
-	// what is actually wrong with it.
+	// A git that writes no event stream classifies no failure, silently
+	// answering every damaged cache as git's own failure, so it is refused.
+	// Asked AFTER the floor: a git below 2.22 writes none either, and the
+	// floor's refusal names what is actually wrong with it.
 	if res.Trace.Version == "" {
 		return nil, fmt.Errorf("%w: git %s (%s) wrote no trace2 event stream on the descriptor the pool gave it "+
 			"(GIT_TRACE2_EVENT=3): Gitlet classifies a damaged cache from it, and every git since 2.22 "+
@@ -889,8 +910,8 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 }
 
 // prepareHome makes HOME an empty directory of the pool's mode and resolves
-// it. A populated one is REFUSED, never cleared: the path is the engine's,
-// but a refusal cannot destroy an operator's files if it ever is not.
+// it. A populated one is REFUSED, never cleared: should the path ever not be
+// the engine's, a refusal destroys no operator's files.
 func prepareHome(home string) (string, error) {
 	if home == "" || !filepath.IsAbs(home) {
 		return "", fmt.Errorf("gitproc: Home %q is not an absolute path: it is HOME for every git process this node runs", home)
@@ -934,10 +955,10 @@ func (p *Pool) Version() Version { return p.version }
 
 // Slots is the size of the lane class c waits in (an unknown class: 0).
 //
-// A caller that runs several processes of one class at once runs at most this
-// many: more would queue against ITSELF and fail ErrBusy with no other load on
-// the node. It is also what the engine logs and reports as the node's
-// resolved sizes, so no second package resolves a default.
+// A caller running several processes of one class at once runs at most this
+// many: more would queue against ITSELF and fail ErrBusy on an idle node. The
+// engine logs and reports it as the resolved sizes, so no second package
+// resolves a default.
 func (p *Pool) Slots(c Class) int {
 	if !c.Valid() {
 		return 0
@@ -945,17 +966,15 @@ func (p *Pool) Slots(c Class) int {
 	return int(p.lane(c).size)
 }
 
-// Free is how many of class c's slots a run could take right now WITHOUT
-// WAITING: those neither held nor — in the READ lane — lent to a push's
-// receive-pack (MaxLentCores), and none while a run waits in the lane (an
-// unknown class: 0). A moment's reading, never a reservation: a run started
-// on it may still find its slot taken by another and wait, as any run does.
+// Free is how many of class c's slots a run could take now WITHOUT WAITING:
+// those neither held nor, in the READ lane, lent to a push's receive-pack
+// (MaxLentCores), and none while a run waits in the lane (an unknown class:
+// 0). A moment's reading, never a reservation: a run started on it may wait.
 //
-// It is what a caller with several INDEPENDENT reads to make sizes their
-// parallelism by — a push's force check asks one merge-base a branch it moves
-// — so that a node with idle cores answers them at once while a loaded one
-// asks them one after another, exactly as before, rather than a push taking
-// every slot of the lane and queueing the other readers behind itself.
+// A caller with several INDEPENDENT reads (a push's force check: one
+// merge-base a moved branch) sizes its parallelism by it, so an idle node
+// answers them at once and a loaded one in turn, rather than one push taking
+// every slot and queueing the other readers behind it.
 func (p *Pool) Free(c Class) int {
 	if !c.Valid() {
 		return 0

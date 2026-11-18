@@ -36,10 +36,8 @@ import (
 
 // Credentials are a topology's people: a token for every human seat and one
 // bound to nobody, the Tier A guard every Gitlet node's server admits them by,
-// and the seat each credential is bound to — answered as the engine's guard
-// reads a Tier A token's binding (auth.SeatBindings): the identity directory's
-// row under the token's login, resolved against a running org that holds
-// every person's seat as a human one.
+// and each token's seat, bound as the engine's guard binds a Tier A token
+// (auth.SeatBindings).
 type Credentials struct {
 	tokens map[string]string // person → token; "" bound to nobody
 }
@@ -94,15 +92,13 @@ func (c *Credentials) OperatorID(person string) string {
 }
 
 // guard is the API's guard over [Credentials.Guard], each person's token bound
-// to their own seat and ci's to none, as the engine binds a Tier A token
-// through the identity directory.
+// to their own seat and ci's to none.
 func (c *Credentials) guard() *auth.Guard {
 	return auth.New(c.Guard()).BindSeats(auth.SeatBindings{Directory: c, Chart: c})
 }
 
 // BoundSeat is the identity directory's row under a token's login
-// (auth.BindingDirectory): every person's token bound to their own seat, and
-// none for ci's — a credential nobody binds.
+// (auth.BindingDirectory): a person's own seat, and none for ci's.
 func (c *Credentials) BoundSeat(_ context.Context, login string) (session.PersonRow, error) {
 	for person := range c.tokens {
 		if person != "" && login == iam.TokenLogin(person) {
@@ -132,32 +128,26 @@ type GitOptions struct {
 	ID string
 	// Dir is the cache's directory, the pool's HOME beneath it.
 	Dir string
-	// Estate is what the node's host and cache ask — a value that answers
-	// through whatever data node serves now, read again at every call, so a
-	// restart of the node or of the data nodes behind it never hands it a
-	// dead one.
+	// Estate is what the node's host and cache ask. It resolves the serving
+	// data node at every call, so no restart hands it a dead one.
 	Estate host.Estate
-	// Reads answers Node.Read, through the same seam the node's routes would
-	// read Gitlet by — the compactor's due listing among its reads.
+	// Reads answers Node.Read and the compactor's due listings, through the
+	// seam the node's routes read Gitlet by.
 	Reads func(context.Context, gitlet.ReadQuery) (gitlet.ReadAnswer, error)
-	// Compactions is what the node's compactor proposes a compaction to: the
-	// repository's committer, through whatever data node serves now, read
-	// again at every call — the engine hands its compactor the router's code
-	// seam, whose Compact this is.
+	// Compactions is where the node's compactor proposes a compaction: the
+	// repository's committer, resolved at every call (the router's code
+	// seam's Compact, in the engine).
 	Compactions func(context.Context, gitlet.CompactionProposal) (gitlet.CompactResult, error)
-	// Expunges is what the node's compactor proposes an expunge's begin and
-	// commit to: the repository's committer, as Compactions — the router's
-	// code seam's Expunge, in the engine.
+	// Expunges is where it proposes an expunge's begin and commit, as
+	// Compactions (the code seam's Expunge, in the engine).
 	Expunges func(context.Context, gitlet.ExpungeProposal) (gitlet.ExpungeResult, error)
-	// Maintainers is which repositories the node maintains, as its compactor
-	// asks once a pass: the node's own router in every topology, as the
-	// engine hands its compactor the router — or a fixed answer a case hands
-	// it (SplitMaintainers), and on a fleet none of the repositories an
-	// earlier case made (ConfineMaintenance).
+	// Maintainers is which repositories the node maintains, asked once a
+	// pass: the node's own router, as in the engine, or a case's fixed answer
+	// (SplitMaintainers); on a fleet, none an earlier case made
+	// (ConfineMaintenance).
 	Maintainers compact.Maintainers
-	// Objects is the object store's backend for each incarnation: asked
-	// again at every start, because a backend riding a broker connection
-	// dies with a member's restart.
+	// Objects is the object store's backend, asked again at every start: a
+	// backend riding a broker connection dies with a member's restart.
 	Objects func() objstore.Backend
 	// Limits are code.limits; a zero field takes the default.
 	Limits gitlet.Limits
@@ -168,17 +158,15 @@ type GitOptions struct {
 	Faults *gitletfault.Script
 	// Credentials are who the node's guard admits, and the seat each is.
 	Credentials *Credentials
-	// Runs is the fleet's executors' rows, which the node's host admits a
-	// coding box by — ONE store for every Gitlet node of a fleet, as every node
-	// reads the one pending store on the fleet's coordination store; nil is
-	// one of the node's own (NewFixtureRuns).
+	// Runs is the executors' rows the host admits a coding box by: ONE store
+	// for every Gitlet node of a fleet, as every engine node reads the
+	// coordination store's; nil is the node's own (NewFixtureRuns).
 	Runs host.Runs
-	// BoxTokens verifies a box's run token, over the fleet's keyring; nil is
-	// one of the node's own over it (NewBoxTokens), as every node builds its
-	// own.
+	// BoxTokens verifies a box's run token over the fleet's keyring; nil is
+	// the node's own (NewBoxTokens), as every node builds its own.
 	BoxTokens *host.BoxTokens
-	// CheckTokens verifies a check's box's token, over the fleet's keyring;
-	// nil is one of the node's own over it (NewCheckTokens).
+	// CheckTokens verifies a check's box's token over the fleet's keyring;
+	// nil is the node's own (NewCheckTokens).
 	CheckTokens *host.CheckTokens
 	// Audit is handed every push record the host publishes; nil keeps none.
 	Audit func(context.Context, types.OperatorActed)
@@ -195,35 +183,31 @@ type GitOptions struct {
 	GitPath string
 	// Logger is the host's; nil is the package's own.
 	Logger *slog.Logger
-	// Roster is the chart the node's query server judges a seat's read by,
-	// and Gitlet a seat's engine write: nil is the fixture chart
-	// (FixtureRoster). A case standing in a node that holds no chart hands one
-	// answering nil, which answers a seat unready (no_chart).
+	// Roster is the chart a seat's reads and engine writes are judged by; nil
+	// is FixtureRoster. One answering nil stands in a node holding no chart,
+	// which answers a seat unready (no_chart).
 	Roster func() gitlet.Roster
 	// Signer signs the node's engine-built commits; nil is FixtureSigner.
 	Signer host.Signer
-	// Current is whether the node serves the company's configuration, as
-	// the query server and Gitlet read it; nil is current.
+	// Current is whether the node serves the company's configuration; nil is
+	// current.
 	Current func() bool
-	// QueryPool stands between the query server and the node's pool — a
-	// case that holds a read's processes, or records them; nil is the pool
-	// itself.
+	// QueryPool stands between the query server and the node's pool, to hold
+	// or record a read's processes; nil is the pool itself.
 	QueryPool func(query.Pool) query.Pool
 	// Fleet is how many live git and data nodes the cache's backfill paces
-	// its reads by (cache.Options.Fleet); nil is a node with no fleet, one of
-	// each.
+	// its reads by (cache.Options.Fleet); nil is one of each.
 	Fleet cache.Fleet
 	// ResyncClock is the clock of the node's ONE set of re-sync buckets
-	// (gitlet.NewResyncs), which Gitlet's host and query server both draw
-	// on; nil is the wall clock. A case passing a refill hands one it moves
-	// by hand; every incarnation reads it.
+	// (gitlet.NewResyncs), shared by its host and query server and read by
+	// every incarnation, so a case can move a refill by hand; nil is the
+	// wall clock.
 	ResyncClock func() time.Time
 }
 
-// rowsOf is the rows' side of a Gitlet node's cache (cache.Fetcher): its
-// snapshots through the estate the host asks, and its reads of Gitlet
-// — the backfill's pages of pushes among them — through the seam Node.Read
-// answers by, as the engine hands the cache one router for both.
+// rowsOf is a Gitlet node's cache's rows (cache.Fetcher): snapshots through
+// the host's estate and reads (the backfill's pages among them) through
+// Node.Read's seam, as the engine hands the cache one router for both.
 type rowsOf struct {
 	host.Estate
 	read func(context.Context, gitlet.ReadQuery) (gitlet.ReadAnswer, error)
@@ -233,14 +217,13 @@ func (r rowsOf) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer
 	return r.read(ctx, q)
 }
 
-// GitletNode is one Gitlet node: its pool, its cache over its own directory, its
-// host and its HTTP server mounting the host's three routes behind the API's
-// own guard, so a person's git meets the 401 challenge and Basic credential it
-// meets in production — and its query server, over the same cache and pool,
-// under the node's own seat git-work share, as the engine builds one.
+// GitletNode is one Gitlet node, built as the engine builds one: its pool, its
+// cache over its own directory, its host, its query server under the node's
+// git-work share, and an HTTP server mounting the host's routes behind the
+// API's own guard, so a person's git meets production's 401 challenge.
 //
-// Like a DataNode, ITS LIFETIME IS THE TEST THAT STARTED IT, and a Restart's t
-// only reports.
+// Like a DataNode, ITS LIFETIME IS THE TEST THAT STARTED IT; a Restart's t only
+// reports.
 type GitletNode struct {
 	o    GitOptions
 	life testing.TB
@@ -251,16 +234,15 @@ type GitletNode struct {
 	// killed is the incarnation a KILLED node's presence row still speaks
 	// for (BackgroundBudget): set by Kill, cleared by Stop and Restart.
 	killed *gitIncarnation
-	// advertised is what the node says its cache gives its background work
-	// in place of the cache's own figure, where it is positive (Advertise).
+	// advertised, when positive, replaces the cache's own background budget
+	// in the presence row (Advertise).
 	advertised int64
 }
 
-// Advertise has the node say it gives its background work budget bytes — 0
-// is the cache's own figure again — as its presence row says it
-// (BackgroundBudget): Gitlet nodes of different sizes, which a repository's
-// maintainer is placed by, on one machine. The node's own admissions still
-// hold its builds to the cache's real budget.
+// Advertise has the node's presence row say it gives its background work
+// budget bytes (BackgroundBudget); 0 restores the cache's own figure. It stands
+// in nodes of different sizes, which maintainer placement reads, on one
+// machine; the node's own admissions still hold builds to the real budget.
 func (g *GitletNode) Advertise(budget int64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -278,8 +260,8 @@ type gitIncarnation struct {
 	share   *gitlet.GitShare
 	resyncs *gitlet.Resyncs
 	query   *query.Server
-	// previews answers the node's merge previews, built beside the query
-	// server over the same cache, pool and share, as the engine builds them.
+	// previews answers merge previews over the query server's cache, pool
+	// and share.
 	previews *home.Previews
 	// compactor is built as the engine builds a Gitlet node's and NEVER
 	// STARTED: every case drives Compact or Poll itself, so no case races a
@@ -332,8 +314,8 @@ func StartGitletNode(t testing.TB, o GitOptions) *GitletNode {
 	}
 	// THE PATH'S GIT IS HELD TO THE NODE FLOOR HERE, before a pool refuses
 	// it, so a machine below the floor reads what to run rather than an
-	// operator's refusal — and a stand-in a case names (a recorder, a wrap)
-	// stands in front of that same git.
+	// operator's refusal; a GitPath a case names (a recorder, a wrap) stands
+	// in front of that same git.
 	if path := gittest.RequireNode(t); o.GitPath == "" {
 		o.GitPath = path
 	}
@@ -405,11 +387,10 @@ func (g *GitletNode) start(t testing.TB) *gitIncarnation {
 	if g.o.Signer != nil {
 		signer = g.o.Signer
 	}
-	// ONE share of the pool's read lane, as the engine builds one: the query
-	// server's reads and the host's engine writes draw on it alike.
+	// ONE share of the pool's read lane and ONE set of re-sync buckets (the
+	// boxes', the checks' and the seats' tools'), which the query server and
+	// the host both draw on, as in the engine.
 	n.share = gitlet.NewGitShare(n.id, n.pool.Slots(gitproc.ClassRead), n.metrics)
-	// And ONE set of re-sync buckets — the boxes', the checks' and the seats'
-	// tools' — which both draw on, as the engine builds one.
 	n.resyncs = gitlet.NewResyncs(g.o.ResyncClock, n.metrics)
 	if n.host, err = host.New(host.Options{
 		Cache: n.cache, Git: n.pool, Estate: g.o.Estate, Objects: objects,
@@ -425,8 +406,6 @@ func (g *GitletNode) start(t testing.TB) *gitIncarnation {
 	if err = n.host.Start(ctx); err != nil {
 		t.Fatalf("gitlettest: start %s's host: %v", n.id, err)
 	}
-	// THE QUERY SERVER, as the engine builds it: over the node's cache and
-	// pool, under the node's one share.
 	var reads query.Pool = n.pool
 	if g.o.QueryPool != nil {
 		reads = g.o.QueryPool(reads)
@@ -436,29 +415,22 @@ func (g *GitletNode) start(t testing.TB) *gitIncarnation {
 		Roster:  roster, Current: g.o.Current, Fetched: fetched}); err != nil {
 		t.Fatalf("gitlettest: build %s's query server: %v", n.id, err)
 	}
-	// THE MERGE PREVIEWS, as the engine builds them beside the query server:
-	// over the node's cache and its own pool, under the same share, judged
-	// and recorded as its reads are.
+	// The merge previews take the pool itself, never the QueryPool stand-in.
 	if n.previews, err = home.NewPreviews(home.PreviewOptions{NodeID: n.id, Cache: n.cache, Git: n.pool,
 		Share: n.share, Roster: roster, Current: g.o.Current, Fetched: fetched, Metrics: n.metrics,
 		Logger: g.o.Logger}); err != nil {
 		t.Fatalf("gitlettest: build %s's merge previews: %v", n.id, err)
 	}
-	// THE COMPACTOR, as the engine builds it after the host has started: over
-	// the node's cache and store, listing through the node's reads and
-	// proposing through its compactions and its expunges.
+	// The compactor is built after the host has started, as in the engine.
 	proposals := compactions{read: g.o.Reads, compact: g.o.Compactions, expunge: g.o.Expunges}
 	if n.compactor, err = compact.New(compact.Options{Cache: n.cache, Objects: objects, Estate: proposals,
 		Maintainers: g.o.Maintainers, NodeID: n.id, Limits: limits, Faults: g.o.Faults, Metrics: n.metrics,
 		Logger: g.o.Logger}); err != nil {
 		t.Fatalf("gitlettest: build %s's compactor: %v", n.id, err)
 	}
-	// A PERSON'S THREE ROUTES AND TWO DOWNLOADS, AND A CODING BOX'S THREE,
-	// on one mux behind the API's real guard, as a Gitlet node serves them:
-	// the host's own handlers — never the API's mount, which internal/api's
-	// own tests hold — so a box meets the guard exactly as it does in
-	// production, its route unguarded and its run's token no credential of
-	// the guard's.
+	// The host's own handlers behind the API's real guard, never the API's
+	// mount (internal/api's tests hold that), so a box meets the guard as in
+	// production: its route unguarded, its run's token no guard credential.
 	mux := http.NewServeMux()
 	mux.Handle(host.PatternInfoRefs, n.host.InfoRefs())
 	mux.Handle(host.PatternUploadPack, n.host.UploadPack())
@@ -475,12 +447,10 @@ func (g *GitletNode) start(t testing.TB) *gitIncarnation {
 }
 
 // Git is the node's git half as the estate's router and server ask for it
-// (estate.LocalGit): its running incarnation's query server for a read by
-// object id, its host for an engine write and its previews for a merge
-// preview, as the engine pairs them over one cache, one pool and one share —
-// read again at every request so a restarted node's is the one asked, and none
+// (estate.LocalGit): the running incarnation's query server, host and
+// previews, read again at every request so a restarted node's is asked; none
 // while the node is killed or stopped, which the serving side answers
-// `no_backend`, as a Gitlet node that has not built Gitlet answers.
+// `no_backend`.
 func (g *GitletNode) Git() (estate.GitServer, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -511,13 +481,10 @@ func (h gitHalf) MergePreview(ctx context.Context, q gitlet.MergePreviewQuery) (
 }
 
 // BackgroundBudget is what the node's presence row says its cache gives its
-// background work (cache.Cache.BackgroundBudget), as an engine's Gitlet node
-// writes it on every beat beside its status: its running incarnation's
-// figure — or what a case has it advertise in its place (Advertise); a KILLED
-// node's last — a process that dies gives no presence back, so the row its
-// last beat wrote, figure and all, stands until its lease lapses; and nothing
-// for a STOPPED node, which gave its presence back before it stopped, so no
-// row speaks for it.
+// background work (cache.Cache.BackgroundBudget): the running incarnation's
+// figure, or what Advertise set; a KILLED node's last, since a dead process
+// gives no presence back and its row stands until its lease lapses; and
+// nothing for a STOPPED node, which gave its presence back.
 func (g *GitletNode) BackgroundBudget() (int64, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -535,13 +502,11 @@ func (g *GitletNode) BackgroundBudget() (int64, bool) {
 }
 
 // GitPlacement is a topology's git placement as its routers read it
-// (estate.GitPlacement): its Placement — who serves git, as the topology lists
-// them, which the git walk and a repository's home order — and, off ONE read
-// of that same listing, what each Gitlet node it lists says its cache gives its
-// background work, as an engine's presence row says it
-// (GitletNode.BackgroundBudget). Node is the Gitlet node an id names, nil for an id
-// the topology holds no Gitlet node for (yet): a node so listed is NOT SAYING,
-// and so is a stopped one a topology still lists, since no row speaks for it.
+// (estate.GitPlacement): its Placement (who serves git) and, off ONE read of
+// that listing, each listed node's background budget
+// (GitletNode.BackgroundBudget). Node is the Gitlet node an id names, nil for
+// one the topology holds none for yet; such a node is NOT SAYING, as is a
+// stopped one still listed.
 type GitPlacement struct {
 	estate.Placement
 	Node func(id string) *GitletNode
@@ -603,18 +568,14 @@ func (g *GitletNode) Kill() {
 	n.host.Stop(ended)
 }
 
-// Stop ends the node as the engine's graceful stop does, as far as git sees
-// it, in the engine's order. FIRST THE LISTENER, drained within drain: no new
-// connection is taken and every request already running finishes — the API's
-// listener, which the engine shuts down before its teardown and whose drain
-// finishes the git requests it let through (api.App.DrainGit), with no bound
-// of its own, since what bounds a shutdown is whatever supervises the process.
-// THEN THE GIT READS AND THE HOST, as the teardown's stopGitletHost stops them
-// and bounded as it is, by host.StopBudget: a read or a merge preview in
-// flight is cut and waited for (query.Server.Stop, home.Previews.Stop), and a
-// request still running past the drain is cancelled and waited for, its relay
-// and its cache stopped. Unlike Kill, it waits for what it ends, so it is
-// never the stop of a node a crash holds.
+// Stop ends the node as the engine's graceful stop does, in its order. FIRST
+// THE LISTENER, drained within drain as the API's is (api.App.DrainGit): no new
+// connection, every running request finishes, and no bound of its own, since
+// the process's supervisor bounds a shutdown. THEN THE GIT READS AND THE HOST,
+// as stopGitletHost stops them, bounded by host.StopBudget: in-flight reads and
+// previews are cut and waited for, and a request still running past the
+// drain is cancelled and waited for. Unlike Kill, it waits for what it ends,
+// so it never stops a node a crash holds.
 func (g *GitletNode) Stop(drain context.Context) {
 	g.mu.Lock()
 	n := g.cur
@@ -638,9 +599,8 @@ func (g *GitletNode) Stop(drain context.Context) {
 	n.srv.CloseClientConnections()
 }
 
-// Restart rebuilds the node over the same directory: a new pool, the cache
-// opened again, a new host and a new listener — so its URL is a new one. t
-// reports; the node's lifetime stays its starter's.
+// Restart rebuilds the node over the same directory, with a new listener and
+// so a new URL. t reports; the node's lifetime stays its starter's.
 func (g *GitletNode) Restart(t testing.TB) {
 	t.Helper()
 	g.mu.Lock()
@@ -676,8 +636,7 @@ func (g *GitletNode) teardown() {
 }
 
 // compactions is a Gitlet node's code log as its compactor reaches it
-// (compact.Estate): the due listings through the node's reads, the proposals
-// through its compactions and its expunges.
+// (compact.Estate).
 type compactions struct {
 	read    func(context.Context, gitlet.ReadQuery) (gitlet.ReadAnswer, error)
 	compact func(context.Context, gitlet.CompactionProposal) (gitlet.CompactResult, error)
@@ -697,12 +656,10 @@ func (c compactions) Expunge(ctx context.Context, p gitlet.ExpungeProposal) (git
 }
 
 // serverLog is a Gitlet node's HTTP server's error log: A HANDLER THAT PANICS
-// FAILS THE CASE. net/http recovers a handler's panic and only logs it — the
-// client sees its connection end, which git prints as `RPC failed` and a
-// case asserting a refusal might read as one — so the line is the one place
-// the panic shows, and the suite fails on it by name. http.ErrAbortHandler,
-// the host's deliberate cut of a response it cannot finish, is never logged.
-// Every other line the server logs is the case's to read.
+// FAILS THE CASE. net/http recovers the panic and only logs it, and git prints
+// the cut connection as `RPC failed`, which a case asserting a refusal could
+// take for one. http.ErrAbortHandler (the host's deliberate cut) is never
+// logged; every other line goes to the case's log.
 type serverLog struct{ t testing.TB }
 
 func (l serverLog) Write(p []byte) (int, error) {
@@ -714,10 +671,9 @@ func (l serverLog) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// prepare is cache.Prepare, asked again for a short while when another
-// incarnation of this process still holds the directory: a killed node's
-// cache gives its claim back the moment the last of its work ends, which in a
-// process that really died is at once and here is a moment later.
+// prepare is cache.Prepare, retried briefly while another incarnation still
+// holds the directory: a killed node's cache gives its claim back when its last
+// work ends: at once in a process that really died, a moment later here.
 func prepare(ctx context.Context, dir string) (cache.Layout, error) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {

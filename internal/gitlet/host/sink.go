@@ -9,31 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/api/paced"
 )
 
-// sink is the response a git process writes into: nothing reaches the client
-// until the first byte git writes — then the status 200, the headers, the
-// service prefix (for an advertisement) and the byte — so a process that fails
-// before writing can still be answered with a status: a 503, or a retry on a
-// rebuilt cache. Writes go through paced.Writer, which holds the client to the
-// per-mebibyte pace and FLUSHES EVERY WRITE: a git process's keepalives and
-// progress lines must reach the client when git writes them, or a balancer's
-// idle timeout cuts a transfer that is merely working.
+// sink is the response a git process writes into. Nothing reaches the client
+// before git's first byte, so a process that fails before writing can still be
+// answered with a status (a 503, or a retry on a rebuilt cache). Writes go
+// through paced.Writer, which holds the client to the per-mebibyte pace and
+// FLUSHES EVERY WRITE: git's keepalives and progress must reach the client as
+// written, or a balancer's idle timeout cuts a transfer that is merely working.
 //
-// A FETCH'S SINK HOLDS MORE (holdPack): the answer's first byte is upload-pack's
-// negotiation, written before its pack-objects runs, and pack-objects meets a
-// damaged cache only after it (band.go). So until the pack begins, what
-// upload-pack writes is held and read for the pack's beginning rather than
-// written, and the response starts only with the pack — or with git's own
-// failure, when the run's answer stands (release) — so a run that met damage
-// before its pack has shown the client nothing and is run again over the
-// repaired cache.
-//
-// A DOWNLOAD'S SINK (download.go) holds its opening (holdOpening) so its
-// headers can read it, writes them itself (headers), and refuses any byte past
-// its bound (bound).
-//
-// AND IT READS ON PAST THE HOLD (tap): whether the answer carried a pack is
-// what the fetch audit asks once the request has ended (fetch.go), and an
-// answer whose acknowledgments outgrew the hold has not said yet.
+// A fetch's sink holds upload-pack's negotiation until the pack begins
+// (holdPack): pack-objects meets a damaged cache only after it (band.go), and a
+// run that has shown the client nothing can run again over the repaired cache.
+// A download's sink (download.go) holds its opening for its headers and refuses
+// any byte past its bound.
 type sink struct {
 	w           http.ResponseWriter
 	contentType string
@@ -57,17 +44,14 @@ type sink struct {
 	// it holds of it (holdPack, holdOpening); nil for any other answer, and
 	// once it has started.
 	hold *preamble
-	// tap is a fetch's answer read for its pack's beginning (band.go) — the
-	// hold's release rule while the answer is held, and past the hold whether
-	// the answer carried a pack at all ([sink.PackSent]): read on through
-	// every write until the pack begins or the answer ends, after the hold
-	// gives up at preambleHoldBytes, keeping nothing of what it reads and
-	// delaying no write. Nil for any other answer.
+	// tap reads a fetch's answer for its pack's beginning (band.go): the hold's
+	// release rule while held, then, past preambleHoldBytes, whether the answer
+	// carried a pack ([sink.PackSent]), which the fetch audit asks (fetch.go).
+	// It keeps nothing and delays no write. Nil for any other answer.
 	tap *answerScan
-	// sent is every byte of the answer the client was written — the service
-	// prefix, what was held and released, and everything after — as the
-	// paced writer took it: what the repository's heat counts as bytes out
-	// (Server.served). Nothing held and dropped by a run done again counts.
+	// sent is every byte the paced writer took, prefix and released hold
+	// included: the repository's heat's bytes out (Server.served). What a run
+	// done again held and dropped never counts.
 	sent int64
 }
 
@@ -78,15 +62,12 @@ type preamble struct {
 }
 
 // preambleHoldBytes is the most of an upload-pack answer a sink holds before
-// its pack begins: everything upload-pack writes ahead of pack-objects' first
-// word — the acknowledgments of the request's last negotiation round, an ACK
-// line of 49 bytes for each common commit it named, its shallow lines and
-// section headers — and pack-objects' first lines. 64 KiB, one largest
-// packet's worth, holds 1 300 acknowledgments, which a round of git's
-// fetch-pack reaches only when nearly every commit it offers is common; past
-// it the answer starts as every answer did before the hold, and damage named
-// after that is answered in git's own words. A fetch holds it in its transfer
-// slot, so a node holds at most 64 KiB a transfer slot for every fetch at once.
+// its pack begins: the last negotiation round's acknowledgments (a 49-byte ACK
+// a common commit), shallow lines, section headers and pack-objects' first
+// lines. 64 KiB, one largest packet, holds 1 300 ACKs, which a fetch-pack round
+// reaches only when nearly every commit it offers is common; past it the answer
+// starts unheld, and damage found later is answered in git's own words. Held
+// in a fetch's transfer slot: at most 64 KiB a slot.
 const preambleHoldBytes = 64 << 10
 
 // newSink is a sink answering w with contentType; an advertisement sets its
@@ -139,9 +120,8 @@ func (s *sink) again() {
 	}
 }
 
-// PackSent reports whether a fetch's answer carried a pack — its pack began
-// (band.go) — as far as it has been written: false for an answer of
-// acknowledgments alone, a negotiation round that sent no object, and for
+// PackSent reports whether a fetch's answer, as far as written, began a pack
+// (band.go): false for a negotiation round of acknowledgments alone, and for
 // any answer but a fetch's.
 func (s *sink) PackSent() bool {
 	s.mu.Lock()
@@ -164,10 +144,8 @@ func (s *sink) Write(p []byte) (int, error) {
 		}
 		s.taken += int64(len(p))
 	}
-	// READ ON PAST THE HOLD until the pack begins, so a fetch whose
-	// acknowledgments outgrew the hold is still told apart from a
-	// negotiation round that sent no object. Once begun, nothing more is
-	// read.
+	// READ ON PAST THE HOLD until the pack begins, so acknowledgments that
+	// outgrew it still tell a fetch from a round that sent no object.
 	if t := s.tap; t != nil && !t.begun {
 		t.scan(p)
 	}
@@ -205,11 +183,10 @@ func (s *sink) emit(p []byte) (int, error) {
 	return n, err
 }
 
-// release starts a held answer with what it holds: the run's answer stands —
-// it succeeded, or failed in git's own words, which the client must read as
-// git wrote them. A fetch holding nothing starts nothing, so a run that wrote
-// nothing is still answered with a status; a download starts even empty.
-// Called once the last run has ended.
+// release starts a held answer with what it holds, once the last run has
+// ended: its answer stands, success or git's own words of failure. A fetch
+// holding nothing starts nothing, so it can still be answered with a status; a
+// download starts even empty.
 func (s *sink) release() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -219,9 +196,8 @@ func (s *sink) release() error {
 	return s.startLocked()
 }
 
-// startLocked writes the status and the headers, then the service prefix and
-// whatever the sink held; s.mu is held. Nothing is read of the answer past
-// it.
+// startLocked writes the status, the headers, the service prefix and whatever
+// the sink held; s.mu is held.
 func (s *sink) startLocked() error {
 	h := s.w.Header()
 	if s.headers != nil {
@@ -273,8 +249,7 @@ func (s *sink) Sent() int64 {
 
 // End ends a started response under what is left of its pace, so the
 // terminator net/http writes after the handler returns is charged to the
-// client's mebibyte rather than to the handler's own work (paced.Writer.End).
-// A sink that never started has nothing to end.
+// client's mebibyte, not the handler's work (paced.Writer.End).
 func (s *sink) End() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

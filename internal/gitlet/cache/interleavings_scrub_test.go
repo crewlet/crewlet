@@ -12,16 +12,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE REPAIRS' AND THE SCRUB'S OPERATIONS in an interleaving: damage that
-// lands in a file this process already vouched for, what a git process over
-// a copy reports, and the scrub that reads every byte behind the serving.
+// THE REPAIRS' AND THE SCRUB'S OPERATIONS in an interleaving: damage in a
+// file this process already vouched for, a git process's report over a copy,
+// and the scrub that reads every byte behind the serving.
 
-// damageInPlace flips a byte in the middle of one file of a held
-// repository's incarnation — a pack, its index or reverse index, or a derived
-// file — through its own inode, its identity kept, with the cache running:
+// damageInPlace flips a byte mid-file in one file of a held copy (a pack, its
+// .idx or .rev, or a derived file), its identity kept, while the cache runs:
 // media damage after this process vouched for the file, which no check sees.
-// The scrub finds it: the one a report makes due, a scrub step's, or the one
-// every check runs first (check).
+// A scrub finds it: one a report makes due, a scrub step's, or check's.
 func (in *interleaving) damageInPlace(string) string {
 	repo, dir, rel := in.heldFile(true, true)
 	if rel == "" {
@@ -31,18 +29,14 @@ func (in *interleaving) damageInPlace(string) string {
 	return fmt.Sprintf("%s of repo-%d flipped", filepath.Base(rel), slices.Index(in.repos, repo)+1)
 }
 
-// requestMeetsDamage is a request whose git meets damage of the copy it
-// reads: a linearizable sync of a held repository, a file of the copy that
-// sync answered flipped in place, as media damage is, and the request's pack
-// or object failure handed to Rebuild as the host hands it — begun after
-// every write into the copy, so it is repaired, never answered as it stands:
-// by the forced round where an index file or a derived one failed, by the
-// scrub that round runs when it found nothing (a pack's body), and by the
-// whole rebuild only where neither found anything to fetch again. The file
-// is picked from the copy the sync answered, never before the sync: its
-// round may take files out of the copy in place — the first round after a
-// crash left a swap's leaving packs in it sweeps them there — or move the
-// repository into its next incarnation.
+// requestMeetsDamage is a request whose git meets media damage in the copy a
+// linearizable sync answered, its failure handed to Rebuild as the host hands
+// it. Begun after every write into the copy, it must be repaired, never
+// answered as it stands: by the forced round (an index or derived file), by
+// the scrub that round runs when it found nothing (a pack's body), else by the
+// whole rebuild. The file is picked after the sync, whose round may sweep
+// files out of the copy (a crashed swap's leaving packs) or move it to its
+// next incarnation.
 func (in *interleaving) requestMeetsDamage(string) string {
 	repo := in.heldRepo()
 	if repo == "" {
@@ -81,12 +75,11 @@ func (in *interleaving) requestMeetsDamage(string) string {
 }
 
 // report hands the cache's observer a run over repo's current incarnation
-// that named damage, as the pool does after every run: a derived file's — a
-// repair round queued, which drops the file unless it was written after the
-// run began — a pack's or an object's, or a crash — the scrub due at once, or
-// in its cooldown after a scrub that found nothing. Half the runs began an
-// hour ago, before anything this process wrote. A third of the reports are
-// made with a check of the repository admitted, which defers a derived
+// that named damage, as the pool does: a derived file's (a repair round
+// queued, which drops the file unless written after the run began), a pack's,
+// an object's or a crash (the scrub due at once, or in its cooldown after a
+// clean scrub). Half the runs began an hour ago, before anything this process
+// wrote; a third are made under an admitted check, which defers a derived
 // report until its release asks the round.
 func (in *interleaving) report(repo string) string {
 	if _, ok := cache.Repos(in.c)[repo]; !ok {
@@ -128,15 +121,12 @@ func (in *interleaving) report(repo string) string {
 }
 
 // settle waits until no repository's round is running or queued and no
-// repair mark waits for one: a report's repair round and a scrub's run on the
-// cache's own goroutines, and the steps after them set the cache's knobs
-// (SetMaxBytes) only between rounds.
+// repair mark waits for one: repair rounds and scrubs run on the cache's own
+// goroutines, and later steps set its knobs (SetMaxBytes) only between rounds.
 //
-// A repair whose download failed is HELD OFF (repairMark.fetchFailed) and
-// nothing repairs it until its backoff has passed: a killed sync's fault,
-// armed for that step's sync, is met by whichever round downloads first, a
-// repair round of another repository among them. So settle lets a day pass
-// for such a copy and syncs it, and its round installs the pack.
+// A repair whose download failed is HELD OFF (repairMark.fetchFailed) until
+// its backoff passes; a killed sync's fault can hit another repository's
+// repair round. So settle passes the backoff for such a copy and syncs it.
 func (in *interleaving) settle() {
 	for _, repo := range in.repos {
 		if _, ok := cache.Repos(in.c)[repo]; !ok {
@@ -154,28 +144,23 @@ func (in *interleaving) settle() {
 	}
 }
 
-// scrub runs every scrub due, with the clock moved past ScrubInterval and
-// every repository used first, so each held copy is due: what a day of
-// serving brings. A scrub's findings are repaired by the round it asks.
+// scrub runs every scrub a day of serving makes due (scrubAll); the round a
+// scrub asks repairs its findings.
 func (in *interleaving) scrub(string) string {
 	return fmt.Sprintf("scrubbed %d", len(in.scrubAll()))
 }
 
-// scrubAll runs every scrub due at once — a copy's first among them — and
-// then uses every held repository past its interval and runs the scrubs that
-// makes due, answering the repositories scrubbed. Both, because a copy's
-// first scrub reads no index file this process holds a vouch for: damage
-// that landed in one after the copy's first round is the interval's scrub to
-// find, a day of serving later.
+// scrubAll runs every scrub due (a copy's first among them), then uses every
+// held copy past ScrubInterval and runs the scrubs that makes due, answering
+// the repositories scrubbed. Both, because a first scrub reads no index file
+// this process vouched for: damage in one after the first round is the
+// interval scrub's to find.
 //
-// EVERY HELD COPY IS USED BEFORE THE DAY PASSES, AND AGAIN AFTER IT: a copy no
-// full round of this process has converged yet — its rounds killed, or the
-// repository evicted and fetched again by a killed sync — is converged by
-// that first use, and its interval begins only then (firstScrub: this process
-// placed every file of it), so damage that landed in a file of it this
-// process had already vouched for is the scrub of a day after that round.
-// Used only after the day, such a copy began its interval then and was due
-// for nothing, and damage in place before its first round outlived the check.
+// EVERY HELD COPY IS USED BEFORE THE DAY AND AGAIN AFTER IT: a copy no full
+// round of this process has converged (rounds killed, or refetched by a killed
+// sync) is converged by its first use, whose round starts its interval
+// (firstScrub). Used only after the day, it would not yet be due, and damage
+// from before that round outlives the check.
 func (in *interleaving) scrubAll() []string {
 	done := cache.ScrubPass(in.c)
 	in.settle()
@@ -199,10 +184,7 @@ func (in *interleaving) scrubAll() []string {
 	return done
 }
 
-// noteReports records the outcomes the reports and the scrubs reached: a
-// derived report that queued a repair round, one found stale by it, one
-// deferred under a check, one in its scrub's cooldown, a crash that made the
-// scrub due, and damage a scrub found.
+// noteReports records the outcomes the reports and the scrubs reached.
 func (in *interleaving) noteReports() {
 	for outcome, saw := range map[string]string{
 		"queued": "a report queued a repair round", "stale": "a stale report", "deferred": "a deferred report",

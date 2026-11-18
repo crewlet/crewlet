@@ -16,22 +16,20 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// gitletfaultPath is this package's import path, which a hit site names its
-// points through.
+// gitletfaultPath is the import path a hit site names the points through.
 const gitletfaultPath = "github.com/crewlet/crewlet/internal/gitlet/gitletfault"
 
-// hitDirs are the directories the points are hit in: Gitlet's
-// pipeline, its engine write's build among it, and the suite's wrapping
-// publisher and reserve reading that hit the committer's — a push's — the
-// cache, whose sync hits its own, the compactor, which hits the compaction's,
-// the publication's and the expunge's, the check runner, which hits a check's
-// run's, and the mirrors, which hit an import's and a pull mirror's sync's.
+// hitDirs are the directories the points are hit in: the host pipeline (the
+// engine write's build included), the suite's wrapping publisher and reserve
+// (the committer's: a push's), the cache's sync, the compactor (compaction,
+// publication, expunge), the check runner (a check's run), and the mirrors
+// (import, pull mirror).
 var hitDirs = []string{"internal/gitlet/host", "internal/gitlet/gitlettest", "internal/gitlet/cache",
 	"internal/gitlet/compact", "internal/gitlet/checkrun", "internal/gitlet/mirror"}
 
-// hitSites counts, over the non-test Go files under each of dirs, every call
-// whose function is a selector named `fault` or `Hit` and whose second argument
-// names a point of this package — under whatever name the file imports it.
+// hitSites counts, over the non-test Go files under dirs, every call to a
+// selector named `fault` or `Hit` whose second argument names a point of this
+// package, under whatever name the file imports it.
 func hitSites(dirs []string) (map[gitletfault.Point]int, error) {
 	counts := map[gitletfault.Point]int{}
 	for _, dir := range dirs {
@@ -88,8 +86,8 @@ func hitSites(dirs []string) (map[gitletfault.Point]int, error) {
 	return counts, nil
 }
 
-// pointNames maps each point's Go identifier to the point, as a hit site
-// spells it.
+// pointNames maps each point's Go identifier, as a hit site spells it, to the
+// point.
 var pointNames = map[string]gitletfault.Point{
 	"HostAfterCommands": gitletfault.HostAfterCommands, "HostAfterSync": gitletfault.HostAfterSync,
 	"HostAfterScratch": gitletfault.HostAfterScratch, "HostHookAdmitted": gitletfault.HostHookAdmitted,
@@ -131,18 +129,14 @@ func byPoint(t *testing.T, counts map[gitletfault.Point]int) map[gitletfault.Poi
 	return out
 }
 
-// A fault point is ONE step, named once: F21 kills the node at every point
-// of PushPath(), C6 the maintainer at every point of CompactPath(), LY10 at
-// every point of PublishPath(), F38 the Gitlet node at every point of WritePath()
-// — the write's own and the one landing's — the expunge's own suite its
-// maintainer at every point of ExpungePath(), and a cache case holds a sync —
-// or crashes it — at each of the sync's, so a point hit at two sites fires at
-// whichever runs first and a point hit at none is a fault no case can make —
-// the swap's rename among them, which a case copies the disk at as a crash
-// would leave it. The push's and the compaction's upload points are each hit
-// in the one closure their caller hands gitlet.StoreBundle, and the
-// publication's in the one it hands both gitlet.StoreLayer and
-// gitlet.StoreBundle.
+// A fault point is ONE step, named once: cases kill a node or maintainer at
+// every point of a path (F21 PushPath(), C6 CompactPath(), LY10 PublishPath(),
+// F38 WritePath() with the landing's, the expunge suite ExpungePath()), and the
+// cache cases hold or crash a sync at each of its points, copying the disk at
+// the swap's rename as a crash leaves it. So a point hit at two sites fires at
+// whichever runs first and one hit at none is a fault no case can make. Each
+// upload point is hit in the one closure its caller hands gitlet.StoreBundle
+// (the publication's also gitlet.StoreLayer).
 func TestEveryPointHasOneHitSite(t *testing.T) {
 	root := sourcetree.Root(t)
 	dirs := make([]string, len(hitDirs))
@@ -163,8 +157,8 @@ func TestEveryPointHasOneHitSite(t *testing.T) {
 }
 
 // The walk counts each point by its sites, under the import's own name or a
-// renamed one, and nothing that is not a hit: the control that keeps the test
-// above able to fail.
+// renamed one, and nothing that is not a hit: the control that keeps
+// TestEveryPointHasOneHitSite able to fail.
 func TestTheHitSiteWalkCountsEachPoint(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, src string) {

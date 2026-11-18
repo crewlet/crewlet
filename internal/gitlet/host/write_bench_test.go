@@ -40,15 +40,14 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// AN ENGINE WRITE, MEASURED (ADR-0092): from the call of the code write tool a
-// seat's turn makes to the pack adopted into the copy (BenchmarkEngineWrite),
-// and its build alone (BenchmarkEngineCommit). What each arm reports confirms
-// or replaces the budgets an engine write is held to — every term of
-// estate.GitWriteAttempt, gitlet.WriteUploadAllowance, gitlet.WriteBuildDeadline,
-// gitlet.MaxFileOps, gitlet.MaxWritePackBytes, the git writes' lane's width and the
-// seat git-work share's half — and doc.go's measured section and
-// gitlet.md's "What an engine write costs" carry the figures, with the
-// machine, the git and the object store each was taken on.
+// An engine write, measured (ADR-0092): BenchmarkEngineWrite from the code
+// write tool's call to the pack adopted into the copy, BenchmarkEngineCommit
+// its build alone. Their figures confirm or replace an engine write's
+// budgets (estate.GitWriteAttempt's terms, gitlet.WriteUploadAllowance,
+// WriteBuildDeadline, MaxFileOps, MaxWritePackBytes, the git writes' lane's
+// width, the seat git-work share's half); the package doc's "Measured" and
+// gitlet.md's "What an engine write costs" carry them, with the machine,
+// git and object store.
 
 // writeStore is an object store an engine write's arms run over: the
 // in-memory twin, or the S3 fake behind the production backend answering each
@@ -58,10 +57,9 @@ type writeStore struct {
 	firstByte time.Duration
 }
 
-// writeStores are BenchmarkEngineWrite's: the twin, and the S3 fake at the two
-// ends of the 100–200 ms AWS documents for S3's first byte (M2-decisions
-// O15.7), at benchConnBytes a connection — every figure an in-process
-// store's, none a real bucket's.
+// writeStores are BenchmarkEngineWrite's: the twin, and the S3 fake at both
+// ends of AWS's documented 100–200 ms first byte (M2-decisions O15.7), at
+// benchConnBytes a connection. No real bucket is measured.
 var writeStores = []writeStore{{"mem", 0}, {"s3fake-100ms", 100 * time.Millisecond},
 	{"s3fake-200ms", 200 * time.Millisecond}}
 
@@ -76,25 +74,18 @@ func (s writeStore) backend(b *testing.B) objstore.Backend {
 	return s3Over(b, srv)
 }
 
-// writeFigures are what an arm's Gitlet node did for its writes and for the
-// person pushing beside them, as it did them — read from the Gitlet node's own
-// seams, never from a fake: the host's per-stage durations as it observes
-// them (crewlet.code.host.write.duration, every observation handed to a bound
-// sink), how long each take of the seat git-work share waited
-// (crewlet.code.seatwork.waits) and each sync of the copy took
-// (crewlet.code.cache.sync.duration), every request the node made of the
-// object store it writes through (its timedObjects), and each push's proposal
-// at the estate the node proposes through (its timedEstate). A NEW SET EVERY
-// ARM, reset once its fixture is built and compacted, so a seeded branch is
-// no sample.
+// writeFigures are what an arm's Gitlet node did, read from its own seams,
+// never a fake's: the host's stage durations
+// (crewlet.code.host.write.duration), the seat git-work share's waits
+// (crewlet.code.seatwork.waits), the copy's syncs
+// (crewlet.code.cache.sync.duration), every object-store request
+// (timedObjects) and every proposal (timedEstate). Reset each arm once its
+// fixture is built and compacted, so a seed is no sample.
 //
-// WHOSE A REQUEST TO THE OBJECT STORE WAS is read off the object it names,
-// the one thing the store sees: an object an engine write's proposal named is
-// the writes', one the person's push proposed is the person's, and any other
-// — a seed's pack, a compaction's output — is the node's own. And every
-// request, sync and proposal is stamped with the arm's PHASE when it was
-// made (alone, writes, compact, after), so what the person's push asked of
-// the store alone is never read as what it asked beside the writes.
+// A request's owner is read off the object it names, the one thing the store
+// sees: the writes', the person's, or else the node's own (a seed, a
+// compaction). Each is stamped with the arm's phase, so the person's requests
+// alone are never read as theirs beside the writes.
 type writeFigures struct {
 	mu sync.Mutex
 	// phase is the arm's phase now: what every request is stamped with.
@@ -102,38 +93,34 @@ type writeFigures struct {
 	// stages is every observation of crewlet.code.host.write.duration, by
 	// its stage: sync, build, land and total.
 	stages map[string][]time.Duration
-	// shareWaits is every take of the seat git-work share an engine write's
-	// build made, granted or unready, as the share timed it.
+	// shareWaits is every take of the share an engine write's build made,
+	// granted or unready.
 	shareWaits []time.Duration
 	// syncs is every completed sync of the copy, by phase and kind.
 	syncs map[string][]time.Duration
-	// puts is how long each object's last PUT took and putCalls how many
-	// PUTs it was given, by the object's name; engine is the names an
-	// engine write's proposal named, and person those the person's pushes
-	// proposed.
+	// puts is each object's last PUT's time and putCalls its PUT count, by
+	// name; engine and person are the names the writes' and the person's
+	// proposals named.
 	puts     map[string]time.Duration
 	putCalls map[string]int
 	engine   map[string]bool
 	person   map[string]bool
 	// calls is every request the node made of the object store, in order.
 	calls []objCall
-	// proposals is how long each engine write's proposal was in flight: the
-	// committer's batch, its record and the wait for its row, which the
-	// committer answers once its row applied (or pending, past its own
-	// wait, which pending counts); answered is when, by push id.
+	// proposals is each engine write's proposal in flight (the committer's
+	// batch, record and wait for its row), answered when each ended by push
+	// id, and pending how many the committer answered pending past its wait.
 	proposals []time.Duration
 	answered  map[string]time.Time
 	pending   int
-	// personProposals is how long each of the person's proposals was in
-	// flight, by phase.
+	// personProposals is each of the person's proposals in flight, by phase.
 	personProposals map[string][]time.Duration
 	// packs is each engine write's pack bytes, as its proposal names them.
 	packs []int64
 }
 
-// objCall is one request the Gitlet node made of the object store: in which of
-// the arm's phases, which request, of which object, and how long the store
-// took to answer it.
+// objCall is one request the Gitlet node made of the object store, and how
+// long the store took to answer it.
 type objCall struct {
 	phase, op, name string
 	took            time.Duration
@@ -154,7 +141,7 @@ func newWriteFigures() *writeFigures {
 	return fig
 }
 
-// reset forgets everything so far: an arm's fixture is built before it.
+// reset forgets everything so far, the arm's fixture included.
 func (fig *writeFigures) reset() {
 	fig.mu.Lock()
 	defer fig.mu.Unlock()
@@ -184,9 +171,9 @@ func (fig *writeFigures) observe(ms float64, attrs map[string]string) {
 	fig.stages[stage] = append(fig.stages[stage], sinceMs(ms))
 }
 
-// observeShare is the sink bound to the share's waits: an engine write's
-// build's, whatever their outcome — a seat's read takes its unit of the same
-// share, and no arm reads.
+// observeShare is the sink bound to the share's waits, keeping an engine
+// write's build's whatever their outcome; a seat's read takes the same share,
+// and no arm reads.
 func (fig *writeFigures) observeShare(ms float64, attrs map[string]string) {
 	if attrs["work"] != string(gitlet.SeatWorkWrite) {
 		return
@@ -239,9 +226,8 @@ func (fig *writeFigures) requests(phase, owner string) map[string][]time.Duratio
 	return out
 }
 
-// logPhase logs everything phase made of the store, by owner and request, and
-// every sync of the copy it waited for, with the person's proposals: what an
-// arm's report tells a slow push by.
+// logPhase logs phase's store requests by owner and request, its syncs of the
+// copy and the person's proposals: what an arm's report tells a slow push by.
 func (fig *writeFigures) logPhase(b *testing.B, phase string) {
 	b.Helper()
 	for _, owner := range []string{"writes", "person", "node"} {
@@ -272,8 +258,8 @@ func (fig *writeFigures) stage(stage string) []time.Duration {
 	return inOrder(fig.stages[stage])
 }
 
-// uploads is every engine write's PUT duration, sorted, and how many PUTs the
-// engine writes' objects were given in all.
+// uploads is every engine write's PUT duration, sorted, and the writes'
+// objects' PUT count.
 func (fig *writeFigures) uploads() ([]time.Duration, int) {
 	fig.mu.Lock()
 	defer fig.mu.Unlock()
@@ -295,9 +281,8 @@ func inOrder(ds []time.Duration) []time.Duration {
 	return out
 }
 
-// timedObjects is the Gitlet node's object store with every request timed and
-// kept by the object it names (writeFigures.calls), and every PUT besides
-// counted by that name.
+// timedObjects is the Gitlet node's object store with every request timed
+// into writeFigures.calls and every PUT counted by object name.
 type timedObjects struct {
 	objstore.Backend
 	fig *writeFigures
@@ -324,8 +309,8 @@ func (o timedObjects) Put(ctx context.Context, name string, r io.Reader, m objst
 	return err
 }
 
-// Get is timed to the store's answer — its first byte — and not to the last
-// byte its reader hands on, which its caller paces.
+// Get is timed to the store's first byte, never the last: its caller paces
+// the reader.
 func (o timedObjects) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
 	start := time.Now()
 	rc, err := o.Backend.Get(ctx, name, off, n)
@@ -347,9 +332,9 @@ func (o timedObjects) Delete(ctx context.Context, name string) error {
 	return err
 }
 
-// timedEstate is the Gitlet node's estate with every push's proposal timed and
-// the pack it names kept as the writes' or the person's: an engine write's,
-// with its answer's instant, and the person's, by the arm's phase.
+// timedEstate is the Gitlet node's estate with every proposal timed and its
+// pack's name kept as the writes' (with when it was answered) or the
+// person's (by phase).
 type timedEstate struct {
 	host.Estate
 	fig *writeFigures
@@ -381,10 +366,9 @@ func (e timedEstate) Propose(ctx context.Context, p gitlet.Proposal) (gitlet.Pro
 	return res, err
 }
 
-// writeCall is what one tool call's write came to, as the tool's own call of
-// Gitlet saw it (timedWriter): when it asked and was answered, and the
-// answer — a write's push id, commit and floor are none of a seat's tool
-// answer, which names its branch and commit.
+// writeCall is one tool call's write as timedWriter saw it: when asked and
+// answered, and the result, whose push id and floor a seat's tool answer
+// omits.
 type writeCall struct {
 	asked             bool
 	askedAt, answerAt time.Time
@@ -392,14 +376,11 @@ type writeCall struct {
 	err               error
 }
 
-// writeCallKey carries a tool call's writeCall in its context, to the
-// timedWriter the tool's write reaches.
+// writeCallKey carries a tool call's writeCall to timedWriter.
 type writeCallKey struct{}
 
-// timedWriter is Gitlet's writes as the code tools reach them — the
-// fleet's routed seam (estate.CodeSeam), its lifecycle requests as they are —
-// with each engine write recorded into the writeCall its tool call's context
-// carries.
+// timedWriter is the fleet's routed seam (estate.CodeSeam) with each engine
+// write recorded into the writeCall its context carries.
 type timedWriter struct{ estate.CodeSeam }
 
 func (w timedWriter) GitWrite(ctx context.Context, ew gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
@@ -412,9 +393,8 @@ func (w timedWriter) GitWrite(ctx context.Context, ew gitlet.EngineWrite) (gitle
 	return res, err
 }
 
-// noRequesters composes nobody: every turn an arm makes was woken by no one,
-// so no code call of it is decided for anybody but the seat — the wiring
-// builtin.CodeDeps requires beside Gitlet, never asked here.
+// noRequesters composes nobody, the wiring builtin.CodeDeps requires: no
+// arm's turn was woken by anyone, so none asks it.
 type noRequesters struct{}
 
 func (noRequesters) Requester(_ context.Context, handle string) (iam.Principal, error) {
@@ -426,10 +406,9 @@ func (noRequesters) Credential(_ context.Context, login string) (iam.Principal, 
 	return iam.Principal{}, false, fmt.Errorf("no requester is composed here, and %q was asked for", login)
 }
 
-// writeTools are the code write tools an arm's writes are asked through, by
-// name: the real ones (builtin.CodeTools) over Gitlet as the fleet routes it,
-// every write timed (timedWriter), as a seat's turn on a node holding nothing
-// of its own is handed them.
+// writeTools are the real code write tools (builtin.CodeTools) by name, over
+// the routed seam with every write timed (timedWriter), as a seat's turn on a
+// node holding nothing is handed them.
 func writeTools(b *testing.B, seam estate.CodeSeam) map[string]tools.SeatCallable {
 	b.Helper()
 	out := map[string]tools.SeatCallable{}
@@ -450,12 +429,11 @@ func writeTools(b *testing.B, seam estate.CodeSeam) map[string]tools.SeatCallabl
 	return out
 }
 
-// writeFleet is a solo fleet of ONE Gitlet node over backend — its broker fsyncing
-// every write as a deployment's does (SyncAlways), its Gitlet node's estate and
-// object store timed into fig and its write durations, its share's waits and
-// its copy's syncs handed to fig as the node observes them — whose seats may
-// land as many pushes a day as the
-// quota's ceiling admits, since an arm's writes are all one seat's.
+// writeFleet is a solo fleet of ONE Gitlet node over backend, its broker
+// fsyncing every write as a deployment's does (SyncAlways), its estate,
+// object store, write durations, share waits and copy syncs timed into fig,
+// and its seats allowed the quota ceiling's pushes a day, since all an arm's
+// writes are one seat's.
 func writeFleet(b *testing.B, backend objstore.Backend, fig *writeFigures) *gitlettest.SoloFleet {
 	b.Helper()
 	f := gitlettest.SoloNode(b, gitlettest.SoloOptions{
@@ -479,27 +457,24 @@ func writeFleet(b *testing.B, backend objstore.Backend, fig *writeFigures) *gitl
 	return f
 }
 
-// The turn a seat's writes are made in: alice — the fixture chart's
-// full_access seat — on a work item of the tracker's usual key, on a model id
-// of a provider's usual length.
+// The turn a seat's writes are made in: alice, the fixture chart's
+// full_access seat, on a work item key and model id of the usual lengths.
 const (
 	benchModel   = "fixture-model-2031"
 	benchWorkKey = "ENG-1234"
 )
 
-// benchSeat is alice as a write's principal names her, in a turn of its own:
-// what a seed's write, which no tool makes, is asked as.
+// benchSeat is alice as a write's principal, in a turn of its own: what a
+// seed's write, which no tool makes, is asked as.
 func benchSeat() gitlet.Principal {
 	return gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: gitlettest.FixtureAlice, Run: gitlet.RunProvenance{
 		TurnID: statelog.NewOpID(time.Now(), ""), WorkBackend: string(types.WorkWorklet), WorkKey: benchWorkKey,
 		Model: benchModel}}
 }
 
-// benchTurn is a turn of alice's own, as the engine dispatches one: its run id
-// minted as the engine mints it, charged to the work item, with the memo of
-// what it looked up by name and the holds it took empty — so the write it
-// makes is the first call of its turn, which resolves the repository's name
-// at the log's head as every turn's first code call does.
+// benchTurn is a fresh turn of alice's as the engine dispatches one, its
+// lookups and holds empty, so its write is its first code call and resolves
+// the repository's name at the log's head.
 func benchTurn(seat *org.Role) *turnctx.Turn {
 	return &turnctx.Turn{RunID: statelog.NewOpID(time.Now(), ""), Seat: seat, Lookups: turnctx.NewLookups(),
 		Holds: turnctx.NewHolds(nil), WorkItem: &types.WorkItem{Backend: types.WorkWorklet,
@@ -515,8 +490,8 @@ const (
 )
 
 // writeArm is one BenchmarkEngineWrite arm: its object store, the kind of
-// write, how many are asked at once and over how many repositories, and
-// whether a person pushes to the first of them beside the writes.
+// write, how many are asked at once over how many repositories, and whether a
+// person pushes to the first beside them (besidePusher).
 type writeArm struct {
 	store       writeStore
 	kind        string
@@ -533,9 +508,9 @@ func (a writeArm) String() string {
 	return fmt.Sprintf("kind=%s/concurrency=%d/repos=%d/beside=%s", a.kind, a.concurrency, a.repos, beside)
 }
 
-// writeArms are one object store's arms: every kind alone; one file's commit
+// writeArms are one object store's arms: every kind alone; one-file commits
 // eight and sixty-four at once, over one repository and over sixty-four; and
-// one at once and sixty-four at once beside a person's pushes.
+// one and sixty-four at once beside a person's pushes.
 func writeArms(store writeStore) []writeArm {
 	var arms []writeArm
 	for _, kind := range []string{writeFiles1, writeFiles10, writeRevert, writeBranch} {
@@ -555,130 +530,50 @@ func writeArms(store writeStore) []writeArm {
 
 const (
 	// writesAtOnce is the widest arm: as many writes at once as the Gitlet
-	// node's write lane answers (queue.ConcurrentAnswers), each of a turn
-	// of its own — a node's whole complement of turns and a second node's,
-	// each inside one write.
+	// node's write lane answers (queue.ConcurrentAnswers), each of its own
+	// turn: two nodes' whole complement of turns, each inside one write.
 	writesAtOnce = 64
 
-	// besidePace is how often the person of a beside=push arm pushes: a
-	// push of one commit every 100 ms, which a busy repository's people and
-	// their CI make together.
+	// besidePace is how often a beside=push arm's person pushes one commit:
+	// a busy repository's people and their CI together.
 	besidePace = 100 * time.Millisecond
 
-	// besideAlone is how many of the person's pushes are timed with nothing
-	// beside them, before the arm's writes begin: the figure the pushes
-	// beside the writes are held to.
+	// besideAlone is how many of the person's pushes are timed alone, before
+	// the writes and again after them: what the pushes beside are held to.
 	besideAlone = 20
 
-	// writesAUnitServes is how many writes asked at once ONE unit of the
-	// seat git-work share serves inside gitlet.GitShareWait: the share's two
-	// seconds over the build's own git at its p99 on two cores — 0.24 s at
-	// the most for a hundred files at depth six (BenchmarkEngineCommit,
-	// doc.go), a one-file commit's far less — is eight, so the eighth write
-	// in line takes its unit before its wait ends. An arm asking no more at
-	// once than the share's units serve is held to answering none of them
-	// unready or busy: a refusal there is a write path that turns writes
-	// into refusals, never the share's bound at work.
+	// writesAUnitServes is how many writes at once ONE unit of the seat
+	// git-work share serves inside gitlet.GitShareWait: its two seconds over a
+	// build's p99 on two cores, 0.24 s at most (a hundred files at depth six,
+	// BenchmarkEngineCommit), is eight. An arm asking no more than the units
+	// serve must answer none unready or busy: a refusal there is the write
+	// path turning writes into refusals, never the share's bound at work.
 	writesAUnitServes = int(gitlet.GitShareWait / (240 * time.Millisecond))
 
-	// compactPasses is the most passes of the compactor an arm runs at one
-	// pause before it gives up on a repository that is still due: one pass
-	// compacts each due repository once, and a repository past
-	// gitlet.CompactTargetPacks may need a few — thirty-two is far past any a
-	// round of sixty-four writes leaves.
+	// compactPasses bounds the compactor's passes at one pause: a repository
+	// past gitlet.CompactTargetPacks may need a few, and thirty-two is far
+	// past any a round of sixty-four writes leaves.
 	compactPasses = 32
 
-	// seedAtOnce is how many of an arm's branches are seeded at once: few
-	// enough that a one-unit share serves each inside its wait
-	// (gitlet.GitShareWait) at any build this package measures, and seedTries
-	// how many times a seed is asked before a fixture gives up on a node
-	// that answers it unready every time.
+	// seedAtOnce is how many branches are seeded at once, few enough that a
+	// one-unit share serves each inside gitlet.GitShareWait at any build this
+	// package measures; seedTries how often a seed answered unready is asked.
 	seedAtOnce = 4
 	seedTries  = 10
 )
 
-// BenchmarkEngineWrite is AN ENGINE WRITE, FROM ITS TOOL'S CALL TO ITS PACK
-// ADOPTED (ADR-0092): each write the call of a code write tool a seat's turn
-// makes — the real one (builtin.CodeTools: code_commit_files, code_revert,
-// code_create_branch, called as the seat's registry calls it past its
-// authority gate, an in-memory decision), on a node holding nothing of its
-// own, over the production estate.Router, whose walk asks the repository's
-// home Gitlet node over the broker as a seat's turn on any other node does — and
-// timed to the tool's answer, which follows the Gitlet node's, given only once
-// the push's row applied and its pack is linked into the copy
-// (gitletcluster's BenchmarkEngineWrite times the same write asked in process
-// at the home, and through a member that is not). Every write is one seat's —
-// alice, the first call of a turn of its own, so every one resolves the
-// repository's name at the log's head as a turn's first code call does — onto
-// a branch of her namespace that that worker's writes alone move, floored by
-// the tool as a seat's write is: at this node's own writes to the
-// repository, or its turn's read of it, whichever is later.
-//
-//   - objects= the in-memory twin, and the S3 fake at a 100 ms and a 200 ms
-//     first byte.
-//   - kind= one commit of one file and of ten onto the branch's head; a
-//     revert of the head; a branch created at a commit the repository holds,
-//     which builds nothing and stores no pack.
-//   - concurrency= how many writes are asked at once, each round's waited for
-//     together, the next round asked at once again — over ONE repository,
-//     every write a branch of its own there, and over sixty-four, each round
-//     spreading its writes over the repositories in turn (repos=).
-//   - beside= nothing, or a person's `git push` of one commit to the first
-//     repository's main every besidePace, timed besideAlone times alone
-//     before the writes begin, then through every round, and besideAlone
-//     times alone again once they have stopped.
-//
-// THE REPOSITORIES ARE KEPT COMPACTED, as a home that keeps up keeps them:
-// once the seeds have landed and after every round, the Gitlet node's compactor
-// runs its passes (compact.Compactor.Poll) until one compacts nothing, so
-// every repository the next round writes holds fewer than
-// gitlet.CompactMinMerge live packs and no round writes over the hundreds a
-// burst would otherwise leave. A pass runs between rounds, never beside one,
-// with the person's pushes held off for it, so neither the writes nor the
-// person is timed beside a compaction — and the person's pushes alone, beside
-// the writes and after them are all taken over a repository at that one pack
-// state, which is what lets the three be compared. (Production's home polls
-// once a minute, so a minute of such a burst would leave more packs between
-// its passes than an arm does; what some 400 of them cost a push, timed once
-// over the arm as it stood before it compacted, is in doc.go.)
-//
-// Each arm reports EVERY ANSWER a write's tool gave, as the turn waited for
-// it: answer-p50 and answer-p99 over all of them — applied, unready or busy,
-// since a turn waits for a refusal as long as it took and then makes a model
-// round and asks again — and unready-p99 over the unready ones; and, over the
-// writes that applied: their p50 and p99 whole; what the tool added around
-// its write (tool: the caller, the arguments, the repository's resolution at
-// the log's head and the answer); the host's own stages (sync, build, land,
-// total; the build holding its unit of the seat git-work share, so its time
-// includes the wait for one); the share's own wait for each write's build,
-// granted or unready (share-wait, as crewlet.code.seatwork.waits times it),
-// beside its budget, gitlet.GitShareWait — estate.GitWriteAttempt's one term a
-// write can reach whole; the bundle's PUT (upload), the proposal and the wait
-// for its row (propose), and what follows the answer of the proposal (adopt:
-// the pack linked into the copy and the answer's way back); the object
-// store's PUTs and GETs of the writes' own objects a write (by the object
-// named: the person's are counted apart, and the node's own — a seed's, a
-// compaction's — apart again); the writes answered unready (unready/write) —
-// the Gitlet node's share holds half its read lane, and a write that waits past
-// gitlet.GitShareWait for a unit is sent on, which with one Gitlet node is an
-// answer the turn asks again — and busy; the most writes the Gitlet node held at
-// once (inflight-peak), which at concurrency=64 is the write lane's whole
-// width held with nothing queued for a slot; and, beside=push, the person's
-// push p50 and p99 alone, beside the writes and after them, with what each
-// phase asked of the object store, by whose object and which request, every
-// sync of the copy it waited for and the person's proposals, logged.
-//
-// REPORTED AGAINST ITS BUDGETS, never failed on them, since a benchmark
-// measures and a test decides: at the S3 fake's 200 ms first byte every
-// arm's p99 over every answer and over the applied writes against a quarter
-// of estate.GitWriteAttempt and its upload p99 against a tenth of
-// gitlet.WriteUploadAllowance; and beside sixty-four writes at once the
-// person's push p99 against twice its p99 alone — the share leaves the
-// person's scans their half of the read lane. HELD by its own assertions,
-// which count rather than time: an arm asking no more writes at once than
-// the share's units serve (writesAUnitServes a unit) answers none unready or
-// busy, and every proposal but a branch arm's names a pack. This package's
-// doc.go carries the figures.
+// BenchmarkEngineWrite times an engine write (ADR-0092) from a seat's turn
+// calling a real code write tool (builtin.CodeTools) on a node holding nothing,
+// through the production estate.Router over the broker, to the tool's answer,
+// given once the push's row applied and its pack is in the copy
+// (gitletcluster's BenchmarkEngineWrite asks it in process). Each write is the
+// first call of a turn of alice's, onto a branch its worker alone moves. Arms:
+// writeStores by writeArms. Between rounds, never beside one, the compactor
+// runs dry (compact) with the person's pushes held off, so the rounds and the
+// person's pushes alone, beside and after the writes see one pack state. Every
+// answer is reported, refusals included, since a turn waits for those too.
+// Budgets are logged, never failed on, and the assertions count rather than
+// time (run). The package doc's "Measured" carries the figures.
 func BenchmarkEngineWrite(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, store := range writeStores {
@@ -690,9 +585,8 @@ func BenchmarkEngineWrite(b *testing.B) {
 	}
 }
 
-// writeBranchState is one branch an arm's writes move: worker's in the arm's
-// repository repo — the worker its only writer — and its head as the last
-// write left it.
+// writeBranchState is worker's branch in repository repo, which only worker
+// writes, and its head as the last write left it.
 type writeBranchState struct {
 	worker, repo int
 	ref, head    string
@@ -704,25 +598,22 @@ type writeRig struct {
 	f    *gitlettest.SoloFleet
 	node gitlettest.Node
 	fig  *writeFigures
-	// seam is Gitlet as the fleet routes it, seat the seat every write is
-	// made as, and calls the write tools by name, over the seam.
+	// seam is Gitlet as the fleet routes it, seat every write's seat, and
+	// calls the write tools by name.
 	seam  estate.CodeSeam
 	seat  *org.Role
 	calls map[string]tools.SeatCallable
 	// repos and names are the arm's repositories, the first RepoName.
 	repos, names []string
-	// branches is every branch the arm's writes move, by worker and
-	// repository.
+	// branches is every branch the arm's writes move, by worker and repository.
 	branches map[[2]int]*writeBranchState
-	// created counts the create_branch arm's branches, which name each
-	// apart.
+	// created numbers the create_branch arm's branches apart.
 	created atomic.Int64
 
-	// quiet holds the person's pushes off while the compactor runs between
-	// rounds: a push takes it shared, a compaction whole.
+	// quiet holds the person's pushes off during a compaction: a push takes
+	// it shared, a compaction whole.
 	quiet sync.RWMutex
-	// compacting is how long the arm's compactions took, which its rate of
-	// writes leaves out.
+	// compacting is the compactions' time, left out of the arm's rate.
 	compacting time.Duration
 
 	mu sync.Mutex
@@ -766,10 +657,10 @@ func newWriteRig(b *testing.B, arm writeArm) *writeRig {
 		}
 		r.repos, r.names = append(r.repos, rows.Repo.ID), append(r.names, d.Name)
 	}
-	// EVERY BRANCH A ROUND WILL MOVE, seeded with two commits — a root, and
-	// a change of its file, so a revert has a change to undo — before the
-	// timer: worker k's write of round i is to repository (k + i×concurrency)
-	// mod repos, so the branches are the pairs that formula reaches.
+	// Every branch a round will move gets two commits before the timer, so a
+	// revert has a change to undo: worker k's write of round i is to
+	// repository (k + i×concurrency) mod repos, so the branches are the pairs
+	// that formula reaches.
 	var todo []*writeBranchState
 	for k := range arm.concurrency {
 		for i := range arm.repos {
@@ -789,12 +680,12 @@ func newWriteRig(b *testing.B, arm writeArm) *writeRig {
 	return r
 }
 
-// compact runs the Gitlet node's compactor as a home that keeps up would — pass
-// after pass until one compacts nothing — with the person's pushes held off
-// and every request it makes stamped as the compaction's, and adds how long
-// it took to what the arm's rate of writes leaves out. A pass that fails a
-// compaction fails the arm: what follows would be measured over packs no
-// production home leaves.
+// compact runs the compactor until a pass compacts nothing, as a home that
+// keeps up would, with the person's pushes held off and its requests stamped
+// phaseCompact; its time is left out of the arm's rate. Production polls once
+// a minute, so a burst leaves it more packs; the package doc's "Measured" has
+// what an uncompacted repository costs a push. A failed compaction fails the
+// arm: what followed would run over packs no production home leaves.
 func (r *writeRig) compact(b *testing.B) {
 	b.Helper()
 	r.quiet.Lock()
@@ -830,9 +721,8 @@ func (r *writeRig) livePacks(b *testing.B) int {
 	return len(rows.Packs)
 }
 
-// seed lands two commits on every branch of todo, seedAtOnce at a time, each
-// asked again while its Gitlet node answers it unready — asked of the fleet's
-// routing directly, no tool making a fixture's writes.
+// seed lands two commits on every branch of todo, seedAtOnce at a time,
+// through the fleet's routing directly: no tool makes a fixture's writes.
 func (r *writeRig) seed(b *testing.B, todo []*writeBranchState) {
 	b.Helper()
 	errs := make(chan error, len(todo))
@@ -864,9 +754,8 @@ func (r *writeRig) seed(b *testing.B, todo []*writeBranchState) {
 	}
 }
 
-// landSeed asks w until it applies — again, the same write, a share's wait
-// later, while it is answered unready, at most seedTries times — and fails on
-// any other answer.
+// landSeed asks w again a share's wait later while it is answered unready, at
+// most seedTries times, and fails on any answer but applied.
 func (r *writeRig) landSeed(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
 	for try := 1; ; try++ {
 		res, err := r.f.Write(ctx, w)
@@ -883,16 +772,13 @@ func (r *writeRig) landSeed(ctx context.Context, w gitlet.EngineWrite) (gitlet.E
 	}
 }
 
-// path is the j-th file a branch's writes put: in a directory of the
-// worker's own.
+// path is the j-th file a branch's writes put, in its worker's directory.
 func (r *writeRig) path(br *writeBranchState, j int) string {
 	return fmt.Sprintf("w%02d/f%d.txt", br.worker, j)
 }
 
-// callOf is worker br.worker's write of round i as its tool is called: the
-// tool of the arm's kind and the arguments a seat's turn gives it — the
-// branch's head as the worker's last write left it, every revision a whole
-// id, so the tool resolves the repository's name and nothing else.
+// callOf is br.worker's write of round i as a seat's turn calls its tool:
+// every revision a whole id, so the tool resolves only the repository's name.
 func (r *writeRig) callOf(br *writeBranchState, i int) (tools.SeatCallable, map[string]any) {
 	branch := strings.TrimPrefix(br.ref, "refs/heads/")
 	args := map[string]any{"repo": r.names[br.repo], "branch": branch}
@@ -918,9 +804,7 @@ func (r *writeRig) callOf(br *writeBranchState, i int) (tools.SeatCallable, map[
 	return r.calls[builtin.CodeCreateBranchTool], args
 }
 
-// round is one round of the arm: every worker's write asked at once and the
-// round waited for whole, and then the compactor's passes (compact), so no
-// round writes over more packs than a home that keeps up leaves.
+// round asks every worker's write at once, waits for all, then compacts.
 func (r *writeRig) round(b *testing.B, i int) {
 	var wg sync.WaitGroup
 	for k := range r.arm.concurrency {
@@ -934,8 +818,8 @@ func (r *writeRig) round(b *testing.B, i int) {
 	r.compact(b)
 }
 
-// one is one write, timed from its tool's call to the tool's answer — every
-// answer the turn waits for, a refusal as much as a write that applied.
+// one is one write, timed from its tool's call to its answer, a refusal as
+// much as an applied write.
 func (r *writeRig) one(ctx context.Context, br *writeBranchState, i int) {
 	tool, args := r.callOf(br, i)
 	call := &writeCall{}
@@ -982,8 +866,7 @@ func (r *writeRig) one(ctx context.Context, br *writeBranchState, i int) {
 	}
 }
 
-// toolAnswer is what a write tool's answer says a write came to: the fields a
-// turn reads off it.
+// toolAnswer is the fields a turn reads off a write tool's answer.
 type toolAnswer struct {
 	Outcome statelog.Outcome `json:"outcome"`
 	Commit  string           `json:"commit"`
@@ -996,11 +879,10 @@ func toolAnswered(out tools.Result) toolAnswer {
 	return a
 }
 
-// unready reports a write no Gitlet node ran because none could run it now —
-// the walk's answer when its one Gitlet node answered gitlet.ErrGitUnready (its
-// share full past gitlet.GitShareWait, its copy still syncing): a refusal that
-// names the node, never the write, and that nobody went silent for. A Gitlet
-// node that went silent is no such answer, and fails the arm.
+// unready reports a write no Gitlet node could run now: gitlet.ErrGitUnready
+// (the share full past gitlet.GitShareWait, the copy still syncing), or the
+// walk's estate.ErrUnserved saying so, which names the node, never the write.
+// A node that went silent is no such answer and fails the arm.
 func unready(err error) bool {
 	var (
 		node *gitlet.ErrGitUnready
@@ -1095,8 +977,8 @@ func (r *writeRig) run(b *testing.B) {
 	if len(shares) > 0 {
 		b.ReportMetric(quantile(shares, 0.50), "share-wait-p50-ms")
 		b.ReportMetric(quantile(shares, 0.99), "share-wait-p99-ms")
-		// Logged beside its budget, as M3-decisions M3-O43 asks of every
-		// term of the attempt.
+		// Logged beside its budget (M3-decisions M3-O43): the one term of
+		// estate.GitWriteAttempt a write can reach whole.
 		b.Logf("the share's wait for a build: p50/p99 %.0f/%.0f ms of gitlet.GitShareWait's %s, over %d takes",
 			quantile(shares, 0.50), quantile(shares, 0.99), gitlet.GitShareWait, len(shares))
 	}
@@ -1126,10 +1008,8 @@ func (r *writeRig) run(b *testing.B) {
 			r.node.Share().Units(), served)
 	}
 
-	// REPORTED AGAINST ITS BUDGET, never failed on: a benchmark measures, and
-	// a test decides. The budgets are the terms of the attempt a write is
-	// held to, each logged beside the p99 it bounds, as M3-decisions M3-O43
-	// asks of every term.
+	// Budgets are logged beside the p99 each bounds (M3-decisions M3-O43),
+	// never failed on: a benchmark measures, a test decides.
 	if r.arm.store.firstByte == 200*time.Millisecond {
 		b.Logf("at a 200 ms first byte: the applied writes' p99 %.0f ms and every answer's %.0f ms, against a "+
 			"quarter of estate.GitWriteAttempt's %s; the upload's p99 %.0f ms, against a tenth of "+
@@ -1143,11 +1023,9 @@ func (r *writeRig) run(b *testing.B) {
 	if got.err != nil {
 		b.Fatal(got.err)
 	}
-	// AND ALONE AGAIN, once the writes have stopped, over the repository the
-	// last round's compaction left — the pack state the alone pushes and
-	// those beside the writes were taken at — so a push slower here than
-	// alone was slowed by something the writes left behind them on the node,
-	// which what this phase asked of the object store and its syncs name.
+	// Alone again after the writes, at the same pack state: a push slower
+	// here than before them was slowed by what the writes left on the node,
+	// which this phase's logged requests and syncs name.
 	r.fig.enter(phaseAfter)
 	b.Logf("after: the repository holds %d live packs", r.livePacks(b))
 	after, err := person.paced(b.Context(), besideAlone)
@@ -1175,9 +1053,8 @@ func (r *writeRig) run(b *testing.B) {
 	}
 }
 
-// watchInFlight samples how many writes s holds every millisecond, for b's
-// inflight-peak, until the function it answers is called: that stops it and
-// answers the most it saw.
+// watchInFlight samples s's writes in flight every millisecond until the
+// returned function is called, which stops it and returns the peak.
 func watchInFlight(b *testing.B, s *host.Server) func() int {
 	ctx, stop := context.WithCancel(b.Context())
 	var peak int
@@ -1208,9 +1085,8 @@ type besideResult struct {
 	err  error
 }
 
-// besidePusher is a person pushing one commit at a time to an arm's first
-// repository's main, through the arm's Gitlet node — each push held off while
-// quiet is held whole, as the arm's compactions hold it.
+// besidePusher is a person pushing one commit at a time to the arm's first
+// repository's main, each push held off while a compaction holds quiet.
 type besidePusher struct {
 	p     *gitlettest.Person
 	work  string
@@ -1230,8 +1106,8 @@ func newBesidePusher(b *testing.B, f *gitlettest.SoloFleet, node gitlettest.Node
 	return &besidePusher{p: p, work: work, url: repoURL(node), quiet: quiet}
 }
 
-// push makes one commit of one 4 KiB file, untimed, and answers how long its
-// push took the person's git — never beside a compaction of the arm's.
+// push commits one 4 KiB file, untimed, and returns how long the person's
+// git took to push it, never beside a compaction.
 func (bp *besidePusher) push(ctx context.Context) (time.Duration, error) {
 	bp.quiet.RLock()
 	defer bp.quiet.RUnlock()
@@ -1257,8 +1133,8 @@ func (bp *besidePusher) push(ctx context.Context) (time.Duration, error) {
 	return time.Since(start), nil //fixedwait:measure a benchmark reports this against twice the push alone; no gate reads it
 }
 
-// paced is n pushes — every push until ctx ends where n is 0 — one every
-// besidePace, each starting at once where the one before took longer.
+// paced is n pushes (until ctx ends where n is 0), one every besidePace, each
+// starting at once where the one before took longer.
 func (bp *besidePusher) paced(ctx context.Context, n int) ([]time.Duration, error) {
 	var took []time.Duration
 	for i := 0; n == 0 || i < n; i++ {
@@ -1281,60 +1157,23 @@ func (bp *besidePusher) paced(ctx context.Context, n int) ([]time.Duration, erro
 	return took, nil
 }
 
-// BenchmarkEngineCommit is AN ENGINE COMMIT'S BUILD ALONE (ADR-0092: build.go's
-// plan, its one read of the copy, its new files hashed, its touched
-// directories written a level at a time, its commit, and its pack and that
-// pack's index-pack --strict), as the host times it (crewlet.code.host.write.
-// duration's build stage, which holds the write's unit of the seat git-work
-// share): every write a commit_files by alice creating a branch of her own at
-// the same commit, its files' text its own, asked of the Gitlet node's host
-// directly, the build alone being the subject — so every build of an arm does
-// the same work, and none leans on the one before. Each fixture's copy is the
-// one a node that stood still serves — indexed whole, its bitmap and graph
-// written (warmIndex) — and its maintainer is then held off for the arms
-// (holdMaintenance), so no index of the packs the arms' writes add is written
-// beside a build: on a few cores such a run, a heavier one over the larger
-// tree, would be timed into the builds it ran beside — the maintainer's cost,
-// which internal/gitlet/cache measures, never the build's. Both trees' fixtures
-// are built first, each warmed by a few untimed builds, and every files= and
-// depth= arm then runs in the one tree and the other back to back
-// (files=/depth=/tree=), so the two builds an assertion compares are taken
-// on one moment of the machine.
-//
-//   - tree= a tree of about 10 000 files, and of 100 000 (CREWLET_BENCH_LARGE),
-//     built by gittest.FastImport along the path p1/…/p6: every directory of
-//     that path, the root's too, holds the next one, commitSiblingFiles files
-//     and commitSiblingDirs directories, and those directories hold the rest
-//     of the files between them — so every directory a build touches holds
-//     the same entries in either tree, and what differs is what a build must
-//     never read (TestAnEngineCommitReadsNoWholeTree). Every file is a blob of
-//     its own, as a repository's are, so the copy's objects are the tree's.
-//   - files= 1, 10 and 100 files put into the path's directory at depth= 1, 3
-//     and 6; and gitlet.MaxFileOps files at depth 6, the bound itself.
-//   - flat= one file put into a directory of 10 000 entries, and of 100 000
-//     (CREWLET_BENCH_LARGE), each a blob of its own: the one cost that follows
-//     a directory's ENTRIES — mktree reads each entry, the directory's tree is
-//     written whole into the write's self-contained pack, its every id
-//     incompressible, and index-pack --strict checks each entry's link into
-//     the copy.
-//
-// Each arm reports its build's p50 and p99 and its pack's bytes (pack-bytes,
-// the largest of the arm's, every write's alike). HELD by its own assertions:
-// for each files= and depth=, the two trees' build p50 within a tenth of each
-// other — the cost follows the change, never the tree — where both ran; a
-// hundred files at depth 6 in the 100 000-file tree under a tenth of
-// gitlet.WriteBuildDeadline; gitlet.MaxFileOps files there inside the whole of
-// it; and the 100 000-entry directory's pack under gitlet.MaxWritePackBytes.
+// BenchmarkEngineCommit times an engine commit's build alone (ADR-0092;
+// build.go), the build stage of crewlet.code.host.write.duration, which holds the
+// write's share unit: each a commit_files by alice creating a branch at one
+// commit, asked of the host directly, so every build does the same work. Each
+// copy is indexed whole (warmIndex) and its maintainer then held off
+// (holdMaintenance), so no index run is timed into a build; that cost is
+// internal/gitlet/cache's to measure. tree= lays files along p1/…/p6 (commitTree)
+// so a touched directory holds the same entries in either tree
+// (TestAnEngineCommitReadsNoWholeTree); flat= times the one cost that follows a
+// directory's entries. Held: the two trees' p50 within a tenth where both ran, a
+// hundred files under a tenth of gitlet.WriteBuildDeadline, MaxFileOps inside all
+// of it, and the 100 000-entry directory's pack under gitlet.MaxWritePackBytes.
 func BenchmarkEngineCommit(b *testing.B) {
 	gitlettest.Quiet(b)
-	// BOTH TREES' FIXTURES FIRST, then each arm in the one tree and the other
-	// back to back: an arm's two trees are compared, so their builds are
-	// taken seconds apart rather than one tree's whole run apart. Run tree by
-	// tree on a shared two-core slot, the larger tree's single-file arms
-	// came right after its fixture's import and minutes after the smaller
-	// tree's, and were 30–45% slower where the ten-file arms between them
-	// were within 5%: the comparison read the machine's moment, never the
-	// tree.
+	// Both trees' fixtures first, then each arm in one tree and the other back
+	// to back: run tree by tree, the comparison read the machine's moment on a
+	// shared slot, tens of percent apart, never the tree.
 	trees := map[int]*commitRig{}
 	for _, files := range []int{commitTreeFiles, commitTreeFilesLarge} {
 		if files == commitTreeFilesLarge && os.Getenv(gittest.LargeEnv) != "1" {
@@ -1451,22 +1290,19 @@ func commitPath(depth int) string {
 	return path.Join(parts...)
 }
 
-// inlineFile writes one fast-import file line whose blob is its own: the file
-// at path holding its own path, so no two files of a fixture share a blob, as
-// no two of a repository's directories' entries name one id in the common
-// case — and the ids a touched directory's tree holds compress as a real
-// tree's do, which is not at all.
+// inlineFile writes one fast-import file line holding its own path, so no two
+// files share a blob, as in a real repository, and a touched directory's tree
+// compresses as a real one does: not at all.
 func inlineFile(w *bufio.Writer, path string) error {
 	content := path + "\n"
 	_, err := fmt.Fprintf(w, "M 100644 inline %s\ndata %d\n%s\n", path, len(content), content)
 	return err
 }
 
-// commitTree writes the tree= arms' tree of about files files as fast-import
-// file lines, every one a blob of its own: along the path p1/…/p6, every
-// directory — the root's too — holds the next, commitSiblingFiles files and
-// commitSiblingDirs directories, and the rest of the files are spread over
-// those directories.
+// commitTree writes about files files as fast-import lines, each its own
+// blob: every directory along p1/…/p6, the root's too, holds the next,
+// commitSiblingFiles files and commitSiblingDirs directories, which share the
+// rest of the files.
 func commitTree(w *bufio.Writer, files int) error {
 	levels := commitDepth + 1
 	perDir := (files - levels*commitSiblingFiles) / (levels * commitSiblingDirs)
@@ -1492,7 +1328,7 @@ func commitTree(w *bufio.Writer, files int) error {
 }
 
 // commitRig is a BenchmarkEngineCommit fixture: one Gitlet node holding a
-// repository of one root commit, its tree the arm's, pushed by ceo.
+// repository of one root commit pushed by ceo.
 type commitRig struct {
 	f    *gitlettest.SoloFleet
 	node gitlettest.Node
@@ -1539,9 +1375,8 @@ func newCommitRig(b *testing.B, tree func(*bufio.Writer) error) *commitRig {
 	return r
 }
 
-// holdMaintenance holds every slot of node's maintenance lane until b ends —
-// taken as each comes free, so a run the maintainer has in hand ends first —
-// so its maintainer writes nothing more while b runs.
+// holdMaintenance holds every slot of node's maintenance lane until b ends,
+// each taken as it comes free so a run in hand ends first.
 func holdMaintenance(b *testing.B, node gitlettest.Node) {
 	b.Helper()
 	slots := node.Pool().Slots(gitproc.ClassMaintenance)
@@ -1566,10 +1401,9 @@ func holdMaintenance(b *testing.B, node gitlettest.Node) {
 	}
 }
 
-// commitWarmBuilds is how many untimed builds each rig makes before its
-// first arm: the first builds after a fixture run beside what its import
-// and push left the machine — the page cache, the Go heap, the copy's
-// first reads of its packs — which no later build of the arm meets.
+// commitWarmBuilds is how many untimed builds a rig makes first: the first
+// builds after a fixture meet what its import and push left (page cache, Go
+// heap, the copy's first pack reads), which no later build does.
 const commitWarmBuilds = 5
 
 // warm makes the rig's commitWarmBuilds untimed builds.

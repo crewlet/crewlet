@@ -32,26 +32,22 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// source is a repository at another host: a bare repository served over
-// smart HTTP — git's own http-backend, as a forge serves one — behind TLS,
-// and a work tree its history is made in. The process's SSL_CERT_FILE names
-// the authority that signed the server's certificate, which is how a Gitlet
-// node's git trusts a source (gitproc.ResolveRemote), so no case using one
-// runs in parallel.
+// source is a repository at another host: a bare repository served over smart
+// HTTP (git's own http-backend, as a forge serves one) behind TLS, and a work
+// tree its history is made in. The process's SSL_CERT_FILE names the server's
+// authority, as a Gitlet node's git trusts a source (gitproc.ResolveRemote), so
+// no case using one runs in parallel.
 type source struct {
 	t    *testing.T
 	c    *gittest.Client
 	wt   string
 	bare string
 	url  string
-	// reads counts the git processes that read the served repository: each
-	// fetch or ls-remote opens with exactly one advertisement request,
-	// `GET info/refs?service=git-upload-pack`, whatever the protocol does
-	// after it.
+	// reads counts advertisement requests (`GET
+	// info/refs?service=git-upload-pack`): exactly one per fetch or ls-remote.
 	reads *atomic.Int64
-	// served counts the bytes the served repository answered upload-pack's
-	// requests with past its advertisement — under protocol v2, which every
-	// git the engine runs speaks, each ls-refs listing and each fetch.
+	// served counts the bytes upload-pack answered past its advertisement:
+	// under protocol v2, each ls-refs listing and each fetch.
 	served *atomic.Int64
 }
 
@@ -151,9 +147,9 @@ func (r *recording) chunks() (chunks []gitlet.ImportChunk, dones []gitlet.Import
 	return chunks, dones
 }
 
-// announced is a node's event stream as a push and an import's end announce
-// themselves on it, every push's and every import's account kept — each
-// heard on the subject its type names, or the case fails.
+// announced is a node's event stream, keeping every push's and import's
+// account; an event published on a subject other than its type's fails the
+// case.
 type announced struct {
 	t        *testing.T
 	mu       sync.Mutex
@@ -200,14 +196,13 @@ type harness struct {
 	faults *gitletfault.Script
 	limits gitlet.Limits
 	events announced
-	// dial is what the workers dial a URL with: nil for the source's own
-	// dial, as Tier A's gitlet.import_allow_private lets a node dial loopback.
+	// dial is the workers' dialer: nil dials the source as Tier A's
+	// gitlet.import_allow_private lets a node dial loopback.
 	dial mirror.Dial
 	// git is the git pool the workers run in: nil for the Gitlet node's own.
 	git mirror.Pool
-	// people is the identity directory the workers ask who holds the person's
-	// seat a push mirror pushes as: nil for every seat held by an active
-	// person using every app (gitlettest.FixturePeople).
+	// people is the identity directory a push mirror's seat is looked up in:
+	// nil for gitlettest.FixturePeople.
 	people gitlet.People
 	// ended is the workers' mirror.Options.Ended: nil for none.
 	ended func(repoID string, out bool, err error)
@@ -221,8 +216,8 @@ func newHarness(t *testing.T, limits gitlet.Limits) *harness {
 	return newHarnessWith(t, limits, nil)
 }
 
-// newHarnessWith is newHarness over a fleet whose options edit changes,
-// handed the harness — its clock among it — before the fleet is built.
+// newHarnessWith is newHarness with edit applied to the fleet's options, handed
+// the harness (its clock included) before the fleet is built.
 func newHarnessWith(t *testing.T, limits gitlet.Limits, edit func(*harness, *gitlettest.SoloOptions)) *harness {
 	t.Helper()
 	h := &harness{t: t, src: newSource(t), faults: &gitletfault.Script{}, events: announced{t: t}, now: time.Now()}
@@ -239,9 +234,9 @@ func newHarnessWith(t *testing.T, limits gitlet.Limits, edit func(*harness, *git
 	return h
 }
 
-// stampedApplier is a data node's applier reading every record's broker
-// instant off a case's clock — the instant its rows are stamped with, and the
-// one its gates count a rejection at — in place of the broker's own.
+// stampedApplier stamps every record a data node applies with the case's clock
+// in place of the broker's instant: the instant its rows keep and its gates
+// count a rejection at.
 type stampedApplier struct {
 	statelog.Applier
 	clock func() time.Time
@@ -273,12 +268,11 @@ func (h *harness) advance(d time.Duration) {
 	h.mu.Unlock()
 }
 
-// mirrors is the Gitlet node's worker as the engine builds it — the fleet's
-// one Gitlet node's cache and pool, the fleet's object store, the fixture chart
-// a push mirror's seat is judged against and the stream its pushes are
-// announced on — dialing the source as Tier A's gitlet.import_allow_private lets
-// a node dial loopback, or as the case's dial does. Each call is a fresh
-// worker: what it knows of a repository is the rows'.
+// mirrors is the Gitlet node's worker as the engine builds it, over the node's
+// cache and pool, the fleet's object store, the fixture chart and the harness's
+// stream, dialing loopback as Tier A's gitlet.import_allow_private allows
+// unless the case's dial replaces it. Each call is a fresh worker, knowing only
+// the rows.
 func (h *harness) mirrors() *mirror.Mirrors {
 	h.t.Helper()
 	n := h.f.Nodes()[0]
@@ -311,9 +305,8 @@ func (h *harness) mirrors() *mirror.Mirrors {
 	return m
 }
 
-// pass is one turn of a home's backstop over m: every page of its listing,
-// each repository it names worked, and every attempt that started waited
-// for. It answers the repositories listed.
+// pass is one backstop turn over m: every page of its listing, each repository
+// worked, every attempt started waited for. It answers the repositories listed.
 func (h *harness) pass(m *mirror.Mirrors) []string {
 	h.t.Helper()
 	listed := h.listAndWork(m)
@@ -356,20 +349,17 @@ func (h *harness) rows(name string) gitlettest.Rows {
 	return rows
 }
 
-// AN IMPORT RESUMES FROM ITS ROWS: an import of more refs than one chunk
-// carries lands its first chunk and dies before the next; a fresh worker —
-// knowing nothing but the rows — lands the next chunk at the next Seq and
-// ends the import, never landing the first chunk again, and its fetch asks
-// only for what the imported refs do not reach: the commit the source made
-// meanwhile — an edit of one line of a file the first chunk holds, so the
-// source sends that file's new blob as a delta against the old one, a THIN
-// pack the fetch completes by appending the old blob from the copy — and its
-// cut stores nothing the first chunk's pack holds, that appended base
-// included.
+// AN IMPORT RESUMES FROM ITS ROWS: an import of more refs than one chunk lands
+// chunk 1 and dies; a fresh worker, knowing only the rows, lands chunk 2 at the
+// next Seq and ends the import, never landing chunk 1 again. Its fetch asks
+// only for what the imported refs do not reach: the source's new commit edits
+// one line, so its blob comes as a delta in a THIN pack the fetch completes
+// with the old blob from the copy, and the cut stores nothing chunk 1's pack
+// holds, that appended base included.
 //
-// Mutation: start every attempt at Seq 1 rather than the listing's, and the
-// second attempt's chunk is refused stale; drop the cut's exclusion of the
-// copy's live packs, and the second chunk stores the appended base again.
+// Mutation: start every attempt at Seq 1, and chunk 2 is refused stale; drop
+// the cut's exclusion of the copy's live packs, and chunk 2 stores the appended
+// base again.
 func TestAnImportResumesFromItsRows(t *testing.T) {
 	h := newHarness(t, gitlet.Limits{})
 	var file strings.Builder
@@ -448,15 +438,15 @@ func seqs(chunks []gitlet.ImportChunk) []int64 {
 	return out
 }
 
-// A PULL MIRROR FOLLOWS A FORCE-PUSH: a pull mirror is imported from its
-// source first, is not synced again within gitlet.MirrorInterval, and once the
-// interval has passed its sync moves it onto its source as it is — main onto
-// a rewritten history, a branch the source deleted deleted — the move off the
-// rewritten tip marked forced, so the committer records the commit it left.
+// A PULL MIRROR FOLLOWS A FORCE-PUSH: an imported pull mirror is not synced
+// again within gitlet.MirrorInterval; after it, its sync moves the mirror onto
+// its source as it is (main onto a rewritten history, a deleted branch
+// deleted), the move off the old tip marked forced so the committer records the
+// commit it left.
 //
-// Mutation: never mark a command forced, and the sync's main is not forced;
-// leave out the deletions of refs the source dropped, and feature stays; list
-// a mirror whatever its last attempt, and it is synced within its interval.
+// Mutation: never mark a command forced, and main's move is not forced; skip
+// deleting refs the source dropped, and feature stays; list a mirror whatever
+// its last attempt, and it is synced within its interval.
 func TestAPullMirrorFollowsAForcePush(t *testing.T) {
 	h := newHarness(t, gitlet.Limits{})
 	a := h.src.commit(map[string]string{"a": "a\n"}, "first")
@@ -513,15 +503,13 @@ func TestAPullMirrorFollowsAForcePush(t *testing.T) {
 }
 
 // A REPOSITORY MADE A PULL MIRROR LATER IS IMPORTED FIRST (M6-D16): an active
-// repository a person pushed a branch of their own to, then declared a pull
-// mirror of a source with more refs than one chunk carries, is brought onto
-// its source by an IMPORT — chunk 1, then chunk 2 from the rows, then its end
-// — never by a sync, whose fetch is given one push's deadline; and once it is
-// done it is the active pull mirror of exactly the source's refs, the branch
-// the source never had deleted.
+// repository holding a person's own branch, then declared a pull mirror of a
+// source with more refs than one chunk, is brought onto the source by an IMPORT
+// (chunk 1, chunk 2, its end), never a sync, whose fetch has one push's
+// deadline; it ends an active pull mirror of exactly the source's refs.
 //
-// Mutation: drop the settings apply's start of the import (mirrorImportSQL) —
-// the repository stays active and its home syncs it, no chunk proposed, red.
+// Mutation: drop the settings apply's start of the import (mirrorImportSQL),
+// and its home syncs it, no chunk proposed.
 func TestARepositoryMadeAPullMirrorIsImportedFirst(t *testing.T) {
 	h := newHarness(t, gitlet.Limits{})
 	a := h.src.commit(map[string]string{"a": "a\n"}, "first")
@@ -576,25 +564,20 @@ func TestARepositoryMadeAPullMirrorIsImportedFirst(t *testing.T) {
 }
 
 // A QUIET PULL MIRROR IS NOT FETCHED AGAIN BY A FRESH HOME: the rows, never a
-// worker's memory, hold a quiet source's mirror back an interval — its import
-// that landed whole is its last sync, so a worker that knows nothing of it (a
-// restart, or a node newly home to it) does not list it within the interval;
-// and once the interval has passed, a sync that finds the source moved nothing
-// lands a sync of nothing, which moves the mirror's last sync on to its own
-// record's instant.
+// worker's memory, hold a quiet mirror back an interval. An import that landed
+// whole is its last sync, so a worker knowing nothing of it (a restart, a new
+// home) does not list it within the interval; after it, a sync finding the
+// source moved nothing lands a sync of nothing, moving the last sync to that
+// record's instant. stampedApplier stamps both records at the workers' clock,
+// so they are compared with no wall clock between them.
 //
-// THE WORKERS' CLOCK STAMPS EVERY RECORD the data node applies, as the
-// broker's instant (stampedApplier): the import's end at the instant the case
-// began, and the sync of nothing at the instant it moved the clock to — read
-// with no wall clock between them.
-//
-// Mutation: leave a mirror's import end off its last sync, and the fresh
-// worker lists it at once; land nothing where the source moved nothing, and
-// its last sync stays the import's.
+// Mutation: leave an import's end off its last sync, and the fresh worker lists
+// it at once; land nothing where the source moved nothing, and its last sync
+// stays the import's.
 func TestAQuietPullMirrorIsNotFetchedAgainByAFreshHome(t *testing.T) {
 	h := newHarnessWith(t, gitlet.Limits{}, func(h *harness, o *gitlettest.SoloOptions) {
-		// At the rows' own resolution, the microsecond, so an instant they
-		// keep is the clock's to the last digit.
+		// The rows keep the microsecond, so an instant they keep equals the
+		// clock's.
 		h.now = h.now.Truncate(time.Microsecond)
 		o.WrapApplier = func(a statelog.Applier) statelog.Applier { return stampedApplier{Applier: a, clock: h.clock} }
 	})
@@ -638,13 +621,13 @@ func TestAQuietPullMirrorIsNotFetchedAgainByAFreshHome(t *testing.T) {
 	}
 }
 
-// AN IMPORT PAST THE BLOB LIMIT ENDS WITH ITS ERROR: a source holding a blob
-// past code.limits.max_blob_bytes is not landed in part and retried for ever
-// — the attempt that finds the blob ends the import, the repository active
-// with nothing landed and its import_error naming the blob and the limit.
+// AN IMPORT PAST THE BLOB LIMIT ENDS WITH ITS ERROR: a blob past
+// code.limits.max_blob_bytes is not landed in part and retried for ever: the
+// attempt that finds it ends the import, the repository active with nothing
+// landed and its import_error naming the blob and the limit.
 //
-// Mutation: compare the blob's size with >= the limit times two, and the
-// chunk is proposed; drop the end's Error, and the import ends clean.
+// Mutation: compare the blob's size with >= the limit times two, and the chunk
+// is proposed; drop the end's Error, and the import ends clean.
 func TestAnImportPastTheBlobLimitEndsWithItsError(t *testing.T) {
 	h := newHarness(t, gitlet.Limits{MaxBlobBytes: 1 << 10})
 	h.src.commit(map[string]string{"small": "s\n", "big": strings.Repeat("x", 4<<10)}, "too big")
@@ -709,19 +692,17 @@ func TestAnAttemptsEndIsToldOnceItIsRecorded(t *testing.T) {
 	}
 }
 
-// AN IMPORT IS ANNOUNCED ONCE IT ENDS (M6 §2.11): an import whose end
-// applied publishes exactly one code_imported, on its type's subject, naming
-// its source and its chunk count, what the repository holds once it ended —
-// its refs, its live bytes and its default branch, read from its rows — and
-// the end's position on the code log; a pull mirror's first fill is one such
-// import, marked mirrored, and the syncs that keep it on its source after are
-// none; and an import its blob limit ended short names its error, having
-// landed nothing.
+// AN IMPORT IS ANNOUNCED ONCE IT ENDS (M6 §2.11): an import whose end applied
+// publishes exactly one code_imported on its type's subject, naming its
+// source, its chunk count, the end's position and what the repository then
+// holds (refs, live bytes, default branch, from its rows). A pull mirror's first fill is
+// such an import, marked mirrored, and its later syncs announce nothing; an
+// import its blob limit ended short names its error, having landed nothing.
 //
-// Mutation: drop announceImported's call from the import's end, and no
-// import is announced; publish the end with no error, and the short import
-// names none; announce every applied record of a pull mirror rather than its
-// import's end, and its sync is announced too.
+// Mutation: drop announceImported's call from the import's end, and nothing is
+// announced; publish the end with no error, and the short import names none;
+// announce every applied record of a pull mirror, and its sync is announced
+// too.
 func TestAnImportIsAnnouncedOnceItEnds(t *testing.T) {
 	t.Run("a pull mirror's first fill, and its sync after", func(t *testing.T) {
 		h := newHarness(t, gitlet.Limits{})
@@ -800,15 +781,13 @@ func TestAnImportIsAnnouncedOnceItEnds(t *testing.T) {
 }
 
 // AN ATTEMPT LANDS ITS PACKS BEFORE ITS REFS: no record carries a ref before
-// every pack an attempt cut is in a record before it or beside it, and no
-// record carries more than gitlet.MaxImportPacks packs or the refs its record
-// takes of those offered to it — here gitlet.MaxImportRefs, the records a chunk
-// or a sync is held to — and every ref lands once, in order.
+// every pack the attempt cut is in it or an earlier one, none carries more than
+// gitlet.MaxImportPacks packs or more refs than its record takes (here
+// gitlet.MaxImportRefs), and every ref lands once, in order.
 //
-// Mutation: put the commands in the first record, and a ref rides ahead of
-// the packs it needs; drop the cap on a record's packs, and one record
-// carries them all; move past every ref offered rather than those taken, and
-// refs are lost.
+// Mutation: put the commands in the first record, and a ref rides ahead of its
+// packs; drop the cap on a record's packs, and one record carries them all;
+// move past every ref offered rather than those taken, and refs are lost.
 func TestAnAttemptLandsItsPacksBeforeItsRefs(t *testing.T) {
 	t.Parallel()
 	outs := make([]string, 2*gitlet.MaxImportPacks+1)
@@ -845,17 +824,14 @@ func TestAnAttemptLandsItsPacksBeforeItsRefs(t *testing.T) {
 	}
 }
 
-// AN IMPORT OF LONG REFS LANDS IN THE CHUNKS ITS RECORDS HOLD: a source of
-// gitlet.MaxImportRefs tags whose names JSON spells long — `&`, six bytes each,
-// at the longest name a ref may have — and its main branch is past what one
-// chunk's record carries by its bytes long before its count, so the attempt
-// cuts each chunk to what its record holds: the import lands in more chunks
-// than the count alone would cut, each one applied, and ends active with
-// every ref of the source.
+// AN IMPORT OF LONG REFS LANDS IN THE CHUNKS ITS RECORDS HOLD:
+// gitlet.MaxImportRefs tags whose names JSON spells long (`&`, six bytes each,
+// at the longest ref name) pass one record's bytes long before its count, so
+// each chunk is cut to what its record holds: more chunks than the count alone
+// cuts, each applied, ending active with every ref.
 //
-// Mutation: cut each chunk by gitlet.MaxImportRefs alone, and its first chunk is
-// refused invalid at every attempt, the repository importing for ever with
-// nothing landed.
+// Mutation: cut chunks by gitlet.MaxImportRefs alone, and chunk 1 is refused
+// invalid at every attempt, the repository importing for ever.
 func TestAnImportOfLongRefsLandsInTheChunksItsRecordsHold(t *testing.T) {
 	h := newHarness(t, gitlet.Limits{})
 	first := h.src.commit(map[string]string{"a": "a\n"}, "first")
@@ -884,15 +860,12 @@ func TestAnImportOfLongRefsLandsInTheChunksItsRecordsHold(t *testing.T) {
 	}
 }
 
-// A CUT OF WHAT THE COPY HOLDS STORES NOTHING: a fetch that brings only
-// objects the copy holds already — the restart after a chunk of packs alone
-// applied, whose fetch asks again for all they hold, since no ref of the copy
-// reaches them — is cut into no output at all, never into a pack of no
-// objects, which no record may carry: an import resumed there would fail on it
-// at every attempt and never land its refs.
+// A CUT OF WHAT THE COPY HOLDS STORES NOTHING: a fetch bringing only objects
+// the copy holds (the restart after a chunk of packs alone applied, which no
+// ref of the copy reaches) is cut into no output, never an empty pack, which no
+// record may carry, so a resumed import would fail on it at every attempt.
 //
-// Mutation: drop the cut's --non-empty, and it names the empty pack git
-// writes.
+// Mutation: drop the cut's --non-empty, and it names the empty pack git writes.
 func TestACutOfWhatTheCopyHoldsStoresNothing(t *testing.T) {
 	h := newHarness(t, gitlet.Limits{})
 	h.src.commit(map[string]string{"a": "a\n"}, "first")
@@ -929,21 +902,18 @@ func (s *source) held() map[string]string {
 	return out
 }
 
-// A PUSH MIRROR WAITS FOR GREEN (M6-D16): a repository whose main a rule
-// protects is pushed to its push mirror — the source here, standing for
-// another forge that takes pushes — with main at its GREEN row's commit and
-// every tag at its tip: while main's gate requires a check none of its
-// commits has passed, main has no green row and the other host is given its
-// tag alone, main held back as waiting; once a push lands under a gate that
-// requires no check, that commit is main's green and the next attempt pushes
-// it; and a later push above the green, under the check again, leaves the
-// other host's main at the green while its new tag goes. Each attempt that
-// moved something is announced (code_mirror_pushed), naming what it held
-// back.
+// A PUSH MIRROR WAITS FOR GREEN (M6-D16): a protected main is pushed at its
+// GREEN row's commit and every tag at its tip (the source stands for a forge
+// taking pushes). While main's gate requires a check no commit passed, main has
+// no green: the tag goes, main held back as waiting. A push under a gate
+// requiring no check is main's green, and the next attempt pushes it; a later
+// push above it, under the check again, leaves the other host's main at the
+// green while the new tag goes. Each attempt that moved something announces
+// code_mirror_pushed, naming what it held back.
 //
-// Mutation: push a protected branch at its tip rather than its green, and
-// the other host's main is a commit no check passed; leave the waiting
-// branches out of the account, and the first announcement names none.
+// Mutation: push a protected branch at its tip, and the other host's main is a
+// commit no check passed; leave waiting branches out of the account, and the
+// first announcement names none.
 func TestAPushMirrorWaitsForGreen(t *testing.T) {
 	h := newHarness(t, gitlet.Limits{})
 	h.src.c.Run(t, "", "--git-dir="+h.src.bare, "config", "http.receivepack", "true")
@@ -1010,11 +980,10 @@ func TestAPushMirrorWaitsForGreen(t *testing.T) {
 	}
 }
 
-// pushMirrored is a harness whose source takes pushes — the other host a
-// push mirror pushes to — and the repository "pushed", declared with the
-// settings settings gives for that host's URL, with a person's work tree and
-// a push of refspecs from it to "pushed", which fails the case unless every
-// ref went through.
+// pushMirrored is a harness whose source takes pushes (a push mirror's other
+// host), "pushed" declared with settings(url), a person's work tree, and a push
+// of refspecs from it to "pushed" that fails the case unless every ref went
+// through.
 func pushMirrored(t *testing.T, settings func(url string) gitlet.RepoSettings) (*harness, *gitlettest.Person, string,
 	func(refspecs ...string)) {
 
@@ -1043,15 +1012,14 @@ func mirroredTo(url string, refs ...string) gitlet.RepoSettings {
 	return s
 }
 
-// A MIRROR LISTS A COPY PAST WHAT A CAPTURE HOLDS, LEAVING THE SEATS OUT:
-// every attempt lists the branches and tags of a copy or a scratch, and a
-// repository may hold far more of them than gitproc.CaptureMax holds of a
-// listing — here more tags than a megabyte of `<id> <ref>` lines — beside
-// branches in the seats' namespace; the listing answers every tag and main,
-// and none of the seats' branches, which for-each-ref leaves out itself.
+// A MIRROR LISTS A COPY PAST WHAT A CAPTURE HOLDS, LEAVING THE SEATS OUT: a
+// copy may hold more refs than gitproc.CaptureMax holds of a listing (here over
+// a megabyte of `<id> <ref>` lines) beside branches in the seats' namespace;
+// the listing answers every tag and main, and none of the seats' branches,
+// which for-each-ref excludes itself.
 //
-// Mutation: capture the listing (Cmd.Stdout nil), and git's output outgrows
-// it; drop for-each-ref's --exclude, and the seats' branches are listed.
+// Mutation: capture the listing (Cmd.Stdout nil), and git's output outgrows it;
+// drop for-each-ref's --exclude, and the seats' branches are listed.
 func TestAMirrorListsACopyPastWhatACaptureHoldsLeavingTheSeatsOut(t *testing.T) {
 	h := newHarness(t, gitlet.Limits{})
 	f := gittest.NewFixture(t)
@@ -1080,20 +1048,17 @@ func TestAMirrorListsACopyPastWhatACaptureHoldsLeavingTheSeatsOut(t *testing.T) 
 	}
 }
 
-// A PUSH MIRROR LANDS BESIDE A FORGE'S OTHER REFS: the other host holds
-// more refs than a capture holds of a listing — a forge's pull-request refs,
-// refs/pull/<n>/head, which no push mirror covers — and the push mirror's
-// main still lands there, and the other host answers its listing with a few
-// bytes rather than the pull-request refs: its ls-remote asks for the
-// branches and tags its patterns reach, which protocol v2 sends as ref
-// prefixes, never for the whole advertisement. Once the other host also
-// holds as many branches beside main — refs the arms do reach, and the
-// listing reads as it streams — the mirror's next main still lands.
+// A PUSH MIRROR LANDS BESIDE A FORGE'S OTHER REFS: the other host holds more
+// refs than a capture holds (refs/pull/<n>/head, which no push mirror covers),
+// and main still lands, the listing answered in a few bytes: ls-remote asks
+// only for the arms its patterns reach (branches, tags), sent as protocol v2
+// ref prefixes. With as many branches beside main, which the arms reach and the
+// listing streams, the next main still lands.
 //
-// Mutation: list the other host with `ls-remote --refs` alone and capture
-// it, and its listing outgrows the capture, failing every attempt; drop the
-// arms alone, and the other host answers with every pull-request ref;
-// capture the listing of the arms, and the branches outgrow it.
+// Mutation: list with `ls-remote --refs` alone and capture it, and the listing
+// outgrows the capture; drop the arms alone, and the other host answers with
+// every pull-request ref; capture the arms' listing, and the branches outgrow
+// it.
 func TestAPushMirrorLandsBesideAForgesOtherRefs(t *testing.T) {
 	h, p, wt, push := pushMirrored(t, func(url string) gitlet.RepoSettings { return mirroredTo(url) })
 	theirs := h.src.commit(map[string]string{"x": "x\n"}, "the forge's own")
@@ -1140,17 +1105,14 @@ func TestAPushMirrorLandsBesideAForgesOtherRefs(t *testing.T) {
 }
 
 // A PUSH MIRROR DELETES WHAT THE REPOSITORY DROPPED, AND NEVER A BRANCH IT
-// HOLDS BACK: a push mirror covering main, release and every tag first gives
-// the other host all three; then the repository deletes its tag v1 and a
-// rule comes to protect release with a check none of its commits has passed,
-// so release has no green commit — and the next attempt deletes v1 at the
-// other host and leaves its release where it was, held back as waiting
-// rather than deleted as a ref the push does not set. The announcement
-// names both.
+// HOLDS BACK: after a first push of main, release and v1, the repository
+// deletes v1 and a rule protects release with a check no commit passed, so
+// release has no green; the next attempt deletes v1 at the other host and
+// leaves release there, waiting rather than deleted as a ref the push does not
+// set. The announcement names both.
 //
 // Mutation: emit no deletion, and the other host keeps v1; delete a waiting
-// branch like any ref the push does not set, and the other host loses
-// release.
+// branch like any ref the push does not set, and the other host loses release.
 func TestAPushMirrorDeletesWhatTheRepositoryDropped(t *testing.T) {
 	covers := []string{"refs/heads/main", "refs/heads/release", "refs/tags/*"}
 	var settings gitlet.RepoSettings
@@ -1189,16 +1151,14 @@ func TestAPushMirrorDeletesWhatTheRepositoryDropped(t *testing.T) {
 	}
 }
 
-// A PUSH MIRROR DIALS ONLY WHEN WHAT IT COVERS MOVED: once its first push
-// has left the other host level, a nudge of its repository a minute later
-// that moved no ref it covers — a push of a branch beside main — reads the
-// rows and dials nobody; once an interval has passed, a nudge reads the other
-// host again whatever moved, and puts back what another writer moved there;
-// and a nudge after main itself moved dials and pushes it.
+// A PUSH MIRROR DIALS ONLY WHEN WHAT IT COVERS MOVED: once its first push left
+// the other host level, a nudge after a push beside main dials nobody; an
+// interval on, a nudge reads the other host whatever moved and puts back what
+// another writer moved there; a nudge after main moved dials and pushes it.
 //
-// Mutation: dial on every nudge (drop the comparison with what the last
-// attempt left level), and the push beside main dials; never read the other
-// host again (drop the interval), and the other writer's main stays.
+// Mutation: dial on every nudge (drop the comparison with what the last attempt
+// left level), and the push beside main dials; never read the other host again
+// (drop the interval), and the other writer's main stays.
 func TestAPushMirrorDialsOnlyWhenWhatItCoversMoved(t *testing.T) {
 	h, p, wt, push := pushMirrored(t, func(url string) gitlet.RepoSettings { return mirroredTo(url) })
 	var dials atomic.Int64
@@ -1252,8 +1212,8 @@ func TestAPushMirrorDialsOnlyWhenWhatItCoversMoved(t *testing.T) {
 	}
 }
 
-// busyLane is the Gitlet node's pool with every refusal of a maintenance slot
-// told on refused: the moment an attempt's cut finds the lane full.
+// busyLane is the node's pool, signalling refused each time it refuses a
+// maintenance slot: the moment an attempt's cut finds the lane full.
 type busyLane struct {
 	*gitproc.Pool
 	refused chan struct{}
@@ -1270,12 +1230,10 @@ func (b busyLane) Reserve() (*gitproc.Reserved, error) {
 	return slot, err
 }
 
-// A CUT WAITS FOR A MAINTENANCE SLOT AND KEEPS ITS FETCH: an import whose
-// fetch has landed in its scratch while every slot of the node's maintenance
-// lane is held — a compaction's build, a merge — waits for one, and once a
-// slot frees cuts and lands what it fetched, the source read ONCE: never an
-// attempt ended on the lane's refusal, its scratch removed with everything it
-// downloaded, and the next attempt downloading it all again.
+// A CUT WAITS FOR A MAINTENANCE SLOT AND KEEPS ITS FETCH: an import whose fetch
+// landed in its scratch while every maintenance slot is held waits for one,
+// then cuts and lands what it fetched, the source read ONCE, never ending on
+// the lane's refusal and downloading it all again.
 //
 // Mutation: ask the lane once and end the attempt on its refusal, as a
 // maintenance Run does, and the repository is still importing once the slots
@@ -1327,15 +1285,14 @@ func TestACutWaitsForAMaintenanceSlotAndKeepsItsFetch(t *testing.T) {
 }
 
 // EVERY DUE MIRROR IS ATTEMPTED WITHIN ITS INTERVAL: a node home to more due
-// repositories than MaxAttempts at once, a pass a minute, could start in a
-// gitlet.MirrorInterval — here imports from a source that answers at once,
-// refusing — attempts every one of them within that interval: a repository
+// repositories than MaxAttempts a pass, a pass a minute, could start in a
+// gitlet.MirrorInterval (here imports whose source refuses at once) attempts every one within it: one
 // listed while MaxAttempts run waits on the worker and starts as one ends,
-// rather than waiting for a pass that hands every slot to the ones listed
-// first again.
+// rather than waiting for a pass that hands every slot to the first-listed
+// again.
 //
-// Mutation: drop a repository listed while MaxAttempts run, as a full worker
-// did, and the passes of a whole interval attempt MaxAttempts of them.
+// Mutation: drop a repository listed while MaxAttempts run, and a whole
+// interval's passes attempt MaxAttempts of them.
 func TestEveryDueMirrorIsAttemptedWithinItsInterval(t *testing.T) {
 	const backstop = time.Minute // internal/gitlet/home's Backstop: a pass a minute
 	passes := int(gitlet.MirrorInterval / backstop)
@@ -1346,10 +1303,9 @@ func TestEveryDueMirrorIsAttemptedWithinItsInterval(t *testing.T) {
 		gate   chan struct{}
 		dialed = map[string]bool{}
 	)
-	// THE GATE holds every attempt that dials while a pass's turns run, so
-	// each turn after the first MaxAttempts finds them running however fast
-	// the source answers; once the turns are done, the source refuses at
-	// once.
+	// THE GATE holds every attempt dialed during a pass's turns, so each turn
+	// past the first MaxAttempts finds them running however fast the source
+	// answers; after the turns, the source refuses at once.
 	h.dial = func(ctx context.Context, url, _ string) (gitproc.Remote, error) {
 		mu.Lock()
 		dialed[url] = true
@@ -1390,15 +1346,13 @@ func TestEveryDueMirrorIsAttemptedWithinItsInterval(t *testing.T) {
 	}
 }
 
-// A QUEUED ATTEMPT STARTS LONGEST UNATTEMPTED FIRST: of the attempts waiting
-// for a slot, the one this node never attempted starts first, then the one
-// it attempted longest ago, and of two that ended at one instant the one
-// queued first — never the order the listing named them in, which keeps an
-// idle pull mirror, whose row no sync moves, at its front.
+// A QUEUED ATTEMPT STARTS LONGEST UNATTEMPTED FIRST: one this node never
+// attempted, then the one attempted longest ago, a tie by queue order; never
+// listing order, which keeps an idle pull mirror (whose row no sync moves) at
+// its front.
 //
-// Mutation: start them in the order they were queued, and the repository
-// attempted last starts first; break a tie by the later arrival, and d
-// starts ahead of c.
+// Mutation: start them in queue order, and the repository attempted last starts
+// first; break a tie by the later arrival, and d starts ahead of c.
 func TestAQueuedAttemptStartsLongestUnattemptedFirst(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
@@ -1409,11 +1363,10 @@ func TestAQueuedAttemptStartsLongestUnattemptedFirst(t *testing.T) {
 	}
 }
 
-// A MIRROR THE LISTING NO LONGER NAMES IS FORGOTTEN: once an import has
-// ended, the next whole listing — which no longer names it — leaves the
-// worker remembering nothing of it, so a node holds the imports and mirrors
-// its last listing named rather than every repository any listing ever
-// named.
+// A MIRROR THE LISTING NO LONGER NAMES IS FORGOTTEN: once an import has ended,
+// the next whole listing, no longer naming it, leaves the worker remembering
+// nothing of it, so its memory is what the last listing named, not every
+// repository ever listed.
 //
 // Mutation: keep what a listing does not name, and the ended import's memory
 // stays.
@@ -1439,11 +1392,11 @@ func TestAMirrorTheListingNoLongerNamesIsForgotten(t *testing.T) {
 	}
 }
 
-// A MIRROR QUEUED PAST ITS PROMISE IS FAILING: a pull mirror that every pass
-// lists and queues behind attempts holding every slot, and that so is never
-// brought level, raises code_mirror_failing once its promise has passed —
-// queued is asked for, and a node home to more mirrors than its attempts
-// bring level is told so rather than taking the mirror for no longer its own.
+// A MIRROR QUEUED PAST ITS PROMISE IS FAILING: a pull mirror every pass lists
+// and queues behind attempts holding every slot, so never brought level, raises
+// code_mirror_failing once its promise has passed: queued counts as asked for,
+// so a node home to more mirrors than its attempts bring level says so rather
+// than taking the mirror for no longer its own.
 //
 // Mutation: record nothing of a mirror a turn queues, and the alarm counts
 // none.
@@ -1460,17 +1413,13 @@ func TestAMirrorQueuedPastItsPromiseIsFailing(t *testing.T) {
 	}
 }
 
-// AN ATTEMPT RUNNING PAST ITS PROMISE IS FAILING: two push mirrors whose
-// attempts — first pushes of large repositories, say — hold both of a node's
-// slots for longer than the promise, and a pull mirror queued behind them,
-// are all three counted by code_mirror_failing: each is asked for at every
-// pass, which is what says the node is still its home, whether the ask found
-// its attempt running or queued it. Where an attempt's start stood for "still
-// home", the two running past the promise went uncounted, and a node whose
-// every mirror was stalled behind them read none failing.
+// AN ATTEMPT RUNNING PAST ITS PROMISE IS FAILING: push mirrors whose attempts
+// hold every slot past the promise, and a pull mirror queued behind them, all
+// count toward code_mirror_failing: the ask at every pass says the node is
+// still home, whether it found the attempt running or queued it.
 //
 // Mutation: record an ask only where it starts or queues an attempt, and the
-// two running attempts count none.
+// running attempts count none.
 func TestAnAttemptRunningPastItsPromiseIsFailing(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
@@ -1484,9 +1433,8 @@ func TestAnAttemptRunningPastItsPromiseIsFailing(t *testing.T) {
 	}
 }
 
-// gitletless is the identity directory with every seat held by an active
-// person who is given every app but Gitlet until given — what a push mirror
-// pushing as a person asks before each push.
+// gitletless is an identity directory whose every seat is an active person
+// given every app but Gitlet, until given is set.
 type gitletless struct{ given atomic.Bool }
 
 func (g *gitletless) Requester(_ context.Context, seat string) (iam.Principal, error) {
@@ -1498,11 +1446,9 @@ func (g *gitletless) Requester(_ context.Context, seat string) (iam.Principal, e
 }
 
 // A PUSH MIRROR PUSHES AS A PERSON ONLY WHILE THEY USE GITLET (ADR-0110): a
-// push mirror publishes only what the seat it pushes as reads, and a person
-// reads only through Gitlet, so while the directory says pat — the person the
-// fixture's mirror pushes as — is not given it, an attempt publishes nothing
-// at the other host; once pat is given it, the next attempt publishes main.
-// The directory is read before every push, so an administrator taking the
+// push mirror publishes only what its seat reads, and a person reads only
+// through Gitlet, so while the directory denies pat (the fixture mirror's seat)
+// Gitlet, an attempt publishes nothing; once given, the next publishes main. The directory is read before every push, so taking the
 // app away stops the next one.
 //
 // Mutation: hand gitlet.MirrorSeatRefusal false in the push, and the other host

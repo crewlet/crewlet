@@ -23,23 +23,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE CHECK: nothing an index file says is served from a file this process did
-// not write or check (doc.go, "What this process did not write is checked
-// before it serves"). A CHECKABLE file is one git reads to find an object or a
-// parent — the commit-graph, the multi-pack-index with its bitmap and reverse
-// index, and every pack's .idx and .rev — and git checks none of them when it
-// reads: a flipped byte of any is read with no word, and a damaged one can
-// answer WRONG — a parent the force check reads, an object offset a clone
-// ships the wrong bytes from, a bitmap that drops objects from every clone.
-// Each is a git HASHFILE, whose last twenty bytes are the SHA-1 of every byte
-// before them (git's finalize_hashfile), and that is the check: a .idx and a
-// .rev also carry their pack's checksum — the pack's name — in the twenty
-// before it, and a .pack's trailer IS its name. The rule has ONE
-// implementation, gitlet.HashTrailer, which a published layer's check
-// (gitlet.CheckLayer) holds the layer's files to as well, so a layer a Gitlet node
-// fetched and the layer it keeps are judged by one reading (ADR-0008). No git
-// process runs: git's own verifiers cost twenty times a trailer for the graph
-// and are blind to the bitmap.
+// The check: nothing an index file says is served from a file this process
+// did not write or check (package doc, "What this process did not write is
+// checked before it serves, and every byte is scrubbed behind it"). A
+// checkable file (the commit-graph, the multi-pack-index with its bitmap and
+// reverse index, every pack's .idx and .rev) is one git reads unchecked and
+// can answer wrong from. Each is a git hashfile: its last twenty bytes are the
+// SHA-1 of every byte before them; a .idx and a .rev carry their pack's
+// checksum in the twenty before, and a .pack's trailer is its name. The rule's
+// one implementation, gitlet.HashTrailer, is gitlet.CheckLayer's too
+// (ADR-0008). No git process runs: git's verifiers cost twenty times a
+// trailer for the graph and miss the bitmap.
 
 // fileKind is which file of an incarnation a check hashed: the `file`
 // attribute of crewlet.code.cache.checks. A pack's own files are named here;
@@ -65,11 +59,9 @@ const (
 	checkSound checkOutcome = "sound"
 	// checkDamaged: it is not.
 	checkDamaged checkOutcome = "damaged"
-	// checkUnreadable: a read of it failed — damaged at the identity it had,
-	// and repaired as a file that failed its trailer is: a disk's bad sector
-	// is what a rename over the file, or a drop, replaces. Never a slot the
-	// read lane did not grant, nor a context that ended: those say nothing
-	// of the file and are counted under no outcome.
+	// checkUnreadable: a read of it failed. Repaired as damaged, since a
+	// rename over it or a drop replaces a bad sector. A refused read slot or
+	// an ended context is no outcome (noVerdict).
 	checkUnreadable checkOutcome = "unreadable"
 	// checkReplaced: it was replaced or removed while it was hashed — no
 	// verdict: its successor is unvouched, and the next check reads it.
@@ -87,26 +79,24 @@ const (
 	// triggerUnvouched: a later full round, holding the files this process
 	// has neither written nor checked since.
 	triggerUnvouched checkTrigger = "unvouched"
-	// triggerScrub: a scrub its interval made due — a used copy's every file
-	// re-hashed a ScrubInterval after its last (scrub.go). A scrub after a
-	// copy's first full round is `first`, as that round's check is.
+	// triggerScrub: a scrub its ScrubInterval made due (scrub.go). A scrub
+	// after a copy's first full round is `first`, as that round's check is.
 	triggerScrub checkTrigger = "scrub"
 	// triggerReport: a scrub a git process's report made due — a pack or an
 	// object it could not read, a pack it named in words, or a crash.
 	triggerReport checkTrigger = "report"
-	// triggerForced: the in-place round of a pack's or an object's repair —
-	// a failed request's (Cache.Rebuild) or a round's own git's
-	// (repairDamaged) — holding every index file to its trailer whatever its
-	// vouch.
+	// triggerForced: the in-place round of a pack's or an object's repair
+	// (Cache.Rebuild, repairDamaged), holding every index file to its
+	// trailer whatever its vouch.
 	triggerForced checkTrigger = "forced"
-	// triggerRequest: what that in-place round did not end — the scrub the
-	// repair runs next (Cache.escalate) — and a pack a confirmed hint named,
-	// installed again without a hash of the cache's own.
+	// triggerRequest: the scrub a repair runs after that round
+	// (Cache.escalate), and a pack a confirmed hint named, installed again
+	// without a hash of the cache's own.
 	triggerRequest checkTrigger = "request"
 )
 
-// hashVerdict is what hashing one file concluded: sound, damaged, or NONE — the
-// file was replaced or removed while it was read, so no verdict is its.
+// hashVerdict is what hashing one file concluded: sound, damaged, or none (the
+// file was replaced or removed while it was read).
 type hashVerdict uint8
 
 const (
@@ -117,39 +107,26 @@ const (
 
 // hashTrailer is the length of a git hashfile's trailer: a SHA-1, since every
 // repository the engine serves is SHA-1 (gitlet.PackRef.GitChecksum is forty
-// hex digits). A SHA-256 object format would be a trailer of 32, checked the
-// same way, and lands with that format.
+// hex digits).
 const hashTrailer = sha1.Size
 
-// fileID is a file's identity as a verdict about its bytes is kept by: its
-// device and inode, its size and its modification time — or its absence. NO
-// CTIME: an adoption and a seeded rebuild hard-link files, and every link and
-// unlink moves the inode's ctime without changing a byte. A file renamed in
-// over it, written through its own inode (which moves its modification time)
-// or removed is another identity; a file whose bytes change with NO change of
-// identity — media damage — is the scrub's to find, never a vouch's.
-//
-// A PACK'S MODIFICATION TIME IS NO PART OF ITS IDENTITY (packModified): git
-// FRESHENS a .pack — utime(2), now, not one byte — whenever a process writes
-// an object the pack already holds (object-file.c's freshen_packed_object),
-// and an engine write's build in a scratch leaning on a copy writes objects
-// the copy may hold: a blob a seat puts back as it was, a tree a revert
-// returns to (internal/gitlet/host's build). Read into the identity, every such
-// write would take its pack out from under the scrub hashing it (a verdict
-// spoiled as "replaced"), and from under the repair mark and the confirmed
-// hint naming it, so a hot pack an agent kept freshening could go unscrubbed
-// and unrepaired for as long as it kept writing. Nothing writes a pack through
-// its own inode — git writes one beside its name and renames it in, as every
-// writer of a copy does — so its inode and its size say every change of it
-// but media damage, which is the scrub's.
+// fileID is the identity a verdict about a file's bytes is kept by: device,
+// inode, size and modification time, or absence. No ctime: an adoption and a
+// seeded rebuild hard-link files, which moves ctime without changing a byte.
+// A pack's modification time is no part of it (packModified): git freshens a
+// .pack whenever a process writes an object it holds (object-file.c's
+// freshen_packed_object; an engine write's build over a copy does), which
+// would spoil the scrub's verdict and the repair mark's and a confirmed
+// hint's naming of it for as long as an agent kept writing. Nothing writes a
+// pack through its own inode, so inode and size catch every change of it but
+// media damage, which is the scrub's.
 type fileID struct {
 	present        bool
 	dev, ino       uint64
 	size, modified int64
 }
 
-// idOf is info's identity: a pack's with no modification time (fileID's PACK
-// rule), every other file's with its own.
+// idOf is info's identity: a .pack's without its modification time (fileID).
 func idOf(info fs.FileInfo) fileID {
 	f := fileID{present: true, size: info.Size()}
 	if !packModified(info.Name()) {
@@ -161,10 +138,9 @@ func idOf(info fs.FileInfo) fileID {
 	return f
 }
 
-// packModified reports whether name is a pack's own file — a .pack — whose
-// modification time git's freshening moves without a byte of it changing
-// (fileID). Its .idx and .rev git never freshens: each is written once, beside
-// its name, and renamed in, so its modification time stays its identity's.
+// packModified reports whether name is a .pack, whose modification time git's
+// freshening moves (fileID). A .idx or .rev is never freshened, so its
+// modification time stays part of its identity.
 func packModified(name string) bool { return strings.HasSuffix(name, ".pack") }
 
 // lstatID is the identity of what is at path now, or the zero (absent) one.
@@ -201,14 +177,13 @@ func (f checkedFile) by() string {
 	return dropCheck
 }
 
-// expect is what a file's name or its row says of its last bytes beside the
-// trailer rule: prior is the twenty before the trailer (a .idx's and a .rev's
-// pack checksum), trailer the trailer itself (a .pack's name, and a published
+// expect is what a file's name or row says of its last bytes beside the
+// trailer rule: prior is the twenty before the trailer (a .idx's and .rev's
+// pack checksum), trailer the trailer itself (a .pack's name, a published
 // layer's .midx's and .graph's); nil says nothing. run is the provenance
-// index's rule (CheckRunTrailer) in place of git's: a SHA-256 trailer, the
-// last 32 bytes, rather than git's SHA-1. whole is a CHAIN FILE's rule
-// (CheckLayers' main file), which carries no trailer: its every byte is
-// content, the ids the incarnation installed a line each.
+// index's SHA-256 trailer (CheckRunTrailer). whole is a chain file's rule
+// (CheckLayers' main file): no trailer, every byte held to content, the ids
+// installed a line each.
 type expect struct {
 	prior, trailer []byte
 	run            bool
@@ -224,11 +199,10 @@ func (e expect) hasher() (hash.Hash, int) {
 	return sha1.New(), hashTrailer //nolint:gosec // git's hashfile trailer is a SHA-1
 }
 
-// pieces is how a hash reads a file: through buf, size bytes at a time —
-// CheckPieceBytes, unless a case lowers it — each piece in a slot hold takes
-// and gives back once the piece is read (gitproc.Pool.HoldRead; nil holds
-// nothing), and read, when set, told the file's path after each piece twice:
-// with its slot still held, and once it is given back (a case's hook).
+// pieces is how a hash reads a file: through buf, size bytes at a time
+// (CheckPieceBytes unless a case lowers it), each piece in a slot hold takes
+// (gitproc.Pool.HoldRead; nil holds nothing). read is a case's hook, told the
+// path after each piece with its slot held and again once it is given back.
 type pieces struct {
 	buf  []byte
 	size int64
@@ -251,13 +225,9 @@ func (c *Cache) pieces(hold func(context.Context) (func(), error)) pieces {
 	return p
 }
 
-// of is p as the one hash of git's trailer rule reads the file at path by
-// (gitlet.HashTrailer): through p's buffer, a piece of p.size in each slot
-// p.hold takes — and, where a case set them, its hooks told of each piece
-// through the hold itself: the fault asked once the piece's slot is held and
-// before a byte of it is read, its error that read's; the read hook once the
-// piece is read with its slot still held, and again once the slot is given
-// back.
+// of is p as gitlet.HashTrailer reads the file at path by, a case's hooks
+// run inside the hold: the fault once the slot is held and before the read,
+// the read hook with the slot held and again once it is given back.
 func (p pieces) of(path string) gitlet.Pieces {
 	if p.read == nil && p.fault == nil {
 		return gitlet.Pieces{Buf: p.buf, Size: p.size, Hold: p.hold}
@@ -288,20 +258,17 @@ func (p pieces) of(path string) gitlet.Pieces {
 	}}
 }
 
-// layer is p as a published layer's check reads by (gitlet.CheckLayer), which
-// hashes the layer's three files through one gitlet.Pieces: p's buffer, its
-// piece and its hold, without the cases' hooks, each of which names the one
-// file a piece is of.
+// layer is p as gitlet.CheckLayer reads by: one gitlet.Pieces for the layer's
+// three files, so without the cases' hooks, which each name one file.
 func (p pieces) layer() gitlet.Pieces {
 	return gitlet.Pieces{Buf: p.buf, Size: p.size, Hold: p.hold}
 }
 
 // repairAction is what a repair does about the checkable file at rel found
-// failing: a derived file is dropped, a pack's file installed again — and a
-// file of the installed chain written again or fetched again, but for the
-// node's tip (tip, its id where the copy holds one, recordedTip), which is a
-// file the node writes as it writes its own graph: dropped, the chain file
-// written again without it (planChain), and written again at once.
+// failing: a derived file is dropped, a pack's file installed again, a file
+// of the installed chain written or fetched again (planChain) — but the
+// node's own tip (tip, recordedTip), which it writes as it writes its graph,
+// is dropped and written again at once.
 func (im *image) repairAction(rel, tip string) string {
 	switch i, o := im.owner(rel); {
 	case i < 0:
@@ -319,29 +286,21 @@ func (im *image) repairAction(rel, tip string) string {
 	return "dropped"
 }
 
-// noVerdict reports whether a hash's error is no fault of the file's: its
-// context ended, or no read slot was free within gitproc.SlotWait. Such a
-// hash says nothing of the file, and is counted under no outcome; any other
-// error is a read of it that failed.
+// noVerdict reports whether a hash's error says nothing of the file: its
+// context ended, or no read slot was free within gitproc.SlotWait. Any other
+// error is a failed read of it.
 func noVerdict(ctx context.Context, err error) bool {
 	return ctx.Err() != nil || errors.Is(err, gitproc.ErrBusy)
 }
 
-// trailerSound holds the file at path to its hashfile trailer — git's, the
-// SHA-1 of every byte before its last twenty against those twenty, or a
-// provenance run's SHA-256 over 32 (expect.run) — by the rule's one
-// implementation, gitlet.HashTrailer, which a published layer's check shares
-// (gitlet.CheckLayer), reading it one PIECE at a time as p says and checking ctx
-// before every read; and to want. A file that is not a regular file, or
-// shorter than its trailer and what want names, is damaged.
-//
-// A VERDICT HOLDS ONLY FOR THE FILE IT HASHED: the path is Lstat'ed before it
-// is opened, and after the hash both the open file and the path again, and
-// when an identity differs — the file written in place, or another renamed
-// in over it, while it was read — or the path is gone, there is no verdict
-// (hashNone): its successor is no file this hash read. Answered beside the verdict: the
-// identity hashed, and the bytes read. An error is a read that failed, never
-// a verdict.
+// trailerSound holds the file at path to its hashfile trailer (git's SHA-1,
+// or a provenance run's SHA-256, expect.run) by gitlet.HashTrailer, a piece
+// at a time as p says, and to want. A non-regular file, or one shorter than
+// its trailer and want's prior, is damaged. A verdict holds only for the file
+// it hashed: the path is Lstat'ed before the open, and the open file and the
+// path again after, so a file written in place, renamed over or removed
+// meanwhile gets hashNone. It answers the identity hashed and the bytes read;
+// an error is a failed read, never a verdict.
 func trailerSound(ctx context.Context, path string, p pieces, want expect) (hashVerdict, fileID, int64, error) {
 
 	before, err := os.Lstat(path)
@@ -411,15 +370,12 @@ func trailerSound(ctx context.Context, path string, p pieces, want expect) (hash
 	return hashSound, id, read, nil
 }
 
-// chainVerdict is v, a reader's verdict of a file held to want, as it stands
-// once its reading is over: no verdict (hashNone) for a CHAIN FILE (want.whole)
-// whose incarnation's chain files did not stand still from m — the mark the
-// reader took with what it held the file to (chainWants) — to now
-// (chainStill). A chain file is held to what the incarnation's record names,
-// and an in-place write of it — the node's tip, a cut that drops the tip —
-// moves the file and the record at two moments, so a hash across one may
-// compare a file of one moment with a record of another: neither sound nor
-// damaged. Every other verdict is the file's own. e.mu is NOT held.
+// chainVerdict is v once the reading is over: hashNone for a chain file
+// (want.whole) whose incarnation's chain files moved between m, the mark
+// taken with chainWants, and now (chainStill). An in-place write of a chain
+// file moves the file and its record at two moments, so a hash across it may
+// compare the two at different moments. Every other verdict stands. e.mu is
+// not held.
 func chainVerdict(e *entry, inc *incarnation, want expect, m chainMark, v hashVerdict) hashVerdict {
 	if !want.whole || v == hashNone {
 		return v
@@ -433,18 +389,17 @@ func chainVerdict(e *entry, inc *incarnation, want expect, m chainMark, v hashVe
 	return v
 }
 
-// contentSound holds the file at path, Lstat'ed at id, to want byte for byte —
-// a chain file, which carries no trailer, against the ids its incarnation
-// installed (CheckLayers): one read, never more than want's length and a
-// byte, since a file longer than want is damaged whatever it holds. As
-// trailerSound, a file replaced or removed while it was read has no verdict.
+// contentSound holds a chain file at path, Lstat'ed at id, to want byte for
+// byte (CheckLayers), reading at most want's length and a byte, since a longer
+// file is damaged whatever it holds. As in trailerSound, a file replaced or
+// removed while it was read has no verdict.
 func contentSound(ctx context.Context, path string, id fileID, want []byte) (hashVerdict, fileID, int64, error) {
 	if err := ctx.Err(); err != nil {
 		return hashNone, id, 0, err
 	}
 	if len(want) == 0 || id.size != int64(len(want)) {
-		// Of no layer, a chain file is none: an incarnation that installed
-		// none holds no chain file (writeChains).
+		// An incarnation that installed no layer holds no chain file
+		// (writeChains).
 		return hashDamaged, id, 0, nil
 	}
 	f, err := os.Open(path)
@@ -483,20 +438,14 @@ func checksumBytes(cs string) []byte {
 	return b
 }
 
-// held is how a check and the scrub hold the derived file f to its bytes, as
-// ITS DECLARATION'S Check says (derived.go) — never as a reader would guess
-// from its name: the file as a check of it is counted (its Owned.File), and
-// what it is hashed against. A Check no case here reads is refused: Validate
-// admits only the Checks this build knows, so a reader not taught one a
-// declaration names is this build's bug, never a file to hold to a trailer it
-// may not carry. A Check the check and the scrub do not hash at all
-// (Check.hashed: the memo's, whose every read holds an entry) is passed over by
-// every caller before it asks (heldFiles, Verify's checkDerived), and refused
-// here like one this build does not know.
-//
-// chains is what each CHAIN FILE of the incarnation holds when it is sound
-// (chainWants), by its path relative to the incarnation: the one file of a
-// declaration that carries no trailer, held to the ids installed.
+// held is how a check and the scrub hold the derived file f, as its
+// declaration's Check says (derived.go), never as its name suggests: the kind
+// it is counted as (Owned.File) and what it is hashed against. A Check no case
+// here reads is refused as this build's bug, Validate admitting only known
+// Checks, never held to a trailer it may not carry; one no hash reads
+// (Check.hashed: the memo's) is passed over by every caller (heldFiles,
+// Verify's checkDerived) and refused here too. chains is what each chain file
+// holds when sound (chainWants), by path relative to the incarnation.
 func (f ownedFile) held(chains map[string][]byte) (checkedFile, expect, error) {
 	cf := checkedFile{kind: fileKind(f.as.File), rel: f.rel}
 	switch f.of.Check {
@@ -514,11 +463,9 @@ func (f ownedFile) held(chains map[string][]byte) (checkedFile, expect, error) {
 		// A provenance run's own SHA-256 trailer, written with it.
 		return cf, expect{run: true}, nil
 	case CheckLayers:
-		// A published layer's file to git's hashfile trailer — and one named
-		// by its checksum (Owned.Named: the .midx and the .graph) to the
-		// forty hex digits of its name AS that trailer — and the chain file,
-		// which the cache writes from the rows and which carries no trailer,
-		// to the ids installed, line for line.
+		// A published layer's file to git's trailer, one named by its
+		// checksum (Owned.Named: the .midx, the .graph) to its name as that
+		// trailer, and the chain file, which has none, to the ids installed.
 		var want expect
 		switch {
 		case f.as.Main:
@@ -535,10 +482,9 @@ func (f ownedFile) held(chains map[string][]byte) (checkedFile, expect, error) {
 		f.of.Check)
 }
 
-// heldFiles is every derived file of files as a check and the scrub hold it
-// (held, against chains for a chain file), with what each is hashed against
-// added to wants — passing over a file whose declaration's Check no hash
-// holds (Check.hashed).
+// heldFiles is every derived file of files as held holds it, adding what each
+// is hashed against to wants; a file whose Check no hash reads (Check.hashed)
+// is passed over.
 func heldFiles(files []ownedFile, wants map[string]expect, chains map[string][]byte) ([]checkedFile, error) {
 	out := make([]checkedFile, 0, len(files))
 	for _, f := range files {
@@ -561,10 +507,9 @@ func packFileRel(place packPlace, cs, ext string) string {
 	return filepath.Join(place.rel(), "pack-"+cs+ext)
 }
 
-// vouches is what of an incarnation's files this process wrote or checked, at
-// which identity (incarnation.vouched): a pack's .idx and .rev in ONE entry
-// keyed by the twenty bytes of the pack's checksum, and the derived files —
-// a handful at most — by their path relative to the incarnation.
+// vouches is which of an incarnation's files this process wrote or checked,
+// at which identity (incarnation.vouched): a pack's .idx and .rev in one entry
+// keyed by its checksum's twenty bytes, the derived files (a handful) by path.
 type vouches struct {
 	packs   map[[hashTrailer]byte]packVouch
 	derived map[string]fileStamp
@@ -576,9 +521,8 @@ type packVouch struct {
 	idx, rev fileStamp
 }
 
-// fileStamp is a fileID as a vouch keeps it: always a file that was present,
-// so its presence is not stored, and a zero stamp is no file — no inode is
-// numbered zero.
+// fileStamp is a fileID as a vouch keeps it: always present, so presence is
+// not stored, and a zero stamp is no file (no inode is numbered zero).
 type fileStamp struct {
 	dev, ino       uint64
 	size, modified int64
@@ -589,13 +533,12 @@ func stampOf(id fileID) fileStamp {
 	return fileStamp{dev: id.dev, ino: id.ino, size: id.size, modified: id.modified}
 }
 
-// packIndexOf is the checksum, as its twenty bytes, and the extension of the
-// pack index file at rel — pack-<forty hex>.idx or .rev, in objects/pack or
-// the dropping view — or false for any other path, a .pack among them. ONE
-// VOUCH A CHECKSUM, wherever its files lie: a pack the rows move between the
-// two directories has its files in both only while a round installs it at its
-// new place, and a vouch held to an identity (vouchedAt) is no vouch for the
-// other's, whose check then reads it — never a verdict carried across.
+// packIndexOf is the checksum bytes and extension of the pack index file at
+// rel (pack-<forty hex>.idx or .rev, in objects/pack or the dropping view), or
+// false for any other path, a .pack among them. One vouch a checksum, wherever
+// its files lie: a pack the rows move has files in both places only while a
+// round installs it, and the vouch, held to one identity (vouchedAt), carries
+// no verdict to the other copy.
 func packIndexOf(rel string) ([hashTrailer]byte, string, bool) {
 	var key [hashTrailer]byte
 	dir, name := filepath.Split(rel)
@@ -613,10 +556,8 @@ func packIndexOf(rel string) ([hashTrailer]byte, string, bool) {
 }
 
 // vouch records that inc's file at rel, at identity id, is one this process
-// wrote or checked: a pack's .idx or .rev, or a derived file, which is what
-// every caller hands it; e.mu is held. A pack's own bytes are never vouched
-// for: the check reads no .pack, and the scrub reads every one vouched or
-// not.
+// wrote or checked; e.mu is held. A .pack is never vouched for: the check
+// reads none, and the scrub reads every one.
 func vouch(inc *incarnation, rel string, id fileID) {
 	if !id.present {
 		return
@@ -679,13 +620,11 @@ func (im *image) ids(dir string) map[string]fileID {
 	return ids
 }
 
-// vouchWritten vouches for every derived file of inc that a git process of
-// this one has just written: present now at an identity other than the one
-// before held — and stamps its declaration written (report.go's wrote). ONLY
-// WHAT MOVED: git keeps a file it would write again unchanged — a bitmap whose
-// index's checksum did not move is not rewritten — so a step that ran over a
-// damaged bitmap and kept it vouches nothing of it, and the next check still
-// reads it.
+// vouchWritten vouches for every derived file of inc a git process of this
+// one has just written (present at an identity other than before's) and
+// stamps its declaration written (report.go's wrote). Only what moved: git
+// keeps a file it would write unchanged, so a step that kept a damaged bitmap
+// vouches nothing of it and the next check still reads it.
 func (c *Cache) vouchWritten(e *entry, inc *incarnation, before map[string]fileID) {
 	var rels []string
 	var written derivedSet
@@ -771,13 +710,11 @@ func vouchedRels(inc *incarnation) []string {
 }
 
 // checked is what a check found: why it ran, how many files were sound, every
-// file found damaged at the identity it was hashed at — a pack's .idx or .rev,
-// whose pack the install puts in again, or a derived file, which the round
-// drops (still) — and the bytes read. forced: the in-place round of a pack's
-// or an object's repair asked it (Cache.Rebuild, repairDamaged), so it held
-// every index file to its trailer whatever its vouch. at and ended are when it
-// ended, on Options.Now's clock and as a time.Now() reading: a forced check's
-// verdict, which its round records once it ends (incarnation.forcedAt).
+// file found damaged at the identity it was hashed at (still), and the bytes
+// read. forced: a repair's in-place round asked it (Cache.Rebuild,
+// repairDamaged), so it ignored vouches. at and ended are when it ended, on
+// Options.Now's clock and on time.Now(): a forced check's verdict, recorded by
+// its round (incarnation.forcedAt).
 type checked struct {
 	trigger checkTrigger
 	forced  bool
@@ -790,27 +727,16 @@ type checked struct {
 	at, ended time.Time
 }
 
-// checkIndexes is step 2 of a full round (sync.go apply): every checkable file
-// of inc the snapshot names — the .idx and .rev of every pack present at its
-// row's sizes — and every derived file git reads that is present, held to its
-// trailer when it is not vouched for at the identity it has now. A derived
-// file the cache's own code writes is no file git reads: the provenance
-// index's runs are held to their own trailer before the cache maps one this
-// process did not write (provenance.go's checks, behind the serving), so a
-// copy's first request after a restart waits on none of them. A read slot of the pool is
-// held for each piece of hashing and none between (D15 of the check's doc:
-// one slot, a piece at a time, none while the round runs git). A pack absent
-// or at the wrong size is not its: the install meets it. Nor is any .pack: a
-// pack is hashed behind the serving, never before it. What passes is vouched.
-// The round holds the entry's write lock and has stopped the maintainer, so
-// nothing else writes a file it hashes.
-//
-// FORCED by a pack's or an object's damage — a request's failure
-// (Cache.Rebuild) or a round's own git's (repairDamaged) — it holds every file
-// to its trailer whether or not it is vouched for: what failed may be damage
-// that arrived after this process checked a file, which no vouch sees.
-//
-// (Not `check`: verify.go's Verify body has that name.)
+// checkIndexes is step 2 of a full round (sync.go apply): it holds to its
+// trailer every checkable file of inc the snapshot names (the .idx and .rev of
+// every pack present at its row's sizes, and every present derived file git
+// reads) not vouched for at its identity now, and vouches what passes. A pack
+// absent or at the wrong size is the install's; no .pack is hashed before
+// serving (scrub.go), nor a provenance run (provenance.go). It holds one read
+// slot a piece and none between. The round holds the entry's write lock and
+// has stopped the maintainer, so nothing else writes a file it hashes. Forced
+// (Cache.Rebuild, repairDamaged), it ignores vouches: the damage may postdate
+// a check. Not `check`: verify.go's Verify body has that name.
 func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, snap snapshot, forced bool) (checked,
 	error) {
 
@@ -902,13 +828,10 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 			// answered as any read the lane refuses.
 			return ck, fmt.Errorf("checking %s against its trailer: %w", f.rel, err)
 		case err != nil:
-			// UNREADABLE: damaged at the identity it had, and repaired as
-			// a file that failed its trailer is — a derived file dropped, a
-			// pack's file renamed over, which replaces the inode the disk
-			// cannot read. Failing the round over it left the repository
-			// unserved for good: no full round could ever pass the file,
-			// and the maintainer, whose rewrite would have replaced it,
-			// runs only on a copy a full round has converged.
+			// Unreadable: repaired as damaged, which replaces the inode the
+			// disk cannot read. Failing the round would leave the repository
+			// unserved for good: no round could pass the file, and the
+			// maintainer runs only on a converged copy.
 			c.countCheck(f.kind, checkUnreadable, trigger)
 			f.trigger = trigger
 			ck.damaged = append(ck.damaged, f)
@@ -942,53 +865,18 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 	return ck, nil
 }
 
-// recordCheck is what a full round's check leaves on inc's repair mark once
-// it has run, whatever the round meets after it, and answers every finding
-// the mark holds that the round repairs; e.mu is not held. forces is how many
-// repairs' forces the check took (requested), and damaged what it found.
-//
-//   - ITS FORCES ARE SPENT. A forced check is asked to hold every index file
-//     to its trailer whatever its vouch, and once it has run, it has done
-//     that. Settled only once the round's install had acted, the forces
-//     outlived a round that failed there — on a pack it ADDS that the object
-//     store does not have or fails to hand over — so every later round of the
-//     copy was forced again, every index file hashed again under the
-//     repository's write lock, until an install succeeded; and a round the
-//     log's head sent on to a second apply after a pack's not-found
-//     (converge) held them all to their trailers a second time itself.
-//   - WHAT IT FOUND GOES ON THE MARK (repairMark.found), at the identity each
-//     file failed at, as a scrub's findings do, and comes off once a round
-//     has installed or dropped it (settleFound): a round that cannot act on a
-//     finding — its install failing on a pack it adds, the finding's own
-//     download failing — leaves it to the next. It is the FINDING that has
-//     to outlive the round, not the forces: an index file damaged in place
-//     keeps its identity and the vouch an earlier check gave it, which no
-//     check but a forced one reads past, so the round that can at last
-//     install its pack again knows of it only from the mark.
-//   - A FINDING FOUND AGAIN STAYS AS IT WAS FOUND. A file the mark already
-//     holds at the identity this check found it failing at is the same
-//     damage, and the finding the mark holds — what found it, a SCRUB above
-//     all — stands; only a finding at ANOTHER identity, newer damage in a
-//     file put there since, replaces it, the one the mark holds naming a file
-//     no longer there (checked.still). A scrub's finding still waiting is
-//     what answers a request's scrub in that scrub's place and covers a
-//     report within its cooldown (scrubWaits), which a check's never does —
-//     a check reads no pack body. Written over by the forced check of a
-//     request failing on that very damage, its pack held off by an object
-//     store that will not hand it over, it answered neither: the request's
-//     step 3 read the whole copy again, about 1.13 times its pack bytes, as
-//     did the report of every clone crashing over it within the hour — once
-//     an hour for as long as the store refused the pack. A scrub's own
-//     finding replaces whatever the mark holds for its file (runScrub): it
-//     read every byte, the pack bodies a check never does among them.
-//   - The round repairs every finding on the mark — this check's, and what an
-//     earlier round's check or a scrub found that still waits — but only this
-//     check's while a check of the repository is admitted (entry.verifying):
-//     a repair between that check's listing and its hashing would move a file
-//     it admitted, so the rest wait for its release, which asks the round
-//     again. This check's own are the round's to act on either way, as they
-//     always were — each handed to it as the mark holds it, so the round's
-//     repair is logged as what found the damage first.
+// recordCheck records a full round's check on inc's repair mark, whatever the
+// round meets after, and returns the findings the round repairs; e.mu is not
+// held. Its forces are spent now: settled after the install, a failing
+// install would force every later round. A finding stays on the mark
+// (repairMark.found) at the identity it failed at until a round installs or
+// drops it (settleFound): damaged in place, a file keeps its vouch. One found
+// again at that identity stays as found, a scrub's above all (it answers a
+// request's scrub and covers a report, scrubWaits); only another identity
+// replaces it (checked.still). While a check is admitted (entry.verifying),
+// the round gets only this check's, as the mark holds them (the repair logs
+// what found the damage first), so no repair moves a file it admitted; the
+// rest wait for its release, which asks the round again.
 func (c *Cache) recordCheck(e *entry, inc *incarnation, forces int, damaged []checkedFile) []checkedFile {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1030,16 +918,12 @@ func (c *Cache) countCheck(kind fileKind, outcome checkOutcome, trigger checkTri
 	}
 }
 
-// still is what of ck's findings — what a check or a scrub found that waits on
-// the repair mark (repairMark.found: the round's own check's among them, put
-// there by recordCheck) and a confirmed hint's (repairMark.reinstall) — the
-// incarnation at dir still holds at the identity each was found at: the packs
-// to install again, by checksum, each with its first finding, and the derived
-// parts to drop, each with what asked. A REPAIR ACTS ONLY ON THE FILE ITS
-// FINDING NAMES: one replaced or removed since its hash — rewritten by the
-// maintainer, put right by an earlier repair — is no finding any more, and its
-// successor, which no hash of this process read, is checked by the next round
-// or the next scrub.
+// still is what of ck's findings (repairMark.found, and a confirmed hint's
+// repairMark.reinstall) the incarnation at dir still holds at the identity
+// each was found at: the packs to install again by checksum, each with its
+// first finding, and the derived parts to drop. A repair acts only on the
+// file its finding names: a successor (the maintainer's rewrite, an earlier
+// repair) is unhashed, and left to the next round or scrub.
 func (ck checked) still(im *image, dir string) (map[string]packFinding, derivedDrops) {
 	packs := map[string]packFinding{}
 	var drops derivedDrops
@@ -1048,10 +932,8 @@ func (ck checked) still(im *image, dir string) (map[string]packFinding, derivedD
 			continue
 		}
 		if i, _ := im.owner(f.rel); i >= 0 {
-			// A file of the installed chain is the round's chain plan's to
-			// answer — the chain cut at the layer that holds it, which is
-			// fetched again, or its chain file written again (planChain) —
-			// never a drop.
+			// A file of the installed chain is the chain plan's to answer
+			// (planChain), never a drop.
 			if !im.decls[i].chained() {
 				drops.add(im.decls[i].Name, time.Time{}, f.by())
 			}
@@ -1072,10 +954,9 @@ func (ck checked) still(im *image, dir string) (map[string]packFinding, derivedD
 	return packs, drops
 }
 
-// packFinding is what of one pack's files the findings still true of it say:
-// the trigger of the first that found it, whether a confirmed hint named it
-// (its bundle, not a file of it), and whether its .idx failed — the derived
-// files may have been built from that index (install).
+// packFinding is what the findings still true of one pack say: the first's
+// trigger, whether a confirmed hint named it, and whether its .idx failed, so
+// the derived files built from it go too (install).
 type packFinding struct {
 	trigger       checkTrigger
 	hinted, index bool

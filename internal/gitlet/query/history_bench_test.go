@@ -20,50 +20,18 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 )
 
-// THE HISTORY READS, MEASURED: code_blame of a file and
-// code_log of a path, git run exactly as the query server runs it (blame.go,
-// log.go: the same arguments, a log page of gitlet.MaxLogLimit commits, the
-// serve configuration's version-2 filters), over a history whose commit-graph
-// is shaped as a Gitlet node holds one:
-//
-//   - filters=on/tail=0 is every commit in a graph with every changed-path
-//     filter — a chain whose publication covers the whole history;
-//   - filters=on/tail=N/max-new-filters=… is the newest N objects' commits
-//     (compact.PublishTailObjects, a publication's tail at its bound) outside
-//     the published graph layer, under the node's tip — the cache's declared
-//     tip write, which computes every filter (all), against the same write
-//     bounded to 100 or 1 024 new ones, every tail commit past them diffed by
-//     the read;
-//   - filters=off/… is the same graphs with no filter at all, what every read
-//     walked before the filters;
-//   - own/max-new-filters=… is OWN MODE's whole graph (the cache's graphArgs,
-//     every filter, against the same bounded to 100 or 1 024), written once
-//     over a repository with no graph — a repository's first own-mode write,
-//     every commit past a bound's filters diffed by the read.
-//
-// Each arm reports the one write its shape was made by — the whole graph,
-// own mode's, or the node's tip over the published layer — beside the read:
-// its seconds and its peak anonymous memory (write-s, write-peak-MiB).
-//
-// tree is where the file sits. tree=flat is gittest.History's own layout,
-// its first file d000/f00000 under a root of thirty directories: a commit
-// with no filter costs the read one compare of a root tree's entry, so it
-// cannot tell the bounds apart (51 and 96 ms with no filter at all at the
-// gigabyte). tree=deep is gittest.DeepHistory's — the same commits with the
-// file four levels down, src/core/d000/f00000, beside a wide tree of
-// historyWide files whose thousand directories src/ lists before core/ — so a
-// commit with no filter costs the read a walk of src/'s listing, as a
-// monorepo's does.
-// The file is rewritten by one commit in each of its 1 280 versions — a
-// window of it each time, so a blame walks back to the last change of each of
-// its lines, and a page of the path's log walks some 36 000 commits at the
-// gigabyte; history=1GB is the large model's commit count (455 680 commits,
-// gittest.LargeEnv) and history=100MB a run's without it. Each read must
-// answer within gitproc.ReadDeadline with the filters, the tail included;
+// BenchmarkBlame is code_blame of a file, git run as blame.go runs it with the
+// serve configuration's version-2 filters, over commit-graphs shaped as a
+// Gitlet node holds them (historyRig.shaped): filters=on/tail=0, every commit
+// filtered; filters=on/tail=N/max-new-filters=…, the node's tip write over the
+// published layer, a tail of compact.PublishTailObjects, its new filters
+// bounded to 100, 1 024 or all, every commit past the bound diffed by the read;
+// filters=off/…, no filter; own/…, own mode's whole graph written over none.
+// Each arm reports its shape's one write (write-s, write-peak-MiB). Each read
+// must answer within gitproc.ReadDeadline with the filters, the tail included.
 // tree=deep's arms decided that every graph write computes every filter
-// (internal/gitlet/cache's maintain.go says why) and, with their write-peak-MiB
-// against objects, cache.GraphBaseBytes; estate.GitReadAttempt is re-checked
-// against the slower of the two reads.
+// (cache's maintain.go) and fit cache.GraphBaseBytes to write-peak-MiB against
+// objects; estate.GitReadAttempt is re-checked against the slower read.
 func BenchmarkBlame(b *testing.B) {
 	historyReads(b, func(path, tip string) []string {
 		return []string{"blame", "--porcelain", tip, "--", path}
@@ -81,7 +49,11 @@ func BenchmarkLogPath(b *testing.B) {
 	})
 }
 
-// historySizes are the histories the reads walk.
+// historySizes are the histories the reads walk: 1GB is the large model's
+// 455 680 commits (gittest.LargeEnv), 100MB a run's without it. The file is
+// rewritten, a window at a time, in each of its 1 280 versions, so a blame
+// walks back to each line's last change and a log page walks some 36 000
+// commits at the gigabyte.
 var historySizes = []struct {
 	name  string
 	bytes int64
@@ -107,7 +79,11 @@ type historyTree struct {
 // BenchmarkCodeRead's large arm lists, in a thousand directories src/ lists.
 const historyWide = 100_000
 
-// historyTrees are the tree= arms.
+// historyTrees are the tree= arms. flat is gittest.History's layout, the file
+// under a root of thirty directories: an unfiltered commit costs one compare
+// of a root entry, so it cannot tell the bounds apart. deep puts it four
+// levels down beside historyWide files src/ lists before core/, so an
+// unfiltered commit costs a walk of src/'s listing, as a monorepo's does.
 var historyTrees = []historyTree{
 	{name: "flat", path: "d000/f00000", perCommit: gittest.HistoryObjectsPerCommit},
 	{name: "deep", path: gittest.DeepPath(0), perCommit: gittest.DeepObjectsPerCommit, wide: historyWide},
@@ -192,8 +168,7 @@ type historyRig struct {
 	objects int64
 	// shapes is each graph shape's repository, written once.
 	shapes map[string]string
-	// writes is each shape's own one write — the whole graph, own mode's, or
-	// the node's tip over the published layer — its seconds and its peak
+	// writes is each shape's own one write: its seconds and its peak
 	// anonymous memory.
 	writes map[string]graphWrite
 }
@@ -272,12 +247,11 @@ func inPack(b *testing.B, repo string) int64 {
 func (r *historyRig) tip() string { return r.commits[len(r.commits)-1] }
 
 // shaped is the repository of shape, its graphs written by the first arm
-// that asks, on pool: on-0 and off-0 one layer over every commit, with every
-// filter and with none; on-tail-<filters> and off-tail the published layer
-// over every commit but the tail's — written once for the three tips over
-// it — and the node's tip over the tail, computing at most filters new
-// filters ("all": every one) or none; own-<filters> own mode's whole graph,
-// written once over no graph at that bound, timed and its memory sampled.
+// that asks: on-0 and off-0 one layer over every commit, with every filter and
+// none; on-tail-<filters> and off-tail the published layer over all but the
+// tail (written once for the tips over it) and the node's tip over the tail,
+// computing at most filters new filters ("all": every one) or none;
+// own-<filters> own mode's whole graph over no graph at that bound.
 func (r *historyRig) shaped(b *testing.B, pool *gitproc.Pool, shape string) string {
 	b.Helper()
 	historyRigs.Lock()

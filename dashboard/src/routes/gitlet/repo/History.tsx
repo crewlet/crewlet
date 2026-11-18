@@ -37,9 +37,7 @@ import { useClock, useNow } from "~/lib/clock.ts";
 import { changePath, noDefaultHead, parseChangeRef, shortOID } from "~/lib/code.ts";
 import { ago } from "~/lib/ago.ts";
 import { CHECK_HISTORY_DAYS, rollupFor, rollupTitle } from "~/lib/checks.ts";
-import { civilAt, civilKey, fmtDate, fmtDateTime, plural, readerDay } from "~/lib/format.ts";
-import { zone } from "~/lib/prefs.ts";
-import { dayStartIn } from "~/lib/range.ts";
+import { fmtDate, fmtDateTime, plural, readerDay } from "~/lib/format.ts";
 import { useOrgIndex, useSeatBadgeOf } from "~/lib/seats.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
@@ -59,6 +57,7 @@ import { ChangeRefPill } from "../ChangeRow.tsx";
 import { CheckRollupMark, Face, GITLET, ShaChip, TagChip, useWhoName, type Who } from "../ui.tsx";
 import { REFUSED_CODES, useCommitMarks, type MarksFailure } from "./marks.ts";
 import { RefPicker, revisionWord } from "./refs.tsx";
+import { sinceOf, WHEN } from "../when.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import "~/styles/gitlet.css";
 
@@ -314,26 +313,6 @@ const dayHeading = (day: ListDay | null, c: CodeLogCommit) =>
 export function subjectOf(c: { subject?: string; subject_bytes?: number }): string {
   if (c.subject) return c.subject;
   return c.subject_bytes ? `(a subject of ${c.subject_bytes} bytes)` : "(no message)";
-}
-
-/** The windows a history is narrowed to by when each commit was committed: `when=`. */
-const WHEN = [
-  { value: "", label: "Any time", days: 0, words: "" },
-  { value: "today", label: "Today", days: 1, words: "today" },
-  { value: "7d", label: "Last 7 days", days: 7, words: "in the last 7 days" },
-  { value: "30d", label: "Last 30 days", days: 30, words: "in the last 30 days" },
-  { value: "90d", label: "Last 90 days", days: 90, words: "in the last 90 days" },
-] as const;
-
-const DAY_MS = 86_400_000;
-
-/** The first instant of the reader's day `days - 1` days before `today`, RFC 3339; none for any time. */
-export function sinceOf(when: string, today: string): string | undefined {
-  const days = WHEN.find((w) => w.value === when)?.days ?? 0;
-  const todayAt = civilAt(today);
-  if (days === 0 || todayAt === null) return undefined;
-  const start = dayStartIn(civilKey(todayAt - (days - 1) * DAY_MS), zone());
-  return start === null ? undefined : new Date(start).toISOString();
 }
 
 /** "All seats", then every seat of the chart by name, each with its face. */
