@@ -131,6 +131,24 @@ async function mount(width: number) {
 const title = () => document.querySelector(".crewlet-reading-pane__title");
 const scroller = () => document.querySelector<HTMLElement>(".inbox-pane");
 
+// THE PHONE'S WAY BACK SITS AT THE COLUMN'S START, no wider than its words: the column is a grid,
+// whose inline axis `justify-self` sets. Mutation: place it with `align-self` alone, and it
+// stretches across the column with its words centred.
+test("on a phone an item's way back sits at the pane's start", async () => {
+  await page.viewport(390, 844);
+  await mount(390);
+  const back = await eventually(() => {
+    const found = document.querySelector<HTMLElement>(".inbox-pane-back");
+    expect(found).not.toBeNull();
+    return found!;
+  });
+  const column = back.parentElement!.getBoundingClientRect();
+  const inset = parseFloat(getComputedStyle(back.parentElement!).paddingLeft) || 0;
+  const box = back.getBoundingClientRect();
+  expect(Math.abs(box.left - column.left - inset)).toBeLessThan(2);
+  expect(box.width).toBeLessThan(column.width / 2);
+});
+
 test("the next item after an answer opens at its head, wherever the last one was scrolled to", async () => {
   await page.viewport(1440, 900);
   await mount(1200);
