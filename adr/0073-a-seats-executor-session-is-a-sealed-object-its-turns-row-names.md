@@ -308,7 +308,7 @@ collection's at the host's three-quarter share, about 193.3 seconds more, so a
 host's take after an end at its bound is still given its whole
 `SessionTakeBudget`. As `BoxReadBudget` (`internal/sandbox/boxhost.go`) computes
 it, a collection of a turn with no cap waits about 4,700.1 seconds (a Claude
-Code one 20 more, for its main thread's read, `MainThreadReadWait`, below) and
+Code one 36 more, for its main thread's read, `MainThreadReadWait`, below) and
 a stop's or a loss's about 4,893.5: the poll's 60-second bound, and at the
 share the take's 240 seconds, its reservation's 30, three 30-second graces and
 the four changes of the run's row its host makes, each at the slowest node's
@@ -693,12 +693,12 @@ it reads; a collection of a turn with none waits as it did. As the code
 computes them, that is about 5,973.5 seconds for a collection of a turn with a
 cap, 4,700.1 + (145 + 30 + 780.03) / 0.75, and about 4,700.1 for one with none
 (the derivation is in the amendment above), and a Claude Code collection waits
-20 seconds more for its main thread's read (`MainThreadReadWait`,
+36 seconds more for its main thread's read (`MainThreadReadWait`,
 `internal/sandbox.TestTheBoxReadBudgetHoldsTheMainThreadRead`). A Claude Code
 read whose run holds a hook's serve to its job (`asksReceipts`) waits for that
 read, the verdict on the serve (`hookVerdictWait`, 10 s) and one more change of
-the row at the slowest crossing: about 5,773.5 seconds for a collection of a
-turn with no cap, 7,046.9 with one, and 5,966.8 for a stop's or a loss's
+the row at the slowest crossing: about 5,789.5 seconds for a collection of a
+turn with no cap, 7,062.9 with one, and 5,982.8 for a stop's or a loss's
 read. The figures
 first given here, 653 and 460 seconds, were from before the changes of the
 run's row were counted at their crossings and before the cap's record was
@@ -2782,10 +2782,10 @@ through the layer by two readings, the floor's figure (the last main-thread
 reply's usage, read by the layer's one rule for a reply's usage) and the count
 (`sandbox.SessionCapture.ResumedCount`, `sandbox.TakenSession.Count`);
 and ONE read of the job's main thread in the read that collects a job, on the
-box's host, before the take, within `sandbox.MainThreadReadWait` (15 s), which
-`sandbox.BoxReadBudget` holds for a Claude Code or an OpenCode collection, 20 s
-more for its asker than a read that asks no thread (about 4,720 s for an
-uncapped turn's, about 5,994 s with a cap), a look at each saved compaction's
+box's host, before the take, within `sandbox.MainThreadReadWait` (27 s), which
+`sandbox.BoxReadBudget` holds for a Claude Code or an OpenCode collection, 36 s
+more for its asker than a read that asks no thread (about 4,736 s for an
+uncapped turn's, about 6,010 s with a cap), a look at each saved compaction's
 size and never a read of
 its body, written with how the harness ended in the one write
 (`sandbox.EndRead.Count`, `sandbox.LaunchRecord.ResumedCount`). A job not
@@ -2863,8 +2863,8 @@ and `ReportedWindow` 0; an older collector's claim misses the count. This build
 reads every absence as may compact, so after an upgrade every continuation of a
 capture an older build took or a job it collected is told as cut off and its
 guard holds no skill. An older asker computed `BoxReadBudget` without the read's
-share, so a newer host's read spends up to 15 s of it, cutting the read's own
-steps from 45 s to 30 s before the take is cut. An older relaunch tells as
+share, so a newer host's read spends up to 27 s of it, cutting the read's own
+steps from 45 s to 18 s before the take is cut. An older relaunch tells as
 before. No state-log record, no `RecordVersion`, no `coord.ProtocolVersion`
 change.
 
@@ -4226,7 +4226,7 @@ older build as a mark it does not know, a session that may compact. An older
 host's reply names no provider and an OpenCode collection's read on an older
 host reads no count, each leaving the floor on the last request's input. An
 older asker computed `BoxReadBudget` for an OpenCode collection without the
-read's share, so a newer host's read spends up to 15 s of it, as the
+read's share, so a newer host's read spends up to 27 s of it, as the
 Claude Code read did once. No state-log record, no `RecordVersion`, no
 `coord.ProtocolVersion` change.
 
