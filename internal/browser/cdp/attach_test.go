@@ -209,7 +209,7 @@ func TestAutoAttachResumesAHeldTargetBeforeItAnswersWhatSetupSent(t *testing.T) 
 // announces as not waiting for the debugger is set up and auto-attached, and
 // never sent Runtime.runIfWaitingForDebugger — it needs none, and Chromium
 // releases a popup a page holds when that page is resumed as when the popup
-// is (AutoAttach's doc), so a resume of a running page would release the
+// is (the package doc), so a resume of a running page would release the
 // popup it opened before that popup's setup — while a held child announced
 // after it is resumed. In a bubble, so "never" is read once everything has
 // settled.
@@ -665,9 +665,7 @@ func TestAutoAttachCarriesOnPastAChildThatEndsBeforeItIsResumed(t *testing.T) {
 				return p.event("", TargetDetachedFromTarget.name, map[string]any{"sessionId": "goes"})
 			}},
 			{"crashed", func(p *peer) error {
-				return p.event("", TargetTargetCrashed.name, map[string]any{
-					"targetId": "target-goes", "status": "crashed", "errorCode": 133,
-				})
+				return p.event("goes", InspectorTargetCrashed.name, map[string]any{})
 			}},
 		} {
 			t.Run(end.name+" "+point.name, func(t *testing.T) {
@@ -984,7 +982,7 @@ func TestAChildFilterThatTakesWhatChromiumAnnouncesTwiceIsRefused(t *testing.T) 
 // A FILTER THAT TAKES TABS IS REFUSED: with auto-attach taking tabs, Chromium
 // announces the page in each tab unheld, so the attacher, which resumes only
 // what Chromium says it holds, would never resume it, and it would not run
-// (AutoAttach). AutoAttach refuses such a Filter — read as Chromium reads a
+// (the package doc). AutoAttach refuses such a Filter — read as Chromium reads a
 // filter — naming the type, and sends nothing: the browser's first command is
 // a call made after it. A Filter that leaves tabs out, Chromium's default
 // among them, is sent as it is.

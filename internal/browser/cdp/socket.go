@@ -16,14 +16,11 @@ import (
 // DialOptions is how [Dial] reaches a browser's DevTools socket.
 type DialOptions struct {
 	// HTTPClient carries the upgrade: the caller's own client, built by
-	// internal/httpx (httpx.Guarded for an address a vendor named). Required:
-	// nil is ErrNoHTTPClient, and nothing is dialled. Dial copies it and
-	// refuses every redirect on the copy; the caller's client keeps its own
-	// policy. The websocket library applies its Timeout to the handshake
-	// alone.
+	// internal/httpx. Required: nil is ErrNoHTTPClient, and nothing is
+	// dialled. Dial copies it and refuses every redirect on the copy; the
+	// caller's client keeps its own policy. The websocket library applies its
+	// Timeout to the handshake alone.
 	HTTPClient *http.Client
-	// Header is sent on the upgrade: a pool's credentials, for one.
-	Header http.Header
 	// Host overrides the upgrade's Host header. A plain Chromium refuses an
 	// upgrade whose Host is a DNS name rather than an address, so a caller
 	// that reached it by a name says the address here.
@@ -33,11 +30,11 @@ type DialOptions struct {
 }
 
 // Dial connects to a browser's DevTools websocket at addr (a ws:// or wss://
-// address Chromium printed or a pool handed out) over o.HTTPClient, and starts
-// the connection; ctx bounds the dial alone. A message it reads past
-// [ReadLimit] is read through and ends only what it is for, and it writes text
-// frames. An error never names addr's query or credentials, which a vendor's
-// address may carry.
+// address Chromium printed, or its /json/version names) over o.HTTPClient,
+// and starts the connection; ctx bounds the dial alone. A message it reads
+// past [ReadLimit] is read through and ends only what it is for, and it writes
+// text frames. An error never names addr's query or credentials, which an
+// operator's address may carry.
 func Dial(ctx context.Context, addr string, o DialOptions) (*Conn, error) {
 	if o.HTTPClient == nil {
 		return nil, ErrNoHTTPClient
@@ -46,7 +43,6 @@ func Dial(ctx context.Context, addr string, o DialOptions) (*Conn, error) {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return ErrRedirected }
 	ws, resp, err := websocket.Dial(ctx, addr, &websocket.DialOptions{
 		HTTPClient: &client,
-		HTTPHeader: o.Header,
 		Host:       o.Host,
 	})
 	if resp != nil && resp.Body != nil {

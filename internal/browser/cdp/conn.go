@@ -61,13 +61,13 @@ const MaxConnBacklog = 2 * MaxBacklog
 // caller's context and CommandTimeout from its sending. No command waits on a
 // page — waiting for a page is built on events, under its own bound — so a
 // command still unanswered after a minute is one Chromium will not answer: a
-// hung renderer, or a target gone without a detach. A minute is twice the
-// longest wait the browser's tools are to offer (30 s, crewlet/crewlet#804),
-// and the idle timeout every common HTTP front gives a response's first byte
-// (nginx's proxy_read_timeout, a cloud load balancer's), which bounds a
-// navigation's commit. A liveness bound under the caller's own deadline, never
-// a budget. It bounds each write too: a browser that takes no frame for a
-// minute is one that will not answer the command it carries.
+// hung renderer, or a target gone without a detach. A minute is the idle
+// timeout every common HTTP front gives a response's first byte (nginx's
+// proxy_read_timeout, a cloud load balancer's), which bounds a navigation's
+// commit, and within the render's own bound (internal/artifacts'
+// RenderTimeout, 90 s). A liveness bound under the caller's own deadline,
+// never a budget. It bounds each write too: a browser that takes no frame for
+// a minute is one that will not answer the command it carries.
 const CommandTimeout = 60 * time.Second
 
 // transport carries messages to and from a browser: the websocket [Dial]
@@ -606,7 +606,7 @@ func lastToken(b []byte, i int) int {
 
 // answer hands a call its reply. A call that is gone — at its deadline, or
 // because its caller gave up — leaves the answer to nobody, said at DEBUG by
-// its ids alone: never its result, which may be a cookie.
+// its ids alone: never its result, which may hold what a page holds.
 func (c *Conn) answer(env envelope) {
 	c.mu.Lock()
 	p := c.pending[env.ID]
@@ -639,13 +639,10 @@ func (c *Conn) event(env envelope) bool {
 	}
 	// A child is registered BEFORE its announcement is delivered, so the
 	// messages Chromium sends it next always find a session — and with the
-	// target it is attached to, which a crash of that target names. A second
-	// announcement of a session held already changes nothing.
+	// target it is attached to, whose crash ends every session attached to it.
+	// A second announcement of a session held already changes nothing.
 	if env.Method == TargetAttachedToTarget.name {
-		var a struct {
-			SessionID  SessionID  `json:"sessionId"`
-			TargetInfo TargetInfo `json:"targetInfo"`
-		}
+		var a TargetAttachedToTargetEvent
 		if json.Unmarshal(env.Params, &a) == nil && a.SessionID != "" && a.TargetInfo.TargetID != "" {
 			if _, held := c.sessions[a.SessionID]; !held {
 				c.sessions[a.SessionID] = newSession(c, a.SessionID, a.TargetInfo)
@@ -667,9 +664,7 @@ func (c *Conn) event(env envelope) bool {
 	// ends takes the event that ended it before it takes the end.
 	switch env.Method {
 	case TargetDetachedFromTarget.name:
-		var d struct {
-			SessionID SessionID `json:"sessionId"`
-		}
+		var d TargetDetachedFromTargetEvent
 		if json.Unmarshal(env.Params, &d) == nil {
 			if child, held := c.sessions[d.SessionID]; held && child != c.browser {
 				c.endSessionLocked(child, &DetachedError{SessionID: d.SessionID, Reason: "detached from its target"})
@@ -682,11 +677,6 @@ func (c *Conn) event(env envelope) bool {
 			_ = json.Unmarshal(env.Params, &d)
 			c.endSessionLocked(s, &DetachedError{SessionID: s.id, Reason: d.Reason})
 			c.forgetLocked(s)
-		}
-	case TargetTargetCrashed.name:
-		var crash TargetTargetCrashedEvent
-		if json.Unmarshal(env.Params, &crash) == nil && crash.TargetID != "" {
-			c.crashLocked(&CrashedError{TargetID: crash.TargetID, Status: crash.Status, ErrorCode: crash.ErrorCode})
 		}
 	case InspectorTargetCrashed.name:
 		if s != c.browser {

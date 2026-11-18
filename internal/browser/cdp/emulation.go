@@ -1,8 +1,8 @@
 package cdp
 
 // EmulationSetDeviceMetricsOverride is Emulation.setDeviceMetricsOverride: a
-// fixed viewport, so screenshots and hit tests read the same pixels. First
-// consumer: perception (internal/browser).
+// fixed viewport, the size a shot is taken at. First consumer: the render's
+// shots (internal/artifactrender).
 var EmulationSetDeviceMetricsOverride = Method[EmulationSetDeviceMetricsOverrideParams, struct{}]{name: "Emulation.setDeviceMetricsOverride"}
 
 // EmulationSetDeviceMetricsOverrideParams is
@@ -15,8 +15,8 @@ type EmulationSetDeviceMetricsOverrideParams struct {
 }
 
 // EmulationSetFocusEmulationEnabled is Emulation.setFocusEmulationEnabled: a
-// background tab keeps its focus, as a seat's tabs all are background ones.
-// First consumer: input.
+// background tab keeps its focus, as a headless tab is one. First consumer:
+// the render's actions.
 var EmulationSetFocusEmulationEnabled = Method[EmulationSetFocusEmulationEnabledParams, struct{}]{name: "Emulation.setFocusEmulationEnabled"}
 
 // EmulationSetFocusEmulationEnabledParams is
@@ -32,7 +32,6 @@ var EmulationSetEmulatedMedia = Method[EmulationSetEmulatedMediaParams, struct{}
 
 // EmulationSetEmulatedMediaParams is Emulation.setEmulatedMedia's parameters.
 type EmulationSetEmulatedMediaParams struct {
-	Media    string         `json:"media,omitempty"`
 	Features []MediaFeature `json:"features,omitempty"`
 }
 

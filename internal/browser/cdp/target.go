@@ -12,18 +12,11 @@ type TargetInfo struct {
 	TargetID TargetID `json:"targetId"`
 	// Type is "page", "iframe", "worker", "shared_worker",
 	// "service_worker", "browser", "tab" or another Chromium names.
-	Type            string   `json:"type"`
-	Title           string   `json:"title"`
-	URL             string   `json:"url"`
-	Attached        bool     `json:"attached"`
-	OpenerID        TargetID `json:"openerId"`
-	CanAccessOpener bool     `json:"canAccessOpener"`
-	OpenerFrameID   FrameID  `json:"openerFrameId"`
-	// ParentFrameID is the frame an out-of-process frame's target sits in,
-	// where its own tree is inlined.
-	ParentFrameID    FrameID          `json:"parentFrameId"`
-	BrowserContextID BrowserContextID `json:"browserContextId"`
-	Subtype          string           `json:"subtype"`
+	Type string `json:"type"`
+	// URL and OpenerID are what the attacher's cases tell the targets they
+	// started apart from the browser's own by.
+	URL      string   `json:"url"`
+	OpenerID TargetID `json:"openerId"`
 }
 
 // TargetFilterEntry is one entry of Target.TargetFilter: a target type to
@@ -49,28 +42,15 @@ type targetSetAutoAttachParams struct {
 	Filter                 []TargetFilterEntry `json:"filter,omitempty"`
 }
 
-// TargetSetDiscoverTargets is Target.setDiscoverTargets: announce every target
-// the browser makes and loses, which Target.targetCrashed rides on. First
-// consumer: the browser session's open sequence (internal/browser).
-var TargetSetDiscoverTargets = Method[TargetSetDiscoverTargetsParams, struct{}]{name: "Target.setDiscoverTargets"}
-
-// TargetSetDiscoverTargetsParams is Target.setDiscoverTargets' parameters.
-type TargetSetDiscoverTargetsParams struct {
-	Discover bool                `json:"discover"`
-	Filter   []TargetFilterEntry `json:"filter,omitempty"`
-}
-
 // TargetCreateBrowserContext is Target.createBrowserContext: a context of its
 // own for a session, its cookies and storage apart from every other's. First
-// consumer: the open sequence.
+// consumer: the render's tab (internal/artifactrender).
 var TargetCreateBrowserContext = Method[TargetCreateBrowserContextParams, TargetCreateBrowserContextResult]{name: "Target.createBrowserContext"}
 
 // TargetCreateBrowserContextParams is Target.createBrowserContext's
 // parameters.
 type TargetCreateBrowserContextParams struct {
-	DisposeOnDetach bool   `json:"disposeOnDetach,omitempty"`
-	ProxyServer     string `json:"proxyServer,omitempty"`
-	ProxyBypassList string `json:"proxyBypassList,omitempty"`
+	DisposeOnDetach bool `json:"disposeOnDetach,omitempty"`
 }
 
 // TargetCreateBrowserContextResult is Target.createBrowserContext's result.
@@ -78,8 +58,8 @@ type TargetCreateBrowserContextResult struct {
 	BrowserContextID BrowserContextID `json:"browserContextId"`
 }
 
-// TargetDisposeBrowserContext is Target.disposeBrowserContext. First consumer:
-// the session's close.
+// TargetDisposeBrowserContext is Target.disposeBrowserContext, which closes
+// every target in the context. First consumer: the render's close.
 var TargetDisposeBrowserContext = Method[TargetDisposeBrowserContextParams, struct{}]{name: "Target.disposeBrowserContext"}
 
 // TargetDisposeBrowserContextParams is Target.disposeBrowserContext's
@@ -88,30 +68,18 @@ type TargetDisposeBrowserContextParams struct {
 	BrowserContextID BrowserContextID `json:"browserContextId"`
 }
 
-// TargetGetBrowserContexts is Target.getBrowserContexts: the contexts a
-// browser holds, so a session refuses one that holds another's. First
-// consumer: the open sequence.
-var TargetGetBrowserContexts = Method[struct{}, TargetGetBrowserContextsResult]{name: "Target.getBrowserContexts"}
-
-// TargetGetBrowserContextsResult is Target.getBrowserContexts' result.
-type TargetGetBrowserContextsResult struct {
-	BrowserContextIDs []BrowserContextID `json:"browserContextIds"`
-}
-
 // TargetCreateTarget is Target.createTarget: a new tab. Under [AutoAttach],
 // open it on about:blank and navigate it once its Setup's answers are in,
 // opening no window from it before then: a tab opened with an address runs
 // before its setup, and a window a tab on about:blank opens can be released
-// by the resume of another held tab sharing its renderer (AutoAttach says
-// what was measured). First consumer: the open sequence and tabs.
+// by the resume of another held tab sharing its renderer (the package doc
+// says what was measured). First consumer: the render's tab.
 var TargetCreateTarget = Method[TargetCreateTargetParams, TargetCreateTargetResult]{name: "Target.createTarget"}
 
 // TargetCreateTargetParams is Target.createTarget's parameters.
 type TargetCreateTargetParams struct {
 	URL              string           `json:"url"`
 	BrowserContextID BrowserContextID `json:"browserContextId,omitempty"`
-	NewWindow        bool             `json:"newWindow,omitempty"`
-	Background       bool             `json:"background,omitempty"`
 }
 
 // TargetCreateTargetResult is Target.createTarget's result.
@@ -119,31 +87,9 @@ type TargetCreateTargetResult struct {
 	TargetID TargetID `json:"targetId"`
 }
 
-// TargetCloseTarget is Target.closeTarget. Its result's success field is
-// deprecated, and not read: a refusal is the error. First consumer: tabs.
-var TargetCloseTarget = Method[TargetCloseTargetParams, struct{}]{name: "Target.closeTarget"}
-
-// TargetCloseTargetParams is Target.closeTarget's parameters.
-type TargetCloseTargetParams struct {
-	TargetID TargetID `json:"targetId"`
-}
-
-// TargetGetTargets is Target.getTargets. First consumer: tabs.
-var TargetGetTargets = Method[TargetGetTargetsParams, TargetGetTargetsResult]{name: "Target.getTargets"}
-
-// TargetGetTargetsParams is Target.getTargets' parameters.
-type TargetGetTargetsParams struct {
-	Filter []TargetFilterEntry `json:"filter,omitempty"`
-}
-
-// TargetGetTargetsResult is Target.getTargets' result.
-type TargetGetTargetsResult struct {
-	TargetInfos []TargetInfo `json:"targetInfos"`
-}
-
 // TargetAttachToTarget is Target.attachToTarget: a session on one target,
 // flat when Flatten is set, announced by Target.attachedToTarget before the
-// answer. First consumer: the open sequence.
+// answer. First consumer: the render's tab.
 var TargetAttachToTarget = Method[TargetAttachToTargetParams, TargetAttachToTargetResult]{name: "Target.attachToTarget"}
 
 // TargetAttachToTargetParams is Target.attachToTarget's parameters.
@@ -155,15 +101,6 @@ type TargetAttachToTargetParams struct {
 // TargetAttachToTargetResult is Target.attachToTarget's result.
 type TargetAttachToTargetResult struct {
 	SessionID SessionID `json:"sessionId"`
-}
-
-// TargetActivateTarget is Target.activateTarget: bring a tab to the front.
-// First consumer: tabs.
-var TargetActivateTarget = Method[TargetActivateTargetParams, struct{}]{name: "Target.activateTarget"}
-
-// TargetActivateTargetParams is Target.activateTarget's parameters.
-type TargetActivateTargetParams struct {
-	TargetID TargetID `json:"targetId"`
 }
 
 // TargetAttachedToTarget is Target.attachedToTarget: a target attached to a
@@ -187,42 +124,4 @@ var TargetDetachedFromTarget = Event[TargetDetachedFromTargetEvent]{name: "Targe
 // TargetDetachedFromTargetEvent is Target.detachedFromTarget's parameters.
 type TargetDetachedFromTargetEvent struct {
 	SessionID SessionID `json:"sessionId"`
-}
-
-// TargetTargetCrashed is Target.targetCrashed: a target's renderer crashed,
-// which ends every session attached to it with a [*CrashedError]. Delivered
-// at the browser level once discovery is on. First consumer: this package's
-// session ends.
-var TargetTargetCrashed = Event[TargetTargetCrashedEvent]{name: "Target.targetCrashed"}
-
-// TargetTargetCrashedEvent is Target.targetCrashed's parameters.
-type TargetTargetCrashedEvent struct {
-	TargetID  TargetID `json:"targetId"`
-	Status    string   `json:"status"`
-	ErrorCode int64    `json:"errorCode"`
-}
-
-// TargetTargetCreated is Target.targetCreated. First consumer: tabs.
-var TargetTargetCreated = Event[TargetTargetCreatedEvent]{name: "Target.targetCreated"}
-
-// TargetTargetCreatedEvent is Target.targetCreated's parameters.
-type TargetTargetCreatedEvent struct {
-	TargetInfo TargetInfo `json:"targetInfo"`
-}
-
-// TargetTargetDestroyed is Target.targetDestroyed. First consumer: tabs.
-var TargetTargetDestroyed = Event[TargetTargetDestroyedEvent]{name: "Target.targetDestroyed"}
-
-// TargetTargetDestroyedEvent is Target.targetDestroyed's parameters.
-type TargetTargetDestroyedEvent struct {
-	TargetID TargetID `json:"targetId"`
-}
-
-// TargetTargetInfoChanged is Target.targetInfoChanged: a target's title or
-// address moved. First consumer: tabs.
-var TargetTargetInfoChanged = Event[TargetTargetInfoChangedEvent]{name: "Target.targetInfoChanged"}
-
-// TargetTargetInfoChangedEvent is Target.targetInfoChanged's parameters.
-type TargetTargetInfoChangedEvent struct {
-	TargetInfo TargetInfo `json:"targetInfo"`
 }

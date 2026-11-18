@@ -12,7 +12,7 @@ type AttachOptions struct {
 	// Filter is the parent's Target.setAutoAttach filter: which types of
 	// target it attaches. Nil or empty is Chromium's own default, every
 	// type but "browser" and "tab": an empty filter is sent as none at all.
-	// One that takes a tab is refused (AutoAttach says why).
+	// One that takes a tab is refused (the package doc says why).
 	Filter []TargetFilterEntry
 	// ChildFilter is every attached child's filter, in turn: which types
 	// a page, a frame or a worker attaches of its own. Nil or empty is
@@ -36,43 +36,18 @@ type AttachOptions struct {
 	// shared worker is announced at the browser's level alone, and a type
 	// neither filter takes is never attached, and runs unheld.
 	ChildFilter []TargetFilterEntry
-	// Setup prepares one target as it is attached: the caller's request
-	// gate, bindings and scripts. It SENDS them, with [Send], in the order
-	// Chromium is to apply them, and returns what it sent: the attacher
-	// resumes a target Chromium holds behind those commands, and waits for
-	// their answers only then. Setup waits for none of them itself while its
-	// target is held, because a page Chromium holds before its renderer
-	// exists — a popup opened with no opener, by window.open's noopener or a
-	// link's target=_blank — answers only what the browser serves until it
-	// has resumed: held for three seconds on both pinned Chromiums, such a
-	// popup answered Fetch.enable and Target.setAutoAttach, and its Runtime,
-	// Page, Network and Emulation commands only once resumed. A Setup that
-	// waited on one would hold its target until [CommandTimeout], and fail.
-	// What Setup sent is in place before its target runs a line: on both
-	// pins such a popup ran its first script with the binding and the script
-	// its Setup had sent. A refusal among the answers is the attacher's
-	// [Attacher.Err], its target running by then without what was refused.
-	//
-	// attached is Chromium's announcement of the target. Its
-	// WaitingForDebugger says whether Chromium holds it: it does for a
-	// target it starts once auto-attach is on, which runs no line before what
-	// Setup sent, and does not for one already running when auto-attach
-	// reached it, which Setup prepares as it runs — it answers at once, so
-	// Setup may wait on it — and refuses, by returning an error, when the
-	// caller must not drive such a target. AutoAttach says which targets are
-	// which, and names the one kind announced as held that is not.
-	//
-	// Setup never makes a target Chromium holds open a window: the popup
-	// would be held inside its opener's window.open, and the attacher's
-	// resume of the opener would release it before its own setup
-	// (AutoAttach). Setup runs for each child on a goroutine of its own,
-	// concurrently across children, with the attacher's context. To stop the
-	// attacher, it returns an error, which leaves its target held. It never
-	// calls [Attacher.Close] or waits on [Attacher.Done]: both wait for every
-	// goroutine the attacher started, Setup's own among them, and so would
-	// wait for ever. Nil sets up nothing. Every Answer it hands back is what
-	// [Send] returned: a nil one stops the attacher, naming the target, as an
-	// error would.
+	// Setup prepares one target as it is attached — the caller's request
+	// gate, bindings and scripts — by SENDING them with [Send], in the order
+	// Chromium is to apply them, and returning what it sent: the attacher
+	// resumes a held target behind them and only then waits for their
+	// answers, a refusal among them being [Attacher.Err] and the target
+	// running without what was refused. It never waits on a target announced
+	// held (attached.WaitingForDebugger), which may answer only once resumed,
+	// and may on one already running; it never makes a held target open a
+	// window. An error it returns, or a nil Answer, refuses the target, left
+	// held, and stops the attacher. It runs per child, concurrently, and never
+	// calls [Attacher.Close] or waits on [Attacher.Done], which wait for it.
+	// Nil sets up nothing; the package doc says what is held, and why.
 	Setup func(ctx context.Context, child *Session, attached TargetAttachedToTargetEvent) ([]Answer, error)
 }
 
@@ -114,8 +89,8 @@ func takes(filter []TargetFilterEntry, kind string) bool {
 
 // Attacher resumes no new target of a session — and, recursively, of each
 // of those, an out-of-process frame's frames and a page's or a worker's
-// workers — until the caller has set it up. It is [AutoAttach]'s, whose doc
-// says which targets Chromium holds until then.
+// workers — until the caller has set it up. It is [AutoAttach]'s; the package
+// doc says which targets Chromium holds until then.
 type Attacher struct {
 	c           *Conn
 	o           AttachOptions
@@ -128,91 +103,18 @@ type Attacher struct {
 	err error
 }
 
-// AutoAttach turns auto-attach on for parent, with Chromium told to hold each
-// new target at its start, and resumes no target it attaches until o.Setup
-// has prepared it. For each one Chromium announces it runs Setup, then turns
-// auto-attach on for the child with o.ChildFilter (nil or empty: Chromium's
-// default without a service worker) — the recursion — and once Chromium has
-// answered that, resumes the child (Runtime.runIfWaitingForDebugger) behind
-// what Setup sent, and only then waits for Setup's answers. So no target
-// Chromium holds runs a line before its setup and its own auto-attach are in
-// place. A Setup that fails, or a child's own auto-attach Chromium refuses,
-// leaves its target held, never resumed, and is the attacher's
-// [Attacher.Err]: the attacher stops, and whoever holds the session ends it.
-//
-// What Chromium holds is each target of these kinds that it starts once
-// auto-attach is on: a page — a popup window.open or a link opens, of its
-// opener's site or another, with an opener or without one, or a tab
-// Target.createTarget opens on about:blank — an out-of-process frame, and a
-// worker of any kind, a frame's own and a worker's own among them. On both
-// pinned Chromiums, with every Setup made to take two seconds, none of them
-// ran a line before its setup (TestAutoAttachHoldsEveryNewTargetUntilItIsSetUp
-// drives every kind named here). Any other kind of target was not measured,
-// and is not known to be held. Two of the ways Chromium holds a page were
-// measured, and the attacher keeps to both:
-//
-//   - A popup window.open opens with an opener is held inside that
-//     window.open, which returns to the opener's script once the popup is
-//     released. A resume on the popup's own session releases it, and so does
-//     one on its OPENER'S: on both pins a running page's popup, held for
-//     three seconds, ran at once when the page was sent
-//     Runtime.runIfWaitingForDebugger, before any setup of its own, while
-//     resuming the page's dedicated, shared or service worker released
-//     nothing. So the attacher resumes only a target Chromium holds, which
-//     has run nothing and so opened nothing, never one already running; the
-//     resume is this package's alone, unexported, so nothing else sends one;
-//     and nothing makes a held target open a window before it is resumed
-//     (AttachOptions.Setup). A resume can release a popup through another page
-//     that shares its opener's renderer, not only through the opener's own
-//     session: on both pins, with Chromium run with
-//     --renderer-process-limit=1, the attacher's resume of a tab created on
-//     about:blank, held and set up in a second, released a popup that a
-//     running about:blank tab held inside window.open, before the popup's own
-//     six-second Setup was done. When the opener was on a site, its popup
-//     waited for its own resume even so, the site's renderer not shared with
-//     the about:blank tab, and so did both when Chromium ran by default, each
-//     tab with a renderer of its own. So a caller never opens a window from a
-//     tab still on about:blank.
-//   - A popup with no opener, and a tab Target.createTarget opens on
-//     about:blank, are held by the browser until a resume reaches their own
-//     session: on both pins a popup with no opener stayed held while the page
-//     that opened it was resumed, and a navigation sent to a held tab waited
-//     for the tab's resume. Such a popup has no renderer while it is held,
-//     which is why Setup sends rather than calls.
-//
-// Two kinds are not held:
-//
-//   - A target already running when auto-attach reaches it — a tab a pool
-//     already had open, the browser's first tab once it has started, and
-//     their frames and workers — is attached as it runs, announced with
-//     WaitingForDebugger false, and its setup comes after whatever it has
-//     run. A caller that must not drive such a target refuses it in Setup,
-//     or closes it and opens a tab of its own. The attacher never resumes
-//     it, so a popup it opens is held until that popup's own setup.
-//   - A tab Target.createTarget opens with an address is announced held, with
-//     WaitingForDebugger true, yet on both pins it ran its first script
-//     before a Setup that took two seconds. Announced held, it is resumed
-//     once its Setup is done, and that resume releases a popup it has opened
-//     meanwhile: on both pins such a tab's popup ran as the tab's two-second
-//     Setup ended, before a Setup of its own that took four. So the caller
-//     creates its tabs on about:blank, and navigates each once its Setup's
-//     answers are in.
-//
-// AutoAttach refuses a Filter that takes tabs, sending nothing. Chromium then
-// announces the page in each tab unheld (WaitingForDebugger false), and the
-// attacher resumes only what Chromium says it holds: on both pins, with
-// auto-attach taking tabs, a page opened from a running tab was announced so
-// under its tab, which was held and resumed, and the page never ran. Taking
-// tabs also had Chromium attach a page's prerender, under its tab, held
-// before it had a renderer, where taking pages, as Chromium's default and the
-// zero AttachOptions do, a page's speculation rules prerender nothing: on
-// both pins the page they named was never requested.
-//
-// The attacher's goroutines end with ctx, with the parent's connection, with
-// a Setup that failed, or with [Attacher.Close]. AutoAttach itself returns
-// once Chromium has answered the parent's Target.setAutoAttach, and refuses,
-// sending nothing, options whose ChildFilter takes a type Chromium announces
-// at more than one level (AttachOptions.ChildFilter says why).
+// AutoAttach turns auto-attach on for parent, Chromium told to hold each new
+// target at its start, and resumes none it attaches until o.Setup has
+// prepared it: for each it runs Setup, turns auto-attach on for the child with
+// o.ChildFilter — the recursion — and once Chromium has answered that resumes
+// the child behind what Setup sent, then waits for Setup's answers. A Setup
+// that fails, or a child's auto-attach Chromium refuses, leaves its target
+// held and stops the attacher ([Attacher.Err]), as ctx, parent's connection
+// and [Attacher.Close] do. It returns once Chromium has answered parent's
+// Target.setAutoAttach, refusing, sending nothing, a Filter that takes tabs
+// and a ChildFilter that takes a type announced at more than one level
+// (AttachOptions.ChildFilter says why). Which targets Chromium holds, as
+// measured, and why a tab is refused are the package doc's.
 func AutoAttach(ctx context.Context, parent *Session, o AttachOptions) (*Attacher, error) {
 	if takes(o.Filter, "tab") {
 		return nil, errors.New("cdp: AttachOptions.Filter takes tab targets: Chromium announces the page in a " +
@@ -349,7 +251,7 @@ func (a *Attacher) hold(ctx context.Context, child *Session, attached TargetAtta
 	}
 	// Only a target Chromium holds is resumed: one already running needs no
 	// resume, and a resume of a page releases every popup it holds, before
-	// that popup's own setup (AutoAttach).
+	// that popup's own setup (the package doc).
 	var resumed *Pending[struct{}]
 	if attached.WaitingForDebugger {
 		resumed = Send(ctx, child, runtimeRunIfWaitingForDebugger, struct{}{})

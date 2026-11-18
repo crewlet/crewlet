@@ -121,17 +121,13 @@ func (c *checker) fail(path, format string, args ...any) {
 // object holds the Go struct t to an object of props, every field by its JSON
 // name. Where the client sends t — a command's parameters, and every object
 // they hold — every property the protocol does not mark optional must also be
-// a field of t, one encoding/json always writes, and never as null: a command
-// lacking a parameter its browser requires is refused on every send; a
-// required field tagged omitempty leaves the wire whenever it holds its zero
-// value — a click at x 0, autoAttach false, a cookie's empty value — and is
-// refused the same way, only on the day a caller sends that zero; and a
-// required field whose zero value encoding/json writes as null — a nil slice,
-// map, pointer or json.RawMessage — is refused as an invalid parameter on that
-// day too (both pins refuse DOMSnapshot.captureSnapshot with computedStyles
-// null, and Storage.setCookies with cookies null), which a List, written as []
-// when nil, never is. What the client only reads may leave out whatever it
-// does not read.
+// a field of t that encoding/json always writes, never as null: a command
+// lacking a required parameter is refused on every send, and one whose
+// required field is omitempty, or written as null at its zero value (a nil
+// slice, map, pointer or json.RawMessage), on the day a caller sends that
+// zero — a click at x 0, autoAttach false (both pins refuse a required list
+// sent as null as an invalid parameter). What the client only reads may leave
+// out whatever it does not read.
 func (c *checker) object(path string, t reflect.Type, props []protocolProperty, domain string, sending bool) {
 	if t.Kind() != reflect.Struct {
 		c.fail(path, "is a Go %s, and the protocol says an object", t.Kind())
@@ -216,8 +212,8 @@ func dropsZero(f reflect.StructField, options string) bool {
 
 // writesNull reports whether encoding/json writes t's zero value as null: a
 // nil slice, map, pointer, interface or json.RawMessage does, unless t's own
-// MarshalJSON writes something else, as a List's does. It asks encoding/json
-// itself rather than restate its rules.
+// MarshalJSON writes something else. It asks encoding/json itself rather than
+// restate its rules.
 func writesNull(t reflect.Type) bool {
 	b, err := json.Marshal(reflect.Zero(t).Interface())
 	return err == nil && string(b) == "null"

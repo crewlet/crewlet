@@ -1,18 +1,19 @@
-// Package cdp is the engine's Chrome DevTools Protocol client: a thin, typed
-// client over one websocket to a browser ([Dial]), with every session flat on
-// that connection.
+// Package cdp is the artifact render's Chrome DevTools Protocol client: a thin,
+// typed client over one websocket to a browser ([Dial]), with every session
+// flat on that connection.
 //
 // # Thin, rather than chromedp or go-rod
 //
-// The engine calls about seventy commands and listens for about thirty events
-// across fifteen domains. chromedp and go-rod each bring a generated surface of
-// the whole protocol and a session model of their own — chromedp's actions on
-// a context it owns, go-rod's pages and its own waits — and the browser's
-// rules (a target held until it is set up, a request decided before it
-// leaves, a crash that fails the calls waiting on it) would be written against
-// their model and around it. So this package declares only what the engine
-// sends and reads, each type holding exactly the fields its consumer reads or
-// sends, by the protocol's own JSON names.
+// The render sends 25 commands and reads 10 events across 9 domains, itself
+// or through this package's own machinery. chromedp and go-rod each bring a
+// generated surface of the whole protocol and a session model of their own —
+// chromedp's actions on a context it owns, go-rod's pages and its own waits —
+// and the rules this package keeps (a target held until it is set up, a
+// request decided before it leaves, a crash that fails the calls waiting on
+// it) would be written against their model and around it. So this package
+// declares only what the render sends and reads, each type holding exactly
+// the fields that the render, this package's machinery or its cases read or
+// send, by the protocol's own JSON names.
 //
 // # Sessions, answers and events
 //
@@ -23,7 +24,11 @@
 // the order it arrived ([Session.Listen], [Listener.Next]). A child's
 // Target.attachedToTarget registers it before it is delivered, so whatever
 // Chromium sends the child next has a session to reach, and [Conn.Session]
-// hands it back from then until Chromium detaches it.
+// hands it back from then until Chromium detaches it; an id it holds no
+// session of comes back as a session that has ended, never registered, since
+// nothing would ever end it. A command's frame waits with its caller until the
+// connection's one writer takes it, never in a queue that would send it after
+// its caller gave up, and a call under a context that has ended sends nothing.
 //
 // A session ends when Chromium detaches it ([*DetachedError]), when its
 // target crashes ([*CrashedError], which Chromium itself would answer with
@@ -57,14 +62,80 @@
 // page also releases every popup it holds, so the attacher resumes only a
 // target Chromium holds, never one already running, and the two commands that
 // hold and release a target, Target.setAutoAttach and
-// Runtime.runIfWaitingForDebugger, are this package's alone. [AutoAttach]
-// says what was measured, that any other kind of target is not known to be
-// held, which two kinds Chromium does not hold — a target already running
-// when auto-attach reached it, which Setup is told of (a pool's open tabs,
-// the browser's first tab once it has started), and a tab created with an
-// address — and why a tab still on about:blank opens no window: the resume of
-// a held tab sharing its renderer can release the popup before the popup's
-// own setup.
+// Runtime.runIfWaitingForDebugger, are this package's alone.
+//
+// What Chromium holds is each target of these kinds that it starts once
+// auto-attach is on: a page — a popup window.open or a link opens, of its
+// opener's site or another, with an opener or without one, or a tab
+// Target.createTarget opens on about:blank — an out-of-process frame, and a
+// worker of any kind, a frame's own and a worker's own among them. On both
+// pinned Chromiums, with every Setup made to take two seconds, none of them
+// ran a line before its setup (TestAutoAttachHoldsEveryNewTargetUntilItIsSetUp
+// drives every kind named here). Any other kind of target was not measured,
+// and is not known to be held. Two of the ways Chromium holds a page were
+// measured, and the attacher keeps to both:
+//
+//   - A popup window.open opens with an opener is held inside that
+//     window.open, which returns to the opener's script once the popup is
+//     released. A resume on the popup's own session releases it, and so does
+//     one on its OPENER'S: on both pins a running page's popup, held for
+//     three seconds, ran at once when the page was sent
+//     Runtime.runIfWaitingForDebugger, before any setup of its own, while
+//     resuming the page's dedicated, shared or service worker released
+//     nothing. So the attacher resumes only a target Chromium holds, which
+//     has run nothing and so opened nothing, and nothing makes a held target
+//     open a window before it is resumed (AttachOptions.Setup). A resume can
+//     release a popup through another page that shares its opener's
+//     renderer, not only through the opener's own session: on both pins,
+//     with Chromium run with --renderer-process-limit=1, the attacher's
+//     resume of a tab created on about:blank, held and set up in a second,
+//     released a popup that a running about:blank tab held inside
+//     window.open, before the popup's own six-second Setup was done. When the
+//     opener was on a site, its popup waited for its own resume even so, the
+//     site's renderer not shared with the about:blank tab, and so did both
+//     when Chromium ran by default, each tab with a renderer of its own. So a
+//     caller never opens a window from a tab still on about:blank.
+//   - A popup with no opener, and a tab Target.createTarget opens on
+//     about:blank, are held by the browser until a resume reaches their own
+//     session: on both pins a popup with no opener stayed held while the page
+//     that opened it was resumed, and a navigation sent to a held tab waited
+//     for the tab's resume. Such a popup has no renderer while it is held,
+//     which is why Setup sends rather than calls: held for three seconds on
+//     both pins, a popup opened by window.open's noopener or a link's
+//     target=_blank answered Fetch.enable and Target.setAutoAttach, and its
+//     Runtime, Page, Network and Emulation commands only once resumed, so a
+//     Setup that waited on one would hold its target until [CommandTimeout],
+//     and fail. What Setup sent is in place before its target runs a line:
+//     such a popup ran its first script with the binding and the script its
+//     Setup had sent.
+//
+// Two kinds are not held:
+//
+//   - A target already running when auto-attach reaches it — a tab opened
+//     before it, the browser's first tab once it has started, and their
+//     frames and workers — is attached as it runs, announced with
+//     WaitingForDebugger false, and its setup comes after whatever it has
+//     run. A caller that must not drive such a target refuses it in Setup,
+//     or closes it and opens a tab of its own. The attacher never resumes
+//     it, so a popup it opens is held until that popup's own setup.
+//   - A tab Target.createTarget opens with an address is announced held, with
+//     WaitingForDebugger true, yet on both pins it ran its first script
+//     before a Setup that took two seconds. Announced held, it is resumed
+//     once its Setup is done, and that resume releases a popup it has opened
+//     meanwhile: on both pins such a tab's popup ran as the tab's two-second
+//     Setup ended, before a Setup of its own that took four. So the caller
+//     creates its tabs on about:blank, and navigates each once its Setup's
+//     answers are in.
+//
+// [AutoAttach] refuses a Filter that takes tabs, sending nothing. Chromium
+// then announces the page in each tab unheld (WaitingForDebugger false), and
+// the attacher resumes only what Chromium says it holds: on both pins, with
+// auto-attach taking tabs, a page opened from a running tab was announced so
+// under its tab, which was held and resumed, and the page never ran. Taking
+// tabs also had Chromium attach a page's prerender, under its tab, held
+// before it had a renderer, where taking pages, as Chromium's default and the
+// zero AttachOptions do, a page's speculation rules prerender nothing: on
+// both pins the page they named was never requested.
 //
 // # The bounds
 //
@@ -79,10 +150,10 @@
 // [MaxConnBacklog], past which the session holding the most ends, so the heap
 // a connection holds is bounded however many sessions it carries. What the
 // browser's own session meets — an event past ReadLimit, a backlog past a
-// bound — ends the connection, so what a page can make arrive there, a
-// request gate's paused requests among it, can end its whole browser, and a
+// bound — ends the connection, so what a page can make arrive there, the
+// requests a gate there pauses among it, can end its whole browser, and a
 // caller that must not let it listens for that on the page's own session
-// instead.
+// instead, as the render does.
 //
 // [ReadLimit] is 16 MiB because the largest answer the render asks for by
 // design is a screenshot of its widest viewport, 1920 by 900 CSS pixels at a
@@ -107,16 +178,13 @@
 // declares needs no newer protocol: every command, event and field of it was
 // described by major 142, read on 2026-11-09 from the devtools-protocol
 // package's description at each major's Chrome for Testing revision, for every
-// major from 138 to 145 and a dozen older ones back to 113 — the newest of it
-// by the protocol's history then being Storage.getStorageKey (142),
-// TargetInfo's parentFrameId (141), Page.navigate's isDownload (140) and
-// Browser.downloadProgress' filePath (139). The suite holds it on every run
-// against the two pinned Chrome for Testing builds, the newest and the floor's
-// own (scripts/chromium-pin.env), reading each one's own description of the
-// protocol against every command, event and field declared here
-// (TestThePinsDescribeEveryMethodTheClientDeclares); a declaration that needs
-// a newer protocol than the floor describes fails it on the floor's arm, and
-// is a reason to raise the floor, argued in internal/browser.
+// major from 138 to 145 and a dozen older ones back to 113. The suite holds
+// it on every run against the two pinned Chrome for Testing builds, the newest
+// and the floor's own (scripts/chromium-pin.env), reading each one's own
+// description of the protocol against every command, event and field declared
+// here (TestThePinsDescribeEveryMethodTheClientDeclares); a declaration that
+// needs a newer protocol than the floor describes fails it on the floor's arm,
+// and is a reason to raise the floor, argued in internal/browser.
 //
 // That proof is complete by construction rather than by review: [Call] and
 // [Send] send, and [Session.Listen] and [Event.Of] read, only an entry of the
@@ -128,14 +196,13 @@
 // no declared one converts to other parameters. A test holds the inventory
 // to the package's declarations both ways; the commands the package's own
 // tests send beside it are registered by a test file, and by no other. Every
-// command anything in the engine can send is one the floor was measured
-// against.
+// command the render can send is one the floor was measured against.
 //
 // # What is never logged
 //
-// A command's parameters can carry a password being typed and a result can
-// carry the cookies of a kept sign-in, so neither is ever logged or put in an
-// error: [*ProtocolError] names the method, Chromium's code and its message,
+// A command's parameters and results carry what a page holds and what the
+// render types into it, so neither is ever logged or put in an error:
+// [*ProtocolError] names the method, Chromium's code and its message,
 // and never its data, which may echo the parameters. The connection logs at
 // DEBUG alone, and only three lines: cdp_answer_unmatched, an answer whose
 // call had gone (at its deadline, or given up by its caller), by the answer's
@@ -148,12 +215,10 @@
 //
 // # What it does not decide
 //
-// Which targets to refuse, what a crash means for a seat, which requests a
-// page may make, and how a page's words are fenced before a model reads them
-// are the browser's to decide, in internal/browser as crewlet/crewlet#804
-// builds it on this package: these protocol types carry no provenance tags,
-// and the browser's own answer types are to declare which of their fields a
-// page controls. The caller's HTTP client is the caller's too
+// Which targets to refuse, what a crash means for a render, which requests a
+// page may make, and what of a page's words reaches a model are the render's
+// to decide (internal/artifactrender): these protocol types carry no
+// provenance tags. The caller's HTTP client is the caller's too
 // ([DialOptions]): this package refuses to dial without one, and never follows
 // a redirect with it.
 package cdp

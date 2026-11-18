@@ -34,8 +34,8 @@ var ErrBacklog = errors.New("cdp: the events waiting for a session's listeners p
 var ErrNoHTTPClient = errors.New("cdp: Dial needs DialOptions.HTTPClient, the caller's own client (internal/httpx)")
 
 // ErrRedirected is a [Dial] whose upgrade was answered with a redirect, which
-// is never followed: a CDP endpoint never redirects, and a followed redirect
-// would carry DialOptions.Header — a pool's credentials — wherever it points.
+// is never followed: a DevTools endpoint never redirects, so one that does is
+// not the browser the caller named.
 var ErrRedirected = errors.New("cdp: the endpoint answered the upgrade with a redirect, which is never followed")
 
 // ErrListenerClosed is a [Listener]'s answer once its own Close has run.
@@ -61,30 +61,23 @@ func (e *DetachedError) Error() string {
 }
 
 // CrashedError ends every session attached to a target whose renderer
-// crashed — Chromium's Target.targetCrashed at the browser level, or
-// Inspector.targetCrashed on one of its sessions — and is the answer of every
-// call in flight on them, which Chromium would otherwise leave unanswered.
+// crashed — Chromium's Inspector.targetCrashed on one of its sessions, the one
+// word of a crash it sends a client that never turns target discovery on — and
+// is the answer of every call in flight on them, which Chromium would
+// otherwise leave unanswered.
 type CrashedError struct {
 	// TargetID is the target that crashed.
 	TargetID TargetID
-	// Status and ErrorCode are Target.targetCrashed's, the renderer's
-	// termination status and exit code; Inspector.targetCrashed carries
-	// neither, and leaves them zero.
-	Status    string
-	ErrorCode int64
 }
 
 func (e *CrashedError) Error() string {
-	if e.Status == "" {
-		return fmt.Sprintf("cdp: target %s crashed", e.TargetID)
-	}
-	return fmt.Sprintf("cdp: target %s crashed (%s, %d)", e.TargetID, e.Status, e.ErrorCode)
+	return fmt.Sprintf("cdp: target %s crashed", e.TargetID)
 }
 
 // ProtocolError is Chromium's refusal of one command: the method, and
 // Chromium's own code and message. It never carries the command's parameters
-// or Chromium's error data, which may echo them: a parameter can be a password
-// being typed or a cookie being restored.
+// or Chromium's error data, which may echo them: a parameter can be what is
+// typed into a page.
 type ProtocolError struct {
 	Method  string
 	Code    int64

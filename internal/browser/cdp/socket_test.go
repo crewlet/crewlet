@@ -45,9 +45,10 @@ func TestTheSocketRefusesADialWithoutAnHTTPClient(t *testing.T) {
 
 // THE SOCKET NEVER FOLLOWS A REDIRECT: an upgrade answered with a 307 to a
 // second server fails with ErrRedirected and the second server sees nothing —
-// a followed redirect would carry the pool's credentials wherever it pointed —
-// while the caller's own client keeps its own redirect policy. The error
-// names the address without its query, where a vendor's token may sit.
+// a DevTools endpoint never redirects, so one that does is not the browser the
+// caller named — while the caller's own client keeps its own redirect policy.
+// The error names the address without its query, where an operator's token
+// may sit.
 //
 // Mutation: drop the copy's CheckRedirect, and the client with no policy of
 // its own follows the redirect to the second server — red.
@@ -81,14 +82,13 @@ func TestTheSocketNeverFollowsARedirect(t *testing.T) {
 		{"a client that would follow", follows},
 		{"a client with a policy of its own", withPolicy},
 	} {
-		_, err := Dial(bounded(t), wsURL(first, "/devtools/browser/x?token=pool-secret"), DialOptions{
+		_, err := Dial(bounded(t), wsURL(first, "/devtools/browser/x?token=token-secret"), DialOptions{
 			HTTPClient: tc.client,
-			Header:     http.Header{"Authorization": {"Bearer pool-secret"}},
 		})
 		if !errors.Is(err, ErrRedirected) {
 			t.Fatalf("%s: the redirected dial answered %v, want ErrRedirected", tc.name, err)
 		}
-		if strings.Contains(err.Error(), "pool-secret") {
+		if strings.Contains(err.Error(), "token-secret") {
 			t.Fatalf("%s: the error names the address's query: %v", tc.name, err)
 		}
 	}
@@ -100,7 +100,7 @@ func TestTheSocketNeverFollowsARedirect(t *testing.T) {
 	}
 }
 
-// A FAILED DIAL NAMES NEITHER ITS QUERY NOR ITS CREDENTIALS: a vendor's
+// A FAILED DIAL NAMES NEITHER ITS QUERY NOR ITS CREDENTIALS: an operator's
 // address may carry a key in either, and a dial that fails — here at a port
 // that refuses it, as one would at a DNS or a TLS failure — answers an error
 // naming the address by its scheme, host and path alone.
@@ -119,12 +119,12 @@ func TestAFailedDialNamesNeitherItsQueryNorItsCredentials(t *testing.T) {
 	if err := ln.Close(); err != nil {
 		t.Fatal(err)
 	}
-	addr := "ws://user:pw-secret@" + refusing + "/devtools/browser/x?token=pool-secret"
+	addr := "ws://user:pw-secret@" + refusing + "/devtools/browser/x?token=token-secret"
 	_, err = Dial(bounded(t), addr, DialOptions{HTTPClient: httpxtest.Pool(t)})
 	if err == nil {
 		t.Fatalf("a dial of %s, which refuses it, succeeded", refusing)
 	}
-	for _, secret := range []string{"pw-secret", "pool-secret"} {
+	for _, secret := range []string{"pw-secret", "token-secret"} {
 		if strings.Contains(err.Error(), secret) {
 			t.Errorf("the failed dial's error names %s: %v", secret, err)
 		}
@@ -171,19 +171,18 @@ func TestAConnectionOutlivesTheContextItWasDialledUnder(t *testing.T) {
 	}
 }
 
-// THE SOCKET SENDS THE CALLER'S HEADER AND HOST on the upgrade: a pool's
-// credentials, and the Host a plain Chromium admits where the caller reached
-// it by a name.
+// THE SOCKET SENDS THE CALLER'S HOST on the upgrade: the Host a plain
+// Chromium admits where the caller reached it by a name.
 //
 // Mutation: drop DialOptions.Host, and the upgrade carries the dialled
 // address as its Host — red.
-func TestTheSocketSendsTheCallersHeaderAndHost(t *testing.T) {
+func TestTheSocketSendsTheCallersHost(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
-	var gotAuth, gotHost string
+	var gotHost string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		gotAuth, gotHost = r.Header.Get("Authorization"), r.Host
+		gotHost = r.Host
 		mu.Unlock()
 		if ws, err := websocket.Accept(w, r, nil); err == nil {
 			_ = ws.CloseNow()
@@ -192,7 +191,6 @@ func TestTheSocketSendsTheCallersHeaderAndHost(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c, err := Dial(bounded(t), wsURL(srv, "/devtools/browser/x"), DialOptions{
 		HTTPClient: srv.Client(),
-		Header:     http.Header{"Authorization": {"Bearer pool-credential"}},
 		Host:       "127.0.0.1:9222",
 	})
 	if err != nil {
@@ -201,7 +199,7 @@ func TestTheSocketSendsTheCallersHeaderAndHost(t *testing.T) {
 	_ = c.Close()
 	mu.Lock()
 	defer mu.Unlock()
-	if gotAuth != "Bearer pool-credential" || gotHost != "127.0.0.1:9222" {
-		t.Fatalf("the upgrade carried Authorization %q and Host %q", gotAuth, gotHost)
+	if gotHost != "127.0.0.1:9222" {
+		t.Fatalf("the upgrade carried Host %q", gotHost)
 	}
 }

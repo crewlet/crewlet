@@ -14,22 +14,16 @@ import (
 
 // EVERY DECLARED METHOD AND EVENT IS IN THE INVENTORY, and every entry is
 // declared: a walk of this package's own files (its tests aside) finds every
-// Method[…]{…} and Event[…]{…} literal, each of which must be name: "…" alone,
-// and the inventory holds exactly those, none twice. So a declaration missing
-// from the inventory fails here, rather than at its first use, where Call,
-// Send, Listen and Of refuse whatever is not an entry, however it was spelled
-// (TestAMethodTheInventoryDoesNotDeclareSendsNothing). And testOnly, which
-// lets the test files' own commands through that refusal, is named in those
-// files twice alone, by its declaration and by the one read that builds what
-// Call, Send, Listen and Of take: no file the engine is built from registers
-// a command the inventory lacks.
+// Method[…]{…} and Event[…]{…} literal, each name: "…" alone, and the inventory
+// holds exactly those, none twice. testOnly, which lets the test files' own
+// commands through Call's, Send's, Listen's and Of's refusal of whatever the
+// inventory lacks, is named in those files twice alone: its declaration, and
+// the one read that builds what they take.
 //
-// Mutations: drop an entry from the inventory, and its declaration is found
-// outside it — red; declare a command unkeyed, Method[P, R]{[0]*P{},
-// [0]*R{}, "IO.close"}, with its entry dropped, and the walk refuses the
-// literal it cannot read — red; register a command from a file of the
-// package's own, func init() { testOnly = append(testOnly, PageClose) },
-// and testOnly is named twice more — red.
+// Mutations, each red: drop an entry from the inventory; declare one unkeyed,
+// Method[P, R]{[0]*P{}, [0]*R{}, "Log.enable"}, its entry dropped; register a
+// command from a file of the package's own, func init() { testOnly =
+// append(testOnly, PageCrash) }.
 func TestEveryDeclaredMethodAndEventIsInTheInventory(t *testing.T) {
 	t.Parallel()
 	entries, err := os.ReadDir(".")
@@ -70,7 +64,9 @@ func TestEveryDeclaredMethodAndEventIsInTheInventory(t *testing.T) {
 			return true
 		})
 	}
-	if files < 10 || len(declared) < 50 {
+	// A walk that read part of the package fails the comparison below; one
+	// that read nothing compares an empty walk with whatever the inventory is.
+	if files < 10 || len(declared) == 0 {
 		t.Fatalf("the walk read %d files and found %d declarations: it is reading nothing", files, len(declared))
 	}
 	// Its declaration and declarations' one read of it, in inventory.go: any

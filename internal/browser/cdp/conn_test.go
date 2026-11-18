@@ -403,14 +403,14 @@ func TestADetachEndsOnlyItsSessionAndFailsItsCallsInFlight(t *testing.T) {
 }
 
 // A CRASH ENDS THE CRASHED TARGET'S SESSIONS, and no other's: Chromium's
-// Target.targetCrashed at the browser level ends every session attached to
-// the target it names with a *CrashedError naming it, and
-// Inspector.targetCrashed on a session ends every session of that session's
-// target. Their calls in flight, which Chromium would never answer, fail with
-// it.
+// Inspector.targetCrashed on one session ends every session attached to that
+// session's target with a *CrashedError naming it, and their calls in flight,
+// which Chromium would never answer, fail with it, as every later call does;
+// a session of another target goes on.
 //
-// Mutation: ignore Inspector.targetCrashed, and the second target's call in
-// flight is never answered — red at the case's bound.
+// Mutations, each red: end only the session the crash arrived on, and the
+// other session of its target waits out the case's bound; end every session,
+// and the other target's call fails rather than take its answer.
 func TestACrashEndsTheCrashedTargetsSessions(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
@@ -419,6 +419,7 @@ func TestACrashEndsTheCrashedTargetsSessions(t *testing.T) {
 	held := announce(ctx, t, c, p, attachment{"one", "first"}, attachment{"two", "first"}, attachment{"three", "second"})
 	one, two, three := held[0], held[1], held[2]
 	calls := map[*Session]chan error{}
+	var threeCall request
 	for _, s := range []*Session{one, two, three} {
 		done := make(chan error, 1)
 		calls[s] = done
@@ -426,34 +427,25 @@ func TestACrashEndsTheCrashedTargetsSessions(t *testing.T) {
 			_, err := Call(ctx, s, testCall, testParams{})
 			done <- err
 		}()
-		p.next()
+		threeCall = p.next()
 	}
-	if err := p.event("", TargetTargetCrashed.name, map[string]any{
-		"targetId": "first", "status": "crashed", "errorCode": 133,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range []*Session{one, two} {
-		var crashed *CrashedError
-		if err := <-calls[s]; !errors.As(err, &crashed) || crashed.TargetID != "first" || crashed.Status != "crashed" {
-			t.Fatalf("session %s's call failed with %v, want a *CrashedError naming target first", s.ID(), err)
-		}
-	}
-	select {
-	case err := <-calls[three]:
-		t.Fatalf("the second target's call ended with %v when the first target crashed", err)
-	default:
-	}
-
-	if err := p.event("three", InspectorTargetCrashed.name, map[string]any{}); err != nil {
+	if err := p.event("one", InspectorTargetCrashed.name, map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
 	var crashed *CrashedError
-	if err := <-calls[three]; !errors.As(err, &crashed) || crashed.TargetID != "second" {
-		t.Fatalf("the second target's call failed with %v, want a *CrashedError naming target second", err)
+	for _, s := range []*Session{one, two} {
+		if err := <-calls[s]; !errors.As(err, &crashed) || crashed.TargetID != "first" {
+			t.Fatalf("session %s's call failed with %v, want a *CrashedError naming target first", s.ID(), err)
+		}
 	}
-	if _, err := Call(ctx, three, testCall, testParams{}); !errors.As(err, &crashed) {
-		t.Fatalf("a call on the crashed session answered %v, want the *CrashedError", err)
+	if _, err := Call(ctx, two, testCall, testParams{}); !errors.As(err, &crashed) {
+		t.Fatalf("a later call on the crashed target's other session answered %v, want the *CrashedError", err)
+	}
+	if err := p.answer(threeCall, testResult{Text: "answered"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-calls[three]; err != nil {
+		t.Fatalf("the second target's call failed with %v when the first target crashed", err)
 	}
 }
 
