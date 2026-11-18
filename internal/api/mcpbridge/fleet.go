@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/config"
@@ -197,7 +195,7 @@ func (b *Bridge) forward(w http.ResponseWriter, r *http.Request, sub subject, f 
 	for attempt := 0; ; attempt++ {
 		owner, err := sub.route.owner, error(nil)
 		if !sub.route.pinned() {
-			owner, err = holderOf(ctx, f.leases, sub.route.seat)
+			owner, err = coord.Holder(ctx, f.leases, coord.SeatResource(sub.route.seat))
 		}
 		switch {
 		case err != nil:
@@ -259,17 +257,4 @@ func (b *Bridge) forward(w http.ResponseWriter, r *http.Request, sub subject, f 
 			return
 		}
 	}
-}
-
-// holderOf is the incarnation a seat's live lease names, or empty while no
-// node holds it.
-func holderOf(ctx context.Context, leases Leases, seat uuid.UUID) (string, error) {
-	lease, err := leases.Get(ctx, coord.SeatResource(seat))
-	if err != nil {
-		return "", err
-	}
-	if lease == nil || !lease.Live(time.Now()) {
-		return "", nil
-	}
-	return lease.Owner, nil
 }

@@ -194,6 +194,11 @@ hours of each other:
   the decider's than that gives a host up early, and writes off the stopped
   run's spend while the host may still be restarting.
 
+Who holds a seat, a duty or a node's presence is not among them, nor how long
+its lease has left on Settings › Nodes and in `fleet_health`: a lease is judged,
+and its time left read, on the coordination store's clock alone, and every node
+takes the store's word for it ([Coordination](../concepts/coordination.md#the-three-valued-answer)).
+
 NTP keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
 

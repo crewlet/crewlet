@@ -1,10 +1,6 @@
 package engine
 
-import (
-	"time"
-
-	"github.com/crewlet/crewlet/internal/agent/builtin"
-)
+import "github.com/crewlet/crewlet/internal/agent/builtin"
 
 // HealthToolDeps are the health tools' dependencies on this node — the fleet's
 // presence leases, the requester ceiling's halves ([turnRequesters],
@@ -23,8 +19,7 @@ func HealthToolDeps(e *Engine) builtin.HealthDeps {
 		return builtin.HealthDeps{}
 	}
 	deps := builtin.HealthDeps{Leases: e.backends.Coord, Self: e.id,
-		Requesters: turnRequesters{engine: e}, Chart: ChartAuthorityOf(e),
-		Now: func() time.Time { return time.Now().UTC() }}
+		Requesters: turnRequesters{engine: e}, Chart: ChartAuthorityOf(e)}
 	if reads := CodeToolDeps(e); reads.Code != nil {
 		deps.Status, deps.Code = e, reads
 	}

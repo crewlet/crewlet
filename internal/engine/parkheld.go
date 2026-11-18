@@ -84,13 +84,12 @@ type heldParks struct {
 	leases holderLeases
 	local  func(seat uuid.UUID) bool
 	budget time.Duration
-	now    func() time.Time
 }
 
 // heldParks is this node's asker and answerer of whether a park holds a seat's
 // inbox.
 func (e *Engine) heldParks() heldParks {
-	p := heldParks{local: e.inboxParkedHere, budget: heldParkBudget, now: time.Now}
+	p := heldParks{local: e.inboxParkedHere, budget: heldParkBudget}
 	if e.node == nil {
 		return p
 	}
@@ -116,19 +115,19 @@ func (p heldParks) parked(ctx context.Context, seat uuid.UUID) (bool, error) {
 	if p.queue == nil || p.leases == nil {
 		return p.local(seat), nil
 	}
-	lease, err := p.leases.Get(ctx, coord.SeatResource(seat))
+	holder, err := coord.Holder(ctx, p.leases, coord.SeatResource(seat))
 	switch {
 	case err != nil:
 		// UNKNOWN, never "held by nobody": an unreadable lease table says
 		// nothing about where the seat is.
 		return false, fmt.Errorf("engine: which node holds seat %s could not be read: %w", seat, err)
-	case lease == nil || !lease.Live(p.now()):
+	case holder == "":
 		// HELD BY NOBODY, and so parked by nobody — see the file comment.
 		return false, nil
-	case lease.Owner == p.owner:
+	case holder == p.owner:
 		return p.local(seat), nil
 	}
-	return p.ask(ctx, lease.Owner, seat)
+	return p.ask(ctx, holder, seat)
 }
 
 // ask puts the question to owner, the incarnation holding seat, and reads its

@@ -199,7 +199,7 @@ func TestAnAskBehindAParkIsOwedOnWhicheverNodeTheSweepRuns(t *testing.T) {
 	heldBy := func(owner string, budget time.Duration) colleagueOwed {
 		return colleagueOwed{engine: duty.e, runs: fakeSeatRuns{}, parks: heldParks{owner: "node-b:1",
 			queue: q, leases: leaseTable{lease: &coord.Lease{Owner: owner, ExpiresAt: time.Now().Add(time.Minute)}},
-			local: duty.e.inboxParkedHere, budget: budget, now: time.Now}}
+			local: duty.e.inboxParkedHere, budget: budget}}
 	}
 
 	alone := colleagueOwed{engine: duty.e, runs: fakeSeatRuns{}}

@@ -56,7 +56,13 @@ type member struct {
 // holder.
 func newFleet(t *testing.T, n int, holderWait time.Duration) *fleetOf {
 	t.Helper()
-	f := &fleetOf{broker: memory.NewBroker(), leases: coordmemory.New(), held: map[string]*coord.Lease{}}
+	return newFleetOn(t, coordmemory.New(), n, holderWait)
+}
+
+// newFleetOn is [newFleet] over leases, the lease table its members share.
+func newFleetOn(t *testing.T, leases *coordmemory.Backend, n int, holderWait time.Duration) *fleetOf {
+	t.Helper()
+	f := &fleetOf{broker: memory.NewBroker(), leases: leases, held: map[string]*coord.Lease{}}
 	servers := make([]*httptest.Server, n)
 	muxes := make([]*http.ServeMux, n)
 	for i := range n {
@@ -248,6 +254,33 @@ func TestARunWhoseSeatMovedIsServedByItsNewHolder(t *testing.T) {
 	rows := recovered.rows()
 	if len(rows) != 1 || rows[0].Name != "post_message" || rows[0].Seq != 2 {
 		t.Errorf("the new holder recorded %+v, want the box's call as the run's second", rows)
+	}
+}
+
+// A BOX'S CALL IS RELAYED TO ITS SEAT'S HOLDER FROM A NODE WHOSE CLOCK RUNS
+// AHEAD of the lease table's by ninety seconds, so the seat's one-minute lease
+// is live by the store and past its deadline on the entry's clock. The entry
+// takes the store's word and relays the call (the coord package doc, "A lease
+// a read hands out is the store's word").
+//
+// Mutation: judge the lease on the entry's own clock (Bridge.forward), and the
+// call waits out its holder wait for a holder it never finds.
+func TestABoxsCallIsRelayedToItsHolderFromANodeWhoseClockRunsAhead(t *testing.T) {
+	t.Parallel()
+	fx := newFixture(t)
+	f := newFleetOn(t, &coordmemory.Backend{
+		Clock: func() time.Time { return time.Now().Add(-90 * time.Second) },
+	}, 2, 10*time.Second)
+	url := f.takeOver(t, f.members[1], &mcpbridge.Session{RunID: "run-1", Launch: "job-1",
+		Handle: "dev", Role: "Engineer", Surface: fx.surface, Ledger: fx.ledger})
+	if !strings.HasPrefix(url, f.members[0].server.URL) {
+		t.Fatalf("the endpoint %q is not the fleet's address", url)
+	}
+	if res := callTool(t, dialWith(t, url, nil), "read_page", map[string]any{}); res.IsError {
+		t.Fatalf("the call through the entry was refused: %s", text(res))
+	}
+	if rows := fx.ledger.rows(); len(rows) != 1 || rows[0].Name != "read_page" {
+		t.Errorf("the holder recorded %+v, want the box's one call", rows)
 	}
 }
 

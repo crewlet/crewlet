@@ -121,16 +121,6 @@ type Reader struct {
 
 	// Budget bounds a peer's answer; zero is [DefaultBudget].
 	Budget time.Duration
-
-	// Now judges a lease's liveness; nil is the wall clock.
-	Now func() time.Time
-}
-
-func (r *Reader) now() time.Time {
-	if r.Now != nil {
-		return r.Now().UTC()
-	}
-	return time.Now().UTC()
 }
 
 func (r *Reader) budget() time.Duration {
@@ -201,24 +191,24 @@ func (r *Reader) read(ctx context.Context, req request, out any,
 	if r.Queue == nil {
 		return answerHere()
 	}
-	lease, err := r.Leases.Get(ctx, coord.SeatResource(req.Seat.ID))
+	holder, err := coord.Holder(ctx, r.Leases, coord.SeatResource(req.Seat.ID))
 	if err != nil {
 		// UNKNOWN, never "held by nobody": an unreadable lease table says
 		// nothing about where the seat is.
 		return "", fmt.Errorf("%w: which node holds %s could not be read: %w",
 			ErrUnavailable, req.Seat.Handle, err)
 	}
-	if lease == nil || !lease.Live(r.now()) {
+	if holder == "" {
 		return "", nil
 	}
-	if lease.Owner == r.Owner {
+	if holder == r.Owner {
 		if !slices.Contains(r.Attached(), req.Seat.ID) {
 			return "", fmt.Errorf("%w: this node is taking %s and its memory is still "+
 				"arriving — ask again in a moment", ErrUnavailable, req.Seat.Handle)
 		}
 		return answerHere()
 	}
-	return r.ask(ctx, req, lease.Owner, out)
+	return r.ask(ctx, req, holder, out)
 }
 
 // ask puts one read to the incarnation holding the seat.

@@ -40,16 +40,16 @@ func (onlyClaude) Restores(archive sandbox.SessionArchive) (bool, string) {
 
 // THE NODE HOLDING THE SEAT IS ASKED WHAT A RELAUNCH OF ITS TURNS IS LAUNCHED
 // ON, its bench and each turn's revision being its own: a reader elsewhere asks
-// the incarnation the lease names once for every session, each with its turn,
-// and gets that node's pick per turn (harness, cell, node, kept sessions, why)
-// and its runner's answer, never its own pick; a holder answers itself. What
-// cannot be said is undecided, never a no: an unreadable lease, an unheld seat,
-// a silent holder, and a holder's own undecided pick, crossing with its reason.
-// A question addressed to another incarnation is not answered.
+// the incarnation the lease names, whatever its own clock says of the lease,
+// once for every session, and gets that node's pick per turn (harness, cell,
+// node, kept sessions, why) and its runner's answer; a holder answers itself.
+// What cannot be said is undecided, never a no: an unreadable lease, an unheld
+// seat, a silent holder, a holder's own undecided pick with its reason.
 //
 // Mutation: answer with the reader's own pick or one pick for every turn, drop
-// a reply field (undecided or its reason included), reorder the sessions, read
-// an unreadable lease as unheld, or answer a question addressed elsewhere: red.
+// a reply field (undecided or its reason included), reorder the sessions, judge
+// the lease on the reader's clock, read an unreadable lease as unheld, or
+// answer a question addressed to another incarnation: red.
 func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -84,8 +84,7 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 	}
 	reader := func(leases leaseTable) relaunchTargets {
 		return relaunchTargets{owner: "node-b:1", queue: q, leases: leases,
-			local: func(string, string) sandbox.RelaunchTarget { return own }, budget: 2 * time.Second,
-			now: time.Now}
+			local: func(string, string) sandbox.RelaunchTarget { return own }, budget: 2 * time.Second}
 	}
 	claude := sandbox.SessionArchive{Harness: "claude-code", SessionID: "s-1", Format: 1, Version: "2.1.310"}
 	other := sandbox.SessionArchive{Harness: "opencode", SessionID: "ses_1", Format: 1, Version: "2.2.5"}
@@ -132,12 +131,18 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 		budget    time.Duration
 		undecided bool
 		why       string
+		// node is whose pick the target is: the holder's, the reader's own,
+		// or nobody's where it cannot be said.
+		node string
 	}{
-		"the reader holds the seat": {leases: live("node-b:1"), why: "the reader's own pick"},
+		"the reader holds the seat": {leases: live("node-b:1"), why: "the reader's own pick", node: "node-b"},
 		"a lease table that cannot be read": {leases: leaseTable{err: errors.New("the store is down")},
 			undecided: true, why: "could not be read"},
-		"a seat no node holds": {leases: leaseTable{lease: &coord.Lease{Owner: "node-a:1",
-			ExpiresAt: time.Now().Add(-time.Minute)}}, undecided: true, why: "no node holds the seat"},
+		"a seat no node holds": {leases: leaseTable{}, undecided: true, why: "no node holds the seat"},
+		// THE STORE'S WORD: it handed the lease out live, and its deadline
+		// is past only on the reader's clock, which runs ahead of the store's.
+		"a seat held, read on a clock running ahead": {leases: leaseTable{lease: &coord.Lease{
+			Owner: "node-a:1", ExpiresAt: time.Now().Add(-time.Minute)}}, node: "node-a"},
 		"a holder that does not answer": {leases: live("node-c:1"), budget: 200 * time.Millisecond,
 			undecided: true, why: "did not say"},
 	} {
@@ -152,9 +157,9 @@ func TestTheNodeHoldingTheSeatIsAskedWhatARelaunchIsLaunchedOn(t *testing.T) {
 			continue
 		}
 		for _, target := range got {
-			if target.Undecided != tc.undecided || !strings.Contains(target.Why, tc.why) {
-				t.Errorf("%s: the reader was answered %+v, want undecided %v saying %q", name, target,
-					tc.undecided, tc.why)
+			if target.Undecided != tc.undecided || !strings.Contains(target.Why, tc.why) || target.Node != tc.node {
+				t.Errorf("%s: the reader was answered %+v, want undecided %v saying %q, %q's pick", name, target,
+					tc.undecided, tc.why, tc.node)
 			}
 		}
 	}

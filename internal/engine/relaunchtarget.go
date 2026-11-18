@@ -123,7 +123,7 @@ func (e *Engine) RelaunchTargets(ctx context.Context, seat uuid.UUID, handle str
 // relaunchTargets is this node as it asks, and answers, what a relaunch of a
 // seat's turn would be launched on.
 func (e *Engine) relaunchTargets() relaunchTargets {
-	r := relaunchTargets{local: e.localRelaunchTarget, budget: relaunchTargetBudget, now: time.Now}
+	r := relaunchTargets{local: e.localRelaunchTarget, budget: relaunchTargetBudget}
 	if e.node == nil {
 		return r
 	}
@@ -159,7 +159,6 @@ type relaunchTargets struct {
 	leases holderLeases
 	local  func(handle, turn string) sandbox.RelaunchTarget
 	budget time.Duration
-	now    func() time.Time
 }
 
 // targets is [Engine.RelaunchTargets]' answer.
@@ -172,19 +171,19 @@ func (r relaunchTargets) targets(ctx context.Context, seat uuid.UUID, handle str
 	if r.queue == nil || r.leases == nil {
 		return r.locals(handle, asks)
 	}
-	lease, err := r.leases.Get(ctx, coord.SeatResource(seat))
+	holder, err := coord.Holder(ctx, r.leases, coord.SeatResource(seat))
 	switch {
 	case err != nil:
 		// UNKNOWN, never "held by nobody": an unreadable lease says nothing
 		// about where the seat is.
 		return undecidedRelaunches(len(asks), fmt.Sprintf("which node holds the seat could not be read: %v", err))
-	case lease == nil || !lease.Live(r.now()):
+	case holder == "":
 		return undecidedRelaunches(len(asks), "no node holds the seat now, and the node that takes it decides "+
 			"what a launch of its turns is launched on")
-	case lease.Owner == r.owner:
+	case holder == r.owner:
 		return r.locals(handle, asks)
 	}
-	return r.ask(ctx, lease.Owner, handle, asks)
+	return r.ask(ctx, holder, handle, asks)
 }
 
 // locals is this node's own pick for each ask.

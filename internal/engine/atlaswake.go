@@ -136,11 +136,11 @@ func (e *Engine) seatTakesWork(ctx context.Context, handle string) (bool, error)
 		return false, nil
 	}
 	if e.backends != nil && e.backends.Coord != nil {
-		lease, err := e.backends.Coord.Get(ctx, coord.SeatResource(id))
+		holder, err := coord.Holder(ctx, e.backends.Coord, coord.SeatResource(id))
 		if err != nil {
 			return false, fmt.Errorf("engine: which node holds %s could not be read: %w", handle, err)
 		}
-		if lease == nil || !lease.Live(time.Now()) {
+		if holder == "" {
 			return false, nil
 		}
 	}

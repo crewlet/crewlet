@@ -126,6 +126,37 @@
 // from its own copy until it notices, while every write through it fails).
 // The memory twin has one copy and meets it trivially.
 //
+// # A lease a read hands out is the store's word
+//
+// Get, ListLive and ListOwned hand out only leases that were live by the
+// STORE's clock as it read them, and a reader acts on each as it is: who holds
+// a resource is the owner Get names ([Holder]). Judging the lease again, its
+// ExpiresAt against the reader's own clock, turns the store's "held" into a
+// "not held" nobody said, on every node whose clock runs ahead of the store's
+// by more than a lease's remaining time — at most its TTL, 45 s for a seat at
+// the default — while a node and the broker member leading the bucket may each
+// stand an hour from the fleet's clock, two hours from each other, before
+// anything raises clock_skew (objstore.AssumedClockSkew). Such a node finds no
+// holder for any seat, so it relays a box's call to nobody and asks no holder
+// what only the holder can answer.
+//
+// How long a lease has left is the store's reading too: its ExpiresAt less the
+// store's own clock ([Backend.Now]), which [TimeLeft] reads. Held against the
+// reader's clock instead, every lease reads as run out on a node whose clock
+// runs ahead of the store's by more than its TTL, and a 45-second lease as
+// having an hour on a node an hour behind. The clock is read for a class,
+// because a store need not keep one for every class: coord/kv keeps seats and
+// presence in one bucket and every other class in another, each lease on its
+// own bucket's clock.
+//
+// So a reader never reads a lease's deadline itself: a backend judges a record
+// on its own clock, and [TimeLeft] is the one reading of a deadline outside a
+// backend, against the store's clock.
+// TestNoNodeJudgesALeaseTheStoreHandedOutOnItsOwnClock refuses a selection of
+// [Lease.ExpiresAt] in every non-test file but a backend's (coord/kv's,
+// coord/memory's), the contract suite's (coordtest) and [TimeLeft]'s, and Lease
+// has no method that judges one.
+//
 // # Why coordination is not itself a replicated log
 //
 // The engine grows a durable-state framework — internal/statelog — whose
@@ -317,8 +348,9 @@ func (claimInFlight) Is(target error) bool { return target == ErrUnavailable }
 
 // ErrTTLTooLong reports a claim or renew asking for a TTL the store cannot
 // honour. An error, never a [Refusal] (nobody else holds the resource), and
-// never a silent clamp: a heartbeat schedules from [Lease.ExpiresAt], so a
-// deadline quietly cut short has the holder renewing too late.
+// never a silent clamp: a holder renews and counts on its lease from the TTL
+// it asked for ([ExclusiveThrough]), so a deadline quietly cut short has it
+// renewing too late and counting on a lease that has lapsed.
 var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 
 // MaxDutyTTL is the longest TTL a lease outside seats and presence
@@ -399,10 +431,12 @@ type Lease struct {
 	Owner    string
 	Epoch    int64
 
-	// ExpiresAt is the UTC deadline as the STORE understands it. A
-	// heartbeat computes its next tick from this. It is the store's
-	// clock, never the caller's: nodes must never compare their own wall
-	// clocks to decide ownership.
+	// ExpiresAt is the UTC deadline as the STORE understands it, on the
+	// store's clock and never the caller's: a node never holds it against its
+	// own clock, to decide ownership or to say how long a lease has left. A
+	// holder renews and counts on its lease from the TTL it asked for
+	// ([ExclusiveThrough]); a reader takes a lease a read handed out as live
+	// ([Holder]) and reads its time left on the store's clock ([TimeLeft]).
 	ExpiresAt time.Time
 
 	// AcquiredAt is when THIS TENURE began, on the store's clock: stamped
@@ -443,13 +477,6 @@ func (o AcquireOptions) EffectiveProtocol() int {
 		return ProtocolVersion
 	}
 	return o.Protocol
-}
-
-// Live reports whether the lease is unexpired relative to a store-supplied
-// now. Callers that have a Lease from the store already know it was live
-// when read; this exists for backends and tests reasoning about records.
-func (l Lease) Live(now time.Time) bool {
-	return l.ExpiresAt.After(now)
 }
 
 // AcquireOptions carries the non-identity inputs to a claim.
@@ -528,16 +555,30 @@ type Backend interface {
 	// from the released tenure is still fencing with.
 	Release(ctx context.Context, resource, owner string, epoch int64) (bool, error)
 
-	// Get reads a resource's current lease, or nil when unheld.
+	// Get reads a resource's current lease, or nil when unheld: a lapsed or
+	// released record reads as nil. A lease it hands out is LIVE, judged on
+	// the store's clock as it read the record, and the reader takes the
+	// store's word ([Holder]): it never judges ExpiresAt on its own clock,
+	// which may run ahead of the store's by more than any lease's TTL (the
+	// package doc, "A lease a read hands out is the store's word").
 	Get(ctx context.Context, resource string) (*Lease, error)
 
-	// ListOwned returns the live leases this owner holds.
+	// ListOwned returns the live leases this owner holds, each live by the
+	// store's word as Get's is.
 	ListOwned(ctx context.Context, owner string) ([]Lease, error)
 
-	// ListLive returns the live leases of one resource class. The
-	// membership read is built on this: ListLive(ClassNode) is the fleet's
-	// roster.
+	// ListLive returns the live leases of one resource class, each live by
+	// the store's word as Get's is: a reader judges none of them again on
+	// its own clock. The membership read is built on this: ListLive(ClassNode)
+	// is the fleet's roster.
 	ListLive(ctx context.Context, class Class) ([]Lease, error)
+
+	// Now reads the STORE's clock for class: the clock that class's
+	// ExpiresAt is on, and so the one a reader holds a deadline against to
+	// say how long a lease has left ([TimeLeft]), never its own. Two classes
+	// need not share one (the package doc, "A lease a read hands out is the
+	// store's word").
+	Now(ctx context.Context, class Class) (time.Time, error)
 
 	// WatchLive streams every write to a lease of class made after it
 	// returns (claim, renewal, takeover, release) as a [LeaseWrite], in

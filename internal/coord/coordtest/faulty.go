@@ -107,6 +107,14 @@ func (f *Faulty) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease
 	return f.inner.ListLive(ctx, class)
 }
 
+// Now delegates, or fails with the configured error.
+func (f *Faulty) Now(ctx context.Context, class coord.Class) (time.Time, error) {
+	if err := f.fault(); err != nil {
+		return time.Time{}, err
+	}
+	return f.inner.Now(ctx, class)
+}
+
 // WatchLive delegates, or fails with the configured error. A watch already
 // running is the backend's, and a Break does not reach it: an outage ends a
 // real watch by closing it, which only the backend can do.

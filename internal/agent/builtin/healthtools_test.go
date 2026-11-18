@@ -486,6 +486,49 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 	}
 }
 
+// A NODE'S TIME LEFT IS THE STORE'S READING, whatever this node's clock says:
+// the lease table's clock stands ninety seconds behind this node's, so a
+// one-minute presence is past its deadline here, and fleet_health still gives
+// it its minute rather than call it running out (the coord package doc, "A
+// lease a read hands out is the store's word"). A store whose clock cannot be
+// read leaves the countdown out, never at 0, and keeps the node.
+//
+// Mutation: hold the deadline against this node's clock in fleet_health, and the
+// node reads 0; give an unreadable clock's node 0, and it reads it.
+func TestFleetHealthReadsANodesTimeLeftOnTheStoresClock(t *testing.T) {
+	t.Parallel()
+	behind := time.Now().Add(-90 * time.Second)
+	backend := &coordmem.Backend{Clock: func() time.Time { return behind }}
+	node(t, backend, "node-a", nil, nil)
+	_, chart := healthChart(t)
+	for name, tc := range map[string]struct {
+		leases builtin.LeaseLister
+		want   any
+	}{
+		"read on the store's clock":          {leases: backend, want: float64(60)},
+		"a store whose clock cannot be read": {leases: clocklessLeases{backend}},
+	} {
+		catalogue := healthTools(healthFleet(tc.leases, chart), chart)
+		answer := healthAnswer(t, callTool(asAdmin(), t, catalogue[builtin.FleetHealthTool], nil))
+		nodes, _ := answer["nodes"].([]any)
+		if len(nodes) != 1 {
+			t.Fatalf("%s: %d nodes, want node-a: %v", name, len(nodes), answer)
+		}
+		got, present := nodes[0].(map[string]any)["expires_in"]
+		if present != (tc.want != nil) || got != tc.want {
+			t.Errorf("%s: node-a's expires_in is %v (present %v), want %v", name, got, present, tc.want)
+		}
+	}
+}
+
+// clocklessLeases is a lease table whose listings answer and whose clock does
+// not: a store blip between the call's two reads.
+type clocklessLeases struct{ builtin.LeaseLister }
+
+func (clocklessLeases) Now(context.Context, coord.Class) (time.Time, error) {
+	return time.Time{}, coord.ErrUnavailable
+}
+
 // A SEAT GRANT ADMITS ONLY ITS GRANTED SEATS, and a surface offers the health
 // tools exactly where the table admits.
 //

@@ -372,6 +372,59 @@ func TestFleetReadsTheLeaseTable(t *testing.T) {
 	}
 }
 
+// EVERY ROW'S TIME LEFT IS THE STORE'S READING, whatever this node's clock says:
+// the lease table's clock stands ninety seconds behind this node's, so each
+// one-minute lease is past its deadline here, and each node, seat and duty row
+// still has its minute (the coord package doc, "A lease a read hands out is the
+// store's word"). A store whose clock cannot be read leaves every countdown out,
+// never at 0, and keeps the rows.
+//
+// Mutation: hold a deadline against this node's clock in fleet, and every row
+// reads 0; give an unreadable clock's rows 0, and they read it.
+func TestEveryFleetRowsTimeLeftIsTheStoresReading(t *testing.T) {
+	t.Parallel()
+	behind := time.Now().Add(-90 * time.Second)
+	backend := &coordmemory.Backend{Clock: func() time.Time { return behind }}
+	cfg := company(t)
+	for _, resource := range []string{coord.NodeResource("node-a"), seatLease(t, cfg, "ceo"),
+		coord.WorkerResource("scheduler")} {
+		if _, _, err := backend.TryAcquire(t.Context(), resource, coord.AcquireOptions{
+			Owner: "node-a:1", TTL: time.Minute,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		coord coord.Backend
+		want  any
+	}{
+		"read on the store's clock":          {coord: backend, want: float64(60)},
+		"a store whose clock cannot be read": {coord: clocklessCoord{backend}},
+	} {
+		body := asMap(t, answer(t, queries.Sources{Coord: tc.coord, NodeID: "node-a",
+			Company: companySource(t, cfg), Now: time.Now}, "fleet", nil))
+		for _, list := range []string{"nodes", "seats", "duties"} {
+			rows, _ := body[list].([]any)
+			if len(rows) != 1 {
+				t.Fatalf("%s: %d %s, want 1: %v", name, len(rows), list, body)
+			}
+			got, present := rows[0].(map[string]any)["expires_in"]
+			if present != (tc.want != nil) || got != tc.want {
+				t.Errorf("%s: the %s row's expires_in is %v (present %v), want %v", name, list, got,
+					present, tc.want)
+			}
+		}
+	}
+}
+
+// clocklessCoord is a lease table whose listings answer and whose clock does
+// not: a store blip between two of one answer's reads.
+type clocklessCoord struct{ coord.Backend }
+
+func (clocklessCoord) Now(context.Context, coord.Class) (time.Time, error) {
+	return time.Time{}, coord.ErrUnavailable
+}
+
 // EACH NODE ROW SAYS WHAT ITS BROKER IS, off the node's own presence: a member,
 // a leaf or a client — and `unknown` for a presence that does not say or names
 // a kind this build does not know. Never an empty cell, and never a guess

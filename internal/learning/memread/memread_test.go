@@ -219,6 +219,39 @@ func TestANonHolderReadsTheHoldersMemory(t *testing.T) {
 	}
 }
 
+// A SEAT IS READ FROM ITS HOLDER WHATEVER THE READER'S CLOCK SAYS of its lease:
+// the lease table's clock runs ninety seconds behind the readers', so @swe's
+// one-minute lease is live by the store and past its deadline on node-b's
+// clock. A read of its memory and the overview are both answered by node-a
+// (the coord package doc, "A lease a read hands out is the store's word").
+//
+// Mutation: judge the lease on the reader's clock, in Reader.read or in
+// Reader.Overview, and that read answers @swe as held by nobody.
+func TestASeatIsReadFromItsHolderWhateverTheReadersClock(t *testing.T) {
+	t.Parallel()
+	f := &fleet{broker: memory.NewBroker(), leases: &coordmemory.Backend{
+		Clock: func() time.Time { return time.Now().Add(-90 * time.Second) },
+	}}
+	a, b := newNode(t, "node-a:1"), newNode(t, "node-b:1")
+	a.remember(t, "swe", "current", 3)
+	f.hold(t, "swe", a.owner)
+	f.reader(t, a, "swe")
+	readB := f.reader(t, b)
+
+	got, err := readB.Memory(t.Context(), seatOf("swe"), memread.MemoryQuery{})
+	if err != nil || got.HeldBy != "node-a" || got.DiaryTotal != 3 {
+		t.Errorf("@swe's memory read from node-b is held by %q with %d notes (%v), want node-a's 3",
+			got.HeldBy, got.DiaryTotal, err)
+	}
+	overview, err := readB.Overview(t.Context(), seatsOf("swe"))
+	if err != nil {
+		t.Fatalf("Overview: %v", err)
+	}
+	if row := overview.Seats[0]; row.HeldBy != "node-a" || row.DiaryTotal != 3 {
+		t.Errorf("@swe's overview row is %+v, want node-a's 3 notes", row)
+	}
+}
+
 // A SEAT NO NODE HOLDS HAS NO CURRENT COPY, and none is shown.
 //
 // This node's disk has @swe's rows from the last time it ran the seat. They are

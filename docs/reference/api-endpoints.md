@@ -12831,6 +12831,13 @@ tenure's start, stamped when the lease's `epoch` was minted and carried
 unchanged through every renewal, so it moves exactly when `epoch` does: on
 a takeover, and on the same node re-claiming after its own lease lapsed.
 
+Every node, seat and duty row carries `expires_in` — **how long its lease
+has left**, in whole seconds, read on the coordination store's clock and
+never on the serving node's, which can stand hours from it
+([Coordination](../concepts/coordination.md#the-three-valued-answer)). It is
+absent, never `0`, where that clock could not be read just now: a `0` reads
+as a holder that stopped renewing.
+
 Each node row carries `alarms` — **what is firing on that node**, off the
 same heartbeat: every [alarm](alarms.md) its own table has up, one entry per
 kind, each `{"kind", "since", "title", "person"}`, `since` being when the

@@ -41,7 +41,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		live[class] = leases
 	}
 	nodes, seats, duties := live[coord.ClassNode], live[coord.ClassSeat], live[coord.ClassWorker]
-	now := s.clock()
+	clocks := s.leaseClocks(ctx, live)
 
 	held := map[string]int{}
 	seatRows := make([]map[string]any, 0, len(seats))
@@ -50,16 +50,16 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		node := nodeOf(lease.Owner)
 		held[node]++
 		row := map[string]any{
-			"handle":     seatHandleOf(byID, lease.Resource),
-			"node":       node,
-			"owner":      lease.Owner,
-			"epoch":      lease.Epoch,
-			"expires_in": secondsLeft(lease.ExpiresAt, now),
+			"handle": seatHandleOf(byID, lease.Resource),
+			"node":   node,
+			"owner":  lease.Owner,
+			"epoch":  lease.Epoch,
 			// SINCE WHEN this node has held it: the tenure's start, which
 			// a renewal does not move, so "node-2 since 08:02" means the
 			// seat has not moved since 08:02.
 			"acquired_at": isoOrEmpty(lease.AcquiredAt),
 		}
+		clocks.expiresIn(row, coord.ClassSeat, lease)
 		seatRows = append(seatRows, row)
 	}
 	slices.SortFunc(seatRows, func(a, b map[string]any) int {
@@ -81,13 +81,13 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			// `unknown` for a kind this build does not know (a newer
 			// build's) — which the roles no longer imply: a node's broker
 			// is what its stream block makes it.
-			"broker":     profile.Broker.String(),
-			"labels":     profile.Labels,
-			"owner":      lease.Owner,
-			"protocol":   lease.Protocol,
-			"seats":      held[id],
-			"expires_in": secondsLeft(lease.ExpiresAt, now),
+			"broker":   profile.Broker.String(),
+			"labels":   profile.Labels,
+			"owner":    lease.Owner,
+			"protocol": lease.Protocol,
+			"seats":    held[id],
 		}
+		clocks.expiresIn(row, coord.ClassNode, lease)
 		status := applied[id]
 		row["config_epoch"] = status.Epoch
 		row["config_status"] = status.Status
@@ -216,11 +216,12 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 
 	dutyRows := make([]map[string]any, 0, len(duties))
 	for _, lease := range duties {
-		dutyRows = append(dutyRows, map[string]any{
-			"duty":       nameIn(coord.ClassWorker, lease.Resource),
-			"node":       nodeOf(lease.Owner),
-			"expires_in": secondsLeft(lease.ExpiresAt, now),
-		})
+		row := map[string]any{
+			"duty": nameIn(coord.ClassWorker, lease.Resource),
+			"node": nodeOf(lease.Owner),
+		}
+		clocks.expiresIn(row, coord.ClassWorker, lease)
+		dutyRows = append(dutyRows, row)
 	}
 	slices.SortFunc(dutyRows, func(a, b map[string]any) int {
 		return cmp.Compare(a["duty"].(string), b["duty"].(string))
@@ -291,6 +292,39 @@ func (s Sources) applyStatus(ctx context.Context) map[string]coord.NodeApply {
 		out[row.NodeID] = row
 	}
 	return out
+}
+
+// leaseClocks is how long each listed class's leases have left, read on the
+// STORE's clock for the class ([coord.TimeLeft]), never this node's: on a node
+// whose clock runs ahead of the store's every lease would read as running out.
+type leaseClocks map[coord.Class]func(coord.Lease) time.Duration
+
+// leaseClocks reads the store's clock for each class live lists a lease of.
+// DEGRADES as [Sources.applyStatus] does: a class whose clock cannot be read
+// loses its countdown and keeps its rows.
+func (s Sources) leaseClocks(ctx context.Context, live map[coord.Class][]coord.Lease) leaseClocks {
+	out := leaseClocks{}
+	for class, leases := range live {
+		if len(leases) == 0 {
+			continue
+		}
+		left, err := coord.TimeLeft(ctx, s.Coord, class)
+		if err != nil {
+			log.WarnContext(ctx, "fleet_store_clock_unavailable", "class", string(class), "error", err)
+			continue
+		}
+		out[class] = left
+	}
+	return out
+}
+
+// expiresIn sets row's `expires_in`, the whole seconds lease has left, where its
+// class's clock was read. ABSENT where it was not, never 0, which reads as a
+// holder that stopped renewing.
+func (c leaseClocks) expiresIn(row map[string]any, class coord.Class, lease coord.Lease) {
+	if left := c[class]; left != nil {
+		row["expires_in"] = int(left(lease) / time.Second)
+	}
 }
 
 // activationTarget is the newest activation as this answer renders it.
@@ -494,18 +528,6 @@ func (s Sources) currentCompany() *config.Company {
 func nodeOf(owner string) string {
 	id, _, _ := strings.Cut(owner, ":")
 	return id
-}
-
-// secondsLeft is how long a lease has, floored at zero.
-//
-// Negative would be a lease already gone, which the live listing does not
-// return — but a clock that moved between the query and this line would
-// produce one, and "-3 seconds left" is not something to render.
-func secondsLeft(expires, now time.Time) int {
-	if expires.IsZero() {
-		return 0
-	}
-	return max(int(expires.Sub(now)/time.Second), 0)
 }
 
 func isoOrEmpty(t time.Time) string {

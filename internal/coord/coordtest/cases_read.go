@@ -1,8 +1,10 @@
 package coordtest
 
 import (
+	"context"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 )
@@ -40,6 +42,68 @@ var readCases = []testCase{
 		if taken.Epoch <= lease.Epoch {
 			h.t.Fatalf("epoch %d after a lapse of epoch %d — the record was dropped, "+
 				"not expired", taken.Epoch, lease.Epoch)
+		}
+	}},
+
+	{"a_store_lease_is_live_on_the_stores_word_whatever_the_readers_clock", func(h *harness) {
+		// A reader whose clock runs an hour ahead of the store's, inside the
+		// two hours a fleet allows between machines, sees every deadline an
+		// hour in its past, and each lease Get and ListLive hand out is still
+		// its owner's (coord.Holder). The control: on that clock each lease
+		// reads lapsed. A resource nobody holds is still nobody's.
+		h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
+		h.claim("seat:cto", coord.AcquireOptions{Owner: "node-b:1", TTL: LongTTL})
+		ahead := readerAhead{b: h.b, skew: time.Hour}
+		listed, err := ahead.ListLive(h.ctx, coord.ClassSeat)
+		if err != nil {
+			h.t.Fatalf("ListLive(seat): unexpected error: %v", err)
+		}
+		h.requireResources("ListLive(seat)", listed, "seat:ceo", "seat:cto")
+		for _, lease := range listed {
+			h.requireLapsedAhead(ahead, coord.ClassSeat, lease)
+			owner, err := coord.Holder(h.ctx, ahead, lease.Resource)
+			if err != nil || owner != lease.Owner {
+				h.t.Fatalf("Holder(%q) read on a clock an hour ahead = %q (%v), want %q, the owner "+
+					"the store named", lease.Resource, owner, err, lease.Owner)
+			}
+		}
+		if owner, err := coord.Holder(h.ctx, ahead, "seat:pm"); err != nil || owner != "" {
+			h.t.Fatalf("Holder of a resource nobody claimed = %q (%v), want nobody", owner, err)
+		}
+	}},
+
+	{"a_leases_time_left_is_read_on_the_stores_clock_whatever_the_readers", func(h *harness) {
+		// The same reader, an hour ahead, would read every lease as run out on
+		// its own clock (the control). On the store's clock for the lease's
+		// class (coord.TimeLeft), each lease a listing hands it has time left,
+		// never more than its TTL, in each bucket a store may keep: a seat's,
+		// a duty's. A store whose clock the suite can move takes the time left
+		// down with it.
+		h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
+		h.claim("worker:scheduler", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL, Ungated: true})
+		ahead := readerAhead{b: h.b, skew: time.Hour}
+		read := func(want time.Duration) {
+			h.t.Helper()
+			for class, resource := range map[coord.Class]string{
+				coord.ClassSeat: "seat:ceo", coord.ClassWorker: "worker:scheduler",
+			} {
+				listed, err := ahead.ListLive(h.ctx, class)
+				if err != nil {
+					h.t.Fatalf("ListLive(%s): unexpected error: %v", class, err)
+				}
+				h.requireResources("ListLive("+string(class)+")", listed, resource)
+				h.requireLapsedAhead(ahead, class, listed[0])
+				if left := h.timeLeft(ahead, class)(listed[0]); left <= 0 || left > want {
+					h.t.Fatalf("TimeLeft(%s) read on a clock an hour ahead = %v, want time left, "+
+						"at most %v", resource, left, want)
+				}
+			}
+		}
+		read(LongTTL)
+		if a, ok := h.b.(Advancer); ok {
+			a.Advance(LongTTL / 2)
+			h.travelled = true
+			read(LongTTL / 2)
 		}
 	}},
 
@@ -188,6 +252,10 @@ var readCases = []testCase{
 			}
 			if hints, err := h.b.PreferredResources(h.ctx, class, "node-a"); err == nil {
 				h.t.Fatalf("PreferredResources(%q) answered %v, want a refusal", class, hints)
+			}
+			if now, err := h.b.Now(h.ctx, class); err == nil {
+				h.t.Fatalf("Now(%q) answered %v, want a refusal: no lease is on that class's clock",
+					class, now)
 			}
 		}
 	}},
@@ -489,4 +557,74 @@ var readCases = []testCase{
 			h.t.Fatalf("meta %v after the caller mutated its own maps, want %v", read.Meta, want)
 		}
 	}},
+}
+
+// readerAhead is a backend as seen by a reader whose clock runs skew ahead of
+// the store's. That reader judging a store's instant on its own clock judges as
+// a reader in step with the store would judge the instant moved skew earlier;
+// the suite can move no clock back (an Advancer moves a store's forward), so
+// readerAhead moves the instants.
+type readerAhead struct {
+	b    coord.Backend
+	skew time.Duration
+}
+
+func (r readerAhead) Get(ctx context.Context, resource string) (*coord.Lease, error) {
+	lease, err := r.b.Get(ctx, resource)
+	if lease == nil {
+		return nil, err
+	}
+	seen := r.seen(*lease)
+	return &seen, err
+}
+
+func (r readerAhead) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	leases, err := r.b.ListLive(ctx, class)
+	for i := range leases {
+		leases[i] = r.seen(leases[i])
+	}
+	return leases, err
+}
+
+// Now is the store's clock, an instant of it moved as every other.
+func (r readerAhead) Now(ctx context.Context, class coord.Class) (time.Time, error) {
+	now, err := r.b.Now(ctx, class)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return now.Add(-r.skew), nil
+}
+
+// seen is lease with its instants as the reader's clock stands to them.
+func (r readerAhead) seen(lease coord.Lease) coord.Lease {
+	lease.ExpiresAt = lease.ExpiresAt.Add(-r.skew)
+	lease.AcquiredAt = lease.AcquiredAt.Add(-r.skew)
+	return lease
+}
+
+// requireLapsedAhead is the control of a case claiming a reader takes the
+// store's word whatever its clock: on ahead's own clock, lease, as ahead was
+// handed it, reads lapsed. It is handed the store's deadline ahead's lead early,
+// and has less than that lead left on the store's clock. Said in the store's
+// instants: the reader's clock is this process's, and a test holds no deadline
+// against the wall clock (internal/fixedwait).
+func (h *harness) requireLapsedAhead(ahead readerAhead, class coord.Class, lease coord.Lease) {
+	h.t.Helper()
+	stored := h.mustHold(lease.Resource, lease.Owner)
+	left := h.timeLeft(h.b, class)(*stored)
+	if !lease.ExpiresAt.Equal(stored.ExpiresAt.Add(-ahead.skew)) || left >= ahead.skew {
+		h.t.Fatalf("%s is handed to a reader %v ahead with the deadline %v, the store's %v with %v "+
+			"left, so on that reader's clock it is not lapsed and this case shows nothing",
+			lease.Resource, ahead.skew, lease.ExpiresAt, stored.ExpiresAt, left)
+	}
+}
+
+// timeLeft is coord.TimeLeft read through clock, failing the case on an error.
+func (h *harness) timeLeft(clock coord.StoreClock, class coord.Class) func(coord.Lease) time.Duration {
+	h.t.Helper()
+	left, err := coord.TimeLeft(h.ctx, clock, class)
+	if err != nil {
+		h.t.Fatalf("TimeLeft(%s): unexpected error: %v", class, err)
+	}
+	return left
 }

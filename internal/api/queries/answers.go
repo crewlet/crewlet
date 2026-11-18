@@ -617,13 +617,13 @@ type Sources struct {
 	//
 	// AND THE STORE IS HANDED IT where an answer here labels what the store
 	// counts: `tokens` and `token_series` head their answer with a window
-	// measured from this clock, and [store.EventLog.PhaseTokens] measures
-	// its rows from the same instant, or the heading and the rows are two
-	// windows. What the store measures AND labels itself stays on its own
-	// clock — a listing's read floor, which has to agree with the clock the
-	// retention sweep deletes by, and `event_series`, whose axis comes back
-	// from the one evaluation its bars were counted over — so pinning this
-	// does not pin those.
+	// measured from this clock, and [store.EventLog.PhaseTokens] measures its
+	// rows from the same instant, or the heading and the rows are two windows.
+	// What a store measures AND labels itself stays on its own clock — a
+	// listing's read floor, which has to agree with the clock the retention
+	// sweep deletes by; `event_series`, whose axis comes from the one evaluation
+	// its bars were counted over; `fleet`'s lease countdowns, on the lease
+	// table's ([coord.TimeLeft]) — so pinning this does not pin those.
 	Now func() time.Time
 
 	// Models is the engine's half of the model questions (`llm_entries`):

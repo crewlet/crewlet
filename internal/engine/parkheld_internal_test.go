@@ -20,14 +20,14 @@ import (
 // park lives in its holder's process, so a reader on another node — the idle
 // sweep, wherever the maintenance duty is — asks the incarnation the seat's
 // lease names, and is answered for each seat with that node's own parks, never
-// the reader's. A reader that holds the seat answers itself. A seat no node
-// holds is in no park. And what cannot be said is an error, never "not
-// parked": a lease table that cannot be read, or a holder that does not
-// answer. A question addressed to another incarnation is not answered.
+// the reader's, whatever the reader's clock says of the lease's deadline. A
+// reader holding the seat answers itself; a seat no node holds is in no park.
+// What cannot be said is an error, never "not parked": an unreadable lease
+// table, a silent holder. A question for another incarnation goes unanswered.
 //
-// Mutation: answer from the reader's own parks, read an unreadable lease or a
-// silent holder as a seat in no park, or answer a question addressed
-// elsewhere, and a case goes red.
+// Mutation: answer from the reader's own parks, judge the lease on the
+// reader's clock, read an unreadable lease or a silent holder as a seat in no
+// park, or answer a question addressed elsewhere, and a case goes red.
 func TestWhetherAParkHoldsASeatsInboxIsAskedOfItsHolder(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -52,8 +52,7 @@ func TestWhetherAParkHoldsASeatsInboxIsAskedOfItsHolder(t *testing.T) {
 	// read off them shows.
 	reader := func(leases leaseTable) heldParks {
 		return heldParks{owner: "node-b:1", queue: q, leases: leases,
-			local: func(seat uuid.UUID) bool { return seat != parkedSeat }, budget: 2 * time.Second,
-			now: time.Now}
+			local: func(seat uuid.UUID) bool { return seat != parkedSeat }, budget: 2 * time.Second}
 	}
 
 	for name, tc := range map[string]struct {
@@ -66,8 +65,11 @@ func TestWhetherAParkHoldsASeatsInboxIsAskedOfItsHolder(t *testing.T) {
 		"a seat the holder parked":       {leases: live("node-a:1"), seat: parkedSeat, parked: true},
 		"a seat the holder did not park": {leases: live("node-a:1"), seat: freeSeat},
 		"a seat the reader holds":        {leases: live("node-b:1"), seat: freeSeat, parked: true},
-		"a seat no node holds": {leases: leaseTable{lease: &coord.Lease{Owner: "node-a:1",
-			ExpiresAt: time.Now().Add(-time.Minute)}}, seat: parkedSeat},
+		"a seat no node holds":           {leases: leaseTable{}, seat: parkedSeat},
+		// THE STORE'S WORD: it handed the lease out live, and its deadline
+		// is past only on the reader's clock, which runs ahead of the store's.
+		"a seat held, read on a clock running ahead": {leases: leaseTable{lease: &coord.Lease{
+			Owner: "node-a:1", ExpiresAt: time.Now().Add(-time.Minute)}}, seat: parkedSeat, parked: true},
 		"a lease table that cannot be read": {leases: leaseTable{err: errors.New("the store is down")},
 			seat: parkedSeat, unknown: "could not be read"},
 		"a holder that does not answer": {leases: live("node-c:1"), budget: 200 * time.Millisecond,
