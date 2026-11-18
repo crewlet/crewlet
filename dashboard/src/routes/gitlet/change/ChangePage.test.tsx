@@ -2262,6 +2262,11 @@ test("More names each recipient with why they heard, in the third person", async
   const list = await screen.findByRole("list", { name: "Whom it notified" });
   expect(within(list).getByText(/asked to review/)).toBeTruthy();
   expect(within(list).queryByText(/your review/)).toBeNull();
+  // WHEN IN WORDS, as the rest of Gitlet says it, the instant in its title: never a
+  // clock to the second. Mutation: print the instant, and this fails.
+  const when = list.querySelector("time");
+  expect(when?.textContent).toMatch(/ago|just now/);
+  expect(when?.getAttribute("title")).toMatch(/\d{4}/);
 });
 
 // EVERY WRITE IS DRAWN FOR EVERY READER, held with the reason it cannot act:

@@ -268,9 +268,9 @@ export function Notified({ change }: { change: CodeChangeDetail }) {
               key={r.record_id}
               label={`Notified ${fmtDateTime(r.at)}`}
               head={
-                <time className="code-byline__when" dateTime={r.at} title={fmtDateTime(r.at)}>
-                  {fmtDateTime(r.at)}
-                </time>
+                <span className="code-byline__when">
+                  <AgoTime value={r.at} clock />
+                </span>
               }
             >
               {r.excerpt && <p>{r.excerpt}</p>}
