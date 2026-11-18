@@ -18,15 +18,12 @@ import (
 // the run, the reader of the harness's record, the clock its model's work is
 // bounded by, and the carry of a login it refreshes on the way.
 //
-// # The shape of a run
-//
 // The host serves its tools for this run alone ([llm.ToolHost.Serve]); the
-// profile's tool route tells the harness how to start the relay to them
-// ([harnessprofile.MCP]); the harness runs its own loop, calling them as its model
-// asks; and the run ends when the model stops or when the host needs it to
-// ([llm.ToolHost.Done]), which stops the harness the way a timeout does — its
-// group signalled, a grace, then killed. Then the host's server for the run is
-// released, which waits for every call still running on it.
+// profile's tool route tells the harness how to start the relay
+// ([harnessprofile.MCP]); the harness runs its own loop; and the run ends when
+// the model stops or the host needs it to ([llm.ToolHost.Done]), which stops the
+// harness as a timeout does (group signalled, a grace, then killed). Then the
+// host's server for the run is released, waiting for every call still on it.
 type toolRun struct {
 	host   llm.ToolHost
 	served llm.Served

@@ -141,6 +141,8 @@ var notRefArgs = map[string]string{
 	"branches_cursor":    "a listing's place",
 	"protections_cursor": "a listing's place",
 	"expected_head":      "an object id the write is compared with, never a ref",
+	"expected_target":    "a tag's value the delete is compared with, an object id, never a ref",
+	"tag":                "a tag a write makes or deletes: a tag is never a seat's branch, the one ref a turn holds",
 	"message":            "a commit's message",
 	"files":              "a commit's file operations",
 	"state":              "a change state filter",

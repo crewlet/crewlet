@@ -71,24 +71,17 @@ func SplitSystem(req llm.Request) (string, llm.Request) {
 }
 
 // harnessNote opens the engine's system prompt on a call whose harness keeps its
-// own ([harnessprofile.Route.KeepsDefault]): the append channel, or no channel at
-// all.
+// own ([harnessprofile.Route.KeepsDefault]): the append channel, or no channel at all.
 //
-// It exists because the vendor's prompt says what the model is, and says it
-// FIRST. Claude Code 2.1.310 prepends "You are Claude Code, Anthropic's official harness
-// for Claude" to every request that appends — no flag removes it — and its
-// default goes on to describe a user at a terminal, a software-engineering
-// task and its own file and shell tools. A seat whose prompt only implies its
-// identity loses to that: measured on 2.1.263, a PM seat introduced itself as
-// helping "through Claude Code". So the engine says outright which of the two
-// prompts is the role.
+// The vendor's prompt says what the model is, and FIRST: Claude Code prepends "You are
+// Claude Code, Anthropic's official harness" to every appending request (no flag
+// removes it) and then describes a terminal user. A seat whose prompt only implies its
+// identity loses to that, so the engine says outright which prompt is the role.
 //
-// CONSTANT, and owned here rather than by the seat's prompt builders, for two
-// reasons. It is the first thing in the engine's text, so it is part of the
-// prefix a vendor caches. And whether it is needed is a fact about this
-// PROVIDER — a seat's fallback chain can move a call from a harness that keeps
-// its own prompt to one that replaces it, and every auxiliary pass shares the
-// provider without ever touching a seat's prompt.
+// CONSTANT, and owned here, not by the seat's prompt builders: it is the first thing in
+// the engine's text, so part of the vendor-cached prefix, and whether it is needed is a
+// fact about this PROVIDER (a fallback chain can move a call to a harness that replaces
+// its prompt; auxiliary passes never touch a seat's prompt).
 const harnessNote = "You are running inside a command-line coding tool as one seat of a " +
 	"Crewlet company, and Crewlet — not a person at a terminal — reads everything you " +
 	"write. The tool's own instructions describe the program you run in, not your role: " +
@@ -215,23 +208,18 @@ func callArguments(call llm.ToolCall) string {
 	return string(encoded)
 }
 
-// renderTranscript is the prompt of a run with tools: the conversation so far,
-// in FENCED parts.
+// renderTranscript is the prompt of a run with tools: the conversation so far, in FENCED parts.
 //
 // # Why fenced
 //
-// A run after a phase's first is a fresh harness process handed the whole
-// conversation — its earlier runs' prose, the calls they made and every result
-// those calls returned — as text. A result is whatever the tool returned: a
-// web page, a message somebody wrote, a file. Under plain `## user` headings,
-// a result that carried a line reading `## user` would open a part the model
-// reads as the person speaking, which is a note from the company's owner
-// written by whoever wrote the page.
+// A run after a phase's first is a fresh harness process handed the whole conversation,
+// results included, as text. A result is whatever a tool returned (a web page, a message,
+// a file): under plain `## user` headings, one carrying a line `## user` would open a part
+// the model reads as the person speaking.
 //
-// So every heading carries a NONCE drawn for this render alone and named in
-// the preamble: nothing in a result can carry it, because it did not exist
-// when the result was written. A line that looks like a heading without it is
-// text inside the part it is in, and the preamble says so.
+// So every heading carries a NONCE drawn for this render alone and named in the preamble:
+// nothing in a result can carry it, since it did not exist when the result was written. A
+// line that looks like a heading without it is text inside its part, as the preamble says.
 func renderTranscript(messages []llm.Message) string {
 	nonce := transcriptNonce(messages)
 	var b strings.Builder

@@ -3,7 +3,7 @@
 // and revoking what that sign-in granted. It holds nothing and stores nothing:
 // the grant, the session a sign-in is between and the access token a server is
 // sent are the engine's (internal/engine's mcpoauth.go), and this package is
-// the requests they are made with.
+// the requests they are made with (ADR-0075 decides what the engine keeps).
 //
 // # What a sign-in is
 //

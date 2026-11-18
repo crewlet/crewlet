@@ -28,6 +28,14 @@
 // And it writes nothing but the bytes it relays, plus one line on stderr when
 // it cannot start: stdout IS the MCP stream, so a single stray byte there is a
 // protocol error the harness reports as a broken server.
+//
+// # Dispatched on argv
+//
+// The binary's switch and [DispatchIfRelay] in a test binary standing in for the
+// engine both key on argv, never on a variable: a dispatch keyed on the
+// environment falls through to the whole test suite the first time a harness
+// strips it. The relay ends when the engine closes the socket, and half-closes
+// when the harness closes stdin so the answer to a call already sent arrives.
 package mcprelay
 
 import (
@@ -50,19 +58,14 @@ const Command = "mcp-relay"
 // Run relays stdin to the socket at args[0] and the socket to stdout, until
 // either side ends.
 //
-// # Which end ends it
+// The engine's end ends it: when it retires the invocation it closes the
+// socket and the relay returns once the copy to stdout sees that, whatever the
+// harness still does with stdin, since nothing sent after that reaches a tool.
 //
-// THE ENGINE'S. When the engine retires the invocation it closes the socket,
-// and the relay returns as soon as the copy to stdout sees that — whatever the
-// harness is still doing with stdin, because nothing it sends after that can reach
-// a tool.
-//
-// When the harness is the one to finish, it closes the relay's stdin. That end is
-// half-closed on the socket rather than the socket closed outright, so the
-// engine reads the end of the stream, answers whatever was still in flight and
-// closes its side — which ends the copy to stdout, and the relay with it.
-// Closing both directions at the first EOF would drop the answer to a call the
-// harness had already sent.
+// When the harness finishes first it closes the relay's stdin, which is
+// half-closed on the socket so the engine answers what was in flight and
+// closes its side, ending the copy and the relay. Closing both directions at
+// the first EOF would drop the answer to a call already sent.
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) != 1 || !filepath.IsAbs(args[0]) {
 		fmt.Fprintf(stderr, "usage: crewlet %s <absolute path of the engine's tool socket>\n", Command)
@@ -97,16 +100,13 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 // DispatchIfRelay runs this process as the relay when it was started as one —
 // `<binary> mcp-relay <socket>` — and exits; otherwise it returns at once.
 //
-// For every test binary that stands in for the engine. The engine names its own
-// executable as the relay ([os.Executable]), and under `go test` that is the
-// test binary: started as a relay without this, it would run the whole suite
-// again, whose engines start harnesses that start relays. Dispatched on ARGV, never
-// on an environment variable, because the harness decides the relay's environment
-// and several pass only a short allowlist — an environment-keyed dispatch would
-// fall through to the suite the first time one of them stripped it.
-//
-// The binary's own dispatch is [Run] in its command switch; this is the same
-// call, for a process with no switch to put it in.
+// For every test binary that stands in for the engine: the engine names its
+// own executable as the relay ([os.Executable]), under `go test` the test
+// binary, which without this would run the whole suite again, whose engines
+// start harnesses that start relays. Dispatched on ARGV, never an environment
+// variable: several harnesses pass only a short allowlist, and an
+// environment-keyed dispatch would fall through to the suite when one stripped
+// it. The binary's own dispatch is [Run] in its command switch.
 func DispatchIfRelay() {
 	if len(os.Args) < 2 || os.Args[1] != Command {
 		return

@@ -49,17 +49,15 @@ type deviceTiming struct {
 
 // deviceLoginTimingDefault is every device sign-in's timing.
 //
-//   - codeWait, a minute: printing a code is the harness starting and making ONE
-//     request to the vendor's device-authorization endpoint, which answers in
-//     well under a second; a minute covers a slow proxy and a cold runtime,
-//     and a harness that has printed nothing by then is not going to, which is
-//     better said than shown as "starting" for the code's whole lifetime.
-//   - lifetime, fifteen minutes: OpenAI's documented device-code lifetime,
-//     for a harness that does not print one (Codex does, "expires in 15 minutes").
-//   - grace, thirty seconds: a device sign-in polls the vendor every few
-//     seconds (OAuth's device grant defaults the interval to five), so an
-//     approval made at the last moment reaches the harness within a few polls,
-//     and thirty seconds is that several times over.
+//   - codeWait, a minute: printing a code is one request to the vendor's
+//     device-authorization endpoint, which answers in well under a second; a
+//     minute covers a slow proxy and a cold runtime, and a harness silent by
+//     then is not going to print, better said than shown as "starting".
+//   - lifetime, fifteen minutes: OpenAI's documented device-code lifetime, for
+//     a harness that does not print one (Codex does).
+//   - grace, thirty seconds: the harness polls every few seconds (OAuth's
+//     device grant defaults to five), so a last-moment approval reaches it
+//     within a few polls; thirty seconds is that several times over.
 var deviceLoginTimingDefault = deviceTiming{
 	codeWait: time.Minute,
 	lifetime: 15 * time.Minute,
@@ -72,45 +70,33 @@ var deviceLoginTimingDefault = deviceTiming{
 const deviceTailLines = 5
 
 // DeviceLogin signs p's harness in by its vendor's DEVICE-CODE flow: it runs the
-// profile's device_login_args in the entry's login home, relays the address
-// and the one-time code the harness prints to out, ONCE, and waits for the person
-// who opens the address to approve the code.
+// profile's device_login_args in the entry's login home, relays the address and
+// the one-time code the harness prints to out, ONCE, and waits for approval.
 //
-// NOTHING IS PASTED BACK THROUGH CREWLET. The person approves at the vendor,
-// the harness learns of it by polling the vendor, and it writes its own login file;
-// the engine only reads what the harness printed and carries the file it wrote into
-// the credential directory. That is the whole reason this flow, and no
-// browser or terminal relay, is how a sign-in starts from the dashboard.
+// NOTHING IS PASTED BACK THROUGH CREWLET: the person approves at the vendor, the
+// harness learns of it by polling and writes its own login file, and the engine
+// only reads what it printed and carries that file into the credential
+// directory: why this flow starts a sign-in from the dashboard.
 //
-// NO TERMINAL: stdout and stderr are ONE capture the engine reads, in the order
-// the harness wrote them, with ANSI colour stripped ([ansiEscape]) before the
-// profile's device_code_patterns read the address, the code and the lifetime
-// out of each line. So the harness runs in a process group of its own
-// ([procgroup.Set]), unlike the interactive login, which needs the operator's
-// terminal as its foreground group, and a sign-in stopped by its caller, or by
-// its code lapsing, takes everything the harness started with it.
-//
-// THE DEADLINE is the code's lifetime as the harness printed it, else fifteen
-// minutes, plus thirty seconds ([deviceLoginTimingDefault]); a harness that prints
-// no code within a minute is stopped as one that will not. A lapsed code
-// answers [ErrDeviceCodeExpired], and a cancelled ctx the context's error.
-//
-// APPROVED is the harness exiting 0 having printed a code, with a login where the
-// entry reads one: the login it wrote is carried into the credential directory
-// under the shared login's lock, as every login command's is, with a new
-// install record ([LoginInstall]). A harness that exited 0 and left no login is
-// refused as a login that left nothing ([Provider.BrokerLogin] does the same).
-//
-// REFUSED UP FRONT for a profile with no device sign-in ([ErrNoLoginCommand]),
-// and for an entry whose calls sign the harness in without a login (api-key, env,
-// or inherit-env with the key in the engine's environment): a login written
-// for such an entry would be read by none of its calls.
+// APPROVED is the harness exiting 0 having printed a code, with a login where
+// the entry reads one, carried over under the shared login's lock with a new
+// install record ([LoginInstall]); exit 0 with no login is refused.
 func DeviceLogin(ctx context.Context, p *Provider, out func(DeviceCode)) error {
 	return deviceLogin(ctx, p, out, deviceLoginTimingDefault)
 }
 
 // deviceLogin is [DeviceLogin] on a timing of the caller's, which the suite
 // shortens to watch a code lapse.
+//
+// REFUSED UP FRONT for a profile with no device sign-in ([ErrNoLoginCommand])
+// and for an entry whose calls sign in without a login (api-key, env, or
+// inherit-env with the key in the engine's environment): such a login would be
+// read by none of its calls.
+//
+// THE DEADLINE is the code's lifetime as printed, else fifteen minutes, plus
+// thirty seconds ([deviceLoginTimingDefault]); a harness that prints no code
+// within a minute is stopped. A lapsed code answers [ErrDeviceCodeExpired], a
+// cancelled ctx the context's error.
 func deviceLogin(ctx context.Context, p *Provider, out func(DeviceCode), timing deviceTiming) error {
 	if !p.profile.HasDeviceLogin() {
 		return fmt.Errorf("%w: the %q harness has no device sign-in, so it cannot be signed in "+
@@ -241,7 +227,10 @@ func (d *deviceReading) said() string {
 }
 
 // runDeviceLogin runs the device sign-in's harness in home and reads what it
-// prints until it exits: see [DeviceLogin].
+// prints until it exits: see [DeviceLogin]. NO TERMINAL: ANSI colour is
+// stripped ([ansiEscape]) before the profile's device_code_patterns read a
+// line, and the harness runs in a process group of its own ([procgroup.Set]),
+// so a stopped sign-in takes everything it started with it.
 //
 // ITS TWO STREAMS ARE ONE CAPTURE, in the workspace's captures directory, read
 // to its end and kept nowhere ([childSpec.merged]): each line is handed to the

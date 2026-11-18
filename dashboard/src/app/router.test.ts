@@ -925,6 +925,20 @@ describe("the resolver", () => {
     ]);
   });
 
+  // AN OLD NAME'S ADDRESS IS TITLED BY THE NAME ITS PAGE RESOLVED, the page
+  // and the trail naming one repository. Mutation: name the crumb from the
+  // address alone, and this fails.
+  test("a renamed repository's old address is crumbed by its new name", () => {
+    expect(crumbsFor(["gitlet", "repos", "old"], { old: "new" }).map((c) => c.label)).toEqual([
+      "Gitlet",
+      "Repositories",
+      "new",
+    ]);
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const commit = crumbsFor(["gitlet", "repos", "old", "commits", sha], { old: "new" });
+    expect(commit[2]).toMatchObject({ label: "new", path: ["gitlet", "repos", "new"] });
+  });
+
   // A COMMIT'S PAGE NAMES ITS COMMIT WHOLE, and a comparison is its
   // repository's; both trails lead back through the repository. Mutation:
   // take an abbreviation as a commit's page, or drop the repository's crumb,

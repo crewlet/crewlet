@@ -216,7 +216,8 @@
   color: var(--color-code-ref-ink);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
-  overflow-wrap: anywhere;
+  /* Breaks after a slash (SlashBreaks); mid-word only for a part wider than its column. */
+  overflow-wrap: break-word;
   vertical-align: middle;
 }
 /* On a selected row the chip draws no ground: its ink is on the row's tint. */
@@ -2572,6 +2573,17 @@
   min-width: 0;
 }
 
+/* A picture file, shown whole on the file's card, never wider than it. */
+.code-picture {
+  display: flex;
+  justify-content: center;
+  padding: var(--spacing-4);
+}
+.code-picture img {
+  max-width: 100%;
+  height: auto;
+}
+
 .code-blob__note {
   margin: 0;
   padding: var(--spacing-3) var(--spacing-4);
@@ -2669,6 +2681,11 @@
   white-space: pre;
 }
 
+/* A repository's Deleted notice, brought into view clear of the sticky bar. */
+.code-repo-notice {
+  scroll-margin-top: calc(var(--sticky-top) + var(--spacing-4));
+}
+
 /* A FILE'S BLAME: each run of lines one commit last changed headed by that
    commit — when, who and its subject — ruled off the run before it. */
 .code-blame {
@@ -2707,7 +2724,7 @@
 
 .code-blame__when {
   flex: none;
-  width: 7ch;
+  width: var(--code-blame-when, 7ch);
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
   white-space: nowrap;
@@ -4895,7 +4912,7 @@
   font-family: var(--font-family-mono);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
-  word-break: break-all;
+  overflow-wrap: break-word;
 }
 
 .code-file__dir {
