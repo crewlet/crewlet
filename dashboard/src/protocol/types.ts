@@ -1184,6 +1184,14 @@ export interface BridgeCall {
    */
   late?: boolean;
   /**
+   * A call nobody waited for by the time it returned: its run's harness had
+   * given up on it, or the run's session on the bridge ended while it ran. It
+   * ran and its effect happened, while the session that made it holds it with
+   * no outcome, as timed out or as still running; told as a late call is.
+   * Absent on every other call.
+   */
+  abandoned?: boolean;
+  /**
    * The call's place, from 1, in the order the round's log took its calls,
    * which [ExecutorRow.bridge_calls_told] names a call by. Absent on a call an
    * older engine appended.

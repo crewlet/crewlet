@@ -411,6 +411,33 @@ test("a call that finished after a relaunch is marked so", () => {
   expect(screen.getAllByText("finished after a relaunch")).toHaveLength(1);
 });
 
+// A CALL NOBODY WAITED FOR is said so: its run's harness gave up on it, or its
+// session ended while it ran, so the session shows it with no outcome though it
+// ran. Drawn as any other call, it read as one its run saw finish. One its run
+// took while it worked is tagged so as well.
+//
+// Mutation: drop the abandoned tag, or draw it on every call, and this goes red.
+test("a call nobody waited for is marked so", () => {
+  overflowing(
+    <Router>
+      <BridgeLog
+        run={run({
+          bridge_calls: [
+            { name: "delegate", abandoned: true, appended: 3, at: "2026-06-15T12:03:00Z" },
+            { name: "read_file", appended: 4, at: "2026-06-15T12:04:00Z" },
+          ],
+          bridge_calls_told: [{ appended: 3, launch: "job-1" }],
+        })}
+      />
+    </Router>,
+    "height",
+  );
+  expect(screen.getAllByText("its run stopped waiting for it")).toHaveLength(1);
+  const gaveUp = screen.getAllByRole("row").find((r) => within(r).queryByText("delegate"));
+  expect(gaveUp && within(gaveUp).queryByText("its run stopped waiting for it")).toBeTruthy();
+  expect(gaveUp && within(gaveUp).queryByText("told to its run while it worked")).toBeTruthy();
+});
+
 // A LATE CALL THE JOB WORKING AS IT LANDED TOOK INTO ITS SESSION is said so, by
 // its place in the log: no continuation of that session is told it again, so
 // the run goes on as if it knew the outcome. A late call no session took, and

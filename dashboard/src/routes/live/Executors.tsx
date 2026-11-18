@@ -1513,6 +1513,18 @@ function BridgeCallGrid({
                   finished after a relaunch
                 </Tag>
               ),
+              // A CALL NOBODY WAITED FOR, given up on by its run's harness or
+              // outliving its session: said, so a call its run's session shows
+              // with no outcome is not read as one that never ran.
+              r.call.abandoned && (
+                <Tag
+                  key="abandoned"
+                  variant="neutral"
+                  title="Its run stopped waiting for it before it returned: it ran, and its effect happened"
+                >
+                  its run stopped waiting for it
+                </Tag>
+              ),
               // AND ONE THE JOB WORKING AS IT LANDED TOOK INTO ITS SESSION: a
               // continuation of that session is not told it again, so a reader
               // sees why the run went on as if it knew the outcome.
