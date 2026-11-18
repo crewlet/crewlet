@@ -1483,6 +1483,121 @@ func TestALinesFactsAreHeldToTheBound(t *testing.T) {
 	}
 }
 
+// scanArrayCharge is what the meter's rule charges an array that grows to n
+// elements of size bytes: grown by doubling from one, each array charged
+// whole as it is made.
+func scanArrayCharge(n, size int) int {
+	charged := 0
+	for capacity := 0; capacity < n; {
+		capacity = max(2*capacity, 1)
+		charged += capacity * size
+	}
+	return charged
+}
+
+// A LINE'S FACTS ARE HELD TO THE BOUND BY EVERY CHARGE: beside what each case
+// keeps, a line writes `uuid` at [threadValueMax] as often as the bound holds
+// but once, then once more at the most bytes the meter's rule leaves (every
+// copy charged and never refunded, each array charged whole as it doubles,
+// the head last), and reads as a record keeping what the case keeps; a byte
+// more fails it closed. WRITTEN FROM THE RULE, never through the meter, so a
+// charge the pass drops moves the boundary: a kept raw's, a retraction's or a
+// kept list's array, a kept list's anchor, a replacement's or a batch entry's
+// id and their array, a leg's agent, and a task notification's agent and leg.
+//
+// Mutation: charge none of these, each in turn.
+func TestEveryChargeOfALinesFactsIsHeldToTheBound(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	const listed = 64
+	quoted := make([]string, listed)
+	for i := range quoted {
+		quoted[i] = `"` + ctUUID(i+1) + `"`
+	}
+	uuids := strings.Join(quoted, ",")
+	anchor := ctUUID(listed + 1)
+	agent := strings.Repeat("a", claudeAgentMaxBytes)
+	leg := "toolu_" + strings.Repeat("l", 58)
+	notice := `<task-notification>\n<task-id>` + agent + `</task-id>\n<tool-use-id>` + leg +
+		`</tool-use-id>\n<status>completed</status>\n</task-notification>`
+	ids := func(entry string) string {
+		return strings.TrimSuffix(strings.Repeat(entry+",", listed), ",")
+	}
+	str := int(unsafe.Sizeof(""))
+	counted := func(walk func(each func(string)) error) bool {
+		n := 0
+		return walk(func(string) { n++ }) == nil && n == listed
+	}
+	for _, tc := range []struct {
+		name string
+		// opening is the record up to its uuids, and typ and subtype its head.
+		opening, typ, subtype string
+		// extra is what the case's facts charge by the meter's rule, beside the
+		// uuids and the head.
+		extra int
+		// kept reports whether the record keeps what the case keeps.
+		kept func(l threadLine) bool
+	}{
+		{"kept raws", `{"type":"user",`, recordUser, "", 0, func(threadLine) bool { return true }},
+		{"a retraction's prefixes", `{"type":"user","retractedMessageUuids":[` + uuids + `],`, recordUser, "",
+			scanArrayCharge(listed, int(unsafe.Sizeof([chainPrefixBytes]byte{}))), func(l threadLine) bool {
+				r, err := l.Retracted()
+				held, all := r.Prefixes()
+				return err == nil && all && len(held) == listed
+			}},
+		{"a kept list's uuids and anchor", `{"type":"system","subtype":"` + subtypeCompactBoundary +
+			`","compactMetadata":{"preservedMessages":{"anchorUuid":"` + anchor + `","uuids":[` + uuids + `]}},`,
+			recordSystem, subtypeCompactBoundary, scanArrayCharge(listed, int(unsafe.Sizeof([16]byte{}))) + len(anchor),
+			func(l threadLine) bool {
+				p, err := l.Preserved()
+				return err == nil && p.Kept && len(p.UUIDs) == listed && p.Anchor == anchor
+			}},
+		{"a replacement's ids", `{"type":"` + recordContentReplacement + `","replacements":[` +
+			ids(`{"kind":"`+replacementToolResult+`","toolUseId":"r"}`) + `],`, recordContentReplacement, "",
+			listed + scanArrayCharge(listed, str), func(l threadLine) bool { return counted(l.ReplacedResults) }},
+		{"a batch's ids", `{"type":"assistant","batchToolUses":[` + ids(`{"id":"b"}`) + `],`, recordAssistant, "",
+			listed + scanArrayCharge(listed, str), func(l threadLine) bool {
+				return counted(func(each func(string)) error {
+					present, err := l.BatchToolUses(each)
+					if !present {
+						return errors.New("no batch")
+					}
+					return err
+				})
+			}},
+		{"a leg's agent", `{"type":"user","toolUseResult":{"status":"completed","agentId":"` + agent + `"},`,
+			recordUser, "", len(agent), func(l threadLine) bool {
+				completed, got, _ := l.AgentAnswer()
+				return completed && got == agent
+			}},
+		{"a task notification's agent and leg", `{"type":"user","message":{"content":"` + notice + `"},`, recordUser,
+			"", len(agent) + len(leg), func(l threadLine) bool {
+				m, err := l.Message()
+				a, lg, _ := m.Notification()
+				return err == nil && a == agent && lg == leg
+			}},
+	} {
+		copies := threadLineMax/threadValueMax - 1
+		last := threadLineMax - copies*threadValueMax - tc.extra - len(tc.typ) - len(tc.subtype)
+		if last < 2 || last > threadValueMax {
+			t.Fatalf("%s: the last uuid would run %d bytes as written, outside 2 to %d", tc.name, last, threadValueMax)
+		}
+		line := func(last int) []scanPart {
+			return scanLine(scanLit(tc.opening), []scanPart{{`"uuid":"` + strings.Repeat("u", threadValueMax-2) + `",`,
+				copies}}, scanLit(`"uuid":"`+strings.Repeat("u", last-2)+`"}`))
+		}
+		if got, err := scanRead(ctx, line(last)); err != nil || !tc.kept(got) {
+			t.Errorf("%s: a line at the most the meter holds reads as %v, keeping what it writes %t; want a record "+
+				"that keeps it", tc.name, err, err == nil && tc.kept(got))
+		}
+		if _, err := scanRead(ctx, line(last+1)); !errors.Is(err, errThreadBound) ||
+			!strings.Contains(err.Error(), "facts run past") {
+			t.Errorf("%s: a line a byte past the most the meter holds reads as %v; want %v, its facts past it",
+				tc.name, err, errThreadBound)
+		}
+	}
+}
+
 // A BOOKKEEPING RECORD'S MESSAGE IS PASSED OVER, as is every gated frame
 // ([gates]) after a type that does not read it: an api-request-blob whose
 // frame holds a MiB of what a reader would keep costs at most 16 KiB more
