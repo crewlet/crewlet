@@ -43,6 +43,7 @@ import type {
 import { changeHref } from "../paths.ts";
 import { useHunkTokens } from "../syntax.tsx";
 import { Byline } from "../ui.tsx";
+import { CommentCard } from "./CommentCard.tsx";
 import { ReplyComposer } from "./Conversation.tsx";
 import { FindingAnswer, findingStands } from "./FindingAnswer.tsx";
 import { refusedWords } from "./reads.ts";
@@ -330,8 +331,12 @@ export function FindingCard({
         <ol className="code-thread__replies" aria-label="Replies">
           {replies.map((c) => (
             <li key={c.id} className="code-thread__reply">
-              <Byline who={c.author} at={c.at} now={now} />
-              <div className="prose md">{renderMarkdown(c.body)}</div>
+              <CommentCard
+                comment={c}
+                change={change}
+                layout="reply"
+                byline={<Byline who={c.author} at={c.at} now={now} />}
+              />
             </li>
           ))}
         </ol>

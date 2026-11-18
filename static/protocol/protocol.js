@@ -4631,7 +4631,19 @@ var ACTIONS = {
 			"thread",
 			"finding",
 			"anchor",
-			"resolve"
+			"resolve",
+			"edit"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_delete_comment: {
+		args: [
+			"repo",
+			"change",
+			"comment"
 		],
 		domain: "code",
 		apps: ["gitlet"],

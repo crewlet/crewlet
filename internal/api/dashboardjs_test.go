@@ -2719,7 +2719,9 @@ const (
 	// and sort: 6780.7 KiB (6,943,394 bytes), 18,661 over main: 6781 KiB.
 	// A change's conversation as a timeline with finding excerpts: 6801.9 KiB (6,965,137 bytes),
 	// 21,743 over main: 6802 KiB.
-	treeBudget = 5<<20 + 1873<<10
+	// A change's comments edited and deleted from their menu: 6996.5 KiB (7,164,384 bytes), 3,876 over
+	// main: 6997 KiB.
+	treeBudget = 5<<20 + 1877<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

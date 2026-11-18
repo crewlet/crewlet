@@ -1295,6 +1295,23 @@
   gap: var(--spacing-2);
 }
 
+/* A COMMENT'S MENU at the end of its row; its edited mark and its tombstone. */
+.code-comment__menu {
+  display: inline-flex;
+  margin-inline-start: auto;
+}
+
+.code-comment__edited {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.code-comment__gone {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+
 .code-thread__foot {
   display: flex;
   flex-wrap: wrap;

@@ -213,6 +213,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "the review sent with its drafts (code_review_change), from the page bar and Finish review",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
+  "routes/gitlet/change/CommentCard.tsx": {
+    why: "a comment's Edit (code_comment_on_change) and Delete (code_delete_comment), from its menu",
+    suite: "routes/gitlet/change/CommentCard.test.tsx",
+  },
   "routes/gitlet/change/Conversation.tsx": {
     why: "a change's comment, a reply to a thread or a finding, and a thread's Resolve",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
