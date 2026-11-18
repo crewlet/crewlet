@@ -56,6 +56,7 @@ import type { ToolRow } from "../contract/tools.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
 import type {
+  CHANGE_MOVE_KINDS,
   CHANGE_STATES,
   CodeSearchAnswer,
   COMMAND_OUTCOMES,
@@ -9174,6 +9175,8 @@ export interface CodeChangeAnswer extends CodePage {
   change?: CodeChangeDetail;
   revisions?: CodeRevisionRow[];
   reviewers?: CodeReviewerRow[];
+  /** The `moves` part: the moves of its lifecycle, oldest first. */
+  moves?: CodeChangeMoveRow[];
   comments?: CodeCommentRow[];
   reviews?: CodeReviewRow[];
   findings?: CodeFindingRow[];
@@ -9192,6 +9195,23 @@ export interface CodeChangeAnswer extends CodePage {
   /** The `excerpts` part: each finding's excerpt by its id, and the context applied. */
   excerpts?: Record<string, CodeExcerpt>;
   context?: number;
+}
+
+/**
+ * One move of a change's lifecycle (`gitlet.ChangeMove`): what it did, who made
+ * it (absent for a push nobody made), a close's reason, what a retarget moved
+ * its target from (`was`) and to (`became`), and the work item key an edit set
+ * (`became`, absent where it cleared one).
+ */
+export interface CodeChangeMoveRow {
+  kind: (typeof CHANGE_MOVE_KINDS)[number] | (string & {});
+  by?: string;
+  by_kind?: CodePartyKind;
+  reason?: string;
+  was?: string;
+  became?: string;
+  position: LogPosition;
+  at: string;
 }
 
 /** One line of a finding's excerpt (`gitlet.ExcerptLine`). */

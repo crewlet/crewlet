@@ -276,6 +276,21 @@ func TestTheDashboardKnowsWhyAPushClosedAChange(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD DRAWS EVERY MOVE OF A CHANGE'S LIFECYCLE on its timeline, by
+// `CHANGE_MOVE_KINDS` (`contract/code.ts`), in the engine's order: a kind it
+// lacks is drawn in general words, one the engine dropped is a sentence nobody
+// reads.
+//
+// Mutation: drop a kind from either side, or reorder the dashboard's, and this
+// fails.
+func TestTheDashboardDrawsEveryMoveOfAChange(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "CHANGE_MOVE_KINDS"), spelledOut(gitlet.ChangeMoveKinds())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's CHANGE_MOVE_KINDS is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
 // THE DASHBOARD ASKS WHAT A CHANGE WAITS ON IN THE ENGINE'S WORDS, every one
 // of them: Gitlet › Changes narrows its listing by `CHANGE_NEEDS`
 // (`contract/code.ts`), and its Waiting on you box asks me, or person for a

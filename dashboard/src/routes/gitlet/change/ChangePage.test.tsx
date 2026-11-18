@@ -1382,6 +1382,52 @@ test("the timeline starts with the description and draws every record in the ord
   expect(words[5]).toMatch(/asked .*sre for a review/);
 });
 
+// THE LIFECYCLE'S MOVES STAND IN THE TIMELINE where their records landed, each
+// naming who made it: a close with its reason under it, a reopen, a draft and
+// its readying, an edit, a work item, a retarget between two branches, and a
+// close by a branch's deletion, which says so rather than its code.
+// Mutation: leave the moves part out of the timeline, or word a source's
+// deletion as its reason, and this fails.
+test("the timeline draws each move of the change's lifecycle, by whom, where it landed", async () => {
+  const move = (seq: number, kind: string, extra = {}) => ({
+    kind,
+    by: "cto",
+    by_kind: "agent",
+    position: at(seq),
+    at: "2026-10-27T11:00:00Z",
+    ...extra,
+  });
+  stubEngine(detail(), () => json({}), {
+    "": page({ change: detail(), revisions: [revisionRow(1, 10)] }),
+    moves: page({
+      moves: [
+        move(20, "retitled"),
+        move(21, "work_item", { became: "ENG-7" }),
+        move(22, "drafted"),
+        move(23, "readied"),
+        move(24, "retargeted", { was: "refs/heads/main", became: "refs/heads/release" }),
+        move(25, "closed", { reason: "Superseded by web!43." }),
+        move(26, "reopened", { by: "dev" }),
+        move(27, "closed", { by: undefined, by_kind: undefined, reason: "source_deleted" }),
+      ],
+    }),
+  });
+  mount();
+  await waitFor(() => expect(timelineWords()).toHaveLength(10));
+  const words = timelineWords();
+  expect(words[1]).toMatch(/pushed revision 1/);
+  expect(words.slice(2)).toEqual([
+    expect.stringMatching(/^CTO edited its title/),
+    expect.stringMatching(/^CTO linked it to ENG-7/),
+    expect.stringMatching(/^CTO marked it as a draft/),
+    expect.stringMatching(/^CTO marked it ready for review/),
+    expect.stringMatching(/^CTO changed its target from main to release/),
+    expect.stringMatching(/^CTO closed it .*Superseded by web!43\.$/),
+    expect.stringMatching(/^Engineer reopened it/),
+    expect.stringMatching(/^Gitlet closed it by deleting its branch/),
+  ]);
+});
+
 // A REVIEW'S DISC WEARS ITS VERDICT'S TONE, the verdict said in words beside
 // it (rule C7). Mutation: drop the Comment tag, and a comment reads as no verdict.
 test("a review's disc wears its verdict's tone, and the verdict is said in words", async () => {

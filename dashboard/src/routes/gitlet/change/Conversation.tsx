@@ -35,19 +35,25 @@ import {
   EyeGlyph,
   FileDiffGlyph,
   FlagGlyph,
+  GitBranchGlyph,
   GitCommitVerticalGlyph,
   GitCompareGlyph,
+  GitPullRequestClosedGlyph,
+  GitPullRequestDraftGlyph,
+  GitPullRequestGlyph,
   MessageSquareGlyph,
+  PencilGlyph,
   ShieldUserGlyph,
+  SquareKanbanGlyph,
   UserGlyph,
   UserPlusGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useDraftState } from "~/app/assistant/draft.ts";
 import { PageFailed } from "~/components/common.tsx";
-import { FINDING_SEVERITIES } from "~/contract/code.ts";
+import { FINDING_SEVERITIES, SOURCE_DELETED } from "~/contract/code.ts";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
-import { changeLive } from "~/lib/code.ts";
+import { changeLive, refName } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -55,6 +61,7 @@ import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type {
   CodeChangeDetail,
+  CodeChangeMoveRow,
   CodeCommentRow,
   CodeFindingRow,
   CodeReviewRow,
@@ -62,8 +69,8 @@ import type {
   CodeRevisionRow,
 } from "~/protocol/index.ts";
 import { ownedPathList } from "../owners.ts";
-import { changeHref } from "../paths.ts";
-import { Byline, Face, ShaChip, useWhoName } from "../ui.tsx";
+import { changeHref, repoHref } from "../paths.ts";
+import { BranchChip, Byline, Face, GITLET, ShaChip, useWhoName } from "../ui.tsx";
 import { Description } from "./Description.tsx";
 import { MergeBox, MergeDisc, type MergeFacts } from "./Merge.tsx";
 import { reRequestable, reviewerStandings } from "./mergeSections.ts";
@@ -86,6 +93,7 @@ import {
   usePagedComments,
   usePagedExcerpts,
   usePagedFindings,
+  usePagedMoves,
   usePagedReviewers,
   usePagedReviews,
   type LatestChecks,
@@ -102,12 +110,13 @@ type Entry =
       replies: CodeCommentRow[];
     }
   | { kind: "revision"; at: CodeRevisionRow["position"]; revision: CodeRevisionRow }
-  | { kind: "ask"; at: CodeReviewerRow["position"]; ask: CodeReviewerRow; again: boolean };
+  | { kind: "ask"; at: CodeReviewerRow["position"]; ask: CodeReviewerRow; again: boolean }
+  | { kind: "move"; at: CodeChangeMoveRow["position"]; move: CodeChangeMoveRow };
 
 /**
  * The timeline's entries, in the order their records landed: each review, each
- * thread by its first comment with its replies under it, each revision, and
- * each ask that stands or was withdrawn. A thread on a finding is drawn with
+ * thread by its first comment with its replies under it, each revision, each
+ * ask that stands or was withdrawn, and each move of its lifecycle. A thread on a finding is drawn with
  * its finding; an answered or ended ask's position is the record that moved it.
  * An ask after a review of the reviewer's own is one asked `again`.
  */
@@ -116,6 +125,7 @@ export function timelineOf(
   comments: readonly CodeCommentRow[],
   revisions: readonly CodeRevisionRow[],
   asks: readonly CodeReviewerRow[] = [],
+  moves: readonly CodeChangeMoveRow[] = [],
 ): Entry[] {
   const threads = new Map<string, { root: CodeCommentRow; replies: CodeCommentRow[] }>();
   for (const c of comments) {
@@ -144,6 +154,7 @@ export function timelineOf(
             positionBefore(r.position, ask.position),
         ),
       })),
+    ...moves.map((move) => ({ kind: "move" as const, at: move.position, move })),
   ];
   return entries.sort((a, b) =>
     positionBefore(a.at, b.at) ? -1 : positionBefore(b.at, a.at) ? 1 : 0,
@@ -161,6 +172,8 @@ export function entryKey(entry: Entry): string {
       return `revision-${entry.revision.n}`;
     case "ask":
       return `ask-${entry.ask.kind}:${entry.ask.reviewer}`;
+    case "move":
+      return `move-${entry.move.position.generation}:${entry.move.position.seq}:${entry.move.kind}`;
   }
 }
 
@@ -185,13 +198,14 @@ export function Conversation({
   const comments = usePagedComments(change);
   // ONE READ for the timeline's asks and the rail's reviewers.
   const asked = usePagedReviewers(change);
+  const moves = usePagedMoves(change);
   // A FINDING ROW MOVES ONLY WITH WHAT SOMEBODY SAID: the placements a push
   // moves are Files changed's to read.
   const findings = usePagedFindings(change, change.revision, partMovedBy(change, "said"));
   const excerpts = usePagedExcerpts(change);
-  const entries = timelineOf(reviews.items, comments.items, revisions, asked.items);
+  const entries = timelineOf(reviews.items, comments.items, revisions, asked.items, moves.items);
   const askedRefused = partRefusal(asked);
-  const parts = [reviews, comments, asked, findings, excerpts];
+  const parts = [reviews, comments, asked, findings, excerpts, moves];
   const excerptsRefused = partRefusal(excerpts);
   const excerptOf = (id: string): ExcerptRead => {
     const found = excerpts.items.find((e) => e.id === id);
@@ -538,6 +552,8 @@ function TimelineEntry({
     }
     case "ask":
       return <AskEntry ask={entry.ask} again={entry.again} now={now} />;
+    case "move":
+      return <MoveEntry move={entry.move} change={change} now={now} />;
     case "thread":
       return (
         <TimelineItem face={entry.root.author}>
@@ -545,6 +561,78 @@ function TimelineEntry({
         </TimelineItem>
       );
   }
+}
+
+/** Each move's disc glyph; a kind a newer engine names draws the change's own. */
+const MOVE_GLYPHS: Readonly<Record<string, ReactNode>> = {
+  closed: <GitPullRequestClosedGlyph size="sm" />,
+  reopened: <GitPullRequestGlyph size="sm" />,
+  drafted: <GitPullRequestDraftGlyph size="sm" />,
+  readied: <GitPullRequestGlyph size="sm" />,
+  retitled: <PencilGlyph size="sm" />,
+  described: <PencilGlyph size="sm" />,
+  work_item: <SquareKanbanGlyph size="sm" />,
+  retargeted: <GitBranchGlyph size="sm" />,
+};
+
+/** What a move did, after who made it: "closed it", "changed its target from main to release". */
+export function moveVerb(move: CodeChangeMoveRow, repo: string): ReactNode {
+  switch (move.kind) {
+    case "closed":
+      return move.reason === SOURCE_DELETED ? "closed it by deleting its branch" : "closed it";
+    case "reopened":
+      return "reopened it";
+    case "drafted":
+      return "marked it as a draft";
+    case "readied":
+      return "marked it ready for review";
+    case "retitled":
+      return "edited its title";
+    case "described":
+      return "edited its description";
+    case "work_item":
+      return move.became ? (
+        <>
+          linked it to <span className="code-tl-strong">{move.became}</span>
+        </>
+      ) : (
+        "unlinked its work item"
+      );
+    case "retargeted": {
+      const was = refName(move.was ?? "").name;
+      const became = refName(move.became ?? "").name;
+      return (
+        <>
+          changed its target from <BranchChip name={was} href={repoHref(repo, { ref: was })} /> to{" "}
+          <BranchChip name={became} href={repoHref(repo, { ref: became })} />
+        </>
+      );
+    }
+  }
+  return move.kind.replaceAll("_", " ");
+}
+
+/** A move of the change's lifecycle where it was made: who, what, when, and a close's reason under it. */
+function MoveEntry({
+  move,
+  change,
+  now,
+}: {
+  move: CodeChangeMoveRow;
+  change: CodeChangeDetail;
+  now: number;
+}) {
+  const said = move.kind === "closed" && move.reason && move.reason !== SOURCE_DELETED;
+  return (
+    <TimelineEvent
+      disc={
+        <Disc glyph={MOVE_GLYPHS[move.kind] ?? <GitPullRequestGlyph size="sm" />} size="small" />
+      }
+      under={said ? <blockquote className="code-tl-note">{move.reason}</blockquote> : undefined}
+    >
+      <Byline who={move.by || GITLET} verb={moveVerb(move, change.repo)} at={move.at} now={now} />
+    </TimelineEvent>
+  );
 }
 
 /**

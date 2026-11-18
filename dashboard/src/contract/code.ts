@@ -137,6 +137,25 @@ export const CHANGE_STATES = ["draft", "open", "closed", "merged"] as const;
 export const SOURCE_DELETED = "source_deleted";
 
 /**
+ * What one move of a change's lifecycle did (`gitlet.ChangeMoveKinds`), in the
+ * engine's order: what a change's timeline draws between its revisions and its
+ * conversation. HELD BOTH WAYS, in order, by
+ * `internal/gitlet.TestTheDashboardDrawsEveryMoveOfAChange`: a kind the engine
+ * grew that this lacks is drawn in general words, and one this keeps that the
+ * engine dropped is a sentence nobody reads.
+ */
+export const CHANGE_MOVE_KINDS = [
+  "closed",
+  "reopened",
+  "drafted",
+  "readied",
+  "retitled",
+  "described",
+  "work_item",
+  "retargeted",
+] as const;
+
+/**
  * What a listing of changes can ask its changes to be waiting on, in the
  * engine's order (`gitlet.Needs`): a review the asker owes, a fix their own
  * change owes, either of the two, or a PERSON — a change whose readiness's
