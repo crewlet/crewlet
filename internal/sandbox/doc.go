@@ -818,8 +818,8 @@
 // ([SessionKeep.SaveInterval], this node's revision) after the last attempt,
 // doubled for each failure in a row up to the larger of the interval and an
 // hour, and never before the seat's allowance paces it. What was not there
-// (the box, the license, the taker, the place) moves the clock without
-// doubling; a landing resets it and remembers how far the job's stream had
+// (the box, the license, the taker, the place, the box's room to pack) moves
+// the clock without doubling; a landing resets it and remembers how far the job's stream had
 // run, so a job that has not moved since is not saved again. AT FIRST SIGHT
 // (a node that restarted, or took an E2B duty over) the last save is taken
 // to be the later of the launch's start and this launch's newest capture,
@@ -845,6 +845,35 @@
 // made, never that context's parent, whose deadline would end the take before
 // it began. A take cut before its place stamps nothing, one cut after it is
 // stamped refused, and the run keeps its newest periodic save.
+//
+// # A pack in a node's own memory, one at a time
+//
+// Kept by [Coordinator.packSlot] and [ErrSaveNoRoom]. A box that shares the
+// node's memory ([Placement.OwnsMemory] false: a direct box) charges every
+// pack made in it against the engine's own, and an OpenCode export holds up
+// to about ten times its session at its peak (internal/sandbox/executor's
+// package doc has the measured table). NEITHER BOUND HOLDS ALONE: a room read
+// alone passes several packs that read one room at once, each filling what
+// the other read as free, and a slot alone lets one export take a container
+// past its limit. So EVERY PACK IN SUCH A BOX TAKES THE NODE'S ONE PACK SLOT
+// ([Coordinator.sharedPack]), a save's around its runner's PackSave, under its
+// duty, and a take's around its TakeSession, where a job still working or one
+// that left no archive is packed on demand, under the take's context: a wait
+// the duty ends is stood down, one the take's context ends refuses the take.
+// A box that owns its memory takes none. The slot costs a drain one pack after
+// another, 0.4 to 5.2 s an OpenCode export of a session to 64 MiB.
+//
+// AND AN OPENCODE SAVE CHECKS ITS BOX'S ROOM before its export, in every cell:
+// the room crewlet_memory's held= and avail_kb= lines state (the limit less
+// what the kernel cannot reclaim, capped by what the machine has available),
+// against twelve times the box's OpenCode database and WAL plus 128 MiB, every
+// session in it counted (the export is not known before it is made). Short of
+// it the pack refuses with [ErrSaveNoRoom], and the save waits one interval,
+// never doubled, since the room is the box's now, not the save's ("room",
+// logged at warning the first time a launch meets it). A room no file states
+// refuses nothing, and the slot still serializes. A FINAL PACK CHECKS NO ROOM:
+// refused, it would lose the job's newest state on an estimate that counts
+// every session in the box's database; it takes the slot all the same.
 //
 // # A turn's session is continued in whichever box its next launch gets
 //

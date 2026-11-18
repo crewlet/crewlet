@@ -1118,7 +1118,8 @@ type Coordinator struct {
 	// so a room two packs read at once each could pass for the other to
 	// fill. One at a time costs a drain one pack after another: 0.4 to
 	// 5.2 s an OpenCode export of a session to 64 MiB, 0.04 to 0.46 s a
-	// Claude Code pack of 1 to 20 MiB.
+	// Claude Code pack of 1 to 20 MiB (package doc, "A pack in a node's own
+	// memory, one at a time").
 	sharedPack chan struct{}
 
 	// mainThreadWait bounds the read of a job's main thread at its collection

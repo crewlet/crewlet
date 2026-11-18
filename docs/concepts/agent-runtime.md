@@ -801,7 +801,7 @@ flowchart TD
    and the turns holding a slot of the gate (a retried answer's resume holds a
    slot and no delivery), with `drain_in_progress` logging what is still in
    flight every 10 s. Beside that wait, from its first instant, the node saves
-   the session of each `direct` Claude Code run it launched whose session
+   the session of each `direct` run it launched whose session
    moved since its last save, for up to 30 s, since such a job goes with the
    container, unit or host being stopped and its relaunch continues its newest save
    ([saved as it works](code-sandbox.md#a-running-jobs-session-saved-as-it-works));
