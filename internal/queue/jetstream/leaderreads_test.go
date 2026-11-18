@@ -747,9 +747,14 @@ func TestAQueueIsPacedByHowItsOwnConnectionWasMade(t *testing.T) {
 		if metered := got.meter != nil; metered != c.metered {
 			t.Errorf("%s's link is metered %v, want %v", c.name, metered, c.metered)
 		}
-		// The meter is the connection's own, so the reading is compared
-		// without it.
-		got.meter = nil
+		// The link's window is its own too: one of the link's size wherever
+		// it is metered, and compared apart, as the meter is.
+		if windowed := got.window != nil; windowed != c.metered ||
+			(windowed && got.window.Size() != jsapi.LinkWindow) {
+			t.Errorf("%s's link window is %v, want one of %d bytes only across a link", c.name,
+				got.window, jsapi.LinkWindow)
+		}
+		got.meter, got.window = nil, nil
 		if got != c.want {
 			t.Errorf("%s crosses %+v, want %+v", c.name, got, c.want)
 		}
