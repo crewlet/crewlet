@@ -545,29 +545,35 @@ func (w *readAtWait) Done() <-chan struct{} {
 }
 
 // A TAKE'S PIECE PAST THE BASE WAITS FOR THE LARGE SLOT BEFORE IT IS HELD:
-// a transcript's line, a document's string and a stretch of short lines a
-// redaction holds (a key with no END), each twice [collectionBaseLineBytes],
-// wait for the slot held elsewhere having read at most the base and one fill
-// past it; freed, the rewrite reads to its end and holds nothing once done;
-// with its context ended while it waits, it ends with [errLargeWait].
+// a transcript's line and a document's string twice [collectionBaseLineBytes],
+// and a stretch held unsettled (a key with no END) that a line within the base
+// carries one byte past it, wait for the slot held elsewhere having read at
+// most the base and one fill past where the piece began; freed, the rewrite
+// reads to its end and holds nothing once done; with its context ended while
+// it waits, it ends with [errLargeWait]. Short lines alone never carry a
+// stretch past the base: the redaction lets a key's block go at
+// [redact.MaxKeyBlockBytes], and is asked again every [scrubSettleStride].
 //
 // Mutation: hold a line only once it is read whole, drop a piece's gate, or
 // keep a hold past the rewrite, and a case goes red.
 func TestATakesPiecePastTheBaseWaitsForTheLargeSlot(t *testing.T) {
 	long := strings.Repeat("a", 2*collectionBaseLineBytes)
-	key := "-----BEGIN RSA PRIVATE KEY-----\n" +
-		strings.Repeat(keyLine+"\n", 2*collectionBaseLineBytes/(len(keyLine)+1))
+	prefix := `{"text":"`
+	// HELD UNASKED: the armour and its lines are short of the first ask.
+	open := "-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat(keyLine+"\n", scrubSettleStride/2/(len(keyLine)+1))
+	stretch := open + strings.Repeat("a", collectionBaseLineBytes-len(open)) + "\n" +
+		strings.Repeat(keyLine+"\n", collectionBaseLineBytes/(len(keyLine)+1))
 	type rewrite func(io.Writer, io.Reader, scrubber, scrubBounds) error
 	pieces := []struct {
 		name    string
 		body    string
 		rewrite rewrite
 	}{
-		{"a transcript's line", `{"text":"` + long + `"}` + "\n", rewriteLines},
-		{"a document's string", `{"text":"` + long + `"}`, rewriteDocument},
-		{"a held stretch", key, rewriteText},
+		{"a transcript's line", prefix + long + `"}` + "\n", rewriteLines},
+		{"a document's string", prefix + long + `"}`, rewriteDocument},
+		{"a held stretch", stretch, rewriteText},
 	}
-	most := collectionBaseLineBytes + 64<<10 + len(keyLine) + 1
+	most := len(prefix) + collectionBaseLineBytes + 64<<10
 	for _, tc := range pieces {
 		for _, leaves := range []bool{false, true} {
 			free := holdLargeSlot(t)
@@ -600,7 +606,7 @@ func TestATakesPiecePastTheBaseWaitsForTheLargeSlot(t *testing.T) {
 			}
 			<-done
 			switch {
-			case leaves && !(errors.Is(err, errLargeWait) && errors.Is(err, context.Canceled)):
+			case leaves && (!errors.Is(err, errLargeWait) || !errors.Is(err, context.Canceled)):
 				t.Errorf("%s: a rewrite whose caller left while it waited ended %v, want the wait's own error",
 					tc.name, err)
 			case !leaves && err != nil:
