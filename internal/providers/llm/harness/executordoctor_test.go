@@ -25,7 +25,7 @@ func doctorEntry(t *testing.T, agent string) *Provider {
 	// failure events, its structured limit and sign-in reports, the cap's
 	// signature in it.
 	overrides["limit_events"] = nil
-	overrides["limit_reset_events"] = nil
+	overrides["limit_reports"] = nil
 	overrides["auth_events"] = nil
 	if builtin, _ := harnessprofile.Builtin(agent); builtin.MCP != nil {
 		overrides["requests"] = nil

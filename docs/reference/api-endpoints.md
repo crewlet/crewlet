@@ -2987,7 +2987,13 @@ knows".
     "waiting": null,
     "usage": {"days": 7, "calls": 412, "total_tokens": 38400000},
     "used_by": [{"seat": "pm", "job": "executor", "position": 0, "written": false, "source": "default-entry"}],
-    "device_sign_in": null
+    "device_sign_in": null,
+    "limits": [
+      {"window": "session", "hours": 5, "state": "ok", "used": 0.05, "resets_at": "2026-10-29T00:00:00Z",
+       "until": null, "seen": "2026-10-28T21:56:00Z", "stale": false},
+      {"window": "weekly", "hours": 168, "state": "warning", "used": 0.83, "resets_at": "2026-11-02T09:00:00Z",
+       "until": null, "seen": "2026-10-28T21:56:00Z", "stale": false}
+    ]
   }],
   "alarms": [{"kind": "llm_credential_expiring", "title": "A model sign-in expires soon", "person": "…",
               "detail": "…", "remedy": "…", "entries": [...]}]
@@ -3016,14 +3022,21 @@ knows".
   wrote the field; `source` the level that decided it: `seat`, `executor`,
   `default-entry`, `first-entry`), and `{"assistant": "chat" | "deep_work",
   "position": n}` for Ask Crewlet.
+- `limits` is the sign-in's vendor limit windows, the newest report of each
+  across live nodes: `window` (`session`, `weekly`, `model`, `unknown`),
+  `hours` (0 where unsaid), `model` (a model window's family), `state` (`ok`,
+  `warning` from 80% used or the vendor's word, `reached`), `used` (the
+  fraction, null where unsaid or the window has turned over since), `resets_at`,
+  `until` (where the model sits this window out), `seen` and `stale` (older than
+  30 minutes). Empty where the harness reports no window.
 - `alarms` is this node's latest evaluation of the five model alarms, each with
   its `title` and `person` (the kind's words for a company owner) beside its
   `detail` and `remedy`.
 
 **A member's reading** (`"reading": "member"`) keeps each entry's `key`,
 `harness`, `model`, `health`, `sign_in.route` and `sign_in.resolves`,
-`sitting_out` without `said` and `nodes`, `last_success`, `waiting` and
-`used_by`, and answers `alarms: null`: nothing in it names a credential, an
+`sitting_out` without `said` and `nodes`, `last_success`, `waiting`,
+`used_by` and `limits`, and answers `alarms: null`: nothing in it names a credential, an
 account, a vendor's sentence or a cost.
 
 #### `GET /llm/runners`

@@ -61,6 +61,7 @@ import { JOB_WORDS, seatName } from "./places.ts";
 import { ROUTE, RUN_IN, WINDOW, product } from "./words.ts";
 import { AgoTime } from "~/components/AgoTime.tsx";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
+import { UsageLimitsCard } from "./UsageLimits.tsx";
 
 type Open = (flow: Flow, at?: WizardAt) => void;
 
@@ -718,6 +719,7 @@ export function EntryPage({
         facts={facts}
       />
       <ConditionCallout model={model} data={data} open={open} />
+      <UsageLimitsCard model={model} />
       {model.admin ? (
         <div className="models-entry-grid">
           <SignInCard model={model} data={data} open={open} focusRef={signInRef} />
