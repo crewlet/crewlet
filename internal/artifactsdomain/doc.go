@@ -3,9 +3,11 @@
 // manifests, the objects each artifact names, assets, shares, pins and
 // recently-opened marks, the change record and the company's usage counters are
 // records on one strictly ordered stream (CREWLET_ARTIFACTS_LOG), applied by
-// every data node into its replicated estate. internal/artifacts is the
-// vocabulary it speaks; internal/artifactdata is the datastore beside it, on a
-// log of its own.
+// every data node into its replicated estate. Comment threads ride it too; the
+// inbox notices they leave are DIVERGENT ([NoticesTable]), each node sweeping
+// its own copy past the inbox horizon, so the identity claim leaves them out.
+// internal/artifacts is the vocabulary it speaks; internal/artifactdata is the
+// datastore beside it, on a log of its own.
 //
 // # Subjects
 //

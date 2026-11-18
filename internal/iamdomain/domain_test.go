@@ -43,10 +43,9 @@ func TestTheStreamIsDeclaredOverItsOwnGrammar(t *testing.T) {
 			"stream silently accepts a gap that means data loss, and here that "+
 			"gap is a revocation", spec.Replay)
 	}
-	// A COMPACTED STREAM WOULD KEEP ONE MESSAGE PER SUBJECT, which for a
-	// session lineage would keep the CLOSE and drop the OPEN — and for a
-	// person would drop every change but the last, which is the
-	// authentication trail.
+	// A COMPACTED STREAM WOULD KEEP ONE MESSAGE PER SUBJECT: a session
+	// lineage's CLOSE without its OPEN, and a person's last change without
+	// the authentication trail before it.
 	if spec.MaxPerSubject != 0 {
 		t.Errorf("the stream retains %d message(s) per subject — this is a log "+
 			"and not a keyed table, and compacting it would delete the trail "+
@@ -58,12 +57,10 @@ func TestTheStreamIsDeclaredOverItsOwnGrammar(t *testing.T) {
 	}
 }
 
-// THE DOMAIN'S CEILING AND TIER A'S DEFAULT ARE ONE NUMBER.
-//
-// Two readers and no compiler between them: the framework's own suites
-// provision the stream from the domain's constant, and a running engine sizes
-// it from the Tier A field. If they disagree, every suite certifies a stream
-// no deployment ever creates.
+// THE DOMAIN'S CEILING AND TIER A'S DEFAULT ARE ONE NUMBER: the framework's
+// suites provision the stream from the domain's constant and a running engine
+// sizes it from the Tier A field, with no compiler between them. If they
+// disagree, every suite certifies a stream no deployment creates.
 func TestTheDeclaredCeilingIsTierAsDefault(t *testing.T) {
 	t.Parallel()
 	got, derived := config.Stream{}.IamMaxBytes()
@@ -82,9 +79,8 @@ func TestTheDeclaredCeilingIsTierAsDefault(t *testing.T) {
 		t.Errorf("the default %d is outside the field's own %d..%d", got,
 			config.IamLogMaxBytesFloor, config.IamLogMaxBytesCeiling)
 	}
-	// AND IT IS NOT THE FLOOR, which is the whole measurement: this log
-	// grows every morning, and at its 64 MiB floor the pessimistic rate
-	// fills it in under three months.
+	// AND IT IS NOT THE FLOOR: this log grows every morning, and at its
+	// 64 MiB floor the pessimistic rate fills it in under three months.
 	if got <= config.IamLogMaxBytesFloor {
 		t.Errorf("the identity log's default is %d, at or below its own "+
 			"floor of %d — sessions are what size this log, and the floor "+
@@ -94,16 +90,15 @@ func TestTheDeclaredCeilingIsTierAsDefault(t *testing.T) {
 }
 
 // THE THREE MACHINERY TABLES ARE NAMED, EXCLUDED FROM THE AUDIT, AND KEPT OUT
-// OF THE IDENTITY CLAIM — the deferred record and its scope as this node's own
+// OF THE IDENTITY CLAIM: the deferred record and its scope as this node's own
 // (Local, scrubbed from every snapshot), and the operation ledger as the one
 // table that TRAVELS without being claimed identical (Divergent).
 //
-// THE LEDGER'S CLASS IS THE FRAMEWORK'S CONTRACT, and it reversed: this used
-// to require it Local, scrubbed from every artefact, and an adopter then could
-// not tell a retry of anything its donor applied from a first attempt — in
-// this estate a second enrolment, a second grant change, a second epoch bump.
-// Classed Replicated it would trip the identity claim on `applied_at`, the one
-// column each node writes from its own clock.
+// THE LEDGER'S CLASS IS THE FRAMEWORK'S CONTRACT. Local, an adopter could not
+// tell a retry of what its donor applied from a first attempt (here a second
+// enrolment, grant change or epoch bump); Replicated, it would trip the
+// identity claim on `applied_at`, the one column each node writes from its
+// own clock.
 func TestTheMachineryTablesAreLocalAndTheRestAreReplicated(t *testing.T) {
 	t.Parallel()
 	d := iamdomain.Domain{}
@@ -152,18 +147,15 @@ func TestTheMachineryTablesAreLocalAndTheRestAreReplicated(t *testing.T) {
 	}
 }
 
-// THE DURABLE TABLES ARE THE ONES THE DESIGN NAMES, SPELLED OUT.
+// THE DURABLE TABLES ARE THE ONES THE DESIGN NAMES, SPELLED OUT, not counted:
+// the scrub list, the identity claim and the local sweep all derive from the
+// inventory, so a table that quietly left it shortens three lists, and a
+// count goes green when somebody adds a different one.
 //
-// Spelled out rather than counted, because the inventory is what the scrub
-// list, the identity claim and the local sweep are all derived from: a table
-// that quietly left it is three lists that are silently short, and a count
-// would go green the moment somebody added a different one.
-//
-// SEVEN OBJECT TABLES AND THREE GATE TABLES. The gates are reproducible for
-// the same reason they are trustworthy — the record that installs one is on
-// this log, in this order, and every node reaches the same verdict from it —
-// and they OUTLIVE the records that wrote them, which is the whole of why
-// `iam_removed` is a row rather than only a deletion.
+// SEVEN OBJECT TABLES AND THREE GATE TABLES. A gate is reproducible because
+// the record installing it is on this log, in order, and every node reaches
+// the same verdict from it; gates OUTLIVE the records that wrote them, which
+// is why `iam_removed` is a row rather than only a deletion.
 func TestTheDurableTablesAreTheOnesTheDesignNames(t *testing.T) {
 	t.Parallel()
 	want := []string{
@@ -180,24 +172,18 @@ func TestTheDurableTablesAreTheOnesTheDesignNames(t *testing.T) {
 	}
 }
 
-// THIS DOMAIN'S HEALTH DOES NOT GATE SEAT ADMISSION, and it is the first
-// strictly-ordered domain to say so.
+// THIS DOMAIN'S HEALTH DOES NOT GATE SEAT ADMISSION.
 //
-// AN AGENT SEAT NEVER READS THIS DOMAIN: a seat's principal is its own handle,
-// its authority is decided by internal/authz from the ORG CHART, and its work
-// arrives on its mailbox. So a node whose iam applier has stalled runs every
-// seat it holds exactly as correctly as a node whose applier is current, and
-// shedding a company's seats because a human cannot sign in would be an outage
-// caused by the wrong subsystem — at the moment an operator most needs the
-// company still working so they can go and fix it.
+// AN AGENT SEAT NEVER READS THIS DOMAIN: its principal is its own handle,
+// internal/authz decides its authority from the ORG CHART, and its work
+// arrives on its mailbox. Shedding seats because a human cannot sign in would
+// be an outage from the wrong subsystem, just when an operator needs the
+// company working. A stall gates the REQUEST path instead, per request, with
+// a 503 and never a 401.
 //
-// What a stall gates instead is the REQUEST path, one layer up, per request,
-// with a 503 and never a 401.
-//
-// The framework's own pairing is satisfied the other way round, and this case
-// asserts that half too: a domain with NO operation ledger may not gate seat
-// admission. This one keeps a ledger and does not gate — a legal combination
-// that had no instance until now.
+// The framework's pairing holds the other way round, asserted here too: a
+// domain with NO operation ledger may not gate seat admission; this one keeps
+// a ledger and does not gate, which is legal.
 func TestTheIdentityDomainDoesNotGateSeatAdmission(t *testing.T) {
 	t.Parallel()
 	d := iamdomain.Domain{}
@@ -211,11 +197,9 @@ func TestTheIdentityDomainDoesNotGateSeatAdmission(t *testing.T) {
 			"write reports a committed position to its caller, and the ledger " +
 			"is the only thing that can answer for one")
 	}
-	// AND IT STILL CLAIMS IDENTITY. The sealed columns do not weaken it,
-	// because a person's values are sealed by the WRITER before publication
-	// rather than by each node on the way in: every node writes the same
-	// ciphertext, so a determinism check compares content rather than
-	// counting rows it cannot read.
+	// AND IT STILL CLAIMS IDENTITY: the WRITER seals a person's values before
+	// publication, not each node on the way in, so every node writes the same
+	// ciphertext and a determinism check compares content.
 	if !d.ClaimsIdentity() {
 		t.Error("the identity domain does not claim identity — N copies of one " +
 			"SQL state derived from one ordered log by one deterministic " +
@@ -224,12 +208,9 @@ func TestTheIdentityDomainDoesNotGateSeatAdmission(t *testing.T) {
 	}
 }
 
-// THE BARRIER WRITES NO ROW, DECLARED.
-//
-// Stating the empty set explicitly is what stops a no-op record slipping
-// through the kind-completeness walk by writing nothing: "this kind wrote
-// nothing" and "nobody classified this kind" are the same observation, and
-// only one of them is correct.
+// THE BARRIER WRITES NO ROW, DECLARED: the explicit empty set stops a no-op
+// record slipping through the kind-completeness walk, where "this kind wrote
+// nothing" and "nobody classified this kind" look the same.
 func TestTheBarrierDeclaresTheEmptyTableSet(t *testing.T) {
 	t.Parallel()
 	if len(iamdomain.BarrierTables) != 0 {
@@ -238,10 +219,10 @@ func TestTheBarrierDeclaresTheEmptyTableSet(t *testing.T) {
 }
 
 // TestATrimmedRecordIntersectsNothing, for the barrier's reason: it writes no
-// row of this domain's anywhere — the framework removes this log's anchors in
-// its transaction (ADR-0080) — so a scope that named a bucket would make every
-// read and write about those people wait behind a record that changed none of
-// their rows, and the root would hold every sign-in in the company behind it.
+// row of this domain's (the framework removes this log's anchors in its
+// transaction, ADR-0080), so a scope naming a bucket would hold those people's
+// reads and writes behind a record that changed none of their rows, and the
+// root would hold every sign-in in the company.
 // Resolved from the KIND, so whatever a peer stated reads back the same.
 func TestATrimmedRecordIntersectsNothing(t *testing.T) {
 	t.Parallel()

@@ -6,22 +6,11 @@ import "slices"
 // eviction or a readmission — that a log did not finish, or that was refused
 // before anything was written.
 //
-// # An action, and never a flag spelling
-//
-// The remedy used to be one sentence, and it was written in the command line's
-// vocabulary: "evict it with -force", "run it again without -op-id", "from
-// another node (-api)". The dashboard rendered that sentence word for word
-// beside a dialog that has no -force, no -op-id and no -api, so an operator in
-// a browser was told to pass flags the screen in front of them could not send.
-// Two surfaces with two vocabularies need the WHAT separated from the HOW: the
-// engine says which of these to do, in a closed set a surface can switch on,
-// and each surface renders it its own way — a Finish button and `-op-id`, a
-// Force control and `-force`. The sentence beside it ([GateRemedy.Detail])
-// names neither.
-//
-// A NAMED STRING rather than an int, so an action a newer node sends is a value
-// an older client shows rather than a panic, and [GateAction.Valid] says
-// whether this build knows it.
+// It is the WHAT, never a flag spelling: the CLI and the dashboard each render
+// it their own way (`-force` and a Force control), so [GateRemedy.Detail]
+// names neither surface's controls. A named string, so an action a newer node
+// sends is a value an older client shows, and [GateAction.Valid] says whether
+// this build knows it.
 type GateAction string
 
 const (
@@ -68,11 +57,8 @@ const (
 )
 
 // GateActions is every [GateAction] this build names, in declaration order.
-//
-// THE DASHBOARD CARRIES A COPY — it is a separate build and cannot import a Go
-// identifier — and the copy is held to this list by a gate in both directions,
-// because an action the engine sends and the screen does not know is a remedy
-// the operator never sees.
+// The dashboard carries a copy, held to this list in both directions: an
+// action it does not know is a remedy the operator never sees.
 func GateActions() []GateAction {
 	return []GateAction{
 		GateRetrySameOp, GateNewGesture, GateForce, GateOtherNode,
@@ -87,19 +73,12 @@ func (a GateAction) Valid() bool { return slices.Contains(GateActions(), a) }
 // finished under its OWN operation id — sent again now, through another node,
 // or after the log is re-anchored or given room.
 //
-// # Why a surface has to know this, and not only whether to retry now
-//
-// A log refused `log_full` cannot be finished by sending the gesture again
-// straight away, and it was once advised no operation id at all — so the
-// operator raised the ceiling and ran the eviction afresh. A fresh id is a
-// SECOND gesture: every log that already held the first one's record is
-// written again, its eviction re-dated and its fence window restarted, and the
-// first id answers `superseded` to anyone finishing it. The gesture's own id is
-// what finishes it after every one of these remedies, and a surface that
-// discarded it once nothing could be retried NOW threw away the only safe way
-// on. False for [GateNewGesture], whose operation can never be finished, and
-// for [GateRestore] and [GateWait], after which the gesture's own answer says
-// what next.
+// A surface must keep the id even when nothing can be retried NOW: a fresh id
+// is a SECOND gesture, rewriting every log that held the first one's record
+// (re-dating its eviction, restarting its fence window) while the first id
+// answers `superseded`. False for [GateNewGesture], whose operation can never
+// be finished, and for [GateRestore] and [GateWait], after which the
+// gesture's own answer says what next.
 func (a GateAction) KeepsOperation() bool {
 	switch a {
 	case GateRetrySameOp, GateOtherNode, GateReanchor, GateSetCapacity:
@@ -109,8 +88,7 @@ func (a GateAction) KeepsOperation() bool {
 }
 
 // GateActionsKeepingOperation is every action [GateAction.KeepsOperation]
-// reports true for, in [GateActions]' order — the list the dashboard's copy is
-// held to.
+// reports true for, in [GateActions]' order: the dashboard's copy is held to it.
 func GateActionsKeepingOperation() []GateAction {
 	var out []GateAction
 	for _, a := range GateActions() {
@@ -125,11 +103,10 @@ func GateActionsKeepingOperation() []GateAction {
 // or one refused before anything was written: the actions, in the order to try
 // them, and the sentence that says why.
 //
-// THE ZERO VALUE IS "NOTHING TO DO" — a log that holds its record — and a
-// remedy with a detail and no action is a condition no gesture on any surface
-// clears, which the detail then names (a broker's payload limit, a refusal
-// this build has no word for). Neither is a retry, which is the point: a
-// surface offers the same gesture again only where [GateRetrySameOp] says so.
+// The zero value is "nothing to do" (the log holds its record); a detail with
+// no action is a condition no gesture clears (a broker's payload limit, a
+// refusal this build has no word for). Neither is a retry: a surface offers
+// the same gesture again only where [GateRetrySameOp] says so.
 type GateRemedy struct {
 	Actions []GateAction
 	Detail  string

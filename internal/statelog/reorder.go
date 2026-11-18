@@ -9,55 +9,30 @@ import (
 // reorderBuffer holds records that arrived out of order, so a strict loop can
 // apply a contiguous prefix.
 //
-// # Why a strict log needs one at all
-//
-// A log is contiguous by construction, so a hole is never the stream's own
-// doing — it is a REDELIVERY: a record whose acknowledgement was lost comes
-// back after the broker's redelivery window, out of order with what has
-// arrived since. The buffer is what carries the loop across that window
-// instead of applying past the hole.
-//
-// # And why overflow is a fault rather than a gap to step over
-//
-// Applying past a hole in a strict log produces state no other node holds, and
-// nothing later can tell that it did: the checkpoint moves, the identity claim
-// compares two nodes that both think they are current, and the missing
-// record's rows are simply absent everywhere the hole was. A bounded buffer
-// that overflows is saying the hole is not closing — which means the stream is
-// not the stream this loop thinks it is, and stopping is the only honest move.
-//
-// A COMPACTED domain has no such invariant: its stream removes interior
-// sequences by design, so a hole there is ordinary and the buffer is bypassed
-// entirely.
+// A hole in a strict log is a redelivery (a lost ack brings a record back out of
+// order), and the buffer carries the loop across it. Overflow is a fault, not a
+// gap to step over: applying past a hole produces state no other node holds and
+// nothing later can detect, so a hole that will not close means the stream is
+// not the one this loop checkpointed against. A COMPACTED domain removes
+// interior sequences by design and bypasses the buffer.
 type reorderBuffer struct {
 	held  []Record
 	bytes int
 }
 
 // admit takes a fetched batch and returns the records that may be applied now,
-// holding back anything above a hole.
+// holding back anything above a hole. run is what the caller already holds for
+// this transaction, so contiguity runs from the checkpoint through it.
 //
-// run is what the caller already holds for this transaction, which is what
-// makes the contiguity test start from the right place: a run filled across
-// two fetches is contiguous from the checkpoint through everything already in
-// it.
-//
-// THE RUN ITSELF, NOT ITS LENGTH. The next sequence is one past the HIGHEST
-// position the run carries, and a run legitimately carries records that are
-// not part of its contiguous prefix — a redelivery at or below the checkpoint
-// that is passed through so it can be acknowledged, or a second copy of a
-// record already in the run. Deriving the next sequence from the count
-// overshoots by one for each of those, and an overshoot admits a record PAST
-// A HOLE: with the checkpoint at 10 and a run of [5, 11, 12], the count says
-// 14 is next when 13 is, so 14 and 15 are applied with 13 missing. That is the
-// one failure a replicated log cannot notice afterwards, and it was reachable
-// from an ordinary lost acknowledgement.
+// The next sequence is one past the HIGHEST position in run, never its length:
+// a run legitimately carries redeliveries at or below the checkpoint (passed
+// through to be acknowledged) and second copies, and counting them admits a
+// record past a hole (checkpoint 10, run [5, 11, 12]: the count says 14 is next
+// when 13 is). TestTheReorderBufferNeverAdmitsPastAHoleAfterARedelivery.
 func (b *reorderBuffer) admit(batch []Record, cursor Position, protocol ReplayProtocol, run []Record) ([]Record, error) {
 	if protocol != ReplayStrict {
-		// NO CONTIGUITY TEST AND NO BUFFER. The stream keeps one
-		// message per subject, so an ordinary write removes an interior
-		// sequence — a loop that treated that as a hole would stall on
-		// the first one for ever.
+		// NO CONTIGUITY TEST AND NO BUFFER: a compacted stream drops an interior
+		// sequence on an ordinary write, so treating it as a hole would stall for ever.
 		return batch, nil
 	}
 
@@ -73,26 +48,20 @@ func (b *reorderBuffer) admit(batch []Record, cursor Position, protocol ReplayPr
 	})
 	b.held = dedupe(b.held)
 
-	// The next sequence this loop may apply is one past whatever it
-	// already holds — the checkpoint, or the highest record in the run.
 	next := highest(run, cursor).Seq + 1
 	var ready []Record
 	for _, rec := range b.held {
 		switch {
 		case rec.Position.Seq < next:
-			// Already committed or already in the run. It still has
-			// to reach the caller, which acknowledges it: a
-			// redelivery nothing acknowledges is redelivered for
-			// ever.
+			// Already committed or in the run: still passed on, since a
+			// redelivery nothing acknowledges is redelivered for ever.
 			ready = append(ready, rec)
 		case rec.Position.Seq == next:
 			ready = append(ready, rec)
 			next++
 		default:
-			// A HOLE. Everything above it waits, and the loop
-			// stops here so what it returns is a PREFIX of what it
-			// holds — which is what lets the remainder be carried
-			// by slicing rather than by rebuilding.
+			// A HOLE: everything above it waits. Stopping here keeps ready a
+			// PREFIX of held, so the remainder is carried by slicing.
 			b.held = b.held[len(ready):]
 			b.bytes = payloadBytes(b.held)
 			return b.checked(ready, next)
@@ -116,13 +85,9 @@ func (b *reorderBuffer) checked(ready []Record, next uint64) ([]Record, error) {
 	return ready, nil
 }
 
-// payloadBytes is what the buffer is measured in: the records themselves,
-// which is the memory a hole actually costs.
-//
-// THE FRAMED BYTES, not the body, and not both. The body is a SUBSLICE of the
-// frame rather than a copy of it, so one allocation is behind the two fields
-// and adding them would report a buffer at twice its real size — which would
-// stop an applier on a hole it had the room for.
+// payloadBytes measures the buffer in FRAMED bytes, the memory a hole costs. The
+// body is a subslice of the frame, so adding both would double the size and stop
+// an applier on a hole it had room for.
 func payloadBytes(held []Record) int {
 	n := 0
 	for _, rec := range held {
@@ -131,17 +96,11 @@ func payloadBytes(held []Record) int {
 	return n
 }
 
-// dedupe keeps ONE record per position and CHAINS the acknowledgements of the
-// copies it drops — and their releases, for the loop that gives the kept copy
-// back unconsumed ([Runner.Run]'s unwind).
-//
-// Both halves are load-bearing and they pull in opposite directions. Two
-// copies of one position applied twice is a record written on top of its own
-// rows — the second copy is above the checkpoint the first established, so the
-// loop's own skip cannot catch it. But each copy is a separate DELIVERY the
-// broker is holding open, and a delivery nothing acknowledges is redelivered
-// for ever: dropping the duplicate's ack turns a transient redelivery into a
-// permanent one.
+// dedupe keeps ONE record per position and CHAINS the acks of the copies it
+// drops, and their releases for [Runner.Run]'s unwind. Both copies applied write
+// a record over its own rows, above the checkpoint where the loop's skip cannot
+// catch it; but each copy is a separate delivery, and one never acknowledged is
+// redelivered for ever.
 func dedupe(held []Record) []Record {
 	if len(held) < 2 {
 		return held
@@ -159,8 +118,8 @@ func dedupe(held []Record) []Record {
 	return out
 }
 
-// chain acknowledges both deliveries, reporting the first failure and still
-// trying the second: one broker error must not leave the other delivery open.
+// chain acknowledges both deliveries, always calling both and joining their
+// errors: one broker error must not leave the other delivery open.
 func chain(first, second func() error) func() error {
 	switch {
 	case first == nil:
@@ -168,26 +127,13 @@ func chain(first, second func() error) func() error {
 	case second == nil:
 		return first
 	}
-	// BOTH ARE CALLED, always. One broker error must not leave the other
-	// delivery open, which is what returning early on the first would do.
 	return func() error { return errors.Join(first(), second()) }
 }
 
-// highest is the furthest position a run carries, or the cursor for an empty
-// run.
-//
-// THE MAXIMUM AND NOT THE LAST ELEMENT: a run is appended to in fetch order,
-// and a fetch that delivered only a redelivery below the checkpoint leaves a
-// record at the end that is lower than everything before it.
-// topRecord is the RECORD at the highest position in a non-empty run.
-//
-// THE LAST ELEMENT IS NOT IT, which is the whole reason this exists. A run
-// closes with whatever the final fetch handed over, and [reorderBuffer.admit]
-// deliberately passes a record BELOW the run's high-water mark straight
-// through so that the caller acknowledges it — a redelivery nothing
-// acknowledges is redelivered for ever. So the tail of a run is a stale
-// redelivery whenever one arrived late, and everything derived from "where
-// this run got to" reads the maximum instead.
+// topRecord is the RECORD at the highest position in a non-empty run. Not the
+// last element: a run is appended in fetch order and [reorderBuffer.admit] passes
+// a redelivery below the high-water mark through to be acknowledged, so the tail
+// may be stale; anything derived from where a run got to reads the maximum.
 func topRecord(run []Record) Record {
 	top := run[0]
 	for _, rec := range run[1:] {
@@ -198,9 +144,8 @@ func topRecord(run []Record) Record {
 	return top
 }
 
-// highest is [topRecord]'s position, floored at a cursor the run may not have
-// reached — which is what makes it safe on a run that is ENTIRELY
-// redeliveries of records already committed.
+// highest is [topRecord]'s position, floored at cursor, so it is safe on a run
+// that is entirely redeliveries of records already committed.
 func highest(run []Record, cursor Position) Position {
 	top := cursor
 	for _, rec := range run {

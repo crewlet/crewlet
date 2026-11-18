@@ -10,13 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE THREE SEAMS A WRITE AUTHORITY IS BUILT FROM, and the one thing each is
-// for.
-//
-// [statelog.NewPublisher] refuses a nil Rows, Fence or Gates by name, which is
-// what makes a domain with a half-built write authority a boot failure rather
-// than a node that appends records the fleet drops one at a time. This file is
-// the identity estate's three.
+// The three seams a write authority is built from. [statelog.NewPublisher]
+// refuses a nil Rows, Fence or Gates by name, so a half-built write authority
+// fails boot rather than appending records the fleet drops one at a time.
 
 // NewRows builds the framework's row seam over this domain's guards, on the
 // log spec names — the one the publisher writes, whose checkpoint and anchors
@@ -35,14 +31,11 @@ const personGuardsStatement = `
 // iamGuards answers the two object-level facts a first write needs: whether a
 // tombstone forbids this subject for ever, and whether a row already guards it.
 //
-// ONE KIND HAS THEM, and that is the whole shape of this domain rather than an
-// omission. A PERSON is the only object here that can be removed — by a record
-// on the directory, which writes the tombstone this guard reads. The directory
-// itself is one object that is never removed, and a session's lineage is
-// opened once and ended rather than removed, so neither has a tombstone, and
-// neither is guarded by a row: the directory publishes at its anchor, and a
-// session's open is the create-at-zero the broker arbitrates, where a row
-// guard would be a second opinion about a lineage the broker already decided.
+// Only a person has them: only a person is removed, by a directory record that
+// writes the tombstone read here. The directory is never removed and publishes
+// at its anchor; a session lineage is ended, not removed, and its open is the
+// create-at-zero the broker arbitrates, where a row guard would be a second
+// opinion about a lineage the broker already decided.
 func iamGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 	deleted, guard bool, err error) {
 
@@ -59,17 +52,12 @@ func iamGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 	return removed > 0, present > 0, nil
 }
 
-// ReadScope is the closure a READ is about.
+// ReadScope is the closure a read is about, in the alphabet a record's own
+// scope resolves into, so the coverage probe is one comparison.
 //
-// It is the same alphabet a record's own scope resolves into, which is what
-// makes the coverage probe one comparison rather than a translation between
-// two vocabularies.
-//
-// A READ ABOUT ONE PERSON IS THEIR BUCKET. A read that names nobody — the
-// directory, a duty's walk, a sweep's own survey — is the WHOLE ESTATE, not
-// because it touches everything but because a read that cannot say who it is
-// about is one every deferred record concerns, and the honest answer to "is
-// this complete" is then "no".
+// A read about one person is their bucket. A read naming nobody (the
+// directory, a duty's walk, a sweep's survey) is the whole estate: every
+// deferred record concerns it, so "is this complete" honestly answers "no".
 func ReadScope(personIDs ...string) statelog.ScopeSet {
 	if len(personIDs) == 0 {
 		return statelog.ScopeSet{Paths: []string{RootPath()}}
@@ -77,45 +65,35 @@ func ReadScope(personIDs ...string) statelog.ScopeSet {
 	return PeopleScope(personIDs...).Resolve(PersonSubject(personIDs[0]))
 }
 
-// ReadScopeForBucket is the closure a per-bucket duty or sweep is about.
-//
-// ITS OWN CONSTRUCTOR rather than a caller reaching for [PeopleScope], because
-// a sweep holds a BUCKET and not a person: going through a person id would
-// mean inventing one whose hash lands where the caller already is, which is a
-// derivation with no inverse and no reason to exist.
+// ReadScopeForBucket is the closure a per-bucket duty or sweep is about. A
+// sweep holds a bucket, not a person; going through [PeopleScope] would mean
+// inventing a person id that hashes to it.
 func ReadScopeForBucket(b Bucket) statelog.ScopeSet {
 	return statelog.ScopeSet{Paths: []string{b.Path()}}
 }
 
 // Fence refuses a write this node must not make.
 //
-// THE SAME TWO PRICES ITS SIBLINGS PAY, because this domain installs the same
-// gate: Evicted runs on every append and is answered from rows this node
-// already has, and ClearForZero pays a coordination round trip because being
-// wrong there is a LOST UPDATE rather than a duplicate.
-//
-// AND HERE IT IS ON THE HOT PATH. Every session's opening publishes at an
-// expectation of ZERO — that is what makes a lineage open exactly once — so
-// ClearForZero is not an occasional path taken by one operation, it is on
-// every sign-in. A node below the trim floor cannot tell a lineage nobody
-// opened from one whose record has been trimmed beneath it, and guessing would
-// open one session twice; the same holds for the first record on any subject,
-// the directory's own included.
+// It installs its siblings' gate at the same prices: Evicted runs on every
+// append, from rows this node has, and ClearForZero pays a coordination round
+// trip because being wrong there is a lost update, not a duplicate. Here
+// ClearForZero is on every sign-in, since a session opens at an expectation of
+// zero (so a lineage opens exactly once): a node below the trim floor cannot
+// tell a lineage nobody opened from one trimmed beneath it, and guessing would
+// open a session twice. The same holds for any subject's first record.
 type Fence struct {
 	db     store.ReplicatedReader
 	nodeID string
 
-	// Floor is the fleet's published trim floor at a generation and Ends
-	// the log's two ends, read live, and Committed this node's applier's
-	// live checkpoint — the three reads [statelog.ZeroFence] takes beside
-	// the eviction. The cursor the floor is compared against is passed per
-	// call: the checkpoint the write's own snapshot read
-	// ([statelog.Snap.Checkpoint]), never the applier's live position,
-	// because the floor theorem concludes that a trimmed record is already
-	// in the rows the DECISION was made from, and a live position that has
-	// moved past it since clears a claim that never saw it. Set by the
-	// engine after the runner exists, because a fence built before its
-	// applier would compare against a position that does not move.
+	// Floor is the fleet's trim floor at a generation, Ends the log's two ends,
+	// and Committed this node's applier's live checkpoint: the reads
+	// [statelog.ZeroFence] takes beside the eviction. The floor is compared with
+	// the cursor passed per call, the write's own snapshot checkpoint
+	// ([statelog.Snap.Checkpoint]), never the live position: the floor theorem
+	// says a trimmed record is in the rows the decision was made from, and a
+	// position moved past it since clears a claim that never saw it. The engine
+	// sets these once the runner exists; a fence built before its applier would
+	// compare against a position that does not move.
 	Floor     func(ctx context.Context, generation uint32) (uint64, error)
 	Ends      func(ctx context.Context) (statelog.LogEnds, error)
 	Committed func() statelog.Position
@@ -126,22 +104,18 @@ func NewFence(db store.ReplicatedReader, nodeID string) *Fence {
 	return &Fence{db: db, nodeID: nodeID}
 }
 
-// Evicted reports this node's own eviction, FROM ITS OWN APPLIED ROWS.
-//
-// Not from coordination, which is the point: a wedged coordination path is a
-// precondition of an eviction being permitted at all, so the source that is
-// still fresh in exactly that failure is this node's own replicated table.
+// Evicted reports this node's own eviction from its own applied rows, not
+// coordination: a wedged coordination path is a precondition of an eviction
+// being permitted, so this node's replicated table is what stays fresh in that
+// failure.
 func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 	if f == nil || f.db.IsZero() || f.nodeID == "" {
 		return false, nil
 	}
 	var from, readmitted sql.NullInt64
-	// THROUGH THE HANDLE, NOT A POOL. A replicated estate that is not open —
-	// a legitimate, documented state, since an adoption closes it between
-	// its rename and its reopen — has no pool, and a statement issued on a
-	// closed one panics inside database/sql. [store.ReplicatedReader.Read]
-	// answers [store.ErrNoEstate], which the refusal below already handles
-	// as the honest "unreadable is not not-evicted".
+	// Through the handle, not a pool: an adoption closes the estate between its
+	// rename and reopen, and a statement on a closed pool panics in database/sql.
+	// [store.ReplicatedReader.Read] answers [store.ErrNoEstate], refused below.
 	err := f.db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			SELECT from_position, readmitted_position
@@ -152,18 +126,15 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
 	case err != nil:
-		// UNREADABLE IS NOT "not evicted". A fence that failed open on a
-		// store it could not read is a node appending records every
-		// other node drops, collecting acknowledgements for writes that
-		// happen nowhere.
+		// Unreadable is not "not evicted": failing open would append records
+		// every other node drops, acknowledged for writes that happen nowhere.
 		return false, fmt.Errorf("iamdomain: read this node's own eviction: %w", err)
 	}
 	if !from.Valid {
 		return false, nil
 	}
-	// THE NEGATION OF [Domain.Evictions]' `Back`, spelled once for both, so
-	// the trim and this node's own fence can never disagree about whether
-	// it is back.
+	// [Domain.Evictions]' `Back` negated, spelled once in back so the trim and
+	// this fence never disagree.
 	return !back(readmitted, from.Int64), nil
 }
 
@@ -174,36 +145,27 @@ func back(readmitted sql.NullInt64, from int64) bool {
 	return readmitted.Valid && readmitted.Int64 > from
 }
 
-// ClearForZero verifies, freshly, that publishing at an expectation of ZERO is
+// ClearForZero verifies, freshly, that publishing at an expectation of zero is
 // safe from this node.
 //
-// A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is the opposite of the
-// fail-open rule a delivery claim follows: failing open there costs a duplicate
-// notification, which is recoverable, and failing open here costs a CLAIM that
-// overwrites one another node already made — which is not, and which in this
-// domain is a second person holding somebody's address.
-//
-// THE CHECK IS [statelog.ZeroFence], the one every sibling's fence runs: this
-// supplies the four reads. Written out here it refused an evicted node with
-// [statelog.ErrConflict], which a caller reads as a colleague editing and
-// retries into; compared the floor with the cursor alone, so it could not tell
-// a node replaying records the log still holds from one below the LOG, which no
-// replay brings back; and read a floor that named no generation, against a
-// cursor that may be in another. Every refusal is now an
-// [*statelog.Unavailable] naming its reason.
+// A read that answers unknown refuses, unlike a delivery claim's fail-open:
+// failing open there costs a recoverable duplicate notification, here a claim
+// overwriting one another node made, in this domain a second person holding
+// somebody's address. The check is [statelog.ZeroFence], every sibling's; this
+// supplies its four reads, and every refusal is an [*statelog.Unavailable]
+// naming its reason.
 func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
 	return statelog.ZeroFence{
 		Evicted: f.Evicted, Floor: f.Floor, Ends: f.Ends, Committed: f.Committed,
 	}.ClearForZero(ctx, cursor)
 }
 
-// Gates answers whether a durable record produced rows on NO node.
+// Gates answers whether a durable record produced rows on no node.
 //
-// THE SAME TWO GATES [Applier.Gated] INSTALLS, read from the publisher's side,
-// by the rule [statelog.Gates] states — which every sibling's reader keeps too,
-// and statelogtest.RunGates certifies for each. The two must agree: a
-// resolution that looked for a gate the applier never installs would read
-// every unapplied record as "somebody else won".
+// It reads the two gates [Applier.Gated] installs, by the rule [statelog.Gates]
+// states, which statelogtest.RunGates certifies. They must agree: looking for a
+// gate the applier never installs would read every unapplied record as
+// "somebody else won".
 type Gates struct{ db store.ReplicatedReader }
 
 // NewGates builds it.
@@ -212,17 +174,11 @@ func NewGates(db store.ReplicatedReader) *Gates { return &Gates{db: db} }
 // GatedAt reports whether a record at p applies nowhere, and the gate that
 // answers for it.
 //
-// ONE TRANSACTION FOR BOTH GATES, on ONE load of the replicated peer, and
-// through the HANDLE rather than a pool — see [Fence.Evicted] for why a closed
-// estate is reachable here. It used to be two reads, eviction first: two
-// instants and possibly two FILES, since every read through the handle
-// resolves afresh the peer an adoption swaps and the applier commits between
-// any two reads, so a
-// removal committing between them made one half of the answer describe the
-// estate before it and the other the estate after it.
-//
-// THE BODY IS READ for the removal gate, by the one rule the applier's own
-// gate asks: see [markedPerson].
+// Both gates are read in one transaction, through the handle (see
+// [Fence.Evicted]): each handle read resolves afresh the peer an adoption swaps,
+// and the applier commits between reads, so two reads could describe the
+// estate before and after one removal. The removal gate reads the body by the
+// applier's own rule: see [markedPerson].
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	writer, opID string, p statelog.Position, body []byte) (statelog.Reason, bool, error) {
 
@@ -232,13 +188,11 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	var reason statelog.Reason
 	var gated bool
 	err := g.db.Read(ctx, func(tx *sql.Tx) error {
-		// THE REMOVAL GATE FIRST, by the rule [statelog.Gates] states: a
+		// The removal gate first, by the rule [statelog.Gates] states: a
 		// tombstone holds the person for every writer for ever, where an
-		// eviction is one writer's and a readmission ends it, so `deleted`
-		// is the answer that stays true. A record both gates drop is
-		// dropped either way, so the order decides only which one is
-		// REPORTED — and it was the eviction, so a caller was told to wait
-		// for a readmission that could never make the write land.
+		// eviction ends at readmission. A record both gates drop is dropped
+		// either way; the order picks which is reported, and reporting the
+		// eviction would have a caller wait for a readmission that cannot help.
 		if person, ok := markedPerson(subj, body); ok {
 			var author sql.NullString
 			err := tx.QueryRowContext(ctx, `
@@ -250,13 +204,10 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 				return fmt.Errorf("iamdomain: read the removal gate for "+
 					"person %s: %w", person, err)
 			case author.Valid && author.String == opID:
-				// THE RECORD THAT REMOVED THE PERSON IS NOT GATED BY ITS
-				// OWN TOMBSTONE, by its own id: without the exception a
-				// removal whose acknowledgement was lost resolves as
-				// "applied nowhere", and its caller is told the person
-				// was not removed when they were. It falls through to
-				// the eviction gate, because this says only that THIS
-				// gate did not drop the record.
+				// The removal's own record (by its id) is not gated by its
+				// tombstone: otherwise a removal whose acknowledgement was lost
+				// resolves as "applied nowhere" and its caller is told the person
+				// was not removed. It falls through to the eviction gate.
 			default:
 				reason, gated = statelog.ReasonDeleted, true
 				return nil
@@ -277,8 +228,8 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 			return fmt.Errorf("iamdomain: read the eviction gate for node %s: %w",
 				writer, err)
 		}
-		// THE APPLIER'S WINDOW, spelled as [Applier.Gated] spells it: half
-		// open at both ends.
+		// The window as [Applier.Gated] spells it: after the eviction, before
+		// the readmission.
 		at := p.Packed()
 		evicted := from.Valid && at > from.Int64
 		readmittedBy := readmitted.Valid && at >= readmitted.Int64

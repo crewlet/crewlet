@@ -197,9 +197,9 @@ func TestOneGiverRecordsOneVerdictPerRequest(t *testing.T) {
 }
 
 // A VERDICT RECORD IS RETAINED BY A BUILD THAT PREDATES IT: the writer stamps
-// a verdict, and a verdict's reseal, at the version its kind was introduced
-// at, which a build reading only the base format holds back rather than
-// faulting on, while a told record beside it stays readable by every build.
+// a verdict and its reseal at the version its kind was introduced at, which a
+// build reading only the base format holds back rather than faults on, while a
+// told record beside it stays readable by every build.
 //
 // Mutation: drop the verdict's row from versionedFields and both records are
 // stamped at 1, which a build without the verdict's applier would fault on.
@@ -440,8 +440,8 @@ func TestTheVerdictsPageNarrowsByEveryFilter(t *testing.T) {
 			t.Fatalf("record %s's verdict: %v", v.By, err)
 		}
 	}
-	// A NEWER PEER'S VERDICT on an act this build does not know, which it
-	// applies all the same: the act is a word on the row, not a shape.
+	// A NEWER PEER'S VERDICT on an act this build does not know applies all
+	// the same: the act is a word on the row, not a shape.
 	peer := verdictOf("web", uuid.NewString(), "reviewer")
 	peer.Kind, peer.Host, peer.User = "deploy", "", ""
 	subject := accessdomain.VerdictSubject("web", peer.Request, "reviewer")

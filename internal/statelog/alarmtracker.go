@@ -18,61 +18,29 @@ import (
 // alarmGauge is the instrument every firing alarm sets.
 const alarmGauge = metrics.AlarmActive
 
-// Tracker turns successive evaluations into the two surfaces that are not a
-// screen: a log line on every transition, and a gauge an operator's
-// collector scrapes.
+// Tracker turns successive evaluations into a log line per transition, a
+// gauge an operator's collector scrapes, and an [AlarmTransition] handed on
+// ([Tracker.OnTransition]; package doc, "A node's alarm transition is the
+// record its wake derives from"). Lines and wakes follow transitions, not the
+// level: a level re-said every [AlarmInterval] cannot say when it STARTED. The
+// gauge is a level, one series per kind, 1 while the alarm holds on any log
+// and 0 when it clears, never deleted: a vanished series reads as a node that
+// stopped reporting. An instance raised again within [RelapseWindow] of
+// clearing is a new raise aged from its run's first.
 //
-// # Why a transition and not a level
-//
-// An alarm evaluated on the position heartbeat ([AlarmInterval]) is true
-// for as long as the condition is, which is minutes or days. Logging the
-// level would write the same line six times a minute for a week and make the
-// log useless for finding when it STARTED — which is the one thing an
-// operator needs and the one thing a level cannot say. So entry and exit are each logged once,
-// carrying how long the alarm was up.
-//
-// The gauge is the opposite and is a level by construction: a collector
-// samples it, so it has to be true at the moment it is read. It carries one
-// series per kind, set to 1 while the alarm holds — on any log, for a per-log
-// one — and 0 when it clears: never DELETED, because a series that disappears
-// reads as "no data" on every dashboard, and "no data" is indistinguishable
-// from a node that stopped reporting.
-//
-// # Every transition is handed on, once
-//
-// The same transitions the log lines say are handed, one [AlarmTransition]
-// each, to whoever the node asked to be told ([Tracker.OnTransition]): the
-// engine, which publishes each as the inbound delivery the seats holding the
-// health grant are woken by. A transition rather than a level for the log
-// line's reason — a wake per evaluation would wake a seat six times a minute
-// about one alarm — and the record the wake derives from, so nothing commits
-// beside it (ADR-0095). A tracker that remembers ([Tracker.Remember]) keeps its
-// standing instances in the node's own file, so its first evaluation after a
-// restart says only what changed: a standing instance is not raised again, and
-// one that cleared while the node was down is cleared with its original instant.
-//
-// # A flap is one run
-//
-// An instance raised again within [RelapseWindow] of clearing is logged and
-// handed on as a new raise, but its age counts from its run's first raise.
-//
-// A Tracker is safe for concurrent use: the heartbeat evaluates every
-// [AlarmInterval], the trim tick evaluates again the moment its own
-// measurements land, on a different goroutine, and the health envelope reads
-// [Tracker.Standing] from every request and push tick.
+// Safe for concurrent use: the heartbeat and the trim tick evaluate on
+// different goroutines, and the health envelope reads [Tracker.Standing].
 type Tracker struct {
 	rec *metrics.Recorder
 	now func() time.Time
 
-	// logger is where the two transition lines go: the package's own
-	// outside a case.
+	// logger takes the transition lines: the package's own outside a test.
 	logger *slog.Logger
 
 	mu     sync.Mutex
 	firing map[instance]firing
-	// lapsed is every instance that cleared within the last [RelapseWindow],
-	// with its run's first raise, which a raise of it again inside the window
-	// resumes.
+	// lapsed is every instance cleared within the last [RelapseWindow], with
+	// its run's first raise, which a raise inside the window resumes.
 	lapsed map[instance]lapse
 
 	// node and handOn are who is told of every transition, and as which
@@ -80,50 +48,38 @@ type Tracker struct {
 	node   string
 	handOn func(AlarmTransition)
 
-	// order is the kinds the latest evaluation reported, in the order it
-	// reported them (the table's own), and observed whether any evaluation
-	// has run at all. Both are for [Tracker.Standing].
+	// order is the kinds the latest evaluation reported, in the table's
+	// order, and observed whether any evaluation has run; both for
+	// [Tracker.Standing].
 	order    []Kind
 	observed bool
 
 	// latest is the latest evaluation's alarms, for [Tracker.Latest].
 	latest []Alarm
 
-	// kept is where the instances up, and the lapses, are kept across a
-	// restart, nil for a tracker that keeps them in memory alone.
+	// kept keeps the instances up, and the lapses, across a restart; nil
+	// keeps them in memory alone.
 	kept *store.DB
 }
 
-// instance is what the tracker writes ONE PAIR OF LOG LINES for: a kind, and
-// the log it stands on when it is a per-log condition ([PerLogKinds]), or the
-// configured entry (a model entry or an MCP server) when it is a per-entry one
-// ([PerEntryKinds]).
-//
-// THE KIND ALONE IS NOT THE LOG LINE'S IDENTITY. Seven conditions are
-// evaluated once per log ([Report]), so one alarm can stand on the tracker's
-// log and the knowledge base's at once ([Alarm.Domains]). Keyed on the kind,
-// the second log joining it raised no line of its own, a log whose condition
-// cleared while another's stood said nothing, and the one `alarm_cleared` that
-// finally came carried the LAST log's detail against the FIRST one's start.
-//
-// AND THE KIND ALONE IS STILL THE ALARM'S IDENTITY everywhere else: the alarm
-// is one per kind, the gauge one series per kind and [Tracker.Standing] one
-// entry per kind, so an instance is a log line's key and nothing more. A
-// node-wide kind lists no log, so it is one instance with none.
-//
-// A PER-ENTRY KIND ([PerEntryKinds]) is the same move over configured entries:
-// one instance per entry it stands on, so the second model whose token comes
-// due, or the second MCP server that goes down, raises a line of its own.
+// instance is what the tracker writes ONE PAIR OF LOG LINES for: a kind, plus
+// the log it stands on for a per-log kind ([PerLogKinds]) or the configured
+// entry (a model entry or MCP server) for a per-entry one ([PerEntryKinds]).
+// Keyed on the kind alone, a second log or entry joining a kind already up, or
+// one clearing while another stood, said nothing, and the clear carried the
+// last log's detail against the first one's start. Everywhere else the kind is
+// the alarm's identity (the gauge, [Tracker.Standing]): an instance keys log
+// lines and nothing more.
 type instance struct {
 	kind   Kind
 	domain string
 	entry  string
 }
 
-// firing is one instance currently up, and told whether whoever is handed its
-// transitions has taken its raise: only a told instance is kept across a restart.
-// run is its run's first raise: since, or an earlier raise of the instance that
-// cleared less than [RelapseWindow] before this one, which every age reads.
+// firing is one instance up. told is whether whoever is handed transitions
+// took its raise: only a told instance is kept across a restart. run is its
+// run's first raise (since, or a raise cleared less than [RelapseWindow]
+// before it), which every age reads.
 type firing struct {
 	since  time.Time
 	run    time.Time
@@ -138,19 +94,12 @@ type lapse struct {
 }
 
 // instancesOf is an alarm's instances, each with the detail its lines carry:
-// one per log or configured entry the alarm stands on, carrying that log's or
-// that entry's own measurement, and otherwise one with no log, carrying the
-// alarm's.
-//
-// THE LOGS AN ALARM LISTS ARE ITS INSTANCES, with no second check of the kind:
-// only a per-log kind lists any, which the report's own test holds in both
-// directions, so a check here would be a second opinion about one fact. An
-// entry that names several logs — one measurement taken identically on each
-// ([AlarmDomain.Domains]) — is an instance per log it names, so carrying a
-// measurement once changes nothing about which log lines are written. The
-// configured entries an alarm lists are its instances by the same rule: only a
-// per-entry kind lists any, since [Evaluate] fills [Alarm.Entries] for the
-// table's per-entry rows and nothing else fills it.
+// one per configured entry or log the alarm lists, with that one's own
+// measurement, else one with no log carrying the alarm's. The lists decide,
+// with no second check of the kind: only a per-entry kind lists entries
+// ([Evaluate] alone fills [Alarm.Entries]) and only a per-log kind lists logs
+// (the report's test holds both directions). An [AlarmDomain] naming several
+// logs is an instance per log.
 func instancesOf(a Alarm) ([]instance, []string) {
 	if len(a.Entries) > 0 {
 		keys := make([]instance, 0, len(a.Entries))
@@ -175,8 +124,7 @@ func instancesOf(a Alarm) ([]instance, []string) {
 	return keys, details
 }
 
-// NewTracker builds a tracker. A nil recorder records nothing and still logs,
-// which is the honest behaviour for a node whose metrics are not configured:
+// NewTracker builds a tracker. A nil recorder records nothing and still logs:
 // the alarm is a fact about the company, not about the collector.
 func NewTracker(rec *metrics.Recorder, now func() time.Time) *Tracker {
 	if now == nil {
@@ -187,22 +135,22 @@ func NewTracker(rec *metrics.Recorder, now func() time.Time) *Tracker {
 }
 
 // Remember makes the tracker keep the instances it has up in db, this node's
-// own file, and read them back at its first evaluation. Set it before then.
+// own file, and read them back at its first evaluation, so after a restart
+// only a change is a transition: one that cleared while the node was down
+// clears with its original instant. Set it before then.
 func (t *Tracker) Remember(db *store.DB) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.kept = db
 }
 
-// OnTransition makes the tracker hand fn every transition it makes from now
-// on, each stamped as node's: an instance fired or cleared, one per instance,
-// as the log lines are, in the order the evaluation made them.
+// OnTransition makes the tracker hand fn every transition from now on,
+// stamped as node's, one per instance in the order the evaluation made them.
 //
-// fn IS CALLED UNDER THE TRACKER'S LOCK, so two evaluations that race (the
-// heartbeat and the trim tick) hand their transitions on in the order the
-// tracker made them; it must not block and must not call the tracker. Set it
-// before the first evaluation, or what that evaluation finds up is told to the
-// log alone.
+// fn IS CALLED UNDER THE TRACKER'S LOCK, so racing evaluations (the heartbeat,
+// the trim tick) hand on in order; it must not block or call the tracker. Set
+// it before the first evaluation, or what that one finds up goes to the log
+// alone.
 func (t *Tracker) OnTransition(node string, fn func(AlarmTransition)) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -220,26 +168,17 @@ func (t *Tracker) transition(key instance, change TransitionChange, detail strin
 	}
 }
 
-// Observe records one evaluation and returns the alarms currently up, in the
-// table's own order.
+// Observe records one evaluation and returns the alarms up, in the table's
+// order. Each [instance] is raised and cleared on its own in the log.
 //
-// EACH INSTANCE IS RAISED AND CLEARED ON ITS OWN in the log: a node-wide kind,
-// or one log a per-log kind stands on (see [instance]). So a log line starts
-// and ends each, as the published reference promises, however many logs share
-// a kind, and a log joining or leaving a kind that stays up is said.
+// EVERY KIND IS WRITTEN TO THE GAUGE on every observation, firing or not:
+// writing only the firing ones leaves a cleared alarm at 1 for whoever reads
+// the metric. The gauge stays one series per kind; a series per log is a label
+// kept for every log a deployment ever ran, for what the log line names.
 //
-// EVERY KIND IS WRITTEN TO THE GAUGE on every observation, firing or not.
-// Writing only the firing ones would leave a cleared alarm's last value at 1
-// for as long as the collector remembers it, which is an alarm that never
-// goes away for anybody reading the metric rather than the log. The gauge
-// stays ONE SERIES PER KIND, at 1 while the kind's alarm is up on any log: a
-// series per log would be a label a collector keeps for every log a
-// deployment ever ran, for a question the log line and the screen already
-// answer by name.
-//
-// AN INSTANCE THE EVALUATION COULD NOT JUDGE IS KEPT AS IT STANDS (unjudged,
-// [Unjudged]): neither cleared nor raised, its start unmoved, so a source a
-// boot or a stop has not read yet does not clear a condition that still holds.
+// AN INSTANCE THE EVALUATION COULD NOT JUDGE ([Unjudged]) IS KEPT AS IT
+// STANDS, its start unmoved, so a source a boot or a stop has not read yet
+// does not clear a condition that still holds.
 func (t *Tracker) Observe(ctx context.Context, alarms []Alarm, unjudged ...AlarmRef) []Alarm {
 	now := t.now()
 	type raised struct {
@@ -255,8 +194,8 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm, unjudged ...Alarm
 		keys, details := instancesOf(a)
 		for i, key := range keys {
 			if live[key] {
-				// One log listed twice under one kind is one
-				// instance; the first listing's detail stands.
+				// One log listed twice is one instance; the first
+				// listing's detail stands.
 				continue
 			}
 			live[key] = true
@@ -289,8 +228,7 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm, unjudged ...Alarm
 	}
 	for _, r := range up {
 		if was, already := t.firing[r.key]; already {
-			// Still up. The detail may have moved (a lag grows), and
-			// that is not a transition.
+			// Still up: a moved detail (a lag grows) is not a transition.
 			was.detail = r.detail
 			t.firing[r.key] = was
 			continue
@@ -359,9 +297,8 @@ func judgedNot(key instance, unjudged []AlarmRef) bool {
 }
 
 // recall reads back the instances that stood when this node last kept them,
-// and the ones that had cleared within the relapse window. A file that cannot
-// be read leaves nothing recalled, said once, and every standing instance is
-// raised again.
+// and those cleared within the relapse window. An unreadable file recalls
+// nothing, said once, so every standing instance is raised again.
 func (t *Tracker) recall(ctx context.Context) {
 	if t.kept == nil {
 		return
@@ -416,9 +353,9 @@ func (t *Tracker) Told(ctx context.Context, id string) {
 	}
 }
 
-// keep writes the told instances up now, and the ones that cleared within the
-// relapse window, over the ones kept before. An untold raise is not kept, so a
-// restart before it is taken raises it again.
+// keep replaces what was kept with the told instances up now and those
+// cleared within the relapse window. An untold raise is not kept, so a restart
+// before it is taken raises it again.
 func (t *Tracker) keep(ctx context.Context) {
 	if t.kept == nil {
 		return
@@ -459,8 +396,8 @@ func (t *Tracker) keep(ctx context.Context) {
 	}
 }
 
-// attrs is a transition line's attributes: the alarm, the log it stands on
-// when it is a per-log one, and the rest.
+// attrs is a transition line's attributes: the alarm, its log or entry if
+// any, and the rest.
 func (i instance) attrs(rest ...any) []any {
 	out := []any{"alarm", string(i.kind)}
 	if i.domain != "" {
@@ -472,8 +409,8 @@ func (i instance) attrs(rest ...any) []any {
 	return append(out, rest...)
 }
 
-// compareInstances orders instances by kind and then log, so the clears one
-// observation logs come out in the same order every time.
+// compareInstances orders instances by kind, log and entry, so one
+// observation's clears are logged in a stable order.
 func compareInstances(a, b instance) int {
 	if c := cmp.Compare(a.kind, b.kind); c != 0 {
 		return c
@@ -485,12 +422,9 @@ func compareInstances(a, b instance) int {
 }
 
 // Latest is the alarms the latest evaluation found, in the table's order, and
-// nil before any evaluation has run.
-//
-// THE SAME EVALUATION every other surface reads: the Models page shows this
-// node's latest instances of the model kinds from here rather than judging the
-// thresholds a second time, so the page, the health count, the gauge and the
-// log lines cannot disagree about whether a token is expiring.
+// nil before any evaluation has run. The Models page reads its model kinds
+// here rather than judging the thresholds again, so it cannot disagree with
+// the health count, the gauge and the log lines.
 func (t *Tracker) Latest() []Alarm {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -500,39 +434,23 @@ func (t *Tracker) Latest() []Alarm {
 // Standing reports the kinds the latest evaluation found firing, the
 // LONGEST-STANDING first, and false before any evaluation has run.
 //
-// For the fourth surface, the health envelope every node pushes to every tab,
-// which carries a count and ONE name rather than the table: the name a health
-// card can afford is the condition that has gone unanswered longest. Not the
-// table's order, which is the order the reference reads in and asserts no
-// ranking: a table sorted by severity would be a second opinion about each
-// alarm beside the threshold that already decides it. How long something has
-// been wrong is a fact this tracker holds and nothing else does, and the
-// table's order breaks a tie only between alarms raised by one evaluation.
+// It feeds the health envelope, which carries a count and ONE name: the
+// condition unanswered longest. Not the table's order, which ranks nothing; it
+// only breaks a tie among alarms raised by one evaluation. ONE ENTRY PER KIND
+// however many logs it stands on, as the gauge counts.
 //
-// ONE ENTRY PER KIND, however many logs it stands on: the count is how many
-// problems an operator has to look at, and one cause standing on several logs
-// is one of them, as the gauge beside it says. A per-log kind has stood since
-// its longest-standing log's instance was raised.
-//
-// FALSE IS NOT "NONE FIRING": a node whose alarm table has not been evaluated
-// yet (mid-boot, or running no state log at all) cannot say, and an empty
-// list here would tell a health card it is healthy.
+// FALSE IS NOT "NONE FIRING": before the table is evaluated (mid-boot, or no
+// state log), an empty list would tell a health card it is healthy.
 func (t *Tracker) Standing() ([]Kind, bool) {
 	kinds, _, observed := t.standing()
 	return kinds, observed
 }
 
-// Marks is [Tracker.Standing] with each kind's start: the kinds the latest
-// evaluation found firing, one mark per kind, the longest-standing first, each
-// dated by the first raise of its run ([RelapseWindow]), its oldest instance's
-// for a kind standing on several logs, and false before any evaluation has run.
-//
-// For the fifth surface, the node's presence heartbeat
-// ([coord.NodeStatus.Alarms]), which every peer reads, so that "what is wrong
-// on that node" is answered by the evaluation the node's own gauge, log lines
-// and health count were fed rather than by a second one. ONE COMPUTATION
-// BEHIND BOTH, so the heartbeat cannot name a different set, or a different
-// longest-standing alarm, from the health card of the same node.
+// Marks is [Tracker.Standing] with each kind's start (its oldest instance's
+// run's first raise), for the node's presence heartbeat
+// ([coord.NodeStatus.Alarms]) every peer reads. ONE COMPUTATION BEHIND BOTH,
+// so the heartbeat cannot name a different set, or a different
+// longest-standing alarm, from the same node's health card.
 func (t *Tracker) Marks() ([]coord.AlarmMark, bool) {
 	kinds, since, observed := t.standing()
 	if !observed {
@@ -546,12 +464,9 @@ func (t *Tracker) Marks() ([]coord.AlarmMark, bool) {
 }
 
 // standing is the latest evaluation's firing kinds, the longest-standing
-// first, with the instant each has stood since, and whether any evaluation has
-// run.
-//
-// A kind has stood since its OLDEST instance's run began: one cause standing on
-// four logs is one alarm, and a log joining it does not make it newer; nor does
-// a raise inside the relapse window, which continues its run.
+// first, with each one's start, and whether any evaluation has run. A kind
+// has stood since its OLDEST instance's run began: neither a log joining it
+// nor a raise inside the relapse window makes it newer.
 func (t *Tracker) standing() ([]Kind, map[Kind]time.Time, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -571,11 +486,9 @@ func (t *Tracker) standing() ([]Kind, map[Kind]time.Time, bool) {
 	return out, since, true
 }
 
-// Firing reports how long each kind currently up has been up: the longest of
-// its instances, since a per-log kind can stand on several logs at once.
-//
-// An alarm's AGE is what separates "this started four minutes ago" from "this
-// started on Tuesday", and the alarm itself carries neither.
+// Firing reports how long each kind up has been up: its longest instance's
+// run. The age tells "started four minutes ago" from "started on Tuesday",
+// which the alarm itself does not carry.
 func (t *Tracker) Firing() map[Kind]time.Duration {
 	now := t.now()
 	t.mu.Lock()

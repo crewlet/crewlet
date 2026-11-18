@@ -24,10 +24,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// THE WRITE PATH WHOLE: a write reaches a real embedded broker and the shipped
-// applier, decided by the shipped writer over a node's own rows, with nothing
-// between them mocked — and two nodes over one log where a case needs a node
-// that has not applied what the other wrote.
+// THE WRITE PATH WHOLE: the shipped writer decides over a node's own rows, a
+// real embedded broker carries the write and the shipped applier applies it,
+// nothing mocked; two nodes share one log where a case needs a node that has
+// not applied the other's write.
 
 // writerClock is every writer's clock: what a capture's object age is judged on.
 var writerClock = time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)
@@ -35,8 +35,8 @@ var writerClock = time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)
 // openExecutorLog stands up a broker and the executor log on it.
 func openExecutorLog(t *testing.T) *js.DomainLog {
 	t.Helper()
-	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
-	// its cap from the runner's free space it takes three quarters of it.
+	// THE BROKER DECLARES ITS SIZE (brokertest): unset, it takes three
+	// quarters of the runner's free disk.
 	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
@@ -76,8 +76,8 @@ func openNodeStore(t *testing.T, name string) store.ReplicatedHandle {
 }
 
 // writeNode is one data node: its own store, publisher and writer over a log
-// it may share, applying only when its own write waits on it — so a node that
-// has not written since another did has not applied what that one wrote.
+// it may share. It applies only while its own write waits, so it has not
+// applied what another node wrote since its own last write.
 type writeNode struct {
 	t        *testing.T
 	db       store.ReplicatedHandle
@@ -147,8 +147,8 @@ func newWriteNode(t *testing.T, log *js.DomainLog, nodeID string) *writeNode {
 	return n
 }
 
-// drain applies every record the broker holds beyond what this node has
-// applied, with the framework's own bookkeeping, as its loop does.
+// drain applies every record past what this node has applied, with the
+// framework's own bookkeeping, as its loop does.
 func (n *writeNode) drain() {
 	n.t.Helper()
 	n.mu.Lock()
@@ -231,8 +231,8 @@ func (n *writeNode) applyBody(spec statelog.StreamSpec, seq uint64, body []byte,
 	n.waiter.reach(record.Position)
 }
 
-// row is one turn's object and whether it ended, on this node, and false where
-// it holds no row.
+// row is one turn's object and whether it ended on this node; found is false
+// where it holds no row.
 func (n *writeNode) row(handle, turn string) (object string, ended, found bool) {
 	n.t.Helper()
 	var (
@@ -359,12 +359,11 @@ func newCaptureOf(seat, conversation, turn string, capture, size, budget int64) 
 
 // A CAPTURE THE APPLY REFUSES ANSWERS UNRECORDED: decided on a node that had
 // not applied another conversation's capture of the same seat, which took the
-// seat's budget, it passes its decide and lands after that capture, where the
-// apply finds no room — and the writer reads the refusal back off the row
-// rather than answering the capture recorded because the record applied.
+// seat's budget, it passes its decide but its apply finds no room; the writer
+// reads the refusal back off the row, not from the record having applied.
 //
 // Mutation: answer Recorded from the outcome alone and the refused capture is
-// reported as the session the turn's row names.
+// reported recorded.
 func TestACaptureTheApplyRefusesAnswersUnrecorded(t *testing.T) {
 	t.Parallel()
 	log := openExecutorLog(t)
@@ -400,8 +399,8 @@ func TestACaptureTheApplyRefusesAnswersUnrecorded(t *testing.T) {
 }
 
 // A SEAT'S REMOVAL IS PUBLISHED WHATEVER THIS NODE HOLDS: decided on a node that
-// has not applied the seat's sessions, it is still a record, and it removes in
-// log order on every node what any record before it wrote.
+// has not applied the seat's sessions, it is still a record, removing in log
+// order on every node what any earlier record wrote.
 //
 // Mutation: decide the removal from this node's count again, publishing
 // nothing where it holds no row, and the seat's sessions outlive its removal.
@@ -454,10 +453,10 @@ func TestARetentionDeleteIsDecidedAgainstTheRowsLastInstant(t *testing.T) {
 	}
 }
 
-// A LOST TURN IS ENDED LOST, AND ONLY IF NOTHING TOUCHED IT SINCE: a turn that
-// never ended and was last captured before the instant asked is ended with the
-// engine's account of a lost end; one captured since is refused not due, and
-// one already ended is refused ended.
+// A LOST TURN IS ENDED LOST, AND ONLY IF NOTHING TOUCHED IT SINCE: an unended
+// turn last captured before the instant asked is ended with the engine's
+// lost-end account; one captured since is refused not due, one already ended
+// refused ended.
 //
 // Mutation: drop the last-instant check from EndLost and a turn captured a
 // moment ago is ended under its running executor.
@@ -513,12 +512,11 @@ func TestASeatsRemovalIsForgottenOnlyPastItsCutoff(t *testing.T) {
 	}
 }
 
-// A CAPTURE'S CONTEXT AND CUT-OFF REACH THE ROW: the whole input of its
-// session's last request and whether its harness was cut off, which only the
-// run's record held before and a launch continuing the session after its turn
-// ended reads off the row — the newest capture's, through the insert of a
-// turn's first capture and the update of a later one; and a context below
-// nothing is refused naming the field.
+// A CAPTURE'S CONTEXT AND CUT-OFF REACH THE ROW: its session's last request's
+// whole input and whether its harness was cut off, which a launch continuing
+// the session after its turn ended reads off the row. The newest capture's
+// wins, through a turn's first capture (insert) and a later one (update); a
+// negative context is refused naming the field.
 //
 // Mutation: leave context_tokens and interrupted off updateCaptureStatement
 // and the later capture's account never reaches the row; drop them from the
@@ -552,11 +550,11 @@ func TestACapturesContextAndCutOffReachTheRow(t *testing.T) {
 	}
 }
 
-// A BEGIN SAYS WHETHER THE LOG HOLDS ITS BASE, read back off the row the apply
-// wrote: a turn's first read of a head that still stands holds it; the same
-// begin asked again under another operation publishes nothing, the first read
-// standing, and still says it holds; and a begin whose base another turn's end
-// absorbed before it landed records its read, holds nothing, and says why.
+// A BEGIN SAYS WHETHER THE LOG HOLDS ITS BASE, read back off the applied row:
+// a turn's first read of a standing head holds it; the same begin under
+// another operation publishes nothing (the first read standing) and still
+// holds; a begin whose base another turn's end absorbed before it landed
+// records its read, holds nothing, and says why.
 //
 // Mutation: answer Held from the outcome alone and the begin whose base had
 // gone is reported holding it.
@@ -600,16 +598,15 @@ func TestABeginSaysWhetherTheLogHoldsItsBase(t *testing.T) {
 	}
 }
 
-// A BEGIN THAT HOLDS NOTHING SAYS WHY, read back off the row the apply wrote: a
-// turn whose own capture landed before its begin holds no base — its launches
-// continue that capture's session — though the begin records its read and
-// names the base; and a begin whose base the seat's budget released between
-// the read and the record holds nothing and names none.
+// A BEGIN THAT HOLDS NOTHING SAYS WHY, read back off the applied row: a turn
+// whose own capture landed before its begin holds no base (its launches
+// continue that capture's session), though the begin records its read and
+// names the base; a begin whose base the seat's budget released between read
+// and record holds nothing and names none.
 //
-// Mutation: drop beginHolds' landed-capture arm and the late begin, whose row
-// names its base, is reported holding it; let a base whose row names no
-// session stand (drop baseStands' session arm) and the begin landing after the
-// budget released its base names it, and is reported holding it.
+// Mutation: drop beginHolds' landed-capture arm and the late begin is reported
+// holding its base; drop baseStands' session arm and the begin landing after
+// the budget released its base names it and is reported holding it.
 func TestABeginThatHoldsNothingSaysWhy(t *testing.T) {
 	t.Parallel()
 	n := newWriteNode(t, openExecutorLog(t), "node-a")
@@ -657,20 +654,18 @@ func TestABeginThatHoldsNothingSaysWhy(t *testing.T) {
 	}
 }
 
-// A HOLDER WHOSE END WAS LOST IS ENDED LOST, AND ITS HOLD LIFTS. A turn whose
-// begin holds a base and which never captured, once the retention duty finds
-// no run of it a day past its begin, is listed as a turn whose end may be lost
-// and ended `lost` through EndLost's own decide — refused not due before its
-// begin's instant — and from then on holds nothing: the base, which the holder
-// never continued and so never absorbed, stays its conversation's head, and
-// the retention's listing, which left it out while it was held, lists it. The
-// lost end's account names no capture, the turn having taken none.
+// A HOLDER WHOSE END WAS LOST IS ENDED LOST, AND ITS HOLD LIFTS. A turn that
+// holds a base and never captured is listed as possibly lost once no run of it
+// is found a day past its begin, and ended `lost` through EndLost's decide
+// (refused not due before its begin's instant). It then holds nothing: the
+// base, never continued so never absorbed, stays the conversation's head, and
+// the retention, which skipped it while held, lists it. The account names no
+// capture.
 //
-// Mutation: refuse in EndLost's decide a turn whose row landed no capture and
-// the lost holder is never ended, holding its base until the retention; write
-// a begun row with no instant of its own and EndLost never finds it not due;
-// word the lost end as a day past the turn's last capture and the account of a
-// turn that captured nothing names one.
+// Mutation: refuse in EndLost a turn that landed no capture and the holder
+// keeps its base until the retention; write a begun row with no instant of its
+// own and EndLost never finds it not due; word the lost end from the turn's
+// last capture and an uncaptured turn's account names one.
 func TestAHolderWhoseEndWasLostIsEndedLostAndItsHoldLifts(t *testing.T) {
 	t.Parallel()
 	n := newWriteNode(t, openExecutorLog(t), "node-a")
@@ -759,11 +754,10 @@ func beginFrom(h executordomain.Head, handle, turn, conversation string) executo
 		BaseObject: h.Session.Object}
 }
 
-// AN END KEEPS ITS WORDS REDACTED BEFORE THEY ARE CUT. What a turn was asked is
-// kept to its first kibibyte and an ending's accounts to theirs, and a
-// credential that bound runs across is a marker before the cut — never the
-// head of a token no later redaction recognises, which every reader of the row
-// was shown through its redaction, a seat's model among them.
+// AN END KEEPS ITS WORDS REDACTED BEFORE THEY ARE CUT. The ask is kept to its
+// first kibibyte and an ending's accounts to their bounds; a credential a bound
+// runs across becomes a marker before the cut, never a token head no later
+// redaction recognises, shown to every reader of the row, a seat's model too.
 //
 // Mutation: keep the ask's first kibibyte as it was asked, and its row holds
 // the token's head.

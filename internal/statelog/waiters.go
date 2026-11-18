@@ -9,12 +9,9 @@ import (
 
 // ErrWaitAbandoned reports a wait the applier ended without reaching the
 // position: the loop stopped, or it is being restarted over a replaced file.
-//
-// AN ERROR RATHER THAN A RELEASE. The alternative — closing the waiter's own
-// channel, which is what a satisfied wait looks like — sent every caller off
-// to read rows that had not reached its position and to report the answer at
-// the level it had asked for. Every caller of a wait already maps an error to
-// the honest refusal: `behind` on a read, `behind` on a write's session wait.
+// An error rather than a release, which would send the caller to read rows
+// below its position at the level it asked for; every caller maps the error
+// to `behind`.
 var ErrWaitAbandoned = errors.New("statelog: the applier stopped while this " +
 	"caller was waiting on it")
 
@@ -22,30 +19,12 @@ var ErrWaitAbandoned = errors.New("statelog: the applier stopped while this " +
 // position, ordered BY POSITION so a move of the reached position wakes
 // exactly the ones it satisfied.
 //
-// # Why a heap and a channel each, rather than a condition variable
-//
-// The obvious shape — and the one this tree's projection package uses — is a
-// sync.Cond with a Broadcast on every commit and a watcher goroutine per wait
-// to turn a context deadline into a wake. At a fraction of a read per second
-// that costs nothing.
-//
-// It stops being free at the rate this framework creates: every write waits
-// for its own record and every linearizable read for the record before its
-// barrier, a busy node holds many such callers at once, the applier yields its
-// batch the moment one of them waits on a row it holds, and the position they
-// wait for moves on every barrier the loop DECODES as well as on every commit
-// ([Runner.Reached]) — so it moves many times a second, and every move then
-// woke EVERY waiter to re-test a target most of them have not reached. The
-// goroutine per wait is the other half — a goroutine whose only job is to
-// watch somebody else's deadline is the shape this engine's concurrency rule
-// exists to refuse.
-//
-// A min-heap keyed on the target inverts it: the applier pops while the
-// minimum is at or below its reached position and closes those channels, so a
-// waiter is woken EXACTLY ONCE, by the move that satisfied it, and a move that
-// satisfies nobody touches nothing. The heap's length is also the one number
-// an operator wants — how many callers are waiting on this applier — which a
-// condition variable's registry could not report.
+// A min-heap with a channel per waiter, not a sync.Cond: the reached position
+// moves many times a second (every decoded barrier and every commit,
+// [Runner.Reached]) under many concurrent waiters, a Broadcast would wake all
+// of them to re-test unreached targets, and turning a context deadline into a
+// wake would need a watcher goroutine per wait. The heap wakes each waiter
+// once, by the move that satisfied it, and its length is the waiting gauge.
 type waiters struct {
 	mu    sync.Mutex
 	items waiterHeap
@@ -57,34 +36,26 @@ type waiter struct {
 	// target is the position this caller is waiting for.
 	target Position
 
-	// done is closed by the move that reaches target. A channel rather
-	// than a flag because the caller selects on it against its own
-	// context, which is what makes a wait cancellable without a goroutine.
+	// done is closed by the move that reaches target; a channel so the
+	// caller selects on it against its own context, with no goroutine.
 	done chan struct{}
 
 	// abandoned is closed by an applier that ends without reaching
-	// target, and it is a SECOND channel because the two mean opposite
-	// things to the caller: done is an answer and this is the absence of
-	// one.
+	// target: separate from done, which is an answer where this is the
+	// absence of one.
 	abandoned chan struct{}
 
-	// seq breaks ties in arrival order, so two waiters on one position are
-	// woken in the order they arrived. Not load-bearing for correctness;
-	// it makes the heap a total order, which makes the tests
-	// deterministic.
+	// seq breaks ties in arrival order: not needed for correctness, but a
+	// total order keeps the tests deterministic.
 	seq uint64
 
-	// index is the heap's own bookkeeping.
+	// index is the heap's own bookkeeping, -1 once out of the heap.
 	index int
 }
 
-// wait registers a waiter for target and returns its channel plus a cancel
-// that removes it.
-//
-// The cancel is what stops an abandoned wait leaking a heap entry: a caller
-// whose context expires would otherwise stay in the heap until the applier
-// reached a position nobody is waiting for any more, holding a channel and a
-// position in the minimum that delays nothing but is reported as a waiter.
+// wait registers a waiter for target and returns its channels plus a cancel
+// that removes it, so a caller whose context expires does not stay in the
+// heap, and the gauge, until the applier passes its target.
 func (w *waiters) wait(target Position) (done, abandoned <-chan struct{}, cancel func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -109,16 +80,13 @@ func (w *waiters) drop(item *waiter) {
 	item.index = -1
 }
 
-// release wakes every waiter at or below reached, the applier's reached
-// position ([Runner.Reached]) as it now stands.
+// release wakes every waiter at or below reached ([Runner.Reached]).
 //
-// FOR A RECORD THAT WRITES A ROW, AFTER ITS TRANSACTION COMMITS, never inside
-// it: the store may re-run a transaction's body, so a wake from inside one can
-// announce a position that was then rolled back. A BARRIER IS DIFFERENT, and
-// is released the moment it is decoded, before any transaction
-// ([Runner.reach]): it writes no row, so there is nothing a re-run body could
-// roll back, and its own commit is a checkpoint and an fsync that change
-// nothing its waiters read.
+// For a record that writes a row it runs AFTER the transaction commits, never
+// inside it: the store may re-run a body, so a wake from inside can announce a
+// position that was rolled back. A barrier is released when decoded
+// ([Runner.reach]): it writes no row, and its later commit changes nothing its
+// waiters read.
 func (w *waiters) release(reached Position) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -133,10 +101,9 @@ func (w *waiters) release(reached Position) {
 	}
 }
 
-// abandonAll tells everybody the applier is not going to reach them, for a
-// loop that is ending. A waiter left blocked on a stopped applier waits out
-// its whole budget for a position nothing will ever reach; one released as
-// though satisfied reads rows below its position. Each is told instead.
+// abandonAll tells every waiter the applier will not reach it, for a loop
+// that is ending: left blocked, it would wait out its whole budget; released,
+// it would read rows below its position.
 func (w *waiters) abandonAll() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -147,7 +114,7 @@ func (w *waiters) abandonAll() {
 	}
 }
 
-// len is how many callers are waiting, which is the gauge an operator reads.
+// len is how many callers are waiting: the gauge an operator reads.
 func (w *waiters) len() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -155,11 +122,8 @@ func (w *waiters) len() int {
 }
 
 // minimum is the lowest position anybody is waiting for, and false when
-// nobody is.
-//
-// The applier's batch linger reads it: a batch being filled while a caller
-// waits for a record already in it is a batch that should end now, and the
-// minimum is what says whether there is anybody to end it for.
+// nobody is. The applier's batch linger reads it to end at once a batch that
+// holds a record somebody waits for.
 func (w *waiters) minimum() (Position, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -209,10 +173,9 @@ func (w *waiters) awaitPosition(ctx context.Context, target Position, reached fu
 	}
 	done, abandoned, cancel := w.wait(target)
 	defer cancel()
-	// RE-CHECK AFTER REGISTERING. A move landing between the check above
-	// and the registration would otherwise never wake this waiter: it
-	// released a heap that did not yet contain it, and no later move is
-	// obliged to reach the same position.
+	// RE-CHECK AFTER REGISTERING: a move between the check above and the
+	// registration released a heap without this waiter, and no later move
+	// is guaranteed.
 	if reached().Packed() >= target.Packed() {
 		return nil
 	}

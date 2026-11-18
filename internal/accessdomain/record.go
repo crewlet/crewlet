@@ -32,15 +32,13 @@ const baseRecordVersion = 1
 const GateRecordVersion = 1
 
 // versionedFields is every field or kind an access record has gained since the
-// base format, with the version a reader needs to apply a record carrying it.
-// A new record kind (the box's own SSH command record, say) is a row naming the
-// subject kind's value, [RecordVersion] moved to it, and a conformance record
-// that carries it.
+// base format, with the version a reader needs to apply a record carrying it
+// (package doc, "A new record kind joins without reshaping").
 //
-// A KIND NO TAG HAS SHIPPED STILL GETS ITS ROW: two builds of a rolling upgrade
-// disagree about it all the same, and a build without the row would fault on
-// the record rather than retain it. The kind's row covers every op on its
-// subject, a verdict's reseal included.
+// A KIND NO TAG HAS SHIPPED STILL GETS ITS ROW: a rolling upgrade's builds
+// disagree about it all the same, and one without the row would fault on the
+// record rather than retain it. The row covers every op on the kind's subject,
+// a verdict's reseal included.
 var versionedFields = statelog.RecordFields{
 	{Name: "Subject.Kind verdict", Since: 2, Path: []string{"subject", "k"}, Equals: string(KindVerdict)},
 }

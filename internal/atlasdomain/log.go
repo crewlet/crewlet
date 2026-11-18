@@ -17,11 +17,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE LOG AS A READ: what was recorded, when and in whose voice, one line a
-// claim. A claim an integration's read stopped holding is a second line at the
-// instant the read withdrew it, so a fact that went away is as visible as one
-// that arrived. Nothing here decides who may read a line: the caller holds
-// every line to the atlas its reader is shown.
+// THE LOG AS A READ (package doc, "Reads"): a claim a read stopped holding is
+// a second line at the read that withdrew it, so a fact that went away shows
+// as one that arrived does. Nothing here decides who may read a line: the
+// caller holds every line to the atlas its reader is shown.
 
 // LogLine is one line of the log: a claim recorded, or one its voice withdrew.
 type LogLine struct {

@@ -16,27 +16,13 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// A RECORD'S REFUSAL SAYS WHETHER A PERMISSION WOULD LIFT IT.
-//
-// A surface answers the two kinds differently: one a permission lifts names
-// it, so the caller knows what to ask an administrator for, and one the
-// record's own rule makes names none, because no permission would change it.
-// Both were one sentinel wrapped in a sentence, so the identity directory's
-// surface answered every refusal as the first kind and named every permission
-// there is — an administrator minting a person's token was told to ask an
-// administrator for access.
-//
-// Walked through the real writer, applier and reader, one row per kind of
-// refusal: a party without admin enrolling, sweeping and minting a service
-// account's token names admin; a permission the minting party cannot confer
-// names that permission; a person's token minted by anybody else, a permission
-// the owner does not hold, an owner who may not act, the row that binds a
-// Tier A token, a name this build does not know and an invitation for a seat
-// the chart retired name none; and a gesture through a machine token names
-// none and says a person must be present — the mint's arm included, which
-// used to answer as an ordinary refusal and so as a missing permission — and
-// a sign-in ceremony or a mint through the Dashboard Assistant names none and
-// says its person takes it themselves.
+// A record's refusal says whether a permission would lift it: one a permission
+// lifts names it, so the caller knows what to ask an administrator for; one
+// the record's own rule makes names none. A gesture through a machine token
+// (the mint's included) also says a person must be present; a sign-in
+// ceremony or mint through the Dashboard Assistant says its person takes it
+// themselves. One row per kind of refusal, through the real writer, applier
+// and reader.
 //
 // Mutations: give the person arm of the mint grants [admin] and its row goes
 // red; build a refusal with fmt.Errorf again and errors.As finds nothing; drop
@@ -200,22 +186,17 @@ func TestEveryRecordRefusalSaysWhetherAPermissionLiftsIt(t *testing.T) {
 	}
 }
 
-// NOTHING IN THIS PACKAGE BUILDS A REFUSAL BUT [iamdomain.Refusal]'s TWO
-// CONSTRUCTORS.
-//
-// A refusal built as `fmt.Errorf("%w: …", ErrRefused)` still compares as one,
-// so nothing would notice that it no longer says whether a permission lifts
-// it — the surface would answer it as an unclassified fault. So the walk holds
-// the package's source to three rules: [iamdomain.ErrRefused] is named only at
-// its declaration, inside the refusal's own methods and as the target of an
-// errors.Is read; [iamdomain.ErrTokenRefused] and [iamdomain.ErrAssistRefused]
-// only at their declarations, as a read's target, and as an argument of the
-// constructor that names no permission, since neither a token's refusal nor
-// the assistant's is ever lifted by one; and a refusal's
-// literal only inside the two constructors. It fails a walk that read fewer
-// files than the package holds today, since a walk of the wrong directory
-// finds nothing to object to. Mutation: put `fmt.Errorf("%w: …", ErrRefused)`
-// back at any refusal site and it goes red.
+// Nothing in this package builds a refusal but [iamdomain.Refusal]'s two
+// constructors: `fmt.Errorf("%w: …", ErrRefused)` still compares as one but no
+// longer says whether a permission lifts it. The walk holds the source to three
+// rules: [iamdomain.ErrRefused] is named only at its declaration, in the
+// refusal's methods and as an errors.Is target; [iamdomain.ErrTokenRefused] and
+// [iamdomain.ErrAssistRefused] only at their declarations, as an errors.Is
+// target and as an argument of the constructor naming no permission (none ever
+// lifts them); and a Refusal literal appears only in the two constructors. A
+// walk of fewer files than the package holds fails: the wrong directory finds
+// nothing. Mutation: put `fmt.Errorf("%w: …", ErrRefused)` back at any refusal
+// site and it goes red.
 func TestErrRefusedIsOnlyEverBuiltAsARefusal(t *testing.T) {
 	t.Parallel()
 	entries, err := os.ReadDir(".")
@@ -266,7 +247,7 @@ func refusalOffences(decl ast.Decl) []ast.Node {
 			}
 		}
 	}
-	// FIRST, every identifier a rule admits where it stands: a declared
+	// First, every identifier a rule admits where it stands: a declared
 	// name, a read's target, and an argument of the constructor a token's
 	// refusal is built through.
 	ast.Inspect(decl, func(n ast.Node) bool {

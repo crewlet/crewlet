@@ -12,26 +12,18 @@ import (
 // A WRITE NEVER DECIDES FROM A STATE BELOW THE CALLER'S OWN PREVIOUS WRITE.
 //
 // [statelog.Request.Session] is the one input the framework cannot derive:
-// only the caller knows that the record which last moved this subject is its
-// own and is still in flight. Until a caller filled it the field had no
-// producer at all — a wait, a refusal reason and a histogram, over a value
-// nothing set — so what the framework did instead was open a snapshot, run the
-// decide, ask the broker for the subject's last sequence, be refused, and only
-// then wait for exactly the position the caller had been holding all along.
-//
-// The two arms below are the whole contract: the wait is OUTSIDE the round
-// loop, so a mark the node has not reached stops the decide from running at
-// all, and a mark it has already passed costs nothing.
+// only the caller knows the record that last moved this subject is its own and
+// still in flight. The wait is OUTSIDE the round loop, so a mark the node has
+// not reached stops the decide from running at all, and a mark it has passed
+// costs nothing: the two arms below.
 func TestASessionMarkIsWaitedForBeforeAnySnapshotOpens(t *testing.T) {
 	t.Parallel()
 
 	t.Run("behind refuses before the decide runs", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
-		// AN APPLIER THAT DOES NOT ANSWER, which is what a node that
-		// cannot catch up looks like from here: the mark below is a
-		// position it never reaches and the wait spends its whole
-		// budget.
+		// AN APPLIER THAT DOES NOT ANSWER, as a node that cannot catch up
+		// looks from here: the wait spends its whole budget.
 		h.applier.mu.Lock()
 		h.applier.stalled = true
 		h.applier.mu.Unlock()
@@ -53,10 +45,8 @@ func TestASessionMarkIsWaitedForBeforeAnySnapshotOpens(t *testing.T) {
 				"— the position is what the caller retries against",
 				refusal.Position, mark)
 		}
-		// THE DECIDE NEVER RAN. That is the whole of what the mark buys
-		// over the framework's own recovery: no expectation is formed
-		// from rows the caller's own record is about to move, and no
-		// decision is computed and thrown away.
+		// THE DECIDE NEVER RAN: no expectation formed from rows the caller's
+		// own record is about to move, no decision computed and thrown away.
 		if decided != 0 {
 			t.Errorf("the decide ran %d time(s) against a state below the "+
 				"caller's own write; the session wait is outside the round "+

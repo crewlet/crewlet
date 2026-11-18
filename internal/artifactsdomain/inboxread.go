@@ -179,7 +179,7 @@ func (q InboxQuery) validate() error {
 	return nil
 }
 
-// Inbox answers one page of q.Handle's artifacts inbox (this file's head).
+// Inbox answers one page of q.Handle's artifacts inbox, in one snapshot.
 func (r *Reader) Inbox(ctx context.Context, q InboxQuery) (InboxPage, error) {
 	if err := q.validate(); err != nil {
 		return InboxPage{}, err

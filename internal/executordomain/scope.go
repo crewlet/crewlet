@@ -10,25 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A RECORD'S SCOPE: the complete set of objects its apply may write, stated by
-// the WRITER and readable at every version.
-//
-// It is what a node that cannot decode a record files the deferral under, and
-// what a later read or write probes to discover it is behind. The framework
-// knows one thing about a path, that it nests left to right, so the alphabet
-// is chosen so the paths NEST where the rows do: a conversation sits under its
-// seat, so a seat-wide record (a capture that may release any of the seat's
-// ended sessions, a seat's removal) covers every conversation of it, and a
-// deferred one blocks a read of any of them.
+// A RECORD'S SCOPE is the complete set of objects its apply may write, stated
+// by the WRITER and readable at every version: what a node that cannot decode
+// it files the deferral under, and what a later read or write probes to learn
+// it is behind. Paths nest as the rows do, so a seat-wide record (a capture's
+// release, a seat's removal) covers, and deferred blocks, all its conversations.
 //
 //	e                        the whole domain: a gate, or an unreadable scope
 //	e/s/<handle>             one seat and every conversation of it
 //	e/s/<handle>/c/<digest>  one conversation of the seat
 //
-// The domain letter is `e`, distinct from every other domain's: a path is what
-// an operator reads out of a deferral row when a fleet is stuck, and two
-// domains whose paths looked alike would make that row ambiguous exactly when
-// it matters.
+// The letter `e` is no other domain's, so an operator reading a stuck fleet's
+// deferral row can tell whose path it is.
 
 const (
 	pathDomain       = "e"
@@ -57,16 +50,13 @@ var TermKinds = []TermKind{TermSeat, TermConversation, TermDomain}
 // Valid reports whether a term kind off the wire is one this build knows.
 func (t TermKind) Valid() bool { return slices.Contains(TermKinds, t) }
 
-// MaxScopeTerms is the cap on a record's declared scope.
-//
-// ONE: every record here touches exactly its subject or exactly its seat. The
-// cap is a writer's mistake caught rather than a bound a writer has to handle.
+// MaxScopeTerms is the cap on a record's declared scope: one, since every
+// record here touches exactly its subject or its seat, so the cap catches a
+// writer's mistake rather than bounding what a writer must handle.
 const MaxScopeTerms = 1
 
-// ScopeTerm is one element of a record's blast radius.
-//
-// DATA, NOT CODE: a build that has never heard of the op still reads every
-// term, because a term names an object and nothing about the operation.
+// ScopeTerm is one element of a record's blast radius: data, not code, so a
+// build that has never heard of the op still reads every term.
 type ScopeTerm struct {
 	Kind TermKind `json:"k"`
 
@@ -88,9 +78,8 @@ func (t ScopeTerm) Path() string {
 	case TermDomain:
 		return pathDomain
 	}
-	// AN UNKNOWN TERM KIND IS THE DOMAIN, NOT A SKIPPED TERM: a term this
-	// build cannot interpret is a claim about a blast radius it cannot
-	// bound, and the only safe reading of an unbounded claim is the widest.
+	// AN UNKNOWN TERM KIND IS THE DOMAIN, NOT A SKIPPED TERM: the only safe
+	// reading of a blast radius this build cannot bound is the widest.
 	return pathDomain
 }
 
@@ -105,19 +94,16 @@ func join(segments ...string) string {
 	return strings.Join(segments, statelog.ScopeSeparator)
 }
 
-// ScopeSet is the COMPLETE set of objects a record's apply may write.
-//
-// NEVER EMPTY. The exactly-the-subject case encodes as the one-byte sentinel,
-// so the field can never be absent by accident. An absent or unreadable scope
-// on a record this build cannot decode is the DOMAIN term, never "just the
-// subject".
+// ScopeSet is the COMPLETE set of objects a record's apply may write, never
+// empty: exactly-the-subject encodes as a one-byte sentinel, so the field is
+// never absent by accident, and an absent or unreadable scope is the DOMAIN,
+// never "just the subject".
 type ScopeSet struct {
 	// Subject is true for the sentinel: this record touches exactly the
 	// object its subject names, and nothing else.
 	Subject bool
 
-	// Terms is the enumeration, when the record touches more than its own
-	// subject.
+	// Terms is the enumeration, when the record touches more than its subject.
 	Terms []ScopeTerm
 }
 
@@ -125,7 +111,7 @@ type ScopeSet struct {
 const ScopeSentinel = "s"
 
 // MarshalJSON encodes the sentinel as a bare string and everything else as an
-// array, so the common case is one byte on the wire.
+// array.
 func (s ScopeSet) MarshalJSON() ([]byte, error) {
 	if s.Subject || len(s.Terms) == 0 {
 		return json.Marshal(ScopeSentinel)
@@ -133,11 +119,9 @@ func (s ScopeSet) MarshalJSON() ([]byte, error) {
 	return json.Marshal(s.Terms)
 }
 
-// UnmarshalJSON accepts both encodings, and reads anything else as the domain.
-//
-// A SCOPE THAT DOES NOT DECODE IS THE WIDEST TERM, never an error and never an
-// empty set: this runs on a node reading a record a newer build wrote, and an
-// error here would take the whole envelope pass down with it.
+// UnmarshalJSON accepts both encodings and reads anything else as the domain,
+// never an error or an empty set: it runs on records a newer build wrote, and
+// an error would fail the whole envelope pass.
 func (s *ScopeSet) UnmarshalJSON(b []byte) error {
 	var sentinel string
 	if err := json.Unmarshal(b, &sentinel); err == nil {
@@ -152,9 +136,8 @@ func (s *ScopeSet) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &terms); err != nil || len(terms) == 0 {
 		*s = ScopeSet{Terms: []ScopeTerm{{Kind: TermDomain}}}
 		//nolint:nilerr // WIDEST-ON-UNREADABLE IS THE CONTRACT, per the
-		// paragraph above: returning the decode error would fail the
-		// envelope pass that exists so such a record can be filed, gated
-		// and reprocessed rather than dropped.
+		// doc above, so such a record is filed, gated and reprocessed rather
+		// than dropped.
 		return nil
 	}
 	*s = ScopeSet{Terms: terms}

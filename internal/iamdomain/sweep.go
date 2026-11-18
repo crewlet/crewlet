@@ -9,48 +9,26 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE RETENTION SWEEP, and why it is a RECORD rather than a local delete.
+// THE RETENTION SWEEP is a RECORD rather than a local delete: these rows are
+// identity-claimed (N nodes assert byte-identical tables), and a node sweeping on
+// its own clock would turn that into a claim about clock synchronisation that
+// nothing checks. So the publisher resolves each horizon to a POSITION once, and
+// every data node deletes exactly the same rows.
 //
-// These rows are identity-claimed: N nodes assert their replicated tables are
-// byte-identical. A node that swept on its own clock would hold different
-// bytes from its peers, and the claim would quietly become a claim about how
-// synchronised their clocks were — checkable by nothing, false whenever an NTP
-// correction landed, and indistinguishable from an applier that had diverged.
-//
-// So the publisher resolves each horizon to a POSITION, once, and publishes
-// it. Every data node then deletes exactly the same rows, whatever its clock
-// says.
-//
-// # Per bucket, and why the division is the point
-//
-// One record per bucket rather than one for the estate, because a sweep is
-// bounded by the applier's row budget and a company-wide delete is not: at the
-// horizons this domain keeps, one tick's worth of session rows for a large
-// company is a single statement holding this store's only writer for as long
-// as it takes. Sixty-four records spread it across sixty-four transactions,
-// and the framework's own budget ends each one at a record boundary.
-//
-// IT STILL HAS TO BE BOUNDED WITHIN A BUCKET, which is what [MaxSweepRows] is
-// for: a bucket that has been unswept for a month is not a sixty-fourth of a
-// tick, it is a sixty-fourth of a month, and the budget is per transaction
-// rather than per record.
+// One record per bucket, not one for the estate: sixty-four records spread a
+// tick's deletes across sixty-four transactions rather than one statement holding
+// this store's only writer. [MaxSweepRows] still bounds each, since a bucket
+// unswept for a month holds a month's rows.
 
-// MaxSweepRows is how many rows one sweep record's apply may delete.
-//
-// FOUR THOUSAND, which is [statelog.ApplyTxRowBudget] — the framework's own
-// per-transaction row budget, and the number every other bounded statement in
-// this estate is measured against. It is a ceiling on ONE record's work rather
-// than on the sweep as a whole: a bucket with more than this behind it is
-// swept again on the next tick, and converges.
-//
-// Taking the framework's constant rather than a number of this domain's own is
-// deliberate: a sweep that deleted more than the budget the applier is sized
-// for would hold this store's only writer past the point every other domain's
-// apply is waiting at, which is the contention the budget exists to bound.
+// MaxSweepRows is how many rows one sweep record's apply may delete:
+// [statelog.ApplyTxRowBudget], the per-transaction budget the applier is sized
+// for, since a sweep past it would hold this store's only writer while every
+// other domain's apply waits. It caps ONE record; a bucket with more behind it is
+// swept again next tick, and converges.
 const MaxSweepRows = statelog.ApplyTxRowBudget
 
-// sweepTrailStatement collects one class of one bucket's trail below a
-// position, a seek of the index 0041 ships for exactly this range delete.
+// sweepTrailStatement deletes one class of one bucket's trail below a position,
+// a seek of the index migration 0041 ships for this range delete.
 const sweepTrailStatement = `
 	DELETE FROM iam_history
 	WHERE rowid IN (
@@ -58,9 +36,8 @@ const sweepTrailStatement = `
 		WHERE bucket = ? AND class = ? AND version < ?
 		LIMIT ?)`
 
-// The two statements a sweep collects one bucket's invitations by — the ones
-// that aged out unredeemed and the ones redeemed — each a seek of the partial
-// index 0041 ships for exactly its predicate.
+// A sweep's two deletes of one bucket's invitations, aged out unredeemed and
+// redeemed, each a seek of the partial index 0041 ships for its predicate.
 const (
 	sweepOpenInvitationsStatement = `
 		DELETE FROM iam_invites WHERE rowid IN (
@@ -77,13 +54,9 @@ const (
 // applySweep deletes one bucket's expired rows below the positions the
 // publisher resolved.
 //
-// ONE BUDGET FOR THE WHOLE RECORD, shared by every statement below and spent
-// in order. It used to be a LIMIT per statement, which made [MaxSweepRows] a
-// bound on each of six deletes rather than on the transaction they share: a
-// bucket back from a lapse with every class overdue deleted six budgets' worth
-// in one apply, holding this store's only writer six times as long as the
-// framework sizes a transaction for. What one record leaves unspent the next
-// one collects, which is the convergence the cap already promised.
+// ONE BUDGET FOR THE WHOLE RECORD, shared by every statement and spent in order,
+// so [MaxSweepRows] bounds the transaction rather than each of its deletes. What
+// one record leaves unspent the next one collects.
 func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	if at.record.Op != OpSweep {
 		return 0, fmt.Errorf("iamdomain: the record at %s is op %q on a sweep "+
@@ -104,8 +77,8 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 	budget := int64(MaxSweepRows)
 
 	var written int64
-	// spend runs one bounded delete against what is left of the budget,
-	// which is the LIMIT its subquery is handed as the last argument.
+	// spend runs one delete whose LIMIT, its last argument, is what is left of
+	// the budget.
 	spend := func(what, query string, args ...any) error {
 		if budget <= 0 {
 			return nil
@@ -121,10 +94,8 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 		return nil
 	}
 
-	// THE TRAIL'S TWO HORIZONS, each a POSITION rather than an age. A zero
-	// position deletes nothing, which is the correct reading of "this
-	// company has no rows old enough yet" and is NOT the same as
-	// "everything": a zero is below every row's version.
+	// THE TRAIL'S TWO HORIZONS are POSITIONS, not ages. A zero means "no rows
+	// old enough yet" and deletes nothing, never everything.
 	for _, horizon := range []struct {
 		class  HistoryClass
 		before uint64
@@ -141,11 +112,9 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 		}
 	}
 
-	// AND THE THREE TABLES WHOSE ROWS ARE OVER RATHER THAN OLD. Each is
-	// collected against the ONE instant the record carries, never a node's
-	// own clock, for this file's whole reason. The subquery is over the
-	// index each table ships for exactly this predicate, so every statement
-	// is a seek into one bucket's range.
+	// AND THE TABLES WHOSE ROWS ARE OVER RATHER THAN OLD, collected against the
+	// ONE instant the record carries, never a node's clock; each subquery seeks
+	// its table's index for this predicate within one bucket.
 	if expired > 0 {
 		for _, collect := range []struct {
 			what, sql string
@@ -161,19 +130,14 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 					WHERE bucket = ? AND ended_at = 0
 					  AND absolute_expires_at > 0 AND absolute_expires_at < ?
 					LIMIT ?)`},
-			// AN INVITATION WITH NO EXPIRY IS COLLECTED like one that
-			// aged out, because every reader reads it as aged out
-			// ([InvitationRow.Spent], [openInvitation]): kept, it was the
-			// one row every reader calls dead whose sealed address stayed
-			// in every data node's estate for good. No writer of any build has
-			// formed one — the issue refuses it — so this moves no row a
-			// node on another build holds, and two builds sweep the same
-			// rows.
+			// AN INVITATION WITH NO EXPIRY IS COLLECTED like one that aged out, as
+			// every reader reads it so ([InvitationRow.Spent], [openInvitation]);
+			// kept, its sealed address would stay in every data node's estate for
+			// good. Issuing refuses one, so every build sweeps the same rows.
 			{"invitations", sweepOpenInvitationsStatement},
-			// WHAT WAS SPENT, and not only what lapsed: a redeemed
-			// invitation is as unpresentable as an expired one, and kept
-			// it would be every address anybody was ever invited at,
-			// sealed, in every data node's estate.
+			// WHAT WAS SPENT too: a redeemed invitation is as unpresentable as an
+			// expired one, and kept it would leave every invited address, sealed, in
+			// every data node's estate.
 			{"redeemed invitations", sweepSpentInvitationsStatement},
 		} {
 			if err := spend(collect.what, collect.sql, bucket, expired); err != nil {
@@ -191,36 +155,18 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 	return int(written), nil
 }
 
-// collectCredentials removes one bucket's credentials that stopped being usable
-// before `expired` — revoked, or past their own expiry — spending at most
-// budget rows.
+// collectCredentials removes one bucket's credentials revoked or expired before
+// `expired`, spending at most budget rows.
 //
-// # From the document as well as from the rows
-//
-// A person's credentials are carried WHOLE on their document, and the rows are
-// derived from it: every content record rewrites them, and the read-modify-write
-// that changes somebody's second factor forms the new set from the document. A
-// sweep that deleted only rows would be undone by the next such write, which
-// republishes the document's copy. So each owner's document is rewritten
-// without the collected credentials, in the same transaction, and stamped with
-// this record's position as its `version` — never below what the row holds,
-// since every record about the person is applied in log order and the version
-// is the one guard a later content record compares against. A person's broker
-// expectation is the framework's anchor for their own subject, which a sweep
-// on its bucket's subject never moves.
-//
-// # One ordered pick, spent person by person
-//
-// The pick is ordered by (person, credential), so every data node takes the
-// same subset under the budget, and it is spent a whole person at a time — the
-// person's document and every row collected for them — because a person half
-// collected would hold rows its document no longer lists. A person with more
-// due than the whole budget is collected in part, first to last, or they could
-// never be collected at all.
-//
-// A DOCUMENT THIS BUILD CANNOT READ IS LEFT ALONE, credentials and all: failing
-// the apply would stop this domain's log on every data node at once, and the
-// rows it derived are the ones every data node of this build keeps identically.
+// Credentials travel WHOLE on the person's document and the rows derive from it,
+// so a row-only delete would be undone by the next credential write: each
+// owner's document is rewritten without them in the same transaction, its
+// `version` raised to this record's position so a redelivered earlier record
+// cannot write them back. The pick is ordered by (person, credential), so every
+// data node takes the same subset, and spent a whole person at a time, so no
+// person keeps rows their document no longer lists; only the first may be cut
+// short, or one with more due than the budget never would be. A document this
+// build cannot read is left alone: failing would stop the log on every node.
 func collectCredentials(ctx context.Context, tx *sql.Tx, at applyContext,
 	bucket, expired, budget int64) (int64, error) {
 
@@ -262,9 +208,8 @@ func collectCredentials(ctx context.Context, tx *sql.Tx, at applyContext,
 
 	var written int64
 	for i, owner := range due {
-		// A WHOLE PERSON OR NONE: their rows and their document, which
-		// is one row more than the credentials. The first person is the
-		// exception, so a person with more due than the budget is not
+		// A WHOLE PERSON OR NONE: their rows plus their document. Only the first
+		// person may be cut short, so one with more due than the budget is not
 		// stuck for ever.
 		cost := int64(len(owner.ids)) + 1
 		if remaining := budget - written; cost > remaining {
@@ -302,9 +247,8 @@ func collectOwned(ctx context.Context, tx *sql.Tx, at applyContext,
 	var written int64
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// ROWS NOBODY OWNS: a removal deletes a person's credentials with
-		// them, so there is no document to keep in step — the rows are
-		// simply collected.
+		// ROWS NOBODY OWNS (a removal deletes a person's credentials with them):
+		// there is no document to keep in step.
 	case err != nil:
 		return 0, fmt.Errorf("iamdomain: read person %s to sweep their "+
 			"credentials: %w", person, err)

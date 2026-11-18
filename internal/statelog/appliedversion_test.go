@@ -24,12 +24,11 @@ func appliedVersion(t *testing.T, h *applyHarness) int64 {
 // THE CHECKPOINT KEEPS THE HIGHEST RECORD VERSION ITS ROWS WERE APPLIED FROM —
 // and not one a record it could not read, or one a gate dropped, never wrote.
 //
-// A snapshot states it, and a joiner whose build reads less refuses the
-// artefact: its rows would sit past a record the joiner could never apply. So
-// it must rise with every record applied — the live loop's, and a later build's
-// reprocess of what an earlier one retained, which moves no checkpoint — and
-// with nothing else, or a rolling upgrade's older nodes refuse every upgraded
-// donor over records that do not exist.
+// A snapshot states it, and a joiner whose build reads less refuses it: its
+// rows would sit past a record the joiner cannot apply. So it rises with every
+// record applied (the live loop's, and a later build's reprocess of a retained
+// record, which moves no checkpoint) and with nothing else, or a rolling
+// upgrade's older nodes refuse every upgraded donor over records never applied.
 func TestTheCheckpointKeepsTheRecordVersionItsRowsWereAppliedFrom(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})

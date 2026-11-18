@@ -8,13 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A POSITION IS A TRIPLE AND ORDERS BY GENERATION FIRST.
-//
-// The whole point of the generation is that a sequence from before a reanchor
-// is comparable and SAFELY STALE rather than plausible: on the rebuilt stream
-// it is a number in a space it does not belong to. An ordering that compared
-// sequences first would rank a large old sequence above a small current one
-// and hand a writer an expectation the broker will refuse for ever.
+// A POSITION IS A TRIPLE AND ORDERS BY GENERATION FIRST: ordering sequences
+// first would rank a large sequence from before a reanchor above a small
+// current one and hand a writer an expectation the broker refuses for ever.
 func TestAPositionOrdersByGenerationBeforeSequence(t *testing.T) {
 	t.Parallel()
 	const s = "CREWLET_PROBE_LOG"
@@ -51,9 +47,8 @@ func TestAPositionOrdersByGenerationBeforeSequence(t *testing.T) {
 			if got != tc.want {
 				t.Errorf("%s.Before(%s) = %v, want %v", tc.a, tc.b, got, tc.want)
 			}
-			// The packed form must give the SAME order for free, since
-			// it is what every durable column is compared with and
-			// nothing in SQL knows a generation exists.
+			// The packed form must give the SAME order: every durable
+			// column is compared by it, in SQL that knows no generation.
 			if packed := tc.a.Packed() < tc.b.Packed(); packed != tc.want {
 				t.Errorf("packed order = %v, want %v — the packed form and "+
 					"Before must not be able to disagree", packed, tc.want)
@@ -62,11 +57,8 @@ func TestAPositionOrdersByGenerationBeforeSequence(t *testing.T) {
 	}
 }
 
-// TWO STREAMS ARE NOT COMPARABLE, and that is an ERROR rather than a false.
-//
-// "This position is not before that one" and "these two are not comparable at
-// all" lead to different code, and a bool collapses the second into the
-// first — which every caller reads as "already caught up".
+// TWO STREAMS ARE NOT COMPARABLE, and that is an ERROR rather than a false
+// ([statelog.ErrWrongStream] says why).
 func TestComparingAcrossStreamsIsAnErrorAndNotAFalse(t *testing.T) {
 	t.Parallel()
 	a := statelog.Position{Stream: "CREWLET_PROBE_LOG", Generation: 1, Seq: 1}
@@ -80,15 +72,11 @@ func TestComparingAcrossStreamsIsAnErrorAndNotAFalse(t *testing.T) {
 	}
 }
 
-// A POSITION A CALLER NAMED IS ON THE LOG IT IS ASKED OF, OR NAMES NOTHING.
-//
-// The one rule every reader of a caller's position asks — a read's floor, a
-// feed's cursor and its `since` bound — because each is compared against this
-// log's own packed numbers, which carry no stream. A position on another log
-// is [statelog.ErrForeignPosition], the request's mistake, and never
-// [statelog.ErrWrongStream], which is the engine comparing two of its own. A
-// zero position and one with no stream are honoured nowhere, so neither is
-// refused: the controls.
+// A POSITION A CALLER NAMED IS ON THE LOG IT IS ASKED OF, OR NAMES NOTHING
+// ([statelog.Position.On]): one on another log is
+// [statelog.ErrForeignPosition], the request's mistake, never
+// [statelog.ErrWrongStream]. A zero position and one with no stream are the
+// controls.
 func TestAPositionACallerNamedIsHeldToItsOwnLog(t *testing.T) {
 	t.Parallel()
 	const here = "CREWLET_PROBE_LOG"
@@ -116,13 +104,9 @@ func TestAPositionACallerNamedIsHeldToItsOwnLog(t *testing.T) {
 	}
 }
 
-// THE PACKED FORM'S BOUNDS ARE CHECKED WHERE A POSITION IS MINTED.
-//
-// (generation << 40) inside an int64 leaves 2^23 generations and one
-// generation's whole space for the sequence. A value past either would go
-// negative in a durable column with nothing saying so, so the mint points
-// refuse it instead — which is why Packed() itself can stay a plain
-// conversion at every comparison in the tree.
+// THE PACKED FORM'S BOUNDS ARE CHECKED WHERE A POSITION IS MINTED, so Packed()
+// stays a plain conversion: a value past either bound would go negative in a
+// durable column with nothing saying so.
 func TestAPositionOutsideThePackedRangeIsRefusedWhereItIsMinted(t *testing.T) {
 	t.Parallel()
 	const s = "CREWLET_PROBE_LOG"
@@ -166,10 +150,9 @@ func TestAPositionOutsideThePackedRangeIsRefusedWhereItIsMinted(t *testing.T) {
 		})
 	}
 
-	// AND THE HIGHEST LEGAL POSITION IS STILL POSITIVE, which is the
-	// property the whole split exists for: a packed position is compared
-	// with a plain `>` in SQL, and a negative one would sort below every
-	// row it is meant to be above.
+	// AND THE HIGHEST LEGAL POSITION IS STILL POSITIVE: SQL compares packed
+	// positions with a plain `>`, and a negative one sorts below every row
+	// it is meant to be above.
 	top := statelog.Position{Stream: s, Generation: statelog.MaxGeneration, Seq: statelog.MaxSeq}
 	if top.Packed() <= 0 {
 		t.Fatalf("the highest legal position packs to %d, which is not positive",
@@ -177,12 +160,9 @@ func TestAPositionOutsideThePackedRangeIsRefusedWhereItIsMinted(t *testing.T) {
 	}
 }
 
-// A POSITION RENDERS WITH THE KEYS ITS READERS INDEX.
-//
-// The dashboard's protocol types declare `{stream, generation, seq}` and its
-// coverage banner reads `incomplete.from.seq`; untagged, the encoder wrote
-// Go's own field names, so the banner printed "from sequence undefined" while
-// every Go test decoded the same bytes back into the same struct and passed.
+// A POSITION RENDERS WITH THE KEYS ITS READERS INDEX: the dashboard's protocol
+// types declare `{stream, generation, seq}`, and a Go round trip alone would
+// pass on Go's own field names while the dashboard read `undefined`.
 func TestAPositionRendersTheKeysTheDashboardReads(t *testing.T) {
 	t.Parallel()
 	at := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 2, Seq: 4711}
@@ -204,10 +184,8 @@ func TestAPositionRendersTheKeysTheDashboardReads(t *testing.T) {
 }
 
 // A POSITION'S TOKEN READS BACK AS THE POSITION IT NAMES, and nothing else
-// does. A cursor, a `since`, a `min_position` and a wake's trigger all travel
-// as the token, and a reader that accepted a bare sequence, or rounded a
-// generation it could not hold, would hand a node a position in a number space
-// it does not belong to — read as behind, or as impossibly far ahead.
+// does: a reader that accepted a bare sequence, or rounded a generation it
+// could not hold, would hand a node a position in the wrong number space.
 func TestAPositionTokenReadsBackAsThePositionItNames(t *testing.T) {
 	t.Parallel()
 	for _, at := range []statelog.Position{

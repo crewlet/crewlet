@@ -11,20 +11,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE THREE TABLES WHOSE ROWS KEEP OBJECTS ALIVE, declared beside the schema that
-// holds them and collected in internal/objstore/references, which the
-// collector, its audit and the backup build their statements from. A table that
-// names objects and is missing from that list is the one mistake that destroys
-// data: its objects read as unreferenced and are collected a day after they
-// were written.
+// THE THREE TABLES WHOSE ROWS KEEP OBJECTS ALIVE, collected in
+// internal/objstore/references, which the collector, its audit and the backup
+// build their statements from. A table missing from that list destroys data:
+// its objects read as unreferenced and are collected a day after they land.
 
 // ObjectReferences is every object a retained version of an artifact names,
 // each distinct object once per artifact with its reference count.
 //
 // REQUIRED (ADR-0081): a retained version is something the company holds, so
-// its objects are audited and every backup carries them — and so the
-// declaration names the log a restore replays and how one record of it names
-// the table's rows (ADR-0082).
+// its objects are audited and backed up, and the declaration names the log a
+// restore replays and how a record names the table's rows (ADR-0082).
 var ObjectReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "artifact_objects",
 	Key: "object", Hash: "hash", Size: "size",
@@ -50,27 +47,17 @@ var AssetReferences = objstore.ReferenceTable{
 	Records:  assetRecordReferences,
 }
 
-// objectRecordReferences answers the artifact_objects rows one record of the
-// artifacts log writes, and the object each names once the record applies —
-// [objstore.ReferenceTable.Records] for [ObjectReferences].
-//
-// A RECORD THIS BUILD READS is answered by the applier's own decoder: a create
-// (on an artifact or a source subject) and a publish or a rollback write the
-// table, one row per distinct object of the version's manifest. Every object
-// is answered whether or not this node's applier would find the record
-// already applied, or count the object as named before — a backup reads a
-// superset of what a restore's rows name, never a subset. A purge, and the
-// unlabelled versions a publish retires, REMOVE rows the record does not list,
-// so they answer none: a backup carrying an object such a record later
-// removed carries one more object than a restore names, which the collector
-// deletes, and never one fewer.
-//
-// A RECORD THIS BUILD CANNOT READ is answered from what EVERY build reads of
-// it ([mayWriteObjects]): one that may write either table is
-// [objstore.ErrRecordUnreadable].
-//
-// THE ROW IS SPELLED AS [ObjectReferences] LISTS ITS OWNER — the artifact id —
-// through [objstore.JoinOwner], as the walk of the table spells it.
+// objectRecordReferences is [objstore.ReferenceTable.Records] for
+// [ObjectReferences]: the rows one record writes (a create on an artifact or
+// source subject, a publish or a rollback: one per distinct object of the
+// version's manifest), owned by the artifact id through [objstore.JoinOwner]
+// as the table's walk spells it. Every object is answered even where this
+// node's applier would skip the record or already holds the object: a backup
+// must read a superset of what a restore's rows name, never a subset. A purge,
+// and the unlabelled versions a publish retires, remove rows the record does
+// not list, so answer none: that costs one extra object the collector
+// deletes, never one too few. A record this build cannot read is answered by
+// [recordForReferences].
 func objectRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 	rec, readable, err := recordForReferences(payload)
 	if err != nil || !readable {
@@ -116,12 +103,10 @@ func objectRecordReferences(payload []byte) ([]objstore.RecordReference, error) 
 	return out, nil
 }
 
-// assetRecordReferences answers the artifact_assets row one record of the
-// artifacts log writes — [objstore.ReferenceTable.Records] for
-// [AssetReferences]: an asset's create names its object, and its removal
-// leaves the row naming none. A purge of the artifact removes its asset rows,
-// which the record does not list, so it answers none, for
-// [objectRecordReferences]' reason.
+// assetRecordReferences is [objstore.ReferenceTable.Records] for
+// [AssetReferences]: an asset's create names its object, its removal leaves
+// the row naming none, and a purge answers none for [objectRecordReferences]'
+// reason.
 func assetRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 	rec, readable, err := recordForReferences(payload)
 	if err != nil || !readable || rec.Subject.Kind != KindAsset {
@@ -158,8 +143,8 @@ func entriesOf(v VersionPayload) []objstore.Object {
 
 // recordForReferences decodes one record for the references, and reports
 // whether this build reads it. A record it cannot read is answered here: nil
-// where it cannot write either referencing table, and
-// [objstore.ErrRecordUnreadable] where it may.
+// where it cannot write a referencing table ([mayWriteObjects]), else
+// [objstore.ErrRecordUnreadable].
 func recordForReferences(payload []byte) (MutationRecord, bool, error) {
 	env, err := DecodeEnvelope(payload)
 	if err != nil {
@@ -181,17 +166,14 @@ func recordForReferences(payload []byte) (MutationRecord, bool, error) {
 	return rec, true, nil
 }
 
-// mayWriteObjects reports whether a record this build cannot read may write an
-// artifact_objects, artifact_assets or artifact_brand_files row, from what
-// every build reads of it: its kind and the scope its WRITER stated as the
-// complete set of objects its apply may write.
-//
-// AN UNKNOWN KIND MAY: this build cannot place what a kind it has never heard
-// of names. A KNOWN KIND may when any path of its scope reaches an artifact or
-// the brand — the domain, an artifact's path or an asset's beneath it, the
-// brand's, or a path this build cannot interpret — and may not when every path
-// is a source address's hold, one person's own state or the framework's own:
-// none of the three tables has a row under any of them.
+// mayWriteObjects reports whether a record this build cannot read may write a
+// row of any of the three tables, from what every build reads of it: its kind
+// and the scope its WRITER stated as all its apply may write. An unknown kind
+// may, since this build cannot place what it names. A known kind may not only
+// when every scope path is a source address's hold, a person's own state or
+// the framework's: none of the three tables has a row under those; any other
+// path (the domain, an artifact, an asset, the brand, or one this build cannot
+// interpret) may.
 func mayWriteObjects(env RecordEnvelope) bool {
 	if !env.Subject.Kind.Valid() {
 		return true
@@ -208,18 +190,14 @@ func mayWriteObjects(env RecordEnvelope) bool {
 	return false
 }
 
-// BrandFileReferences is every file an adoption of the company's brand serves:
-// the generated stylesheet, each logo and each face, copied out of the kit's
-// version at adoption so the adopted brand outlives the kit's retention, trash
-// and purge. A row goes only when its adoption is no longer current and no
-// retained version names its stylesheet.
+// BrandFileReferences is every file an adoption of the company's brand serves
+// (the stylesheet, each logo and face), copied out of the kit's version so the
+// adopted brand outlives the kit's retention, trash and purge. A row goes only
+// when its adoption is no longer current and no retained version names its
+// stylesheet.
 //
-// REQUIRED (ADR-0081), for [ObjectReferences]' reason: the adopted brand is
-// the company's public face, and a superseded adoption's files are what a
-// retained version that pinned its stylesheet still serves — files the
-// company holds, so they are audited, every backup carries them, and the
-// declaration names the log a restore replays and how one record of it names
-// the table's rows (ADR-0082).
+// REQUIRED (ADR-0081) for [ObjectReferences]' reason: a superseded adoption's
+// files are still served by a retained version that pinned its stylesheet.
 var BrandFileReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "artifact_brand_files",
 	Key: "object", Hash: "hash", Size: "size",
@@ -230,21 +208,11 @@ var BrandFileReferences = objstore.ReferenceTable{
 	Records:  brandFileRecordReferences,
 }
 
-// brandFileRecordReferences answers the artifact_brand_files rows one record of
-// the artifacts log writes — [objstore.ReferenceTable.Records] for
-// [BrandFileReferences]: an adoption writes one row per file it serves, keyed
-// by its stylesheet's hash and the file's slot, each naming the fresh copy the
-// adoption uploaded. Every file is answered whether or not this node's applier
-// would apply the adoption, for [objectRecordReferences]' reason: a backup
-// reads a superset of what a restore's rows name, never a subset. A clear, and
-// the prune every adoption and clear runs, REMOVE rows the record does not
-// list, so they answer none, for the same reason.
-//
-// A RECORD THIS BUILD CANNOT READ is answered as [objectRecordReferences]
-// answers one ([mayWriteObjects]).
-//
-// THE ROW IS SPELLED AS [BrandFileReferences] LISTS ITS OWNER — the
-// stylesheet's hash, then the slot — through [objstore.JoinOwner].
+// brandFileRecordReferences is [objstore.ReferenceTable.Records] for
+// [BrandFileReferences]: an adoption writes one row per file it serves, owned
+// by the stylesheet's hash then the slot ([objstore.JoinOwner]), each naming
+// the copy it uploaded. Every file is answered, and a clear or a prune answers
+// none, for [objectRecordReferences]' reasons.
 func brandFileRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 	rec, readable, err := recordForReferences(payload)
 	if err != nil || !readable || rec.Subject.Kind != KindBrand || rec.Op != OpAdopt {
@@ -274,7 +242,7 @@ func (ObjectEstate) Name() string { return Domain{}.Name() }
 
 // Barrier waits until this node has applied everything the log had committed
 // when it was called, and answers where that is: a linearizable read of the
-// whole domain, which appends the read index's barrier.
+// whole domain.
 func (s ObjectEstate) Barrier(ctx context.Context) (statelog.Position, error) {
 	if s.Reader == nil {
 		return statelog.Position{}, errNoReader
