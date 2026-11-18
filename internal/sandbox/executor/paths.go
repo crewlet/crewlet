@@ -155,11 +155,12 @@
 // `hook_additional_context` of the same firing at E after it. A firing is
 // keyed by the digest of its `toolUseID` and E, never the string, so what the
 // reading keeps is fixed in size whatever the thread wrote: per asked take
-// (at most 64) the firing's digest, its event as one of two constants, the two
-// records' handles, the system message's line, and the firing of the first
-// success whose stdout names the take. A context before its system message
-// pairs nothing. The success's stdout is the hook's whole answer, so it is
-// never a confirmation.
+// (at most 64; an ask of more, which a row a peer with wider bounds wrote may
+// make, decides none) the firing's digest, its event as one of two constants,
+// the two records' handles, the system message's line, and the firing of the
+// first success whose stdout names the take. A context before its system
+// message pairs nothing. The success's stdout is the hook's whole answer, so
+// it is never a confirmation.
 //
 // HELD where the pair's two records are handed ([threadChain.Handed]) on a
 // thread every size path of the resume reads alike ([threadChain.AnySize]:

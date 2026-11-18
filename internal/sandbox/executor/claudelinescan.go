@@ -122,10 +122,13 @@ func (t *scanReader) Reset(r io.Reader, maxBytes int64) {
 }
 
 // Asking makes every line t reads from here on name which of tokens, take
-// tokens ([claudeTakeToken]), a hook's words hold ([threadLine.HookTakes]), as
-// [threadReader.Asking] does: called before the first [scanReader.Next], and
-// cleared by [scanReader.Reset].
-func (t *scanReader) Asking(tokens []string) { t.asked = askedTokens(tokens) }
+// tokens ([claudeTakeToken]), a hook's words hold ([threadLine.HookTakes]), or
+// refuses an ask past [maxAskedTakes], as [threadReader.Asking] does: called
+// before the first [scanReader.Next], and cleared by [scanReader.Reset].
+func (t *scanReader) Asking(tokens []string) (err error) {
+	t.asked, err = askedTokens(tokens)
+	return err
+}
 
 // Next is the member's next WHOLE line, read without its break in one
 // scanner pass, answered as [threadReader.Next] answers it: io.EOF at the

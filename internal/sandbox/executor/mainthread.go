@@ -55,7 +55,7 @@ func walkThread(ctx context.Context, r io.Reader, maxBytes int64, large *passBud
 	reader := newThreadReader(&lineRun{r: r, escalate: escalate}, maxBytes)
 	for _, reading := range readings {
 		if asker, ok := reading.(takeAsker); ok {
-			reader.Asking(asker.asked())
+			asker.ask(reader)
 		}
 	}
 	ended := func(torn bool, err error) {
@@ -100,9 +100,10 @@ type recordKeeper interface {
 }
 
 // takeAsker is a reading that asks which take tokens a hook's words name
-// ([threadReader.Asking]): the receipts' ([hookReading]).
+// ([threadReader.Asking]) of reader, before its first line, and keeps a
+// refusal as its own: the receipts' ([hookReading]).
 type takeAsker interface {
-	asked() []string
+	ask(reader *threadReader)
 }
 
 // keepsPastBase reports whether a reading holds more than

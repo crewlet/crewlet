@@ -18,6 +18,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -348,21 +349,33 @@ func (t *threadReader) Reset(r io.Reader, maxBytes int64) {
 // ([threadReader.Asking]): a hook record's masks' width, 64 bits.
 const maxAskedTakes = 64
 
+// The most takes a job's row asks ([sandbox.MainThreadAsk.Takes]): every
+// serve of each note and item it holds. A bound raised past the masks fails
+// this build, never a job's read.
+var _ [maxAskedTakes - (steer.MaxTurnNotes+sandbox.MaxJobItems)*sandbox.MaxNoteServes]struct{}
+
+// errAskedPastMasks is an ask of more take tokens than a hook record's masks
+// hold ([threadReader.Asking]).
+var errAskedPastMasks = errors.New("executor: more take tokens are asked than a hook record's masks hold")
+
 // Asking makes every line t reads from here on name which of tokens, take
 // tokens ([claudeTakeToken]), a hook's words hold ([threadLine.HookTakes]):
 // bit i for tokens[i]. Called before the first [threadReader.Next];
-// [threadReader.Reset] clears it.
-func (t *threadReader) Asking(tokens []string) { t.asked = askedTokens(tokens) }
+// [threadReader.Reset] clears it. Past [maxAskedTakes] tokens it asks nothing
+// and answers [errAskedPastMasks]: the ask comes off a row, which a peer with
+// wider bounds may have written, so its caller decides nothing of them.
+func (t *threadReader) Asking(tokens []string) (err error) {
+	t.asked, err = askedTokens(tokens)
+	return err
+}
 
-// askedTokens is tokens as a reader keeps them asked, a copy. Past
-// [maxAskedTakes] it panics: a reading asks at most 60, so more is its
-// caller's bug, never a thread's.
-func askedTokens(tokens []string) []string {
+// askedTokens is tokens as a reader keeps them asked, a copy, or none and
+// [errAskedPastMasks] past [maxAskedTakes].
+func askedTokens(tokens []string) ([]string, error) {
 	if len(tokens) > maxAskedTakes {
-		panic(fmt.Sprintf("executor: a thread's reading asks %d take tokens, past the %d a hook record's masks hold",
-			len(tokens), maxAskedTakes))
+		return nil, fmt.Errorf("%w: %d asked, %d held", errAskedPastMasks, len(tokens), maxAskedTakes)
 	}
-	return slices.Clone(tokens)
+	return slices.Clone(tokens), nil
 }
 
 // threadSource is a member's reader whose every error but its end reaches

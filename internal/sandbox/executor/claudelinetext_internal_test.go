@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"math/rand/v2"
@@ -518,10 +519,12 @@ func TestATakesTokenIsMatchedWholeAndExactly(t *testing.T) {
 	if got := read(asked[0], nil); slices.ContainsFunc(got, func(bits uint64) bool { return bits != 0 }) {
 		t.Errorf("a text read with nothing asked names the takes %b", got)
 	}
-	defer func() {
-		if recover() == nil {
-			t.Errorf("a reading asking %d takes reads on; want it refused", maxAskedTakes+1)
-		}
-	}()
-	newThreadReader(strings.NewReader(""), 0).Asking(append(all, asked[0]))
+	reader := newThreadReader(strings.NewReader(""), 0)
+	if err := reader.Asking(asked); err != nil {
+		t.Fatalf("a reading asking %d takes is refused: %v", len(asked), err)
+	}
+	if err := reader.Asking(append(all, asked[0])); !errors.Is(err, errAskedPastMasks) || reader.asked != nil {
+		t.Errorf("a reading asking %d takes answers %v and asks %d; want %v and none", maxAskedTakes+1, err,
+			len(reader.asked), errAskedPastMasks)
+	}
 }

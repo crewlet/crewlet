@@ -81,13 +81,13 @@ type hookReading struct {
 	lastRestart, lastCleared int
 	stray, malformed, broken bool
 	torn                     bool
-	err                      error
+	err, askErr              error
 }
 
 var _ takeAsker = (*hookReading)(nil)
 
-// newHookReading reads takes, at most [maxAskedTakes], off the handles chain
-// files.
+// newHookReading reads takes off the handles chain files; past
+// [maxAskedTakes] of them it decides none ([threadReader.Asking]).
 func newHookReading(chain *chainReading, takes []sandbox.AskedTake) *hookReading {
 	r := &hookReading{chain: chain, tokens: make([]string, len(takes)), takes: make([]hookTake, len(takes))}
 	for i, take := range takes {
@@ -96,8 +96,8 @@ func newHookReading(chain *chainReading, takes []sandbox.AskedTake) *hookReading
 	return r
 }
 
-// asked is the take tokens the layer reads hook records for.
-func (r *hookReading) asked() []string { return r.tokens }
+// ask asks reader for the takes' tokens; a refusal decides none of them.
+func (r *hookReading) ask(reader *threadReader) { r.askErr = reader.Asking(r.tokens) }
 
 func (r *hookReading) line(l threadLine) {
 	if r.restarts.See(l.Head) {
@@ -205,6 +205,9 @@ func (r *hookReading) end(torn bool, err error) { r.torn, r.err = torn, err }
 // chain under ctx: Held, Restarted, Absent, or none of these with Why (the
 // package doc's "A hook's note, confirmed off its job's main thread").
 func (r *hookReading) receipts(ctx context.Context, ask sandbox.MainThreadAsk) sandbox.HookReceipts {
+	if r.askErr != nil {
+		return sandbox.HookReceipts{Why: fmt.Sprintf("the takes were not asked of the thread: %v", r.askErr)}
+	}
 	if r.err != nil {
 		return sandbox.HookReceipts{Why: fmt.Sprintf("the thread was not read to its end: %v", r.err)}
 	}

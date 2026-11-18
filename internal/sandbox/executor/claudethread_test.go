@@ -5338,7 +5338,9 @@ func TestAHookRecordNamesOnlyTheTakesItWasAsked(t *testing.T) {
 		}
 		for _, ask := range [][]string{asked, nil} {
 			r := newThreadReader(bytes.NewReader(raw), threadPlainMax)
-			r.Asking(ask)
+			if err := r.Asking(ask); err != nil {
+				t.Fatal(err)
+			}
 			named := 0
 			for {
 				line, err := r.Next(t.Context())
@@ -5432,7 +5434,9 @@ func TestAHooksEventIsHeldToItsType(t *testing.T) {
 func ctAsked(t *testing.T, record string, tokens []string) threadLine {
 	t.Helper()
 	r := newThreadReader(strings.NewReader(ctThread(record)), threadPlainMax)
-	r.Asking(tokens)
+	if err := r.Asking(tokens); err != nil {
+		t.Fatal(err)
+	}
 	line, err := r.Next(t.Context())
 	if err != nil {
 		t.Fatalf("%.120s reads as no record: %v", record, err)

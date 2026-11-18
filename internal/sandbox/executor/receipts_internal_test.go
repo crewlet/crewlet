@@ -332,6 +332,31 @@ func TestAbsenceIsProvenOnlyByAThreadThatMeetsEveryCondition(t *testing.T) {
 	rhWant(t, "a torn last piece", got, held, nil, nil)
 }
 
+// AN ASK PAST THE MASKS DECIDES NO TAKE: a row a peer with wider bounds wrote
+// may ask more takes than a hook record's masks hold, and the read answers
+// none of them, saying why, rather than any it could still tell apart.
+//
+// Mutation: ask the first 64 of an over-wide ask, and the two pairs read as
+// held; ignore the refusal, and the why names no refused ask.
+func TestAnAskPastTheMasksDecidesNoTake(t *testing.T) {
+	t.Parallel()
+	takes := []sandbox.AskedTake{rhAskBatch, rhAskStop}
+	for i := len(takes); i <= maxAskedTakes; i++ {
+		takes = append(takes, sandbox.AskedTake{Take: rcUUID(300 + i), Event: rhStop})
+	}
+	got := rhRead(t, "2.1.322", true, rhBase(), takes...)
+	rhWant(t, fmt.Sprintf("%d asked", len(takes)), got, nil, nil, nil)
+	if !strings.Contains(got.Why, errAskedPastMasks.Error()) {
+		t.Errorf("%d asked: why %q; want it to name the refused ask", len(takes), got.Why)
+	}
+	var absent []string
+	for _, take := range takes[2:maxAskedTakes] {
+		absent = append(absent, take.Take)
+	}
+	rhWant(t, fmt.Sprintf("%d asked", maxAskedTakes), rhRead(t, "2.1.322", true, rhBase(), takes[:maxAskedTakes]...),
+		[]string{rhBatchTake, rhStopTake}, nil, absent)
+}
+
 // A HOOK-CANCELLED LINE DENIES NOTHING: a firing past its hook's timeout names
 // no take, so it neither proves a take at its event absent nor stands in the
 // way of an absence the thread proves otherwise.
