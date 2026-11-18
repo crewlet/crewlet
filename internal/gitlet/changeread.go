@@ -411,12 +411,9 @@ func (r *Reader) changesPage(q ReadQuery, served []ChangeSummary) page {
 	return pg
 }
 
-// listChanges is [Reader.changes] over one walk, appending to the rows out
-// holds and filling what is left of their page. Where asked names a reviewer,
-// a walk of changes awaiting a fix leaves out those whose ask of asked stands:
-// the first half of what waits on asked lists them. waits is the half of
-// needs=me the walk is, which each row names ([ChangeSummary.WaitsFor]); ""
-// on every other listing.
+// listChanges is [Reader.changes] over one walk, filling what is left of out's page. Where asked
+// names a reviewer, a fix walk leaves out changes whose ask of asked stands (needs=me's review
+// half lists them). waits is the needs=me half each row names ([ChangeSummary.WaitsFor]), or "".
 func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
 	out *ReadAnswer, asked string, waits Need) error {
 

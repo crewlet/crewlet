@@ -436,10 +436,7 @@ export function suggestionMessage(finding: Pick<CodeFindingRow, "title">): strin
   return `Apply suggestion: ${finding.title}`;
 }
 
-/**
- * Apply suggestion, confirmed: one commit on the change's branch at the head on
- * screen, its message the reader's to change, and the finding resolved with it.
- */
+/** Apply suggestion: one commit at the head on screen, message editable, resolving the finding. */
 function ApplySuggestionDialog({
   change,
   finding,

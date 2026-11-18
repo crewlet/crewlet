@@ -1293,10 +1293,9 @@ func decideCommentEdit(ctx context.Context, tx *sql.Tx, w ConversationWrite, ask
 	return d, nil
 }
 
-// decideCommentDelete is a comment's delete's rules over row: a comment of
-// this change (comment_gone), deleted by its author, a principal that
-// maintains the repository or a person (not_permitted); unchanged where it is
-// deleted already.
+// decideCommentDelete is a comment delete's rules over row: a comment of this
+// change (comment_gone), by its author, a maintainer of the repository or a
+// person (not_permitted); unchanged where it is deleted already.
 func decideCommentDelete(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker string, kind PartyKind,
 	row changeRow, named string, grant Grant, d conversationDecision) (conversationDecision, error) {
 

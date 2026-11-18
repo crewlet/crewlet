@@ -1,7 +1,5 @@
 /**
- * A comment's own controls: Edit for its author alone, Delete for every
- * person, each one act after its own gesture, and a deleted comment drawn as
- * the tombstone the engine keeps in its place, its replies under it.
+ * A comment's Edit (its author's alone) and Delete, and a deleted one's tombstone with its replies.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";

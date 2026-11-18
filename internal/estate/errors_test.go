@@ -607,9 +607,8 @@ func declaredErrors(t *testing.T, dir string) (vars, types []string) {
 	return slices.Compact(vars), slices.Compact(types)
 }
 
-// A GITLET REFUSAL CROSSES NAMING ITS FIELD as a value: a write refused on a
-// data node still says which field it was refused by on the asking node, so
-// the act route answers it (ADR-0060), and stays ErrInvalid with its sentence.
+// A GITLET REFUSAL CROSSES NAMING ITS FIELD as a value: a write refused on a data node still names
+// its field on the asking node (ADR-0060) and stays ErrInvalid with its sentence.
 // Mutation: drop gitlet.FieldRefused's typed row and errors.As finds nothing.
 func TestAGitletRefusalCrossesNamingItsField(t *testing.T) {
 	t.Parallel()

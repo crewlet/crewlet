@@ -139,9 +139,8 @@ func refused(code tools.Refusal, msg string) tools.Result {
 func failed(msg string) tools.Result { return refused(tools.RefusalInvalid, msg) }
 
 // failedArg is [failed] for a refusal of ONE argument, carrying its name as a
-// value beside the class ([argRefused]): a surface answering a person says
-// which value was refused in its own words (ADR-0060), and the model reads
-// the sentence, which names it too.
+// value beside the class ([argRefused]) so a surface can say in its own words
+// which value was refused (ADR-0060).
 func failedArg(field, msg string) tools.Result {
 	return tools.Result{Output: msg, Failed: true, Cause: tools.Classify(tools.RefusalInvalid, argRefused(field))}
 }

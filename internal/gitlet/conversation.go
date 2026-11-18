@@ -341,11 +341,9 @@ type CommentEdit struct {
 	Body string `json:"body" untrusted:"fence"`
 }
 
-// CommentDelete deletes one of a change's comments, by its author, a
-// principal that maintains the repository or a person. A TOMBSTONE, as a
-// deleted branch's commits and a closed change are kept: the row keeps its
-// place, its thread and its author, its words cleared, so every reply stays
-// readable (doc.go, "A deleted comment").
+// CommentDelete deletes one of a change's comments, by its author, a principal
+// that maintains the repository or a person. A TOMBSTONE: the row keeps its
+// place, thread and author, its words cleared, so every reply stays readable.
 type CommentDelete struct {
 	RepoID    string `json:"repo_id"`
 	ChangeID  string `json:"change_id"`

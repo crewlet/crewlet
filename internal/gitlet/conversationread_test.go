@@ -741,14 +741,9 @@ func TestWhatWaitsOnAnOwnersFixIsWhatTheirCountersAsk(t *testing.T) {
 	}
 }
 
-// WHAT WAITS ON YOU FILLS ITS PAGE ACROSS ITS TWO HALVES: a page of needs=me whose
-// review half ends goes on into the asker's changes awaiting a fix, so one review
-// asked and three changes to fix are four rows on a first page of fifty, each naming
-// its half; a smaller page resumes across the boundary with nothing lost or listed
-// twice.
-//
-// Mutation: serve one half a page (the review half's last page ending at the boundary
-// with a fix: cursor) → the first page holds app!2 alone.
+// WHAT WAITS ON YOU FILLS ITS PAGE ACROSS ITS TWO HALVES: needs=me runs from its review half into
+// the asker's changes awaiting a fix, each row naming its half; a smaller page resumes across the
+// boundary, nothing lost or listed twice. Mutation: serve one half a page → app!2 alone, red.
 func TestWhatWaitsOnYouFillsItsPageAcrossItsTwoHalves(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

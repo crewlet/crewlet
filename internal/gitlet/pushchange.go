@@ -60,7 +60,7 @@ type ChangeOption struct {
 	Draft bool `json:"draft,omitempty"`
 	// Reverts is the number of the change this one reverts, set by a
 	// revert_change's build alone (an engine write's push), never by a push's
-	// options; kept on code_changes.reverts. VERSION 8 ([RevertsVersion]).
+	// options; kept on code_changes.reverts. VERSION 9 ([RevertsVersion]).
 	Reverts int64 `json:"reverts,omitempty"`
 }
 

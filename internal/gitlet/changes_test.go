@@ -565,12 +565,9 @@ func TestEveryLifecycleWriteMovesItsRow(t *testing.T) {
 	}
 }
 
-// A CLOSED CHANGE NAMES WHO CLOSED IT, not its owner: a close record's
-// principal, a person by the human seat they hold, kept on the row while it is
-// closed and cleared by its reopen; and a read of the change answers it.
-//
-// Mutation: keep no closer in the close's apply, or clear none on the reopen,
-// and this fails.
+// A CLOSED CHANGE NAMES WHO CLOSED IT, not its owner: the close record's principal (a person by
+// their human seat), kept while closed, cleared on reopen, and answered by a read of the change.
+// Mutation: keep no closer in the close's apply, or clear none on the reopen, and this fails.
 func TestAClosedChangeNamesWhoClosedIt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -607,15 +604,9 @@ func TestAClosedChangeNamesWhoClosedIt(t *testing.T) {
 	}
 }
 
-// A CHANGE'S MOVES ARE ITS LIFECYCLE'S HISTORY: every lifecycle write that
-// moved it is a move of its `moves` part, oldest first, naming who made it:
-// an edit's title, description and work item each a move, a draft and its
-// readying, a retarget from and to, a close with its reason, a reopen, and a
-// push that deletes the source a close named for its pusher. A page resumes
-// after the move its cursor names.
-//
-// Mutation: write no move in the lifecycle's apply, or none in a push's
-// close, or resume a page at its cursor's move, and this fails.
+// A CHANGE'S MOVES ARE ITS LIFECYCLE'S HISTORY: every lifecycle write (each edited field, a draft
+// and its readying, a retarget, a close with its reason, a reopen, a source-deleting push's close)
+// is a move in `moves`, oldest first, naming who made it; a page resumes after its cursor's move.
 func TestAChangesMovesAreItsLifecyclesHistory(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

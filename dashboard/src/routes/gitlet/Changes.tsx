@@ -273,9 +273,7 @@ export function changeOrder(f: Filters, chosen: string): ChangeOrder {
 const STATE_TABS: readonly KnownChangeState[] = ["open", "draft", "merged", "closed"];
 
 /**
- * What the foot says it shows, of the scope's total where only the scope narrows. A page
- * with more after it says it shows the first of them: the engine's page of a narrowed
- * listing may be short and still have more to load.
+ * What the foot says it shows; "the first" where more follows, as a narrowed page may be short.
  */
 export function footWords(
   f: Filters,

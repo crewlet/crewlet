@@ -140,11 +140,9 @@ const (
 	// EjectCheckFailed is a required check that failed on what the entry was
 	// tested in.
 	EjectCheckFailed QueueEndReason = "check_failed"
-	// EjectChecksUndefined is a required check the checks file at the train's
-	// base, the target's tip, defines in no form that runs: no candidate can
-	// pass it, so the entry was tested in nothing, and is put out until the
-	// target defines it or its gate stops requiring it. Version 8
-	// ([GateChecksVersion]).
+	// EjectChecksUndefined is a required check the checks file at the
+	// target's tip defines in no form that runs, so no candidate can pass it.
+	// Version 8 ([GateChecksVersion]).
 	EjectChecksUndefined QueueEndReason = "checks_undefined"
 	// EjectConflict is the entry's merge onto what was before it in its
 	// train conflicting.

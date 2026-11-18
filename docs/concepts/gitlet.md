@@ -9089,7 +9089,7 @@ on — the seat's own `seats/<handle>/revert-<n>`, or `revert-<n>` for a person
    person's `-o change` opens one ([A change a push
    opens](#a-change-a-push-opens)) — and the write's answer names it. The
    push's record names the change it reverts (`code_changes.reverts`, record
-   version 8), so the reverted change's read answers its latest revert as
+   version 9), so the reverted change's read answers its latest revert as
    `reverted_by`, and a second revert, refused `exists` on the branch, names
    that change.
 

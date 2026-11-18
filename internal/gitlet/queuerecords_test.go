@@ -652,13 +652,9 @@ func TestAnEjectedEntryLeavesItsQueueAndItsTrain(t *testing.T) {
 	requireQueueRefused(t, n, before, res, err, gitlet.MergeRefusalNotQueued, "is ejected")
 }
 
-// A CHANGE'S QUEUE ENTRIES ARE ITS PART, in queue order: each enqueue names who
-// made it, the head and the target, and once it ended how, with the record's
-// position; an ejection names the checks it failed, and a dequeue its reason. A
-// page resumes after the entry its cursor names.
-//
-// Mutation: read the entries newest first, drop the ejection's checks, or
-// resume a page at its cursor's entry, and this fails.
+// A CHANGE'S QUEUE ENTRIES ARE ITS PART, in queue order: each enqueue names who made it, the head,
+// the target and, once ended, how and the record's position; an ejection names its failed checks,
+// a dequeue its reason; a page resumes after its cursor's entry.
 func TestAChangesQueueEntriesAreItsPart(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

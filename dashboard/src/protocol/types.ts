@@ -8825,10 +8825,7 @@ export interface CodeChangeSummary extends CodeChangeRow {
   updated_at: string;
   /** Its card, where `cards=true` asks (`gitlet.ChangeSummary.Card`); absent is not answered. */
   card?: CodeChangeCard;
-  /**
-   * On a `needs=me` listing, the half that listed it: `review` (it asks the reader's
-   * review) or `fix` (the reader's own, awaiting their fix); absent on every other listing.
-   */
+  /** On a `needs=me` listing, why it is listed: the reader's `review`, or a `fix` of their own. */
   waits_for?: "review" | "fix" | (string & {});
 }
 
@@ -9218,10 +9215,7 @@ export interface CodeChangeAnswer extends CodePage {
 }
 
 /**
- * One move of a change's lifecycle (`gitlet.ChangeMove`): what it did, who made
- * it (absent for a push nobody made), a close's reason, what a retarget moved
- * its target from (`was`) and to (`became`), and the work item key an edit set
- * (`became`, absent where it cleared one).
+ * One lifecycle move (`gitlet.ChangeMove`); `was`/`became` are a retarget's or work item's values.
  */
 export interface CodeChangeMoveRow {
   kind: (typeof CHANGE_MOVE_KINDS)[number] | (string & {});
@@ -9235,10 +9229,7 @@ export interface CodeChangeMoveRow {
 }
 
 /**
- * One queue entry of a change (`gitlet.ChangeQueueEntry`): who added it to its
- * target's queue and where, and for one that ended how (`reason`, absent for a
- * landing), what an ejection named and the commit a landing made, with the
- * positions of the records that enqueued and ended it.
+ * One queue entry of a change (`gitlet.ChangeQueueEntry`); `reason` is absent for a landing.
  */
 export interface CodeChangeQueueEntryRow {
   entry_id: string;

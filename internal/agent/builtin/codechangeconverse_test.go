@@ -324,14 +324,9 @@ func TestACommentSetsItsThreadAsASecondWrite(t *testing.T) {
 	}
 }
 
-// A COMMENT IS EDITED AND DELETED BY NAME: `edit` sends one edit of the
-// comment it names with `body` as its words, refused beside a thread, a
-// finding, an anchor or a resolve, or with no words; code_delete_comment sends
-// one delete of the comment it names and is destructive, as a branch's delete
-// is.
-//
-// Mutations: an edit sent as a new comment → red; the delete not destructive →
-// red.
+// A COMMENT IS EDITED AND DELETED BY NAME: `edit` sends one edit of the named comment, refused
+// beside a thread, finding, anchor or resolve, or with no words; code_delete_comment sends one
+// destructive delete. Mutations: an edit sent as a new comment, or a delete not destructive → red.
 func TestACommentIsEditedAndDeletedByName(t *testing.T) {
 	t.Parallel()
 	const comment = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d31"

@@ -116,11 +116,7 @@ export type WriteFailed =
        * words (the merge controls) reads this, never the sentence.
        */
       hostRefusal: string;
-      /**
-       * On an `invalid` refusal, the field the engine refused the write by
-       * (`fields` on the answer, ADR-0060), as the request spells it: a value a
-       * screen names in its own words. Empty everywhere else.
-       */
+      /** An `invalid` refusal's refused fields (ADR-0060), as the request spells them. */
       fields: string[];
       /**
        * On a refusal on AUTHORITY, the grants any ONE of which would have

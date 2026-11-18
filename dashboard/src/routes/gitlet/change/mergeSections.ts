@@ -77,9 +77,7 @@ export function boxTone(readiness: CodeReadiness | undefined): DiscTone {
 }
 
 /**
- * Whether its merge was measured at a tip its target has since moved past: the
- * home measures a moved target again only after a while, so until then the
- * measurement is of a branch that no longer stands.
+ * Whether its merge was measured before its target moved; the home re-measures only after a while.
  */
 export function measuredBeforeMove(
   change: Pick<CodeChangeDetail, "target_ref" | "target_tip" | "mergeability">,
@@ -94,12 +92,7 @@ export function measuredBeforeMove(
 }
 
 /**
- * Why Fast-forward cannot land its head, or undefined where it may: its target
- * moves to its head only where the head holds the target's tip. Known from the
- * head revision's facts, measured against the tip the read found: their merge
- * base is that tip where the head holds it, and another commit where the target
- * has moved past the branch. Facts of an earlier tip say neither, so the build
- * answers.
+ * Why Fast-forward is held (the head's facts show the target moved past it), else undefined.
  */
 export function fastForwardHeld(
   change: Pick<CodeChangeDetail, "target_ref" | "target_tip" | "head" | "revision">,
@@ -170,8 +163,7 @@ export function reviewerStandings(
 }
 
 /**
- * Whom a re-request asks: each standing verdict not an approval of the head, not asked now, no
- * author, and never the reader, whose own review is theirs to give again, not to ask of themselves.
+ * Whom a re-request asks: reviewers yet to approve the head, less those asked, authors and reader.
  */
 export function reRequestable(
   change: Pick<CodeChangeDetail, "revision" | "authors">,

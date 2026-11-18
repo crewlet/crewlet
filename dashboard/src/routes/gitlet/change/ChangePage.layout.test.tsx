@@ -601,9 +601,8 @@ test("a merged change's box says into what on one line at 1440 px", async () => 
   }
 });
 
-// THE HEADER'S TIME WRAPS WHOLE: "opened" and its time stay on one line, whatever
-// width breaks the byline around the branch's chip. Each width from 1440 px down
-// moves the break through the sentence, so one inside the time is met.
+// THE HEADER'S TIME WRAPS WHOLE: "opened" and its time stay on one line at every width down
+// from 1440 px, which moves the byline's break through the sentence.
 // Mutation: drop the time's nowrap, and a width breaks "opened" from its time.
 test("the header keeps 'opened' and its time on one line at every width down from 1440 px", async () => {
   mount(1440);

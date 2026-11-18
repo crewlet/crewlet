@@ -8,12 +8,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// ONLY AN ENGINE-BUILT REVERT NAMES WHAT IT REVERTS: a proposal's change
-// carrying `reverts` is refused naming change.reverts unless the engine built
-// the push, and a negative number is refused from anybody.
-//
-// Mutation: drop the proposal's rule on change.reverts (the git push's case
-// validates, red).
+// ONLY AN ENGINE-BUILT REVERT NAMES WHAT IT REVERTS: a proposal's change carrying `reverts` is
+// refused naming change.reverts unless the engine built the push, and a negative number from anybody.
+// Mutation: drop the proposal's rule on change.reverts (the git push's case validates, red).
 func TestOnlyAnEngineBuiltRevertNamesWhatItReverts(t *testing.T) {
 	t.Parallel()
 	of := func(via PushVia, reverts int64) Proposal {

@@ -595,12 +595,9 @@ func TestTheStandingCountBoundKeepsTheFirstPageQuick(t *testing.T) {
 	}
 }
 
-// A CI'S REPORT STANDS AS THE SUBJECT IT MEASURES: a report names no purpose, holding no queue, so
-// a failed one at web!1's head stands as that change's head check, a running one at main's tip as
-// the tip's, and one at a commit that is neither stands nowhere; the first page counts them so.
-//
-// Mutation: judge a reported attempt by its purpose alone and web stands at nothing, its counts
-// zero.
+// A CI'S REPORT STANDS AS THE SUBJECT IT MEASURES: it names no purpose, so a failed one at web!1's
+// head is that change's head check, a running one at main's tip the tip's, one at neither nowhere;
+// the first page counts them so. Mutation: judge it by purpose alone; web stands at nothing.
 func TestACIsReportStandsAsTheSubjectItMeasures(t *testing.T) {
 	t.Parallel()
 	e := newStandingEstate(t)

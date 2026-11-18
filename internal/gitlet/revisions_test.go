@@ -242,13 +242,9 @@ func TestAPusherBecomesAnAuthor(t *testing.T) {
 	}
 }
 
-// A REVISION SAYS HOW ITS PUSH MOVED ITS BRANCH: a git push forward is `git`
-// and not forced, an engine push that rewrote the branch (a rebase onto the
-// target, the engine's one write that does) is `engine` and forced, and the
-// revision an open by a tool made names no push at all.
-//
-// Mutation: keep no way or no force on the book's revision, or read neither
-// back, and this fails.
+// A REVISION SAYS HOW ITS PUSH MOVED ITS BRANCH: a git push forward is `git`, not forced; an engine
+// rebase onto the target (its only rewrite) is `engine`, forced; a tool's open names no push.
+// Mutation: keep no way or no force on the book's revision, or read neither back, and this fails.
 func TestARevisionSaysHowItsPushMovedItsBranch(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

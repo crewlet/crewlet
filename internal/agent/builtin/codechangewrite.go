@@ -439,13 +439,9 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return newForeignRead(turn, c.asker.Seat).page(ctx, tool, out, "")
 }
 
-// heldByTarget refuses an open whose source its target already holds, as the
-// committer refuses one whose source is AT its target (no_difference): such a
-// change proposes nothing, and its home would mark it merged at once. The
-// committer's decide reads rows, which see two tips that differ, so the
-// histories are read here, one landed_in of the source's tip in the target,
-// before anything is written. A branch missing, or both at one commit, is
-// left to the decide, which refuses either in its own words.
+// heldByTarget refuses an open whose source tip its target already holds: it
+// proposes nothing and would be marked merged at once. The decide reads only
+// rows, so history is checked here; a missing branch or equal tips is left to it.
 func (d CodeDeps) heldByTarget(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo gitlet.RepoRef, source, target string) *tools.Result {
 

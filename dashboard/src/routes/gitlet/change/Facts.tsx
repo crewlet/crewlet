@@ -223,9 +223,7 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
 }
 
 /**
- * The credential a person opened it through: its kind in words, the id behind a copy
- * control ([credentialOf]), as Settings says a revision's. A token's id names nothing a
- * reader knows, and its label is its owner's and an admin's to read, not every reader's.
+ * The credential it was opened through: its kind and a copyable id, as a token's label is private.
  */
 function Through({ credential }: { credential: string }) {
   const named = credentialOf(credential);

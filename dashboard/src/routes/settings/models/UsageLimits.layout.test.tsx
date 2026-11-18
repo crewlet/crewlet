@@ -1,8 +1,5 @@
 /**
- * THE USAGE LIMITS CELL, LAID OUT: one line per window, its figures at the
- * column's trailing edge, at a 1440px window's list width and a wider one, and
- * on hover a tooltip with one line per window and its reset.
- * Mutation: give the cell's windows a `note`, or drop the tooltip's `lines`.
+ * THE USAGE LIMITS CELL, LAID OUT: a line per window, figures at the trailing edge, tooltip lines.
  */
 import "~/styles/models.css";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";

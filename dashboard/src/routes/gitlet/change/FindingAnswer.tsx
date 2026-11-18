@@ -34,11 +34,7 @@ export function findingStands(state: string): boolean {
   return STANDING.includes(state);
 }
 
-/**
- * Answer, or its form once pressed. The card owns which one it draws: while
- * the form is open it is the card's whole foot, and Apply, Reply and Resolve
- * come back after Send or Cancel.
- */
+/** Answer, or once pressed its form, which is the card's whole foot until Send or Cancel. */
 export function FindingAnswer({
   change,
   finding,

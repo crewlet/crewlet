@@ -185,12 +185,9 @@ func TestAPrincipalsCheckWriteWeighsWhatItAsks(t *testing.T) {
 	}
 }
 
-// A REPORT SAYS WHAT THE GATE REQUIRES: a person's CI's check holds no queue, which is where an
-// engine's attempt says whether its target's gate requires it, so the report's decide reads the
-// gate: lint, which main's gate requires, is required from its run reported to its ending, and
-// e2e, which it does not, is not; the record saying so is version 8.
-//
-// Mutation: record a report's required as false, as before, and lint reads "not required", red.
+// A REPORT SAYS WHAT THE GATE REQUIRES: a person's CI check holds no queue, so the report's decide
+// reads the target's gate: lint (main's gate requires it) is required from run to end, e2e is not;
+// the record saying so is version 8. Mutation: record required as false; lint reads "not required".
 func TestAReportSaysWhatTheGateRequires(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

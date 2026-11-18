@@ -14,10 +14,8 @@ import (
 )
 
 // A CHANGE'S MOVES: one row a move of its lifecycle (code_change_moves, replicated 0188), written
-// by the apply of the record that made it, so a change's timeline says who closed, reopened,
-// drafted, readied, edited or retargeted it and when, where its row says only where it stands now.
-// A move is derived from the record and the row it moved, never from a field a record gained, so a
-// record of every version writes the same moves on every node.
+// by the apply of its record for a timeline of who closed, reopened, drafted, readied, edited or
+// retargeted it; derived from the record and the row it moved, never a newer field, so nodes agree.
 
 // ChangeMoveKind is what one move did to a change. A closed set ([ChangeMoveKinds]), with Valid.
 type ChangeMoveKind string
@@ -52,10 +50,9 @@ func ChangeMoveKinds() []ChangeMoveKind {
 // Valid reports a kind this build knows.
 func (k ChangeMoveKind) Valid() bool { return slices.Contains(ChangeMoveKinds(), k) }
 
-// ChangeMove is one move of a change's lifecycle as a read serves it: what it did, who made it (a
-// seat by its handle, a person by their human seat; "" for a push nobody made), a close's reason,
-// what a retarget moved its target from and to and the work item an edit set, and the record's
-// position and broker instant.
+// ChangeMove is one move of a change's lifecycle as a read serves it: what it did, who made it
+// ("" for a push nobody made), a close's reason, a retarget's from and to or an edit's work item,
+// and its record's position and broker instant.
 type ChangeMove struct {
 	Kind   ChangeMoveKind `json:"kind"`
 	By     string         `json:"by,omitempty"`
@@ -93,10 +90,9 @@ type moveRow struct {
 	reason, was, became string
 }
 
-// lifecycleMoves is what a lifecycle record (payload) does to a change whose row was row before
-// it and next after it, as moves: each set field of an edit that is one, a draft's state where it
-// moved, a retarget, a close, a reopen. A landing the home found makes none: the change's row says
-// it merged, and how.
+// lifecycleMoves is the moves a lifecycle record (payload) makes on a change whose row was row
+// before it and next after: an edit's set fields, a draft state that moved, a retarget, a close, a
+// reopen. A landing makes none; the change's row says it merged, and how.
 func lifecycleMoves(payload any, row, next changeRow) []moveRow {
 	move := func(kind ChangeMoveKind, by Principal) moveRow {
 		handle, party := by.party()

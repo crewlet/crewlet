@@ -694,11 +694,7 @@ export function ejectedWords(entry: CodeChangeQueueEntryRow): string {
   return `${said}: ${namesSaid(named.slice(0, 3), Math.max(0, named.length - 3))}`;
 }
 
-/**
- * A queue entry where its records landed: who added the change to its target's
- * queue, then how the entry ended. A landing and an ejection are the queue's own
- * (Gitlet's); a dequeue names nobody, since the entry keeps only why it left.
- */
+/** A queue entry: who queued it, then how it ended; a dequeue names nobody, only why. */
 function QueueEntry({
   entry,
   ended,
@@ -845,10 +841,9 @@ function AskedWhom({ reviewer }: { reviewer: string }) {
 
 /**
  * A thread, as a card: its first comment (where it is about a line, which
- * line), its replies under it, each with its writer's face and its menu
- * (`CommentCard.tsx`), and for a reader a reply of their own and Resolve
- * conversation. `onRail`: its writer's face is on the timeline's rail, not in
- * its head.
+ * line), its replies under it, each with its writer's face and its menu (`CommentCard.tsx`), and
+ * for a reader a reply of their own and Resolve conversation. `onRail`: its writer's face
+ * is on the timeline's rail, not in its head.
  */
 export function Thread({
   root,

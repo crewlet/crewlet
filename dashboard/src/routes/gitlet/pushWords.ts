@@ -108,10 +108,7 @@ export function pushWords(push: CodePushRow): PushSentence {
 }
 
 /**
- * A credential as a push's tag says it: its kind in words, and the name a person gave it
- * where it has one (a deployment token's). A personal access token's or a session's id
- * names nothing a person knows, so it is the tag's title, never its words
- * ([credentialOf]); a login of any other kind is its own name.
+ * A credential as a push's tag: its kind in words, a deployment token's name; ids go in the title.
  */
 export function credentialTag(login: string): { words: string; name: string } {
   const named = credentialOf(login);

@@ -64,10 +64,7 @@ function usedWords(l: ModelLimit): string {
   );
 }
 
-/**
- * One window as the kit draws it, named by its whole sentence: one line, with
- * no reset note, which only the model page's card has room for.
- */
+/** One window as the kit draws it, named by its whole sentence; no reset note (card only). */
 export function limitWindow(l: ModelLimit, now: number): LimitWindow {
   const label = limitLabel(l);
   const when = whenWords(l, now, true);
@@ -96,10 +93,7 @@ function staleCaption(limits: readonly ModelLimit[], now: number): string | unde
   return `as of ${ago(stale.sort()[0], now, { since: true })}`;
 }
 
-/**
- * Every window's use and exact reset, one line each (the tooltip's `lines`),
- * then when they were heard: once where all agree, else on each line.
- */
+/** Each window's use and exact reset on a line (the tooltip's `lines`), then when heard. */
 function LimitDetail({ limits, now }: { limits: readonly ModelLimit[]; now: number }) {
   const heard = new Set(limits.map((l) => ago(l.seen, now)));
   const each = heard.size > 1;
@@ -149,10 +143,7 @@ export function UsageLimitsCell({ model }: { model: ModelView }) {
   );
 }
 
-/**
- * The model page's card: the bars, each with when it resets beneath, and every
- * window's exact figures under them.
- */
+/** The model page's card: each window's bar with its reset beneath, then every exact figure. */
 export function UsageLimitsCard({ model }: { model: ModelView }) {
   const now = useNow();
   const limits = model.entry.limits;

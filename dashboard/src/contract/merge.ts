@@ -67,8 +67,6 @@ export const MERGE_REFUSALS = [
 export const MERGE_CONFLICT = "conflict";
 
 /**
- * The word a fast-forward's BUILD answers when the change's head does not hold
- * its target's tip (`gitlet.WriteNotFastForward`): the target has moved past
- * the branch, which a rebase brings level. Held with [MERGE_REFUSALS].
+ * A fast-forward BUILD's refusal: the target moved past the branch (`gitlet.WriteNotFastForward`).
  */
 export const MERGE_NOT_FAST_FORWARD = "not_fast_forward";

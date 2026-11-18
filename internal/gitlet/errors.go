@@ -287,11 +287,9 @@ func (e *TooWideError) Error() string {
 // Unwrap is ErrInvalidProposal.
 func (e *TooWideError) Unwrap() error { return ErrInvalidProposal }
 
-// FieldRefused is a request this domain refuses by one of its fields ([ErrInvalid],
-// [ErrInvalidProposal]): Field names the field as the request spells it (`findings[0].lines`,
-// `owner`, `limit`), so a surface answering a person can say which value was refused without
-// reading the sentence, which is written for whoever built the request (ADR-0060). Err is the
-// refusal itself, the sentinel and its sentence, which errors.Is and the message read as before.
+// FieldRefused is a request refused by one of its fields ([ErrInvalid], [ErrInvalidProposal]):
+// Field as the request spells it (`findings[0].lines`), so a surface can say which value was
+// refused without reading the sentence (ADR-0060); Err is the sentinel and its sentence.
 type FieldRefused struct {
 	Field string
 	Err   error
@@ -304,10 +302,9 @@ func (e *FieldRefused) Unwrap() error { return e.Err }
 // RefusedField is the field refused, as a surface outside the domain asks it of an error's chain.
 func (e *FieldRefused) RefusedField() string { return e.Field }
 
-// refusedf is fmt.Errorf for a refusal by one field, whose format leads "%w: <field>: " with the
-// field written in the format or as its first argument after the sentinel ("%w: %s: "): the error
-// says exactly what the format says, and carries the field as a value ([FieldRefused]). The field
-// is read from the CALL, never from text the error carries, so no sentence becomes a value.
+// refusedf is fmt.Errorf for a refusal by one field, whose format leads "%w: <field>: " (or
+// "%w: %s: " with the field as the first argument), carrying the field as a [FieldRefused]. The
+// field is read from the CALL, never from the error's text, so no sentence becomes a value.
 func refusedf(format string, args ...any) error {
 	err := fmt.Errorf(format, args...)
 	head, _, ok := strings.Cut(strings.TrimPrefix(format, "%w: "), ": ")

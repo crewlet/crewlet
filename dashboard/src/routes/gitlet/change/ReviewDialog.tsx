@@ -57,9 +57,7 @@ export function verdictItems(
 }
 
 /**
- * Why a review that says nothing is held: changes asked for, or a comment,
- * with no summary and no finding tells the author nothing. An approval may be
- * bare. Null where it says something.
+ * Why a review is held as saying nothing: changes asked or a comment with no summary or finding.
  */
 export function saysNothing(
   verdict: CodeVerdict,

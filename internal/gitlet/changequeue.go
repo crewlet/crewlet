@@ -13,16 +13,12 @@ import (
 )
 
 // A CHANGE'S QUEUE ENTRIES, its `queue` part ([PartQueue]): each enqueue of the change, who made
-// it and how it ended, read on code_queue_change_idx in queue order, so its timeline says when it
-// was added to its target's queue and when it landed, was taken out or left it. An ended entry is
-// kept as long as the queue's history ([QueueHistory]), so a change's older entries are gone from
-// its timeline as from the queue's.
+// it and how it ended, read on code_queue_change_idx in queue order. Ended entries are kept only as
+// long as the queue's history ([QueueHistory]), so older ones leave the timeline too.
 
-// ChangeQueueEntry is one queue entry of a change as its `queue` part serves it: its target and
-// the head it was enqueued at, how it was to merge and who enqueued it, where it stands, and for
-// one that ended why ([QueueEndReason]; "" for a landing), what its ejection named (the checks,
-// the conflicting paths) and the commit it landed as; the positions and instants of the record
-// that enqueued it and the one that ended it.
+// ChangeQueueEntry is one queue entry of a change as its `queue` part serves it: how and by whom
+// it was enqueued, where it stands, why an ended one ended ([QueueEndReason]; "" for a landing),
+// what its ejection named or it landed as, and its enqueue's and end's positions and instants.
 type ChangeQueueEntry struct {
 	EntryID          string            `json:"entry_id"`
 	TargetRef        string            `json:"target_ref"`

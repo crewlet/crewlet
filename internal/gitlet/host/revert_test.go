@@ -34,7 +34,6 @@ func (c *mergeCase) mainTip() string {
 // before the merge (for the fast-forward, its whole range from its recorded
 // base). The push's record opens "Revert <repo>!<n>" from that branch into
 // main at that commit; main does not move.
-//
 // The reverted change's read then answers the revert as reverted_by.
 //
 // Mutations: revert a fast-forward against its merge_oid's first parent →

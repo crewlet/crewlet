@@ -22,14 +22,9 @@ func deleting(repo, change string, asker gitlet.Principal, comment string) gitle
 	})
 }
 
-// A COMMENT IS EDITED BY ITS AUTHOR ALONE: anybody else, a maintainer and a
-// person among them, is refused not_permitted naming whose it is; the words
-// replace the old ones in the comment's own place, it reads as edited, and the
-// conversation's text_bytes moves by what the words gained; words it holds
-// already are unchanged, and a comment the change does not hold is
-// comment_gone.
-//
-// Mutation: drop the author rule, and the maintainer's edit lands.
+// A COMMENT IS EDITED BY ITS AUTHOR ALONE: anybody else, a maintainer or person too, is refused
+// not_permitted naming whose it is; the edit replaces the words in place, reads edited, and moves
+// text_bytes by the gain; the same words are unchanged; a comment not held is comment_gone.
 func TestACommentIsEditedByItsAuthorAlone(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -92,15 +87,9 @@ func TestACommentIsEditedByItsAuthorAlone(t *testing.T) {
 	}
 }
 
-// A DELETED COMMENT KEEPS ITS PLACE AND EVERY REPLY (doc.go, "A deleted
-// comment"): its author, a maintainer or a person deletes it, anybody else is
-// refused not_permitted; the row stays in its thread with its words cleared,
-// naming who deleted it and when; every reply, anyone's, stands and the thread
-// still takes one; the excerpt each notice of it quoted is cleared; it takes no
-// edit; and deleting it again is unchanged.
-//
-// Mutations: delete the row rather than clear it, and its reply loses its root;
-// skip the notices, and the inbox still quotes the deleted words.
+// A DELETED COMMENT KEEPS ITS PLACE AND EVERY REPLY (doc.go, "A deleted comment"): only its author,
+// a maintainer or a person deletes it; its words and its notices' excerpts are cleared, naming who
+// deleted it and when; replies stand, the thread takes more; no edit; a second delete is unchanged.
 func TestADeletedCommentKeepsItsPlaceAndEveryReply(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -200,10 +189,8 @@ func TestADeletedCommentKeepsItsPlaceAndEveryReply(t *testing.T) {
 	}
 }
 
-// AN EDIT AND A DELETE ARE VALIDATED BEFORE ANYTHING IS READ: a comment named
-// by a whole id, an edit's words held to a comment's rules, and who writes
-// stamped by the writer alone.
-//
+// AN EDIT AND A DELETE ARE VALIDATED BEFORE ANYTHING IS READ: a whole comment id, an edit's words
+// held to a comment's rules, and who writes stamped from the writer alone.
 // Mutation: skip the edit's body rule, and an empty edit is proposed.
 func TestACommentsEditAndDeleteAreValidatedFirst(t *testing.T) {
 	t.Parallel()

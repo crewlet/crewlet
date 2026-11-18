@@ -146,10 +146,9 @@ func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFiel
 // OpKind is what a record does.
 type OpKind string
 
-// Every op is BASE FORMAT ([RecordVersion]) but [OpViewed] and [OpViewedKey]
-// ([ViewedVersion]) and [OpCommentEdit] and [OpCommentDelete]
-// ([CommentEditsVersion]). None installs a gate but [OpPurge], and an eviction
-// and the activation fence by their kind ([RecordEnvelope.InstallsGate]).
+// Every op is BASE FORMAT ([RecordVersion]) but [OpViewed] and [OpViewedKey] ([ViewedVersion]),
+// [OpCommentEdit] and [OpCommentDelete] ([CommentEditsVersion]). None installs a gate but
+// [OpPurge], an eviction and the activation fence by their kind ([RecordEnvelope.InstallsGate]).
 const (
 	// OpCreate makes a repository: its name claim, its row and its
 	// protection rules, in one record on the NAME's subject.

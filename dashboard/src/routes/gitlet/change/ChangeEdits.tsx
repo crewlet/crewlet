@@ -1,9 +1,5 @@
 /**
- * A live change's edits beside what it says (`code_update_change`, one thing a
- * call, each against the version on screen): back to a draft, the branch it
- * merges into, and the work item it carries. Ready for review is the page
- * bar's (`ChangePage.tsx`), and the title and description the description's
- * own Edit (`Description.tsx`).
+ * A live change's edits (`code_update_change`, one per call): back to draft, target, work item.
  */
 
 import { useState } from "react";
@@ -208,11 +204,7 @@ export function EditWorkItem({ change }: { change: CodeChangeDetail }) {
   );
 }
 
-/**
- * "Restore branch" on a merged or closed change whose source branch is gone:
- * the branch made again at the change's head (`code_create_branch`), which its
- * history still holds. Nothing while the branch's read has not answered.
- */
+/** "Restore branch": a finished change's deleted source branch, made again at its head. */
 export function RestoreBranch({ change }: { change: CodeChangeDetail }) {
   const write = useAct("code_create_branch");
   const source = refName(change.source_ref).name;

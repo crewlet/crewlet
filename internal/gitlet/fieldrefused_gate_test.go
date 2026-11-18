@@ -15,12 +15,9 @@ import (
 // fieldFormat is a refusal format whose field leads it: "%w: <field>: ", the field a name or "%s".
 var fieldFormat = regexp.MustCompile(`^%w: (%s|[a-z_][A-Za-z0-9_.\[\]-]*): `)
 
-// EVERY REFUSAL BY ONE FIELD IS SPELLED SO ITS FIELD IS A VALUE: a refusal formed with
-// fmt.Errorf("%w: <field>: ...", ErrInvalid or ErrInvalidProposal, ...) names its field only in
-// its sentence, which no surface answering a person may show (ADR-0060), so this package forms
-// every one with refusedf, which carries the field as a FieldRefused.
-//
-// Mutation: spell one refusal with fmt.Errorf again and this names it.
+// EVERY REFUSAL BY ONE FIELD IS SPELLED SO ITS FIELD IS A VALUE: this package forms each with
+// refusedf (a FieldRefused), as fmt.Errorf("%w: <field>: ...", ErrInvalid, ...) names the field
+// only in a sentence no person may be shown (ADR-0060). Mutation: spell one with fmt.Errorf again.
 func TestEveryRefusalByAFieldNamesItAsAValue(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")

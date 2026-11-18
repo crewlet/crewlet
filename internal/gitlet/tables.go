@@ -40,11 +40,9 @@ var ReproducibleTables = []string{
 	// purge removes it.
 	"code_ref_drops",
 
-	// A repository's changes, their authors, every revision of a head, the
-	// body (its own row, off the one every head move rewrites) and the moves
-	// of each change's lifecycle: written on the repository's subject and
-	// removed with it, each change's revisions, authors, moves and body before
-	// its row.
+	// A repository's changes, their authors, revisions, bodies (off the row
+	// every head move rewrites) and lifecycle moves: written on the repository's
+	// subject and removed with it, each change's other rows before its own.
 	"code_changes", "code_change_authors", "code_revisions", "code_change_bodies", "code_change_moves",
 
 	// A change's conversation — reviewers, comments, participants, reviews and

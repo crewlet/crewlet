@@ -511,11 +511,9 @@ describe("what a change came to", () => {
     expect(result).toMatchObject({ kind: "refused", code: "invalid", sentence: message });
   });
 
-  // AN INVALID REFUSAL THAT NAMES ITS FIELD is said by naming it in the
-  // dashboard's words (ADR-0060): a field a person fills in by what its form
-  // calls it, and one the page sent as the value the page sent, never telling
-  // a person to check what they entered when they entered nothing. Mutation:
-  // keep the code's sentence, and both read "Check what was entered".
+  // AN INVALID REFUSAL THAT NAMES ITS FIELD says which in the dashboard's words (ADR-0060), never
+  // telling a person to check what they entered for a value the page sent.
+  // Mutation: keep the code's sentence, and both read "Check what was entered".
   test("an invalid refusal naming its field says which value was refused", async () => {
     const message =
       "That change was refused, and nothing was written. Check what was entered, then try again.";

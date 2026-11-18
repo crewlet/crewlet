@@ -259,12 +259,9 @@ func TestTheDashboardKnowsEveryStateOfAChange(t *testing.T) {
 	}
 }
 
-// THE DASHBOARD WORDS A CHANGE ITS SOURCE'S DELETION CLOSED: the merge box and
-// a change's peek say its branch was deleted where its row's close reason is
-// `SOURCE_DELETED` (`contract/code.ts`), the engine's [gitlet.SourceDeleted].
-// A reason spelled apart from the engine's is drawn as its raw code.
-//
-// Mutation: respell either side, and this fails.
+// THE DASHBOARD WORDS A CHANGE ITS SOURCE'S DELETION CLOSED: the merge box and peek say its branch
+// was deleted when its close reason is `SOURCE_DELETED` (`contract/code.ts`), the engine's
+// [gitlet.SourceDeleted]; a reason spelled apart shows raw. Mutation: respell either side, red.
 func TestTheDashboardKnowsWhyAPushClosedAChange(t *testing.T) {
 	t.Parallel()
 	got, err := clientsource.Scalar(clientsource.Tree(t), "SOURCE_DELETED")
@@ -276,13 +273,9 @@ func TestTheDashboardKnowsWhyAPushClosedAChange(t *testing.T) {
 	}
 }
 
-// THE DASHBOARD DRAWS EVERY MOVE OF A CHANGE'S LIFECYCLE on its timeline, by
-// `CHANGE_MOVE_KINDS` (`contract/code.ts`), in the engine's order: a kind it
-// lacks is drawn in general words, one the engine dropped is a sentence nobody
-// reads.
-//
-// Mutation: drop a kind from either side, or reorder the dashboard's, and this
-// fails.
+// THE DASHBOARD DRAWS EVERY MOVE OF A CHANGE'S LIFECYCLE on its timeline, by `CHANGE_MOVE_KINDS`
+// (`contract/code.ts`) in the engine's order: a kind it lacks shows in general words, one the
+// engine dropped is dead text. Mutation: drop a kind on either side, or reorder the dashboard's.
 func TestTheDashboardDrawsEveryMoveOfAChange(t *testing.T) {
 	t.Parallel()
 	got, want := theDashboardsList(t, "CHANGE_MOVE_KINDS"), spelledOut(gitlet.ChangeMoveKinds())

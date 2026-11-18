@@ -1730,12 +1730,9 @@ func TestTheCodeWriteGuidanceNamesTheCodeWrites(t *testing.T) {
 	}
 }
 
-// A CODE TOOL'S ARGUMENT REFUSAL NAMES THE ARGUMENT AS A VALUE beside its
-// class, so the act route answers which value was refused (ADR-0060) without
-// the sentence, which stays the model's: an owner in no shape an owner takes
-// is refused invalid, naming `owner`, and nothing is sent.
-//
-// Mutation: refuse it with failed and the cause names no field.
+// A CODE TOOL'S ARGUMENT REFUSAL NAMES THE ARGUMENT AS A VALUE beside its class, so the act route
+// answers which was refused without the model's sentence (ADR-0060): a malformed owner is refused
+// invalid, naming `owner`, and nothing is sent. Mutation: refuse it with failed; no field named.
 func TestACodeToolsArgumentRefusalNamesTheArgument(t *testing.T) {
 	t.Parallel()
 	writer := &codeWrites{}

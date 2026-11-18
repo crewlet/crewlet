@@ -78,10 +78,8 @@ func TestARevertsMergeIsStepTwo(t *testing.T) {
 	}
 }
 
-// A SECOND REVERT NAMES THE ONE UNDER WAY: its branch exists, so the write is
-// refused stale, and the refusal names the change the reverted one's read says
-// reverts it.
-//
+// A SECOND REVERT NAMES THE ONE UNDER WAY: its branch exists, so the write is refused stale,
+// naming the change the reverted one's read says reverts it.
 // Mutation: drop the read of what reverts it → the refusal names no change, red.
 func TestASecondRevertNamesTheOneUnderWay(t *testing.T) {
 	t.Parallel()

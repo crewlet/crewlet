@@ -1071,10 +1071,9 @@ test("More holds where the change came from and whom it notified, and an old key
   expect(selected.textContent).toMatch(/^Conversation/);
 });
 
-// WHERE IT CAME FROM SAYS A CREDENTIAL BY ITS KIND AND AN INSTANT AS A RELATIVE TIME: a token's
-// id names nothing a reader knows, so it sits behind the copy control; a time standing alone in a
-// property row is the short form, its exact instant the title. Mutation: draw owner_operator_id as
-// written, or the instant by fmtDateTime, and this fails.
+// WHERE IT CAME FROM SAYS A CREDENTIAL BY ITS KIND AND AN INSTANT AS A RELATIVE TIME, the
+// token's id behind the copy control and the exact instant in the title.
+// Mutation: draw owner_operator_id as written, or the instant by fmtDateTime, and this fails.
 test("More says the credential a change was opened through by its kind, and when as a relative time", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
@@ -1408,12 +1407,9 @@ test("the timeline starts with the description and draws every record in the ord
   expect(words[5]).toMatch(/asked .*sre for a review/);
 });
 
-// THE LIFECYCLE'S MOVES STAND IN THE TIMELINE where their records landed, each
-// naming who made it: a close with its reason under it, a reopen, a draft and
-// its readying, an edit, a work item, a retarget between two branches, and a
-// close by a branch's deletion, which says so rather than its code.
-// Mutation: leave the moves part out of the timeline, or word a source's
-// deletion as its reason, and this fails.
+// THE LIFECYCLE'S MOVES STAND IN THE TIMELINE where their records landed, each naming who made
+// it; a close by a branch's deletion says so rather than its code.
+// Mutation: leave the moves part out of the timeline, or word a source's deletion as its reason.
 test("the timeline draws each move of the change's lifecycle, by whom, where it landed", async () => {
   const move = (seq: number, kind: string, extra = {}) => ({
     kind,
@@ -1454,13 +1450,9 @@ test("the timeline draws each move of the change's lifecycle, by whom, where it 
   ]);
 });
 
-// THE QUEUE'S ENTRIES STAND IN THE TIMELINE: who added the change to the queue,
-// and how each entry ended, where its record landed: an ejection with what it
-// found and named, a dequeue with why, and a landing as the queue's. A revision
-// the engine's rebase made says it was rebased onto its target, and a
-// force-push says so.
-// Mutation: leave the queue part out of the timeline, word every revision as
-// pushed, or drop an ejection's checks, and this fails.
+// THE QUEUE'S ENTRIES STAND IN THE TIMELINE: who queued the change and how each entry ended,
+// and a revision the engine's rebase made says it was rebased.
+// Mutation: leave the queue part out, word every revision as pushed, or drop an ejection's checks.
 test("the timeline draws the change's queue entries and says which revisions were rebased", async () => {
   const queued = (id: string, enq: number, extra = {}) => ({
     entry_id: id,
@@ -2029,11 +2021,9 @@ test("a merged change offers no review, no ask and no close, only its revert", a
   }
 });
 
-// A CLOSED CHANGE NAMES WHO CLOSED IT, in its header and its merge box, never its
-// owner for somebody else's close; where no closer is known (a push nobody made
-// deleted its branch) the owner only proposed it, and the reason is worded.
-// Mutation: name the owner as the header's actor for every closed change, or
-// draw the reason's code, and this fails.
+// A CLOSED CHANGE NAMES WHO CLOSED IT in its header and merge box, never its owner for another's
+// close; where no closer is known (a push deleted its branch) the reason is worded.
+// Mutation: name the owner as every closed change's actor, or draw the reason's code.
 test("a closed change's header and merge box name who closed it, not its owner", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-10-27T13:00:00Z"));
@@ -2639,10 +2629,9 @@ test("Re-run failed checks runs every failed check of the change's head again", 
   });
 });
 
-// A REFUSED RE-RUN IS DRAWN UNDER THE SECTION'S WORDS, on a row of its own,
-// never in the end cell beside Re-run, whose width squeezed the title to a word
-// a line. Mutation: drop the section's refusal place, and the refusal is drawn
-// inside the end cell.
+// A REFUSED RE-RUN IS DRAWN UNDER THE SECTION'S WORDS, on a row of its own, never in the end
+// cell beside Re-run, where it squeezes the title.
+// Mutation: drop the section's refusal place, and the refusal is drawn inside the end cell.
 test("a refused Re-run is drawn on its own row under the checks section's words", async () => {
   LATEST = [check({ name: "e2e", state: "failed" }), check()];
   stubEngine(detail(), () =>
@@ -4686,10 +4675,9 @@ test("the details line says what the press will do", async () => {
   );
 });
 
-// FAST-FORWARD IS HELD WHERE THE TARGET MOVED PAST THE BRANCH: the head's facts,
-// measured against the tip the read found, name another merge base, so the
-// build would refuse it; the option says why and cannot be chosen. Mutation:
-// offer it whatever the facts say, and it is chosen.
+// FAST-FORWARD IS HELD WHERE THE TARGET MOVED PAST THE BRANCH (the head's facts name another
+// merge base than the tip): the option says why and cannot be chosen.
+// Mutation: offer it whatever the facts say, and it is chosen.
 test("Fast-forward is held, saying why, where its target has moved past the branch", async () => {
   const behind = () => ({
     ...storyParts(() => story({ target_tip: C71 })),

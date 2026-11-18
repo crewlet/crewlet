@@ -1311,11 +1311,9 @@ test("a change row folds by its own width in a 370 px card at 1440 px", async ()
   }
 });
 
-// THE HEAD'S PICKERS SHARE THE COUNTED STATE TABS' ROW at 1440, drawn as their words, in
-// every filter state: a filter adds Every state to the tabs and a seat's name to a picker,
-// and the list must not jump. Mutations: draw the pickers boxed, and their floors wrap them
-// under the tabs; give the pickers their words' width as a basis, and a filtered list's
-// pickers wrap; let every picker shrink, and their words end in dots.
+// THE HEAD'S PICKERS SHARE THE COUNTED STATE TABS' ROW at 1440, drawn as their words, in every
+// filter state, so the list does not jump.
+// Mutations: box the pickers, give them their words' width as a basis, or let every one shrink.
 test.each(["#/gitlet", "#/gitlet?needs=me", "#/gitlet?owner=jane&state=all"])(
   "the changes' head keeps its pickers on the state tabs' row at 1440 px (%s)",
   async (hash) => {

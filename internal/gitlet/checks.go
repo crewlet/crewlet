@@ -592,9 +592,8 @@ type CheckStarted struct {
 	// Runner, so two claims of one attempt converge on the lower.
 	StartedAt time.Time `json:"started_at"`
 	// Required is, on a person's CI's report, whether the target's gate
-	// requires the check, as the report's decide read it: a report records
-	// no queue, which is where an engine's attempt says so
-	// ([CheckQueued.Required]). Version 8 ([GateChecksVersion]).
+	// requires the check, as its decide read it (an engine's attempt says so on
+	// its queue, [CheckQueued.Required]). Version 8 ([GateChecksVersion]).
 	Required bool `json:"required,omitempty"`
 }
 

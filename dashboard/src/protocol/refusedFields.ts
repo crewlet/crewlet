@@ -1,13 +1,5 @@
 /**
- * Which value a write was refused by, in this dashboard's words: an `invalid`
- * refusal names the field the engine refused (`fields`, ADR-0060), as the
- * request spells it, and never the engine's sentence, which is written for
- * whoever built the request.
- *
- * A field a person fills in is named by what the form calls it; any other
- * (an argument the page itself sends) is named as the value the page sent, so
- * the sentence never tells a person to check what they entered when they
- * entered nothing.
+ * An `invalid` refusal's field (`fields`, ADR-0060), named in this dashboard's words.
  */
 
 import type { ActionTool } from "./act.ts";

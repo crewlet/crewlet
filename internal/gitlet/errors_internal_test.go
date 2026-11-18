@@ -5,13 +5,9 @@ import (
 	"testing"
 )
 
-// A REFUSAL BY ONE FIELD CARRIES THE FIELD AS A VALUE, read from the call that
-// formed it (its format's field, or the argument a "%s" field takes), never
-// from the sentence; its sentence and its sentinel stay as they were. A
-// format whose field is no plain name carries none.
-//
-// Mutation: take the field from the error's text and the "%s" case names the
-// sentence's first word; drop the wrapping and errors.Is(ErrInvalid) is false.
+// A REFUSAL BY ONE FIELD CARRIES THE FIELD AS A VALUE, read from the call that formed it (its
+// format's field, or a "%s" field's argument), never the sentence; sentence and sentinel are
+// unchanged, and a format whose field is no plain name carries none.
 func TestARefusalByOneFieldNamesItAsAValue(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

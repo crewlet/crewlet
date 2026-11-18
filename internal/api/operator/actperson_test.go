@@ -525,12 +525,9 @@ func (f fieldRefusal) Error() string        { return f.err.Error() }
 func (f fieldRefusal) Unwrap() error        { return f.err }
 func (f fieldRefusal) RefusedField() string { return f.field }
 
-// AN INVALID REFUSAL NAMES THE FIELD IT WAS REFUSED BY, as a value a client
-// words in its own way (ADR-0060): never the domain's sentence, which stays
-// off the answer, and none where the refusal names no field.
-//
-// Mutation: answer no fields, or the domain's sentence as detail, and this
-// fails.
+// AN INVALID REFUSAL NAMES THE FIELD IT WAS REFUSED BY, as a value a client words its own way
+// (ADR-0060): never the domain's sentence, and no field where the refusal names none.
+// Mutation: answer no fields, or the domain's sentence as detail, and this fails.
 func TestAnInvalidRefusalNamesItsFieldAsAValue(t *testing.T) {
 	t.Parallel()
 	_, answer := act(t, refusingSurface(t, fieldRefusal{field: "labels",

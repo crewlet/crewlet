@@ -1,9 +1,5 @@
 /**
- * One comment on a change as a thread draws it: who said it, its marks, its
- * menu and its words. The menu edits it (`code_comment_on_change` with
- * `edit`, its author's alone) and deletes it (`code_delete_comment`, its
- * author's, a maintainer's or a person's). A deleted comment keeps its place
- * as a tombstone naming who deleted it, so its thread and every reply stay.
+ * One comment of a thread and its Edit/Delete menu; a deleted one stays as a tombstone.
  */
 
 import { useRef, useState, type ReactNode } from "react";

@@ -192,13 +192,9 @@ func TestOpenChangeRequestsItsReviewersAsAStep(t *testing.T) {
 	}
 }
 
-// A SOURCE ITS TARGET ALREADY HOLDS IS NO CHANGE: feature's head is in main's
-// history, so the open is refused no_difference, as one at main's own commit
-// is, and nothing is written; the committer's decide, which reads rows, would
-// see two tips that differ and open a change its home marks merged at once.
-// A source main does not hold opens as before.
-//
-// Mutation: skip the history read, and the open is sent.
+// A SOURCE ITS TARGET ALREADY HOLDS IS NO CHANGE: feature's head is in main's history, so the open
+// is refused no_difference and nothing is written (the committer would open a change marked merged
+// at once); a source main lacks still opens. Mutation: skip the history read, and the open is sent.
 func TestAnOpenOfASourceItsTargetHoldsIsRefused(t *testing.T) {
 	t.Parallel()
 	writer := &codeWrites{}

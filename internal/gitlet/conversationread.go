@@ -38,10 +38,9 @@ import (
 // open_findings counter is set ([needingFixIn]). A pushed revision answers
 // neither; an answered standing blocker waits on its raiser (S40).
 
-// needs=me is needs=review, then needs=fix, each its own index's walk, the fix
-// half's cursor prefixed with [fixHalf], a change in both listed by the first; a
-// page the review walk ends on fills from the fix walk, each row naming its half
-// ([ChangeSummary.WaitsFor]), which spells the cursor after it.
+// needs=me is needs=review, then needs=fix, each its own index's walk, the fix half's cursor
+// prefixed with [fixHalf], a change in both listed by the first; a page the review walk ends on
+// fills from the fix walk, each row naming its half ([ChangeSummary.WaitsFor]) for its cursor.
 //
 // needs=person walks code_mergeability_waits_idx (replicated 0106), the
 // STORED readiness (mergeability.go), and keeps those the read's own judgment
@@ -128,13 +127,11 @@ const (
 	PartStanding ChangePart = "standing"
 	// PartMoves is the moves of the change's lifecycle, oldest first
 	// ([ChangeMove]): who closed, reopened, drafted, readied, edited or
-	// retargeted it. An older build refuses it as an unknown part, as it does
-	// [PartStanding].
+	// retargeted it. An older build refuses it as an unknown part.
 	PartMoves ChangePart = "moves"
 	// PartQueue is the change's queue entries, in queue order
-	// ([ChangeQueueEntry]): who added it to its target's queue, and how each
-	// entry landed, was taken out or left. An older build refuses it as an
-	// unknown part.
+	// ([ChangeQueueEntry]): who added it to its target's queue and how each
+	// entry ended. An older build refuses it as an unknown part.
 	PartQueue ChangePart = "queue"
 )
 

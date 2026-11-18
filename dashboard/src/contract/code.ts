@@ -129,20 +129,11 @@ export const REPO_NAME_MAX_BYTES = 63;
  */
 export const CHANGE_STATES = ["draft", "open", "closed", "merged"] as const;
 
-/**
- * The reason a change's row gives where a push closed it by deleting its
- * source branch (`gitlet.SourceDeleted`), worded rather than drawn as the
- * code. Held by `internal/gitlet.TestTheDashboardKnowsWhyAPushClosedAChange`.
- */
+/** Why a push closed a change: it deleted the source branch (`gitlet.SourceDeleted`). */
 export const SOURCE_DELETED = "source_deleted";
 
 /**
- * What one move of a change's lifecycle did (`gitlet.ChangeMoveKinds`), in the
- * engine's order: what a change's timeline draws between its revisions and its
- * conversation. HELD BOTH WAYS, in order, by
- * `internal/gitlet.TestTheDashboardDrawsEveryMoveOfAChange`: a kind the engine
- * grew that this lacks is drawn in general words, and one this keeps that the
- * engine dropped is a sentence nobody reads.
+ * Each kind of lifecycle move a change's timeline draws (`gitlet.ChangeMoveKinds`), HELD BOTH WAYS.
  */
 export const CHANGE_MOVE_KINDS = [
   "closed",
