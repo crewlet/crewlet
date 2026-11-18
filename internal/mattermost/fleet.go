@@ -21,51 +21,16 @@ import (
 
 // One websocket per agent seat.
 //
-// # Why a socket at all
-//
-// Mattermost has no usable inbound webhook. Outgoing hooks fire only in
-// public channels and carry no thread id, no channel type and no mention
-// list — none of which the routing model can do without. So the engine
-// connects as each bot and listens.
-//
-// Each post is republished onto the STANDARD raw-webhook envelope, so
-// everything downstream — dedupe, the parser seam, the guards, the valve —
-// stays webhook-shaped and this backend needs no special case anywhere else.
-// Only the fact that it arrived over a socket is different, and only here.
-//
-// # Reconnects are the hard part
-//
-// Mattermost replays nothing. A connection that drops and comes back has
-// simply missed whatever happened in between, with no cursor, sequence gap
-// or resume token to detect it with. So each seat records the newest post it
-// has seen and, on reconnect, re-reads every channel it belongs to and
-// replays the gap in order.
-//
-// The window is BOUNDED, because the purpose is to cover a blip and not to
-// catch up after an outage: every replayed message costs a full agent turn,
-// so an hour-long gap replayed in full would be both expensive and wrong —
-// those conversations have moved on and been resolved by people.
-//
-// # Every node listens, and one delivers
-//
-// The transport opens EVERY seat's socket on EVERY node, not only the seats a
-// node holds: a node that restarts, drains or loses a seat's lease leaves the
-// seat heard by every other node meanwhile, so there is no gap for a backfill
-// to cover and no handover to get wrong. The price is that each post arrives
-// once per node, so a post is CLAIMED fleet-wide before it is published
-// (`mattermost|<handle>|<post id>`, [ClaimTTL]): the node that wins publishes
-// it and records the delivery, and every other node drops it. A claim store
-// that cannot answer fails OPEN — a post published by two nodes is a duplicate
-// the second layer collapses, while one suppressed by a store blip is a
-// message nobody answers. The second layer is the wake's id, derived from the
-// seat and the post ([WakeID]), which the inbox and the fleet completion ledger
-// both key on.
-//
-// A POST IS NOT SPENT UNTIL IT IS QUEUED. A publish that fails releases the
-// claim, forgets the post and holds the seat's cursor before it, and the seat
-// reconnects and replays from there — so the post is read again, by this node
-// or by whichever peer gets there first. It used to move the cursor past the
-// post first, which lost it for good.
+// One websocket per agent seat (outgoing hooks carry no thread id, channel type
+// or mentions), each post republished onto the STANDARD raw-webhook envelope.
+// Mattermost replays nothing, so a seat records its newest post and on
+// reconnect replays the gap, BOUNDED ([MaxBackfill]): each message costs a
+// turn. EVERY node opens EVERY seat's socket, so each post is CLAIMED
+// fleet-wide before publishing (`mattermost|<handle>|<post id>`, [ClaimTTL]). A
+// claim store that cannot answer fails OPEN: a duplicate collapses on the
+// wake's id ([WakeID]), a suppressed post is answered by nobody. A POST IS NOT
+// SPENT UNTIL QUEUED: a failed publish releases the claim and holds the cursor
+// before the post.
 
 // ReconnectBackoff is the delay before each reconnect attempt; the last
 // value repeats.
@@ -89,20 +54,15 @@ const MaxBackfill = 15 * time.Minute
 
 // ClaimTTL is how long a post stays claimed by the node that delivered it.
 //
-// IT MUST OUTLIVE THE REPLAY HORIZON, because a replay is where a duplicate
-// comes from: a peer's socket that drops and returns re-reads up to
-// [MaxBackfill] behind the moment it reconnects, so a post can be read again
-// up to MaxBackfill after it was written — and a claim that lapsed first lets
-// that peer publish the post a second time and wake its seat about a message
-// already answered. The first claim on a post is taken no earlier than the
-// post was written, so MaxBackfill is the floor; on top of it sit the replay's
-// own floor falling back to the ENGINE's clock when the server cannot be asked
-// (minutes of skew are possible, seconds are usual), the claim judged against
-// each claiming node's own clock, and a reconnect that waited out the
-// [ReconnectBackoff] ceiling (5 minutes, plus a quarter of jitter) before it
-// replayed. TWICE THE WINDOW — thirty minutes — covers all of it with room,
-// and is coord.MaxClaimTTL, the longest claim the coordination store keeps.
-// Longer buys nothing: a post older than the window is never replayed.
+// IT MUST OUTLIVE THE REPLAY HORIZON: a peer's socket that reconnects re-reads
+// up to [MaxBackfill] behind, so a post can be read again that long after it
+// was written, and a claim that lapsed first lets the peer publish it twice.
+// MaxBackfill is the floor; on top sit the replay's floor falling back to the
+// ENGINE's clock when the server cannot be asked, each claiming node judging by
+// its own clock, and a reconnect that waited out the [ReconnectBackoff] ceiling
+// (5 minutes plus a quarter of jitter). TWICE THE WINDOW, thirty minutes,
+// covers it and is coord.MaxClaimTTL, the longest claim the store keeps;
+// longer buys nothing, as an older post is never replayed.
 const ClaimTTL = 2 * MaxBackfill
 
 // dedupeRing is how many post ids each seat remembers.
@@ -115,19 +75,13 @@ const dedupeRing = 512
 
 // PingInterval is how often a seat's socket asks its server to answer.
 //
-// THIRTY SECONDS. What this detects is a connection that is up as far as TCP
-// can tell and dead above it — an L7 half-open, where a load balancer tore
-// down the upstream side while still answering keepalives — which nothing
-// else in this package can see: coder/websocket answers a server's pings
-// internally without returning from Read, so a quiet channel and a dead
-// server are identical from here.
-//
-// The value trades detection latency against traffic. Thirty seconds is well
-// inside the idle timeout of every proxy that sits in front of a Mattermost
-// instance (60s is the common default, and a ping also keeps that timer from
-// firing), and it costs two tiny frames per seat per interval. TCP keepalives
-// alone would take about eleven minutes on a genuinely dead path and never
-// resolve an L7 half-open at all.
+// THIRTY SECONDS. It detects an L7 half-open (a load balancer tore down the
+// upstream while still answering keepalives), which nothing else here can see:
+// coder/websocket answers a server's pings inside Read, so a quiet channel and
+// a dead server look identical. It is well inside the idle timeout of the
+// proxies in front of Mattermost (60s is common, and a ping resets that timer)
+// and costs two tiny frames per seat per interval. TCP keepalives alone take
+// about eleven minutes on a dead path and never resolve an L7 half-open.
 const PingInterval = 30 * time.Second
 
 // PongTimeout is how long a seat waits for the answer.
@@ -419,22 +373,15 @@ func (f *Fleet) delay(attempt int) time.Duration {
 
 // pump reads one connection until it fails, with a heartbeat under it.
 //
-// THE HEARTBEAT IS THE ONLY LIVENESS SIGNAL THIS SIDE HAS. Nothing in this
-// package pinged, and coder/websocket answers a server's pings internally
-// without returning from Read — so a quiet channel and a dead server look
-// identical from here. TCP keepalives rescue a genuinely dead path in about
-// eleven minutes; an L7 half-open, where a load balancer has torn down the
-// upstream connection but still answers keepalives, never resolves at all,
-// and the seat is deaf until something else restarts it.
+// THE HEARTBEAT IS THE ONLY LIVENESS SIGNAL THIS SIDE HAS: a quiet channel and
+// a dead server look identical from Read, and an L7 half-open never resolves
+// ([PingInterval]). An idle READ deadline is NOT the instrument: control
+// frames do not surface through Read, so a quiet channel would trip it and
+// force a spurious backfill on every idle seat.
 //
-// An idle READ deadline is deliberately NOT the instrument: control frames do
-// not surface through Read, so a merely-quiet channel would trip it and force
-// a spurious backfill on every idle seat.
-//
-// A failed ping closes the socket, which ends Read and drops into the
-// existing reconnect-and-replay path — so recovery needs no new machinery.
-// So does a post that could not be queued: the pump ends, and the replay
-// after the reconnect reads it again.
+// A failed ping closes the socket, ending Read into the existing
+// reconnect-and-replay path. So does a post that could not be queued: the
+// pump ends and the replay reads it again.
 func (f *Fleet) pump(ctx context.Context, s *seatSocket, socket Socket) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -909,21 +856,13 @@ func dialWebsocket(ctx context.Context, seat Seat, c *Client) (Socket, error) {
 // socketHeader is the handshake every socket the engine opens sends: the
 // bot's credential, and NO ORIGIN.
 //
-// Origin is how a BROWSER tells a server which page is asking, and
-// Mattermost's websocket origin check is a browser control: both of its
-// branches (App.OriginChecker, server/channels/app/server.go, and
-// utils.CheckOrigin, at v11.11.1) admit an upgrade that carries none, which
-// is what Mattermost's own Go client sends. The engine used to send the
-// Origin of the address it dials, which put its sockets under the BROWSER
-// rule — the Origin's host and scheme must be the Site URL's — so a company
-// dialling anything but the address people browse (an in-cluster Service, a
-// private name) had every seat's upgrade refused with a 403 while its REST
-// calls worked, unless an administrator also listed that address in
-// AllowCorsFrom: every agent deaf, on the ordinary Kubernetes deployment.
-//
-// One function for the fleet and the doctor's per-seat probe, because a
-// probe shaped differently from the engine's own dial answers a question
-// about some other client.
+// The websocket origin check is a browser control: both branches
+// (App.OriginChecker, utils.CheckOrigin, v11.11.1) admit an upgrade with no
+// Origin, as Mattermost's own Go client sends. Sending the dialled address's
+// would put the sockets under the browser rule (Origin must be the Site URL's),
+// so a company dialling an in-cluster Service would get every upgrade refused
+// with a 403 while REST worked: every agent deaf. One function for the fleet
+// and the doctor's per-seat probe, which must be shaped as the engine's dial.
 func socketHeader(token string) http.Header {
 	return http.Header{"Authorization": {"Bearer " + token}}
 }

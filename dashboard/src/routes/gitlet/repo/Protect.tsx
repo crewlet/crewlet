@@ -14,7 +14,8 @@
  * exempt a change from approval by what is added and removed (`add`,
  * `remove`), the paths a person approves by glob (`put`, `remove`). The
  * queue's depth and batch are sent a field at a time. Turning the gate off is
- * `remove_gate`.
+ * `remove_gate`. An exempting class means something only beside an approval
+ * asked, so under "No approval" the form neither offers nor sends one.
  *
  * REMOVING A RULE IS CONFIRMED in the page, naming what the refs lose. Every
  * control is drawn for every reader and held with its reason
@@ -100,6 +101,11 @@ function inClassOrder(classes: readonly string[]): string[] {
   return CODE_PATH_CLASSES.filter((c) => classes.includes(c));
 }
 
+/** Whether the gate asks an approval, the only gate its exempting classes do anything on. */
+function asksApproval(form: Pick<ProtectForm, "approvals">): boolean {
+  return form.approvals !== "none";
+}
+
 /** A list's change, item by item: what `wanted` adds to `had` and what it removes, or null for none. */
 function listChange(
   wanted: readonly string[],
@@ -159,7 +165,8 @@ export function protectArgs(
   // one even where every choice is the engine's default.
   if (!gate || form.mergeBy !== gate.merge_by) args.merge_by = form.mergeBy;
   if (!gate || form.approvals !== gate.approvals) args.approvals = form.approvals;
-  const exemptions = listChange(inClassOrder(form.approvalsUnless), gate?.approvals_unless ?? []);
+  const exempting = asksApproval(form) ? inClassOrder(form.approvalsUnless) : [];
+  const exemptions = listChange(exempting, gate?.approvals_unless ?? []);
   if (exemptions) args.approvals_unless = exemptions;
   const paths = humanPathsChange(form.humanPaths, gate?.human_paths ?? []);
   if (paths) args.human_paths = paths;
@@ -469,17 +476,18 @@ function ProtectDialog({
                 />
               )}
             </FormField>
-            {CODE_PATH_CLASSES.map((c) => (
-              <Checkbox
-                key={c}
-                label={`No approval for a change of ${PATH_CLASS_WORDS[c]}`}
-                description={`A change whose every path changes ${PATH_CLASS_WORDS[c]} merges without one.`}
-                checked={form.approvalsUnless.includes(c)}
-                onCheckedChange={(on) =>
-                  set({ approvalsUnless: exemptBy(form.approvalsUnless, c, on) })
-                }
-              />
-            ))}
+            {asksApproval(form) &&
+              CODE_PATH_CLASSES.map((c) => (
+                <Checkbox
+                  key={c}
+                  label={`No approval for a change of ${PATH_CLASS_WORDS[c]}`}
+                  description={`A change whose every path changes ${PATH_CLASS_WORDS[c]} merges without one.`}
+                  checked={form.approvalsUnless.includes(c)}
+                  onCheckedChange={(on) =>
+                    set({ approvalsUnless: exemptBy(form.approvalsUnless, c, on) })
+                  }
+                />
+              ))}
             <ListInput
               label="Paths a person approves"
               itemName="path"

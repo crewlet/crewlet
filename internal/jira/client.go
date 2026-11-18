@@ -16,26 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx"
 )
 
-// The REST client.
+// The REST client: ONE credential, the engine's (integrations.jira's org-wide
+// read account), reading what ROUTING needs and the payload lacks: who is
+// watching an issue. A seat's own Jira work uses its MCP server and token.
 //
-// ONE credential, the engine's — the org-wide read account named by
-// integrations.jira. A seat's own Jira work happens through its MCP server
-// under its own token; what the engine reads here is what ROUTING needs and
-// the payload does not carry: who is watching an issue.
-//
-// # Two deployments, one client
-//
-// Jira Cloud serves /rest/api/3 and names people by accountId. Jira Data
-// Center serves /rest/api/2 — v3 is a 404 there — and names them by name.
-// Which one an address is on is DERIVED, by the one rule config validation
-// and the Confluence client derive it by ([atlassianhost.Of]): a host of
-// Atlassian's own Clouds — a site, or the gateway a cloud id is read through
-// — is Cloud, and any other host is what the company declared in
-// integrations.atlassian.deployment ([ClientOptions.Declared]), or Data
-// Center when it declared nothing. The declaration is what places a Cloud
-// site no host list can name — Atlassian Isolated Cloud's, at a base domain
-// of its own — and it is the same input a test server standing in for Cloud
-// at a loopback address is given.
+// Two deployments, one client. Jira Cloud serves /rest/api/3 and names people
+// by accountId; Data Center serves /rest/api/2 (v3 is a 404) and names them by
+// name. The deployment is DERIVED by the rule config validation and the
+// Confluence client share ([atlassianhost.Of]): an Atlassian Cloud host is
+// Cloud, any other is what the company declared in
+// integrations.atlassian.deployment ([ClientOptions.Declared]), else Data
+// Center. The declaration places a Cloud site no host list can name (Isolated
+// Cloud) and lets a loopback test server stand in for Cloud.
 
 // Deployment is which Jira an address names.
 type Deployment string

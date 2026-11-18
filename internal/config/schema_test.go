@@ -1434,15 +1434,14 @@ func tokenDoc(id string) string {
 // A TIER A TOKEN'S ID IS BOUNDED IN THE ARTIFACT AT THE WIDTH THE VALIDATOR
 // DERIVES.
 //
-// The bound used to be prose in the field's description, which a schema does
-// not read: an editor accepted a fifty-nine-character id that `crewlet
-// validate` then refused. It is a `maxlen` directive now, and a struct tag is a
-// literal that cannot be computed — so this holds the literal to the
-// derivation, both ways: the artifact's `maxLength` is iam.MaxLogin less the
-// `token:` class, and the validator admits exactly that many and no more.
+// A schema does not read prose in a field's description, so the bound is a
+// `maxlen` directive; a struct tag is a literal that cannot be computed, so
+// this holds the literal to the derivation both ways: the artifact's
+// `maxLength` is iam.MaxLogin less the `token:` class, and the validator
+// admits exactly that many and no more.
 //
-// THE BOUND SITS ON THE FIELD'S OWN BRANCH, beside its pattern, and never on
-// the ${VAR} branch Tier A admits beside it: a reference's length says nothing
+// THE BOUND SITS ON THE FIELD'S OWN BRANCH, beside its pattern, never on the
+// ${VAR} branch Tier A admits beside it: a reference's length says nothing
 // about the id it resolves to.
 func TestTheSchemaBoundsATokenIDWhereTheValidatorDoes(t *testing.T) {
 	t.Parallel()
@@ -1675,14 +1674,11 @@ func schemaDoc(t *testing.T, tier Tier) map[string]any {
 // byteBoundCases holds every byte ceiling's schema bounds to the validator's,
 // on both sides of both edges.
 //
-// THE TWO ARE WRITTEN APART — a js tag on the field and a constant in
-// retention.go — and nothing else compares them. A floor raised without its
+// THE TWO ARE WRITTEN APART (a js tag on the field, a constant in
+// retention.go) and nothing else compares them. A floor raised without its
 // tag leaves an editor accepting a limit the engine refuses; a tag raised
-// without its floor red-underlines a working file. StoreMaxBytesFloor moved
-// as state logs joined the broker, once per domain, and the identity and
-// usage logs took floors of their own, which is exactly how the two drift.
-// The bounds come from the CONSTANTS, so a case here cannot agree with a
-// stale tag by having been written from it.
+// without its floor red-underlines a working file. The bounds come from the
+// CONSTANTS, so a case cannot agree with a stale tag it was written from.
 //
 // EVERY CASE STATES A STORE DIRECTORY, because a `stream:` block the case
 // writes is one [Runnable] leaves as written, and an embedded member with no

@@ -12,14 +12,13 @@ import (
 
 // ONLY A PERSON'S OWN SIGN-OUT EMPTIES THE BROWSER'S CACHE.
 //
-// An answer read by object id is kept under a key naming who it is for
-// (internal/api/httpjson's Immutable), so a sign-in, a Tier A token's exchange
-// and a step-up set their cookie and leave the cache alone: Chrome holds a
-// response that empties it until it has scanned this origin's whole cache. A
-// sign-out, a sign-out everywhere and a named sign-out of the session this
-// browser holds send `Clear-Site-Data: "cache"` beside the cookies they clear,
-// so what a tab that named no reader kept is not served to whoever uses the
-// browser next. A named sign-out of another session leaves this browser alone.
+// An answer read by object id is cached under a key naming who it is for
+// (httpjson's Immutable), so a sign-in, a token exchange and a step-up set
+// their cookie and leave the cache alone: Chrome holds a response that empties
+// it until it has scanned the origin's whole cache. A sign-out, a sign-out
+// everywhere and a named sign-out of this browser's own session send
+// `Clear-Site-Data: "cache"`, so nothing a tab kept is served to the next
+// user. A named sign-out of another session leaves this browser alone.
 //
 // Mutations: sign a row out through clearSession and that row is red; send
 // the header from session.Issue and the first three rows are red.

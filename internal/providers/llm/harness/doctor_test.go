@@ -93,21 +93,16 @@ func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 
 // THE DOCTOR'S ROUTES FOLLOW THE ENTRY'S AUTH MODE, not only its harness. On a
 // machine with a personal Claude login, every entry with no sign-in was told to
-// adopt it with -from-host or — preferred — to mint a headless token with
-// -capture-token. An api-key entry never reads that token (the mode removes it
-// from the harness's environment) and should not be handed a plan login either,
-// which the harness would bill beside its key by the vendor's precedence; an
-// inherit-env entry never looks in the secret store the token is stored in.
-// Each is told what its mode reads, worded as the remote run's refusal and
-// `crewlet llm login` word it ([Provider.ModeSignIn]).
-//
-// The subscription case is the control: it proves the host login was found, so
-// the routes missing from the other two are missing by mode, not by accident.
-// Not parallel: HOME is the fake human's, and inherit-env reads the process
-// environment, emptied here of both variables it forwards.
+// adopt it with -from-host or mint a headless token with -capture-token. An
+// api-key entry never reads that token and must not be handed a plan login,
+// which the harness would bill beside its key; an inherit-env entry never looks
+// in the secret store the token is stored in. Each is told what its mode reads
+// ([Provider.ModeSignIn]). The subscription case is the control: the host login
+// was found, so the routes missing from the others are missing by mode. Not
+// parallel: HOME is the fake human's, and inherit-env reads the environment.
 //
 // Mutation: offer the host-login routes whatever the mode, and the api-key and
-// inherit-env cases name -capture-token and go red.
+// inherit-env cases name -capture-token.
 func TestTheDoctorsRoutesFollowTheEntrysAuthMode(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -184,25 +179,16 @@ func TestTheDoctorsRoutesFollowTheEntrysAuthMode(t *testing.T) {
 }
 
 // THE DOCTOR OFFERS NO ROUTE THROUGH A VARIABLE NO STORE CAN HOLD. overrides
-// can set token_env or api_key_env to a name outside the reference grammar —
-// MY-TOKEN, MY=KEY — which every write of the company document refuses, and
-// which an entry loaded to run still carries. Nothing that keeps a credential
-// can hold such a name, yet the doctor told a subscription entry on a machine
-// with a personal login to mint a headless MY-TOKEN with `-capture-token`
-// (preferred, even), a token that could be neither stored nor referenced, and
-// which `crewlet llm login` refuses before it mints; and an api-key entry to
-// store or export a key handed over under MY=KEY. Each is now a problem naming
-// the field, and the routes leave the variable out: an inherit-env entry is
-// told to export only the variable a shell can.
-//
-// The control is the same subscription entry with its token variable in the
-// grammar, told to mint, so the missing advice is missing by the name.
-// Not parallel: HOME is the fake human's, and inherit-env reads the process
-// environment, emptied here of the variable it can forward.
-//
+// can set token_env or api_key_env to a name outside the reference grammar
+// (MY-TOKEN, MY=KEY), which a loaded entry still carries though every write
+// refuses it. No store can hold such a name, so the doctor must not tell an
+// entry to mint or store one: each is a problem naming the field, and the
+// routes leave the variable out. The control is the same entry with its token
+// variable in the grammar, told to mint. Not parallel: HOME is the fake
+// human's, and inherit-env reads the environment.
 // Mutation: let MintsHeadlessToken ignore the grammar, and the subscription
 // case offers `-capture-token` again; give ModeSignIn's api-key branch no
-// misnamed case, and that case is told `crewlet secrets set`; drop the field's
+// misnamed case, and it is told `crewlet secrets set`; drop the field's
 // problem, and every case misses the path.
 func TestTheDoctorOffersNoRouteThroughAVariableNoStoreCanHold(t *testing.T) {
 	home := t.TempDir()
@@ -432,15 +418,13 @@ func TestDoctorNamesTheLogoutThatKeepsABundleOut(t *testing.T) {
 }
 
 // THE DOCTOR'S PROBES ASK AS A SEAT ASKS. They prove what a seat runs under —
-// that its harness answers, that the shell is denied, that the web is reached — so
-// each is sent as a seat's call is: an agent call with a system prompt, which
-// takes the channel a seat's prompt takes. Sent with none, most profiles
-// passed no channel at all, the vendor's default prompt ran, and the report
-// described a configuration no seat ever had.
+// that its harness answers, that the shell is denied, that the web is reached —
+// so each is an agent call with a system prompt, taking the channel a seat's
+// prompt takes. Sent with none, most profiles passed no channel, the vendor's
+// default prompt ran, and the report described a configuration no seat had.
 //
-// A profile with no tool route, so the smoke test's own call is the plain
-// one it makes to learn whether the harness answers — a completion like the two
-// probes (smoke_test.go covers the route).
+// A profile with no tool route makes the smoke test's own call the plain one it
+// makes to learn whether the harness answers (smoke_test.go covers the route).
 //
 // Mutation: drop Agent from probeRequest, or its system message, and the
 // probes leave the appending channel and this is red.

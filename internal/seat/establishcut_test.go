@@ -27,22 +27,15 @@ import (
 // TestALeaseLostWhileASeatIsEstablishingCutsItsHookAndNeverHoldsTheHeartbeat
 // is the wedge: a renew answers false while the seat's hook runs.
 //
-// The heartbeat used to drop the seat through [Host.dropLostSeat], which takes
-// the seat's lock — and the claim holds that lock for the whole hook. So the
-// heartbeat goroutine waited for the hook, its beat froze, and past one TTL the
-// watchdog ended the process; on the boot's first pass, before the watchdog is
-// armed, every other seat that pass had attached went unrenewed while it still
-// consumed its mailbox. Here the hook waits for its context, which only a cut
-// ends, and the case asks the heartbeat itself: it must return, naming the
-// seat lost, and the seat must then be given back by the claim that took it,
+// Dropping the seat through [Host.dropLostSeat] takes the seat's lock, which
+// the claim holds for the whole hook, so the heartbeat goroutine would wait
+// for the hook, its beat freeze, and past one TTL the watchdog end the
+// process. Here the hook waits for its context, which only a cut ends, and the
+// heartbeat must return, naming the seat lost; the claim then gives it back,
 // backed off like any lost lease.
 //
-// Red before the cut: Heartbeat blocks on the seat's lock for as long as the
-// hook runs, which is for ever. A goroutine blocked on a mutex is not durably
-// blocked to a bubble, so the run hangs to its -timeout rather than failing.
-//
-// Mutation: drop an establishing seat through dropLostSeat, as the heartbeat
-// did, and this hangs the same way.
+// Mutation: drop an establishing seat through dropLostSeat, and this hangs to
+// its -timeout (a mutex wait is not durably blocked to a bubble).
 func TestALeaseLostWhileASeatIsEstablishingCutsItsHookAndNeverHoldsTheHeartbeat(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -284,15 +277,13 @@ func TestACutSeatIsNotRenewed(t *testing.T) {
 
 // TestASeatADrainCutIsGivenBackOnTheDrainsAllowance holds the give-back of a
 // seat a drain cut to the stop the drain is part of. The claim that took the
-// seat gives it back, on the pass's context, which carries no stop: on its own
-// it began an allowance of its own beside the stop's, so a stop against an
-// unreachable store spent one allowance more for every seat it cut — a third
-// of the lease at the shipped TTL, and none of it counted where the stop's
-// grace is reckoned.
+// seat gives it back on the pass's context, which carries no stop: left to
+// begin an allowance of its own, a stop against an unreachable store spent
+// one more allowance per seat cut, uncounted in the stop's grace.
 //
-// The store answers no release until the context it was asked on ends: the
-// presence the drain gives back and the seat it cut must both end inside the
-// drain's one allowance, read in the bubble's clock.
+// The store answers no release until its context ends: the presence and the
+// cut seat must both end inside the drain's one allowance, in the bubble's
+// clock.
 //
 // Mutation: give a drain-cut seat back on an allowance of its own, and the
 // pass ends a whole allowance of the lease later.

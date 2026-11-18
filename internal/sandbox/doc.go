@@ -222,6 +222,72 @@
 // ([Coordinator.capturesLoss]), and its ending reads the row again before it
 // reports its notes.
 //
+// AND AN OPENCODE CONTINUATION'S FIRST REQUEST IS JUDGED IN ITS BOX. OpenCode
+// compacts a session before a request, a continued run's first among them,
+// where its count of the session with the brief reaches the point its box's
+// configuration sets for the run's model: the model's limit less a buffer.
+// Unlike Claude Code's window, that point is not the engine's to pin: it is
+// read off the model catalog and the documents of the box the run is handed,
+// which the relaunch's briefs are written before. So the runner builds both
+// tellings where the session's count has a bound, the held one and the one
+// told as a session that may be a summary, and the launch, once it has the
+// box, asks the box for its point ([PointReader]) and hands the held telling
+// only where the count's bound, the brief and what the box hands over before
+// it sit strictly below that point ([OpenCodePoint.SendsWhole]); anywhere
+// else, and wherever the point cannot be read, it hands the summarized one
+// ([SessionContinuation.Summarized], [Continuation.Summarized]). What the box
+// hands over before the brief is charged only in the box that holds the
+// session's copy ([PointAsk.Sources]): there OpenCode tells the session every
+// context source that changed since its last request in that box (its
+// instruction files, the run's own instructions, the skill and MCP server
+// listings, the date and the environment), each at most its whole render,
+// where after an import into another box it starts afresh and hands none. A
+// box document that adds a source the read cannot size is no point
+// ([PointBoxSources]). A box whose release is not the writer's is no point
+// either: no pair of differing releases has been measured. See
+// opencodefirst.go.
+//
+// AND A SESSION THE RUN STARTS OF ITS OWN KEEPS ITS TASK. A fresh brief opens a
+// session with the turn's task, and a later continuation of that session that
+// may be a summary may lack it as surely as a cut-off copy lacks its brief. So
+// every launch whose run may start a session on its fresh brief keeps that
+// brief's task beside the run's record as a lead of its own kind
+// ([LeadKindFresh]): a turn's first launch ([LaunchRequest.FreshOwn]), a
+// relaunch handed its fresh brief ([Continuation.Fresh]), and one whose handed
+// brief continues a session, whose box may start one of its own after a failed
+// restore ([BriefLeads.Fresh]). That last is kept unmarked: the brief the job's
+// run read did not tell it, so no continuation of a session that run did not
+// start on it is told it as a lead its brief told, while a continuation that
+// may be a summary is told every lead the run keeps (leads.go).
+//
+// AND THE HARNESS'S OWN ESTIMATE OF A SESSION'S NEXT REQUEST, read in the same
+// read as its count, of a Claude Code job's main thread or an OpenCode job's
+// export (asksMainThread): stamped on a capture
+// ([SessionCapture.NextRequestTokens], [TakenSession.Next]) and written in the
+// collection's one write ([EndRead.Next], [LaunchRecord.NextRequestTokens]),
+// never carried and never on the executor log, and handed to the floor beside
+// the last request's input of the same capture: a kept capture's own for its
+// restore ([SessionCapture.NextRequest]), never a newer one's it was continued
+// past, and its job's newest capture's for the copy in place
+// ([ContinuedSession.CopyNextRequest]). An OpenCode count
+// names the provider of the reply it is anchored on BESIDE it, never in it
+// ([SessionCapture.CountProvider], [LaunchRecord.CountProvider],
+// [ValidCountProvider]), written and cleared with the count
+// (LaunchRecord.counted), so no record names one count's provider beside
+// another's figure. internal/sandbox/executor's package doc says how each is
+// read.
+//
+// The estimate is held AT BOTH RATES Claude Code counts text at
+// ([NextRequest]'s Tokens and OlderTokens), since which model the next
+// request goes to is the launch's to pick ([NextRequest.At]). Zero is no
+// figure (a thread not read whole, a release whose rules were not read, a
+// compaction whose kept stretch could not be found), and its reader then
+// reads the last request's input. It is NEVER CARRIED along a session's
+// lineage, as [ResumedCount] is not: a job that made no request of its own
+// may have grown its copy by its brief, so a figure carried from its basis
+// would under-state it. And never on the executor log: a stamp settled off
+// the log carries the last request's input alone.
+//
 // See docs/concepts/code-sandbox.md.
 //
 // # A launch's harness session is kept, and a turn's end recorded
@@ -639,6 +705,96 @@
 // take is not kept, the save is kept holding all the job did, told as a session
 // its run went on past. It over-tells; it never holds a call the session did
 // not see.
+//
+// # A save taken as its job works
+//
+// Kept by save.go and saveledger.go. A save task runs its steps CHEAPEST FIRST,
+// so a save the store would refuse costs its box nothing: the box attached
+// (never woken), its job's event stream read for whether it moved since this
+// node's last landed save, then ONE READ OF THE RUN'S ROW, settled where a
+// save of the turn was left begun by a gone taker or unanswered, and held to
+// the license's pre-check; the fleet's policy, the seat's allowance, what the
+// box was handed and the taker lease; and only then the pack. The place, the
+// save point and the cursor all come from that one read, made before the
+// pack, for "The place order is the content order".
+//
+// THE BOX PHASE IS THE DUTY'S, nothing after it: the attach, the stream's read
+// and the pack end with the stint of duty the offer came under (an E2B duty
+// handed to a peer, the coordinator stopping, a drain's end), and a save cut
+// there stamps nothing and is released from its box. Past the pack the save is
+// the coordinator's, as every take is: its take context starts after the pack,
+// so the scrub has its whole budget, and the scrub's values are read after the
+// pack too, so a token the poll recorded while the pack ran is in them.
+//
+// THE SEAT'S ALLOWANCE IS CHARGED BEFORE THE STAMP'S INSTANT, never after: the
+// whole company agrees on it (one value per seat in the coordination store's
+// uploads bucket, which ages a value out with the hold it needs), written by
+// compare-and-swap, sized from the packed archive and a margin for what the
+// scrub changes, keyed by an entry id so an append asked again counts once. A
+// crash, a lost answer or a cut keep can then only over-count, which is the
+// safe direction for a bound every artifact's bucket shares, and nothing waits
+// between the stamp's instant and its reservation. A spool that seals past what
+// was counted is refused before its keep, so a landed save is never
+// under-counted. An entry is held for [saveLedgerHold]: a save's object is
+// stored within the take's life after its entry, the collector deletes a
+// superseded one within its grace and two of its passes, and the entry's end is
+// read on another node's clock, so twice the engine's assumed skew.
+//
+// A SAVE CONTINUES NOTHING ([savePlaces.continued] nil): a run's row records no
+// capture its launch continued, the saver is often not the launching process,
+// and the launch's request names what it ASKED for, which a failed restore
+// replaced with a fresh session. So a save is placed at its launch's newest
+// landed save's point, or zero, which tells more, never less.
+//
+// # A save is offered by the poll, from memory
+//
+// Kept by save.go and the waiter's hook. THE POLL IS THE ONE TRIGGER: it
+// reaches every running box each interval already, under the duty that
+// authorises touching it, so each box a poll finds running within its turn's
+// cap is offered ([WaiterOptions.Save]); a bridge call, a clock in the box's
+// script or a signal would each be a second way into the box, under no duty.
+// THE OFFER DECIDES FROM MEMORY AND NEVER BLOCKS, since the poll is the box's
+// keepalive: saves on, the runner saving, the stint live and no task of the
+// turn under way on this node, the save due, and one of [maxConcurrentSaves]
+// slots free, taken without waiting (the next poll offers again). The task
+// runs on the coordinator's own lifetime, counted for its stop, and gives its
+// slot back only once its keep has ended, so the slots bound the uploads too.
+//
+// THE STINT is the waiter's duty, made by the pass that claimed it and ended
+// by its stand-down. A task carries the stint it began under, so a poll that
+// returns after a stand-down offers nothing under a duty this node lost.
+//
+// DUE-NESS IS COUNTED ON THIS NODE'S CLOCK ALONE: the interval
+// ([SessionKeep.SaveInterval], this node's revision) after the last attempt,
+// doubled for each failure in a row up to the larger of the interval and an
+// hour, and never before the seat's allowance paces it. What was not there
+// (the box, the license, the taker, the place) moves the clock without
+// doubling; a landing resets it and remembers how far the job's stream had
+// run, so a job that has not moved since is not saved again. AT FIRST SIGHT
+// (a node that restarted, or took an E2B duty over) the last save is taken
+// to be the later of the launch's start and this launch's newest capture,
+// instants other machines stamped, clamped to within one interval of now: as
+// in "A capture's life is counted on one clock", an age read across machines
+// decides only a wait one interval bounds, so the first save comes within an
+// interval of first sight whatever any clock says, and a paced seat takes no
+// unpaced save then. A memory no offer came for in an hour is forgotten.
+//
+// # A save as its node drains
+//
+// Kept by [Coordinator.SaveHosted]. A DRAINING NODE SAVES EACH DIRECT JOB IT
+// LAUNCHED whose session moved since its last save here, since that job's box
+// is on the node's host. Not a container's, which survives an engine's restart
+// and dies only with its host, nor an E2B one, which outlives the engine and
+// whose duty a peer takes up, saving it within an interval of first sight.
+// It LISTS the runs rather than reading the waiter's offers, so a box whose
+// poll is stuck at its bound is not missed, and saves THE MOST STALE FIRST
+// under the same slots, waiting for one for at most [drainSaveWait]. A save
+// of the turn under way counts; a drain save is never paced, only charged;
+// and from the drain's first instant no offer starts a save. The drain's end
+// bounds each save's box phase, and its take once the take's own context is
+// made, never that context's parent, whose deadline would end the take before
+// it began. A take cut before its place stamps nothing, one cut after it is
+// stamped refused, and the run keeps its newest periodic save.
 //
 // # A turn's session is continued in whichever box its next launch gets
 //
@@ -1438,7 +1594,8 @@
 // So each section that a later build may add fields to carries an Extra of its
 // own, filled by its decode and written back by its encode under the rule the
 // record's top follows: [RunSteer], [RunNote], [NoteRead], a hook's serve of a
-// note ([HookServed]) and the call it answered ([NoteCall]), [BridgeCall],
+// note ([HookServed]) and the call it answered ([NoteCall]), a late call's
+// item ([LateCall]) and a telling of one ([CallTelling]), [BridgeCall],
 // [ElidedCall], [SessionCapture], [HeldCall], [ConversationBase] with its
 // [BaseSession] and each [BaseSibling], and [LaunchRecord] — the job's own
 // record, which grows a fact about the job with nearly every piece that touches
@@ -1555,8 +1712,8 @@
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,308,597
-//	to spare, measured .............. measuredSpare             287,311
+//	every other field, measured ..... measuredOtherFields     2,219,257
+//	to spare, measured .............. measuredSpare             376,651
 //
 // Every other field is the identity, status and time fields, the run its turn's
 // leads are kept for and how many leads that part has taken
@@ -1577,24 +1734,25 @@
 // and which of the turn's leads its brief told, by their numbers in the run's
 // leads part ([LaunchRecord.LeadMarks], at most [MaxKeptLeads]), what the
 // session its box holds carried at its newest request the engine measured
-// ([LaunchRecord.Context]), what Claude Code counts that copy at and the
-// restart its launch's session held ([LaunchRecord.ResumedCount],
-// [LaunchRecord.BasisRestart]), and a refused completion its seat's holder owes
-// ([LaunchRecord.RefusalOwed], its condition at most [MaxOwedConditionBytes]);
-// the owed end and the captures (newest, kept and [PendingRun.Saving]), each
-// with the reads its session holds only as a count ([SessionCapture.Omitted])
-// and its count ([SessionCapture.ResumedCount]); and what the job may do on
-// Gitlet: the holds of its turn ([MaxCodeHolds]), its repositories
-// ([MaxRunRepos], each held to its grammar, its cone and its change's title,
-// [MaxChangeTitleBytes], among them), its floors and whom its pushes and its
-// change are made for ([PendingRun.CodeWorkingFor]). Every one of them is
-// bounded by THIS ENGINE: a person's reply, a tool's arguments and a box's
-// account of its session are each held to their share by the write that puts
-// them on the row, which refuses one past it by name ([ErrAnswerTooLarge],
-// [ErrHeldCallTooLarge], [ErrCaptureUnbounded]) rather than leave it to the
-// store; and the turn's read of its conversation is held to its line by
-// construction, made of a read the executor log bounds field by field
-// ([NewConversationBase]), the largest of which a test holds under it.
+// ([LaunchRecord.Context]), its harness's count of that copy, the count's
+// provider and writer and its next request (ResumedCount, CountProvider,
+// CountRelease, NextRequestTokens on [LaunchRecord]) and the restart its
+// launch's session held ([LaunchRecord.BasisRestart]), and a refused
+// completion its seat's holder owes ([LaunchRecord.RefusalOwed], its condition
+// at most [MaxOwedConditionBytes]); the owed end and the captures (newest,
+// kept and [PendingRun.Saving]), each with the reads its session holds only as
+// a count ([SessionCapture.Omitted]) and the same three figures; and what the
+// job may do on Gitlet: the holds of its turn ([MaxCodeHolds]), its
+// repositories ([MaxRunRepos], each held to its grammar, its cone and its
+// change's title, [MaxChangeTitleBytes], among them), its floors and whom its
+// pushes and its change are made for ([PendingRun.CodeWorkingFor]). Every one
+// of them is bounded by THIS ENGINE: a person's reply, a tool's arguments and
+// a box's account of its session are each held to their share by the write
+// that puts them on the row, which refuses one past it by name
+// ([ErrAnswerTooLarge], [ErrHeldCallTooLarge], [ErrCaptureUnbounded]) rather
+// than leave it to the store; and the turn's read of its conversation is held
+// to its line by construction, made of a read the executor log bounds field by
+// field ([NewConversationBase]), the largest of which a test holds under it.
 //
 // The two measured lines are the model's, and pinned ([measuredOtherFields],
 // [measuredSpare]): what every other field weighs at its worst, a held call's
@@ -4519,9 +4677,9 @@
 // ADR-0067). The store keeps the seal as the bytes it was handed, as it keeps
 // an answer's ([RecordedAnswer.Sealed]). A FILING IS A PERSON'S NOTE ALONE
 // ([PendingStore.FileNote]): an item for one job is the store's to file, in its
-// own writes of the record, never a filer's, so a filing that names a job is
-// refused ([ErrNoteKind]) and no filer can hand one job words a person's note
-// would not reach it with.
+// own writes of the record, never a filer's, so a filing that names a job or
+// hands one a call is refused ([ErrNoteKind]) and no filer can hand one job
+// words a person's note would not reach it with.
 //
 // # Bounds are the caller's
 //
@@ -4546,14 +4704,14 @@
 // FILED BY THE STORE ALONE, in its own writes of the record, never handed in by
 // a filer: [PendingStore.FileNote] files a person's note and refuses one that
 // names a job ([ErrNoteKind]), since an item tells a job something on the
-// store's account rather than a person's. This build's store files none, and a
-// record holds one only where a store's write put it there: wherever it does,
-// it is counted apart from a person's notes ([MaxJobItems]), handed over by
-// every write only to a reader inside that job ([RunNote.IsFor]), passed over
-// by every reader of a person's notes (the ending, the carry, the review, a
-// launch's brief, the capture's cursor), and removed by the write of the launch
-// that opens the next job ([openNotes]). Empty for a person's note, an item of
-// the whole turn.
+// store's account rather than a person's. The one kind this build files is a
+// late-call item ([RunNote.LateCall], "A late call is handed to the job
+// working as it lands"): it is counted apart from a person's notes
+// ([MaxJobItems]), handed over by every write only to a reader inside that job
+// ([RunNote.IsFor]), passed over by every reader of a person's notes (the
+// ending, the carry, the review, a launch's brief, the capture's cursor), and
+// removed by the write of the launch that opens the next job ([openNotes]).
+// Empty for a person's note, an item of the whole turn.
 //
 // keptCallOf is call as a serve keeps it: whole where its session is of the id
 // charset (letters, digits, `-` and `_`, [ValidCallID]'s) and its id is a JSON
@@ -4643,8 +4801,9 @@
 //   - every ITEM FOR ONE JOB ([RunNote.For]) is removed first: the job this
 //     write opens is new, so every item on the record was the job before it's
 //     alone, and nothing in this one will read it. An item for the job this
-//     write opens is the store's to file after it, held to [MaxJobItems];
-//     the steps below are a person's notes';
+//     write opens is the store's to file after it, once the opening of its log
+//     decides which calls are late, held to [MaxJobItems]; the steps below
+//     are a person's notes';
 //   - the brief's notes ([PendingRun.BriefNotes]) are recorded READ by the job:
 //     a note the record already holds, still waiting, is recorded read; one it
 //     holds read by the take the brief names as lost ([RunNote.LostTake]) is
@@ -4755,10 +4914,10 @@
 // harness confirms it. An item for one job the record holds ([RunNote.For])
 // counts toward neither.
 //
-// A PERSON'S NOTE ALONE: a filing that names a job ([RunNote.For]) is refused
-// with [ErrNoteKind] before anything is read or written, whatever the record
-// holds. An item for one job is the store's to file, in its own writes of the
-// record, never a filer's.
+// A PERSON'S NOTE ALONE: a filing that names a job ([RunNote.For]) or hands
+// one a call ([RunNote.LateCall]) is refused with [ErrNoteKind] before
+// anything is read or written, whatever the record holds. An item for one job
+// is the store's to file, in its own writes of the record, never a filer's.
 //
 // NO FENCE, as [PendingStore.AppendBridgeCall] takes none: a note is an append
 // to the turn, never an ownership decision. The note must carry its id and its
@@ -4842,6 +5001,70 @@
 // whatever its status or its ending. A record that is gone, before the settle
 // or under it, answers nothing, never an error; a settle that names no job is
 // an error.
+//
+// # A late call is handed to the job working as it lands
+//
+// A call whose outcome the session of the job working on its round lacks — one
+// an earlier job made that the round's log took late ([BridgeCall.Late]), or
+// one of the job's own its harness gave up on ([BridgeCall.Abandoned]) — is
+// filed for that job as a LATE-CALL ITEM ([RunNote.LateCall]): a copy of the
+// call as the log listed it, bounded as an ordinary call is ([itemCall]), for
+// the engine to hand the job at its next request. FILED IN THE WRITES THAT
+// DECIDE THE CALL IS LATE OR NOBODY WAITED FOR IT, and nowhere else
+// ([CoordStore.fileLateItems]):
+//
+//   - the APPEND that lists it ([CoordStore.AppendBridgeCall]): a late call
+//     for the job the log is open to, and a call of the log's own job its
+//     harness gave up on for that job, once its spend is written;
+//   - the OPENING of a job's log that carries its round on
+//     ([CoordStore.BeginLaunch]): every call it walks past the read the
+//     relaunch's briefs were built from, late already or not, for the job it
+//     opens, after the reset removed every item of the job before.
+//
+// The log's job, never the caller's: the item is for whichever job the round
+// runs on, which the log's own compare-and-swap read. PINNED as a take is: the
+// row must name that job, in a status its harness takes notes in
+// ([LateCallStatuses]), its ending undecided; a call already filed for the job
+// is filed once ([lateItemID]); at most [MaxJobItems] a job; never a call an
+// older build appended unnumbered, nor one a person approved. A filing that
+// fails or is refused never fails its write: the call keeps its mark, and every
+// continuation of the round tells it (internal/agent/runner's heldAt), as
+// before any item existed. UNSEALED, since it is the log's account, which the
+// log holds in the clear and no seal would prove anything of; the engine hands
+// it under words of its own, never as anybody's note (ADR-0067, ADR-0073).
+//
+// # A late call its job's session took is told to no continuation of it again
+//
+// Where the job's own session is KNOWN TO HOLD an item's call — OpenCode's
+// plugin confirmed it delivered ([NoteTake.Confirms]), or the job's main thread
+// shows its hook took it after its last restart ([HookSettle.Held]) — the write
+// that records the read records a TELLING of the call ([RunSteer.Tellings],
+// [CallTelling]): the round, the call's place in its log, the job, and that
+// write's OWN NEW PLACE among the reads, never the item's. So a capture or a
+// save whose cursor was read off the row before that write has a cursor below
+// it ([SessionCapture.NoteCursor] is at most [RunSteer.Reads] as read, and the
+// count only grows), and only one read after it, of the job's session or a
+// later one's, is past it. Nothing else records one: not a hook's take, whose
+// answer may never reach its harness, not the review's, not a brief. A telling
+// outlives its item, is kept by every relaunch that carries the round on, and
+// is cleared by one that starts a new round, whose log numbers its calls
+// afresh; one a call, at most [MaxCallTellings]. A continuation credits it only
+// to a session not cut off or possibly a summary, whose cursor is at or past
+// it, and whose briefs counted no read of the call without listing it
+// ([BriefTold.LateOmitted]): internal/agent/runner's heldByTelling, ADR-0073.
+// And never one a hook's step recorded ([CallTelling.Hook]) to a box whose
+// release's resume this build did not read: such a box holds no read at a
+// hook's step as the job's session showed it, and the briefs for it
+// ([UnheldTelling]) tell the call.
+//
+// ONE JOB A CALL, BY THE ORDER OF THE WRITES: an item is filed only by the
+// write that appends its call or opens a job's log, for a job launching or
+// running, and a relaunch's briefs read the log only once the collection has
+// claimed the job before. So a call filed for that job was in the log those
+// briefs read, and the opening that carries the round on walks only the calls
+// past it. Were one call told to two jobs all the same, the telling keeps the
+// HIGHER place ([withTelling]): a session that took it only there holds it from
+// there alone, and the lower would credit a capture of it read between the two.
 //
 // # Stopping a seat's running work
 //
@@ -5268,8 +5491,9 @@
 // the hook took it, marked `Restarted` where it shows that only before its last
 // restart, which no capture counts held (`notesHeld` stops before that read,
 // and before an unread note's place). An ITEM FOR ONE JOB (`RunNote.For`) is
-// the store's alone to file, in its own writes of the record: `FileNote` files
-// a person's note alone and refuses one that names a job (`ErrNoteKind`), so no
+// the store's alone to file, in its own writes of the record (a late call's,
+// `fileLateItems`): `FileNote` files a person's note alone and refuses one that
+// names a job or a call (`ErrNoteKind`), so no
 // filer hands a job words on the store's account. One a record holds is counted
 // apart from a person's two bounds (`MaxJobItems`), handed by every write only
 // to a reader inside the job, passed over by the ending and the cursor, and

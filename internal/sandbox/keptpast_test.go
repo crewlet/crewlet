@@ -36,7 +36,8 @@ func keptWhileWorking(t *testing.T, rig *coordRig) (SessionCapture, *keptRestore
 	kept := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID, State: CaptureLanded,
 		Interrupted: true, Through: new(0), At: rig.now, Harness: "claude-code", HarnessVersion: "2.1.310",
 		SessionID: "s-1", ArchiveFormat: FakeArchiveFormat, Object: objstore.KeyAt(rig.now).String(),
-		ObjectHash: strings.Repeat("a", 64), ObjectSize: 14, ContentKey: "k1", ContextTokens: 40_000}
+		ObjectHash: strings.Repeat("a", 64), ObjectSize: 14, ContentKey: "k1", ContextTokens: 40_000,
+		NextRequestTokens: 43_000, NextRequestOlderTokens: 32_000}
 	if took, err := rig.pending.StampCapture(t.Context(), "t1", kept); err != nil || !took {
 		t.Fatalf("stamping the capture taken as the job worked = %v, %v", took, err)
 	}
@@ -61,23 +62,23 @@ func launchAfter(t *testing.T, rig *coordRig, want SessionCapture, reused bool,
 	req := continuingKept(want)
 	req.Continue = offered
 	got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-2"), rig.runner,
-		reused, false)
+		reused, false, RunSources{})
 	t.Cleanup(got.release)
 	return got
 }
 
 // A RELAUNCH CONTINUES THE NEWEST KEPT CAPTURE OF ITS JOB PAST ONE NOT KEPT:
 // past a newest capture refused, unfinished or unanswered past its window, it
-// continues the older one the job kept, told every call after it, and its line
-// names the newer one passed over and why. One whose taker stopped is settled
-// from the turn's row first, and continued where the log took it. A job that
-// kept none before its newest starts without one, measured as that newest.
+// continues the older one the job kept, at its own next-request estimate, told
+// every call after it, and its line names the newer one passed over and why.
+// One whose taker stopped is settled from the turn's row first, and continued
+// where the log took it. A job that kept none before its newest starts without
+// one; its copy is answered as that newest measured and estimated it. In a
+// synctest bubble, and not parallel: it captures the process-wide logger.
 //
-// In a synctest bubble, and not parallel: it captures the process-wide logger
-// ([captureLogs]).
-//
-// Mutation: continue only the job's newest capture, or drop the line that names
-// the one passed over, and a case goes red.
+// Mutation: continue only the job's newest capture, drop the line that names
+// the one passed over, or answer the copy's estimate off the kept capture, and
+// a case goes red.
 func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -95,6 +96,7 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 				refused := kept
 				refused.CaptureSeq, refused.State, refused.Final = 2, CaptureRefused, true
 				refused.Reason, refused.ContextTokens = "past the seat's budget", 61_000
+				refused.NextRequestTokens, refused.NextRequestOlderTokens = 64_000, 48_000
 				if took, err := rig.pending.StampCapture(t.Context(), "t1", refused); err != nil || !took {
 					t.Fatalf("stamping the refused capture = %v, %v", took, err)
 				}
@@ -169,9 +171,13 @@ func TestARelaunchContinuesTheNewestKeptCaptureOfItsJobPastOneNotKept(t *testing
 					t.Fatalf("the relaunch continues %+v (%q), want the capture the job kept before its newest, "+
 						"at its own 40000 tokens", continued, why)
 				}
-				if c.name == "refused" && continued.CopyContext != 61_000 {
-					t.Errorf("the answer says the job's copy carried %d tokens, want the 61000 its newest capture "+
-						"measured", continued.CopyContext)
+				if c.name == "refused" && (continued.CopyContext != 61_000 ||
+					continued.CopyNextRequest != NextRequest{Tokens: 64_000, OlderTokens: 48_000} ||
+					continued.Capture.NextRequest() != kept.NextRequest()) {
+					t.Errorf("the answer says the job's copy carried %d tokens and sends %+v next, the kept capture "+
+						"%+v; want the 61000 and 64000 its newest capture measured, the kept one its own %+v",
+						continued.CopyContext, continued.CopyNextRequest, continued.Capture.NextRequest(),
+						kept.NextRequest())
 				}
 				want := "the relaunch continues the newest capture that job kept (launch 1, capture 1)"
 				if len(lines) != 1 || !strings.Contains(lines[0], c.line) || !strings.Contains(lines[0], want) {

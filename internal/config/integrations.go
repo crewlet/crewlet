@@ -17,15 +17,12 @@ import (
 // agents, and how notifications get delivered.
 //
 // It carries no tool credentials. Agent tools are MCP servers under
-// mcp_servers, and the engine never derives one from an integration block —
-// the two are separate on purpose, because they are opposite directions
-// with different identities. A chat-enabled seat names its bot token twice
-// (once for the transport, once for the tool server) pointing at ONE
-// ${VAR}: two consumers, one secret.
+// mcp_servers, and the engine never derives one from an integration block: they
+// are opposite directions with different identities. A chat-enabled seat names
+// its bot token twice (transport and tool server) pointing at ONE ${VAR}.
 //
-// Every block is a POINTER, and nil is meaningful: it is what turns the
-// integration off. An empty block is not the same thing — `slack: {}` is
-// how Slack is enabled with nothing overridden.
+// Every block is a POINTER, and nil turns the integration off. An empty block
+// is not the same: `slack: {}` enables Slack with nothing overridden.
 type Integrations struct {
 	Jira         *Jira         `yaml:"jira,omitempty" json:"jira,omitempty" desc:"Jira instance or Cloud site, org read account and webhook secret. Absent = disabled."`
 	Confluence   *Confluence   `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."`
@@ -49,34 +46,16 @@ type Integrations struct {
 	ForgeAppID string `yaml:"forge_app_id,omitempty" json:"forge_app_id,omitempty" desc:"Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud."`
 
 	// CheckIntervalSeconds is how long a CONVERGED integration is trusted
-	// before the loop reads it back, and therefore how long access somebody
-	// revoked by hand at the third-party app goes unnoticed.
+	// before the loop reads it back, and so how long access somebody revoked by
+	// hand at the third-party app goes unnoticed.
 	//
-	// # Why this is a company's choice rather than one number for everybody
-	//
-	// It is the only thing that finds a revoked credential at all — nothing
-	// tells this engine, and every other cadence in the loop is a retry of
-	// something already known to be wrong. So it is a straight trade against
-	// what a converged pass COSTS at the vendor, and that cost is the
-	// company's own size: a pass asks each seat's credential who it is and
-	// reads the memberships and hooks per seat and per project, so it is
-	// O(seats x projects) requests per surface per interval — tens for a
-	// small company, a few hundred for a large one on GitLab or Mattermost.
-	//
-	// Ten minutes is the default because it is affordable at the large end.
-	// At the small end it is simply slow, and measured as such: an operator
-	// who deleted an agent's token by hand watched the card say Connected
-	// for eight minutes. A five-seat company can afford one minute; a
-	// two-hundred-seat one should probably lengthen it.
-	//
-	// # Zero is the default, not "never"
-	//
-	// A settled surface that is never read back is one this engine would
-	// report healthy for the life of the deployment, which is the state the
-	// whole subsystem exists to refuse — so there is no "off". Zero takes
-	// the default and anything below [MinCheckInterval] is refused naming
-	// the field, rather than silently clamped: a value typed in seconds when
-	// the writer meant minutes should say so.
+	// It is the only thing that finds a revoked credential (every other cadence
+	// retries something known wrong), so it trades against what a converged
+	// pass COSTS at the vendor: O(seats x projects) requests per surface per
+	// interval, tens for a small company, hundreds for a large one. Ten minutes
+	// is the default because it is affordable at the large end. Zero takes the
+	// default, not "never": a surface never read back would be reported healthy
+	// for ever. Below [MinCheckInterval] is refused, not clamped.
 	CheckIntervalSeconds int `yaml:"check_interval_seconds,omitempty" json:"check_interval_seconds,omitempty" desc:"How often a converged integration is read back, in seconds. 0 takes the default of 600; the floor is 60."`
 }
 
@@ -235,19 +214,15 @@ type Jira struct {
 	// accepting an unverifiable payload.
 	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"HMAC secret for inbound webhooks."`
 
-	// WebhookName is the name the engine's own hook is registered under,
-	// and therefore WHICH HOOK ON THIS INSTANCE IS THIS DEPLOYMENT'S.
+	// WebhookName is the name the engine's own hook is registered under, and so
+	// WHICH HOOK ON THIS INSTANCE IS THIS DEPLOYMENT'S.
 	//
-	// The reconcile converges the hook carrying this name, whatever
-	// address it currently points at, which is what stops a change of
-	// public base leaving a live orphan behind delivering to somewhere
-	// that no longer answers — one per change, all enabled.
-	//
-	// So it has to differ between two deployments watching ONE instance:
-	// staging and production of the same company share this document, and
-	// with one name each pass would repoint the other's hook and only the
-	// last one to run would receive anything. The same knob exists on
-	// Datadog for the same reason.
+	// The reconcile converges the hook carrying this name whatever address it
+	// points at, so a change of public base leaves no live orphan delivering
+	// nowhere. It must differ between two deployments watching ONE instance
+	// (staging and production share this document): with one name each pass
+	// would repoint the other's hook. Datadog has the same knob for the same
+	// reason.
 	WebhookName string `yaml:"webhook_name,omitempty" json:"webhook_name,omitempty" desc:"Name the engine's own Jira webhook is registered under; give two deployments watching one instance two names (default crewlet)."`
 }
 
@@ -501,18 +476,14 @@ func (c *Confluence) validate(path Path, discovers bool, declared atlassianhost.
 // sharedToken refuses a token too weak to be the whole authentication for a
 // route.
 //
-// TWO ROUTES HAVE NOTHING ELSE. Datadog's provider attaches headers with fixed
-// values and Confluence Cloud's attaches nothing at all, so neither delivery
-// can be signed and the token is the entire check — see
-// [secrets.CheckSharedToken] for the rule and why the number is what it is.
-// Every other inbound route verifies an HMAC over the body, where the secret's
-// shape is what [whsec] refuses.
+// TWO ROUTES HAVE NOTHING ELSE: Datadog's provider attaches headers with fixed
+// values and Confluence Cloud's attaches nothing, so neither delivery can be
+// signed; see [secrets.CheckSharedToken] for the rule and the number. Every
+// other inbound route verifies an HMAC, where [whsec] refuses a weak secret.
 //
-// A ${VAR} IS UNKNOWN, NOT WRONG, exactly as everywhere else in this file:
-// Tier B holds a pointer verbatim and resolves it where the transport is
-// built, so the length of what it resolves to is not knowable here. The
-// webhook edge makes the same check on the resolved value, which is what
-// stops a reference being the way around this.
+// A ${VAR} IS UNKNOWN, NOT WRONG: Tier B holds a pointer verbatim and resolves
+// it where the transport is built. The webhook edge makes the same check on the
+// resolved value, so a reference is no way around this.
 func sharedToken(p *problems, path Path, value string) {
 	token := strings.TrimSpace(value)
 	if token == "" || envref.Has(token) {
@@ -752,21 +723,17 @@ func (m *Mattermost) validate(path Path) error {
 	return p.err()
 }
 
-// atlassianDeployment is the deployment a Jira or Confluence block is on as
-// far as validation can tell, by [atlassianhost.Of] — the rule both vendor
-// clients read, handed the same declaration — so a block is never admitted as
-// one deployment and served as the other. It refuses the one combination no
-// answer can serve: an address Atlassian's Cloud hosts, in a company that
-// declared Data Center.
+// atlassianDeployment is the deployment a Jira or Confluence block is on as far
+// as validation can tell, by [atlassianhost.Of], the rule both vendor clients
+// read, so a block is never admitted as one deployment and served as the other.
+// It refuses the one combination no answer can serve: an address Atlassian's
+// Cloud hosts, in a company that declared Data Center.
 //
-// A cloud id is Cloud by construction: it is read through a gateway. A url
-// whose host is a ${VAR} is what the company declared, and unknown when it
-// declared nothing — Tier B holds the reference verbatim and the engine
-// resolves it where the client is built, so here `${JIRA_URL}` has no host,
-// and reading that as Data Center refused the Cloud company the integration
-// guide's own example describes (`url: "${JIRA_URL}"` on the Forge relay, no
-// signing secret to give). A reference in the path leaves a written host
-// judged by that host.
+// A cloud id is Cloud by construction (read through a gateway). A url whose
+// host is a ${VAR} is unknown when the company declared nothing: Tier B holds
+// the reference verbatim, so `${JIRA_URL}` has no host here, and reading that
+// as Data Center refused the integration guide's own Cloud example on the Forge
+// relay. A reference in the path leaves a written host judged by that host.
 func atlassianDeployment(p *problems, path Path, url, cloudID string, declared atlassianhost.Deployment) atlassianhost.Deployment {
 	switch {
 	case cloudID != "":
@@ -847,23 +814,14 @@ type DatadogProvisioning struct {
 
 // GitHub is the org-level GitHub block.
 //
-// Symmetric with [GitLab] with two differences, and both come from what
-// GitHub is rather than from a choice made here:
+// Symmetric with [GitLab] with two differences that come from what GitHub is:
 //
-//   - URL IS OPTIONAL. github.com is where most companies are, and its API
-//     lives on a different host from its web UI (api.github.com), so there
-//     is no instance address to write. An Enterprise Server deployment names
-//     itself and the API is derived from it — see [GitHub.APIBase].
-//   - THE PROVISIONER MINTS NOTHING. GitHub issues no user account and no
-//     personal access token on a provisioner's behalf: a token belongs to
-//     the person who created it, and the API to create one on somebody's
-//     behalf was withdrawn in 2020. So `crewlet github provision` reports
-//     what each seat's own credential authenticates as and registers the
-//     webhooks — the same shape as Jira's, for the same reason.
-//
-// The tool server is a separate `shared: false` http MCP entry; each agent
-// supplies its token there as an Authorization header, and that is the same
-// credential this integration reads a seat's login from.
+//   - URL IS OPTIONAL. github.com's API is on a different host from its web UI,
+//     so there is no instance address to write; an Enterprise Server deployment
+//     names itself and the API is derived ([GitHub.APIBase]).
+//   - THE PROVISIONER MINTS NOTHING. GitHub issues no account or token on a
+//     provisioner's behalf, so `crewlet github provision` reports what each
+//     seat's credential authenticates as and registers the webhooks.
 type GitHub struct {
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Turn the integration on."`
 
@@ -875,23 +833,17 @@ type GitHub struct {
 	// anyone's POST.
 	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"HMAC secret for inbound deliveries; required when enabled."`
 
-	// Token is the optional ORGANIZATION credential, and it now has one
-	// job rather than two.
+	// Token is the optional ORGANIZATION credential, with one job.
 	//
 	// IT IS THE WHOLE ORGANIZATION-LEVEL CLIENT. Empty, the reconcile pass
-	// builds none and registers nothing at GitHub — no organization hook,
-	// no repository hook — which is what `org_webhook: true` with no token
-	// reports. Installing an agent's App does not substitute for it: an
-	// organization-wide hook needs `admin:org_hook`, a user-token scope
-	// that no App installation carries.
+	// builds none and registers nothing at GitHub (no organization or
+	// repository hook), which is what `org_webhook: true` with no token
+	// reports. An agent's App does not substitute: an organization-wide hook
+	// needs `admin:org_hook`, a user-token scope no App installation carries.
 	//
-	// ITS OTHER JOB IS GONE. It was also the READ credential for
-	// participant fan-out — a webhook payload carries the author, the
-	// assignees and the requested reviewers, but not who has COMMENTED or
-	// REVIEWED, which is most of the set GitHub itself would notify. Each
-	// agent's own App answers that now ([github.SeatLookup]), scoped to
-	// what that agent may see rather than to whatever the person who
-	// minted this token could reach.
+	// It is no longer the READ credential for participant fan-out (a payload
+	// lacks who has COMMENTED or REVIEWED): each agent's own App answers that
+	// ([github.SeatLookup]), scoped to what that agent may see.
 	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Organization token with admin:org_hook, for one organization-wide hook. Empty means each agent's own app carries its own."`
 
 	// Provisioning is read by the engine's own reconcile loop as well as by
@@ -932,22 +884,15 @@ func (g *GitHub) APIBase() string {
 // Bases is where GitHub is reached: the REST base and the browser base, both
 // derived from a RESOLVED url.
 //
-// RESOLVED FIRST, THEN DERIVED, and both halves are load-bearing.
+// RESOLVED FIRST, THEN DERIVED, both load-bearing. [GitHub.APIBase] and
+// [GitHub.WebURL] are computed FROM the url, so the raw block points an
+// Enterprise Server deployment at github.com whenever its host is a `${VAR}`.
+// The REST base is `<url>/api/v3` on Enterprise Server, the browser base the
+// host without it; the raw url is right as either only on github.com, where an
+// empty field makes both fall back.
 //
-// [GitHub.APIBase] and [GitHub.WebURL] are computed FROM the url, so asking
-// the raw block points an Enterprise Server deployment at github.com whenever
-// its host is written as a `${VAR}` — a legal way to write it, since the
-// field takes an embedded reference too.
-//
-// And the two are genuinely different addresses. The REST base is
-// `<url>/api/v3` on Enterprise Server; the browser base is the host without
-// it. Passing the raw url as either is only ever right on github.com, where
-// an empty field makes both fall back — which is exactly why a caller that
-// skipped this looked correct everywhere but Enterprise.
-//
-// ONE IMPLEMENTATION because three callers need it, in three packages: the
-// engine's reconcile client, its seat-app half, and the dashboard's app-
-// creation flow. Each had its own idea, and two of them were wrong.
+// ONE IMPLEMENTATION for three callers in three packages (the reconcile client,
+// the seat-app half, the dashboard's app-creation flow).
 func (g *GitHub) Bases(resolve func(name string) (string, bool)) (apiBase, webBase string) {
 	if g == nil {
 		return "", ""
@@ -989,15 +934,12 @@ type GitHubProvisioning struct {
 // ContainerWebhookMode is how a provisioner registers hooks: once on the
 // container that holds the repositories, or once per repository.
 //
-// ONE type for both code hosts, because it is one question — a GitLab group
-// and a GitHub organization are the same thing here, and both hosts can
-// refuse a container hook for the same kind of reason (a plan that does not
-// include them, a credential without the scope). Two enums with three
-// identical values would be two `Valid()` methods to keep in step and two
-// chances for `auto` to come to mean different things.
-//
-// The FIELD names stay each third-party app's own (`group_webhook` on
-// GitLab, `org_webhook` on GitHub), because those are the words their own
+// ONE type for both code hosts, because it is one question: a GitLab group and
+// a GitHub organization are the same here, and both hosts can refuse a
+// container hook for the same kind of reason (a plan without them, a credential
+// without the scope). Two enums would be two `Valid()` methods to keep in step
+// and two chances for `auto` to come to mean different things. The FIELD names
+// stay each app's own (`group_webhook`, `org_webhook`), the words its
 // documentation uses.
 type ContainerWebhookMode string
 
@@ -1044,21 +986,15 @@ type GitLab struct {
 	// ahead of the provisioning token, so a read never needs the wider one.
 	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Read PAT (read_api) for participants-based routing and the atlas's read of the group; empty degrades routing."`
 
-	// WebhookName is the name every hook this engine registers carries,
-	// and therefore WHICH HOOKS ON THIS INSTANCE ARE THIS DEPLOYMENT'S.
+	// WebhookName is the name every hook this engine registers carries, and so
+	// WHICH HOOKS ON THIS INSTANCE ARE THIS DEPLOYMENT'S.
 	//
-	// The reconcile converges the hooks carrying this name whatever
-	// address they currently point at, which is what stops a change of
-	// public base leaving live orphans behind — one group hook and one
-	// per project per change, all enabled, all delivering to somewhere
-	// that no longer answers. Measured on a real deployment behind a
-	// tunnel: three.
-	//
-	// So it has to differ between two deployments watching ONE instance:
-	// staging and production of the same company share this document, and
-	// with one name each pass would repoint the other's hooks and only the
-	// last one to run would receive anything. The same knob exists on Jira
-	// and on Datadog for the same reason.
+	// The reconcile converges the hooks carrying this name whatever address
+	// they point at, so a change of public base leaves no live orphans (a group
+	// hook and one per project per change, delivering nowhere). It must differ
+	// between two deployments watching ONE instance (staging and production
+	// share this document): with one name each pass would repoint the other's
+	// hooks. Jira and Datadog have the same knob for the same reason.
 	WebhookName string `yaml:"webhook_name,omitempty" json:"webhook_name,omitempty" desc:"Name every hook the engine registers on this instance carries; give two deployments watching one instance two names (default crewlet)."`
 
 	// Provisioning is read by the engine's own reconcile loop as well as by
@@ -1099,18 +1035,13 @@ type GitLabProvisioning struct {
 	// AdminToken is the group Owner credential the provisioning and the
 	// teardown both authenticate with.
 	//
-	// HELD, which is a deliberate reversal. It used to be asked for on
-	// every run and dropped, because a token that can create service
-	// accounts is a standing power once it is kept. What that cost is a
-	// disconnect: removing an account needs the authority that created
-	// it, so with nothing held there was no way to take one away except
-	// by hand at the third-party app, and every account this engine ever made
-	// outlived the integration.
-	//
-	// It is a ${VAR} like every other credential here: the value is
-	// sealed in the fleet's secret store and never in this document, and
-	// a disconnect names it in the orphaned list so an operator knows
-	// exactly what to revoke.
+	// HELD, a deliberate reversal: it was asked for each run and dropped,
+	// because a token that can create service accounts is a standing power once
+	// kept. But removing an account needs the authority that created it, so
+	// with nothing held every account this engine made outlived the
+	// integration. It is a ${VAR} like every credential here, sealed in the
+	// fleet's secret store, and a disconnect names it in the orphaned list so
+	// an operator knows what to revoke.
 	AdminToken string `secret:"true" yaml:"admin_token,omitempty" json:"admin_token,omitempty" desc:"Personal access token with the full api scope, belonging to a group owner. Creates and removes the service accounts."`
 
 	UsernamePrefix string `yaml:"username_prefix,omitempty" json:"username_prefix,omitempty" desc:"Prefix on each service-account username."`
@@ -1121,24 +1052,18 @@ type GitLabProvisioning struct {
 
 	GroupWebhook ContainerWebhookMode `yaml:"group_webhook,omitempty" json:"group_webhook,omitempty" js:"enum=auto|true|false" desc:"auto (one group hook if the plan allows), true, or false."`
 
-	// Mode is WHERE A SERVICE ACCOUNT IS OWNED, and therefore which route
-	// creates one, mints its tokens and deletes it.
+	// Mode is WHERE A SERVICE ACCOUNT IS OWNED, and so which route creates one,
+	// mints its tokens and deletes it.
 	//
-	// # Why it is in the document rather than only on the command line
+	// It is in the document, not only `-mode` on `crewlet gitlab provision`,
+	// because the engine provisions now and reads no flag: assuming "group",
+	// against accounts created with `-mode instance` it was refused minting,
+	// and its DISCONNECT deleted through the group route, whose 404 for an
+	// unknown account was read as success, leaving accounts live with every
+	// credential.
 	//
-	// It was `-mode` on `crewlet gitlab provision` and nowhere else, which
-	// made it a fact only the person who typed it knew — and the engine
-	// provisions now. Its passes read no flag, so they assumed "group" for
-	// every company: against accounts created with `-mode instance` the
-	// engine minted through the group route and was refused, and its
-	// DISCONNECT deleted through the group route, which answers 404 for an
-	// account that route has never heard of — read as success, so every one
-	// of those accounts was reported removed and stayed live with every
-	// credential it held.
-	//
-	// Empty is [GitLabModeGroup], which is the only shape GitLab.com has.
-	// The flag is still there and still overrides, for one invocation, the
-	// way `-public-url` overrides `api.external_url`.
+	// Empty is [GitLabModeGroup], the only shape GitLab.com has. The flag still
+	// overrides for one invocation.
 	Mode GitLabMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=group|instance" desc:"Where service accounts are owned: group (default, and all GitLab.com offers) or instance (self-managed only; needs an instance-administrator token)."`
 }
 
@@ -1357,28 +1282,17 @@ func (a *Atlassian) Declared() atlassianhost.Deployment {
 }
 
 // DiscoversAtlassianSite reports whether this company's Atlassian organization
-// will supply the Jira and Confluence site addresses, so nobody has to give one.
+// will supply the Jira and Confluence site addresses, so nobody has to give
+// one.
 //
-// THE PREDICATE THE SETUP FORM ALREADY ACTS ON, written down so validation can
-// act on the same one. `cloud_id` is declared Hidden on both products —
-// "DISCOVERED, NOT ASKED", because the organization key reads every site this
-// company has along with its cloud id — and on Cloud the site `url` is hidden
-// beside it, since an address typed there is used INSTEAD of the gateway and a
-// provisioned account's token authenticates only at the gateway.
+// THE PREDICATE THE SETUP FORM ALREADY ACTS ON, so validation acts on the same
+// one. `cloud_id` is Hidden on both products ("DISCOVERED, NOT ASKED") and on
+// Cloud so is the site `url`: an address typed there is used INSTEAD of the
+// gateway, where a provisioned account's token authenticates.
 //
-// Validation did not know that and demanded one of them anyway, so connecting
-// Atlassian on Cloud could not succeed: the form deliberately asks for neither,
-// the write is refused for both, and the pass that would have discovered them
-// never runs because the write is what starts it. The operator is told to fill
-// in a field that is not on the screen.
-//
-// NIL IS NOT CLOUD HERE, although [Atlassian.IsCloud] answers true for it. That
-// answer is right for "which deployment is this" and wrong for this question: a
+// NIL IS NOT CLOUD HERE, although [Atlassian.IsCloud] answers true for it: a
 // company with no organization block has nothing to discover a site WITH, so it
-// must still name one. Via the dashboard that shape does not arise — Atlassian
-// is one card covering the organization and both products, so connecting it
-// always writes the organization — and a hand-written document that omits it is
-// asked for a url, correctly.
+// must name one.
 func (i Integrations) DiscoversAtlassianSite() bool {
 	return i.Atlassian != nil && i.Atlassian.IsCloud()
 }
@@ -1398,45 +1312,28 @@ const DatadogIgnore = "none"
 
 // Atlassian is the organization one service account per agent is created in.
 //
-// A DIFFERENT THING FROM THE TWO PRODUCT BLOCKS. Jira and Confluence are
-// sites this engine reads and writes AS an account. This is the organization
-// those sites belong to, and the only place an identity can be created at
-// all: Atlassian's site APIs have no route for it, and its organization APIs
-// take a credential no site accepts. The block is separate because the
-// credential is, not because the product is.
+// A DIFFERENT THING FROM THE TWO PRODUCT BLOCKS. Jira and Confluence are sites
+// this engine reads and writes AS an account. This is the organization those
+// sites belong to, the only place an identity can be created: the site APIs
+// have no route for it and the organization APIs take a credential no site
+// accepts.
 //
-// OPTIONAL, and its absence is a working configuration rather than a missing
-// one: a company whose operator creates each agent's Atlassian account by
-// hand and pastes the token into the seat's mcp_env needs none of this. What
-// it buys is that nobody has to.
+// OPTIONAL, and its absence is a working configuration: an operator who creates
+// each agent's Atlassian account by hand and pastes the token into the seat's
+// mcp_env needs none of this. What it buys is that nobody has to.
 type Atlassian struct {
-	// Deployment says which Atlassian this company runs, and it is ASKED
-	// rather than derived.
+	// Deployment says which Atlassian this company runs, and it is ASKED rather
+	// than derived.
 	//
-	// Every other part of this file works out Cloud from a hostname, which
-	// is right once an address exists and useless before one does: a form
-	// has to decide what to ask BEFORE the operator has answered anything,
-	// and an empty address reads as Data Center. That is how a Cloud connect
-	// came to be offered a Data Center's fields, and how the Cloud webhook
-	// token was dropped from the list before the address proving the site
-	// Cloud was submitted.
+	// The rest of this file works out Cloud from a hostname, useless before an
+	// address exists: a form must decide what to ask BEFORE the operator
+	// answers. Cloud has an ORGANIZATION yielding sites and addresses from one
+	// key; Data Center has none, so its address is required.
 	//
-	// It also decides which questions are worth asking at all. A Cloud
-	// company has an ORGANIZATION: its sites, their cloud ids and their
-	// addresses are all readable from one key, so asking a person to type
-	// them is asking them to copy values out of a console this engine is
-	// already reading. Data Center has no organization, no cloud id and no
-	// service accounts, so there the address is the only way in and it is
-	// required.
-	//
-	// And once an address exists, a WRITTEN value decides what its host
-	// cannot ([Atlassian.Declared], [atlassianhost.Of]): a Jira or
-	// Confluence url at a host that is not one of Atlassian's own is on the
-	// deployment declared here. That is the only way an Atlassian Isolated
-	// Cloud site — at a base domain of its own, which no host list names —
-	// is read as Cloud, and the way a Data Center url written as a ${VAR}
-	// is asked for its signing secret at validation. Unset, it is Cloud for
-	// the form and nothing for an address.
+	// Once an address exists, a WRITTEN value decides what its host cannot
+	// ([Atlassian.Declared], [atlassianhost.Of]): a url at a host not
+	// Atlassian's own is on the deployment declared here, the only way an
+	// Isolated Cloud site is read as Cloud.
 	Deployment string `yaml:"deployment,omitempty" json:"deployment,omitempty" desc:"Which Atlassian this company runs: cloud or data_center. The form opens on cloud; a value written here also decides a Jira or Confluence url whose host is not Atlassian's own."`
 
 	// OrgID is the organization the admin APIs take as their subject. It is
@@ -1455,16 +1352,12 @@ type Atlassian struct {
 // Datadog turns monitor alerts into inbound events, so a firing monitor can
 // wake a seat the same way a comment on a merge request does.
 //
-// It is the one inbound integration that CANNOT SIGN A BODY. Datadog's
-// Webhooks integration attaches custom headers, but only with fixed values,
-// so there is nothing varying with the payload to compute an HMAC over. The
-// strongest check the provider offers is a shared token sent in a header, and
-// that is what this verifies.
-//
-// The difference from every other route here is real and worth naming: a
-// replayed delivery is indistinguishable from a fresh one, and anyone holding
-// the token can forge an alert. Treat WebhookToken as a signing key — it is
-// doing that job with none of the guarantees.
+// It is the one inbound integration that CANNOT SIGN A BODY: Datadog's Webhooks
+// attach custom headers only with fixed values, so nothing varies with the
+// payload to compute an HMAC over. The strongest check offered is a shared
+// token in a header, which this verifies. A replayed delivery is
+// indistinguishable from a fresh one and anyone holding the token can forge an
+// alert: treat WebhookToken as a signing key.
 type Datadog struct {
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Turn the integration on."`
 
@@ -1475,29 +1368,16 @@ type Datadog struct {
 	WebhookToken string `secret:"true" yaml:"webhook_token,omitempty" json:"webhook_token,omitempty" desc:"Shared token compared against X-Crewlet-Token; required when enabled."`
 
 	// WebhookName is the name of the webhook definition the engine keeps at
-	// Datadog, and therefore the handle an operator writes in a monitor
-	// message: `@webhook-crewlet` by default.
+	// Datadog, and so the monitor handle `@webhook-crewlet` by default.
 	//
-	// Configurable because the name is Datadog's PRIMARY KEY for a webhook
-	// and one organization may be watched by two Crewlet deployments, a
-	// staging one and a production one. Sharing a name there would have
-	// each deployment rewrite the other's address on every pass, so the
-	// alerts would land at whichever reconciled last.
+	// Configurable because the name is Datadog's PRIMARY KEY for a webhook, and
+	// a staging and a production deployment may watch one organization.
 	//
-	// CHANGING IT LEAVES THE PREVIOUS DEFINITION IN PLACE, deliberately,
-	// and the engine REPORTS that rather than acting on it. The name is
-	// also the handle monitors write — `@webhook-crewlet` — so every
-	// monitor still naming the old one goes on delivering through the old
-	// definition, correctly: same address, same token. Deleting it on a
-	// rename would silence exactly those monitors, and Datadog serves no
-	// listing (a GET on the collection answers 405) so nothing could find
-	// it afterwards either.
-	//
-	// So the engine remembers the name it registered under and raises
-	// [integration.FindingRegistrationOrphaned] when this field moves —
-	// an advisory, because nothing is broken. Repoint the monitors and
-	// then remove the old definition at Datadog. A disconnect withdraws
-	// only the name this field holds.
+	// CHANGING IT LEAVES THE PREVIOUS DEFINITION IN PLACE and the engine
+	// REPORTS that ([integration.FindingRegistrationOrphaned], an advisory):
+	// monitors naming the old handle keep delivering through it, and deleting
+	// it would silence them, and Datadog serves no listing (a GET answers 405)
+	// to find it later. Repoint the monitors, then remove the old definition.
 	WebhookName string `yaml:"webhook_name,omitempty" json:"webhook_name,omitempty" desc:"Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-<name> (default crewlet)."`
 
 	// HandleTag is the monitor tag key that names the seat an alert wakes,

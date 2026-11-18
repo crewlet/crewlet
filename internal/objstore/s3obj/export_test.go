@@ -23,10 +23,10 @@ import (
 // [Backend.partBytes].
 func CutParts(b *Backend, n int) { b.cutParts(n) }
 
-// Clock is the time a client's gate keeps ([clock]): Now, the instant it
-// measures its quiet minute ([throttleQuiet]) from, and After, the timer that
-// lifts it when the minute ends. A nil field is the production one —
-// time.Now, and time.AfterFunc.
+// Clock is the time a client keeps ([clock]): Now, the instant its gate
+// measures its quiet minute ([throttleQuiet]) from and its watches date
+// movements on, and After, the timer that lifts the gate when the minute
+// ends. A nil field is the production one: time.Now, and time.AfterFunc.
 type Clock struct {
 	Now   func() time.Time
 	After func(d time.Duration, f func())
@@ -72,7 +72,7 @@ type WatchedClient = watchedClient
 // Watching is next with every attempt watched under the stall bound stall.
 func Watching(next s3.HTTPClient, stall time.Duration) *WatchedClient {
 	bound := newStallBound(stall)
-	return watching(next, &bound)
+	return watching(next, &bound, time.Now)
 }
 
 // Live is how many of c's attempts are being watched now.

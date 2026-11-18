@@ -17,21 +17,15 @@ import (
 
 // GitHub's half of per-seat access ([seataccess.Vendor]).
 //
-// # The account is the app and its installation
+// The account is the app and its installation: each agent has its own GitHub
+// App, the ledger records its id, and it acts only through an installation. A
+// seat is created by two people's clicks (manifest, install), switched off and
+// on by suspending its installation as the app, narrowed at every token mint,
+// and widened only when the app's owner and then the organization accept the
+// new permissions (D5).
 //
-// Each agent has its own GitHub App, so the "account" the ledger records is
-// the app (its id), and it can act only through an installation. A seat is
-// created by two people's clicks (the manifest and the install), switched off
-// and on by suspending its installation as the app, narrowed at every token
-// mint, and widened only when the app's owner and then the organization
-// accept the new permissions (D5).
-//
-// # Read-only on the document
-//
-// The installation id the token issuer mints against and the app record are
-// written by the GitHub pass ([AdoptSeatApps]), which adopts an installation a
-// person made and clears a record GitHub no longer has. This session reads and acts at GitHub and leaves the document
-// to that pass, so there is one writer of those fields.
+// Read-only on the document: the installation id and app record are written
+// only by the GitHub pass ([AdoptSeatApps]), so there is one writer.
 
 func init() { seataccess.Register(vendor{}) }
 

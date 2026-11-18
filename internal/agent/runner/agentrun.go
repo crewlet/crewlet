@@ -194,6 +194,12 @@ type AgentRunRequest struct {
 	// seat's budget unable to carry it — starts fresh with Brief.
 	Session *SessionContinuation
 
+	// FreshOwn is the leads Brief opened with of its own where Continue is
+	// nil: a turn's first launch and a send-back, whose fresh brief opens a
+	// session of the run's own with the turn's task (freshLead). The launch
+	// keeps them whichever brief it hands its run (sandbox.LaunchRequest.FreshOwn).
+	FreshOwn []sandbox.Lead
+
 	// Decided is told how the launch decided its run takes up a session —
 	// the turn's kept capture, the job before's own copy in its box, or none
 	// ([SessionDecision]) — once the launch has its box and before the run
@@ -269,6 +275,17 @@ type Continuation struct {
 	// floor with Brief beside it.
 	ContextTokens int64
 
+	// NextRequest is the harness's own estimate of that session's next
+	// request: the job's record's, which the read that collected the job made
+	// of the copy its box holds ([Resume.NextRequest]), where it holds a
+	// figure, else its newest capture's ([SessionBasis.CopyNextRequest]).
+	// What the relaunch's floor is made of where it holds a figure, in place
+	// of ContextTokens, which under-counts it by the last request's reply and
+	// everything after it, and over-counts it past a compaction no request
+	// has followed; never the larger of the two, which would put that
+	// compacted figure back.
+	NextRequest sandbox.NextRequest
+
 	// BriefRead is how many calls the round's log had taken at the read
 	// every brief of the launch was built from ([Resume.BridgedRead]): the
 	// launch's opening of the job's log marks every call of the round the log
@@ -289,6 +306,29 @@ type Continuation struct {
 	// them ([Resume.Owed], [SessionBasis.Owed]): a session holds what its brief
 	// told, never what its budgets left out.
 	Told, Fresh sandbox.BriefTold
+
+	// Summarized is the copy's brief told as a session that may be a
+	// summary, beside Brief, where the launch judges its first request in the
+	// box ([firstRequest.byBox]), and SummarizedTold what it told of the
+	// round: handed where the box's point does not prove Brief whole. ""
+	// elsewhere. Count and CountProvider are the job's record's count of the
+	// copy and its reply's provider ([Resume.Count]), which it is judged by.
+	Summarized     string
+	SummarizedTold sandbox.BriefTold
+	Count          *sandbox.ResumedCount
+	CountProvider  string
+}
+
+// inPlaceNextRequest is the estimate of the next request of the copy a job's
+// box holds that a relaunch continuing it in place is held to
+// ([Continuation.NextRequest]): record's, the read of the copy itself as its
+// job ended, where it holds a figure, and else captured's, the job's newest
+// capture's.
+func inPlaceNextRequest(record, captured sandbox.NextRequest) sandbox.NextRequest {
+	if record.Tokens > 0 {
+		return record
+	}
+	return captured
 }
 
 // SessionDecision is how a launch decided its run takes up a session, told
@@ -316,6 +356,12 @@ type SessionDecision struct {
 	// in turn. Both false where the launch handed the brief told by the
 	// save point, or continues no kept session.
 	Exact, Unheld bool
+
+	// Summarized says the brief the launch handed is the one told as a
+	// session that may be a summary ([SessionContinuation.Summarized],
+	// [Continuation.Summarized]): the box's point did not prove the held one
+	// whole, so the run's guard arms nothing.
+	Summarized bool
 }
 
 // SessionContinuation is how a launch continues a session in whatever box it
@@ -350,6 +396,16 @@ type SessionContinuation struct {
 	// carry it but carries the rest (internal/engine's continuedFloor).
 	Exact *ExactTelling
 
+	// Summarized is the briefs told as a session that may be a summary,
+	// beside Brief and Replaced, where the launch judges the first request
+	// in its box ([firstRequest.byBox]): handed where that box's point does
+	// not prove the brief it would hand sends the session whole. Never
+	// dropped alone: the floor counts it as it counts Brief. Count and
+	// CountProvider are what the launch judges by ([keptCount]).
+	Summarized    *SummarizedTelling
+	Count         *sandbox.ResumedCount
+	CountProvider string
+
 	// Unheld is the briefs for a box whose release the resume was not read
 	// in, beside Brief and Replaced; nil where they would tell the same
 	// ([UnheldTelling]). The launch hands one of them only to such a box.
@@ -362,14 +418,22 @@ type SessionContinuation struct {
 	UnheldDropped bool
 }
 
+// SummarizedTelling is a kept path's briefs told as a session that may be a
+// summary ([SessionContinuation.Summarized]): Brief for the box the session
+// was last worked in, Replaced for any other, and what they told of the round.
+type SummarizedTelling struct {
+	Brief, Replaced string
+	Told            sandbox.BriefTold
+}
+
 // UnheldTelling is a relaunch's briefs for a box whose harness answers a
 // release whose resume this build did not read (internal/sandbox/executor's
 // claudeResumeRead): a read at a hook's step is confirmed by what the job's
 // session showed, as a release the reading was read for resumes it, so such a
 // box holds none of them. Told as [SessionContinuation]'s briefs are, but the
 // notes from the first read at a hook's step on, as notes the session may
-// already show ([Runner.firstUnheld]). Built only where the capture's cursor
-// counts such a read.
+// already show ([Runner.firstUnheld]), and every late call a hook took, which
+// they credit no telling of ([Telling.Hook]). Built only where they differ.
 type UnheldTelling struct {
 	Brief, Replaced string
 
@@ -463,6 +527,12 @@ type SessionBasis struct {
 	// none out, or the capture states none, an older build's.
 	Owed []int
 
+	// LateOwed is the late calls that brief counted without listing them
+	// (sandbox.SessionCapture.LateOmitted), apart from Owed: every brief tells
+	// them again, and the session, holding only that count of each, is
+	// credited no telling of one ([heldByTelling]).
+	LateOwed []int
+
 	// Interrupted says the session was captured from a harness that was cut
 	// off, so its transcript may end mid-call, and may lack the brief its job
 	// was handed and the notes its job read.
@@ -499,6 +569,15 @@ type SessionBasis struct {
 	// continues no capture of the turn's, or the capture measured none.
 	ContextTokens int64
 
+	// NextRequest is the harness's own estimate of the next request of the
+	// same kept capture's session, as its take read it
+	// (sandbox.SessionCapture.NextRequest): what that launch's floor is made
+	// of where it holds a figure, in place of ContextTokens. The capture's
+	// OWN, as ContextTokens is, never a newer capture's of its job it was
+	// continued past ([SessionBasis.CopyNextRequest]). Zero where the basis
+	// continues no capture of the turn's, or the capture estimated none.
+	NextRequest sandbox.NextRequest
+
 	// CopyContext is what the last request of the session of the job the
 	// relaunch follows carried, as that job's newest capture measured it,
 	// KEPT OR NOT, so set where the basis continues no kept capture too: the
@@ -511,12 +590,23 @@ type SessionBasis struct {
 	// measured any.
 	CopyContext int64
 
-	// Count is what Claude Code counts the kept capture's session at before
-	// its next request, as the take read its archive's main thread whole
+	// CopyNextRequest is the harness's own estimate of the next request of
+	// that same copy, as the same newest capture's take read it, kept or not
+	// (sandbox.ContinuedSession.CopyNextRequest): the in-place floor's figure
+	// where the job's record holds none ([Continuation.NextRequest]); never a
+	// kept capture's ([SessionBasis.NextRequest]). Zero where that capture
+	// estimated none.
+	CopyNextRequest sandbox.NextRequest
+
+	// Count is what the session's harness counts the kept capture's session
+	// at before its next request, as the take read its archive whole
 	// (sandbox.SessionCapture.ResumedCount): what the kept path's first
 	// request is judged by ([firstRequest], [keptCount]). Nil where the
 	// capture counted nothing, which reads as a session that may compact.
-	Count *sandbox.ResumedCount
+	// CountProvider is the provider of the reply an OpenCode count is
+	// anchored on (sandbox.SessionCapture.CountProvider), "" for any other.
+	Count         *sandbox.ResumedCount
+	CountProvider string
 
 	// Window is what the seat's executor chain may hold a Claude Code run to:
 	// the least standard window over its Claude Code members, on each one's
@@ -776,6 +866,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		Notes:      fresh,
 		Retold:     r.retold(),
 		Session:    briefs.kept,
+		FreshOwn:   freshLead(round, history, notes),
 		Decided:    r.sessionDecided(ctx, emit, round, system, surface, caps, briefs, decided),
 		Started:    r.sessionStarted(ctx, emit, round, system, surface, caps, briefs, decided),
 		Surface:    surface,
@@ -1028,8 +1119,21 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// notes, what the copy may lack of those the turn has read and the ones
 	// this brief is the first to read ([Runner.inPlaceNotes]).
 	lead := carry.continuation(fence)
-	picked, inPlaceHolds := inPlace.led(ctx, r, lead)
+	picked, inPlaceHolds, summed := inPlace.led(ctx, r, lead)
 	continued := picked.led(lead)
+	// AND, WHERE THE LAUNCH JUDGES THE COPY'S FIRST REQUEST IN ITS BOX, the
+	// copy told as a session that may be a summary, which it hands where the
+	// box's point does not prove the held brief whole.
+	var summarized string
+	var summarizedTold sandbox.BriefTold
+	var count *sandbox.ResumedCount
+	var countProvider string
+	if summed != nil {
+		summarized = summed.led(lead)
+		summarizedTold = sandbox.BriefTold{Omitted: summed.omitted.reads, LateOmitted: summed.omitted.late,
+			Own: own, Told: summed.told.refs, ToldUnread: summed.told.unread}
+		count, countProvider = r.cfg.Resume.Count, r.cfg.Resume.CountProvider
+	}
 	// A FRESH RUN'S BRIEF is the round's own, the turn's answers that carried
 	// its work on before, what became of the run before it (what it asked and
 	// was told, or how it was cut off) and every call of the round so far: it
@@ -1057,8 +1161,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// round's jobs did and what became of the last, and so leaves out
 			// what the reseed leaves out; and the turn's answers it tells
 			// after the task are told again with the task ([Runner.taskAgain]).
-			briefs.kept = r.baseSession(basis, reseed.Text, sandbox.BriefTold{Omitted: freshOmitted,
-				Own: append(taskLead(state.Round, history, ""), own...)})
+			briefs.kept = r.baseSession(basis, reseed.Text, sandbox.BriefTold{Omitted: freshOmitted.reads,
+				LateOmitted: freshOmitted.late, Own: append(taskLead(state.Round, history, ""), own...)})
 		}
 	} else {
 		// A ROUND LOST A SECOND TIME CONTINUES NOTHING, but the session its
@@ -1072,7 +1176,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	reseed = r.namingKeptSession(reseed, basis, built)
 	briefs.fresh = reseed
 	if inPlaceSession != "" {
-		briefs.inPlace = continued
+		briefs.inPlace, briefs.inPlaceSummarized = continued, summarized
 	}
 	decided := &launchDecided{}
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
@@ -1092,6 +1196,10 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// as far as its job's newest capture, kept or not, and a kept
 			// capture is held to what it holds itself.
 			ContextTokens: max(basis.CopyContext, r.cfg.Resume.ContextTokens),
+			// AND WHAT ITS HARNESS ESTIMATES ITS NEXT REQUEST AT, the job's
+			// record's off the copy itself where it holds one, else the
+			// newest capture's: the floor's figure where either holds one.
+			NextRequest: inPlaceNextRequest(r.cfg.Resume.NextRequest, basis.CopyNextRequest),
 			// AND THE READ EVERY BRIEF ABOVE WAS BUILT FROM, so the job's
 			// opening marks late what the log took after it: the job before's
 			// calls that landed while this relaunch was readied, the call a
@@ -1103,9 +1211,15 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// AND WHAT EACH OPENED WITH: its own leads, and the copy's the
 			// leads of its job's brief it told again, and those it was to and
 			// could not read.
-			Told: sandbox.BriefTold{Omitted: picked.omitted, Own: own, Told: picked.told.refs,
-				ToldUnread: picked.told.unread},
-			Fresh: sandbox.BriefTold{Omitted: freshOmitted, Own: own},
+			Told: sandbox.BriefTold{Omitted: picked.omitted.reads, LateOmitted: picked.omitted.late, Own: own,
+				Told: picked.told.refs, ToldUnread: picked.told.unread},
+			// The fresh one opens with the turn's task besides, which a session
+			// its run starts on it may lack once a compaction summarizes it.
+			Fresh: sandbox.BriefTold{Omitted: freshOmitted.reads, LateOmitted: freshOmitted.late,
+				Own: append(freshLead(state.Round, history, ""), own...)},
+			// AND THE SAME COPY TOLD AS A SESSION THAT MAY BE A SUMMARY, with
+			// the count the launch judges the held brief by in its box.
+			Summarized: summarized, SummarizedTold: summarizedTold, Count: count, CountProvider: countProvider,
 		},
 		Session:    briefs.kept,
 		Decided:    r.sessionDecided(ctx, emit, state.Round, system, surface, caps, briefs, decided),
@@ -1669,8 +1783,8 @@ const runRound = 1
 // was replaced, so after the cut was taken — its place, which its own job's
 // session gave it, can fall past the cut though it was made before the answer
 // — and after the brief of the job carrying the round on was built. That job
-// was never told it, and every later continuation of the round is told it as
-// no submission of the round ([prompts.AfterSave.LateSubmission]): the
+// was handed it only once under way, and whatever tells it tells it as no
+// submission of the round ([prompts.AfterSave.LateSubmission]): the
 // round's submission is the one a run carrying the round on makes. Replayed, a
 // late submission would stand for the carried-on run's work, or stand over it
 // where its place sorts after; read as the round's, a lost round would be

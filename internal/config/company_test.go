@@ -581,24 +581,16 @@ func TestAHumanSeatWithNoContactIsAValidCompany(t *testing.T) {
 
 // A HUMAN SEAT NOBODY CAN MENTION IS SAID SO ONLY WHERE THAT IS TRUE: on a
 // vendor chat surface this company talks on, and only when the seat names no
-// account there.
-//
-// The advisory used to fire for every human seat with an empty `contact`,
-// whatever the company ran, and said nothing addressed to it on a chat
-// surface reached anybody. On the engine's own chat that is false — the
-// person reads the rooms on the dashboard as their seat — and with no chat at
-// all there is no surface to be unreachable on. And the contact block as a
-// whole was the wrong question on a vendor surface: a GitHub login silenced
-// it on a Slack company where no mention reaches the person.
+// account there. On the engine's own chat the person reads the rooms as their
+// seat, and the contact block as a whole is the wrong question: a GitHub login
+// silenced it on a Slack company where no mention reaches the person.
 //
 // Each vendor's rows are built from [chatVendors], so a third surface is
-// covered by being added there, and the row that writes the vendor's own
-// contact key holds that key to the field it is decoded into.
+// covered by being added there.
 //
-// Mutations: fire on every backend and the chatlet and `none` rows warn;
-// judge the contact block as a whole and the code-host and other-vendor rows
-// go quiet; read only the first declared surface and the two-workspace row
-// warns.
+// Mutations: fire on every backend and the chatlet and `none` rows warn; judge
+// the contact block as a whole and the code-host and other-vendor rows go
+// quiet; read only the first declared surface and the two-workspace row warns.
 func TestAHumanSeatNobodyCanMentionIsAdvisedOnlyOnAVendorSurface(t *testing.T) {
 	t.Parallel()
 	const person = "roles:\n  - name: Founder\n    kind: human\n"
@@ -869,16 +861,9 @@ func TestAnUnknownSurfaceIsTreatedAsDeclared(t *testing.T) {
 //
 // A block with neither `url` nor `cloud_id` has an unknown deployment, and the
 // problem that says so is the only one outstanding. The signing-secret rule
-// fired on it anyway, because "not Cloud" was tested as "no cloud_id and a
-// url that is not a Cloud host", and an empty url is not one.
-//
-// What that produced is worse than a redundant line. An operator connecting
-// Atlassian — having chosen Atlassian Cloud in the dialog, which is exempt
-// from signing secrets on both of its routes — was told a secret was
-// "required for a Data Center instance", naming a deployment they had not
-// picked and a field the form does not offer. Two of the four problems on
-// that screen were consequences of the other two, and they pointed the wrong
-// way.
+// fired anyway, because "not Cloud" was tested as "no cloud_id and a url that
+// is not a Cloud host", and an empty url is not one. An operator who chose
+// Atlassian Cloud was told a secret was "required for a Data Center instance".
 func TestAnUnidentifiedAtlassianInstanceAsksOnlyToBeNamed(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

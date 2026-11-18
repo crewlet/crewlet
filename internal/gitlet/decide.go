@@ -234,7 +234,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		case !ok:
 			open = append(open, i)
 		case row.RepoID != repoID:
-			answers[i].err = fmt.Errorf("%w: push_id: %s is a push to repository %s, not %s",
+			answers[i].err = refusedf("%w: push_id: %s is a push to repository %s, not %s",
 				ErrInvalidProposal, p.PushID, row.RepoID, repoID)
 		default:
 			answers[i].collapsed, answers[i].commands = &row, row.Commands

@@ -22,6 +22,7 @@ import type {
   CodeReadiness,
 } from "~/protocol/index.ts";
 import {
+  notPassedWords,
   checkStateTone,
   checkStateWord,
   classCount,
@@ -345,4 +346,13 @@ test("a rollup's title counts its checks and says when they ran", () => {
   expect(rollupTitle(running, "refs/heads/main", now)).toBe(
     "1 check: 1 running. Running since 2 minutes ago. Counted over the checks one read holds.",
   );
+});
+
+// AN ERRORED CHECK IS NEVER SAID TO HAVE FAILED: it measured nothing. Mutation: count
+// errored among the failed, and "2 checks errored" reads "2 checks failed".
+test("checks that did not pass are named failed or errored by how they ended", () => {
+  expect(notPassedWords(2, 0)).toBe("2 checks failed");
+  expect(notPassedWords(0, 2)).toBe("2 checks errored");
+  expect(notPassedWords(0, 1)).toBe("1 check errored");
+  expect(notPassedWords(1, 2)).toBe("1 check failed and 2 errored");
 });

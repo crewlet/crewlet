@@ -3,7 +3,6 @@ package cdp
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -111,16 +110,9 @@ func TestTheSocketNeverFollowsARedirect(t *testing.T) {
 // red.
 func TestAFailedDialNamesNeitherItsQueryNorItsCredentials(t *testing.T) {
 	t.Parallel()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	refusing := ln.Addr().String()
-	if err := ln.Close(); err != nil {
-		t.Fatal(err)
-	}
+	refusing := httpxtest.Refusing(t)
 	addr := "ws://user:pw-secret@" + refusing + "/devtools/browser/x?token=token-secret"
-	_, err = Dial(bounded(t), addr, DialOptions{HTTPClient: httpxtest.Pool(t)})
+	_, err := Dial(bounded(t), addr, DialOptions{HTTPClient: httpxtest.Pool(t)})
 	if err == nil {
 		t.Fatalf("a dial of %s, which refuses it, succeeded", refusing)
 	}

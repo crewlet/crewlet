@@ -491,7 +491,7 @@ func TestACaptureTakenAfterARenewalHoldsNoRenewedValue(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewWaiter: %v", err)
 		}
-		if got := waiter.pollOne(t.Context(), rig.manager, run); got != pollRunning {
+		if got := waiter.pollOne(t.Context(), t.Context(), rig.manager, run); got != pollRunning {
 			t.Fatalf("the poll of the running job = %v, want it running", got)
 		}
 		if held, _ := rig.provider.Box(run.SandboxID).ReadFile(t.Context(), file); string(held) != renewed {
@@ -552,7 +552,7 @@ func TestARenewalTheStoreDidNotAnswerIsKeptOutOfTheBox(t *testing.T) {
 
 		store := &refusingStore{inner: rig.coordinator.pending, refuse: refusals("AddHanded")}
 		rig.coordinator.pending = store
-		if got := waiter.pollOne(ctx, rig.manager, run); got != pollRunning {
+		if got := waiter.pollOne(ctx, ctx, rig.manager, run); got != pollRunning {
 			t.Fatalf("the poll of the running job = %v, want it running", got)
 		}
 		if len(refused) != 1 || errors.Is(refused[0], ErrJobNotRunning) {
@@ -566,7 +566,7 @@ func TestARenewalTheStoreDidNotAnswerIsKeptOutOfTheBox(t *testing.T) {
 		}
 
 		rig.coordinator.pending = store.inner
-		if got := waiter.pollOne(ctx, rig.manager, run); got != pollRunning {
+		if got := waiter.pollOne(ctx, ctx, rig.manager, run); got != pollRunning {
 			t.Fatalf("the next poll of the running job = %v, want it running", got)
 		}
 		if held, _ := box.ReadFile(ctx, file); string(held) != renewed {

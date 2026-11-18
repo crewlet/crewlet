@@ -345,30 +345,17 @@ func TestTheStoreFloorIsTheSchemasMinimum(t *testing.T) {
 	}
 }
 
-// A LOG THAT GROWS WITH NO CORPUS TAKES A FLOOR WELL UNDER ONE THAT DOES, and
-// that is a decision rather than an accident.
+// A LOG THAT GROWS WITH NO CORPUS TAKES A FLOOR WELL UNDER ONE THAT DOES.
 //
-// # What a ceiling costs before a byte is written
+// The broker grants a stream its WHOLE ceiling at create time, so a domain's floor is free space a
+// node needs before it can boot. The identity, usage and assistant logs grow with headcount, a
+// census and the questions people ask, none with a corpus the volume has a say in; at the
+// corpus-sized gibibyte each would raise the smallest deployment's disk for a log it never fills.
+// A mutation log under a gibibyte really is a window that refuses appends within a week.
 //
-// The broker grants a stream its WHOLE ceiling when it creates it, so a
-// domain's floor is free space a node must have before it can boot at all. The
-// identity log grows with headcount and sign-ins, the usage log with a census
-// of seats and schedules, and the Dashboard Assistant's log with the questions
-// people ask it: none of them with a corpus the operator's volume has anything
-// to say about. A ten-person company writes a few megabytes to the first two,
-// and a month of its questions fits in the assistant's 64 MiB. Held to the
-// gibibyte the corpus-sized logs take, each would raise the disk the smallest
-// deployment needs by a gibibyte for a log it will never fill.
-//
-// The floor the corpus-sized logs take belongs to them: a mutation log under a
-// gibibyte really is a window that refuses appends within a week of a company
-// starting work.
-//
-// SO THE ASSERTION IS THE RELATION, not the number: these floors must stay well
-// under the corpus floor, because that is the property that keeps adding a
-// domain from raising what a deployment needs. The margin is deliberately
-// loose — what would be wrong is either creeping back up to the others' floor,
-// not its exact value.
+// SO THE ASSERTION IS THE RELATION, not the number: these floors stay well under the corpus floor,
+// which keeps adding a domain from raising what a deployment needs. The margin is deliberately
+// loose; what would be wrong is creeping back up to the others' floor.
 func TestALogThatGrowsWithNoCorpusTakesAFloorFarUnderOneThatDoes(t *testing.T) {
 	t.Parallel()
 
@@ -449,25 +436,16 @@ func logCeilings(t *testing.T) map[string]bool {
 
 // THE VECTOR CHANGELOG IS SIZED FOR THE PEAK, FROM THE VOLUME.
 //
-// The peak is a model change republishing every source at once — the whole
-// corpus inside the window, 93× the steady state — and the corpus is the
-// company's whole history, while the mutation log's ceiling bounds a trailing
-// window. So an unset changelog asks for what the mutation log derives from the
-// volume, whatever the mutation log is set to:
+// The peak is a model change republishing every source at once, 93× the steady state: the
+// company's whole history, while the mutation log's ceiling bounds a trailing window. So an
+// unset changelog asks for what the mutation log derives from the volume, whatever that is set to:
 //
-//   - the reference company's fifth-year model change (8.46 GB) fits twice
-//     over on a 64 GiB volume — half the mutation log's ceiling, the rule
-//     this replaced, asked for 8 GiB there and the pool scaled it under the
-//     peak;
-//   - an operator who sized a small mutation log for a fleet that trims does
-//     not shrink the changelog with it — beside a 4 GiB mutation log that
-//     rule asked for 2 GiB, which the reference company outgrows in its
-//     second year;
-//   - on no volume does it ask for less than the fixed 16 GiB default, capped
-//     by the same share of free space, that the first rule replaced.
+//   - the reference company's fifth-year change (8.46 GB) fits twice over on
+//     64 GiB, where the replaced half-of-mutation-log rule was scaled under it;
+//   - a small mutation log for a fleet that trims no longer shrinks it;
+//   - on no volume does it ask less than the old fixed 16 GiB default.
 //
-// And the largest company the engine is sized for — 10 000 seats in its fifth
-// year — must be able to WRITE a ceiling that holds its peak twice.
+// The largest company (10 000 seats, fifth year) must be able to WRITE a ceiling holding twice its peak.
 func TestTheVectorCeilingIsSizedForAModelChange(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
@@ -627,23 +605,16 @@ func TestTheSnapshotDirectoryResolvesAgainstTheStore(t *testing.T) {
 	}
 }
 
-// THE BROKER'S OWN STORAGE LIMIT IS BOUNDED, IS EMBEDDED-ONLY, AND CANNOT BE
-// SMALLER THAN THE CEILINGS DECLARED INSIDE IT.
+// THE BROKER'S OWN STORAGE LIMIT IS BOUNDED, IS EMBEDDED-ONLY, AND CANNOT BE SMALLER
+// THAN THE CEILINGS DECLARED INSIDE IT.
 //
-// # Why each of those is a refusal rather than a warning
-//
-// This field is the number every stream ceiling on this node's broker is
-// compared against, and the failure it prevents is the one that has no
-// symptom of its own: a create refused with `insufficient storage resources
-// available` — or, on a clustered member, `no suitable peers for placement,
-// insufficient storage` — on whichever stream a bring-up happened to reach
-// last rather than on the one that is too big.
-//
-// So a limit smaller than the operator's OWN ceilings cannot be honoured by
-// anybody, and both numbers are on the same page of the same file — the
-// honest moment to say so is while they are still being written. And on an
-// external cluster this reaches nothing at all, which is the rule `url`,
-// `store_dir` and `debug` already keep.
+// Every stream ceiling on this node's broker is compared against this field, and the
+// failure it prevents has no symptom of its own: a create refused with `insufficient
+// storage resources available` (clustered: `no suitable peers for placement,
+// insufficient storage`) on whichever stream a bring-up reached last, not the one too
+// big. A limit under the operator's OWN ceilings cannot be honoured, and both numbers
+// are in the same file, so it is refused while they are being written. On an external
+// cluster it reaches nothing, the rule `url`, `store_dir` and `debug` already keep.
 func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30

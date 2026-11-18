@@ -297,17 +297,14 @@ func TestTheCommandLineStatesTheOriginABrowserWould(t *testing.T) {
 // A PIPED PASSWORD, OR THE CODE AFTER IT, IS READ NO FURTHER THAN ANY SIGN-IN
 // CARRIES, and refused before anything is sent.
 //
-// Each was the next line of standard input, read to its end: a file piped by
-// mistake was read up to its first line ending, so a blob with none was read
-// whole into memory, and a stream with no line ending was a sign-in that
-// never began. A sign-in's whole body is at most
-// [authapi.MaxLoginBodyBytes], so no password or code is longer; the line is
-// refused at that bound, having read at most one buffer of the line reader
-// past it (bufio's default, 4096 bytes), and the node sees nothing for a
+// Reading to the first line ending read a blob with none whole into memory, and
+// a stream with no ending was a sign-in that never began. A sign-in's body is at
+// most [authapi.MaxLoginBodyBytes], so the line is refused at that bound, having
+// read at most one bufio buffer (4096 bytes) past it; the node sees nothing for a
 // password and only the first sign-in for a code.
 //
-// Mutation: read the line with ReadString again, and the stream with no
-// ending runs into its reader's guard and is answered as a failed read.
+// Mutation: read the line with ReadString again, and the stream with no ending
+// runs into its reader's guard and is answered as a failed read.
 func TestAPipedPasswordOrCodeIsReadNoFurtherThanAnySignInCarries(t *testing.T) {
 	const most = maxPipedPasswordBytes + len("\r\n") + 4096
 	for _, tc := range []struct {
@@ -342,19 +339,16 @@ func TestAPipedPasswordOrCodeIsReadNoFurtherThanAnySignInCarries(t *testing.T) {
 }
 
 // A PASSWORD AT THE BOUND IS A PASSWORD, on either reader, and a byte past it
-// is not: the bound refuses a pipe pointed at the wrong thing, never a
-// password a sign-in could carry. A line ending, `\n` or `\r\n`, is not part
-// of the password; the last line may have none, and the code is the line
-// after the password.
+// is not: the bound refuses a pipe pointed at the wrong thing, never a password
+// a sign-in could carry. A line ending, `\n` or `\r\n`, is not part of the
+// password; the last line may have none, and the code is the line after it.
 //
-// So the bound is the password's, measured once the ending is gone: a byte
-// past it is refused whatever ending follows, or none. Held to the raw bytes
-// with room for `\r\n`, a password a byte past the bound passed with `\n` or
-// with no ending, and only `\r\n` after it was refused.
+// The bound is measured once the ending is gone, so a byte past it is refused
+// whatever ending follows. Held to the raw bytes with room for `\r\n`, a
+// password a byte past the bound passed with `\n` or no ending.
 //
-// Mutation: drop the length check after the ending is trimmed, and the
-// password a byte past the bound with `\n` or with no ending is read back on
-// both readers.
+// Mutation: drop the length check after the ending is trimmed, and that password
+// is read back on both readers.
 func TestAPasswordAtTheBoundIsReadWholeAndOnePastItIsNot(t *testing.T) {
 	t.Parallel()
 	atLimit := strings.Repeat("p", maxPipedPasswordBytes)

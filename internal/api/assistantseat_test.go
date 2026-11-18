@@ -132,20 +132,15 @@ func prepareSeat(t *testing.T, fx *assistApp, read exec.Grant) (proposal.Preview
 
 // AN AGENT SEAT IS ADDED TO THE ORG THROUGH THE GENERIC CHANGE, AS ITS PERSON.
 //
-// The request that started this: an administrator on the Org chart asks for a
-// seat named crewlet-swe with a senior software engineer's responsibilities.
-// The turn looks the Org builder's own unit route up, reads the unit through
-// its read grant, and proposes the unit back with the seat added. The preview
-// is the server's: the request, and the new seat's fields as added rows under
-// the unit it lands in (its name, its responsibilities), bound to the unit's
-// entity tag, decided by `config.org.write` and saying beforehand that the
-// approval asks a step-up. The read grant cannot send it; the approved request,
-// carried on an exec grant bound to it under the If-Match the revision names,
-// lands, and the person reads the seat in the unit. A second change prepared
-// against the unit before it is refused by the route (409), and the revision
-// the approval re-reads has moved. Mutation: put config.org.write on the
-// human-only list and the approved seat is refused; drop the entity tag from
-// the preview's revision and the stale change overwrites.
+// An administrator asks for a seat named crewlet-swe. The turn looks the Org
+// builder's unit route up, reads the unit through its read grant, and proposes
+// it back with the seat added. The preview is the server's: the new seat's
+// fields as added rows under the unit, bound to its entity tag, decided by
+// `config.org.write`, saying beforehand that approval asks a step-up. The read
+// grant cannot send it; the approved request on an exec grant under the
+// revision's If-Match lands. A second change prepared against the unit before
+// is refused (409). Mutation: put config.org.write on the human-only list, or
+// drop the entity tag from the preview's revision so a stale change overwrites.
 func TestAnAgentSeatIsAddedThroughTheGenericChange(t *testing.T) {
 	t.Parallel()
 	fx, read := principlesApp(t)
@@ -339,16 +334,14 @@ func TestATurnProposesTheSeatAndChangesNothing(t *testing.T) {
 // A SEAT THE UNIT WOULD REFUSE IS REFUSED BEFORE THE PERSON SEES IT, AND ONE IT
 // TAKES LANDS WITH THE HISTORY LINE THE PERSON APPROVED (ADR-0055).
 //
-// The case the browser found: a turn copied `GET /org`'s resolved seat fields
-// (`tool_sources`, an `llm` block of purposes) into the unit it proposed, the
-// person approved it and confirmed it was them, and only then did the route
-// refuse the fields, and next the missing summary. Now the preview asks the
-// route's own check through the read grant: the unknown fields are the step's
-// refusal in the route's words and nothing is proposed; the corrected seat,
-// whose call names no `_summary`, is previewed with its history line on the
-// card and in the body, and the approved write lands with that line as the
-// revision's summary. Mutation: skip the check, or carry the summary in a
-// header, and a case here fails.
+// A turn copied `GET /org`'s resolved seat fields (`tool_sources`, an `llm`
+// block) into the unit it proposed, and the route refused them only after the
+// person approved and confirmed. The preview now asks the route's own check
+// through the read grant: unknown fields are the step's refusal in the route's
+// words and nothing is proposed; the corrected seat, whose call names no
+// `_summary`, is previewed with its history line on the card and in the body,
+// and the approved write lands with it as the revision's summary. Mutation:
+// skip the check, or carry the summary in a header.
 func TestASeatTheUnitWouldRefuseIsRefusedBeforeThePersonSeesIt(t *testing.T) {
 	t.Parallel()
 	fx, read := principlesApp(t)

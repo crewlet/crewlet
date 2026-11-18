@@ -318,14 +318,12 @@ func TestARunningCallsProgressKeepsComingUntilItsToolReturns(t *testing.T) {
 }
 
 // A RUNNING CALL'S ANSWER WAITS FOR A PROGRESS ALREADY ON ITS WAY. The beat
-// writes from a goroutine of its own, so the moment a tool returns can find a
-// progress half-way out; the answer is handed back only once that write has
-// ended, so no progress races the answer on its response or follows it — a
-// harness handed one for a token it has retired logs it as an error (OpenCode
+// writes from a goroutine of its own, so a tool can return with a progress
+// half-way out; the answer is handed back only once that write has ended, since
+// a progress for a retired token is logged by a harness as an error (OpenCode
 // 2.1.4: "Received a progress notification for an unknown token"). Held in a
-// bubble: the beat's second progress is held in the server's sending
-// middleware, which every progress passes through, the tool is let go, and the
-// answer must not come until the held progress has been written.
+// bubble: the second progress is held in the server's sending middleware, the
+// tool is let go, and the answer must not come until the progress is written.
 //
 // Mutation: hand the answer back without stopping the beat (`_ = going` for
 // `going.stop()`), or stop it without waiting for its write to end (`false &&`

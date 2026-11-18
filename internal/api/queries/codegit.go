@@ -12,50 +12,33 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A REPOSITORY'S FILES, HISTORY AND DIFFS, AS QUESTIONS: `code_refs`, its live
-// refs under a prefix (GET /gitlet/repos/{name}/refs, the reader's `refs`);
-// `code_tree` and `code_blob`, a directory and a file at a revision (…/tree,
-// …/blob); `code_find`, a file found by its name in a revision's tree
-// (…/find); `code_log` and `code_blame`, a path's history and who last changed
-// each line of a file (…/log, …/blame); `code_tree_commits`, the commit that
-// last changed each entry of a directory (…/tree-commits); `code_diff` and
-// `code_compare`, what changed between two revisions and how they relate,
-// with what merging the one into the other would do (…/diff, …/compare);
-// `code_tips`, many branch heads and tags at once with how far each is from a
-// base (…/tips); `code_tags`, its tags newest first by their own date
-// (…/tags); and `code_commit`, one commit with the push that introduced it
-// and the changes it belongs to (…/commits/{sha}). Each is decided per repository by the grant
-// the serving node derives, as every code question is (code.go), and read at
-// the caller's freshness.
-//
-// # Read by object id, of the repository's home
-//
-// A tree, a file, a history, a blame and a diff are the repository's CONTENT,
-// answered by its home Gitlet node (estate.CodeSeam.GitRead, ADR-0089) and never
-// by the rows — the code tools' own reads, one implementation. A revision a
-// request names by a ref — a branch, a tag, a whole ref, or `HEAD` for the
-// default branch — is resolved first, at the caller's freshness, in ONE read
-// however many it names (code.resolve_ref), and the Gitlet node is asked at the
+// A REPOSITORY'S FILES, HISTORY AND DIFFS, AS QUESTIONS: `code_refs` (live
+// refs under a prefix), `code_tree`, `code_blob` and `code_find` (a revision's
+// directory, file, and a file found by name), `code_log`, `code_blame` and
+// `code_tree_commits` (history, who last changed each line, the commit that
+// last changed each entry), `code_diff` and `code_compare`, `code_tips` (many
+// heads and tags with their distance from a base), `code_tags` (newest first
+// by their own date) and `code_commit` (one commit with its push and changes).
+// Each is decided per repository by the serving node's grant, as every code
+// question is (code.go), and read at the caller's freshness.
+
+// Content is read by object id, of the repository's home: a tree, file,
+// history, blame and diff are answered by its home Gitlet node
+// (estate.CodeSeam.GitRead, ADR-0089), never by the rows. A revision named by
+// a ref (branch, tag, whole ref, or `HEAD`) is resolved first in ONE read at
+// the caller's freshness (code.resolve_ref), and the node is asked at the
 // floor of the records that last moved those refs (gitlet.RefsFloor), so the
-// copy that answers holds what the rows named. An object id passes with no
-// read of a ref.
-//
-// # An answer by whole object ids never changes
-//
-// A question every revision of which is a WHOLE object id is answered
-// [Immutable] — a strong entity tag and `Cache-Control: immutable` over REST
-// — so a screen paging back through a file or a diff costs the node nothing
-// to send twice. That holds only of a page that is a function of what the
-// request named, so such a read asks its Gitlet node for the page alone
-// (gitlet.GitQuery.Unstamped): cut against a room no stamp of the answering
-// node takes, and answered with none — no repository id, no copy position, no
-// push behind each commit — which would each move between two reads of one
-// request. A revision named by a ref moves with the ref, and an abbreviation
-// with whichever object it finds now, so a request naming either is answered
-// bare, and carries what the read stamped: the refs it resolved, the copy's
-// position and the push behind each commit, where the node's index holds it.
-// A commit's provenance is `code_commit`'s, which is never immutable: the
-// changes a commit belongs to move.
+// answering copy holds what the rows named. An object id needs no ref read.
+
+// An answer by whole object ids never changes: a question every revision of
+// which is a WHOLE object id is answered [Immutable] (strong entity tag,
+// `Cache-Control: immutable`), valid only of a page that is a function of what
+// the request named, so such a read asks its node for the page alone
+// (gitlet.GitQuery.Unstamped), carrying no repository id, copy position or
+// push per commit, which would move between reads. A ref moves, and an
+// abbreviation resolves to whatever it finds now, so a request naming either
+// is answered bare with what the read stamped. A commit's provenance is
+// `code_commit`'s, never immutable: its changes move.
 
 // ReasonNoRef is the reason a git question's `not_found` names beside the
 // code questions' own and [ReasonNoObject]: a ref the request named is no
@@ -242,19 +225,16 @@ func (s Sources) gitAskOf(ctx context.Context, p Params, what string) (gitAsk, e
 }
 
 // resolve is the repository the question names and every revision of revs as
-// an object id: an object id passes as it is; every other is a ref — `HEAD`
-// among them, the default branch, which the reader resolves from the
-// repository's row in the same transaction (gitlet.HeadRef) — and all of them
-// are resolved in ONE read at the caller's freshness, which answers the
-// repository too. Where no revision names a ref the repository is read alone,
-// for its id. A name no live ref holds is [NotFound] (`no_ref`), every one of
-// them named.
+// an object id: an object id passes; every other is a ref (`HEAD` is the
+// default branch, resolved from the repository's row, gitlet.HeadRef), all
+// resolved in ONE read at the caller's freshness, which answers the
+// repository too; with no ref named the repository is read alone, for its
+// id. A name no live ref holds is [NotFound] (`no_ref`), each one named.
 //
-// ONE READ FOR EVERY SPELLING: the default branch is what a question's `ref`
-// defaults to, so a read of the row ahead of the refs, to learn which branch
-// `HEAD` is, would cost the commonest question a repository is asked a second
-// snapshot — on a node without the estate, a second hop through the router —
-// and would let the name be released and taken again between the two.
+// ONE READ FOR EVERY SPELLING: `ref` defaults to the default branch, so a
+// read of the row ahead of the refs would cost the commonest question a second
+// snapshot (a second router hop on a node without the estate) and let the
+// name be released and retaken between the two.
 func (g gitAsk) resolve(ctx context.Context, revs ...*gitRev) (gitlet.RepoRef, error) {
 	var names []string
 	for _, r := range revs {
@@ -676,29 +656,18 @@ func (s Sources) codeDiff(ctx context.Context, p Params) (any, error) {
 	return answered(page, immutable), nil
 }
 
-// codeCompare answers `code_compare`: how `base` and `head` relate — their
-// merge base, which contains which, the commits each has that the other
-// lacks, and the first page of what head changed since the merge base — and
-// what merging head into base would do, asked of the repository's home Gitlet
-// node by the two commits' whole ids the comparison answered
-// (code.merge_preview), so the preview merges exactly the commits compared.
-// Immutable only where both are whole ids and the merge was decided: a merge
-// its home could not decide in a read's time answers `unknown`, which a later
-// read may decide.
+// codeCompare answers `code_compare`: how `base` and `head` relate and what
+// merging head into base would do, asked of the home by the two whole commit
+// ids compared (code.merge_preview), so the preview merges exactly those.
+// Immutable only where both are whole ids and the merge was decided; one the
+// home could not decide in time answers `unknown`.
 //
-// A COMPARISON IN WHICH ONE COMMIT CONTAINS THE OTHER IS ITS OWN PREVIEW, and
+// A COMPARISON IN WHICH ONE COMMIT CONTAINS THE OTHER IS ITS OWN PREVIEW and
 // asks the home nothing: base inside head is a fast-forward, head inside base
-// merges nothing, and the merge a preview runs (`git merge-tree`, the home's
-// mergeIn) answers both `clean`, no path conflicted — so the answer is that
-// merge's, decided here from the merge base the comparison already read.
-// Asked of the home it would cost a call to the home on every view and, until
-// the home's memo held the merge, a scratch, a `cat-file` and a merge-tree
-// under a unit of the node's seat git-work share, which the seats' own reads
-// draw from — for the commonest comparison there is: a branch against the
-// target it was cut from, which has not moved since. Nothing the
-// preview would judge or record is lost: the comparison was judged against
-// the same grant by the same node and, of a `visibility: unit` repository,
-// recorded as its asker's read.
+// merges nothing, both `clean`, decided here from the merge base already
+// read. Asking would cost a call and a git-work unit of the seats' shared
+// share on every view of the commonest comparison, a branch against its
+// unmoved target.
 func (s Sources) codeCompare(ctx context.Context, p Params) (any, error) {
 	g, err := s.gitAskOf(ctx, p, "code_compare")
 	if err != nil {

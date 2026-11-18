@@ -8,19 +8,16 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// RoleAvatar is how an AGENT seat is drawn wherever the dashboard shows who
-// it is: one of the Crewlet characters, in one of the six seat colours, both
-// chosen by whoever authors the seat.
+// RoleAvatar is how an AGENT seat is drawn wherever the dashboard shows who it
+// is: one of the Crewlet characters, in one of the six seat colours, both
+// chosen by whoever authors the seat, else picked from the handle
+// ([DefaultAvatar]). The handle never changes (ADR-0013), so a rename keeps
+// the face.
 //
-// PRESENTATION ONLY. Nothing that runs a seat reads it: no prompt, no
-// routing, no placement. It travels from the document to the org projection
-// and stops there, which is why it is checked by ADMISSION rules rather than
-// runnable ones (see [Company.validateAvatars]) and is never carried onto
+// PRESENTATION ONLY: nothing that runs a seat reads it. It travels from the
+// document to the org projection and stops there, which is why it is checked
+// by ADMISSION rules (see [Company.validateAvatars]) and never carried onto
 // [org.Role].
-//
-// CHOSEN, OR PICKED FROM THE HANDLE ([DefaultAvatar]). The handle never
-// changes (ADR-0013), so a rename keeps the face, and agents that chose
-// nothing are still told apart.
 type RoleAvatar struct {
 	// Character is which Crewlet the seat is drawn as.
 	Character AvatarCharacter `yaml:"character,omitempty" json:"character,omitempty" js:"enum=crewlet|hexlet|peaklet|prismlet|towerlet|bricklet|gemlet|coglet|pluslet|shieldlet|stacklet|sparklet|cloudlet|foxlet|rocketlet|crownlet|cactlet|wisplet|heartlet|flasklet|chiplet|duolet|chatlet|pagelet|archlet|dashlet|octlet|conelet|hivelet|folderlet" desc:"The Crewlet character this agent seat is drawn as. Absent = one picked from the seat's handle."`
@@ -106,16 +103,14 @@ func (a *RoleAvatar) Resolved(handle string) RoleAvatar {
 // validateAvatars refuses an avatar the dashboard could not draw, and one on
 // a seat that is never drawn as a character.
 //
-// AN ADMISSION RULE rather than a runnable one, because nothing about running
-// depends on it: no path that runs a seat reads its avatar. That matters
-// most for the closed sets. The design system will grow characters, and a
-// revision a newer node admitted with one this build does not know must still
-// APPLY here during a rolling upgrade; refused as a runnable rule, it would
-// split the fleet over a picture.
+// An admission rule, not a runnable one: no path that runs a seat reads its
+// avatar. That matters for the closed sets: the design system will grow
+// characters, and a revision a newer node admitted with one this build does
+// not know must still APPLY here during a rolling upgrade; refused as
+// runnable, it would split the fleet over a picture.
 //
-// A HUMAN SEAT IS DRAWN AS A PERSON: the circle and the person's initials,
-// never a character, so an avatar there reads as a setting and does nothing,
-// which is the silence the human-seat rules exist to end.
+// A human seat is drawn as a person (circle and initials), so an avatar there
+// would be a setting that does nothing, the silence the human-seat rules end.
 func (c *Company) validateAvatars() error {
 	var p problems
 	for role, path := range c.EachRole() {

@@ -10,41 +10,26 @@ import (
 )
 
 // THE ARTIFACT ORIGIN'S POLICIES: what a browser is told about every response
-// the api.artifacts listener sends. They live here, beside the dashboard's and
-// the API's, so every Content-Security-Policy the engine writes is built in one
-// package, and a reader comparing the origin that holds a session with the one
-// that holds none reads them side by side.
+// the api.artifacts listener sends, built here beside the dashboard's and the
+// API's so every Content-Security-Policy the engine writes is in one package.
 //
-// # Why these documents get a policy at all
-//
-// An artifact is arbitrary script, and the origin holds no credential, so the
-// policy is not what keeps a session safe: the separate origin is. What the
-// policy keeps safe is the artifact's own data and its viewers. A page reads
-// rows other viewers wrote into its datastore through the bridge; one that
-// renders such a row as markup would run whatever script the row carries, as
-// every viewer who opens it, with the viewer's bridge in reach. So the script
-// policy admits the page's own scripts and the scripts they load, and nothing
-// a row writes into the page; and fetches, sockets, beacons, images, media,
-// fonts and styles reach only the artifact's own origin.
-//
-// # What the policy does not bound: the page's own author
-//
-// 'strict-dynamic' (D41) trusts every script a nonced script creates, from
-// any URL, so a page's OWN script can load a script from another site, and a
-// script load is an outbound request whose URL carries whatever the page put
-// in it. A page whose author means to (an editor, or an agent talked into it)
-// can therefore send what its viewer may read through the bridge to a third
-// party, silently, as each viewer opens it. Dropping 'strict-dynamic' would
-// not close that: a nonced script element loads from any URL whatever the
-// host list says, and a page's own script can read its nonce. Only a policy
-// with no nonce (inline scripts by hash, external ones by host) would, and it
-// breaks every page whose libraries insert scripts at run time, which is why
-// D41 chose this one. What does bound it is who may publish (an editor, by
-// the role the publish is decided on), the version history that names who
-// published what, and the linter, which refuses every literal remote script
-// source so an honest page never loads third-party code by accident. A viewer
-// who writes a row cannot reach this channel at all: their markup carries no
-// nonce, so nothing it injects runs.
+// An artifact is arbitrary script and its origin holds no credential, so the
+// separate origin keeps a session safe, not the policy. The policy keeps the
+// artifact's own data and viewers safe: a page that rendered a row another
+// viewer wrote as markup would run its script as every viewer who opens it,
+// with the viewer's bridge in reach. So scripts are the page's own and those
+// they load, never what a row writes; fetches, sockets, beacons, images,
+// media, fonts and styles reach only the artifact's own origin.
+
+// WHAT THE POLICY DOES NOT BOUND: the page's own author. 'strict-dynamic' (D41)
+// trusts every script a nonced script creates, from any URL, so a page's own
+// script can send what its viewer may read through the bridge to a third
+// party. Dropping it would not close that (a nonced element loads from any URL
+// and a page's script can read its nonce); only a nonce-free policy would, and
+// it breaks every page whose libraries insert scripts at run time. What bounds
+// it is who may publish (an editor), the version history naming who published
+// what, and the linter refusing every literal remote script source. A viewer
+// who writes a row cannot reach this channel: their markup carries no nonce.
 
 // ArtifactOrigin is what every artifact response's headers are built from: the
 // facts about the origin and the frame a document is served into.
@@ -99,56 +84,17 @@ const ArtifactPermissions = "accelerometer=(), ambient-light-sensor=(), autoplay
 	"usb=(), web-share=(), window-management=(), xr-spatial-tracking=()"
 
 // ArtifactDocument sets the headers of one HTML (or other scriptable) document
-// served into an artifact frame, under a nonce fresh to this response and the
-// script facts the publish-time linter recorded for it. Call it before
-// anything writes the status.
-//
-// # The script policy is strict, and costs nothing per response
-//
-// `script-src 'nonce-…' 'strict-dynamic'`: the linter wrote a placeholder into
-// every script element at publish and the serving path substituted this nonce
-// for it, so the page's own scripts run and the scripts they create run, while
-// a script element an attacker gets into the page (through a row a viewer
-// wrote) carries no nonce and does not. An inline event handler the page
-// published is admitted by its digest under `'unsafe-hashes'`, and one
-// injected later matches no digest. String evaluation and WebAssembly
-// compilation are admitted only where the linter found the page needs them.
-//
-// A nil script, an HTML file the linter recorded nothing for, admits no script
-// but the nonce, which nothing in such a document carries: the closed reading.
-//
-// 'strict-dynamic' names no host, so a script the page's own script creates
-// loads from anywhere: the policy keeps a row's markup from running, not the
-// page's author from sending what it reads elsewhere (the package comment).
-//
-// # And the rest of the policy says what the page may reach
-//
-//   - object-src, base-uri, form-action and frame-src are 'none': no plugin, no
-//     base that re-points every relative URL, no form that navigates anywhere
-//     (the sandbox still allows forms, because without it a form's submit
-//     event never fires and every page with an onsubmit handler breaks), and
-//     no frame inside the frame;
-//   - connect-src, img-src, media-src, font-src and style-src name the
-//     artifact's own origin and nothing else, plus data: and blob: where a
-//     page legitimately makes its own (script-src names no host, above);
-//   - worker-src is blob: alone, so no service worker can register on the
-//     artifact origin and outlive a revocation in the viewer's browser;
-//   - no webrtc directive: no shipping browser implements it, and Chrome logs
-//     an "Unrecognized Content-Security-Policy directive" error for it on every
-//     frame load, so it bought nothing and cost a console error per page. A
-//     script that could open a peer connection is the page's own (nonced), and
-//     the policy does not try to stop a page's author from sending what it
-//     reads elsewhere (the package comment);
-//   - frame-ancestors are the dashboard's origins, so no other site can frame
-//     an artifact a viewer's ticket opened;
-//   - sandbox repeats the frame's own tokens.
-//
-// # Beside the policy
-//
-// The document is never cached, its opener is isolated, it asks for an origin
-// agent cluster of its own, and it sets no Cross-Origin-Embedder-Policy: an
-// untrusted page must never become cross-origin isolated, which would hand it
-// SharedArrayBuffer and fine timers for nothing it needs.
+// served into an artifact frame, under this response's nonce and the linter's
+// script facts. Call it before anything writes the status.
+// `script-src 'nonce-…' 'strict-dynamic'`: the linter put a placeholder in
+// every script element and serving substitutes the nonce, so the page's
+// scripts run while markup injected through a viewer's row carries none.
+// Handlers are admitted by digest, eval and WebAssembly only where the linter
+// found a need, a nil script admits none, and no host is named, so the page's
+// author is unbound (the package comment). Other sources are the artifact's
+// own origin; worker-src is blob: alone, so no service worker outlives a
+// revocation; frame-ancestors are the dashboard's, so no other site frames it;
+// the sandbox allows forms, or onsubmit never fires. No COEP: never isolated.
 func ArtifactDocument(h http.Header, o ArtifactOrigin, nonce string, script *artifacts.ScriptPolicy) {
 	h.Set("Content-Security-Policy", artifactDocumentPolicy(o, nonce, script))
 	h.Set("Permissions-Policy", ArtifactPermissions)

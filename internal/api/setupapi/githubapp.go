@@ -26,54 +26,15 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// Giving one agent its own GitHub App, in the two acts a person performs.
+// Giving one agent its own GitHub App takes a person: an app is created by
+// POSTing a manifest from a page carrying the operator's own GitHub session,
+// so there is no server-to-server path and no reconcile pass. The flow:
 //
-// # Why this is not a reconcile pass
-//
-// Everything else this engine provisions is unattended: an organization key
-// creates a Datadog account or an Atlassian service account with no browser
-// anywhere. GitHub has no equivalent. An app is created by POSTing a manifest
-// from a page carrying the operator's own GitHub session, so a person who may
-// create apps on that organization confirms what is being created. There is
-// no server-to-server path, and a reconcile loop cannot open a browser.
-//
-// So the flow is two routes and two clicks:
-//
-//	POST /setup/integrations/github/app   the engine hands back a manifest
-//	                                      and the URL to POST it to
-//	GET  /webhooks/github-app             GitHub returns the one-time code,
+//	POST /setup/integrations/github/app   hands back a manifest and its URL
+//	GET  /webhooks/github-app             GitHub returns the one-time code;
 //	                                      the engine converts and seals it
 //
-// and then one more click, at GitHub, to INSTALL the app that now exists.
-// The reconcile loop takes over from there and never needs a browser again.
-//
-// # The state is verified, not merely carried
-//
-// The callback is unauthenticated, because a browser redirect from GitHub
-// carries no engine credential. So the only thing standing between it and
-// anybody who can reach the engine is the state, and it is a SEALED token
-// naming the seat, its expiry and who began the creation, minted here and
-// opened there. Slack's landing carries a handle for display and checks
-// nothing, which is fine for a page that only prints a code and would not be
-// fine here: this callback writes a credential into a seat.
-//
-// # And it says who is doing this
-//
-// The begin route is the one request in the flow that carries a credential,
-// and the callback's writes — the app's private key sealed into the store, the
-// app recorded on the seat — are the continuation of that person's gesture. So
-// the state carries them: the author, their kind and the credential they began
-// through, which is what both writes record. They used to record `setup`, a
-// name that is nobody, so "who gave this agent its GitHub identity" had no
-// answer in the company's revisions or on the key's row.
-//
-// SEALED AND NOT SIGNED: the state goes to GitHub and comes back in a URL —
-// through GitHub's logs, a browser history and every ingress access log — and
-// who began a creation is this company's business rather than any of theirs,
-// which a signature would leave readable to every one of them. It is sealed under the fleet keyring
-// every node holds, so the node GitHub returns the browser to opens what
-// another node minted, and rotating the keyring leaves a state minted under
-// the previous key valid while that key is still in the ring.
+// then one click at GitHub to INSTALL the app; reconcile takes over from there.
 
 // completeDeadline bounds the detached half of a conversion.
 //
@@ -88,18 +49,11 @@ const completeDeadline = 2 * time.Minute
 // manifestTTL is how long a begun app creation stays valid.
 //
 // IT IS [coord.SetupOnceRetention] RATHER THAN A NUMBER BESIDE IT. The state
-// is spent by a claim in the fleet's registry taken at this TTL, and the claim
-// lapses at the deadline its own record carries — so a state that outlived
-// the claim spending it would still open after the thing that spends it had
-// stopped holding anybody off, which is a bearer credential that works as
-// often as it is presented. Written as two numbers it was exactly that: a
-// fifteen-minute claim that lapsed with a five-minute bucket, replayable for
-// the last ten.
-//
-// The value's own reasons live at that constant: a quarter of an hour is the
-// span of the task (a browser round trip to GitHub and two clicks), and it is
-// under GitHub's one-hour life for the one-time code a conversion returns, so
-// a link that expires says so rather than failing later on a dead code.
+// is spent by a claim in the fleet's registry taken at this TTL; a state that
+// outlived that claim would open again after nothing held anybody off, a
+// bearer credential that works as often as it is presented. The value's
+// reasons live at that constant (the span of the task, under GitHub's
+// one-hour life for the one-time code).
 const manifestTTL = coord.SetupOnceRetention
 
 // stateAAD binds a sealed state to this flow, so no other envelope the
@@ -108,6 +62,16 @@ const stateAAD = "setup/github_app_state"
 
 // appState is what a begun creation carries through GitHub and back: the seat,
 // when the link lapses, and who began it.
+//
+// The callback is unauthenticated (a GitHub redirect carries no engine
+// credential), so this state is all that stands between it and anybody who can
+// reach the engine. The author rides along: the callback's writes record it.
+//
+// SEALED AND NOT SIGNED: the state travels through GitHub's logs, browser
+// history and ingress logs, and who began a creation is this company's
+// business, which a signature would leave readable. It is sealed under the
+// fleet keyring, so any node opens what another minted, and a state minted
+// under the previous key stays valid while that key is in the ring.
 type appState struct {
 	Seat      string    `json:"seat"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -190,19 +154,14 @@ type AppFlow struct {
 // StateClaims is what spends a callback state, so no state is ever accepted
 // twice.
 //
-// The consumer's own interface, one method wide: this package needs
-// first-claim-wins and nothing else. The fleet's [coord.Claims] satisfies it,
-// and reading it here INVERTS that type's documented polarity on purpose.
-// Webhook dedupe fails OPEN, because a push suppressed by a store blip is a
-// wake nobody notices. This is an authorization check, so it fails CLOSED: a
-// store that cannot answer is not evidence that a state is unspent, and the
-// cost of refusing is that an operator clicks again.
+// The fleet's [coord.Claims] satisfies it, and reading it here INVERTS that
+// type's polarity on purpose. Webhook dedupe fails OPEN; this is an
+// authorization check, so it fails CLOSED: a store that cannot answer is not
+// evidence that a state is unspent, and refusing costs one more click.
 //
-// THE DELIVERY REGISTRY, at this flow's own TTL. A claim carries its
-// deadline in its record, so a quarter-hour claim shares the bucket with a
-// five-minute delivery claim and lapses at its own deadline rather than the
-// bucket's; a TTL past the registry's ceiling ([coord.MaxClaimTTL]) is an
-// error, which this flow refuses on like any other.
+// It is the delivery registry at this flow's own TTL: a claim lapses at the
+// deadline its record carries, not the bucket's, and a TTL past
+// [coord.MaxClaimTTL] is an error this flow refuses on.
 type StateClaims interface {
 	// Claim records key and reports whether THIS caller was first. It
 	// lapses ttl after now, judged against the now the next caller passes.
@@ -222,19 +181,15 @@ func (s *Service) AppFlow() *AppFlow { return s.appFlow }
 
 // spend records a state as used, and reports whether it already was.
 //
-// KEYED ON THE DIGEST, never the token: the fleet's registry is shared state
-// and the state IS the credential on this route, so writing it there would
-// put a live bearer token in a store read by every node.
+// KEYED ON THE DIGEST, never the token: the state IS the credential on this
+// route, and the registry is read by every node. The claim is taken at the TTL
+// the state was minted for, from the moment it is spent, so no replay works
+// while the token would still open.
 //
-// The claim outlives the token deliberately — taken at the TTL the state was
-// minted for, measured from the moment it is spent — so a token cannot be
-// replayed at any point while it would still open.
-//
-// USED IS ITS OWN ANSWER, not a refusal folded in with a forged or expired
-// link: the commonest second presentation is the person's own browser asking
-// for the page that finished the creation again (a refresh, or Back from
-// GitHub's install page), and what it is told depends on whether that
-// creation left the agent its app ([AppFlow.usedLink]).
+// USED IS ITS OWN ANSWER, not folded in with a forged or expired link: the
+// commonest second presentation is the person's own refresh or Back from
+// GitHub's install page, and what it is told depends on whether that creation
+// left the agent its app ([AppFlow.usedLink]).
 func (f *AppFlow) spend(ctx context.Context, state string) (used bool, err error) {
 	digest := sha256.Sum256([]byte(state))
 	key := "github-app-state:" + hex.EncodeToString(digest[:])
@@ -252,15 +207,12 @@ func (f *AppFlow) spend(ctx context.Context, state string) (used bool, err error
 //
 // THE AGENT'S OWN RECORD DECIDES IT. A link is spent before GitHub's code is
 // exchanged, so a spent link says nothing about how its creation ended: the
-// agent the link names either has an app (the creation finished, or an
-// earlier one did) and nothing is left to do, or it has none, which is a
-// creation that stopped or one still finishing. Told "start again" either
-// way, as it was, a person who refreshed the page that had just finished the
-// creation read "not created" and made the agent a second app.
+// agent the link names either has an app (nothing is left to do) or has none
+// (a creation that stopped or is still finishing). Telling "start again" in
+// both cases made a person who refreshed a finished creation build a second app.
 //
-// A COMPANY THIS NODE CANNOT READ is the agent with no app as far as this
-// answer goes, which is the answer that sends nobody to make a second app
-// straight away: it says to give the agent's app a minute to show first.
+// A COMPANY THIS NODE CANNOT READ counts as no app, and that answer says to
+// give the agent's app a minute to show first.
 func (f *AppFlow) usedLink(ctx context.Context, handle string) error {
 	refused := fmt.Errorf("%w: it was already used", ErrStateRefused)
 	fc, err := f.service.readCompany(ctx)
@@ -406,16 +358,13 @@ var ErrStateRefused = errors.New(
 // AppFailure is an app creation this request did not finish, with what the
 // person GitHub sent back to this engine is told about it.
 //
-// THE PAGE THAT TELLS THEM IS THE WEBHOOK EDGE'S, and it printed this error's
-// own text: "setupapi: this app-creation link is not one this engine issued",
-// a seal's failure naming the secret it was writing, the config surface's
-// refusal naming a token. Only this flow knows which step stopped, and so
-// what the person can do about it (start again, delete an app GitHub made
-// before starting again, look again in a minute, or nothing at all), whether
-// an app now exists at GitHub, and whose failure it was, so it says all three
-// here ([appStop]).
-// The error beneath is the log's, and errors.Is and errors.As still reach
-// every sentinel and type in it.
+// THE PAGE THAT TELLS THEM IS THE WEBHOOK EDGE'S, and printing the error's own
+// text would leak internals (a seal's failure naming the secret, a refusal
+// naming a token). Only this flow knows which step stopped, so what the person
+// can do (start again, delete an app GitHub made first, look again in a
+// minute, or nothing), whether an app now exists at GitHub, and whose failure
+// it was are said here ([appStop]). The error beneath is the log's, and
+// errors.Is and errors.As still reach every sentinel and type in it.
 type AppFailure struct {
 	stop appStop
 	err  error
@@ -455,21 +404,14 @@ func appFailed(stop appStop, err error) error {
 // back is told about it.
 //
 // THE STEP DECIDES THE REMEDY. Before GitHub hands the app over, nothing
-// exists and the person starts again; once it has, the key and the webhook
-// secret exist only in what GitHub sent this one time, so an app Crewlet
-// could not keep is deleted before starting again rather than left beside a
-// second one.
+// exists and the person starts again; after, the key and webhook secret exist
+// only in what GitHub sent once, so an app Crewlet could not keep is deleted
+// first, not left beside a second one.
 //
 // AND THE STATUS, by whose the failure is: 400 for the link or GitHub's code,
-// the same 409, 404 and 403 the begin route answers for a company it has not
-// got, an agent it no longer has and a document managed elsewhere, 502 for
-// GitHub not finishing the exchange, and 500 for Crewlet not finishing what
-// it was handed. Never 503: that promises this request may succeed if it is
-// sent again, and a link is spent before anything that can fail for a while,
-// so the same request is answered "already used", by what the agent it names
-// has ([AppFlow.usedLink]); what clears a condition here is that answer or a
-// new creation, which the sentence says. A 400 on every stop, as it was,
-// filed a key Crewlet failed to save under the person's mistake.
+// the begin route's 409, 404 and 403, 502 for GitHub not finishing, 500 for
+// Crewlet not finishing. Never 503: the link is spent, so sending again is
+// answered "already used" ([AppFlow.usedLink]).
 type appStop struct {
 	told   string
 	status int
@@ -529,22 +471,16 @@ var (
 			"app to this agent. Delete the app on GitHub, then start again from " +
 			"Company › Integrations."}
 
-	// stopUnconfirmed is a record of the app on the agent that was STORED,
-	// whose activation the coordination store didn't answer, and which the
-	// agent's record, read back once, doesn't show or couldn't be read for
-	// ([AppFlow.unconfirmed]). That write may already be the company (ADR-0057:
-	// never "nothing was written", whichever surface the write came through),
-	// so it is not stopNotRecorded, whose "delete the app" sent a person to
-	// delete the app the agent was already running. What settles it is the
-	// agent's record a minute on, which a refresh of this page reads
-	// ([AppFlow.usedLink]) and Company › Integrations shows.
+	// stopUnconfirmed is a record of the app that was STORED, whose
+	// activation the coordination store didn't answer and which a read back
+	// doesn't show ([AppFlow.unconfirmed]). That write may already be the
+	// company (ADR-0057), so it is not stopNotRecorded, whose "delete the app"
+	// would delete an app the agent was already running. A refresh a minute on
+	// settles it ([AppFlow.usedLink]).
 	//
-	// 500 BY THIS PAGE'S OWN RULE, not the 503 the config surface answers the
-	// same outcome with. The coordination store is Crewlet's, and a 503
-	// promises the request may succeed if it is sent again: the config
-	// surface's client sends its read again, but what this page's person sends
-	// again is a spent link, which runs nothing and is answered by the agent's
-	// record.
+	// 500 BY THIS PAGE'S OWN RULE, not the config surface's 503: a 503
+	// promises that sending again may succeed, but what this page's person
+	// sends again is a spent link, which runs nothing.
 	stopUnconfirmed = appStop{status: http.StatusInternalServerError, created: true,
 		heading: "App created, confirming it was added to",
 		told: "GitHub created the app and Crewlet saved its key, but whether the app was " +
@@ -594,20 +530,15 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 		return "", appFailed(stopLinkRefused, err)
 	}
 	handle := opened.Seat
-	// SPENT HERE, BEFORE THE EXCHANGE, which is what makes [ErrStateRefused]
-	// mean what it has always said it means.
+	// SPENT HERE, BEFORE THE EXCHANGE. The state is the ONLY authorization
+	// on this route (the unauthenticated webhooks mux) and opening it is a
+	// pure seal and expiry check, so unspent it is a bearer credential that
+	// works as often as presented for a full [manifestTTL]; it travels in a
+	// query string, kept by browser history and ingress logs.
 	//
-	// The state is the ONLY authorization on this route — it is served by the
-	// unauthenticated webhooks mux — and opening it is a pure seal and
-	// expiry check, so without this it is a bearer credential that works as
-	// many times as it is presented for a full [manifestTTL]. It travels in a
-	// query string, which is where browser history and every ingress access
-	// log keep it.
-	//
-	// BEFORE the exchange rather than after, and that costs nothing: GitHub's
-	// manifest code is itself one-time, so a conversion that fails needs a
-	// fresh code and therefore a fresh creation either way. Spending first
-	// means a replay cannot race a slow exchange.
+	// Before rather than after costs nothing: GitHub's manifest code is
+	// one-time, so a failed conversion needs a fresh creation either way, and
+	// a replay cannot race a slow exchange.
 	used, err := f.spend(ctx, state)
 	if err != nil {
 		return handle, err
@@ -723,18 +654,14 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	return handle, nil
 }
 
-// unconfirmed is how a creation ends whose record on the agent was stored and
-// whose activation the coordination store didn't answer
-// ([configapi.ActivationUnknownError]): by the agent's record, read back once.
+// unconfirmed ends a creation whose record was stored and whose activation
+// the coordination store didn't answer ([configapi.ActivationUnknownError]),
+// by reading the agent's record back once.
 //
-// READ HERE, BEFORE THE PERSON IS TOLD ANYTHING. An activation whose answer
-// was lost may have landed (a store between raft leaders answers again within
-// an election), and this runs detached ([completeDeadline]), so one more read
-// of the fleet's company costs a moment and spares the person a page that
-// can't say. An agent that records this app is the creation finished, and is
-// answered as any other. Anything else, a read that failed or a pointer still
-// on the revision the write was built on, is [stopUnconfirmed], since a late
-// landing is still possible.
+// An activation whose answer was lost may have landed; this runs detached
+// ([completeDeadline]), so one more read spares the person a page that can't
+// say. An agent recording this app is the creation finished; anything else is
+// [stopUnconfirmed], since a late landing is still possible.
 //
 // THE SEAT DECIDES, NOT THE POINTER: a write built on the stored revision
 // carries the app too, and the pointer then names that one instead.

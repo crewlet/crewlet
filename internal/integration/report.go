@@ -62,27 +62,15 @@ const (
 // Label is the phase in the words a person reads, rather than the words the
 // wire carries.
 //
-// TWO VOCABULARIES ON PURPOSE, and this is the seam between them. [Phase] is
-// a stored value: it is written into the fleet's coordination store, read
-// back by a peer that may be a different build, and named in the docs and the
-// API. What an operator scanning a list of integrations wants is not that.
+// TWO VOCABULARIES ON PURPOSE: [Phase] is a stored value, read back by a peer
+// that may be another build and named in the docs and API. The words are
+// decided HERE, ONCE, so every screen and client shows the same status.
 //
-// THE WORDS ARE DECIDED HERE, ONCE, so one company reads the same status on
-// every screen that shows it: the dashboard renders these labels, and any
-// other client renders them too rather than mapping the phases itself.
-// Anything else would mean an integration that says "activating" on one
-// screen and something else on another.
-//
-// THERE IS NO `disconnected` PHASE, and it is not an omission: an integration
-// nobody has connected yet is a company document with no block at all, so
-// there is no row and no phase to report.
-//
-// `disconnecting` IS a phase here, which this comment used to deny on the
-// reasoning that a disconnect is one config write. It is not: the teardown
-// asks the third-party app to remove what this engine registered BEFORE the
-// block leaves the document, so there is an interval, it can fail, and a
-// surface sits in this phase for as long as it takes. See [PhaseDisconnecting]
-// and [State.Reported].
+// THERE IS NO `disconnected` PHASE: an integration nobody has connected is a
+// document with no block, so there is no row. `disconnecting` IS one: the
+// teardown asks the third-party app to remove what this engine registered
+// BEFORE the block leaves the document, an interval that can fail. See
+// [PhaseDisconnecting] and [State.Reported].
 func (p Phase) Label() string {
 	switch p {
 	case PhaseReady:

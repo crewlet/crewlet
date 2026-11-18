@@ -14,51 +14,17 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
 
-// THE CROSS-SITE REQUEST CHECK, and why it is a separate gate from CORS.
-//
-// # What CORS does not do
-//
-// A browser's same-origin policy stops a page READING a cross-origin response.
-// It does not stop the request being SENT, and it never has: a form post and a
-// `fetch` with `credentials: include` both leave the browser and both arrive
-// here with whatever the browser attaches automatically. CORS decides whether
-// the attacker's page may read the ANSWER, which on a state-changing request
-// is the part they do not need.
-//
-// # Why it landed before the first cookie did
-//
-// What a browser attaches automatically is a COOKIE — the session cookie a
-// sign-in sets. A bearer
-// is attached by script, which a cross-site page cannot do without already
-// holding the token, so while bearers were the only credential this check
-// refused nothing, and that was exactly when to add it: landing the cookie
-// first and the check second would have left a window in which every write on
-// this surface was forgeable by any page an operator happened to visit.
-//
-// # The rule, and why each half of it is shaped the way it is
-//
-//   - A PRESENT `Origin` THAT DOES NOT MATCH IS REFUSED, on every method that
-//     is not a read. This is the whole of the browser case: a browser sends
-//     `Origin` on every non-GET it makes, cross-site or not, and cannot be
-//     talked out of it.
-//   - AN ABSENT `Origin` IS ALLOWED unless the request authenticated by
-//     cookie. Every non-browser client sends none — curl, the operator CLI,
-//     a CI pipeline — and refusing them would be refusing the callers this
-//     API mostly has, to close a hole none of them can be used for: a bearer
-//     is not attached by the browser, so a cross-site page cannot make one
-//     travel.
-//   - A COOKIE WITH NO `Origin` IS REFUSED, which is the one arm the rule
-//     above must not swallow. A browser always sends the header on a non-GET,
-//     so a cookie-authenticated request without one did not come from the
-//     browser the cookie was issued to.
-//
-// # What counts as a match
-//
-// `api.external_url`'s own origin, and any `api.auth.allowed_origins` entry.
-// The second is the same list CORS reads and it means the same thing here:
-// another address this deployment is genuinely reached on. A deployment
-// behind two hostnames has to name both, or the second one's writes are
-// refused with a message that says exactly that.
+// THE CROSS-SITE REQUEST CHECK, a separate gate from CORS: CORS stops a page
+// READING a cross-origin answer, not the request being SENT, and a form post
+// or credentialed `fetch` arrives with whatever cookie the browser attaches.
+// A bearer is attached by script, so only the session cookie is forgeable.
+// For every non-read method:
+//   - A present `Origin` that does not match is refused (a browser always
+//     sends one on a non-GET).
+//   - An absent `Origin` is allowed (curl, the CLI, CI send none) unless the
+//     request authenticated by cookie, which is refused: a browser always sends
+//     the header, so it did not come from the browser the cookie was issued to.
+// A match is `api.external_url`'s origin or an `api.auth.allowed_origins` entry.
 
 // CSRF refuses a state-changing request that a cross-site page could have
 // caused.
@@ -94,29 +60,15 @@ func NewCSRF(b *config.Bootstrap) *CSRF {
 // Origin is the `scheme://host[:port]` a URL is at, spelled as a browser's
 // `Origin` header spells it, or "" for a value that names no origin.
 //
-// A PATH IS DROPPED RATHER THAN REFUSED. `api.external_url` legitimately
-// carries one — a path-routing proxy needs it — and a browser reaching this
-// deployment at `https://ops.example.com/crewlet` still sends
-// `Origin: https://ops.example.com`, so comparing the whole value would refuse
-// every write from exactly the deployment shape the path is there for.
+// A path is dropped, not refused: `api.external_url` may carry one (a proxy),
+// the browser's `Origin` has none. The rest takes the browser's serialized
+// spelling: lower-case scheme and host, canonical IP (`[::1]`), the port
+// omitted when it is the scheme's default. Both sides of a comparison go
+// through here, so two spellings of one address compare equal.
 //
-// THE REST IS PUT IN THE BROWSER'S SPELLING, because a browser serializes an
-// origin rather than echoing what somebody typed: the scheme and host in lower
-// case, an IP address in its canonical form (`[::1]`, never
-// `[0:0:0:0:0:0:0:1]`), and the port as a number, left out where it is the
-// scheme's default. Kept as written, `https://Crewlet.Example.com:443` — an
-// address every browser and every link built on it reach — matched no
-// `Origin` a browser ever sends, and every sign-in and write from it was
-// refused as cross-site. Both sides of a comparison go through here, so an
-// address two spellings name — `[::ffff:127.0.0.1]` written, `[::ffff:7f00:1]`
-// sent — compares equal whichever one each side used.
-//
-// What this cannot put in a browser's spelling the configuration refuses
-// instead (config.checkBrowserHost): a host outside ASCII, which a browser
-// sends in its punycode form, an IPv4 address written other than as four
-// decimal octets, which a browser rewrites, and an IPv6 zone, which no browser
-// can address. The one rule, exported, so the command line states the origin
-// it sends by it too.
+// What cannot be spelled so the configuration refuses (config.checkBrowserHost):
+// non-ASCII hosts, IPv4 not in four decimal octets, IPv6 zones. Exported so
+// the CLI states its origin by the same rule.
 func Origin(raw string) string {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Scheme == "" || parsed.Hostname() == "" {
@@ -157,26 +109,17 @@ func (c *CSRF) Permits(origin string) bool {
 	return canonical != "" && slices.Contains(c.origins, canonical)
 }
 
-// THE PATHS THIS CHECK DOES NOT JUDGE ARE [Public]'s, and exactly those: the
-// ones a SERVER reaches rather than a browser — a vendor's webhook delivery and
-// the three per-run token edges a sandbox box calls, its telemetry, its tool
-// bridge and a coding box's git. Each verifies a credential of its own that no
-// browser attaches — a signature over the body, a signed token in the path or
-// in git's Basic password — so a page on another site cannot make one travel, and
-// refusing a delivery for the `Origin` a server never sends would take every
-// integration off the air. One list rather than a copy here, so the edges this
-// check skips and the routes the public listener serves cannot drift apart.
+// The paths this check does not judge are [Public]'s, exactly: the ones a
+// SERVER reaches (webhook deliveries and the per-run token edges a box calls).
+// Each verifies a credential no browser attaches, and refusing them for the
+// `Origin` a server never sends would take every integration off the air. One
+// list, so the skipped edges and the public listener's routes cannot drift.
 //
-// NOT [Unguarded], which it used to be, and the difference is the sign-in
-// surface. The routes that are unguarded because a login cannot require a
-// login — the sign-in, an invitation's redemption, a password reset — are
-// BROWSER routes that change state, and exempting them here left login CSRF
-// open: a form on somebody else's page could post an attacker's credentials to
-// `/auth/login`, or redeem an attacker's invitation, and leave the victim's
-// browser signed in as the attacker, doing their work in an account the
-// attacker can read. What stands in for the guard on those routes is the
-// throttle AND this check; the guard is what they are exempt from, never the
-// cross-site rule.
+// NOT [Unguarded]: its sign-in, invitation and password-reset routes are
+// BROWSER routes that change state, and exempting them would leave login CSRF
+// open (a foreign form posting an attacker's credentials to `/auth/login`).
+// The throttle AND this check stand in for the guard there; they are exempt
+// from the guard, never from the cross-site rule.
 
 // Middleware refuses a cross-site state change.
 //
@@ -201,25 +144,15 @@ func (c *CSRF) Middleware(next http.Handler) http.Handler {
 }
 
 // RefuseCrossSite judges one request's `Origin` by the rule above, whatever
-// its method, and answers the refusal itself when it fails. It reports whether
-// it refused.
+// its method, answers the refusal itself and reports whether it refused.
 //
-// EXPORTED FOR THE LIVE SOCKET, which is the one GET that must be judged: a
-// WebSocket handshake is a GET, so [CSRF.Middleware] passes it as a read, yet
-// the socket it opens streams the company's state to whoever opened it — and a
-// browser attaches the session cookie to a cross-site page's handshake exactly
-// as it does to a cross-site form post. The socket used to leave the judgement
-// to its WebSocket library, which compares `Origin` against the request's own
-// `Host` header: a second hostname named in `api.auth.allowed_origins` was
-// refused there while every write from it was served, and so was every browser
-// behind a proxy that rewrites `Host` to its upstream's, which nginx does
-// unless told otherwise. One rule, asked in one place, is what keeps the
-// socket and the writes beside it agreeing about where this deployment is.
-//
-// The caller asks it only of a request that IS a handshake: a browser sends
-// `Origin` on every WebSocket upgrade, but not on the same-origin GET the
-// dashboard re-asks the socket path with to read a refused handshake's status,
-// and that GET carries the cookie.
+// Exported for the live socket, the one GET that must be judged: a handshake
+// is a GET, so [CSRF.Middleware] passes it as a read, yet it streams the
+// company's state under a cookie the browser attaches cross-site. The
+// WebSocket library compares `Origin` with `Host`, refusing allowed_origins
+// entries and proxies rewriting `Host`; one rule keeps socket and writes agreed.
+// Ask it only of a real handshake: the dashboard's same-origin GET of the path
+// carries the cookie but no `Origin`.
 func (c *CSRF) RefuseCrossSite(w http.ResponseWriter, r *http.Request) bool {
 	switch origin := r.Header.Get("Origin"); {
 	case origin == "":

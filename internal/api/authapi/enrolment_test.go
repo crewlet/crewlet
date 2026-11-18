@@ -147,31 +147,16 @@ func statusOf(rec *httptest.ResponseRecorder) any {
 
 // A REQUIRED SECOND FACTOR IS ENROLLED BEFORE ANYTHING ELSE.
 //
-// A required second factor promised that nobody acts on a password
-// alone, and nothing read it: a person holding only a password signed in and
-// reached every route. Now their sign-in succeeds into a session that says so
-// (`status: second_factor_enrolment_required`), which the guard refuses /iam
-// and /worklet to; `GET /auth/session` says the same; enrolling an authenticator
-// through that very session REPLACES it with a whole one — the restricted
-// session ended, the new cookie on the enrolment's answer — and the whole one
-// reaches both routes, while the restricted cookie reaches nothing again.
-//
-// And the replacement keeps the restricted session's PROOF: the enrolment's
-// code proves possession of a seed that session was handed a moment earlier,
-// not who holds it, so dating the replacement at the enrolment handed whoever
-// held the restricted cookie a fresh step-up window.
-//
-// And an UNSET second factor is required HERE, where a sign-in enforces it —
-// not only in what `/auth/config` reports — since that default is the one a
-// deployment that says nothing runs on.
-//
-// The CONTROL is the same person under an optional second factor, whose sign-in is a
-// whole session from the start. Mutation: drop the mark at the sign-in, or the
-// guard's check, and the restricted cookie reaches /iam; replace nothing at
-// the enrolment and the old cookie still works; date the replacement at the
-// enrolment and its proof is five minutes younger than the password's; read
-// only an explicit `required` as required and the unset case is a whole
-// session on a password alone.
+// A password-only sign-in under a required second factor opens a session
+// saying so (`status: second_factor_enrolment_required`), which the guard
+// refuses /iam and /worklet. Enrolling through it REPLACES it with a whole one;
+// the replacement keeps the restricted PROOF (the code proves the seed, not who
+// holds the cookie). An UNSET factor is required HERE, where a sign-in enforces
+// it. The CONTROL is an optional factor, whole from the start.
+// Mutation: drop the mark or the guard's check and the restricted cookie
+// reaches /iam; replace nothing and the old cookie works; date the replacement
+// at the enrolment and its proof is younger; read only an explicit `required`
+// and the unset case is whole on a password alone.
 func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -295,18 +280,15 @@ func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 
 // ONLY A SIGN-IN THAT PROVED A PASSWORD AND NOTHING ELSE IS RESTRICTED.
 //
-// Every way this surface opens a session on a password — the sign-in, an
-// invitation's redemption, and a password step-up — opens one that
-// may only enrol where a second factor is required and none was proved, and
-// SAYS so in its answer's `status`, which is how a client learns to render the
-// enrolment rather than a broken first screen. The step-up matters most: it is
-// one of the routes an enrolment-only session reaches, and it opens a
-// replacement — which, left whole, would turn a password alone into a whole
-// session in one request. A sign-in that PROVED a factor is whole. Mutation:
-// restrict on the deployment's setting alone and the second-factor row is
-// restricted; skip any of the three password routes — `if how.stepUp { return
-// false }` in enrolmentOnly included — and its row is whole; answer
-// `signed_in` whatever was opened and the restricted rows' statuses are wrong.
+// Every session this surface opens on a password (sign-in, an invitation's
+// redemption, a step-up) may only enrol where a second factor is required and
+// none was proved, and SAYS so in `status`, so a client renders the enrolment.
+// The step-up matters most: an enrolment-only session reaches it, and left
+// whole its replacement would turn a password alone into a whole session. A
+// sign-in that PROVED a factor is whole. Mutation: restrict on the setting
+// alone and the second-factor row is restricted; skip any password route
+// (`if how.stepUp { return false }` in enrolmentOnly included) and its row is
+// whole; answer `signed_in` always and the restricted statuses are wrong.
 func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
 	t.Parallel()
 	required := func(o *authapi.Options) { requiring(o, iam.SecondFactorRequired) }
@@ -373,17 +355,15 @@ func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
 
 // A RESTRICTED SESSION IS RESTRICTED BEFORE ANY NODE HAS APPLIED IT.
 //
-// Every sign-in answers before any node applies the session it opened
-// (`NoWait`), and a node below the bearer's start position serves reads on the
-// bearer alone. The restriction lived only on the session's row, so on that
-// node — the one that answered the sign-in included — the first requests after
-// a password sign-in were served whole, and `GET /auth/session` said
-// `signed_in`. The sign-in mints the restriction into the bearer now, and both
-// the guard and the session route read it there.
+// A sign-in answers before any node applies its session (`NoWait`), and a node
+// below the bearer's start position serves reads on the bearer alone, so a
+// restriction kept only on the session's row would serve the first requests
+// whole and `GET /auth/session` would say `signed_in`. The restriction is
+// minted into the bearer, and the guard and the session route read it there.
 //
-// The CONTROL is the same sign-in under an optional second factor, whose session is
-// whole on the same node. Mutation: mint the bearer without the mark and the
-// restricted row reaches /iam and reports itself signed in.
+// The CONTROL is the same sign-in under an optional factor, whole on the same
+// node. Mutation: mint the bearer without the mark and the restricted row
+// reaches /iam and reports itself signed in.
 func TestARestrictedSessionIsRestrictedBeforeAnyNodeHasAppliedIt(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -438,21 +418,13 @@ func TestARestrictedSessionIsRestrictedBeforeAnyNodeHasAppliedIt(t *testing.T) {
 
 // A PASSWORD NEVER ENROLS OVER A SECOND FACTOR.
 //
-// An enrolment-only session is proved by a password alone, and its proof is
-// fresh for the step-up window, so it satisfied everything an enrolment asks
-// of a whole session. Somebody who knew the password of a person holding no
-// factor could sign in restricted, wait for that person to enrol their own
-// authenticator, and then enrol THEIRS through the still-live restricted
-// session: the owner's factor replaced, the owner locked out, and a whole
-// session handed over for it. Once the person holds a factor, a session that
-// proved only a password is refused — decided in the snapshot the factor would
-// land on — and the stored factor is untouched.
-//
-// The CONTROL is a whole session, proved with the factor, replacing its own
-// factor: that is what enrolling one again is for, so the refusal is the
-// restriction's and not the factor's. Mutation: drop the check from the
-// enrolment's Apply and the first row enrols the stranger's seed and opens a
-// whole session.
+// A restricted session's password proof is fresh, so it satisfied an enrolment:
+// knowing the password of a person with no factor, one could sign in restricted,
+// wait for the owner to enrol, then enrol THEIRS through the live session, the
+// owner locked out. Once a factor is held a password-only session is refused,
+// decided in the snapshot the factor lands on, the stored factor untouched.
+// The CONTROL is a whole session replacing its own factor. Mutation: drop the
+// check from the enrolment's Apply and the first row enrols the stranger's seed.
 func TestAPasswordNeverEnrolsOverASecondFactor(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

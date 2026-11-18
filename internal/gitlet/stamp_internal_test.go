@@ -70,7 +70,8 @@ func TestACodeRecordIsStampedWithTheLowestVersionThatReadsIt(t *testing.T) {
 		!strings.Contains(err.Error(), "PushBatch.Novel (version 2)") {
 		t.Fatalf("a push stamped 1 carrying a version-2 field encoded: %v", err)
 	}
-	versioned := map[OpKind]int{OpViewed: ViewedVersion, OpViewedKey: ViewedVersion}
+	versioned := map[OpKind]int{OpViewed: ViewedVersion, OpViewedKey: ViewedVersion,
+		OpCommentEdit: CommentEditsVersion, OpCommentDelete: CommentEditsVersion}
 	for _, op := range OpKinds {
 		body, err := Encode(stampRecord(0, op, `{}`))
 		if err != nil {

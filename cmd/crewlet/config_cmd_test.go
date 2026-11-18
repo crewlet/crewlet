@@ -67,20 +67,16 @@ var fixtureCipher = func() secrets.Cipher {
 
 // fixtureStream is the `stream:` block a CLI fixture's Tier A carries: an
 // embedded stream persisting under dir, because one held in memory is refused
-// on every node ([config.Stream.Durable]) and a fixture short of it would be
-// refused for that before its case was judged.
+// on every node ([config.Stream.Durable]).
 //
-// SIZED AT [brokertest.StoreMaxBytes] beside its directory, because the block
-// is a node's: a node booted from it reserves several gibibytes of its broker
-// ([brokertest.StoreIn] has why that is never left to the runner's free
-// disk). The commands that read the document with the engine stopped
-// ([openFleetStore]) start a broker on the same directory that reserves
-// nothing today, and one block for every caller keeps any document from naming
-// the directory without the size.
+// SIZED AT [brokertest.StoreMaxBytes], because a node booted from the block
+// reserves several gibibytes of its broker ([brokertest.StoreIn] has why). The
+// commands that read the document with the engine stopped ([openFleetStore])
+// start a broker on the same directory, and one block for every caller keeps
+// any document from naming the directory without the size.
 //
 // A dir a broker is started in is a [brokertest.TempDir], whose removal
-// outlasts a stopped broker's late write where a t.TempDir's fails the case;
-// a document that is only parsed may name any directory.
+// outlasts a stopped broker's late write where t.TempDir's fails the case.
 func fixtureStream(dir string) string {
 	return fmt.Sprintf("stream:\n  store_dir: %s\n  store_max_bytes: %d\n",
 		filepath.Join(dir, "stream"), brokertest.StoreMaxBytes)
@@ -392,18 +388,12 @@ func TestDiffingARevisionAgainstItselfSaysSo(t *testing.T) {
 // An OFFLINE activation marks the revision active on this node and says what
 // it can and cannot do.
 //
-// It cannot move the fleet's pointer: that lives in the coordination store,
-// which on the default embedded topology is inside the engine's own process,
-// so a command run while the engine is stopped genuinely cannot reach it.
-// Saying so is the whole value — an operator who activated a revision and saw
-// nothing change would reasonably conclude the command failed, and neither
-// remedy (restart, or the running node's own route) is guessable.
-//
-// EACH COMMAND NAMES ITS OWN ROUTE to a running fleet. One note served them
-// all and named `PUT /config`, which moves no pointer to a stored revision and
-// re-seals nothing — so it was the wrong answer for an activation. For an
-// import it is the right one: a whole company file is what it stores and
-// activates.
+// It cannot move the fleet's pointer, which lives in the coordination store
+// (inside the engine's process on the default topology), so a command run with
+// the engine stopped cannot reach it. Saying so is the whole value: neither
+// remedy (restart, or the running node's own route) is guessable. EACH COMMAND
+// NAMES ITS OWN ROUTE: `PUT /config` moves no pointer to a stored revision and
+// re-seals nothing, so it is wrong for an activation, right for an import.
 //
 // That the pointer then MOVES on the next start is asserted where it happens:
 // TestReactivatingTheBootRevisionOfflineMintsAnEpoch in bootpublish_test.go.

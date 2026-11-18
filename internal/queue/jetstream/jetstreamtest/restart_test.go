@@ -101,36 +101,17 @@ func TestARestartedMemberRejoinsAsItself(t *testing.T) {
 }
 
 // landAppend appends one record to the replicated log named stream through log
-// and answers once it has landed, asked again under the same message id while
-// nobody answers.
+// and answers once it has landed, asking again under the same message id.
 //
-// NOBODY ANSWERING IS NOT A REFUSAL, and a member coming or going is when nobody
-// does. A stream's subjects are served by its leader alone, so a publish through
-// any member needs a leader — a member that stops hands its leadership to a peer
-// it believes healthy, and a transfer that does not take waits out an election
-// of up to nine seconds (server/raft.go) — and that leader's interest in the
-// subject on a route to this member, which a member's route peers do not prove:
-// they name a peer from the first connection of its pool, and the stream's
-// account may ride a later one (server/route.go). Until both hold the publish
-// meets no responders, and the client gives up after two more tries a quarter of
-// a second apart. Half a second against a window of seconds is why a single
-// append through a member just restarted failed one run in many, with "no
-// response from stream": measured on the rotation case, one restart in 27
-// left no member leading the stream for 3.5 s, and the seventh ask landed.
-//
-// THE ENGINE'S WRITER READS THAT AS NO ANSWER, never as a failure
-// (internal/statelog's classify): it reads the log at [jsprovision.LookupBudget]
-// to learn whether its record landed, then publishes again under the same
-// operation id. So this asks again under the same message id, which the log's
-// duplicate window collapses onto the first copy if an acknowledgement was what
-// went missing — a case holding the log's end to its records notices one that
-// landed twice.
-//
-// AT MOST [jsprovision.LookupBudget], the longest silence the server keeps: a
-// group past it has an answer to give, so a member's appends still unanswered
-// are a member that is broken rather than slow, and the error says so, naming
-// what it last heard and who believes they lead the stream. Anything but silence
-// — a refusal, a closed connection — is answered at once: no wait changes it.
+// NOBODY ANSWERING IS NOT A REFUSAL: a member coming or going leaves a window
+// (election up to nine seconds, server/raft.go, then the leader's interest
+// reaching this member, server/route.go) in which a publish meets no responders
+// and the client gives up after half a second. The engine's writer reads that
+// as no answer (internal/statelog's classify) and publishes again under the
+// same operation id, so this asks again under the same message id, which the
+// duplicate window collapses. At most [jsprovision.LookupBudget], the longest
+// silence the server keeps: past it the error names who believes they lead the
+// stream. Anything but silence is answered at once.
 func landAppend(ctx context.Context, c *Cluster, log *js.DomainLog, stream, subject, msgID string, body []byte) error {
 	deadline := time.Now().Add(jsprovision.LookupBudget)
 	for {

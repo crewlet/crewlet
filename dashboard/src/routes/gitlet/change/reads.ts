@@ -57,6 +57,8 @@ import {
   type CodeFindingRow,
   type CodeReviewRow,
   type CodeReviewerRow,
+  type CodeChangeMoveRow,
+  type CodeChangeQueueEntryRow,
   type CodeRevisionRow,
   type CodeViewedRow,
   type LogRefusal,
@@ -72,6 +74,8 @@ import {
 export const CHANGE_POLL_MS = 60_000;
 /** A part of a change, as the page asks for it. */
 export type ChangePartName =
+  | "moves"
+  | "queue"
   | "reviewers"
   | "comments"
   | "reviews"
@@ -120,7 +124,14 @@ export function changePartParams(
  * instant is kept at) where one of them added a row.
  */
 export function partMovedBy(change: CodeChangeDetail, part: ChangePartName | "said"): string {
-  if (part === "files" || part === "diff") return String(change.version);
+  // A MOVE IS A LIFECYCLE RECORD'S, and every one moves the change's version.
+  if (part === "files" || part === "diff" || part === "moves") return String(change.version);
+  // A QUEUE ENTRY is added, tested and ended by the queue's records, which write no change row
+  // but its landing: its live entry, as the readiness's queue condition names it, says when.
+  if (part === "queue") {
+    const queued = change.readiness?.preconditions.find((p) => p.kind === "queue")?.queue;
+    return `${change.version}/${queued?.entry_id ?? ""}/${queued?.state ?? ""}`;
+  }
   // THE READER'S OWN MARKS move with the change's state alone: an ended change keeps none.
   if (part === "viewed") return change.state;
   const conversation = change.conversation;
@@ -200,12 +211,15 @@ export function useLatestChecks(change: CodeChangeDetail | undefined): LatestChe
     ...(live ? { pollMs: CHECKS_POLL_MS } : {}),
   });
   useAskAgainWhenMoved(change?.head, true, read.refetch);
-  const answered = read.data?.checks;
+  // AN ANSWER WITHOUT `checks` IS NO CHECK: the engine leaves an empty list
+  // out, so only a read not answered yet is "still reading".
+  const answer = read.data;
+  const answered = answer?.checks;
   const said = partRefusal({ error: read.error, refusal: read.refusal, items: answered ?? [] });
   const refused = said === "" ? (read.detail ?? "") : said;
   const rows = useMemo(
-    () => (answered === undefined ? null : byRequiredThenName(answered)),
-    [answered],
+    () => (answer === undefined ? null : byRequiredThenName(answered ?? [])),
+    [answer, answered],
   );
   return { rows, refused, loading: read.loading && rows === null };
 }
@@ -233,6 +247,12 @@ const reviewsOf = (a: CodeChangeAnswer) => a.reviews ?? [];
 const commentsOf = (a: CodeChangeAnswer) => a.comments ?? [];
 const findingsOf = (a: CodeChangeAnswer) => a.findings ?? [];
 const reviewersOf = (a: CodeChangeAnswer) => a.reviewers ?? [];
+const movesOf = (a: CodeChangeAnswer) => a.moves ?? [];
+const queueOf = (a: CodeChangeAnswer) => a.queue_entries ?? [];
+const queueId = (row: CodeChangeQueueEntryRow) => row.entry_id;
+// A MOVE IS ITS RECORD'S AND ITS KIND'S: one edit may set a title and a description at once.
+const moveId = (row: CodeChangeMoveRow) =>
+  `${row.position.generation}:${row.position.seq}:${row.kind}`;
 const excerptsOf = (a: CodeChangeAnswer) => Object.values(a.excerpts ?? {});
 const findingPathsOf = (a: CodeChangeAnswer) => a.finding_paths ?? [];
 const findingPathId = (row: CodeFindingPathRow) => `${row.path}\n${row.state}\n${row.revision}`;
@@ -252,7 +272,16 @@ const partNext = (a: CodeChangeAnswer) => a.next ?? "";
  */
 function usePagedPart<T>(
   change: CodeChangeDetail,
-  part: "reviews" | "comments" | "findings" | "excerpts" | "reviewers" | "finding_paths" | "viewed",
+  part:
+    | "reviews"
+    | "comments"
+    | "findings"
+    | "excerpts"
+    | "reviewers"
+    | "finding_paths"
+    | "viewed"
+    | "moves"
+    | "queue",
   pick: (a: CodeChangeAnswer) => readonly T[],
   idOf: (row: T) => string,
   extra: Readonly<Record<string, string | number | undefined>>,
@@ -298,6 +327,20 @@ export function usePagedReviewers(
     {},
     partMovedBy(change, "reviewers"),
   );
+}
+
+/** The moves of a change's lifecycle, every page the reader asked for, oldest first. */
+export function usePagedMoves(
+  change: CodeChangeDetail,
+): Paged<CodeChangeMoveRow, CodeChangeAnswer> {
+  return usePagedPart(change, "moves", movesOf, moveId, {}, partMovedBy(change, "moves"));
+}
+
+/** A change's queue entries, every page the reader asked for, in queue order. */
+export function usePagedQueue(
+  change: CodeChangeDetail,
+): Paged<CodeChangeQueueEntryRow, CodeChangeAnswer> {
+  return usePagedPart(change, "queue", queueOf, queueId, {}, partMovedBy(change, "queue"));
 }
 
 /** A change's comments, every page the reader asked for, in thread order. */

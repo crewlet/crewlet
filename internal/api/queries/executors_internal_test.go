@@ -18,13 +18,11 @@ import (
 // what a run was asked, asked back and answered is its seat's BODY (ADR-0033).
 //
 // The row is the board everybody reads, so a key added to [runRow] reaches
-// everybody's overview the moment it is added — unless the table says what it
-// is. A key the row writes that [runKeys] does not name fails here, as does a
-// name the table keeps for a key the row no longer writes (a classification of
-// nothing, which reads as a decision somebody made). And the four the owner's
-// decision lists as a run's body, and the entry the job was launched on, which
-// is the company's configuration, are held to it by name, because the
-// classification itself is what a careless edit would move.
+// everybody's overview unless [runKeys] says what it is. A key the row writes
+// and the table does not name fails here, as does a name the table keeps for
+// a key the row no longer writes. The four keys the owner's decision lists as
+// a run's body, and the provider entry (company configuration), are held by
+// name, because the classification is what a careless edit would move.
 //
 // Mutation: add a key to runRow, or drop a row of runKeys, and this goes red;
 // classify `task_description` or `provider_key` as status and it goes red too.

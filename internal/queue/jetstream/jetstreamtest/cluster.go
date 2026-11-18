@@ -52,50 +52,31 @@ type Cluster struct {
 // clusterSeq numbers the clusters this process names, so no two share one.
 var clusterSeq atomic.Uint64
 
-// newClusterName is a cluster name no other cluster this harness names — in
-// this process or in another — carries. Every bring-up ATTEMPT is handed one
-// with its fresh ports ([withFreshPorts]), whether it starts the members
-// itself or hands the addressing to a caller that does
-// ([Relays.ClusterName]).
+// newClusterName is a cluster name no other cluster, in this process or
+// another, carries. Every bring-up ATTEMPT is handed one ([withFreshPorts],
+// [Relays.ClusterName]).
 //
-// # Why one name for every cluster was a merge waiting for a port
-//
-// A member a case shuts down for good leaves its peers dialling its route port
-// for as long as they run: nats-server retries an EXPLICIT route for ever
-// (server/route.go, connectToRoute's tryForEver), and every route this harness
-// configures is explicit. The port is free from the moment the member stops,
-// so a cluster another case is starting in the same binary can be handed it by
-// [freePorts] — and under one shared name its member is accepted into the
-// first cluster's mesh. Two clusters become one, and their server names, and
-// so their JetStream peer ids ([js.PeerIDOf] hashes the name), collide.
-// Measured: a survivor routed to another cluster's member on its dead peer's
-// port about a second after that member started. A route whose cluster name
-// does not match is refused by the server (server/route.go,
-// processRouteConnect: "cluster name ... does not match"), so a name per
-// cluster turns that merge into a refused dial.
-//
-// THE PROCESS AND A COUNTER, never a port: a port is exactly what a stopped
-// member gives back, so a cluster named after the port it was handed could
-// inherit the name of the cluster that freed it. The counter keeps the
-// clusters of one binary apart, which is where the cases run side by side;
-// the process id keeps two binaries apart as well.
+// A member shut down for good leaves its peers redialling its EXPLICIT route
+// port for ever (server/route.go, tryForEver), and [freePorts] can hand that
+// port to a cluster starting in the same binary. Under one shared name the
+// member joins that mesh, and server names and so JetStream peer ids
+// ([js.PeerIDOf] hashes the name) collide. A route with another cluster name
+// is refused (processRouteConnect), so a name per cluster turns that merge
+// into a refused dial. Process id and counter, never a port: a port is what a
+// stopped member gives back.
 func newClusterName() string {
 	return fmt.Sprintf("crewlet-test-%d-%d", os.Getpid(), clusterSeq.Add(1))
 }
 
 // StartCluster starts an n-member embedded cluster and waits for it to form.
 //
-// Each member gets its own store directory and its own stable server name,
-// exactly as n separate processes would, and a store sized at
-// [brokertest.StoreMaxBytes] rather than from the runner's free disk, unless
-// base declares a size of its own. Streams default to n replicas, so a
-// publish is quorum-durable before Publish returns — which is the property
-// that makes "sync truth, async cache" true rather than aspirational.
+// Each member gets its own store directory and stable server name, as n
+// separate processes would, and a store sized at [brokertest.StoreMaxBytes]
+// unless base declares a size. Streams default to n replicas, so a publish is
+// quorum-durable before Publish returns ("sync truth, async cache").
 //
-// A [testing.TB] rather than a *testing.T, because a BENCHMARK stands up the
-// same topology: a measurement of what a fleet's broker costs is worth
-// nothing taken against a cluster built some other way than the one every
-// fleet test runs on.
+// It takes a [testing.TB] because a BENCHMARK stands up the same topology: a
+// fleet broker's cost measured on another topology is worth nothing.
 //
 // The cluster is shut down when the test ends.
 func StartCluster(t testing.TB, n int, base js.Config) *Cluster {
@@ -169,21 +150,15 @@ func startCluster(t testing.TB, n int, base js.Config, leafListeners bool) *Clus
 }
 
 // awaitReady waits until every member can serve a stream at its configured
-// replica count — current, routed, and answered by the metadata leader — so a
-// cluster this harness hands back is one a metadata request is answered on.
+// replica count (current, routed, answered by the metadata leader).
 //
-// HERE, AFTER EVERY MEMBER HAS STARTED, because [js.StartServer] cannot wait:
+// It runs AFTER EVERY MEMBER HAS STARTED because [js.StartServer] cannot wait:
 // the first member of a fresh cluster would wait for a quorum its own blocking
-// keeps from forming. Only [js.Server.Client] waited, so a test that rode a
-// member's raw connection — the coordination store's cluster cases, which open
-// buckets on [js.Server.Conn] — sent its first lookup to a group that might
-// have no leader yet. Such a request is not refused but DROPPED, so the lookup
-// sat out a whole fifteen-second ask term before it was asked again: measured
-// as four sixteen-second stalls in one run of those cases, each standing in
-// for an election that takes about a second.
-//
-// A member that never gets there fails the ATTEMPT, so [withFreshPorts] tries
-// again rather than handing back a cluster nobody can provision on.
+// keeps from forming. Only [js.Server.Client] waited, so a test on a member's
+// raw connection ([js.Server.Conn]) could send its first lookup to a group with
+// no leader yet; that request is DROPPED, not refused, and sat out the
+// fifteen-second ask term. A member that never gets there fails the ATTEMPT,
+// so [withFreshPorts] tries again.
 func (c *Cluster) awaitReady(ctx context.Context) error {
 	for i, srv := range c.Servers {
 		if err := srv.AwaitClusterReady(ctx, c.Configs[i].Replicas); err != nil {
@@ -208,97 +183,38 @@ func (c *Cluster) LeafURLs() []string {
 // ClusterStartAttempts is how many times a cluster is stood up before the
 // harness gives up.
 //
-// EXPORTED BECAUSE THERE ARE TWO LAYERS AND ONE DECISION. [internal/e2e]
-// retries a whole fleet of engines on the same reasoning — its own doc says so
-// in as many words, "applied one layer up" — and carried its own number while
-// saying it. Four here and three there is the drift this repository has
-// already paid for under three other names (textcut, whsec, jsprovision): two
-// spellings of one rule, each comment asserting it matched the other, with
-// nothing enforcing it. One constant, read by both.
+// Exported because [internal/e2e] retries a whole fleet of engines on the same
+// reasoning one layer up: two copies of one number drift, so both read this.
 //
-// # Why a retry rather than a wider window
-//
-// Reserving a port means binding it, reading the number and letting it go, so
-// there is always an interval in which somebody else can take it — and the
-// somebody else is usually the rest of this repository's own suite, which
-// starts dozens of embedded brokers at once. Measured: this harness passes in
-// six seconds on a loaded machine in isolation and timed out at a hundred and
-// twenty inside a full run.
-//
-// A wider reservation window would not help, because the window is not the
-// problem: the collision is with a process this one does not coordinate with.
-// What DOES fix it is noticing — the probe before each member starts, and the
-// server's own refusal of a bind that fails ([js.ErrRoutePortTaken]) — and
-// trying again with different numbers.
+// A retry rather than a wider window: reserving a port means binding, reading
+// the number and letting it go, so another process (usually the rest of this
+// suite) can take it in between, and no window helps against a process this
+// one does not coordinate with. What fixes it is noticing (the pre-start
+// probe, the server's [js.ErrRoutePortTaken]) and trying again with new numbers.
 const ClusterStartAttempts = 4
 
 // ClusterStartBudget bounds the WHOLE retry loop in wall clock, not just the
-// number of tries.
+// number of tries: n attempts at an unbounded cost each is a PRODUCT nobody
+// declared ([jsprovision.SequenceBudget]).
 //
-// # Why attempts alone were not a bound
+// THREE MINUTES is far above any legitimate bring-up (a healthy two-member
+// fleet in [internal/e2e] takes about ten seconds, the slowest cluster case
+// 63s end to end) and below where retrying costs more than it buys: six cases
+// at this ceiling are eighteen minutes inside a thirty-minute package timeout.
 //
-// Because n attempts at an unbounded cost each is a PRODUCT nobody declared,
-// which is the lesson [jsprovision.SequenceBudget] already records one layer
-// down: "the real worst case was already the product rather than the term".
-// Measured on the engine's own CI: three cluster cases spent 438.93s, 324.11s
-// and 314.48s — 1077s, 64% of the package's whole run — on three attempts
-// each that were individually bounded and collectively not. The package
-// timeout came within 115 seconds of firing, which would have replaced three
-// legible test failures with one suite timeout naming nothing.
-//
-// # THREE MINUTES
-//
-// Above any legitimate bring-up by a wide margin: a healthy two-member fleet
-// in [internal/e2e] boots, asserts and tears down in about ten seconds on a
-// four-vCPU host, and the slowest cluster case there measures 63s END TO END
-// — of which the bring-up this bounds is a fraction.
-//
-// And below the point where retrying costs more than it can buy: six cluster
-// cases at this ceiling is eighteen minutes inside a thirty-minute package
-// timeout, so even a run that loses every one of them reports what failed
-// instead of being killed mid-test.
-//
-// It bounds the LOOP, and it does so by bounding each attempt within it: every
-// attempt is handed a context carrying what is LEFT of the budget, so a member
-// start that would otherwise wait out its store recovery — which the start
-// does not bound — and then its listener budget is interrupted instead.
-// Consulted only between attempts — which is how this was first written — it
-// bounded how MANY were made and nothing about how long one took, and a single
-// sequential three-member attempt could outlast the whole ceiling before the
-// loop ever looked at it.
-//
-// What an attempt should cost when nothing is wrong is still the engine's
-// question and [jsprovision] answers it; this is the harness's ceiling on
-// re-asking it.
+// Each attempt gets a context carrying what is LEFT, so a member start waiting
+// out its unbounded store recovery is interrupted; checked only between
+// attempts, one could outlast the ceiling.
 const ClusterStartBudget = 3 * time.Minute
 
-// ClusterStartTerm is what ONE attempt may spend, and it is the half
-// [ClusterStartBudget] alone does not buy.
+// ClusterStartTerm is what ONE attempt may spend. [ClusterStartBudget] alone
+// hands the first attempt the whole remaining budget, so one that hangs (a
+// broker retrying a route to a port where nothing listens) consumes every
+// retry, and the remedy of new numbers is unreachable.
 //
-// The budget bounds the SEQUENCE, for the reason its own doc gives and cites
-// [jsprovision.SequenceBudget] for: n attempts at an unbounded cost each is a
-// product nobody declared. But a ceiling on the sequence with no term per
-// attempt is the SAME defect wearing the other face — the first attempt is
-// handed the whole remaining budget, so one that hangs consumes every retry
-// before any of them runs.
-//
-// Measured on this repository's own CI, which is what makes this a fix rather
-// than a tidy: `TestAFleetOfThree/AFleetAgreesAboutOneCompany`, then a test
-// standing up a fleet of its own, failed after 181.05s with
-// "no cluster came up within 3m0s (1 OF 4 ATTEMPTS)". Member 0's broker spent
-// the entire ceiling retrying a route to a port where nothing was listening
-// ("Error trying to connect to route (attempt 178): connection refused"), and
-// the three attempts that exist precisely to absorb that never ran. The
-// harness's own remedy — "what DOES fix it is noticing and trying again with
-// DIFFERENT NUMBERS" — was unreachable from inside the failure it is for.
-//
-// THE BUDGET DIVIDED BY THE ATTEMPTS, so nothing new is chosen: the ceiling
-// stays exactly three minutes and all four tries are real. At 45s it is still
-// far above any healthy bring-up — the same doc records a two-member fleet
-// booting, asserting and tearing down in about ten seconds on a four-vCPU
-// host, and the slowest cluster case at 63s end to end, of which this bounds a
-// fraction. A legitimate bring-up that did exceed it loses a slow attempt and
-// gets a fresh one with new ports, which is the trade this loop is built on.
+// It is the budget divided by the attempts, so nothing new is chosen: all four
+// tries are real. At 45s it is still far above any healthy bring-up; a slow
+// legitimate one loses an attempt and gets a fresh one with new ports.
 const ClusterStartTerm = ClusterStartBudget / ClusterStartAttempts
 
 // StartAttemptEnd is when one bring-up attempt must give up: the sooner of
@@ -325,19 +241,13 @@ var errNotRetryable = errors.New("not fixable by another attempt")
 
 // listenErr classifies a route listener's bind failure for [withFreshPorts].
 //
-// THE ONE CLASSIFIER BOTH RELAY PATHS USE, so the retry gets the same answer
-// wherever a forwarder failed to bind. [net.ListenConfig.Listen] hands back
-// EADDRINUSE for the race this harness genuinely loses — it reserves
-// n(n-1)+2n ports and then binds them one at a time — and a permission
-// failure, an address this host does not have, or a cancelled context for the
-// things a different number answers identically.
-//
-// It exists because the classification was written at neither relay path:
-// both returned the raw error, so [withFreshPorts]'s "retry unless it is
-// proven to repeat" read every one of them as transient and spent four
-// attempts on an unbindable address before reporting it as a lost race. The
-// mechanism was already here — [Cluster.start] classifies its own probe
-// failure exactly this way — and the relay half simply did not feed it.
+// It is the one classifier both relay paths use, so the retry gets the same
+// answer wherever a forwarder failed to bind. [net.ListenConfig.Listen] hands
+// back EADDRINUSE for the race this harness genuinely loses (it reserves
+// n(n-1)+2n ports and binds them one at a time); a permission failure, an
+// address this host lacks or a cancelled context fail identically under any
+// number. A raw error would read as transient to [withFreshPorts]'s "retry
+// unless proven to repeat" and spend every attempt on an unbindable address.
 func listenErr(err error) error {
 	if errors.Is(err, syscall.EADDRINUSE) {
 		return fmt.Errorf("%w: %w", js.ErrRoutePortTaken, err)
@@ -345,37 +255,18 @@ func listenErr(err error) error {
 	return fmt.Errorf("%w: %w", errNotRetryable, err)
 }
 
-// withFreshPorts runs start until it comes up, with fresh ports each time —
-// and a fresh cluster NAME, which it mints and hands to each attempt
-// ([newClusterName]): an attempt is a cluster of its own, so it is named as
-// one in the one place every bring-up passes through.
+// withFreshPorts runs start until it comes up, with fresh ports and a fresh
+// cluster NAME ([newClusterName]) each attempt, minted here because every
+// bring-up passes through.
 //
-// # What it retries, and what it must not
+// RETRY IS THE DEFAULT: bring-up fails for TIMING far more often than for ports
+// (a readiness wait that ran out, a group still electing). Only a failure KNOWN
+// to repeat ends the run early, since guessing "deterministic" wrongly ends a
+// case that would pass. The log names what failed, never "a port race".
 //
-// RETRY IS THE DEFAULT and the log says what actually failed. Standing up n
-// brokers fails for TIMING far more often than for ports — a member whose
-// readiness wait ran out, a metadata group still electing — and absorbing
-// exactly that is what the attempts are for. Measured by getting it backwards
-// in this same pull request: gating [internal/e2e]'s equivalent retry on a
-// lost port alone ended three cluster cases on their first attempt, each on a
-// `context deadline exceeded` that a second attempt had always taken in its
-// stride.
-//
-// So only a failure KNOWN to repeat ends the run early, and the burden is on
-// proving that rather than on proving it might not: guessing "deterministic"
-// wrongly ends a case that would have passed, while guessing "transient"
-// wrongly costs some seconds and a line.
-//
-// What the log must not do is call every one of them a port race. That was the
-// other half of the same defect — the one diagnostic a reader gets, naming a
-// cause the run had no evidence for.
-// ctx IS THE PARENT EVERY ATTEMPT DERIVES FROM, so a caller that already
-// carries a budget keeps it: context.WithDeadline only ever shortens, and a
-// mesh start nested inside another retry loop must SHARE that loop's ceiling
-// rather than add a second one able to exhaust it. Derived from t.Context()
-// instead, the inner loop could spend the outer one's whole budget and hand
-// the outer loop's first real attempt an already-expired context — reported
-// as "no cluster came up" by a loop that had never started a member.
+// ctx IS THE PARENT EVERY ATTEMPT DERIVES FROM, so a caller's budget is kept:
+// WithDeadline only shortens, and a mesh start nested in another retry loop
+// must SHARE its ceiling, not hand the outer loop an expired context.
 func withFreshPorts(ctx context.Context, t testing.TB, what string,
 	start func(ctx context.Context, name string) (*Cluster, error)) *Cluster {
 
@@ -446,31 +337,15 @@ func (c *Cluster) shutdown() {
 
 // StartPartitionableCluster starts an n-member cluster whose every route runs
 // through a relay this process owns, so a test can cut one member off from
-// the rest and put it back — see [Cluster.Partition].
+// the rest and put it back — see [Cluster.Partition]. It costs n(n-1) extra
+// listeners, so it is for a member UNREACHABLE rather than stopped.
 //
-// # Why this is not the default
-//
-// It costs n(n-1) extra listeners and copies every route byte through user
-// space, so it is for the cases that need a partition and no others. Those
-// are the cases about a member that is UNREACHABLE rather than stopped, and
-// the two are not the same input: a stopped member's peers watch its routes
-// close and its leases lapse, while a partitioned member carries on believing
-// it holds everything it held and comes back still believing it.
-//
-// # Why gossip is aimed at a dead port
-//
-// A NATS member tells its peers where to find the members it has just met,
-// and each of them dials that address ITSELF. With nothing configured, the
-// address is derived from the connection's own remote address — which here is
-// the relay's, carrying the peer's REAL route port, so a third member would
-// dial straight past the relay and hold a route no partition could cut. That
-// is the same vacuous pass [Cluster.Partition] guards against, arriving by a
-// different door. So every member advertises a port nothing listens on: a
-// gossiped route can never be established, the configured relays are the only
-// path between members, and cutting them cuts everything. An implicit route
-// is attempted once and abandoned (nats-server retries only explicit ones),
-// so the dead address costs one refused dial per gossip and no reconnect
-// storm.
+// Gossip is aimed at a dead port: a member tells its peers where to find the
+// members it has met, and each dials that address ITSELF. By default it derives
+// from the relay's address, carrying the peer's REAL route port, so a third
+// member would dial past the relay and hold a route no partition cuts. Every
+// member advertises a port nothing listens on instead; an implicit route is
+// tried once and abandoned (nats-server retries only explicit ones).
 func StartPartitionableCluster(t *testing.T, n int, base js.Config) *Cluster {
 	t.Helper()
 	if n < 2 {
@@ -727,15 +602,12 @@ func (c *Cluster) start(ctx context.Context, t testing.TB, cfg js.Config, i int)
 // startErr classifies a member's start failure for [withFreshPorts].
 //
 // A BROKER THAT DECLARED ITSELF DEAD ([js.ErrBrokerDied]) is the one start
-// failure known to repeat, with one exception. What nats-server calls fatal is
-// a fact about the configuration or the host — a store directory JetStream
-// cannot use, an advertise address it cannot read — and the next attempt
-// brings the same ones, so retrying spends the whole start budget re-asking a
-// question already answered and then reports a cluster that never came up.
-// The exception is a listener whose port somebody else took between this
-// harness reserving it and the member binding it, which is the race the
-// attempts exist for; the server reports it as [js.ErrRoutePortTaken] or
-// [js.ErrLeafPortTaken] beside the death, and it is retried.
+// failure known to repeat: what nats-server calls fatal is a fact about the
+// configuration or host (an unusable store directory, an unreadable advertise
+// address), so retrying only spends the budget re-asking. The exception is a
+// listener port somebody else took between reservation and bind, the race the
+// attempts exist for, reported as [js.ErrRoutePortTaken] or
+// [js.ErrLeafPortTaken] beside the death and retried.
 //
 // Everything else keeps the default, which is to retry: see [withFreshPorts].
 func startErr(err error) error {
@@ -754,28 +626,16 @@ func hostPort(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) }
 
 // PortFree reports whether a port can still be bound right now.
 //
-// It is a probe rather than a reservation: what it buys is finding a lost race
-// in microseconds, before the member starts. The member's own refusal of a
-// bind that fails ([js.ErrRoutePortTaken]) arrives only after it has
-// recovered its store, which is when the server opens its route listener.
+// A probe, not a reservation: it finds a lost race before the member recovers
+// its store. Exported because a fleet of ENGINES builds servers from Tier A
+// (see [Relays]) and cannot call [Cluster.start]. The host is an argument,
+// since one assumed can answer about an address the server never binds.
 //
-// EXPORTED because the members are not always this package's to start. A fleet
-// of ENGINES embeds its own servers and builds them from Tier A (see [Relays]),
-// so the harness that stands one up cannot call [Cluster.start] and would
-// otherwise have no way to make the same check — which is exactly the gap it
-// had.
-// THE HOST IS AN ARGUMENT, because a probe that assumes one is a probe that
-// can answer about an address the server never binds — which is exactly what a
-// hardcoded 127.0.0.1 did for a member left to listen on every interface.
-//
-// AND A PROBE THAT COULD NOT ANSWER IS NOT AN ANSWER, which is why the error
-// comes back rather than being folded into the bool. [js.PortAvailable] draws
-// that line deliberately — an occupied port is (false, nil) and an address
-// this host does not have, a privileged port or a cancelled probe is
-// (false, err) — and collapsing it here put every one of those back under "the
-// port was taken", so a caller retried a configuration mistake three times and
-// then reported a race. That is the exact sentence [js.PortAvailable]'s own
-// doc says it exists to prevent.
+// A PROBE THAT COULD NOT ANSWER IS NOT AN ANSWER, so the error comes back
+// rather than folding into the bool. [js.PortAvailable]: an occupied port is
+// (false, nil); an address this host lacks, a privileged port or a cancelled
+// probe is (false, err). Collapsing it made a caller retry a configuration
+// mistake and then report a race.
 func PortFree(ctx context.Context, host string, port int) (bool, error) {
 	// THE ENGINE'S OWN PROBE, not a second one: [js.PortAvailable] is what
 	// a clustered member runs against its configured route port before it

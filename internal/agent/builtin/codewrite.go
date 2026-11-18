@@ -23,10 +23,10 @@ import (
 	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
-// THE CODE WRITE TOOLS: five branch writes, each an engine write the
-// repository's Gitlet node builds and lands as one push (ADR-0092); five
-// repository lifecycle requests a data node decides; and a change's writes
-// (codechangewrite.go), all in [CodeTools] beside the reads.
+// THE CODE WRITE TOOLS: five branch writes and two tag writes (codetag.go),
+// each an engine write the repository's Gitlet node builds and lands as one
+// push (ADR-0092); five repository lifecycle requests a data node decides; and
+// a change's writes (codechangewrite.go), all in [CodeTools] beside the reads.
 //
 // The gate admits everybody (`authz.ClassEverybody`): who may write is the
 // caller's grant on the repository (ADR-0088), judged by the deciding node
@@ -51,12 +51,12 @@ const (
 )
 
 // CodeWrites are the write tools in catalogue order: the five branch writes,
-// the five lifecycle tools, then [ChangeWrites], [CheckWrites], [PurgeWrites]
+// the two tag writes, the five lifecycle tools, then [ChangeWrites], [CheckWrites], [PurgeWrites]
 // and [ImportWrites]. [Register]'s delivery switch and [codeAnnotations] read it.
 func CodeWrites() []string {
 	return append([]string{CodeCommitFilesTool, CodeRevertTool, CodeCherryPickTool, CodeCreateBranchTool,
-		CodeDeleteBranchTool, CodeCreateRepoTool, CodeUpdateRepoTool, CodeDeleteRepoTool, CodeRestoreRepoTool,
-		CodeProtectBranchTool}, append(append(append(ChangeWrites(), CheckWrites()...), PurgeWrites()...),
+		CodeDeleteBranchTool, CodeCreateTagTool, CodeDeleteTagTool, CodeCreateRepoTool, CodeUpdateRepoTool,
+		CodeDeleteRepoTool, CodeRestoreRepoTool, CodeProtectBranchTool}, append(append(append(ChangeWrites(), CheckWrites()...), PurgeWrites()...),
 		ImportWrites()...)...)
 }
 
@@ -134,6 +134,8 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 		&codeBranchWrite{deps: deps, kind: gitlet.WriteCherryPick},
 		&codeBranchWrite{deps: deps, kind: gitlet.WriteCreateBranch},
 		&codeBranchWrite{deps: deps, kind: gitlet.WriteDeleteBranch},
+		&codeTagWrite{deps: deps, kind: gitlet.WriteCreateTag},
+		&codeTagWrite{deps: deps, kind: gitlet.WriteDeleteTag},
 		&codeRepoWrite{deps: deps, tool: CodeCreateRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeUpdateRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeDeleteRepoTool},
@@ -470,14 +472,15 @@ func (t *codeBranchWrite) args(args map[string]any) (gitlet.EngineWrite, revArgs
 func fileOpsArg(tool string, args map[string]any) ([]gitlet.FileOp, *tools.Result) {
 	raw, _ := argval.List(args["files"])
 	if len(raw) == 0 {
-		r := failed(fmt.Sprintf("%s needs `files`: one operation a path — put, edit, delete, move or mode.", tool))
+		r := failedArg("files",
+			fmt.Sprintf("%s needs `files`: one operation a path — put, edit, delete, move or mode.", tool))
 		return nil, &r
 	}
 	out := make([]gitlet.FileOp, 0, len(raw))
 	for i, entry := range raw {
 		m, ok := argval.Object(entry)
 		if !ok {
-			r := failed(fmt.Sprintf("%s: files[%d] is not an object of `op`, `path` and the fields its op "+
+			r := failedArg("files", fmt.Sprintf("%s: files[%d] is not an object of `op`, `path` and the fields its op "+
 				"takes.", tool, i))
 			return nil, &r
 		}
@@ -489,7 +492,7 @@ func fileOpsArg(tool string, args map[string]any) ([]gitlet.FileOp, *tools.Resul
 		if content, present := m["content"]; present {
 			text, ok := argval.String(content)
 			if !ok {
-				r := failed(fmt.Sprintf("%s: files[%d].content is the file's text; a binary file is put by "+
+				r := failedArg("files", fmt.Sprintf("%s: files[%d].content is the file's text; a binary file is put by "+
 					"`blob_oid`, or committed in a clone and pushed.", tool, i))
 				return nil, &r
 			}
@@ -902,7 +905,7 @@ func gateChangeArg(tool string, args map[string]any) (*gitlet.GateChange, *tools
 	}
 	var change gitlet.GateChange
 	if err := decodeArg(named, &change); err != nil {
-		r := failed(fmt.Sprintf("%s: a merge gate field is not as the schema says: %v.", tool, err))
+		r := failedArg("gate", fmt.Sprintf("%s: a merge gate field is not as the schema says: %v.", tool, err))
 		return nil, &r
 	}
 	change.Remove = remove
@@ -1043,7 +1046,7 @@ func ownerArg(tool, arg string, args map[string]any) (gitlet.Owner, bool, *tools
 	}
 	var o gitlet.Owner
 	if err := decodeArg(raw, &o); err != nil || !o.Kind.Valid() || strings.TrimSpace(o.Ref) == "" {
-		r := failed(fmt.Sprintf("%s: `%s` is {\"kind\": \"unit\", \"ref\": \"<unit key>\"} or {\"kind\": "+
+		r := failedArg(arg, fmt.Sprintf("%s: `%s` is {\"kind\": \"unit\", \"ref\": \"<unit key>\"} or {\"kind\": "+
 			"\"seat\", \"ref\": \"<handle>\"}.", tool, arg))
 		return gitlet.Owner{}, false, &r
 	}
@@ -1216,8 +1219,13 @@ func pushRefused(ctx context.Context, tool, repo, branch string, cmd gitlet.Comm
 	said := fmt.Sprintf("%s did not land the write to %s on %s: %s (%s).", tool, branch, repo, detail, cmd.Reason)
 	switch class {
 	case tools.RefusalStaleVersion:
-		said += fmt.Sprintf(" Read the branch again with %s and make the change on the head it answers.",
-			CodeResolveTool)
+		if strings.HasPrefix(cmd.Ref, tagRoot) {
+			said += fmt.Sprintf(" A tag never moves: read it again with %s, and delete it at the value it "+
+				"answers or name another tag.", CodeResolveTool)
+		} else {
+			said += fmt.Sprintf(" Read the branch again with %s and make the change on the head it answers.",
+				CodeResolveTool)
+		}
 	case tools.RefusalUnavailable:
 		if again := sameCall(actor, tool); again != "" {
 			said += " Nothing was committed: " + again + " — it is the same write."

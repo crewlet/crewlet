@@ -25,15 +25,12 @@ units:
 // EVERY SEAT GETS ITS HANDLE WRITTEN DOWN WHEN THE DOCUMENT IS READ, and a
 // handle it declares is kept.
 //
-// A handle is a seat's identity — its agent id, its mailbox, its memory and
-// every reference to it derive from it — so one left to be derived from the
-// display name would move the day somebody corrected a typo in that name: a
-// removal and a creation nobody asked for. Written into the document at
-// parse, every stored revision carries it, and editing the name of a stored
-// seat is only ever an edit of its name.
-//
-// The control is the same edit on a document that declares no handle: its
-// derived handle moves, which is exactly what minting exists to stop.
+// A handle is a seat's identity (agent id, mailbox, memory and every reference
+// derive from it), so one derived from the display name would move when
+// somebody corrected a typo: a removal and a creation nobody asked for. Written
+// into the document at parse, every stored revision carries it. The control is
+// the same edit on a document that declares no handle: its derived handle
+// moves, which minting exists to stop.
 //
 // Mutation: drop MintIdentities from the parse and the first assertions fail.
 func TestEverySeatGetsAHandleAtParse(t *testing.T) {

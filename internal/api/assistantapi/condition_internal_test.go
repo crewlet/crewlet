@@ -47,27 +47,15 @@ func answer(t *testing.T, write func(http.ResponseWriter, *http.Request, *slog.L
 // A CONDITION OF THE NODE IS TOLD AS ONE ON THE ASSISTANT'S SURFACE, AND A
 // FAULT IS A FAULT.
 //
-// Every failure the assistant met in its own records, its counter or its
-// authority table was `503 assistant_unavailable` under a Retry-After of two
-// seconds and no detail: a log at its ceiling was asked again every two
-// seconds, and a store that was broken was said to be coming back. A
-// condition is `503 unavailable` in a person's words for it
-// ([builtin.ConditionSentence]), under its own hint and with none where no
-// wait clears it; anything no condition claims is `500 internal_error`; the
-// assistant's own reasons keep `assistant_unavailable`, with no Retry-After;
-// and a write whose outcome is unknown says so, naming the key a retry sends.
-// None carries its error's own text, which goes to the surface's log.
-//
-// A read whose own write of the engine's nobody can confirm (a lapsed turn
-// closed as its transcript is read) is told to come back, since the read asked
-// again settles it; it sent no key, so it is no unknown outcome of the
-// caller's.
-//
-// Mutation: drop either AnswerCondition arm from fail and the conditions
-// answer 500 or `assistant_unavailable`; answer a write's unknown outcome
-// through fail and it answers no `outcome`; drop fail's own unknown arm and
-// the read's row answers 500; put a wait back on the assistant's own reason
-// and its row goes red.
+// A condition is `503 unavailable` in a person's words
+// ([builtin.ConditionSentence]), under its own hint, none where no wait clears
+// it; what no condition claims is `500 internal_error`; the assistant's own
+// reasons keep `assistant_unavailable`, no Retry-After; a write of unknown
+// outcome names the key a retry sends. None carries its error's text (the log
+// does). A read whose own engine write nobody can confirm (a lapsed turn closed
+// as its transcript is read) is told to come back, since it sent no key.
+// Mutation: drop an AnswerCondition arm, fail's unknown arm or the write's
+// outcome, or put a wait on the assistant's own reason, and its row goes red.
 func TestAConditionIsToldAsOneAndAFaultAsAFault(t *testing.T) {
 	t.Parallel()
 	behind := fmt.Errorf("assistantdomain: read: %w", &statelog.Unavailable{

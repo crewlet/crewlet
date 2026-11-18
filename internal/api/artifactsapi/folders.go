@@ -18,31 +18,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE FOLDERS: the tree a reader sees, a folder's create, rename, move and
-// removal, and filing an artifact (ADR-0047: an artifact lives in one folder,
-// and a folder grants nothing).
+// THE FOLDERS (ADR-0047: an artifact lives in one folder; a folder grants
+// nothing). SEEING or FILING into a folder is decided on its top-level folder's
+// owner and shares ([artifactsdomain.FolderObject]), so a tree is seen whole or
+// not at all; MANAGING it (rename, move, remove, take an artifact out) on the
+// folder's own owner beside those shares ([artifactsdomain.FolderManagerObject]:
+// owner, owner's lead, administrator). Every decision asks the first before
+// anything else, and an unseen folder is answered as one that does not exist.
 //
-// # Two objects, never one
-//
-// Whether a caller SEES a folder, and whether they may FILE into it, is
-// decided on its top-level folder's owner and shares
-// ([artifactsdomain.FolderObject]), so a tree is seen whole or not at all and
-// a breadcrumb never names a folder its reader cannot see. Whether they may
-// MANAGE it (rename, move, remove, take an artifact out of it) is decided on
-// the folder's own owner beside those shares
-// ([artifactsdomain.FolderManagerObject]), whose rows ask for owner: its owner,
-// the owner's lead, an administrator. Every decision on a folder asks the
-// first before anything else, and a caller it does not show the folder is
-// answered exactly as for a folder that does not exist.
-//
-// # Filing asks the artifact and the folder
-//
-// Filing an artifact is an edit of where it lives: editor on the artifact
-// (`move_artifact`) AND contributor on the destination
-// (`artifacts.folder.file`), two decisions, both of which must admit. Taking
-// an artifact out of a folder to the top level is `move_artifact` too, or the
-// folder's manager's `artifacts.folder.unfile`, for an artifact they can read.
-// Nothing about the artifact's access changes either way.
+// Filing needs editor on the artifact (`move_artifact`) AND contributor on the
+// destination (`artifacts.folder.file`). Taking one out to the top level is
+// `move_artifact`, or the manager's `artifacts.folder.unfile` for an artifact
+// they can read.
 
 // FolderReads is the artifacts estate's folder reads every folder decision and
 // the tree read ask: the estate router's.

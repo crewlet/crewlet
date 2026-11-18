@@ -34,21 +34,16 @@ import (
 
 // A SIGNALLED NODE DRAINS WITH ITS PROBES UP.
 //
-// This is `crewlet run` itself, stopped the way an orchestrator stops it: a
-// real SIGTERM to a real process, with a real turn in flight. A signal handler
-// cannot be exercised from inside the process that installed it without
-// taking the test binary with it, so the node runs in a CHILD: the test binary
-// re-executes itself, the child calls [runEngine] — on the socket the parent
-// reserved for its port ([drainProbeSocketFD]) — and the parent signals it and
-// watches from outside.
+// This is `crewlet run` itself, stopped as an orchestrator stops it: a real
+// SIGTERM to a real process with a real turn in flight. A signal handler cannot
+// be exercised in the process that installed it without taking the test binary
+// with it, so the node runs in a CHILD: the test binary re-executes itself, the
+// child calls [runEngine] on the socket the parent reserved
+// ([drainProbeSocketFD]), and the parent signals it and watches from outside.
 //
-// The turn is held in flight by the model it is waiting on, which answers
-// only when the parent says so. That is what makes the drain last long enough
-// to observe, and it is a real turn on the real path: a signed GitLab delivery
-// on the webhook edge, the notification service, the seat's mailbox, and the
-// harness backend running the model's harness ([heldHarness]) as a child of the node — for
-// the seat's first turn's onboarding pass, the one call a turn makes on the
-// seat's own model before its executor's run is launched and the turn parks.
+// The model holds the turn in flight, answering only when the parent says so,
+// which makes the drain observable. It is a real turn on the real path: a signed
+// GitLab delivery through to [heldHarness], the seat's onboarding call.
 const (
 	drainProbeEnv     = "CREWLET_RUN_DRAIN_PROBE"
 	drainProbeArgsEnv = "CREWLET_RUN_DRAIN_PROBE_ARGS"
@@ -77,20 +72,15 @@ const (
 // parentDeathFD is the pipe the parent holds the write end of, inherited by
 // the child as its first extra descriptor.
 //
-// THE CHILD'S LIFETIME IS THE PARENT'S, and it has to be enforced by the
-// kernel rather than by the parent's good manners. Everything that reaps this
-// child — the command's context, the cleanup — runs only when the test binary
-// unwinds, and the two ways it does not unwind are ordinary: `go test
-// -timeout` firing, and a panic in any other case in package main. The child
-// is `crewlet run`: it has installed a signal handler and blocks for ever, so
-// a leak holds the API port, a Turso database and an embedded NATS server
-// until somebody notices.
+// THE CHILD'S LIFETIME IS THE PARENT'S, enforced by the kernel, not the parent's
+// good manners: everything that reaps the child runs only when the test binary
+// unwinds, and it does not on `go test -timeout` or a panic in another case.
+// The child is `crewlet run`, blocking for ever, so a leak holds the API port, a
+// Turso database and an embedded NATS server.
 //
-// A pipe rather than syscall.SysProcAttr's Pdeathsig, which is linux-only:
-// the release matrix is linux AND darwin, and a guard that covers half of it
-// is the asymmetry internal/procgroup exists so that nobody writes twice. The
-// kernel closes the write end when the parent dies however it dies, and the
-// read below returns EOF.
+// A pipe, not Pdeathsig (linux-only; the release matrix is linux AND darwin, the
+// asymmetry internal/procgroup exists to avoid): the kernel closes the write end
+// when the parent dies however it dies, and the read below returns EOF.
 const parentDeathFD = 3
 
 // drainProbeSocketFD is the listening socket the parent reserved for the
@@ -457,23 +447,18 @@ func (n *nodeChild) exitedWith(t *testing.T, code int) {
 	}
 }
 
-// heldHarness is the seat's model: a harness that marks every call it is handed and
-// answers none until the test lets it go, and then fails them all at once.
+// heldHarness is the seat's model: a harness that marks every call it is handed
+// and answers none until the test lets it go, and then fails them all at once.
 //
-// A FAILURE rather than an answer, because the case is about the node that
-// waits for the turn and not about the turn: a harness that exits non-zero ends
-// the call as a `server` failure, which the backend does not retry, and the
-// one member behind it ([unreachableCoder]) has no harness to start. The
-// onboarding pass fails, which a turn carries on from, and the turn ends at
-// its executor's launch however that goes. Nothing in the case turns on how
-// the turn ends, only on its ending once the harness is let go.
+// A FAILURE rather than an answer, because the case is about the node waiting for
+// the turn, not the turn: a non-zero exit ends the call as a `server` failure,
+// which the backend does not retry. The onboarding pass fails, which a turn
+// carries on from, and the turn ends at its executor's launch however that goes.
 //
-// /bin/sh UNDER THE `custom` PROFILE rather than this binary re-executed: a
-// held call computes nothing, and both of its halves — the mark that a call
-// arrived and the file it waits for — are things the parent sees from
-// outside, as it sees the node's probes. `custom` because it ships nothing, so
-// no vendor's sign-in, sentinels or configuration stands between the engine
-// and a harness that has none of them.
+// /bin/sh UNDER THE `custom` PROFILE, not this binary re-executed: a held call
+// computes nothing, and its mark and release file are things the parent sees from
+// outside. `custom` ships nothing, so no vendor's sign-in, sentinels or
+// configuration stands between the engine and a harness that has none.
 type heldHarness struct {
 	t *testing.T
 	// marker is the file a call creates on arrival; release is the one the

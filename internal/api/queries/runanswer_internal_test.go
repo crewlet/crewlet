@@ -67,22 +67,17 @@ func asPerson(t *testing.T, login, seat string, kind iam.Kind, grants ...iam.Gra
 }
 
 // A PARKED RUN SAYS, FOR EACH READER, WHOM IT IS PUT TO AND WHETHER THEY MAY
-// ANSWER IT, by the answer route's own authority ([runanswer.May], the verb
-// and object `POST /mcp-approvals/{id}` decides on), never a copy of it. The
-// three cases a screen draws:
+// ANSWER IT, by the answer route's own authority ([runanswer.May], what
+// `POST /mcp-approvals/{id}` decides on), never a copy of it:
 //
-//   - PUT TO ME: an escalated merge put to the person its rule escalates to,
-//     who may approve it — it waits on them.
-//   - I MAY ANSWER, PUT TO SOMEBODY ELSE: the same merge while it waits on its
-//     delegate, read by the lead of the seat that asked — theirs to answer,
-//     asking nothing of them yet; once escalated, or past the delegate's
-//     deadline, it waits on them too.
-//   - I MAY NOT: a person who neither leads the seat nor is named — told who
-//     it waits on, and offered nothing.
+//   - PUT TO ME: an escalated merge, read by the person its rule escalates to.
+//   - I MAY ANSWER, PUT TO SOMEBODY ELSE: the merge while it waits on its
+//     delegate, read by the asking seat's lead; once escalated or overdue it
+//     waits on them too.
+//   - I MAY NOT: neither leads the seat nor is named; told who it waits on.
 //
-// Mutation: decide may_answer by the audience list (or any rule but
-// runanswer's), or drop the escalated/overdue arm of NeedsYou, and a case
-// below goes red.
+// Mutation: decide may_answer by the audience list, or drop the
+// escalated/overdue arm of NeedsYou, and a case goes red.
 func TestAParkedRunSaysWhomItIsPutToAndWhoMayAnswerIt(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)

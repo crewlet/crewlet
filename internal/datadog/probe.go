@@ -13,39 +13,17 @@ import (
 )
 
 // Probe checks a typed Datadog key pair before anything stores it.
+// ONE CHECK FOR BOTH KEYS, asked about the application key, whose requirement
+// names the API key and region ([setup.Requirement.CheckWith]). Staged:
 //
-// ONE CHECK FOR BOTH KEYS, asked about the application key, because Datadog
-// accepts or refuses them together: the application key's requirement names
-// the API key and the region in [setup.Requirement.CheckWith], and the API
-// key is not checked on its own.
+//  1. `/api/v1/validate`, API key alone: a refusal is the API key's.
+//  2. `/api/v1/org`, both: now a refusal is the application key's.
+//  3. One read of each resource the reconcile manages: a refusal is a missing
+//     permission; an absent webhook is a read that worked.
+//  4. One read of each atlas listing: a refusal only warns ([atlasWarnings]).
 //
-// # In stages, so a refusal names the key to replace
-//
-//  1. `/api/v1/validate` with the API key alone. A refusal is the API key's.
-//  2. `/api/v1/org` with both. The API key is now known good, so a refusal
-//     is the application key's, and an acceptance names the organization.
-//  3. One read of each resource the reconcile manages: users, roles and the
-//     configured webhook. A refusal is a permission the application key
-//     lacks. An absent webhook is a read that worked, since the first pass
-//     creates it.
-//  4. One read of each listing the atlas reads: monitors, the service
-//     catalogue, hosts and Synthetic tests. A refusal here is a warning on
-//     a working verdict, never a refusal of the keys ([atlasWarnings]).
-//
-// Every stage is a read, and nothing at Datadog is created or changed. That
-// is also its limit: the WRITE permissions the reconcile needs (managing
-// users and roles, writing the webhook) cannot be proved without writing, so
-// the verdict says what was read and claims nothing more.
-//
-// # Budget
-//
-// The whole check runs under [setup.VerifyBudget], and each call under
-// [probeCallTimeout] within it, so one slow stage cannot spend the budget of
-// the stages after it unnoticed. A stage that runs out says which stage it
-// was.
-//
-// httpClient is nil in production, which takes the client's own transport
-// and timeout; a test hands one that reaches a fake region.
+// Reads only, so WRITE permissions are unproved. Budget: [setup.VerifyBudget],
+// each call [probeCallTimeout]. A nil httpClient takes the client's own.
 func Probe(httpClient *http.Client) setup.Probe {
 	return func(ctx context.Context, check setup.Check) (setup.Verdict, error) {
 		if check.Field != "app_key" {

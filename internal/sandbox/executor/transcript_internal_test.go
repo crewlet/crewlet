@@ -86,7 +86,7 @@ func TestALineOfManyNoteOpeningsCostsWhatItsBytesCost(t *testing.T) {
 		return b.String()
 	}
 	read := func(text string) {
-		for range notesIn(text) {
+		for range headedIn(text) {
 		}
 	}
 	for name, closing := range map[string]string{

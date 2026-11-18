@@ -30,42 +30,15 @@ import (
 
 // `crewlet secrets` — the operator's window onto the encrypted secret store.
 //
-// # Why a store and not just a .env
-//
-// Rotation. A secret written into the config is archived for ever, because
-// every revision is an immutable copy and revisions are never scrubbed;
-// rotating one here is an UPDATE of one row. And one name can have many
-// pointers — a bot token referenced from an integration block and a per-role
-// MCP env is ONE credential with two readers — which keying by var name
-// keeps as one row rather than several that must update atomically.
-//
-// The engine resolves ${VAR} through the STORE FIRST and the environment
-// behind it, so a value rotated here wins over a stale `.env` exported into
-// the process months ago. That order is the whole point; without it a
-// rotation appears to work and changes nothing.
-//
-// # One store, two ways in, and the running engine decides which
-//
-// The company's rows live on the coordination KV, where every node reads
-// them, and nowhere else. While this node's engine RUNS, the KV is behind it —
-// on the default topology inside its own process, listening on no socket — so
-// the command goes through the node's authenticated /secrets surface. While
-// it is STOPPED, the command reaches the same store itself, through the
-// node's own broker or the external one it dials (fleetstore.go). Which of
-// the two is in play is not a guess — the node database's lock makes "the
-// engine is running" an answer with a pid on it — and the command says which
-// one it used after every write.
-//
-// # The keyring is Tier A, and a node named by -api holds its own
-//
-// The store holds only ciphertext. The key material lives in the bootstrap
-// config — on disk or in the environment, never in the database it opens —
-// which is why these commands read Tier A and not the company document.
-//
-// Through a node `-api` names, this command seals and opens nothing: the node
-// does both, under its own keyring. So a machine that is not a node, holding
-// no Tier A file, runs every subcommand there but `rekey`, which judges the
-// rows against the `secrets.active_key_id` that file names, and so needs it
+// Keyed by var name: a secret in the config is archived for ever in its immutable
+// revisions, so rotation is an UPDATE of one row, and a token with two readers
+// stays one row. The engine resolves ${VAR} through the STORE FIRST and the
+// environment behind it, so a rotated value beats a stale exported `.env`; without
+// that order a rotation changes nothing. While the engine RUNS the command goes
+// through its authenticated /secrets surface; while it is STOPPED it reaches the
+// same store itself ([routeSecretStore]), saying which after every write. The
+// store holds only ciphertext and the keyring is Tier A, so a machine with no Tier
+// A file runs every subcommand through a node `-api` names but `rekey`
 // ([secretsBootstrap]).
 
 const secretsUsage = `crewlet secrets: read and rotate the encrypted secret store
@@ -387,38 +360,18 @@ type secretTarget struct {
 	locked error
 }
 
-// secretsBootstrap is the Tier A document a `crewlet secrets` run is routed
-// under ([routeSecretStore]): the file at bootstrapPath, or nil where there is
-// none and apiURL names the node to go through — a machine that is not a node,
-// which needs none. command names the run for a refusal, and needsKeyID is
-// whether it needs Tier A's `secrets.active_key_id`, which `rekey` does.
+// secretsBootstrap is the Tier A document a `crewlet secrets` run is routed under
+// ([routeSecretStore]): the file at bootstrapPath, or nil where apiURL names the
+// node to go through. command names the run for a refusal; needsKeyID is whether
+// it needs `secrets.active_key_id`, which `rekey` does.
 //
-// NO KEYRING CHECK OF ITS OWN: Tier A refuses a file without one, so a
-// document that loaded carries it, and the refusal an operator sees names
-// `secrets.keys` in the file's own terms. And a file that exists and does not
-// load fails the run, -api or not, as it fails every command that reads the
-// company ([companyBootstrap]): someone who configured a node and did not get
-// it must not have the run quietly go somewhere else.
-//
-// # Where no file is no answer
-//
-// With no -api the file is the only way to the store: it names this node's
-// database, whose lock says whether the engine runs; the address of the
-// engine's API; the broker the fleet's store is reached through while the
-// engine is stopped; and the keyring that store is sealed under. A command
-// reading the company resolves from the environment alone there
-// ([companyStore.route]); this one has nothing to fall back to, since the
-// store is its whole subject, so it is refused, naming both ways to a store —
-// or, for a rekey, naming only -config, since -api would not spare it the
-// file.
-//
-// A rekey needs the file through -api too: it judges the rows against the
-// active key id it expects, Tier A's `secrets.active_key_id`. Its -dry-run
-// lists, from the node's listing, what is sealed under any other key. Its
-// real pass also sends that id, and the node refuses a rotation onto a key it
-// does not seal with: that check is what keeps a rekey from reporting a
-// rotation the fleet did not make, and sending the node's own key in its place
-// would check nothing.
+// NO KEYRING CHECK OF ITS OWN: Tier A refuses a file without one. A file that
+// exists and does not load fails the run, -api or not ([companyBootstrap]), so a
+// configured node never has the run quietly go elsewhere. With no -api the file is
+// the only way to the store, and unlike a company read ([companyStore.route]) there
+// is no fallback, so it is refused. A rekey needs the file through -api too: it
+// sends the active key id, and the node's refusal of a rotation onto a key it does
+// not seal with keeps a rekey from reporting one the fleet did not make.
 func secretsBootstrap(bootstrapPath, apiURL, command string, needsKeyID bool) (*config.Bootstrap, error) {
 	if strings.TrimSpace(apiURL) == "" {
 		boot, err := loadBootstrapForStore(bootstrapPath)
@@ -526,35 +479,17 @@ const revealTakesATierAToken = "\n\nEach value is read with a reveal, which take
 	"a person present: " + apiTokenEnv + " must hold one of Tier A's api.auth " +
 	"tokens, since a machine token is refused a reveal whatever it carries"
 
-// routeSecretStore picks the way to the fleet's store a run can actually take:
-// the running node's API, or the store itself while this node's engine is
-// stopped. boot may be nil only where apiURL names the node: a machine that is
-// not a node, holding no Tier A file. run names the command and what it does
-// with the store, for a refusal an operator reads.
+// routeSecretStore picks the way to the fleet's store a run can take: the running
+// node's API, or the store itself while the engine is stopped.
 //
-// # The running engine decides, and it decides unambiguously
-//
-// The fleet's rows live on the coordination KV. While the engine is up, the
-// only way in is its API: on the default topology the KV is inside its
-// process, and a second broker on its store directory is refused. While it is
-// down, this command reaches the store itself ([openFleetStore]).
-//
-// The NODE DATABASE'S LOCK is what tells the two apart, and it is a fact
-// rather than a guess: the engine holds an OS advisory lock on its database
-// file for as long as it is running — from the read its start decides on,
-// before its broker starts ([bootEngine]) — so [store.ErrLocked] means "the
-// engine is up, or coming up" with a pid attached, and a lock found free means
-// it is not. A node still starting answers the API route `503 starting` until
-// it serves, which is the truth: the run is made again once it does. Only a
-// start with -import-company, which reads no store first, holds the store
-// directory before the database, and a run in that stretch meets its broker
-// ([fleetStoreRemedy]).
-// The lock is only asked ([store.Probe]); what keeps an engine from starting
-// beneath a run that reached the store directly is the broker the run
-// started, which holds the store directory until the run lets it go
-// ([jetstream.StoreDirLock]). Probing the API instead would confuse "the node
-// is stopped" with "the node is up but its HTTP port is bound elsewhere", and
-// those need opposite answers.
+// The NODE DATABASE'S LOCK tells the two apart as a fact, not a guess: the engine
+// holds an OS advisory lock on it from the read its start decides on, before its
+// broker starts ([bootEngine]), so [store.ErrLocked] means the engine is up or coming up. Only
+// -import-company holds the store directory before the database, and a run in
+// that stretch meets its broker ([fleetStoreRemedy]). The lock is only asked
+// ([store.Probe]); the run's own broker holds the store directory against an
+// engine starting beneath it ([jetstream.StoreDirLock]). Probing the API instead
+// would confuse "stopped" with "up, HTTP port bound elsewhere".
 func routeSecretStore(ctx context.Context, environ config.Source, boot *config.Bootstrap,
 	bootstrapPath, apiURL string, run storeRun) (*secretTarget, func(), error) {
 
@@ -956,19 +891,16 @@ const secretsStoppedNote = "This node's engine reads it when it starts; a node "
 
 // getSecret is the ONLY command that prints a value, and it is break-glass.
 //
-// It is refused without an explicit flag — before any store is routed
-// ([secretsCallError]) — because the overwhelmingly common need is "is X set
-// and when did it change", which the listing answers without putting a
-// credential into a terminal, a scrollback buffer and a screen-share. The HTTP
-// route it reads through a node is gated the same way,
-// by a ?reveal=true a crawl cannot reach by accident; the node's other route
-// that returns values, POST /secrets/reveal, is a POST no crawl can make.
+// It is refused without an explicit flag, before any store is routed
+// ([secretsCallError]), because the common need is "is X set and when did it
+// change", which the listing answers without putting a credential into a terminal,
+// scrollback and screen-share. The node route it reads through is gated the same
+// way by ?reveal=true; its other value route, POST /secrets/reveal, is a POST no
+// crawl can make.
 //
-// The access is LOGGED BY NAME, here and — when this goes through a running
-// node — there too, against the operator its own guard authenticated. A
-// break-glass read that leaves no trace is indistinguishable from an
-// exfiltration, and the name is the whole of what can be logged: logging the
-// value would be the leak.
+// The access is LOGGED BY NAME, here and in a running node, against the operator
+// its guard authenticated: a break-glass read with no trace is indistinguishable
+// from exfiltration, and logging the value would be the leak.
 func getSecret(ctx context.Context, sv *secretTarget, name string, stdout io.Writer) error {
 	value, err := sv.Get(ctx, name)
 	if err != nil {

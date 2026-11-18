@@ -18,11 +18,10 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// fakeDeviceLogin plays Codex's `login --device-auth` as measured on the
-// installed harness: the steps in ANSI colour, the address, the code's lifetime on
-// the line before the code, then a wait for the person's approval, after which
-// it writes its login file and exits 0. It writes its pid to FAKE_DEVICE_PID
-// first, where that names a file.
+// fakeDeviceLogin plays Codex's `login --device-auth`: the steps in ANSI colour,
+// the address, the code's lifetime on the line before the code, then a wait for
+// approval, after which it writes its login file and exits 0. It writes its pid
+// to FAKE_DEVICE_PID first, where that names a file.
 //
 //   - FAKE_DEVICE_STREAM=stderr prints the steps on stderr instead of stdout;
 //   - FAKE_DEVICE_MINUTES is the lifetime it prints (15 when unset);

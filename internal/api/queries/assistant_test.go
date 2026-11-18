@@ -63,18 +63,16 @@ func through(p iam.Principal) context.Context {
 
 // AN ASSISTED QUESTION IS ANSWERED AS ITS PERSON'S OWN, AT EVERY POSTURE.
 //
-// ADR-0052's parity: a question is a read, and no question answers a
-// credential or a secret in clear, so the registry keeps nothing from a
-// principal acting through the assistant that it does not keep from the same
-// person at their keyboard. The one exception is code_change's viewed_key,
-// withheld from an assistant grant (codechange.go), which has no use for it
-// and whose conversation would keep it past the repository's purge. Over every question this build registers, each at
-// its own posture and answered by a stub, a person holding one app and an
-// administrator are each answered or refused through the assistant exactly as
-// at the keyboard, with the same reason and the same permissions named. The
-// split is real: the one-app person is refused something and answered
-// something. Mutation: put a gate on assisted principals back in AnswerWith
-// and the assistant is refused what its person reads.
+// ADR-0052's parity: a question is a read, and none answers a credential or a
+// secret in clear, so the registry keeps nothing from a principal acting
+// through the assistant that it keeps from the same person at their keyboard.
+// The one exception is code_change's viewed_key, withheld from an assistant
+// grant (codechange.go): its conversation would keep it past the repository's
+// purge. Over every registered question, a person holding one app and an
+// administrator are answered or refused through the assistant exactly as at
+// the keyboard, with the same reason and permissions named. Mutation: put a
+// gate on assisted principals back in AnswerWith and the assistant is refused
+// what its person reads.
 func TestAnAssistedQuestionIsAnsweredAsItsPersonsOwn(t *testing.T) {
 	t.Parallel()
 	real := queries.NewRegistry()

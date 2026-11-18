@@ -159,20 +159,16 @@ type FeedPageChange struct {
 
 // FeedScheduleRun is one run of one schedule — or several in a row.
 //
-// A RUN IS A FIRE THE SCHEDULER DISPATCHED. The ledger also records the ticks
-// it deliberately did NOT run (`skipped_catchup`, `skipped_paused`), so that
-// "why did the standup not run" has an answer — but a tick not run is not
-// something the company did, and it is answered where the ledger is read
-// (`schedule_runs`, Agents › Schedules), not here.
+// A RUN IS A FIRE THE SCHEDULER DISPATCHED. Ticks it deliberately did not run
+// (`skipped_catchup`, `skipped_paused`) are not something the company did;
+// `schedule_runs` answers them, not the feed.
 //
-// CONSECUTIVE RUNS OF ONE SCHEDULE ARE ONE ROW. A sweep every ten minutes is
-// 144 rows a day, and a feed that printed each would bury every completion
-// and filing under one schedule's heartbeat — which is what "what did the
-// company do" is least about. So runs of the same schedule for the same
-// runner that nothing else in the feed falls between are folded into the
-// newest of them: `runs` counts them and `since` is the oldest one's instant.
-// The fold is decided here, where the merge knows what falls between, rather
-// than on a screen that sees one page at a time.
+// CONSECUTIVE RUNS OF ONE SCHEDULE ARE ONE ROW: a sweep every ten minutes is
+// 144 rows a day and would bury every completion under its heartbeat. Runs of
+// the same schedule and runner that nothing else in the feed falls between fold
+// into the newest: `runs` counts them, `since` is the oldest's instant. The fold
+// is decided here, where the merge knows what falls between, not on a screen
+// that sees one page at a time.
 type FeedScheduleRun struct {
 	ScopeType string `json:"scope_type"`
 	// ScopeID is the scope's IDENTITY, which the ledger keys a fire on, and
@@ -252,33 +248,14 @@ const feedSourceReads = 4
 // creates and hand-offs from the tracker, pages created or saved, and the
 // schedules' runs — newest first.
 //
-// MERGED BY INSTANT, CURSORED PER SOURCE. Each source is read one page past
-// its own cursor in its own order; the pages are merged by instant and cut at
-// the limit; and the next cursor records, for each source, the position of
-// the last row of it this page consumed. So a row is never repeated and never
-// skipped however the three interleave, and a source that has nothing more
-// stops being asked.
-//
-// EVERYBODY'S, AND EACH KIND SHOWN BY ITS APP (ADR-0033): the work the
-// tracker records to whoever holds Worklet, the pages to whoever holds the
-// knowledge base, and the schedules' runs — the company's own machinery — to
-// everybody, through [authz.Shows]. A kind the caller may not see is DROPPED
-// from what is read, named in `kinds=` or not, never refused: a refusal of
-// `kinds=page` would confirm to somebody without Doclet that the
-// company keeps pages, and an answer of the rows they may see is the one they
-// asked for.
-//
-// TWO LOGS, A FLOOR IN EACH. The work is the tracker's log and the pages the
-// knowledge base's, so a caller reading back a write names the floor of each
-// log it wrote (`min_position`, once per log) and each half waits on its own
-// ([statelog.Freshness.On]) — a page saved a moment ago is in the feed drawn
-// after the save, as a task completed is. The schedules' runs are the usage
-// domain's rows, which nobody writes from a screen and no floor names. A floor
-// on any other log is the request's mistake, refused naming it. And the answer
-// reports the WEAKEST level a half was read at ([statelog.Weakest]): a half
-// whose log the caller named no floor on is read `stale` under a `session`
-// ask, and an answer labelled by its other half would claim a freshness its
-// pages never had.
+// MERGED BY INSTANT, CURSORED PER SOURCE: each source is read one page past its
+// own cursor and the next cursor records its last consumed row, so no row
+// repeats or is skipped. EACH KIND SHOWN BY ITS APP (ADR-0033, [authz.Shows]):
+// a kind the caller may not see is DROPPED, never refused, since refusing
+// `kinds=page` would confirm to somebody without Doclet that pages exist.
+// TWO LOGS, A FLOOR IN EACH (`min_position`, [statelog.Freshness.On]); a floor
+// on another log is refused. The answer reports the WEAKEST level a half was
+// read at ([statelog.Weakest]).
 func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 	kept, err := s.feedKept()
 	if err != nil {
@@ -693,43 +670,15 @@ func (a *accessChanges) of(ctx context.Context, handle string, asked time.Time) 
 // decisions answers what is waiting on one person — the open asks put to
 // them and the executors parked on a question to them — newest first, at
 // most [worklet.MaxDecisions], with the full count and the oldest one's
-// instant beside the page.
+// instant beside the page; `more` says something lies past the `limit` page.
 //
-// `limit` asks for a smaller page and `more` says something lies past it: Ask
-// Crewlet reads a page that fits one of its steps.
-//
-// # And, on the caller's own record, what they may unblock
-//
-// A person may answer more than is put to them: a run whose question went to
-// a delegate, or to somebody else, is still theirs to answer where they lead
-// its seat or administer the company ([runanswer.May], the verb and object
-// the answer's own route decides on). Those are listed too, each item saying
-// where it stands for the caller (`put_to_you`, `may_answer`, `needs_you`), so
-// Home and the Inbox draw them as a group of their own beside what is put to
-// the person. Only on the caller's own record: whether somebody else may
-// answer a run is theirs to be asked, not a lead's to read off.
-//
-// `total` IS WHAT WAITS ON THE PERSON, the figure a badge says: the asks and
-// runs put to them and, on their own record, the runs they may answer that
-// their delegates escalated or left past the deadline ([runanswer.Waiting.NeedsYou]).
-// `answerable` is the rest of what they may answer, which waits on somebody
-// else in good time and asks nothing of them yet.
-//
-// THE SAME SCOPE RULE AS `work_my_work` — see [Sources.recordHandle]: no
-// `handle` is the caller's own record, and naming anybody else's is
-// [authz.ActionPersonRead] — theirs, whoever leads them, or an admin, each
-// with the tracker — decided on the record the name resolves to.
-//
-// BUT YOUR OWN NEEDS NO TRACKER, which is why this is everybody's question
-// rather than the tracker's (ADR-0033): a person kept off the tracker is still
-// asked things — and may read the item an open ask names them on, and post the
-// answer, without it (`get_work_item`'s and `comment_on_work_item`'s asked
-// arm). A list of what is waiting on them that refused them would leave the
-// only way to find those asks closed.
-//
-// AND AN EXECUTOR'S QUESTION IS SHOWN AS THE BOARD SHOWS IT ([serialiseRun]):
-// to the people it is put to — the record being read, when it is the caller's
-// own — and its seat's trail to whoever reads that.
+// On the caller's own record only, it also lists runs they may answer where
+// the question went elsewhere ([runanswer.May]). `total` IS WHAT WAITS ON THE
+// PERSON, the badge's figure: asks and runs put to them plus runs escalated or
+// past deadline ([runanswer.Waiting.NeedsYou]); `answerable` is the rest.
+// SCOPE as `work_my_work` ([Sources.recordHandle]). OPEN TO A PERSON KEPT OFF
+// THE TRACKER (ADR-0033): refusing them would close the only way to find their
+// asks. AN EXECUTOR'S QUESTION IS SHOWN AS THE BOARD SHOWS IT ([serialiseRun]).
 func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	handle, err := s.recordHandle(ctx, authz.ActionPersonRead,
 		strings.TrimSpace(p.String("handle")))
@@ -866,28 +815,15 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 // answeredDecisions answers what one person decided lately, within
 // [worklet.AnsweredWindow], newest closing first, at most [worklet.MaxAnswered]:
 //
-//   - A work item's asks put to them and closed, by them or by somebody else.
-//     Each is the ask as `decisions` listed it while it was open, who answered
-//     it and when, the option chosen or the words, and the asker's first
-//     record on the task since.
-//   - An executor's questions THEY answered, and only those ([Sources.answeredRuns]):
-//     a run's question can be put to a whole team, and one teammate's answer
-//     is that teammate's decision, so a question somebody else answered is in
-//     the other person's list and not in this one.
+//   - A work item's asks put to them and closed, by anyone, with the answer and
+//     the asker's first record on the task since.
+//   - An executor's questions THEY answered, only ([Sources.answeredRuns]): a
+//     question put to a team is the answering teammate's decision.
 //
-// THE SAME SCOPE AS `decisions` ([Sources.recordHandle] with
-// [authz.ActionPersonRead]): no `handle` is the caller's own record, and
-// anybody else's is theirs, their lead's or an admin's. And for the same
-// reason it is everybody's: a person kept off the tracker was still asked
-// these questions, and what they answered is theirs to read.
-//
-// BUT WHAT THE ASKER DID NEXT IS THE TASK'S, not the ask's: it is a record on
-// the task beyond the question put to the reader, so it is shown only to a
-// reader the tracker shows a task to ([shows]) and dropped for the rest, a
-// filter rather than a refusal, as the company feed filters.
-//
-// A COMPANY THAT KEEPS NO TRACKER HERE ([keptHere]) has no asks in the engine:
-// it is answered with none, and with no `read_level`, since none was read.
+// SCOPE AND AUDIENCE AS `decisions`. WHAT THE ASKER DID NEXT IS THE TASK'S, so
+// it is shown only to a reader the tracker shows a task to ([shows]), filtered
+// not refused. A COMPANY THAT KEEPS NO TRACKER HERE ([keptHere]) is answered
+// with no asks and no `read_level`.
 func (s Sources) answeredDecisions(ctx context.Context, p Params) (any, error) {
 	handle, err := s.recordHandle(ctx, authz.ActionPersonRead,
 		strings.TrimSpace(p.String("handle")))

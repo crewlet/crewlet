@@ -86,12 +86,11 @@ func limitsOf(e map[string]any) map[string]any {
 // series' decision D4: administrators grant, leads only narrow).
 //
 // Every case is one write by the Platform lead, who holds no grant. They may
-// turn a server off for their team, hold a tool back for a sub-team or a seat,
-// further than it is held or as far as its entry already holds it. They may not
-// turn a server back on, loosen a tool from blocked to approve, lift a tool's
-// limit, or move a seat out from under their team's limits: each is refused
-// as an administrator's, naming every seat it would widen. Nor may they touch
-// Data's limits, which are not theirs, by narrowing or by lifting.
+// turn a server off for their team, or hold a tool back for a sub-team or seat
+// further than it is held. They may not turn a server back on, loosen a tool
+// from blocked to approve, lift a limit, or move a seat out from under their
+// team's limits: each is refused as an administrator's, naming every seat it
+// would widen. Nor may they touch Data's limits, narrowing or lifting.
 //
 // Mutation: drop the Widened parts from admit, and every widening case is
 // admitted.

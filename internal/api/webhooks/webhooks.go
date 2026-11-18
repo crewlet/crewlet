@@ -18,6 +18,13 @@
 // the honest answer: nothing crashed, this node cannot serve this delivery yet,
 // and the delivery waits at the provider until somebody sets the secret. A
 // signature that does not MATCH is the other case entirely and stays 401.
+//
+// Datadog and Confluence Cloud sign nothing, so a shared token IS the
+// authentication there and [secrets.CheckSharedToken] gives it a length floor;
+// the other providers verify a signature over the body. The OAuth landings
+// (Slack, the GitHub App return, the MCP sign-in callback) and the engine's
+// client metadata document live here too; mcp_oauth.go says what the callback
+// trusts.
 package webhooks
 
 import (
@@ -246,24 +253,17 @@ func (r *Receiver) Routes(mux httpjson.Router) {
 
 // --- the shared pipeline ---------------------------------------------------
 
-// scheme is how one provider's deliveries are authenticated, and it carries
-// TWO questions rather than one.
+// scheme is how one provider's deliveries are authenticated: TWO questions.
 //
-// verify is the familiar half: does this body, under this secret, produce
-// this signature. The two schemes that also need a header or a clock close
-// over them, which is what keeps [Receiver.authenticate] one function rather
-// than five.
+// verify: does this body, under this secret, produce this signature. Schemes
+// needing a header or a clock close over them, keeping [Receiver.authenticate]
+// one function.
 //
-// usable is what a scheme needs OF ITS OWN CONFIGURED SECRET before the
-// question is worth asking, and it is a property of the scheme rather than of
-// the route because that is where it stops being forgettable. For the signing
-// schemes it is nil: an HMAC key's shape is refused where the key is written
-// (see [whsec]), and its strength does not depend on how long an operator
-// made it. For the two providers that CANNOT SIGN it is the whole of the
-// security: the shared token is the entire check, so a token short enough to
-// guess is a route with nothing to authenticate with, and saying so here
-// means a ${VAR} pointing at a weak one is refused exactly where a weak
-// literal is.
+// usable is what a scheme needs OF ITS OWN CONFIGURED SECRET, so it cannot be
+// forgotten per route. Nil for the signing schemes: an HMAC key's shape is
+// refused where it is written (see [whsec]). For the two providers that CANNOT
+// SIGN it is the whole of the security: a guessable shared token authenticates
+// nothing, and a ${VAR} pointing at a weak one is refused as a weak literal is.
 type scheme struct {
 	verify func(body []byte, secret, signature string) bool
 	usable func(secret string) error
@@ -375,17 +375,15 @@ type delivery struct {
 
 // accept claims, republishes, records and answers one verified delivery.
 //
-// THE ORDER IS THE POINT. The claim comes first, because two concurrent
-// retries must not both wake the seat. The republish comes next, because it is
-// the only step that has to happen: a delivery that reached the queue will be
-// worked even if this process dies in the next instruction. The store row and
-// the live push come last and are best effort — observability must not be able
-// to swallow a wake.
+// THE ORDER IS THE POINT. The claim comes first, so two concurrent retries
+// cannot both wake the seat. The republish comes next, the only step that has
+// to happen: a delivery on the queue is worked even if this process dies next.
+// The store row and live push come last, best effort: observability must not
+// swallow a wake.
 //
-// A republish that fails RELEASES the claim and answers 503, so the provider's
-// retry finds the delivery unclaimed. Recording first and publishing second
-// would leave the opposite failure: a feed row saying the webhook arrived, an
-// agent that never heard about it, and a retry refused by the claim.
+// A failed republish RELEASES the claim and answers 503, so the retry finds the
+// delivery unclaimed. Recording first would leave a feed row for a webhook the
+// agent never heard about, and a retry refused by the claim.
 func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, d delivery, answer any) {
 	ctx := req.Context()
 	if !r.claim(ctx, d) {
@@ -534,25 +532,16 @@ func (r *Receiver) record(ctx context.Context, v verified, d delivery) {
 
 // deliveryRecord is one delivery's record.
 //
-// WHO IT WAS FOR is a field, and so a tag on the row, rather than only inside
-// the payload. The row is what a listing returns — the payload deliberately is
-// not — so without it a deliveries screen could say a delivery arrived and not
-// which seat it was addressed to. `recipient` rather than a name of this
-// package's own: it is one of the tags the event store resolves to a seat's
-// agent id and indexes as a PARTY, so tagging it here is also what makes
-// `events?agent=<handle>` return what reached that seat from outside — the one
-// question the party index exists for, and the one class of event it was blind
-// to. The HANDLE travels, as the route named it; the store maps it to the id
-// against the company it holds, so this edge needs no roster.
+// WHO IT WAS FOR is a tag on the row, since a listing returns the row and not
+// the payload. `recipient` is a tag the event store resolves to a seat's agent
+// id and indexes as a PARTY, so `events?agent=<handle>` returns what reached
+// that seat from outside. The HANDLE travels; the store maps it to the id.
 //
 // THE ROUTE is the one that AUTHENTICATED, which the source is not on the
-// Forge relay: a relayed Jira event belongs to `jira` and arrived at `forge`,
-// and the relay's own row on the integrations screen counts by it.
+// Forge relay: a relayed Jira event belongs to `jira` and arrived at `forge`.
 //
-// THE BODY is the provider's exact bytes — what opening the row shows — and
-// every route here has already parsed them as a JSON object; the parsed body
-// re-encoded is the fallback only for bytes that are not JSON at all, which no
-// route admits today and a raw message could not carry.
+// THE BODY is the provider's exact bytes; the parsed body re-encoded is the
+// fallback only for bytes that are not JSON, which no route admits today.
 func deliveryRecord(route string, d delivery) types.InboundDelivery {
 	body := json.RawMessage(d.raw)
 	if !json.Valid(body) {
@@ -593,24 +582,16 @@ func providerKey(d delivery) string {
 
 // sensitiveHeaders are redacted before a delivery's headers travel.
 //
-// A delivery's headers are persisted to the event store and rendered on the
-// dashboard, so anything here that carries a SECRET is a secret at rest in
-// the audit log — readable by everyone who can read an event, and impossible
-// to un-write.
+// Headers are persisted to the event store and rendered on the dashboard, so a
+// SECRET here is at rest in the audit log, readable by everyone who can read
+// an event and impossible to un-write.
 //
-// `x-gitlab-token` is that. GitLab sends a hook's plaintext secret token
-// verbatim in this header whenever one is set — by hand, by another tool, or
-// by a provisioner that used `token` rather than `signing_token` — so it is a
-// secret at rest the moment it is stored. This engine's provisioner sets
-// `signing_token` only, and the route never authenticates on this header.
+// `x-gitlab-token` is that: GitLab sends a hook's plaintext secret token
+// verbatim whenever one is set. The route never authenticates on it.
 //
-// SIGNATURE headers are deliberately NOT redacted, and the reason is not the
-// one that used to be written here. It said "a transport re-verifies against
-// them" — nothing does; no consumer of RawWebhook reads a signature at all.
-// They stay because a signature is an HMAC OUTPUT rather than a key: it
-// reveals nothing about the secret, and it is the evidence an operator needs
-// to tell "the provider did not sign this" from "the provider signed it with
-// the wrong key".
+// SIGNATURE headers are deliberately NOT redacted: a signature is an HMAC
+// OUTPUT, not a key, and it is the evidence an operator needs to tell "the
+// provider did not sign this" from "signed it with the wrong key".
 var sensitiveHeaders = map[string]bool{
 	"authorization": true, "cookie": true, "proxy-authorization": true,
 	"x-gitlab-token": true,
@@ -738,30 +719,15 @@ func noSecret(w http.ResponseWriter, source string) {
 
 // bodyKey is the delivery identity of a third-party app that sends none.
 //
-// # Byte identity IS delivery identity here
+// All three Atlassian routes reach here: Forge-relayed Cloud events carry no
+// per-delivery header, Data Center only from versions sending
+// X-Atlassian-Webhook-Identifier. Payloads are byte-identical across retries
+// and differ for distinct events, so byte identity IS delivery identity.
 //
-// A Cloud event relayed through Forge carries no per-delivery header at all,
-// and an Atlassian Data Center delivery carries one only from the versions
-// that send X-Atlassian-Webhook-Identifier — so all three Atlassian routes
-// reach here. What they do send is a payload that is byte-identical across
-// the provider's own retries and different for any two distinct events: every
-// one of these third-party apps stamps its payloads with entity ids and timestamps, so
-// two events cannot serialize the same.
-//
-// # Why a hash of the whole body rather than derived coordinates
-//
-// Coordinates are the tempting shape — event, action, entity id, activity id
-// — and they are strictly worse in the direction that matters. Every field
-// left out of a coordinate set is a way for two DIFFERENT events to collapse
-// into one, and a collapsed event is a message nobody ever answers. A hash
-// over the whole body cannot do that: any difference at all yields a
-// different key. Its failure mode is the opposite and the safe one — a
-// third-party app that re-serialized between attempts would fail to collapse a
-// redelivery, which is exactly today's behaviour and no worse.
-//
-// It is also the only derivation that needs to know nothing about the
-// third-party app, which is what keeps three routes from each growing their own
-// half-right field list.
+// A hash of the WHOLE body, not derived coordinates: every field left out of a
+// coordinate set lets two DIFFERENT events collapse into one, a message nobody
+// answers. The hash's failure is the safe one (a re-serialized redelivery is
+// not collapsed) and it needs no knowledge of the provider.
 func bodyKey(raw []byte) string {
 	// Prefixed so a hash is never mistaken for the provider's own id —
 	// see [providerKey].

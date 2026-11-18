@@ -972,6 +972,14 @@ type ContinuedSession struct {
 	// capture continued is held to its own measure (Capture.ContextTokens).
 	CopyContext int64
 
+	// CopyNextRequest is the harness's own estimate of that session's next
+	// request, as the same newest capture's take read it, kept or not
+	// ([SessionCapture.NextRequest]): what that launch is held to with its
+	// brief where it holds a figure, CopyContext where it holds none. Set
+	// beside CopyContext. A kept capture continued is held to its own
+	// (Capture.NextRequest), never this one, a passed-over newer capture's.
+	CopyNextRequest NextRequest
+
 	// KeptTurn is the turn whose kept session the relaunch's read found,
 	// continued or not: the turn's own where its run's record says a capture of
 	// it landed, once what was unsettled is settled — a live turn's row is
@@ -1006,13 +1014,13 @@ const relaunchCaptureWait = 15 * time.Second
 // a newer one is no longer being kept or [relaunchCaptureWait] has run out
 // (passed over and logged, [Coordinator.passedOver]); else, where the turn
 // has kept none, its frozen base ([Coordinator.continuedWithout]); or why
-// none, and what that job's last request carried. Within the wait, what is
-// unsettled is settled first: a gone taker's capture from the log, an
-// unanswered one asked again, a save as the newest; past it, one read of its
-// own settles landed a held taker's capture the log names. Settles are this
-// node's own writes in their own room past the wait. Asked before the run's
-// surface and briefs are built; never an error, and never a read of the
-// conversation's head. The package doc's "The job before's capture" says why.
+// none, and what that job's copy last carried and is estimated to send next.
+// Within the wait, what is unsettled is settled first: a gone taker's capture
+// from the log, an unanswered one asked again, a save as the newest; past it,
+// one read of its own settles landed a held taker's capture the log names.
+// Settles are this node's own writes in their own room past the wait. Asked
+// before the run's surface and briefs are built; never an error, never a read
+// of the conversation's head. The package doc's "The job before's capture".
 func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	restorer ArchiveRestorer) (ContinuedSession, string) {
 
@@ -1055,7 +1063,7 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		return ContinuedSession{}, "the turn's run record was gone before the capture of the job " +
 			"the relaunch follows settled"
 	}
-	answer := ContinuedSession{CopyContext: copyContext(run)}
+	answer := ContinuedSession{CopyContext: copyContext(run), CopyNextRequest: copyNextRequest(run)}
 	if err != nil {
 		// NO ANSWER IS NO KEPT CAPTURE: the row the wait could not read again
 		// may hold a capture since kept, or refused, and a relaunch never
@@ -1295,6 +1303,17 @@ func copyContext(run PendingRun) int64 {
 	return 0
 }
 
+// copyNextRequest is the harness's own estimate of the next request of the
+// session of run's current job, as that job's newest capture's take read it,
+// kept or not ([copyContext]); zero where it left none, or none that
+// estimated one.
+func copyNextRequest(run PendingRun) NextRequest {
+	if newest := run.Capture; newest != nil && newest.LaunchSeq == run.LaunchSeq {
+		return newest.NextRequest()
+	}
+	return NextRequest{}
+}
+
 // unkeptWhy is why a capture is not the kept one, as its stamp says.
 func unkeptWhy(c SessionCapture) string {
 	switch c.State {
@@ -1350,6 +1369,18 @@ type SessionContinuation struct {
 	// to every other box ([Coordinator.continueKept]).
 	Exact *ExactTelling
 
+	// Summarized is the briefs told as a session that may be a summary,
+	// beside Brief and Replaced, where the session's first request is the
+	// launch's to judge in its box (an OpenCode session whose count has a
+	// bound): handed where the box's point does not prove the brief the
+	// launch would hand sends the session whole ([OpenCodePoint.SendsWhole]).
+	// Nil where the runner judged the first request itself. Count and
+	// CountProvider are what that is judged by: the count the runner judged
+	// the kept path by, and the provider of the reply it is anchored on.
+	Summarized    *SummarizedTelling
+	Count         *ResumedCount
+	CountProvider string
+
 	// Unheld is the briefs for a box whose harness answers a release whose
 	// resume this build did not read ([CarryCheck.ResumeRead]), beside Brief
 	// and Replaced; nil where they would tell the same. Only for a kept
@@ -1367,8 +1398,9 @@ type SessionContinuation struct {
 // not read the resume of: a read at a hook's step is held only as the job's
 // session showed it, which such a box's resume may not rebuild, so these tell
 // the notes from the first such read on again, as notes the session may
-// already show; or, where its harness may compact the session before it reads
-// them, they are the briefs told as a session that may be a summary.
+// already show, and every late call a hook took ([CallTelling.Hook]); or,
+// where its harness may compact the session before it reads them, they are
+// the briefs told as a session that may be a summary.
 type UnheldTelling struct {
 	Brief, Replaced string
 
@@ -1467,6 +1499,12 @@ type LaunchDecision struct {
 	// ([SessionContinuation.Unheld]). Both false where it hands the brief
 	// told by the save point, or continues no kept session.
 	Exact, Unheld bool
+
+	// Summarized says the brief handed is the one told as a session that may
+	// be a summary ([SessionContinuation.Summarized],
+	// [Continuation.Summarized]): the box's point did not prove the session
+	// reaches its first request whole, so its guard arms nothing.
+	Summarized bool
 }
 
 // continuedLaunch is how one launch continues the turn's session, if it does:
@@ -1487,6 +1525,9 @@ type continuedLaunch struct {
 	// and unheld that it is one for a box whose release the resume was not
 	// read in ([SessionContinuation.Unheld]), so told is that telling's own.
 	exact, unheld bool
+	// summarized says brief is the one told as a session that may be a
+	// summary ([LaunchDecision.Summarized]), so told is that telling's own.
+	summarized bool
 	// measure is what the session carried at its newest request the engine
 	// measured, along its lineage, saying where it came from: the job
 	// before's record of its own copy, where the launch continues that copy
@@ -1525,37 +1566,39 @@ func carriedMeasure(tokens int64, source MeasureSource, launch string) *SessionM
 // decision is how the launch decided, for its caller ([LaunchRequest.Decided]).
 func (l continuedLaunch) decision() LaunchDecision {
 	return LaunchDecision{Brief: l.kind, Kept: l.kept, Base: l.kind == BriefContinuedConversation, Exact: l.exact,
-		Unheld: l.unheld}
+		Summarized: l.summarized, Unheld: l.unheld}
 }
 
 // omitted is what the launch req records on the job it opens of the calls of
 // the round it carries on that the brief it hands its run left out, and, where
-// that brief continues a session, the fresh one its box falls back to
-// ([LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]).
+// that brief continues a session, the fresh one its box falls back to, each of
+// both kinds ([BriefTold.Omitted], [BriefTold.LateOmitted];
+// [LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]).
 //
 // NONE FOR A LAUNCH THAT CARRIES NO ROUND ON ([LaunchRequest.Continue] nil): a
 // turn's first launch tells no round's calls, and a send-back opens a new
 // round, whose log restarts, so a set of the collected round's calls would be
 // read against another round's log. A closed round's reads past the read cap
 // are counted under the prior-work ledger's rule for them.
-func (l continuedLaunch) omitted(req LaunchRequest) (brief, fresh []int) {
+func (l continuedLaunch) omitted(req LaunchRequest) (brief, fresh BriefTold) {
 	if req.Continue == nil {
-		return nil, nil
+		return BriefTold{}, BriefTold{}
 	}
 	if l.kind.Continues() {
-		fresh = req.Continue.Fresh.Omitted
+		fresh = req.Continue.Fresh
 	}
-	return l.told.Omitted, fresh
+	return l.told, fresh
 }
 
 // freshLaunch is a launch that continues no session: what its fresh brief told
-// of the round it carries on where it carries one on, and nothing where it
-// does not (a turn's first launch, a send-back), whose request names no
-// continuation to read it off.
+// of the round it carries on where it carries one on, and only the leads it
+// opened with where it does not (a turn's first launch, a send-back), whose
+// request names no continuation to read them off ([LaunchRequest.FreshOwn]).
 func freshLaunch(req LaunchRequest) continuedLaunch {
 	// A SESSION OF THE RUN'S OWN restarts nowhere yet: its basis is known, and
 	// is none.
-	launch := continuedLaunch{brief: req.Brief, kind: BriefFresh, restart: new(""), release: func() {}}
+	launch := continuedLaunch{brief: req.Brief, kind: BriefFresh, restart: new(""), release: func() {},
+		told: BriefTold{Own: req.FreshOwn}}
 	if req.Continue != nil {
 		launch.told = req.Continue.Fresh
 	}
@@ -1574,7 +1617,7 @@ func freshLaunch(req LaunchRequest) continuedLaunch {
 // naming it, and a reading of a capture passed over for the copy is said
 // unused ([Coordinator.exactUnused]).
 func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, opened PendingRun,
-	box Sandbox, runner Runner, reused, begun bool) continuedLaunch {
+	box Sandbox, runner Runner, reused, begun bool, sources RunSources) continuedLaunch {
 
 	var (
 		refused []string
@@ -1590,7 +1633,7 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 		if want.Base {
 			launch, why = c.continueBase(ctx, req, opened, box, runner, reused, begun, *want)
 		} else if why = copyWentPast(req, opened, reused, *want); why == "" {
-			launch, why = c.continueKept(ctx, req, opened, box, runner, reused, *want)
+			launch, why = c.continueKept(ctx, req, opened, box, runner, reused, *want, sources)
 		} else {
 			readPassedOver = want.Exact != nil
 		}
@@ -1598,14 +1641,17 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			// WHAT ITS BRIEFS TOLD, what they left out of the round and what
 			// they opened with, the same for the brief for either box
 			// ([SessionContinuation.Told]); and where the brief handed is
-			// one told by a reading, or one for a box whose release the
-			// resume was not read in, that telling's own ([ExactTelling.Told],
-			// [UnheldTelling.Told]). Chosen here, the one assignment, so
-			// every continuation records what the brief it handed left
-			// out, the box's own copy among them.
+			// one told by a reading, one told as a session that may be a
+			// summary, or one for a box whose release the resume was not read
+			// in, that telling's own ([ExactTelling.Told],
+			// [SummarizedTelling.Told], [UnheldTelling.Told]). Chosen here, the
+			// one assignment, so every continuation records what the brief it
+			// handed left out, the box's own copy among them.
 			switch {
 			case launch.exact:
 				launch.told = want.Exact.Told
+			case launch.summarized:
+				launch.told = want.Summarized.Told
 			case launch.unheld:
 				launch.told = want.Unheld.Told
 			default:
@@ -1626,6 +1672,21 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			launch = continuedLaunch{brief: continued.Brief, fresh: req.Brief, session: continued.SessionID,
 				kind: BriefContinued, told: continued.Told, measure: opened.Prior.Context,
 				restart: opened.Prior.Restart, release: func() {}}
+			// AN OPENCODE COPY'S FIRST REQUEST, judged in this box where its
+			// caller handed the summarized telling beside the held one (the
+			// package doc's "first request is judged in its box"): sources
+			// are charged, the box holding the copy, and the point paired
+			// with the release the job before's record names as the copy's
+			// writer, whether or not the company keeps captures
+			// ([PriorBox.Writer]).
+			if continued.Summarized != "" {
+				judge := &boxJudge{path: "in_place", count: continued.Count, provider: continued.CountProvider,
+					ask: PointAsk{Writer: opened.Prior.Writer, Sources: &sources}}
+				if !c.sendsWhole(ctx, req, box, runner, judge, continued.Brief) {
+					launch.brief, launch.told, launch.summarized = continued.Summarized, continued.SummarizedTold, true
+					c.mayCompact(ctx, req, judge, continued.Brief)
+				}
+			}
 			outcome = continuesBoxCopy
 		}
 	}
@@ -1686,7 +1747,7 @@ func copyWentPast(req LaunchRequest, opened PendingRun, reused bool, want Sessio
 // release only where an unheld telling is at stake: the one that wrote it, as
 // the executor's DISABLE_AUTOUPDATER pins it.
 func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opened PendingRun,
-	box Sandbox, runner Runner, reused bool, want SessionContinuation) (continuedLaunch, string) {
+	box Sandbox, runner Runner, reused bool, want SessionContinuation, sources RunSources) (continuedLaunch, string) {
 
 	if why := c.continuesNoKept(); why != "" {
 		return continuedLaunch{}, why
@@ -1729,6 +1790,36 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	// nothing is fetched to be kept over a copy it would not touch.
 	own := reused && !kept.Interrupted
 	archive := ArchiveOf(row)
+	// WHERE ITS FIRST REQUEST IS THIS LAUNCH'S TO JUDGE (an OpenCode session
+	// handed with its summarized telling), the box's point, read once on
+	// every branch, after CheckCarry where that runs, with what the box hands
+	// over first where it is the one the capture was taken in: the brief
+	// told by a reading where it sends whole, else the held brief where it
+	// does, else the summarized one.
+	var judge *boxJudge
+	if want.Summarized != nil {
+		judge = &boxJudge{path: "kept", count: want.Count, provider: want.CountProvider,
+			ask: PointAsk{Writer: archive.Version}}
+		if reused {
+			judge.ask.Sources = &sources
+		}
+	}
+	// held is brief where it may be handed, else the summarized brief for
+	// this box, logged: "" and why where there is none.
+	held := func(brief string) (string, bool, string) {
+		if judge == nil || c.sendsWhole(ctx, req, box, runner, judge, brief) {
+			return brief, false, ""
+		}
+		summed := want.Summarized.Replaced
+		if reused {
+			summed = want.Summarized.Brief
+		}
+		if summed == "" {
+			return "", false, "the launch was given no brief told as a session that may be a summary for this box"
+		}
+		c.mayCompact(ctx, req, judge, brief)
+		return summed, true, ""
+	}
 	var check CarryCheck
 	if !own || want.Unheld != nil || want.UnheldDropped {
 		check, err = restorer.CheckCarry(ctx, box, archive)
@@ -1744,7 +1835,13 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	if !own {
 		exact, unused = exactFor(want.Exact, check, reused)
 	}
-	unheld := exact == "" && want.Unheld != nil && !check.ResumeRead
+	if judge != nil {
+		judge.ask.Release = check.Version
+		if exact != "" && !c.sendsWhole(ctx, req, box, runner, judge, exact) {
+			exact, unused = "", exactMayCompact
+		}
+	}
+	unheld, summarized := exact == "" && want.Unheld != nil && !check.ResumeRead, false
 	switch {
 	case exact != "":
 		brief = exact
@@ -1758,10 +1855,16 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	case want.UnheldDropped && !check.ResumeRead:
 		return continuedLaunch{}, fmt.Sprintf("the seat's budget could not carry the briefs for a box whose "+
 			"release the resume was not read in, and this box's harness answers %s", answeredRelease(check))
+	default:
+		var why string
+		if brief, summarized, why = held(brief); why != "" {
+			return continuedLaunch{}, why
+		}
 	}
 	if own {
 		return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
-			kept: true, unheld: unheld, measure: measure, restart: restart, release: func() {}}, ""
+			kept: true, unheld: unheld, summarized: summarized, measure: measure, restart: restart,
+			release: func() {}}, ""
 	}
 	fetched, err := c.fetchSession(ctx, row)
 	if err != nil {
@@ -1782,8 +1885,8 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	// the run — which replaces the box's copy where its harness was cut off.
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: kept.Interrupted}
 	return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
-		kept: true, exact: exact != "", unheld: unheld, carried: carried, measure: measure, restart: restart,
-		release: func() {
+		kept: true, exact: exact != "", unheld: unheld, summarized: summarized, carried: carried,
+		measure: measure, restart: restart, release: func() {
 			_ = body.Close()
 			fetched.remove()
 		}}, ""
@@ -1845,6 +1948,78 @@ func (c *Coordinator) exactUnused(ctx context.Context, req LaunchRequest, why st
 // exactUnusedOutcome is what a launch that does not hand the brief told by a
 // reading hands instead ([Coordinator.exactUnused]).
 const exactUnusedOutcome = "the relaunch is handed the telling without the reading"
+
+// exactMayCompact is why a launch does not hand an OpenCode session the brief
+// told by a reading where the box's point does not prove that brief sends the
+// session whole ([Coordinator.exactUnused]).
+const exactMayCompact = "its harness may compact the session in this box before it reads the brief told by the " +
+	"reading"
+
+// boxJudge is how a launch judges, in its box, whether an OpenCode session it
+// continues reaches its first request whole ([OpenCodePoint.SendsWhole]): the
+// path (`kept` or `in_place`), the count it is judged by and the provider of
+// its anchoring reply, the ask, and the point once read, read at most once.
+type boxJudge struct {
+	path     string
+	count    *ResumedCount
+	provider string
+	ask      PointAsk
+	read     bool
+	point    OpenCodePoint
+}
+
+// sendsWhole reports whether the session j judges reaches its first request
+// whole with brief, the box's point read on its first ask ([PointReader]): no
+// point, a runner that reads none and a box that could not be asked among
+// them, sends nothing whole.
+func (c *Coordinator) sendsWhole(ctx context.Context, req LaunchRequest, box Sandbox, runner Runner,
+	j *boxJudge, brief string) bool {
+
+	if !j.read {
+		j.read = true
+		j.ask.Model, j.ask.Env = req.Model, withHomePaths(req.Spec.Env, req, box)
+		j.point = readPoint(ctx, box, runner, j.ask)
+	}
+	provider, _ := ModelProvider(req.Model)
+	return j.point.SendsWhole(j.count, j.provider, provider, brief)
+}
+
+// readPoint is box's OpenCode point as runner reads it ([PointReader]), no
+// point where it reads none or the box could not be asked.
+func readPoint(ctx context.Context, box Sandbox, runner Runner, ask PointAsk) OpenCodePoint {
+	reader, ok := runner.(PointReader)
+	if !ok {
+		return OpenCodePoint{Mark: PointUnread, Why: "the box's runner reads no OpenCode point"}
+	}
+	point, err := reader.ReadOpenCodePoint(ctx, box, ask)
+	if err != nil {
+		return OpenCodePoint{Mark: PointUnread,
+			Why: redact.Secrets("the box could not be asked for its OpenCode point: " + err.Error())}
+	}
+	return point
+}
+
+// mayCompact logs that a launch hands the session j judged the brief told as
+// one that may be a summary, the box's point not proving brief, the one it
+// would otherwise hand, sends it whole: `executor_session_may_compact`, the
+// launch's form of the runner's line, keyed as [Coordinator.notContinued]'s.
+func (c *Coordinator) mayCompact(ctx context.Context, req LaunchRequest, j *boxJudge, brief string) {
+	bound, _ := j.count.Bound()
+	var mark CountMark
+	if j.count != nil {
+		mark = j.count.Mark
+	}
+	log.InfoContext(ctx, "executor_session_may_compact", "turn_id", req.Turn.TurnID,
+		"agent", req.Turn.AgentHandle, "path", j.path, "bound", bound, "mark", string(mark),
+		"provider", j.provider, "model", req.Model, "release", j.point.Release, "point", j.point.Tokens,
+		"never", j.point.Never, "point_mark", string(j.point.Mark), "detail", j.point.Why,
+		"box_tokens", OpenCodeCharge(j.point.BoxBytes), "brief_tokens", OpenCodeCharge(int64(len(brief))),
+		"outcome", mayCompactOutcome)
+}
+
+// mayCompactOutcome is what a launch whose box may compact the session before
+// its first request hands instead of the held telling ([Coordinator.mayCompact]).
+const mayCompactOutcome = "the continuation is told as one that may be a summary, and its guard arms no skill"
 
 // continueBase continues, in box, the session the turn's conversation's last
 // turn left, as the turn's first launch froze it ([PendingRun.Base]) — or says

@@ -176,6 +176,10 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/worklet/item/edit.tsx"],
     why: "a task's title and description editors, fields of the one draft its page's edits declare",
   },
+  "routes/gitlet/change/CommentCard.tsx": {
+    screen: ["routes/gitlet/change/ChangePage.tsx"],
+    why: "a comment's words being edited, a field of the change page's one draft",
+  },
   "routes/gitlet/change/Conversation.tsx": {
     screen: ["routes/gitlet/change/ChangePage.tsx"],
     why: "the comment on a change and each thread's reply box, fields of the change page's one draft",
@@ -236,6 +240,10 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: a search for a task, page or artifact to link, in its dialog",
   "routes/gitlet/commit/ComparePage.tsx": "modal: opening a change of a branch, in its dialog",
   "routes/gitlet/change/AskDialog.tsx": "modal: the note asking reviewers, in its dialog",
+  "routes/gitlet/change/ChangeEdits.tsx":
+    "modal: a change's target branch or work item, in its dialog",
+  "routes/gitlet/change/Finding.tsx":
+    "modal: an applied suggestion's commit message, in its dialog",
   "routes/gitlet/change/Merge.tsx": "modal: an override's reason, in its dialog",
   "routes/gitlet/change/ReviewDialog.tsx": "modal: a review's summary, in its dialog",
   "routes/gitlet/ImportRepo.tsx": "modal: a repository to import, in its dialog",
@@ -282,6 +290,7 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/gitlet/repo/PathOwners.tsx": "modal: a path owner and its globs, in its dialog",
   "routes/gitlet/repo/Protect.tsx": "modal: a branch protection rule, in its dialog",
   "routes/gitlet/repo/RepoLife.tsx": "modal: a repository delete's reason, in its dialog",
+  "routes/gitlet/repo/TagWrites.tsx": "modal: a new tag's name, target and message, in its dialog",
   "routes/gitlet/repo/RepoWrites.tsx":
     "modal: a repository's details, its new name and its mirrors, in their dialogs",
   "routes/settings/integrations/SshServers.tsx":

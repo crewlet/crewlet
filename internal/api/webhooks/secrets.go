@@ -64,31 +64,17 @@ type Secrets struct {
 }
 
 // Verifiable names the surfaces whose material can actually verify a
-// delivery, sorted. The answer to "would a real delivery be accepted right
-// now", asked without sending one.
+// delivery, sorted: "would a real delivery be accepted right now", asked
+// without sending one. NOT "is a secret configured": a ${VAR} that did not
+// resolve renders as present while the route answers 503.
 //
-// NOT "is a secret configured", which is what every operator surface showed
-// before this: a secret lives in the config as a ${VAR}, and one that did not
-// resolve renders as present while the route answers 503 to every delivery
-// and the third-party app's settings page reports a healthy hook. The config
-// says set, the third-party app says fine, and the deliveries stop, with
-// nothing anywhere naming the variable.
+// The rule is the ROUTE's own: GitLab needs a key it could have signed with,
+// not merely a non-empty string. Mattermost is absent by design (a websocket,
+// no delivery to verify), read as "nothing to say".
 //
-// The rule is per surface and it is the ROUTE's own: GitLab needs a key the
-// third-party app could have signed with, not merely a non-empty string, because a
-// value that is not one cannot be the HMAC key for any delivery. Mattermost
-// is absent by design: it holds a websocket rather than a route, so there is
-// no delivery to verify at all, and the operator surface reads its absence
-// here as "nothing to say" rather than as a refusal.
-//
-// SLACK IS PER SEAT, and it belongs here on the same question every other
-// surface answers: would a real delivery be accepted right now. It is
-// verifiable when AT LEAST ONE seat's signing secret resolved, because a
-// delivery addressed to that seat's path would be. Leaving it out did not
-// read as "nothing to say" the way Mattermost's absence does, because the
-// company row does carry a secret_present for Slack: so secret_usable was
-// false for every Slack company that had ever worked, and the dashboard told
-// each of them that every delivery was being refused.
+// SLACK IS PER SEAT, verifiable when AT LEAST ONE seat's signing secret
+// resolved; leaving it out would read as refusal, since the company row
+// carries a secret_present for Slack.
 func (s Secrets) Verifiable() []string {
 	var out []string
 	if whsec.Valid(s.GitLab) {
@@ -140,40 +126,16 @@ func (s Secrets) Verifiable() []string {
 
 // SecretsOf reads the verification material out of a company epoch.
 //
-// The organization is taken as an argument rather than rebuilt from the config,
-// because the caller holding an epoch already has one and building a second
-// would let the two drift over a reload.
-//
-// # Resolved, and that is the whole point
-//
-// A secret lives in the config as a ${VAR}: verbatim in the stored payload,
-// resolved at construction, which is what makes rotating one a change to the
-// environment rather than to the company. Every consumer resolves — and this
-// one did not.
-//
-// The consequence was not a degraded route. It was SEVEN routes verifying
-// against the literal string "${GITLAB_SIGNING_SECRET}": every delivery from
-// every third-party app refused, with the engine logging one warning per delivery and
-// the third-party app's settings page showing a healthy hook. Measured against a real
-// GitLab. Worse than the outage is what the literal IS — a config field the
-// dashboard renders, not a secret — so a forged delivery would have verified
-// against a string an attacker could read.
+// Secrets are RESOLVED from their ${VAR}: the literal is a config field the
+// dashboard renders, so a forged delivery would verify against a string an
+// attacker could read.
 //
 // A DISABLED BLOCK CONTRIBUTES NOTHING, so its route answers 503 rather than
-// verifying and ingesting a delivery the routing half will then drop:
-// `enabled: false` is what an operator sets after a credential leak, and
-// accepting deliveries that go nowhere is worse than refusing them. It also
-// makes this agree with RoutedSources, which reports what can actually reach
-// a seat.
+// ingesting what the routing half then drops (`enabled: false` is set after a
+// credential leak; agrees with RoutedSources). Only GitHub and GitLab have
+// that switch; for Jira and Confluence the block being PRESENT enables it.
 //
-// Only GitHub and GitLab have that switch. For Jira and Confluence the block
-// being PRESENT is the enablement — removing it is the gesture — and a nil
-// block already contributes nothing here.
-//
-// resolve is what a ${VAR} answers to; nil resolves nothing, which leaves
-// every route with an empty secret and therefore refusing to serve. That is
-// the safe direction: a route with nothing to verify with answers 503 rather
-// than accepting.
+// A nil resolve leaves every route's secret empty: 503, never accepting.
 func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) string) Secrets {
 	if resolve == nil {
 		resolve = func(string) string { return "" }
@@ -214,22 +176,14 @@ func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) stri
 		if !role.IsAgent() {
 			continue
 		}
-		// THE SEAT'S OWN GITHUB APP, on the same walk as its Slack one
-		// and for the same reason: both are the seat's own credential
-		// for its own identity at a third-party app, and the seat is
-		// what the org model holds.
-		//
-		// It used to be read off the company DOCUMENT instead, on the
-		// reasoning that an app has no runtime identity to carry — and
-		// when a stored revision stopped carrying seats at all, that walk
-		// became a walk of nothing and every agent's deliveries were
-		// refused with no secret to verify against. The app rides the
-		// seat now (see [org.GitHubApp]).
+		// THE SEAT'S OWN GITHUB APP, on the same walk as its Slack one: both
+		// are the seat's own credential at a third-party app, and the seat
+		// is what the org model holds, not the company document (see
+		// [org.GitHubApp]).
 		//
 		// NOT GATED ON integrations.github.enabled. That switch turns off
-		// the ORGANIZATION's app and route; an agent's app is its own,
-		// and a company that only ever created per-agent ones has no
-		// `integrations.github` block to enable at all.
+		// the ORGANIZATION's app and route; an agent's app is its own, and a
+		// company of only per-agent apps has no `integrations.github` block.
 		if app := role.GitHub; app != nil {
 			if secret := resolve(app.WebhookSecret); secret != "" {
 				if s.GitHubSeat == nil {

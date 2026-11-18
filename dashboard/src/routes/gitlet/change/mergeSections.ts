@@ -4,6 +4,7 @@
  */
 
 import { CHECK_HISTORY_DAYS } from "~/lib/checks.ts";
+import { refName } from "~/lib/code.ts";
 import type {
   CodeChangeDetail,
   CodePrecondition,
@@ -75,6 +76,37 @@ export function boxTone(readiness: CodeReadiness | undefined): DiscTone {
   return readiness?.preconditions.length ? "success" : "neutral";
 }
 
+/**
+ * Whether its merge was measured before its target moved; the home re-measures only after a while.
+ */
+export function measuredBeforeMove(
+  change: Pick<CodeChangeDetail, "target_ref" | "target_tip" | "mergeability">,
+): boolean {
+  const m = change.mergeability;
+  return (
+    m !== undefined &&
+    change.target_tip !== undefined &&
+    m.target_ref === change.target_ref &&
+    m.target_oid !== change.target_tip
+  );
+}
+
+/**
+ * Why Fast-forward is held (the head's facts show the target moved past it), else undefined.
+ */
+export function fastForwardHeld(
+  change: Pick<CodeChangeDetail, "target_ref" | "target_tip" | "head" | "revision">,
+  revisions: readonly Pick<CodeRevisionRow, "n" | "facts">[],
+): string | undefined {
+  const tip = change.target_tip;
+  const facts = revisions.find((r) => r.n === change.revision)?.facts;
+  if (!tip || tip === change.head || !facts || facts.target_ref !== change.target_ref)
+    return undefined;
+  if (facts.base_oid === tip || facts.target_oid !== tip) return undefined;
+  const target = refName(change.target_ref).name;
+  return `${target} has moved past this branch, so ${target} cannot move to its head. Rebase it first, or merge it another way.`;
+}
+
 /** Whether its head's checks are still kept: pushed within the checks' horizon. */
 export function checksKept(
   change: Pick<CodeChangeDetail, "revision" | "opened_at">,
@@ -130,16 +162,19 @@ export function reviewerStandings(
   return out;
 }
 
-/** Whom a re-request asks: each standing verdict not an approval of the head, not asked now, no author. */
+/**
+ * Whom a re-request asks: reviewers yet to approve the head, less those asked, authors and reader.
+ */
 export function reRequestable(
   change: Pick<CodeChangeDetail, "revision" | "authors">,
   standings: readonly Standing[],
   asked: readonly CodeReviewerRow[],
+  me: string,
 ): string[] {
   const authors = new Set(change.authors.map((a) => a.author));
   const askedNow = new Set(asked.filter((a) => a.state === "requested").map((a) => a.reviewer));
   return standings
     .filter((s) => s.verdict !== "approve" || s.revision !== change.revision)
     .map((s) => s.handle)
-    .filter((h) => !askedNow.has(h) && !authors.has(h));
+    .filter((h) => !askedNow.has(h) && !authors.has(h) && h !== me);
 }

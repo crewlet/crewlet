@@ -233,34 +233,16 @@ func takeSeat(t *testing.T, list []any, handle string) ([]any, any) {
 
 // A LEAD WRITES INSIDE THEIR SUBTREE, AND ONLY THERE.
 //
-// Every case is one write by the Platform lead, who holds no grant. What they
-// may do is everything about the seats and units inside Platform — its own
-// fields, a seat's, a seat added, moved between two of their teams, a team
-// removed — and what they may not is anything that reaches outside it on
-// either side of the write: handing Platform to somebody else, removing or
-// moving the unit they lead, moving a seat out, making a seat manage somebody
-// outside, touching a root seat, changing a key another system finds a seat
-// or a team by — a project, even one nothing in the company names any more,
-// a channel or a contact id — changing a credential — an `mcp_env` key with
-// nothing under it among them, since the key alone starts that tool server
-// for the seat, and a credential emptied or removed — or naming a `${VAR}`
-// anywhere — a contact id or an address that names one is resolved from the
-// engine's own environment and recited to whoever looks the seat up.
+// Each case is one write by the Platform lead, who holds no grant: anything
+// inside Platform, nothing reaching outside it on either side: handing
+// Platform on, moving the unit they lead or a seat out, managing somebody
+// outside, a root seat, a key another system finds a seat by (project,
+// channel, contact id), a credential (even an `mcp_env` key alone, or one
+// emptied), or a `${VAR}` (recited to whoever looks the seat up).
 //
-// A case with no kind is a whole-document write, its edit handed the whole
-// document: a seat or a unit outside their subtree is refused at its own
-// address before anything is built (TestAWriteIsDecidedBeforeItsIDIsLookedUp),
-// so what reaches outside from a write that also reaches inside is asked
-// there.
-//
-// Mutation: decide every place against the document being replaced alone and
-// the cases that only the proposed document refuses — clearing the unit's
-// lead, a seat moved out — are admitted; drop the key check and the project,
-// the channel and the contact id are admitted; list only credential fields and the contact id and the
-// address naming a variable are admitted; compare a credential field's
-// strings alone and the empty server blocks are admitted; list only what the
-// proposed document holds and the emptied and removed credentials are;
-// compare no order and both reorders outside their team are admitted.
+// Mutation: decide against the replaced document alone, drop the key check,
+// list only credential fields, compare strings alone, list only the proposed
+// document's, or compare no order, and its case is admitted.
 func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -633,14 +615,13 @@ func onlyAnAdministratorMayTurnOn(t *testing.T, on string) {
 
 // A WRITE THAT CHANGES NOTHING IS ADMIN'S.
 //
-// A whole document sent back unchanged re-activates it on every node (`POST
-// /config/reload`'s gesture), and a patch or an entity's PUT that changes
-// nothing is answered as already so, which would tell its caller that a
-// setting they may not read holds a value they guessed. So a caller without
-// admin is refused it however it arrives: a patch of a key that is already
-// unset, by a person who leads nothing, and an entity sent back as it was
-// read, by a lead. The revision does not move. The control is an admin, whose
-// same patch is answered `changed: false`, and stores nothing either.
+// A whole document sent back unchanged re-activates it on every node, and a
+// patch or an entity's PUT that changes nothing is answered as already so,
+// which would tell its caller a setting they may not read holds a value they
+// guessed. So a caller without admin is refused it however it arrives: a patch
+// of an already unset key by a person who leads nothing, and an entity sent
+// back as read by a lead. The revision does not move. The control is an admin,
+// whose same patch is answered `changed: false`, storing nothing either.
 //
 // Mutation: admit a diff with no part refused, as before, and both writes
 // are answered as unchanged to callers who may not read what they name.
@@ -681,13 +662,12 @@ func TestAWriteThatChangesNothingIsTheCompanyGrants(t *testing.T) {
 // A LEAD'S CHECK OF AN UNCHANGED SEAT OR UNIT IS ANSWERED.
 //
 // The write is refused only because storing it re-publishes the company. A
-// dry run stores nothing, and it is how a lead reads what the engine derives
-// of their unit as it stands, and the warnings a ceiling they raise is
-// compared against — so the lead's own seat and unit, sent back as read with
-// `dry_run=true`, answer 200 valid with the derivation, and the revision does
-// not move. The control is the same lead's check of the whole document, which
-// no address decided and which stays refused, so `{}` hands nobody the
-// company's hierarchy and warnings.
+// dry run stores nothing, and is how a lead reads what the engine derives of
+// their unit and the warnings a raised ceiling is compared against: their own
+// seat and unit, sent back as read with `dry_run=true`, answer 200 valid with
+// the derivation, and the revision does not move. The control is the same
+// lead's check of the whole document, which no address decided and stays
+// refused, so `{}` hands nobody the company's hierarchy and warnings.
 //
 // Mutation: drop the exemption and both entity checks are refused 403
 // unchanged; take it for every dry run and the whole-document check answers.
@@ -878,15 +858,13 @@ func TestAReadIsDecidedBeforeItsIDIsLookedUp(t *testing.T) {
 
 // A WRITE IS DECIDED BEFORE ITS ID IS LOOKED UP, as a read is.
 //
-// The Platform lead writing a seat or a unit outside their subtree — in
-// another team, at the root, the team above their own — or one the company
-// does not have is refused in the same bytes whatever the body: decided where
-// the id sits before anything is built, a missing id at the root. Built
-// first, a body this kind cannot read answered 400 naming where the seat sits
-// in the document, a body naming another handle 400 naming both, a well-formed
-// edit admission's 403 naming the seat's unit, and a missing id 404. The
-// controls are an admin, who is told the id is not there, and an
-// address inside their subtree, whose body is read and refused as unreadable.
+// The Platform lead writing a seat or unit outside their subtree or one the
+// company lacks is refused in the same bytes whatever the body: decided where
+// the id sits before anything is built, a missing id at the root. Built first,
+// answers would differ (400 naming where the seat sits, 400 naming two
+// handles, 403 naming the seat's unit, 404). The controls are an admin, told
+// the id is not there, and an address inside their subtree, whose body is read
+// and refused as unreadable.
 //
 // Mutation: decide the address after the draft is built, and every body to an
 // existing id answers apart from the missing one.

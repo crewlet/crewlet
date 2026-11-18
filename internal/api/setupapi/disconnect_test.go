@@ -23,11 +23,8 @@ import (
 //
 // The store is the company's, so a credential an operator may be sharing with
 // another deployment is not something a Disconnect button removes. What the
-// answer owes them is the list — and the list existed only on the FORCE path,
-// which nothing presses: the ordinary disconnect returned
-// `{key, removed, disconnecting, remove_seats, detail}` and named nothing at
-// all. Measured: seven credentials survived a disconnect and not one of them
-// was named.
+// answer owes them is the list of what survives, on the ordinary path as on
+// the FORCE one.
 //
 // It has to be computed HERE, before the intent is recorded, because every
 // name in it is derived from a `${VAR}` in the company document and both paths
@@ -345,12 +342,8 @@ func mustSaveStatus(t *testing.T, status *statusStore, state integration.State) 
 // either name. They also SURVIVE a disconnect by design — GitHub offers no
 // API to delete an app registration, so uninstalling is all the engine can do
 // and deleting the key would destroy the only copy of a working one for an
-// app that still exists.
-//
-// Which makes this list the only place they are ever mentioned. It named the
-// company-level signing secret alone: measured on a live disconnect, two
-// sealed per-seat values stayed in the store with the operator never told
-// they were there.
+// app that still exists. This list is the only place they are mentioned, so
+// it names the per-seat sealed values as well as the company-level secret.
 func TestAGitHubDisconnectNamesEachAgentsAppCredentials(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)

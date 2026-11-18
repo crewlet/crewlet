@@ -16,35 +16,13 @@ import (
 
 // Turning a page change into a woken seat.
 //
-// # A wiki has no assignees, and that shapes every rule here
-//
-// A tracker event names somebody: an assignee, a reporter, a watcher. A page
-// event names only who edited it. So routing has three signals — a seat is
-// SUBSCRIBED to the page, somebody was MENTIONED in the content, or the page
-// lives in a space some unit owns — and the last is a fallback in the strict
-// sense: it says "this concerns your team", never "this is yours".
-//
-// # The subscription list is the ENGINE'S, not Confluence's
-//
-// Confluence does keep watchers, and reading them is the obvious design. It
-// is the wrong one here for three reasons that compound: the watcher list is
-// mostly PEOPLE, who Confluence has already notified natively and who resolve
-// to nothing the engine can route to; reading it costs a call per event on a
-// path that must stay cheap; and a per-role token often cannot read another
-// user's watch state at all, so the answer would be "no watchers" on exactly
-// the deployments the feature is documented for.
-//
-// So the engine keeps its own list, of the only parties it can route to
-// anyway. A seat is subscribed to a page when it TOUCHED it — edited it, or
-// was mentioned on it — which is the same rule Confluence applies to people
-// and needs no vendor call to evaluate. It lives on the coordination store,
-// because a seat subscribed by a mention one node handled has to be found by
-// whichever node handles the next event.
-//
-// The list is bounded by the coordination bucket's retention rather than by a
-// per-page TTL: a page nobody has touched inside that window drops its
-// subscribers, which is the right forgetting — a seat that edited a page a
-// year ago is not waiting on it.
+// A page event names only its editor, so a seat is routed to when SUBSCRIBED,
+// MENTIONED, or its unit owns the page's space (a fallback: "this concerns
+// your team", never "this is yours"). The subscription list is the ENGINE'S:
+// Confluence's watchers are mostly PEOPLE, unroutable; reading them costs a
+// call per event; and a per-role token often cannot read them. A seat is
+// subscribed when it TOUCHED the page, kept on the coordination store so any
+// node finds it and bounded by that bucket's retention, not a per-page TTL.
 
 // Routing reasons, strongest first.
 const (
@@ -224,30 +202,22 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	page, _ := w.Body["page"].(map[string]any)
 	comment, _ := w.Body["comment"].(map[string]any)
 	if len(page) == 0 && len(comment) > 0 {
-		// THE COMMENT'S OWN CONTAINER IS THE SECOND PLACE THE PAGE IS NAMED,
-		// and both inbound shapes deliver a comment with no top-level page:
-		// the Forge relay lifts a container only when it was given one, and
-		// Confluence Cloud's own hook puts the page under "parent" with
-		// nothing beside the comment at all (measured against a live site).
-		// The page id is the whole conversation key for this third-party app, so a
-		// comment read only from the sibling key had no key at all: it fell
-		// back to its own event id and coalesced with nothing, and three
-		// comments on one page while the seat was busy ran three turns, which
-		// is precisely the case the key exists to collapse. On Cloud it was
-		// worse, since the space lives on the parent too, so every Cloud
-		// comment routed to nobody. Lifting the container here, once, is what
-		// lets the space, the title and the id below all read from one place.
+		// THE COMMENT'S OWN CONTAINER IS THE SECOND PLACE THE PAGE IS NAMED:
+		// the Forge relay lifts a container only when given one, and Cloud's
+		// own hook puts the page under "parent" (measured). The page id is the
+		// conversation key, so a comment without it coalesces with nothing and
+		// three comments on one page run three turns; the space lives on the
+		// parent too, so on Cloud the comment would route to nobody. Lifting
+		// it once lets space, title and id read from one place.
 		page = container(comment)
 	}
 	// THE PAGE ID IS RESOLVED ONCE, and the self URL is its last resort.
 	//
-	// A Confluence Cloud REPLY names its page in neither place the lift
-	// above looks: its parent is the comment being replied to, and that
-	// object may carry no parent of its own. Its self URL does name the
-	// page, in the /pages/<id>/ segment every Cloud content URL has, and a
-	// reply with no page id at all is dropped before mentions, watchers or
-	// the space lead are ever considered — so on Cloud a seat asked in a
-	// reply would never be woken, and replies are most of a wiki thread.
+	// A Cloud REPLY names its page in neither place the lift above looks (its
+	// parent is the comment replied to). Its self URL does, in the
+	// /pages/<id>/ segment; without an id the reply is dropped before
+	// mentions, watchers or the space lead are considered, and replies are
+	// most of a wiki thread.
 	pageID := str(page, "id")
 	if pageID == "" {
 		pageID = pageIDFromSelf(str(comment, "self"))
@@ -650,17 +620,14 @@ func LeadsFrom(o *org.Organization) map[string]string {
 
 // container is the PAGE a comment hangs off, wherever the payload names it.
 //
-// Three senders name it three ways. The Forge relay calls it "container", and
-// it is the page. Confluence's own hook calls it "parent", which is the page
-// for a top-level comment and ANOTHER COMMENT for a reply — whose own parent
-// is the page — so the chain is WALKED rather than read once. Reading it once
-// and refusing a comment parent dropped every Cloud reply on the floor, which
-// is worse than the mis-keying that guard was written against: a reply keyed
-// on a comment id at least woke somebody.
+// The Forge relay calls it "container" (the page). Confluence's own hook calls
+// it "parent": the page for a top-level comment but ANOTHER COMMENT for a
+// reply, whose own parent is the page, so the chain is WALKED. Refusing a
+// comment parent would drop every Cloud reply, worse than keying it on a
+// comment id, which at least woke somebody.
 //
-// Only an explicit "comment" is walked past. An object in the parent slot
-// that names no content type is the page in every shape observed, and
-// treating an unlabelled one as a comment would put the drop back.
+// Only an explicit "comment" is walked past: an unlabelled parent is the page
+// in every shape observed.
 func container(comment map[string]any) map[string]any {
 	if c, ok := comment["container"].(map[string]any); ok {
 		return c

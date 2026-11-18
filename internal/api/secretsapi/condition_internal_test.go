@@ -21,19 +21,15 @@ import (
 
 // A CONDITION OF THE NODE IS NOT A FAULT HERE EITHER.
 //
-// Every failure this surface did not name was `500 internal_error`, a
-// coordination store that blinked and a node behind its log among them, which
-// told an administrator the engine had broken and offered no retry. A
-// condition is `503` in a person's words for it ([builtin.ConditionSentence]),
-// under its own hint, none where no wait clears it, and its error goes to the
-// log; a fault keeps its `500` (the control).
+// A blinked coordination store or a node behind its log must not answer
+// `500 internal_error`, which says the engine broke and offers no retry. A
+// condition is `503` in a person's words ([builtin.ConditionSentence]), under
+// its own hint, and its error goes to the log; a fault keeps its `500`.
 //
-// Not parallel: it installs the process's log sink.
-//
-// Mutation: drop the condition's arm from fail and the first two rows answer
-// 500; answer the fault as a condition and the control does; log through
-// another package's logger, or without what the request was doing, and the
-// log assertion goes red.
+// Not parallel: it installs the process's log sink. Mutation: drop the
+// condition's arm from fail and the first two rows answer 500; answer the
+// fault as a condition and the control does; log through another logger, or
+// without the request's context, and the log assertion goes red.
 func TestAConditionIsNotAFault(t *testing.T) {
 	var out syncBuffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &out)

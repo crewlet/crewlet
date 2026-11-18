@@ -39,14 +39,12 @@ import (
 // what was never touched.
 //
 // The company: jane owns `page` (an HTML artifact), `notes` (a doc, filed in
-// the folder `campaigns`),
-// `handbook` (a doc of two tabs), `deck` (slides), `design` (a canvas of
-// two artboards) and `pulse` (a dashboard of one note), the last five shared
-// with bob as viewer; the
-// page is shared with bob as viewer, with the ENG unit as editor and with sam
-// as editor. `scribe` is an agent owning `report`, led by lee. dana relates to
-// nothing, and ada is an administrator who relates to nothing either. The
-// tracker holds ENG-12, live, and ENG-9, removed.
+// the folder `campaigns`), `handbook` (a doc of two tabs), `deck` (slides),
+// `design` (a canvas of two artboards) and `pulse` (a dashboard of one note),
+// the last five shared with bob as viewer; the page is shared with bob as
+// viewer, the ENG unit and sam as editor. `scribe` is an agent owning `report`,
+// led by lee. dana and the administrator ada relate to nothing. The tracker
+// holds ENG-12, live, and ENG-9, removed.
 
 var (
 	page     = artifacts.IDFor("jane's page")

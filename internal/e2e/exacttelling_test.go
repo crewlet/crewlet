@@ -24,12 +24,11 @@ import (
 // harness killed mid-stream does, asks a person, and exits failing. Its
 // collection parks it on the question and keeps its session marked cut off;
 // the person's answer relaunches the turn, which continues that kept session
-// (`--resume`). What the relaunch's brief tells of the job's calls is decided
-// across every component a unit test stubs: the stand-in's records, the
-// session's capture and its archive in the object store, the engine's reading
-// of that archive through the runner of the harness that wrote it, the
-// runner's telling by the reading, and the launch's choice of the brief by the
-// release the relaunch's box answers.
+// (`--resume`). What the brief tells of the job's calls is decided across every
+// component a unit test stubs: the stand-in's records, the session's capture
+// and archive in the object store, the engine's reading of that archive, the
+// runner's telling by it, and the launch's choice of brief by the release the
+// relaunch's box answers.
 
 // exactModel is the model the coder entry of a company here names: one whose
 // window the engine knows (internal/sandbox's claudeWindows), so the
@@ -186,12 +185,11 @@ func countsAre(t *testing.T, line map[string]any, asked, held, told int) {
 
 // A CUT-OFF SESSION'S RELAUNCH IS TOLD ONLY THE CALLS ITS SESSION LACKS.
 //
-// The job made four calls and its question, and its session holds the first
-// two, each its call and its result. The relaunch, in a box of the release
-// that wrote the session, continues the session told the last two calls and
-// the question under the header a reading's list takes, and neither of the
-// first two anywhere; the reading's line says it was asked all five, held two
-// and told three, for the job's release.
+// The job made four calls and its question; its session holds the first two,
+// each call and result. The relaunch, in a box of the release that wrote the
+// session, is told the last two calls and the question under the header a
+// reading's list takes, and neither of the first two; the reading's line says
+// asked five, held two, told three, for the job's release.
 //
 // Mutations: the stand-in's replies filed without their message's id, and
 // the reading holds none, so the relaunch is told every call; every record
@@ -226,11 +224,10 @@ func TestACutOffSessionsRelaunchIsToldOnlyTheCallsItsSessionLacks(t *testing.T) 
 // A RELAUNCH IN A BOX OF ANOTHER RELEASE IS TOLD EVERY CALL AFTER THE SAVE
 // POINT.
 //
-// The same job, its session read as holding its first two calls for the
-// release that wrote it; but the relaunch's box answers another release, whose
-// resume may hand its model otherwise, so the launch hands the brief told by
-// the save point: every call and the question under the header that says they
-// are every call since it, and the line saying why, naming both releases.
+// The same job, its session read as holding its first two calls; but the box
+// answers another release, whose resume may hand its model otherwise, so the
+// launch hands the brief told by the save point: every call and the question
+// under the header saying so, and the line saying why, naming both releases.
 //
 // Mutations: the launch hands the brief told by the reading whatever release
 // the box answers, and the first two calls go untold here; the stand-in's

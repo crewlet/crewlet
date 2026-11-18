@@ -49,17 +49,13 @@ func twoNodes(t *testing.T) (fleet *eventfan.Fleet, a, b *store.EventLog) {
 
 // EVERY HISTORY READ GOES THROUGH THE FLEET.
 //
-// The decision ADR-0021 records: turn-level detail is on the data node that
-// published it or keeps it in custody for a node without `data`, and nowhere
-// else, so every question that reads it is asked of every live data node and
-// says which answered. Here the rows are split across two
-// stores and each question is asked once, through the registry a client
-// reaches — and each answer must hold BOTH nodes' rows and name both nodes.
-//
-// Half of the enforcement is this test and the other half is the compiler:
-// [queries.FleetEvents] answers a coverage from every method, so a bare
-// *store.EventLog — one node's store, read as though it were the company's —
-// does not fit in [queries.Sources] at all.
+// ADR-0021: turn-level detail is on the data node that published it or keeps
+// it in custody for a node without `data`, so every question reading it is
+// asked of every live data node and says which answered. Here the rows are
+// split across two stores and each answer must hold BOTH nodes' rows and name
+// both. The compiler holds the other half: [queries.FleetEvents] answers a
+// coverage from every method, so a bare *store.EventLog does not fit in
+// [queries.Sources].
 //
 // Mutation: answer any of these from the asker's store alone and it fails.
 func TestEventReadsGoThroughTheFleet(t *testing.T) {

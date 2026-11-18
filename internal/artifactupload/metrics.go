@@ -154,20 +154,31 @@ func (s *Service) observePublish(start time.Time, err error) {
 // answered 507, a 5xx, and every publish after it is refused the same until an
 // operator makes room. Judged answered, a full bucket would refuse every
 // publish while the objective stayed green and its burn-rate alarm silent.
-func (s *Service) judgePublish(start time.Time, err error) {
+func (s *Service) judgePublish(ctx context.Context, start time.Time, err error) {
 	if s.judged != nil {
 		answered := err == nil || refused(err) && !errors.As(err, new(*StoreFull))
-		s.judged.Record(objectives.PublishSuccess, s.now().Sub(start), answered)
+		s.judge(ctx, objectives.PublishSuccess, s.now().Sub(start), answered, err)
 	}
 }
 
 // judgeApplied counts one bytes-free publish ([bytesFree]), from the domain's
 // decision to its record applied, as a [objectives.PublishApplied] event. A
 // refusal is no latency event: it was answered, and never applied.
-func (s *Service) judgeApplied(decided time.Time, err error) {
+func (s *Service) judgeApplied(ctx context.Context, decided time.Time, err error) {
 	if s.judged != nil && !refused(err) {
-		s.judged.Record(objectives.PublishApplied, s.now().Sub(decided), err == nil)
+		s.judge(ctx, objectives.PublishApplied, s.now().Sub(decided), err == nil, err)
 	}
+}
+
+// judge records one event of n, or abandons it when it ended in an outcome
+// nobody established because its caller went away ([objectives.Abandoned]):
+// a person who closed the page or a stopped turn, not a fault of the pipeline's.
+func (s *Service) judge(ctx context.Context, n objectives.Name, elapsed time.Duration, answered bool, err error) {
+	if err != nil && !refused(err) && objectives.Abandoned(ctx) {
+		s.judged.Abandon(n, elapsed)
+		return
+	}
+	s.judged.Record(n, elapsed, answered)
 }
 
 // bytesFree reports a publish that moves no new bytes into the store: every

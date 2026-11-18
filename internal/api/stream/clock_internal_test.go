@@ -11,24 +11,15 @@ import (
 
 // EVERY DECISION THIS PACKAGE TAKES IS TAKEN ON THE SERVICE'S CLOCK.
 //
-// The service's clock ([Options.Now]) is what the guard that resolved a
-// socket's caller reads, what the timer ending its credential reads
-// (lifetime.go) and what every envelope is stamped with. The watch's two
-// authority decisions read the wall clock instead, so under a pinned or
-// simulated clock a recency window would have been judged by a different
-// clock from the one that proved it — latent while the person-read row
-// asks no recency, and a wrong answer the day it asks one. The one reading of
-// the wall clock left is the default the service falls back to when it is
-// handed none.
+// The service's clock ([Options.Now]) is what the guard, the credential timer
+// (lifetime.go) and every envelope's stamp read. A watch decision reading the
+// wall clock would, under a pinned clock, judge a recency window by a
+// different clock from the one that proved it: latent while no row asks
+// recency. The only wall-clock reading left is the service's default.
 //
-// Syntactic, because the defect is a second clock and nothing a socket says
-// can show which clock a decision read while every row it can reach asks no
-// recency. EVERY MENTION of the wall clock's readers counts, not only a call:
-// `time.Now` handed over as a value — a `now: time.Now` in the watch's own
-// literal — is the same second clock read one step later.
-//
-// Mutation: put time.Now() back at either watch decision, or build the watch
-// with `now: time.Now`, and this goes red.
+// Syntactic: EVERY MENTION of the wall clock's readers counts, `time.Now`
+// handed over as a value (`now: time.Now`) included. Mutation: put time.Now()
+// back at either watch decision, or build the watch with `now: time.Now`.
 func TestEveryDecisionHereIsTakenOnTheServicesClock(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
