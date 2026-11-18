@@ -27,16 +27,11 @@ func (c *collector) Publish(_ context.Context, _ string, ev *events.Event) error
 	return nil
 }
 
-// A NESTED PHASE'S IDENTITY HAS TO CARRY ITS ROUND.
-//
-// A phase is identified by (turn, phase, iteration), plus the task id that
-// tells one worker of a fan-out from the next. Task ids are unique only WITHIN
-// one delegate call — `subagent.plan` refuses a repeat there, and nothing
-// constrains the next round — so with iteration left at zero a self-iterating
-// turn that delegated a task named the same thing twice published two records
-// under one identity. Every consumer that keys on it, the dashboard's phase
-// merge included, kept whichever arrived last: a worker, its prompt, its tools
-// and its failure were simply not there.
+// A NESTED PHASE'S IDENTITY HAS TO CARRY ITS ROUND. A phase is identified by
+// (turn, phase, iteration) plus its task id, and task ids are unique only
+// within one delegate call (`subagent.plan`), so without the round two rounds'
+// same-named tasks share an identity and every consumer keying on it, the
+// dashboard's phase merge included, keeps only the last.
 func TestASubagentPhaseCarriesTheRoundItRanIn(t *testing.T) {
 	t.Parallel()
 	pub := &collector{}
@@ -49,8 +44,7 @@ func TestASubagentPhaseCarriesTheRoundItRanIn(t *testing.T) {
 		mu:    &mu,
 	}
 
-	// The same task id, delegated in two different execute rounds — which is
-	// a model naming its work the same thing twice, not a misuse.
+	// The same task id in two execute rounds: legitimate, not a misuse.
 	for _, round := range []int{1, 2} {
 		base.nestedAt(round).subagentCompleted(context.Background(), subagent.Result{
 			ID: "research", Worker: "researcher", Status: subagent.StatusOK,
@@ -83,14 +77,9 @@ func TestASubagentPhaseCarriesTheRoundItRanIn(t *testing.T) {
 }
 
 // A NESTED PHASE PUBLISHES ITS OWN DURATION, because nothing else can give it
-// one.
-//
-// The turn's own phases pair with an `agent_phase_started`; a worker and the
-// round-cap judge publish no start at all — they nest under a host phase that
-// is already showing one. So for as long as a duration was reconstructed from
-// two events, a delegate fan-out of eight had eight records with no wall clock
-// anywhere between them, and "which worker was slow" was unanswerable on every
-// screen in the product. The worker measures itself and this carries it.
+// one: a worker and the round-cap judge publish no `agent_phase_started` to
+// pair with, so without the worker's own measure no screen can say which
+// worker of a fan-out was slow.
 func TestASubagentPhaseCarriesTheWorkersOwnWallClock(t *testing.T) {
 	t.Parallel()
 	pub := &collector{}
@@ -125,10 +114,9 @@ func TestASubagentPhaseCarriesTheWorkersOwnWallClock(t *testing.T) {
 	}
 }
 
-// A WORKER'S RECORD CARRIES ITS PROMPTS' OUTLINES — and never a map that does
-// not tile its text: the wire promise is that every map a reader receives can
-// be sliced by, so one this node already knows is wrong is withheld and the
-// reader falls back to the prompt's own headings.
+// A WORKER'S RECORD CARRIES ITS PROMPTS' OUTLINES, never a map that does not
+// tile its text: every map a reader receives must be safe to slice by, so a
+// wrong one is withheld and the reader falls back to the prompt's headings.
 func TestAWorkerRecordCarriesItsPromptOutlinesOnlyWhenTheyTile(t *testing.T) {
 	t.Parallel()
 	pub := &collector{}
@@ -164,11 +152,9 @@ func TestAWorkerRecordCarriesItsPromptOutlinesOnlyWhenTheyTile(t *testing.T) {
 }
 
 // A COLLECTED RUN'S RECORD SAYS WHAT ITS RUN'S RECORD DID NOT KEEP. The
-// execute phase's record lists the calls the run's log kept — a long run's
-// head and tail — and outlives the log: once the run is gone, that record is
-// the turn's account of what its executor did. So the dropped calls are counted
-// in its round's calls and said by tool, how many and how many failed, the
-// calls whose tool was not kept either last.
+// execute phase's record outlives the run's log, which keeps a long run's head
+// and tail only, so the dropped calls count in the round's calls and are said
+// by tool, with how many failed, the calls of no kept tool last.
 //
 // Mutation: leave the dropped calls off the record, or out of the round's
 // count, and a long run reads as the two hundred calls its log kept.
@@ -206,14 +192,11 @@ func TestACollectedRunsRecordSaysWhatItsRunsRecordDidNotKeep(t *testing.T) {
 	}
 }
 
-// A HELD CALL AND AN APPROVED ONE ARE RECORDED AS THE CALLS THEY ARE. The two
-// calls whose arguments every record withholds — a call held for a person's
-// approval and the one they let be made — carry `{}` as their arguments on the
-// execute phase's record only because none is kept in the clear, and the held
-// one is recorded failed only because nothing it asked for happened: so the
-// record says which each is, and a reader draws its arguments as sealed and
-// the held call as the run's question, never a call made with nothing or a
-// tool that broke.
+// A HELD CALL AND AN APPROVED ONE ARE RECORDED AS THE CALLS THEY ARE. Both
+// carry `{}` because their arguments are withheld, and the held one is failed
+// only because nothing it asked for happened, so the record marks each and a
+// reader draws sealed arguments and a question, not a bare call or a broken
+// tool.
 //
 // Mutation: build the execution without the marks, or write the row without
 // them, and the turn's execute card draws `{}` for both and the held call as
@@ -237,15 +220,12 @@ func TestAHeldCallAndAnApprovedOneAreRecordedAsTheCallsTheyAre(t *testing.T) {
 	}
 }
 
-// A CALL WHOSE ARGUMENTS ARE NOT KNOWN IS RECORDED AS ONE, with why. Its
-// arguments go on the execute phase's record as `{}` only because no record
-// holds them: the bridge refused what the model wrote as unparsable, or the
-// log's text of them does not read back (ArgsUnread), or the call was still in
-// flight as the round was read and its entry kept its identity alone
-// (Unfinished with no arguments). So the row says which, and a reader draws the
-// arguments as not known rather than as the tool called with none. A call in
-// flight that carries arguments, a withheld one (which says which of its two it
-// is) and a call made with none say nothing of the kind.
+// A CALL WHOSE ARGUMENTS ARE NOT KNOWN IS RECORDED AS ONE, with why: they
+// were unparsable or do not read back (ArgsUnread), or the call was in flight
+// with only its identity kept (Unfinished with no arguments). The row says
+// which, so `{}` is not drawn as a call made with none. An in-flight call with
+// arguments, a withheld one (marked its own way) and a call made with none say
+// nothing of the kind.
 //
 // Mutation: build the execution without argsUnknown, write the row without it,
 // tell the two reasons alike, or mark a withheld or an unfinished call that

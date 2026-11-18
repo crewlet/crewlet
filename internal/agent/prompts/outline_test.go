@@ -16,9 +16,8 @@ type outlined struct {
 	name   string
 	prompt Prompt
 	keys   []string
-	// nested maps a section key to text that must fall inside that section
-	// — a heading the content brought with it, which a reader splitting on
-	// "##" lines would have filed somewhere else.
+	// nested maps a section key to text that must fall inside it: a heading
+	// the content brought, which splitting on "##" lines would misfile.
 	nested map[string][]string
 }
 
@@ -113,8 +112,7 @@ func outlineCorpus() []outlined {
 		},
 		{name: "user message, nothing", prompt: BuildPhaseUserMessage(UserMessage{}), keys: []string{"task"}},
 		{
-			// A SECTION APPENDED TO A BUILT PROMPT ([Prompt.Then]) tiles it
-			// as a builder's last section would.
+			// A section appended by [Prompt.Then] tiles as a last section.
 			name: "user message, then a kept session it does not continue",
 			prompt: BuildPhaseUserMessage(richUserMessage()).Then(KeyKeptSession,
 				KeptSession("t-0 🧰", false, false)),
@@ -214,15 +212,14 @@ func TestEveryPromptsOutlineTilesItsText(t *testing.T) {
 }
 
 // A HEADED SECTION STARTS WITH ITS OWN HEADING LINE, and its title is that
-// heading's text — so the blank line a builder writes before a heading stays
-// with the section before it, and a reader can render the slice as-is. And the
-// map SAYS which sections those are: every other one is a part the builder
-// named, which no reader can tell from one opening on somebody else's heading.
+// heading's text, so the blank line before a heading stays with the section
+// before it and a reader can render the slice as-is. Every section not marked
+// Headed is one the builder named, which no reader could tell from one opening
+// on somebody else's heading.
 func TestAHeadedSectionStartsWithItsHeading(t *testing.T) {
 	t.Parallel()
-	// The sections that may carry no heading of their own, where the builder
-	// named them — `identity` and `task` are headed in some prompts and
-	// named in others.
+	// The sections the builder may name rather than head (`identity` and
+	// `task` are headed in some prompts).
 	headless := map[string]bool{
 		"identity": true, "task": true, "worker_rules": true, "instruction": true,
 		"reference": true,
@@ -255,11 +252,9 @@ func TestAHeadedSectionStartsWithItsHeading(t *testing.T) {
 	}
 }
 
-// THE PREFETCH KEYS ARE THE PREFETCH SUMMARY'S OWN NAMES. Every block the
-// executor's prefetch hands over is measured on PrefetchSummary as
-// `<name>_hit` and `<name>_bytes`, and the outline keys the block on that same
-// name — read here off the summary's tags, so a block renamed on one side and
-// not the other fails rather than leaving a reader two names for one thing.
+// THE PREFETCH KEYS ARE THE PREFETCH SUMMARY'S OWN NAMES: the `<name>` of
+// PrefetchSummary's `<name>_hit` tags, so a block renamed on one side only
+// fails rather than having two names.
 func TestThePrefetchKeysAreThePrefetchSummarysOwn(t *testing.T) {
 	t.Parallel()
 	var want []string
@@ -289,9 +284,8 @@ func TestThePrefetchKeysAreThePrefetchSummarysOwn(t *testing.T) {
 }
 
 // THE OUTLINE NEVER CHANGES A BYTE OF THE TEXT: a Builder's text is exactly
-// the join of its parts, whatever sections were opened over them. A prompt's
-// bytes are its cache key and its behaviour, so this is the property the whole
-// outline rests on.
+// the join of its parts, whatever sections were opened over them, since the
+// bytes are the cache key and the behaviour.
 func TestABuilderTextIsExactlyTheJoinOfItsParts(t *testing.T) {
 	t.Parallel()
 	parts := []string{"", "lead — line", "\n## A", "body ✅", "", "## B", "\n\n", "\n### C", "tail"}
@@ -320,10 +314,8 @@ func TestABuilderTextIsExactlyTheJoinOfItsParts(t *testing.T) {
 }
 
 // HEADED IS THE BUILDER'S WORD, NEVER THE TEXT'S. A lead part carrying
-// somebody else's markdown — a worker persona, a task the executor wrote —
-// often opens with a heading of its own, and that heading is the content's,
-// under the title the builder gave the part: a reader that took it for the
-// part's own heading lost its words.
+// somebody else's markdown (a worker persona, a task) often opens on a heading
+// that is the content's, under the builder's title for the part.
 func TestALeadIsNeverHeadedWhateverItsTextOpensWith(t *testing.T) {
 	t.Parallel()
 	b := NewBuilder("\n")
@@ -342,8 +334,8 @@ func TestALeadIsNeverHeadedWhateverItsTextOpensWith(t *testing.T) {
 	}
 }
 
-// Valid is what a reader of a map it did not build relies on before slicing by
-// it, so it refuses each way a map can be wrong.
+// Valid is what a reader relies on before slicing by a map it did not build,
+// so it refuses each way a map can be wrong.
 func TestValidRefusesAnOutlineThatDoesNotTile(t *testing.T) {
 	t.Parallel()
 	// "## A\nné\n" is nine bytes — é is two — and "## B\nx" six.
@@ -367,9 +359,8 @@ func TestValidRefusesAnOutlineThatDoesNotTile(t *testing.T) {
 			t.Errorf("%s: an outline that does not tile was accepted", name)
 		}
 	}
-	// Bytes that add up over text that is not UTF-8 do not tile what a
-	// reader receives: JSON rewrites each bad byte as U+FFFD, three bytes
-	// for one, and every boundary after it moves.
+	// Over invalid UTF-8 the bytes do not tile what a reader receives: JSON
+	// rewrites each bad byte as three-byte U+FFFD.
 	bad := "## A\nn\xffe\n## B\nx"
 	if (Prompt{Text: bad, Sections: []Section{{Key: "a", Bytes: 9}, {Key: "b", Bytes: 6}}}).Valid() {
 		t.Error("an outline over invalid UTF-8 was accepted")
@@ -377,25 +368,19 @@ func TestValidRefusesAnOutlineThatDoesNotTile(t *testing.T) {
 }
 
 // A PROMPT TOLD AS A PART OF ANOTHER MOVES ITS BUILDER'S HEADINGS AND NOTHING
-// ELSE. A later brief tells again, under a heading of its own, a send-back or a
-// turn's task that a session may lack, nested a level down so it reads as part
-// of that message ([Prompt.Nested]): every heading a builder opened a section
-// with moves one level, by the outline that builder recorded, and every other
-// byte stays where it was. Somebody else's words under those headings (a
-// trigger's own "## Triage", a pull request's "# Title", a reviewer's "##
-// Missing", a code block's "#include", a worker's task opening on its own "#
-// Fix the login bug") are kept byte for byte, as every builder's prompt in the
-// corpus holds them, and the outline still tiles the text, each section keeping
-// its key, its title and whether it is headed. A prompt with no outline, or one
-// that does not tile, is returned as it is.
+// ELSE ([Prompt.Nested]): every heading a builder opened a section with moves
+// one level, by its recorded outline; somebody else's words (a trigger's "##
+// Triage", a code block's "#include", a worker's task opening on "# Fix the
+// login bug") stay byte for byte; the outline still tiles, each section
+// keeping its key, title and Headed. A prompt with no outline, or one that
+// does not tile, is returned as it is.
 //
 // Mutation: move every line that begins with a '#', move a section that is not
 // headed, leave the outline measuring the text as it was, or slice by an
 // outline that does not tile, and a case goes red.
 func TestNestingAPromptMovesOnlyTheHeadingsItsBuilderWrote(t *testing.T) {
 	t.Parallel()
-	// SOMEBODY'S WORDS, fenced under who wrote them as a chat reply is, with
-	// a heading, a code block's "#include" and a heading of their own.
+	// Somebody's fenced words, with headings and a code block's "#include".
 	words := "[untrusted:AAAAAAAAAAAAAAAA source=chat_thread trust=colleague authors=ana]\n" +
 		"# install the deps first\n```c\n#include <stdio.h>\n```\n## Steps to reproduce\n- run make\n" +
 		"[/untrusted:AAAAAAAAAAAAAAAA]"
@@ -405,8 +390,7 @@ func TestNestingAPromptMovesOnlyTheHeadingsItsBuilderWrote(t *testing.T) {
 		outlined{name: "a task and a ledger holding somebody's headings",
 			prompt: BuildPhaseUserMessage(UserMessage{TaskDescription: words,
 				PriorWork: "### Iteration 1\nProduced: " + words})},
-		// A PART THE BUILDER NAMED, which opens on its writer's heading: the
-		// worker's task, a lead section, is no heading of the builder's.
+		// A lead part opening on its writer's heading, not the builder's.
 		outlined{name: "a worker's task opening on its writer's heading",
 			prompt: BuildSubagent(Seat{}, SubagentInput{ParentSystemPrompt: "# Fix the login bug\n" + words})})
 	for _, tc := range corpus {
@@ -426,8 +410,7 @@ func TestNestingAPromptMovesOnlyTheHeadingsItsBuilderWrote(t *testing.T) {
 				if s.Key != before.Key || s.Title != before.Title || s.Headed != before.Headed {
 					t.Errorf("section %+v is nested as %+v, want its key, title and heading kept", before, s)
 				}
-				// ITS OWN HEADING ONE LEVEL DOWN, where the builder opened it
-				// with one, and every other byte as it was.
+				// Its own heading one level down, if headed; every other byte kept.
 				want := original
 				if blank := len(original) - len(strings.TrimLeft(original, "\n")); before.Headed {
 					if !strings.HasPrefix(original[blank:], "#") {

@@ -14,8 +14,8 @@ import (
 )
 
 // EVERY KIND A CLOSED FORMAT VALIDATES HAS ITS FORMAT ONE READ AWAY, before an
-// artifact of it exists: the answer is the format package's own reference,
-// naming the kind's index, and a kind with no closed format is told so.
+// artifact of it exists: the format package's reference, naming the kind's
+// index; a kind with no closed format is refused.
 //
 // Mutation: drop a format from formatReferences and its kind answers nothing.
 func TestEveryValidatedKindsFormatIsOneReadAway(t *testing.T) {
@@ -46,9 +46,9 @@ func TestEveryValidatedKindsFormatIsOneReadAway(t *testing.T) {
 
 var briefExample = regexp.MustCompile("(?s)```json\n(.*?)\n```")
 
-// A MODEL GIVEN THE FORMAT WRITES A VALID BRAND KIT FIRST TIME: the brand
-// answer carries every key, the one-source rule, the SVG rule and an example,
-// and the example is a brand.json the publish's own reader takes as written.
+// A MODEL GIVEN THE FORMAT WRITES A VALID BRAND KIT FIRST TIME: the answer
+// carries the keys, the one-source rule, the SVG rule and an example the
+// publish's own reader takes as written.
 //
 // Mutation: answer a hand-written summary that drifts from the reader, and the
 // example is refused.
@@ -74,9 +74,8 @@ func TestTheBrandFormatAnswerIsEnoughToWriteAKitFirstTime(t *testing.T) {
 	}
 }
 
-// CREATE_ARTIFACT NAMES THE SKILL BY ITS KEY AND THE FORMAT BY ITS TOOL: a
-// description that said "the artifacts tool skill" sent a model to
-// load_tool_skill("artifacts"), which no catalogue lists.
+// CREATE_ARTIFACT NAMES THE SKILL BY ITS KEY AND THE FORMAT BY ITS TOOL, since
+// a skill named in words sends a model to a key no catalogue lists.
 func TestCreateArtifactNamesTheSkillKeyAndTheFormatTool(t *testing.T) {
 	t.Parallel()
 	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)

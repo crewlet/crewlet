@@ -14,17 +14,13 @@ import (
 // AN ARGUMENT A BUILTIN DOES NOT READ IS REFUSED BY NAME, ON EVERY PATH A CALL
 // TAKES — before the tool runs, and before anybody's authority is asked.
 //
-// A builtin reads what its schema declares and nothing else, so an undeclared
-// argument was DROPPED, and the call answered as though somebody had asked for
-// less. The HTTP write surface refused one at its routes and nothing else did:
-// a seat's turn, a sandbox's bridge and the operator's assistant reach the
-// same tools through the same gate with no route in front of them, so an
-// assistant still sending `save_work_view`'s retired `owner` had a PERSONAL
-// view saved as a SHARED tab under a success, and a model that misspelt an
-// argument was never told which one. The gate every builtin is wrapped in at
-// registration is the one place every call passes, so it is checked there —
-// here on its two paths: a seat's turn through the phase surface, and the
-// operator catalogue's plain call.
+// A builtin reads only what its schema declares, so an undeclared argument
+// would be dropped and the call answered as though less were asked (a retired
+// `owner` saving a personal view as a shared tab; a misspelling never named).
+// A seat's turn, a sandbox's bridge and the operator's assistant reach the
+// tools with no HTTP route in front, so the gate every builtin is wrapped in
+// at registration checks it; this covers its two paths: a seat's turn through
+// the phase surface, and the operator catalogue's plain call.
 func TestAnArgumentABuiltinDoesNotReadIsRefusedOnEveryPath(t *testing.T) {
 	t.Parallel()
 

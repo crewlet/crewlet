@@ -10,10 +10,9 @@ import (
 )
 
 // A RUN WHOSE SEAT WITHDREW ITS QUESTION OR ITS CALL IS TOLD SO, AS ITS OWN
-// (ADR-0111): never as a person's answer or a person's denial, with the reason
-// its seat gave, the call not made, and told to carry on under its access as
-// it stands, asking again where it still needs to. In its own session and on a
-// fresh machine alike.
+// (ADR-0111): never as a person's answer or denial, with its seat's reason, the
+// call not made, and to carry on under its access as it stands, asking again
+// where it must, in its own session and on a fresh machine alike.
 //
 // Mutation: drop the withdrawn branch and the run reads its own seat's reason
 // as somebody's answer, or as a person who denied the call.

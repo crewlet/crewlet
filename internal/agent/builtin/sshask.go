@@ -23,17 +23,15 @@ import (
 )
 
 // Approve once at the decision (ADR-0125): ask_to_operate puts one exact
-// operate command to a person as a decision on a work item, composed by the
-// engine, whose ask carries its act; once the person chooses the act's
-// approving option, the seat's ssh_operate call that matches it byte for byte
-// runs without a second prompt.
+// operate command to a person as a decision on a work item, whose ask carries
+// the engine's act; once they choose its approving option, the seat's
+// ssh_operate call matching it byte for byte runs without a second prompt.
 //
-// THE ACT BINDS THE CALL, never the words: it names the server and the digest
-// over the server as shown, the command and the stdin, set by the engine from
-// the call the tool was given. A model's own words that quote a command bind
-// nothing, since what a person read in prose is not a call. Choosing the
-// approving option is decided as an SSH approval at its step-up (the tracker
-// refuses it otherwise), and the person is held to it again at the hold.
+// THE ACT BINDS THE CALL, never the words: the engine sets it from the call
+// (server and the digest over the server as shown, command, stdin); a command
+// quoted in a model's prose binds nothing. The choice is decided as an SSH
+// approval at its step-up (the tracker refuses it otherwise), and the person
+// is held to it again at the hold.
 
 // SSHAskOperateTool is the ask, named after its authority row.
 const SSHAskOperateTool = toolname.AskToOperate
@@ -206,8 +204,8 @@ func (t *sshOperate) RunDecided(ctx context.Context, turn *turnctx.Turn, args ma
 		Subject: a.command, Stdin: a.stdin,
 	})
 	if err != nil || !first {
-		// UNRECORDED, OR NOT THE DECISION'S FIRST USE: the call is held for a
-		// person like any other, so an approval never runs twice.
+		// UNRECORDED, OR NOT THE DECISION'S FIRST USE: held like any other
+		// call, so an approval never runs twice.
 		if err != nil {
 			log.WarnContext(ctx, "ssh_decision_verdict_unrecorded", "seat", handle, "error", err.Error())
 		}

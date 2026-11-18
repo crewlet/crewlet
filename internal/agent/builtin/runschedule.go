@@ -64,44 +64,18 @@ func (d ScheduleRunDeps) now() time.Time {
 	return time.Now().UTC()
 }
 
-// runSchedule runs one schedule now, off its cron.
-//
-// # What it promises
-//
-// `applied` means the schedule's task is on the inbox of every runner seat
-// the answer lists as `fired`: an ordinary turn of the schedule's own
-// conversation, started as soon as the seat is free, under the schedule's
-// wall-clock cap, and recorded in the schedule's history as
-// `fired_manually`. The schedule's cron is untouched: its next fire comes
-// when it was going to, and this run takes no tick's place
-// ([sched.ManualFireLabel]).
-//
-// # What it refuses
-//
-// In the engine's own words, and before anything is claimed: a company that
-// switched scheduling off, or configures no model; a schedule switched off
-// (`enabled: false`), since running it would overrule that decision without
-// changing it; a schedule nothing can run; and a run every one of whose seats
-// a person paused. A schedule some of whose seats are paused runs for the
-// rest, and the answer names the paused ones.
-//
-// # Whose decision it is
-//
-// Waking a seat is its lead's to decide, or an administrator's, as pausing it
-// is ([authz.ActionScheduleRun]): the call is decided on EVERY seat the
-// schedule would wake, and refused whole where the caller may not wake one of
-// them, so a unit's standup is its lead's to run and not any member's.
-//
-// # The same request again is the same run
-//
-// A request that names its operation (the dashboard's, a script's) sent again
-// claims the run it already made and sends nothing more. A call that names
-// none is a new run each time.
-//
-// # Never an agent's
-//
-// A seat that could run a schedule would be one starting its colleagues'
-// turns, or its own, outside the times the people who run the company set.
+// runSchedule runs one schedule now: `applied` means its task is on the inbox
+// of every seat listed as `fired`, an ordinary turn of its own conversation
+// under its wall-clock cap, recorded as `fired_manually`; the cron is untouched
+// and this run takes no tick's place ([sched.ManualFireLabel]). Refused before
+// anything is claimed: scheduling off, no model, the schedule switched off
+// (running it would overrule that without changing it), nobody to run it, every
+// seat paused; a partly paused one runs for the rest and names the paused ones.
+// Waking a seat is its lead's or an administrator's ([authz.ActionScheduleRun]):
+// decided on EVERY seat, refused whole if the caller may not wake one, so a
+// unit's standup is its lead's. A request naming its operation, sent again,
+// claims the run it made; one naming none is a new run. Never an agent's: it
+// would start turns outside the times the people who run the company set.
 type runSchedule struct {
 	deps      ScheduleRunDeps
 	authorize Authorizer
@@ -198,10 +172,9 @@ func (t *runSchedule) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if found {
 		runners = entry.Runners(company)
 	}
-	// DECIDED ON THE SEATS IT WOULD WAKE, every one. A schedule that names
-	// none (it is not declared, or nothing can run it) is decided on the
-	// scope AS TYPED, which nobody leads, so only an administrator passes
-	// and is then told what is wrong: the refusal a caller reads never
+	// A schedule that names no seat (undeclared, or nothing runs it) is
+	// decided on the scope AS TYPED, which nobody leads, so only an
+	// administrator passes and learns what is wrong: a caller's refusal never
 	// depends on whether the schedule exists.
 	owners := runners
 	if len(owners) == 0 {

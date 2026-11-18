@@ -16,11 +16,6 @@ import (
 
 // A CROSS-PROJECT MOVE CAN BE STARTED — by the lead of the item's project, or
 // by an admin.
-//
-// The tracker's move carried a subtree, re-keyed it, left its old keys
-// resolving, marked a stopped walk and had a duty to finish one; and no tool,
-// route or command could start it. The docs sent a reader to "move it" to
-// clear a subtask filed in another project than its root.
 
 // leadsOneProject is a chart in which the caller leads exactly one project —
 // so a case can tell the project an item is LEAVING from the one it is going
@@ -184,10 +179,9 @@ func TestAStoppedMoveIsNotReportedAsNotMade(t *testing.T) {
 	}
 }
 
-// A MOVE REFUSED OVER A TAG NAMES THE TAG AND THE WAY PAST IT. The target may
-// already have a different tag under the same label, or no room for another,
-// and the answer was the generic "the change was NOT made" — nothing a seat
-// could act on, so the move was simply abandoned.
+// A MOVE REFUSED OVER A TAG NAMES THE TAG AND THE WAY PAST IT, not a generic
+// "the change was NOT made" a seat cannot act on: the target may hold a
+// different tag under the same label, or have no room for another.
 func TestAMoveRefusedOverATagNamesTheWayPastIt(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -265,13 +259,9 @@ func (m *landingMover) MoveTaskToProject(_ context.Context, opID, _, target stri
 }
 
 // THE RETRY A MOVE PRESCRIBES IS ANSWERED BY THE MOVE, not refused by the gate
-// the first attempt already passed.
-//
-// The gate asked about the lead of the project the item is in NOW, and after
-// a first attempt that landed that is the TARGET: a seat leading ENG and not
-// OPS, told to call again with the same arguments, was told instead that
-// moving OPS-3 out of OPS was OPS's lead's decision — about a move that had
-// happened, which it never learned.
+// the first attempt already passed: once that attempt landed, the item's
+// project NOW is the TARGET, and a seat leading ENG and not OPS must not be
+// sent to OPS's lead about a move that already happened.
 func TestTheRetryOfAMoveThatLandedIsAnsweredByTheMove(t *testing.T) {
 	t.Parallel()
 	for name, first := range map[string]func(string) (worklet.WriteResult, error){
@@ -357,16 +347,12 @@ func (m stoppedMover) MoveTaskToProject(_ context.Context, opID, _, _ string,
 	}}, &stop
 }
 
-// A MOVE WHOSE ROOT LANDED AND WHOSE WALK STOPPED IS NOT "NOT MADE".
-//
-// Every such stop but an unknown step reached the default of writeFailure —
-// "The change was NOT made — do not report it as done" — about an item
-// already re-keyed into the target. A seat told that moved it again, as a new
-// call, which the tracker refuses as somebody else's move. The answer is the
-// root's receipt, the walk's count, and the one thing that finishes it: the
-// same call, a restore first where a task in the trash holds it, and neither
-// where this node cannot vouch for the step it stopped at: the Worklet duty
-// finishes it then.
+// A MOVE WHOSE ROOT LANDED AND WHOSE WALK STOPPED IS NOT "NOT MADE": the item
+// is already re-keyed into the target, and a seat told otherwise moves it
+// again as a new call, which the tracker refuses. The answer is the root's
+// receipt, the walk's count and what finishes it: the same call, a restore
+// first where a task in the trash holds it, and neither where this node cannot
+// vouch for the step it stopped at (the Worklet duty finishes it then).
 //
 // Mutation: drop the MoveStopped arm in move_work_item and every case answers
 // "NOT made".

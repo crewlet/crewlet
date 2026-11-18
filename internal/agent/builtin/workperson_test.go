@@ -19,18 +19,11 @@ import (
 
 // A SEAT NEVER RE-ORDERS SOMEBODY ELSE'S QUEUE, and a person does.
 //
-// The bar is the tracker's own and it is the one thing the authority table
-// does NOT decide: [authz.ClassOwnOrLead] admits a lead, and a seat that leads
-// somebody is still not allowed this — an agent re-ordering a colleague's list
-// is a hand-off in disguise, bypassing the guarded take and the reassignment
-// budget.
-//
-// It used to be carried as `PersonAuthority.Person`, filled from "the actor is
-// not a seat", which was ALSO how an operator satisfied the cross-person gate
-// at all: the lead lookup resolved an org-chart handle and an operator token
-// carries its own name, so `Lead` was false for every operator by construction
-// and the only shipped surface for the verb refused the founder every time.
-// The relation half is the table's now; this is the half that is left.
+// That bar is the tracker's own, the one thing the authority table does NOT
+// decide: [authz.ClassOwnOrLead] admits a lead, but a seat re-ordering a
+// colleague's list is a hand-off in disguise, bypassing the guarded take and
+// the reassignment budget. The relation half is the table's, so an operator
+// (who leads nobody on the chart) must still reach the writer authorized.
 func TestASeatNeverReordersSomebodyElsesQueue(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -79,14 +72,9 @@ func TestASeatNeverReordersSomebodyElsesQueue(t *testing.T) {
 	}
 }
 
-// A PRIORITY ENTRY GIVEN AS A KEY IS RESOLVED TO AN ID.
-//
-// The list is stored as ids and read back by joining on them, and this tool's
-// own description invites a key. An unresolved `ENG-1` failed in three places
-// at once and reported nothing anywhere: the entry vanished from `my_work`, it
-// vanished from `preset=priorities`, and the wake that tells the person their
-// queue changed was silently suppressed — while the call answered
-// `outcome: applied`.
+// A PRIORITY ENTRY GIVEN AS A KEY IS RESOLVED TO AN ID: the list is stored as
+// ids and joined on them, so an unresolved key would vanish from `my_work` and
+// `preset=priorities` and suppress the wake while the call answered `applied`.
 func TestAPriorityGivenAsAKeyIsResolved(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -149,10 +137,8 @@ func operatorRegistry(t *testing.T, trk *fakeTracker, person builtin.PersonWrite
 }
 
 type personSpy struct {
-	// handle is WHOSE record the last write named, and opID the operation
-	// it wrote under. Both on every verb, because the subject of a person
-	// write is the whole of what this file is about: a mark written under
-	// the wrong name is a mark nobody ever sees.
+	// handle is WHOSE record the last write named, and opID its operation:
+	// a mark written under the wrong name is one nobody ever sees.
 	handle     string
 	opID       string
 	priorities []string
@@ -162,10 +148,9 @@ type personSpy struct {
 	seen       statelog.Position
 	pins       worklet.PinGesture
 
-	// actor is who the surface resolved the writer FOR, which is the other
-	// half: the record's subject is the person and its author is still
-	// the credential, and a case asserting one without the other would
-	// pass on a fix that let a caller write as anybody.
+	// actor is who the writer was resolved FOR: the record's subject is the
+	// person and its author the credential, and a case asserting only one
+	// would pass a fix that let a caller write as anybody.
 	actor builtin.Actor
 }
 
@@ -197,11 +182,9 @@ func (p *personSpy) MarkInbox(_ context.Context, opID, handle string, seen state
 	return worklet.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
-// TestMarkInboxCarriesThePrimarySplit is the finding on the write side.
-// [worklet.Person.PrimaryReasons] was validated, stored, replicated and
-// reported — and `mark_inbox` passed nil for it on every call, so the one
-// writer that could have set it CLEARED it instead. A preference nothing can
-// express is storage for a rule nobody wrote.
+// TestMarkInboxCarriesThePrimarySplit holds `mark_inbox` to passing
+// [worklet.Person.PrimaryReasons] through: it is the split's only writer, so
+// passing nil would clear it on every call.
 func TestMarkInboxCarriesThePrimarySplit(t *testing.T) {
 	t.Parallel()
 	person := &personSpy{}
@@ -219,8 +202,8 @@ func TestMarkInboxCarriesThePrimarySplit(t *testing.T) {
 			"has no other producer", person.inbox.PrimaryReasons)
 	}
 
-	// AND AN UNKNOWN REASON IS REFUSED NAMING THE SET, rather than
-	// written and silently dropped by the validator behind it.
+	// An unknown reason is refused naming the set, not dropped silently
+	// by the validator behind it.
 	bad := callWork(t, reg, worklet.MarkInboxTool, map[string]any{
 		"primary_reasons": []any{"because-i-said-so"},
 	})
@@ -234,12 +217,10 @@ func TestMarkInboxCarriesThePrimarySplit(t *testing.T) {
 }
 
 // TestAMarkCarriesTheCallersFloor holds `mark_inbox`'s `seen` to the writer:
-// a mark is decided by whichever data node the router reaches, which may be
-// behind the one the inbox page was read from, so the position the caller read
-// to has to reach the decide or a notice the person was shown is refused as no
-// change the company recorded. None is the zero position, which waits for
-// nothing; a malformed one, or one on another log, is refused before anything
-// is asked.
+// the decide may run on a data node behind the one the inbox was read from, so
+// without the caller's floor a notice they were shown is refused as unknown.
+// None is the zero position, which waits for nothing; a malformed one, or one
+// on another log, is refused before anything is asked.
 func TestAMarkCarriesTheCallersFloor(t *testing.T) {
 	t.Parallel()
 	person := &personSpy{}
@@ -353,12 +334,7 @@ func personSurface(t *testing.T, trk *fakeTracker, person *personSpy,
 			Writer: trk.as,
 			Inbox:  trk,
 			PersonWriter: func(a builtin.Actor) builtin.PersonWriter {
-				// THE ACTOR THE WRITER WAS RESOLVED FOR, which is
-				// what carries the attribution: the record's
-				// subject is the person and its author is still
-				// the credential, and a case that asserted only
-				// the first would pass on a fix that let a caller
-				// write as anybody.
+				// The attribution: see personSpy.actor.
 				person.actor = a
 				return person
 			},
@@ -366,9 +342,8 @@ func personSurface(t *testing.T, trk *fakeTracker, person *personSpy,
 		},
 		Authorize: builtin.Decide(chartLeads),
 	}) {
-		// WITH THE HINTS, which is what the operator surface itself
-		// serves now — registering without them would make the
-		// annotation case below assert nothing.
+		// With the hints the operator surface serves, or the annotation
+		// case below asserts nothing.
 		if err := reg.RegisterWith(tool, tools.OriginBuiltin,
 			builtin.AnnotationsFor(tool.Name())); err != nil {
 
@@ -378,16 +353,11 @@ func personSurface(t *testing.T, trk *fakeTracker, person *personSpy,
 	return reg
 }
 
-// TestEveryOperatorToolIsAnnotatedDeliberately closes the hole that classified
-// three reads as writes. `annotationsFor` is a switch with a FAIL-CLOSED
-// default — `ReadOnly: No` with `OpenWorld` unset, which is exactly what
-// [mcp.WritesToSharedSurface] reads as TRUE — so a tool added to the operator
-// surface and forgotten in the switch is silently reported to every MCP client
-// as a write to a surface a human reads, and refused to a sub-agent that was
-// granted it. Nothing failed; the tool just stopped working for one caller.
-//
-// The table is the DECISION, restated where a reviewer sees it: adding a tool
-// to the operator surface without deciding this fails here.
+// TestEveryOperatorToolIsAnnotatedDeliberately makes the table below the
+// decision: `annotationsFor`'s default is FAIL-CLOSED (`ReadOnly: No`,
+// `OpenWorld` unset), which [mcp.WritesToSharedSurface] reads as TRUE, so a
+// tool missing from its switch is silently reported to every MCP client as a
+// write to a surface a human reads, and refused to a sub-agent granted it.
 func TestEveryOperatorToolIsAnnotatedDeliberately(t *testing.T) {
 	t.Parallel()
 	shared := map[string]bool{
@@ -416,10 +386,9 @@ func TestEveryOperatorToolIsAnnotatedDeliberately(t *testing.T) {
 		worklet.RestoreWorkItemTool:    true,
 		worklet.MoveWorkItemTool:       true,
 
-		// A PERSON'S OWN STATE IS NOT A SHARED SURFACE. Each is written
-		// only on behalf of the person whose it is, so a second caller
-		// cannot be surprised by one — which is the question the flag
-		// asks, rather than "does this write".
+		// A person's own state is not a shared surface: written only for
+		// its owner, it surprises no second caller, which is what the
+		// flag asks rather than "does this write".
 		worklet.MarkInboxTool: false,
 		worklet.SetPinsTool:   false,
 
@@ -456,14 +425,10 @@ func TestEveryOperatorToolIsAnnotatedDeliberately(t *testing.T) {
 	}
 }
 
-// THE PERSON TOOLS TAKE GESTURES, and their schemas say so.
-//
-// `mark_inbox` used to take all three lists and the watermark and REPLACE each
-// — its own description told a caller to read first because an omitted list
-// was CLEARED — so one "mark this read" from a screen erased every other mark.
-// The schema is what a caller builds its call from, so it is asserted here:
-// the gesture's six names and nothing of the old shape — beside the `op_id`
-// every operator write takes to be made again as the same operation.
+// THE PERSON TOOLS TAKE GESTURES, and their schemas say so: a caller builds
+// its call from the schema, so `mark_inbox` offers the gesture's names (beside
+// every operator write's `op_id`) and nothing of a replace-the-lists shape,
+// under which one "mark this read" erased every other mark.
 func TestThePersonToolSchemasTakeGestures(t *testing.T) {
 	t.Parallel()
 	reg := personRegistry(t, &personSpy{})
@@ -548,8 +513,8 @@ func TestThePersonToolsPassTheGestureThrough(t *testing.T) {
 		t.Error("a mark_inbox naming nothing was accepted")
 	}
 
-	// A BARE LIST WHERE A CHANGE BELONGS is refused naming the shape,
-	// rather than read as the whole strip — which is the old replace.
+	// A bare list where a change belongs is refused naming the shape, not
+	// read as the whole strip.
 	bare := callWork(t, reg, worklet.SetPinsTool, map[string]any{"views": []any{"v-1"}})
 	if !bare.Failed || !strings.Contains(bare.Output, "add") {
 		t.Errorf("a bare list of views answered %q", bare.Output)

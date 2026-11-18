@@ -14,22 +14,15 @@ import (
 
 // What happened, and what is expected of me.
 //
-// # The board answers "what is there"; these answer everything else
-//
-// `list_work_items` is about the rows that exist now. Every question about a
-// CHANGE — who moved this, when did it stop being blocked, what did that bulk
-// edit actually do — is about the ordered log instead, and no filter over the
-// rows can reach it: a task that was reassigned twice and back looks exactly
-// like one nobody touched.
-//
-// # And `my_work` is the call a turn opens with
-//
-// Eight lists in one answer rather than eight calls, because assembled
-// separately a seat could see a task in `assigned` that had already moved out
-// of it by the time `priorities` was read — and spend its turn on work
+// `list_work_items` answers what rows exist now; a question about a CHANGE
+// (who moved this, when it stopped being blocked) is about the ordered log,
+// which no filter over the rows reaches: a task reassigned twice and back
+// looks like one nobody touched. `my_work`, the call a turn opens with, is
+// eight lists in one answer, since read separately a task could move out of
+// `assigned` before `priorities` was read and the seat spend its turn on work
 // somebody else had taken.
 
-// FeedReader is the tracker read side these two need.
+// FeedReader is the tracker read side task_activity and my_work need.
 type FeedReader interface {
 	Activity(ctx context.Context, q worklet.ActivityQuery, now time.Time) (
 		worklet.ActivityAnswer, error)
@@ -129,20 +122,17 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Cursor:  strings.TrimSpace(argString(args, "cursor")),
 		Level:   seatReadLevel,
 	}
-	// A KIND IS PASSED AS IT CAME and the tracker's read refuses one it
-	// does not have, naming the set ([worklet.ErrBadQuery], which
-	// [readFailure] words as an argument to change): built from any string
-	// and never checked, a mistyped kind answered an empty feed that reads
-	// exactly like a project where nothing happened.
+	// A KIND IS PASSED AS IT CAME: the tracker's read refuses one it lacks,
+	// naming the set ([worklet.ErrBadQuery], which [readFailure] words as an
+	// argument to change); unchecked, a mistyped kind would answer an empty
+	// feed that reads like a project where nothing happened.
 	for _, kind := range strings.Split(argString(args, "kinds"), ",") {
 		if kind = strings.TrimSpace(kind); kind != "" {
 			q.Kinds = append(q.Kinds, worklet.ChangeKind(kind))
 		}
 	}
-	// NEITHER KEY NAMED IS THE SEAT'S OWN PROJECT, not the whole company:
-	// a model asking "what has been going on" means its own work, and a
-	// company-wide feed is the one answer that is both expensive and
-	// almost never what was meant.
+	// NEITHER KEY NAMED IS THE SEAT'S OWN PROJECT, not the whole company: a
+	// company-wide feed is expensive and almost never what was meant.
 	if q.Task == "" && q.Project == "" {
 		q.Project = t.deps.defaultProject(actor)
 		if q.Project == "" {
@@ -150,8 +140,8 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 	if since := strings.TrimSpace(argString(args, "since")); since != "" {
-		// A POSITION FIRST, because it is unambiguous and a timestamp is
-		// not — and a caller resuming a page holds a position.
+		// A POSITION FIRST: unlike a timestamp it is unambiguous, and a
+		// caller resuming a page holds one.
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if at, err := statelog.ParsePosition(since); err == nil {
 			q.Since = at
@@ -233,17 +223,11 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if !ok || t.deps.Reader == nil {
 		return unconfigured(worklet.MyWorkTool), nil
 	}
-	// THE HANDLE IS THE TURN'S OWN SEAT AND TAKES NO ARGUMENT.
-	//
-	// A model that could name whose day to read could read anybody's —
-	// which is a colleague's inbox, their priorities and the questions
-	// they owe, handed to an agent nobody asked. The operator surface
-	// supplies its own identity the same way, through the actor seam.
-	//
-	// AND IT IS THE ACTOR'S OWN RECORD, which is its handle: a person the
-	// identity directory binds to a seat writes AS that seat
-	// ([PrincipalActor]), so their day is the seat's and never the
-	// credential's.
+	// THE HANDLE IS THE TURN'S OWN SEAT AND TAKES NO ARGUMENT: a model that
+	// could name whose day to read could read a colleague's inbox, priorities
+	// and owed questions. The operator surface supplies its identity through
+	// the same actor seam. It is the actor's handle, so a person bound to a
+	// seat ([PrincipalActor]) reads the seat's day, never the credential's.
 	out, err := reader.MyWork(ctx, worklet.MyWorkQuery{
 		Handle: actor.Handle, Level: seatReadLevel, Agents: t.deps.agentHandles(),
 	}, t.deps.now(), t.deps.zone())

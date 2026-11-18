@@ -19,13 +19,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The golden-turn suite: whole turns driven through the REAL loop, the real
-// runner and the real tool surfaces, with only the models scripted — the
-// reviewer's replies, and what each executor run does over the bridge.
-//
-// It is the gate for the turn engine because none of the pieces below is
-// individually wrong in any of these scenarios — each one is a
-// misunderstanding BETWEEN two of them, which is exactly what a unit test of
+// The golden-turn suite: whole turns through the REAL loop, runner and tool
+// surfaces, with only the models scripted (the reviewer's replies, and what
+// each executor run does over the bridge). It gates the turn engine because
+// each scenario is a misunderstanding BETWEEN two pieces, which a unit test of
 // either cannot see.
 
 func settings() turn.Settings {
@@ -49,12 +46,12 @@ func (p played) results() []string {
 	return out
 }
 
-// goldenTurn runs a whole turn as the engine runs one. turn.Run drives a
-// runner whose executor launches a run and parks the turn; the run plays its
-// script against the surface it was launched with; a FRESH runner — as the
-// process that collects it builds one — resumes from the parked state with
-// what the bridge recorded, and the loop re-enters the parked round; and so
-// on until the turn ends. The k-th launch plays runs[k], the last repeating.
+// goldenTurn runs a whole turn as the engine does: turn.Run drives a runner
+// whose executor launches a run and parks the turn; the run plays its script
+// against its launch surface; a FRESH runner, as the collecting process builds
+// one, resumes from the parked state with what the bridge recorded, and the
+// loop re-enters the parked round, until the turn ends. The k-th launch plays
+// runs[k], the last repeating.
 func goldenTurn(t *testing.T, entries []phase.Entry, opts buildOpts, reply turn.Reply,
 	runs ...run,
 ) (turn.Result, []played) {
@@ -297,13 +294,12 @@ func asksColleagues(t *testing.T, reg *tools.Registry) {
 	}
 }
 
-// A NO_ACTION AFTER A COLLEAGUE ASK IS REFUSED INSIDE THE ROUND. Nobody asked
-// for this turn, but it asked a colleague, so ending it as "nobody was
-// asking" would leave the ask unreported. The run's own submission is refused,
-// naming the ask, and the run reports what it did in the same round — rather
-// than the engine's check sending the round back for a fresh run. The
-// annotation travels from the registry through the run's surface to the
-// submission tool, which no piece shows alone.
+// A NO_ACTION AFTER A COLLEAGUE ASK IS REFUSED INSIDE THE ROUND: "nobody was
+// asking" would leave the ask unreported, so the run's own submission is
+// refused, naming the ask, and the run reports in the same round rather than
+// the check sending the round back for a fresh run. The annotation travels
+// from the registry through the run's surface to the submission tool, which
+// no piece shows alone.
 //
 // Mutation: the launch back to decodeWork, and the no_action is accepted,
 // leaving no refusal for the run to see.
@@ -336,13 +332,12 @@ func TestGoldenANoActionAfterAColleagueAskIsRefusedInsideTheRound(t *testing.T) 
 	}
 }
 
-// A NO_ACTION MADE BEFORE THE RUN ACTED IS CORRECTED BY THE CHECK. The run
-// said nobody was asking while it had done nothing — accepted, as it was true
-// then — and asked a colleague after. The collection replays the submission
-// against every call the round made, and must take it as the run's own
-// account: refused there, the round would be rescued as one that submitted
-// nothing. turn.Check then corrects it from the same record, naming the ask,
-// and the next run reports what the turn did.
+// A NO_ACTION MADE BEFORE THE RUN ACTED IS CORRECTED BY THE CHECK. Accepted
+// when made, as it was true then, and followed by a colleague ask: the
+// collection's replay against the round's calls must take it as the run's own
+// account (refused there, the round would be rescued as one that submitted
+// nothing), and turn.Check corrects it from the same record, naming the ask,
+// so the next run reports what the turn did.
 //
 // Mutation: refuse the no_action in decodeWork rather than at the live
 // submission alone, and the replay rescues round one, whose rescue the
@@ -407,8 +402,7 @@ func TestGoldenAStalledTurnFailsRatherThanSpinning(t *testing.T) {
 func TestGoldenTheLedgerCrossesRoundsWithItsBudgetsApplied(t *testing.T) {
 	t.Parallel()
 	// The ledger is built by the loop, rendered by the prompt builder and
-	// read by the next executor round. This is the only place all three
-	// meet.
+	// read by the next executor round: only here do all three meet.
 	body := strings.Repeat("prose ", 400)
 	// One reviewer per segment, as the engine has: each segment's runner is
 	// a fresh one, so a shared script would replay its first reply.
@@ -627,13 +621,12 @@ func askingTurn(t *testing.T, prov *scriptedProvider, r run) (turn.Result, *aski
 }
 
 // A DECISION ABOVE THE SEAT ENDS THE TURN BLOCKED ON THAT BRANCH, AND THAT IS
-// A FINISHED TURN. Four components have to agree for it: the prompt builder
-// tells a seat holding the asking tool to ask with options and stop, the
-// surface carries the decision to the tool unchanged, the pre-review check
-// reads a blocked round that asked as having reached somebody, and the
-// done-override accepts the ask as the delivery on the tracker. Any one of
-// them reading "blocked" as "gave up" sends the seat back round after round to
-// make the choice it was told was not its own.
+// A FINISHED TURN. The prompt builder tells a seat holding the asking tool to
+// ask with options and stop, the surface carries the decision unchanged, the
+// pre-review check reads a blocked round that asked as having reached
+// somebody, and the done-override accepts the ask as the tracker delivery. Any
+// one reading "blocked" as "gave up" sends the seat back, round after round, to
+// make a choice it was told was not its own.
 func TestGoldenAnAskWithADecisionEndsTheTurnBlockedOnThatBranch(t *testing.T) {
 	t.Parallel()
 	decision := map[string]any{

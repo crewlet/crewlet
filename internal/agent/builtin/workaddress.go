@@ -2,41 +2,22 @@ package builtin
 
 import "github.com/crewlet/crewlet/internal/worklet"
 
-// HOW A TOOL NAMES A TASK TO THE CALLER WHO WILL ACT ON THE NAME.
+// HOW A TOOL NAMES A TASK: two tasks can hold one key (a counter restored
+// beside newer work), a key resolves to the task that claimed it first, and
+// the others carry `key_collision` and are reached by id. So every name a
+// tool hands back is built by [worklet.ItemAddress], in one of three shapes
+// (TestNoToolNamesATaskByAKeyOutsideTheAddressRule holds the package to it):
 //
-// A task has two names, and only one of them is always its own. Its KEY is
-// what a person reads and pastes and what a model types back — but two tasks
-// can hold one key (a counter restored beside newer work mints numbers they
-// already hold), and every read resolves the key to the task that claimed it
-// first. The other holders are flagged `key_collision` and are reached by
-// their ID alone. So everything a tool hands back to name a task is built by
-// one rule, [worklet.ItemAddress] (the key, unless the flag is set, and then
-// the id), and the tools here used to echo the key whatever the flag said: a
-// seat that commented on the duplicate was answered `item: ENG-7`, told to
-// "Read ENG-7's thread", and its next call landed on the claimant.
-//
-// Three shapes, one per kind of text:
-//
-//   - A RECEIPT names the task in `item` — the reference to hand back, the
-//     value every `item` argument takes — beside `key`, what the task is
-//     called, and `key_collision` where the two differ, so a reader can tell
-//     an id standing in for a key from a fault ([receiptItem], [ReceiptOf]).
-//   - An INSTRUCTION to call a tool on the task names its address, bare,
-//     because the caller copies it into an argument ([worklet.TaskDetail.Address]).
-//   - PROSE about the task names its address with the key beside it and why
-//     ([worklet.TaskDetail.Named]), because an id alone says nothing about
-//     which task it is.
-//
-// A gate holds the package to it: outside the functions listed in its own
-// allowance, nothing here reads a task's key off a detail
-// (TestNoToolNamesATaskByAKeyOutsideTheAddressRule).
+//   - a RECEIPT: `item` (the address), `key`, and `key_collision` where the
+//     two differ ([receiptItem], [ReceiptOf]);
+//   - an INSTRUCTION to call a tool: the bare address, which the caller
+//     copies into an argument ([worklet.TaskDetail.Address]);
+//   - PROSE: the address with the key beside it and why, because an id alone
+//     says nothing about which task it is ([worklet.TaskDetail.Named]).
 
-// The sentences every argument that takes a task reference ends with.
-//
-// IN THE SCHEMA, because the schema is what a model reads before it composes a
-// call: the flag on a row is only half of the rule, and a model that has never
-// been told what it means types the key it read beside it. A gate holds every
-// argument offering a key to carrying one of these
+// The sentences every argument that takes a task reference ends with: in the
+// schema, because that is what a model reads before composing a call, and a
+// model never told what `key_collision` means types the key it read
 // (TestEveryArgumentOfferingAKeySaysWhenToUseTheID).
 const (
 	// itemRef ends the description of an argument naming ONE task.
@@ -50,14 +31,12 @@ const (
 		"that claimed it first."
 )
 
-// receiptItem puts on a receipt how it names the task it is about: `item`, the
-// address ([worklet.ItemAddress]), `key` beside it, and `key_collision` where
-// the key is not the address.
-//
-// ONE FUNCTION for every receipt, so a create, a move and an edit cannot name
-// the task three ways — and `item` on every one of them, because it is the
-// argument's own name: a caller that hands back the field called `item` as the
-// argument called `item` is right whichever task it was.
+// receiptItem names on a receipt the task it is about: `item`, the address
+// ([worklet.ItemAddress]), `key` beside it, and `key_collision` where the key
+// is not the address, so an id standing in for a key does not read as a
+// fault. One function for every receipt, and `item` on each
+// because it is the argument's own name: handing it back as `item` reaches
+// the right task whichever one it was.
 func receiptItem(answer map[string]any, id, key string, collision bool) map[string]any {
 	answer["item"] = worklet.ItemAddress(id, key, collision)
 	if key != "" {
@@ -70,11 +49,9 @@ func receiptItem(answer map[string]any, id, key string, collision bool) map[stri
 }
 
 // ReceiptOf is [receiptItem] for a task the caller read before writing.
-//
-// EXPORTED FOR THE VERBS NO TOOL MAKES — the human write surface's rank move
-// and comment edit write through the tracker themselves — so their receipts
-// name the item by the same rule, in the same three fields, as every tool's
-// they sit beside on that surface.
+// Exported for the human write surface's rank move and comment edit, which
+// write through the tracker themselves, so their receipts name the item by
+// the same rule, in the same three fields, as every tool's.
 func ReceiptOf(answer map[string]any, before worklet.TaskDetail) map[string]any {
 	return receiptItem(answer, before.Task.ID, before.Task.Key, before.KeyCollision)
 }

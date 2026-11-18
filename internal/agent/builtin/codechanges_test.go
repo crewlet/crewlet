@@ -36,11 +36,9 @@ const siteEntryID = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0e01"
 func revHead(n int64) string { return strings.Repeat(strconv.FormatInt(n, 10), 40) }
 func revBase(n int64) string { return strings.Repeat(string(rune('a'+n)), 40) }
 
-// changeFixture is the change site!7 as Gitlet's rows hold it — its
-// detail, its revisions oldest first, its findings, reviews and comments in
-// the order a page reads them — and a listing of the repository's changes,
-// newest first; read answers a change read as the shipped reader pages one,
-// each page resuming after the row its cursor names.
+// changeFixture is the change site!7 as Gitlet's rows hold it (revisions
+// oldest first, the conversation in page order) and a newest-first listing of
+// the repository's changes; read pages them as the shipped reader does.
 type changeFixture struct {
 	repo      string
 	detail    gitlet.ChangeDetail
@@ -103,12 +101,10 @@ func newChangeHost(f *changeFixture) *gitletHost {
 	return h
 }
 
-// read answers q as the shipped reader pages a change read: a listing of the
-// repository's changes newest first by number, a page after the number its
-// cursor names; and one change's revisions — with its detail on a first page
-// — newest first after the revision a cursor names, its detail alone for a
-// read asking it alone (gitlet.ReadQuery.DetailOnly, a write tool's), or a part
-// of its conversation after the row a cursor names.
+// read answers q as the shipped reader pages it, each page after the row its
+// cursor names: a listing newest first by number; one change's revisions
+// newest first, with its detail on a first page or the detail alone
+// (gitlet.ReadQuery.DetailOnly, a write tool's); or a part of its conversation.
 func (f *changeFixture) read(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	out := gitlet.ReadAnswer{Position: f.at, Level: q.Fresh.Level}
 	if q.Repo != "" && q.Repo != f.repo {
@@ -219,11 +215,11 @@ func changeCall(t *testing.T, host *gitletHost, turn *turnctx.Turn, name string,
 // ---- one list ------------------------------------------------------------- //
 
 // THE CHANGE TOOLS JOIN THE ONE LIST: code_list_changes and code_get_change
-// are code reads like the nine before them — on the one list a seat's registry
-// and the operator catalogue both take, right after the reads by object id
-// (code_blame the last of them), described and shaped the same on both; each a
-// proven, idempotent read a worker may be handed, that delivers nowhere; and
-// offered by neither surface of a company that hosts no code.
+// sit on the one list a seat's registry and the operator catalogue both take,
+// right after the reads by object id (code_blame the last), described and
+// shaped the same on both; each a proven, idempotent read a worker may be
+// handed, that delivers nowhere, offered by neither surface of a company that
+// hosts no code.
 //
 // Mutations: CodeTools leaving either change tool out, or listing it before
 // the reads by object id; a change tool annotated as a write → red.
@@ -319,16 +315,13 @@ func changeQuestionsFor(t *testing.T, host *gitletHost, ceiling string) {
 	}
 }
 
-// A CHANGE READ IS MADE FOR WHOEVER WOKE THE TURN, at the access the change
-// tools' table names — read — which the node that answers judges the
-// colleague at on every question: in a turn a colleague seat woke, every read
-// of a change's rows and every read by object id a change tool makes names
-// that seat; in one a person woke, none does, a person maintaining every
-// repository; and in one a stranger woke, nothing is read at all.
+// A CHANGE READ IS MADE FOR WHOEVER WOKE THE TURN, judged at read
+// (changeToolNeeds): in a turn a colleague seat woke, every change-row read and
+// read by object id names that seat; in one a person woke, none does (a person
+// maintains every repository); in one a stranger woke, nothing is read.
 //
-// Mutations: a change tool asking a question through anything but
-// CodeDeps.read and gitRead (the colleague left off it), or caller skipped →
-// red.
+// Mutations: a change tool asking through anything but CodeDeps.read and
+// gitRead (the colleague left off), or caller skipped → red.
 func TestAChangeReadIsMadeForWhoeverWokeTheTurn(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -377,15 +370,14 @@ func TestAChangeReadIsMadeForWhoeverWokeTheTurn(t *testing.T) {
 
 // ---- the listing ------------------------------------------------------------ //
 
-// A LISTING IS READ AS ITS ARGUMENTS SAY: its filters are the reader's own —
-// a repository by its name, a state, an owner, a work item, a reviewer, a
-// need — at the seat's level, a page of `limit`, and on a turn's first call
-// naming the repository the listing is its resolution too, one read; one that
-// names nothing to list is refused before anything is read, as are a state
-// and a need this build does not know and a limit past its bound.
+// A LISTING IS READ AS ITS ARGUMENTS SAY: its filters (repository, state,
+// owner, work item, reviewer, need) are the reader's own, at the seat's level,
+// a page of `limit`; a turn's first call naming the repository resolves it in
+// that one read. A listing naming nothing, an unknown state or need, and a
+// limit past its bound are refused before anything is read.
 //
 // Mutation: a listing naming nothing sent to the reader; the repository
-// resolved by a read of its own before the listing → red.
+// resolved by a read of its own first → red.
 func TestAListingIsReadAsItsArgumentsSay(t *testing.T) {
 	t.Parallel()
 	host := newChangeHost(siteChange())
@@ -438,22 +430,17 @@ func TestAListingIsReadAsItsArgumentsSay(t *testing.T) {
 }
 
 // A LISTING NAMES A WORK ITEM AS THE CHANGE WRITES DO, AND RESOLVES ONLY A
-// KEY: a Worklet item's key — what a seat woken on it holds — bare or under
-// Worklet's backend, is resolved by the tracker's own read and lists the
-// changes carrying the item, asked of the reader by the identity a change's
-// row holds (`native:<task id>`), the very item code_open_change filed under
-// the key. An identity is listed as named with no tracker read: a Worklet id,
-// bare or under `native:`, even with no Worklet on this surface, and even
-// when its task is gone, since a purge leaves the changes that carry it; and
-// another tracker's item. A key that names no task, an id in a spelling no
-// row holds (resolved as a key would be), a key with no tracker on this
-// surface to resolve it, and `none`, which carries no item and no index
-// holds, are each refused before Gitlet is asked anything — `none`
-// before the tracker is either.
+// KEY: a Worklet key, bare or `native:`, is resolved by the tracker's read and
+// asked of the reader as the identity a change's row holds (`native:<task
+// id>`), as code_open_change files it. An identity is listed as named with no
+// tracker read: a Worklet id, bare or `native:`, even with no Worklet here or
+// its task purged (a purge leaves its changes), and another tracker's item. A
+// key naming no task, an id in a spelling no row holds (tried as a key), a key
+// with no tracker to resolve it, and `none` (no index holds it) are refused
+// before Gitlet is asked, `none` before the tracker too.
 //
-// Mutation: the listing passing `work` to the reader as named, unresolved →
-// the key reaches the reader as itself, red. Mutation: an id sent through the
-// tracker's read again → the read counts, and the gone task's refusal, red.
+// Mutations: `work` passed to the reader unresolved; an id sent through the
+// tracker's read (the read counts, the gone task is refused) → red.
 func TestAListingNamesAWorkItemAsTheChangeWritesDo(t *testing.T) {
 	t.Parallel()
 	const (
@@ -576,19 +563,17 @@ func TestAChangeIsNamedByItsNumberOrItsReference(t *testing.T) {
 }
 
 // A REVISION'S FILES ARE READ FROM ITS RECORDED BASE: `files` and `diff` read
-// the Gitlet node's diff from the revision's base to its head — the head
-// revision's, or the one `revision` names, read in a second read at session
-// floored at the call's first — and with `since_revision` the interdiff of
-// the two, from each revision's facts; every one at the floor of the records
-// that moved the revisions' heads and their targets, never at a read's
-// checkpoint. A revision past the head is refused; one whose base is not yet
-// recorded is unavailable on a live change and not found on one that ended,
-// naming how else to read it; one that shares no history with its target
-// names its head's files.
+// the diff from a revision's base to its head (the head revision's, or the one
+// `revision` names, read second at session floored at the first read), and
+// `since_revision` the interdiff from both revisions' facts; each floored at
+// the records that moved the heads and targets, never a read's checkpoint. A
+// revision past the head is refused; one with no recorded base yet is
+// unavailable on a live change and not found on an ended one, naming how else
+// to read it; one sharing no history with its target names its head's files.
 //
-// Mutations: the diff from the target's tip rather than the base; the
-// interdiff built from one revision's facts; the floor at the first read's
-// checkpoint; the second read at the seat's level → red.
+// Mutations: the diff from the target's tip; the interdiff from one revision's
+// facts; the floor at the first read's checkpoint; the second read at the
+// seat's level → red.
 func TestARevisionsFilesAreReadFromItsRecordedBase(t *testing.T) {
 	t.Parallel()
 	f := siteChange()
@@ -673,14 +658,12 @@ func TestARevisionsFilesAreReadFromItsRecordedBase(t *testing.T) {
 	}
 }
 
-// A DIFF READS ITS TWO REVISIONS AT ONCE: what changed in revision 2 since
-// revision 1 of a change whose head is 3 reads the head, then the two
-// revisions beside each other — neither needs the other's row — so a node
-// reading the estate through another pays one round trip for the two, as the
-// API's change question does (gitlet.ChangeRevisions).
+// A DIFF READS ITS TWO REVISIONS AT ONCE: revision 2 since revision 1 of a
+// change whose head is 3 reads the head, then the two revisions concurrently,
+// so a node reading the estate through another pays one round trip for both,
+// as the API's change question does (gitlet.ChangeRevisions).
 //
-// Mutation: read the two revisions one after the other → each is read
-// alone, red.
+// Mutation: read the two revisions one after the other → red.
 func TestADiffReadsItsTwoRevisionsAtOnce(t *testing.T) {
 	t.Parallel()
 	host := newChangeHost(siteChange())
@@ -717,21 +700,18 @@ func TestADiffReadsItsTwoRevisionsAtOnce(t *testing.T) {
 	}
 }
 
-// FINDINGS ARE RE-ANCHORED TO THE ASKED REVISION: a page of findings is read
-// at the seat's level, the change and its head after it at session, and every
-// finding raised on another revision than the one asked about — the head by
-// default — is placed in it by ONE re-anchoring read naming that revision's
-// head and base and each finding's own lines, floored at the head revision's
-// push, the latest any finding was raised on; a finding raised on the asked
-// revision is where it was raised, with nothing asked; and one on the old side
-// of a revision that shares no history with its target is gone. Each finding's
-// `at` is where its lines are, outdated or gone as the Gitlet node placed them;
-// and a re-anchoring the Gitlet node refuses is answered as that refusal, never
-// as this node's fault.
+// FINDINGS ARE RE-ANCHORED TO THE ASKED REVISION (the head by default): a page
+// is read at the seat's level, the change and its head after it at session,
+// and every finding raised on another revision is placed by ONE re-anchoring
+// read naming the asked revision's head and base and each finding's lines,
+// floored at the head revision's push, the latest any was raised on; its `at`
+// is where the Gitlet node placed it, outdated or gone. One raised on the asked
+// revision stays put, nothing asked; one on the old side of a revision sharing
+// no history with its target is gone. A refused re-anchoring is answered as
+// that refusal, never as this node's fault.
 //
-// Mutations: every finding placed where it was raised (no re-anchoring); the
-// re-anchoring read at the head whatever revision was asked about; the floor
-// at the asked revision alone; a refused re-anchoring told as a fault → red.
+// Mutations: no re-anchoring; the re-anchoring at the head whatever was asked;
+// the floor at the asked revision; a refused re-anchoring told as a fault → red.
 func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 	t.Parallel()
 	raised := func(id string, revision int64, side gitlet.Side, start, end int) gitlet.FindingRow {
@@ -875,22 +855,18 @@ func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 
 // ---- one page, one answer ------------------------------------------------- //
 
-// A GET_CHANGE PAGE FITS ONE TOOL ANSWER: every part of a change at its
-// bound — a description at its longest beside a page of revisions whose
-// target branches are the longest a ref may be, in the character every JSON
-// encoder writes as two bytes (`"`, which the answers' plain encoding escapes as
-// any encoder must, where `<` it writes as itself); a page of findings with their longest bodies and
-// suggestions; reviews with their longest summaries; comments with their
-// longest bodies; a Gitlet node's page cut at its bound; a readiness with a
-// merge of many long conflicting paths — is answered within one tool answer,
-// a page cut whole-row where its rows outgrow it, and the pages that follow
-// read every row once, in order. A row that alone outgrows an answer is
-// refused, naming that no argument narrows it; and so is the detail of a
-// change whose description alone does.
+// A GET_CHANGE PAGE FITS ONE TOOL ANSWER: every part at its bound (the longest
+// description beside revisions whose targets are the longest ref, all `"`,
+// two bytes in every JSON encoder, unlike `<`, which the answers' plain
+// encoding writes as itself; findings, reviews and comments at their longest;
+// a Gitlet node's page cut at its bound; a readiness of many long conflicting
+// paths) fits one answer, a page cut whole-row, and the pages that follow read
+// every row once, in order. A row, or a description, alone outgrowing an
+// answer is refused, naming that no argument narrows it.
 //
-// Mutations: a part answered whole (refused for its size); next left as the
-// reader's after a cut (the rows between lost); the fences registered for
-// every row of every probe (the render refuses a cut page) → red.
+// Mutations: a part answered whole; next left as the reader's after a cut
+// (rows lost); the fences registered for every row of every probe (the render
+// refuses a cut page) → red.
 func TestAGetChangePageFitsOneToolAnswer(t *testing.T) {
 	t.Parallel()
 	prose := func(n int) string {
@@ -1053,13 +1029,12 @@ func linearizable(reads []gitlet.ReadQuery, resolves []gitlet.RefQuery) int {
 	return n
 }
 
-// A CHANGE IS READ IN DETAIL ONLY WHERE ITS DETAIL IS READ: a revision's files,
-// a file's patch and the findings read the change IN BRIEF (gitlet.ReadQuery.
-// Brief) — its row and its head revision — and never its detail, which judges
-// its readiness and reads its description, authors, conversation and
-// mergeability for nothing; and so does a write of its conversation. The
-// summary and merge_readiness, which present them, read the detail, and so
-// does a dequeue, which acts on the readiness's queue entry.
+// A CHANGE IS READ IN DETAIL ONLY WHERE ITS DETAIL IS READ: files, diff,
+// findings and a conversation write read the change IN BRIEF
+// (gitlet.ReadQuery.Brief), its row and head revision, never the detail, whose
+// readiness judgement and other reads they would pay for nothing. The summary,
+// merge_readiness and a dequeue (which acts on the readiness's queue entry)
+// read the detail.
 //
 // Mutations: read the head in detail → files, diff, findings and the comment
 // read the detail, red; read merge_readiness or the dequeue in brief → their
@@ -1114,19 +1089,16 @@ func TestAChangeIsReadInDetailOnlyWhereItsDetailIsRead(t *testing.T) {
 	}
 }
 
-// A CHANGE TOOL'S CALL IS ONE LINEARIZABLE READ where nothing resolved its
-// repository before it: the call's first read of the change — or of its
-// checks, or a listing of the repository's changes — is the repository's
-// resolution too (gitlet.ReadQuery.Resolve), so a call costs the code log ONE
-// barrier, not a `repo` read's and then its own, one after the other. On the
-// operator surface, which has no turn and resolves on every call, every call;
-// in a turn, its first call naming the repository, and every later call reads
-// by the turn's resolution with one read of its own. A write of an existing
-// change is the same one read.
+// A CHANGE TOOL'S CALL IS ONE LINEARIZABLE READ: where nothing resolved its
+// repository before, the call's first read (of the change, its checks or a
+// listing) is the resolution too (gitlet.ReadQuery.Resolve), so a call costs
+// the code log ONE barrier, not a `repo` read's and then its own. The operator
+// surface, with no turn, resolves on every call; a turn on its first call
+// naming the repository, later calls reading by that resolution. A write of
+// an existing change is the same one read.
 //
-// Mutations: resolve the repository by a read of its own before the change's
-// (the repo read restored) → two linearizable reads a call, red; drop the
-// resolution's answer and read again → two, red.
+// Mutations: the repository resolved by a read of its own first, or the
+// resolution's answer dropped and read again → two linearizable reads, red.
 func TestAChangeToolCallIsOneLinearizableRead(t *testing.T) {
 	t.Parallel()
 	calls := []struct {

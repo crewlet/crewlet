@@ -7,12 +7,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 )
 
-// A FRESH RUN IS TOLD NO OTHER CALLS. A run that starts a session of its own has
-// no session above, so nothing it may show is said to be none of the listed
-// calls, however the turn began: its brief's late section says each call is
-// ONE call, which elsewhere brings the section, and the turn continued an
-// earlier turn's session. prompts.CalledBefore renders no such section either,
-// so it is held here, where the value is decided.
+// A FRESH RUN IS TOLD NO OTHER CALLS: with no session above it, nothing it may
+// show is said to be none of the listed calls, even where its late section and
+// a continued earlier turn's session would bring that section elsewhere.
+// prompts.CalledBefore renders none either, so it is held here, where the value
+// is decided.
 //
 // Mutation: ignore toldAs.fresh, and the fresh run's telling carries the
 // earlier turns' part.
@@ -40,11 +39,10 @@ func TestAFreshRunIsToldNoOtherCalls(t *testing.T) {
 }
 
 // A SPAN HOLDING THE TOLD ROUND IS NO PARTNER OF ITS CALLS. The park's last
-// tier folds every closed round, the round a send-back collected included, into
-// one span, and a task told again renders it. Its tally counts the round's own
-// calls, which are told by their own rules: read as work already done, it
-// would mark every told call of its tools against those same calls. A span of
-// earlier rounds alone is work already done like any other.
+// tier folds every closed round, the told one included, into one span; its
+// tally counts the round's own calls, so read as work already done it would
+// mark every told call against itself. A span of earlier rounds alone is work
+// already done like any other.
 //
 // Mutation: read a span as standing for its first round alone, or take the
 // entry standing for the round as a partner, and the first case is marked.

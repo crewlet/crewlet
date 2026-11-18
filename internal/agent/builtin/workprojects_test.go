@@ -12,12 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A SEAT THAT NAMES NO PROJECT MEANS ITS OWN, on every one of these.
-//
-// Three tools fall back to it and each one used to be a separate chance to
-// get it wrong: a describe that answered about a different project from the
-// one a create files into teaches a model the wrong vocabulary for the
-// container it is writing to, and the model has no way to notice.
+// A SEAT THAT NAMES NO PROJECT MEANS ITS OWN, on every one of these: a
+// describe about a different project from the one a create files into teaches
+// a model the wrong vocabulary, and it has no way to notice.
 func TestTheProjectToolsFallBackToTheSeatsOwnProject(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -35,8 +32,7 @@ func TestTheProjectToolsFallBackToTheSeatsOwnProject(t *testing.T) {
 	}
 
 	// AND A SEAT WHOSE UNIT OWNS NONE IS REFUSED NAMING THE LOOKUP, never
-	// answered about an empty key: an empty project is not a project, and
-	// a reader handed one would answer "no such project ''".
+	// answered about an empty key ("no such project ''").
 	unowned := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 	got := callWork(t, unowned, worklet.DescribeProjectTool, map[string]any{})
 	if !got.Failed || !strings.Contains(got.Output, "list_projects") {
@@ -45,15 +41,11 @@ func TestTheProjectToolsFallBackToTheSeatsOwnProject(t *testing.T) {
 	}
 }
 
-// EVERY ONE OF THESE READS AT THE SEAT SURFACE'S OWN DEFAULT.
-//
-// A turn must see its own writes: a seat that files into a project and then
-// describes it would otherwise read a copy from before its own create, and a
-// model that cannot see its own write files it again. The level is asserted
-// against [statelog.DefaultReadLevel] rather than a literal, because a literal
-// is what let twenty-one call sites drift to a level nothing populated: a
-// `session` read with no position is this node's committed prefix wearing a
-// stronger name, which is exactly the stale answer the comment above forbids.
+// EVERY ONE OF THESE READS AT THE SEAT SURFACE'S OWN DEFAULT, so a turn sees
+// its own writes rather than filing one again. Asserted against
+// [statelog.DefaultReadLevel], not a literal: literals drift to a level
+// nothing populates (`session` with no position is this node's committed
+// prefix under a stronger name).
 func TestTheProjectToolsReadAtTheSeatDefault(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -91,10 +83,8 @@ func TestTheProjectToolsCarryTheirArguments(t *testing.T) {
 	if q.Q != "platform" || q.Unit != "Engineering" || q.Limit != 12 {
 		t.Errorf("list_projects built %+v, want every argument carried", q)
 	}
-	// THE SAME GRAMMAR THE SCREEN'S IS. `archived=only` SELECTS the
-	// retired ones, and a tool that read it as the two-valued flag it
-	// replaced would answer a model about both sets while the model's own
-	// question was about one.
+	// THE SCREEN'S GRAMMAR: `archived=only` selects the retired ones alone,
+	// never both sets as a two-valued flag would.
 	if q.Archived != worklet.ArchivedOnly {
 		t.Errorf("archived=only reached the query as %q, want %q",
 			q.Archived, worklet.ArchivedOnly)
@@ -115,8 +105,7 @@ func TestTheProjectToolsCarryTheirArguments(t *testing.T) {
 	}
 
 	// AND A VALUE THAT IS NOT ONE IS A TOOL FAILURE NAMING IT, never a
-	// silent fall back to the default: a model told nothing learns nothing
-	// and asks the same wrong question again.
+	// silent default: a model told nothing asks the same wrong question again.
 	res := callWork(t, reg, worklet.ListProjectsTool, map[string]any{
 		"archived": "yes",
 	})
@@ -198,20 +187,16 @@ func (s stubUnits) AllUnits() []worklet.ChartUnit {
 	return []worklet.ChartUnit{unit}
 }
 
-// MY_WORK TAKES NO HANDLE, ever.
-//
-// A model that could name whose day to read could read anybody's — which is a
-// colleague's priorities, their inbox and the questions they owe, handed to an
-// agent nobody asked. The handle is the turn's own seat and comes from the
-// immutable turn context the tool surface bound.
+// MY_WORK TAKES NO HANDLE, ever: one that could name whose day to read could
+// read a colleague's priorities, inbox and owed questions. The handle is the
+// turn's own seat, from the immutable turn context the tool surface bound.
 func TestMyWorkIsAlwaysTheTurnsOwnSeat(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
-	// A HANDLE SENT ANYWAY IS REFUSED BY NAME and reads nobody's day: a
-	// model that tried to read a colleague's is told it cannot name one,
-	// rather than being shown its own as if it had asked for that.
+	// A HANDLE SENT ANYWAY IS REFUSED BY NAME and reads nobody's day, never
+	// the caller's own as if it had asked for that.
 	named := callWork(t, reg, worklet.MyWorkTool, map[string]any{"handle": "somebody-else"})
 	if !named.Failed || !errors.Is(named.Cause, builtin.ErrUndeclaredArgument) {
 		t.Errorf("my_work naming a handle answered %q (cause %v), want the "+
@@ -242,11 +227,8 @@ func TestMyWorkIsAlwaysTheTurnsOwnSeat(t *testing.T) {
 	}
 }
 
-// THE FEED FALLS BACK TO THE SEAT'S OWN PROJECT, never to the whole company.
-//
-// A model asking "what has been going on" means its own work, and a
-// company-wide feed is the one answer that is both expensive and almost never
-// what was meant.
+// THE FEED FALLS BACK TO THE SEAT'S OWN PROJECT, never the whole company: a
+// company-wide feed is expensive and almost never what was meant.
 func TestTaskActivityFallsBackToTheSeatsOwnProject(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -270,9 +252,8 @@ func TestTaskActivityFallsBackToTheSeatsOwnProject(t *testing.T) {
 		t.Errorf("task_activity built %+v, want every argument carried", q)
 	}
 
-	// A `since` THAT IS NEITHER SHAPE IS REFUSED naming both, rather than
-	// silently dropped — a bound the caller believed in and that never
-	// reached the query answers a different question.
+	// A `since` THAT IS NEITHER SHAPE IS REFUSED naming both, never dropped:
+	// a bound that never reached the query answers a different question.
 	got := callWork(t, reg, worklet.TaskActivityTool, map[string]any{
 		"task": "ENG-1", "since": "last tuesday",
 	})
@@ -285,13 +266,10 @@ func TestTaskActivityFallsBackToTheSeatsOwnProject(t *testing.T) {
 // A KIND task_activity DOES NOT HAVE IS REFUSED AS THE ARGUMENT, and the schema
 // offers the set it is refused against.
 //
-// The tool built a change kind from any string it was handed and never checked
-// it, so a model asking for `status_changed` read an empty feed as a project
-// where nothing had happened. The tracker's read refuses such a kind naming
-// every kind it has ([worklet.ErrBadQuery]); what this holds is the tool's
-// half — the kinds are in the schema a model picks from, and the refusal is
-// worded as an argument to change rather than a tracker that could not be
-// read "right now", which a model retries with the same argument.
+// An unchecked kind (`status_changed`) reads as an empty feed. The tracker's
+// read refuses it naming every kind ([worklet.ErrBadQuery]); this holds the
+// tool's half: the kinds are in the schema, and the refusal says to change the
+// argument, not that the tracker could not be read, which a model retries.
 func TestTaskActivityOffersItsKindsAndRefusesAnotherAsTheArgument(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -323,12 +301,10 @@ func TestTaskActivityOffersItsKindsAndRefusesAnotherAsTheArgument(t *testing.T) 
 	}
 }
 
-// A MISTYPED PROJECT KEY IS NOT A READ FAILURE. It used to be reported as one
-// — "could not read the tracker … do not conclude the item does not exist" —
-// which told a model that typed ENGG for ENG to keep believing in ENGG, and
-// dropped the reader's own sentence naming the nearest keys. And a `for_type`
-// the company does not file is the ARGUMENT's fault, about a project that is
-// right there.
+// A MISTYPED PROJECT KEY IS NOT A READ FAILURE, whose "do not conclude the
+// item does not exist" keeps a model that typed ENGG for ENG believing in ENGG
+// and drops the reader's sentence naming the nearest keys. A `for_type` the company does not file is
+// the ARGUMENT's fault, about a project that is there.
 func TestDescribingAProjectThatIsNotThereSaysSo(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

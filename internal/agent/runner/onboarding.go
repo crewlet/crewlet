@@ -14,37 +14,22 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The dedicated first-turn onboarding pass, which runs BEFORE the executor.
+// The first-turn onboarding pass runs BEFORE the executor, as its own phase
+// with its own budget (turn_engine.onboarding_max_tool_rounds), so reading the
+// team's pages never starves the work. Its surface is the onboarding builtins
+// plus the discovery meta-tools, and its prompt lists every other tool it can
+// reach, so it activates its knowledge-base tools as the executor would.
 //
-// It used to happen inside the turn's own thinking pass, driven by a hint
-// injected into that prompt. On a genuine first turn that spent the whole
-// round budget on reading the team's pages and persisting conventions, and
-// could starve the submission entirely — a seat's first ever turn was the one
-// most likely to end having decided nothing at all.
-//
-// So it is its own phase with its own budget
-// (turn_engine.onboarding_max_tool_rounds), and onboarding never competes with
-// the work. Its surface is the onboarding builtins plus the discovery
-// meta-tools, and its prompt lists every other tool it can reach, so the agent
-// activates its knowledge-base tools (first-party on Doclet, an MCP server's
-// on Confluence) the same way the executor reaches an MCP tool,
-// on a separate budget.
-//
-// NO REQUIRED-SKILL GUARD, deliberately: onboarding is a fixed read → persist
-// → mark workflow and the hint is its own guidance, so the load-before-use tax
-// would only burn rounds the pass needs for reading.
-//
-// There is no rescue path either. A pass that runs out of rounds simply ends
-// UNMARKED and retries next turn, which is the right outcome — a rescue would
-// have to invent a summary of pages the agent did not finish reading.
+// NO REQUIRED-SKILL GUARD: the pass is a fixed read → persist → mark workflow,
+// so the load-before-use tax would only burn its reading rounds. NO RESCUE: a
+// pass out of rounds ends UNMARKED and retries next turn, since a rescue would
+// invent a summary of pages it did not finish reading.
 
 var onboardingLog = logging.Get("agent.onboarding")
 
 // onboardingAlwaysOn is what the pass can call without discovering it.
-//
-// mark_onboarded is what ENDS the pass, so it is also the terminator: without
-// it the loop asks again after the model has already marked, and the pass
-// spends its remaining budget re-deciding something it has decided.
+// mark_onboarded must be here: it ends the pass, and without it the loop asks
+// again after the model has marked.
 var onboardingAlwaysOn = []string{toolname.ReflectAndPersist, toolname.MarkOnboarded}
 
 // Markers is what the onboarding pass needs from the learning store.
@@ -60,26 +45,18 @@ type Markers interface {
 	Release(ctx context.Context, p learning.Pass, at time.Time) error
 }
 
-// ClaimTTL bounds the cross-process pass lease.
-//
-// The pass is bounded by the onboarding round budget — 10 rounds by default,
-// judge-extended to a ceiling of 20, at 20-30 seconds a round worst case, so
-// roughly ten minutes at the ceiling. Fifteen minutes covers that with slack
-// for a slow provider. A crashed claimant blocks re-onboarding for at most
-// this long, which is why the pass releases explicitly in a defer rather than
-// letting the TTL do it.
+// ClaimTTL bounds the cross-process pass lease: the round ceiling of 20 at
+// 20-30 seconds a round worst case is about ten minutes, plus slack for a slow
+// provider. A crashed claimant blocks re-onboarding for at most this long; a
+// live pass releases explicitly in a defer rather than leaving it to the TTL.
 const ClaimTTL = 15 * time.Minute
 
-// Latch remembers, per process, which seats are known onboarded.
+// Latch remembers, per process, which seats are known onboarded, so that a
+// flaky read of the best-effort marker store cannot re-run a pass for a seat
+// this process has already SEEN marked. Not for speed.
 //
-// The point is not speed. The marker store is best-effort, and a transient
-// lookup failure must not re-run a whole onboarding pass for an agent this
-// process has already SEEN marked — so once a read confirms it, or a pass
-// marks it, no later read flake can re-fire.
-//
-// KEYED BY CHAIN HASH, which is what makes a live org restructure re-onboard
-// by design: a seat that moved under a different unit is oriented to a company
-// it has not read about.
+// KEYED BY CHAIN HASH, so a seat moved under a different unit by a live org
+// restructure re-onboards by design.
 type Latch struct {
 	mu   sync.Mutex
 	seen map[string]string // agent id -> chain hash
@@ -112,16 +89,15 @@ func (l *Latch) Confirm(agentID, chainHash string) {
 // Onboarding is the per-turn wiring for the pass. Zero disables it, which is
 // what a node with no marker store has.
 type Onboarding struct {
-	// Markers is the durable store. Nil skips the pass entirely: without
-	// somewhere to mark, it would run every turn forever.
+	// Markers is the durable store. Nil skips the pass: without somewhere to
+	// mark, it would run every turn forever.
 	Markers Markers
 
 	// Latch is the process-local memory of who is already onboarded.
 	Latch *Latch
 
-	// Rounds and Ceiling are the pass's own budget — the only engine-driven
-	// phase with a ceiling above its budget, so the only one the round-cap
-	// extension reaches.
+	// Rounds and Ceiling are the pass's own budget; it is the only
+	// engine-driven phase the round-cap extension reaches.
 	Rounds  int
 	Ceiling int
 
@@ -129,31 +105,18 @@ type Onboarding struct {
 	Now func() time.Time
 }
 
-// Onboard runs the first-turn pass if this seat still needs it.
+// Onboard runs the first-turn pass if this seat still needs it, and reports
+// whether it RAN (only logged). Five gates, so the pass runs until it marks
+// and then never again for the chain:
 //
-// It reports whether the pass RAN, which the turn logs. Nothing else reads
-// it: onboarding is this pass alone, and the executor neither reaches
-// mark_onboarded nor is told to onboard.
-//
-// FIVE GATES, and every one of them exists because onboarding must run until
-// it marks and then never again for the same chain:
-//
-//  1. No budget, no store, no seat — nothing to do, and a pass that could
-//     never be marked would run every turn forever.
-//  2. A human seat: it is never spawned, so it never onboards, and it has
-//     no agent id to key a marker on.
-//  3. The process latch: this process has already seen this seat marked.
-//  4. The durable marker, read TRI-STATE. True skips. False runs. An ERROR
-//     skips and retries next turn — collapsing a failed lookup into "not
-//     onboarded" would re-run full passes for already-marked agents on every
-//     transient database blip, which is strictly worse than waiting a turn.
-//  5. The cross-process lease. Seat inboxes are shared subscriptions, so
-//     during a rolling restart two engines can each run a turn for the same
-//     un-onboarded seat. The lease makes exactly one of them run the pass.
-//
-// The lease is also why there is no in-process lock here: it is atomic and
-// excludes concurrent passes within a process as well as across, so a second
-// lock would guard a path the first one already closes.
+//  1. No budget, store or seat: a pass never marked would run forever.
+//  2. A human seat: never spawned, and no agent id to key a marker on.
+//  3. The process latch ([Latch]).
+//  4. The marker, TRI-STATE: an ERROR skips and retries next turn rather than
+//     re-onboard marked seats on every database blip.
+//  5. The cross-process lease: shared seat inboxes let two engines run the
+//     same seat's turn in a rolling restart. It also excludes passes within
+//     a process, so no in-process lock.
 func (r *Runner) Onboard(ctx context.Context) (bool, error) {
 	cfg := r.cfg.Onboarding
 	seat := r.cfg.Seat.Role
@@ -163,7 +126,7 @@ func (r *Runner) Onboard(ctx context.Context) (bool, error) {
 	}
 	agentID, ok := r.cfg.Seat.Org.AgentIDFor(seat)
 	if !ok {
-		// A human seat is never spawned, so it never onboards.
+		// A human seat.
 		return false, nil
 	}
 	id := agentID.String()
@@ -199,9 +162,8 @@ func (r *Runner) Onboard(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	defer func() {
-		// Released explicitly whether or not the pass marked. A marked
-		// pass has already cleared it; an unmarked or crashed one must not
-		// hold re-onboarding hostage until the TTL.
+		// Released whether or not the pass marked, so an unmarked one does
+		// not block re-onboarding until the TTL.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := cfg.Markers.Release(context.WithoutCancel(ctx), pass, cfg.now()); err != nil {
 			onboardingLog.Warn("onboarding_release_failed",
@@ -219,13 +181,9 @@ func (r *Runner) Onboard(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// onboardingPass is the LLM pass itself, under the lease.
-//
-// ITERATION 0, so a dashboard groups it under the turn BEFORE the first
-// executor round, which runs at iteration 1. The phase events, the extension
-// judge and the failure path all come from runPhase — the same machinery the
-// reviewer uses, which is what stops onboarding drifting into a second turn
-// engine.
+// onboardingPass is the LLM pass itself, under the lease, at
+// [onboardingIteration]. It runs through runPhase, as the reviewer does, so
+// onboarding never drifts into a second turn engine.
 func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error) {
 	snapshot := r.seatSnapshot()
 	surface, err := r.surfaceWith(ctx, r.ownMeter(), phase.Onboarding, 0, snapshot, nil,
@@ -235,8 +193,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	}
 	system := prompts.BuildOnboarding(r.cfg.Seat, prompts.OnboardingInput{
 		Hint: learning.Hint(r.cfg.Seat.Org, r.cfg.Seat.Role),
-		// Everything the pass can reach and does not hold — its
-		// knowledge-base tools among them, which it finds here.
+		// Its knowledge-base tools are found here.
 		Discoverable: snapshot.Discoverable(surface.Active()),
 	})
 	user := prompts.BuildOnboardingUserMessage()
@@ -245,23 +202,17 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 		phase: phase.Onboarding, surface: surface, system: system, user: user,
 		rounds: r.cfg.Onboarding.Rounds, ceiling: r.cfg.Onboarding.Ceiling,
 		iteration: onboardingIteration,
-		// A pass that thinks and stops never marks, so it re-fires on every
-		// turn this seat ever takes — the most expensive silent failure in
-		// the engine, and one a corrective re-prompt fixes for one round.
-		// Naming mark_onboarded here is what arms that corrective, and it
-		// names this tool rather than the whole catalogue the pass carries.
-		// Never forced, like every phase: see phaseRun.terminateAfter for
-		// why a forced tool choice is not asked for as well.
+		// Arms the corrective re-prompt for a pass that stops without
+		// marking, which would otherwise re-fire on every turn this seat
+		// takes. Never forced (phaseRun.terminateAfter).
 		terminateAfter: []string{toolname.MarkOnboarded},
 	})
 	if err != nil {
 		return false, fmt.Errorf("runner: onboarding: %w", err)
 	}
 
-	// MARKED is read off what actually ran, not off the model's prose: a
-	// pass that said it was done without calling the tool has not marked,
-	// and treating its claim as the fact would leave a seat permanently
-	// unmarked in the store while never onboarding again in this process.
+	// MARKED is read off what ran, not the model's prose: latching a claim
+	// would leave the seat unmarked in the store yet never re-onboarded here.
 	marked := calledSuccessfully(surface, toolname.MarkOnboarded)
 	notes := "did not mark (will retry next turn)"
 	decision := ""

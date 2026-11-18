@@ -14,12 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A CLOSED ROUND'S CALL A TOLD CALL COULD BE TAKEN FOR IS LISTED AGAIN. A
-// session that continued through the turn's earlier rounds may show their
-// calls as well as the round's own, and a told call alike one of them could be
-// taken for it as surely as for a call of the round (runner's closedShown):
-// listed again first, each line saying it was made in an earlier round, which
-// says where in the session it may be.
+// A CLOSED ROUND'S CALL A TOLD CALL COULD BE TAKEN FOR IS LISTED AGAIN: a
+// session that continued through earlier rounds may show their calls
+// (runner's closedShown), so they are listed again first, each line noting it
+// was made in an earlier round, which says where in the session it may be.
 
 // earlierRound is the note a closed round's call listed again ends its line
 // with, in a conversation that is no schedule's.
@@ -37,11 +35,10 @@ func latePost(text string, seq int) runner.BridgedCall {
 // holds, which no told call reads alike.
 var heldIssue = digested(numbered("jira_get", map[string]any{"key": "OPS-1"}, 1, 1))
 
-// A CLOSED ROUND'S CALL A TOLD CALL COULD BE TAKEN FOR IS LISTED AGAIN. Round 1
-// posted "hi" to C1; round 2's relaunch continues a session cut off, which may
-// show round 1, and tells a late post of the same words. The closed post is
-// listed again, its line ending with the note that it was made in an earlier
-// round; a late post of other words reads apart, and nothing is listed.
+// A CLOSED ROUND'S CALL A TOLD CALL COULD BE TAKEN FOR IS LISTED AGAIN. Round
+// 2's relaunch continues a cut-off session that may show round 1's post, and
+// tells a late post of the same words: the closed post is listed again with
+// the earlier-round note. A late post of other words lists nothing.
 //
 // Mutation: list again only the round's own calls, or drop the note, and the
 // first case goes red.
@@ -63,13 +60,10 @@ func TestAClosedRoundsCallAToldCallCouldBeTakenForIsListedAgain(t *testing.T) {
 	}
 }
 
-// THE ROUND A SEND-BACK CARRIES IS LISTED AGAIN ONCE. A reviewer's send-back
-// continues the session of the round it collected, and the turn's closed rounds
-// hold that round last: its calls are the round's own, held at the point or
-// told by their rules, so a held post a late post of the round reads alike is
-// listed once, as a call of the round, never again as a closed round's, and
-// with no note, which would say it was made in an earlier round than the one
-// just sent back.
+// THE ROUND A SEND-BACK CARRIES IS LISTED AGAIN ONCE. A send-back continues
+// the session of the round it collected, which the closed rounds hold last:
+// its calls are the round's own, so a held post alike a late one is listed
+// once, as the round's, with no earlier-round note.
 //
 // Mutation: list again the closed entry that stands for the round, and the
 // post is listed twice, with the note; put the note on the round's own calls,
@@ -102,22 +96,18 @@ func TestTheRoundASendBackCarriesIsListedAgainOnce(t *testing.T) {
 	}
 }
 
-// A CLOSED ROUND A TASK TOLD AGAIN RENDERS IS NEVER LISTED AGAIN. A session cut
-// off may lack its job's brief, which continued the session the conversation's
-// last turn left and told the turn's task with round 1 as work already done:
-// that task is told again, rendering round 1 again, so round 1's post is told
-// there and never listed again as well, which would tell one call twice in one
-// message and point the words over it at an identical line as a call of its
-// own. Round 2, closed after that brief, is the session's own, and its post a
-// late post could be taken for is listed again.
+// A CLOSED ROUND A TASK TOLD AGAIN RENDERS IS NEVER LISTED AGAIN. A cut-off
+// session may lack its job's brief, so the task is told again, rendering round
+// 1 as work done: listing round 1's post too would tell one call twice and
+// call an identical line a call of its own. Round 2, closed after that brief,
+// is the session's own, and its post alike a late post is listed again.
 //
 // Mutation: list again the rounds a task told again renders, and round 1's post
 // is told twice.
 func TestAClosedRoundATaskToldAgainRendersIsNeverListedAgain(t *testing.T) {
 	t.Parallel()
-	// NO DIGEST, as a build before one recorded them: arguments not comparable,
-	// so each closed post reads alike every told post, and the two are told
-	// apart by their words.
+	// NO DIGEST: arguments not comparable, so each closed post reads alike every
+	// told post, and their words tell the two apart.
 	closedPost := func(text string) ledger.Call {
 		return ledger.Call{Name: "slack_post", Args: map[string]any{"channel": "C1", "text": text}, Result: "done"}
 	}
@@ -139,10 +129,9 @@ func TestAClosedRoundATaskToldAgainRendersIsNeverListedAgain(t *testing.T) {
 	}
 }
 
-// A CLOSED SUBMISSION IS NEVER LISTED AGAIN. A closed round's `submit_work` was
-// sent back, and a told submission is said not to stand; taking one for the
-// other loses nothing, while listed again under words that say nothing of
-// submissions, the closed one could read as standing.
+// A CLOSED SUBMISSION IS NEVER LISTED AGAIN. A closed round's `submit_work`
+// was sent back; listed again under words that say nothing of submissions, it
+// could read as standing, while taking a told submission for it loses nothing.
 //
 // Mutation: list a closed submission again, and its line is in the section.
 func TestAClosedSubmissionIsNeverListedAgain(t *testing.T) {
@@ -163,13 +152,12 @@ func TestAClosedSubmissionIsNeverListedAgain(t *testing.T) {
 	}
 }
 
-// A CLOSED HELD CALL AN ANSWER HERE TELLS IS NEVER LISTED AGAIN. Round 1's run
-// held a `vendor_post` for a person's approval, who allowed it, and the call
-// was made: both calls are on round 1's record, their arguments sealed, so
-// each reads alike every call of its tool. The answer is told again here, and
-// it tells what became of the call; a closed list keeps no held call's id, so
-// neither withheld call is listed again beside a late `vendor_post`, by the
-// answer's round and tool. Where the answer is about another tool, both are.
+// A CLOSED HELD CALL AN ANSWER HERE TELLS IS NEVER LISTED AGAIN. Round 1 held
+// a `vendor_post` for approval and then made it, both sealed, so each reads
+// alike every call of its tool. The answer, told again, tells what became of
+// the call; a closed list keeps no held call's id, so neither is listed again
+// beside a late `vendor_post`, by the answer's round and tool. Beside an
+// answer about another tool, both are.
 //
 // Mutation: list again a withheld call of the round and tool an answer of the
 // brief tells, and the first case lists both.
@@ -201,11 +189,10 @@ func TestAClosedHeldCallAnAnswerHereTellsIsNeverListedAgain(t *testing.T) {
 }
 
 // A CLOSED CALL IS COMPARED AS A PARK KEEPS IT. A parked turn's closed rounds
-// ride its row, condensed past their share: a value too large is left out in
-// place, its marker saying so (execstate.EncodeWithin). Decoded back, a closed
-// write kept whole reads alike a told write of the same values and apart from
-// one whose content or path its line shows differs; condensed, its content
-// reads alike any content, and its path, kept whole, is still compared.
+// are condensed past their share, a too-large value left out under a marker
+// (execstate.EncodeWithin). Kept whole, a closed write is compared value by
+// value; condensed, its content reads alike any content and its path is still
+// compared.
 //
 // Mutation: compare a marker as the text it is, and the condensed write reads
 // apart from a told write of the same content.
@@ -259,13 +246,11 @@ func TestAClosedCallIsComparedAsAParkKeepsIt(t *testing.T) {
 	}
 }
 
-// THE SUMMARIZED TELLING IS NEVER THE SHORTER WITH CLOSED CALLS LISTED AGAIN. A
-// Claude Code relaunch whose session its harness may hand its model as a
-// summary is told every call of the round from its start; the kept path hands
-// that telling wherever the held one may compact, on the claim that it is
-// never the shorter (keptTellings.led). Closed calls alike a told call are
-// listed again in both, value by value, so the summarized telling's are a
-// superset of the held one's, and its brief, for either box, is never the
+// THE SUMMARIZED TELLING IS NEVER THE SHORTER WITH CLOSED CALLS LISTED AGAIN.
+// The kept path hands a Claude Code relaunch whose session may be summarized
+// the telling of every call from the round's start, claiming it is never the
+// shorter (keptTellings.led). Closed calls alike a told call are listed again
+// in both, so the summarized one's are a superset and its brief never the
 // shorter.
 //
 // Mutation: list closed calls again only in the held telling, and the
@@ -279,9 +264,8 @@ func TestTheSummarizedTellingIsNeverTheShorterWithClosedCallsListedAgain(t *test
 	}
 	history := []ledger.Iteration{{Iteration: 1, Calls: calls}}
 	relaunch := func(count *sandbox.ResumedCount) *runner.SessionContinuation {
-		// RESTARTED NOWHERE since its brief, as its launch handed it, and its
-		// job's copy counted as its capture is, so the count alone decides which
-		// telling is handed.
+		// RESTARTED NOWHERE since its brief, and its job's copy counted as its
+		// capture is, so the count alone decides which telling is handed.
 		return lostRelaunchOver(t, keptClaude(count, false), history, runner.Resume{BasisRestart: new(""),
 			Count:   count,
 			Bridged: []runner.BridgedCall{heldIssue, latePost("bye", 2)}}).Session
@@ -299,16 +283,12 @@ func TestTheSummarizedTellingIsNeverTheShorterWithClosedCallsListedAgain(t *test
 	}
 }
 
-// THE COPY IN ITS BOX IS TOLD ITS CLOSED ROUNDS AS A KEPT SESSION IS. A relaunch
-// carrying round 2 on in its job's own box continues a copy that went through
-// round 1 as surely as a kept session did, so round 1's post a late post could
-// be taken for is listed again, with its note: where the job's harness ended its
-// own run and the copy holds every call of the round, and where it was cut off
-// and the round is told from its start. Where a task is told again, rendering
-// round 1 as work already done, round 1's post is told there once and never
-// listed again too. And where the copy's thread restarted before its job, it may
-// hold round 1 only in a summary's words, so it is told the post's tool among
-// the earlier rounds' calls.
+// THE COPY IN ITS BOX IS TOLD ITS CLOSED ROUNDS AS A KEPT SESSION IS. A copy
+// carrying round 2 went through round 1, so round 1's post alike a late post
+// is listed again with its note, whether its harness ended its own run or it
+// was cut off. A task told again renders round 1 and tells the post there
+// once. A copy whose thread restarted before its job may hold round 1 only as
+// a summary, so it is told the post's tool among the earlier rounds' calls.
 //
 // Mutation: hand either in-box telling no closed rounds, leave out the rounds a
 // task told again renders, or ignore the copy's restart, and a case goes red.

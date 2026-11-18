@@ -13,9 +13,9 @@ import (
 )
 
 // THE FOLDER TREE AND THE ADOPTED BRAND, as the fake domain answers them: a
-// folder is visible to a viewer it is owned by or whose record, units or the
-// company its top-level folder is shared with (the relation the authority
-// table decides, held here only as far as these cases need it).
+// folder is visible to its top-level folder's owner and to a viewer whose
+// record, units or company that folder is shared with (the authority table's
+// relation, only as far as these cases need it).
 
 // folder holds a live folder under parent ("" for the top level), owned by
 // owner, shared as given when it is top-level (a subfolder inherits its root's

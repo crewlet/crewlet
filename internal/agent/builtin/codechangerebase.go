@@ -15,21 +15,18 @@ import (
 )
 
 // THE REBASE: code_rebase_change replays a change's commits its target does
-// not hold onto the target's tip and moves the change's source branch to the
-// last of them, as ONE ENGINE WRITE the repository's Gitlet node builds and
-// lands as one forced push (gitlet.WriteRebaseChange) — each commit keeping its
-// author and its author date (U43 a), the first that conflicts stopping it
-// with nothing stored. The push is the caller's, held to the grant's ref rule
-// and the protections of the source branch as a force-push of it is, and its
-// apply records the change's new revision. In a turn somebody woke, the write
-// carries whom it is made for (gitlet.EngineWrite.Ceiling, [CodeDeps.writeCaller])
-// and the Gitlet node holds the push to that requester's grant too, the seat's own
-// work spared — as every branch write is, since a rebase is one.
+// not hold onto the target's tip and moves the source branch to the last, as
+// ONE engine write (gitlet.WriteRebaseChange) the Gitlet node lands as one
+// forced push: each commit keeps its author and author date (U43 a), and the
+// first that conflicts stops it with nothing stored. The push is the caller's,
+// held to the grant's ref rule and the source branch's protections as a
+// force-push is, and, as every branch write, to the requester's grant in a
+// turn somebody woke (gitlet.EngineWrite.Ceiling, [CodeDeps.writeCaller]).
 
 // CodeRebaseChangeTool is the tool's name: its authority row's action.
 const CodeRebaseChangeTool = string(authz.ActionCodeRebaseChange)
 
-// rebaseVerb is the verb a rebase's operation is named by (m3-w1's op rule).
+// rebaseVerb is the verb a rebase's operation is named by ([opIDFor]).
 const rebaseVerb = "code-rebase"
 
 type codeRebaseChange struct{ deps CodeDeps }
@@ -81,11 +78,9 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	// CONFLICT, as an ended change is on every code tool (a merge's
-	// change_not_open, a suggestion's, a change write's change_closed): the
-	// change is in a state that refuses the rebase until somebody reopens it,
-	// or for good once merged — internal/mcp's one rule — and the request
-	// itself, naming the change it means, is not wrong.
+	// CONFLICT, as an ended change is on every code tool ([mergeRefusalClass]):
+	// the change's state refuses it until reopened, or for good once merged,
+	// and the request itself is not wrong.
 	if !cv.change.State.Live() {
 		return refusedBy(tools.RefusalConflict, fmt.Errorf("gitlet: %s is %s", cv.g.ref(), cv.change.State),
 			fmt.Sprintf("%s: %s is %s, and only a live change is rebased.", tool, cv.g.ref(),
@@ -99,9 +94,8 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err := w.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, cv.g.c.actor, repo.Name, err), nil
 	}
-	// THE SOURCE BRANCH'S HOLD, before the write is sent ([CodeDeps.branch]):
-	// the rebase moves the change's source, often a seat's branch, at the head
-	// it names, so it is held as a read of it is.
+	// The source, often a seat's branch, is held before the write is sent, as
+	// a read of it is ([CodeDeps.branch]).
 	if refusal := t.deps.branch(ctx, turn, tool, cv.g.c, repo, true, w.Ref); refusal != nil {
 		return *refusal, nil
 	}

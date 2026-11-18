@@ -15,20 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// AN EXECUTOR'S ASK IS READ AT ONE TRUST THROUGH EVERY DOOR (ADR-0040).
-//
-// One parked ask (a question, the context the run gave with it, the options
-// it offered) reaches a model by many doors: answer_executor's receipt, which
-// a person's model reads when it answers; the Dashboard Assistant's reads of
-// the executors and of what waits on the person; its generic reads of the
-// same routes and of the decisions the person answered, where the ask is kept
-// once answered; and the receipt of its own write that answers a run, which
-// the turn its approval resumes reads. Each used to decide for itself:
-// answer_executor read the run's words as a colleague's, the curated reads as
-// an outside party's, and the generic read of the answered decisions as a
-// colleague's again, so one ask was trusted by the door it came through. Every
-// door now reads it by the one rule for an executor's words
-// ([provenance.Executor]).
+// AN EXECUTOR'S ASK IS READ AT ONE TRUST THROUGH EVERY DOOR (ADR-0040): the
+// rule for an executor's words ([provenance.Executor]), whether it arrives by
+// answer_executor's receipt, the Dashboard Assistant's curated or generic reads
+// of the executors and of the pending and answered decisions, or the receipt
+// of the write that answers a run. Otherwise one ask is trusted by its door.
 //
 // Mutation: fence answer_executor's question by the hosted rule again, or read
 // a decisions route's answer by its path alone, and the door that does is red.

@@ -38,11 +38,10 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// keptSessions is the seats' rows on the executor log as the session tools
-// read them — each seat's the latest begun first, its page answered whole and
-// a search answered as a case sets it — and the sealed objects they name, in a
-// real session store over memory. Every read is recorded with the seat and the
-// level it asked at.
+// keptSessions is the seats' executor-log rows as the session tools read them
+// (each seat's newest first, a page answered whole, a search as a case sets it)
+// and the sealed objects they name, in a real session store over memory. It
+// records every read's seat and level.
 type keptSessions struct {
 	mu      sync.Mutex
 	rows    map[string][]executordomain.Session
@@ -128,8 +127,7 @@ func (k *keptSessions) keeps() bool {
 	return !k.off
 }
 
-// switchOff turns the company's switch off, as a revision the node applies
-// does.
+// switchOff turns the company's switch off, as a revision the node applies does.
 func (k *keptSessions) switchOff() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -141,9 +139,9 @@ func (k *keptSessions) deps() builtin.SessionDeps {
 	return builtin.SessionDeps{Rows: k, Objects: k.store, Keeps: k.keeps}
 }
 
-// keep seals an OpenCode export of texts — one person's message each, in
-// order — as seat's session of a new turn of conversation, ended, records its
-// row as the seat's newest and answers it.
+// keep seals an OpenCode export of texts (one person's message each) as seat's
+// ended session of a new turn of conversation, records its row as the seat's
+// newest and returns it.
 func (k *keptSessions) keep(t *testing.T, seat, conversation string, texts ...string) executordomain.Session {
 	t.Helper()
 	return k.keepTurn(t, seat, uuid.NewString(), conversation, texts...)
@@ -295,12 +293,11 @@ func entryOrdinals(answer map[string]any) []int {
 	return out
 }
 
-// A SEAT READS ONLY ITS OWN SESSIONS: neither tool takes a seat — an argument
-// naming one is refused before the tool runs, as every argument a tool does
-// not read is — and both read the seat of the turn the call is bound to, never
-// the call's principal: another seat's turn id is answered exactly as a turn id
-// nobody has, word for word, a listing never holds another seat's row, and
-// every read is made as the turn's seat.
+// A SEAT READS ONLY ITS OWN SESSIONS: neither tool takes a seat (an argument
+// naming one is refused as any unread argument is), and both read the seat of
+// the turn the call is bound to, never the call's principal. Another seat's
+// turn id is answered word for word as a turn id nobody has, a listing never
+// holds another seat's row, and every read is made as the turn's seat.
 //
 // Mutation: read the seat off the call's principal, and a read is made as
 // another seat.
@@ -479,24 +476,17 @@ func TestTheMarksNameThisTurnAndThisConversation(t *testing.T) {
 }
 
 // A SEAT IS TOLD OF A SESSION IN PROGRESS, AND OF ONE ITS TURN WENT PAST, WHAT
-// A PERSON IS: both tools show a row with the domain's own words for the
-// session it keeps, asked of the row's shown form. The reading turn's earlier
-// launch's session — `this_turn`, its turn not ended — is in progress, never an
-// ended turn's, in the engine's sentence for one
-// (executordomain.Session.InProgressNote), whole in a listing and on the
-// read's first page, and never fenced, since it is the engine's words alone
-// and quotes nobody; an ended row kept up to a session its turn went on past
-// says so (executordomain.Session.WentOnNote), the reason its newer capture
-// was not kept redacted, fenced as the row's other words are, cut in a listing
-// as they are and whole on the read's first page; and a row at its turn's last
-// word says neither.
+// A PERSON IS, in the domain's words asked of the row's shown form. The reading
+// turn's own unended session (`this_turn`) is in progress, in
+// executordomain.Session.InProgressNote: whole in a listing and on the read's
+// first page, never fenced, since it quotes nobody. An ended row its turn went
+// on past says so (executordomain.Session.WentOnNote), the unkept capture's
+// reason redacted and fenced, cut in a listing, whole on the first page. A row
+// at its turn's last word says neither.
 //
-// Mutation: ask the went-on note of the row as it is held, and the token
-// reaches the seat; leave in_progress, in_progress_note or kept_note off the
-// row, or show one note in the other's field, and a row says the wrong thing;
-// fence the in-progress sentence, and it is labelled somebody else's; cut the
-// read's first page's note, and its reason is lost there; leave a listed note
-// uncut, and the listing's row runs past its words' bound.
+// Mutation (each fails a check): ask the went-on note of the held row, leave
+// in_progress, in_progress_note or kept_note off, swap the notes, fence the
+// in-progress sentence, cut the first page's note or leave a listed one uncut.
 func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testing.T) {
 	t.Parallel()
 	k := newKeptSessions(t)
@@ -578,19 +568,13 @@ func TestASeatIsToldOfASessionInProgressOrOneItsTurnWentPastAsAPersonIs(t *testi
 	}
 }
 
-// A PAGE OF SESSIONS AT ITS WORST FITS ONE ANSWER, AND ONE MORE ROW WOULD NOT.
-// A listing's page bound is set by a row's worst case, so a search's page of
-// that many hits, every field of every one at the bound its record is held to
-// — its turn's id and the one it was handed, its conversation's key, its
-// harness, what its turn was asked, its ending's engine words, five accounts
-// and who stopped it, its unkept capture and last word at the largest places,
-// the sessions it ran out of context in, its note on a session its turn went
-// on past, the fields it matched and its snippet, each in plain letters, which
-// JSON leaves as they are — marked this turn's and this conversation's, after
-// a cursor at its largest and saying it could not read every record, is
-// answered whole, never refused for its size; and the pages' own measure of a
-// row leaves no room for one more: the bound is the most rows whose worst case
-// fits one tool answer, not merely some number that does.
+// A PAGE OF SESSIONS AT ITS WORST FITS ONE ANSWER, AND ONE MORE ROW WOULD NOT:
+// the bound is the most rows whose worst case fits one tool answer, not merely
+// some number that does. A search's page of that many hits, every field at its
+// record's bound in plain letters JSON leaves as they are, marked this turn's
+// and this conversation's, after a cursor at its largest and saying it could
+// not read every record, is answered whole; and the pages' own measure of a
+// row leaves no room for one more.
 //
 // Mutation: raise listedSessionsMax to eleven, or show a listed row's note
 // uncut, and the page is refused for its size; lower it to nine, and the page
@@ -820,13 +804,10 @@ func (blockedObjects) Open(ctx context.Context, _ executordomain.Session) (io.Re
 
 // A SESSION READ PAST ITS DEADLINE SAYS SO: a store that never answers ends the
 // call at its bound, unavailable, naming the session's size and that a wait
-// may clear it — never a session that holds nothing, and never a call held
-// for as long as the run that made it. Run in a bubble, so "at its bound" is
-// exact arithmetic on the bubble's clock, which moves only once every
-// goroutine of the case is blocked: the call answers when that clock has
-// moved by the bound and not an instant later, and a call held to no bound
-// of its own leaves the bubble with nothing left to wake, which fails the
-// case rather than a wall-clock wait for it.
+// may clear it, never a session that holds nothing nor a call held as long as
+// the run that made it. In a synctest bubble "at its bound" is exact on the
+// bubble's clock, and a call held to no bound of its own leaves the bubble
+// with nothing to wake, failing the case without a wall-clock wait.
 //
 // Mutation: read on the caller's context alone, and the bubble is left with
 // the call still waiting; bound the read by SessionReadWithin rather than the
@@ -865,12 +846,11 @@ func TestASessionReadPastItsDeadlineSaysSo(t *testing.T) {
 }
 
 // A SESSION LISTED, THEN RELEASED, IS READ AS RELEASED: a row a listing showed
-// kept, whose session the seat's budget released or a later turn's end
-// absorbed — its object collected — before the read, is answered from what
-// its row says then: no session, and why, or a session the seat keeps no more,
-// and never an empty transcript or an object that does not open. A page read
-// before the release stands as it was handed out, and the next one says
-// nothing more can be read.
+// kept, whose session the budget released or a later turn's end absorbed (its
+// object collected) before the read, is answered from what its row says then
+// (no session and why, or a session no longer kept), never as an empty
+// transcript or an object that does not open. A page read before the release
+// stands, and the next one says nothing more can be read.
 //
 // Mutation: read the object the listing named rather than the row, and the
 // read answers unreadable or missing.
@@ -1024,12 +1004,11 @@ func TestAMatchReadHandsOutTheWindowAroundTheWords(t *testing.T) {
 	}
 }
 
-// THE SWITCH STOPS EVERY MODEL'S READS AT ITS NEXT CALL. The tools a launch is
-// offered are the revision's it pinned, so a launch already running when its
-// node applies a revision that turns `turn_engine.conversation_session.enabled`
-// off still holds both: each call asks the revision the node runs now, and
-// once it keeps no session, both tools are refused as forbidden, saying the
-// switch is off, reading nothing.
+// THE SWITCH STOPS EVERY MODEL'S READS AT ITS NEXT CALL. A launch keeps the
+// tools of the revision it pinned, so one running when its node turns
+// `turn_engine.conversation_session.enabled` off still holds both: each call
+// asks the node's current revision, and once it keeps no session both are
+// refused as forbidden, naming the switch, reading nothing.
 //
 // Mutation: decide on the switch only when the tools are registered, and the
 // running launch's calls read on.
@@ -1138,11 +1117,10 @@ func (refusingObjects) Open(context.Context, executordomain.Session) (io.ReadClo
 }
 
 // A SESSION THE LOG COULD NOT CONFIRM IS SAID AS SUCH. Where a session's object
-// failed and the executor log did not answer whether the session is still
-// kept, the read is unavailable saying the log could not be asked — never that
-// the object store did not answer, which here answered that the object is
-// gone — while a store that did not answer, the log saying the session is
-// still kept, is said as the store's.
+// failed and the executor log did not answer whether it is still kept, the read
+// is unavailable saying the log could not be asked, never that the object store
+// did not answer (it answered: the object is gone); a store that did not
+// answer, the log saying the session is kept, is said as the store's.
 //
 // Mutation: answer every unavailable read as a store that did not answer, and
 // the first case says so.

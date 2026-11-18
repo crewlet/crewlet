@@ -18,8 +18,8 @@ import (
 type writeFamily struct {
 	tool string
 	args map[string]any
-	// wire registers the family's tools over a fresh fake and answers a
-	// read of whom every write the fake took was made for.
+	// wire registers the family's tools over a fresh fake and returns a read
+	// of whom each write the fake took was made for.
 	wire func(t *testing.T, who builtin.Requesters) (*tools.Registry, func() []types.WrittenFor)
 }
 
@@ -83,12 +83,11 @@ func writeFamilies() []writeFamily {
 }
 
 // A WRITE CARRIES WHOEVER THE WRITING TURN WORKS FOR (ADR-0109), composed from
-// the call's own bound ceiling on every family's write alike: a person's turn
-// writes for the person, a credential's for the credential at the apps this
-// node holds it to, a turn a colleague's ask woke for whoever that carried (so
-// a chain B to C to D carries the founder end to end), and a turn nobody woke
-// for nobody beyond its seat, which still STATES so: the stores refuse an
-// agent's write that states nothing.
+// the call's bound ceiling on every family alike: a person's turn for the
+// person, a credential's for it at the apps this node holds it to, a turn a
+// colleague's ask woke for whoever that carried (B to C to D carries the
+// founder end to end), and a turn nobody woke for nobody beyond its seat, which
+// it still STATES: the stores refuse an agent's write that states nothing.
 //
 // Mutation: drop the carrier from one family's actor (pageActor builds its
 // actor without it), and that family's writes state nothing: this names it,
@@ -139,11 +138,10 @@ func TestAWriteCarriesWhoeverTheWritingTurnWorksFor(t *testing.T) {
 }
 
 // A WRITE WHOSE ARGUMENTS NAME SOMEBODY TO WORK FOR GETS NOTHING WIDER (ADR-0109):
-// the carrier is the engine's, composed from the call's bound ceiling, and
-// nothing a model writes reaches it. At the gate such a call is refused for
-// the argument nobody declared, so nothing is written; and the tool itself,
-// handed the argument past the gate, writes for whoever its turn works for,
-// here nobody, never for the CEO the arguments name.
+// the carrier is composed from the call's bound ceiling, never from what a model
+// writes. The gate refuses the undeclared argument, writing nothing; past the
+// gate, the tool writes for whoever its turn works for (here nobody), never the
+// CEO the arguments name.
 //
 // Mutation: compose the carrier from the arguments instead of the ceiling (a
 // `working_for` read off the call), and the turn nobody woke writes for the
@@ -189,10 +187,10 @@ func TestAWriteWhoseArgumentsNameSomebodyGetsNothingWider(t *testing.T) {
 }
 
 // A WRITE WHOSE TURN'S REQUESTER CANNOT BE COMPOSED WRITES NOTHING (ADR-0109):
-// it is refused as a node that could not tell, to be tried again, and never
-// written as a turn nobody woke, which would wake whoever it reaches for the
-// seat with every app. Reached here past a gate that bound nothing, with no
-// composer to ask, as a wiring that skipped one would.
+// it is refused as undecidable, to be tried again, never written as a turn
+// nobody woke, which would wake whoever it reaches for the seat with every app.
+// Reached past a gate that bound nothing, with no composer, as a wiring that
+// skipped one would.
 //
 // Mutation: answer a requester that could not be composed as a turn nobody
 // woke (writtenForTurn's error dropped), and each family writes for nobody.
@@ -227,8 +225,8 @@ func mustLookup(t *testing.T, reg *tools.Registry, name string) tools.Callable {
 	return entry.Tool
 }
 
-// callAsSeat is one seat-callable call in turn, its principal the turn's own seat
-// as every surface derives it.
+// callAsSeat is one seat-callable call in turn, its principal the turn's own
+// seat as every surface derives it.
 func callAsSeat(t *testing.T, tool tools.Callable, turn *turnctx.Turn, args map[string]any) tools.Result {
 	t.Helper()
 	seat, ok := tool.(tools.SeatCallable)

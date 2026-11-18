@@ -16,10 +16,10 @@ import (
 )
 
 // WHETHER A CONTINUED SESSION REACHES ITS FIRST REQUEST WHOLE. Claude Code compacts
-// a session before a request where its own count of it, with the brief and what
-// the resume attaches, reaches its threshold, which is 167,000 tokens under a
-// 200,000-token window; a continuation that may compact there, or whose job
-// restarted the session after its brief, is told as a cut-off one.
+// before a request where its count of the session, with the brief and what the
+// resume attaches, reaches 167,000 tokens under a 200,000-token window; a
+// continuation that may compact there, or whose job restarted the session after
+// its brief, is told as a cut-off one.
 
 // standard200k is the window a claude-sonnet-4-5 member holds a run to.
 var standard200k = sandbox.ClaudeCodeWindow("claude-sonnet-4-5")
@@ -46,8 +46,8 @@ func keptClaude(count *sandbox.ResumedCount, interrupted bool) runner.SessionBas
 }
 
 // copyOf is what a job's record says of the copy its box holds: how its harness
-// ended, what Claude Code counts it at, and the restart its launch handed it,
-// the copy's own as its count read it.
+// ended, Claude Code's count of it, and as the restart its launch handed it,
+// the newest restart that count read.
 func copyOf(end sandbox.HarnessEnd, count *sandbox.ResumedCount) func(*runner.Resume) {
 	return func(r *runner.Resume) {
 		r.HarnessEnd, r.Count, r.Run.Harness = end, count, sandbox.ClaudeCodeHarness
@@ -82,14 +82,14 @@ var earlierCall = numbered("jira_create", map[string]any{"summary": "an earlier 
 var laterCall = numbered("jira_create", map[string]any{"summary": "a later issue"}, 2, 2)
 
 // readNote is a note the turn's job read at its first take, numbered 1: at or
-// below every kept capture's note cursor here, so a session told as holding what
-// its record says is told it nowhere.
+// below every kept capture's note cursor here, so a session held whole is never
+// told it.
 var readNote = steer.Read{Note: steer.Note{ID: "read-1", Text: "keep the release notes short", By: "founder"},
 	Reading: steer.Reading{Phase: types.PhaseExecute, Iteration: 1, Round: 1,
 		Boundary: types.SteerBoundaryToolBatch, Launch: "job-1", Order: 1}}
 
-// keptAnswer is an answer an earlier job of the turn opened with, which the run
-// keeps beside its record and its job's own brief did not tell.
+// keptAnswer is an answer an earlier job of the turn opened with, kept beside
+// the run's record and untold by its job's own brief.
 var keptAnswer = keptLead(answerOf("job-0", 1, 1, "use the release branch"))
 
 // toldPath is what one path's continuation was handed: its brief, and whether
@@ -99,9 +99,9 @@ type toldPath struct {
 	refused bool
 }
 
-// continuedDown relaunches g down one path, the kept capture where kept and the
-// copy in its job's box else, and plays a skill-covered call on the guard the
-// launch armed for it.
+// continuedDown relaunches g down one path (the kept capture where kept, else
+// the copy in its job's box) and plays a skill-covered call on the guard the
+// launch armed.
 func continuedDown(t *testing.T, g guarded, kept bool) toldPath {
 	t.Helper()
 	req := g.relaunch(t)
@@ -120,18 +120,13 @@ func continuedDown(t *testing.T, g guarded, kept bool) toldPath {
 	return told
 }
 
-// toldAsASummary fails t unless told is a session's continuation told as one
-// that may be a summary: why, in words that never say it was cut off, then every
-// lead its record keeps, every call of the round from its start as calls it may
-// already show, and every note the turn has read the same way, in that order;
-// and a guard that arms no skill. NOWHERE "CUT OFF" OF THIS SESSION: its record
-// says its harness ended its own run, so no section of its brief says it was,
-// or may have been, cut off, the leads told again among them, whose section
-// once said the run working in the session may have been cut off before its
-// harness wrote them. Save where a turn's task told again says what it says of
-// the session the conversation's last turn left, under the line that makes it
-// conditional ([conditionalOnTheBase]): that session may have been cut off when
-// it was kept, which is true of where it began, never of this run.
+// toldAsASummary fails t unless told is a continuation told as one that may be
+// a summary: why, then every lead its record keeps, every call of the round from
+// its start and every note the turn has read, in that order, as messages it may
+// already show; and a guard that arms no skill. Its record says its harness
+// ended its own run, so no line says it was, or may have been, cut off, the
+// leads' section included; save under [conditionalOnTheBase], which speaks of
+// where the session began, never of this run.
 func toldAsASummary(t *testing.T, name string, told toldPath) {
 	t.Helper()
 	section, leads := strings.Index(told.brief, prompts.MayCompactSession), strings.Index(told.brief, leadsHeading)
@@ -158,13 +153,11 @@ func toldAsASummary(t *testing.T, name string, told toldPath) {
 }
 
 // conditionalOnTheBase opens what a turn's task told again says of the session
-// the conversation's last turn left, true only of a session that began as that
-// one ([prompts.NextTurnAgain]): its bullets follow it, to the next line that
-// is not one.
+// the conversation's last turn left, true only of a session that began as it
+// ([prompts.NextTurnAgain]); its bullets follow, to the next non-bullet line.
 const conditionalOnTheBase = "Where the session above began as the one your earlier "
 
-// outsideTheBase is the lines of brief save those [conditionalOnTheBase] opens
-// and the bullets under it.
+// outsideTheBase is brief's lines but [conditionalOnTheBase]'s and its bullets.
 func outsideTheBase(brief string) []string {
 	var lines []string
 	under := false
@@ -181,9 +174,9 @@ func outsideTheBase(brief string) []string {
 	return lines
 }
 
-// toldAsHeld fails t unless told is a session's continuation told as one that
-// holds what its record says: none of what [toldAsASummary] asks, and a guard
-// that keeps the skills its launch armed.
+// toldAsHeld fails t unless told is a continuation told as holding what its
+// record says: none of what [toldAsASummary] asks, and a guard keeping the
+// skills its launch armed.
 func toldAsHeld(t *testing.T, name string, told toldPath) {
 	t.Helper()
 	for _, not := range []string{prompts.MayCompactSession, leadsHeading, "use the release branch", cutOffHeader,
@@ -200,9 +193,9 @@ func toldAsHeld(t *testing.T, name string, told toldPath) {
 
 // pathOf is a case of [TestEveryTellingOfAPathReadsItsOneValue] and
 // [TestASessionItsJobRestartedIsToldAsOneThatMayBeASummary]: the session the
-// probe answers, whether the case reads the kept path, what the job's record
-// counted the copy in its box at and the restart its launch handed it, and
-// whether the session may be a summary.
+// probe answers, whether it reads the kept path, the record's count of the copy
+// in its box and the restart its launch handed it, and whether the session may
+// be a summary.
 type pathOf struct {
 	basis   runner.SessionBasis
 	kept    bool
@@ -213,8 +206,7 @@ type pathOf struct {
 
 // told is c's continuation, by a person's answer in the job's own box, of a job
 // whose harness ended its own run, whose round made earlierCall, which read
-// readNote, and whose run keeps keptAnswer: its launch armed the seat's one
-// skill, as its box said it took the session up.
+// readNote and whose run keeps keptAnswer; its launch armed the seat's one skill.
 func (c pathOf) told(t *testing.T, active []string) toldPath {
 	t.Helper()
 	return continuedDown(t, guarded{basis: c.basis, continued: true, bridged: []runner.BridgedCall{earlierCall},
@@ -227,11 +219,10 @@ func (c pathOf) told(t *testing.T, active []string) toldPath {
 		}}, c.kept)
 }
 
-// AN OWN RUN'S COPY THAT MAY COMPACT IS TOLD AS A CUT-OFF ONE: a copy whose
-// harness ended its own run holds every call of the round, and its harness may
-// hand its model a summary of them at the first request, so it is told why, in
-// words that never say it was cut off, and then every call of the round from its
-// start, as calls it may already show.
+// AN OWN RUN'S COPY THAT MAY COMPACT IS TOLD AS A CUT-OFF ONE: it holds every
+// call of the round, but its harness may hand its model a summary of them at the
+// first request, so it is told why (never that it was cut off) and then every
+// call from the round's start, as calls it may already show.
 //
 // Mutation: ignore the verdict, and this goes red.
 func TestAnOwnRunCopyThatMayCompactIsToldAsACutOffOne(t *testing.T) {
@@ -250,8 +241,7 @@ func TestAnOwnRunCopyThatMayCompactIsToldAsACutOffOne(t *testing.T) {
 }
 
 // AN OWN RUN'S COPY THAT SENDS WHOLE IS TOLD AS HELD: its first request carries the
-// session whole, so it is told none of the calls it holds and nothing of a
-// summary.
+// session whole, so it is told none of its calls and nothing of a summary.
 //
 // Mutation: compact every copy, and this goes red.
 func TestAnOwnRunCopyThatSendsWholeIsToldAsHeld(t *testing.T) {
@@ -265,12 +255,11 @@ func TestAnOwnRunCopyThatSendsWholeIsToldAsHeld(t *testing.T) {
 
 // A KEPT SESSION THAT MAY COMPACT IS TOLD EVERY CALL FROM THE ROUND'S START: a
 // summary holds the calls at or below its save point in its own words alone, so
-// the call made before the save is told beside the one after it, both as calls
-// it may already show, though its record says its harness ended its own run.
-// The kept path's one calls site is pinned here where it may be a summary, as
-// TestAKeptCaptureCutOffSaysWhetherItsJobRestarted pins it where the record says
-// the session was cut off and TestASessionItsJobRestartedIsToldAsOneThatMayBeASummary
-// where it holds what its record says.
+// the call before the save is told beside the one after it, both as calls it
+// may already show, though its record says its harness ended its own run. This
+// pins the kept path's one calls site where the session may be a summary;
+// TestAKeptCaptureCutOffSaysWhetherItsJobRestarted pins it cut off, and
+// TestASessionItsJobRestartedIsToldAsOneThatMayBeASummary held.
 //
 // Mutation: tell the calls from the save point, or under the words of calls the
 // session lacks, and this goes red.
@@ -292,13 +281,12 @@ func TestAKeptSessionThatMayCompactIsToldEveryCallFromTheRoundsStart(t *testing.
 }
 
 // THE KEPT PATH IS JUDGED BY THE WORSE OF ITS CAPTURE AND ITS JOB'S COPY. A capture
-// taken whole is continued in its own box from the box's unscrubbed copy, which a
-// redaction may have made longer, so its verdict reads the worse of the two
-// counts; a capture cut off is always restored over the box's copy, so its own
-// count decides. Each case is read by what the verdict moves: a capture that may
-// compact is told the call at or below its save point and arms no skill, and one
-// that sends whole is told only the calls after its save point and keeps the
-// skills its launch armed, whatever words its record has it told in.
+// taken whole continues from its box's unscrubbed copy, which a redaction may have
+// made longer, so the worse of the two counts decides; a capture cut off is always
+// restored over the box's copy, so its own count does. Each case reads what the
+// verdict moves: one that may compact is told the call at or below its save point
+// and arms no skill; one that sends whole is told only the calls after it and
+// keeps the skills its launch armed, whatever its record's words.
 //
 // Mutation: read the capture's count alone, and the first case goes red; read a
 // cut-off capture by the worse of the two, and the second does.
@@ -397,8 +385,8 @@ func TestASessionThatMayCompactArmsNoSkill(t *testing.T) {
 }
 
 // A CUT-OFF COPY FAR FROM ITS THRESHOLD KEEPS ITS LAUNCH-ARMED SKILLS: its first
-// request sends it whole, so its guard holds the skills its launch armed, as it
-// did before, and none of its job's own loads, which it may never have written.
+// request sends it whole, so its guard holds the skills its launch armed and none
+// of its job's own loads, which it may never have written.
 //
 // Mutation: read a cut-off copy as compacting whatever its count, and the armed
 // skill is refused.
@@ -424,9 +412,9 @@ func TestACutOffCopyFarFromItsThresholdKeepsItsLaunchArmedSkills(t *testing.T) {
 }
 
 // THE TOLD RECORD FOLLOWS THE TELLING HANDED: a copy that may compact is told every
-// lead its record keeps, told or not, since a compaction can drop every lead the
-// session held, and the launch records those as told by this brief; a copy that
-// sends whole is told none, and records none.
+// lead its record keeps, told before or not, since a compaction can drop them all,
+// and the launch records them as told by this brief; a copy that sends whole is
+// told none, and records none.
 //
 // Mutation: record the held telling's leads, or tell the told leads alone, and a
 // case goes red.
@@ -453,8 +441,7 @@ func TestTheToldRecordFollowsTheTellingHanded(t *testing.T) {
 }
 
 // AN OPENCODE SESSION IS NEVER JUDGED BY CLAUDE CODE'S THRESHOLD: no count of
-// Claude Code's describes another harness's session, so its copy is told as it
-// was.
+// Claude Code's describes another harness's session.
 //
 // Mutation: judge every harness's session, and this goes red.
 func TestAnOpenCodeSessionIsNeverJudgedByClaudeCodesThreshold(t *testing.T) {
@@ -497,12 +484,11 @@ func TestACutOffCopyThatMayCompactKeepsItsCutOffWords(t *testing.T) {
 }
 
 // A KEPT CAPTURE CUT OFF SAYS WHETHER ITS JOB RESTARTED THE SESSION, apart from
-// whether it may lack its brief: the session a cut-off capture holds may lack its
-// job's brief either way, and is told its calls after its save point as calls it
-// may already show; where its job restarted the session after the brief (its
-// newest restart is not the one its launch handed it, or cannot be read), the
-// restart left nothing before it but a summary, and every call of the round is
-// told from its start.
+// whether it may lack its brief: either way it is told its calls after its save
+// point as calls it may already show; where its job restarted the session after
+// the brief (its newest restart is not the one its launch handed it, or cannot
+// be read), nothing before the restart survives but a summary, so every call of
+// the round is told from its start.
 //
 // Mutation: set the restart from the record's cut-off word, or read a count that
 // names no restart as one that did not restart, and a case goes red.
@@ -533,12 +519,11 @@ func TestAKeptCaptureCutOffSaysWhetherItsJobRestarted(t *testing.T) {
 		if calls < 0 || !strings.Contains(brief[calls:], "a later issue") {
 			t.Errorf("%s: the calls after the save are not told as calls it may already show:\n%s", name, brief)
 		}
-		// HELD BELOW THE SAVE where its job did not restart, so in no list of
-		// calls it may lack, and listed again under words that say the session
-		// shows it: the call after the save, told as one it may already show,
-		// names its tool, and neither call's arguments carry the digest that
-		// would let their lines read apart. Told from the round's start where
-		// its job restarted, so held nowhere and listed again nowhere.
+		// HELD BELOW THE SAVE where its job did not restart: listed again under
+		// words that say the session shows it, never among calls it may lack.
+		// Read by section, since both calls name one tool and no digest tells
+		// their lines apart. Where its job restarted, told from the round's
+		// start and listed again nowhere.
 		told, _, _ := strings.Cut(brief, listedAgainHeading)
 		again, _ := sectionOf(brief, listedAgainHeading)
 		if got := strings.Contains(told, "an earlier issue"); got != tc.fromAll {
@@ -553,8 +538,7 @@ func TestAKeptCaptureCutOffSaysWhetherItsJobRestarted(t *testing.T) {
 
 // THE NOTE CURSOR IS NEVER READ WHERE THE SESSION MAY COMPACT: a summary holds the
 // notes its session read in its own words alone, so every note the turn has read
-// is told again, as notes it may already show, whatever cursor the capture
-// states.
+// is told again, as notes it may already show, whatever the capture's cursor.
 //
 // Mutation: read the cursor where the session may compact, and this goes red.
 func TestTheNoteCursorIsNeverReadWhereTheSessionMayCompact(t *testing.T) {
@@ -587,13 +571,10 @@ func TestTheNoteCursorIsNeverReadWhereTheSessionMayCompact(t *testing.T) {
 
 // EVERY TELLING OF A PATH READS ITS ONE VALUE. Each path decides once whether the
 // session it continues may be a summary at its run's first request, and every
-// part of its telling and its guard follow that one value, never a record's word
-// alone: a copy in its job's box whose harness ended its own run, and a kept
-// capture taken whole, that their harness may compact are each told why, every
-// lead the record keeps, every call of the round from its start and every note
-// the turn has read, as messages they may already show, and arm no skill; the
-// same sessions far below their point are told as holding what their record
-// says, and keep the skills their launch armed.
+// part of its telling and its guard follows that value, never the record's word
+// alone: an own-run copy in its job's box and a kept capture taken whole that
+// their harness may compact are told as [toldAsASummary] asks; the same sessions
+// far below their point are told as held ([toldAsHeld]).
 //
 // Mutation: read the record's word in place of the path's value in any one part
 // (the copy's notes, the kept capture's leads, notes or calls), or arm the
@@ -617,16 +598,13 @@ func TestEveryTellingOfAPathReadsItsOneValue(t *testing.T) {
 }
 
 // A SESSION ITS JOB RESTARTED IS TOLD AS ONE THAT MAY BE A SUMMARY. A resume hands
-// its model nothing before the newest restart of its session's main thread but
+// its model nothing before the newest restart of the session's main thread but
 // what that restart left, so a job whose newest restart is not the one its launch
-// handed it restarted after its brief (a compaction as it worked, a
-// microcompaction's boundary, a span replaced, a later root), and its session
-// may lack everything the engine counts it as holding: the copy in its box whose
-// harness ended its own run, and a kept capture taken whole, are each told why,
-// every lead the record keeps, every call of the round from its start and every
-// note the turn has read, and arm no skill, however far below its point the
-// session's count is. Their twins whose newest restart is the one their launch
-// handed them are told as holding what their record says.
+// handed it (a compaction as it worked, a microcompaction's boundary, a span
+// replaced, a later root) may lack everything the engine counts it as holding:
+// an own-run copy in its box and a kept capture taken whole are told as
+// [toldAsASummary] asks however low their count, and their twins whose newest
+// restart is their launch's as held.
 //
 // Mutation: leave the restart out of the copy's value, read it only of a capture
 // cut off, or read a session that may be a summary as one its harness may

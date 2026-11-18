@@ -49,9 +49,9 @@ type RepoRequest struct {
 }
 
 // OpenChangeRequest is a code_checkout call's ask to open a change from the
-// branch the run works on, at its collection: the branch it proposes into —
-// "" for the repository's default branch — its title — "" for the subject of
-// the commit the run delivers — and whether it opens as a draft.
+// run's branch at its collection: the branch it proposes into ("" for the
+// default branch), its title ("" for the delivered commit's subject) and
+// whether it opens as a draft.
 type OpenChangeRequest struct {
 	Target string
 	Title  string
@@ -59,9 +59,9 @@ type OpenChangeRequest struct {
 }
 
 // RefusedCheckout is a checkout refused with a result already composed and
-// classed — a repository the call named that the seat may not be given, in
-// Gitlet's own words — which the tool answers as it is rather than as
-// a checkout the engine could not do.
+// classed (a repository the seat may not be given, in Gitlet's own words),
+// which the tool answers as it is rather than as a checkout the engine could
+// not do.
 type RefusedCheckout struct{ Result tools.Result }
 
 func (r *RefusedCheckout) Error() string { return r.Result.Output }
@@ -70,63 +70,27 @@ func (r *RefusedCheckout) Error() string { return r.Result.Output }
 // reads the result's own.
 func (r *RefusedCheckout) Unwrap() error { return r.Result.Cause }
 
-// AN EXECUTOR'S REPOSITORIES ON GITLET, resolved as its
-// box checks each out into the run's grants (ADR-0093): each repository a
-// code_checkout call names becomes a [sandbox.RunRepo] on the run's row — its
-// id beside its current name, the commit the run starts from, the branch it
-// works on, what it may do and its cone — and the position the resolution
-// read it at raises the run's code floor.
-//
-// THROUGH THE CODE TOOLS' OWN SEAMS, never a second copy of them: the
-// repository by the one resolution of a `repo` argument ([CodeDeps.repo],
-// which takes the turn's hold on a scratch repository AFTER the read that
-// judged the seat's grant, so a seat that may not read a repository holds
-// nothing of it), every ref by the one ref query ([CodeDeps.refsOf], which
-// takes the turn's hold on every seat's branch it answers), a base
-// named by its id by the one read by object id ([CodeDeps.gitRead]), and all
-// of them as the caller the code tools read as — decided again for whoever
-// woke the turn ([CodeDeps.callerOn] on Gitlet's read verb), so a box
-// is never given a repository its requester could not read.
-//
-// AND WHAT THE BOX MAY PUSH IS DECIDED FOR THAT REQUESTER TOO (M3-decisions
-// U40 (a), its write half for an executor): in a turn a colleague seat woke,
-// the run's row names that seat ([RunRepos.Ceiling], the row's CodeCeiling),
-// and Gitlet's box admission holds the box to the colleague's own
-// grant on every request it makes ([gitlet.Grant.Under]) — a read the colleague
-// could not make, and a push outside the seat's own work the colleague could
-// not make, are refused, while its own work — the branches under its own
-// namespace, and every branch of a repository it owns — stays its own,
-// which anybody who can message it steers. The checkout prechecks the
-// same rule ([runAccess]), so `access: write` on a branch the colleague could
-// not push is refused at the checkout rather than at the box's first push, and an access left out is
-// write only where the box could push. A CREDENTIAL acting as no seat pushes
-// to no repository itself, so in a turn one woke the box pushes the seat's
-// own work alone and fetches what it was given, as the credential reads every
-// repository: Gitlet's box admission holds it to the credential's own grant
-// (gitlet.CredentialPrincipal), which the checkout prechecks the same way, as
-// the turn's own code writes for it are held to the seat's own work
-// (ADR-0110). A person bounds nothing, holding maintain on every repository,
-// and a stranger's turn reads nothing at all.
-//
-// AND WHOM THE TURN WORKS FOR RIDES ON THE RUN'S ROW ([RunRepos.WorkingFor],
-// the row's CodeWorkingFor, ADR-0109): what the box pushes, and the change the
-// run's collection opens, are the turn's writes made late, so each carries
-// whom the turn works for as the turn's own code writes do — the carrier the
-// resolution's caller composed from the same bound ceiling (its actor's,
-// [writtenForTurn]), never one derived again from the row's requester, which
-// would restate that composition outside it and lose this node's narrowing of a
-// credential's apps.
+// An executor's repositories on Gitlet (ADR-0093) each become a
+// [sandbox.RunRepo] on the run's row, read through the code tools' own seams
+// ([CodeDeps.repo], [CodeDeps.refsOf], [CodeDeps.gitRead]) as the caller they
+// read as ([CodeDeps.callerOn]), so a box is never given a repository its
+// requester could not read, and a seat that may not read one holds nothing of
+// it. What the box may push is bounded by that requester too (M3-decisions
+// U40 (a)), prechecked by [runAccess]: a waking colleague's grant
+// ([RunRepos.Ceiling], [gitlet.Grant.Under]) or credential's (ADR-0110); a
+// person, holding maintain everywhere, bounds nothing. Whom the turn works
+// for rides on the row ([RunRepos.WorkingFor], ADR-0109) as its caller
+// composed it ([writtenForTurn]), never re-derived from the requester, which
+// would lose this node's narrowing of a credential's apps.
 
 // RunRepos is what the repositories a checkout names resolve to.
 type RunRepos struct {
 	// Repos are the run's grants, in the order the call named them.
 	Repos []sandbox.RunRepo
 	// Heads are where each grant's branch stood as the resolution read it,
-	// in Repos' order: the commit the branch's head names, "" where the
-	// branch does not exist yet. What a box that lost its clone continues
-	// from where its job holds the grant already ([sandbox.GrantHeld]):
-	// whatever the job it continues pushed is there, and a branch nothing
-	// was pushed to holds none of it.
+	// in Repos' order: its head commit, "" where the branch does not exist
+	// yet. A box that lost its clone continues from it where its job holds
+	// the grant already ([sandbox.GrantHeld]).
 	Heads []string
 	// Floor is the run's first code floor: the furthest position any read
 	// of the resolution answered at, and this node's own writes to each
@@ -134,17 +98,14 @@ type RunRepos struct {
 	// the clone.
 	Floor statelog.Position
 	// Ceiling is the handle of the colleague seat whose ask woke the turn,
-	// whose own grant bounds the run's box on every repository it was given
-	// ([gitlet.Grant.Under]) — the seat the resolution's reads carried as their
-	// ceiling ([gitlet.ReadQuery.CeilingSeat]) — and "" where no colleague seat
-	// bounds the run.
+	// whose grant bounds the run's box ([gitlet.Grant.Under]) as it bounded
+	// the resolution's reads ([gitlet.ReadQuery.CeilingSeat]); "" for none.
 	Ceiling string
-	// WorkingFor is whom the turn works for, as every code write its own tools
-	// make states it (the resolution's caller's carrier, [writtenForTurn]): a
-	// colleague's seat, a person's, or a credential acting as no seat with the
-	// apps this node holds it to — and nil for a turn that works for its own
-	// seat. The run's row carries it, and the box's pushes and the change the
-	// run's collection opens state it.
+	// WorkingFor is whom the turn works for, as its own code writes state it
+	// ([writtenForTurn]): a colleague's seat, a person's, or a credential
+	// acting as no seat with the apps this node holds it to; nil for the
+	// seat's own work. The box's pushes and the change the run's collection
+	// opens state it too.
 	WorkingFor *types.WorkingFor
 }
 
@@ -155,44 +116,17 @@ type RunRepos struct {
 type GrantFunc func(asker gitlet.Principal, repo gitlet.RepoRef) gitlet.Grant
 
 // ResolveRunRepos resolves the repositories a code_checkout call names, for
-// turn's seat, into the run's grants and the code floor they were read at —
-// refusing, as a [*RefusedCheckout] whose result the tool answers as it is,
-// any repository the seat may not be given, naming it and why. Called by the
-// engine's checkout before the grant is written to the run's row, since a
-// resolution takes the turn's holds and reads at the seat's level.
-//
-// For each request, in order:
-//
-//  1. the repository, by [CodeDeps.repo] — judged by the node that answers
-//     for the seat and for whoever its turn acts for, and held; a deleted or
-//     purging one is refused in Gitlet's words;
-//  2. the branch: the request's; a change's it names to work on — read
-//     LINEARIZABLE, as every seat's read is, and refused closed or merged
-//     ([CodeDeps.runChange]) — its source branch; or [gitlet.SeatBranch] of the
-//     seat, the turn's work item's key and the turn — held to
-//     [gitref.ValidBranch]; and the branch a change it asks to open proposes
-//     into ([openTarget]): the one it names, or the default branch;
-//  3. ONE ref query for the branch, a base named as a ref, — where no base
-//     is named — the default branch, and that branch the change proposes
-//     into, which must exist; the turn's hold taken on every seat's branch
-//     among them ([HoldRef]) and on the run's own branch where it does not
-//     exist yet, before the grant is written — and a
-//     change's branch, a live change's source, must;
-//  4. the access: `write` asked must pass, for the branch, the ref rule the
-//     box will be judged by — the seat's grant held to a run given write and,
-//     in a turn a colleague woke, to that colleague's grant outside the
-//     seat's own work (gitlet.Grant.Under: its own namespace, and a repository
-//     it owns), and in one a credential acting as no seat woke, to the
-//     credential's own, which pushes nothing — and the repository must not be
-//     archived; `read`
-//     is read, and none asked is write where `write` would pass, else read;
-//     a run that asks to open a change must come to write, or it could
-//     deliver nothing to open one from;
-//  5. the base: an id — whole or abbreviated — expanded and checked by a
-//     read by object id; a ref, as the query answered it; none, the branch's
-//     head where it exists — a change's head, for a run on one — else the
-//     default branch's, and an EMPTY repository (no default branch) none;
-//  6. the cone, each path cleaned and held to the box's grammar.
+// turn's seat, into the run's grants and the code floor they were read at, or
+// refuses with a [*RefusedCheckout] naming the repository and why. The
+// engine's checkout calls it before writing the grant to the run's row, since
+// it takes the turn's holds. Per request: the repository ([CodeDeps.repo]);
+// the branch (named, a live change's source by [CodeDeps.runChange], else
+// [gitlet.SeatBranch]); ONE ref query for every ref it needs, holding each
+// seat's branch and the run's own one not there yet ([HoldRef]); the access
+// ([runAccess]), which open_change needs to be write; the base (an id read by
+// object id, a ref as queried, else the branch's head, else the default
+// branch's, none in an empty repository); and the cone, held to the box's
+// grammar.
 func (d CodeDeps) ResolveRunRepos(ctx context.Context, turn *turnctx.Turn, reqs []RepoRequest,
 	grant GrantFunc) (RunRepos, error) {
 
@@ -285,10 +219,8 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		return resolvedRepo{}, refusal
 	}
 
-	// ONE READ for every ref the checkout needs of the repository: the run's
-	// branch, a base named as a ref, the default branch where no base is
-	// named, and the branch a change it asks to open proposes into — one
-	// barrier, all of them at one checkpoint.
+	// ONE READ for every ref the checkout needs, so all are read at one
+	// checkpoint.
 	names := []string{"refs/heads/" + branch}
 	baseAt, defaultAt, targetAt := -1, -1, -1
 	switch {
@@ -324,9 +256,8 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	head := answer.Refs[0]
 	switch {
 	case change != nil && head.Missing != "":
-		// A LIVE CHANGE'S SOURCE IS LIVE — deleting it closes the change in
-		// the same record — so the branch was deleted between the two reads,
-		// and the change with it.
+		// Deleting a live change's source closes the change in the same
+		// record, so both went between the two reads.
 		r := refusedBy(tools.RefusalNotFound, fmt.Errorf("%w: %s", gitlet.ErrRefNotFound, head.Missing),
 			fmt.Sprintf("%s: %s's branch %s was deleted as it was checked out, which closes the change; "+
 				"nothing was checked out — read it with %s.", tool, change.Ref, change.SourceRef, CodeGetChangeTool))
@@ -338,12 +269,10 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	}
 	if head.Missing != "" {
 		// THE RUN'S OWN BRANCH, NOT THERE YET: held with no read, as a branch
-		// a write creates is — no deletion can have listed it, and the box's
-		// first push sets it. Every ref the read answered is held already
-		// (CodeDeps.refsOf), so every ref a checkout resolves is on the
-		// turn's set — which the running job's row carries from its launch
-		// on (PendingStore.AddCodeHolds) — before the grant is written, and a
-		// relaunch, which replaces the row's grants, keeps them held.
+		// a write creates is (no deletion can have listed it). With refsOf's
+		// holds, every ref a checkout resolves is on the turn's set before
+		// the grant is written; the job's row carries it from launch
+		// (PendingStore.AddCodeHolds), so a relaunch keeps them held.
 		if err := HoldRef(ctx, turn, d.Holder, c.actor, repo, names[0], nil, statelog.Position{},
 			d.Now); err != nil {
 			r := refHoldFailure(ctx, tool, repo, names[0], err)
@@ -352,16 +281,14 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	}
 
 	// THE GRANT THE BOX WILL BE JUDGED BY, from this node's chart: the
-	// seat's, held to a run given write — what `write` puts on the row — and,
-	// in a turn a colleague woke, to that colleague's own grant outside the
-	// seat's namespace, as Gitlet's box admission holds it.
+	// seat's, held to write and, in a turn a colleague woke, under that
+	// colleague's own, as Gitlet's box admission holds it.
 	boxGrant := grant(c.asker, current).Within(gitlet.AccessWrite)
 	if w := c.actor.WrittenFor.Carrier(); c.ceiling != "" {
 		boxGrant = boxGrant.Under(grant(gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: c.ceiling}, current))
 	} else if w != nil && w.Kind == types.WorkingForCredential {
-		// A CREDENTIAL ACTING AS NO SEAT pushes to no repository itself, so
-		// a run it woke writes the seat's own work alone, as Gitlet's box
-		// admission holds its box to (gitlet.CredentialPrincipal).
+		// A CREDENTIAL ACTING AS NO SEAT pushes nowhere itself, so its run
+		// writes the seat's own work alone (gitlet.CredentialPrincipal).
 		boxGrant = boxGrant.Under(grant(gitlet.CredentialPrincipal(w.Login), current))
 	}
 	access, refusal := runAccess(req, branch, head, current, boxGrant)
@@ -369,8 +296,8 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		return resolvedRepo{}, refusal
 	}
 	if req.OpenChange != nil && access != sandbox.RepoWrite {
-		// AN ACCESS LEFT OUT came to read: the box could push nothing, so
-		// it could deliver nothing to open a change from.
+		// AN ACCESS LEFT OUT came to read: the box could deliver nothing to
+		// open a change from.
 		r := refusedBy(tools.RefusalForbidden, gitlet.ErrNotPermitted, fmt.Sprintf("%s: repository %q's run "+
 			"asks for open_change on %s, which it may not push, so it could deliver nothing to open a change "+
 			"from: name a `branch` it may push — leave `branch` out for your own — or leave open_change out.",
@@ -381,9 +308,8 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	var base string
 	switch {
 	case req.Base != "" && gitlet.ValidRev(req.Base):
-		// AN ID, whole or abbreviated, read by object id: expanded to the
-		// commit it names, and a commit the repository does not hold is
-		// refused here rather than at the clone, inside a box.
+		// AN ID, whole or abbreviated, read by object id: expanded, and one
+		// the repository does not hold refused here rather than in a box.
 		got, refusal := d.gitRead(ctx, turn, tool, c, repo, gitlet.GitQuery{Kind: gitlet.GitTree, RepoID: repo.ID,
 			Fresh: statelog.FloorAt(statelog.ReadSession, floor), Tree: &gitlet.TreeQuery{Rev: req.Base}})
 		if refusal != nil {
@@ -441,22 +367,18 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	return resolvedRepo{grant: out, head: branchHead, floor: floor}, nil
 }
 
-// runAccess is what a run may do with a repository — the request's access,
-// held to g, the grant its box will be judged by on the run's branch — or the
-// refusal: `write` asked on a repository that takes no push — archived, being
-// imported, or a pull mirror — or on a branch g's ref rule refuses (the
-// seat's, or that of the colleague or the credential its turn works for), is
-// refused with
-// Gitlet's sentence; none asked is write exactly where write would pass, so a
-// read-only seat naming a repository to look at is not refused, and a run that
-// forgot the field can deliver where its box may.
+// runAccess is what a run may do with a repository: the request's access held
+// to g, the grant its box will be judged by on the run's branch, or the
+// refusal. `write` on a repository that takes no push (archived, importing, a
+// pull mirror) or on a branch g's ref rule refuses is refused in Gitlet's
+// words; none asked is write exactly where write would pass, so a read-only
+// seat naming a repository to look at is not refused.
 //
-// A PRECHECK, from this node's chart: a box's every push is decided again at
-// Gitlet's admission and at its decide, so this decides only whether a
-// run that could never deliver is refused before a box costs anything — which
-// is why g is the box's grant, held to a run given write, and not the seat's:
-// a branch the seat may push and its box may not (another seat's namespace,
-// which needs maintain) is a run that could never deliver.
+// A PRECHECK: Gitlet's admission and decide judge every push again, so this
+// only refuses a run that could never deliver before a box costs anything.
+// Hence g is the box's grant, not the seat's: a branch the seat may push and
+// its box may not (another seat's namespace, which needs maintain) could
+// never deliver.
 func runAccess(req RepoRequest, branch string, head gitlet.ResolvedRef, repo gitlet.RepoRef,
 	g gitlet.Grant) (sandbox.RepoAccess, *tools.Result) {
 
@@ -496,14 +418,11 @@ func runAccess(req RepoRequest, branch string, head gitlet.ResolvedRef, repo git
 	return "", &r
 }
 
-// runChange is the change a request names to work on, read once at the seat's
-// level — LINEARIZABLE, held to the caller's grant on the repository — as its
-// row alone ([changeRead.row]): a launch needs its state, its branches, its
-// id and its number, none of what its detail reads besides; with the
-// position it was read at; nil for a request that names none. A change that
-// is no longer live is refused naming what became of it: a closed one's work
-// is over unless it is reopened, and a merged one's is in its target, which a
-// run starts from by naming it as `base`.
+// runChange is the change a request names to work on, with the position it
+// was read at, or nil for none: its row alone ([changeRead.row]), since a
+// launch needs none of its detail, read LINEARIZABLE at the seat's level. A
+// closed change is refused (its work is over unless reopened), as is a merged
+// one (its work is in its target, which a run names as `base`).
 func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCaller, req RepoRequest,
 	repo gitlet.RepoRef) (*gitlet.ChangeSummary, statelog.Position, *tools.Result) {
 
@@ -521,8 +440,8 @@ func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCalle
 		}
 		s = n
 	}
-	// BY THE ONE INTEGER RULE (argval.Whole), the rule `change` is read by
-	// on every code tool, so a change one tool takes is one this takes.
+	// argval.Whole, as every code tool reads `change`, so a change one tool
+	// takes is one this takes.
 	number, ok := argval.Whole(s)
 	if !ok || number < 1 {
 		r := failed(fmt.Sprintf("%s: repository %q's `change` %q is no change: name it by its number (42) or "+
@@ -549,12 +468,10 @@ func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCalle
 	return change, at, nil
 }
 
-// openTarget is the branch, whole, a request's ask to open a change proposes
-// the run's branch into — the one it names, else the repository's default
-// branch — held to the rules an open is, before anything is read; "" for a
-// request that asks for none. A title it names is held to a change's title's
-// rule here too ([gitlet.TitleProblem]), so an ask the collection's open would
-// refuse costs no box.
+// openTarget is the whole branch a request's open_change proposes the run's
+// branch into (the one it names, else the default branch), or "" for none.
+// It and the title ([gitlet.TitleProblem]) are held to an open's rules before
+// anything is read, so an ask the collection's open would refuse costs no box.
 func openTarget(req RepoRequest, repo gitlet.RepoRef, branch string) (string, *tools.Result) {
 	const tool = CodeCheckoutTool
 	ask := req.OpenChange

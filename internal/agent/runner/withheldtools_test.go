@@ -14,14 +14,12 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A WITHHELD TOOL IS OFFERED ON NO PHASE.
-//
-// The registry is the epoch's, shared by every seat, and a tool only some
-// seats may call — fleet_health, which a role's grant opens — is registered
-// for all of them; the engine names what this seat's surfaces leave out. The
-// executor's run is not offered it, cannot activate it over the bridge, and
-// its prompt does not list it to discover; the reviewer is not offered it; the
-// onboarding pass's catalogue does not list it. Every other tool stays.
+// A WITHHELD TOOL IS OFFERED ON NO PHASE. The registry is the epoch's, shared
+// by every seat, so a tool only some seats may call (fleet_health, opened by a
+// role's grant) is registered for all, and the engine names what this seat's
+// surfaces leave out: it is absent from the executor's offer, bridge and
+// prompt, the reviewer's offer and the onboarding catalogue. Every other tool
+// stays.
 //
 // Mutation: build any phase's surface from the registry whole rather than the
 // seat's snapshot, and that phase offers or lists fleet_health.

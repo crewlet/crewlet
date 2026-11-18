@@ -74,13 +74,10 @@ func receiptFields(t *testing.T, name string, got tools.Result) map[string]any {
 
 // EVERY RECEIPT ABOUT THE DUPLICATE OF A KEY NAMES IT BY ITS ID.
 //
-// A task holding a key another task claimed first is reached only by its id,
-// and every tool echoed its KEY: comment_on_work_item answered `item: ENG-1`,
-// the receipts of an edit, a merge, a removal and a restore answered `key:
-// ENG-1` and nothing else — so the caller's next call, built from what it was
-// just told, landed on the claimant. Each now names the task in `item` by the
-// rule every row follows, with the key beside it and the flag that explains
-// the difference; and a task that answers to its key is still named by it.
+// A task holding a key another claimed first is reached only by its id, so a
+// receipt naming it by key sends the caller's next call to the claimant. Every
+// write's receipt names the task in `item` by the address rule, with the key
+// and the flag beside it; a task that answers to its key is still named by it.
 //
 // Mutation: echo the key in `item` from the receipt helper, or name a receipt
 // from anything but the task it read, and the duplicate's case fails.
@@ -138,9 +135,8 @@ func TestEveryReceiptNamesAKeysDuplicateByItsID(t *testing.T) {
 
 // A CREATE OR A MOVE THAT LANDED ON A KEY ANOTHER TASK HOLDS NAMES ITS ID.
 //
-// A create after a counter restore is what PRODUCES a duplicate, and its
-// receipt is the first thing that names it; a move mints its new key from the
-// target's counter the same way. Both receipts named the key alone.
+// A create after a counter restore is what PRODUCES a duplicate, and a move
+// mints its new key from the target's counter the same way.
 //
 // Mutation: build either receipt's `item` from the key, or drop the flag the
 // writer reported, and this fails.
@@ -197,11 +193,9 @@ func (c *collidingMoves) MoveTaskToProject(ctx context.Context, opID, taskID,
 
 // A WRITE NOBODY CAN SAY LANDED SENDS ITS CALLER TO THE DUPLICATE BY ITS ID.
 //
-// An unknown outcome is answered with what to read to find out — "Read ENG-1
-// with get_work_item", "Read ENG-1's thread" — and for a duplicate that read
-// opens the claimant, whose version and thread say nothing about whether this
-// write landed. Every such pointer now names the address, and the prose
-// naming the task names its id with the key beside it.
+// An unknown outcome says what to read to find out, and for a duplicate the
+// key opens the claimant, which says nothing about this write. So every
+// pointer names the address, and the prose names the id with the key beside.
 //
 // Mutation: build any of these pointers from the key and this fails.
 func TestAnUnknownWriteOnAKeysDuplicateSendsTheCallerToItsID(t *testing.T) {
@@ -243,17 +237,14 @@ func TestAnUnknownWriteOnAKeysDuplicateSendsTheCallerToItsID(t *testing.T) {
 
 // EVERY ARGUMENT THAT OFFERS A KEY SAYS WHEN TO USE THE ID INSTEAD.
 //
-// A row's `key_collision` is half the rule; the other half is what a model
-// does with it, and the only place a model reads that before composing a call
-// is the argument's own description. Every one of them said "the item key
-// (ENG-42) or its id", which a model reads as permission to type the key it
-// was shown — onto the claimant.
+// An argument's description is the only place a model reads, before composing
+// a call, what to do with a row's `key_collision`; "a key or its id" alone
+// reads as permission to type the key it was shown, onto the claimant.
 //
-// OVER BOTH CATALOGUES, a seat's and the operator's, because each serves tools
-// the other does not. And it is held in BOTH directions: an argument offering
-// a key must carry the sentence, and the arguments known to take a task must
+// Over both catalogues, a seat's and the operator's, since each serves tools
+// the other does not; and both ways: the arguments known to take a task must
 // be among those found, so a description reworded past the pattern cannot
-// pass this by no longer being seen.
+// pass by no longer being seen.
 func TestEveryArgumentOfferingAKeySaysWhenToUseTheID(t *testing.T) {
 	t.Parallel()
 	offersKey := regexp.MustCompile(`(?i)ENG-42|\bkeys? or (an |its )?ids?\b|\bids? or keys?\b`)
@@ -325,16 +316,13 @@ func walkArguments(prefix string, schema map[string]any, fn func(path, descripti
 // NOTHING HERE NAMES A TASK BY A KEY READ OFF A DETAIL, outside the functions
 // that apply the address rule or that report a key as what it is.
 //
-// The bug this holds was a pattern rather than a line: about twenty answers
-// and hints each echoed `before.Task.Key` where the caller needed the task's
-// address, and each looked right beside the others. So the expression itself
-// is what is refused — a new receipt or hint reaches for
-// [worklet.TaskDetail.Address], [worklet.TaskDetail.Named] or the receipt
-// helper, or it is declared here with the reason the key is the right thing.
-//
-// Both directions: an undeclared use fails, and so does a declared function
-// that no longer reads one, because an allowance outliving its reason is how
-// the next echo gets in under it.
+// The bug is a pattern, not a line: `before.Task.Key` echoed where the caller
+// needed the address looks right beside its peers. So the expression itself
+// is refused: a receipt or hint uses [worklet.TaskDetail.Address],
+// [worklet.TaskDetail.Named] or the receipt helper, or is declared here with
+// the reason the key is the right thing. Both directions: a declared function
+// that no longer reads one fails too, since a stale allowance lets the next
+// echo in.
 func TestNoToolNamesATaskByAKeyOutsideTheAddressRule(t *testing.T) {
 	t.Parallel()
 	allowed := map[string]string{

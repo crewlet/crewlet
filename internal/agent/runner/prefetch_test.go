@@ -15,11 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The prefetched context, as the phases receive it.
-//
-// The runner takes STRINGS: it cannot re-fetch, which is the freeze. What is
-// left to get wrong is which phase is shown which block, and that is exactly
-// what these pin.
+// The prefetched context, as the phases receive it. The runner takes strings,
+// so it cannot re-fetch (the freeze); these pin which phase sees which block.
 
 // withContext builds a runner over the given blocks, for the reviewer's case.
 func withContext(t *testing.T, prov *scriptedProvider, blocks prefetch.Blocks) *runner.Runner {
@@ -59,8 +56,8 @@ func systemOf(t *testing.T, prov *scriptedProvider, phaseName string) string {
 	return ""
 }
 
-// launchedSystem is the system text the executor's run was launched with, on
-// a runner over the given blocks: what its harness appends to its own.
+// launchedSystem is the system text the executor's run was launched with over
+// the given blocks: what its harness appends to its own.
 func launchedSystem(t *testing.T, blocks prefetch.Blocks) string {
 	t.Helper()
 	_, req := launch(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
@@ -68,11 +65,9 @@ func launchedSystem(t *testing.T, blocks prefetch.Blocks) string {
 	return req.System
 }
 
-// Every block the prefetch renders reaches the executor's prompt under its own
-// heading — the system text its run is launched with. A block rendered and not
-// shown is work spent on nothing — and there is only ONE prompt to reach, which
-// is the point: the frame that decides is the frame that acts, so nothing has
-// to be forwarded from one to another.
+// Every block the prefetch renders reaches the executor's launched system text
+// under its own heading: one prompt, so the frame that decides is the frame
+// that acts and nothing is forwarded between them.
 func TestEveryPrefetchedBlockReachesTheExecutorsPrompt(t *testing.T) {
 	t.Parallel()
 	system := launchedSystem(t, prefetch.Blocks{
@@ -97,10 +92,9 @@ func TestEveryPrefetchedBlockReachesTheExecutorsPrompt(t *testing.T) {
 	}
 }
 
-// THE REVIEWER GETS NONE OF IT. Its question is whether this round's work is
-// right, and standing memory, the team's docs and the requester's traits are
-// what the executor needed to DO the work — in front of a reviewer they
-// compete with the evidence it is meant to judge.
+// THE REVIEWER GETS NONE OF IT: memory, docs and the requester's traits served
+// the executor doing the work, and in front of a reviewer they compete with the
+// evidence it judges.
 func TestTheReviewerIsNotHandedThePrefetch(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{
@@ -124,8 +118,8 @@ func TestTheReviewerIsNotHandedThePrefetch(t *testing.T) {
 	}
 }
 
-// AN EMPTY BLOCK RENDERS NO HEADING. A heading with nothing under it tells the
-// agent it has a memory, or a knowledge base, that it cannot read.
+// AN EMPTY BLOCK RENDERS NO HEADING, which would tell the agent it has a
+// memory or knowledge base it cannot read.
 func TestAnEmptyBlockRendersNoHeading(t *testing.T) {
 	t.Parallel()
 	system := launchedSystem(t, prefetch.Blocks{})
@@ -141,14 +135,11 @@ func TestAnEmptyBlockRendersNoHeading(t *testing.T) {
 }
 
 // A LATER LAUNCH IS BUILT FROM THE CONTEXT THE TURN STARTED WITH. A turn sent
-// back for another iteration launches again from the segment that collected
-// its run — a fresh runner, which the engine hands no prefetch and no read of
-// its conversation — so the freeze has to survive the park, or the second run
-// is briefed without the seat's memory, its company's pages and how the
-// conversation's earlier turns ended, on a system prompt that moved under work
-// already in hand. The endings reach the second brief byte for byte as the
-// first launch's carried them: the read the turn's end absorbs is the one its
-// first brief told, and a sibling that ended since is the next turn's.
+// back relaunches from the collecting segment, a fresh runner handed no
+// prefetch or conversation read, so the freeze must survive the park. The
+// endings reach the second brief byte for byte as the first carried them: the
+// turn's end absorbs the read its first brief told; a sibling that ended since
+// is the next turn's.
 //
 // Mutation: leave the context or the endings off the park, or render the
 // endings again on the resume, and the second launch lacks them or differs.

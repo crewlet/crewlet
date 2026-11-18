@@ -15,24 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A CALL STILL IN FLIGHT IS COUNTED BY ITS IDENTITY, ON EVERY PATH A RUN'S CALLS
-// ARE READ BACK ON. The bridge writes a call's entry on its run's log before the
-// call runs, so a call whose update has not landed — still running on the node
-// its seat was taken from, its update refused by the store, or its process gone
-// — is a call the run made, on its record by that entry's identity alone
-// (runner.Resume.Unfinished). A segment that reads the run's calls back counts
-// it as the run that never parked counts it: its collection, its continuation
-// after a person's answer, its reopening on a node that took it over — so a
-// later call that asks for something else never derives the operation id the
-// call in flight already used. And a closed round's record keeps it, so a later
-// round counts it too: one whose entry carries no digest — a tool that may ask a
-// person first — as a call of its tool whose arguments are not known, never as
-// the tool called with none.
+// A CALL STILL IN FLIGHT IS COUNTED BY ITS IDENTITY, ON EVERY PATH A RUN'S
+// CALLS ARE READ BACK ON. The bridge writes a call's entry before it runs, so
+// a call whose update never landed is on the record by that entry alone
+// (runner.Resume.Unfinished). Collection, continuation after an answer and
+// reopening elsewhere count it as the unparked run did, so a later, different
+// call never reuses its operation id. A closed round's record keeps it, so a
+// later round counts it too; one with no digest (a tool that may ask a person
+// first) counts as its tool with unknown arguments, never with none.
 //
-// Mutation: leave the calls in flight out of the seed, and a segment counts no
-// call before its next one to the tool — the call in flight's operation id,
-// derived again; seed a closed round's unfinished call with no digest by its
-// arguments, and it counts as the tool called with none.
+// Mutation: leave the calls in flight out of the seed, and the call in
+// flight's operation id is derived again; seed a closed round's digestless
+// call by its arguments, and it counts as the tool called with none.
 func TestACallStillInFlightIsCountedByItsIdentityOnEveryPath(t *testing.T) {
 	t.Parallel()
 	register := func(t *testing.T, reg *tools.Registry) {
@@ -43,8 +37,8 @@ func TestACallStillInFlightIsCountedByItsIdentityOnEveryPath(t *testing.T) {
 	inFlight := []runner.BridgedCall{{Call: ledger.Call{Name: "set_status", Result: runner.UnfinishedNote,
 		Failed: true, Digest: turnctx.ArgsDigest(published), Unfinished: true}, Seq: 1}}
 	state := execstate.State{Version: execstate.Version, Round: 1, ActiveTools: []string{"set_status"}}
-	// THE RUN THAT NEVER PARKED made `published`, still in flight, and then
-	// makes `noted`: one different call before it.
+	// THE RUN THAT NEVER PARKED made `published`, still in flight, then makes
+	// `noted`: one different call before it.
 	check := func(t *testing.T, calls *turnctx.CallLog) {
 		t.Helper()
 		if got := calls.Ordinal("set_status", noted); got != 1 {
@@ -108,13 +102,11 @@ func TestACallStillInFlightIsCountedByItsIdentityOnEveryPath(t *testing.T) {
 	})
 }
 
-// A COLLECTED ROUND'S RECORD LISTS A CALL WHOSE OUTCOME IS UNKNOWN AS ONE. A
-// call its run's log still held in flight when the collection read it is listed
-// in the round's record after the round's calls — what the reviewer reads and
-// the turn's tool log keeps — FAILED, so no delivery check, citation or
-// submission takes it for something done, and answered in the words that say
-// its outcome is unknown and its effects may stand: never as a plain failure,
-// which a run makes again.
+// A COLLECTED ROUND'S RECORD LISTS A CALL WHOSE OUTCOME IS UNKNOWN AS ONE:
+// after the round's calls, where the reviewer and the turn's tool log read
+// it, FAILED so no delivery check, citation or submission takes it as done,
+// and answered in words that say its effects may stand, never as a plain
+// failure, which a run makes again.
 //
 // Mutation: leave the unfinished calls out of the round's record, and the
 // reviewer and the turn's tool log never see the call.
@@ -147,23 +139,18 @@ func TestACollectedRoundListsACallWhoseOutcomeIsUnknown(t *testing.T) {
 	}
 }
 
-// AN UNFINISHED CALL IS TOLD IT MAY HAVE TAKEN EFFECT. A call the round's log
-// held in flight when the round was read is carried on as one whose outcome is
-// unknown: failed, so nothing takes it for a delivery or a submission, and
-// answering runner.UnfinishedNote, that what it did may have taken effect. A
-// run carrying the round on in its kept session is told it apart from the
-// calls after the save, in the late calls' section, whatever the session's
-// end, and that section's words agree with its line: they never say the call
-// finished, and they except from "a call marked `→ error` did not take effect"
-// one that says its outcome is unknown, in the words its line says it in, as
-// one that may have, to be checked before it is made again. So a run reading
-// both checks whether the call took effect, rather than make it again as a
-// call that failed: the duplicate the late calls' telling exists to prevent.
+// AN UNFINISHED CALL IS TOLD IT MAY HAVE TAKEN EFFECT. Carried on failed (no
+// delivery or submission) and answering runner.UnfinishedNote, it is told to a
+// run continuing its kept session apart from the calls after the save, in the
+// late calls' section, whatever the session's end. That section never says
+// the call finished, and excepts it, in its line's words, from "a call marked
+// `→ error` did not take effect": it may have, so it is checked before being
+// made again rather than duplicated.
 //
-// Mutation: restore the section's words that said its calls finished after
-// their run stopped waiting for them and that an error did not take effect,
-// tell the call among the calls after the save, leave it out of the brief, or
-// word the note without saying its outcome is unknown, and a case goes red.
+// Mutation: word the section as saying its calls finished or that an error
+// did not take effect, tell the call among the calls after the save, leave it
+// out of the brief, or word the note without saying its outcome is unknown,
+// and a case goes red.
 func TestAnUnfinishedCallIsToldItMayHaveTakenEffect(t *testing.T) {
 	t.Parallel()
 	const (
@@ -213,17 +200,13 @@ func TestAnUnfinishedCallIsToldItMayHaveTakenEffect(t *testing.T) {
 }
 
 // EVERY READER OF A ROUND IS TOLD A CALL WHOSE OUTCOME IS UNKNOWN MAY HAVE
-// TAKEN EFFECT. A call the round's log held in flight when the round was read
-// is on the round's record, failed, its line answering runner.UnfinishedNote,
-// and every reader of that record reads the line under a rule for a call
-// marked `→ error`: the round's reviewer, and, once it sends the round back,
-// the next round's fresh brief, over the prior-work ledger, and the send-back
-// continuing the session that made the call, which tells it among the late
-// calls. Each is told the line, under a rule that says a failed call did not
-// take effect only excepting one that says its outcome is unknown, as the line
-// does, which may have. Told that every failed call did not take effect, and
-// to retry it, a reviewer would send the round back to make such a call again,
-// and a run would make it again: a second post or delegation.
+// TAKEN EFFECT. Such a call is on the round's record, failed, answering
+// runner.UnfinishedNote, and each reader reads it under a rule for `→ error`:
+// the reviewer and, once it sends the round back, the next round's fresh
+// brief (the prior-work ledger) and the send-back continuing the session (the
+// late calls). Each rule excepts it from "did not take effect", as its line
+// does; otherwise a reviewer sends it back to retry, and a run posts or
+// delegates twice.
 //
 // Mutation: drop the exception from the reviewer's rule, the prior-work
 // ledger's or a send-back's, and its reader goes red; leave the call out of

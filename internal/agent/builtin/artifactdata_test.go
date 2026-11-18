@@ -57,12 +57,11 @@ func (r dataRig) call(t *testing.T, turn *turnctx.Turn, name string, args map[st
 
 var dana = iam.Actor{Name: "dana", Kind: iam.ActorHuman}
 
-// EVERY ROW A DATASTORE TOOL HANDS A MODEL IS FENCED: a row's fields arrive
-// inside a fence carrying the turn's token, labelled `artifact_row` with the
-// row's writers, nothing else in the answer can open or close one, and the
-// answer carries the envelope; a conflict's current rows are fenced alike, and
-// the schema, which nobody wrote as prose, is not. A conflict is a refusal, so
-// the rows rendered for the model's merge are no receipt a person is answered.
+// EVERY ROW A DATASTORE TOOL HANDS A MODEL IS FENCED: in a fence carrying the
+// turn's token, labelled `artifact_row` with the row's writers, which nothing
+// else in the answer can open or close, under the envelope. A conflict's
+// current rows are fenced alike and, a conflict being a refusal, are no
+// receipt for a person; the schema, which nobody wrote as prose, is not fenced.
 func TestEveryDataToolResultIsFenced(t *testing.T) {
 	t.Parallel()
 	req := requesters{"founder": founderPrincipal(iam.Apps...)}
@@ -344,14 +343,11 @@ func TestASchemaChangeIsTheWritersToJudge(t *testing.T) {
 }
 
 // A LIMIT ON WHAT AN ARTIFACT'S DATA MAY HOLD IS TOLD TO A PERSON IN A
-// PERSON'S WORDS (ADR-0060), on a write and on a schema change alike.
-//
-// The applier refuses either for one verdict, `quota`, whichever limit it was:
-// the company's storage settings, a collection's own row caps, or the
-// engine's caps on one store. The tool's sentence names the applier's reason
-// for the model; a person's surface answers the catalog's phrasing in its
-// place, which is true of every one of those limits, where without one it
-// answered nothing but its code's own sentence.
+// PERSON'S WORDS (ADR-0060), on a write and on a schema change alike. Every
+// such limit (the company's storage settings, a collection's row caps, the
+// engine's per-store caps) is one verdict, `quota`: the tool's sentence names
+// the applier's reason for the model, and a person's surface answers the
+// catalog's phrasing in its place.
 //
 // Mutation: drop the phrasing from the verdict's quota arm, and both go red.
 func TestADatastoreLimitIsToldToAPersonInTheirWords(t *testing.T) {

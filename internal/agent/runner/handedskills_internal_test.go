@@ -9,11 +9,9 @@ import (
 )
 
 // A SKILL IS HANDED UNDER A NAME BOTH HARNESSES READ, derived from its key the
-// same way on every node and at every launch: lowercase, every run of anything
-// but an ASCII letter or digit one hyphen, trimmed at either end and to 64. Two
-// keys that come to one name are told apart in key order, the first keeping
-// it, so a name a run's model already loaded stays its own across a relaunch
-// handed the same keys.
+// same way on every node and launch ([nativeNames]). Keys that collide are
+// told apart in key order, the first keeping the name, so a name a run's model
+// already loaded stays its own across a relaunch handed the same keys.
 //
 // Mutation: tell two names apart in the order the keys were given, and the
 // same skill set is named differently on two nodes.

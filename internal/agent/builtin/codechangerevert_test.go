@@ -10,20 +10,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A REVERT'S MERGE IS STEP TWO (M5-D25): code_revert_change sends ONE revert
-// of the change it names on the seat's own revert branch, and — asked to
-// merge — a merge of the change its push opened, at the commit the revert
-// made, into the reverted change's target, under the revert's operation's
-// step 2; a merge refused is said beside the opened change as a residue,
-// never as a refusal of the revert that landed.
+// A REVERT'S MERGE IS STEP TWO (M5-D25): code_revert_change sends one revert
+// of the named change on the seat's revert branch and, asked to merge, a
+// merge of the change its push opened, at the revert's commit, into the
+// reverted change's target, as step 2 of the revert's operation. A refused
+// merge is a residue beside the opened change, never a refusal of the revert.
+// The branch's deletion is the Gitlet node's to decide: the merge sends no
+// delete_source and reads no gates.
 //
-// Its branch's deletion is left to the Gitlet node that judges the merge, as an
-// unsaid delete_branch is: the merge says no word of it and nothing reads
-// the target's gates for it.
-//
-// Mutations: merge under the revert's own operation → red; answer a refused
-// merge as the call's refusal → red; decide the branch's deletion in the tool
-// → red.
+// Mutations: merge under the revert's own operation, answer a refused merge
+// as the call's refusal, or decide the branch's deletion in the tool → red.
 func TestARevertsMergeIsStepTwo(t *testing.T) {
 	t.Parallel()
 	for name, refuse := range map[string]bool{"merged": false, "refused": true} {

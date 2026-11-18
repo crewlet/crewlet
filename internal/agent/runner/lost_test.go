@@ -14,9 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// lostRound launches round 1, plays before against the run's surface, and
-// resumes the parked turn on a fresh runner told its job was lost with lost —
-// as the engine's resume does once the coordinator claims a lost job.
+// lostRound launches round 1, plays before, and resumes the parked turn on a
+// fresh runner told its job was lost, as the engine does once the coordinator
+// claims a lost job.
 func lostRound(t *testing.T, before run, lost runner.Lost, opts buildOpts,
 ) (*playLauncher, *runner.Runner, error) {
 	t.Helper()
@@ -42,12 +42,10 @@ func lostRound(t *testing.T, before run, lost runner.Lost, opts buildOpts,
 }
 
 // A LOST JOB'S ROUND IS CARRIED ON IN A FRESH SESSION where the turn keeps no
-// capture of its session, never collected, and never in the box's own copy of
-// the session: the job was cut off mid-step, so what it left is no account of
-// the round, and judged as one the round "did not succeed" for a reason the run
-// never had. The same round is relaunched with what it did so far — its tools,
-// its calls counted — and the fresh run is told what happened and where to look
-// for the work. (A kept capture's continuation is continued_test.go's.)
+// capture of its session: never collected ([runner.Lost]), never in the box's
+// own copy of the session. The same round relaunches with its tools and calls
+// counted, and the fresh run is told what happened and where to look. (A kept
+// capture's continuation is continued_test.go's.)
 //
 // Mutation: collect a lost job as resumeAgentRun does, and the turn files the
 // truncated run as the round's result; continue its session in place, and the
@@ -84,9 +82,8 @@ func TestALostJobsRoundIsCarriedOnInAFreshSession(t *testing.T) {
 	}
 }
 
-// A LOST JOB WHOSE ROUND WAS ALREADY SUBMITTED IS COLLECTED: its submit_work is
-// on the round's calls, so it had finished its work and was lost on its way
-// out — the round is over, and starting it again would do it twice.
+// A LOST JOB WHOSE ROUND WAS ALREADY SUBMITTED IS COLLECTED: its submit_work
+// is on the round's calls, so starting it again would do the work twice.
 //
 // Mutation: carry every lost round on, and a run that delivered is relaunched
 // to deliver again.
@@ -109,11 +106,9 @@ func TestALostJobThatHadSubmittedIsCollected(t *testing.T) {
 }
 
 // A ROUND LOST MORE OFTEN THAN IT IS CARRIED ON AFTER IS NOT STARTED AGAIN: a
-// run that keeps taking its host down would take it — and every other seat's
-// work on it — down again with each relaunch. The phase the round opened is
-// closed failed, saying why, and the turn ends with it: the refusal is one
-// every retry would meet again, so the turn is given up whatever the round's
-// calls showed, rather than handed back to be refused once more.
+// run that keeps taking its host down would take every other seat's work down
+// with it. The round's phase closes failed, saying why, and the turn is given
+// up whatever its calls showed, since every retry would be refused again.
 //
 // Mutation: drop the refusal, and a run that kills its host is relaunched for
 // ever; drop turn.ErrPermanent from it, and a round whose jobs wrote nothing
@@ -141,10 +136,9 @@ func TestARoundLostTooOftenIsNotStartedAgain(t *testing.T) {
 	}
 }
 
-// A CARRIED-ON ROUND IS REFUSED A NO_ACTION ITS LOST JOB ACTED IN. The run
-// that carries a lost job's round on is the same round, so its submission is
-// judged against what the lost job did: a job that posted, and a run after it
-// that said nobody was asking, is refused while it can still report the post.
+// A CARRIED-ON ROUND IS REFUSED A NO_ACTION ITS LOST JOB ACTED IN: it is the
+// same round, so its submission is judged against what the lost job did, and
+// refused while it can still report the post.
 //
 // Mutation: the relaunch's submission back to decodeWork, and the no_action is
 // accepted.
@@ -169,11 +163,10 @@ func TestACarriedOnRoundIsRefusedANoActionItsLostJobActedIn(t *testing.T) {
 	}
 }
 
-// A FRESH RUN IS TOLD WHERE TO LOOK, NOT PROMISED WHAT IS THERE. Whether it is
-// in the lost job's box is the launch's to decide, so a kept box is described
-// as a place to look first, and a box that went with its host as a fresh
-// machine — where anything unpushed is gone — so the run neither hunts for a
-// working tree that is not there nor starts over beside one that is.
+// A FRESH RUN IS TOLD WHERE TO LOOK, NOT PROMISED WHAT IS THERE: a kept box is
+// a place to look first, a lost one a fresh machine where anything unpushed is
+// gone, so the run neither hunts for a missing working tree nor starts over
+// beside one that is there.
 func TestARunCarryingALostRoundIsToldWhereToLook(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

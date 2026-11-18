@@ -49,7 +49,7 @@ func (a *approvalTool) made() int {
 
 // firstCommit marks a held call on its row as the store does: the first mark
 // makes the call, and its result is recorded once. Every attempt at the answer
-// shares it, and each attempt's claim reads the row as it stands then.
+// shares it.
 type firstCommit struct {
 	mu     sync.Mutex
 	marked bool
@@ -97,12 +97,11 @@ func (c *firstCommit) Record(_ context.Context, result sandbox.HeldResult,
 	return *c.kept, nil
 }
 
-// heldCarry is a runner carrying on a run that parked on a call to
-// `tr_close_issue`, a tool at Needs approval a person allowed once, from the
-// asking job's record — state, and the calls the round made over the bridge —
-// where the required skill `tracker-rules` covers that tool; and the tool, the
-// commit marking the call on the run's row, the launcher the run is relaunched
-// through and what the turn published.
+// heldCarry is a runner resuming a run parked on a once-allowed call to
+// `tr_close_issue` (Needs approval, covered by the required skill
+// `tracker-rules`), from the asking job's state and bridged calls; with the
+// tool, the commit marking the call, the relaunch's launcher and what the turn
+// published.
 func heldCarry(t *testing.T, state execstate.State, bridged []runner.BridgedCall) (*runner.Runner,
 	*approvalTool, *firstCommit, *playLauncher, *capture) {
 
@@ -112,10 +111,9 @@ func heldCarry(t *testing.T, state execstate.State, bridged []runner.BridgedCall
 	return r, tool, commit, launcher, pub
 }
 
-// heldAttempt is one attempt at the answer [heldCarry]'s runner carries the run
-// on with, over the tool and the commit every attempt at that answer shares,
-// where `tracker-rules` is required — or, where required is false, a skill the
-// seat may load and is not held to.
+// heldAttempt is one attempt at [heldCarry]'s answer, over the tool and commit
+// every attempt shares; with required false, `tracker-rules` is loadable but
+// not required.
 func heldAttempt(t *testing.T, state execstate.State, bridged []runner.BridgedCall, required bool,
 	tool *approvalTool, commit *firstCommit) (*runner.Runner, *playLauncher, *capture) {
 
@@ -187,16 +185,14 @@ func skillLoad() runner.BridgedCall {
 }
 
 // AN APPROVED CALL IS MADE UNDER THE GUARD OF THE SESSION THAT ASKED IT. A run
-// whose required skill covers a tool at Needs approval loads the skill over the
-// bridge, calls the tool, and parks on the person's approval; the answer's
-// resume makes the call once, through the surface the run carries on with, as
-// the asking session's guard holds it — the skill its own job loaded — before
-// the relaunch empties the guard for whichever session its launch decides. The
-// call runs, its result reaches the relaunched run, and no refusal is published.
+// loads a required skill over the bridge, calls the tool it covers, and parks
+// on approval; the resume makes the call once, through the surface the run
+// carries on with, under the asking session's guard (holding its own load),
+// before the relaunch empties the guard. The call runs, its result reaches the
+// relaunched run, and no refusal is published.
 //
-// Mutation: empty the guard for the relaunch before the held call is made, and
-// the approved call is refused as covered by a skill never loaded, recorded as
-// made, and never run.
+// Mutation: empty the guard before the held call is made, and the approved call
+// is refused as covered by a skill never loaded, recorded as made, and never run.
 func TestAnApprovedCallIsMadeUnderTheGuardOfTheSessionThatAskedIt(t *testing.T) {
 	t.Parallel()
 	// THE ASKING JOB'S OWN LOAD, made over the bridge before it called the
@@ -220,19 +216,16 @@ func TestAnApprovedCallIsMadeUnderTheGuardOfTheSessionThatAskedIt(t *testing.T) 
 }
 
 // AN APPROVED CALL THE GUARD WOULD REFUSE IS NOT MADE, AND ITS APPROVAL IS NOT
-// USED UP. The guard the call is made under is the one the rebuild armed for
-// the asking session, which need not be the guard that held it: a skill the
-// asking session loaded in an earlier job is the launch's armed skill, held
-// only where the job's box said it took that session up — and a box whose
-// word never reached the job's record is rebuilt without it — and a skill made
-// required while the call waited covers it now. Either way the guard is asked
-// before the call is marked on the run's row: the call is not made, the mark
-// is never written, and the relaunched run is told why — it can load the skill
-// and call again, which asks the person afresh.
+// USED UP. The call is made under the guard the rebuild armed for the asking
+// session, which need not be the one that held it: a skill loaded in an
+// earlier job is armed only where the job's box said it took that session up
+// (a box whose word never reached the record is rebuilt without it), and a
+// skill made required while the call waited covers it now. The guard is asked
+// before the mark: nothing is made or marked, and the relaunched run is told
+// why, so it can load the skill and call again, asking the person afresh.
 //
 // Mutation: ask the guard only as the call runs, after the mark, and the call
-// is marked, its refusal recorded as its result, and the run told the call
-// was made.
+// is marked, its refusal recorded as its result, and the run told it was made.
 func TestAnApprovedCallTheGuardWouldRefuseIsNotMade(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -282,14 +275,11 @@ func TestAnApprovedCallTheGuardWouldRefuseIsNotMade(t *testing.T) {
 }
 
 // AN APPROVED CALL AN EARLIER ATTEMPT MADE IS ANSWERED FROM ITS MARK, WHATEVER
-// THE GUARD SAYS NOW. The first attempt at the answer makes the call under a
-// guard that admits it, and its relaunch is refused after, as the floor of the
-// session it continues refuses one, so the answer is attempted again. Meanwhile
-// the skill covering the tool is made required, and the second attempt's
-// rebuilt guard would refuse the call. The call is not made again, and the run
-// that carries the work on is handed what it returned: never told the call was
-// not made, which would send it to ask the person again for a call that was
-// made, and approved a second time, make it twice.
+// THE GUARD SAYS NOW. The first attempt makes the call and its relaunch is
+// refused (its continued session's floor); before the retry the covering skill
+// is made required, so the rebuilt guard would refuse the call. The call is not
+// made again and the run is handed what it returned, never told it was not
+// made, which has it ask the person again and, approved twice, make it twice.
 //
 // Mutation: ask the guard before the mark answers the call, and the second
 // attempt tells the run the call was not made, its result lost.

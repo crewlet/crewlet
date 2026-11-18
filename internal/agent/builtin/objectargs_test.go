@@ -14,11 +14,10 @@ import (
 // EVERY OBJECT ARGUMENT A DOMAIN DECLARES IS ONE A TOOL TAKES.
 //
 // The person's write surface names, beside a failed call, the object its
-// arguments named — read through [builtin.ObjectArgs], each native domain's
-// own list — so a client holding an unknown outcome knows which object to read.
-// A name in that list that no tool declares is an argument renamed under it:
-// the answer would name nothing, silently, for every call that took the new
-// name. Read against the operator catalogue's own schemas, every seam wired.
+// arguments named, read through [builtin.ObjectArgs], so a client holding an
+// unknown outcome knows which object to read. A listed name no tool declares is
+// an argument renamed under it: the answer would silently name nothing. Read
+// against the operator catalogue's own schemas, every seam wired.
 //
 // Mutation: rename any entry of a domain's objects and this goes red.
 func TestEveryObjectArgumentIsOneAToolTakes(t *testing.T) {
@@ -45,15 +44,11 @@ func TestEveryObjectArgumentIsOneAToolTakes(t *testing.T) {
 
 // EVERY WRITE NAMES THE OBJECT IT WRITES — the other direction.
 //
-// A list of object arguments every one of which some tool takes can still be
-// short: a write whose arguments name its object under a name the list lacks
-// is answered, failed or unknown, with nothing but the tool's name beside it.
-// write_page was that write — its page is addressed by its `container` and its
-// title, and neither was a declared object — so a client holding a create
-// whose outcome nobody could establish was told nothing about where to look.
-// So every catalogue tool that is not a PROVEN read (the dispatch's own rule
-// for what it audits) must take at least one declared object argument, or be
-// named here with the reason it acts on no object of the company's records.
+// A list whose every entry some tool takes can still be short: a write naming
+// its object under a name the list lacks is answered, failed or unknown, with
+// only the tool's name beside it. So every catalogue tool that is not a PROVEN
+// read (the dispatch's own rule for what it audits) takes a declared object
+// argument, or is named here with why it acts on no object of the records.
 //
 // Mutation: drop `container` from the pages domain's objects and write_page
 // goes red; give a write no object argument and it is named.

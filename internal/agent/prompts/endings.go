@@ -10,64 +10,34 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// HOW A CONVERSATION'S EARLIER TURNS ENDED, as a turn's brief tells them.
+// HOW A CONVERSATION'S EARLIER TURNS ENDED, as a turn's brief tells them. A
+// continued session (internal/sandbox, restore.go) holds what a turn did, never
+// how it ended — whether its reply reached the party waiting, its reviewer's
+// decision, who stopped it, what failed — which the executor log records
+// (internal/executorkeep's Ending). Every session of the conversation is told
+// this block, a schedule's in its words ([ConversationEndings.Fires]).
 //
-// A conversation's next turn continues the session its last turn left where it
-// can (internal/sandbox, restore.go), and that session holds what the turn did
-// and said, never how it ended: whether the reply it wrote reached the party
-// waiting, what its reviewer decided, who stopped it and why, what failed. The
-// engine recorded those on the executor log as the turn's ending
-// (internal/executorkeep's Ending), and this block tells them — every ended
-// turn of the conversation no ended turn was shown, each whole, the newest
-// first while they fit [EndingsMaxBytes], the rest counted. A session of the
-// run's own is told the same block: it is the conversation's account that no
-// transcript holds, whichever session reads it. A schedule's conversation is
-// told in the schedule's words, each of its turns a fire
-// ([ConversationEndings.Fires]).
-//
-// RENDERED ONCE, at the turn's dispatch, under the turn's own token, and frozen
-// on its park (internal/agent/execstate's Frozen.Endings): every brief of the
-// turn, on whatever node and in whatever segment, carries the bytes its first
-// launch's brief did. A later segment's token is another, and the fences keep
-// the first one's: no foreign word in them carries an unescaped marker of any
-// token ([provenance.Neutralise]), so they open and close nothing under it.
+// RENDERED ONCE, at dispatch, under the turn's token, and frozen on its park
+// (internal/agent/execstate's Frozen.Endings), so every brief of the turn
+// carries the same bytes. A later segment's token differs and the fences keep
+// the first's; they open and close nothing under it, since every foreign word
+// is neutralised against any token ([provenance.Neutralise]).
 
-// EndingsMaxBytes bounds the block, its heading and the count of what it left
-// out included, AS THE RUN RECORD CARRIES IT: the block's JSON encoding, quotes
-// and escapes included (internal/agent/execstate's Frozen.Endings, which
-// encoding/json writes into every park of the turn).
-//
-// TWENTY-FOUR THOUSAND BYTES, about six thousand tokens: the order of one
-// round of the prior-work ledger, and a small fraction of any model this
-// engine targets.
-// One ending's accounts are bounded where they are recorded
-// (internal/executorkeep's CompletedWorkMaxBytes and the rest), so an ending
-// whose every account is at its bound renders in about thirteen kilobytes, and
-// ordinary endings in a few hundred bytes: the block always holds the head
-// whole and, beside it, the conversation's last several turns. It is also what
-// every run record of the turn carries frozen on its park, in a coordination
-// store sized for kilobytes — the share of the run row's one byte budget the
-// block is held to.
-//
-// MEASURED ENCODED, never as the text renders: JSON writes `<`, `>`, `&`,
-// U+2028 and U+2029 as six bytes each and a control character as up to six, and
-// the accounts are model- and person-written text that quotes code and markup
-// freely, so a block bounded as rendered text could take six times its bound of
-// the record. Measured encoded, its rendered text is never longer either: every
-// rune JSON writes takes at least the bytes it renders in.
-//
-// NEVER A TURN CUT INSIDE: the head is told whatever the bound — the turn
-// whose session the next one continues is the one it most needs — and the
-// others newest first while they fit; the rest are counted, and stay for the
-// next turn to be told, since only what a brief told is absorbed. Only a head
-// whose own accounts alone would not fit, which escaping can make of accounts
-// at their bounds, is told without them, saying so: the block is bounded
-// whatever is recorded.
+// EndingsMaxBytes bounds the whole block, heading and count included, as its
+// JSON encoding in the run record (Frozen.Endings, in every park of the turn;
+// the coordination store sizes it in kilobytes). 24,000 bytes, about six
+// thousand tokens, small beside any targeted model's context: the order of one
+// ledger round, enough for the head at its recorded bounds (about 13 kB;
+// executorkeep's CompletedWorkMaxBytes and the rest) plus several ordinary
+// turns. Measured encoded because JSON writes `<`, `>`, `&`, U+2028 and U+2029
+// as six bytes and accounts quote markup freely; the rendered text is never
+// longer. No turn is cut inside: the head is told whatever the bound (its
+// accounts dropped, saying so, only where escaping makes them alone too long),
+// the rest newest first while they fit, then counted, left for the next turn.
 const EndingsMaxBytes = 24_000
 
-// endingsHeader opens the block: what it is, and the rules its turns are read
-// by. The engine's facts in it say what reached the party waiting, which is
-// what the rules turn on.
+// endingsHeader opens the block with the rules its turns are read by, which
+// turn on whether a reply reached the party waiting.
 const endingsHeader = "## How this conversation's earlier turns ended" +
 	"\nYour earlier turns on this same thread / issue / item, oldest first, as the engine" +
 	" recorded how each one ended — which no transcript says." +
@@ -79,9 +49,7 @@ const endingsHeader = "## How this conversation's earlier turns ended" +
 	" disagree, the task wins."
 
 // scheduleEndingsHeader is [endingsHeader] for a schedule's conversation, each
-// of whose turns is a fire: the same rules, told of the schedule's earlier
-// fires — a fire's work, like a turn's, already took effect, and this fire's
-// task is what the schedule asks now.
+// of whose turns is a fire: the same rules, told of earlier fires.
 const scheduleEndingsHeader = "## How this schedule's earlier fires ended" +
 	"\nYour earlier fires of this same schedule, oldest first, as the engine recorded how each" +
 	" one ended — which no transcript says." +
@@ -92,9 +60,8 @@ const scheduleEndingsHeader = "## How this schedule's earlier fires ended" +
 	"\n- **This is history, not the current state:** where it and the task below" +
 	" disagree, the task wins."
 
-// endingWords are the words the block tells a conversation's ended turns in:
-// its header, what heads each turn, and what the line counting the turns it
-// does not show calls one and several.
+// endingWords are the words the block is told in: its header, each turn's
+// heading, and the left-out count's singular and plural.
 type endingWords struct {
 	header    string
 	turn      string
@@ -102,17 +69,15 @@ type endingWords struct {
 }
 
 var (
-	// turnWords tell a conversation's earlier turns.
 	turnWords = endingWords{header: endingsHeader, turn: "Turn",
 		one: "earlier turn of this conversation is", many: "earlier turns of this conversation are"}
 
-	// fireWords tell a schedule's earlier fires.
 	fireWords = endingWords{header: scheduleEndingsHeader, turn: "Fire",
 		one: "earlier fire of this schedule is", many: "earlier fires of this schedule are"}
 )
 
-// endingWordsFor is the words the block of a conversation is told in: a
-// schedule's where fires says it is one, a conversation's otherwise.
+// endingWordsFor is a schedule's words where fires is set, a conversation's
+// otherwise.
 func endingWordsFor(fires bool) endingWords {
 	if fires {
 		return fireWords
@@ -123,12 +88,10 @@ func endingWordsFor(fires bool) endingWords {
 // TurnEnding is one ended turn of a conversation as the engine recorded its end
 // (internal/executorkeep's Ending and the turn's row).
 //
-// The ENGINE'S WORDS are its own: Outcome, Decision, Answer, DeliveredTo and the
-// delivery facts. Everything else is SOMEBODY ELSE'S, and the block fences it
-// under the turn's token ([BuildConversationEndings]): what the turn was asked,
-// what its reviewer and its executor wrote, a stop's reason, and the engine's
-// accounts of what failed and what was not kept, which quote what a box, a tool
-// or a store said. StoppedBy is a name somebody chose, defused in place.
+// Outcome, Decision, Answer, DeliveredTo and the delivery facts are the
+// engine's words; every other text is fenced under the turn's token
+// ([endingAccounts]), even the engine's accounts, which quote what a box, a
+// tool or a store said. StoppedBy is a name somebody chose, defused in place.
 type TurnEnding struct {
 	// Turn is the turn's id, and EndedAt when its end landed on the log.
 	Turn    string
@@ -141,17 +104,16 @@ type TurnEnding struct {
 	Decision string
 	Answer   string
 
-	// Delivered says its reply reached the party waiting on DeliveredTo — the
-	// surface the reply was owed on, set whether or not it went — and
-	// DeliveryUnknown that whether it did cannot be told, the turn's record of
-	// its calls being incomplete. DeliveredTo empty is a turn nobody waited on.
+	// Delivered says its reply reached the party waiting on DeliveredTo, the
+	// surface it was owed on (set whether or not it went; empty where nobody
+	// waited), and DeliveryUnknown that the turn's record of its calls is too
+	// incomplete to tell.
 	Delivered       bool
 	DeliveredTo     string
 	DeliveryUnknown bool
 
 	// CompletedWork is what its reviewer said landed, and BlockedOn what its
-	// executor said stopped a blocked round: the seat's own phases' words,
-	// which quote whatever they read.
+	// executor said stopped a blocked round.
 	CompletedWork string
 	BlockedOn     string
 
@@ -159,53 +121,46 @@ type TurnEnding struct {
 	StoppedBy  string
 	StopReason string
 
-	// Failure is the engine's account of the guard, the budget or the loss that
-	// ended it, Unkept why its newest session was not kept ("" where it was),
-	// and Exhausted what it means that a launch of it ran out of its model's
-	// context ("" where none did): the engine's sentences, the first two
-	// quoting what refused or broke.
+	// Failure is the engine's account of the guard, budget or loss that ended
+	// it, Unkept why its newest session was not kept ("" where it was), and
+	// Exhausted what a launch running out of its model's context means ("" where
+	// none did).
 	Failure   string
 	Unkept    string
 	Exhausted string
 
-	// Ask is what the turn was asked, as its row keeps it: the first kibibyte,
-	// whose writer the row does not name.
+	// Ask is the first kibibyte of what the turn was asked; the row does not
+	// name its writer.
 	Ask string
 }
 
 // ConversationEndings is what [BuildConversationEndings] renders.
 type ConversationEndings struct {
-	// Seat is the handle of the seat the block is for, whose own reviewer and
-	// executor wrote the turns' accounts of what landed and what blocked them.
+	// Seat is the handle of the seat the block is for, whose phases wrote the
+	// accounts of what landed and what blocked.
 	Seat string
 
-	// Head is the turn whose session the conversation's next turn continues,
-	// "" where none left one: told whatever the bound.
+	// Head is the turn whose session the next turn continues ("" where none
+	// left one): told whatever the bound.
 	Head string
 
-	// Turns are the conversation's ended turns no ended turn was shown, the
-	// head among them, in the order they ended.
+	// Turns are the ended turns not yet shown, the head among them, in the
+	// order they ended.
 	Turns []TurnEnding
 
-	// Omitted counts the older ones the read itself left out, which the block
-	// counts with its own.
+	// Omitted counts older turns the read itself left out, added to the
+	// block's own count.
 	Omitted int
 
-	// Fires says the conversation is a schedule's, each of its turns a fire
-	// (internal/notify's Scheduled): the block tells the schedule's earlier
-	// fires, in the schedule's words.
+	// Fires says the conversation is a schedule's (internal/notify's
+	// Scheduled), told in the schedule's words.
 	Fires bool
 }
 
 // BuildConversationEndings renders how the conversation's earlier turns ended
-// under the turn's token b, and answers the turns it told, in the order they
-// ended: what the turn's end absorbs — a turn the bound left out is not told,
-// and stays for the next turn to be. Empty, with none told, for a conversation
-// with no ended turn to tell.
-//
-// The head always, whole where its accounts fit and its engine facts alone
-// where they do not; then the others, the newest first, each whole, until one
-// does not fit; the rest counted. Rendered in the order the turns ended.
+// under the turn's token b, within [EndingsMaxBytes], and returns the turns it
+// told in the order they ended: only those are absorbed by the turn's end, so
+// one left out stays for the next turn. Empty for no ended turn.
 func BuildConversationEndings(b provenance.Boundary, in ConversationEndings) (string, []string) {
 	if len(in.Turns) == 0 {
 		return "", nil
@@ -215,12 +170,9 @@ func BuildConversationEndings(b provenance.Boundary, in ConversationEndings) (st
 	for i, t := range in.Turns {
 		rendered[i] = renderEnding(b, in.Seat, words, t, true)
 	}
-	// THE COUNT'S ROOM IS HELD BACK FROM THE START, at its longest: a line
-	// counting every turn, which any count the block ends on is no longer
-	// than. Each turn told costs its own text and the blank line before it,
-	// every part measured as the record encodes it ([encodedLen]): JSON
-	// escapes rune by rune, so the parts' encoded lengths add up to the
-	// block's.
+	// The count's room is held back from the start at its longest (every
+	// turn counted). Encoded lengths of the parts add up to the block's,
+	// since JSON escapes rune by rune ([encodedLen]).
 	gap := encodedLen("\n\n")
 	room := EndingsMaxBytes - len(`""`) - encodedLen(words.header) - gap -
 		encodedLen(words.leftOut(len(in.Turns)+in.Omitted))
@@ -259,10 +211,9 @@ func BuildConversationEndings(b provenance.Boundary, in ConversationEndings) (st
 	return strings.Join(parts, "\n\n"), turns
 }
 
-// encodedLen is how many bytes s takes inside a JSON string as encoding/json
-// writes it, its quotes left off: what the block costs of the run record that
-// carries it ([EndingsMaxBytes]). A Go string always encodes — a byte that is
-// not UTF-8 is written as U+FFFD's escape — so there is no error to answer.
+// encodedLen is how many bytes s takes inside a JSON string, quotes left off
+// ([EndingsMaxBytes]). A Go string always encodes (invalid UTF-8 becomes
+// U+FFFD), so the error is ignored.
 func encodedLen(s string) int {
 	encoded, _ := json.Marshal(s)
 	return len(encoded) - len(`""`)
@@ -276,11 +227,9 @@ func (w endingWords) leftOut(n int) string {
 	return fmt.Sprintf("%d %s not shown here.", n, w.many)
 }
 
-// renderEnding is one ended turn as the block tells it, headed in words: its
-// id and when it ended, how it ended and whether its reply reached anybody, in
-// the engine's words, each defused under b; then, where prose is set, every
-// account somebody else wrote, fenced under b with whose it is. Without prose
-// the accounts are left out, saying so.
+// renderEnding is one ended turn: the engine's facts, defused under b, then,
+// where prose is set, every account fenced under b; without prose the
+// accounts are left out, saying so.
 func renderEnding(b provenance.Boundary, seat string, words endingWords, t TurnEnding,
 	prose bool) string {
 
@@ -314,23 +263,18 @@ func renderEnding(b provenance.Boundary, seat string, words endingWords, t TurnE
 	return w.String()
 }
 
-// account is one of an ending's fields somebody else wrote, the line it is
-// introduced by, and whose words they are.
+// account is one fenced field of an ending, its lead line and its label.
 type account struct {
 	lead  string
 	label provenance.Label
 	text  string
 }
 
-// endingAccounts is every account of t that holds words, in the order the block
-// tells them.
+// endingAccounts is every non-empty account of t, in the order told.
 //
-// EACH AT THE LEAST TRUST: whoever wrote them, they quote what they read — a
-// reviewer's account a box's output, an engine's account a store's refusal —
-// and a later turn reads them as data. Each names its writer where the record
-// does: the seat's own phases for the reviewer's and the executor's, the
-// engine for its own, nobody for the ask and a stop's reason, whose writers the
-// record does not keep (a stop's author is told beside it, defused).
+// Each is at the least trust whoever wrote it, since each quotes what it read
+// (a box's output, a store's refusal). The writer is named where the record
+// keeps one; the ask's and a stop reason's are not kept.
 func endingAccounts(seat string, t TurnEnding) []account {
 	label := func(authors ...provenance.Author) provenance.Label {
 		return provenance.Label{Source: provenance.SourceTurnEnding, Trust: provenance.TrustExternal,
@@ -368,10 +312,9 @@ func endingOutcome(b provenance.Boundary, t TurnEnding) string {
 	case "stopped":
 		line = "It was stopped."
 	case "lost":
-		// NOT "WITH ITS BOX OR HOST": a turn ends lost wherever no frame of it
-		// saw it end (internal/executorkeep's OutcomeLost) — a resume that
-		// broke, a seat removed, an end never recorded — and its box may have
-		// been read whole. What ended it is the engine's failure below.
+		// Not "with its box or host": lost means no frame saw it end
+		// (internal/executorkeep's OutcomeLost), and its box may have been read
+		// whole. What ended it is the Failure account.
 		line = "It was lost: the engine ended it, not the turn itself, and it is not carried on."
 	default:
 		line = "It ended `" + provenance.Neutralise(b, t.Outcome) + "`."

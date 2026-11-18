@@ -7,15 +7,12 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 )
 
-// A FRESH RUN LISTS NOTHING AGAIN. A run that starts a session of its own,
-// carrying a round on (prompts.CalledBefore), has no session above that could
-// show a closed round's call, and its brief renders every closed round as work
-// already done: no closed call is set beside a told call to list again, however
-// alike the two read, where a brief to a session that continued through those
-// rounds lists it.
+// A FRESH RUN LISTS NOTHING AGAIN. A run starting a session of its own
+// (prompts.CalledBefore) has no session above that could show a closed round's
+// call, and renders closed rounds as work already done; a session that
+// continued through them lists an alike closed call again.
 //
-// Mutation: ignore toldAs.fresh, and the closed post is listed again on the
-// fresh run's brief.
+// Mutation: ignore toldAs.fresh, and the fresh run lists the closed post again.
 func TestAFreshRunListsNothingAgain(t *testing.T) {
 	t.Parallel()
 	args := map[string]any{"channel": "C1", "text": "hi"}
@@ -39,11 +36,10 @@ func TestAFreshRunListsNothingAgain(t *testing.T) {
 	}
 }
 
-// A CLOSED WITHHELD CALL OF ANOTHER ROUND THAN A LEAD'S IS STILL LISTED AGAIN. A
-// lead telling what became of a held call leaves out the withheld calls of its
-// round and tool, since a closed list keeps no held call's id; but a withheld
-// call of the tool in another round is another held call, whose fate no lead
-// tells, and the session may show it as surely as any closed call.
+// A CLOSED WITHHELD CALL OF ANOTHER ROUND THAN A LEAD'S IS STILL LISTED AGAIN.
+// A lead leaves out the withheld calls of its round and tool, since a closed
+// list keeps no held call's id; a withheld call of the tool in another round
+// is another held call, whose fate no lead tells and the session may show.
 //
 // Mutation: leave out a withheld call of the lead's tool whatever its round,
 // and round 2's is no longer set beside the told calls.
