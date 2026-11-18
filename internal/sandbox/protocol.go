@@ -156,6 +156,13 @@
 // read it ([BoxReader]), and a launching node whose presence stays lapsed for
 // the box timeout has its running jobs lost with it. See boxhost.go.
 //
+// AND A LAUNCH THAT FAILS ONCE ITS ROW IS WRITTEN ENDS ITS RUN, its log's
+// opening included: a row left launching is polled and claimed by nothing and
+// holds its seat until the seat moves. A write the store did not answer may
+// have landed, so the launch ends the job it named and nothing else
+// ([UnopenedLaunchError]); a row that names another job is left to its holder.
+// See launch.go.
+//
 // AND A JOB LOST WITH ITS HOST IS CARRIED ON, NEVER COLLECTED: one its
 // engine's restart killed — which the box tells from one that crashed by the
 // engine process that last saw it running ([JobLost], local_witness.go) — one
