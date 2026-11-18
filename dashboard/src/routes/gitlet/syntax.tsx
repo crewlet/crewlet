@@ -377,10 +377,8 @@ export function useDiffSides(args: { repo: string; file: CodeDiffFile | undefine
   return { before, after };
 }
 
-/**
- * A diff's spans for DiffView: each side's line from its blob's state under the
- * bound, else from its hunk's start; plain while a blob is being read.
- */
+/** A diff's spans for DiffView: each side's line from its blob's state under the bound, else from
+ *  its hunk's start; plain while a blob is being read. */
 export function useDiffTokens(args: {
   sides: DiffSides;
   file: CodeDiffFile | undefined;

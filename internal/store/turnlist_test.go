@@ -1020,14 +1020,9 @@ func TestATurnStoppedOnAnotherNodeIsStoppedWhenTheHalvesFold(t *testing.T) {
 	}
 }
 
-// A WORKER'S FAILURE IS ITS OWN, not its turn's. A worker the executor
-// delegated to publishes its record nested under the execute phase
-// (`host_phase`), and the run reads its failure as an answer and goes on; the
-// turn that completes did not fail, and the seat's last turn seeded from this
-// row says so as the live projection does.
-//
-// Mutation: fold every failed row into the turn's failure, nested ones
-// included, and the turn reads failed with the worker's reason.
+// A WORKER'S FAILURE IS ITS OWN, not its turn's: its record nests under the execute phase
+// (`host_phase`), so the turn did not fail, as the live projection says. Mutation: fold nested
+// failed rows into the turn's failure, and the turn reads failed with the worker's reason.
 func TestANestedRecordsFailureIsNotItsTurns(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()

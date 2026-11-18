@@ -74,10 +74,9 @@ func phaseStage(payload map[string]any) (stage Stage, moves bool) {
 	return StagePhase, true
 }
 
-// ownFailure reports whether an event is a failure of its turn's own work.
-// A nested record's failure (`host_phase` set: a worker, or a phase's
-// round-cap judge) is that record's alone: the phase that called it reads it
-// as an answer, so it fails neither the turn nor the seat.
+// ownFailure reports whether an event is a failure of its turn's own work. A nested record's
+// failure (`host_phase` set: a worker, or a round-cap judge) is that record's alone: the phase
+// that called it reads it as an answer, so it fails neither the turn nor the seat.
 func ownFailure(env Envelope, payload map[string]any) bool {
 	return env.Failed && str(payload, "host_phase") == ""
 }

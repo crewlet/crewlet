@@ -6,13 +6,9 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 )
 
-// THE LAST ROUND IS ANNOUNCED. A worker that spent every round reading ended
-// with nothing; told before its last round, it answers with what it has. A run
-// that would go on into that round ends once the calls of the round before are
-// answered, and the next run, the last, reads the note first.
-//
-// Mutation: never end the run for the note, and the one run spends all three
-// rounds without reading it.
+// THE LAST ROUND IS ANNOUNCED: a run that would go on into it ends once the round before is
+// answered, and the next run, the last, reads the note first. Mutation: never end the run for the
+// note, and the one run spends all three rounds without reading it.
 func TestTheLastRoundNoteIsReadBeforeTheLastRound(t *testing.T) {
 	t.Parallel()
 	const note = "This is your last round."

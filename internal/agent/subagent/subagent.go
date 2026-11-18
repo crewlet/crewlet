@@ -516,10 +516,9 @@ func Permit(universe tools.Snapshot, parent, requested []string) Grant {
 	return Grant{Universe: safe, Active: active, Rejected: rejected}
 }
 
-// engineName is the engine's name for a tool a parent asked for. The executor
-// delegates from its harness, which shows it the engine's tools under a prefix
-// of its own (`mcp__crewlet__get_page` for `get_page`), so a name that is none
-// of the engine's is read without a built-in harness's prefix.
+// engineName is the engine's name for a tool a parent asked for: an executor asks in its harness's
+// spelling (`mcp__crewlet__get_page` for `get_page`), so a name that is none of the engine's is
+// read without a built-in harness's prefix.
 func engineName(asked string, reachable map[string]bool) string {
 	if reachable[asked] {
 		return asked

@@ -2505,10 +2505,8 @@ const REFUSE_WALK_ONCE = new Set<string>();
 /** Files whose read alone the engine refuses. */
 const REFUSE_ALONE = new Set<string>();
 
-/**
- * The engine for the stack: the listing `files`, the walk `walk` (cursor `w:<n>`)
- * or `walkRefused`, each file alone from STACK_PATCHES, and blobs by id.
- */
+/** The engine for the stack: the listing `files`, the walk `walk` (cursor `w:<n>`) or
+ *  `walkRefused`, each file alone from STACK_PATCHES, and blobs by id. */
 function stubStack({
   files = STACK_FILES,
   walk = WALK,

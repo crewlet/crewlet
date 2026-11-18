@@ -266,11 +266,9 @@ export function usePagedFindings(
   return usePagedPart(change, "findings", findingsOf, rowId, { revision }, moved);
 }
 
-/**
- * A change's findings counted by path, state and revision, followed to its last
- * page as it arrives: its rows are few, and a badge from a partial read would
- * undercount without saying so.
- */
+/** A change's findings counted by path, state and revision, followed to its last page as it
+ *  arrives: its rows are few, and a badge from a partial read would undercount without saying
+ *  so. */
 export function usePagedFindingPaths(
   change: CodeChangeDetail,
 ): Paged<CodeFindingPathRow, CodeChangeAnswer> {

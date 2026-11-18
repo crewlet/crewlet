@@ -456,14 +456,9 @@ func TestAGrantIsBoundedByTheParentsOwnTools(t *testing.T) {
 	}
 }
 
-// THE EXECUTOR ASKS IN ITS HARNESS'S SPELLING. It delegates from its harness,
-// which shows it the engine's tools under a prefix of its own, so the names it
-// passes are that harness's (`mcp__crewlet__read_file`). Compared verbatim,
-// every one was refused and the worker went without the tools it was sent
-// for. A prefixed name still reaches no tool the grant refuses.
-//
-// Mutation: compare the asked name verbatim, and every prefixed name is
-// rejected.
+// THE EXECUTOR ASKS IN ITS HARNESS'S SPELLING (`mcp__crewlet__read_file`), and a prefixed name
+// still reaches no tool the grant refuses. Mutation: compare the asked name verbatim, and every
+// prefixed name is rejected.
 func TestAGrantReadsAToolNameInItsHarnesssSpelling(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -3400,12 +3395,9 @@ func TestTheDelegateSchemaIsOneTheCheckKeeps(t *testing.T) {
 	}
 }
 
-// A WORKER IS TOLD ITS ROUNDS, AND ITS LAST ONE. A worker that spent every
-// round reading ended `no_result` with most of its answer in hand; told its
-// cap up front, and before its last round to submit what it has, it answers.
-//
-// Mutation: hand the worker's loop no last-round note, and it reads on to its
-// cap and ends with no result.
+// A WORKER IS TOLD ITS ROUNDS, AND ITS LAST ONE: told its cap up front, and before its last round
+// to submit what it has, it answers. Mutation: hand the worker's loop no last-round note, and it
+// reads on to its cap and ends with no result.
 func TestAWorkerIsToldToSubmitBeforeItsLastRound(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)

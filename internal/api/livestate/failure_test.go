@@ -300,14 +300,9 @@ func TestTheWorkKeyOutlivesTheRoundsThatRebuildTheCall(t *testing.T) {
 	}
 }
 
-// A WORKER'S FAILURE IS NOT THE SEAT'S. A worker the executor delegated to,
-// or the round-cap judge a phase consulted, publishes its record nested under
-// that phase; the phase reads its failure as an answer and goes on. Read as
-// the seat's own, it raised "the last turn failed" on the seat's page and in
-// the Inbox while the turn was still running.
-//
-// Mutation: record every failed phase completion as the seat's last error,
-// and the worker's and the judge's failures land on the seat.
+// A WORKER'S FAILURE IS NOT THE SEAT'S: a delegated worker's or a round-cap judge's record nests
+// under its phase, which reads its failure as an answer. Mutation: record every failed phase
+// completion as the seat's last error, and the worker's and the judge's failures land on the seat.
 func TestANestedRecordsFailureIsNotTheSeatsLastError(t *testing.T) {
 	t.Parallel()
 	for _, host := range []string{"execute", "review"} {

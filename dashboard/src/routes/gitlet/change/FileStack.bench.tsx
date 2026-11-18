@@ -1,7 +1,5 @@
-/**
- * What a change's stack costs to draw: the real `FileStack` over five Go and TSX files, its
- * walk and blobs answered at once, plain and coloured. jsdom lays nothing out: render work.
- */
+/** What a change's stack costs to draw: the real `FileStack` over five Go and TSX files, its walk
+ *  and blobs answered at once, plain and coloured. jsdom lays nothing out: render work. */
 import { cleanup } from "@testing-library/react";
 import { expect, test } from "vitest";
 import { WINDOW_FROM_ROWS } from "@crewlethq/ui";

@@ -1,7 +1,5 @@
-/**
- * The review of a change's head: the three verdicts as menu items, held as the
- * reader's access and authorship leave them, and the one dialog each opens.
- */
+/** The review of a change's head: the three verdicts as menu items, held as the reader's access and
+ *  authorship leave them, and the one dialog each opens. */
 import { useState, type ReactNode } from "react";
 import { Button, Menu, Stack, Textarea, type MenuItem } from "@crewlethq/ui";
 import {
@@ -22,11 +20,8 @@ import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import type { CodeChangeDetail, CodeVerdict } from "~/protocol/index.ts";
 import { useStandingFindings } from "./reads.ts";
 
-/**
- * Why the reader's verdict on a change they wrote is held: an author's review
- * counts for nothing, so the engine takes none (`own_change`), and the step
- * that is theirs is asking somebody else.
- */
+/** Why the reader's verdict on a change they wrote is held: an author's review counts for nothing,
+ *  so the engine takes none (`own_change`), and the step that is theirs is asking somebody else. */
 export const OWN_CHANGE_HELD =
   "You wrote this change, so your review would not count. Ask somebody else to review it.";
 
@@ -68,19 +63,9 @@ const VERDICT_TITLES: Readonly<Record<string, { title: string; done: string }>> 
   comment: { title: "Comment", done: "Reviewed" },
 };
 
-/**
- * One review of the change's head revision: its verdict, a summary, every
- * finding drafted on that revision's lines (`lib/reviewDrafts.ts`), and the
- * reader's own standing findings it CARRIES, checked by default, since a
- * review of a later revision supersedes every standing finding of the
- * reviewer's it does not carry (S40), and that is a choice made by unchecking
- * one, never by forgetting it. So the press is HELD until the dialog holds
- * every one of them (`useStandingFindings`, read to its last page): a review
- * sent while that read is out, or after it was refused, would carry none it
- * had not read and supersede the rest unseen. Sent as ONE
- * `code_review_change`; the drafts are forgotten only once the engine has
- * taken the review.
- */
+/** One review of the head: verdict, summary, drafts and the reader's standing findings it carries
+ *  (checked by default; one left out is superseded), held until every standing one is read, and
+ *  sent as ONE `code_review_change`, the drafts forgotten only once the engine takes it. */
 export function ReviewDialog({
   change,
   verdict,

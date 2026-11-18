@@ -1,7 +1,5 @@
-/**
- * Every file a revision changes as one stack of sticky-headed `DiffView`s, read
- * as the reader reaches them by the engine's walk of every patch (`patches=true`).
- */
+/** Every file a revision changes as one stack of sticky-headed `DiffView`s, read as the reader
+ *  reaches them by the engine's walk of every patch (`patches=true`). */
 
 import {
   memo,
@@ -103,10 +101,8 @@ function hasLines(f: CodeDiffFile): boolean {
 
 const isSubmodule = (f: CodeDiffFile) => f.old_mode === "160000" || f.new_mode === "160000";
 
-/**
- * The query's characters in order over a path, case-insensitive, as matched
- * runs `[start, end)` of code points, or null where they are not all there.
- */
+/** The query's characters in order over a path, case-insensitive, as matched runs `[start, end)` of
+ *  code points, or null where they are not all there. */
 export function matchPath(query: string, path: string): [number, number][] | null {
   const want = Array.from(query.toLowerCase()).filter((c) => c.trim() !== "");
   if (want.length === 0) return null;
@@ -1333,10 +1329,8 @@ function DraftNote({
   );
 }
 
-/**
- * The composer under a pick: a finding drafted on the picked lines. It writes
- * nothing to the engine: a draft is the tab's until a review sends it.
- */
+/** The composer under a pick: a finding drafted on the picked lines. It writes nothing to the
+ *  engine: a draft is the tab's until a review sends it. */
 function FindingComposer({
   pick,
   initial,
