@@ -47,8 +47,9 @@ requests, and the object store's transfers across a link: a put's wait for its
 acknowledgements, and a download's or a walk's for its next message, whose
 consumer is made again once two heartbeats go missing on a still link or the
 link has read one message at the transport's bound and a window since it
-heard a word (`internal/objstore/natsobj`). A wait that has no meter to read keeps its time bound; making every
-request bound across a link read the meter is a separate change.
+heard a word (`internal/objstore/natsobj`). A wait that has no meter to read
+keeps its time bound; making every request bound across a link read the meter
+is a separate change.
 
 ## Why the obvious alternative is wrong
 

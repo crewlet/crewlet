@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/objstore"
 )
 
 // A READ ACROSS A LINK, ONE PULL AT A TIME, EACH INSIDE THE LINK'S WINDOW
@@ -17,8 +18,10 @@ import (
 // every pull itself ([jsapi.Pulls]), its bytes taken from the window first and
 // given back once the pull has ended: a download's pull is one piece
 // ([pieceBound]), a walk's the window, and a message larger than either is
-// pulled again alone at the transport's bound. A slow reader holds nothing of
-// the window: what it has not handed over has already crossed.
+// pulled again alone at the transport's bound. Every pull ends at its
+// consumer's end ([jsapi.Pulls.AskToEnd]): one held to its expiry there held
+// the window past every walk's end. A slow reader holds nothing of the window:
+// what it has not handed over has already crossed.
 //
 // THE SILENCE IS THE LINK'S ([reading.judge]), as a put's is ([Backend.held]):
 // the consumer is made again when its heartbeats stop on a still link, or once
@@ -90,14 +93,10 @@ func (r *reading) fill(ctx context.Context) error {
 		return err
 	}
 	defer r.b.window.Give(bound)
-	if err := r.pulls.Ask(n, bound, linkExpiry, linkHeartbeat); err != nil {
+	if err := r.pulls.AskToEnd(n, bound, linkExpiry, linkHeartbeat); err != nil {
 		return err
 	}
-	heard := time.Now()
-	var read uint64
-	if r.b.link != nil {
-		_, read = r.b.link.Carried()
-	}
+	heard, read := r.heard()
 	delivered := 0
 	for {
 		wait, cancel := context.WithDeadline(ctx, r.judgedAt(heard))
@@ -107,14 +106,14 @@ func (r *reading) fill(ctx context.Context) error {
 		case ctx.Err() != nil:
 			return context.Cause(ctx)
 		case err != nil && wait.Err() != nil:
-			if jerr := r.judge(ctx, heard, read); jerr != nil {
+			if jerr := r.judge(ctx, heard, read, bound); jerr != nil {
 				return jerr
 			}
 			continue
 		case err != nil:
 			return err
 		}
-		heard = time.Now()
+		heard, read = r.heard()
 		switch ev.Kind {
 		case jsapi.Delivered:
 			r.hand = append(r.hand, fromPull(ev))
@@ -139,6 +138,17 @@ func (r *reading) fill(ctx context.Context) error {
 	}
 }
 
+// heard is now, and what r's link has read by now (none where it is not
+// metered): where a pull's silence is counted from, by the clock and by the
+// link's bytes, at its ask and at every word it hears.
+func (r *reading) heard() (time.Time, uint64) {
+	var read uint64
+	if r.b.link != nil {
+		_, read = r.b.link.Carried()
+	}
+	return time.Now(), read
+}
+
 // judgedAt is when a pull r has heard nothing of since heard is next judged
 // ([reading.judge]): at its first quiet second while its consumer may never
 // have had the pull, at two heartbeats, and at its stall, whichever comes
@@ -161,8 +171,8 @@ func (r *reading) judgedAt(heard time.Time) time.Time {
 	return next
 }
 
-// judge decides a pull r has heard nothing of since heard, its link having
-// read read bytes by then:
+// judge decides a pull of bound bytes r has heard nothing of since heard, its
+// link having read read bytes by then:
 //
 //   - a consumer that never had its first pull is made again ([errUnpulled]);
 //   - no message for r's stall, the link having carried nothing at the floor
@@ -173,10 +183,10 @@ func (r *reading) judgedAt(heard time.Time) time.Time {
 //     bound and a window, is the consumer lost, and it is made again
 //     ([errLost]);
 //   - otherwise the pull is waited on.
-func (r *reading) judge(ctx context.Context, heard time.Time, read uint64) error {
+func (r *reading) judge(ctx context.Context, heard time.Time, read uint64, bound int) error {
 	quiet := time.Since(heard)
 	if r.fresh && quiet >= quietWait {
-		if r.unpulled(ctx) {
+		if r.unpulledAcross(ctx, bound) {
 			return errUnpulled
 		}
 		r.fresh = false
@@ -194,6 +204,18 @@ func (r *reading) judge(ctx context.Context, heard time.Time, read uint64) error
 		return fmt.Errorf("%w while the link read %d bytes", errLost, now-read)
 	}
 	return nil
+}
+
+// unpulledAcross reports whether r's consumer, read across a link on a pull of
+// bound bytes, says it never had the pull ([jsapi.Unpulled]), or is gone. Its
+// answer crosses behind what the consumer delivered ahead of it, so it is given
+// the pull's crossing at the floor, and asked again while nobody answers within
+// the lookup's ceiling ([jsapi.Pulls.Quiet]), never the read's whole deadline:
+// the pull's take is held meanwhile. One unanswered is not known to lack the
+// pull, and is waited on.
+func (r *reading) unpulledAcross(ctx context.Context, bound int) bool {
+	says, _, err := r.pulls.Quiet(ctx, jsapi.Delivering(bound, objstore.MiBPace))
+	return errors.Is(err, jetstream.ErrConsumerNotFound) || (err == nil && says == jsapi.Unpulled)
 }
 
 // again makes r's consumer again past the last message it handed over, or

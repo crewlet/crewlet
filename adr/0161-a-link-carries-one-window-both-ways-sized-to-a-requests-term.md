@@ -25,7 +25,9 @@ on the link, whichever connection it rides: the object store's puts, downloads a
 - **A waiter takes no stall of its own.** Every holder is bounded by its own, and its silence is
   the link's (ADR-0155).
 - **A read across a link asks its own pulls**, one piece a pull for a download, since a client
-  iterator that pulls on its own threshold cannot be admitted to a window.
+  iterator that pulls on its own threshold cannot be admitted to a window. Each pull ends at its
+  consumer's end (`jsapi.Pulls.AskToEnd`): one held there to its expiry held a walk's whole window
+  past every ranged read and listing.
 - **A member crosses no link** and has no link window: its puts share a window of their own,
   sized by throughput, and its reads keep the client's hand.
 
@@ -43,6 +45,11 @@ drains.
 and the sum of them is what a request waits behind.
 
 ## What this does not decide
+
+A read that gives up while its pull is still open (its caller gone, its consumer lost) gives its
+take back at once, though what the server already sent for the pull may still cross: at the
+floor a request sent then can wait behind two pieces, past its term, once. Holding the take until
+the pull's bytes are known to have crossed is not decided here.
 
 What crosses a link unwindowed: an event delivered to a seat, a fleet record, an estate answer,
 each whole up to the transport's bound. A request behind one of them waits for it, and a wait's

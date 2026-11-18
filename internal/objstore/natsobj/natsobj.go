@@ -77,8 +77,9 @@
 // only when the broker has acknowledged nothing for [objstore.Stall] while
 // messages are out ([objstore.ErrStalled]), across a metered link only while
 // the link carried nothing at the floor ([Backend.held]); and a put that
-// fails, the caller giving up among the ways, drains what is out and purges what it stored under a context that
-// does not end with the caller's ([objstore.ContextReader]) — the metadata
+// fails, the caller giving up among the ways, drains what is out and purges
+// what it stored under a context that does not end with the caller's
+// ([objstore.ContextReader]) — the metadata
 // first, so an object never names pieces that are gone. A piece the stream
 // refuses because the bucket holds its whole reservation fails the put as
 // [objstore.ErrFull].

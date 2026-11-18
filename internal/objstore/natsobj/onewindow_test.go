@@ -188,6 +188,71 @@ func TestADownloadAcrossALinkHoldsOnePieceAtATime(t *testing.T) {
 	}
 }
 
+// A WALK ACROSS A LINK ENDS AT ITS CONSUMER'S END.
+//
+// A ranged get walks its object's headers to its offset, and a listing walks
+// the metadata, on pulls of up to a walk's batch bounded at the whole window.
+// A pull the server holds once its consumer has nothing more holds the window
+// to the pull's expiry: every ranged read and listing across a link, however
+// fast, was answered seconds late, every transfer on the link held behind it.
+// So every pull ends at its consumer's end. Seen on the leaf: every pull asks
+// no_wait, and none ends at its expiry (408), only at the consumer's end (404).
+//
+// Mutation: ask the pulls without no_wait, and the walks end at 408.
+func TestAWalkAcrossALinkEndsAtItsConsumersEnd(t *testing.T) {
+	t.Parallel()
+	across := kvtest.SlowLeaf(t, 32<<20)
+	data := patterned(3*natsobj.MessageBytes + 1000)
+	if err := open(t, client(t, across.MemberBroker)).Put(t.Context(), "walked", bytes.NewReader(data),
+		objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	b := openWith(t, client(t, across.LeafBroker), acrossLink())
+	seen := watchInOrder(t, memberConn(t, across.LeafBroker), "_INBOX.>",
+		"$JS."+jsapi.Domain+".API.CONSUMER.MSG.NEXT."+natsobj.Stream+".>")
+	off := int64(2*natsobj.MessageBytes + 10)
+	r, err := b.Get(deadline(t), "walked", off, -1)
+	if err != nil {
+		t.Fatalf("a ranged get across a link: %v", err)
+	}
+	got, err := io.ReadAll(r)
+	_ = r.Close()
+	if err != nil || !bytes.Equal(got, data[off:]) {
+		t.Fatalf("a ranged get from %d across a link read %d bytes, %v; want the %d after it", off, len(got),
+			err, len(data)-int(off))
+	}
+	listed := 0
+	if err := b.List(deadline(t), func(objstore.Info) error { listed++; return nil }); err != nil || listed != 1 {
+		t.Fatalf("a listing across a link named %d objects, %v; want the one put", listed, err)
+	}
+
+	walks, ends := 0, 0
+	for _, m := range seen.all() {
+		switch {
+		case strings.Contains(m.Subject, "CONSUMER.MSG.NEXT"):
+			var req server.JSApiConsumerGetNextRequest
+			if err := json.Unmarshal(m.Data, &req); err != nil {
+				t.Fatalf("a pull's request does not decode: %v", err)
+			}
+			if req.Batch > 1 {
+				walks++
+			}
+			if !req.NoWait {
+				t.Errorf("a pull of %d messages across a link was asked to wait out its expiry at its "+
+					"consumer's end", req.Batch)
+			}
+		case m.Header.Get("Status") == "408":
+			t.Errorf("a pull across a link ended at its expiry, holding its take of the window that long")
+		case m.Header.Get("Status") == "404":
+			ends++
+		}
+	}
+	if walks < 2 || ends < 2 {
+		t.Fatalf("the ranged get and the listing asked %d walks' pulls, %d ended at their consumer's end; "+
+			"want both to walk and end there", walks, ends)
+	}
+}
+
 // movingLink is a link meter that says the link moves while the case holds it
 // moving, and has read nothing: the link's other traffic, as the case stages
 // it, without a meter's socket.
