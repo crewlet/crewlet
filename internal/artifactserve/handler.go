@@ -96,12 +96,14 @@ func (unrecorded) Observe(string, time.Duration, metrics.Attrs) {}
 // objective meter ([objectives.Meter]), which judges each against its bound.
 type Objectives interface {
 	Record(n objectives.Name, elapsed time.Duration, answered bool)
+	Abandon(n objectives.Name, elapsed time.Duration)
 }
 
 // unjudged is the objectives of a handler handed none, which count nothing.
 type unjudged struct{}
 
 func (unjudged) Record(objectives.Name, time.Duration, bool) {}
+func (unjudged) Abandon(objectives.Name, time.Duration)      {}
 
 // Deps are the handler's dependencies, every one required but the recorder.
 type Deps struct {
@@ -216,6 +218,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if status == 0 {
 		status = http.StatusOK
 	}
+	class := strconv.Itoa(status/100) + "xx"
+	// ABANDONED: the client went away before it was answered, so the 5xx its
+	// cancelled read was given, or nothing, reached nobody and is no fault here.
+	abandoned := (rec.status == 0 || status >= http.StatusInternalServerError) &&
+		objectives.Abandoned(r.Context())
+	if abandoned {
+		class = "abandoned"
+	}
 	if dest == destDocument {
 		// A DOCUMENT'S FIRST BYTE IS THE VIEW OBJECTIVE'S EVENT, under
 		// every status but a 5xx: a refusal the viewer caused (an expired
@@ -226,10 +236,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if first.IsZero() {
 			first = h.now()
 		}
-		h.judged.Record(objectives.ViewFirstByte, first.Sub(start), status < http.StatusInternalServerError)
+		if abandoned {
+			h.judged.Abandon(objectives.ViewFirstByte, first.Sub(start))
+		} else {
+			h.judged.Record(objectives.ViewFirstByte, first.Sub(start), status < http.StatusInternalServerError)
+		}
 	}
-	h.metrics.Add(metrics.ArtifactsServeRequests, 1, metrics.Attrs{
-		"dest": dest, "status": strconv.Itoa(status/100) + "xx"})
+	h.metrics.Add(metrics.ArtifactsServeRequests, 1, metrics.Attrs{"dest": dest, "status": class})
 	h.metrics.Observe(metrics.ArtifactsServeDuration, h.now().Sub(start),
 		metrics.Attrs{"dest": dest})
 	if rec.bytes > 0 {

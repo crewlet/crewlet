@@ -18,6 +18,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
 
 // EVERY FAILURE CLASS IS NAMED ONCE, and only the classes listed are valid:
@@ -135,12 +136,7 @@ func TestARemoteStartIsClassedByWhatTheServerAnswered(t *testing.T) {
 // from the dial: no answer was given to read.
 func TestARemoteStartNothingAnsweredIsClassedFromTheDial(t *testing.T) {
 	t.Parallel()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	closed := "http://" + listener.Addr().String() + "/mcp"
-	_ = listener.Close()
+	closed := "http://" + httpxtest.Refusing(t) + "/mcp"
 	tlsServer := httptest.NewTLSServer(http.NotFoundHandler())
 	t.Cleanup(tlsServer.Close)
 	for _, tc := range []struct {

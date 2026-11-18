@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 )
 
@@ -484,10 +485,8 @@ func TestNoAnswerIsTransientAndACancellationIsTheCallers(t *testing.T) {
 		}
 	}
 
-	dead := httptest.NewServer(http.NotFoundHandler())
-	dead.Close()
 	gone, err := embeddings.New(embeddings.Config{
-		Model: "m", Dimensions: 4, BaseURL: dead.URL, Limits: small,
+		Model: "m", Dimensions: 4, BaseURL: "http://" + httpxtest.Refusing(t), Limits: small,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
