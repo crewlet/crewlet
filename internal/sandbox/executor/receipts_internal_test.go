@@ -187,7 +187,7 @@ func TestATakeIsHeldOnlyWhereItsTokenAndAContextShareAFiring(t *testing.T) {
 
 // A PAIR BEFORE THE LAST RESTART IS RESTARTED, one after it held: a restart
 // that lies after a pair's system message may have dropped it from what a
-// resume hands (D9's branch A).
+// resume hands.
 //
 // Mutation: drop the restart check, and the pairs before it read as held.
 func TestAPairBeforeTheLastRestartIsRestarted(t *testing.T) {
@@ -212,8 +212,8 @@ func rhCleared(report string) rhRecord {
 	}
 }
 
-// A BATCH PAIR BEFORE A CLEARED REPLY IS RESTARTED, AND A STOP PAIR IS NOT
-// (D10): a reply whose request cleared tool results, or whose report does not
+// A BATCH PAIR BEFORE A CLEARED REPLY IS RESTARTED, AND A STOP PAIR IS NOT: a
+// reply whose request cleared tool results, or whose report does not
 // read, may have cleared a batch's note with its result, never a Stop's.
 //
 // Mutation: read no reply's clearing, or read it for a Stop's pair too, and a
@@ -235,7 +235,7 @@ func TestABatchPairBeforeAClearedReplyIsRestartedAndAStopPairIsNot(t *testing.T)
 		[]string{rhBatchTake, rhStopTake}, nil, nil)
 }
 
-// A PAIR THE RESUME DOES NOT HAND IS NOT HELD (D21), and is evidence its take
+// A PAIR THE RESUME DOES NOT HAND IS NOT HELD, and is evidence its take
 // arrived, so never absent: a pair a retraction withdrew either record of, and
 // one off the chain the leaf walks, under a parent naming no record.
 //
@@ -270,7 +270,7 @@ func TestAPairTheResumeDoesNotHandIsNotHeld(t *testing.T) {
 	rhWant(t, "a pair off the chain", rhRead(t, "2.1.322", true, off, rhAskBatch, rhAskStop), nil, nil, nil)
 }
 
-// A PAIR IS HELD ONLY ON A THREAD EVERY SIZE PATH READS ALIKE (D27): a thread
+// A PAIR IS HELD ONLY ON A THREAD EVERY SIZE PATH READS ALIKE: a thread
 // a large-file reader of the resume may read otherwise holds no pair, since
 // the copy resumed may differ in size from the one read. A compaction's
 // boundary or a later root makes every thread such a one, wherever its pairs
@@ -312,7 +312,7 @@ func TestAPairIsHeldOnlyOnAThreadEverySizePathReadsAlike(t *testing.T) {
 	}
 }
 
-// NO TAKE IS HELD FOR A RELEASE THE RESUME WAS NOT READ IN (D28): the chain
+// NO TAKE IS HELD FOR A RELEASE THE RESUME WAS NOT READ IN: the chain
 // models 2.1.310's and 2.1.322's resume alone, so a job another release ran
 // confirms nothing, and so denies nothing, and a read of its takes alone
 // opens no thread for them.

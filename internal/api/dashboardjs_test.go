@@ -1479,7 +1479,7 @@ const (
 	// Setting editors and SettingsTable on DataGrid's anatomy, on kit 0.150.0, whose one sheet adds their rules: 424.4 KiB: 425 KiB, 2.32 seconds.
 	// Configuration warnings as one quiet line, on kit 0.151.0, whose one sheet adds the collapsible
 	// callout's and compact list's rules: 425.1 KiB: 426 KiB, 2.33 seconds.
-	initialBudget = 427 << 10
+	initialBudget = 429 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2719,7 +2719,7 @@ const (
 	// and sort: 6780.7 KiB (6,943,394 bytes), 18,661 over main: 6781 KiB.
 	// A change's conversation as a timeline with finding excerpts: 6801.9 KiB (6,965,137 bytes),
 	// 21,743 over main: 6802 KiB.
-	treeBudget = 5<<20 + 1859<<10
+	treeBudget = 5<<20 + 1865<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

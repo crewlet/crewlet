@@ -125,9 +125,9 @@ func (r *hookReading) line(l threadLine) {
 	}
 	switch l.Head.Type {
 	case recordAssistant:
-		// D10: a reply whose request cleared tool results may have cleared a
-		// batch's note with its result, so every batch pair before it is
-		// read as before a restart; a reply that does not read, as one that did.
+		// A REPLY WHOSE REQUEST CLEARED TOOL RESULTS may have cleared a batch's
+		// note with its result, so every batch pair before it is read as
+		// before a restart; a reply that does not read, as one that did.
 		if cleared, err := l.ToolResultsCleared(); cleared || err != nil {
 			r.lastCleared = l.N
 		}

@@ -2271,8 +2271,8 @@ func (c *Coordinator) keepLostSession(ctx context.Context, run PendingRun, rowRe
 // attached, never woken; its job ended where it still works
 // ([Coordinator.endJob]); the release that ran it collected, for the verdict
 // alone; its served notes settled off its main thread (mainthread.go); and,
-// for a company that keeps sessions, its session taken. M1's [ErrStoreSilent]
-// is returned before the take; nothing else of the box is read.
+// for a company that keeps sessions, its session taken. The verdict's
+// [ErrStoreSilent] is returned before the take; nothing else of the box is read.
 func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCapture, *SessionKept, error) {
 	manager := c.mgr()
 	if manager == nil {
