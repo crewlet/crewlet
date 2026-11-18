@@ -60,6 +60,7 @@ import { fmtCount, plural } from "~/lib/format.ts";
 import { useReviewDrafts } from "~/lib/reviewDrafts.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
+import { spellPosition } from "~/protocol/session.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type {
   CodeChangeAnswer,
@@ -70,7 +71,7 @@ import type {
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { FileTree, type FileBadges } from "../FileTree.tsx";
 import { FIND_LIMIT, Matched } from "../repo/GoToFile.tsx";
-import { FileStack, fileKey, matchPath, type StackJump } from "./FileStack.tsx";
+import { FileStack, fileKey, matchPath, type StackHeadSlot, type StackJump } from "./FileStack.tsx";
 import { findingStands } from "./FindingAnswer.tsx";
 import { FinishReview } from "./ReviewDialog.tsx";
 import {
@@ -84,6 +85,7 @@ import {
   usePagedFindingPaths,
   usePagedFindings,
 } from "./reads.ts";
+import { useViewedMarks, ViewedMarksContext, ViewedToggle } from "./Viewed.tsx";
 import "~/styles/gitlet.css";
 
 /** The page's width from which the tree sits beside the stack (the sheet's 720 px fold). */
@@ -200,6 +202,22 @@ export function Files({
     [findings.items, placed, comments.items, drafting, drafted, add, remove, update, clear, thread],
   );
   const listed = pagedFiles.items;
+  // THE READER'S VIEWED FILES, marked at the position the listing was read at: a viewed file is folded.
+  const position = files.data?.position;
+  const marks = useViewedMarks({
+    change,
+    listed,
+    seen: position ? spellPosition(position) : "",
+  });
+  // THE TOGGLE READS THE MARKS from context, so its control and each head stay put across reads.
+  const viewedControl = useCallback((f: CodeDiffFile) => <ViewedToggle file={f} />, []);
+  const headSlot = useMemo<StackHeadSlot>(
+    () => ({
+      control: viewedControl,
+      foldedByHost: (f) => !f.path_b64 && marks.viewed.has(f.path),
+    }),
+    [viewedControl, marks.viewed],
+  );
   // WHAT THE FILTERS KEEP: the words a path holds, the extensions shown, and
   // the files with a standing finding.
   const findingPaths = usePagedFindingPaths(change);
@@ -525,32 +543,35 @@ export function Files({
                 {pagedFiles.pageError && <PageFailed error={pagedFiles.pageError} />}
               </FilesPane>
             )}
-            <FileStack
-              change={change}
-              head={head}
-              rev={rev}
-              since={since}
-              moved={diffMoved}
-              files={visible}
-              lead={
-                <>
-                  {unchanged && (
-                    <p className="muted" role="status">
-                      {since !== null
-                        ? `${file} is not among the files changed since revision ${since}.`
-                        : `${file} is not among the files revision ${rev} changes.`}
-                    </p>
-                  )}
-                  {showing}
-                </>
-              }
-              indexOf={indexOf}
-              layout={layout === "split" ? "split" : "unified"}
-              notes={notes}
-              jump={jump}
-              onCurrent={setCurrent}
-              foot={loadMoreFiles && <span>{loadMoreFiles}</span>}
-            />
+            <ViewedMarksContext.Provider value={marks}>
+              <FileStack
+                change={change}
+                head={head}
+                rev={rev}
+                since={since}
+                moved={diffMoved}
+                files={visible}
+                lead={
+                  <>
+                    {unchanged && (
+                      <p className="muted" role="status">
+                        {since !== null
+                          ? `${file} is not among the files changed since revision ${since}.`
+                          : `${file} is not among the files revision ${rev} changes.`}
+                      </p>
+                    )}
+                    {showing}
+                  </>
+                }
+                indexOf={indexOf}
+                layout={layout === "split" ? "split" : "unified"}
+                notes={notes}
+                jump={jump}
+                onCurrent={setCurrent}
+                foot={loadMoreFiles && <span>{loadMoreFiles}</span>}
+                headSlot={headSlot}
+              />
+            </ViewedMarksContext.Provider>
           </div>
         </QueryState>
       </Stack>

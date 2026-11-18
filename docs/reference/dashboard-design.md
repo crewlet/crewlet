@@ -5773,6 +5773,7 @@ a tool arrives in it with the control that sends it. The controls
 | Revert · Cherry-pick | A commit's page | `code_revert` / `code_cherry_pick{repo, branch, expected_head, commit, message?}`: one new commit on the branch chosen |
 | Rebase · Take out of the queue · Revert | A change's page, beside its merge controls; Take out on a row of Gitlet › Queue | `code_rebase_change{change, expected_head}` · `code_dequeue_change{change}` · `code_revert_change{change, merge?}`, each after a confirmation |
 | Answer · Resolve | A standing finding, under its review and on a change's Files changed tab | `code_resolve_finding{change, findings, resolution, note?}` |
+| Viewed | A file's head on a change's Files changed | `code_mark_viewed{change, viewed?, unviewed?, seen?}`: the person's own mark of a file at its state |
 | Send (`Enter`) | A chat room's composer | `post_message{channel, body, links?}`: under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one. `links` are what the words link to that a room previews, read from the body when it is sent: this dashboard's records (a task, a page or an artifact the Attach pickers wrote in, or one linked by hand) as whole addresses on it, and github.com pull requests (`https://github.com/{owner}/{repo}/pull/{n}`, pasted or linked), once each and at most `MAX_MESSAGE_LINKS` (`chatlet.MaxLinks`), so the room previews what a person attached as it does what a seat links. Nothing is checked against the sender: `chat_unfurls` reads each record as the reader looking at the message, and a pull request only under an owner the GitHub configuration names, so a link previews nothing for a reader who may not open it, whoever sent it. A message of words alone sends none |
 | Reply | A chat thread's composer | `reply_in_thread{channel, reply_to, body, links?}`, its links read from the body as Send's are |
 | Edit message, then Save | A chat message of your own (its More menu) | `edit_message{channel, message_id, body}`: the author's alone, never an admin's on somebody else's words, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty; the editor closes on an answer that took it and keeps your words on any other |
@@ -8784,7 +8785,9 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   the engine's walk of every patch a page at a time as the reader reaches it, a
   file jumped to read alone, and a file past 400 changed lines folded until
   asked; each hunk opens with git's header, and **Expand** reveals hidden lines
-  from the file's blob by its id; `t` goes to a file. **Filter files** and
+  from the file's blob by its id; `t` goes to a file. **Viewed** on a file's head
+  marks it viewed at the state shown (`code_mark_viewed`); a viewed file is folded,
+  and reads unviewed again once a revision changes it. **Filter files** and
   **Filter options** (its extensions, and With findings from the findings
   counted by path) narrow the tree and the stack (`q=`, `ext=`, `only=`). Beside the stack, the
   files' tree in its own scroller: their directories, a run of directories holding one more alone folded

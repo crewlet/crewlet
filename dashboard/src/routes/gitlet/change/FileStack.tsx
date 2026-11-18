@@ -50,6 +50,7 @@ import {
   type DiffLine,
 } from "~/components/DiffView.tsx";
 import { PageFailed } from "~/components/common.tsx";
+import { RefusalsTo, useRefusalPlace } from "~/components/WriteButton.tsx";
 import {
   CATEGORY_CHOICES,
   SEVERITY_CHOICES,
@@ -281,6 +282,14 @@ export interface StackNotes {
   thread: string;
 }
 
+/** What a host adds to each head: a control before More actions, and whether the file starts folded. */
+export interface StackHeadSlot {
+  /** Kept stable: a new one draws every section again, so the control reads its state itself. */
+  control: (f: CodeDiffFile) => ReactNode;
+  /** Folded unless the reader unfolded it; its answer moving drops the reader's own choice. */
+  foldedByHost: (f: CodeDiffFile) => boolean;
+}
+
 /** A jump to a file: its key, and a count so the same file is jumped to again. */
 export interface StackJump {
   key: string;
@@ -301,6 +310,7 @@ export function FileStack({
   onCurrent,
   lead,
   foot,
+  headSlot,
 }: {
   change: CodeChangeDetail;
   /** The revision's head, whole, where the file itself is read; "" where unknown. */
@@ -319,13 +329,27 @@ export function FileStack({
   /** What is said above the sections: how many a filter shows. */
   lead?: ReactNode;
   foot?: ReactNode;
+  headSlot?: StackHeadSlot;
 }) {
   const walk = useStackPatches({ change, rev, since, moved });
   const root = useRef<HTMLDivElement>(null);
   const [near, setNear] = useState<ReadonlySet<string>>(() => new Set());
   const [alone, setAlone] = useState<ReadonlySet<string>>(() => new Set());
   const [split, setSplit] = useState<ReadonlyMap<string, "unified" | "split">>(() => new Map());
-  const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
+  // THE READER'S OWN FOLD per file, else the host's (a viewed file starts folded).
+  const [own, setOwn] = useState<ReadonlyMap<string, boolean>>(() => new Map());
+  const hostFolds = useMemo(
+    () => new Map(files.map((f) => [fileKey(f), headSlot?.foldedByHost(f) ?? false])),
+    [files, headSlot],
+  );
+  const foldedKeys = files
+    .map(fileKey)
+    .filter((k) => own.get(k) ?? hostFolds.get(k) ?? false)
+    .join("\n");
+  const folded = useMemo(
+    () => new Set(foldedKeys === "" ? [] : foldedKeys.split("\n")),
+    [foldedKeys],
+  );
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const readAlone = useCallback(
     (key: string) => setAlone((was) => (was.has(key) ? was : new Set([...was, key]))),
@@ -382,7 +406,7 @@ export function FileStack({
     }
     for (const f of files) {
       const key = fileKey(f);
-      if (!near.has(key) || alone.has(key) || !hasLines(f)) continue;
+      if (!near.has(key) || alone.has(key) || folded.has(key) || !hasLines(f)) continue;
       if (f.added + f.deleted > FOLD_FROM_LINES) continue;
       const at = indexOf(f);
       const held = walked.get(at);
@@ -405,6 +429,7 @@ export function FileStack({
     next,
     frontierKey,
     alone,
+    folded,
     readAlone,
   ]);
   // A JUMP: read the file alone if the walk does not hold it, then bring its head to the top.
@@ -418,12 +443,12 @@ export function FileStack({
     jumped.current = jump.seq;
     const f = files.find((one) => fileKey(one) === jump.key);
     const held = f ? walked.get(indexOf(f)) : undefined;
-    if (f && hasLines(f) && !(held?.complete && walkedAs(held, f))) {
+    if (f && hasLines(f) && !folded.has(jump.key) && !(held?.complete && walkedAs(held, f))) {
       if (f.added + f.deleted <= FOLD_FROM_LINES) readAlone(jump.key);
     }
     section.scrollIntoView?.({ block: "start" });
     section.querySelector<HTMLElement>("h3")?.focus({ preventScroll: true });
-  }, [jump, files, indexOf, walked, readAlone]);
+  }, [jump, files, indexOf, walked, folded, readAlone]);
   // THE FILE WHOSE HEAD IS STUCK at the top, read on the scroller's scroll once a frame.
   useEffect(() => {
     const el = root.current;
@@ -453,15 +478,50 @@ export function FileStack({
   }, [onCurrent]);
   // STABLE BY KEY, so a section draws again only when what it shows moves.
   const onFold = useCallback(
-    (key: string) =>
-      setFolded((was) => {
-        const now = new Set(was);
-        if (now.has(key)) now.delete(key);
-        else now.add(key);
-        return now;
-      }),
+    (key: string, fold: boolean) => setOwn((was) => new Map(was).set(key, fold)),
     [],
   );
+  // A HOST'S FOLD THAT MOVES drops the reader's own choice. A fold pressed from inside its
+  // section (focus there) brings a stuck head to the top; a late read or another tab never scrolls.
+  const hostWas = useRef(hostFolds);
+  const keepPlace = useRef(new Set<string>());
+  useLayoutEffect(() => {
+    const was = hostWas.current;
+    hostWas.current = hostFolds;
+    const moved = [...hostFolds].filter(([k, fold]) => was.has(k) && was.get(k) !== fold);
+    if (moved.length === 0) return;
+    const at = document.activeElement?.closest<HTMLElement>("section[data-key]")?.dataset.key;
+    for (const [k, fold] of moved) if (fold && k === at) keepPlace.current.add(k);
+    setOwn((mine) => {
+      if (!moved.some(([k]) => mine.has(k))) return mine;
+      const now = new Map(mine);
+      for (const [k] of moved) now.delete(k);
+      return now;
+    });
+  }, [hostFolds]);
+  useLayoutEffect(() => {
+    const el = root.current;
+    const scroller = el ? scrollerOf(el) : null;
+    for (const k of keepPlace.current) {
+      if (!folded.has(k)) continue;
+      keepPlace.current.delete(k);
+      const section = el?.querySelector<HTMLElement>(`section[data-key="${CSS.escape(k)}"]`);
+      if (!section || !scroller) continue;
+      const top =
+        scroller.getBoundingClientRect().top +
+        (parseFloat(getComputedStyle(scroller).getPropertyValue("--sticky-top")) || 0);
+      if (section.getBoundingClientRect().top < top - 1)
+        section.scrollIntoView?.({ block: "start" });
+    }
+  }, [folded]);
+  // EACH HEAD'S CONTROL made once a file entry, until the host's control moves.
+  const control = headSlot?.control;
+  const controls = useMemo(() => new WeakMap<CodeDiffFile, ReactNode>(), [control]);
+  const controlOf = (f: CodeDiffFile): ReactNode => {
+    if (!control) return null;
+    if (!controls.has(f)) controls.set(f, control(f));
+    return controls.get(f);
+  };
   const onOpen = useCallback(
     (key: string) => {
       setOpened((was) => new Set([...was, key]));
@@ -517,6 +577,7 @@ export function FileStack({
             onLayout={onLayout}
             folded={folded.has(key)}
             onFold={onFold}
+            headEnd={controlOf(f)}
             opened={opened.has(key)}
             onOpen={onOpen}
             notes={notes}
@@ -571,6 +632,7 @@ const FileSection = memo(function FileSection({
   onLayout,
   folded,
   onFold,
+  headEnd,
   opened,
   onOpen,
   notes,
@@ -591,7 +653,9 @@ const FileSection = memo(function FileSection({
   ownLayout: boolean;
   onLayout: (key: string, layout: "unified" | "split") => void;
   folded: boolean;
-  onFold: (key: string) => void;
+  onFold: (key: string, fold: boolean) => void;
+  /** The host's control at the head's end, before More actions. */
+  headEnd: ReactNode;
   opened: boolean;
   onOpen: (key: string) => void;
   notes: StackNotes;
@@ -599,6 +663,8 @@ const FileSection = memo(function FileSection({
   const path = entry.path;
   const key = fileKey(entry);
   const headId = useId();
+  // THE HEAD IS A ROW OF CONTROLS: its control's refusal is drawn under it, never in it.
+  const refusals = useRefusalPlace("code-file__refusal");
   const clip = useClipboard({ failedResetMs: null });
   const toast = useToast();
   const lines = hasLines(entry);
@@ -1148,7 +1214,7 @@ const FileSection = memo(function FileSection({
             variant="ghost"
             aria-expanded={!folded}
             className="code-file__fold"
-            onClick={() => onFold(key)}
+            onClick={() => onFold(key, !folded)}
           />
           <h3 id={headId} className="code-file__path" tabIndex={-1}>
             {unread ? (
@@ -1193,6 +1259,7 @@ const FileSection = memo(function FileSection({
               <Diffstat added={entry.added} deleted={entry.deleted} label={`in ${path}`} />
             )
           )}
+          {headEnd !== null && <RefusalsTo place={refusals.element}>{headEnd}</RefusalsTo>}
           <Menu
             label={`More actions on ${path}`}
             icon={<EllipsisVerticalGlyph />}
@@ -1234,6 +1301,7 @@ const FileSection = memo(function FileSection({
           />
         </span>
       </div>
+      {headEnd !== null && refusals.place}
       {!folded && (
         <div className="code-file__body">
           {(outdated.length > 0 || threadsElsewhere.length > 0) && (

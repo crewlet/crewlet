@@ -394,6 +394,23 @@ test("a file's head keeps its counts on its first line with a long path, at 820 
   expect(Math.abs(middle(counts) - path.first)).toBeLessThan(6);
 });
 
+// VIEWED SITS WITH THE COUNTS at the head's first line's end, however long the path.
+// Mutation: let the head's end wrap, and the toggle drops below the counts.
+test("a head keeps Viewed and its counts on its first line at 820 px with a long path", async () => {
+  await page.viewport(820, 800);
+  mount(820, FILES);
+  const content = await stacked();
+  const head = content.querySelectorAll(".code-file__head")[3]!;
+  const path = lineMiddles(head.querySelector("h3")!);
+  expect(path.lines).toBeGreaterThan(1);
+  const viewed = [...head.querySelectorAll("button")].find((b) =>
+    b.getAttribute("aria-label")?.startsWith("Viewed:"),
+  )!;
+  expect(Math.abs(middle(viewed) - path.first)).toBeLessThan(6);
+  expect(Math.abs(middle(viewed) - middle(head.querySelector(".code-diffstat")!))).toBeLessThan(2);
+  expect(head.scrollWidth).toBeLessThanOrEqual(head.clientWidth);
+});
+
 // ON A PHONE A RENAME'S HEAD STARTS WITH ITS PATH beside the fold, and its copy
 // follows the path's last word. Mutation: make the lead a wrapping row, and the
 // fold stands alone on the first line.

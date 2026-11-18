@@ -3894,3 +3894,20 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
+
+/* A HEAD'S CONTROL REFUSED (Viewed): said under the head, which never reflows. */
+.code-file__refusal {
+  padding: var(--spacing-2);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+/* ON A PHONE A HEAD'S END (counts, Viewed, menu) takes its own line under the path. */
+@container page (width < 640px) {
+  .code-file__head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .code-file__end {
+    justify-self: end;
+  }
+}

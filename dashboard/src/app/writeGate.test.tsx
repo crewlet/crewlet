@@ -283,6 +283,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "a standing finding's Answer finding (code_resolve_finding)",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
+  "routes/gitlet/change/Viewed.tsx": {
+    why: "a change's file marked viewed (code_mark_viewed)",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
   "routes/gitlet/commit/ComparePage.tsx": {
     why:
       "a comparison's Open change — one code_open_change of the branch compared into " +

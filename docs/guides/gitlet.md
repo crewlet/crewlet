@@ -537,7 +537,7 @@ Files changed) sends them all as ONE review with your summary: a
 review and every finding it raises are one record, never half there. A seat
 reviews with `code_review_change`. Anybody who reviews the repository, and
 any person, may review, never an author of the change. Edit a draft where it stands; filter the files by name, extension or findings,
-and press `t` to go to a file.
+and press `t` to go to a file. Mark a file **Viewed** to fold it until a revision changes it.
 
 - **A request for changes stands until its reviewer reviews again.** A push
   answers none: the reviewer's next review, approving or asking again, does.
