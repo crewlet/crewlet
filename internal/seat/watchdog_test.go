@@ -478,20 +478,15 @@ func (b *unansweredRenews) Renew(ctx context.Context, resource, owner string, ep
 // A PASS OF RENEWS NOBODY ANSWERS IS STILL TURNING, and the watchdog sees it
 // so.
 //
-// A renew the store leaves unanswered is held to its read's whole bound — five
-// seconds where nothing set a deadline — so a heartbeat pass while a node's
-// link to the broker is down spends a bound per batch of [renewConcurrency]
-// seats, keeping each seat until its own lease's TTL and then dropping it,
-// which is what an unreachable store asks of it. The beat was stamped only
-// once the whole pass had answered, so bounds that summed past the TTL read
-// as a wedge and the watchdog ended a process that was doing its job. Here
-// four batches at the floor TTL, on a bubble's clock: three of 64 and one
-// more seat, twenty seconds against fifteen, the last seat sent fifteen
-// seconds in and dropped. Stamped as each renew is asked and answers, the
-// beat is never older than one bound.
+// An unanswered renew is held to its read's whole bound (five seconds), so a
+// pass with the broker link down spends a bound per batch of [renewConcurrency]
+// seats. Stamped only once the whole pass answered, bounds summing past the TTL
+// read as a wedge and the watchdog ended a process doing its job. Here, on a
+// bubble's clock: four batches at the floor TTL, twenty seconds against fifteen.
+// Stamped as each renew is asked and answers, the beat is never older than one
+// bound.
 //
-// Mutation: stamp the beat only once the pass is done (the watchdog fires
-// twenty seconds in).
+// Mutation: stamp the beat only once the pass is done (fires twenty seconds in).
 func TestAPassOfUnansweredRenewsIsStillTurning(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -536,17 +531,15 @@ func (b *peerTookThem) Renew(ctx context.Context, resource, owner string, epoch 
 // A PASS THAT DROPS ITS SEATS IS STILL TURNING, however long their teardowns
 // take.
 //
-// Applying a renewal's answer can run a seat's release hook — a lost seat's
-// teardown, an undead seat's retried one — and the engine's waits out its own
-// bound: five seconds on a lifecycle publish the stream will not acknowledge.
-// The renewals all answer a round trip into the pass, and stamped only by
-// them, the beat stood still while the pass applied their answers: twelve
-// seats lost at the shipped TTL, sixty seconds of teardowns, read as a wedge
-// forty-five seconds in, and the watchdog ended the process. Stamped as each
-// answer is applied, the beat is never older than one teardown.
+// Applying a renewal's answer can run a seat's release hook, which waits out
+// the engine's own bound (five seconds on a lifecycle publish the stream will
+// not acknowledge). Stamped only by the renewals, the beat stood still while
+// answers were applied: twelve lost seats at the shipped TTL, sixty seconds of
+// teardowns, read as a wedge at forty-five. Stamped as each answer is applied,
+// the beat is never older than one teardown.
 //
-// Mutation: stamp the beat only as each renewal is asked and answers (the
-// watchdog fires fifty seconds in).
+// Mutation: stamp the beat only as each renewal is asked and answers (fires
+// fifty seconds in).
 func TestAPassThatDropsItsSeatsIsStillTurning(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {

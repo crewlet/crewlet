@@ -520,21 +520,13 @@ func TestNothingIsForgottenWithoutADocumentTest(t *testing.T) {
 
 // Surfaces are converged in the canonical order however the config listed
 // them, so two nodes with one company agree and a status listing does not
-// reshuffle when the duty moves between them.
+// reshuffle when the duty moves.
 //
-// THE CANONICAL ORDER IS [ConvergeOrder], NOT [Kinds], and the fixture has to
-// contain a pair that tells them apart or this asserts nothing. It did not:
-// Slack, GitHub and Datadog sort identically under both, so the whole change
-// from one to the other left this green.
-//
-// Atlassian before Jira is the pair that differs, and it is a real dependency
-// rather than a preference. Atlassian is where an agent's service account is
-// CREATED; Jira is a product that account works in, and its pass checks for the
-// account with the credential Atlassian minted. In reading order Jira went
-// first, so over a reconnect the tracker found the seat still mapped to the
-// account the disconnect had deleted and showed "Action required — you, at the
-// third-party app" with a 401 for about thirty-five seconds, until Atlassian's
-// own pass made the new one. Nobody had anything to do.
+// THE ORDER IS [ConvergeOrder], NOT [Kinds], and the fixture must hold a pair
+// that tells them apart: Slack, GitHub and Datadog sort identically under both.
+// Atlassian before Jira is that pair, and a real dependency: Atlassian CREATES
+// the service account Jira's pass checks for. In reading order a reconnect
+// showed "Action required" and a 401 until Atlassian's pass ran.
 func TestOrderIsCanonicalNotRegistrationOrder(t *testing.T) {
 	w, err := New(Options{
 		Store: newStore(),
@@ -1066,20 +1058,13 @@ func TestStampEndpointFollowsTheSurfacesIngress(t *testing.T) {
 
 // A PEER'S SURFACE IS SKIPPED, NOT DELETED.
 //
-// The status rows are the FLEET's, written by whichever build ran the last
-// pass, and a rolling upgrade puts a newer node's kind in front of an older
-// reader. [Kind.Valid]'s own doc promises what happens then: "an unknown kind
-// is SKIPPED by the worker and rendered as-is by the API."
-//
-// It was deleted instead, and this build cannot tell a peer's kind from a
-// departed one by looking at its own registrations — both are simply absent.
-// So an older node erased the newer node's status on every tick and the newer
-// node wrote it back on every pass, for the length of the upgrade.
-//
-// The sweep now walks this build's own canonical order rather than the rows it
-// found, so a kind it has never heard of is not merely spared but never
-// considered — which is the same promise made structurally instead of by a
-// guard somebody could drop.
+// The status rows are the FLEET's, and a rolling upgrade puts a newer node's
+// kind in front of an older reader. [Kind.Valid]'s doc promises "an unknown
+// kind is SKIPPED by the worker and rendered as-is by the API". This build
+// cannot tell a peer's kind from a departed one by its own registrations (both
+// are absent), so the sweep walks its own canonical order rather than the rows
+// found: an unknown kind is never considered, structurally and not by a guard
+// somebody could drop.
 func TestAKindThisBuildDoesNotKnowIsLeftAlone(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	peer := Kind("a-surface-from-a-newer-build")
@@ -1259,22 +1244,15 @@ func TestARenamedRegistrationReachesTheStatusRow(t *testing.T) {
 
 // THE LOST DISCONNECT — the regression this whole guard exists for.
 //
-// A tick reads every row once to decide what is due. An operator pressing
-// Disconnect writes the intent under the surface's own guard, on whichever
-// node served the request, and that write can land after this tick's bulk read
-// and before it reaches this surface. Folding the pass's outcome into the row
-// it read FIRST puts a connected integration back over the top: the card flips
-// from Disconnecting to connected and the operator presses the button again.
+// A tick reads every row once to decide what is due. An operator's Disconnect
+// writes its intent under the surface's guard and can land after that bulk
+// read. Folding the outcome into the row read FIRST puts a connected
+// integration back over the top. The loop released the lease before writing
+// from a pre-pass snapshot; the fix holds it across read, pass and write.
 //
-// coord.Integrations says this cannot happen because "every writer takes the
-// surface's own provisioning lease first". Every writer did — and the loop then
-// released it and wrote afterwards, from a snapshot taken before the pass. The
-// fix is not a lock that was missing, it is holding the one that was already
-// there across the read, the pass and the write alike.
-//
-// The disconnect is landed from inside the guard callback, which is exactly
-// where a real one can land: markDisconnecting must wait for this guard, so the
-// last instant it can get in is just before the loop takes it.
+// The disconnect lands from inside the guard callback, as a real one can:
+// markDisconnecting waits for this guard, so the last instant it gets in is
+// just before the loop takes it.
 func TestADisconnectLandingBeforeTheGuardIsNotOverwritten(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	store := newStore(State{Kind: KindGitLab, Report: Ready()})

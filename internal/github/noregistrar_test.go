@@ -13,17 +13,13 @@ import (
 // A SURFACE THAT COULD NOT REGISTER WHAT IT WAS ASKED FOR DOES NOT REPORT
 // READY.
 //
-// `integrations.github.token` is optional and the connect form does not ask
-// for it, both deliberately: routing needs nothing from it, because each
-// agent's own app answers who is participating in a thread. What it IS still
-// needed for is a hook the company DEMANDED — `org_webhook: true`, which has
-// no fallback, or a `repos` list, which no agent's own app covers — and with
-// no token the pass reads nothing and writes nothing.
-//
-// It said so in NOTES, and notes are not findings. Measured on a live
-// connect: `phase: ready`, `phase_label: Connected`, `findings: []`,
-// `routes: true`, `secret_usable: true` — and exactly one webhook on the
-// organization, belonging to a different deployment and never triggered.
+// `integrations.github.token` is optional: routing needs nothing from it, as
+// each agent's own app answers who participates. It IS needed for a hook the
+// company DEMANDED (`org_webhook: true`, which has no fallback, or a `repos`
+// list no agent's app covers); with no token the pass reads and writes nothing.
+// That was said only in NOTES, which are not findings: a live connect showed
+// `phase: ready`, `findings: []`, `secret_usable: true`, and one webhook on
+// the organization that belonged to another deployment and never triggered.
 func TestAPassWithNoCredentialToRegisterWithReportsIt(t *testing.T) {
 	t.Parallel()
 	res, err := github.Reconcile(context.Background(), github.Options{
@@ -165,19 +161,14 @@ func TestAPassAskedForNoHookReportsNoRegistrar(t *testing.T) {
 
 // THE RECOMMENDED ARRANGEMENT REPORTS NOTHING TO DO.
 //
-// A company whose agents each carry their own app hears about the
-// repositories those apps are installed on, and that is the answer the form
-// opens on. It was reported two ways and both were wrong: as an
-// `ingress_blocked` finding naming the organization token, which reads as
-// Action required over agents receiving events perfectly well, and, from the
-// other branch, as "integrations.github.provisioning.repos is empty, so there
-// is nothing left to hook", which describes a gap that is not there.
-//
-// Worse than either: the card saying so spent its time asking for the agents'
-// apps to be installed, and an App installation can never carry
-// `admin:org_hook`. So the one instruction on screen could not clear the one
-// warning on screen, and an operator who did exactly as they were told
-// watched nothing change. Measured on a live connect.
+// A company whose agents each carry their own app hears about the repositories
+// those apps are installed on. That was reported two wrong ways: an
+// `ingress_blocked` finding naming the organization token (Action required over
+// agents receiving events fine), and "provisioning.repos is empty, so there is
+// nothing left to hook", a gap that is not there. Worse, the card asked for the
+// agents' apps to be installed, and an App installation can never carry
+// `admin:org_hook`, so the one instruction on screen could not clear the one
+// warning on screen.
 func TestTheRecommendedCoverageReportsNothingOutstanding(t *testing.T) {
 	t.Parallel()
 	res, err := github.Reconcile(context.Background(), github.Options{
@@ -319,19 +310,15 @@ func TestTheNamedRepositoryPathIsUnchanged(t *testing.T) {
 
 // A COMPANY LEFT ON THE OLD DEFAULT IS NOT DEGRADED WHILE ITS AGENTS WORK.
 //
-// `Default` is a suggestion and never a stored value, so changing which
-// answer the form opens on moves nobody who already stored `org_webhook:
-// "true"` with no token — and that was every company connected from the
-// dashboard while the strictest mode was the default. They are not migrated:
-// rewriting an explicit answer is the engine overruling a decision somebody
-// may have made on purpose, which is the thing this codebase removes
-// everywhere else.
+// `Default` is a suggestion, never a stored value, so changing what the form
+// opens on moves nobody who already stored `org_webhook: "true"` with no
+// token (every dashboard connect while the strictest mode was the default).
+// They are not migrated: rewriting an explicit answer overrules a decision
+// somebody may have made on purpose.
 //
-// What was wrong was the REPORT, not the value. `ingress_blocked` claims
-// nothing can be delivered, and that is false the whole time each agent's own
-// app is delivering — so the card read Action required beside a seat row
-// reading `satisfied: true, ready`, and the remedy it offered (install the
-// apps) was the one act that could never clear it.
+// What was wrong was the REPORT: `ingress_blocked` claims nothing can be
+// delivered, false while each agent's own app delivers, and its remedy
+// (install the apps) could never clear it.
 func TestTheOldDefaultIsReportedAsCoverageNotAsABlock(t *testing.T) {
 	t.Parallel()
 	res, err := github.Reconcile(context.Background(), github.Options{

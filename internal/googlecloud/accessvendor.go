@@ -664,19 +664,16 @@ func known(in seataccess.ApplyInput) []string {
 
 // converge makes email hold want's level on want's projects, its live grants
 // on theirs, and nothing on every other of projects, one write per level list
-// a project crosses: on each project the lists it holds go first, least access
-// first, then the lists it no longer holds, most access first, so no moment
-// holds a level below the one it is moving to; then each grant's role, one
-// write per role, which exactly one of the provisioner's conditions allows. A
-// level list taken off never takes a role a live grant holds. A new account
-// Google does not know on a project yet is waited out, and every project's
-// roles are read back as written.
+// a project crosses: lists it holds go first, least access first, then lists
+// it no longer holds, most access first, so no moment holds a level below the
+// one it is moving to; then each grant's role, one write per role, which
+// exactly one of the provisioner's conditions allows. A level list taken off
+// never takes a role a live grant holds. A new account Google does not know
+// yet is waited out, and roles are read back as written.
 //
 // A ROLE NO LEVEL OR GRANTS LIST NAMES IS NOT CREWLET'S TO TAKE: the
-// provisioner's conditions refuse revoking it, so it is left and named after
-// the rest.
-//
-// Each write is noted in w: a list granted, or a list taken off.
+// conditions refuse revoking it, so it is left and named after the rest.
+// Each write is noted in w.
 func (s *accessSession) converge(
 	ctx context.Context, email string, want seataccess.Desired, projects []string, w *writes,
 ) error {

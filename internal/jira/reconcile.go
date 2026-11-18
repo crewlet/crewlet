@@ -21,30 +21,15 @@ import (
 
 // Reconcile brings a Jira instance in line with the company config.
 //
-// # What Jira lets a provisioner do, and what it does not
-//
-// The chat backend and the tracker this build already serves can CREATE an
-// account and mint its credential, so their reconciles are about converging
-// a fleet of accounts. Jira cannot: a Cloud API token is issued by the
-// person it belongs to at Atlassian's own account site, and a Data Center
-// personal access token can only be minted for the calling user. A run that
-// pretended otherwise would print instructions dressed as actions.
-//
-// So this reconcile does the three things Jira genuinely allows, and each of
-// them answers a question that is otherwise invisible until an issue reaches
-// nobody:
-//
-//   - WHICH ACCOUNT each seat's credential authenticates as. That mapping is
-//     the whole of a seat's inbound routing, and nothing in the org model
-//     declares it — the engine resolves it at boot and says nothing about
-//     the seats it could not.
-//   - WHETHER EVERY PROJECT the org names exists, and whether Jira's own
-//     idea of who leads it agrees with the org chart's. A disagreement
-//     splits notification: Jira's own mail goes one way, the engine's
-//     lead-fallback goes another, and both halves look healthy.
+// Jira cannot mint an account's credential (a Cloud token is issued by its
+// owner, a Data Center PAT only for the caller), so this does the three things
+// it allows, each invisible until an issue reaches nobody:
+//   - WHICH ACCOUNT each seat's credential authenticates as: a seat's whole
+//     inbound routing, which the org model does not declare.
+//   - WHETHER EVERY PROJECT the org names exists, and whether Jira's lead
+//     agrees with the org chart's; a disagreement splits notification.
 //   - THE INBOUND WEBHOOK, on Data Center, registered with a secret the
-//     engine holds. Without one the instance delivers nothing and the
-//     integration looks idle rather than unconfigured.
+//     engine holds; without one the integration looks idle.
 
 // DefaultWebhookName is the name the engine's own hook is registered under
 // when the company names none.
@@ -56,25 +41,13 @@ const DefaultWebhookName = "crewlet"
 
 // ours reports a hook this deployment registered.
 //
-// TWO CONDITIONS, and both are needed.
+// THE NAME IS THE IDENTITY, the only field that survives a change of public
+// base: matching the URL would orphan a hook per move. THE DELIVERY PATH IS
+// THE GUARD against somebody else's hook: ours all end in /webhooks/jira
+// whatever the base, so one that merely shares the name is left alone.
 //
-// THE NAME IS THE IDENTITY, because it is the only field that survives a
-// change of public base. Matching on the URL instead meant a deployment that
-// moved created a second hook and left the first: one live orphan per change,
-// each delivering to an address that no longer answers, and a run that
-// "converged" left three registrations behind. So the name is what selects,
-// and this file's own comment used to say the opposite — matched on the URL
-// "because an instance may carry hooks somebody else registered".
-//
-// THE DELIVERY PATH IS THE GUARD that concern deserves. Every hook this
-// engine registers ends in /webhooks/jira whatever base it was registered
-// against, so a hook that merely shares the name and points somewhere else
-// is not this engine's and is left alone — which is the whole of what
-// matching on the URL was protecting, kept without the orphans.
-//
-// Two DEPLOYMENTS of one company watching one instance is the case the name
-// cannot settle, because they share this document: they set
-// `integrations.jira.webhook_name` to two values, exactly as they would
+// Two DEPLOYMENTS of one company watching one instance share this document,
+// so they set `integrations.jira.webhook_name` to two values, as for
 // Datadog's.
 func ours(hook Webhook, name string) bool {
 	return hook.Name == name && strings.HasSuffix(hook.URL, webhookPath)
@@ -108,23 +81,13 @@ type Options struct {
 	// CredentialSealed says when this seat's Atlassian credential was
 	// written into the company's store, and whether anything knows.
 	//
-	// # What it is for, and why it is a seam rather than a lookup
-	//
-	// An account Atlassian has only just granted is refused by Jira for
-	// about a minute with its own 401, which is byte-for-byte what a wrong
-	// credential looks like. The only thing that separates them is how long
-	// ago this engine sealed the credential, and that is in the fleet's
-	// secret store — which this package must not reach into: it would put
-	// the tracker in the coordination layer's import graph to answer a
-	// question about Atlassian.
-	//
-	// CONSULTED ONLY FOR A SEAT THE INSTANCE REFUSED, which in a working
-	// company is none, so the steady-state cost is zero reads.
-	//
-	// Nil, or a false second return, is "nothing here can say" — and the
-	// refusal is then reported as the failure it may well be. Guessing the
-	// other way would report every genuinely broken seat as a provider's
-	// wait, for ever, under a sentence telling an operator not to act.
+	// An account just granted is refused for about a minute with a 401
+	// like a wrong credential's; only the time since sealing separates
+	// them. That is in the fleet's secret store, which this package must
+	// not import, hence a seam. CONSULTED ONLY FOR A REFUSED SEAT. Nil, or
+	// false, is "nothing here can say" and the refusal is reported as the
+	// failure it may be; guessing otherwise would call every broken seat a
+	// provider's wait, for ever.
 	CredentialSealed func(ctx context.Context, handle string) (time.Time, bool)
 
 	// Now is the clock the propagation window is measured against. Nil is
@@ -245,12 +208,10 @@ type Result struct {
 	// A SEPARATE FIELD because an empty Hooked means three unrelated
 	// things: a read-only pass, a working Cloud company whose events come
 	// through the Forge relay, and a deployment nothing can reach. Only
-	// the third is a problem, and Classify over no findings is Ready — so
-	// a Data Center company that never set its public base reported Jira
-	// working while the instance had nowhere to deliver to.
+	// the third is a problem, and Classify over no findings is Ready.
 	//
-	// The zero value is "nothing to report", deliberately: a Result built
-	// anywhere but Reconcile must not invent an ingress problem.
+	// The zero value is "nothing to report": a Result built anywhere but
+	// Reconcile must not invent an ingress problem.
 	NoIngress string
 
 	// NoIngressKey is the Tier A key this deployment's webhook address is
@@ -273,35 +234,16 @@ func (r *Result) Routing() int {
 
 // Reconcile runs one pass.
 //
-// The order is deliberate: PROBE the org credential, then read, then write.
-// The one write this command makes is the webhook, and a run that registered
-// it before discovering the credential was dead would leave an instance
-// delivering to an engine that cannot enrich anything it receives.
+// PROBE the org credential, then read, then write: registering the webhook
+// before discovering the credential was dead leaves an instance delivering to
+// an engine that cannot enrich anything.
 //
-// # THE SINK IS COMPLETED WHATEVER THE PASS DID
-//
-// [provision.TokenSink.Flush] is the point at which what a run sealed
-// STANDS, and under the reconcile loop it is load-bearing rather than
-// ceremonial: the loop's own sink rebuilds the engine's `${VAR}` snapshot
-// there, and only there. This returned the pass's error several statements
-// BEFORE reaching it, and the mint is earlier still — so a pass that minted a
-// signing secret and then failed to reach the instance sealed a value and
-// never announced it.
-//
-// On THIS pass that state is permanent rather than self-healing, and the
-// reason is the fix that came before it. Everywhere the sealed-but-unflushed
-// value is simply re-minted next tick, the damage is a rotation on a timer;
-// here the next pass reads the sealed value back through
-// [provision.TokenSink.Value] (see [webhookSecret]) and therefore never
-// Records again — so the sink never seals again, so the snapshot is never
-// rebuilt, for the life of the deployment. The instance ends up signing with
-// a key the engine's own webhook route cannot resolve, every delivery is
-// refused at the edge, and the pass reports Ready on every tick.
-//
-// So the flush happens on EVERY exit path, and it is not conditioned on
-// whether this pass minted: a sink that recorded nothing has nothing to make
-// durable and says so cheaply, where a "did we mint" flag is one more thing
-// that has to stay in step with a mint several call frames away.
+// THE SINK IS COMPLETED WHATEVER THE PASS DID. [provision.TokenSink.Flush] is
+// where what a run sealed STANDS: the loop's sink rebuilds the `${VAR}`
+// snapshot there only. A pass that minted a secret and then failed must still
+// flush, or the next pass reads it back through [provision.TokenSink.Value]
+// (see [webhookSecret]), never Records again, and every delivery is refused
+// while the pass reports Ready. So Flush runs on EVERY exit path.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	res, err := reconcile(ctx, opts)
 	if opts.Sink == nil {
@@ -414,27 +356,14 @@ func agentSeats(o *org.Organization) []*org.Role {
 
 // resolveSeats asks each seat's own credential who it is.
 //
-// CONCURRENTLY, because sequentially this is one round trip per seat against
-// an instance that may be slow, and the whole point of the command is that
-// an operator runs it and reads the answer.
+// CONCURRENTLY: sequentially it is one round trip per seat.
 //
-// # A credential the instance REFUSED is a finding; one it did not answer is
-// a fault
-//
-// The same rule checkProjects states below, applied to the half of the walk
-// that did not have it. Every lookup failure became the same empty Account,
-// which [Result.Findings] renders as `identity_failed` — "this seat has no
-// Jira account", owed by an ADMIN and never clearing on its own. That is a
-// true statement about a token the instance refused with a 401, and a
-// fabrication about an instance that did not answer at all: one blip, or one
-// node shutting down mid-pass, reported every credentialled seat as an
-// account somebody has to go and create, and reported it with the transport
-// error as the reason.
-//
-// Three-valued, therefore, as everything else in this engine is: resolved,
-// definitively not resolved, and NOT OBSERVED. The third raises, so the loop
-// records it as this surface's fault and retries it, and the seats it never
-// reached are not described at all.
+// A credential the instance REFUSED is a finding; one it did not answer is a
+// fault (as in checkProjects). An empty Account renders as `identity_failed`,
+// owed by an ADMIN: true of a token refused with a 401, a fabrication when the
+// instance did not answer, where one blip would report every seat as an
+// account to create. So three-valued: resolved, definitively not resolved,
+// and NOT OBSERVED, which raises so the loop retries it as a fault.
 func resolveSeats(ctx context.Context, opts Options) ([]SeatIdentity, error) {
 	if opts.Org == nil {
 		return nil, nil
@@ -641,23 +570,11 @@ func ensureWebhook(ctx context.Context, opts Options) (ingress, error) {
 	if err != nil {
 		return ingress{Notes: notes}, fmt.Errorf("jira: list webhooks: %w", err)
 	}
-	// BY NAME, NOT BY ADDRESS.
-	//
-	// It matched on the URL, so a hook this engine had registered at a
-	// DIFFERENT address was invisible to it: changing the public base URL
-	// created a second hook and left the first, and every change after that
-	// added another. A deployment behind a tunnel accumulated one per
-	// restart, all live, all delivering to addresses that no longer answer.
-	//
-	// The name is what says the hook is this engine's, so the name is what
-	// converges: one hook, pointed wherever the company says it is reachable
-	// now.
-	// ONE HOOK, and the extras go.
-	//
-	// Converging on the first match still leaves every hook a previous
-	// address created: this engine's own name on three live registrations,
-	// two of them delivering to somewhere that no longer answers. What
-	// "converged" has to mean is one.
+	// BY NAME, NOT BY ADDRESS: a hook registered at a DIFFERENT address
+	// would be invisible, so each change of public base (a tunnel's every
+	// restart) would add another live hook delivering nowhere. The name says
+	// the hook is ours, so it converges: ONE hook, pointed wherever the
+	// company is reachable now, and the extras go.
 	name := opts.Config.WebhookNameOrDefault()
 	mine := make([]Webhook, 0, len(hooks))
 	for _, hook := range hooks {
@@ -716,23 +633,14 @@ type webhookKey struct {
 
 // webhookSecret is the value the hook is registered with.
 //
-// # Minted only where there is nothing usable
-//
-// The tempting shape is to mint every run, and it is an outage: the engine
-// is running with the OLD secret, and re-registering with a fresh one makes
-// the instance sign every delivery with a key the running engine does not
-// hold — every webhook refused at the edge, from a command whose whole
-// promise is that it is safe to re-run. So a secret that already resolves is
-// used as it is, and minting happens when there is none, or when the
-// operator asked to recreate the hook having planned the restart.
-//
-// # And "nothing usable" includes what this deployment already sealed
-//
-// Which is [provision.MintSecret]'s whole subject, and the reason it is not
-// written out here: the sink is asked before anything is minted and the read
-// is three-valued. This pass was the one that got that right while three
-// others did not, so the rule moved to the leaf they all share rather than
-// being copied twice more.
+// Minted only where there is nothing usable: minting every run is an outage,
+// since the running engine holds the OLD secret and the instance would sign
+// every delivery with a key it lacks, from a command meant to be safe to
+// re-run. A secret that already resolves is used as it is; minting happens
+// when there is none, or when the operator asked to recreate the hook having
+// planned the restart. "Nothing usable" includes what this deployment already
+// sealed, which is [provision.MintSecret]'s subject (the sink is asked
+// first, three-valued), shared by every pass rather than copied.
 func webhookSecret(
 	ctx context.Context, opts Options, target string,
 ) (webhookKey, error) {

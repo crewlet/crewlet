@@ -24,22 +24,14 @@ var clientPackages = map[string]bool{
 // engine code builds a Jira or Confluence client without saying what the
 // company declared.
 //
-// The declaration is what makes an address no host list names — an Isolated
-// Cloud site's — Cloud, and the validator reads it. A construction that left
-// it out compiles, runs and answers Data Center for that address, so the
-// client would read /rest/api/2 (Jira) or register a Data Center hook
-// (Confluence) for a company the validator admitted as Cloud — the
-// disagreement this package exists to end, reopened one call site at a time
-// and with nothing to notice it. So every composite literal of either
-// package's ClientOptions in non-test code under internal/ and cmd/ must name
-// Declared, even where the value it names is a seat client inheriting the org
-// client's. A literal that names it is not checked for WHAT it passes: that is
-// review's, and the call sites read the one accessor
-// ([config.Atlassian.Declared]).
-//
-// Test code is out of scope, deliberately: a test server stands in for one
-// deployment and says so, or takes the host rule's answer for 127.0.0.1,
-// which is Data Center.
+// The declaration makes an address no host list names (an Isolated Cloud
+// site's) Cloud. A construction that omits it answers Data Center for that
+// address, so the client would read /rest/api/2 (Jira) or register a Data
+// Center hook (Confluence) for a company the validator admitted as Cloud,
+// unnoticed. So every ClientOptions literal in non-test code under internal/
+// and cmd/ must name Declared; WHAT it passes is review's
+// ([config.Atlassian.Declared]). Test code is out of scope: a test server
+// stands in for one deployment.
 func TestEveryAtlassianClientIsGivenTheCompanysDeclaration(t *testing.T) {
 	t.Parallel()
 

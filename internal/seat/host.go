@@ -211,24 +211,14 @@ type Config struct {
 	// Status is this node's live state, re-read on every heartbeat and
 	// advertised to peers on the presence lease.
 	//
-	// Nil publishes none, and a peer reads that absence as "not saying"
-	// rather than as a zero (see coord.StatusFromMeta), so a host built
-	// without one draws no idle row. The engine always supplies one.
+	// Nil publishes none; a peer reads that as "not saying", not zero (see
+	// coord.StatusFromMeta). The beat bounds the hook to [StatusBudgetRatio]
+	// of an interval, so a slow control plane costs a column, not the seats.
 	//
-	// It takes a context because answering may mean reading a store, and
-	// this runs on the path that renews presence: the beat bounds it to
-	// [StatusBudgetRatio] of an interval, so a slow control plane costs a
-	// column rather than the node's seats.
-	//
-	// THE ERROR IS THE HOOK'S OWN ANSWER to "did I answer?", and the beat
-	// publishes nothing when it is not nil — a hook whose context ended
-	// before its reads finished returns that context's error. The beat
-	// used to infer it instead, from its own clock after the hook had
-	// returned, and a clock read after the fact cannot tell a hook that
-	// was cut short from one that finished and was then descheduled past
-	// the deadline: a complete answer was discarded whenever the
-	// goroutine lost the CPU at the wrong moment, which a short budget on
-	// a loaded machine made routine.
+	// THE ERROR IS THE HOOK'S OWN ANSWER to "did I answer?": the beat
+	// publishes nothing when it is not nil, so a hook cut off by its context
+	// returns that error. The beat's clock after the fact cannot tell a
+	// cut-short hook from one descheduled past the deadline.
 	Status func(context.Context) (coord.NodeStatus, error)
 
 	// GitBackground is what this node's git cache gives its background
@@ -237,13 +227,11 @@ type Config struct {
 	// status hook runs and never through it. Nil on a node without the gitlet
 	// role, whose row then carries no such key.
 	//
-	// NOT A STATUS FIELD, because a status the beat gave up on is dropped
-	// whole, and this is no display column: it is what every Gitlet node
-	// places a repository's maintenance by (internal/estate,
-	// Router.Maintainer), and a figure that went with its status for a beat
-	// would leave the node weighed as one that says nothing of what it can
-	// hold. It must not block — read memory, never a store — which is what
-	// lets the beat write it unbounded.
+	// NOT A STATUS FIELD: a status the beat gave up on is dropped whole,
+	// and this is what every Gitlet node places a repository's maintenance
+	// by (internal/estate, Router.Maintainer), not a display column. It
+	// must not block — read memory, never a store — so the beat writes it
+	// unbounded.
 	GitBackground func() int64
 
 	// PresenceClaimed is told the epoch of each presence this host claims at
@@ -271,61 +259,30 @@ type Config struct {
 	Hooks Hooks
 
 	// Ready reports whether this node may take on NEW seats right now.
-	// Nil always admits, which is the deployment with nothing to wait for.
+	// Nil always admits.
 	//
-	// # Why this is not the Seats list, and not the acquire hook
+	// Not the Seats list (an empty one DECOMMISSIONS every seat held), nor the
+	// acquire hook (refusing there claims then releases). It gates only the
+	// claim half: a node not ready keeps, renews and SHEDS what it holds and
+	// takes nothing new. It runs on the sweep path, [Host.Start]'s first pass
+	// included, and must never wait without a bound.
 	//
-	// Returning an empty seat list would DECOMMISSION every seat this node
-	// already holds — the sweep converges in both directions, so "no
-	// seats" reads as "the company deleted them all". Refusing in the
-	// acquire hook would take the lease first and hand it straight back,
-	// spending a claim, a release and a per-seat backoff on a condition
-	// that is about the NODE rather than the seat.
-	//
-	// So it gates only the claim half. A node that is not ready keeps
-	// everything it holds, keeps renewing, keeps SHEDDING to capacity —
-	// an over-subscribed node must still give seats back while it waits —
-	// and simply takes nothing new. That is what makes it safe to flip
-	// false at any time rather than only at boot: this node's own copy of
-	// the company's records going stale is a reason to stop taking work,
-	// never a reason to drop the work already in hand.
-	//
-	// IT RUNS ON THE SWEEP PATH, [Host.Start]'s first pass included, and
-	// must never wait without a bound: it may make a request — the engine's
-	// asks a data node whether its copy admits a seat, bounded by a budget
-	// of its own and cached between sweeps — and its context is the sweep's,
-	// which a stop cancels. A read of a store that can hang is not a gate.
-	//
-	// THE HOST CANNOT SEE IT CHANGE, so whoever owns it asks for a pass
-	// when it opens ([Host.Resweep]): only it knows which events can open
-	// it. A refusal is otherwise answered by the next tick, up to
-	// [SweepInterval] of a node holding nothing it could have held — the
-	// whole of a node's company when the refusal was [Host.Start]'s.
+	// THE HOST CANNOT SEE IT CHANGE: its owner asks for a pass when it opens
+	// ([Host.Resweep]); otherwise the next tick, up to [SweepInterval].
 	Ready func(ctx context.Context) bool
 
 	// Serviceable reports whether this node may KEEP the seats it holds,
 	// and names what stopped it when the answer is no.
 	//
-	// # A DIFFERENT QUESTION FROM Ready, and the difference is the whole
-	// # reason there are two
+	// Unlike Ready (work not yet taken; a BEHIND copy catches up), it fires
+	// only where the node cannot serve work in hand at all: in the engine,
+	// it can no longer say where its seats' estate is served. A WRONG
+	// domain copy is not such a case; calls on it go to another data node.
 	//
-	// Ready is about work this node has not taken yet: a copy that is
-	// merely BEHIND catches up, so withholding claims is the whole remedy
-	// and dropping work in hand would be pure loss. This one is about work
-	// already in hand, and it fires only where this node cannot serve that
-	// work at all — in the engine, a node that can no longer say where the
-	// estate its seats read and write is served. A domain's copy that is
-	// WRONG is not such a case: the node takes that domain's copy out of
-	// service and its seats' calls on it go to another data node, which is
-	// the same answer a peer would give them.
+	// VOLUNTARY, not fenced: the lease is still renewed, the in-flight turn
+	// finishes and the seat leaves when idle.
 	//
-	// VOLUNTARY, not fenced: the lease is still held and still renewed, so
-	// the in-flight turn finishes and the seat leaves when it goes idle.
-	// Abandoning a turn mid-flight would cost more than finishing it.
-	//
-	// Nil keeps every seat, which is the single-node case and the case
-	// before a state log exists. It runs on the sweep path and, like
-	// Ready, must not block.
+	// Nil keeps every seat. It runs on the sweep path and must not block.
 	Serviceable func(ctx context.Context) (bool, string)
 
 	TTL               time.Duration
@@ -532,17 +489,13 @@ func (h *Host) now() time.Time { return h.clock() }
 // of the two readings an instant read from the clock carries.
 //
 // BOTH, BECAUSE EACH IS WRONG ONE WAY. The monotonic reading ignores a wall
-// clock stepped back, which would make a renew look younger than it is, but
-// it STOPS while the host sleeps (mach_absolute_time on macOS,
-// CLOCK_MONOTONIC on Linux), and the store's TTL does not: measured on it
-// alone, a node that slept past its TTL woke still holding every seat, and
-// went on admitting turns as the seat until its next heartbeat failed to
-// renew, while the store had expired the lease and a peer could hold it. The
-// wall reading counts the sleep, and a step back shortens it. The larger is
-// never younger than the renew really is, since a sleep and a step back each
-// hold back one reading only; a step forward makes a renew look older than it
-// is, which costs a refused admission or a seat dropped early, never a seat
-// held past its lease.
+// clock stepped back, but it STOPS while the host sleeps (macOS, Linux) and
+// the store's TTL does not: alone, a node that slept past its TTL would wake
+// still admitting turns on a lease a peer may hold. The wall reading counts
+// the sleep, and a step back shortens it. A sleep and a step back each hold
+// back one reading only, so the larger is never younger than the renew; a
+// step forward costs a refused admission or an early drop, never a seat held
+// past its lease.
 func elapsed(now, then time.Time) time.Duration {
 	return max(now.Sub(then), now.Round(0).Sub(then.Round(0)))
 }
@@ -556,13 +509,10 @@ func (h *Host) Owner() string { return h.owner }
 // lockSeat takes this seat's lock, returning the release.
 //
 // ONE LOCK PER SEAT, HELD ACROSS A WHOLE ACQUIRE OR RELEASE. The heartbeat
-// and the sweep are independent goroutines with no ordering between them,
-// and both hooks are long: an acquire attaches a consumer and spawns MCP
-// children, a release tears them down. Without this, a heartbeat that
-// detects a lost lease can interleave with a sweep that just re-claimed the
-// same seat — and the release then tears down the consumer the claim just
-// created, leaving a seat that is owned in the lease table and dead in this
-// process, with nothing to notice.
+// and the sweep are unordered goroutines and both hooks are long. Without
+// this, a heartbeat that detects a lost lease can interleave with a sweep
+// that just re-claimed the seat, and the release tears down the consumer the
+// claim just created: owned in the lease table, dead in this process.
 //
 // NOTHING THAT ENDS A SEAT STILL BEING TAKEN WAITS FOR IT. An acquire hook has
 // no total, so the heartbeat finding the lease lost and a drain cut that hook
@@ -590,17 +540,14 @@ func (h *Host) lockSeat(handle string) func() {
 // WithHeldSeat runs fn with the lease this node holds a seat under, under that
 // seat's own lock, and reports whether the seat was held.
 //
-// UNDER THE LOCK every acquisition and release of the seat runs under, which
-// is the whole of it: a caller that must prepare the seats this node ALREADY
-// holds — for something that arrived after they were taken — cannot race the
-// seat's own acquisition hook preparing it, or a release tearing down what it
-// just attached. A seat claimed while the caller waits is prepared by its hook
-// and seen as held once that hook has returned; a seat released meanwhile is
-// not held, and fn does not run.
+// UNDER THE LOCK every acquisition and release of the seat runs under: a
+// caller preparing seats this node ALREADY holds cannot race the seat's own
+// acquisition hook or a release tearing down what it attached. A seat claimed
+// while the caller waits is prepared by its hook and seen as held once that
+// returns; one released meanwhile is not held, and fn does not run.
 //
-// fn must not call back into the host for the same seat — [Host.Release]
-// takes this same lock — so a caller that wants to give a seat back on fn's
-// failure does it after WithHeldSeat returns.
+// fn must not call back into the host for the same seat ([Host.Release] takes
+// this lock); give a seat back on fn's failure after WithHeldSeat returns.
 func (h *Host) WithHeldSeat(handle string, fn func(lease coord.Lease) error) (bool, error) {
 	unlock := h.lockSeat(handle)
 	defer unlock()
@@ -621,25 +568,13 @@ func (h *Host) WithHeldSeat(handle string, fn func(lease coord.Lease) error) (bo
 
 // MayStart reports the epoch a new turn may start under.
 //
-// FRESHNESS, NOT MEMBERSHIP. "Do I hold this seat?" is a question about a
-// local snapshot refreshed on a 15 s heartbeat against a 45 s TTL, so the
-// honest answer can be a full TTL stale — precisely the window an ownership
-// check exists to close, which means a membership check cannot meet its own
-// exit criterion.
-//
-// What IS provable: a successful renew at time t bought exclusivity through
-// t+ttl. So admission asks how long ago that renew was and admits only
-// inside one heartbeat interval. Every turn that starts is then certified
-// owned for at least ttl-heartbeat (30 s at the shipped constants), and the
-// first failed renew stops NEW turns immediately while the store-unavailable
-// grace still keeps the seat so in-flight work can finish. The window is the
-// heartbeat and the renews go out a beat inside it ([Host.renewPeriod]), so a
-// healthy node's own renews never leave it — widening the window instead would
-// admit on a proof older than that certificate.
-//
-// This is an OPTIMIZATION, not the safety property. Correctness comes from
-// epoch-fenced writes: the returned epoch is the fencing token, and a write
-// without it is a write a zombie can also make.
+// FRESHNESS, NOT MEMBERSHIP: a local "do I hold it?" snapshot can be a full
+// TTL stale. A renew at t bought exclusivity through t+ttl, so admission
+// requires that renew inside one heartbeat, certifying a started turn owned
+// for at least ttl-heartbeat. The first failed renew stops NEW turns; the
+// store-unavailable grace keeps the seat for in-flight work. Renews go out a
+// beat inside the window ([Host.renewPeriod]); widening it would admit on an
+// older proof. An OPTIMIZATION: correctness comes from epoch-fenced writes.
 func (h *Host) MayStart(handle string) (int64, bool) {
 	h.mu.Lock()
 	held := h.held[handle]
@@ -660,30 +595,15 @@ func (h *Host) MayStart(handle string) (int64, bool) {
 }
 
 // Provable reports whether this node can still prove it holds a seat's lease:
-// the seat is in the held set — establishing included — and its last renew
-// was less than one TTL ago, so by this node's own clock the lease has not
-// lapsed.
+// the seat is held (establishing included) and its last renew was under one
+// TTL ago by this node's own clock.
 //
-// NOT [Host.MayStart], which answers a narrower question for another caller.
-// A turn runs for minutes, so admitting one wants exclusivity for a stretch
-// still to come, and a seat that is still establishing must not take one at
-// all. Acting as the seat for one INSTANT — starting a process that carries
-// its credentials, which the release following a lost lease stops again —
-// needs only that the lease is live NOW: and it is live while the seat
-// establishes, having been taken moments ago and renewed by the heartbeat
-// since, and it is still live one heartbeat after a renew that is merely
-// late. Asked through MayStart, an apply landing on a renew's boundary would
-// be refused for a seat this node plainly holds.
-//
-// A lease past its TTL is one a peer may already hold, which is the one
-// answer this must never get wrong: the heartbeat drops such a seat at its
-// next beat, and until it does this says no. Every stamp it measures from is
-// read before the store call it records — the claim's ([Host.Sweep]) and each
-// renew's ([Host.Heartbeat]) — so the TTL is counted from no later than the
-// store counts it.
-//
-// A SEAT CUT WHILE IT WAS BEING TAKEN is not provable, whatever its renew's
-// age: its lease is lost, or it is being given back by a drain ([heldSeat.cut]).
+// NOT [Host.MayStart]: acting as the seat for one INSTANT (starting a process
+// with its credentials) needs only that the lease is live NOW, as it is while
+// establishing. A lease past its TTL may be a peer's, so every stamp it
+// measures from is read before the store call it records ([Host.Sweep],
+// [Host.Heartbeat]). A SEAT CUT WHILE BEING TAKEN is not provable
+// ([heldSeat.cut]).
 func (h *Host) Provable(handle string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -710,38 +630,15 @@ func (h *Host) EpochFor(handle string) (int64, bool) {
 // NoteDeliveryDeferred records that this seat's consumer stopped for want of
 // proof.
 //
-// Called by whoever acted on a MayStart refusal by DEFERRING a delivery —
+// Called by whoever acted on a MayStart refusal by DEFERRING a delivery,
 // which quiesces the attachment (see queue.OutcomeDefer). Without this the
-// seat is PERMANENTLY DEAF, and the deafness outlives whatever caused it: a
-// store blip, a pass that ran more than a beat late, anything that leaves
-// the last renew older than the admission window for one delivery. A batch
-// landing in that window defers, the queue quiesces, and nothing ever
-// resumes it: the admission signal is edge-triggered, the deferral never
-// entered the set, so the next successful renew reports "still admitted",
-// short-circuits, and never calls the resume hook.
-//
-// IT USED TO TAKE NO FAILURE AT ALL, and that is worth keeping here because
-// it is the reason this mechanism looks over-engineered. The renew pass was
-// scheduled by a beat count rounded UP, so consecutive renews were one
-// heartbeat apart PLUS the rounding, and every cycle had a window where a
-// healthy, renewing seat answered false — a sixth of every cycle at a three
-// second TTL. Rounded down, the pass still went out at the very instant the
-// window closed wherever the beat divided the heartbeat — the shipped 45 s
-// among them — so each on-time renew refused the seat for its own round trip.
-// [Host.renewPeriod] is what removed both: it sends each renew a beat early,
-// on a ticker no long pass can delay. This is still required, because the
-// window is now reached by real lateness rather than by arithmetic.
-//
-// Deliberately NOT inside MayStart. The in-turn fence calls that too, where
-// a refusal abandons a turn and stops no consumer — marking there would
-// leave the set claiming a seat is quiesced when it is still happily
-// consuming, and the next real store outage would then short-circuit the
-// call that stops it. The state means "the consumer is stopped pending
-// proof", so only the path that stops one may set it.
-//
-// No hook fires here: the consumer is already stopping, which is what got us
-// called. This records the edge so the RESUME can fire on the next
-// successful renew.
+// seat is PERMANENTLY DEAF: a store blip or late pass leaves the last renew
+// older than the admission window, a batch defers, and nothing resumes the
+// queue: the admission signal is edge-triggered and the deferral never
+// entered the set, so the next renew reports "still admitted" and never
+// calls the resume hook. Not inside MayStart: the in-turn fence calls that
+// too, where a refusal stops no consumer. No hook fires here; this records
+// the edge so the RESUME fires on the next renew.
 func (h *Host) NoteDeliveryDeferred(handle string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -756,19 +653,14 @@ func (h *Host) NoteDeliveryDeferred(handle string) {
 // whatever [New] resolved: a value adopted from a lease bucket a peer created,
 // the deployment's own configuration, or [SeatLeaseTTL] when it set none.
 //
-// THE ADOPTED CASE IS THE ONE THIS EXISTS FOR, so it is the one the sentence
-// has to cover. Described as "the configured value", a caller would reasonably
-// assume the timing it derives follows the local file — which is exactly false
-// on the fleet mismatch this method was added to serve, and the assumption
-// that put three budgets on the shipped constant in the first place.
+// THE ADOPTED CASE IS WHAT THIS EXISTS FOR: it is not the locally configured
+// value, so timing derived from the local file is wrong on a fleet mismatch.
 //
-// Exported because every budget that races a lease has to be derived from the
-// lease it is racing, and the callers that derive one live in other packages:
-// the stop allowance a drain in [internal/node] begins through [WithinStop]
-// when its caller carries none, and the watchdog threshold in
-// [internal/engine]. Written against the constant instead, each of them
-// claimed in its own comment to follow the deployment's TTL while following
-// the shipped number — which is the drift [HeartbeatRatio] exists to name.
+// Exported because every budget that races a lease must derive from the lease
+// it races, and those callers live elsewhere: the stop allowance a drain in
+// [internal/node] begins through [WithinStop], and the watchdog threshold in
+// [internal/engine]. Written against the constant they would follow the
+// shipped number, the drift [HeartbeatRatio] exists to name.
 func (h *Host) TTL() time.Duration { return h.ttl }
 
 // HeartbeatInterval is the window this host admits a seat within after its last
@@ -927,42 +819,15 @@ func (h *Host) stampBeat() {
 // Start spins the heartbeat loop, announces this node, takes a first share of
 // the seats, and spins the sweep loop.
 //
-// THE HEARTBEAT FIRST, before anything the start claims. The first pass runs
-// each claimed seat's acquire hook inline, and a hook spawns MCP children,
-// hydrates the seat's memory and recovers its interrupted executor, which
-// can outlast a TTL: the seat is in the held set while it does precisely so
-// that the heartbeat renews its lease throughout ([heldSeat]). Started after
-// that pass, as it was, the heartbeat renewed nothing on the one pass where
-// every seat is new — a hook that ran past the TTL let the lease lapse under a
-// seat this node was halfway through building, and the presence lease with it
-// — and the watchdog, which reads this loop's beat, read the whole pass as the
-// heartbeat wedged: every beat gap past two seconds measured across 126
-// started engines under load was that pass, 5.1 s the longest, and past the
-// TTL the watchdog ends the process. The sweep loop still starts after the
-// pass, which is the start's own.
+// THE HEARTBEAT FIRST: the first pass runs acquire hooks inline, which can
+// outlast a TTL, so it must renew held seats ([heldSeat]) and the watchdog
+// must not read the pass as a wedged beat.
 //
-// Presence is announced BEFORE the first sweep: capacity divides by the live
-// node count, and a node that has not registered itself would compute a
-// share that excludes itself. The first sweep runs synchronously, so a node
-// whose claim gate admits as it starts holds its share the moment it reports
-// started. One whose gate does not — a data node still catching up with its
-// logs, the commonest boot — claims nothing yet and keeps renewing its
-// presence, and its seats wait for the pass the gate's owner asks for as the
-// gate opens ([Config.Ready], [Host.Resweep]). A boot is therefore not
-// synchronous in general, and a caller that needs the seats held waits for
-// them.
-//
-// A DRAIN BEGUN BEFORE IT HOLDS THROUGH IT. Start leaves [Host.BeginDrain]'s
-// flag as it finds it — [Host.Stop] is what ends a drain — so a stop decided
-// while the node around this host is still starting (a signal during an
-// engine's boot) makes the first pass claim nothing and announce nothing. It
-// used to clear the flag, and that pass claimed the node's whole share onto a
-// node already leaving, running every claimed seat's acquire hook to its end.
-//
-// It reports no error because none of its work has a failure a caller could
-// act on: an unreachable store means this node claims nothing yet and
-// retries on its own loops, which is what it would do with any error a
-// caller handed back to it.
+// Presence is announced BEFORE the first sweep, or capacity divides by a node
+// count excluding this one. A closed claim gate ([Config.Ready]) claims nothing
+// until its owner asks for a pass ([Host.Resweep]); a caller needing seats held
+// waits. A DRAIN BEGUN BEFORE START HOLDS THROUGH IT: Start leaves the flag
+// alone ([Host.Stop] ends it), so that pass claims and announces nothing.
 func (h *Host) Start(ctx context.Context) {
 	h.mu.Lock()
 	if h.running {
@@ -987,27 +852,15 @@ func (h *Host) Start(ctx context.Context) {
 
 // BeginDrain stops claiming but keeps renewing what is already held.
 //
-// The first half of a graceful shutdown: readiness flips off, no new seats
-// are taken, and the seats in hand keep their leases alive so their turns
-// can finish. [Host.ReleaseAll] is the second half.
+// The first half of a graceful shutdown: no new seats, held leases stay
+// alive so turns finish. [Host.ReleaseAll] is the second.
 //
-// A SEAT STILL BEING TAKEN IS CUT ([heldSeat.cut]), under the same lock the
-// flag is set under, so no claim can establish a seat after the drain was
-// decided: its acquire hook's context ends, and the claim running it gives the
-// seat back as never established ([ReasonAcquireFailed]) without backing off
-// it, as a step of the stop ctx carries ([Host.drainStop]); [Host.AwaitCut] is
-// how the drain learns that give-back is done. The drain used to wait for it
-// instead, since its release takes the
-// seat's lock and the claim holds that lock for the whole hook — and a hook
-// has no total: it spawns MCP children, hydrates the seat's memory and
-// recovers an interrupted executor.
-//
-// Presence is dropped immediately. A draining node that keeps its presence
-// lease stays in every peer's divisor, so they compute a share that reserves
-// capacity for a node which will never claim again — and this node's seats
-// stay dark for the whole drain plus the takeover ramp. With 3 nodes and 10
-// seats the two healthy peers each compute ceil(10/3)=4, and two of the
-// draining node's seats are claimable by nobody for the entire window.
+// A SEAT STILL BEING TAKEN IS CUT ([heldSeat.cut]) under the flag's lock, so
+// none establishes after the drain: its hook's context ends and the claim
+// gives it back ([ReasonAcquireFailed]) without backoff, within
+// [Host.drainStop]; [Host.AwaitCut] learns that is done. Waiting would block
+// on the seat's lock. Presence is dropped at once, or peers keep reserving
+// capacity for a node that never claims again.
 func (h *Host) BeginDrain(ctx context.Context) {
 	h.mu.Lock()
 	h.draining = true
@@ -1031,15 +884,12 @@ func (h *Host) BeginDrain(ctx context.Context) {
 // cut while it was being taken ([heldSeat.cut]) has given that seat back, and
 // reports how many had not when ctx ended.
 //
-// THE DRAIN'S OTHER HALF OF A CUT. [Host.BeginDrain] cuts rather than waits,
-// so that nothing waits on a seat's lock for a hook with no total, and a cut
-// seat leaves [Host.Held] at once — so the drain's [Host.ReleaseAll] never
-// reaches it, and without this a drain would report done while a claim was
-// still giving a seat back: its teardown and its lease give-back running on
-// beside whatever the stop tears down after the drain. A cut hook that reads
-// its context returns promptly, and its give-back is bounded by the drain's
-// allowance ([Host.drainStop]); one that ignores its context is waited for up
-// to ctx, as the drain's wait for its turns is.
+// THE DRAIN'S OTHER HALF OF A CUT. A cut seat leaves [Host.Held] at once, so
+// [Host.ReleaseAll] never reaches it; without this a drain would report done
+// while a claim was still giving a seat back, beside whatever the stop tears
+// down next. A cut hook that reads its context returns promptly, its
+// give-back bounded by [Host.drainStop]; one that ignores it is waited for up
+// to ctx.
 func (h *Host) AwaitCut(ctx context.Context) int {
 	h.mu.Lock()
 	var settling []chan struct{}
@@ -1090,13 +940,11 @@ func (h *Host) ResumeClaiming(ctx context.Context) {
 // lease's TTL.
 //
 // THE RENEW'S AGE, NOT THE LEASE'S EXISTENCE. A store that stops answering
-// leaves the last lease in hand while the row behind it lapses, and from then
-// on every peer reads this node as gone: it is no longer in their divisor, and
-// the estate's router no longer asks it anything. What a successful claim at t
-// proves is the row through t+ttl, so that is how long this answers yes — the
-// same bound a seat's grace is held to ([heldSeat.renewedAt]). It is what a
-// readiness probe reads, because a node its fleet cannot see is not doing the
-// work it was started for, however healthy it looks from inside.
+// leaves the last lease in hand while the row lapses, and peers then read this
+// node as gone (out of their divisor, unasked by the estate's router). A claim
+// at t proves the row through t+ttl, so that is how long this answers yes, the
+// bound a seat's grace is held to ([heldSeat.renewedAt]). A readiness probe
+// reads it: a node its fleet cannot see is not doing its work.
 func (h *Host) HoldsPresence() bool {
 	_, held := h.PresenceEpoch()
 	return held
@@ -1105,12 +953,10 @@ func (h *Host) HoldsPresence() bool {
 // PresenceEpoch is the epoch of the presence lease this node holds now, and
 // false whenever [Host.HoldsPresence] would answer no.
 //
-// THE INCARNATION A PEER COUNTS THIS NODE BY. A lease that lapsed is never
-// renewed, only claimed again at a new epoch, so a record a node files under
-// its presence epoch (an MCP listing, internal/coord's mcplisting.go) is one
-// its peers stop counting the moment the presence it was filed under lapses,
-// and a node that sees its epoch move knows a sweep may have removed what it
-// filed under the old one.
+// THE INCARNATION A PEER COUNTS THIS NODE BY. A lapsed lease is claimed again
+// at a new epoch, so a record filed under the presence epoch (an MCP listing,
+// internal/coord's mcplisting.go) stops counting when it lapses, and a node
+// seeing its epoch move knows a sweep may have removed what it filed.
 func (h *Host) PresenceEpoch() (int64, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1154,19 +1000,14 @@ func (h *Host) Stop(ctx context.Context) {
 	}
 	h.wg.Wait()
 
-	// NOT THE CALLER'S CONTEXT, for the reason Node.Drain gives: Stop is
-	// reached on a shutdown path whose context is routinely already
-	// cancelled, and a give-back that inherits it releases nothing — every
-	// seat then sits dark for a full TTL instead of being taken over at
-	// once, and this node's presence lingers so peers keep reserving
-	// capacity for it.
+	// NOT THE CALLER'S CONTEXT (see Node.Drain): a shutdown context is
+	// routinely already cancelled, and a give-back inheriting it releases
+	// nothing, leaving every seat dark for a TTL and the presence lingering.
 	//
-	// ON THE STOP'S ONE ALLOWANCE instead ([WithinStop]): the engine's, when
-	// its stop is what reached here, or one begun from THIS HOST'S TTL —
-	// never [SeatLeaseTTL], for the reason [HeartbeatRatio] gives: a
-	// deployment that shortened its lease to ten seconds would otherwise
-	// spend fifteen giving the seats back, an allowance strictly outside the
-	// lease it is racing. Every give-back below is a [StopStep] of it.
+	// ON THE STOP'S ONE ALLOWANCE ([WithinStop]): the engine's, or one begun
+	// from THIS HOST'S TTL, never [SeatLeaseTTL] ([HeartbeatRatio] says why:
+	// a ten second lease would spend fifteen giving seats back). Every
+	// give-back below is a [StopStep] of it.
 	releaseCtx := WithinStop(context.WithoutCancel(ctx), h.ttl)
 	h.ReleaseAll(releaseCtx, ReasonDrain)
 	h.releaseNodePresence(releaseCtx)
@@ -1191,24 +1032,15 @@ func (h *Host) Stop(ctx context.Context) {
 
 // ReleaseAll hands every seat back, all at once.
 //
-// Concurrently, not one after another, and the difference is the whole point
-// of a graceful drain. A seat's teardown takes time of its own — its MCP
-// children's shutdown ladder, its last memory flush — so in sequence a node
-// holding a dozen seats pays it a dozen times over, and the eleventh seat
-// stays dark for the whole procession. Released together, the drain costs the
-// slowest teardown rather than the sum, and the give-backs, which share a
-// stop's one allowance ([StopBudget]), are charged once for the time they
-// overlap.
+// Concurrently: a teardown takes time (MCP shutdown ladder, memory flush), so
+// in sequence the last seat stays dark for the whole procession. Together the
+// drain costs the slowest teardown, and the give-backs share a stop's one
+// allowance ([StopBudget]).
 //
-// Deliberately uncapped, unlike claiming. The claim-rate limit is sized by
-// the cost of an MCP SPAWN on the node taking a seat on; letting go costs a
-// teardown, and the peers picking these up are throttled by their own claim
-// limits anyway — so the only thing a release cap would add is a longer
-// drain.
-//
-// Failures are per seat: a teardown that cannot be proven keeps THAT seat's
-// lease and says nothing about the others, so one stuck consumer must not
-// strand eleven healthy seats.
+// Uncapped, unlike claiming: that limit is sized by an MCP SPAWN on the taking
+// node, peers are throttled by their own, and a cap would only lengthen the
+// drain. Failures are per seat: an unproven teardown keeps THAT seat's lease
+// and strands no healthy one.
 func (h *Host) ReleaseAll(ctx context.Context, reason ReleaseReason) {
 	handles := h.Held()
 	if len(handles) == 0 {

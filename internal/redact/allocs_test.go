@@ -5,21 +5,15 @@ import (
 	"testing"
 )
 
-// CLEAN TEXT SKIPS EVERY REPLACEMENT, which is the whole point of testing a
-// rule before running it.
+// CLEAN TEXT SKIPS EVERY REPLACEMENT: `ReplaceAllString` allocates even with
+// no match (it copies the input into a fresh buffer and converts it to a
+// string), so testing a rule before running it spares clean transcripts, which
+// are almost all of them, two full copies per rule.
 //
-// `ReplaceAllString` allocates even when it changes nothing: with no match it
-// still copies the whole input into a fresh buffer and converts that buffer to
-// a string. Every rule over a clean transcript was therefore two full copies
-// of it — paid on every sandbox result and every transcript, of which almost
-// none carry a credential.
-//
-// Measured against the unguarded loop BUILT HERE from the same rule table
-// rather than against a fixed number, for two reasons: the number moves when a
-// rule is added, and the race detector adds an allocation per regexp
-// execution, so an absolute count is 0 under `go test` and grows with the
-// table under `-race`. A comparison against the shape this replaced holds
-// under both, and is what the change actually claims. An internal test because
+// Measured against an unguarded loop built here from the same rule table, not
+// a fixed number: the number moves when a rule is added, and the race detector
+// adds an allocation per regexp execution, so an absolute count is 0 under
+// `go test` and grows with the table under `-race`. An internal test because
 // the rules are the baseline.
 func TestCleanTextSkipsEveryReplacement(t *testing.T) {
 	// Transcript-shaped: long enough that a copy per rule dominates, and

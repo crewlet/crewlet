@@ -156,18 +156,14 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		return copies, nil
 	}
 	// NOBODY HERE WAS REACHED. The lead is woken unless the actor is the
-	// issue's own assignee, which is the one case where the work is
-	// demonstrably owned: somebody took it and is working on it in the
-	// open. Everything else — an unassigned ticket filed into the
-	// project, an issue handed entirely to people outside the org chart —
-	// has landed nowhere, and a ticket that lands nowhere produces no
-	// error anywhere and is discovered weeks later.
+	// issue's own assignee, the one case where the work is demonstrably
+	// owned. Anything else (an unassigned ticket, an issue handed to people
+	// outside the org chart) has landed nowhere, with no error anywhere.
 	//
-	// Keyed on the ASSIGNEE rather than on "was every target the actor",
-	// because Jira adds the reporter to the watcher list automatically:
-	// the founder who files an unassigned ticket is its only watcher, so
-	// the every-target-was-the-actor reading would call the most
-	// important case in the integration self-service and stay silent.
+	// Keyed on the ASSIGNEE, not on "was every target the actor": Jira adds
+	// the reporter as a watcher, so a founder filing an unassigned ticket is
+	// its only watcher and that reading would stay silent on the most
+	// important case.
 	if meta["assignee_account_id"] != "" && meta["assignee_account_id"] == actor {
 		log.DebugContext(ctx, "jira_actor_owns_the_issue", "issue", meta["issue_key"],
 			"event_type", event)

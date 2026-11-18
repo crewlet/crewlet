@@ -397,19 +397,15 @@ func (t *Transport) attach(ctx context.Context, s identifiedSeat) error {
 
 // register puts this seat's bot into the party registry.
 //
-// BY USER ID, IN THE BOT NAMESPACE, because the user id is what every payload
-// names a poster by — a post's author, a mention list — and the bot namespace
-// is where a fellow agent's id lives beside the people's ([notify.BotNamespace]),
-// so a fellow agent's message is annotated exactly the way a person's is.
+// BY USER ID, IN THE BOT NAMESPACE ([notify.BotNamespace]): the id is what every
+// payload names a poster by, so a fellow agent's message is annotated as a
+// person's is.
 //
-// NOT THE USERNAME. It was registered in the transport's own namespace too,
-// on the reasoning that a person typing a mention uses it — but no lookup in
-// the engine is ever handed a username: a mention reaches a seat through the
-// server's own `mentions` list, which carries user ids, and an agent finds a
-// colleague through the org. What that namespace holds now is the PEOPLE's
-// user ids (see people.go), and a username beside them would be a second kind
-// of key in one map, one that Mattermost's own rules let a bot be named so as
-// to collide with: a 26-character lowercase username is a valid one.
+// NOT THE USERNAME: no lookup is ever handed one (mentions arrive as user ids,
+// agents find colleagues through the org), and the transport's namespace holds
+// the PEOPLE's user ids (people.go), where a username would be a second kind of
+// key that a bot could collide with, as a 26-character lowercase username is
+// valid.
 func (t *Transport) register(seat Seat) {
 	t.mu.Lock()
 	lookup := t.registry
@@ -432,27 +428,15 @@ func (t *Transport) register(seat Seat) {
 // Reregister puts every running seat's identities, and the new org's people,
 // into a NEW registry.
 //
-// An apply builds a fresh registry from the new org, and these identities
-// are facts about the SERVER rather than about the config — resolved once at
-// connect, against a live instance. Losing them on an apply would make every
-// agent's own message annotate as a stranger until something reconnected,
-// which is a thing nothing here would ever do on its own.
-//
-// THE PEOPLE ARE THE ORG'S, and what the server last said about their names
-// fills the new registry at once, with no request — so a person recognised a
-// moment ago is not a stranger while the names are asked about again, which
-// the refresh loop is told to do now: an apply is what names a new person or
-// corrects a name. A registry the identity directory rebuilds for the same
-// org — a suspension, a reinstatement — comes through here too, and what it
-// withholds gets no account (people.go).
-//
-// AND AN APPLY STATES WHO THEY ARE, which a directory rebuild does not:
-// restated says which this is. On an apply each name is anchored to the
-// account it holds now, so a name reported as moved stops being reported: the
-// company has been stated again with it, which is the operator's answer to
-// the report (people.go, "The name is the authority, and a move is said"). A
-// rebuild for the same company keeps the anchors, or suspending anybody would
-// withdraw a report about somebody else that nobody answered.
+// These identities are facts about the SERVER, resolved once at connect:
+// losing them on an apply would annotate every agent's own message as a
+// stranger's until a reconnect, which nothing would do. THE PEOPLE ARE THE
+// ORG'S: what the server last said about their names fills the new registry
+// with no request, so nobody turns stranger while the refresh loop (told to ask
+// now) asks again. A directory rebuild comes through here too (people.go). Only
+// an apply (restated) anchors each name to the account it holds, ending a
+// reported [move]; a rebuild keeps the anchors, or suspending anybody would
+// withdraw a report about somebody else.
 func (t *Transport) Reregister(reg *notify.Registry, people []Person, restated bool) {
 	if reg == nil {
 		return
@@ -573,17 +557,14 @@ func (t *Transport) ThreadBackend() string { return Backend }
 
 // ReadThread implements [notify.ThreadReader].
 //
-// It reads as the SEAT, on the seat's own bot token, which is what makes the
-// block match what that agent can actually see: a channel the bot is not in
-// answers an error and the turn gets the unreadable hint rather than somebody
-// else's conversation.
+// It reads as the SEAT, on its own bot token, so the block matches what that
+// agent can see: a channel the bot is not in errors and the turn gets the
+// unreadable hint, not somebody else's conversation.
 //
-// A seat this node has no client for reports false rather than dereferencing
-// one. That is not defensive: a bot whose token was refused at boot is left
-// out of the map deliberately (see [Transport.startSeat]), and a node running
-// in maintenance mode starts no chat transport at all — both are ordinary
-// states, and both must render "the thread could not be read" rather than
-// panicking a turn.
+// A seat this node has no client for reports false: a bot whose token was
+// refused at boot is left out of the map deliberately ([Transport.startSeat]),
+// and a node in maintenance mode starts no chat transport; both are ordinary
+// and must render "could not be read" rather than panic a turn.
 func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string) (notify.Transcript, bool) {
 	t.mu.Lock()
 	s, ok := t.seats[handle]

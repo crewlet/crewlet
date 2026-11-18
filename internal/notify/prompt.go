@@ -14,38 +14,15 @@ import (
 
 // Prompt is everything the spine needs to know about ONE third-party app.
 //
-// Nine questions, and each is asked by a different part of the spine — which
-// is why they are one interface rather than nine registries that could drift
-// out of step about what a source is:
-//
-//   - Build renders the trigger a seat is woken with.
-//   - Provenance says what the notification's body is and who wrote it, which
-//     is how the spine fences it before Build is handed it ([Render]).
-//   - RequiresRecon says whether that trigger is the context or a POINTER at
-//     it, which the turn-start prefetches read.
-//   - SubjectIsLabel says whether the subject is part of what was sent or
-//     the surface's own name for the event, which the turn's ask reads.
-//   - Addressed says whether somebody is waiting on this seat for an answer,
-//     which the turn engine's delivery check reads.
-//   - PartitionKey says which other events this one is handled WITH: the
-//     broker's inbox partition and the coalescer's merge unit.
-//   - ConversationIdentity says which ongoing conversation it is part of: the
-//     key a seat's sessions are kept under on the executor log, the turn
-//     telemetry's conversation_key tag, the episodes column, and the value a
-//     parked executor matches a person's answer against — they answer on the
-//     conversation, not into the batch.
-//   - WakesActor says whether a notification reaches the party who caused it.
-//   - DigestBody is the supersede rule when several of them merge.
-//
-// The count was "four" over five bullets for as long as the interface had
-// five questions on it, which is how the two identities above stayed one
-// bullet — and one method — long after they had stopped being one answer.
+// Nine questions, each asked by a different part of the spine (Build,
+// Provenance, RequiresRecon, SubjectIsLabel, Addressed, PartitionKey,
+// ConversationIdentity, WakesActor, DigestBody), so one interface rather than
+// nine registries that could drift about what a source is. Each method's doc
+// names who asks and why its conservative answer is what it is.
 //
 // A third-party app implements it; nothing in the spine does. The generic
-// fallback below is the answer for a source nobody has written one for (an
-// extension's own events, or a third-party app added to config before its
-// prompt exists), and it is deliberately the most conservative reading of
-// each question.
+// fallback answers for a source with no prompt, the most conservative reading
+// of each question.
 type Prompt interface {
 	// Source is the integration name this prompt answers for.
 	Source() string
@@ -62,138 +39,89 @@ type Prompt interface {
 	// context can honestly do.
 	Build(n Inbound, parties Parties) string
 
-	// Provenance is what the notification's body is — the surface it was
-	// read from — and who wrote it, which is what the spine fences it as
-	// ([Render]) and what the turn's ask is fenced as where an auxiliary
-	// model reads it.
+	// Provenance is what the notification's body is (the surface it was read
+	// from) and who wrote it: what the spine fences it as ([Render]) and what
+	// the turn's ask is fenced as for an auxiliary model.
 	//
-	// Asked of the source because only it knows its surfaces: a code
-	// host's body is a comment on one event and a description on the next,
-	// and the person who CAUSED the event (who assigned the issue) is often
-	// not who wrote the body (who opened it). Most sources answer from what
-	// their parser stamped ([Stated]); a source whose body is always one
-	// kind of thing by one party, a chat message by its sender, answers
-	// from that. An author nobody can name is no author, which the fence
-	// labels `external`.
+	// Asked of the source because only it knows its surfaces: a code host's
+	// body is a comment on one event and a description on the next, and who
+	// CAUSED the event is often not who wrote the body. Most sources answer from
+	// what their parser stamped ([Stated]); a chat message answers from its
+	// sender. An author nobody can name is no author, which the fence labels
+	// `external`.
 	Provenance(n Inbound, parties Parties) Provenance
 
 	// RequiresRecon reports that the body only says WHERE to look.
 	//
-	// A webhook saying "PR #42 got a comment" tells a seat where the work
-	// is, not what it is: the seat has to fetch the thread before it has
-	// any context. When this is true the turn-start relevance filters skip
-	// their auxiliary model call, because filtering against a bare pointer
-	// is near-guaranteed to be worth nothing and the agent is already
-	// told to re-query after it has looked.
+	// A webhook saying "PR #42 got a comment" gives a seat no context until it
+	// fetches the thread. When true, the turn-start relevance filters skip
+	// their auxiliary model call: filtering against a bare pointer is worth
+	// nothing and the agent is told to re-query after it has looked.
 	RequiresRecon(n Inbound) bool
 
-	// SubjectIsLabel reports that the subject is the SURFACE's name for
-	// the event — the same words on every event it delivers — rather than
-	// part of what was sent.
+	// SubjectIsLabel reports that the subject is the SURFACE's name for the
+	// event (the same words on every event) rather than part of what was sent.
 	//
-	// The turn's ask (what every relevance judgement and the turn's one
-	// vector are made against) leads with a notification's subject,
-	// because on most sources it is content: an issue's key and title, a
-	// page's title, a monitor's alert — and on a tracker comment the only
-	// place the topic is named at all. A chat backend's subject is not: it
-	// is "Slack message" on every message, and an ask leading with it
-	// handed the memory filter, the knowledge-query writer and the episode
-	// summary the same words on every turn of the surface, and pulled
-	// every chat turn's vector towards every other. Only the source can
-	// say which kind of subject it writes, so it is asked here.
+	// The turn's ask leads with the subject, content on most sources. A chat
+	// backend's is "Slack message" on every message: leading with it gave every
+	// chat turn the same words and pulled every turn's vector towards every
+	// other. Only the source knows which kind it writes.
 	//
-	// The conservative answer is FALSE: a subject read as content when it
-	// was a label costs the ask a few repeated words, while one read as a
-	// label when it was content drops what was sent.
+	// The conservative answer is FALSE: a label read as content costs a few
+	// repeated words, content read as a label drops what was sent.
 	SubjectIsLabel(n Inbound) bool
 
 	// Addressed reports that somebody is waiting on THIS seat for an
 	// answer: a direct message, a personal mention, an assignment.
 	//
-	// The turn engine reads it as the half of "did this turn deliver?" a
-	// model cannot get wrong — an addressed turn may not end in silence,
-	// because to the person who asked, silence is indistinguishable from a
-	// message that was lost. An unaddressed one may end having done
-	// nothing at all, which is what makes triage cheap.
+	// The turn engine's delivery check reads it: an addressed turn may not end
+	// in silence, which to the asker is indistinguishable from a lost message;
+	// an unaddressed one may do nothing, which makes triage cheap.
 	//
-	// Only the third-party app can say which of its events are an ask. A tracker's
-	// answer is its own routing reason (assigned, mentioned); a chat
-	// backend's is the channel type and whether the seat was named. So it
-	// is asked here rather than pattern-matched centrally, and the
-	// conservative answer is FALSE: a seat wrongly told nobody is waiting
-	// keeps the freedom to stay silent, while one wrongly told somebody is
-	// must post something on every broadcast it observes.
+	// Only the app can say which events are an ask (a tracker's routing reason,
+	// a chat backend's channel type and whether the seat was named), so it is
+	// not pattern-matched centrally. The conservative answer is FALSE: a seat
+	// wrongly told nobody waits may stay silent, while one wrongly told somebody
+	// waits must post something on every broadcast it observes.
 	Addressed(n Inbound) bool
 
 	// PartitionKey is the SOURCE-LOCAL grouping key: which other events
 	// this one is handled together with.
 	//
-	// Local — "ENG-42", "C42:1718.003" — because the caller namespaces it.
-	// Empty means this source cannot derive one for this event, and the
-	// event is then never merged with anything.
+	// Local ("ENG-42", "C42:1718.003") because the caller namespaces it. Empty
+	// means no key can be derived and the event is never merged.
 	//
-	// Two readers, and both are positional rather than historical: the
-	// broker partitions a seat's inbox by it and the coalescer merges a
-	// partition into one trigger. A parked executor was a third until
-	// its match moved onto the identity — a person answers on the
-	// conversation, and the engine's own prompt routinely puts their reply
-	// in a finer partition than the question was asked from.
+	// Two readers: the broker partitions a seat's inbox by it and the coalescer
+	// merges a partition into one trigger. A parked executor matches on the
+	// identity instead: a person answers on the conversation, and their reply
+	// often lands in a finer partition than the question.
 	PartitionKey(metadata map[string]string, subject string) string
 
 	// ConversationIdentity is the SOURCE-LOCAL identity of the ongoing
-	// conversation: what the turn's rows on the executor log, the episodes
-	// and the event store's conversation_key tag file this event under.
+	// conversation: what the executor log, the episodes and conversation_key
+	// file this event under. Namespaced like [Prompt.PartitionKey]; empty means
+	// none. REQUIRED, not an optional side-interface, whose type assertion would
+	// give a source that forgot it a silent default.
 	//
-	// Local, like [Prompt.PartitionKey], because the caller namespaces
-	// both through the same rule. Empty means the same thing: this source
-	// cannot name a conversation for this event.
-	//
-	// REQUIRED, not an optional side-interface a source can decline. A
-	// type assertion would hand a source that forgot the method a silent
-	// default — which is exactly the failure this pair was split to
-	// remove, a key that answered a question nobody had asked it.
-	//
-	// THE INVARIANT EVERY IMPLEMENTATION OWES: the identity must be
-	// CONSTANT ACROSS EVERY EVENT IN A PARTITION, so a partition key is
-	// always the identity itself or a finer cut of it. A turn is a
-	// partition and its rows on the executor log are keyed once per turn,
-	// so if two constituents of one coalesced trigger disagreed about the
-	// identity the key would depend on which event sorted first.
-	//
-	// For most sources the two coincide, because an issue key, a page id
-	// and a monitor id are each one object that is both the merge unit and
-	// the durable thread; those delegate in one line. Two cut the
-	// partition finer, and each one's doc shows the invariant deciding the
-	// answer: [ChatPrompt], where a direct conversation is one conversation
-	// however its replies are threaded, and Worklet's, whose
-	// partition is the task's identity cut by the surface a wake owes its
-	// reply on — so a merge of two wakes owing two surfaces never has to
-	// drop one of the promises, while every turn about the task still
-	// keeps one ledger.
+	// THE INVARIANT EVERY IMPLEMENTATION OWES: the identity is CONSTANT ACROSS
+	// EVERY EVENT IN A PARTITION, so a partition key is the identity or a finer
+	// cut of it; else a coalesced turn's key would depend on which event sorted
+	// first. [ChatPrompt] and Worklet's cut finer (Worklet's by the surface a
+	// wake owes its reply on, so a merge never drops one of two promises).
 	ConversationIdentity(metadata map[string]string, subject string) string
 
 	// WakesActor reports whether a notification reaches the party who
 	// caused it, overriding the self-action rule.
 	//
-	// True for an event reporting the OUTCOME of the actor's own action —
-	// a pipeline that failed names the person who pushed as its actor, and
-	// they are the one who has to fix it. False for an event the actor
-	// already knows about, which is nearly everything: their own comment,
-	// their own assignment, their own edit.
+	// True for the OUTCOME of the actor's own action (a failed pipeline names
+	// the pusher, who has to fix it); false for what the actor already knows,
+	// nearly everything. See [WakesActor] for a source with no prompt.
 	//
-	// Only the third-party app can say which of its notifications are
-	// which, so it is asked here rather than pattern-matched on the name
-	// centrally. See [WakesActor] for what happens to a source with no
-	// registered prompt.
-	//
-	// HANDED THE WHOLE NOTIFICATION, never its event type alone: a code
-	// host's answer is its event type (a failed pipeline), but the native
-	// tracker's is the ROUTING REASON the parser stamped on each
-	// recipient's copy — a status change that unblocked somebody's task
-	// reaches its actor as `unblocked` and every other copy of the same
-	// change does not, and the event type is `status` on all of them. Asked
-	// with the type alone, a prompt that needs the reason reads the type
-	// as one and answers no for every copy.
+	// HANDED THE WHOLE NOTIFICATION, never its event type alone: the native
+	// tracker answers by the ROUTING REASON the parser stamped on each
+	// recipient's copy. A status change that unblocked a task reaches its actor
+	// as `unblocked` and no other copy, yet the type is `status` on all, so a
+	// type-only answer is no for every copy.
 	WakesActor(n Inbound) bool
 
 	// DigestBody is the per-source supersede rule for one constituent of a
@@ -256,49 +184,31 @@ type Inbound struct {
 	// service, never by a parser.
 	Fence provenance.Boundary
 
-	// Owes names the CHAT SURFACE the woken seat promised to post on, when
-	// the promise is not simply "answer where you were asked" — which
-	// [Prompt.Addressed] already says, on this notification's own source.
+	// Owes names the CHAT SURFACE the woken seat promised to post on, when the
+	// promise is not simply "answer where you were asked" ([Prompt.Addressed]).
 	//
-	// SET BY THE PARSER, PER RECIPIENT, because only the parser knows which
-	// copy of one change carries a promise: today that is the tracker's
-	// `answered` wake to an asker whose decision said it would report the
-	// outcome in a channel, and none of the other copies of that answer.
-	// Empty — every vendor edge — owes nothing beyond the source.
+	// SET BY THE PARSER, PER RECIPIENT, because only it knows which copy of one
+	// change carries a promise: the tracker's `answered` wake to an asker whose
+	// decision said it would report the outcome in a channel, not the other
+	// copies. Empty, on every vendor edge, owes nothing beyond the source.
 	//
-	// A FIELD rather than a [Prompt] method, unlike Addressed, because it is
-	// not a reading of the source's routing that every source has to give:
-	// it is one first-party promise, and nine prompts answering "" to it
-	// would be nine places to forget that a merge has to carry it.
+	// A FIELD, not a [Prompt] method: it is one first-party promise, and nine
+	// prompts answering "" would be nine places to forget a merge must carry it.
 	Owes string
 }
 
 // FirstPartyWriter is the writer a first-party notice states
-// ([Inbound.Writer]), from the actor, the actor kind, the actor's apps and
-// whom the write was made for, as its record names them: the actor as the
-// seat's handle for a seat's write and for a person's, which iam.ActorFor
-// records under the seat they hold; as the credential's login for a credential
-// acting as no seat, with the apps the node that took the write recorded for
-// it (iam.ActorApps); and nothing for the engine's. THE KIND DECIDES, NEVER
-// THE SPELLING: a handle is one segment, and so can be a node's name.
+// ([Inbound.Writer]) as the record names it: the seat's handle for a seat's or
+// a person's write (iam.ActorFor), the credential's login with its recorded
+// apps (iam.ActorApps) for a credential acting as no seat, nothing for the
+// engine's. THE KIND DECIDES, NEVER THE SPELLING: a handle can be a node's name.
 //
-// THE ONE PLACE A WRITER IS BUILT, and the apps and the carrier parameters
-// rather than options, so no producer names a credential's write without what
-// a turn it wakes may use for it (a credential's writer carrying no apps is
-// worked for as a stranger), nor an agent's without whom it was written for
-// (ADR-0109). The apps are kept for a credential's write alone, and only as
-// apps this build knows, once each, in iam.Apps order: what a seat's or a
-// person's record carries is not its requester's to use, since the running
-// node reads who holds the seat. The carrier is kept for an agent's write and
-// for the engine's, its apps held to that same order: a person and a
-// credential write for nobody but themselves, and a carrier handed for one of
-// them would make a turn work for somebody that writer never spoke for. The
-// engine writes for nobody but itself too, save the one exception ADR-0109's
-// amendment makes: its record about an agent's earlier act made for somebody,
-// which carries that act's carrier — Gitlet's merge queue's ejection and a
-// close it could not make, which internal/gitlet's parser alone hands one
-// (its writerOf). Every other producer hands the record's own carrier, which
-// its store refuses on any write but an agent's (types.WrittenFor.For).
+// THE ONE PLACE A WRITER IS BUILT, so no credential's write goes without the
+// apps a woken turn may use (none is worked for as a stranger), nor an agent's
+// without whom it was written for (ADR-0109). Apps are kept for a credential
+// alone, known ones, once each, in iam.Apps order; the carrier for an agent's
+// write and the engine's record about an agent's earlier act (only
+// internal/gitlet's writerOf); the store refuses it elsewhere (types.WrittenFor.For).
 func FirstPartyWriter(kind iam.ActorKind, actor string, apps []iam.Grant,
 	workingFor *types.WorkingFor) *types.NotificationWriter {
 
@@ -417,19 +327,16 @@ func cmpFirst(a, b string) string {
 
 // Prompts is the per-source registry.
 //
-// A VALUE built and passed, not a package-level map. A mutable global would
-// make registration order matter, leak one test's third-party app into the
-// next, and give a process no way to run two companies with different
-// integration sets, which is exactly what an epoch swap is.
+// A VALUE built and passed, not a package-level map: a mutable global would
+// make registration order matter, leak one test's app into the next, and stop
+// a process running two companies with different integration sets, as an epoch
+// swap does.
 //
-// THE ZERO VALUE IS A REGISTRY WITH NO APPS, and answers every source with the
-// generic fallback. That is why the fallback is not a field: it held
-// [Generic] wherever [NewPrompts] built the value and nil everywhere else, so
-// a service handed a zero registry — an ordinary configuration, every node
-// has one before an integration is wired — panicked on the first delivery of
-// any source. A type that has to be constructed to be usable is one whose
-// zero value should have been refused, and this one is copied and passed by
-// value on every inbound event.
+// THE ZERO VALUE IS A REGISTRY WITH NO APPS and answers every source with the
+// generic fallback, which is why the fallback is not a field: a field is nil
+// wherever [NewPrompts] did not build the value, and a service handed a zero
+// registry (every node has one before an integration is wired) would panic on
+// the first delivery. The value is copied on every inbound event.
 type Prompts struct {
 	bySource map[string]Prompt
 }
