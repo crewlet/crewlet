@@ -1861,6 +1861,46 @@ func TestAThreadPastTheChainsBoundIsCannotTell(t *testing.T) {
 	}
 }
 
+// A REPLACED KEPT LIST LEAVES THE CHAIN WITH ITS COUNT: boundaries listing
+// 4,096 uuids, then 64, then none, each in place of the one before
+// ([threadChain.items]), leave the chain's kept list no more room than its own
+// entries take, so none for the list of none.
+//
+// Mutation: list a boundary's uuids into the array of the list it replaces,
+// and the chain keeps the first list's room under a count of none.
+func TestAReplacedKeptListLeavesTheChainWithItsCount(t *testing.T) {
+	t.Parallel()
+	lists := []int{4096, 64, 0}
+	lines := []string{rcPlain[0]}
+	for i, entries := range lists {
+		kept := make([]int, entries)
+		for k := range kept {
+			kept[k] = 100 + k
+		}
+		lines = append(lines, rcBoundary(2+i, 1000*(i+1), rcListing(1, kept...)))
+	}
+	c := newThreadChain("")
+	r := newThreadReader(strings.NewReader(ctThread(lines...)), threadPlainMax)
+	for i := range lines {
+		line, err := r.Next(t.Context())
+		if err != nil {
+			t.Fatalf("line %d reads %v", i+1, err)
+		}
+		if h, _, err := c.See(line); h == noChainRecord || h == pastChainBound || err != nil {
+			t.Fatalf("line %d is filed as %d, %v", i+1, h, err)
+		}
+		if i == 0 {
+			continue
+		}
+		entries := lists[i-1]
+		if room := cap(append([][16]byte(nil), make([][16]byte, entries)...)); c.kept.listed != entries ||
+			cap(c.kept.list) > room {
+			t.Errorf("after a list of %d, the chain counts %d listed and keeps room for %d, want at most %d",
+				entries, c.kept.listed, cap(c.kept.list), room)
+		}
+	}
+}
+
 // EACH DISTINCT ORDER IS HANDED ONCE, with the variants that hand it, which
 // part the eight among them: one order where nothing parts the variants; two
 // where a retraction does, or q1t's leaf; and two where q1t's leaf hands the

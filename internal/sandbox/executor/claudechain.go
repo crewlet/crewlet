@@ -417,13 +417,12 @@ type threadChain struct {
 	lastRow, newest chainHandle
 	newestMS        int64
 	// lastBoundary is the last compaction's boundary, and kept what the
-	// newest one that names what it kept says, for the relink.
+	// newest one that names what it kept says, for the relink, its list in an
+	// array of its own ([threadChain.keptOf]).
 	lastBoundary chainHandle
 	kept         chainKept
-	// scratch collects one record's retraction prefixes, and keptScratch one
-	// boundary's listed uuids.
-	scratch     [][chainPrefixBytes]byte
-	keptScratch [][16]byte
+	// scratch collects one record's retraction prefixes.
+	scratch [][chainPrefixBytes]byte
 
 	// What End decided: each record's verdict, by handle - 1, the distinct
 	// orders, the leaf every variant walks from, and, in a subagent's thread,
@@ -903,7 +902,7 @@ func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHa
 		// it, whose list leaves the chain's count with it (2.1.322's iWo reads
 		// the last such boundary alone, `r=Ce`).
 		c.filed += preserved.listed - c.kept.listed
-		preserved.boundary, preserved.list, c.keptScratch = h, c.keptScratch, c.kept.list[:0]
+		preserved.boundary = h
 		c.kept = preserved
 	}
 	if src, ok := line.SourceToolAssistantUUID(); ok && r.kind&kindResult != 0 {
@@ -1046,14 +1045,14 @@ func (c *threadChain) retractionsOf(line threadLine) bool {
 }
 
 // keptOf reads what line, a compaction's boundary, says it kept
-// ([threadLine.Preserved]), the canonical uuids it lists into keptScratch,
-// and reports whether it names what it kept at all, and whether the boundary
-// fits threadChainMaxRecords beside what the chain filed: with its list in
-// place of the list of the boundary it replaces, where it names what it kept,
-// else alone. Every entry counts, a canonical uuid or not; metadata in no
-// shape is whyPreservedShape.
+// ([threadLine.Preserved]), the canonical uuids it lists in an array of their
+// own, never one a replaced list held, which would keep room for entries no
+// longer counted ([threadChain.items]); and reports whether it names what it
+// kept at all, and whether the boundary fits threadChainMaxRecords beside what
+// the chain filed: with its list in place of the list of the boundary it
+// replaces, where it names what it kept, else alone. Every entry counts, a
+// canonical uuid or not; metadata in no shape is whyPreservedShape.
 func (c *threadChain) keptOf(line threadLine) (k chainKept, named, fits bool) {
-	c.keptScratch = c.keptScratch[:0]
 	// room is how many entries the list may hold beside the boundary itself.
 	room := threadChainMaxRecords - c.filed + c.kept.listed - 1
 	// THE ROOM BEFORE THE SHAPE, as a retraction list's ([threadChain.retractionsOf]):
@@ -1071,7 +1070,7 @@ func (c *threadChain) keptOf(line threadLine) (k chainKept, named, fits bool) {
 		return chainKept{}, false, c.filed < threadChainMaxRecords
 	}
 	k.listed, k.nowhere = p.Listed, p.Nowhere
-	c.keptScratch = append(c.keptScratch, p.UUIDs...)
+	k.list = slices.Clone(p.UUIDs)
 	k.anchor, k.head, k.tail, k.segment = writtenUUID(p.Anchor), writtenUUID(p.Head), writtenUUID(p.Tail), p.Segment
 	// A list of none still needs the room the boundary itself takes.
 	return k, true, room >= 0
@@ -1133,7 +1132,7 @@ func (c *threadChain) passBound() chainHandle {
 	c.cannotTell(whyBound)
 	c.past = true
 	c.recs, c.index, c.written, c.replies, c.callIDs, c.carried = nil, nil, nil, nil, nil, nil
-	c.occurs, c.prefixes, c.sources, c.scratch, c.kept, c.keptScratch = nil, nil, nil, nil, chainKept{}, nil
+	c.occurs, c.prefixes, c.sources, c.scratch, c.kept = nil, nil, nil, nil, chainKept{}
 	return pastChainBound
 }
 
@@ -1151,7 +1150,7 @@ func (c *threadChain) End(ctx context.Context) error {
 	c.state = chainAbandoned
 	err := c.decide(ctx)
 	c.index, c.written, c.sources, c.scratch, c.replies = nil, nil, nil, nil, nil
-	c.kept, c.keptScratch = chainKept{}, nil
+	c.kept = chainKept{}
 	if err != nil {
 		c.verdicts, c.orders, c.leaf, c.ownLeaves = nil, nil, noChainRecord, nil
 		return err
