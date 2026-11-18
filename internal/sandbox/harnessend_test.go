@@ -12,27 +12,18 @@ import (
 	"time"
 )
 
-// HOW A COLLECTION RECORDS THE WAY ITS JOB'S HARNESS ENDED. The read that
-// collects a job writes on the job's own record whether its harness ended its
-// own run — over, gone cleanly by itself, its script packing it — or was cut
-// off, by the line its capture is placed by, whether or not it takes or keeps a
-// capture of the session: a relaunch that carries the round on in the job's box
-// continues the copy that box holds, which no capture describes, and a copy
-// whose harness was cut off may lack calls it made and had answered. Cut off
-// are a harness killed, its script packing after it; one told to stop by the
-// end its turn's cap asked of the job; a job its cap ended before its harness
-// started; and a job lost with its engine after it asked a person, read as its
-// loss is carried on and parked on its question for the answer that carries it
-// on in its box. And the resume that follows on the claim — a round a replaced
-// sign-in carries on, in the same frame — reads it off the claim, which was
-// read before the record was written. CUT OFF ONCE, CUT OFF FOR THE JOB: a read
-// that finds the harness ended its own run, of a job an earlier read found cut
-// off — a collection made again — leaves the record and the claim cut off.
+// HOW A COLLECTION RECORDS HOW ITS JOB'S HARNESS ENDED: on the job's record,
+// capture kept or not, as its own run (over, gone cleanly, its script packing
+// it) or cut off, by the line its capture is placed by; a relaunch in the box
+// continues its copy, which may lack calls a cut-off harness made. Cut off:
+// killed (script packing after), stopped or ended before starting by its cap,
+// or lost with its engine after asking a person. The resume on the claim, read
+// before the record, reads it off the claim. CUT OFF ONCE, CUT OFF FOR THE
+// JOB: a later read finding an own run leaves both.
 //
-// Mutation: write no record, record every job's harness as ending its own run,
-// record it only where the job's session is kept, leave the claim's copy as it
-// was read, or set the claim's copy to the read's end over a cut-off one, and a
-// case goes red.
+// Mutation: write no record, record every end as an own run, record it only
+// where the session is kept, leave the claim's copy as read, or set it to the
+// read's end over a cut-off one, and a case goes red.
 func TestACollectionRecordsHowItsJobsHarnessEnded(t *testing.T) {
 	t.Parallel()
 	archive := SessionArchive{Harness: "claude-code", SessionID: "s-1", Format: 1, Version: "2.1.310",
@@ -271,22 +262,14 @@ func TestAReadIsNeverRecordedOverAWordThisBuildDoesNotKnow(t *testing.T) {
 	}
 }
 
-// EACH OF A TAKE'S RECORDS IS GIVEN ITS OWN GRACE. The read that collects a job
-// makes two records after its take, one after the other, in the room it leaves
-// them before its pause (Coordinator.takeRecordsRoom): the take's own (the
-// digest it leaves in the box where it spooled the session, or the stamp of its
-// refusal) and how the job's harness ended, each asked under a grace of its
-// own from where it is asked. A room of one grace for the pair let a take at
-// its bound whose own record took its whole room leave the harness end a grace
-// short of its own, and none at all in the store's own process, where the room
-// was that grace alone: cut where the read's room for its records ends, and
-// said as unrecorded.
-// So here, in that process, the take runs to a second inside its deadline, its
-// digest answers a second inside its grace, and the store answers the harness
-// end a second inside its own: the record lands, and so does the digest.
-//
-// IN A SYNCTEST BUBBLE, where each answer comes exactly when its wait ends and
-// the read's deadline is exact arithmetic.
+// EACH OF A TAKE'S RECORDS IS GIVEN ITS OWN GRACE. After its take, the read
+// that collects a job makes two records in turn, in the room it leaves them
+// before its pause (Coordinator.takeRecordsRoom): the take's own (the digest
+// it leaves in the box, or its refusal's stamp) and the harness end, each under
+// its own grace from where it is asked. So here, in the store's own process,
+// the take runs to a second inside its deadline, its digest and the store's
+// answer each a second inside its grace, and both records land. IN A SYNCTEST
+// BUBBLE, so each answer comes exactly when its wait ends.
 //
 // Mutation: count one grace for the pair in takeRecordsRoom, and the harness
 // end is cut at the read's room for it and goes unrecorded.
@@ -401,18 +384,14 @@ func (h *heldMarks) asked() []heldMark {
 }
 
 // A JOB'S HARNESS END IS RECORDED AFTER ITS TAKE, WITHIN THE ROOM THE READ LEAVES
-// ITS RECORDS. The record shares that room with the take's own records
-// (Coordinator.takeRecordsRoom), its crossing counted there: asked for before
-// the take, a store slow to answer it cut the take's time; past the room the
-// read leaves the take's own records (Coordinator.recordsBy), the box's pause
-// and the read's answer. So the read that collects a job asks for the record once
-// its take is done, under a deadline no later than its own less the pause's
-// grace, and a store that never answers it still leaves the box its pause.
+// ITS RECORDS (Coordinator.takeRecordsRoom, shared with the take's own): asked
+// before the take, a slow store cuts the take's time; outside that room
+// (Coordinator.recordsBy), it cuts the box's pause and the read's answer. So it
+// is asked once the take is done, under a deadline no later than the read's
+// less the pause's grace, and a store that never answers leaves the pause.
 //
-// IN A SYNCTEST BUBBLE: the take spends fifty seconds of the bubble's clock, so
-// the record's own grace, counted from where it is asked, ends past the read's
-// room for it, and the store holds the record until its deadline, which the
-// bubble's clock reaches exactly.
+// IN A SYNCTEST BUBBLE: the take spends fifty seconds, so the record's own
+// grace ends past the read's room, and the store holds it to its deadline.
 //
 // Mutation: ask for the record before the take, or under a context of its own
 // that the read's room does not bound, and a check goes red.

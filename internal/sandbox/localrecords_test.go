@@ -25,13 +25,12 @@ func containerLocal(t *testing.T) *Local {
 	}
 }
 
-// THE ENGINE'S RECORDS ABOUT A CONTAINER BOX ARE NOT ITS JOB'S TO WRITE. A
-// container's job writes its whole home, which is the one directory mounted
-// into it; the records of which logins the box was seeded with, and the env
-// file each exec rewrites, are what the engine acts on as the engine host's
-// user. They used to sit in the home's .crewlet/, so a job could name any host
-// file as the "shared login" a box file was copied back over at teardown, or
-// make the env file a link the next exec followed out of the box.
+// THE ENGINE'S RECORDS ABOUT A CONTAINER BOX ARE NOT ITS JOB'S TO WRITE. The
+// job writes its whole home, the one directory mounted into it, while the
+// engine acts as the host's user on the records of the box's seeded logins and
+// the env file each exec rewrites: in the home, a job could name any host file
+// as the "shared login" copied over at teardown, or make the env file a link
+// the next exec follows out of the box.
 //
 // Mutation: put the records back under the home's .crewlet/, and the victim
 // is overwritten — by the next exec, and again by the teardown.
@@ -87,12 +86,12 @@ func TestAContainerJobCannotRewriteWhatTheEngineKnowsAboutItsBox(t *testing.T) {
 }
 
 // A RECORD THAT IS NOT A REGULAR FILE IS ANSWERED AT ONCE, by every path that
-// reads one. Each reconnect reads the box's credential map before it answers —
-// the poll's Attach, the collection's Connect, the pause reaper's Kill and the
-// orphan reaper — and a direct box's teardown and liveness read its job
-// record; a plain open of a named pipe there waited for a writer for good, and
-// nothing cancels an open. An unusable map degrades to no write-back, said in a
-// warning; an unusable job record is the unknown answer, which keeps the box.
+// reads one: each reconnect (the poll's Attach, the collection's Connect, the
+// pause reaper's Kill, the orphan reaper) reads the credential map, and a
+// direct box's teardown and liveness its job record. A plain open of a named
+// pipe waits for a writer for good, and nothing cancels an open. An unusable
+// map degrades to no write-back, with a warning; an unusable job record is the
+// unknown answer, which keeps the box.
 //
 // Mutation: read either record with os.ReadFile, and the pipe cases hang.
 func TestABoxRecordThatIsNotARegularFileIsAnsweredAtOnce(t *testing.T) {
@@ -194,11 +193,10 @@ func TestABoxRecordThatIsNotARegularFileIsAnsweredAtOnce(t *testing.T) {
 	}
 }
 
-// A POLL THAT MEETS SUCH A BOX STILL LETS THE WAITER STOP. The poll's task
-// held one of the waiter's slots and the run's busy registration while its
-// open waited, and Stop waits for every task the loop started — so engine
-// shutdown never completed, and sixteen such boxes stopped every poll on the
-// node.
+// A POLL THAT MEETS SUCH A BOX STILL LETS THE WAITER STOP: a poll blocked on
+// the open holds a waiter slot and the run's busy registration, and Stop waits
+// for every task the loop started, so engine shutdown would never complete,
+// and sixteen such boxes would stop every poll on the node.
 //
 // Mutation: read the credential map with os.ReadFile, and the poll never
 // reaches its runner.

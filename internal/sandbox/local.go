@@ -23,9 +23,9 @@ import (
 	"github.com/crewlet/crewlet/internal/procgroup"
 )
 
-// localLog names the LOCAL backend. The package-neutral logger is in
-// protocol.go; binding one var for the whole package stamped the remote
-// backend and the shared runtime as "sandbox.local" too.
+// localLog names the LOCAL backend; the package-neutral logger is in
+// protocol.go, so the remote backend and the shared runtime are not stamped
+// "sandbox.local".
 var localLog = logging.Get("sandbox.local")
 
 // WorkspaceSubdir is where a box's checkout lives, relative to its home: the
@@ -38,21 +38,18 @@ const WorkspaceSubdir = "workspace"
 const ContainerPrefix = "crewlet-sbx-"
 
 // ControlTimeout bounds a CONTROL-PLANE command: mkdir, `docker exec`, the
-// liveness probe, and a container box's start — its `docker run`, with the
-// pull of an image the host does not hold yet inside it. Never the launched
-// job itself, which is detached and deliberately uncapped. Sized for a
-// container runtime under load, not for work.
+// liveness probe, and a container box's start (its `docker run`, including
+// the pull of an image the host lacks). Never the detached launched job,
+// which is deliberately uncapped. Sized for a container runtime under load.
 //
-// EXPORTED for the one reader outside this package: a scheduled turn's
-// default cap (internal/org's DefaultScheduleTimeout) has to outlast what its
-// turn spends before its run starts, the box's start among it, and a test in
+// Exported for internal/org's DefaultScheduleTimeout, which must outlast what
+// a turn spends before its run starts, the box's start among it; a test in
 // internal/engine holds the two in order.
 const ControlTimeout = 120 * time.Second
 
-// minReapAge floors the orphan reaper's cutoff regardless of the TTL it is
-// handed. A spec with a tiny (or zero) timeout would otherwise make every box
-// on the host instantly reapable, including ones another engine just created
-// and has not yet heart-beaten.
+// minReapAge floors the orphan reaper's cutoff whatever TTL it is handed: a
+// tiny or zero spec timeout would otherwise make every box on the host
+// reapable at once, including ones another engine just created.
 const minReapAge = time.Minute
 
 // BoxRootEnv overrides where local boxes are created.
@@ -87,12 +84,11 @@ func localRefusedf(why Why, format string, args ...any) error {
 // `providers.sandbox.local.state_dir` is stateDir: the state_dir as written,
 // else [DefaultBoxRoot].
 //
-// ONE RULE for every box the engine makes on its host: a seat's boxes, in
-// either local cell ([NewLocal]), and the Dashboard Assistant's confined
-// deep-work boxes, which the engine keeps in a directory of their own beneath
-// it. The volume an operator gives this directory is the one sized for boxes;
-// a box root derived from anything else (the store's directory, which it once
-// was for deep work) puts a run's writes on a volume nobody sized for them.
+// ONE RULE for every box the engine makes on its host: a seat's boxes in
+// either local cell ([NewLocal]) and the Dashboard Assistant's confined
+// deep-work boxes, in a directory of their own beneath it. This is the volume
+// an operator sizes for boxes; a root derived from anything else puts a run's
+// writes on a volume nobody sized for them.
 func BoxRoot(stateDir string) string {
 	if stateDir == "" {
 		return DefaultBoxRoot()
@@ -120,33 +116,22 @@ func DefaultBoxRoot() string {
 // boxLayout is where one box's files live on the engine host: one directory,
 // root, holding TWO SIDES that must never be one.
 //
-// HOME is the box's side — the harness's HOME, its checkout and its run
-// files, and in container mode the only directory bind-mounted into the
-// container, so everything under it is written by whatever runs in the box.
-// RECORDS is the engine's side: what the engine itself must know about the box
-// to manage it, kept beside the home rather than inside it. A box has to be
-// SELF-DESCRIBING — Connect is handed nothing but an id, possibly in a
-// different process from the one that created it, so anything a reconnect must
-// know is on disk rather than in the object Create returned — and that record
-// is only worth keeping if the box cannot rewrite it. They used to share the
-// home's .crewlet/, where a containerised agent could replace the credential
-// map with one naming any host file as the "shared login" to write a box file
-// back over at teardown, the env file with a link the next exec's rewrite
-// followed out of the box, and either with a named pipe whose open blocked the
-// poll, the collection, the pause reaper and the orphan reaper for good.
+// HOME is the box's side: the harness's HOME, checkout and run files, and in
+// container mode the only directory bind-mounted, so whatever runs in the box
+// writes all of it. RECORDS is the engine's side, beside the home: what a
+// reconnect needs (Connect gets only an id, maybe in another process), worth
+// keeping only if the box cannot rewrite it. A box that could would name any
+// host file as the login to write back over, plant a link the next env rewrite
+// follows out, or leave a pipe whose open blocks every reader.
 //
-// In direct mode the job runs as the engine's own user with no mount, so it
-// can reach the records too; nothing here is a boundary there, which is what
-// direct mode is documented to be.
+// In direct mode (engine's user, no mount) nothing here is a boundary.
 type boxLayout struct {
 	id   string
 	root string
-	// credentialSteps observes the login write-back a teardown of this box
-	// makes ([hostbox.CredentialSteps]): its backend's
-	// ([Local.credentialSteps]), nil in production. ON THE LAYOUT because the
-	// layout is the one value every teardown holds (a box's Close and Kill,
-	// the orphan reaper, a box a later process reconnected to), and the one
-	// [Local.layout] mints for each of them.
+	// credentialSteps observes this box's teardown login write-back
+	// ([hostbox.CredentialSteps]): its backend's ([Local.credentialSteps]), nil
+	// in production. On the layout because the layout is the one value every
+	// teardown holds (Close, Kill, the orphan reaper, a reconnected box).
 	credentialSteps hostbox.CredentialSteps
 }
 
@@ -170,24 +155,18 @@ func (l boxLayout) meta() string { return filepath.Join(l.home(), ".crewlet") }
 // metaName is [boxLayout.meta] as a name in the home.
 const metaName = ".crewlet"
 
-// openHome is the box's home opened as an os.Root, and EVERY HOST-SIDE ACCESS
-// TO A FILE THE BOX HOLDS — a read, a write, a directory made, a file removed
-// — is made through one, by a name relative to it.
+// openHome is the box's home opened as an os.Root; EVERY HOST-SIDE ACCESS TO
+// A FILE THE BOX HOLDS (read, write, mkdir, remove) goes through one, by a
+// name relative to it.
 //
-// THE HOME IS THE BOX'S TO WRITE. A container's job writes its whole home, the
-// one directory mounted into it, and a confined direct box's job is given
-// back its home and nothing else ([Local.confinedRules]) — and both run
-// whatever a checkout's scripts say. So any directory in it may be a link by
-// the time the engine reaches it, put there before the engine looked or in
-// the instant after. A path checked and then opened by name was two walks of
-// whatever the names held at each moment; the root walks the name once, a
-// component at a time, follows a link only to somewhere beneath itself and
-// refuses the rest. What leads outside the box is refused at the access,
-// whenever it was put there.
+// THE HOME IS THE BOX'S TO WRITE: a container's job writes its whole mounted
+// home, a confined direct job is given back its home ([Local.confinedRules]),
+// and both run a checkout's scripts. So any directory in it may become a link
+// at any moment; a path checked then opened by name is two walks, while the
+// root walks it once and refuses a link leading outside it.
 //
-// Opened per access rather than held by the box: a box value is made afresh
-// by every reconnect and dropped without a teardown, and a held descriptor
-// would outlive the directory a teardown removes.
+// Opened per access, not held: a box value is remade by every reconnect and
+// dropped without teardown, and a held descriptor would outlive the directory.
 func (l boxLayout) openHome() (*os.Root, error) { return os.OpenRoot(l.home()) }
 
 // openRecords is the box's records opened as an os.Root, which every access to
@@ -216,24 +195,21 @@ func (l boxLayout) mkdirHome(rel string) error {
 // somebody else's processes, and probing it would keep a dead box alive.
 func (l boxLayout) pidFile() string { return filepath.Join(l.records(), pidRecord) }
 
-// aliveFile is the keepalive stamp — the local counterpart of a remote box's
+// aliveFile is the keepalive stamp, the local counterpart of a remote box's
 // TTL.
 //
-// A directory's mtime does NOT move when files are written inside its
-// subdirectories, so the box root's own timestamp is frozen at creation for
-// the box's entire life. Anything reading it as "recently used" is reading a
-// constant. This file is touched on every SetTimeout, which the waiter calls
-// once per poll for exactly the box it is keeping alive, and a launch for the
-// box it is provisioning — a box with no job yet, which only the stamp keeps
-// from the orphan sweep of another launch on the host.
+// A directory's mtime does NOT move on writes inside its subdirectories, so
+// the box root's timestamp is its creation time for life. This file is touched
+// on every SetTimeout (the waiter's, once per poll for the box it keeps alive)
+// and by a launch for the box it is provisioning, which has no job yet and
+// only the stamp keeps from another launch's orphan sweep.
 func (l boxLayout) aliveFile() string { return filepath.Join(l.records(), aliveRecord) }
 
 // credentialsFile records the logins this box was seeded with
 // ([seededCredential]), so a reconnect knows which files to write back and
-// against what. Without it a reconnected box closes with an empty map and the
-// login the harness refreshed mid-run is discarded — and every production
-// teardown goes through Connect or Kill, never the object Create returned, so
-// that would be every run.
+// against what. Every production teardown goes through Connect or Kill, never
+// the object Create returned, so without it every run's refreshed login would
+// be discarded.
 func (l boxLayout) credentialsFile() string { return filepath.Join(l.records(), credentialsRecord) }
 
 // runFile records the run the box was made for ([boxRun]), which is how this
@@ -269,23 +245,16 @@ const (
 )
 
 // seededCredential is one login file a box was seeded with, as the box's
-// RECORD keeps it: where on the engine host it came from, and the SHA-256 of
-// the very bytes the box was given — "" for a file of the login the shared
-// directory did not hold when the box was seeded, which the box was given
-// nothing for.
+// RECORD keeps it: its source on the engine host and the SHA-256 of the bytes
+// the box was given, "" for a file the shared login did not hold then.
 //
-// THE SEED IS WHAT A WRITE-BACK IS JUDGED AGAINST. A box's teardown compared
-// its copy with the shared login as it was AT TEARDOWN, and an idle box's copy
-// differs from that the moment anybody else writes: a run that never refreshed
-// put its stale seed back over a login the host had refreshed while it ran —
-// OpenCode's export reproduces its import byte for byte, so every box seeded
-// with its document did — and the vendor had already rotated that seed's
-// refresh token away, logging every seat out at the next expiry.
+// THE SEED IS WHAT A WRITE-BACK IS JUDGED AGAINST, not the shared login at
+// teardown: an idle box's copy differs from that once anybody else writes, and
+// putting a stale seed back over a login the host refreshed meanwhile, whose
+// refresh token the vendor had already rotated away, logs every seat out.
 //
-// AN ABSENT FILE IS RECORDED TOO, because a login is the set of its files: a
-// write-back is made only while the shared login is still the one the box was
-// seeded from, and a file somebody added since is as much a newer login as a
-// file somebody changed.
+// AN ABSENT FILE IS RECORDED TOO: a login is the set of its files, and a file
+// added since the seed is as much a newer login as one changed.
 type seededCredential struct {
 	Source string `json:"source"`
 	Seed   string `json:"seed"`
@@ -331,22 +300,17 @@ func loginsOf(files map[string]string) []boxLogin {
 }
 
 // seedCredentials copies the harness login into the box before the harness
-// runs, and reports what it seeded the box with: every file of the login, by
-// its path relative to the box's home, with the digest of what the box was
-// given — and "" for a file the shared directory does not hold, which is not
-// seeded, so nothing is ever written back over it.
+// runs, and reports what it seeded: every file of the login by its path
+// relative to the home, with the digest of what the box was given, and "" for
+// a file the shared directory lacks, which is not seeded and so never written
+// back over.
 //
-// THE LOGIN IS READ WHOLE, under the shared directory's lock
-// ([hostbox.ReadCredentials]): read a file at a time it could straddle a write
-// — a box seeded with one sign-in's token beside another's config.toml — and a
-// write that stopped part way is finished first rather than read as the half
-// it left. And it is seeded WHOLE OR NOT AT ALL: a login the box cannot be
-// given every file of is given none, and said, because a harness handed half a
-// login fails inside the run in a way nothing outside it explains.
-//
-// The keys are relative paths from an operator-overridable profile, so they go
-// through hostbox.SafeJoin: an entry like "../../etc/cron.d/x" would otherwise
-// write a host file every time a box was created.
+// Each login is READ WHOLE under the shared directory's lock
+// ([hostbox.ReadCredentials]), so a seed never straddles a write, and seeded
+// WHOLE OR NOT AT ALL ([seedLogin]): a harness handed half a login fails inside
+// the run in a way nothing outside explains. Keys come from an
+// operator-overridable profile, so they go through hostbox.SafeJoin: a
+// "../../etc/cron.d/x" would otherwise write a host file.
 func seedCredentials(ctx context.Context, l boxLayout, files map[string]string) map[string]seededCredential {
 	seeded := map[string]seededCredential{}
 	for _, login := range loginsOf(files) {
@@ -435,24 +399,18 @@ func digestOf(content []byte) string {
 	return digest
 }
 
-// collectCredentials writes a login the run refreshed back to the shared
-// directory — a COMPARE-AND-SWAP against what the box was seeded with
-// ([writeBackLogin]), one login at a time.
+// collectCredentials writes each login the run refreshed back to the shared
+// directory, a COMPARE-AND-SWAP against the seed ([writeBackLogin]).
 //
-// OAuth access tokens expire in hours and most vendors rotate the refresh
-// token alongside them, so a box that quietly discards the rewritten file logs
-// the whole fleet out at the next expiry — and one that writes back a login it
-// did not refresh over one the host did logs the fleet out just the same.
+// Most vendors rotate the refresh token with the hours-long access token, so
+// discarding a refresh logs the fleet out at the next expiry, and writing back
+// a login the box did not refresh over one the host did logs it out the same.
+// Reads stay in the box's home ([readBoxFile]), so a "../../" key cannot copy
+// a host file over the credential store, and the map is the box's RECORD, out
+// of its reach: where a login is written is the operator's profile's say.
 //
-// Read through SafeJoin for the same reason the seed is written through it: a
-// "../../" key would otherwise copy an arbitrary host file out of the box's
-// directory and over the credential store. The map itself is the box's RECORD
-// — written by the engine at Create, out of the box's reach — so where a login
-// is written back to is the operator's profile and never the box's say.
-//
-// A TEARDOWN, so it takes [context.WithoutCancel] of its caller's context: the
-// teardown is often the cancellation's own consequence, and the only wait in
-// it — another writer's lock — has its own bound ([hostbox.CredentialLockWait]).
+// A TEARDOWN, so it takes [context.WithoutCancel]; its one wait, another
+// writer's lock, has its own bound ([hostbox.CredentialLockWait]).
 func collectCredentials(ctx context.Context, l boxLayout, seeded map[string]seededCredential) {
 	ctx = context.WithoutCancel(ctx)
 	files := map[string]string{}
@@ -474,10 +432,9 @@ func collectCredentials(ctx context.Context, l boxLayout, seeded map[string]seed
 			case writeBackWritten:
 				localLog.Info("local_sandbox_credential_refreshed", "sandbox_id", l.id, "file", relative)
 			case writeBackChanged, writeBackRemoved:
-				// WARN, because it is the one trace that a refresh the run
-				// made went nowhere; two in a row on one login are worth
-				// somebody looking at. It names the file, never what either
-				// copy holds.
+				// WARN: the one trace that a refresh the run made went nowhere;
+				// two in a row on one login are worth a look. It names the file,
+				// never what either copy holds.
 				localLog.Warn("local_sandbox_credential_superseded",
 					"sandbox_id", l.id, "file", relative, "path", seeded[relative].Source,
 					"shared", string(outcome), "detail", supersededDetail[outcome])
@@ -519,28 +476,16 @@ const (
 )
 
 // writeBackLogin writes the files of one login the run CHANGED back over the
-// shared login, but only while the shared login is STILL, as a whole, the one
-// the box was seeded with — and reports what became of each file the run
-// changed.
+// shared login, only while the shared login is STILL, as a whole, the one the
+// box was seeded with, and reports what became of each changed file.
 //
-// TWO CONDITIONS, and each is a different lost login. A box whose copy still
-// holds its seed refreshed nothing, and writing it back would revert whatever
-// the host wrote meanwhile. A shared login that no longer holds the seed —
-// any file of it, or a file it did not hold — was rewritten by somebody else:
-// a refresh of its own, which rotated the refresh token the box's copy
-// descends from, or a new login an operator made — and the box's copy is the
-// older of the two. Judged a file at a time, a refresh of one file was written
-// beside another writer's newer other file, a login no harness wrote. So the
-// comparison and the write are one step, under the shared directory's lock
-// ([hostbox.LockCredentials]), which every writer of it takes, and the write
-// is ONE WRITE of the whole login ([hostbox.WriteCredentials]), so a teardown
-// killed part way never leaves half of it.
-//
-// A file the box was not seeded with is never written: a box never creates a
-// login, nor a file of one.
-//
-// The write goes through commit, which is [hostbox.WriteCredentials] in every
-// box: see [loginCommit].
+// TWO CONDITIONS, each a different lost login: a copy still holding its seed
+// refreshed nothing, and writing it back reverts the host's writes since; a
+// shared login no longer holding the seed (any file of it, or one it lacked)
+// was rewritten by another refresh or a new login, and is the newer. So the
+// compare and ONE WRITE of the whole login (never half, even if killed) are
+// one step under [hostbox.LockCredentials], which every writer takes. A file
+// the box was not seeded with is never written. commit: see [loginCommit].
 func writeBackLogin(
 	ctx context.Context, l boxLayout, login boxLogin, seeded map[string]seededCredential, commit loginCommit,
 ) (map[string]writeBack, error) {
@@ -630,29 +575,24 @@ func writeBackLogin(
 }
 
 // loginCommit is how a write-back puts a whole login in the shared directory:
-// [hostbox.WriteCredentials], with the observer the box's layout carries
+// [hostbox.WriteCredentials] with the layout's observer
 // ([boxLayout.credentialSteps]), in every box.
 //
-// A PARAMETER rather than a call written in, for the one failure after which
-// the refresh HAS been written — its journal landed, and a file the disk then
-// refused is put in place by the next reader — which a write-back has to report
-// as written. Nothing a test can leave in the shared directory beforehand
-// reaches that failure: the write-back reads the login under the same hold of
-// the lock first, and the read refuses whatever would stop the write. So a test
-// hands in a commit that puts the obstacle down between the two.
+// A PARAMETER for the one failure after which the refresh HAS been written
+// (its journal landed; the next reader puts a refused file in place), which a
+// write-back must report as written. No obstacle a test leaves beforehand
+// reaches it, since the read under the same lock refuses whatever would stop
+// the write, so a test hands in a commit that puts one down between the two.
 type loginCommit func(dir string, names []string, login map[string][]byte) error
 
-// readBoxFile reads one login file a box holds at name in its home, reporting
-// false where it holds none.
+// readBoxFile reads one login file at name in a box's home, false where it
+// holds none.
 //
-// OPENED ONCE, as a box's files are read ([openRegularIn]): a file checked by
-// its path and then opened by it again is two reads of whatever the path names
-// at each moment, and the box's side is the one that names it. So a pipe there
-// answers at once as what it is rather than blocking a teardown, a link is
-// refused rather than followed, no directory on the way leads out of the box,
-// and what is written back is the file that was read. Larger than
-// [hostbox.MaxCredentialBytes], it is refused: the shared login would not hold
-// it, and a box is not handed the engine's memory.
+// OPENED ONCE ([openRegularIn]), since the box's side names the path: a pipe
+// answers at once rather than blocking a teardown, a link is refused, no
+// directory on the way leads out, and what is written back is what was read.
+// Past [hostbox.MaxCredentialBytes] it is refused: the shared login would not
+// hold it, and a box is not handed the engine's memory.
 func readBoxFile(home *os.Root, name string) ([]byte, bool, error) {
 	src := filepath.Join(home.Name(), name)
 	in, err := openRegularIn(home, name)
@@ -675,13 +615,8 @@ func readBoxFile(home *os.Root, name string) ([]byte, bool, error) {
 }
 
 // recordCredentialMap persists what the box was seeded with so Connect can
-// write a refreshed login back.
-//
-// It RETURNS its failure rather than logging it, even though the caller only
-// logs: the previous shape wrote the WriteFile error into an `if err :=`
-// binding that shadowed the one being checked, so the warning this function
-// exists to emit could never fire and no test could have caught it. A
-// returned error is the shape a test can assert on.
+// write a refreshed login back. It returns its failure, though the caller
+// only logs it, so a test can assert on it.
 func recordCredentialMap(l boxLayout, seeded map[string]seededCredential) error {
 	if len(seeded) == 0 {
 		return nil
@@ -702,11 +637,9 @@ func recordCredentialMap(l boxLayout, seeded map[string]seededCredential) error 
 // readCredentialMap is what the box was seeded with, as recorded at Create:
 // nil when nothing was.
 //
-// A RECORD THAT CANNOT BE USED IS SAID, and read as no map: every reconnect
-// reads it before it answers — the poll's, the collection's, the pause
-// reaper's and the orphan reaper's — and none of them may fail over a list of
-// logins to write back, so what is lost is the write-back of a refreshed
-// login, which the warning names.
+// A RECORD THAT CANNOT BE USED IS SAID and read as no map: every reconnect
+// (the poll, the collection, both reapers) reads it and none may fail over
+// it; what is lost is a refreshed login's write-back, which the warning names.
 func readCredentialMap(l boxLayout) map[string]seededCredential {
 	blob, err := readRecord(l, credentialsRecord)
 	if absent(err) {
@@ -726,11 +659,9 @@ func readCredentialMap(l boxLayout) map[string]seededCredential {
 }
 
 // maxRecordBytes bounds one read of a box's record. The largest the engine
-// writes is the credential map — a harness profile's few credential files, each a
-// relative path, a host path and a 64-character digest — which is a few
-// hundred bytes; a mebibyte is over a hundred and twenty entries at the
-// longest paths a filesystem takes, so a record past it is not one this
-// engine wrote and is not read whole into memory to find that out.
+// writes, the credential map, is a few hundred bytes; a mebibyte holds over a
+// hundred and twenty entries at a filesystem's longest paths, so a record past
+// it is not this engine's and is not read whole to find that out.
 const maxRecordBytes = 1 << 20
 
 // readRecord reads the engine's record called name about a box, the way every
@@ -828,14 +759,12 @@ func removeRecord(l boxLayout, name string) error {
 	return nil
 }
 
-// containerJobGroup is the process group, in its container, that a container box
-// recorded for the job pid names as that job started ([boxLayout.groupFile]),
-// false where it recorded none for it: a job an older build started, which
-// recorded nothing; a runtime whose exec did not lead a session of its own
-// ([containerBox.StartBackground] records no group then); a record of another
-// job's; or one that cannot be read, which is said. The kill of a job with
-// none reads its group off its first process instead
-// ([killFirstProcessGroup]).
+// containerJobGroup is the in-container process group a container box
+// recorded for the job pid names as it started ([boxLayout.groupFile]), false
+// where there is none: an older build's job, a runtime whose exec led no
+// session of its own ([containerBox.StartBackground]), another job's record,
+// or an unreadable one, which is said. A job with none is killed through its
+// first process's group ([killFirstProcessGroup]).
 func containerJobGroup(l boxLayout, pid int) (int, bool) {
 	raw, err := readRecord(l, groupRecord)
 	if absent(err) {
@@ -887,23 +816,15 @@ func killJobGroup(ctx context.Context, l boxLayout) {
 // jobGroup is the box's recorded job group when that group is still the job,
 // and false when there is none to act on.
 //
-// THREE ANSWERS, and the caller decides which way the third fails. False with
-// a nil error is definitive: no job was recorded, the record is not one this
-// engine wrote, or the group it names has ended or now belongs to a later
-// process. An error means the kernel could not be asked, which neither proves
-// the job alive nor licenses a signal: the orphan reaper keeps the directory on
-// it, and every signalling path withholds its signal.
-//
-// A box with no record started no job. A record that exists and cannot be
-// read — something other than a regular file at its path included, read the
-// way every record is ([readRecord]) — is the unknown answer, like a kernel
-// record that cannot be read.
-//
-// A record that does not parse is logged and read as no job. Only a direct
-// box has one, and its job runs as the engine's own user beside its records,
-// so the file's content is input rather than a fact; and a bare pid written
-// there is exactly the identity with no start time [procgroup.ParseLeader]
-// refuses.
+// THREE ANSWERS. False with a nil error is definitive: no record (no job
+// started), a record this engine did not write, or a group that has ended or
+// passed to a later process. An error means the record ([readRecord], a
+// non-regular file included) or the kernel could not be read: it neither
+// proves the job alive nor licenses a signal, so the orphan reaper keeps the
+// box and every signal is withheld. A record that does not parse is logged and
+// read as no job: a direct job runs as the engine's user beside its records,
+// so the content is input, and a bare pid lacks the start time
+// [procgroup.ParseLeader] requires.
 func jobGroup(l boxLayout) (procgroup.Leader, bool, error) {
 	leader, found, err := readJobRecord(l)
 	if err != nil || !found {
@@ -988,12 +909,11 @@ type LocalOptions struct {
 	// RunArgs are extra arguments spliced into the container run.
 	RunArgs []string
 
-	// RuntimeEnv is what the operator DECLARED for the container runtime's
-	// own harness, its references already resolved — laid over the fixed rule
-	// every runtime call carries ([hostbox.ContainerRuntime]), for what that
-	// rule cannot know a runtime's helpers read: the cloud role, profile or
-	// key file a registry credential helper pulls the image with.
-	// It never reaches a box: that is `role.sandbox.env`.
+	// RuntimeEnv is what the operator DECLARED for the container runtime's own
+	// harness, references resolved, laid over the fixed rule every runtime call
+	// carries ([hostbox.ContainerRuntime]): what a registry credential helper
+	// reads to pull the image (a cloud role, profile or key file). It never
+	// reaches a box: that is `role.sandbox.env`.
 	RuntimeEnv map[string]string
 
 	// Confine runs every command a Direct box's job starts inside Host's
@@ -1077,12 +997,10 @@ func (l *Local) Kind() string { return "local" }
 
 // layout is where one box's files live.
 //
-// AN EMPTY ID IS REFUSED, and this is not defensive tidiness: joining "" gives
-// the boxes DIRECTORY ITSELF, so an empty id produces a "box" whose root is
-// the parent of every box on the host — one whose Close or Kill would
-// os.RemoveAll every other box's checkout. It is reachable: a run's row exists
-// before its box is attached, so a poll landing in that window asks to connect
-// to "".
+// AN EMPTY ID IS REFUSED: joining "" gives the boxes directory itself, whose
+// Close or Kill would os.RemoveAll every box on the host. It is reachable: a
+// run's row exists before its box is attached, so a poll in that window
+// connects to "".
 func (l *Local) layout(id string) (boxLayout, error) {
 	if strings.TrimSpace(id) == "" {
 		return boxLayout{}, localErrorf("local sandbox: an empty sandbox id names no box " +
@@ -1190,8 +1108,8 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	if err != nil || result.ExitCode != 0 {
 		_ = os.RemoveAll(layout.root)
 		if cancelledBy(ctx) {
-			// THIS NODE CANCELLED THE LAUNCH, which says nothing about the
-			// image: classed as one, a drain was told as a setup to fix.
+			// THIS NODE CANCELLED THE LAUNCH, which says nothing about the image:
+			// classed as an image failure, a drain would read as a setup to fix.
 			return nil, fmt.Errorf("sandbox: starting container sandbox %s was "+
 				"abandoned: %w", id, ctx.Err())
 		}
@@ -1202,15 +1120,12 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		if err != nil {
 			detail = err.Error()
 		}
-		// THE WHOLE DETAIL. This is the container runtime's own account of
-		// why the image would not start — a missing platform, a pull
-		// failure, a mount that does not exist — and the operator reading
-		// it has no other copy. A 400-byte cut removed the second half of
-		// exactly the messages worth reading.
+		// THE WHOLE DETAIL: the runtime's own account of why the image would not
+		// start (platform, pull, mount), of which the operator has no other copy.
 		//
-		// CLASSED BY WHETHER THE IMAGE IS HERE, asked of the runtime rather
-		// than read from its words: present and refused is the configuration's,
-		// absent is a pull that failed, which a retry may outlast.
+		// CLASSED BY WHETHER THE IMAGE IS HERE, asked of the runtime rather than
+		// read from its words: present and refused is the configuration's; absent is
+		// a failed pull, which a retry may outlast.
 		return nil, localRefusedf(startFailure(ctx, l.cli, l.opts.Image),
 			"could not start sandbox container from image %q: %s", l.opts.Image, detail)
 	}
@@ -1256,16 +1171,14 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 	if l.opts.Network != "" {
 		argv = append(argv, "--network", l.opts.Network)
 	}
-	// AHEAD OF THE ENGINE FOR THE KERNEL'S OOM KILLER ([boxOOMScore]), for
-	// every process in the box and not only its first: both runtimes start an
-	// `exec` from the container's own process specification, the value
-	// included (Docker's daemon/exec.go, Podman's
-	// libpod/oci_conmon_exec_common.go), so the launched job and every setup
-	// command take it too. Neither raises it unasked: Docker runs a container
-	// at 0, and Podman at its own harness's value, which is the engine's. A
-	// container on the engine's own kernel competes with the engine for the
-	// host's memory; one in a VM of its own (Docker Desktop) is merely ordered
-	// within it. Before run_args, so an operator's own --oom-score-adj wins.
+	// AHEAD OF THE ENGINE FOR THE KERNEL'S OOM KILLER ([boxOOMScore]), for every
+	// process in the box: both runtimes start an `exec` from the container's
+	// process spec, this value included (Docker's daemon/exec.go, Podman's
+	// libpod/oci_conmon_exec_common.go). Neither raises it unasked: Docker runs a
+	// container at 0, Podman at its harness's value, the engine's. It orders
+	// the box against the engine only on a shared kernel; in a VM (Docker
+	// Desktop) it orders within the VM. Before run_args, so an operator's own
+	// --oom-score-adj wins.
 	if score, ok := boxOOMScore(); ok {
 		argv = append(argv, "--oom-score-adj", strconv.Itoa(score))
 	}
@@ -1301,16 +1214,13 @@ func (l *Local) Connect(ctx context.Context, sandboxID string) (Sandbox, error) 
 
 // Attach implements [Provider]: the box as it is, never resumed.
 //
-// A DIRECT BOX IS READ WHILE STOPPED. Its files are the engine host's own and
-// its liveness probe asks the kernel about a host pid, neither of which needs
-// the job to run, so a paused direct box is handed back paused.
-//
-// A CONTAINER IS REFUSED WHILE PAUSED. Its files are read on the host side of
-// the mount too, but its liveness probe is an exec into it, which a paused
-// container refuses — so a reader handed one would report a finished job as
-// unreadable. Whether it is paused is the runtime's answer, read without
-// changing it; a runtime that cannot say is not taken for a pause, since the
-// files are still readable and the probe's own error is the honest report.
+// A DIRECT BOX IS READ WHILE STOPPED: its files are the host's and its probe
+// asks the kernel about a host pid, so a paused direct box is handed back
+// paused. A PAUSED CONTAINER IS REFUSED: its probe is an exec, which a paused
+// container refuses, so a reader would report a finished job as unreadable.
+// Paused is the runtime's answer, read without changing it; a runtime that
+// cannot say is not taken for a pause, since the files stay readable and the
+// probe's own error is the honest report.
 func (l *Local) Attach(ctx context.Context, sandboxID string) (Sandbox, error) {
 	box, err := l.reattach(sandboxID)
 	if err != nil {
@@ -1374,49 +1284,33 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 	if l.opts.Placement == Container {
 		_, _ = runHost(ctx, l.cli.command(0, "rm", "-f", l.containerName(sandboxID)))
 	} else if signalJob(layout, "kill", procgroup.Kill) {
-		// SIGKILL alone, with NO SIGCONT first. A stopped process is killed
-		// by SIGKILL directly — the signal cannot be caught, blocked or
-		// ignored, so it needs no scheduling to take effect. Waking the
-		// group first would let a paused run execute again, briefly, on its
-		// way out: this method exists precisely so a reaped clarification
-		// pause is never resumed, and the SIGCONT that Close needs (a
-		// stopped process really does never run to handle SIGTERM) would
-		// quietly defeat that here.
+		// SIGKILL alone, with NO SIGCONT first: SIGKILL takes a stopped process
+		// directly, and waking the group would let a paused run execute again on
+		// its way out, which this method exists to prevent.
 		//
-		// And WAIT for it to actually go. SIGKILL is delivered, not
-		// applied: the kernel takes the process down some moments later,
-		// and until it does the harness's wrapper is still writing
-		// its exit code and marker into the box. Removing the tree under
-		// those writes fails with the directory non-empty — a failure the
-		// removal below would report and nothing could act on, leaving a
-		// box for the orphan reaper to find hours later.
+		// And WAIT for it to go: the kernel takes the process down moments after
+		// delivery, and until then the wrapper still writes its exit code and
+		// marker, so removing the tree under it fails non-empty and leaves the box
+		// for the orphan reaper.
 		awaitJobExit(ctx, layout)
 	}
-	// Kill is a teardown like any other, and the box on disk may hold a login
-	// the run refreshed before it was reclaimed — collecting it needs no
-	// resume, which is the one thing this method must not do. What is on disk
-	// is all there is: nothing in the box runs again after a SIGKILL or a
-	// `docker rm -f`. A harness that keeps its login in a file has rewritten that
-	// file itself; one that keeps it in a database of its own has it on disk
-	// only as far as its runner exported it, which is why such a runner
-	// exports while the run works rather than only at its end (see
-	// executor's OpenCode).
+	// A teardown like any other: the box may hold a login the run refreshed,
+	// and collecting it needs no resume. Nothing in the box runs after SIGKILL or
+	// `docker rm -f`, so a harness keeping its login in a database has it on disk
+	// only as far as its runner exported it, which is why such a runner exports
+	// while the run works (executor's OpenCode).
 	collectCredentials(ctx, layout, readCredentialMap(layout))
 	removeBox(layout)
 	localLog.Debug("local_sandbox_killed", "sandbox_id", sandboxID)
 	return nil
 }
 
-// removeBox deletes a box's directory, saying so when it cannot.
+// removeBox deletes a box's directory, saying so when it cannot: a box that
+// survives its teardown holds the seeded login and the run's writes, and only
+// a later create's orphan reaper would ever clean it.
 //
-// A box that survives its own teardown is not harmless: it holds the seeded
-// login and whatever the run wrote, and the only thing that will ever clean it
-// up is the orphan reaper on some later create. Reported rather than swallowed
-// so the operator learns of it now instead of finding the directory later.
-//
-// THROUGH THE ROOT OF THE DIRECTORY HOLDING EVERY BOX, by the box's own name:
-// nothing in the box — a link where a directory was — leads the removal of
-// its contents anywhere else.
+// THROUGH THE ROOT OF THE DIRECTORY HOLDING EVERY BOX, by the box's name, so
+// no link in the box leads the removal anywhere else.
 func removeBox(l boxLayout) {
 	err := func() error {
 		boxes, err := os.OpenRoot(filepath.Dir(l.root))
@@ -1548,33 +1442,17 @@ func (l *Local) RunBoxes() ([]HostBox, error) {
 // orphan reaping
 // ---------------------------------------------------------------------
 
-// reapOrphans removes box directories an engine crash left behind.
+// reapOrphans removes box directories an engine crash left behind, bounded by
+// the box TTL the caller already configures: exactly "how long a box may
+// outlive its engine".
 //
-// Teardown normally deletes a box, so anything here outlived the engine that
-// made it. Bounded by the box TTL the caller already configures rather than a
-// knob of its own — that value is exactly "how long a box may outlive its
-// engine".
-//
-// AGE ALONE DOES NOT MEAN ORPHANED, and reading it off the directory's mtime
-// does not even mean age. A directory's mtime moves only when an entry is
-// added or removed directly in it, and a box's root entries are all made at
-// Create — so the root mtime is the box's birth time, frozen, however busy the
-// harness inside workspace/ is. Reaping on it deleted the checkout, the
-// seeded credentials and the job record of every run that lasted longer than
-// the TTL, while its process tree kept going: without the pid file nothing
-// could ever kill it, so the job became an unkillable orphan writing into a
-// directory that no longer existed.
-//
-// So the two questions are asked separately. IS IT IN USE? A live process
-// group that is still the box's own job (direct) or an existing container,
-// checked against the OS rather than inferred. HAS IT BEEN ABANDONED? The
-// keepalive stamp the waiter refreshes on every poll, which is what SetTimeout
-// means on this backend. A box is reaped only when it fails BOTH: nothing
-// running, and nothing has touched it for a whole TTL.
-//
-// A paused box is deliberately covered by the first: SIGSTOPped processes stop
-// being heart-beaten but stay alive, and bounding THAT wait belongs to the
-// clarification pause TTL, which already owns it.
+// A box is reaped only when it fails BOTH questions. IN USE? A live process
+// group still the box's own job (direct) or an existing container, asked of
+// the OS. ABANDONED? Its keepalive stamp ([boxLayout.aliveFile]) untouched for
+// a whole TTL. Age alone is not orphanhood, and the root's mtime is its birth
+// time ([lastSeen]): reaping on it would delete a long run's checkout and job
+// record while its process tree ran on, unkillable. A paused box counts as in
+// use; bounding that wait is the clarification pause TTL's.
 func (l *Local) reapOrphans(ctx context.Context, olderThan time.Duration) {
 	boxes := filepath.Join(l.root, "boxes")
 	entries, err := os.ReadDir(boxes)
@@ -1667,11 +1545,8 @@ func (l *Local) liveContainers(ctx context.Context) (map[string]bool, error) {
 			detail = err.Error()
 		}
 		localLog.Warn("local_sandbox_reap_listing_failed", "error", detail)
-		// WRAPPED, and carrying the detail. The reaper reads this to decide
-		// which boxes are live, so a listing failure that reported only
-		// "container listing failed" left the caller unable to say whether
-		// the runtime was down, unreachable or refusing — three different
-		// operator actions behind one string.
+		// WRAPPED, with the detail: the runtime down, unreachable or refusing are
+		// three different operator actions.
 		if err != nil {
 			return nil, fmt.Errorf("listing sandbox containers: %w", err)
 		}

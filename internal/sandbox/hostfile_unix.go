@@ -16,47 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/hostbox"
 )
 
-// openRegularIn opens name beneath root — a directory of a local box, opened
-// as an os.Root ([boxLayout.openHome], [boxLayout.openRecords]) — for reading,
-// and only a REGULAR FILE, as it lies.
-//
-// THE OTHER SIDE OF THE MOUNT IS NOT THE ENGINE'S. A container box's home is
-// written by the agent inside it, which can run any command, and the engine
-// reads that directory from the host. A plain open(2) of a named pipe blocks
-// until a writer appears and cannot be cancelled, so `mkfifo ~/.crewlet/done`
-// wedged the completion poll — which polled one box after another, so no run
-// on the node was polled or kept alive again — and a character device that
-// never ends (`/dev/zero`'s numbers, made with the mknod a default container
-// keeps) streamed for as long as the reader would read. So the open is made
-// NON-BLOCKING, which returns at once whatever the path is, and the
-// descriptor is checked before a byte is read: anything but a regular file is
-// a [NotRegularFileError] naming the path and what it is, which a poll
-// reports and a collection describes as that piece's refusal — never an empty
-// file, which is the reading of a run that has not written it yet. The flag
-// is cleared again for the read, so a regular file reads as it always did.
-//
-// EVERY DIRECTORY ON THE WAY IS WALKED THROUGH THE ROOT, one component at a
-// time, so none of them — a link the box put in place of one, whenever it put
-// it there — leads the open outside the box: the root follows a link only to
-// somewhere beneath itself, and refuses the rest ([os.Root]). A path checked
-// and then opened by name was two walks of whatever the names held at each
-// moment, and the box's side writes the names.
-//
-// AND EACH OF THEM IS OPENED AS A DIRECTORY, the last one too, so anything
-// else in its place — a named pipe where `.crewlet` was, a device, a file — is
-// refused at once rather than opened: the root opens the directories above the
-// last as directories, and the last as it is asked to, which a plain open of a
-// pipe there turned back into the wait above. Refused, it is named for what it
-// is ([notDirOnWay]).
-//
-// AND NOT THROUGH A LINK AT THE LAST ELEMENT, not even one inside the box:
-// the file is opened in the directory the root reached with O_NOFOLLOW, so a
-// link there is refused as what it is — a link — rather than followed, or read
-// as a file not written yet, which a dangling link had been while the open
-// followed it.
-//
-// A path that is not there answers [fs.ErrNotExist] through the error, which
-// is what the callers read as "not written yet".
+// openRegularIn opens name beneath root (a local box's directory opened as an
+// os.Root: [boxLayout.openHome], [boxLayout.openRecords]) for reading, and only
+// a REGULAR FILE, as it lies; an absent path answers [fs.ErrNotExist], which
+// callers read as "not written yet". The box's side of the mount writes every
+// name on the path, so: the open is NON-BLOCKING (a named pipe would block it
+// uncancellably, wedging the completion poll) and the descriptor is checked
+// before a byte is read (a device may never end), anything else being a
+// [NotRegularFileError], never an empty file; every directory on the way is
+// walked through the root, which follows a link only beneath itself, and opened
+// as a directory ([notDirOnWay]); and the last element is opened O_NOFOLLOW, so
+// a link there, even one inside the box, is refused as a link rather than
+// followed or, dangling, read as not written yet.
 func openRegularIn(root *os.Root, name string) (*os.File, error) {
 	host := filepath.Join(root.Name(), name)
 	dir, err := root.OpenFile(filepath.Dir(name), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NONBLOCK, 0)
@@ -87,12 +58,11 @@ func openRegularIn(root *os.Root, name string) (*os.File, error) {
 				break
 			}
 		}
-		// SOME KINDS ARE REFUSED BEFORE THERE IS A DESCRIPTOR TO ASK: a link
-		// at the last element (ELOOP under O_NOFOLLOW) and a socket (ENXIO,
-		// which a read of one used to report as a box that could not be
-		// read, so a collection retried it until the run was lost). So the
-		// name itself is asked what it is, in the same directory. Not for an
-		// absent name, which is the answer "not written yet".
+		// SOME KINDS ARE REFUSED BEFORE THERE IS A DESCRIPTOR TO ASK: a link at
+		// the last element (ELOOP under O_NOFOLLOW) and a socket (ENXIO, which
+		// must not read as a box that could not be read, retried until the run
+		// is lost). So the name itself is asked, in the same directory; not an
+		// absent name, which is "not written yet".
 		if openErr != nil && !errors.Is(openErr, unix.ENOENT) {
 			kind = kindAt(int(dirfd), base)
 		}
@@ -121,42 +91,18 @@ func openRegularIn(root *os.Root, name string) (*os.File, error) {
 	return os.NewFile(uintptr(fd), host), nil
 }
 
-// replaceIn puts content at name beneath root WHOLE, BY REPLACING THE FILE
-// rather than rewriting it: the one way the engine writes a local box's file,
-// in its home and in its records alike ([writeHomeFile], [writeRecord]).
-//
-// A READER NEVER FINDS A WRITE HALF DONE. The engine writes into a box a run is
-// using — the completion poll rewrites a seat's GitHub App token file under
-// the running job, and the job's git credential helper reads it at every call
-// — and a write that truncated the file and then wrote it in place left it
-// empty, then part written, in between: a push that read it then
-// authenticated with nothing. A write the engine's process stopped part way
-// through left it so for good, and a record a later engine reads back is
-// judged by what it holds: an empty witness ([jobEnd]) is not one this engine
-// wrote, so a job its engine's restart killed was collected as one that ended
-// rather than carried on. So the content is written to a fresh file beside
-// name, synced, and renamed over name in one step ([hostbox.ReplaceFileIn]):
-// a reader opens the old file or the new one, and a crash leaves one of the
-// two.
-//
-// AND IT WRITES THROUGH NOTHING AT NAME. A rename replaces the directory entry:
-// it follows no link there and rewrites no other name of the same file (a hard
-// link the box made to a file of its own). The file staged beside it is
-// created exclusively, which follows no link either, and every directory on
-// the way is walked through the root, as a read's is.
-//
-// ONLY A REGULAR FILE IS REPLACED, or nothing at all. Anything else at name —
-// a link, a directory, a named pipe, a socket, a device — is the box's own
-// doing, so it is refused as what it is ([NotRegularFileError], Write) and
-// left as the box made it, and so is anything but a directory on the way
-// ([notDirOnWay]). It is looked at before the write, and again after one
-// that failed, so a directory the box put there in between is refused as one
-// too.
-//
-// NO STAGED FILE OUTLIVES A WRITE THAT FAILED: [hostbox.ReplaceFileIn] removes
-// it. The new file has [hostbox.FileMode] whatever the one it replaces had, so
-// new content is never handed a mode the box widened. name's directory must
-// exist.
+// replaceIn puts content at name beneath root WHOLE, BY REPLACING THE FILE: the
+// one way the engine writes a local box's file ([writeHomeFile], [writeRecord]).
+// A run reads files the engine writes while it works (its git credential helper
+// reads the seat's token file at every call), and a later engine judges a
+// record by what it holds (an empty [jobEnd] witness is not its own), so no
+// reader may find a write half done: the content is staged beside name, synced
+// and renamed over it ([hostbox.ReplaceFileIn], which removes the staged file
+// on failure). The rename follows no link at name and rewrites no other name
+// of the file; the new file has [hostbox.FileMode], never a mode the box
+// widened. Anything but a regular file at name, or a directory on the way, is
+// the box's doing and refused as what it is ([notRegularAt]), looked at before
+// the write and again after one that failed. name's directory must exist.
 func replaceIn(root *os.Root, name string, content []byte) error {
 	return replaceFrom(root, name, bytes.NewReader(content))
 }
@@ -170,13 +116,9 @@ func replaceFrom(root *os.Root, name string, content io.Reader) error {
 }
 
 // boxReplace is how [replaceWith] puts a whole file beneath a root:
-// [hostbox.ReplaceFileIn], in every box.
-//
-// A PARAMETER rather than a call written in, for the one refusal nothing a
-// test can leave in the tree beforehand reaches: something the box puts at
-// the name AFTER the look that would have refused it, which the replacement
-// itself then meets. So a test hands in a replacement that puts the obstacle
-// down between the two.
+// [hostbox.ReplaceFileIn], in every box. A parameter so a test can put an
+// obstacle at the name between the look and the replacement, the one refusal
+// nothing left in the tree beforehand reaches.
 type boxReplace func(root *os.Root, name string, content io.Reader) error
 
 // replaceWith is [replaceFrom] with its replacement handed in ([boxReplace]).
@@ -197,11 +139,8 @@ func replaceWith(root *os.Root, name string, content io.Reader, replace boxRepla
 // ([NotRegularFileError], Write): what is at name where that is not a regular
 // file, or what is on the way to it where that is not a directory. nil for a
 // regular file, for nothing at all, and for a name that cannot be looked at,
-// whose write then says why itself.
-//
-// A LOOK, NOT AN OPEN: the root walks the directories on the way as
-// directories and looks at the last element without following it, so a named
-// pipe anywhere on the path is named rather than waited on.
+// whose write then says why itself. A look, not an open, so a named pipe
+// anywhere on the path is named rather than waited on.
 func notRegularAt(root *os.Root, name string) error {
 	info, err := root.Lstat(name)
 	switch {
@@ -221,11 +160,9 @@ func notRegularAt(root *os.Root, name string) error {
 // notDirOnWay is the refusal of a path whose way to its file holds something
 // other than a directory: the first such component of dir, named for what it
 // is, or nil where every component is a directory by now, or one cannot be
-// looked at — the open's own error then says why.
-//
-// Each component is looked at through the root, which follows a link only to
-// somewhere beneath itself, as the open did; a look opens nothing, so a pipe
-// there is not waited on.
+// looked at (the open's own error then says why). Each is looked at through
+// the root, as the open walked it; a look opens nothing, so a pipe is not
+// waited on.
 func notDirOnWay(root *os.Root, dir string, write bool) *NotRegularFileError {
 	way := ""
 	for _, part := range strings.Split(filepath.ToSlash(dir), "/") {
@@ -288,8 +225,8 @@ func kindAt(dirfd int, base string) string {
 }
 
 // fileKind names what st describes, as a reader says it, or "" for a regular
-// file. (The mode's width differs between platforms, so it is switched on
-// where it lies rather than converted.)
+// file. The mode's width differs between platforms, so it is switched on where
+// it lies rather than converted.
 func fileKind(st unix.Stat_t) string {
 	switch st.Mode & unix.S_IFMT {
 	case unix.S_IFREG:

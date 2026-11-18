@@ -10,14 +10,12 @@ import (
 )
 
 // A REPLY ANSWERS ONLY A RUN WORKING FOR WHOM IT WAS WRITTEN FOR (ADR-0077,
-// ADR-0109). Every reply here is written by somebody the question was put to,
-// so the rows judge the third clause alone. A reply written for nobody else
-// always matches: its writer spoke for itself. Otherwise the run's principal
-// is read in the order the ceiling composes it (its WorkingFor, else its
-// Requester where not its own seat, else its RequesterLogin, else its own
-// work), both sides as the ceiling reads them before it asks the directory,
-// and compared by kind and by the seat's handle or the credential's login,
-// never a credential's apps.
+// ADR-0109). Every writer here was put the question, so the rows judge that
+// clause alone. A reply for nobody else always matches. Otherwise the run's
+// principal is read in the ceiling's order (WorkingFor, else Requester where
+// not its own seat, else RequesterLogin, else its own work), both sides as the
+// ceiling reads them before the directory, compared by kind and the seat's
+// handle or credential's login, never a credential's apps.
 //
 // Mutation: drop the clause, compare kinds alone, read Requester before
 // WorkingFor, let the run's own work match only nobody, read the carrier off
@@ -106,11 +104,9 @@ func TestAReplyAnswersOnlyARunWorkingForWhomItWasWrittenFor(t *testing.T) {
 }
 
 // A REPLY WRITTEN FOR SOMEBODY ELSE LEAVES THE RUN PARKED, through the
-// coordinator. The run works for ada; the cto, whom its question was put to,
-// replies in a turn that works for omar, and the reply is omar's work, owed a
-// turn of its own held to omar's apps: the coordinator answers that it is not
-// the run's, and the run still waits on its question. The cto's reply written
-// for ada answers it.
+// coordinator. The run works for ada; the cto, whom it asked, replies in a turn
+// working for omar, so the reply is omar's work, owed its own turn held to
+// omar's apps, and not the run's. The cto's reply written for ada answers it.
 //
 // Mutation: drop the clause from putTo, and omar's reply answers ada's run.
 func TestAReplyWrittenForSomebodyElseLeavesTheRunParked(t *testing.T) {

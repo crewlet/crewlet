@@ -16,27 +16,17 @@ import (
 )
 
 // EVERY SECRET A LAUNCH HANDS ITS BOX IS KEPT FOR ITS SESSION'S SCRUB, AND
-// NOTHING ELSE IS, class by class, from the very request the job is started
-// with: what the engine says sits in a credential position
-// ([LaunchRequest.Secrets]), its MCP servers' env and headers and what their
-// url's references resolved to, the run's own export token, and every string of
-// the login the box was seeded with, read from the file it was seeded from; and
-// where that login lives, so a capture reads it again in the box and on the
-// host. Not the seat's handle or email, a setting, the telemetry's protocol, the
-// unresolved text of a reference or a setup step's file: none is a secret, and
-// each, scrubbed by value, was lost from every kept transcript that named it.
-// A SECRET THAT IS A JSON DOCUMENT is kept whole and by every string it holds, a
-// setting it holds among them — the engine tells a document's credential from
-// its settings by no more than the names they are written under, so what sits
-// in a credential position goes whole (handed.go, "Whole, and by every string a
-// document holds"), but for the constants a Google service-account key's format
-// fixes (TestAServiceAccountKeysPublishedConstantsStayInItsSessions). Nothing blank and nothing twice, and the whole of it
-// round-trips through what the row's seal covers.
+// NOTHING ELSE IS: credential positions ([LaunchRequest.Secrets]), MCP servers'
+// env, headers and resolved urls, the run's own export token, every string of
+// the seeded login and where it lives. Not a seat's handle, email, setting,
+// telemetry protocol, unresolved reference or setup step's file: scrubbed by
+// value, each blanks transcripts. A JSON secret goes whole and by every
+// string, settings too, as only names tell them apart (handed.go), but for a
+// service-account key's constants. None blank or twice; the seal keeps it all.
 //
 // Mutation: leave a class out of handedSecrets, add the run's environment or
-// its setup steps back whole, read the login only at the capture, keep a
-// JSON-valued secret whole alone, or keep a blank value, and a check below goes
-// red.
+// setup steps back whole, read the login only at capture, keep a JSON secret
+// whole alone or a blank value, and a check below goes red.
 func TestEverySecretALaunchHandsItsBoxIsKeptForTheScrubAndNothingElse(t *testing.T) {
 	t.Parallel()
 	login := filepath.Join(t.TempDir(), ".credentials.json")
@@ -140,17 +130,13 @@ func TestSecretsPastWhatARowKeepsAreRefusedWhole(t *testing.T) {
 }
 
 // A SERVICE-ACCOUNT KEY'S PUBLISHED CONSTANTS STAY IN ITS SESSIONS, and every
-// other string of it goes. A Google service-account key's `type`, `auth_uri`,
-// `token_uri`, `auth_provider_x509_cert_url` and `universe_domain` are fixed by
-// Google's format, the same in every key, so none is a secret; taken out by
-// value, they blanked every googleapis.com URL from the transcripts of a seat
-// handed one. Its private key and that key's id, its client's email and id,
-// its project and its client certificate's URL, which names the client's
-// email, are the account's, and go as every string of a document in a
-// credential position does: where the launch handed the key, and where the box
-// was seeded with it as a login. A document of any other format keeps no
-// constant: its `type` and its URLs, under the very same names, go with the
-// rest.
+// other string of it goes. Google's format fixes a key's `type`, `auth_uri`,
+// `token_uri`, `auth_provider_x509_cert_url` and `universe_domain`, the same in
+// every key, so none is a secret, and scrubbed they would blank every
+// googleapis.com URL from a seat's transcripts. The account's own members go,
+// its client certificate's URL among them since it names the client's email,
+// whether the launch handed the key or seeded it as the box's login; a document
+// of any other format keeps no constant, even under the same names.
 //
 // Mutation: drop the format check, and the other format's `type` and URLs are
 // kept; exempt a member of the account's, and its value is kept; walk the
@@ -244,11 +230,10 @@ func openedSet(t *testing.T, rig *coordRig, keep *sessionKeep, turnID string) Ha
 
 // AN ISSUED DOCUMENT IS SCRUBBED BY EVERY STRING IT HOLDS, where its launch
 // handed it and where the poll renewed it. A seat's AWS session reaches its box
-// as the document its credential_process prints, and a transcript prints the
-// session's parts bare — `aws configure export-credentials`, a helper's trace —
-// which the whole document never matches and no shape names. So the set holds
-// the document whole and every string of it, and a capture is handed them all,
-// beside what the launch handed.
+// as the document its credential_process prints, and a transcript prints its
+// parts bare (`aws configure export-credentials`, a helper's trace), which the
+// whole document never matches; so the set holds it whole and by every string,
+// and a capture is handed them all beside what the launch handed.
 //
 // Mutation: keep a launch's value whole only, or a renewal's, or record a
 // renewal in a set the capture does not read, and a check below goes red.
@@ -286,15 +271,12 @@ func TestAnIssuedDocumentIsScrubbedByEveryStringItHolds(t *testing.T) {
 }
 
 // A RENEWED VALUE IS DROPPED AN HOUR PAST ITS EXPIRY, and nothing a launch
-// handed ever is. A lapsed token opens nothing, and dropping it is what keeps a
-// long run's renewals — an AWS session's 144 a day — from taking the set past
-// its bound; an hour is far past any clock's error, so nothing still good goes.
-// A value recorded again, or held by both of the sets a launch joins as it
-// carries one into the box's next job, lapses at the later of its expiries,
-// and one either holds for good — what a launch handed — keeps none, whatever
-// a renewal says of it. The poll's record drops them from the set beside the
-// row as it adds the next, and the launch of a job that continues in the box
-// drops them as it seals the set it carried.
+// handed ever is. Dropping lapsed tokens keeps a long run's renewals (an AWS
+// session's 144 a day) within the set's bound; an hour is far past any clock's
+// error. A value recorded twice, or held by both sets a launch joins, lapses at
+// the later expiry, and one either holds for good never lapses. The poll's
+// record drops lapsed values as it adds the next, and a launch continuing in
+// the box as it seals the set it carried.
 //
 // Mutation: drop at the expiry itself, never drop, drop a value the launch
 // handed, keep the earlier of two expiries (in a record or in a union), give a
@@ -403,14 +385,12 @@ func TestARenewedValueIsDroppedAnHourPastItsExpiry(t *testing.T) {
 	})
 }
 
-// AN OLDER BUILD'S SCRUB TAKES THE RENEWED VALUES, which live in the one list
-// it reads. A node of the build before this one decodes the set as its values
-// and its logins alone, and scrubs a capture by the values: a renewal kept
-// anywhere else would be in no capture it takes mid-upgrade. When each one
-// lapses rides beside them, which it reads past. And a set marked as holding
-// less than its box reads to it as a job that keeps none, whose every capture
-// it refuses, as this build does: what it reads is the empty seal, not a word
-// it does not know.
+// AN OLDER BUILD'S SCRUB TAKES THE RENEWED VALUES, which live in the one list it
+// reads: the build before decodes the set as its values and logins alone, so a
+// renewal kept elsewhere would be in no capture it takes mid-upgrade; expiries
+// ride beside, which it reads past. A set marked as holding less than its box
+// reads to it as the empty seal, a job that keeps none, whose every capture it
+// refuses as this build does.
 //
 // Mutation: keep a renewal in a field of its own, or mark a set by a flag
 // beside the seal it still holds, and a check below goes red.
@@ -477,12 +457,11 @@ func TestAnOlderBuildsScrubTakesTheRenewedValues(t *testing.T) {
 }
 
 // A CAPTURE TAKEN AFTER A RENEWAL HOLDS NO RENEWED VALUE. The poll rewrites a
-// running box's token file as its token renews, and the run's transcript can
-// print what it read there; the launch never saw that value, and reading it
-// again at the capture would issue another. So the waiter hands its refresh a
-// recorder bound to the job it polls, which records the token in the set
-// beside the job's row before the file is written, and a capture taken after
-// it is handed the token to scrub, whole and by every string it holds.
+// running box's token file as it renews, and a transcript can print it; the
+// launch never saw it, and reading it again at the capture would issue another.
+// So the waiter hands its refresh a recorder bound to the polled job, which
+// records the token in the set beside its row before the file is written, and a
+// later capture scrubs it whole and by every string.
 //
 // Mutation: hand the refresh a recorder that records nothing, bind it to
 // another job, or have the capture read a set the record did not grow, and a
@@ -536,12 +515,10 @@ func TestACaptureTakenAfterARenewalHoldsNoRenewedValue(t *testing.T) {
 }
 
 // A RENEWAL THE STORE DID NOT ANSWER IS KEPT OUT OF THE BOX until a poll's
-// record lands. The poll's refresh writes a token only where its record
-// answers nil, so a record the store did not take answers an error: never the
-// nil of a token the refresh may write, which would put a live token in the
-// box that no capture of the job is scrubbed of, and never [ErrJobNotRunning]
-// either, which would leave a job that still runs on an expiring token. The
-// next poll asks again, and writes the token once its record lands.
+// record lands. The refresh writes a token only on a nil record, so a record
+// the store did not take answers its error: nil would put a live token in the
+// box that no capture is scrubbed of, and [ErrJobNotRunning] would leave a
+// running job on an expiring token. The next poll asks again.
 //
 // Mutation: answer a record the store refused as one the refresh may write, or
 // as a job no longer running, and a check below goes red.
@@ -602,12 +579,10 @@ func TestARenewalTheStoreDidNotAnswerIsKeptOutOfTheBox(t *testing.T) {
 }
 
 // A LATER BUILD'S KEYS IN THE HANDED SET SURVIVE THIS BUILD'S RENEWALS, in the
-// part beside the row and in the set it seals. Every renewal reads the part,
-// opens the set, records the token and writes both back, on whichever node
-// polls the box, every few minutes of a long run; and the launch of a job that
-// continues in the box joins the set it carries with its own. A fact a later
-// build keeps in either, decoded into this build's shapes and written back from
-// them, was gone from the fleet at this build's next poll.
+// part beside the row and in the set it seals. Every renewal, on whichever node
+// polls the box, decodes both into this build's shapes and writes them back,
+// and a launch continuing in the box joins the set it carries with its own; a
+// later build's key dropped there is gone from the fleet.
 //
 // Mutation: drop either section's Extra on its decode or its encode, or leave
 // the carried set's out of the union, and a check below goes red.
@@ -668,15 +643,13 @@ func TestALaterBuildsKeysInTheHandedSetSurviveARenewal(t *testing.T) {
 	})
 }
 
-// A RENEWAL PAST THE SET'S BOUND IS WRITTEN, AND REFUSES EVERY LATER CAPTURE.
-// A set still past what a run keeps once its lapsed values are dropped cannot
-// hold the token, and one without it would scrub a capture of less than the
-// box holds; so it is marked, which every capture of the job reads as a
-// refusal saying why, as a launch past the bound is, and the token is written
-// all the same: the run needs a good token more than it needs a kept session.
-// The node that marks it says so once (`executor_session_scrub_incomplete`,
-// with why), since nothing else on it would; a later renewal finds the mark and
-// is written too, the set asked nothing and nothing said again.
+// A RENEWAL PAST THE SET'S BOUND IS WRITTEN, AND REFUSES EVERY LATER CAPTURE. A
+// set still past its bound once lapsed values are dropped cannot hold the token,
+// and one without it would scrub a capture of less than the box holds, so it is
+// marked, which every capture reads as a refusal saying why; the token is
+// written anyway, since the run needs a good token more than a kept session.
+// The marking node logs it once (`executor_session_scrub_incomplete`, with
+// why); a later renewal is written, the set unasked and nothing logged again.
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 //
 // Mutation: refuse the token past the bound, leave the set as it was, ask a
@@ -720,13 +693,12 @@ func TestARenewalPastTheSetsBoundIsWrittenAndRefusesEveryLaterCapture(t *testing
 	})
 }
 
-// A TOKEN THE LAUNCH WRITES IN A KEPT BOX IS SEALED WITH ITS JOB. A job that
-// continues in its turn's kept box has the box's token files brought up to
-// date before it starts, which can write a token no poll recorded — the box was
-// paused, and no poll reached it — and the job's own set is written only with
-// its command, once the job has started. So the launch keeps what its refresh
-// wrote and seals it with the job, its lapse beside it, with the job's own
-// secrets and those carried from the job before it in the box.
+// A TOKEN THE LAUNCH WRITES IN A KEPT BOX IS SEALED WITH ITS JOB. A job
+// continuing in its turn's kept box has the box's token files refreshed before
+// it starts, which can write a token no poll recorded (the box was paused), and
+// the job's own set is written only once it has started. So the launch keeps
+// what its refresh wrote and seals it, its lapse beside it, with the job's own
+// secrets and those carried from the job before it.
 //
 // Mutation: hand the launch's refresh a recorder that keeps nothing, or seal
 // the job without what it kept, and a check below goes red.
@@ -783,9 +755,9 @@ func TestATokenTheLaunchWritesInAKeptBoxIsSealedWithItsJob(t *testing.T) {
 }
 
 // THE NAME OF AN MCP SERVER THE LAUNCH DECLARES IS NEVER TAKEN OUT BY VALUE,
-// whatever credential position also holds the same word: it is part of every
-// tool name of that server, and scrubbed out of a kept session it left the
-// tool definitions the harness restores named outside the provider's pattern.
+// whatever credential position also holds it: every tool name of that server
+// carries it, and scrubbed from a kept session it leaves the tool definitions
+// the harness restores named outside the provider's pattern.
 //
 // Mutation: collect the values without withoutServerNames, and it goes red.
 func TestAServerNameALaunchDeclaresIsNeverTakenOutByValue(t *testing.T) {
