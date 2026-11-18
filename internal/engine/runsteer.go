@@ -747,10 +747,11 @@ type hookSettle struct {
 
 // merge adds what settle names to the pending one, each once: a newer ask is
 // one more fact about the job, never a replacement of what is still unasked.
+// Each list keeps its newest [steerLossesKept], as the inbox's rings do.
 func (h *hookSettle) merge(settle sandbox.HookSettle) {
 	for _, take := range settle.Unanswered {
 		if !slices.Contains(h.settle.Unanswered, take) {
-			h.settle.Unanswered = append(h.settle.Unanswered, take)
+			h.settle.Unanswered = kept(append(h.settle.Unanswered, take))
 			h.tried = false
 		}
 	}

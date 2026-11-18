@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -362,5 +363,29 @@ func TestACancelledServeIsToldAgainUnderTheHeader(t *testing.T) {
 	}
 	if got := servedNotes(mustRow(t, store, "run-1")); !slices.Equal(got, []string{"n-1"}) {
 		t.Errorf("a continuation is told %v under the header, want the note a cancel alone lost", got)
+	}
+}
+
+// A JOB'S PENDING SETTLE KEEPS ITS NEWEST LOSSES. A run's loop merges every
+// settle a job's inbox hands it into one, so a box that loses serves faster
+// than its store answers would grow it without end: each list keeps its
+// newest steerLossesKept, as the inbox's own rings do.
+//
+// Mutation: leave either list uncapped, and the case goes red.
+func TestAJobsPendingSettleKeepsItsNewestLosses(t *testing.T) {
+	t.Parallel()
+	var held hookSettle
+	const asked = steerLossesKept + 8
+	for k := range asked {
+		held.merge(sandbox.HookSettle{Launch: "job-1", Unanswered: []string{"take-" + strconv.Itoa(k)},
+			Cancelled: []sandbox.NoteCall{{Session: "mcp-session-1", ID: strconv.Itoa(k)}}})
+	}
+	if got := held.settle.Unanswered; len(got) != steerLossesKept || got[0] != "take-8" ||
+		got[len(got)-1] != "take-"+strconv.Itoa(asked-1) {
+		t.Errorf("the pending settle holds %d unanswered takes, %v, want the newest %d", len(got), got,
+			steerLossesKept)
+	}
+	if got := held.settle.Cancelled; len(got) != steerLossesKept || got[0].ID != "8" {
+		t.Errorf("the pending settle holds %d cancelled calls, want the newest %d", len(got), steerLossesKept)
 	}
 }
