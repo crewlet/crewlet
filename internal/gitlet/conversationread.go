@@ -472,17 +472,24 @@ func (r *Reader) changeComments(ctx context.Context, tx *sql.Tx, q ReadQuery, na
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for rows.Next() {
 		var (
-			c            CommentRow
-			kind, byKind string
-			anchor       string
-			position, at int64
+			c                          CommentRow
+			kind, byKind, deletedKind  string
+			anchor                     string
+			position, at, edited, gone int64
 		)
 		if err := rows.Scan(&c.ID, &c.ThreadID, &c.ParentID, &c.Author, &kind, &c.AuthorOperatorID, &anchor,
-			&c.Resolved, &c.ResolvedBy, &byKind, &c.TurnID, &position, &at, &c.Body, &c.FindingID); err != nil {
+			&c.Resolved, &c.ResolvedBy, &byKind, &c.TurnID, &position, &at, &c.Body, &c.FindingID, &edited, &gone,
+			&c.DeletedBy, &deletedKind); err != nil {
 			return fmt.Errorf("gitlet: read the comments of %s: %w", named, err)
 		}
-		c.AuthorKind, c.ResolvedByKind = PartyKind(kind), PartyKind(byKind)
+		c.AuthorKind, c.ResolvedByKind, c.DeletedByKind = PartyKind(kind), PartyKind(byKind), PartyKind(deletedKind)
 		c.Position, c.At = unpacked(position), store.DecodeTime(at)
+		if edited != 0 {
+			c.EditedAt = store.DecodeTime(edited)
+		}
+		if gone != 0 {
+			c.DeletedAt = store.DecodeTime(gone)
+		}
 		if anchor != "" {
 			c.Anchor = &CommentAnchor{}
 			if err := json.Unmarshal([]byte(anchor), c.Anchor); err != nil {
@@ -811,10 +818,12 @@ const (
 		FROM code_reviewers INDEXED BY ` + reviewersKey + ` WHERE change_id = ? AND reviewer > ?
 		ORDER BY reviewer LIMIT ?`
 	commentsOfSQL = `SELECT id, thread_id, parent_id, author, author_kind, author_operator_id, anchor, resolved,
-			resolved_by, resolved_by_kind, turn_id, position, at, body, finding_id
+			resolved_by, resolved_by_kind, turn_id, position, at, body, finding_id, edited_at, deleted_at,
+			deleted_by, deleted_by_kind
 		FROM code_comments WHERE change_id = ? ORDER BY thread_id, position LIMIT ?`
 	commentsOfAfterSQL = `SELECT id, thread_id, parent_id, author, author_kind, author_operator_id, anchor,
-			resolved, resolved_by, resolved_by_kind, turn_id, position, at, body, finding_id
+			resolved, resolved_by, resolved_by_kind, turn_id, position, at, body, finding_id, edited_at, deleted_at,
+			deleted_by, deleted_by_kind
 		FROM code_comments WHERE change_id = ? AND thread_id >= ? AND (thread_id > ? OR position > ?)
 		ORDER BY thread_id, position LIMIT ?`
 	reviewsOfSQL = `SELECT id, revision, reviewer, reviewer_kind, operator_id, verdict, findings, turn_id, model,

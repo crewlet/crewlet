@@ -842,6 +842,13 @@ func registeredStatements() map[string]statement {
 			[]string{conversationKey + " (change_id=?)", reviewerKey + " (change_id=?)"}},
 		"resolve thread": {resolveThreadSQL, []any{true, "seat-0", "agent", "comment-1", "repo-1-change-000001"},
 			[]string{commentKey + " (id=?)"}},
+		// A COMMENT'S EDIT AND DELETE: the comment read and written back by its
+		// key, a decide's and an apply's.
+		"comment state": {commentStateSQL, []any{"comment-1"}, []string{commentKey + " (id=?)"}},
+		"comment width": {commentWidthSQL, []any{"comment-1", "repo-1-change-000001"},
+			[]string{commentKey + " (id=?)"}},
+		"edit comment":   {editCommentSQL, []any{"Why?", 4, 3000, "comment-1"}, []string{commentKey + " (id=?)"}},
+		"delete comment": {deleteCommentSQL, []any{3000, "seat-0", "agent", "comment-1"}, []string{commentKey + " (id=?)"}},
 		// A CHANGE'S REVIEWS AND FINDINGS: a finding by its key — a decide's
 		// and an answer's; the findings an answer names, driven from the list
 		// of their ids, one seek of the key an id; a raiser's standing
@@ -1203,6 +1210,8 @@ func registeredStatements() map[string]statement {
 				"INTEGER PRIMARY KEY (rowid=?)"}},
 		"remove a cut change's notices": {removeCutNoticesSQL, []any{"repo-1-change-000001", PurgePartRows},
 			[]string{"code_notifications_change_idx (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"unquote notices": {unquoteNoticesSQL, []any{"repo-1-change-000001", 3000},
+			[]string{"code_notifications_change_idx (change_id=? AND log_seq=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"sweep notices": {sweepNoticesSQL, []any{string(PartyAgent), 3000},
 			[]string{"code_notifications_swept_idx (recipient_kind=? AND created_at<?)"}},
 		"purged changes": {purgedChangesSQL, []any{"repo-1"}, []string{"code_changes_number_idx (repo_id=?)"}},

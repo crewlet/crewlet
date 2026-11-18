@@ -1915,13 +1915,14 @@ type ChangeResult struct {
 
 // ConversationWrite is one write of a change's conversation as its asker hands
 // it to the repository's committing data node ([ChangeWriter.Converse]):
-// EXACTLY ONE of an ask for review, a comment, a thread's resolution, a review,
-// an answer to findings and a revision's facts (each its op's payload,
-// [ConversationOps]), decided as a record of its own on the change's subject,
-// beside who asks and their read floor. OpID is the record's operation id, Seen
-// the publish's session floor. What no asker sends (who wrote it, a reviewer's
-// kind, a comment's id and thread, a review's and its findings' ids) the writer
-// stamps from its asker, the chart and its snapshot.
+// EXACTLY ONE of an ask for review, a comment, a thread's resolution, a
+// comment's edit or delete, a review, an answer to findings and a revision's
+// facts (each its op's payload, [ConversationOps]), decided as a record of its
+// own on the change's subject, beside who asks and their read floor. OpID is
+// the record's operation id, Seen the publish's session floor. What no asker
+// sends (who wrote it, a reviewer's kind, a comment's id and thread, a review's
+// and its findings' ids) the writer stamps from its asker, the chart and its
+// snapshot.
 type ConversationWrite struct {
 	// OpID is the record's operation id, as [ChangeProposal.OpID] is; a
 	// comment's id derives from it ([CommentID]).
@@ -1966,6 +1967,8 @@ type ConversationWrite struct {
 	Reviewers      *ReviewerRequest `json:"reviewers,omitempty"`
 	Comment        *Comment         `json:"comment,omitempty"`
 	ThreadResolve  *ThreadResolve   `json:"thread_resolve,omitempty"`
+	CommentEdit    *CommentEdit     `json:"comment_edit,omitempty"`
+	CommentDelete  *CommentDelete   `json:"comment_delete,omitempty"`
 	Review         *Review          `json:"review,omitempty"`
 	FindingResolve *FindingResolve  `json:"finding_resolve,omitempty"`
 	// Revise is a revision's facts, and Mergeability whether the change's head
@@ -2722,7 +2725,8 @@ type ReviewerRow struct {
 // finding it replies to, its author (a seat, or a person with the credential
 // used), the line a thread's first comment points at, whether and by whom its
 // thread is resolved, the turn that said it, its words, and its record's
-// position and broker instant.
+// position and broker instant; when its author last edited it, and when and by
+// whom it was deleted, which clears its words and keeps its place.
 type CommentRow struct {
 	ID               string            `json:"id"`
 	ThreadID         string            `json:"thread_id"`
@@ -2739,6 +2743,10 @@ type CommentRow struct {
 	Body             string            `json:"body" untrusted:"fence"`
 	Position         statelog.Position `json:"position"`
 	At               time.Time         `json:"at"`
+	EditedAt         time.Time         `json:"edited_at,omitzero"`
+	DeletedAt        time.Time         `json:"deleted_at,omitzero"`
+	DeletedBy        string            `json:"deleted_by,omitempty"`
+	DeletedByKind    PartyKind         `json:"deleted_by_kind,omitempty"`
 }
 
 // ChangeAuthor is one author of a change (code_change_authors): a seat's handle

@@ -237,6 +237,17 @@
 // reviews or its findings — the detail on its revisions' first page counting
 // it.
 //
+// A DELETED COMMENT IS A TOMBSTONE, as a deleted branch's commits stay and a
+// closed change stays listed: its row keeps its place, its thread and its
+// author, its words cleared, with who deleted it and when, so a thread whose
+// root is deleted keeps every reply, anyone's, and takes replies still. Its
+// author edits it ([CommentEdit], marked edited) and deletes it, as do a
+// principal that maintains the repository and a person ([CommentDelete]); a
+// delete also clears the excerpt every notice of its record quotes. Neither
+// tells anybody. The code log keeps the original record until the log's own
+// retention trims it: a delete takes the words out of every read, not out of
+// the log.
+//
 // A REVISION'S FACTS ARE ON THE CHANGE'S SUBJECT TOO (revise.go): what the
 // repository's home Gitlet node read of the change's head revision against its
 // target — its base, the trees of its base and its head, its patch-id, the

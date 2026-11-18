@@ -1197,6 +1197,18 @@ func (c CommentRow) encodedBytes() int {
 	if c.TurnID != "" {
 		n += field("turn_id", stringBytes(c.TurnID), false)
 	}
+	if !c.EditedAt.IsZero() {
+		n += field("edited_at", timeBytes(c.EditedAt), false)
+	}
+	if !c.DeletedAt.IsZero() {
+		n += field("deleted_at", timeBytes(c.DeletedAt), false)
+	}
+	if c.DeletedBy != "" {
+		n += field("deleted_by", stringBytes(c.DeletedBy), false)
+	}
+	if c.DeletedByKind != "" {
+		n += field("deleted_by_kind", stringBytes(string(c.DeletedByKind)), false)
+	}
 	return n + field("body", stringBytes(c.Body), false) +
 		field("position", positionBytes(c.Position), false) + field("at", timeBytes(c.At), false)
 }

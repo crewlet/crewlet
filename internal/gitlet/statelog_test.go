@@ -122,6 +122,15 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	case "RecordEnvelope.Op viewed_key":
 		op, payload = gitlet.OpViewedKey, gitlet.ViewedKeyRecord{RepoID: repo,
 			Key: gitlet.ViewedKey(strings.Repeat("ab", gitlet.ViewedKeyBytes))}
+	case "RecordEnvelope.Op comment_edit", "RecordEnvelope.Op comment_delete":
+		const comment = "0190f3c4-0000-7000-8000-0000000000c2"
+		op, payload = gitlet.OpCommentEdit, gitlet.CommentEdit{RepoID: repo, ChangeID: change, CommentID: comment,
+			By: seat, Body: "Why a minute?"}
+		if field.Name == "RecordEnvelope.Op comment_delete" {
+			op, payload = gitlet.OpCommentDelete, gitlet.CommentDelete{RepoID: repo, ChangeID: change,
+				CommentID: comment, By: seat}
+		}
+		subject, scope = gitlet.ChangeSubject(change), gitlet.Scope{gitlet.RepoPath(repo), gitlet.ChangePath(change)}
 	case "PushEntry.Offered":
 		entry.Commands[0].Result, entry.Commands[0].Reason = gitlet.ResultNG, gitlet.RefusalProtectedDirect
 		entry.Via, entry.Offered = gitlet.ViaGit, 1

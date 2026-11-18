@@ -37,6 +37,10 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		repoID, changeID = p.RepoID, p.ChangeID
 	case ThreadResolve:
 		repoID, changeID = p.RepoID, p.ChangeID
+	case CommentEdit:
+		repoID, changeID = p.RepoID, p.ChangeID
+	case CommentDelete:
+		repoID, changeID = p.RepoID, p.ChangeID
 	case Review:
 		repoID, changeID = p.RepoID, p.ChangeID
 	case FindingResolve:
@@ -91,6 +95,10 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		rows, counts, err = applyComment(ctx, tx, at, p)
 	case ThreadResolve:
 		rows, err = applyThreadResolve(ctx, tx, at, p)
+	case CommentEdit:
+		rows, counts, err = applyCommentEdit(ctx, tx, at, p)
+	case CommentDelete:
+		rows, counts, err = a.applyCommentDelete(ctx, tx, at, p)
 	case Review:
 		rows, counts, err = applyReview(ctx, tx, at, p)
 	case FindingResolve:
@@ -140,14 +148,15 @@ func movesReadiness(payload any) bool {
 }
 
 // spoken reports a record SOMEBODY WROTE (an ask, a comment, a thread
-// resolved, a review, an answer to a finding), which dates the conversation's
+// resolved, a comment edited or deleted, a review, an answer to a finding),
+// which dates the conversation's
 // last move (code_conversations.updated_at) that a listing narrowed to a window
 // walks. The home's facts and the asks' settling date nothing: a moving target
 // re-checks every live change into it, which would put every change of a busy
 // branch in every day's window.
 func spoken(payload any) bool {
 	switch payload.(type) {
-	case ReviewerRequest, Comment, ThreadResolve, Review, FindingResolve:
+	case ReviewerRequest, Comment, ThreadResolve, CommentEdit, CommentDelete, Review, FindingResolve:
 		return true
 	}
 	return false
@@ -497,6 +506,83 @@ func applyThreadResolve(ctx context.Context, tx *sql.Tx, at applyContext, t Thre
 	return 1, nil
 }
 
+// applyCommentEdit replaces a comment's words by its author's, marking it
+// edited, and moves its conversation's text_bytes by what the words gained.
+// A comment gone, deleted or another's applies as nothing: no writer forms it.
+func applyCommentEdit(ctx context.Context, tx *sql.Tx, at applyContext, e CommentEdit) (int, conversationCounts,
+	error) {
+
+	by, kind := e.By.party()
+	c, found, err := commentWidthIn(ctx, tx, e.CommentID, e.ChangeID)
+	switch {
+	case err != nil:
+		return 0, conversationCounts{}, err
+	case !found || c.deleted || by == "" || c.author != by || c.authorKind != kind:
+		n, err := conversationNotApplied(ctx, at, e.RepoID, e.ChangeID, "no comment "+e.CommentID+" its "+
+			"editor wrote stands")
+		return n, conversationCounts{}, err
+	}
+	if _, err := tx.ExecContext(ctx, editCommentSQL, e.Body, len(e.Body), at.at(), e.CommentID); err != nil {
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: edit comment %s at %s: %w", e.CommentID, at.position,
+			err)
+	}
+	return 1, conversationCounts{textBytes: int64(len(e.Body)) - c.bodyBytes}, nil
+}
+
+// applyCommentDelete deletes a comment as a tombstone (doc.go, "A deleted
+// comment"): its row keeps its place, thread and author, its words cleared,
+// and who deleted it and when; every notice quoting it loses its excerpt.
+func (a *Applier) applyCommentDelete(ctx context.Context, tx *sql.Tx, at applyContext, d CommentDelete) (int,
+	conversationCounts, error) {
+
+	by, kind := d.By.party()
+	c, found, err := commentWidthIn(ctx, tx, d.CommentID, d.ChangeID)
+	switch {
+	case err != nil:
+		return 0, conversationCounts{}, err
+	case !found || c.deleted || by == "":
+		n, err := conversationNotApplied(ctx, at, d.RepoID, d.ChangeID, "no comment "+d.CommentID+" stands")
+		return n, conversationCounts{}, err
+	}
+	if _, err := tx.ExecContext(ctx, deleteCommentSQL, at.at(), by, string(kind), d.CommentID); err != nil {
+		return 0, conversationCounts{}, fmt.Errorf("gitlet: delete comment %s at %s: %w", d.CommentID,
+			at.position, err)
+	}
+	unquoted, err := a.unquoteNotices(ctx, tx, at, d.ChangeID, c.position)
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
+	return 1 + unquoted, conversationCounts{textBytes: -c.bodyBytes}, nil
+}
+
+// commentWidth is what an edit's and a delete's apply read of one comment.
+type commentWidth struct {
+	author              string
+	authorKind          PartyKind
+	deleted             bool
+	bodyBytes, position int64
+}
+
+// commentWidthIn reads comment id of changeID, and false where the change holds
+// none by that id.
+func commentWidthIn(ctx context.Context, tx *sql.Tx, id, changeID string) (commentWidth, bool, error) {
+	var (
+		c       commentWidth
+		kind    string
+		deleted int64
+	)
+	err := tx.QueryRowContext(ctx, commentWidthSQL, id, changeID).Scan(&c.author, &kind, &c.bodyBytes,
+		&c.position, &deleted)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return commentWidth{}, false, nil
+	case err != nil:
+		return commentWidth{}, false, fmt.Errorf("gitlet: read comment %s: %w", id, err)
+	}
+	c.authorKind, c.deleted = PartyKind(kind), deleted != 0
+	return c, true, nil
+}
+
 // applyAsks settles a change's asks with its lifecycle ([AskSettle]): each
 // named ask moves from the state the other direction leaves (waiting to ended,
 // ended to requested) only while the change, as this transaction reads it,
@@ -657,4 +743,12 @@ const (
 		ON CONFLICT (id) DO NOTHING`
 	resolveThreadSQL = `UPDATE code_comments SET resolved = ?, resolved_by = ?, resolved_by_kind = ?
 		WHERE id = ? AND change_id = ? AND thread_id = id`
+	// A comment's edit and delete: its width read first, which the
+	// conversation's text_bytes moves by.
+	commentWidthSQL = `SELECT author, author_kind, body_bytes, position, deleted_at
+		FROM code_comments WHERE id = ? AND change_id = ?`
+	editCommentSQL   = `UPDATE code_comments SET body = ?, body_bytes = ?, edited_at = ? WHERE id = ?`
+	deleteCommentSQL = `UPDATE code_comments SET body = '', body_bytes = 0, deleted_at = ?, deleted_by = ?,
+			deleted_by_kind = ?
+		WHERE id = ?`
 )

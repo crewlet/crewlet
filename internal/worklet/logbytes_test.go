@@ -432,6 +432,13 @@ var codeLogNegligible = map[gitlet.OpKind]string{
 		"takes: once a change at most, a record naming the change and a reason, smaller than an edit",
 	gitlet.OpChangeReopen: "a closed change reopened by code_close_change: once a close at most, a " +
 		"record naming the change, smaller than an edit",
+	// A COMMENT'S EDIT OR DELETE: a correction of what was said, never part of a
+	// change's day of work, each at most the words of one comment.
+	gitlet.OpCommentEdit: "a comment's words replaced by its author through code_comment_on_change: a " +
+		"few times a comment at most, each a record of the comment's id and its new words, no larger than " +
+		"the comment (codeCommentBytes) and carrying no routing",
+	gitlet.OpCommentDelete: "a comment deleted through code_delete_comment: once a comment at most, a " +
+		"record naming the comment and who deleted it, about two hundred bytes",
 	// A CHANGE'S ASKS SETTLED with its lifecycle, only where an ask outlives it.
 	gitlet.OpAsks: "a change's asks for review settled by its repository's home Gitlet node through the " +
 		"estate's code.conversation — ended once it closed or merged with asks still waiting, asked again " +

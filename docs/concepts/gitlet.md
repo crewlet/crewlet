@@ -2209,8 +2209,8 @@ behind their batches and contend with every push to the repository.
   next node answers: a reply to a comment the asker was shown is never refused
   because the writer has not seen the comment yet.
 - **A seat and a person's assistant write it through tools** —
-  `code_request_review`, `code_review_change`, `code_comment_on_change` and
-  `code_resolve_finding` ([The company's
+  `code_request_review`, `code_review_change`, `code_comment_on_change`,
+  `code_delete_comment` and `code_resolve_finding` ([The company's
   code](../guides/tools-and-mcp.md#the-companys-code)) — each one write, named
   by one operation and decided at or past the tool's own read of the change. A
   review is ONE record — its verdict, its summary, every finding it raises and
@@ -2240,7 +2240,7 @@ behind their batches and contend with every push to the repository.
 | `code_conversations` | each change that has been discussed | Its counters — its comments, its reviews, its open findings, its standing blockers and how many reviewers' standing verdict asks for changes — what its comments, reviews and findings weigh, the version and position of its last record, and the version of what its [readiness](#merge-readiness) reads: one more for each ask for review, review, answer to findings, revision's facts and settling of its asks — and how many of its asks wait and how many its end left, which its [home](#the-homes-change-work) finds a change to settle by |
 | `code_reviewers` | each reviewer it has asked | A seat, or a person by the human seat they hold; why — asked by name, or as a [path owner](#recorded-on-the-change) a revision's facts asked — whether the ask waits (`requested`), was answered by the reviewer's review (`reviewed`), was ended by the change's close or merge (`ended`) or was withdrawn (`withdrawn`) — each kept, so the change says who was once asked — who asked, nobody for a path owner, and the note they asked with, at most 1 KiB, or for a path owner the globs the ask is for, at most 32 and 1 KiB of them, with how many more |
 | `code_participants` | everybody who takes part in it | Each reviewer asked or reviewing and each author of a comment, by handle and kind, and a reviewer's **standing verdict**: the latest of their reviews that approves or asks for changes, and the revision it judged |
-| `code_comments` | each comment | Its thread, its parent or the finding it replies to, who said it — a seat, or a person with the credential they used — the line it points at, whether its thread is resolved and by whom, the turn that said it, and its body, at most 32 KiB |
+| `code_comments` | each comment | Its thread, its parent or the finding it replies to, who said it — a seat, or a person with the credential they used — the line it points at, whether its thread is resolved and by whom, the turn that said it, its body, at most 32 KiB, when its author last edited it, and when and by whom it was deleted |
 | `code_reviews` | each review | The revision it judged, who reviewed — a seat, or a person with the credential they used — its verdict, how many findings it raised, the turn and the model that reviewed, and its summary, at most 4 KiB |
 | `code_findings` | each finding | The review and the revision that raised it, its raiser, where it points — a file, a side of the revision's diff, its lines, the commit and the blob they were read in — its severity and category, its state, and its last answer: the note, who gave it, the commit it names |
 | `code_finding_texts` | each finding | Its title (one line, at most 200 bytes), its body (at most 4 KiB) and the lines it suggests in place of the ones it points at (at most 16 KiB) — a row of its own, so the finding's state is rewritten without its text |
@@ -2371,6 +2371,23 @@ credential bound to no seat says nothing: every comment names who said it.
   anybody else is refused `not_permitted` — and its first comment names who
   resolved it. A finding's thread is answered by the finding's own answer
   ([Findings](#findings)), never resolved as a comment's is.
+- **A comment is edited by its author alone**, any comment of theirs, the
+  first of a thread, a reply or a reply to a finding: its words are replaced
+  and the row keeps when, which a reader sees as edited. Anybody else is
+  refused `not_permitted`; words it holds already change nothing.
+- **A comment is deleted by its author, a principal that maintains the
+  repository or a person**, anybody else refused `not_permitted`. A deleted
+  comment is a tombstone, as a deleted branch's commits stay and a closed
+  change stays listed: its row keeps its place, its thread and its author,
+  its words cleared, with who deleted it and when, so a thread whose first
+  comment is deleted keeps every reply, anyone's, and still takes replies. A
+  deleted comment takes no edit (`comment_gone`, as does a comment the change
+  does not hold), and deleting it again changes nothing. The delete also
+  clears the excerpt every inbox notice of the comment quotes.
+- **An edit or a delete tells nobody**: no notice, no wake. The code log
+  keeps the comment's original record until the log's own retention trims it
+  ([Retention](../guides/retention.md)): a delete takes the words out of every
+  read of the change, not out of the log.
 
 ### Reviews
 
