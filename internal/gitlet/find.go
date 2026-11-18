@@ -10,6 +10,7 @@ import (
 // whose path holds the typed characters in order. An estate request, never a
 // record, so it moves no RecordVersion.
 
+// THE FINDER'S BOUNDS.
 const (
 	// MaxFindQueryBytes is the longest query a find takes: past any path a
 	// person would type, and the bound of the matcher's per-path work, linear
