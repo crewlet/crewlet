@@ -815,7 +815,8 @@ func (c *Coordinator) drainSave(wait context.Context, run PendingRun, begun, dra
 
 // runSave runs one save task its offer spawned under stint, then writes what
 // came of it to memo, gives its slot back once its keep has ended, and logs a
-// failure no stamp's line names.
+// failure no stamp's line names, all before it closes running.ended: a waiter
+// on ended may move the clock or the memory on.
 func (c *Coordinator) runSave(stint context.Context, job saveJob, memo *saveMemo, running *saveRun) {
 	start := c.now()
 	life, duty, endDuty := c.saveContexts(stint, job.drainEnd)
@@ -842,14 +843,14 @@ func (c *Coordinator) runSave(stint context.Context, job saveJob, memo *saveMemo
 	case saveLanded:
 		memo.last, memo.failures, memo.mark = start, 0, out.streamed
 	}
-	failures, due := memo.failures, memo.due(job.interval)
+	failures, nextDue := memo.failures, memo.due(job.interval).Sub(c.now())
 	unlogged := out.unplaced != "" && !memo.logged[out.unplaced]
 	if unlogged {
 		memo.logged[out.unplaced] = true
 	}
 	c.saves.mu.Unlock()
 	<-c.saves.slots
-	close(running.ended)
+	defer close(running.ended)
 	if out.unplaced == "" {
 		return
 	}
@@ -858,7 +859,7 @@ func (c *Coordinator) runSave(stint context.Context, job saveJob, memo *saveMemo
 		level = slog.LevelWarn
 	}
 	log.Log(life, level, "executor_session_not_kept", "turn_id", job.run.TurnID, "point", job.point(),
-		"failures", failures, "next_due_s", due.Sub(c.now()).Seconds(), "detail", out.why)
+		"failures", failures, "next_due_s", nextDue.Seconds(), "detail", out.why)
 }
 
 // memoOf is run's memory, made at FIRST SIGHT where none is kept or it counts
