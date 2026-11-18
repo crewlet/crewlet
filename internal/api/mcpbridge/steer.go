@@ -69,8 +69,10 @@ const (
 type SteerInbox interface {
 	// Take answers one hook of the run's main agent, at event
 	// ([SteerEventToolBatch] or [SteerEventFinish]): the hook's whole answer,
-	// in the shape the harness reads, or empty for nothing. Never an error — a
-	// note that could not be taken waits for the next step.
+	// in the shape the harness reads, or empty for nothing. Every note
+	// answered is recorded SERVED to the run's job first, and read only once
+	// the job's session shows it. Never an error: a note that could not be
+	// served waits for the next step.
 	Take(ctx context.Context, event string) string
 
 	// Wait is the notes waiting past the cursor after, oldest first, and a

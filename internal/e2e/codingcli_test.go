@@ -22,6 +22,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
@@ -524,6 +525,8 @@ func runHarness(endpoint string) int {
 		return fail("%v", err)
 	}
 	stream := codingStream{out: os.Stdout, session: session}
+	thread := &codingSessionThread{path: transcript, session: session, release: codingRecordRelease(),
+		at: time.Now().UTC()}
 	// A RUN CARRYING ON AN ASKING RUN, its session resumed with the answer
 	// as its prompt: whatever the mode, it does the work now, as Claude Code
 	// resuming a conversation answers its next prompt. Asking again would be
@@ -534,7 +537,10 @@ func runHarness(endpoint string) int {
 		if _, err := os.Stat(transcript); err != nil {
 			return fail("No conversation found with session ID: %s (%v)", parsed.resume, err)
 		}
-		if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
+		if err := thread.carryOn(); err != nil {
+			return fail("carrying the session's transcript on: %v", err)
+		}
+		if err := codingWork(context.Background(), endpoint, parsed, hooks, thread, stream); err != nil {
 			return fail("%v", err)
 		}
 		return 0
@@ -545,8 +551,6 @@ func runHarness(endpoint string) int {
 	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
 		return fail("filing the session's transcript: %v", err)
 	}
-	thread := &codingSessionThread{path: transcript, session: session, release: codingRecordRelease(),
-		at: time.Now().UTC()}
 	if err := thread.brief(parsed.brief); err != nil {
 		return fail("filing the session's transcript: %v", err)
 	}
@@ -566,7 +570,7 @@ func runHarness(endpoint string) int {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		if err := codingHeldSubmit(context.Background(), parsed, hooks, stream); err != nil {
+		if err := codingHeldSubmit(context.Background(), parsed, hooks, thread, stream); err != nil {
 			return fail("%v", err)
 		}
 		stream.result("success", codingHeldReport, 1, replyUsage{})
@@ -575,12 +579,12 @@ func runHarness(endpoint string) int {
 		// A RUN CARRYING ON A HELD CALL is told what became of it, in its own
 		// session or as a fresh run, and does the work.
 		if strings.Contains(parsed.brief, heldAnswered) || strings.Contains(parsed.brief, heldReseeded) {
-			if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
+			if err := codingWork(context.Background(), endpoint, parsed, hooks, thread, stream); err != nil {
 				return fail("%v", err)
 			}
 			return 0
 		}
-		if err := codingCallHeld(context.Background(), parsed, hooks, stream); err != nil {
+		if err := codingCallHeld(context.Background(), parsed, hooks, thread, stream); err != nil {
 			return fail("%v", err)
 		}
 		stream.result("success", "waiting on a person's approval", 1, replyUsage{})
@@ -590,7 +594,7 @@ func runHarness(endpoint string) int {
 		// the answer in its brief, and does not ask again: it does the work,
 		// as a real harness told what it was about to ask would.
 		if strings.Contains(parsed.brief, codingQuestion) {
-			if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
+			if err := codingWork(context.Background(), endpoint, parsed, hooks, thread, stream); err != nil {
 				return fail("%v", err)
 			}
 			return 0
@@ -605,7 +609,7 @@ func runHarness(endpoint string) int {
 		// THE SEAT'S OWN TOOL, over the run's bridge: what it records on the
 		// run's row is what the collection parks on, so a question asked any
 		// other way would test a protocol the engine does not speak.
-		if err := codingAsk(context.Background(), parsed, hooks, stream); err != nil {
+		if err := codingAsk(context.Background(), parsed, hooks, thread, stream); err != nil {
 			return fail("%v", err)
 		}
 		stream.result("success", "blocked on a question", 1, replyUsage{})
@@ -615,7 +619,7 @@ func runHarness(endpoint string) int {
 		// [codingModeAsk]'s does; a case expecting the cut-off session
 		// continued says so of the argv.
 		if strings.Contains(parsed.brief, codingQuestion) {
-			if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
+			if err := codingWork(context.Background(), endpoint, parsed, hooks, thread, stream); err != nil {
 				return fail("%v", err)
 			}
 			return 0
@@ -636,7 +640,7 @@ func runHarness(endpoint string) int {
 		// run the default and pass a case for the wrong reason.
 		return fail("unknown %s %q", codingModeEnv, mode)
 	}
-	if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
+	if err := codingWork(context.Background(), endpoint, parsed, hooks, thread, stream); err != nil {
 		return fail("%v", err)
 	}
 	return 0
@@ -647,7 +651,7 @@ func runHarness(endpoint string) int {
 // boundaries — a note one hands back after a batch rides the model's next
 // request, and one handed back at the finish continues the turn with it.
 func codingWork(ctx context.Context, endpoint string, args codingArgs, hooks codingHooks,
-	stream codingStream) error {
+	thread *codingSessionThread, stream codingStream) error {
 	system := ""
 	if args.systemFile != "" {
 		raw, err := os.ReadFile(args.systemFile)
@@ -694,7 +698,7 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, hooks cod
 	// hands back continues the turn, as Claude Code continues it, and
 	// nothing ends it on that word.
 	finish := func(round int, last string) (bool, error) {
-		note, err := hooks.play(ctx, session, codingEventFinish, stream)
+		note, err := hooks.play(ctx, session, codingEventFinish, thread, stream)
 		if err != nil || note == "" {
 			if err == nil {
 				stream.result("success", last, round+1, spent)
@@ -740,7 +744,7 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, hooks cod
 		}
 		// THE BATCH HAS ITS RESULTS: a note handed back now rides the
 		// model's next request, after them.
-		note, err := hooks.play(ctx, session, codingEventToolBatch, stream)
+		note, err := hooks.play(ctx, session, codingEventToolBatch, thread, stream)
 		if err != nil {
 			return err
 		}
@@ -912,11 +916,12 @@ func readCodingHooks(path string) (codingHooks, error) {
 // play plays every hook at event as Claude Code does on the main agent's own
 // boundary: a call of its tool over the run's bridge session, its input's
 // ${hook_event_name} and ${agent_id} filled in (the main agent's id is empty).
-// Each answer's transcript line is printed as the harness prints it, and what they
-// hand the model is answered, joined. A call that fails is the run's failure:
-// the bridge answers this tool with text always.
+// Each answer's transcript line is printed as the harness prints it, its hook
+// records are filed in thread as Claude Code files them ([codingSessionThread.hook]),
+// and what the answers hand the model is answered, joined. A call that fails
+// is the run's failure: the bridge answers this tool with text always.
 func (h codingHooks) play(ctx context.Context, session *mcp.ClientSession, event string,
-	stream codingStream) (string, error) {
+	thread *codingSessionThread, stream codingStream) (string, error) {
 	var notes []string
 	for _, hook := range h[event] {
 		args := map[string]any{}
@@ -948,6 +953,9 @@ func (h codingHooks) play(ctx context.Context, session *mcp.ClientSession, event
 			stream.line(map[string]any{"type": "system", "subtype": "informational",
 				"content": event + " says: " + out.SystemMessage, "level": "notice",
 				"session_id": stream.session})
+		}
+		if err := thread.hook(event, answer, out.SystemMessage, out.HookSpecificOutput.AdditionalContext); err != nil {
+			return "", fmt.Errorf("filing the %s hook's records in the session: %w", event, err)
 		}
 		if note := out.HookSpecificOutput.AdditionalContext; note != "" {
 			notes = append(notes, note)
@@ -1024,20 +1032,81 @@ func (th *codingSessionThread) result(id, text string, failed bool) error {
 	}}, os.O_APPEND)
 }
 
-// append files record as the thread's next, the file opened with flag.
+// carryOn takes the thread up where its file ends, as a resumed session
+// does: the next record is chained to the newest one filed.
+func (th *codingSessionThread) carryOn() error {
+	raw, err := os.ReadFile(th.path)
+	if err != nil {
+		return err
+	}
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		var record struct {
+			UUID string `json:"uuid"`
+		}
+		if json.Unmarshal([]byte(line), &record) == nil && record.UUID != "" {
+			th.parent = record.UUID
+		}
+	}
+	return nil
+}
+
+// hook files what Claude Code files for a hook at event that answered answer,
+// its system message system and its additional context added: a success
+// holding the whole answer, the system message and the context, each a
+// chained main-thread attachment of one firing, `hook-<uuid>`, as Claude Code
+// 2.1.310 files them (internal/sandbox/executor's claudethread_test.go). So a
+// collection of the job finds the take's token in the pair. Nothing for an
+// answer that handed the model nothing, or a stand-in with no thread.
+func (th *codingSessionThread) hook(event, answer, system, added string) error {
+	if th == nil || added == "" {
+		return nil
+	}
+	firing := "hook-" + uuid.NewString()
+	for _, attachment := range []map[string]any{
+		{"type": "hook_success", "content": "", "stdout": answer, "stderr": "", "exitCode": 0,
+			"command": config.ToolServerName + "/" + mcpbridge.SteerTool},
+		{"type": "hook_system_message", "content": system},
+		{"type": "hook_additional_context", "content": []string{added}},
+	} {
+		attachment["hookName"], attachment["hookEvent"], attachment["toolUseID"] = event, event, firing
+		if err := th.append(map[string]any{"type": "attachment", "attachment": attachment}, os.O_APPEND); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// append files record as the thread's next, the file opened with flag, its
+// keys in Claude Code's order: `parentUuid` and `isSidechain` first, then the
+// record's own, then `uuid` right before `timestamp`, then the session and the
+// release. Claude Code's reader of a large session finds a record by those
+// bytes, so a thread written in another order is one a collection cannot
+// read alike on every size path, and confirms no hook's note from.
 func (th *codingSessionThread) append(record map[string]any, flag int) error {
 	id := uuid.NewString()
 	var parent any
 	if th.parent != "" {
 		parent = th.parent
 	}
-	record["parentUuid"], record["isSidechain"], record["uuid"] = parent, false, id
-	record["timestamp"] = th.at.Format("2006-01-02T15:04:05.000Z")
-	record["sessionId"], record["version"] = th.session, th.release
-	raw, err := json.Marshal(record)
+	head, err := json.Marshal(map[string]any{"parentUuid": parent})
 	if err != nil {
 		return err
 	}
+	own, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	tail, err := json.Marshal(struct {
+		UUID      string `json:"uuid"`
+		Timestamp string `json:"timestamp"`
+		SessionID string `json:"sessionId"`
+		Version   string `json:"version"`
+	}{id, th.at.Format("2006-01-02T15:04:05.000Z"), th.session, th.release})
+	if err != nil {
+		return err
+	}
+	raw := slices.Concat(head[:len(head)-1], []byte(`,"isSidechain":false,`), own[1:len(own)-1], []byte(","),
+		tail[1:])
 	file, err := os.OpenFile(th.path, flag|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -1117,7 +1186,8 @@ func codingQuestionInput() map[string]any {
 // codingAsk is a [codingModeAsk] run's calls: its structured question, over a
 // session it opens on the seat's bridge, the submission the bridge refuses it
 // once it has asked, then the Stop hook its harness runs as it ends its turn.
-func codingAsk(ctx context.Context, args codingArgs, hooks codingHooks, stream codingStream) error {
+func codingAsk(ctx context.Context, args codingArgs, hooks codingHooks, thread *codingSessionThread,
+	stream codingStream) error {
 	bridge, err := bridgeURL(args.mcpConfig)
 	if err != nil {
 		return err
@@ -1149,7 +1219,7 @@ func codingAsk(ctx context.Context, args codingArgs, hooks codingHooks, stream c
 		return fmt.Errorf("a submission after the question answered %q (failed %v), "+
 			"want it refused as parked", out, failed)
 	}
-	_, err = hooks.play(ctx, session, codingEventFinish, stream)
+	_, err = hooks.play(ctx, session, codingEventFinish, thread, stream)
 	return err
 }
 
@@ -1171,7 +1241,8 @@ func toldHowToAsk(args codingArgs) (bool, error) {
 // hooks after it, which take any note a person sent while it was held. It asks
 // no model, so a note goes no further than the harness's own transcript line; the
 // record of its reading is the engine's.
-func codingHeldSubmit(ctx context.Context, args codingArgs, hooks codingHooks, stream codingStream) error {
+func codingHeldSubmit(ctx context.Context, args codingArgs, hooks codingHooks, thread *codingSessionThread,
+	stream codingStream) error {
 	bridge, err := bridgeURL(args.mcpConfig)
 	if err != nil {
 		return err
@@ -1194,11 +1265,11 @@ func codingHeldSubmit(ctx context.Context, args codingArgs, hooks codingHooks, s
 	if failed {
 		return fmt.Errorf("submitting over the bridge after the release: %s", out)
 	}
-	if _, err := hooks.play(ctx, session, codingEventToolBatch, stream); err != nil {
+	if _, err := hooks.play(ctx, session, codingEventToolBatch, thread, stream); err != nil {
 		return err
 	}
 	stream.text(codingHeldReport)
-	_, err = hooks.play(ctx, session, codingEventFinish, stream)
+	_, err = hooks.play(ctx, session, codingEventFinish, thread, stream)
 	return err
 }
 

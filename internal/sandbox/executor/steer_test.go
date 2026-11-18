@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -59,7 +60,7 @@ func TestAHookAnswerCarriesTheOldestNotesThatFit(t *testing.T) {
 // block its step, and a note must only ever add to what the model reads.
 func TestAHookAnswerIsContextAndNeverADecision(t *testing.T) {
 	t.Parallel()
-	got := executor.ClaudeHookAnswer("Stop", []executor.HookNote{
+	got := executor.ClaudeHookAnswer("Stop", hookTake, []executor.HookNote{
 		{By: "ada", Message: "## A note from ada\nuse <staging> & main"},
 		{By: "bob", Message: "## A note from bob\ntag it"},
 		{By: "ada", Message: "## A note from ada\nand push"},
@@ -78,18 +79,78 @@ func TestAHookAnswerIsContextAndNeverADecision(t *testing.T) {
 		"## A note from ada\nuse <staging> & main\n\n## A note from bob\ntag it\n\n## A note from ada\nand push" {
 		t.Errorf("the hook output is %v", out)
 	}
-	if answer["systemMessage"] != "crewlet: 3 notes from ada, bob reached the run as it was finishing" {
+	if answer["systemMessage"] != "crewlet: 3 notes from ada, bob reached the run as it was finishing "+hookToken {
 		t.Errorf("the transcript line is %q", answer["systemMessage"])
 	}
 	if !strings.Contains(got, "<staging> & main") {
 		t.Errorf("the note's own characters were escaped: %s", got)
 	}
-	one := executor.ClaudeHookAnswer("PostToolBatch", []executor.HookNote{{By: "ada", Message: "m"}})
-	if !strings.Contains(one, `"systemMessage":"crewlet: a note from ada reached the run"`) {
+	one := executor.ClaudeHookAnswer("PostToolBatch", hookTake, []executor.HookNote{{By: "ada", Message: "m"}})
+	if !strings.Contains(one, `"systemMessage":"crewlet: a note from ada reached the run `+hookToken+`"`) {
 		t.Errorf("one note after a batch answered %s", one)
 	}
-	if none := executor.ClaudeHookAnswer("Stop", nil); none != "" {
+	if none := executor.ClaudeHookAnswer("Stop", hookTake, nil); none != "" {
 		t.Errorf("no notes answered %q, want nothing", none)
+	}
+}
+
+// hookTake is a take a hook's answer names, and hookToken the token it names
+// it by.
+const (
+	hookTake  = "0b7e3c2a-5d41-4f6e-9a8b-1c2d3e4f5a6b"
+	hookToken = "[crewlet take " + hookTake + "]"
+)
+
+// A HOOK'S ANSWER NAMES ITS TAKE, AND THE LIVE LINE LEAVES IT OUT: the answer's
+// system message ends in the take's token, which the job's session then shows
+// beside the note and a collection reads the serve's receipt by; a person
+// reading the run's live transcript, or a captured session's, sees what the
+// hook said without it. A token of any other shape, or one the line does not
+// end in, is a person's words and stays.
+//
+// Mutation: leave the token on the live line (claudeSteerSaid without the cut),
+// and both transcripts show it; drop it from the answer, and the answer names
+// no take.
+func TestAHookAnswerNamesItsTakeAndTheLiveLineLeavesItOut(t *testing.T) {
+	t.Parallel()
+	for event, said := range map[string]string{
+		"PostToolBatch": "a note from ada reached the run",
+		"Stop":          "a note from ada reached the run as it was finishing",
+	} {
+		answer := executor.ClaudeHookAnswer(event, hookTake, []executor.HookNote{{By: "ada", Message: "m"}})
+		var out struct {
+			SystemMessage string `json:"systemMessage"`
+		}
+		if err := json.Unmarshal([]byte(answer), &out); err != nil {
+			t.Fatalf("the answer is not JSON: %v\n%s", err, answer)
+		}
+		if !strings.HasSuffix(out.SystemMessage, " "+hookToken) {
+			t.Errorf("%s: the answer's system message %q does not end in its take's token", event,
+				out.SystemMessage)
+		}
+		line := `{"type":"system","subtype":"informational","content":` +
+			jsonText(t, event+" says: "+out.SystemMessage) + `,"timestamp":"2026-10-30T12:00:03.100Z"}`
+		if got := decodeClaude(line); got != "[steer] "+said {
+			t.Errorf("%s: the live line reads %q, want %q", event, got, "[steer] "+said)
+		}
+		described, raw := claudeCaptureOf(t, []string{line}, nil)
+		got, err := executor.ReadTranscript(t.Context(), described.Harness, described.Format,
+			opener(bytes.NewReader(raw)), 0)
+		if err != nil {
+			t.Fatalf("ReadTranscript: %v", err)
+		}
+		sameEntries(t, got.Entries, []shown{{kind: executor.EntryNote, text: said}})
+	}
+	for _, kept := range []string{
+		"a note from ada reached the run [crewlet take not-a-uuid-at-all-xxxxxxxxxxxxxxxxxx]",
+		"a note from ada reached the run [crewlet take " + strings.ToUpper(hookTake) + "]",
+		"a note from ada reached the run " + hookToken + " and more",
+	} {
+		line := `{"type":"system","subtype":"informational","content":` +
+			jsonText(t, "PostToolBatch says: crewlet: "+kept) + `}`
+		if got := decodeClaude(line); got != "[steer] "+kept {
+			t.Errorf("the live line reads %q, want the hook's words whole: %q", got, kept)
+		}
 	}
 }
 

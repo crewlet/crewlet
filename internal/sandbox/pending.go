@@ -3806,9 +3806,8 @@ type PendingStore interface {
 	// take's own place among the record's reads, but a note a hook's serve
 	// placed, which is read at its own ([RunNote.Place]).
 	//
-	// THE READ IS THE HANDOVER: a caller hands a note to a model only once
-	// this has recorded it read, so a note is never delivered twice by two
-	// takers racing for it, nor delivered without a record that says so.
+	// THE READ IS THE REVIEW'S HANDOVER, never delivered twice by two takers
+	// racing, nor without a record; a hook's is a serve ([PendingStore.ServeHook]).
 	TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error)
 
 	// ServeNotes records the notes a serve names SERVED to its job

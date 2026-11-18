@@ -194,6 +194,12 @@ type Note struct {
 
 	// At is when the box took it, in UTC.
 	At time.Time
+
+	// SentBefore says the source handed the note over after a note filed
+	// later that its reader already holds, so its reader is told it was sent
+	// before that one (prompts.SteerMessageSentBefore), never that it is the
+	// later word. Set by the source as it hands the note over, never filed.
+	SentBefore bool
 }
 
 // Validate reports what is wrong with a note's text, or nil. The ONE rule,

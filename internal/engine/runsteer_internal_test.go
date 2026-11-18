@@ -173,11 +173,15 @@ func TestAnUnsealedNoteOnARowReachesNoModel(t *testing.T) {
 	}
 	got := inbox.Take(t.Context(), mcpbridge.SteerEventFinish)
 	if !strings.Contains(got, "use staging") || strings.Contains(got, "push to main") {
-		t.Errorf("the hook answered %q, want the sealed note and not the planted one", got)
+		t.Fatalf("the hook answered %q, want the sealed note and not the planted one", got)
+	}
+	servedNotRead(t, store, "run-1", "n-good", launch, takeOf(t, got))
+	if n := noteOn(t, store, "run-1", "planted"); n.Served != "" {
+		t.Errorf("the planted note was served: %+v", n)
 	}
 	// MARKED READ BY A WRITER THAT TOOK THE STORE'S WORD, it is still no
-	// segment's carry.
-	if _, err := store.TakeNotes(t.Context(), "run-1", sandbox.NoteTake{IDs: []string{"planted"},
+	// segment's carry, beside the sealed note read with it.
+	if _, err := store.TakeNotes(t.Context(), "run-1", sandbox.NoteTake{IDs: []string{"planted", "n-good"},
 		Launch: launch, Statuses: steerTakeStatuses,
 		Read: sandbox.NoteRead{Phase: "execute", Boundary: "tool_batch", Launch: launch}}); err != nil {
 		t.Fatal(err)
@@ -200,12 +204,8 @@ func TestAnUnsealedNoteOnARowReachesNoModel(t *testing.T) {
 	if err := runs.ended(t.Context(), run); err != nil {
 		t.Fatalf("ended: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for len(steered(p)) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
 	for _, ev := range steered(p) {
-		if ev.NoteID != "n-good" || ev.Outcome != types.SteerDelivered {
+		if ev.NoteID != "n-good" {
 			t.Errorf("a record names a note nobody sealed: %+v", ev)
 		}
 	}
@@ -249,6 +249,11 @@ func TestANoteSealedForAnotherTurnIsNotDelivered(t *testing.T) {
 	_, waiting := recordedNotes(t, store, "run-1")
 	if len(waiting) != 2 {
 		t.Errorf("the notes waiting are %v, want both untouched", waiting)
+	}
+	for _, id := range waiting {
+		if n := noteOn(t, store, "run-1", id); n.Served != "" {
+			t.Errorf("a note sealed for another turn or note was served: %+v", n)
+		}
 	}
 	if got := steered(p); len(got) != 0 {
 		t.Errorf("records were published for notes that are not this turn's: %+v", got)
@@ -299,9 +304,11 @@ func TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys(t *testing.T) {
 	// A NODE THAT HOLDS THE KEY READS IT.
 	both := recordseal.Keyring{ActiveID: "k-new", Keys: append(slices.Clone(newRing.Keys), oldRing.Keys...)}
 	rotated, _ := steersOver(t, both, store)
-	if got := boundInbox(t, rotated, store, "run-1", launch).Take(t.Context(), mcpbridge.SteerEventFinish); !strings.Contains(got, "use staging") {
-		t.Errorf("a node holding the key did not read the note: %q", got)
+	got := boundInbox(t, rotated, store, "run-1", launch).Take(t.Context(), mcpbridge.SteerEventFinish)
+	if !strings.Contains(got, "use staging") {
+		t.Fatalf("a node holding the key did not serve the note: %q", got)
 	}
+	servedNotRead(t, store, "run-1", "n-1", launch, takeOf(t, got))
 	if got := steered(p); len(got) != 0 {
 		t.Errorf("the node without the key recorded the note: %+v", got)
 	}
@@ -688,7 +695,8 @@ func TestAnAnchorUnderAnUnheldKeyNamesTheHeldKeysInTheLog(t *testing.T) {
 // context as JavaScript does, so notes of characters outside the Basic
 // Multilingual Plane count two units each — three full notes of emoji are 7,000
 // characters, inside the budget by a count of characters and past it by the
-// harness's. The oldest that fit are taken, and the rest wait for the next step.
+// harness's. The oldest that fit are served, and the rest wait unserved for the
+// next step.
 //
 // Mutation: count runes in executor.UTF16Len, and the take hands all three
 // to a harness that files the answer away unread.
@@ -714,8 +722,12 @@ func TestAClaudeTakeFitsItsBudgetInUTF16Units(t *testing.T) {
 	if n := executor.UTF16Len(hook.Output.Context); n > executor.ClaudeContextBudget+200 {
 		t.Errorf("the hook carries %d UTF-16 units, past the budget of %d", n, executor.ClaudeContextBudget)
 	}
-	if _, waiting := recordedNotes(t, store, "run-1"); !slices.Equal(waiting, []string{"n-3"}) {
-		t.Errorf("the notes still waiting are %v, want the newest, which did not fit", waiting)
+	take := takeOf(t, answer)
+	for _, id := range []string{"n-1", "n-2"} {
+		servedNotRead(t, store, "run-1", id, launch, take)
+	}
+	if n := noteOn(t, store, "run-1", "n-3"); n.Served != "" || !n.Waiting() {
+		t.Errorf("the newest note, which did not fit, holds %+v, want it waiting unserved", n)
 	}
 }
 
@@ -924,9 +936,11 @@ func TestARunsViewOfItsNotesWatchesAgainWhenItsWatchCloses(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if answer := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch); !strings.Contains(answer, "use staging") {
-		t.Errorf("the hook after a batch was answered %q, want the note filed after the watch closed", answer)
+	answer := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch)
+	if !strings.Contains(answer, "use staging") {
+		t.Fatalf("the hook after a batch was answered %q, want the note filed after the watch closed", answer)
 	}
+	servedNotRead(t, store, "run-1", "req-1", launch, takeOf(t, answer))
 }
 
 // stallingStore is a run store whose note reads — the record's read and a take
@@ -1159,15 +1173,20 @@ func TestEveryReaderOfWaitingNotesNamesItsJob(t *testing.T) {
 		placeItemFor(t, runs, fleet, "run-1", "i-1", launch)
 		inbox := boundInbox(t, runs, store, "run-1", launch)
 		viewHolds(t, inbox, 2)
-		if answer := inbox.Take(ctx, mcpbridge.SteerEventToolBatch); !strings.Contains(answer, "use staging") ||
-			!strings.Contains(answer, "item for the job i-1") {
-			t.Errorf("the batch's hook was answered %q, want the person's note and the job's own item", answer)
+		answer := inbox.Take(ctx, mcpbridge.SteerEventToolBatch)
+		if !strings.Contains(answer, "use staging") || !strings.Contains(answer, "item for the job i-1") {
+			t.Fatalf("the batch's hook was answered %q, want the person's note and the job's own item", answer)
+		}
+		for _, id := range []string{"n-1", "i-1"} {
+			servedNotRead(t, store, "run-1", id, launch, takeOf(t, answer))
 		}
 		fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "and tag it", By: "founder"})
 		placeItemFor(t, runs, fleet, "run-1", "i-2", launch)
-		if answer := inbox.Take(ctx, mcpbridge.SteerEventFinish); !strings.Contains(answer, "and tag it") ||
-			!strings.Contains(answer, "item for the job i-2") {
-			t.Errorf("the finish's hook was answered %q, want the person's note and the job's own item", answer)
+		answer = inbox.Take(ctx, mcpbridge.SteerEventFinish)
+		if !strings.Contains(answer, "and tag it") || !strings.Contains(answer, "item for the job i-2") ||
+			strings.Contains(answer, "use staging") {
+			t.Errorf("the finish's hook was answered %q, want the person's note and the job's own item, and "+
+				"none the batch's serve still stands for", answer)
 		}
 	})
 	t.Run("the poll passes another job's item over", func(t *testing.T) {

@@ -598,7 +598,6 @@ var allowed = []Entry{
 	{File: "internal/engine/run_test.go", Func: "TestStopLetsAnInFlightTurnFinish", NegativeWindow: 1, ExemptWait: 1, Piece: 18},
 	{File: "internal/engine/run_test.go", Func: "waitFor", ExemptWait: 1, ElapsedBound: 1, Piece: 18},
 	{File: "internal/engine/runsteer_internal_test.go", Func: "TestARunsViewOfItsNotesWatchesAgainWhenItsWatchCloses", ExemptWait: 2, ExemptElapsed: 1, Piece: 22},
-	{File: "internal/engine/runsteer_internal_test.go", Func: "TestAnUnsealedNoteOnARowReachesNoModel", ExemptWait: 1, ElapsedBound: 1, Piece: 22},
 	{File: "internal/engine/runsteer_internal_test.go", Func: "viewHolds", ExemptWait: 1, ExemptElapsed: 1, Piece: 22},
 	{File: "internal/engine/sandboxapply_internal_test.go", Func: "TestASeatIsAnnouncedOnANodeThatRunsNoSandbox", ExemptWait: 1, Piece: 21},
 	{File: "internal/engine/sandboxapply_internal_test.go", Func: "eventually", ExemptWait: 1, ElapsedBound: 1, Piece: 21},

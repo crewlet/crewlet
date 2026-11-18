@@ -215,6 +215,28 @@ func TestASteerMessageIsFactualWhereverItLands(t *testing.T) {
 		"\nA person who runs this company sent this through Crewlet")
 }
 
+// A NOTE SENT BEFORE ONE ALREADY HANDED OVER SAYS SO, under the heading every
+// note opens with: a reader handed it after a note filed later would take it
+// as the later word, since it arrived last. The heading is what a captured
+// session's reader finds a note by, so it is the same; the note is last and
+// verbatim.
+//
+// Mutation: render it as SteerMessage, and it says nothing of the later note.
+func TestANoteSentBeforeOneAlreadyHandedOverSaysSo(t *testing.T) {
+	t.Parallel()
+	msg := SteerMessageSentBefore("ada", "  post to #staging  ")
+	head := "## A note from ada, sent while this turn was running\n"
+	if !strings.HasPrefix(msg, head) || !strings.HasPrefix(SteerMessage("ada", "x"), head) {
+		t.Errorf("the note does not open with every note's heading:\n%s", msg)
+	}
+	contains(t, msg, "before a later note already handed to this turn",
+		"where the two disagree, the later note stands")
+	if !strings.HasSuffix(msg, "\n\npost to #staging") {
+		t.Errorf("the note is not last and verbatim:\n%s", msg)
+	}
+	contains(t, SteerMessageSentBefore("", "x"), "## A note from a person who runs this company")
+}
+
 func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {
 	t.Parallel()
 	withPrior := BuildPhaseUserMessage(UserMessage{

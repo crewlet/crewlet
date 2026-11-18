@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -18,7 +19,7 @@ import (
 // A person's notes to a run's turn, in the shapes the harnesses take them.
 //
 // The engine's run inbox (internal/engine, runsteer.go) decides which notes a
-// run's harness is handed and records them read; what is here is only how each harness
+// run's harness is served; what is here is only how each harness
 // is handed them — the shape of a Claude Code hook's answer and how much of it
 // the harness keeps in front of its model, and the id OpenCode admits a note under —
 // because those are facts about the harnesses, measured on them, and this package is
@@ -106,7 +107,8 @@ const OpenCodeSteerInstruction = steerInstructionHead +
 // agent makes, so a bridge that stopped answering would hold the run for ten
 // minutes a step. A healthy engine answers in milliseconds, and the bridge
 // answers within half of this (internal/api/mcpbridge, its take budget), so a
-// note it took reaches the model before the harness gives up.
+// note it served reaches the model before the harness gives up; one whose
+// answer comes too late is never read, its job's session showing no pair.
 // Measured on 2.1.310: the field is in seconds, and at it the harness cancels the
 // call and discards a late answer.
 const ClaudeHookTimeout = 10 * time.Second
@@ -269,7 +271,8 @@ type claudeHookOutput struct {
 
 // ClaudeHookAnswer is the answer to a Claude Code hook at event that hands its
 // model notes: their messages as the hook's additional context, joined, and a
-// line naming who sent them for the run's transcript. Empty for no notes.
+// line naming who sent them for the run's transcript, ending in take's token
+// ([claudeTakeToken]), which the live line leaves out. Empty for no notes.
 //
 // NEVER A DECISION: the answer carries no `decision`, `continue` or `reason`,
 // so it can never stop the harness's loop or block a step — what it adds is context
@@ -278,7 +281,7 @@ type claudeHookOutput struct {
 // the end of the last tool result on others, see [ClaudeCodeSteerInstruction];
 // at the run's finish, a continuation of its turn whose answer is the run's).
 // The transcript line reaches only the run's own stream, never a request.
-func ClaudeHookAnswer(event string, notes []HookNote) string {
+func ClaudeHookAnswer(event, take string, notes []HookNote) string {
 	if len(notes) == 0 {
 		return ""
 	}
@@ -302,6 +305,7 @@ func ClaudeHookAnswer(event string, notes []HookNote) string {
 	if event == claudeEventFinish {
 		line += " as it was finishing"
 	}
+	line += " " + claudeTakeToken(take)
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	// THE NOTE AS WRITTEN: a person's "<" or "&" reaches the model as itself,
@@ -331,6 +335,24 @@ const claudeTakeTokenLen = len(claudeTakePrefix) + 36 + len("]")
 // its job's session then shows ([threadLine.HookTakes]): ONE definition, which
 // the answer, the cut and the ask all read.
 func claudeTakeToken(take string) string { return claudeTakePrefix + take + "]" }
+
+// withoutTakeToken is said without a trailing take token of exactly the shape
+// [claudeTakeToken] writes (a uuid's 36 characters of hex and dashes), and the
+// space before it: what the hook said, as a person reads it. Anything else is
+// left as it is.
+func withoutTakeToken(said string) string {
+	trimmed := strings.TrimRightFunc(said, unicode.IsSpace)
+	at := len(trimmed) - claudeTakeTokenLen
+	if at < 0 || !strings.HasPrefix(trimmed[at:], claudeTakePrefix) || !strings.HasSuffix(trimmed, "]") {
+		return said
+	}
+	for _, r := range trimmed[at+len(claudeTakePrefix) : len(trimmed)-1] {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && r != '-' {
+			return said
+		}
+	}
+	return strings.TrimRightFunc(trimmed[:at], unicode.IsSpace)
+}
 
 // OpenCodeInboxID is the id OpenCode admits a note under for a job: `msg_` and
 // the first 32 hex digits of a hash of the job and the note.

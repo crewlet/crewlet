@@ -1509,10 +1509,10 @@ func openPlaces(calls BridgeLog, last int) []int {
 // AN ITEM FOR ONE JOB ([RunNote.For]) stops nothing: whatever its read, a
 // continuation is told the turn's notes, and an item is no person's note.
 //
-// NONE, NOT THE NOTES BEFORE THE JOB'S LAST TAKE. A take is recorded read in
-// the write that answers the harness's ask, before the answer is handed back
-// (internal/engine's note hooks), so a harness cut off between the two never
-// had its last take's notes; but neither is such a session known to hold its
+// NONE, NOT THE NOTES BEFORE THE JOB'S LAST SERVE. A hook's serve is recorded
+// in the write that answers the harness's ask, before the answer is handed
+// back (internal/engine's note hooks), so a harness cut off between the two
+// never had its last serve's notes; but neither is such a session known to hold its
 // job's brief, the message that told the notes the session it continued
 // lacked, an earlier job's among them: no probe has measured whether Claude
 // Code 2.1.310 writes the message a continued session is handed before it

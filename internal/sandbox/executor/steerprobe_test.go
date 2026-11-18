@@ -33,11 +33,14 @@ type probeInbox struct {
 
 const probeNote = "## A note from ada, sent while this turn was running\n\nTarget the release branch."
 
+// probeTake is the take every answer of the probe's inbox names.
+const probeTake = "5e2d1c0b-9a87-4f65-b432-10fedcba9876"
+
 func (i *probeInbox) Take(_ context.Context, event string) string {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.takes = append(i.takes, event)
-	return executor.ClaudeHookAnswer(event, []executor.HookNote{{By: "ada", Message: probeNote}})
+	return executor.ClaudeHookAnswer(event, probeTake, []executor.HookNote{{By: "ada", Message: probeNote}})
 }
 
 func (i *probeInbox) Wait(context.Context, int) ([]mcpbridge.SteerNote, <-chan struct{}) {

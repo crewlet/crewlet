@@ -593,14 +593,15 @@ func claudeSteerLine(subtype string, raw json.RawMessage) (string, bool) {
 
 // claudeSteerSaid is what the run's own hook said in a system message of
 // subtype, its content raw, as it handed the model a note — the content after
-// the event's opening, AS THE HARNESS RECORDED IT — and false for every other
-// system message. ONE READING of which message that is and where what the
-// hook said begins, for the live transcript ([claudeSteerLine]) and for a
-// captured session's ([ReadTranscript]); each shows it in its own way, which
-// is why neither the redaction nor a bound is here. The live view redacts the
-// whole of it and cuts a line for a phase event; a captured session's reader
-// redacts and bounds an entry's text as it hands the entry out, and only then
-// — a record before the page it is reading is counted and never redacted.
+// the event's opening, AS THE HARNESS RECORDED IT, less the take's token, cut
+// here alone ([withoutTakeToken]) — and false for every other system message.
+// ONE READING of which message that is and where what the hook said begins,
+// for the live transcript ([claudeSteerLine]) and for a captured session's
+// ([ReadTranscript]); each shows it in its own way, which is why neither the
+// redaction nor a bound is here. The live view redacts the whole of it and
+// cuts a line for a phase event; a captured session's reader redacts and
+// bounds an entry's text as it hands the entry out, and only then — a record
+// before the page it is reading is counted and never redacted.
 func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 	if subtype != "informational" {
 		return "", false
@@ -613,7 +614,7 @@ func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 	if loc == nil {
 		return "", false
 	}
-	return content[loc[1]:], true
+	return withoutTakeToken(content[loc[1]:]), true
 }
 
 // claudeToolLine renders one tool call for the transcript: its name and the
