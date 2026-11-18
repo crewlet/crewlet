@@ -1671,7 +1671,8 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 // release whose resume this build did not read ([UnheldTelling]), and no
 // session there where the seat's budget dropped it
 // ([SessionContinuation.UnheldDropped]). The box's own copy, taken whole there,
-// is asked nothing: no reading is read of it ([Coordinator.HoldingsOf]).
+// is asked only where an unheld telling is at stake: no reading is read of it
+// ([Coordinator.HoldingsOf]), and its harness may have updated since its job.
 func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opened PendingRun,
 	box Sandbox, runner Runner, reused bool, want SessionContinuation) (continuedLaunch, string) {
 
@@ -1710,20 +1711,23 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	// THE BOX'S OWN COPY, where its harness exited cleanly in this very box
 	// and its session was taken whole there: the box holds the archive, so
 	// nothing is fetched to be kept over a copy it would not touch.
-	if reused && !kept.Interrupted {
-		return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
-			kept: true, measure: measure, restart: restart, release: func() {}}, ""
-	}
+	own := reused && !kept.Interrupted
 	archive := ArchiveOf(row)
-	check, err := restorer.CheckCarry(ctx, box, archive)
-	switch {
-	case err != nil:
-		return continuedLaunch{}, fmt.Sprintf("the box could not be asked whether its harness continues "+
-			"the session: %v", err)
-	case !check.Continues:
-		return continuedLaunch{}, check.Why
+	var check CarryCheck
+	if !own || want.Unheld != nil || want.UnheldDropped {
+		check, err = restorer.CheckCarry(ctx, box, archive)
+		switch {
+		case err != nil:
+			return continuedLaunch{}, fmt.Sprintf("the box could not be asked whether its harness continues "+
+				"the session: %v", err)
+		case !own && !check.Continues:
+			return continuedLaunch{}, check.Why
+		}
 	}
-	exact, unused := exactFor(want.Exact, check, reused)
+	var exact, unused string
+	if !own {
+		exact, unused = exactFor(want.Exact, check, reused)
+	}
 	unheld := exact == "" && want.Unheld != nil && !check.ResumeRead
 	switch {
 	case exact != "":
@@ -1738,6 +1742,10 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	case want.UnheldDropped && !check.ResumeRead:
 		return continuedLaunch{}, fmt.Sprintf("the seat's budget could not carry the briefs for a box whose "+
 			"release the resume was not read in, and this box's harness answers %s", answeredRelease(check))
+	}
+	if own {
+		return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
+			kept: true, unheld: unheld, measure: measure, restart: restart, release: func() {}}, ""
 	}
 	fetched, err := c.fetchSession(ctx, row)
 	if err != nil {

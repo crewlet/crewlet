@@ -18,14 +18,15 @@ var toldUnheld = BriefTold{Omitted: []int{4}, Own: []Lead{answerLead("told again
 // A HOOK NOTE IS TOLD AGAIN IN A BOX WHOSE RELEASE THE RESUME WAS NOT READ IN.
 // A read at a hook's step is held as the job's session showed it, which only a
 // release whose resume this build read rebuilds (CarryCheck.ResumeRead). So a
-// box answering such a release is handed the save point's brief, and any other
-// the one that tells those notes again ([UnheldTelling]) for the box it is, its
-// told set recorded and the decision saying so; or, where the floor dropped
-// that telling, no session at all. The job's own whole copy is asked nothing.
+// box answering such a release is handed the save point's brief, and any other,
+// the job's own whole copy among them, the one that tells those notes again
+// ([UnheldTelling]) for the box it is, its told set recorded and the decision
+// saying so; or, where the floor dropped that telling, no session at all.
 //
-// Mutation: hand the unheld brief whatever the box answers, never hand it,
-// record the save point's told set beside it, leave it out of the decision, or
-// continue a box the dropped telling was for, and a case goes red.
+// Mutation: hand the unheld brief whatever the box answers, never hand it, ask
+// the job's own copy nothing, record the save point's told set beside it, leave
+// it out of the decision, or continue a box the dropped telling was for, and a
+// case goes red.
 func TestAHookNoteIsToldAgainInABoxWhoseReleaseTheResumeWasNotReadIn(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -40,9 +41,11 @@ func TestAHookNoteIsToldAgainInABoxWhoseReleaseTheResumeWasNotReadIn(t *testing.
 		{name: "a new box, a release read", interrupted: true, brief: savePointNewBox},
 		{name: "a new box, a release not read", interrupted: true, unread: true, brief: unheldNewBox},
 		{name: "a new box of a clean exit, a release not read", unread: true, brief: unheldNewBox},
-		{name: "its own whole copy, asked nothing", reused: true, unread: true, brief: savePointSameBox},
+		{name: "its own whole copy, a release read", reused: true, brief: savePointSameBox},
+		{name: "its own whole copy, a release not read", reused: true, unread: true, brief: unheldSameBox},
 		{name: "dropped, a new box of a release read", interrupted: true, dropped: true, brief: savePointNewBox},
 		{name: "dropped, a new box of a release not read", interrupted: true, unread: true, dropped: true},
+		{name: "dropped, its own whole copy of a release not read", reused: true, unread: true, dropped: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
