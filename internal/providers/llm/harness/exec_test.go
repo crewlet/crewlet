@@ -27,41 +27,27 @@ import (
 // helperEnv marks a re-execution of this test binary as the fake harness rather
 // than the suite. [TestMain] reads it before the framework starts.
 //
-// The fake is this binary rather than a shell script because the two platforms
-// the engine ships for do not share a userland: what the fake reports — a
-// file's permission bits, its whole environment, its stdin as base64 — is
-// spelled with `stat`, `base64` and `echo` flags that GNU and BSD disagree
-// about, so a script would test each machine's tools as much as the exec path.
-// Every mode is Go, defined here beside the cases that drive it, and every
-// fixture launches it through [fakeChildEnv].
-//
-// The `-test.run=TestFakeHarness` the fixtures still pass now names no
-// test, and is kept deliberately as a FORK-BOMB GUARD rather than a selector:
-// TestMain dispatches on the variable alone, so if a fixture ever forgets it,
-// the child falls through to the suite — and a filter matching nothing makes
-// that child exit immediately instead of re-running every test in this package,
-// recursively, once per case.
+// The fake is this binary, not a shell script: `stat`, `base64` and `echo`
+// flags differ between GNU and BSD, so a script would test each machine's
+// tools as much as the exec path. Fixtures launch it through [fakeChildEnv].
+// The `-test.run=TestFakeHarness` they pass names no test; it is a FORK-BOMB
+// GUARD: TestMain dispatches on the variable alone, so a fixture that forgets
+// it falls through to the suite, and a filter matching nothing makes that
+// child exit instead of re-running every test recursively.
 const helperEnv = "CREWLET_HARNESS_FAKE"
 
-// TestMain runs the fake harness when this binary was re-executed as one, a writer
-// of the shared login when it was re-executed as one of those
-// ([runLoginWriter]), and the suite otherwise.
+// TestMain runs the fake harness, or a writer of the shared login
+// ([runLoginWriter]), when this binary was re-executed as one, else the suite.
 //
-// THE DISPATCH IS HERE rather than in a test function, and that is what stops
-// the fake being REPORTED as a skipped test. It was `TestFakeHarness` with
-// a t.Skip on the parent path, so every ordinary run of this package logged a
-// skip for something that is not a test and never had an assertion in it —
-// noise in exactly the place a skip is supposed to mean "this went unchecked".
-// Same shape as internal/mcp/helper_process_test.go.
+// THE DISPATCH IS HERE, not in a test function, so the fake is not REPORTED
+// as a skipped test (a skip means "this went unchecked"); same shape as
+// internal/mcp/helper_process_test.go. It exits before flags are parsed, so
+// the fake's output is exactly what the case asked for.
 //
-// It also exits before the framework parses flags, so the fake's output is
-// exactly the bytes the case asked for with nothing of testing's around them.
-//
-// THE RELAY FIRST. A run with tools hands its harness this binary as the relay to
-// the seat's tools — the engine names its own executable, and under `go test`
-// that is this one — and the harness starts it with an environment of its own
-// choosing, which for the fake is its own: started as a relay and dispatched
-// on the fake's variable, it would play a harness instead.
+// THE RELAY FIRST. A run with tools hands its harness this binary as the
+// relay (under `go test` the engine's own executable), started with an
+// environment that for the fake carries the fake's variable: dispatched on
+// that, a relay would play a harness instead.
 func TestMain(m *testing.M) {
 	mcprelay.DispatchIfRelay()
 	if os.Getenv(helperEnv) == "1" {

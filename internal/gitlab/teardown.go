@@ -18,21 +18,15 @@ type TeardownOptions struct {
 
 // Teardown removes the webhooks this engine registered in a GitLab group.
 //
-// THE HOOKS ONLY. They are this engine's own registrations pointing at this
-// deployment, and leaving one behind delivers a company's pushes to an engine
-// that no longer has a block to route them. The service accounts are per-seat
-// access ([Vendor]): turning a seat off or removing its account goes through
-// the ledger, which reaches every account the engine created, including one
-// whose seat has left the document.
+// THE HOOKS ONLY: leaving one behind delivers a company's pushes to an engine
+// with no block to route them. Service accounts are per-seat access
+// ([Vendor]); removing one goes through the ledger, which reaches every
+// account the engine created, even one whose seat has left the document. So
+// the [provision.Removed] it answers is always empty.
 //
-// EVERY HOOK IS ATTEMPTED before the first failure is returned, and the
-// errors are joined: one project a token cannot administer must not strand
-// the hooks on all the others.
-//
+// EVERY HOOK IS ATTEMPTED before the joined errors are returned: one project a
+// token cannot administer must not strand the hooks on all the others.
 // SAFE TO REPEAT: a hook already gone is not an error.
-//
-// It removes no account, so the [provision.Removed] it answers is always
-// empty.
 func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, error) {
 	var none provision.Removed
 	if opts.Client == nil {
@@ -70,14 +64,9 @@ func groupIDOf(ctx context.Context, c *Client, path string) (int, bool, error) {
 // hooks other integrations registered and taking the first one found would
 // delete somebody else's.
 //
-// BY NAME RATHER THAN BY THE CURRENT ADDRESS, which is what makes a
-// disconnect finish the job. This compared each hook against
-// `webhookTarget(WebhookBase)` and removed only an exact match, so every hook
-// a PREVIOUS public base had left behind survived the disconnect that was
-// supposed to remove it — and a deployment whose base had moved, or which had
-// no base left to compute a target from, removed nothing at all and said it
-// was done. Measured: a group hook and two project hooks still live after the
-// integration was disconnected.
+// BY NAME RATHER THAN BY THE CURRENT ADDRESS: matching `webhookTarget` would
+// leave every hook a PREVIOUS public base registered, and remove nothing when
+// no base is left to compute a target from, yet report done.
 func removeHooks(ctx context.Context, opts TeardownOptions, groupID int) []error {
 	name := opts.Config.WebhookNameOrDefault()
 	var failures []error
@@ -103,24 +92,15 @@ func removeHooks(ctx context.Context, opts TeardownOptions, groupID int) []error
 
 	// EVERY PROJECT IN THE GROUP, not only the ones the config names.
 	//
-	// The config is not a record of where the hooks ARE. A run that
-	// established per-project hooks wrote them on the projects named AT THE
-	// TIME, so a project dropped from `provisioning.projects` since — or a
-	// company that connected with the group alone and never named one —
-	// left them unreachable, and a teardown that visited only the current
-	// list reported success having walked past them.
+	// The config is not a record of where the hooks ARE: hooks were written on
+	// the projects named AT THE TIME, so a project since dropped from
+	// `provisioning.projects` keeps them, unvisited. A dead tunnel hostname
+	// (`trycloudflare`) is re-issued to a stranger, so those payloads would
+	// keep leaving the customer's GitLab for them.
 	//
-	// Measured on a live disconnect: two hooks still on a project in the
-	// group, pointing at dead tunnels from earlier runs, which nothing
-	// would ever visit again. A `trycloudflare` hostname is re-issued to
-	// whoever asks next, so those deliveries go on leaving the customer's
-	// GitLab for a stranger — signed with a secret that stranger does not
-	// have, so nothing can be forged INTO the engine, and the payloads
-	// still leave.
-	//
-	// The configured list is unioned in rather than replaced, because a
-	// project need not be in the group at all: `provisioning.projects`
-	// takes any path this credential can administer.
+	// The configured list is unioned in, not replaced: a project need not be
+	// in the group, `provisioning.projects` takes any path the credential
+	// can administer.
 	for _, project := range sweepable(ctx, opts, groupID, &failures) {
 		hooks, err := opts.Client.ProjectHooks(ctx, project)
 		if err != nil {

@@ -11,8 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The sentinels. Each is a fact a caller acts on differently, which is why they
-// are separate.
+// The sentinels, separate because a caller acts on each differently.
 var (
 	// ErrNotFound reports an artifact, a version or an asset that does not
 	// exist (or never did, which a caller with no relation is told too).
@@ -54,22 +53,18 @@ var (
 	ErrLabelTaken = errors.New("artifactsdomain: another version has that label")
 
 	// ErrLabelsFull reports a label for a version when the artifact already
-	// keeps [artifacts.MaxLabels] labelled versions: the ARTIFACT'S STATE,
-	// its own labels at their cap, so the same label lands once one is
-	// removed. Its own sentinel beside [ErrLabelTaken] because the two send
-	// a caller to different places — another label for a collision, a
-	// removal for a full set — and one sentinel for both told a caller
-	// choosing a label to choose another when no label would land.
+	// keeps [artifacts.MaxLabels] labelled versions, so the same label lands
+	// once one is removed. Apart from [ErrLabelTaken] because a full set
+	// sends the caller to a removal, where another label would not land.
 	ErrLabelsFull = errors.New("artifactsdomain: every label this artifact " +
 		"keeps is in use")
 
 	// ErrExists reports a create of an artifact or an asset that is already
-	// there: a COLLISION with what an earlier write made, which is the same
-	// create made again after its operation ledger forgot it, or a create
-	// that raced another onto one id. Read it rather than make it again. Its
-	// own sentinel rather than [ErrInvalid] (nothing about the request is
-	// malformed) or the state log's bare one (which every surface but the
-	// tools answered as this node's fault).
+	// there: a COLLISION with an earlier write, the same create made again
+	// after its operation ledger forgot it, or one that raced another onto
+	// one id. Read it rather than make it again. Not [ErrInvalid] (nothing is
+	// malformed) nor the state log's bare one (a surface tells that as this
+	// node's fault).
 	ErrExists = errors.New("artifactsdomain: what this write creates is already there")
 
 	// ErrInvalid reports a write whose input the domain refuses, naming the
@@ -167,39 +162,16 @@ func (e *FolderAmbiguous) Error() string {
 }
 
 // Sentence is a refusal this package wrote, as a person and a model read it:
-// the sentence, without the package names and the class word a Go error
-// carries in front of it.
+// the package names and class words ("artifactsdomain: invalid: manifest:
+// invalid: worklet: …") cut wherever they sit, since a reader acts on neither,
+// and every word after them kept. THE ONE PLACE the artifacts' words are cut;
+// internal/artifactupload's Sentence cuts the publish pipeline's first.
 //
-// A REFUSAL HERE OPENS WITH ITS SENTINEL ("artifactsdomain: invalid: kind
-// \"x\" is not one of …"), and one about a manifest, a path or an audience
-// carries the refusal of the package that decided it after that
-// ("artifactsdomain: invalid: manifest: invalid: worklet: the path …"). The
-// package names say where it came from and the class word what [errors.Is]
-// finds, and neither is anything a reader acts on: stripped of the package
-// names alone, a refusal read "publish_artifact refused that: invalid: kind
-// …", the class word mid-sentence. Both go, wherever they sit, and every word
-// after them stays.
-//
-// THE ONE PLACE THE ARTIFACTS' WORDS ARE CUT, beside [ErrInvalid]: the tools
-// and the artifacts API each kept a list of package names to strip, and
-// neither list knew the class words. The publish pipeline's own refusals
-// carry its names too, which internal/artifactupload's Sentence cuts before
-// this one.
-//
-// AND NEVER AN ID THE READER DID NOT CHOOSE. A refusal about the artifact
-// itself — not there, in the trash, being purged, purged, moved past a base, a
-// version or an asset it does not keep, a restore of one that is not in the
-// trash, an asset store at its cap — carries the artifact's id for the log
-// ("the artifact was purged: 0192f…"), and a person reads it on a screen that
-// already shows the artifact, or as the answer to a link; the id goes, the
-// sentence stays, and the error a log prints keeps it ([CutArtifactID],
-// [VersionMoved]).
-//
-// AND THE FRAMEWORK'S OWN THREE IN ITS WORDS — a lost race ([ErrConflict] wraps
-// it), a create of what is there ([AlreadyExists] carries it) and a write a
-// deletion keeps deleted — as every surface that asks the state log first
-// tells them ([statelog.Sentence]), so a caller asking only this one never
-// prints a subject the framework met.
+// NEVER AN ID THE READER DID NOT CHOOSE: a refusal about the artifact itself
+// carries its id for the log, which a person reading it beside the artifact
+// does not need ([CutArtifactID], [VersionMoved]). And the framework's own
+// three (a lost race, a create of what is there, a write a deletion keeps
+// deleted) in its words ([statelog.Sentence]), so a subject never shows.
 func Sentence(err error) string {
 	if said, ok := statelog.Sentence(err); ok {
 		return said
@@ -223,20 +195,14 @@ func Sentence(err error) string {
 // `<sentinel>: <id>: <a sentence of its own>`.
 var aboutTheArtifact = []error{ErrNotFound, ErrTrashed, ErrPurging, ErrPurged, ErrInvalid}
 
-// CutArtifactID is what a person reads of a refusal whose error names, for the
-// log, the artifact the reader is already looking at: text with the artifact
-// id that follows sentinel's own words cut, and text unchanged where no id
-// follows them.
+// CutArtifactID is text with the artifact id that follows sentinel's words
+// cut, for a person already looking at the artifact; text is unchanged where
+// no id follows them.
 //
-// TWO SHAPES. `<sentinel>: <id>` is told as the sentinel's words ("the
-// artifact was purged"). `<sentinel>: <id>: <sentence>` is told as the
-// sentence alone, which says more than the sentinel and would contradict it
-// beside it: a version the artifact does not keep is ErrNotFound, whose own
-// words are "no such artifact".
-//
-// Exported for the datastore's purge
-// ([github.com/crewlet/crewlet/internal/artifactdata.ErrGone]), which names
-// its artifact the same way.
+// `<sentinel>: <id>` is told as the sentinel's words; `<sentinel>: <id>:
+// <sentence>` as the sentence alone, which would contradict the sentinel
+// beside it (a version not kept is ErrNotFound, "no such artifact").
+// Exported for [github.com/crewlet/crewlet/internal/artifactdata.ErrGone].
 func CutArtifactID(text string, sentinel error) string {
 	lead := sentinel.Error() + ": "
 	at := strings.Index(text, lead)
@@ -254,12 +220,10 @@ func CutArtifactID(text string, sentinel error) string {
 	return text[:at] + strings.TrimPrefix(after, " ")
 }
 
-// sentenceCuts are what [Sentence] removes, the class words before the package
-// names they open with: this package's own, and those of the packages whose
-// refusals this one carries — a manifest's, an artifact id's, a label's or an
-// audience's ("not an audience: \"nobody\" is not …", whose sentence names
-// what it is not on its own), a path's, which the manifest holds to Worklet's
-// one file-path rule, and a folder's name ([foldername.Check]).
+// sentenceCuts are what [Sentence] removes, class words before the package
+// names they open with: this package's own and those of the packages whose
+// refusals it carries (a manifest, an artifact id, a label, an audience, a
+// Worklet path, a folder name).
 var sentenceCuts = []string{
 	ErrInvalid.Error() + ": ", manifest.ErrInvalid.Error() + ": ",
 	artifacts.ErrInvalidAudience.Error() + ": ", artifacts.ErrInvalidID.Error() + ": ",
@@ -267,17 +231,13 @@ var sentenceCuts = []string{
 	"artifactsdomain: ", "manifest: ", "artifacts: ", "worklet: ", "foldername: ",
 }
 
-// AlreadyExists is [ErrExists] naming What was already there. THE STATE LOG'S
-// [statelog.ErrExists] IS IN ITS CHAIN AND NOT IN ITS WORDS: what the
-// framework says names the subject's broker path, while a create of what is
-// already there is one refusal on every domain, and a surface telling a
-// person one tells it in the framework's words for a person
-// ([statelog.Sentence]).
+// AlreadyExists is [ErrExists] naming What was already there. [statelog.ErrExists]
+// is in its chain and not its words, which name the subject's broker path; a
+// person is told it in [statelog.Sentence]'s words, one on every domain.
 //
-// EXPORTED, WITH ITS FIELD, because it crosses the estate's wire: a node with
-// no data asks a data node to write, and the wire rebuilds an error type from
-// its exported fields and its registration (internal/estate's typedKinds),
-// so an unexported one would arrive as its message alone.
+// EXPORTED, WITH ITS FIELD, because it crosses the estate's wire, which rebuilds
+// an error from its exported fields and registration (internal/estate's
+// typedKinds); an unexported one would arrive as its message alone.
 type AlreadyExists struct{ What string }
 
 func (e *AlreadyExists) Error() string   { return ErrExists.Error() + ": " + e.What }

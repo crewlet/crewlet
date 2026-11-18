@@ -52,50 +52,15 @@ import (
 // TestPermissionParityAcrossFivePrincipals: THE ASSISTANT SEES WHAT ITS PERSON
 // SEES, AND NOTHING ELSE (ADR-0050), for every read tool in the catalogue.
 //
-// Four people sign in to one company through the guard's real session arm:
-// an administrator, a person holding only Worklet, one holding only the
-// knowledge base, and one holding nothing but the overview everybody reads.
-// For each of them, every catalogue read is made through the assistant, as a
-// scripted model calling the tool in a real turn of the real orchestrator,
-// whose requests the App's own dispatcher carries on a grant derived from the
-// person's cookie through the App's own guard, and EVERY REQUEST THE TURN
-// SENDS is made again as the person, with that cookie. Every one, not only the
-// read's own: a read's step and its card read through the same grant (a chat
-// room a call names by its id is read to say where the read is, and a direct
-// conversation is said by its people, so the person's own seat and the seats'
-// names are read as well), and each of those reads is the person's too. The
-// answers must be the SAME BYTES with the same status: an answer stays that
-// answer, and a refusal stays that refusal. The company's sources are real
-// enough that the split is real: every tool's question is registered, so a
-// refusal is the authority's and never a route this fixture forgot to mount
-// (a question the fixture does not serve fails the walk, rather than passing
-// as two equal 404s), and the walk fails when any principal sees neither an
-// answer nor a refusal anywhere.
-//
-// The catalogue's offering is a filter and never authority, so every read is
-// offered to the turn, including those the curated catalogue keeps from this
-// person: a refusal must come from the API, as the same code and permissions
-// (exec.RefusalOf) the person's own request is refused with, and shown so on
-// the drawer's step in the engine's sentence for it (cards.PersonRefusal). The curated catalogue must never offer a
-// read the person is refused.
-//
-// And two principals may not use the assistant at all, a session exchanged
-// from a Tier A token and a machine token: the same requests made with their
-// own credential are answered, while no grant can be derived from either and
-// no turn is started for either, so through the assistant every tool is a
-// refusal.
-//
-// Zero tolerance: any difference fails the suite, the one exception being an
-// instant an answer reads off the wall clock while it is asked ([sameAnswer]).
-// Mutation: give the principal an assistant grant resolves to one more
-// permission (internal/api/auth's assist arm), and the overview-only person's
-// assistant reads Worklet; let iam.Assistable admit everybody, and a
-// token's session derives a grant and a machine token is started a turn.
-// Give it Chatlet, and the room a chat read names by its id is answered to the
-// overview-only person's assistant while their cookie is refused it, before
-// the read itself is sent; leave chat out of [parityWorldOf], and every chat
-// read is a question nobody serves; send a read other than the one its tool
-// builds, and the walk says so.
+// Four people (administrator, Worklet-only, knowledge-base-only,
+// overview-only) sign in through the real session arm. Every request a read's
+// turn sends is made again as the person: the SAME BYTES and status
+// ([sameAnswer] excepts a wall-clock instant), a refusal the authority's.
+// Withheld reads are still offered and refused with the person's own code
+// (exec.RefusalOf, cards.PersonRefusal); the curated catalogue never offers
+// one. A Tier A session and a machine token get no grant. Mutation: widen the
+// assist arm (internal/api/auth), let iam.Assistable admit all, leave chat out
+// of [parityWorldOf], send another read.
 func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 	t.Parallel()
 	sources := parityWorld(t)

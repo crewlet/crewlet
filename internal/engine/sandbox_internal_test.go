@@ -8,8 +8,10 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -21,8 +23,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -30,9 +34,14 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+	"github.com/crewlet/crewlet/internal/queue"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/version"
 )
 
 // The knob has three states and the manager's input carries a pointer for
@@ -1041,6 +1050,230 @@ func (e *Engine) useSandbox(pending sandbox.PendingStore, coordinator *sandbox.C
 	e.sandbox.Store(&sandboxRuntime{pending: pending, coordinator: coordinator})
 }
 
+// THE COORDINATOR COUNTS A FAILED RESUME TOWARD ITS GIVE-UP BY THE ANSWER THE
+// SEAT'S DELIVERIES ARE NAKED BY (nodesFailure): a resume the coordination
+// store, the queue or a stop failed is the node's, and ends no run, while one
+// the run itself failed, a deadline among them, is counted. Unwired, every
+// failure is the run's, and half an hour of an outage ends every run whose job
+// finished during it.
+//
+// Mutation: leave NodesFailure off the coordinator's options, or hand it any
+// answer but nodesFailure's, and a row goes red.
+func TestTheEnginesCoordinatorCountsOnlyTheRunsOwnFailures(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e := &Engine{backends: &Backends{Queue: queuememory.New()}, answers: testAnswers()}
+	opts := e.coordinatorOptions(nil, nil)
+	if opts.NodesFailure == nil {
+		t.Fatal("the coordinator is built with no answer to whose a failed resume is")
+	}
+	for name, tc := range map[string]struct {
+		err   error
+		nodes bool
+	}{
+		"a coordination store that did not answer": {err: fmt.Errorf("engine: read the rebase: %w: "+
+			"nats: timeout", coord.ErrUnavailable), nodes: true},
+		"a step the coordination store was silent on": {err: fmt.Errorf("%w: sandbox: read run t1",
+			sandbox.ErrStoreSilent), nodes: true},
+		"a resume that ran past its deadline": {err: fmt.Errorf("runner: %w", context.DeadlineExceeded)},
+		"the run's own":                       {err: errors.New("the turn could not be re-entered")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := opts.NodesFailure(ctx, tc.err); got != tc.nodes || got != nodesFailure(ctx, tc.err) {
+				t.Errorf("the coordinator reads %v as the node's = %v, want %v, as nodesFailure does",
+					tc.err, got, tc.nodes)
+			}
+		})
+	}
+}
+
+// THE ENGINE'S COORDINATOR IS TOLD WHICH RESUME FAILURES ONLY AN OPERATOR
+// CLEARS, by the one classification of conditions every failure is told by: a
+// disk full, read-only or failing and a process at its limit of open files are
+// raised as executor_resume_blocked while the run waits, under the kind its
+// failure records; a coordination store that did not answer, which clears by
+// itself, and the run's own failure are not. Unwired, a run the give-up never
+// ends waited for the operator with nothing raised but a line per attempt.
+//
+// Mutation: leave OperatorsCondition off the coordinator's options, or answer
+// every condition of the node's as the operator's, and a row goes red.
+func TestTheEnginesCoordinatorRaisesAResumeOnlyAnOperatorClears(t *testing.T) {
+	t.Parallel()
+	e := &Engine{backends: &Backends{Queue: queuememory.New()}, answers: testAnswers()}
+	opts := e.coordinatorOptions(nil, nil)
+	if opts.OperatorsCondition == nil {
+		t.Fatal("the coordinator is built with no answer to which failures only an operator clears")
+	}
+	for name, tc := range map[string]struct {
+		err  error
+		kind string
+	}{
+		"a full disk":             {err: fmt.Errorf("resume: write wal: %w", syscall.ENOSPC), kind: "disk_full"},
+		"a read-only disk":        {err: fmt.Errorf("resume: open: %w", syscall.EROFS), kind: "disk_read_only"},
+		"a failing disk":          {err: fmt.Errorf("resume: read: %w", syscall.EIO), kind: "disk_failed"},
+		"open files at the limit": {err: fmt.Errorf("resume: open: %w", syscall.EMFILE), kind: "open_files_exhausted"},
+		"a coordination store that did not answer": {err: fmt.Errorf("engine: read the rebase: %w: "+
+			"nats: timeout", coord.ErrUnavailable)},
+		"the run's own": {err: errors.New("the turn could not be re-entered")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			kind, ok := opts.OperatorsCondition(tc.err)
+			if ok != (tc.kind != "") || (ok && kind != tc.kind) {
+				t.Errorf("the coordinator reads %v as the operator's = %v (%q), want %q", tc.err, ok, kind,
+					tc.kind)
+			}
+		})
+	}
+}
+
+// THE ENGINE'S COORDINATOR BOUNDS A RESUME ANOTHER BUILD CAN MAKE BY THE LIVE
+// NODES' BUILDS: a parked state a newer build wrote is resumable elsewhere while
+// a node that reads its version is live, and not once none is; a state of this
+// build's version only where another node reads it; a run with no parked state,
+// or bytes that are no state, nowhere. ONLY THE VERSION IS READ
+// (execstate.VersionOf), never the whole state (the package doc's "A resume
+// another node or build can make").
+//
+// Mutation: leave ResumableElsewhere off the coordinator's options, read a
+// state this build does not decode as this build's version, decode the whole
+// state for its version, or mark the newer state's resume as the plain
+// sandbox.ErrResumeUnavailable, and a row goes red.
+func TestTheEnginesCoordinatorCountsAResumeAnotherBuildCanMakeOnlyOnceNoneIsLive(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	newer := execstate.Version + 1
+	err := (&resumer{engine: &Engine{backends: &Backends{Coord: memory.New()}}}).resume(ctx,
+		sandbox.ResumeRequest{Run: runParkedAtVersion(t, newer)})
+	if !errors.Is(err, sandbox.ErrResumeElsewhere) {
+		t.Fatalf("the resume of a newer state = %v, want it marked as one another build can make", err)
+	}
+	for name, tc := range map[string]struct {
+		run       sandbox.PendingRun
+		live      []int
+		elsewhere bool
+	}{
+		"a newer state, a node of its build live": {run: runParkedAtVersion(t, newer),
+			live: []int{execstate.Version, newer}, elsewhere: true},
+		"a newer state, none of its build live": {run: runParkedAtVersion(t, newer),
+			live: []int{execstate.Version}},
+		"a newer state, no other node live": {run: runParkedAtVersion(t, newer)},
+		"this build's state, another of it live": {run: runParkedAtVersion(t, execstate.Version),
+			live: []int{execstate.Version}, elsewhere: true},
+		"this build's state, alone": {run: runParkedAtVersion(t, execstate.Version)},
+		"no parked state": {run: sandbox.PendingRun{TurnID: "t1"},
+			live: []int{execstate.Version, newer}},
+		"bytes that are no state": {run: sandbox.PendingRun{TurnID: "t1", ExecuteState: json.RawMessage(`[1]`)},
+			live: []int{execstate.Version, newer}},
+		"this build's version, a body it refuses, another of it live": {run: sandbox.PendingRun{
+			TurnID: "t1", ExecuteState: json.RawMessage(`{"version":` + strconv.Itoa(execstate.Version) +
+				`,"active_tool_names":"not a list"}`)}, live: []int{execstate.Version}, elsewhere: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			backend := memory.New()
+			present(ctx, t, backend, "node-self", execstate.Version)
+			for i, v := range tc.live {
+				present(ctx, t, backend, "node-"+strconv.Itoa(i), v)
+			}
+			e := &Engine{backends: &Backends{Queue: queuememory.New(), Coord: backend},
+				answers: testAnswers(), testNode: "node-self"}
+			opts := e.coordinatorOptions(nil, nil)
+			if opts.ResumableElsewhere == nil {
+				t.Fatal("the coordinator is built with no bound on a resume another build can make")
+			}
+			got, err := opts.ResumableElsewhere(ctx, tc.run)
+			if err != nil {
+				t.Fatalf("the fleet's answer: %v", err)
+			}
+			if got != tc.elsewhere {
+				t.Errorf("resumable elsewhere = %v, want %v", got, tc.elsewhere)
+			}
+		})
+	}
+}
+
+// THE ENGINE'S COORDINATOR BOUNDS A RESUME A REPLY KIND KEEPS FROM THIS BUILD
+// BY THE LIVE NODES' BUILDS, never by the parked state's version: resumable
+// elsewhere while a live node runs another build (or does not say which, its
+// heartbeat naming no build or carrying no status), not once every live node
+// runs this build. A fleet that cannot be read is an error (the package doc's
+// "A resume another node or build can make").
+//
+// Mutation: bound the reply's failure by the parked state's version again, or
+// read a node that does not say its build, or says nothing at all, as this
+// build's, or answer an unread fleet as nobody, and a row goes red.
+func TestTheEnginesCoordinatorCountsAReplyNoBuildLiveReads(t *testing.T) {
+	t.Parallel()
+	live := t.Context()
+	unread := sandbox.PendingRun{TurnID: "t1", AgentHandle: "app", Reply: "later",
+		ExecuteState: runParkedAtVersion(t, execstate.Version).ExecuteState}
+	if _, err := resumeReply(unread); !errors.Is(err, sandbox.ErrResumeElsewhere) {
+		t.Fatalf("the premise: reply %q is one another build may read, got %v", unread.Reply, err)
+	}
+	for name, tc := range map[string]struct {
+		builds    []string
+		silent    bool
+		down      bool
+		elsewhere bool
+	}{
+		"two builds live":                         {builds: []string{version.String(), "v9.9.9"}, elsewhere: true},
+		"a node that does not say its build":      {builds: []string{version.String(), ""}, elsewhere: true},
+		"a node that says nothing at all":         {builds: []string{version.String()}, silent: true, elsewhere: true},
+		"one build fleet-wide":                    {builds: []string{version.String(), version.String()}},
+		"no other node live":                      {},
+		"a fleet that cannot be read, two builds": {builds: []string{"v9.9.9"}, down: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			backend := coordtest.NewFaulty(memory.New())
+			presentOnBuild(live, t, backend, "node-self", version.String())
+			for i, build := range tc.builds {
+				presentOnBuild(live, t, backend, "node-"+strconv.Itoa(i), build)
+			}
+			if tc.silent {
+				// A HEARTBEAT THAT CARRIED NO STATUS, its hook having
+				// overrun its share of the beat.
+				present(live, t, backend, "node-silent", -1)
+			}
+			if tc.down {
+				backend.Break(nil)
+			}
+			e := &Engine{backends: &Backends{Queue: queuememory.New(), Coord: backend},
+				answers: testAnswers(), testNode: "node-self"}
+			got, err := e.coordinatorOptions(nil, nil).ResumableElsewhere(live, unread)
+			if tc.down {
+				if err == nil {
+					t.Fatalf("an unread fleet answered %v with no error; want the read's failure, "+
+						"which counts nothing", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("the fleet's answer: %v", err)
+			}
+			if got != tc.elsewhere {
+				t.Errorf("resumable elsewhere = %v, want %v", got, tc.elsewhere)
+			}
+		})
+	}
+}
+
+// presentOnBuild publishes a live node's presence saying it runs build, or no
+// build at all for "", and that it reads this build's parked state version, so
+// only its build tells it apart.
+func presentOnBuild(ctx context.Context, t *testing.T, backend coord.Backend, node, build string) {
+	t.Helper()
+	status := coord.NodeStatus{ParkedStateVersion: execstate.Version, Build: build}
+	if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(node), coord.AcquireOptions{
+		Owner: node + ":1", TTL: time.Hour, Preferred: node, Ungated: true,
+		Meta: map[string]any{coord.StatusKey: status.Meta()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // THE ENGINE'S COORDINATOR HOLDS THIS PROCESS'S TAKER LEASE IN THE NODE'S LEASE
 // STORE, AND GIVES IT BACK ONLY AS THE SANDBOX STOPS. Every capture the
 // coordinator begins names the lease it holds, and a wait for a capture another
@@ -1126,4 +1359,103 @@ func TestTheEnginesCoordinatorHoldsThisProcesssTakerLease(t *testing.T) {
 		t.Errorf("an engine with no lease store hands its coordinator %#v as its taker lease's store, under %q; "+
 			"want neither", opts.Takers, opts.Incarnation)
 	}
+}
+
+// A DELIVERY MADE AS A SEAT'S CONTROL TOPIC IS ATTACHED WAITS FOR THE SEAT'S
+// RECOVERY. The broker delivers what it held the moment the topic is attached,
+// which on a seat already held the admission does not refuse, so the
+// preparation hands the subscription to the recovery pass, which attaches it
+// once the seat's recovery gate is closed: the delivery is refused its claim
+// (sandbox.ErrSeatRecovering) and handed back as this node's, and the pass takes
+// the run over (the package doc's "Everything else on the control topic NAKs").
+//
+// Mutation: attach the control topic before the pass and hand the pass no
+// attach, as the preparation did, and the delivery claims the run ahead of it.
+func TestADeliveryAsTheSeatsControlTopicIsAttachedWaitsForItsRecovery(t *testing.T) {
+	t.Parallel()
+	live := t.Context()
+	c, seat := executorCompany(t)
+	bridge := bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	})
+	e, _ := launchRig(t, c, bridge)
+	agent, ok := c.Org.AgentIDFor(seat)
+	if !ok {
+		t.Fatal("the seat has no agent id")
+	}
+	rt := e.sandbox.Load()
+	// A JOB OF THE SEAT'S RUNNING, whose completion was published while
+	// nothing here consumed the seat's control topic.
+	opened, openErr := rt.pending.BeginLaunch(live, sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: seat.Handle(), AgentID: agent.String(), Role: seat.Name,
+		Harness: "claude-code",
+	}, sandbox.Fence{})
+	if openErr != nil {
+		t.Fatalf("BeginLaunch: %v", openErr)
+	}
+	if suspended, err := rt.pending.MarkSuspended(live, "t1", sandbox.Suspension{
+		State: json.RawMessage(`{"version":4,"iteration":1}`), Iteration: 1}); err != nil || !suspended {
+		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
+	}
+	finished := types.ExecutorFinished{Agent: agent.String(), AgentHandle: seat.Handle(), RoleName: seat.Name,
+		TurnID: "t1", LaunchID: opened.LaunchID, Harness: "claude-code"}
+	attached := &deliveredOnAttach{EventQueue: e.backends.Queue, topic: topics.AgentControl(agent),
+		ev: events.New(finished, events.TraceContext{})}
+	e.backends.Queue = attached
+	if err := attached.Start(live); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if err := e.prepareSeatSandbox(live, rt, placement.Seat{ID: agent, Handle: seat.Handle()}, 1,
+		"node-a:1"); err != nil {
+		t.Fatalf("prepareSeatSandbox: %v", err)
+	}
+	got, delivered := attached.outcome()
+	if !delivered {
+		t.Fatal("the premise: the seat's control topic was attached and nothing was delivered on it")
+	}
+	if !errors.Is(got.Err, sandbox.ErrSeatRecovering) || got.Outcome != queue.OutcomeNak || got.FailsMessage() {
+		t.Fatalf("the delivery made as the seat's control topic was attached = %s (%v, fails the message "+
+			"%v); want it refused by the seat's recovery gate and handed back as this node's", got.Outcome,
+			got.Err, got.FailsMessage())
+	}
+	if row, found, err := rt.pending.Get(live, "t1"); err != nil || !found || row.Status != sandbox.StatusRunning {
+		t.Fatalf("the run is %q (found %v, %v) once the seat was prepared; want it running, taken over as "+
+			"its last holder left it", row.Status, found, err)
+	}
+}
+
+// deliveredOnAttach is an event queue that, the moment a subscription to topic
+// is attached, hands it ev as the broker hands a message it held for the topic,
+// and keeps what the subscription made of it. It answers every call as the
+// queue beneath it does.
+type deliveredOnAttach struct {
+	queue.EventQueue
+	topic     string
+	ev        *events.Event
+	mu        sync.Mutex
+	got       queue.Result
+	delivered bool
+}
+
+func (q *deliveredOnAttach) Subscribe(ctx context.Context, topic, group string, h queue.Handler) error {
+	if err := q.EventQueue.Subscribe(ctx, topic, group, h); err != nil {
+		return err
+	}
+	if topic != q.topic {
+		return nil
+	}
+	got := h(ctx, q.ev)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.got, q.delivered = got, true
+	return nil
+}
+
+// outcome is what the subscription made of the delivery, and whether one was
+// made.
+func (q *deliveredOnAttach) outcome() (queue.Result, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.got, q.delivered
 }

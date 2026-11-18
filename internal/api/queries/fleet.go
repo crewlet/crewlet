@@ -165,22 +165,13 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			// AND WHETHER THIS NODE SERVES ADMIN — its own
 			// `api.auth.admin`, `serve` or `refuse`.
 			//
-			// The posture is applied at decision time and nothing is
-			// written when it changes, which is what makes turning a
-			// node to `refuse` immediate — and what makes a fleet
-			// whose nodes disagree a LEGAL state a rolling restart
-			// passes through, or a deliberate one (an admin node
-			// beside nodes published to the people who only use the
-			// company). Legal and invisible is the problem: whether
-			// somebody can administer the company would depend on
-			// which node a load balancer sent them to, with nothing
-			// anywhere saying so. Two postures on this view is that
-			// being said.
-			//
-			// ABSENT RATHER THAN EMPTY on a node that declares none,
-			// for the reason above it: a worker binding no API has
-			// no opinion, and a blank cell must not read as a node
-			// that refuses.
+			// Applied at decision time, nothing written when it changes, so
+			// `refuse` is immediate. A fleet whose nodes disagree is LEGAL (a
+			// rolling restart, or an admin node beside published ones), but
+			// whether somebody can administer would depend on the node a load
+			// balancer chose: two postures on this view say so. ABSENT
+			// RATHER THAN EMPTY on a node that declares none: a blank cell
+			// must not read as a node that refuses.
 			if live.AdminPosture != "" {
 				row["admin"] = live.AdminPosture
 			}
@@ -232,20 +223,13 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		"unplaceable":    s.unplaceable(profiles, seatRows),
 		"unmanned_roles": unmannedRoles(nodeRows, s.currentCompany()),
 		"this_node":      s.NodeID,
-		// What the fleet is converging ON, so a lagging node reads as
-		// "3 epochs behind 41" rather than as a number with nothing to
-		// compare it to.
-		// ONE READ, TWO FIELDS. `target_epoch` is what every node row is
-		// compared against; `activation` is what that number STANDS FOR
-		// — which revision, activated when, with the summary whoever
-		// activated it wrote. An operator reading "node-2 is two epochs
-		// behind" could not see any of the second half.
-		//
-		// Read once rather than once per field: they are the same
-		// pointer, and two reads of it inside one answer can disagree
-		// while an activation lands between them — a screen saying
-		// "target 42" beside "revision r-41" describes a fleet that
-		// never existed.
+		// What the fleet is converging ON, so a lagging node reads as "3
+		// epochs behind 41". ONE READ, TWO FIELDS: `target_epoch` is what
+		// every node row is compared against and `activation` is what that
+		// number STANDS FOR (revision, time, the activator's summary). Read
+		// once: two reads of the pointer can disagree while an activation
+		// lands between them, and "target 42" beside "revision r-41"
+		// describes a fleet that never existed.
 		"target_epoch": target.epoch,
 		"activation":   target.detail,
 	}
@@ -330,16 +314,13 @@ func (c leaseClocks) expiresIn(row map[string]any, class coord.Class, lease coor
 // activationTarget is the newest activation as this answer renders it.
 //
 // The epoch is 0 when there is none or it cannot be read, which is safe
-// because the client compares against it only when non-zero — an unknown
-// target renders as no comparison rather than as "every node is 41 epochs
-// behind".
+// because the client compares against it only when non-zero: an unknown
+// target renders as no comparison, not "every node is 41 epochs behind".
 //
-// The detail is NIL rather than an object of empty strings, because "nothing
-// has ever been activated" and "the pointer could not be read" both leave a
-// screen with nothing to render, and an empty object would have it render a
-// revision named "" activated at the zero time. The two are told apart in the
-// log, which is where an operator looks for a failure, rather than on a screen
-// that has no remedy to offer for either.
+// The detail is NIL rather than an object of empty strings: "never activated"
+// and "the pointer could not be read" both leave a screen nothing to render,
+// and an empty object would draw a revision named "" at the zero time. The
+// two are told apart in the log, where an operator looks for a failure.
 type activationTarget struct {
 	epoch  int64
 	detail any

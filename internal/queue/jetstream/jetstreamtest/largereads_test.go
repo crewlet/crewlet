@@ -16,22 +16,12 @@ import (
 // A LEAF OF A FLEET READS A DEAD LETTER AT THE KEEP'S CEILING WHOLE, AND SEES
 // ITS DROP AT ONCE.
 //
-// On a fleet the dead letters keep a copy on each of three members. A leaf
-// reading an entry too large for the stream leader's reply to cross its link
-// reads it through a consumer instead, which the broker places on one of the
-// three copies at random — and a copy behind the leader still holds an entry
-// a peer has just dropped, or has not heard of one just kept. So the read
-// keeps only a consumer placed on the leader's server, and makes it again
-// elsewhere: here a leaf of three members reads each of two entries at the
-// ceiling whole, a member drops it, and the leaf reads it at once as gone —
-// the leader's answer, which acknowledged the drop.
-//
-// The placement the read insists on is held deterministically where it is
-// decided (internal/queue/jetstream's TestAReadKeepsOnlyAConsumerTheStreamsLeaderRuns,
-// TestAReadKeepsTheConsumerItsBrokerPlacedOnTheLeader and
-// TestAReadNoConsumerOfWhichIsPlacedOnTheLeaderFailsAfterItsPlacements); this
-// case holds the whole read against a real fleet, whose placements and create
-// answers that decision reads.
+// A leaf reading an entry too large for the leader's reply to cross its link
+// reads through a consumer the broker places on a random copy, and a copy
+// behind the leader still holds an entry a peer just dropped. So the read keeps
+// only a consumer on the leader's server, retrying elsewhere. The placement
+// rule is held where decided (internal/queue/jetstream's
+// TestAReadKeepsOnlyAConsumerTheStreamsLeaderRuns); this holds the whole read.
 //
 // Mutation: read the frame across the leaf's link with the leader's message
 // read, and the leaf's server closes its link on the reply: the read fails.

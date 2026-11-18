@@ -1406,7 +1406,9 @@ started with `-p` and no prompt, reading its brief on standard input from a
 file in the box — a brief carries every note the turn has read, and one
 argument is capped at 128 KiB — and with `--settings` naming a file of two
 `mcp_tool` hooks, which call the bridge's unlisted `steer_take` tool after each
-batch of the main agent's tool calls and as the run is about to finish, beside
+batch of the main agent's tool calls and as the run is about to finish (each
+note a hook is handed is recorded read only once the job's own session shows
+the hook took it), beside
 the setting every run's settings hold, which keeps the box's own retention
 sweep off the session the engine carries. The wrapper unsets
 `CLAUDE_CODE_SIMPLE` and `CLAUDE_CODE_SAFE_MODE` first, since either switches
@@ -1594,8 +1596,11 @@ harness cancelled — Claude Code and OpenCode cancel a call at its server's
 timeout, which the box is handed as the bridge's own bound, and the model reads
 the call as timed out — or hung up on, which the next progress the bridge keeps
 its answer going with finds, is listed as its run's own and marked as one
-nobody waited for, which every continuation of its round is told whatever its
-save point — as is one still running as its job's session on the bridge ended,
+nobody waited for, which its job is handed while it works and every
+continuation of its round is told whatever its save point, but one of a
+session that took it ([A relaunch continues the turn's
+session](code-sandbox.md#a-relaunch-continues-the-turns-session)) — as is one
+still running as its job's session on the bridge ended,
 which that end answered at once that it was still running ([The tool
 bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box));
 one it stopped waiting for while it still read the call's response,
@@ -4218,7 +4223,10 @@ counted is shown as one that did not say,
 never as a node where nothing happened. Each model's **Limits** draw one bar per
 window from the newest report across nodes, a warning from 80% used, the window
 it sits out as reached until it is tried again, and a reading older than half an
-hour as stale; a model whose harness reports none says "None reported".
+hour as stale; a model whose harness reports none says "None reported". The
+list draws each window on one line; hovering or focusing it lists every
+window's use and exact reset, one line each, as each bar's accessible name
+says them. The model's own page also writes the reset under each bar.
 Members read every model's condition;
 only an admin reads the credential's name, its hint, who stored it and when, the
 account a login names and the vendor's own sentence.

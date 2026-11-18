@@ -32,16 +32,14 @@ type evictionLog interface {
 // AN EVICTION IS WRITTEN AS WHOEVER PRESSED IT, ON EVERY LOG THE TRIM COUNTS
 // NODES ON — through the gate this binary hands the API ([nodeGate]).
 //
-// Two failures, both through the wiring here. The route handed the gate nothing
-// about its caller, so every log's record — and the row every data node applies
-// it into, the one `crewlet retention` prints as "evicted by" — named THIS
-// NODE's writer: "who stopped node-9 writing" had one answer, the node that
-// happened to serve the request. And the gate this binary handed over was the
-// TRACKER's writer, which wrote the tracker's log alone: every other log went
-// on counting the evicted node for ever. Mutation: hand the API the tracker's
-// writer again, or drop the caller from the request, and a log either holds no
-// row or names the node; drop the credential from the party a log's writer acts
-// as, and that log's record does not carry it.
+// Two failures. The route gave the gate nothing about its caller, so every
+// record, and the row `crewlet retention` prints as "evicted by", named THIS
+// NODE's writer. And the gate was the TRACKER's writer, writing the tracker's
+// log alone, so every other log counted the evicted node for ever. Mutation:
+// hand the API the tracker's writer again, or drop the caller from the
+// request, and a log either holds no row or names the node; drop the
+// credential from the party a log's writer acts as, and that log's record
+// does not carry it.
 func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 	t.Parallel()
 	e := bootedEngine(t)

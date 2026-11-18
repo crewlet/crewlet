@@ -16,27 +16,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// `crewlet gitlet purge-unreachable` — a person's purge of a repository's
-// unreachable objects, from a shell.
+// `crewlet gitlet purge-unreachable`: a person's purge of a repository's
+// unreachable objects, from a shell, through code_purge_unreachable on the
+// operator catalogue's act route (the same request and record as the dashboard
+// and an assistant). CREWLET_API_TOKEN alone is the credential, and must be a
+// PERSON's own machine token: a purge is a person's alone. The step-up a
+// dashboard session needs is not asked: a machine token is stepped up by
+// construction (internal/api/auth).
 //
-// # Through the act transport, as the person the token is bound to
-//
-// The tool a person's assistant and a repository's Settings tab on the
-// dashboard call, code_purge_unreachable, through the operator catalogue's act
-// route (`POST /operator/act/{tool}`), so a purge from a terminal is the same
-// request with the same record. The credential is
-// CREWLET_API_TOKEN and nothing else, and it must be a PERSON's own machine
-// token: a purge is a person's alone, so a token bound to nobody is refused,
-// naming why. The step-up a purge asks of a dashboard session is not asked of
-// it: a machine token is stepped up by construction (internal/api/auth).
-//
-// # A retry is the same request
-//
-// Every invocation mints an operation id before the request and sends it as
-// the `Idempotency-Key` header; the request's id is that operation, so an
-// answer whose outcome is unknown — or none at all — prints it, and `-op-id`
-// sends it again, which the repository's committer answers as the first
-// request rather than recording a second.
+// Every invocation mints an operation id and sends it as the `Idempotency-Key`
+// header; an answer of unknown outcome prints it, and `-op-id` sends it again,
+// which the repository's committer answers as the first request.
 
 // codePurgeTool is the tool the command calls.
 const codePurgeTool = string(authz.ActionCodePurgeUnreachable)

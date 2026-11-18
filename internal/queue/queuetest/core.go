@@ -68,21 +68,14 @@ func (s *suite) runCore(t *testing.T) {
 	t.Run("distinct_pairs_never_share_a_subscription", func(t *testing.T) {
 		t.Parallel()
 		// Two pairs that differ only in a character a backend is tempted to
-		// rewrite when it flattens (topic, group) into one broker-side name.
+		// rewrite when it flattens (topic, group) into one broker-side name
+		// (e.g. "." to "_"): topic `a.b` and `a_b` would land on ONE consumer,
+		// two seats sharing an inbox, defeating seat ownership's mutual
+		// exclusion. Every other topic here is plain lowercase dotted, so
+		// nothing else would reveal it.
 		//
-		// Found by enumerating what this suite SENDS rather than what it
-		// asserts: every topic and group in it was a plain lowercase dotted
-		// identifier, so no mutation of any backend could ever have revealed
-		// this — the input never arrived. Measured on a shipped backend
-		// whose consumer name is safe(group)+"__"+safe(topic) with "."
-		// rewritten to "_": topic `a.b` and topic `a_b` in one group land on
-		// ONE consumer. For real engine subjects that is two seats sharing an
-		// inbox, reachable from two operator handles differing only by a dot,
-		// and it defeats the mutual exclusion seat ownership rests on.
-		//
-		// A backend MAY REFUSE a name it cannot represent — the same latitude
-		// it has to refuse a linger it cannot honour — and this skips if it
-		// does. What it may not do is accept two distinct pairs and quietly
+		// A backend MAY REFUSE a name it cannot represent, and this skips if
+		// it does. What it may not do is accept two distinct pairs and quietly
 		// alias them.
 		q := s.start(ctx, t)
 
@@ -334,23 +327,18 @@ func (s *suite) runCore(t *testing.T) {
 		})
 	})
 
-	// THE ORDER A RETURN TAKES, on every backend — and it is two orders, not
-	// one. A FAILURE comes back BEHIND the mail that was waiting when it
-	// failed: the shipped broker withholds it for its redelivery backoff and
-	// serves never-delivered messages meanwhile. A HAND-BACK — a deferral —
-	// comes back at the HEAD, because the broker serves a plain Nak's
-	// redelivery before new mail.
+	// THE ORDER A RETURN TAKES, on every backend: two orders. A FAILURE comes
+	// back BEHIND the mail waiting when it failed (the shipped broker
+	// withholds it for its redelivery backoff and serves never-delivered
+	// messages meanwhile). A HAND-BACK, a deferral, comes back at the HEAD
+	// (a plain Nak's redelivery is served before new mail).
+	// Not a capability only the twin declares: every engine and node test
+	// runs on the twin, so a twin replaying a failure from the head would
+	// certify a retry before the conversation's newer message, an order
+	// production never gives.
 	//
-	// It was a capability, HeadReplayOnNak, that only the twin declared, and
-	// that was the wrong repair for the reason FreeDeferral was: every engine
-	// and node test runs on the twin, so for as long as the twin replayed a
-	// failure from the head they certified a seat that retried a failed
-	// message before its conversation's newer one — an order production never
-	// gives. A parked executor's answer route and the ordinary turn's retry
-	// were both written against it. One case, both backends, one answer.
-	//
-	// The mail is HELD while it is published, so both events are waiting
-	// before anything is fetched and nothing races the backoff.
+	// The mail is HELD while published: both events wait before anything is
+	// fetched, so nothing races the backoff.
 	t.Run("a_failure_returns_behind_waiting_mail_and_a_deferral_at_the_head", func(t *testing.T) {
 		t.Parallel()
 		quiescing := s.needQuiescing(t)
@@ -368,12 +356,12 @@ func (s *suite) runCore(t *testing.T) {
 				}
 				return res
 			})
-			if err := q.PauseTopic(ctx, topic, "grp", "test"); err != nil {
+			if err := q.PauseTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
 				t.Fatalf("PauseTopic: %v", err)
 			}
 			publish(ctx, t, q, topic, newEvent("e1"))
 			publish(ctx, t, q, topic, newEvent("e2"))
-			if err := q.ResumeTopic(ctx, topic, "grp", "test"); err != nil {
+			if err := q.ResumeTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
 				t.Fatalf("ResumeTopic: %v", err)
 			}
 			return seen
@@ -400,12 +388,12 @@ func (s *suite) runCore(t *testing.T) {
 				}
 				return res
 			})
-			if err := q.PauseTopic(ctx, topic, "grp", "test"); err != nil {
+			if err := q.PauseTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
 				t.Fatalf("PauseTopic: %v", err)
 			}
 			publish(ctx, t, q, topic, newEvent("e1"))
 			publish(ctx, t, q, topic, newEvent("e2"))
-			if err := q.ResumeTopic(ctx, topic, "grp", "test"); err != nil {
+			if err := q.ResumeTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
 				t.Fatalf("ResumeTopic: %v", err)
 			}
 			seen.awaitLabels(t, "the deferral", "e1")
@@ -494,32 +482,18 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("a_handler_is_told_how_many_deliveries_are_left", func(t *testing.T) {
 		t.Parallel()
-		// WHAT A HANDLER MAY BOUND ITS OWN RETRIES ON. A handler that
-		// hands a message back — and on a real broker every return does,
-		// including a deferral — is spending a budget it cannot otherwise
-		// see: the count is carried by the MESSAGE and survives the
-		// handoffs and restarts that reset anything a process remembers.
-		// The engine's sandbox answer route documented a headroom claim
-		// over a per-process count for exactly this reason and the claim
-		// was false; see internal/sandbox.AnswerDeliveryReserve.
+		// WHAT A HANDLER MAY BOUND ITS OWN RETRIES ON. Every return, a
+		// deferral included, spends a budget the handler cannot otherwise
+		// see: the count rides the MESSAGE and survives the restarts that
+		// reset a process's memory (internal/sandbox.AnswerDeliveryReserve).
 		//
-		// THE CONTRACT'S CONVENTION, not a backend's: deliveries LEFT
-		// after the one in hand, so the last attempt before the
-		// dead-letter reports zero. That is what lets a caller reason
-		// about headroom without knowing which of the two conventions
-		// its broker counts in.
+		// THE CONTRACT'S CONVENTION: deliveries LEFT after the one in hand,
+		// so the last attempt before the dead-letter reports zero.
 		//
-		// BOTH READERS, ON THE PATH THAT CARRIES ONE MESSAGE. A backend
-		// states each message's own count and the contract folds the
-		// partition's from that list, so with exactly one message the two
-		// answers MUST be the same number — and that agreement is itself
-		// worth pinning, because it is the only place the fold can be
-		// checked against its own input. Without it the single-delivery
-		// path was certified on the partition's number alone while
-		// [queue.DeliveriesLeftFor] — the number the engine's one caller
-		// actually reads — was exercised only by the batch suite: half a
-		// shared suite covering half a shared contract, which is the shape
-		// this whole package exists to prevent.
+		// BOTH READERS, ON ONE MESSAGE. A backend states each message's own
+		// count and the contract folds the partition's from it, so with one
+		// message the two MUST agree: the only check of the fold against its
+		// input, and of [queue.DeliveriesLeftFor], the engine's one caller.
 		newQueueWithAttempts := s.needAttempts(t)
 		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
@@ -601,33 +575,16 @@ func (s *suite) runCore(t *testing.T) {
 
 	// A PASS HANDS A MESSAGE BACK TO ITS GROUP AND KEEPS CONSUMING: the
 	// fourth outcome, for a delivery THIS node will not handle and a peer may
-	// (an older build during a roll, meeting a record a newer one wrote).
-	// Four things are owed, on every backend:
-	//
-	//   - it comes back, and BEHIND the mail that was waiting, as a failure
-	//     does: the shipped broker spaces it on the failure path's backoff;
-	//   - the attachment that passed it goes on taking mail and is never
-	//     quiesced. Nothing is wrong with the node, so one message it cannot
-	//     read must not stop it taking every other;
-	//   - it spends a delivery like every return, and is dead-lettered with
-	//     its copy once the budget is spent: a message no node reads must not
-	//     circle its group for ever;
-	//   - and that dead letter is kept WITH THE GROUP'S UNHANDLED DELIVERIES
-	//     (queue.RetiredTo), where a failure's is kept with its poison
-	//     (a_subscriptions_retired_event_is_one_more_dead_letter): nothing
-	//     steers a pass to a node that can handle it, so the dead letter is
-	//     what a reader that can handle it now finds it again by.
-	//
-	// The mail is HELD while it is published, as the return-order case holds
-	// it, so both events are waiting before anything is fetched and nothing
-	// races the backoff.
-	//
-	// Mutation: quiesce the attachment on a pass, and e2 is never handled;
-	// return a pass at the head as a deferral's, and e1 comes back ahead of
-	// e2; return it without the budget's check, and it is never
-	// dead-lettered; ack it, and it never comes back; count it as a failure
-	// of its message, and its dead letter is kept with the group's poison
-	// while the unhandled subject holds nothing.
+	// (an older build meeting a newer one's record). Owed on every backend:
+	//   - it comes back BEHIND the waiting mail, as a failure does;
+	//   - the attachment is never quiesced, or one unreadable message stops
+	//     every other;
+	//   - it spends a delivery and is dead-lettered once the budget is spent,
+	//     so no message circles its group for ever;
+	//   - that dead letter is kept WITH THE GROUP'S UNHANDLED DELIVERIES
+	//     (queue.RetiredTo), not a failure's poison
+	//     (a_subscriptions_retired_event_is_one_more_dead_letter).
+	// The mail is HELD while published, as in the return-order case.
 	t.Run("a_pass_returns_behind_waiting_mail_keeps_consuming_and_dead_letters_once_spent", func(t *testing.T) {
 		t.Parallel()
 		newQueueWithAttempts := s.needAttempts(t)
@@ -645,12 +602,12 @@ func (s *suite) runCore(t *testing.T) {
 			}
 			return queue.Ack()
 		})
-		if err := q.PauseTopic(ctx, topic, group, "test"); err != nil {
+		if err := q.PauseTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "test"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		publish(ctx, t, q, topic, newEvent("e1"))
 		publish(ctx, t, q, topic, newEvent("e2"))
-		if err := q.ResumeTopic(ctx, topic, group, "test"); err != nil {
+		if err := q.ResumeTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "test"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 
@@ -670,12 +627,10 @@ func (s *suite) runCore(t *testing.T) {
 	// A MESSAGE PASSED UNTIL A HAND-BACK SPENT ITS LAST DELIVERY IS KEPT WITH
 	// ITS GROUP'S UNHANDLED DELIVERIES, where its passes would have kept it.
 	// A pass leaves no failure on the message and a hand-back judges
-	// nothing of it (queue.OutcomeDefer), so the message never failed as
-	// itself (queue.RetiredTo). A newer record's wake that the older nodes of
-	// a roll passed round, whose last delivery met a node that sheds or
-	// stops, is the delivery a reader that can handle it replays; kept with
-	// the poison, it was read as a failure's and never delivered
-	// (crewlet#993). A failure's copy still goes with the poison
+	// nothing of it (queue.OutcomeDefer), so it never failed as itself
+	// (queue.RetiredTo). Kept with the poison, a newer record's wake that a
+	// roll's older nodes passed round would never reach a reader that can
+	// handle it. A failure's copy still goes with the poison
 	// (a_subscriptions_retired_event_is_one_more_dead_letter).
 	//
 	// Mutation: count a hand-back as a failure of its message, and the
@@ -711,10 +666,8 @@ func (s *suite) runCore(t *testing.T) {
 	// LAST DELIVERY. Where a retired message is kept is decided by its
 	// deliveries, not by the return that spent its budget (queue.RetiredTo):
 	// a hand-back judges nothing of the message. Decided by the last return,
-	// a message whose every delivery failed, and whose last a node that shed
-	// or stopped handed back, was kept with the unhandled deliveries — poison
-	// a reader replays at every start, failing each time, and an alarm calls a
-	// wake nobody has had.
+	// poison would be kept as unhandled, replayed at every start and failing
+	// each time.
 	//
 	// Mutation: forget the message's earlier failures when a hand-back spends
 	// its budget (the twin's subscription.failed unread, JetStream's
@@ -796,7 +749,7 @@ func (s *suite) runCore(t *testing.T) {
 		failedBy, handedBy := newJournal(), newJournal()
 		subscribe(ctx, t, first, topic, group, func(hctx context.Context, ev *events.Event) queue.Result {
 			failedBy.record(labelOf(ev))
-			if err := first.PauseTopic(hctx, topic, group, "queuetest-failed-elsewhere"); err != nil {
+			if err := first.PauseTopic(hctx, topic, group, attachmentOf(hctx, t, first, topic, group), "queuetest-failed-elsewhere"); err != nil {
 				t.Errorf("PauseTopic: %v", err)
 			}
 			return queue.Nak(errors.New("the message cannot be handled"))
@@ -819,7 +772,7 @@ func (s *suite) runCore(t *testing.T) {
 		subscribe(ctx, t, q, "topic.a", "grp", recordingHandler(a))
 		subscribe(ctx, t, q, "topic.b", "grp", recordingHandler(b))
 
-		if err := q.PauseTopic(ctx, "topic.a", "grp", "test"); err != nil {
+		if err := q.PauseTopic(ctx, "topic.a", "grp", attachmentOf(ctx, t, q, "topic.a", "grp"), "test"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		publish(ctx, t, q, "topic.a", newEvent("a1"))
@@ -830,7 +783,7 @@ func (s *suite) runCore(t *testing.T) {
 		b.awaitLabels(t, "an unpaused topic to keep flowing", "b1")
 		a.staysAt(ctx, t, 0, "a paused topic buffers rather than delivering")
 
-		if err := q.ResumeTopic(ctx, "topic.a", "grp", "test"); err != nil {
+		if err := q.ResumeTopic(ctx, "topic.a", "grp", attachmentOf(ctx, t, q, "topic.a", "grp"), "test"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		a.awaitLabels(t, "the held events to flush in publish order", "a1", "a2")
@@ -846,18 +799,18 @@ func (s *suite) runCore(t *testing.T) {
 		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
 
 		for _, reason := range []string{holdReason, "second-subsystem"} {
-			if err := q.PauseTopic(ctx, "seat.inbox", "grp", reason); err != nil {
+			if err := q.PauseTopic(ctx, "seat.inbox", "grp", attachmentOf(ctx, t, q, "seat.inbox", "grp"), reason); err != nil {
 				t.Fatalf("PauseTopic(%s): %v", reason, err)
 			}
 		}
 		publish(ctx, t, q, "seat.inbox", newEvent("work"))
 
-		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", holdReason); err != nil {
+		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", attachmentOf(ctx, t, q, "seat.inbox", "grp"), holdReason); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		j.staysAt(ctx, t, 0, "one subsystem released its hold and un-gated another's")
 
-		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", "second-subsystem"); err != nil {
+		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", attachmentOf(ctx, t, q, "seat.inbox", "grp"), "second-subsystem"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		j.awaitLabels(t, "the last hold to release the topic", "work")
@@ -873,7 +826,7 @@ func (s *suite) runCore(t *testing.T) {
 		subscribe(ctx, t, q, "crewlet.events.agent_phase_started", "held-grp", recordingHandler(held))
 		subscribe(ctx, t, q, "crewlet.events.agent_phase_started", "free-grp", recordingHandler(free))
 
-		if err := q.PauseTopic(ctx, "crewlet.events.agent_phase_started", "held-grp", holdReason); err != nil {
+		if err := q.PauseTopic(ctx, "crewlet.events.agent_phase_started", "held-grp", attachmentOf(ctx, t, q, "crewlet.events.agent_phase_started", "held-grp"), holdReason); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		publish(ctx, t, q, "crewlet.events.agent_phase_started", newEvent("t"))
@@ -886,7 +839,7 @@ func (s *suite) runCore(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
 		// Releasing a hold that was never taken must not error.
-		if err := q.ResumeTopic(ctx, "never.paused", "grp", "test"); err != nil {
+		if err := q.ResumeTopic(ctx, "never.paused", "grp", attachmentOf(ctx, t, q, "never.paused", "grp"), "test"); err != nil {
 			t.Fatalf("ResumeTopic on an unpaused subscription: %v", err)
 		}
 	})
@@ -977,20 +930,16 @@ func (s *suite) runCore(t *testing.T) {
 		t.Parallel()
 		// A DISPATCH LOOP STARTS HANDLERS AT MOMENTS NOBODY CHOSE.
 		//
-		// Two of the three backends counted with a sync.WaitGroup, whose
-		// contract forbids exactly this: "calls with a positive delta that
-		// start when the counter is zero must happen before a Wait". A
-		// queue cannot honour that — a message arrives when it arrives —
-		// and the consequence is not theoretical: Wait may return on a
-		// momentary zero while a handler is starting, so a drain reports
-		// clean and the process shuts down through a running handler.
+		// A sync.WaitGroup counter forbids this: "calls with a positive delta
+		// that start when the counter is zero must happen before a Wait". A
+		// queue cannot honour that, and Wait may return on a momentary zero
+		// while a handler is starting, so a drain reports clean and shutdown
+		// runs through a live handler.
 		//
-		// The suite could not see it because every other case here waits
-		// on a QUIET queue. This one overlaps the two on purpose, and its
-		// real assertion is the RACE DETECTOR: under -race, which CI runs
-		// on everything, a WaitGroup implementation reports a data race on
-		// itself here. Without -race it still exercises the interleaving
-		// and asserts the counts stay sane.
+		// Every other case waits on a QUIET queue; this one overlaps the two
+		// on purpose, and its real assertion is the RACE DETECTOR: under
+		// -race a WaitGroup implementation reports a data race on itself
+		// here. Without -race it still asserts the counts stay sane.
 		q := s.start(ctx, t)
 		// A JOURNAL, so the wait for every message to be handled restarts
 		// its bound on each one handled: two hundred hand-overs are one
@@ -1114,21 +1063,17 @@ func (s *suite) runCore(t *testing.T) {
 		}
 	})
 
-	// EVERY VERB, AT THE TWO POINTS A QUEUE IS NOT LIVE.
+	// EVERY VERB, AT THE TWO POINTS A QUEUE IS NOT LIVE. A backend must not
+	// be internally inconsistent there: refusing Publish while
+	// EnsureSubscription creates durable broker state, or PauseTopic takes a
+	// hold that outlives the stop and leaves the next life silently deaf, or
+	// returning SUCCESS from Quiesce, Unquiesce, Detach, PauseTopic and
+	// ResumeTopic on a closed connection.
 	//
-	// Nine of them had never been sent at either point by any case in this
-	// suite, and both backends were internally inconsistent there. The twin
-	// refused Publish and Subscribe while EnsureSubscription created durable
-	// broker state, DeleteSubscription destroyed it and PauseTopic took a
-	// hold that outlived the stop and left the next life silently deaf.
-	// JetStream refused everything that touched the broker and returned
-	// SUCCESS from Quiesce, Unquiesce, Detach, PauseTopic and ResumeTopic on
-	// a closed connection.
-	//
-	// The two points get different rules, and the asymmetry is deliberate —
+	// The two points get different rules, and the asymmetry is deliberate;
 	// see queue.EventQueue's Start and Stop.
 
-	// BEFORE START a backend picks its answer and applies it to all twenty-one.
+	// BEFORE START a backend picks its answer and applies it to all twenty-two.
 	t.Run("an_unstarted_queue_answers_the_same_way_for_every_verb", func(t *testing.T) {
 		t.Parallel()
 		q := s.newQueue(t)
@@ -1149,32 +1094,14 @@ func (s *suite) runCore(t *testing.T) {
 
 	// AFTER STOP there is no choice: a closed client mutates nothing.
 	//
-	// THIS IS ALSO WHAT CLOSES THE RESTART WINDOW, and the case that used to
-	// state that separately is gone. `a_hold_taken_while_stopped_does_not_
-	// survive_a_restart` asked whether a hold TAKEN on a stopped queue
-	// outlived a Start, and it was written for a real defect: the twin refused
-	// Publish and Subscribe while EnsureSubscription, DeleteSubscription and
-	// PauseTopic still mutated broker state on a stopped client, so a hold
-	// survived and the restarted seat was silently deaf while reporting itself
-	// running — the incident Stop's own doc exists to prevent, reached from the
-	// other side. It was found by asking at which point in the LIFECYCLE each
-	// verb is sent, rather than what the suite happens to send: after a Stop
-	// the suite sent exactly Start and Publish, and never the other twelve.
-	//
-	// That case then RAN ON NO BACKEND AT ALL — measured from a -json log, a
-	// `skip` record under internal/queue/jetstream (not Restartable) and under
-	// internal/queue/memory (which refuses PauseTopic while stopped, its own
-	// t.Skipf), and a `pass` under neither. Two per-backend skips that are each
-	// defensible alone multiplied into total coverage loss, which is a failure
-	// mode no single-backend review can see.
-	//
-	// Deleting it costs nothing, because this case is the GENERAL form of the
-	// same fix and is strictly stronger: it is ungated, it runs on both
-	// backends, and it requires all twenty-one verbs (PauseTopic among them) to
-	// refuse with queue.ErrNotLive. A hold that cannot be TAKEN cannot survive
-	// anything, so the window is closed by construction rather than by
-	// observation, and it is closed for every verb rather than for the one
-	// somebody thought to try.
+	// THIS IS ALSO WHAT CLOSES THE RESTART WINDOW. A backend that mutates
+	// broker state on a stopped client (EnsureSubscription,
+	// DeleteSubscription, PauseTopic) lets a hold survive, and the restarted
+	// seat is silently deaf while reporting itself running: the incident
+	// Stop's own doc exists to prevent. A restart-only case would be gated
+	// per backend and could run nowhere; this one is ungated and requires
+	// all twenty-two verbs to refuse with queue.ErrNotLive: a hold that
+	// cannot be TAKEN cannot survive anything.
 	t.Run("a_stopped_queue_refuses_every_verb", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -1204,18 +1131,13 @@ func (s *suite) runCore(t *testing.T) {
 
 		// AND THE REFUSAL LEFT NOTHING BEHIND, which the error alone does not
 		// say. A backend can refuse with ErrNotLive and still have mutated
-		// broker state on the way — that is the shape of the defect the
-		// deleted restart case was written for, where the twin refused
-		// Publish and Subscribe while EnsureSubscription, DeleteSubscription
-		// and PauseTopic went through on a stopped client. Checking only the
-		// error would let a hold survive and call it a pass.
+		// broker state on the way; checking only the error would let a hold
+		// survive and call it a pass.
 		//
-		// The TAIL is capability-gated rather than the whole case, so this
-		// still runs everywhere the verbs above do and the backend that
-		// cannot restart simply does not reach the second half. Gating the
-		// case would have made it a skip — and a skip on the one backend that
-		// can observe the property is how the deleted case came to run
-		// nowhere at all.
+		// The TAIL is capability-gated rather than the whole case, so the
+		// verbs above run everywhere and a backend that cannot restart just
+		// skips the second half. Gating the case would skip it on the one
+		// backend that can observe the property.
 		if !s.caps.Restartable {
 			return
 		}
@@ -1312,7 +1234,7 @@ func listErr(_ []queue.Subscription, err error) error { return err }
 // lifecycleVerbs sends every publish, subscription, attachment, ephemeral and
 // dead-letter verb once and reports what each answered.
 //
-// ALL TWENTY-ONE, in one list, because the property under test is that they AGREE
+// ALL TWENTY-TWO, in one list, because the property under test is that they AGREE
 // — a helper that took a subset would be certifying the subset the author
 // happened to think of, which is exactly how nine of them went unsent.
 //
@@ -1348,6 +1270,14 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 	// a live queue answers that drop nil, so what is read is again only
 	// whether the verb refused.
 	letters := topics.DeadLetter(topic, "g")
+	// THE HOLD NAMES WHAT Attachment ANSWERED, so on a live queue the two
+	// hold verbs are asked under the pair's own attachment and answer as a
+	// hold does rather than as a refused attachment; on one that is not
+	// live Attachment refuses, and so must they, with the zero one. Sent
+	// BEFORE the Detach below, which ends that attachment.
+	at, atErr := q.Attachment(ctx, topic, "g")
+	pauseErr := q.PauseTopic(ctx, topic, "g", at, "test")
+	resumeErr := q.ResumeTopic(ctx, topic, "g", at, "test")
 	return []verbResult{
 		{"Publish", q.Publish(ctx, topic, newEvent(topic))},
 		{"Subscribe", q.Subscribe(ctx, topic, "g", func(context.Context, *events.Event) queue.Result {
@@ -1363,8 +1293,9 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		{"DeleteSubscription", second(q.DeleteSubscription(ctx, topic, "g"))},
 		{"ListSubscriptions", listErr(q.ListSubscriptions(ctx, ns+".>"))},
 		{"SubscribeStream", streamErr},
-		{"PauseTopic", q.PauseTopic(ctx, topic, "g", "test")},
-		{"ResumeTopic", q.ResumeTopic(ctx, topic, "g", "test")},
+		{"Attachment", atErr},
+		{"PauseTopic", pauseErr},
+		{"ResumeTopic", resumeErr},
 		{"Serve", serveErr},
 		{"Ask", askErr},
 		{"Broadcast", q.Broadcast(ctx, topic, []byte("probe"))},

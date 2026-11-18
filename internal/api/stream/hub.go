@@ -106,19 +106,14 @@ const QueueDepth = 512
 // Kind is what a frame from the socket is: a push, one of the two answers to a
 // query, or the pong.
 //
-// A NAMED TYPE, so the one place a kind is spelled is a constant below and
-// every frame is built from one — and the route, need and posture tables are
-// keyed by it, so a kind spelled as a bare string somewhere else does not
-// compile. The dashboard's `PushKind` union is its copy of exactly these
-// constants — `contract/wire.ts`, held both ways by
-// `TestTheDashboardKnowsExactlyThePushKindsTheEngineSends`, which reads every
-// constant of this type from this package's source — and the socket's dispatch
-// falls silently through a kind that union does not name. So a kind is frozen
-// against RENAMING once a dashboard renders it: a renamed kind is a broken
-// client, not a refactor. A NEW kind is additive — the client's dispatch
-// ignores a kind it does not know, which is what lets the engine add one
-// before the screen that renders it. Every one of them has an entry on
-// [routes]; see TestEveryPushKindHasARoute.
+// A NAMED TYPE, so the route, need and posture tables keyed by it reject a
+// kind spelled as a bare string. The dashboard's `PushKind` union
+// (`contract/wire.ts`) copies exactly these constants, held both ways by
+// `TestTheDashboardKnowsExactlyThePushKindsTheEngineSends`, and its dispatch
+// falls silently through a kind the union does not name. So a kind is frozen
+// against RENAMING once a dashboard renders it; a NEW kind is additive, the
+// client ignores one it does not know. Every kind has an entry on [routes]:
+// TestEveryPushKindHasARoute.
 type Kind string
 
 // The push kinds.
@@ -135,22 +130,18 @@ const (
 	KindTools     Kind = "tools"
 	KindHealth    Kind = "health"
 
-	// KindInboxChanged says one seat's inbox moved, and it is routed to an
-	// AUDIENCE rather than to everyone: it carries the seat in
-	// [Envelope.Seat] and reaches only the clients in that seat's room,
-	// the ones that asked to watch it (see [Hub.Watch]) and were allowed to
-	// (see [watching]).
+	// KindInboxChanged says one seat's inbox moved. It is routed to an
+	// AUDIENCE, not everyone: it carries the seat in [Envelope.Seat] and
+	// reaches only clients in that seat's room, those that asked to watch it
+	// ([Hub.Watch]) and were allowed to ([watching]).
 	//
-	// IT IS HOW A PERSON LEARNS THEY HAVE WORK. The applier of every
-	// domain that keeps a person's inbox, on every node serving the API —
-	// each holds the estate, since ingress requires the `data` role — says
-	// whose inbox each committed batch moved, and each node pushes that to
-	// its OWN sockets through [Service.InboxChanged]: every such node
-	// applies every record, so no node forwards to another (but for a
-	// domain whose own copy is out of service there, which the engine
-	// relays from a sound peer's). The payload is an [InboxChange]:
-	// identifiers and a count, never content, naming the domain whose half
-	// of the inbox moved.
+	// IT IS HOW A PERSON LEARNS THEY HAVE WORK. Every node serving the API
+	// holds the estate (ingress requires the `data` role), and each node's
+	// appliers say whose inbox a committed batch moved; each pushes that to
+	// its OWN sockets through [Service.InboxChanged], so no node forwards to
+	// another (except for a domain whose copy is out of service there, which
+	// the engine relays from a sound peer). The payload is an [InboxChange]:
+	// identifiers and a count, never content, naming the domain that moved.
 	KindInboxChanged Kind = "inbox_changed"
 
 	// KindArtifactChanged says one artifact moved: a version published, its
@@ -306,16 +297,14 @@ func (n Need) Valid() bool { return slices.Contains(Needs, n) }
 
 // needs is who may read each kind that says something about the COMPANY.
 //
-// BESIDE THE ROUTES and total over the kinds together with [answers]: a route
-// says who a frame is addressed to, and this says who may read it at all.
+// Total over the kinds together with [answers]: a route says who a frame is
+// addressed to, this who may read it at all.
 //
 // EACH KIND IS DECLARED AS ITS QUESTION IS, so no fact is reachable by
 // choosing a channel: an event is the `events` query's row, so admin's; an
 // `inbox_changed` frame the seat room's, decided as a read of that person's
-// inbox; everything else is the overview the questions beside it answer to
-// everybody. What of the overview a reader
-// receives is decided per payload — a seat's live call is masked to its
-// status for a reader its trail is not open to — by [Shaped].
+// inbox; the rest is the overview, everybody's, whose per-payload content
+// [Shaped] decides.
 //
 // A kind in neither table is received by NOBODY — see [Audience.Receives].
 var needs = map[Kind]Need{
@@ -382,34 +371,16 @@ var answers = map[Kind]bool{
 
 // Audience is what one reader may receive: whether they are an admin, which
 // apps they use, their own record, which seats' bodies (what a seat is
-// saying, as opposed to what it is doing) are theirs to read, and the
-// principal it was described for.
+// saying, not doing) they may read, and the principal it was described for.
 //
-// ITS ZERO VALUE RECEIVES NO COMPANY FACT AT ALL, because it was resolved for
-// nobody: the closed end and the only safe one, since a reader nobody
-// described is not one this node knows may see anything.
+// ITS ZERO VALUE RECEIVES NO COMPANY FACT AT ALL: it was resolved for nobody.
 //
-// A VALUE, compared whole by [Audience.Equal], because an open socket keeps
-// the audience it was opened with and a published company that would give it
-// another closes it for the reconnect to build the new one.
-//
-// # The apps are a set read from iam.Apps, never a field per app
-//
-// It held one boolean per app and a switch over them in [Audience.Has], so an
-// app added to the vocabulary was an app no socket reader held until somebody
-// remembered a second edit here, in a switch nothing compared with the list.
-// The set is whatever [iam.Apps] declares, filled through [iam.Principal.Can]
-// (an administrator through every app), so the audience can never disagree
-// with the authority table about which apps a reader uses.
-//
-// # And the principal, for what is decided per object
-//
-// An artifact is decided by the reader's ROLE on it, which no app answers:
-// whether a socket may join an artifact's room, and which of its rows a push
-// may carry to it, are the authority table's question about this principal
-// and that artifact ([authz.StandingOn]). So the audience keeps who it was
-// described for ([Audience.Principal]) rather than a second, narrower copy of
-// the facts a role is decided from.
+// A VALUE, compared whole by [Audience.Equal]: an open socket keeps its
+// audience, and a published company that would change it closes the socket
+// so the reconnect builds the new one. The apps are a set read from
+// [iam.Apps] through [iam.Principal.Can], never a field per app. The
+// principal is kept because an artifact is decided by the reader's ROLE on
+// it, which no app answers ([authz.StandingOn]).
 type Audience struct {
 	resolved bool
 	admin    bool
@@ -551,19 +522,16 @@ func (a Audience) Equal(b Audience) bool {
 		a.principal.Stage == b.principal.Stage
 }
 
-// variant is the name of what this audience receives of a payload masked by
-// reach — whether it is an administrator's, which apps it uses, and which
-// seats' bodies it reads — so two audiences given one variant receive
-// byte-identical frames and a broadcast encodes once per variant rather than
-// once per client. withRecord adds the reader's own record, for a payload that
-// shows something to a person by who they are (an executor's question).
+// variant names what this audience receives of a masked payload (admin or
+// not, apps, seats' bodies), so two audiences with one variant receive
+// byte-identical frames and a broadcast encodes once per variant, not per
+// client. withRecord adds the reader's own record, for a payload that shows
+// something to a person by who they are (an executor's question).
 //
-// THE APPS BY NAME, in [iam.Apps] order, so an app added to the vocabulary
-// splits the variants it should with no edit here.
-//
-// THE BODY SET AS A DIGEST, so a variant name stays short however many seats a
-// lead leads; two different sets colliding would hand one reader another's
-// variant, which is why it is SHA-256 rather than a cheaper hash.
+// THE APPS BY NAME, in [iam.Apps] order, so a new app splits variants with no
+// edit here. THE BODY SET AS A DIGEST keeps the name short however many seats
+// a lead leads; SHA-256 because a collision would hand one reader another's
+// variant.
 func (a Audience) variant(withRecord bool) string {
 	switch {
 	case !a.resolved:
@@ -587,18 +555,15 @@ func (a Audience) variant(withRecord bool) string {
 // Shaped is a push payload whose CONTENT depends on what its reader may read,
 // beyond whether they may read its kind at all.
 //
-// The need table ([needs]) decides WHETHER an audience receives a kind; a
-// shaped payload decides WHAT of it. The roster is everybody's, and a seat's
-// live call inside it is its body only to an administrator and the seat's
-// lead; the org tree is everybody's, and a seat's resolved model chain and
-// tool sources inside it are derived from settings only an administrator
-// reads — so one kind carries several shapes, and a reader is handed the one
-// its audience describes.
+// [needs] decides WHETHER an audience receives a kind; a shaped payload
+// decides WHAT of it. The roster is everybody's, but a seat's live call is its
+// body only to an administrator and the seat's lead; the org tree's resolved
+// model chain and tool sources derive from settings only an administrator
+// reads. So one kind carries several shapes, one per audience.
 //
-// The decision travels WITH THE PAYLOAD rather than being a second table here,
-// because the payload's type is the one place that knows which of its fields
-// is which: a table of kinds could only say "shaped", and would have to trust
-// every producer of the kind to have built the narrow shape.
+// The decision travels WITH THE PAYLOAD, not in a second table here: only the
+// payload's type knows which of its fields is which, and a table of kinds
+// could only say "shaped" and trust every producer to build the narrow shape.
 type Shaped interface {
 	// For is the payload as an audience may receive it, and the name of
 	// that variant. Two audiences given one variant name receive
@@ -745,18 +710,14 @@ type Envelope struct {
 	*Refused
 
 	// Detail is the refusal's own sentence, written FOR the caller: a
-	// `bad_params` refusal's (see [BadParamsError]) — which names the
-	// parameter to change and the values it accepts — a revision this node
-	// cannot open ([RevisionError]), which names the key or the document that
-	// brings it back, or an `unavailable` one's state-log refusal words
-	// ([Unavailable.Detail]). ONE KEY for every one, as the REST envelope
-	// carries each under `detail`; set through
-	// [Envelope.unavailable] on the second, so the two halves of an
-	// `unavailable` frame cannot be built apart. Omitted on every other
-	// frame — a query failure's own text can carry a database path, and
-	// none of the rest has a reader. Both setters write it through
-	// [httpjson.Sentence], as the REST envelope writes its own, so the two
-	// transports carry the same sentence.
+	// `bad_params` refusal's ([BadParamsError]), a revision this node cannot
+	// open ([RevisionError]), or an `unavailable` one's state-log refusal
+	// words ([Unavailable.Detail]). ONE KEY for all, as the REST envelope
+	// carries each under `detail`; set through [Envelope.unavailable] on the
+	// last, so the two halves of an `unavailable` frame cannot be built apart.
+	// Omitted on every other frame: a query failure's own text can carry a
+	// database path. Written through [httpjson.Sentence], as the REST
+	// envelope does, so both transports carry the same sentence.
 	Detail string `json:"detail,omitempty"`
 
 	// *Unavailable is an `unavailable` query error frame's refusal code
@@ -1040,18 +1001,15 @@ func (c *Client) Reply(env Envelope) {
 
 // send queues a frame, dropping the oldest if the queue is full.
 //
-// Never blocks. The caller is the ingest path, shared by every client, so one
-// slow reader blocking here would stop the whole fan-out.
+// Never blocks: the caller is the ingest path shared by every client, so one
+// slow reader here would stop the whole fan-out.
 //
 // The lock is held ACROSS the channel operations, not merely around the closed
-// check. Checking and then releasing leaves a window in which Close runs and
-// the send lands on a closed channel — which panics, and takes the whole
-// broadcast with it. The two ends genuinely race: the transport closes when its
-// socket dies while the ingest path is fanning out. Holding it is cheap because
-// nothing here blocks: every operation is a select with a default.
-//
-// It reports whether the frame was queued: false for no frame and for a client
-// already closed.
+// check: otherwise Close (the transport, when its socket dies mid-fan-out)
+// could run in between and the send would land on a closed channel and panic
+// the whole broadcast. Holding it is cheap, every operation is a select with a
+// default. It reports whether the frame was queued: false for no frame and for
+// a closed client.
 func (c *Client) send(frame *Frame) bool {
 	if frame == nil {
 		return false
@@ -1546,32 +1504,14 @@ func (h *Hub) registered() []*Client {
 // Broadcast encodes an envelope ONCE PER POSTURE AND VARIANT and hands the bytes
 // to every client the kind's route names.
 //
-// # Once per posture, not once per client
-//
-// A client's posture is the only thing that decides its bytes, so two clients
-// in the same posture must receive the byte-identical frame from one encode.
-// With N dashboards open this used to be N marshals of identical JSON — on N
-// goroutines, for every push — because the envelope travelled to each writer
-// and each writer encoded it. The cache below is keyed by posture and payload
-// variant, filled lazily, so a company with every tab in one posture pays
-// exactly one encode for a plain payload.
-//
-// # The route decides the audience
-//
-// [RouteBroadcast] is every client; [RouteRoom] is the clients in the frame's
-// room and nobody else. [RouteDirect] is REFUSED here: a result carries the
-// correlation id of one client's question, and fanning it out would answer
-// every other tab's question with it. [RouteViewer] is refused too: its
-// recipients are chosen one by one by the chat hub, and a chat frame fanned
-// out by route is a private room on every tab. A kind with no route at all is
-// refused for the same reason: there is no safe default, and "everyone" is the
-// unsafe one.
-//
-// Never blocks on any client: each client's own queue absorbs the difference,
-// and one that has fallen behind loses its oldest frame rather than holding up
-// the publish path.
-//
-// It answers how many clients it handed the frame to ([fanOut]).
+// Posture alone decides a client's bytes, so clients in one posture share one
+// encode. The route decides the audience: [RouteBroadcast] is every client,
+// [RouteRoom] those in the frame's room. [RouteDirect] is REFUSED, as fanning
+// out a result would answer every tab's question with it; [RouteViewer] too,
+// as the chat hub chooses recipients one by one and a chat frame fanned out by
+// route is a private room on every tab; so is a kind with no route, since
+// "everyone" is the unsafe default. Never blocks: a slow client loses its
+// oldest frame. It answers how many clients got it.
 func (h *Hub) Broadcast(env Envelope) int {
 	route := RouteOf(env.Kind)
 	switch {
@@ -1614,16 +1554,12 @@ func (h *Hub) Broadcast(env Envelope) int {
 // variant, and a [Shaped] or [RoomShaped] one as many as the readers it tells
 // apart.
 //
-// THE ONE PATH A PUSH LEAVES BY, whoever chose the targets — [Hub.Broadcast]
-// from its route, and a producer that decides its recipients one by one from
-// its own — so who may read a kind, what a posture delivers, how a payload is
-// shaped and how often it is encoded are each decided in one place. A producer
-// with a send loop of its own would be a second answer to all four.
-//
-// It answers how many clients it handed the frame to: what a producer timing a
-// push to the sockets watching a change counts as the change pushed
-// (internal/objectives' change visibility), so a change nobody is watching is
-// no event.
+// THE ONE PATH A PUSH LEAVES BY, whoever chose the targets, so who may read a
+// kind, what a posture delivers, how a payload is shaped and how often it is
+// encoded are each decided in one place. It answers how many clients it
+// handed the frame to: a producer timing a push to the sockets watching a
+// change counts that as the change pushed (internal/objectives' change
+// visibility), so an unwatched change is no event.
 func fanOut(targets []*Client, env Envelope) int {
 	sent := 0
 	type encoding struct {

@@ -578,21 +578,16 @@ func TestFleetNamesGitletOnlyWhereCodeIsHosted(t *testing.T) {
 
 // EVERY ANSWER SETTINGS DRAWS IS ADMIN'S.
 //
-// The dashboard's rail marks all five Admin destinations `guarded: true`: it
-// draws a lock on the row and its palette says "needs a token". That flag is
-// presentation — the only thing that actually refuses is this registry — and
-// `fleet` was registered public while its siblings were operator-only, so the
-// client promised a guard the server did not keep. On a node with
-// `api.allow_anonymous_read` an anonymous GET read the node ids, which node
-// held which seat, the lease epochs and the rollout's progress.
+// The rail's `guarded: true` on all five Admin destinations is presentation:
+// only this registry refuses. `fleet` was once public, so an anonymous GET
+// (`api.allow_anonymous_read`) read node ids, seat holders and lease epochs.
 //
 // The two here are the two this registry gates by these sources;
-// Configuration's four are [TestTheConfigQueryIsAdmins] and Credentials
-// is `/secrets`, a prefix guarded whole. Named rather than derived, because
-// the mapping from a screen to the question it asks lives in each screen's own
-// `useQuery` call and no gate can see across the two languages — so the
-// registration check below is what stops this list going quiet: a name nothing
-// registers fails rather than passing as "gated".
+// Configuration's four are [TestTheConfigQueryIsAdmins] and Credentials is
+// `/secrets`, a prefix guarded whole. Named rather than derived, because the
+// screen-to-question mapping lives in each screen's `useQuery` call, across
+// two languages; the registration check stops a name nothing registers
+// passing as "gated".
 func TestTheAdminWorkspacesAnswersAreAdmins(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
@@ -1180,46 +1175,16 @@ func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 
 // THE ROOM READS WHAT THIS ANSWER SENDS.
 //
-// Nothing linked the two. The Integrations room was written against a payload
-// of `key` / `enabled` / `inbound_path` / `last_at` and a top-level
-// `traffic_known`, and the server sent `kind` / `configured` / `events` —
-// so every card rendered an unbranded badge, a permanent "disabled" chip and
-// a blank inbound path, and both sides' tests passed, because each was
-// checked against its own idea of the other.
+// This reads the FIELD NAMES out of the client's own declarations (the row,
+// the answer, the reconcile report and its findings, in
+// `contract/integrations.ts`) and holds the answer to each in both directions
+// ([holdShape]); each side was otherwise checked only against its own idea of
+// the other.
 //
-// This reads the FIELD NAMES out of the client's own declarations — the row,
-// the answer around it, the reconcile report and its findings, all in
-// `contract/integrations.ts` — and holds the answer to each in both
-// directions ([holdShape]). It is the cheap half of the gate `internal/e2e`
-// gives the push protocol; the query channel had none at all.
-//
-// IT USED TO ONLY LOG a declared field no row carried, and two sat there for
-// as long as the room existed: `label` and `detail`, both read by the
-// dashboard — the sidebar's row name and a card's fallback summary — and
-// neither ever sent. A log line in a passing test is read by nobody.
-//
-// TWICE NOW THIS GATE HAS POINTED AT A PATH THAT DOES NOT EXIST, so it is
-// worth saying what it reads and why. It read
-// `static/dashboard/js/views/integrations.js` — the hand-written bundle the
-// React rewrite deleted — so os.ReadFile failed, the t.Skipf below it fired,
-// and this certified NOTHING on every machine and in CI for the whole of that
-// rewrite while reporting a pass. [rooms_test.go] records the identical bug
-// being found and fixed in this same package; this file was missed, and
-// nothing noticed, because nothing counted skips. So: the source, never the
-// build output, and a missing declaration is FATAL — a broken checkout is not
-// a reason to certify nothing. And no path at all: the interfaces are found by
-// NAME through [clientsource.Interface], so a move of `protocol/types.ts` is
-// invisible here instead of a third time this gate reads a file that is gone.
-//
-// It reads the TYPE rather than the room's access sites, and that is the
-// second lesson. The old sweep matched `row.<field>` and `data.<field>`
-// literally. Integrations.tsx destructures (`const { data } = useQuery(…)`,
-// then `data?.integrations`) and names a row `r` inside its map callback, so
-// the `data.` half matched nothing at all and the `row.` half missed `r.key`
-// — a sweep whose whole job is to notice a missing name, silently narrowing
-// to whichever identifiers one file happened to use. A declared interface is
-// ONE place, and a field added there without a server that sends it fails
-// here.
+// It reads the SOURCE, never build output, and a missing declaration is FATAL:
+// a skip here once certified nothing while reporting a pass ([rooms_test.go]
+// records the same bug). Interfaces are found by NAME through
+// [clientsource.Interface], by TYPE rather than access sites.
 func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	t.Parallel()
 
@@ -1375,18 +1340,15 @@ func rowsOf(t *testing.T, value any) []map[string]any {
 // holdShape holds rows an answer sent against one interface the client
 // declares for them, in both directions.
 //
-// A DECLARED member is one some row carries — FAILING, not logged: a member
-// no row carries is a field every screen that trusts the type reads as
-// undefined, and a gate that only noted it left `label` and `detail` on the
-// integrations row for as long as the room existed, both read, neither ever
-// sent. A REQUIRED member is on every row, since the interface describes each
-// element rather than the set. And a key the answer sends is a declared
-// member — unless the interface is `open`, with an index signature standing
-// for the keys that vary by row — because a field no declaration names is one
-// no screen can read without first finding out it exists.
+// A DECLARED member is one some row carries, FAILING rather than logged: a
+// member no row carries reads as undefined in every screen that trusts the
+// type. A REQUIRED member is on every row, since the interface describes each
+// element rather than the set. A key the answer sends is a declared member,
+// unless the interface is `open` (an index signature for keys that vary by
+// row), because no screen can read a field no declaration names.
 //
-// The fixture is what makes the first half fair: it has to exercise every
-// branch that adds an optional key, or a gap in the fixture reads as a drift.
+// The fixture must exercise every branch that adds an optional key, or a
+// fixture gap reads as drift.
 func holdShape(t *testing.T, iface string, rows []map[string]any, open bool) {
 	t.Helper()
 	if len(rows) == 0 {
@@ -1456,19 +1418,14 @@ func declaredFields(t *testing.T, iface string) map[string]bool {
 
 // THE MEMORY SCREEN READS WHAT THIS ANSWER SENDS.
 //
-// The seat page's memory tab is typed by `AgentMemory` and the row shapes
-// composed into it (`contract/memory.ts`), and nothing held them to the
-// answer. They had drifted both ways: a diary entry declared a `scope` and
-// `tags`, an episode an `outcome` and a `content`, and a skill a `body`, none
-// of which the engine has ever sent — so the tab's fallbacks read fields that
-// were always undefined — while a diary entry's `source` and `retrievals` and
-// an episode's plan, tool sequence and work key were sent to a client with no
-// name for them.
+// The seat page's memory tab is typed by `AgentMemory` and its row shapes
+// (`contract/memory.ts`); this holds them to the answer, so a declared field
+// never sent reads as undefined and a sent field gets no name in the client.
 //
-// Every row shape is held both ways over an answer whose fixture fills every
-// half — a diary entry, an episode, a skill, and two counterparties, one a
-// seat and one an unmapped person on a surface, because a subject's `handle`
-// and its `external_id` are each sent only for its own kind.
+// Every row shape is held both ways over a fixture that fills every half: a
+// diary entry, an episode, a skill, and two counterparties, a seat and an
+// unmapped person on a surface, because a subject's `handle` and `external_id`
+// are each sent only for its own kind.
 func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -1913,28 +1870,17 @@ func outcomeEvent(id, kind, app string, at time.Time) store.EventRecord {
 }
 
 // THE OUTCOMES ARE COUNTED OVER THE INBOUND WINDOW, EXACTLY, however many more
-// outcome events there are than deliveries.
+// outcome events there are than deliveries. A page of the newest 400 events
+// spans a shorter stretch than the deliveries beside `inbound`. Here two
+// deliveries, the oldest three weeks back, sit beside 400 merges and six
+// drops. The window is the whole history: from the floor under the instant the
+// answer was read, inclusive, to that instant. Drops at or before the oldest
+// delivery count, as does the one at the floor; the one under it and the one
+// at the instant do not; all 400 merges do.
 //
-// They used to be the newest 400 `notification` events, whose span is their
-// own: a company whose seats merge and drop busily fills that page in an hour
-// while its deliveries go back weeks, so the counts beside `inbound` covered a
-// different — usually much shorter — stretch of time. Here two deliveries,
-// the oldest three weeks back, sit beside 400 merges and six drops. The page
-// holds every delivery there is, so the window is the whole history: from the
-// floor under the instant the answer was read, inclusive, to that instant. So
-// the drops at the oldest delivery and before it count — nothing arrived
-// before it, and starting the window there would only have cut what became of
-// the deliveries — and so does the one at the floor, while the one a
-// microsecond under it does not, nor does the one at the instant itself; and
-// every one of the 400 merges does, though they outnumber the deliveries two
-// hundred to one. The newest delivery's `last_at` is written to the window's
-// own resolution.
-//
-// Mutation: count the outcomes from a page of `notification` events again, and
-// a merge falls off it while the drop at the instant comes on; start the window
-// at the oldest delivery, and the drops before it are lost; ask the count
-// without its top edge, and the drop at the instant is counted; count
-// deliveries past the window's top, and the one written at the instant is.
+// Mutation: count outcomes from a page of events and a merge falls off; start
+// at the oldest delivery and earlier drops are lost; drop the top edge and the
+// drop at the instant counts.
 func TestIntegrationOutcomesOutnumberingDeliveriesCoverTheInboundWindow(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -1995,14 +1941,12 @@ func TestIntegrationOutcomesOutnumberingDeliveriesCoverTheInboundWindow(t *testi
 // NO DELIVERY IS A COUNT OVER THE WHOLE HISTORY, and so are the outcomes beside
 // it.
 //
-// An empty page that says nothing lies past it is not "no window": it says
-// every node that answered holds no delivery in the thirty days, which is a
-// count of zero over exactly that month — and the drops and merges of that
-// month are counted beside it. This is the Mattermost row's ordinary case,
-// since a websocket writes no delivery row: counted as an empty window, a
-// Mattermost-only company read "Dropped 0" over a month its routing gate
-// dropped everything in. `traffic_since` names the floor under the instant
-// the answer was read, to the microsecond.
+// An empty page with nothing past it is not "no window": it is a count of zero
+// over exactly the month, and the month's drops and merges are counted beside
+// it. This is the Mattermost row's ordinary case, since a websocket writes no
+// delivery row; treated as an empty window it read "Dropped 0" over a month
+// of drops. `traffic_since` names the floor under the instant the answer was
+// read, to the microsecond.
 //
 // Mutation: name no window when the page is empty, and every drop and merge is
 // zero beside a null `traffic_since`.
@@ -2044,14 +1988,12 @@ func TestNoDeliveryCountsTheOutcomesOfTheWholeHistory(t *testing.T) {
 //
 // One delivery more than the page holds, a second apart: the page's oldest
 // delivery may share its instant with one past the cut, so the window starts a
-// microsecond after it, the delivery there is not counted, and nor is a drop
-// at that instant — while a drop a microsecond later is. `traffic_since` names
-// the edge to the store's own resolution, since a second-truncated one would
-// name a wider window than was counted.
+// microsecond after it; a drop at that instant is not counted, one a
+// microsecond later is. `traffic_since` names the edge to the store's own
+// resolution, since a second-truncated one would name a wider window.
 //
-// Mutation: count the outcomes from the history floor rather than from the
-// named edge, and the drops at and under the page's oldest delivery are
-// counted; start the window AT that delivery, and its drop is.
+// Mutation: count from the history floor and the drops at and under the page's
+// oldest delivery count; start the window AT that delivery and its drop does.
 func TestACappedDeliveryPageNamesTheWindowItsOutcomesAreCountedOver(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -2096,13 +2038,11 @@ func TestACappedDeliveryPageNamesTheWindowItsOutcomesAreCountedOver(t *testing.T
 // THE NEWEST DELIVERY LIES INSIDE THE WINDOW IT IS COUNTED IN, to the
 // microsecond.
 //
-// `last_at` is the newest delivery in the window `traffic_since` names, and the
-// window's edge is written to the store's own resolution — so `last_at` has to
-// be too. Cut to the second, the newest delivery read as arriving before the
-// window holding it began whenever the two shared a second. Here a capped
+// `last_at` is the newest delivery in the window `traffic_since` names, whose
+// edge has the store's own resolution, so `last_at` must too: cut to the second
+// it reads before the window holding it when they share a second. Here a capped
 // page's every delivery lies inside one second: the window starts a
-// microsecond past the oldest it reached, and the newest is a few hundred
-// microseconds later, in the same second.
+// microsecond past the oldest, the newest is a few hundred microseconds later.
 //
 // Mutation: write `last_at` to the second, and it reads before `traffic_since`.
 func TestTheNewestDeliveryIsNeverBeforeItsWindow(t *testing.T) {
@@ -2363,17 +2303,12 @@ func integrationRows(t *testing.T, sources queries.Sources) map[string]map[strin
 
 // A SEAT IN A UNIT IS A SEAT.
 //
-// `roles:` at the top level is the seats belonging to NO unit, and a company
-// of any size puts its agents in units instead. Listing only the top level
-// answered an empty seat list, and a zero count, for every one of them: the
-// Slack row then reported no per-seat app on a company running seven, and its
-// secret_present was computed from a count that was always zero while the
-// routes verified fine.
+// Top-level `roles:` is the seats in NO unit, and a company of any size puts
+// its agents in units; listing only the top level reported no per-seat app and
+// a zero secret_present count for a company running seven.
 //
-// The walk is the COMPANY'S OWN ORG now, which is the same rule one step
-// further on: a stored revision carries no `roles:` and no `units:` at all,
-// so even the whole-document walk that fixed this answers nothing for a
-// running company. What a seat carries is on the seat.
+// The walk is the COMPANY'S OWN ORG, because a stored revision carries no
+// `roles:` or `units:` at all. What a seat carries is on the seat.
 func TestSeatsInUnitsAreReported(t *testing.T) {
 	t.Parallel()
 	const doc = `
@@ -2611,24 +2546,14 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 }
 
 // THE ORGANIZATION IS NOT AN INBOUND SURFACE, AND ITS ROW MUST NOT PRETEND TO
-// BE ONE.
+// BE ONE. Atlassian is where an agent's ACCOUNT is created; Jira and
+// Confluence carry the webhooks and parsers, and nothing is addressed to the
+// organization.
 //
-// Atlassian is where an agent's ACCOUNT is created; the products that account
-// works in are Jira and Confluence, each with its own webhook and its own
-// parser. Nothing is ever addressed to the organization, so it has no delivery
-// to verify and nothing to route.
-//
-// The row passed the organization API key as the `secret` argument — a
-// PROVISIONING credential where a delivery-verification secret belongs — so it
-// answered `secret_usable: false` (nothing verifies atlassian, because nothing
-// needs to) and `routes: false` (no parser routes it, because nothing
-// arrives). The dashboard drew those as "secret unresolved — every delivery is
-// refused" and "routes nowhere", on an organization whose key had just created
-// every agent's account. Both are null now: "not applicable", which is what
-// the three-valued contract is for and what the screen already hides.
-//
-// Expo is the same in this build: its block names the account its agents'
-// robots act for, and nothing arrives from Expo.
+// Its API key is a PROVISIONING credential, not a delivery-verification
+// secret, so `secret_usable` and `routes` must be null ("not applicable", which
+// the screen hides), never false, which the dashboard draws as "every delivery
+// is refused" and "routes nowhere". Expo is the same.
 func TestTheAtlassianOrganizationClaimsNoIngress(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
@@ -2681,12 +2606,9 @@ func TestTheAtlassianOrganizationClaimsNoIngress(t *testing.T) {
 // for that rather than for its own name.
 //
 // A Cloud event the Forge app relays is republished as `jira` or `confluence`
-// and parsed by that product's parser, so no parser is ever registered under
-// `forge`. Asked about itself the relay answered `routes: false` on every
-// Cloud deployment for ever — and the dashboard groups it under the Atlassian
-// row, so a tenant whose relay was feeding both products correctly carried a
-// permanent "Forge relay — routes nowhere" beside the two rows saying they
-// routed fine.
+// and parsed by that product's parser, so no parser is registered under
+// `forge`; asked about itself the relay would answer `routes: false` on every
+// Cloud deployment.
 func TestTheForgeRelayRoutesAsTheProductItRelays(t *testing.T) {
 	t.Parallel()
 	forgeRow := func(t *testing.T, routed []string) map[string]any {
@@ -2759,22 +2681,15 @@ func TestMattermostStillReportsWhetherItRoutes(t *testing.T) {
 
 // A ROW FOLLOWS THE BLOCK THAT MAKES A DELIVERY REACH A SEAT.
 //
-// The GitHub row used to be reported on the org block OR on the agents' own
-// apps, so that a company holding nothing but per-agent apps had a row.
-// Neither half of that reading survives contact with what the engine does: an
-// agent's app needs an INSTALLATION to see a repository at all, and the
-// PARSER that turns a delivery into work for a seat is registered only where
-// `integrations.github` is present and enabled — at boot
-// ([Engine.startNotifications]) and on every apply
-// ([Engine.reconcileGitHub]), both on the same condition. Without the block a
-// seat app's delivery is verified at the webhook route and then dropped.
+// The PARSER that turns a delivery into work for a seat is registered only
+// where `integrations.github` is present and enabled, at boot
+// ([Engine.startNotifications]) and on every apply ([Engine.reconcileGitHub]);
+// without the block a seat app's delivery is verified at the webhook route and
+// then dropped, so per-agent apps alone are no reason for an enabled row.
 //
-// So a company with installed apps and no block is not a surface with no row;
-// it is a surface that is off, and a row for it is a row with nothing
-// enabled — which the dashboard draws as Paused, its word for a state an
-// operator chose. That is exactly what a disconnect leaves behind, which is
-// where this was measured: the block went, the sealed per-seat values stayed,
-// and the card sat on a state nobody had asked for.
+// A company with installed apps and no block is a surface that is off: its row
+// has nothing enabled, which the dashboard draws as Paused. That is what a
+// disconnect leaves behind, the sealed per-seat values staying.
 func TestARowNeedsTheBlockThatRoutesItRatherThanALeftoverSecret(t *testing.T) {
 	t.Parallel()
 	rowFor := func(t *testing.T, cfg *config.Company, kind string) map[string]any {
@@ -2883,16 +2798,12 @@ func TestARowNeedsTheBlockThatRoutesItRatherThanALeftoverSecret(t *testing.T) {
 // ENABLED: FALSE MEANS AN OPERATOR SWITCHED IT OFF, on every surface.
 //
 // The dashboard draws a tool whose every row reports `enabled: false` as
-// PAUSED, which is a claim about somebody's intent. Two rows could reach that
-// state without anybody intending anything, because they were reported on
-// per-seat secrets as well as on the company block and then took `enabled`
-// from the block alone — so an absent block and a paused one were the same
-// row. A disconnect produces the first one every time.
+// PAUSED, a claim about somebody's intent. An absent block (what a disconnect
+// leaves) must not read as a paused one.
 //
-// Asserted over EVERY surface rather than over the two that had the defect:
-// what makes it safe to read `enabled: false` as an intent is that no arm
-// anywhere can emit it for any other reason, and the next surface added is
-// the one that would.
+// Asserted over EVERY surface: reading `enabled: false` as intent is safe only
+// if no arm anywhere emits it for another reason, and the next surface added
+// is the one that would.
 func TestAnEnabledFalseRowIsAlwaysADeliberatePause(t *testing.T) {
 	t.Parallel()
 	// EVERY BLOCK THIS BUILD CAN REPORT, each with whatever makes it
@@ -2931,12 +2842,10 @@ func TestAnEnabledFalseRowIsAlwaysADeliberatePause(t *testing.T) {
 // AN EPOCH IS A NUMBER AND NOT A REVISION, and the fleet view carried only
 // the number.
 //
-// `coord.NodeApply.RevisionID` is written by every node and stored by the
-// plane precisely so a mid-transition read can name it — its own doc says "a
-// node still on the previous revision is exactly what an operator is looking
-// for" — and the answer dropped it. So a screen could say "node-b is two
-// epochs behind" and not which revision it was behind, when that revision was
-// activated, or what whoever activated it wrote about it.
+// `coord.NodeApply.RevisionID` is stored precisely so a mid-transition read can
+// name the revision a node is still on; without it a screen can say "two
+// epochs behind" but not which revision, when it was activated, or what its
+// activator wrote.
 func TestTheFleetNamesTheRevisionAndNotJustTheEpoch(t *testing.T) {
 	t.Parallel()
 	pinned := time.Date(2026, 5, 4, 9, 30, 0, 0, time.UTC)
@@ -3010,36 +2919,18 @@ func TestTheFleetNamesTheRevisionAndNotJustTheEpoch(t *testing.T) {
 	}
 }
 
-// WHICH REVISION A NODE ATTEMPTED IS NOT WHICH ONE IT RUNS, and the fleet view
-// says both (#324).
+// WHICH REVISION A NODE ATTEMPTED IS NOT WHICH ONE IT RUNS (#324): a node that
+// refused the fleet's revision reports the failed attempt and keeps serving the
+// one before it, and the view says both.
 //
-// A node that refused the fleet's revision reports the failed attempt at the
-// target — that revision, status error — and goes on serving the one before
-// it. With only the attempt on the row, "the active revision failed on
-// node-b" was all a screen could say, never "node-b is still serving P", and
-// whether node-b was taking traffic on the old company or on nothing at all
-// was a question for its logs.
+// NOR IS EITHER WHAT IT WOULD BOOT ON: the boot row moves only after an apply
+// succeeds, so `config_boot_revision_id` (node-b) can differ from both. ABSENT
+// from a node that boots on nothing (node-a). `config_applied_epoch` is the
+// epoch each LAST APPLIED, ABSENT rather than 0 from node-c, which applied
+// nothing.
 //
-// NOR IS EITHER OF THEM WHAT IT WOULD COME BACK ON: the boot row moves only
-// after an apply succeeds, and a write to it that failed leaves a node running
-// a revision it would not restart on. node-b is that node here, and whoever
-// keeps what a node needs in order to start reads `config_boot_revision_id`.
-// It is ABSENT rather than empty from a node that boots on nothing — a node
-// whose database is discarded at every start, and a build older than the
-// field — which node-a is.
-//
-// AND THE EPOCH EACH LAST APPLIED, which the attempted one does not say for
-// the node that refused it: node-b attempted the fleet's epoch and still runs
-// what it applied at the epoch before, and a screen judging whether a save
-// reached it compares the saved epoch with `config_applied_epoch`, as a node's
-// own health push compares it with its live epoch. ABSENT from a node that has
-// applied nothing — node-c, which booted on what it holds and refused the
-// first epoch it met — rather than a 0 a client would compare.
-//
-// Mutations: answer config_boot_revision_id from the record's Serving and
-// node-b's row names the revision it runs, which is not the one it would boot;
-// answer config_applied_epoch from the record's Epoch and node-b reads as
-// running the epoch it refused.
+// Mutations: answer config_boot_revision_id from Serving, or
+// config_applied_epoch from Epoch, and node-b reads as what it runs or refused.
 func TestTheFleetViewSaysWhichRevisionEachNodeServes(t *testing.T) {
 	t.Parallel()
 	pinned := time.Date(2026, 5, 4, 9, 30, 0, 0, time.UTC)
@@ -3190,18 +3081,14 @@ func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
 // EACH NODE'S ADMIN POSTURE IS VISIBLE, because a fleet that disagrees about it
 // is legal and otherwise silent.
 //
-// `api.auth.admin` is applied at decision time, per node, per request, and
-// nothing is written when it changes — that is what makes turning a node to
-// `refuse` immediate, and what makes a fleet whose nodes disagree a LEGAL state
-// a rolling restart passes through (or a deliberate one: an admin node beside
-// nodes published to the people who only use the company). Invisible, the
-// symptom is a person whose authority depends on which node a load balancer
-// sent them to. Each row naming its node's posture is that being said out loud
-// — and a node serving no API names none rather than reading as one that
-// refuses.
+// `api.auth.admin` is applied per node, per request, and nothing is written
+// when it changes, which makes `refuse` immediate and a fleet whose nodes
+// disagree a LEGAL state (a rolling restart, or a deliberate admin node beside
+// others). Invisible, a person's authority depends on which node a load
+// balancer picks. A node serving no API names no posture rather than reading
+// as one that refuses.
 //
-// Mutation: publish the field under another key, or always, and this goes
-// red.
+// Mutation: publish the field under another key, or always, and this goes red.
 func TestTheFleetReportsEachNodesAdminPosture(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()

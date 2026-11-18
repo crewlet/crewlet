@@ -18,15 +18,12 @@ import (
 // refuses alike.
 //
 // A CONDITION OF THE NODE IS TOLD AS ONE ([operator.AnswerCondition]): a copy
-// behind its log, a log that refused the append, a coordination store or a
-// broker that did not answer is `503 unavailable` in a person's words for it,
-// under its own hint, and with none where no wait clears it. Anything no
-// condition claims is a fault, `500 internal_error`, its words the log's. Both
-// were `503 assistant_unavailable` under a Retry-After of two seconds and no
-// detail, so a full log was asked again every two seconds and a broken store
-// was said to be coming back. `assistant_unavailable` is left to the
-// assistant's own reasons ([assistant.Unavailable]), which no wait it knows
-// clears.
+// behind its log, a refused append, a coordination store or broker that did
+// not answer is `503 unavailable` in a person's words for it, under its own
+// hint, and with none where no wait clears it. Anything no condition claims is
+// a fault, `500 internal_error`, its words the log's. `assistant_unavailable`
+// is left to the assistant's own reasons ([assistant.Unavailable]), which no
+// wait clears.
 func (s *Surface) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var (
 		busy        *assistant.Busy

@@ -684,7 +684,7 @@ test("the kind is the engine's kind, with the reader's counts beside it", async 
   );
   expect(within(kinds).getByRole("radio", { name: /All/ }).textContent).toBe("All5");
   const counted = asked.find((u) => u.pathname === "/query/code_counts")!;
-  expect(counted.searchParams.get("parts")).toBe("repos");
+  expect(counted.searchParams.get("parts")).toBe("changes,repos,queue");
 
   fireEvent.click(within(kinds).getByRole("radio", { name: /Projects/ }));
   await waitFor(() => expect(location.hash).toBe("#/gitlet/repos?kind=project"));

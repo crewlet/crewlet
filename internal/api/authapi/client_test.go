@@ -13,17 +13,12 @@ import (
 
 // THE RESET SCREEN READS WHAT THE RESET VIEW SENDS.
 //
-// `ResetView` (`contract/identity.ts`) is the dashboard's type for
-// `GET /auth/reset/{id}`, and ONE screen serves both links that route opens —
-// a reset an administrator issued to somebody holding a password, and the
-// first password link a person created on a seat is handed — told apart by
-// `first` and nothing else. A key renamed on this side alone would draw every
-// first password link as a reset warning of sessions it ends, with nothing
-// failing.
-//
-// HELD BOTH WAYS over the answers to both links: every member the interface
-// declares is sent by some answer and every REQUIRED one by every answer, and
-// every key either answer sends is one the interface declares.
+// `ResetView` (`contract/identity.ts`) types `GET /auth/reset/{id}`; ONE screen
+// serves both links (an administrator's reset, a created person's first
+// password), told apart by `first` alone, so a key renamed here would draw
+// every first link as a reset warning with nothing failing. HELD BOTH WAYS:
+// every declared member is sent by some answer, every REQUIRED one by every
+// answer, and every key sent is declared.
 //
 // Mutation: rename `first` on [resetView] and the first two directions fail;
 // add a field the screen does not declare and the third does.

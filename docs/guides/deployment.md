@@ -166,12 +166,12 @@ hours of each other:
   and any other node reads it as still being kept until its life and two
   hours have passed by its own clock, about three hours and twelve minutes; a
   read standing by beside it is read as standing until its window and two
-  hours have passed, about four hours and ten and a half minutes. Neither
-  wait holds that long on that reading alone: a turn's end holds each capture
-  for its life, and each standby for its window and its takeover's life, from
-  the moment it first sees it, on its own clock. A reader whose clock runs
-  further ahead of the taker's than the two hours can read a capture still
-  being kept as abandoned, or a read still standing by as gone.
+  hours have passed, about four hours and thirty-seven and a half minutes.
+  Neither wait holds that long on that reading alone: a turn's end holds each
+  capture for its life, and each standby for its window and its takeover's
+  life, from the moment it first sees it, on its own clock. A reader whose
+  clock runs further ahead of the taker's than the two hours can read a
+  capture still being kept as abandoned, or a read still standing by as gone.
 - A capture's record still to be answered names an object whose key the
   spooling node's clock minted, and the executor log refuses it once it is
   twelve hours old by the clock of the node deciding the record, so a reader
@@ -1695,7 +1695,7 @@ both.
 
 They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. A `direct` box needs neither: a node that runs seats, binds `api.port` and forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` hands its own boxes its listener on loopback for both. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, which every seat's [executor box](../concepts/llm-backends.md#the-tool-bridge) dials, is the same kind of value: the fleet's address — an `ingress` node, or a load balancer in front of several — and the same on every node. A bridge session lives in the process holding the run's seat, and the node a box's call lands on relays it there over the broker, so a `seats` node without `ingress` serves the network no bridge of its own. Only a `direct` box needs none of it: it dials its own node's listener on loopback — on a node without `ingress`, `api.port`, served to that host alone. `CREWLET_BOX_GIT_URL`, if the company hosts code, is the receiver's case again: each `seats` node sets it to the Gitlet nodes' public `/box/git` — any of them, or the balancer over them — because a run's git token is signed with the same keyring and admitted by the run's row, which every Gitlet node reads.
 
-Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field), and give the boot a startup probe on `/health`, which answers `503` until the node has recovered what it holds and `200` from then on, while the rest of the boot runs and `/ready` stays `503`. Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic and how long the startup probe has to wait. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain unless it is serving git (a git request already running is finished first; a new one is refused). So give such a pod a `preStop` sleep of a few seconds if you need its load balancer to have stopped sending it requests before the listener goes: Kubernetes takes a terminating pod out of its Service's endpoints as the hook begins, and sends the SIGTERM that starts the drain only once the hook has ended, so the sleep is the time that change has to reach every proxy in front of the pod. (A balancer that probes `/ready` itself sees the `503` only once the drain has begun, and acts on it after its own period and threshold.) For git the same window is the one the drain waits through: a git client sent to the pod once its drain has begun is refused at its first request and retries against a peer rather than being cut part way, but the upload `POST` of a fetch begun on a peer is served there, and waited for, for as long as such requests still arrive. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
+Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field), and give the boot a startup probe on `/health`, which answers `503` until the node has recovered what it holds and `200` from then on, while the rest of the boot runs and `/ready` stays `503`. Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic and how long the startup probe has to wait. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds (or, where it hosts a `direct` executor run whose session moved, once it has saved that session, within 30 s), which is also the whole of an `ingress` node's drain unless it is serving git (a git request already running is finished first; a new one is refused). So give such a pod a `preStop` sleep of a few seconds if you need its load balancer to have stopped sending it requests before the listener goes: Kubernetes takes a terminating pod out of its Service's endpoints as the hook begins, and sends the SIGTERM that starts the drain only once the hook has ended, so the sleep is the time that change has to reach every proxy in front of the pod. (A balancer that probes `/ready` itself sees the `503` only once the drain has begun, and acts on it after its own period and threshold.) For git the same window is the one the drain waits through: a git client sent to the pod once its drain has begun is refused at its first request and retries against a peer rather than being cut part way, but the upload `POST` of a fetch begun on a peer is served there, and waited for, for as long as such requests still arrive. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 
 Both communicate through the stream, and through the coordination KV on the
 same broker — never with each other. Both accept `-debug` for verbose
@@ -1888,14 +1888,17 @@ node without `ingress` is what a rolling update waits on before it replaces
 the next pod, so a satellite that cannot reach its fleet holds the rollout
 rather than letting it take the next one down too.
 
-Give every pod a `terminationGracePeriodSeconds` of at least its longest turn
-plus 150 s, plus any `preStop` sleep you give it — Kubernetes starts the grace
+Give every pod a `terminationGracePeriodSeconds` of at least the longer of its
+longest turn and 30 s, plus 150 s, plus any `preStop` sleep you give it — Kubernetes starts the grace
 countdown before the hook runs, so the sleep is spent out of the same grace.
 The drain waits for the turns already running — and, on a pod that serves
 Gitlet, for the clones and pushes already running, which it
 finishes rather than cuts — and has no bound of the engine's own, so the
 longest turn (or the longest clone or push the pod should finish) is the part
-of the grace it needs; what follows the
+of the grace it needs; beside it, a pod that runs `direct` executors saves
+their sessions for up to 30 s
+([saved as it works](../concepts/code-sandbox.md#a-running-jobs-session-saved-as-it-works)),
+so its drain can take that long however short its turns; what follows the
 drain — giving its leases back, closing the HTTP listeners (five seconds each,
 which an open sandbox bridge session spends whole), flushing the auxiliary
 spend, the reads of unit repositories and the day's usage, and, on a pod that
@@ -1910,7 +1913,8 @@ own bound (see
 [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown)). A grace of the longest turn
 alone kills such a member before its store closes; the extra 150 s covers that
 with room for the process to exit. A deployment whose turns finish in seconds
-still needs 150 s, not Kubernetes' 30 s default — a pod that runs no seats
+still needs 150 s, not Kubernetes' 30 s default, and 180 s where a pod runs
+`direct` executors — a pod that runs no seats
 60 s — and an `ingress` pod with the `preStop` sleep described above needs
 60 s plus that sleep.
 
@@ -3517,7 +3521,11 @@ deliveries, and it is delivered again when the window turns over (the one
 that ends last, where several refuse) or at once when a change to the
 ceilings applies on that node — the revision that changed them. The node logs
 `seat_budget_parked` with the window and when it resets, and
-`seat_budget_park_released` when the mail flows again. A
+`seat_budget_park_released` when it lifts the hold and the mail flows again.
+A release whose line carries `held_again=true` met a park taken while it was
+in flight (a turn on another partition that found the window still spent):
+that park holds the seat again, so its inbox stays held and its mail waits
+for that park's own release. A
 turn refused part-way through is parked the same way, unless it had already
 written outside the engine, in which case it is recorded and not run again.
 See [Agent Runtime § The budget park](../concepts/agent-runtime.md#the-budget-park).

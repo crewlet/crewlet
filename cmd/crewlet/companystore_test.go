@@ -294,20 +294,12 @@ func readersOfTheCompany() []readerRun {
 // before it reads, plans or changes anything.
 //
 // Started alone, a member cannot reach the quorum the fleet's store needs, and
-// beside running peers it would rejoin the cluster for the sake of one value,
-// so its command is sent to a running member ([engine.ErrNoFleetStoreHere]).
-// A run that went on without the store would read every value the fleet holds
-// as unset — and unset is the signal a provisioner mints on, or a report
-// restores the configured bundle on. So each such run is refused, naming
-// `-api` and this node's Tier A, whatever flag for a fresh value it was given,
-// and:
-//
-//   - nothing is printed but the error, on either stream: not a plan, nor a
-//     route line;
-//   - no vendor is reached;
-//   - no broker is started on the member's store directory;
-//   - an llm entry's credentials directory is left as it was.
-//
+// beside running peers it would rejoin the cluster for one value, so its
+// command is sent to a running member ([engine.ErrNoFleetStoreHere]). Going on
+// would read every value as unset, the signal a provisioner mints on. So each
+// such run is refused, naming `-api` and this node's Tier A: nothing is printed
+// but the error, no vendor is reached, no broker is started on the store
+// directory, and an llm entry's credentials directory is left as it was.
 // Mutation: let a reader on, past a store it could not reach, and every row
 // goes red.
 func TestAClusterMemberWithItsEngineStoppedRefusesEveryReaderOfTheCompany(t *testing.T) {

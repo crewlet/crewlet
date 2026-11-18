@@ -60,7 +60,7 @@ import { ChangeRefPill } from "./ChangeRow.tsx";
 import { CodeList, useDayGroups, type ListDay } from "./CodeList.tsx";
 import { REPO_PARAM, commitHref, compareHref, repoHref } from "./paths.ts";
 import {
-  credentialWords,
+  credentialTag,
   dayAside,
   dayCounts,
   pusherParams,
@@ -73,6 +73,7 @@ import { PushesRail } from "./PushesRail.tsx";
 import { usePushActivity } from "./railParts.tsx";
 import { REFUSED_CODES, refusalSentence } from "./repo/marks.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { useGitletSectionCounts } from "./sectionCounts.ts";
 import { BranchChip, Face, GITLET, useWhoName } from "./ui.tsx";
 import { WHEN, dayBoundsFor, sinceOf } from "./when.ts";
 import "~/styles/gitlet.css";
@@ -97,6 +98,7 @@ const VIA_WORDS: Readonly<Record<string, string>> = {
 };
 
 export function Pushes() {
+  useGitletSectionCounts();
   const [repo, setRepo] = useParam(REPO_PARAM, "", "filter");
   const picker = <RepoPicker size="sm" repo={repo} onChoose={setRepo} />;
   if (repo !== "" && isRepoName(repo)) {
@@ -577,15 +579,27 @@ function PushChips({ push }: { push: CodePushRow }) {
           </Tag>
         )
       )}
-      {push.actor_kind === "operator" && !landing && (
-        <Tag appearance="outline" size="xs" leadingIcon={<KeyGlyph size="xs" />}>
-          {credentialWords(push.actor)} <span className="mono">{push.actor}</span>
-        </Tag>
-      )}
+      {push.actor_kind === "operator" && !landing && <CredentialTag login={push.actor} />}
       <Tag appearance="outline" size="xs">
         {VIA_WORDS[push.via] ?? push.via}
       </Tag>
     </>
+  );
+}
+
+/** The credential a person pushed through: its kind, a name a person gave it, the whole id its title. */
+function CredentialTag({ login }: { login: string }) {
+  const { words, name } = credentialTag(login);
+  return (
+    <Tag appearance="outline" size="xs" leadingIcon={<KeyGlyph size="xs" />} title={login}>
+      {words}
+      {name && (
+        <>
+          {" "}
+          <span className="mono">{name}</span>
+        </>
+      )}
+    </Tag>
   );
 }
 

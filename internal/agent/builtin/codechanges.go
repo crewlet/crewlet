@@ -65,6 +65,7 @@ var changeToolNeeds = map[string]gitlet.Access{
 	CodeRequestReviewTool:   gitlet.AccessRead,
 	CodeReviewChangeTool:    gitlet.AccessReview,
 	CodeCommentOnChangeTool: gitlet.AccessRead,
+	CodeDeleteCommentTool:   gitlet.AccessRead,
 	CodeResolveFindingTool:  gitlet.AccessRead,
 	// An apply pushes the source branch, a full_access seat's own namespace:
 	// the push's rule, read.
@@ -451,7 +452,7 @@ func changeArg(tool string, args map[string]any) (string, int64, *tools.Result) 
 	s := strings.TrimSpace(argString(args, "change"))
 	if name, n, ok := strings.Cut(s, "!"); ok {
 		if repo != "" && repo != name {
-			r := failed(fmt.Sprintf("%s: `change` %q is a change of repository %q and `repo` names %q — "+
+			r := failedArg("change", fmt.Sprintf("%s: `change` %q is a change of repository %q and `repo` names %q — "+
 				"name one repository.", tool, clip(s), clip(name), clip(repo)))
 			return "", 0, &r
 		}
@@ -460,7 +461,7 @@ func changeArg(tool string, args map[string]any) (string, int64, *tools.Result) 
 	whole, _ := argval.Whole(s)
 	number := int64(whole)
 	if number < 1 {
-		r := failed(fmt.Sprintf("%s needs `change`: a change's number on `repo`, or its reference as %s "+
+		r := failedArg("change", fmt.Sprintf("%s needs `change`: a change's number on `repo`, or its reference as %s "+
 			"names it (web!42).", tool, CodeListChangesTool))
 		return "", 0, &r
 	}

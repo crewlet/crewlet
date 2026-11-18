@@ -11,14 +11,12 @@ import (
 
 // A LOGIN IS HELD TO ITS HOLDER'S KIND AT ENROLMENT.
 //
-// A person's login is dotted and a machine's is coloned, and "either one, for
-// either kind" was the hole: `token:<id>` is the login a Tier A token acts
-// under, and the directory row holding it is what binds that token to a seat —
-// so a person enrolled as `token:ops` (an invitation's redeemer types their
-// own login) made the deployment's `ops` credential act as their seat. The
-// refusals are asserted on the SENTINEL and on the ESTATE, because an
-// enrolment that failed for an unrelated reason would pass an "it errored"
-// check whatever the rule said.
+// A person's login is dotted and a machine's coloned. `token:<id>` is the
+// login a Tier A token acts under, and the directory row holding it binds that
+// token to a seat, so a person enrolled as `token:ops` (an invitation's
+// redeemer types their own login) would make the deployment's `ops` credential
+// act as their seat. Refusals are asserted on the SENTINEL and the ESTATE: an
+// enrolment failing for an unrelated reason would pass an "it errored" check.
 func TestAnEnrolmentHoldsALoginToItsHoldersKind(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -50,9 +48,8 @@ func TestAnEnrolmentHoldsALoginToItsHoldersKind(t *testing.T) {
 				iamdomain.ErrInvalidLogin)
 		}
 	}
-	// NOTHING WAS WRITTEN. The grammar is checked before the record is
-	// published, so a refused enrolment publishes nothing — a row under
-	// `token:ops` would be half of the binding this rule exists to refuse.
+	// NOTHING WAS WRITTEN: the grammar is checked before publication, and a
+	// row under `token:ops` would be half the binding this rule refuses.
 	rig.drain()
 	if got := rig.column(`SELECT login FROM iam_people`); len(got) != 0 {
 		t.Errorf("a refused enrolment left logins %v in the estate", got)
@@ -98,13 +95,12 @@ func TestAnEnrolmentHoldsALoginToItsHoldersKind(t *testing.T) {
 
 // EVERY PERSON ENROLS WITH A LOGIN, although their address already finds them.
 //
-// A login is the name a person signs in and is shown under, on every row of
-// the directory and beside every change the trail records of their sign-ins
-// and credentials. A person enrolled by address alone was recorded as `anonymous`
-// beside every change they made — iam.ActorFor had no name to write — and
-// failed iam.Principal.Validate on every request they sent, so the directory
-// admitted a person the rest of the engine could not name. Refused before the
-// first claim, so the refusal leaves nothing holding the address.
+// A login is the name a person signs in and is shown under, on every directory
+// row and beside every change the trail records. Without one, iam.ActorFor has
+// no name to write (`anonymous`) and iam.Principal.Validate fails every
+// request, so the directory would admit a person the engine cannot name.
+// Refused before the first claim, so the refusal leaves nothing holding the
+// address.
 func TestEveryPersonEnrolsWithALogin(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -143,12 +139,10 @@ func TestEveryPersonEnrolsWithALogin(t *testing.T) {
 
 // AND AT A RENAME, where the holder's kind is read INSIDE THE SNAPSHOT.
 //
-// A rename is an identity record on the directory — `PATCH /iam/people/{id}`
-// publishes it — and it once passed through no grammar at all, so a person
-// refused `token:ops` at enrolment could rename into it a minute later. The
-// kind is read in the decide's own transaction rather than taken from a
-// caller, because a caller stating it would be stating what it read somewhere
-// else.
+// A rename (`PATCH /iam/people/{id}`) is an identity record on the directory;
+// without the grammar a person refused `token:ops` at enrolment could rename
+// into it. The kind is read in the decide's own transaction, not taken from a
+// caller, who would be stating what it read somewhere else.
 func TestARenameHoldsALoginToItsHoldersKind(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

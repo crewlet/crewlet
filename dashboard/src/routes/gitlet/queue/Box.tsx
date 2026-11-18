@@ -375,7 +375,6 @@ export function BoxNote({ band, approval }: { band: QueueBand; approval: boolean
   return (
     <EmptyState
       size="compact"
-      headingLevel={4}
       icon={<ListOrderedGlyph size={24} />}
       title={`Nothing is queued for ${branch}`}
       description={`A change joins this queue from its merge box once ${approval ? "it is approved" : "its gate is met"}, and lands when its required checks pass on the merge.`}

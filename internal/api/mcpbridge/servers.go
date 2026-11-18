@@ -70,6 +70,25 @@ func Servers(surface Surface) []string {
 	return out
 }
 
+// Guidance is what each MCP server an opening of surface serves under its own
+// name says it is for, by that name ([Servers]): the instructions the server's
+// endpoint answers ([instructionsOf]), which a run's harness may hand its
+// model again in the box that holds its session, so a launch charges them.
+// A server that says nothing is left out; nil where none says anything.
+func Guidance(surface Surface) map[string]string {
+	seat := seatOf(surface)
+	var out map[string]string
+	for _, name := range Servers(surface) {
+		if said := instructionsOf(seat, name); said != "" {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[name] = said
+		}
+	}
+	return out
+}
+
 // seatOf is surface where it is a seat's, or nil: the one surface a seat's
 // MCP servers reach an opening through.
 func seatOf(surface Surface) *tools.Surface {

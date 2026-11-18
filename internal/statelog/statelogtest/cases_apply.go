@@ -13,20 +13,15 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// runEnvelope certifies the half of a record every build must be able to read.
-//
-// It is the one part of the deferral contract a domain can break on its own:
-// without an envelope there is no position, no kind, no subject and no scope,
-// so a record a build cannot decode could not be indexed, probed for or
-// reported on — only dropped, which is what turns a rolling upgrade into an
-// outage.
+// runEnvelope certifies the half of a record every build must be able to read:
+// without an envelope, a record a build cannot decode has no kind, subject or
+// scope to index, probe or report, so it can only be dropped, which turns a
+// rolling upgrade into an outage.
 func runEnvelope(t *testing.T, new Factory) {
 	t.Helper()
 
-	// AN UNKNOWN VERSION MUST STILL DECODE. The caller is the arm that by
-	// definition cannot read the payload, so an Envelope that failed here
-	// would leave a build with nothing to retain and nothing to say about
-	// what it is missing.
+	// An unknown version must still decode: the caller is the arm that cannot
+	// read the payload, and has nothing to retain without an envelope.
 	t.Run("a version above this build still yields an envelope", func(t *testing.T) {
 		c := new(t)
 		requireKinds(t, c)
@@ -58,7 +53,7 @@ func runEnvelope(t *testing.T, new Factory) {
 		}
 	})
 
-	// A RECORD THIS BUILD DOES KNOW decodes to what it was encoded as.
+	// A record this build knows decodes to what it was encoded as.
 	t.Run("a record at this build's version round-trips", func(t *testing.T) {
 		c := new(t)
 		requireKinds(t, c)
@@ -83,21 +78,17 @@ func runEnvelope(t *testing.T, new Factory) {
 func runApply(t *testing.T, new Factory) {
 	t.Helper()
 
-	// APPLY IS A PURE FUNCTION of the rows in this transaction, the record
-	// and the options — so two nodes applying one record produce the same
-	// rows. This case runs the same records into two fresh estates and
-	// compares what they hold, which is the strongest statement that can
-	// be made from outside without reading the applier's own source.
+	// Apply is a pure function of the transaction's rows, the record and the
+	// options, so two nodes applying one record produce the same rows.
 	t.Run("the same records produce the same rows", func(t *testing.T) {
 		if err := Determinism(t, new); err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	// APPLY IS IDEMPOTENT AT A POSITION. The checkpoint is what makes it
-	// so on the ordinary path, and a domain whose apply is not idempotent
-	// underneath it produces a node that differs from its peers after any
-	// redelivery — which every broker makes eventually.
+	// Apply is idempotent at a position: a domain that is not, beneath the
+	// checkpoint, diverges from its peers after any redelivery, which every
+	// broker makes eventually.
 	t.Run("applying a record twice is applying it once", func(t *testing.T) {
 		if err := Idempotency(t, new); err != nil {
 			t.Fatal(err)
@@ -108,11 +99,8 @@ func runApply(t *testing.T, new Factory) {
 // Determinism runs one set of records into two fresh estates and reports what
 // differs.
 //
-// EXPORTED AND RETURNING THE VERDICT, for the reason [Declaration] is: a case
-// that cannot be shown to fail is a claim rather than a check. The *testing.T
-// is for the INFRASTRUCTURE — a temporary directory, a context, a store that
-// would not open — and those still stop the test; what comes back is the
-// contract's own answer.
+// It returns the verdict for [Declaration]'s reason; t is only for
+// infrastructure failures, which still stop the test.
 func Determinism(t *testing.T, new Factory) error {
 	t.Helper()
 	records := suiteRecords(t, new)
@@ -145,17 +133,11 @@ func Idempotency(t *testing.T, new Factory) error {
 
 // suiteRecord is one record the suite publishes, at a stated position.
 //
-// THE POSITION IS PART OF THE FIXTURE rather than the loop's index, because
-// the idempotency case replays records and a replay is a REDELIVERY: the
-// broker hands back the message it already handed over, at the sequence it
-// already had. Numbered by the loop instead, a replayed record arrives at a
-// sequence the broker never issued, and every domain that records the position
-// it applied at then looks non-idempotent for a case the suite invented.
-//
-// Re-publication under a NEW sequence — the same operation id appended again
-// by a publisher that never learned the first one landed — is a real case, and
-// it is the FRAMEWORK's: the operation ledger drops it, which this harness does
-// not run. It is certified in internal/statelog against the loop that owns it.
+// The position is part of the fixture, not the loop's index: the idempotency
+// case's replay is a redelivery, at the sequence the broker already issued.
+// A fresh sequence would make every domain that records its applied position
+// look non-idempotent. Re-publication under a new sequence is the operation
+// ledger's case, certified in internal/statelog.
 type suiteRecord struct {
 	kind string
 	id   string
@@ -197,18 +179,16 @@ func applyInto(t *testing.T, new Factory, records []suiteRecord) map[string]stri
 	}
 	defer func() { _ = w.Close() }()
 
-	// THE OPTIONS ARE FIXED, which is the point: every value an applier
-	// would otherwise read from the world arrives here, so two runs differ only
-	// in what the records say.
+	// Fixed options: every value an applier would read from the world
+	// arrives here, so two runs differ only in what the records say.
 	opts := statelog.ApplyOptions{
 		Now:             time.Unix(1_700_000_000, 0).UTC(),
 		StoredAt:        time.Unix(1_700_000_000, 0).UTC(),
 		ArbitratedKinds: c.spec().ArbitratedKinds,
 
-		// THE PROBED LIMIT, not a fixed one: an applier sizes its
-		// multi-row inserts by this, so a suite that left it zero would
-		// certify every domain writing one row per statement — the one
-		// shape the chunker exists to replace — and agree with itself.
+		// The probed limit: appliers size multi-row inserts by it, and
+		// zero would certify one row per statement, the shape the chunker
+		// replaces.
 		MaxVariables: db.Caps().MaxVariables,
 	}
 
@@ -252,12 +232,9 @@ func applyOne(ctx context.Context, c Candidate, tx *sql.Tx, rec statelog.Record,
 
 // requireKinds refuses a candidate the apply cases cannot exercise.
 //
-// FATAL, NOT A SKIP. Kinds is what this suite publishes records of, so a
-// candidate declaring none is one it cannot certify at all — and certifying
-// nothing while reporting a pass is the outcome a conformance suite exists to
-// make impossible. It was three copies of a t.Skip, which never fired (every
-// shipped domain derives Kinds from an enum, and the meta-test hardcodes one)
-// and would have silently hollowed out the apply cases the day one did not.
+// Fatal, not a skip: Kinds is what the suite publishes, and certifying
+// nothing while reporting a pass is what a conformance suite exists to
+// prevent.
 func requireKinds(t *testing.T, c Candidate) {
 	t.Helper()
 	if len(c.Kinds) == 0 {
@@ -269,10 +246,8 @@ func requireKinds(t *testing.T, c Candidate) {
 
 // diffTables names the tables that differ and shows what each side holds.
 //
-// NAMED RATHER THAN DUMPED. Two whole estates rendered side by side is
-// unreadable at any real corpus, and the failure it reports is usually one
-// column of one table — a clock, a node id, an unsorted map. So the message
-// carries only the tables that actually differ.
+// Only differing tables are shown: two whole estates are unreadable, and the
+// failure is usually one column of one table.
 func diffTables(a, b map[string]string) string {
 	names := make([]string, 0, len(a))
 	for name := range a {
@@ -288,9 +263,8 @@ func diffTables(a, b map[string]string) string {
 			name, oneLine(a[name]), oneLine(b[name]))
 	}
 	if out.Len() == 0 {
-		// Only reachable when one side holds a table the other does
-		// not, which a shared migration makes impossible — so it is
-		// reported rather than silently rendering nothing.
+		// One side holds a table the other does not, which a shared
+		// migration rules out; reported rather than rendering nothing.
 		return "  the two sides declare different tables"
 	}
 	return strings.TrimRight(out.String(), "\n")

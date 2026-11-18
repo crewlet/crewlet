@@ -138,6 +138,21 @@ func refused(code tools.Refusal, msg string) tools.Result {
 // [refused] or [refusedBy].
 func failed(msg string) tools.Result { return refused(tools.RefusalInvalid, msg) }
 
+// failedArg is [failed] for a refusal of ONE argument, carrying its name as a
+// value beside the class ([argRefused]) so a surface can say in its own words
+// which value was refused (ADR-0060).
+func failedArg(field, msg string) tools.Result {
+	return tools.Result{Output: msg, Failed: true, Cause: tools.Classify(tools.RefusalInvalid, argRefused(field))}
+}
+
+// argRefused is the argument a tool refused, by the name the call spells it.
+type argRefused string
+
+func (a argRefused) Error() string { return "builtin: refused argument " + string(a) }
+
+// RefusedField is the argument, as a surface outside the tools asks it of a cause's chain.
+func (a argRefused) RefusedField() string { return string(a) }
+
 // refusedBy is [refused] for a refusal something underneath decided — a read
 // that found nothing, a write the log refused — carrying that error BENEATH
 // the class ([tools.Classify]), so a caller branching on the domain's own
@@ -589,7 +604,9 @@ const sandboxLaterWait = time.Minute
 // chain — a read refused ([statelog.Refused]), a write ([statelog.Unavailable])
 // or a bare sentinel somebody wrapped — in the state log's own words for it
 // ([statelog.ConditionWords]), and never its error or its detail, which are
-// the log's.
+// the log's. Its kind is [KindStateLogWriteRefused] for a write refused for
+// what it is ([statelog.Reason.RefusesTheWrite]) and [KindStateLogUnavailable]
+// for every other refusal.
 //
 // THE REFUSAL ITSELF, never the chain's whole message: a wrapper is free to
 // join an error of its own beside it (`%w: %w`), and that one may be a
@@ -597,8 +614,13 @@ const sandboxLaterWait = time.Minute
 func stateLogSaid(err error) conditionSaid {
 	what, _, _ := statelog.ConditionWords(err)
 	person, _ := statelog.ConditionSentence(err)
+	kind := KindStateLogUnavailable
+	var refused *statelog.Unavailable
+	if errors.As(err, &refused) && refused.Reason.RefusesTheWrite() {
+		kind = KindStateLogWriteRefused
+	}
 	return conditionSaid{clause: what, person: person,
-		stuck: statelog.RetryAfter(err, time.Second) == 0, kind: KindStateLogUnavailable}
+		stuck: statelog.RetryAfter(err, time.Second) == 0, kind: kind}
 }
 
 // What a model is told about a condition no wait clears, in place of a tool's

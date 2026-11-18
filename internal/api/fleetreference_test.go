@@ -25,18 +25,12 @@ import (
 // none it does not — a node row, a seat row, a duty row, the activation and
 // the answer's own top level, each compared both ways.
 //
-// The example is the only place a script author sees the answer whole, and it
-// had fallen behind it: a node's `admin`, its `appliers_ready` and
-// `appliers_total`, the revision and report time beside its epoch, and the
-// answer's `target_epoch` and `activation` were on the wire and nowhere on the
-// page, while the screen that drew them was the only reader that knew. A field
-// the example lacks is a field nobody builds an alert on; one it names that
-// the answer does not send is one somebody builds an alert on that never
-// fires. So the answer is rendered with every optional field present — a node
-// publishing a whole status, an apply record naming the revision it runs and
-// would start on and the epoch it applied, an activation, an object-store
-// record — and its keys are held to the example's, read by the same
-// [exampleUnder] that holds the example's `objects` block to the renderer
+// The example is the only place a script author sees the answer whole. A field
+// it lacks is one nobody builds an alert on; one it names that the answer does
+// not send is an alert that never fires. So the answer is rendered with every
+// optional field present (a whole node status, an apply record, an activation,
+// an object-store record) and its keys are held to the example's, read by the
+// same [exampleUnder] that holds the `objects` block to the renderer
 // ([TestTheReferenceExampleIsTheRenderersOwnAnswer]).
 func TestTheFleetReferenceExampleCarriesEveryFieldTheAnswerDoes(t *testing.T) {
 	t.Parallel()

@@ -105,6 +105,7 @@ import type {
   ExecutorEnding,
   ExecutorRow,
   ExecutorStatus,
+  ToldCall,
 } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DelegateWaitNote, DelegatedMark } from "~/components/Delegation.tsx";
@@ -1306,7 +1307,7 @@ export function BridgeLog({ run }: { run: ExecutorRow }) {
             {droppedWords(run.bridge_elided_calls ?? [])}
           </Callout>
         )}
-        <BridgeCallGrid calls={calls} />
+        <BridgeCallGrid calls={calls} told={run.bridge_calls_told ?? []} />
       </div>
     </Card>
   );
@@ -1440,8 +1441,16 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
  * nothing named them. The records are drawn only while a row is open, so a log
  * at the engine's bound of two hundred parses nothing until it is read.
  */
-function BridgeCallGrid({ calls }: { calls: readonly BridgeCall[] }) {
+function BridgeCallGrid({
+  calls,
+  told,
+}: {
+  calls: readonly BridgeCall[];
+  told: readonly ToldCall[];
+}) {
   const rows = useMemo(() => calls.map((call, i) => ({ call, key: `${call.at}:${i}` })), [calls]);
+  // BY THE CALL'S PLACE IN THE LOG, the one name a telling has for its call.
+  const taken = useMemo(() => new Set(told.map((t) => t.appended)), [told]);
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   return (
     <DataGrid<{ call: BridgeCall; key: string }>
@@ -1494,8 +1503,7 @@ function BridgeCallGrid({ calls }: { calls: readonly BridgeCall[] }) {
               ),
               // A CALL THAT OUTLIVED ITS JOB, which the round's record took
               // after a relaunch carried the round on: said, so a call charged
-              // to no job and told to every later continuation is not read as
-              // one of the job's own.
+              // to no job is not read as one of the job's own.
               r.call.late && (
                 <Tag
                   key="late"
@@ -1503,6 +1511,30 @@ function BridgeCallGrid({ calls }: { calls: readonly BridgeCall[] }) {
                   title="Its run was replaced before it finished: a call of the round, charged to no launch"
                 >
                   finished after a relaunch
+                </Tag>
+              ),
+              // A CALL NOBODY WAITED FOR, given up on by its run's harness or
+              // outliving its session: said, so a call its run's session shows
+              // with no outcome is not read as one that never ran.
+              r.call.abandoned && (
+                <Tag
+                  key="abandoned"
+                  variant="neutral"
+                  title="Its run stopped waiting for it before it returned: it ran, and its effect happened"
+                >
+                  its run stopped waiting for it
+                </Tag>
+              ),
+              // AND ONE THE JOB WORKING AS IT LANDED TOOK INTO ITS SESSION: a
+              // continuation of that session is not told it again, so a reader
+              // sees why the run went on as if it knew the outcome.
+              r.call.appended !== undefined && taken.has(r.call.appended) && (
+                <Tag
+                  key="told"
+                  variant="info"
+                  title="It finished after its run stopped waiting for it, and the job working then took its outcome into its session"
+                >
+                  told to its run while it worked
                 </Tag>
               ),
               callFailed(r.call) && (

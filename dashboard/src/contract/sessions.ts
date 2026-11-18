@@ -42,9 +42,11 @@ export type SessionOutcome = "completed" | "failed" | "stopped" | "lost";
 
 /**
  * Where a launch would continue a turn's session (`sandbox.ContinuesIns`): in
- * whichever box the launch gets — a relaunch from the turn's kept capture, or
- * the conversation's next turn from its head; or, a relaunch's alone, only in
- * the box the turn's run parked in, while that box is held.
+ * whichever box the launch gets — a relaunch from the turn's kept capture (in
+ * the box its job parked in, where that capture was taken while the job still
+ * worked, from the copy that box holds, which went on past it), or the
+ * conversation's next turn from its head; or, a relaunch's alone, only in the
+ * box the turn's run parked in, while that box is held.
  */
 export type SessionContinuesIn = "any_box" | "parked_box";
 
@@ -221,9 +223,11 @@ export type TranscriptState =
   "read" | "none" | "missing" | "unreadable" | "malformed" | "unsupported";
 
 /** Who an entry of a transcript is from (`executor.EntryKinds`): a note is
- *  one a person sent the run while it worked. */
+ *  one a person sent the run while it worked, and a late call one of the
+ *  work's calls that finished after the run that made it stopped waiting for
+ *  it, as the engine handed it to the run while it worked. */
 export type TranscriptEntryKind =
-  "brief" | "note" | "model" | "tool_call" | "tool_result" | "summary" | "unread";
+  "brief" | "note" | "late_call" | "model" | "tool_call" | "tool_result" | "summary" | "unread";
 
 /**
  * Why a page of a transcript ends before the transcript does

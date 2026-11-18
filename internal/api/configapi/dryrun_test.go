@@ -653,15 +653,13 @@ func TestADryRunMarksTheWarningsItIntroduces(t *testing.T) {
 
 // A DRY RUN IS REFUSED A DOCUMENT ITS ACTIVATION CANNOT CARRY, AS ITS WRITE IS.
 //
-// Every write that stores a revision carries its document to every node sealed
-// in the activation pointer, with its summary, and the pointer is one value of
-// the coordination store, held to coord.MaxValueBytes: a write whose pointer
-// would pass it is refused 413 before anything is stored. A dry run is the
-// same request checked the same way, so on every route that answers one it is
-// refused alike and stores nothing — a dry run that passed the write it stands
-// for would tell an editor to save a change the write then refuses. A summary
-// as large as one key holds makes a pointer past it whatever the document,
-// which reaches every route alike.
+// Every write that stores a revision carries its sealed document and summary
+// in the activation pointer, one coordination-store value held to
+// coord.MaxValueBytes: a write whose pointer would pass it is refused 413
+// before anything is stored. A dry run is refused alike on every route that
+// answers one, or it would tell an editor to save a change the write then
+// refuses. A summary as large as one key holds passes it whatever the
+// document, on every route alike.
 //
 // Mutation: answer any route's dry run straight after its document is checked,
 // without the check its commit makes, and that route's case answers 200.

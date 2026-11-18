@@ -33,18 +33,12 @@ import (
 const RecentRunsLimit = 50
 
 // schedules answers the schedules question: what is configured, and what
-// recently fired.
-//
-// The two halves come from different places on purpose. The configured
-// schedules are a PROJECTION of the org — computed, never stored — so a
-// schedule an operator just added shows immediately rather than after its
-// first fire. The history is the usage domain's fires (ADR-0020), every data
-// node's, which is the one place that knows what became of each fire: the
-// dispatch ledger records `fired` when the scheduler sends it, before the
-// seat's node decides whether a later fire runs in its place.
-//
-// The engine's default cap rides beside them, so a form for a new schedule
-// says what an empty time limit means from the engine rather than a copy.
+// recently fired. The configured schedules are a PROJECTION of the org,
+// computed and never stored, so a new one shows at once. The history is the
+// usage domain's fires (ADR-0020) from every data node: the dispatch ledger
+// records `fired` when the scheduler sends it, before the seat's node decides
+// whether a later fire runs in its place. The engine's default cap rides
+// beside them, so a form says what an empty time limit means.
 func (s Sources) schedules(ctx context.Context, _ Params) (any, error) {
 	return map[string]any{
 		"schedules":               s.ConfiguredSchedules(),
@@ -94,27 +88,13 @@ func (s Sources) ConfiguredSchedules() []schedule.Row {
 // integrations answers how each external surface is wired, and what has come
 // through it.
 //
-// IT NEVER INFERS HEALTH. An idle Slack and a 401-ing Slack are identical in
-// the event store — verification runs before a row is written — so a green dot
-// derived from "we saw traffic" would be reporting the weather. What this
-// answers is what is configured, whether the credential this node needs is
-// present, and how many deliveries arrived; a reader draws their own
-// conclusion from those.
-//
-// # Configured is not routed
-//
-// `routes` is the one thing here that is a property of the BUILD rather than
-// of the config, and it is the difference between an integration that works
-// and one that only looks like it does. A third-party app's webhook route verifies and
-// stores its deliveries as soon as its block is present; whether one then
-// wakes a seat needs a parser, and four third-party apps have the first half and not
-// the second. Without this field they render identically — configured, secret
-// present, deliveries arriving — so a company whose tracker is ingesting
-// hundreds of events that reach nobody looks exactly like one that is working.
-//
-// THREE-VALUED, like secret_present and for the same reason: null is "this
-// node cannot say", which is what a node whose notification service has not
-// started honestly answers, and is not the same claim as false.
+// IT NEVER INFERS HEALTH: an idle Slack and a 401-ing Slack are identical in
+// the event store (verification runs before a row is written). It answers
+// what is configured, whether this node has the credential, and how many
+// deliveries arrived. `routes` is a property of the BUILD: a webhook route
+// stores deliveries once its block is present, but waking a seat needs a
+// parser, and four apps lack it. THREE-VALUED like secret_present: null is
+// "this node cannot say", which is not false.
 func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	company, roster := s.Company()
 	if company == nil {
@@ -227,19 +207,12 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 			secretUsable = boolPtr(slices.Contains(verifiable, kind))
 		}
 		row["secret_usable"] = secretUsable
-		// THREE-VALUED again, and the third value is the one that took a
-		// subsystem to be able to say at all: null means nothing is
-		// checking this surface from here, an absent entry means the loop
-		// has not reached it yet, and a present one is a real finding.
-		// Before the reconcile loop existed this answer had no honest
-		// form, which is why the doc comment above still says it never
-		// infers health: it does not, and now it does not have to.
-		//
-		// AND A ROW IS NOT A REPORT. The setup write stamps an address on
-		// a surface no pass converges, which leaves a row with no phase in
-		// it; rendered as a report, that empty phase became the card's
-		// status and drew Slack with no state at all while its address had
-		// moved. [integration.State.Observed] is the test.
+		// THREE-VALUED again: null means nothing checks this surface from
+		// here, an absent entry means the loop has not reached it yet, a
+		// present one is a real finding. A ROW IS NOT A REPORT: the setup
+		// write stamps an address on a surface no pass converges, leaving a
+		// row with no phase, which rendered as a card with no state;
+		// [integration.State.Observed] is the test.
 		if !reconcileKnown {
 			row["reconcile"] = nil
 		} else if state, checked := reconciled[kind]; checked && state.Observed() {
@@ -247,31 +220,17 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		} else {
 			row["reconcile"] = nil
 		}
-		// WHETHER THIS SURFACE'S REGISTRATION STILL POINTS HERE.
+		// WHETHER THIS SURFACE'S REGISTRATION STILL POINTS HERE: a registration
+		// made against an old public base keeps pointing at an address that no
+		// longer answers. Where a pass registers the hook the next tick moves
+		// it; otherwise it stays false until a person changes it at the
+		// third-party app. THREE-VALUED: null is "no address recorded", which a
+		// screen must not report as a fault.
 		//
-		// A company's public base moves, and a registration made against
-		// the old one keeps pointing at an address that no longer answers.
-		// Where a pass registers the hook, the next tick moves it and this
-		// is true again within a tick; where nothing does, it stays false
-		// until a person goes and changes it at the third-party app, which
-		// is the whole reason the field exists.
-		//
-		// THREE-VALUED like the rest: null is "nothing has recorded an
-		// address for this surface", which is not the same claim as "the
-		// address moved". A row that has never been set up says null, and
-		// a screen must not report that as a fault.
-		//
-		// COMPARED AGAINST [Sources.WebhookBase] RATHER THAN ANYTHING IN
-		// THE COMPANY DOCUMENT, which is where the address used to live
-		// and where a `${VAR}` could sit unresolved — comparing a
-		// registration against the reference itself reported every such
-		// company as moved for ever. It is the VENDORS' address now, a
-		// Tier A literal this node resolved before it decoded its own
-		// config, and the one every writer of an endpoint stamps — never
-		// the person's `api.external_url`, which behind a public listener
-		// is another socket and would read every registration as moved. A
-		// nil accessor still says null rather than false, for the reason
-		// above.
+		// COMPARED AGAINST [Sources.WebhookBase], never the company document,
+		// where a `${VAR}` could sit unresolved and read every company as
+		// moved, and never `api.external_url`, which behind a public listener
+		// is another socket. A nil accessor says null, not false.
 		row["endpoint"] = nil
 		if state, checked := reconciled[kind]; checked && state.Endpoint != "" {
 			row["endpoint"] = state.Endpoint
@@ -433,29 +392,15 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		add("ssh", in.SSH.Enabled, nil, map[string]any{"hosts": len(in.SSH.Hosts)})
 	}
 	if in.Atlassian != nil {
-		// THE ORGANIZATION, not a third product. Jira and Confluence are
-		// sites this engine reads as an account; this is where the account
-		// itself is created, which no site API can do — so it reconciles
-		// identities, ingests nothing, and has no inbound address of its
-		// own. The loop writes a status row for it like any other surface,
-		// and without a row here that status was invisible: the one screen
-		// an operator watches said nothing at all about whether their
-		// agents' Atlassian accounts could still be created.
-		// PRESENCE IS THE CONFIGURATION, the same as jira and confluence
-		// beside it: the block carries no `enabled` switch, because an
-		// organization key is either there to create accounts with or it
-		// is not.
-		// NO DELIVERY SECRET, AND NOTHING TO ROUTE. The organization key is
-		// a PROVISIONING credential — it creates accounts — and `secret`
-		// here means the value an inbound delivery is verified with, which
-		// this surface has because it receives no delivery at all. Passed as
-		// the key, the row reported `secret_usable: false` (nothing verifies
-		// atlassian, because nothing needs to) and `routes: false` (no parser
-		// routes it, because nothing arrives), which the dashboard drew as
-		// "secret unresolved — every delivery is refused" and "routes
-		// nowhere" over an organization whose key had just created every
-		// agent's account. Mattermost, the other surface with no inbound
-		// address, has passed nil here all along.
+		// THE ORGANIZATION, not a third product: where the account itself is
+		// created, which no site API can do. It reconciles identities,
+		// ingests nothing, and has no inbound address, but needs a status row
+		// like any surface. PRESENCE IS THE CONFIGURATION: the block has no
+		// `enabled` switch. NO DELIVERY SECRET: the organization key is a
+		// PROVISIONING credential, and `secret` means the value a delivery is
+		// verified with; passed as the key, the row drew "secret unresolved"
+		// and "routes nowhere" over a working organization. Mattermost, the
+		// other surface with no inbound address, passes nil.
 		add("atlassian", true, nil,
 			map[string]any{
 				"deployment": in.Atlassian.DeploymentOrDefault(),
@@ -662,40 +607,19 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 
 // deliveryWindow is where the window a page of deliveries covers starts. Its
 // top is the instant the page was read at, [eventfan.Listing.At].
-//
-// THE PAGE IS CAPPED, NOT TIME-BOUNDED — the newest [MaxEventPage] across the
-// fleet — so "42 inbound" alone could span an hour or a year, and naming the
-// window is what makes it a measurement. The window is the widest one whose
-// EVERY delivery the page holds, and which of two it is turns on
-// [eventfan.Listing.More] — whether the fleet may hold deliveries past the
-// page — and never on the page's length, which says neither:
-//
-//   - a page with nothing past it holds every delivery the 30-day history
-//     keeps on every node that answered: no node's own page filled or was cut
-//     to fit the transport, and the merge did not cut it at its size. So the
-//     window is the WHOLE HISTORY, from the floor under the read's instant —
-//     its rows or none. Such a page can hold exactly [MaxEventPage], two nodes
-//     holding half each; and when it holds none, zero deliveries is exactly
-//     what the month held, which is a count like any other. Started at the
-//     oldest delivery instead, the window narrowed nothing the deliveries
-//     counted — none arrived before it — and cut away what the outcome counts
-//     beside them had, so a company whose drops and merges outnumber its
-//     deliveries saw its month of them reported over a stretch somebody else's
-//     last delivery chose, or as zero when no delivery had arrived;
-//   - a page with deliveries past it covers what lies AFTER the oldest
-//     instant it reached. Every delivery newer than its last row is on it —
-//     the merge stops at the newest point any node's page stopped at
-//     ([eventfan.MergeListing]) — but a delivery sharing that last row's
-//     instant may lie past the cut, so the window starts one tick of the
-//     store's clock (a microsecond) after it, and the rows at that instant are
-//     not counted rather than counted short. Such a page can be shorter than
-//     [MaxEventPage], when a node's reply was cut to fit the transport, and it
-//     can be a page with nothing past it after all — a node holding exactly
-//     its page reads as one that filled — when it costs the window only the
-//     deliveries at its oldest instant, and names the window it counted.
-//
-// The outcome counts are then ASKED over exactly this window rather than
-// taken from a page of their own, which is the point of naming it.
+// The outcome counts are ASKED over exactly this window.
+
+// THE PAGE IS CAPPED, NOT TIME-BOUNDED (the newest [MaxEventPage] across the
+// fleet), so naming the window is what makes a count a measurement. Which
+// window turns on [eventfan.Listing.More], never the page's length:
+//   - nothing past the page: it holds every delivery the 30-day history keeps
+//     on every node that answered, so the window is the WHOLE HISTORY from
+//     the floor under the read's instant, even for zero rows. Started at the
+//     oldest delivery, it would cut away what the outcome counts had;
+//   - deliveries past it: the window is what lies AFTER the oldest instant
+//     reached ([eventfan.MergeListing]). A delivery sharing the last row's
+//     instant may lie past the cut, so it starts one store tick (a
+//     microsecond) after, and those rows are not counted rather than short.
 func deliveryWindow(listing eventfan.Listing) time.Time {
 	at := listing.At
 	if !listing.More {
@@ -721,19 +645,12 @@ func deliveryWindow(listing eventfan.Listing) time.Time {
 // the deliveries named: `[out.since, at)`.
 //
 // A QUESTION OF THE FLEET'S OWN ([eventfan.Fleet.NotificationOutcomes]): every
-// node counts its outcome events in that window, grouped in its own store, and
-// the counts are summed. The outcomes are engine events and the deliveries
-// edge rows, so no one listing holds both — and they used to be the newest
-// page of notification events instead, whose span was its own: on a company
-// whose notification events outnumbered its deliveries, the counts in a row
-// described a different stretch of time from the deliveries beside them, with
-// nothing to say so. Its failure leaves the outcome counts absent rather than
-// zero — see [traffic] — because a zero that means "unreadable" is the number
-// an operator would act on.
-//
-// AT THE DELIVERIES' OWN INSTANT, `at` ([eventfan.Listing.At]), which is the
-// window's top edge and the instant every node floors the history at — one
-// reading of the fleet's clock for the whole row, not two a scatter apart.
+// node counts its outcome events in that window and the counts are summed,
+// since outcomes are engine events and deliveries edge rows, so no one
+// listing holds both. Its failure leaves the counts absent, not zero (see
+// [traffic]): a zero meaning "unreadable" is the number an operator acts on.
+// `at` ([eventfan.Listing.At]) is the instant every node floors the history
+// at, one reading of the fleet's clock for the whole row.
 func (s Sources) countOutcomes(ctx context.Context, out *traffic, at time.Time) {
 	counted, coverage, err := s.Events.NotificationOutcomes(ctx,
 		store.OutcomeQuery{Since: out.since, At: at})
@@ -747,22 +664,15 @@ func (s Sources) countOutcomes(ctx context.Context, out *traffic, at time.Time) 
 	out.skipped, out.coalesced = counted.Skipped, counted.Coalesced
 }
 
-// seatsFor lists the handles that carry this surface in their own config.
+// seatsFor lists the handles that carry this surface in their own config:
+// LISTED, not counted, since "which seats reach GitLab" is followed at once by
+// "which ones". A seat carries a surface by its OWN field for it (a Slack
+// app, a Mattermost identity, a per-seat project or space); one with none is
+// served by the company-wide account.
 //
-// LISTED rather than counted, because the number alone answers a question
-// nobody asks. "Which seats reach GitLab" is followed immediately by "which
-// ones", and a count sends the reader to the org page to work it out — while
-// the answer is already in the config this function is reading.
-//
-// What counts as carrying a surface is that seat's OWN field for it: a Slack
-// app, a Mattermost identity, a per-seat project or space. A seat with none
-// of them is served by the company-wide account, not by one of its own.
-//
-// THE WALK IS THE COMPANY'S OWN ORG, not the document's `roles:`. That field
-// is the seats belonging to NO unit, so a company whose agents all sit in
-// units answered an empty list from every caller here — and once a stored
-// revision stopped carrying seats at all, so did every company. What a seat
-// carries is on the seat, and the seat is what the org model holds.
+// THE WALK IS THE COMPANY'S OWN ORG, not the document's `roles:`, which holds
+// only the seats of NO unit and so answered an empty list for a company whose
+// agents all sit in units.
 func seatsFor(roster *org.Organization, kind string) []string {
 	out := []string{}
 	if roster == nil {
@@ -802,25 +712,15 @@ func seatsFor(roster *org.Organization, kind string) []string {
 }
 
 // seatSecrets counts the per-seat apps of one kind that carry a verification
-// credential AND can do anything with it.
+// credential AND can do anything with it. Counted as well as listed by
+// [seatsFor]: the COUNT says whether the route can verify anything at all.
 //
-// Counted as well as listed by [seatsFor]: the COUNT is what says whether the
-// route can verify anything at all, since an app with no signing secret
-// cannot, and an app without one is exactly the half-finished state an
-// operator needs to see.
-//
-// # A sealed value is not a surface
-//
-// Each arm below adds the thing that makes the secret MEAN something, and
-// both were learned the same way — from a disconnect that removed the
-// meaningful half and left the secret, so the row outlived the integration
-// and the card sat on a state nobody had chosen.
-//
-// A count this reports is therefore a claim that deliveries reach a seat, not
-// that a `${VAR}` is written down somewhere. What is left over after a
-// half-finished teardown is reported by the SETUP screen's seat roster, which
-// is where an operator acts on a seat, and — with what only a person can
-// finish — by the disconnect itself.
+// A sealed value is not a surface: each arm below adds the thing that makes
+// the secret MEAN something, because a disconnect removed the meaningful half
+// and left the secret, so the row outlived the integration. A count is a
+// claim that deliveries reach a seat, not that a `${VAR}` is written down.
+// What a half-finished teardown leaves is reported by the SETUP screen's seat
+// roster and by the disconnect itself.
 func seatSecrets(company *config.Company, roster *org.Organization, kind string) int {
 	n := 0
 	if company == nil || roster == nil {
@@ -843,24 +743,13 @@ func seatSecrets(company *config.Company, roster *org.Organization, kind string)
 			}
 		case "github":
 			// AN INSTALLATION, and the organization block that enables
-			// the surface the delivery arrives on.
-			//
-			// A seat app that is not installed on the organization sees no
-			// repository, mints no token and receives no delivery — so
-			// counting its signing secret reported a surface that is
-			// receiving events on the strength of an app that reaches
-			// nothing. It survived a disconnect for exactly that reason:
-			// the org block went, every installation was removed at
-			// GitHub, and the row stayed alive on two sealed values,
-			// rendering the card as Connecting with a `routes nowhere`
-			// badge permanently.
-			//
-			// The block is the other half of the same fact and was
-			// missing: [Engine.reconcileGitHub] retires the parser on
-			// `cfg == nil || !cfg.Enabled`, so an installed app whose
-			// company has no enabled block delivers to a route that
-			// verifies it and routes it nowhere — which a disconnect with
-			// the installations left in place produces exactly.
+			// the surface the delivery arrives on. An app not installed on the
+			// organization sees no repository, mints no token and receives no
+			// delivery, so its signing secret alone reported a live surface
+			// (a disconnect left the row Connecting with `routes nowhere`).
+			// The block is the other half: [Engine.reconcileGitHub] retires the
+			// parser on `cfg == nil || !cfg.Enabled`, so an installed app with
+			// no enabled block delivers to a route that routes nowhere.
 			block := company.Integrations.GitHub
 			if app := r.GitHub; app != nil && app.InstallationID != 0 &&
 				block != nil && block.Enabled {
@@ -913,21 +802,12 @@ func memorySeat(organization *org.Organization, handle string) (memread.Seat, bo
 
 // trailSeat resolves the seat a question about a SEAT'S TRAIL — what it
 // remembers, what it said — is asked about, and decides the caller may read
-// it. An absent name is the caller's own seat.
-//
-// THE NAME IS RESOLVED BY [iam.OwnerOf] FIRST, through [Sources.recordHandle],
-// so a person's LOGIN names the seat the identity directory binds them to and
-// is never read as a seat's handle; and the authority is
-// [authz.ActionSeatTrailRead], the one verb every trail question asks, so the
-// halves of what a seat has said and remembered cannot answer one reader
-// differently: the seat itself, whoever leads it, or an admin (ADR-0033). The
-// questions are registered as decided by that verb ([DecidedBy]), so this is
-// the ONLY place the decision is made — anybody whose stage may act reaches
-// it, and a lead reads their own agents' trail and nobody else's.
-//
-// THE CALLER'S OWN IS THEIR SEAT and nothing else: an unbound caller has no
-// trail, and naming nobody is [errNoSeat], whose remedy is a binding rather
-// than a credential.
+// it. An absent name is the caller's own seat; an unbound caller has no trail
+// ([errNoSeat], whose remedy is a binding). The name is resolved by
+// [iam.OwnerOf] first, through [Sources.recordHandle], so a LOGIN is never
+// read as a handle. The authority is [authz.ActionSeatTrailRead], the one verb
+// every trail question asks (the seat, its lead or an admin, ADR-0033),
+// registered as [DecidedBy]: this is the ONLY place the decision is made.
 func (s Sources) trailSeat(ctx context.Context, asked string) (memread.Seat, error) {
 
 	principal, how := iam.From(ctx)
@@ -1008,30 +888,18 @@ func (s Sources) agentEpisode(ctx context.Context, p Params) (any, error) {
 	return s.Memory.Episode(ctx, seat, episode)
 }
 
-// memoryOverview answers every agent seat's memory totals — its diary, its
-// episodes, the skills it drafted — and its newest reflection, each counted by
-// the node holding the seat, with the `coverage` naming every holder asked.
+// memoryOverview answers every agent seat's memory totals (diary, episodes,
+// drafted skills) and newest reflection, counted by the node holding the seat,
+// with the `coverage` naming every holder asked.
+// EVERY AGENT SEAT IN THE CHART, in handle order, uncapped: a cut list hid
+// the seats a reader looked for. A seat no node holds is still a row
+// (`held_by: none`), since a missing seat reads as one that does not exist.
 //
-// EVERY AGENT SEAT IN THE CHART, in handle order, and no cap: the list this
-// answers is the company's agents, which the chart already bounds, and a list
-// cut at a dozen (the old Knowledge home's) hid exactly the seats a reader went
-// looking for. A seat no node holds is still a row — `held_by: none`, nothing
-// counted — because a seat missing from the list reads as a seat that does not
-// exist.
-//
-// DECIDED PER SEAT by [authz.ActionSeatTrailRead], exactly as each seat's own
-// memory is, and the list holds the seats the caller's trail reaches and no
-// others: every seat for an admin, a lead's own agents, and nothing at all for
-// anybody else — an empty list rather than a refusal, because "you lead no
-// agent" is an answer about the caller. It was decided ONCE, on no seat at
-// all, which the owner-or-lead rule refuses as naming nobody — to everybody,
-// an admin included — so the diaries list answered nobody the day the trail
-// stopped being one grant's.
-//
-// A SEAT THIS NODE CANNOT DECIDE MAKES THE WHOLE ANSWER UNAVAILABLE rather
-// than leaving the seat out: a list short by a seat the caller leads reads as
-// the seat's memory gone, and the chart that cannot say is one read away from
-// saying.
+// DECIDED PER SEAT by [authz.ActionSeatTrailRead]: every seat for an admin, a
+// lead's own agents, an empty list (not a refusal) for anybody else; decided
+// once on no seat, the owner-or-lead rule refuses everybody. A SEAT THIS NODE
+// CANNOT DECIDE MAKES THE WHOLE ANSWER UNAVAILABLE: a short list reads as
+// memory gone.
 func (s Sources) memoryOverview(ctx context.Context, _ Params) (any, error) {
 	principal, how := iam.From(ctx)
 	if how == iam.Unknown {
@@ -1146,23 +1014,13 @@ func reconcileFindings(findings []integration.Finding) []map[string]any {
 	out := make([]map[string]any, 0, len(findings))
 	for _, f := range findings {
 		// THE VERDICT TRAVELS WITH THE FINDING, from
-		// [integration.FindingKind.Verdict] — the one table in the tree
-		// that says what a kind MEANS.
-		//
-		// Without it a reader has only the kind string, and the only way to
-		// tell a real problem from an advisory is to keep a second copy of
-		// the closed set wherever the question is asked. The dashboard did
-		// exactly that by accident: it treated any finding naming an agent
-		// as that agent not working, which is wrong for the two kinds whose
-		// verdict is PhaseReady — grant_excess and registration_orphaned
-		// both describe something that is working — so one spare permission
-		// on a GitHub app badged a healthy agent amber underneath a card
-		// reading Connected.
-		//
-		// A kind this build does not know still gets a verdict here,
-		// because Verdict's default arm answers for one: a peer on a newer
-		// build can write a kind into the shared row, and rendering it as
-		// an advisory would let it hide a real problem.
+		// [integration.FindingKind.Verdict], the one table that says what a
+		// kind MEANS. A reader with only the kind string must keep a second
+		// copy of the closed set; the dashboard did, and badged a healthy
+		// agent amber for a spare permission (grant_excess and
+		// registration_orphaned are PhaseReady). A kind this build does not
+		// know still gets a verdict from Verdict's default arm: a newer peer
+		// may write one, and an advisory would hide a real problem.
 		phase, actor := f.Kind.Verdict()
 		row := map[string]any{
 			"kind":       string(f.Kind),

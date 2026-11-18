@@ -13,30 +13,21 @@ import (
 // # The engine names no variable of its own
 //
 // A seat's Jira credential lives in its `mcp_env.jira` block, under whichever
-// key that seat's tool stack reads — the community Atlassian MCP servers want
-// JIRA_API_TOKEN beside JIRA_USERNAME, an HTTP server takes an Authorization
-// header. So the scan looks under the keys the tools already use rather than
-// inventing CREWLET_JIRA_TOKEN_<seat>, which would be a variable nothing
-// reads.
+// key its tool stack reads (JIRA_API_TOKEN beside JIRA_USERNAME, or an
+// Authorization header), not a CREWLET_JIRA_TOKEN_<seat> nothing reads.
 //
-// ONE list, exported, read by both the engine's identity resolution and the
-// reconcile's report. A second copy beside either of them is how the two come
-// to look under different keys — and the failure is silent, because a seat
-// whose credential was not found looks exactly like a seat that has none.
+// ONE exported list, read by both the engine's identity resolution and the
+// reconcile's report: a second copy makes the two look under different keys,
+// silently, since an unfound credential looks like none.
 
 // A SEAT'S OWN TRACKER CREDENTIAL IS READ THROUGH [atlassian.CredentialAt].
 //
-// It used to be read here, by this package's own SeatEnvs / CredentialKeys /
-// EmailKeys and a seatBlock scan — and by a second, differently-spelled set in
-// internal/confluence, and a third in internal/atlassian. One Atlassian account
-// authenticates both products, so that was one question answered three ways,
-// and they disagreed: a seat holding `mcp_env.atlassian.JIRA_API_TOKEN`, which
-// is the spelling the old Atlassian provisioning note told operators to write, read
-// as ready to Jira and as having no credential at all to Confluence, for ever.
-//
-// The reader moved to internal/atlassian because that package owns the
-// ACCOUNT — it mints the service account and records the address Atlassian
-// assigns — and the products are consumers of an identity it creates.
+// One Atlassian account authenticates both products, so one reader serves
+// both: separate spellings per product disagree, a seat holding
+// `mcp_env.atlassian.JIRA_API_TOKEN` reading as ready to Jira and credential-
+// less to Confluence. The reader lives in internal/atlassian because that
+// package owns the ACCOUNT (it mints the service account and records the
+// address); the products consume the identity.
 
 // ProjectsOf lists every Jira project key the org declares, sorted and
 // upper-cased.

@@ -26,22 +26,16 @@ import (
 
 // maxBundle bounds a credential bundle on the way IN, decompressed.
 //
-// An archive is an execution surface if it is unpacked on trust: a bundle
-// arrives from the secret store, which is shared by every node holding the
-// keyring, so a compromised row must not be able to exhaust a node's memory
-// or fill its disk. One mebibyte is two orders of magnitude above the largest
-// real login (a Claude credential file is under 2 KB) and small enough that
-// the worst case is nothing.
+// An archive is an execution surface if unpacked on trust: a bundle comes from the
+// secret store every keyring node shares, so a compromised row must not exhaust
+// memory or disk. One MiB is far above any real login (Claude's is under 2 KB).
 //
-// A BUNDLE KEPT IN THE SECRET STORE MEETS A SECOND BOUND, on different bytes:
-// [github.com/crewlet/crewlet/internal/secrets.MaxValueBytes] caps what the
-// store keeps, the bundle once packed (base64 of gzip), and `crewlet llm
-// export -secret-store` checks a bundle against it before writing one, while
-// this caps what a restore unpacks. A stored bundle must pass both, and
-// neither implies the other: a directory that compresses well packs far
-// smaller than it unpacks. This one is not tied to the store's because the
-// store is not the only way in — `crewlet llm import` reads a bundle from
-// stdin, and auth.credential_bundle can resolve from the engine's environment.
+// A stored bundle meets a SECOND BOUND on different bytes:
+// [github.com/crewlet/crewlet/internal/secrets.MaxValueBytes] caps what the store
+// keeps (base64 of gzip; `crewlet llm export -secret-store` checks it), this caps
+// what a restore unpacks. Neither implies the other (a directory that compresses
+// well packs far smaller than it unpacks), and this is not tied to the store's:
+// `crewlet llm import` and auth.credential_bundle also bring bundles in.
 const maxBundle = 1 << 20
 
 // ErrNoLoginCommand is returned when a profile declares no way to do what
@@ -132,29 +126,18 @@ func (p *Provider) CaptureToken(ctx context.Context, in io.Reader, errOut io.Wri
 		return "", fmt.Errorf("%w: the %q harness mints no headless token, so sign it in "+
 			"with a login instead: %s", ErrNoLoginCommand, p.harness, p.loginRemedy(nil))
 	}
-	// MIRRORED WHILE IT IS CAPTURED, and this is the whole difficulty of the
-	// command. A minting command is INTERACTIVE — the harness renders its UI
-	// whenever STDIN is a terminal, which it is here, since the operator has
-	// to complete a browser sign-in — and it writes every byte of that UI to
-	// STDOUT: the sign-in URL, the "paste code here" prompt, all of it.
-	// Measured against Claude Code 2.1.263 with a tty on stdin and a pipe on
-	// stdout: 1512 bytes to stdout, ZERO to stderr; and against 2.1.325
-	// (native) and 2.1.112 (Node) with stdout a memfd, a pipe and a regular
-	// file, the same UI, byte for byte but for its random parts, in all
-	// three. So capturing stdout alone handed the operator a blank terminal
-	// that then sat waiting for a code from a URL they were never shown.
+	// MIRRORED WHILE IT IS CAPTURED. A minting command is INTERACTIVE: the harness
+	// renders its UI whenever STDIN is a terminal (it is, for the browser sign-in)
+	// and writes every byte of it to STDOUT: the sign-in URL, the "paste code
+	// here" prompt. Capturing stdout alone left the operator a blank terminal
+	// waiting for a code from a URL never shown (measured on Claude Code 2.1.x
+	// with a tty on stdin: all UI on stdout, none on stderr).
 	//
-	// The mirror goes to errOut rather than stdout because `-print-token`
-	// writes the token itself to stdout, and a vendor's UI in that stream
-	// would corrupt what the operator is piping into their secret manager.
-	// EVERY BYTE AS IT IS READ, not every line: the prompt ends without a
-	// line break. ONE READER writes both streams' mirror, so the two never
-	// interleave mid-write.
-	//
-	// A LOGIN COMMAND for the sync that follows it (syncLogin): a minting
-	// command is the vendor's sign-in, and one that also leaves a credential
-	// file behind has left the operator's own new login. Not one that must
-	// leave a login, though — what it is FOR is the token it prints.
+	// The mirror goes to errOut because `-print-token` writes the token to stdout,
+	// and a vendor's UI there would corrupt what the operator pipes into a secret
+	// manager. Every byte as read, not every line: the prompt has no line break.
+	// ONE READER writes the mirror, so the streams never interleave. A credential
+	// file left behind is kept (syncLogin) but not required: it is FOR the token.
 	captures, err := p.ws.capturesDir()
 	if err != nil {
 		return "", err
@@ -272,28 +255,15 @@ func (p *Provider) CredentialLogin(ctx context.Context, username, password strin
 // noCredentialLogin is [Provider.CredentialLogin]'s refusal for a harness that
 // declares no username/password login, naming the routes this entry has.
 //
-// THE MODE FIRST, THEN THE HARNESS, since the mode decides what the entry reads at
-// all, in the words [Provider.ModeSignIn] keeps for every message that tells an
-// operator how to sign such an entry in. Chosen by the harness alone, an api-key
-// entry was offered a login and `-capture-token`, a token the mode removes from
-// the harness's environment and that `crewlet llm login` refuses before it mints;
-// and an inherit-env one `-capture-token`, whose token lands in the secret
-// store that mode never reads, so the command refuses to store it. So api-key
-// is told its key and nothing else, as the doctor tells it: a login in its
-// directory would sit in every seat's home beside the key, and which of the
-// two the harness bills is the vendor's precedence rather than the entry's — except
-// on a harness whose profile names no key variable, a pairing every write of the
-// configuration refuses, where the mode hands the harness nothing and its remedy
-// is a login under subscription, so the entry is told that and not that a
-// login is not its sign-in. inherit-env is told what it forwards, a login,
-// which it seeds like every mode, and a minted token only to stdout, to
-// export. subscription is told a login and a headless token.
-//
-// ONLY ROUTES THIS HARNESS HAS, judged as the doctor judges them: its own login
-// command where it declares one ([Provider.loginRemedy]), and -capture-token
-// where it mints a headless token ([Provider.MintsHeadlessToken]). Offered
-// whatever the harness declared, both sent an operator of a harness with neither to a
-// second refusal.
+// THE MODE FIRST, THEN THE HARNESS: the mode decides what the entry reads, in
+// the words [Provider.ModeSignIn] keeps for every sign-in message. By harness
+// alone, api-key was offered `-capture-token`, a token its mode removes from the
+// environment, and inherit-env one whose token lands in a store it never reads.
+// So api-key is told its key only (a login would sit beside the key, and which
+// the harness bills is the vendor's precedence), except where the profile names
+// no key variable: then a login under subscription. inherit-env is told a login
+// and a token to export; subscription, a login and a headless token.
+// Only routes this harness has ([Provider.loginRemedy], [Provider.MintsHeadlessToken]).
 func (p *Provider) noCredentialLogin() error {
 	const lead = "%w: the %q harness authenticates through the vendor's browser OAuth flow — " +
 		"there is no username/password login to drive"
@@ -326,35 +296,16 @@ func (p *Provider) noCredentialLogin() error {
 }
 
 // Logout revokes the login where the harness can, and removes the credential
-// files either way.
+// files either way: a failed vendor command must not leave a working login on
+// disk that an operator believes removed.
 //
-// Both halves, and the local half whatever the vendor's command did: a vendor
-// command that failed must not leave a working login on disk that an operator
-// believes they removed.
-//
-// A login a failed export left pending in the login home is DISCARDED FIRST
-// ([Provider.discardLoginHome]), before the vendor's command runs: that command
-// would otherwise begin by carrying the pending login out — over the very login
-// it is about to revoke — and a carry that failed again failed the logout over
-// a login the logout was discarding anyway.
-//
-// The vendor's command makes no login, so what it leaves is carried out as a
-// refresh ([syncRefresh]) — which a login the harness has just revoked never is:
-// it can only write over the very login it was seeded from, and a home whose
-// login is gone writes nothing. The removal takes the shared login's lock, so
-// a seat carrying a refresh out at the same moment either lands before it,
-// and is removed with the rest, or finds the login gone and keeps it gone; and
-// it moves the operator epoch on ([Workspace.bumpLoginEpoch]), so a pending
-// login the discard could not reach — another command held the login home —
-// is never carried out over the logout later.
-//
-// AND IT IS DURABLE AGAINST THE CONFIGURED BUNDLE: under the same lock, before
-// anything is removed, it records the logout beside the operator epoch
-// ([Workspace.markLoggedOut]), and the automatic restore declines while that
-// record stands ([ErrLoggedOut]) — otherwise the engine's next boot or apply, or
-// the next `crewlet llm status`, restored the very login the operator had just
-// removed. A login of record written afterwards clears it. What the operator is
-// told about the bundle itself is [Provider.LogoutNotice].
+// A login a failed export left pending is DISCARDED FIRST
+// ([Provider.discardLoginHome]): the vendor's command would otherwise carry it
+// out over the very login it is about to revoke. What that command leaves is
+// carried out as a refresh ([syncRefresh]), which a revoked login never is.
+// The removal takes the shared login's lock, so a seat's concurrent refresh
+// lands before it and is removed too, or finds the login gone, and moves the
+// operator epoch on ([Workspace.bumpLoginEpoch]).
 func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
 	if err := p.discardLoginHome(ctx); err != nil {
 		return fmt.Errorf("harness: the login was NOT removed: %w", err)
@@ -368,24 +319,17 @@ func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
 		return errors.Join(fmt.Errorf("harness: the login was NOT removed: %w", err), vendorErr)
 	}
 	defer unlock()
-	// THE RECORD FIRST: a removal that stopped part way leaves a directory
-	// the record already keeps the bundle out of, and a record that cannot
-	// be written still removes the login, the half an operator relies on.
-	// THEN THE EPOCH, before the removal it counts ([Workspace.bumpLoginEpoch])
-	// and on the same terms: one that cannot be moved still removes the login.
+	// THE RECORD FIRST ([Workspace.markLoggedOut]), so the automatic restore
+	// declines while it stands ([ErrLoggedOut]); otherwise the next boot, apply or
+	// `crewlet llm status` restored the login just removed ([Provider.LogoutNotice]
+	// tells the operator). A record or epoch that cannot be written still lets the
+	// login go.
 	//
 	// The removal is ONE WRITE of the login less every file of it that is a
-	// login ([Workspace.writeLoginLocked]), so a logout killed part way never
-	// leaves one file of the login it was removing. What it keeps is what is
-	// not a login ([Workspace.loginIn]): a settings file the harness also keeps
-	// its login in, holding none, is the harness's record of itself rather than
-	// anybody's sign-in. A write that stopped part way is the login of record,
-	// so it is finished by the read and removed with the rest; one that cannot
-	// be finished cannot be told apart file by file, and the logout REPLACES
-	// it whole — it removes the login an operator asked removed either way.
-	// Its install record goes in the same write ([LoginInstall]): a record
-	// left behind would name a login that is gone, and order whatever is
-	// restored or written next against it.
+	// login ([Workspace.writeLoginLocked]), so a killed logout never leaves one
+	// file of it; what is not a login stays ([Workspace.loginIn]). A write that
+	// stopped part way cannot be told apart file by file, so the logout REPLACES
+	// it whole, install record ([LoginInstall]) included.
 	removeErr := p.ws.markLoggedOut()
 	if err := p.ws.bumpLoginEpoch(); err != nil {
 		removeErr = errors.Join(removeErr, err)
@@ -459,31 +403,15 @@ func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 // AdoptHostLogin copies the harness's login out of a human's home directory into
 // this provider's own, and reports what it took.
 //
-// A COPY, not a redirect: agents never write into the operator's personal
-// credential file, so a fleet refreshing a token mid-session is not a
-// surprise the operator gets handed. The cost is that both copies then
-// descend from one refresh token, and a vendor that rotates refresh tokens
-// can log out whichever side refreshes second — which is why the caller says
-// so, and recommends a headless token where the vendor mints one.
+// A COPY, not a redirect: agents never write the operator's personal file, and
+// both copies descend from one refresh token, so a vendor that rotates them can
+// log out whichever side refreshes second.
 //
-// A login the harness keeps in a database of its own is taken the only way it can
-// leave one, through the harness's own export run against that home
-// ([Provider.exportHostLogin]) — run FIRST, before anything is written, so an
-// export that fails adopts nothing rather than half a login.
-//
-// EVERY FILE IS READ BEFORE ANYTHING IS WRITTEN, and the login it makes is the
-// human's whole: a file the human's home does not hold is removed from the
-// shared login rather than kept beside the ones adopted, which would make a
-// login of two sign-ins.
-//
-// It is the operator's own new login, so it is written over whatever the
-// shared directory holds, under the shared login's lock: a seat carrying out a
-// refresh of the old login at the same moment then finds the login moved and
-// keeps this one ([syncRefresh]). And it moves the operator epoch on
-// ([Workspace.bumpLoginEpoch]), so a login an earlier `crewlet llm login` left
-// pending in the login home — its export failed — is never carried out over
-// this one by the next command. A login of record, so a logout before it is
-// over ([Workspace.clearLoggedOut]).
+// A login in the harness's own database is taken through its export
+// ([Provider.exportHostLogin]) FIRST, so a failure adopts nothing. Every file is
+// read before any is written; one the home lacks leaves the shared login. Written
+// under the shared lock, it ends a logout ([Workspace.clearLoggedOut]) and moves
+// the epoch on ([Workspace.bumpLoginEpoch]) so a pending login never overwrites it.
 func (p *Provider) AdoptHostLogin(ctx context.Context, home string) ([]string, error) {
 	if home == "" {
 		var err error
@@ -637,30 +565,16 @@ func (p *Provider) hostStoreName(home string) string {
 }
 
 // ExportBundle packs the credential directory into one base64 blob for the
-// encrypted secret store, so an engine rebuilt on every deploy comes up
-// already authenticated.
+// encrypted secret store, so an engine rebuilt on every deploy comes up authenticated.
 //
-// ONLY the credential files travel. Sessions, history and caches are never
-// in a bundle: they are per-seat conversation state, and shipping them across
-// hosts would restore one seat's transcripts onto another node's disk.
-//
-// And the bundle NAMES THE HARNESS it was exported from, in a manifest beside the
-// files ([harnessprofile.BundleManifest]): a bundle is keyed by the entry, which
-// can move to another harness, and the files' names cannot say whose they are —
-// six harnesses keep an `auth.json` — so the restore reads the harness from the
-// manifest and refuses every other ([ErrForeignBundle]).
-//
-// The files are read as ONE login ([Workspace.Login]), so a bundle never packs
-// a write that stopped part way — which every fresh volume restoring it would
-// then hold. And only the files of it that are a login travel
-// ([Workspace.loginIn]): a settings file the harness also keeps its login in,
-// holding none, is the harness's record of itself on this host.
-//
-// And it CARRIES THE LOGIN'S INSTALL RECORD ([LoginInstall]) in its manifest,
-// read in the same hold of the shared login's lock as the files, so it is the
-// record that login was committed with: the restore orders the bundle's login
-// against the one a node holds by it ([Provider.RestoreBundle]). A login with
-// no record exports a bundle with none.
+// ONLY credential files travel: sessions, history and caches are per-seat state
+// that must not be restored onto another node. The manifest NAMES THE HARNESS
+// ([harnessprofile.BundleManifest]), since file names cannot say whose they are
+// (six keep an `auth.json`), and the restore refuses another's ([ErrForeignBundle]).
+// The files are read as ONE login ([Workspace.Login]) so a half-written one is never
+// packed, and only those that are a login ([Workspace.loginIn]). The login's INSTALL
+// RECORD ([LoginInstall]) rides in the manifest, read under the same lock hold, so a
+// restore can order the bundle against a node's login ([Provider.RestoreBundle]).
 func (p *Provider) ExportBundle(ctx context.Context) (string, error) {
 	unlock, err := p.ws.lockShared(ctx)
 	if err != nil {
@@ -749,64 +663,18 @@ func packBundle(m bundleManifest, files []bundleFile) (string, error) {
 	return base64.StdEncoding.EncodeToString(raw.Bytes()), nil
 }
 
-// RestoreBundle restores a bundle as the entry's login when it is the NEWEST
-// login this node knows of: into a credential directory holding no login, or
-// over one installed before it.
+// RestoreBundle restores a bundle as the entry's login when it is the NEWEST this
+// node knows of (empty directory, or an older install). Not newer is the ordinary
+// boot case, no error; [Provider.ImportBundle] is the operator's form.
 //
-// Validated on the way in, because an archive is an execution surface if it
-// is unpacked on trust: only the profile's own credential file names, regular
-// files only, no paths, each name once, and a total size cap. A bundle naming
-// "../../.ssh/authorized_keys" is the attack this refuses by construction.
-//
-// And only a bundle that NAMES THIS ENTRY'S HARNESS as the one it was exported
-// from ([ErrForeignBundle]). The file names alone cannot tell: a bundle is
-// keyed by the entry, and an entry moved from codex to pi kept a bundle whose
-// `auth.json` is a name pi keeps too — restored, it was written into pi's
-// empty login as a credential pi cannot read, and as a login already present
-// it turned away every later restore, the right bundle included.
-//
-// THE NEWEST LOGIN WINS, by the logins' install records ([LoginInstall]). The
-// bundle replaces a login the directory holds only when the bundle carries a
-// record that is a DIFFERENT login installed LATER ([LoginInstall.Newer]); a
-// login with no record counts as installed at the zero instant, older than any
-// recorded bundle. Restored only into an empty directory, as it once was, a
-// fresh sign-in exported to the store (a device sign-in made through another
-// node, a re-login after a revoked one) never reached a node that had ever held
-// a login; restored whenever it differed, a boot-time blob would overwrite a
-// login made on this node after it, and a refresh token the node had rotated
-// since, which is how a fleet logs itself out. The record decides between the
-// two: a refresh keeps its login's record, so a bundle of the login a node
-// already holds is never newer than it, however stale its token.
-//
-// A BUNDLE WITH NO RECORD restores only into a directory holding no login:
-// nothing in it says it is newer than anything, so it replaces nothing. Its
-// login is then held with no record, and the first recorded bundle replaces it.
-// A bundle that cannot be read at all (another harness's, a broken archive) is no
-// newer login either: where a login is held it stands and nothing is said,
-// and only a directory holding none reports the refusal that leaves it
-// signed out.
-//
-// The bundle's OWN record is written with it, never a new one: every node
-// restoring one bundle then holds one record, so a second restore of it is no
-// newer and writes nothing, and each node answers one [SignInID] for one login.
-//
-// NOT AN OPERATOR'S WRITE, unlike the import, where it fills an empty
-// directory with the login the deployment was configured with: it leaves the
-// operator epoch where it is ([Workspace.bumpLoginEpoch]), so a login an
-// operator made on this node whose export failed, which is why the directory is
-// empty, is still carried out over it by the next command. One that REPLACES a
-// login moves the epoch as an operator's write does: it writes over a login
-// exactly as `-from-host` does, and a sign-in running meanwhile, or a login a
-// failed export left pending, must not read it as a refresh of the login it
-// began from.
-//
-// And it DECLINES AFTER A LOGOUT, answering [ErrLoggedOut], whatever the
-// bundle's record: the directory a logout empties is one an operator emptied,
-// and refilling it from the deployment's configuration undid the logout at the
-// next boot, apply or `status` ([Workspace.markLoggedOut]).
-//
-// A bundle that is not newer is the ordinary case at every boot and not an
-// error; [Provider.ImportBundle] is the operator's form, which says so.
+// Validated as an execution surface: the profile's file names, regular files, no
+// paths, each once, size capped. It must NAME THIS HARNESS ([ErrForeignBundle]):
+// codex and pi both keep an `auth.json`. NEWEST WINS by install record
+// ([LoginInstall.Newer]): a DIFFERENT login installed LATER replaces (a refresh keeps
+// its record, so a stale token never does); no record counts as zero, restoring only
+// into an empty directory. An unreadable bundle replaces nothing and is reported only
+// to an empty directory. Its own record is written; the epoch ([Workspace.bumpLoginEpoch])
+// moves only if it REPLACES a login. It DECLINES AFTER A LOGOUT ([ErrLoggedOut]).
 func (p *Provider) RestoreBundle(ctx context.Context, blob string) error {
 	if err := p.restoreBundle(ctx, blob, false); err != nil && !errors.Is(err, ErrLoginPresent) {
 		return err
@@ -874,18 +742,14 @@ func (p *Provider) loggedOutError() error {
 // the messages that say one does without ending a logout
 // ([Provider.LogoutNotice], [Provider.loggedOutError]), or "" where none does.
 //
-// ONLY WHERE THE ENTRY TAKES ONE. Said of every entry, it named
-// `-capture-token` and `-token-stdin` to a harness whose profile names no token
-// variable — codex, like every built-in one but claude-code — which `crewlet
-// llm login` refuses both for; to one whose token variable is outside the
-// reference grammar ([misnamedVariable]), under which a token could be neither
-// stored nor referenced; and to an api-key or inherit-env entry, whose mode
-// that command refuses a stored token for: api-key removes the variable from
-// the harness's environment, and inherit-env forwards it from the engine's own and
-// never reads the secret store. So a token is named only under a variable a
-// store can hold ([Provider.TokenCanBeStored]), `-capture-token` only where the
-// harness mints one ([Provider.MintsHeadlessToken]), and by the mode: stored under
-// subscription, exported under inherit-env, and never under api-key.
+// ONLY WHERE THE ENTRY TAKES ONE: `crewlet llm login` refuses `-capture-token` and
+// `-token-stdin` for a harness with no token variable (every built-in but
+// claude-code), one outside the reference grammar ([misnamedVariable]), and an
+// api-key or inherit-env entry (api-key removes the variable; inherit-env never
+// reads the store). So a token is named only under a variable a store can hold
+// ([Provider.TokenCanBeStored]), `-capture-token` only where one is minted
+// ([Provider.MintsHeadlessToken]), by mode: stored under subscription, exported
+// under inherit-env, never under api-key.
 func (p *Provider) headlessTokenRoute() string {
 	if !p.TokenCanBeStored() {
 		return ""
@@ -929,22 +793,18 @@ func (p *Provider) loginRoutes() string {
 	return words.Or(routes)
 }
 
-// LogoutNotice is what `crewlet llm logout` tells the operator about the
-// entry's configured credential bundle while the logout's record stands
-// ([Workspace.markLoggedOut]): that nothing restores the bundle onto this host
-// until a login is written again — which a headless token, where one signs the
-// entry in ([Provider.headlessTokenRoute]), is not — that a
-// state directory with no record of the logout, a fresh volume, still does,
-// and what retires it. It is "" for an entry that configures no bundle, and
+// LogoutNotice is what `crewlet llm logout` tells the operator about the entry's
+// configured credential bundle while the logout's record stands
+// ([Workspace.markLoggedOut]): that nothing restores it onto this host until a
+// login is written again (a headless token, where one signs the entry in
+// ([Provider.headlessTokenRoute]), is not one), that a fresh volume with no record
+// still restores it, and what retires it. It is "" for an entry with no bundle and
 // while no record stands: a logout that stopped before writing one leaves a
-// directory the next restore does refill, and saying otherwise would be false.
+// directory the next restore refills, so saying otherwise would be false.
 //
-// READ OFF THE RECORD, never off whether [Provider.Logout] returned an error: a
-// vendor logout that fails after the login was removed fails the command with
-// the record written all the same, and the operator revoking a compromised
-// login — the case the notice is for — was told nothing about the bundle now
-// held back, nor about what retires it for a fresh volume. An error is a record
-// that cannot be read, which the restore would answer with too.
+// READ OFF THE RECORD, never off whether [Provider.Logout] returned an error: a vendor
+// logout failing after the login was removed still writes the record, and an operator
+// revoking a compromised login was told nothing about the bundle held back.
 func (p *Provider) LogoutNotice() (string, error) {
 	if p.bundle == "" {
 		return "", nil
@@ -984,31 +844,18 @@ func (p *Provider) retireBundle() string {
 		"the engine's environment", name, name)
 }
 
-// ImportBundle is [Provider.RestoreBundle] for an operator who asked for it,
-// and so it answers [ErrLoginPresent] where a login is already in place rather
-// than nothing.
+// ImportBundle is [Provider.RestoreBundle] for an operator who asked for it, so it
+// answers [ErrLoginPresent] where a login is in place rather than nothing.
 //
-// IT NEVER REPLACES A LOGIN, newer bundle or not, unlike the automatic restore:
-// an operator is there to be told, and `crewlet llm logout` then the import is
-// the way to say that this bundle, and not the login in place, is the one. The
-// automatic restore has nobody to ask, so it decides by the install records.
-//
-// It writes the bundle's install record ([LoginInstall]), as the restore does,
-// so the node that imports a bundle and every node that restores it hold one
-// record for one login; a bundle that carries none is given a new one, since an
-// operator installed it now, and with none it would count as older than every
-// recorded bundle and be replaced by the next boot's restore.
-//
-// DECIDED UNDER THE SHARED LOGIN'S LOCK, with the writes: a caller that looked
-// for a login first and then restored was told "restored" whenever a login
-// landed between the two, about a bundle that had written nothing.
-//
-// An operator's write of the login of record, so it moves the operator epoch
-// on ([Workspace.bumpLoginEpoch]): a login an earlier `crewlet llm login` left
-// pending in the login home is never carried out over the bundle afterwards.
-// And it is never declined after a logout, which it ends
-// ([Workspace.clearLoggedOut]): an import is how an operator replaces a login
-// they logged out.
+// IT NEVER REPLACES A LOGIN, newer bundle or not: an operator is there to be told,
+// and `crewlet llm logout` then the import says this bundle is the one. It writes
+// the bundle's install record ([LoginInstall]), a new one if it has none (installed
+// now; with none it would count as older than every recorded bundle and be replaced
+// at the next boot). The decision is made UNDER THE SHARED LOGIN'S LOCK, with the
+// writes: a look-then-restore reported "restored" for a bundle that wrote nothing
+// when a login landed between. As an operator's write it moves the epoch on
+// ([Workspace.bumpLoginEpoch]) so a pending login is never carried out over it, and
+// it is never declined after a logout, which it ends ([Workspace.clearLoggedOut]).
 func (p *Provider) ImportBundle(ctx context.Context, blob string) error {
 	return p.restoreBundle(ctx, blob, true)
 }
@@ -1308,43 +1155,18 @@ func (p *Provider) declineAfterLogout(operator bool) error {
 	return nil
 }
 
-// runInCredentialHome runs one of the harness's own auth commands in the LOGIN
-// HOME, which is seeded from and carried back to the shared credential
-// directory rather than a seat's, and reports whether the home held a login
-// once the command was done.
+// runInCredentialHome runs one of the harness's own auth commands in the LOGIN HOME,
+// seeded from and carried back to the shared credential directory (a seat's home is
+// pruned, which would delete a login brokered into it), and reports whether the home
+// held a login afterwards. mode: [syncLogin] MAKES a login (the one kind that may
+// create the shared login, written over whatever it holds), [syncRefresh] only USES one.
 //
-// A login has to write where every seat's checkout is seeded FROM, and a seat
-// home is pruned; brokering a login into one would delete the credential
-// moments later.
-//
-// mode is whether the command MAKES a login ([syncLogin]: login, a capture, a
-// credential login — the one kind of command that may create the shared login,
-// and whose result is written over whatever the shared directory holds by
-// then) or only USES one ([syncRefresh]: status, a vendor's own logout).
-//
-// The whole of it holds the login home's lock ([Workspace.lockLoginHome]): it
-// prunes the home on the way in and out, and a second command doing that under
-// a first's browser flow deleted the database the first was about to store
-// its login in.
-//
-// It sweeps NO SEAT'S HOME, though a seat's generation can be left open just
-// as this home's can ([Workspace.sweep]): the engine sweeps those at every
-// seat's first call, and a command doing it too would pay a harness export per
-// kept seat home — for a home kept because its export keeps failing, up to
-// [auxiliaryTimeout] each, on every `crewlet llm status` — for a seed whose only
-// readers are a login, which replaces it, and a status, which reads it.
-//
-// THE ONE CHILD WHOSE OUTPUT THE ENGINE DOES NOT CAPTURE, and the one place
-// besides [startChild] that starts a harness: the vendor's interactive login, a
-// credential login, a vendor's logout and the status shown to the operator.
-// Their stdout and stderr are the operator's terminal, handed down from the
-// CLI, and the engine reads neither, so nothing of theirs can be cut short in
-// its hands, and a vendor's sign-in UI needs a terminal to draw on. os/exec
-// hands an *os.File to the child as it is, so the engine makes no pipe; when
-// the operator's own stdout is a pipe (`crewlet llm status | less`), the pipe
-// is the operator's. The gates in childoutput_gate_test.go name this function
-// as that exception. [Provider.CaptureToken], which reads the token its
-// command prints, captures instead.
+// It holds the login home's lock ([Workspace.lockLoginHome]): a second command
+// pruning the home deleted the first's browser-flow database. It sweeps NO SEAT'S HOME
+// ([Workspace.sweep]), which the engine does at each seat's first call. It is, with
+// [startChild], the one place that starts a harness whose output is NOT CAPTURED: stdout
+// and stderr are the operator's terminal, handed down as *os.File with no pipe
+// (childoutput_gate_test.go names this exception); [Provider.CaptureToken] captures.
 func (p *Provider) runInCredentialHome(
 	ctx context.Context, mode syncMode, args []string,
 	in io.Reader, out, errOut io.Writer, extra ...map[string]string,
@@ -1481,19 +1303,16 @@ func (p *Provider) inCredentialHome(
 
 	runErr := command(ctx, home, buildEnv(p.profile, checkout, env, p.auth))
 
-	// Carried out even on failure: a login that authenticated and then
-	// failed a later step still wrote a credential worth keeping — and on an
-	// operator's Ctrl+C too, which is why the export does not inherit the
-	// cancellation that ended the command.
+	// Carried out even on failure: a login that authenticated and then failed a later
+	// step still wrote a credential worth keeping, and on Ctrl+C too, which is why the
+	// export does not inherit the cancellation.
 	//
-	// WITHOUT THE EPOCH IT IS ORDERED AFTER ([generation.After]), which orders
-	// only a login carried out LATER: the one carried out now is the
-	// operator's sign-in finishing, and it is written over whatever landed
-	// while it ran, an operator's other write included — the later of two
-	// sign-ins wins. The record on disk keeps it, for the next command should
-	// this carry fail. The epoch it was SEEDED at stays
-	// ([generation.SeededEpoch]): it decides only what becomes of a file the
-	// sign-in removed.
+	// WITHOUT THE EPOCH IT IS ORDERED AFTER ([generation.After]), which orders only a
+	// login carried out LATER: this one is the operator's sign-in finishing, written
+	// over whatever landed while it ran, so the later of two sign-ins wins. The record
+	// on disk keeps it for the next command should this carry fail. The epoch it was
+	// SEEDED at stays ([generation.SeededEpoch]): it decides only what becomes of a
+	// file the sign-in removed.
 	now := gen
 	now.After = nil
 	holds, syncErr := p.ws.syncCredentialsOut(context.WithoutCancel(ctx), home, cache, p, now)

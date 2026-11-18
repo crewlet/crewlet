@@ -6,6 +6,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Suspense, useRef, type ReactNode } from "react";
 import { GitCommitVerticalGlyph } from "@crewlethq/icons/glyphs";
+import { EmptyState, HeadingLevelProvider } from "@crewlethq/ui";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -512,7 +513,7 @@ describe("Load more", () => {
 describe("the reader's days", () => {
   const headings = () =>
     within(screen.getByRole("group", { name: "History of main" }))
-      .getAllByRole("heading", { level: 3 })
+      .getAllByRole("heading", { level: 2 })
       .map((h) => h.textContent);
 
   // Mutation: group by day across the list, re-sorting it.
@@ -713,6 +714,42 @@ describe("roles", () => {
     act(() => link("Row 2").focus());
     press("j");
     expect(document.activeElement).toBe(link("Row 3"));
+  });
+
+  // THE HEADINGS STAND WHERE THE LIST IS DRAWN: an h2 under the page's title, one
+  // level under a section's heading, and what a group holds one under its own.
+  // Mutation: fix the groups' level, or leave a group's parts at the list's, and this fails.
+  test("a grouped list's headings take the level of where it is drawn", () => {
+    const groups = [
+      {
+        key: "web",
+        heading: "web into main",
+        last: <EmptyState size="compact" title="Nothing queued for main" description="" />,
+        rows: ROWS.slice(0, 1),
+      },
+    ];
+    const list = (
+      <CodeList<Row>
+        look="boxes"
+        groups={groups}
+        rowKey={(r) => r.id}
+        aria-label="Merge queues"
+        title={(r) => r.title}
+      />
+    );
+    const levels = () =>
+      screen.getAllByRole("heading").map((h) => [h.textContent, Number(h.tagName.slice(1))]);
+    const page = mount(list);
+    expect(levels()).toEqual([
+      ["web into main", 2],
+      ["Nothing queued for main", 3],
+    ]);
+    page.unmount();
+    mount(<HeadingLevelProvider level={3}>{list}</HeadingLevelProvider>);
+    expect(levels()).toEqual([
+      ["web into main", 3],
+      ["Nothing queued for main", 4],
+    ]);
   });
 
   // Mutation: draw something for a call with neither rows nor groups.

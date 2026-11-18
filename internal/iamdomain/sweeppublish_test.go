@@ -14,13 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE PUBLISHER HALF OF THE SWEEP, through the real broker.
-//
-// sweep_test.go holds the applier to "a position, never a clock". What it
-// cannot hold is the other half: that the POSITIONS come from somewhere a
-// second node does not have to agree with — the one publisher, once — and that
-// what the publisher sends is what every node then deletes, whatever its own
-// clock reads.
+// THE PUBLISHER HALF OF THE SWEEP, through the real broker. sweep_test.go holds
+// the applier to "a position, never a clock"; this holds the positions to coming
+// from the one publisher, once, and every node to deleting what it sent,
+// whatever its own clock reads.
 
 // the two horizons every case here sweeps at, which are the shipped defaults.
 var defaultHorizons = iamdomain.Horizons{
@@ -28,16 +25,13 @@ var defaultHorizons = iamdomain.Horizons{
 	Sessions: 90 * 24 * time.Hour,
 }
 
-// TWO NODES WITH SKEWED CLOCKS DELETE IDENTICAL ROWS: the position, not the
-// clock, decides.
+// TWO NODES WITH SKEWED CLOCKS DELETE IDENTICAL ROWS: the position decides.
 //
-// Node A publishes the sweep with its clock ninety-five days ahead of the
-// broker's — so the session trail is past its horizon and the change trail is
-// not — and applies it on a batch clock of 2023. Node B applies the SAME log on
-// a batch clock a year later. They must end byte-for-byte alike, and the
-// control is that the sweep deleted something at all: an identical pair of
-// untouched estates would pass the first half on a publisher that published
-// nothing.
+// Node A publishes with its clock ninety-five days past the broker's (the
+// session trail past its horizon, the change trail not) and applies on a batch
+// clock of 2023; node B applies the SAME log a year later. They must end
+// byte-for-byte alike, and the control is that something was deleted: two
+// untouched estates would pass on a publisher that published nothing.
 func TestTwoNodesWithSkewedClocksDeleteIdenticalRows(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -49,9 +43,9 @@ func TestTwoNodesWithSkewedClocksDeleteIdenticalRows(t *testing.T) {
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
 		Login: "sarah.chen", Seat: rig.vacantSeat("sarah-chen"),
-		// THE FIRST PASSWORD LINK OPEN PAST EVERY SWEEP HERE, which run at
-		// the wall clock: a link lapsed by then is a credential the sweep
-		// collects, and its bucket would be due for a reason no case names.
+		// THE FIRST PASSWORD LINK OPEN PAST EVERY SWEEP HERE (they run at the wall
+		// clock): a lapsed link is a credential the sweep collects, making its
+		// bucket due for a reason no case names.
 		LinkExpiresAt: wall.Add(365 * 24 * time.Hour),
 		OpID:          "enrol-sarah", Reason: "the joiner",
 	}); err != nil {
@@ -108,14 +102,10 @@ func TestTwoNodesWithSkewedClocksDeleteIdenticalRows(t *testing.T) {
 }
 
 // A BUCKET IS SWEPT ONCE SOMETHING IN IT IS A SLACK PAST ITS HORIZON, and not
-// before — which is what bounds this publisher at one record per bucket per day
-// however busy the company is.
-//
-// Twelve hours past the horizon the tick publishes NOTHING: the rows are old
-// enough to delete and not old enough to be worth a record. A day and an hour
-// past, the one bucket holding them is due and gets exactly one record — and
-// planning again at the same instant finds nothing due, because that record
-// took everything past the horizon rather than only what was a day past it.
+// before. Twelve hours past, the tick publishes NOTHING; a day and an hour past,
+// the one bucket holding the rows gets exactly one record, and planning again at
+// the same instant finds nothing due, because that record took everything past
+// the horizon.
 func TestABucketIsSweptOnlyOnceItIsASlackPastItsHorizon(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -183,12 +173,9 @@ func TestABucketIsSweptOnlyOnceItIsASlackPastItsHorizon(t *testing.T) {
 	}
 }
 
-// THE SWEEP IS ADMIN'S, and using the company's apps is not it.
-//
-// What a sweep decides is how long the authentication trail is kept, which is
-// Tier A's `api.audit` — a fact about the deployment. A party using every app
-// is refused before anything is read; the control is the node's own
-// permission, which is what the duty publishes with.
+// THE SWEEP IS ADMIN'S, and using the company's apps is not it: a party using
+// every app is refused before anything is read; the control is the node's own
+// permission, which the duty publishes with.
 func TestTheSweepIsAdmins(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -205,11 +192,8 @@ func TestTheSweepIsAdmins(t *testing.T) {
 	}
 }
 
-// A ZERO HORIZON IS REFUSED, never read as "keep nothing".
-//
-// Config fills both defaults, so a zero here is a caller that built the value
-// by hand — and the reading that would follow is that every row is past its
-// horizon, which empties the trail on the first tick.
+// A ZERO HORIZON IS REFUSED, never read as "keep nothing", which would empty
+// the trail on the first tick.
 func TestAZeroHorizonIsRefused(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

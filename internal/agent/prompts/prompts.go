@@ -82,6 +82,11 @@
 // trigger's body, a quoted reply, review evidence — brings with it. The
 // [Builder] records a boundary where a part is appended and never changes a
 // byte of the join, because the text is the cache key and the behaviour.
+//
+// A kept session its job went on past is told [SavedSession] in place of
+// [InterruptedSession]: it was saved while its run still worked, when, and that
+// the run went on after it, so it ends where it was saved and not where the run
+// stopped, and what the run did beyond the calls told after it is in no record.
 package prompts
 
 import (

@@ -10,16 +10,19 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A RECORD'S SCOPE: the complete set of objects its apply may write, stated by
-// the WRITER and readable at every version.
-//
-// It is what a node that cannot decode a record files the deferral under, and
-// what a later read or write probes to discover it is behind. The framework
-// knows one thing about a path, that it nests left to right, so the alphabet
-// below is chosen so the paths NEST where the rows do: an asset sits under its
-// artifact, because an asset record moves its artifact's held bytes, so a
-// deferred asset record blocks a write to the artifact and a deferred purge of
-// the artifact blocks a write to any of its assets.
+// A RECORD'S SCOPE: every object its apply may write, stated by the WRITER and
+// readable at every version. A node that cannot decode a record files the
+// deferral under it, and a later read or write probes it to find it is behind.
+// A deferred record blocks every write whose path nests with its own, and
+// paths nest left to right, so the alphabet nests where the rows do: an asset
+// record moves its artifact's held bytes, so it sits under its artifact; the
+// tree path nests every folder, so a tree record orders against every artifact
+// record that read a folder; a folder's removal re-files its artifacts, so it
+// also names `a/x`. The letter `a` differs from every other domain's (`t`,
+// `p`, `i`) so an operator reading a stuck fleet's deferral rows can tell them
+// apart.
+
+// The scope alphabet:
 //
 //	a                         the whole domain: a gate, or an unreadable scope
 //	a/x/<artifact>            one artifact, its versions, objects, shares and history
@@ -27,23 +30,10 @@ import (
 //	a/x/<artifact>/c/<thread> one comment thread on it, and its remarks
 //	a/s/<owner>.<token>       one owner's hold on one republish-in-place address
 //	a/r/<record>              one person's pins and opened marks
-//	a/x                       every artifact: a folder's removal re-files them all
+//	a/x                       every artifact
 //	a/f                       the folder tree: every folder, its shares and history
 //	a/f/<folder>              one folder, as a placement reads it
 //	a/b                       the company's adopted brand and the files it serves
-//
-// THE TREE NESTS EVERY FOLDER, so a record on the tree subject (a create, a
-// rename, a move, a share, a removal) orders against every artifact record
-// that read a folder (a create into it, a move into or out of it), and a
-// deferred tree record blocks them all. A folder's removal also names `a/x`,
-// because it re-files every artifact in the folder, which nests every
-// artifact.
-//
-// The domain letter is `a`, distinct from every other domain's (`t`, `p`,
-// `i`): a path is what an operator reads out of a deferral row when a fleet is
-// stuck, and two domains whose paths looked alike would make that row
-// ambiguous exactly when it matters.
-
 const (
 	pathDomain   = "a"
 	pathArtifact = "x"
@@ -85,8 +75,7 @@ const (
 	TermTree TermKind = "tree"
 
 	// TermFolder is one folder by id (`a/f/<folder>`): what an artifact
-	// record that reads a folder (a create into it, a move into or out of
-	// it) names.
+	// record that reads a folder (a create or a move into it, a move out) names.
 	TermFolder TermKind = "folder"
 
 	// TermBrand is the company's adopted brand (`a/b`): the brand subject's
@@ -106,13 +95,11 @@ var TermKinds = []TermKind{TermArtifact, TermAsset, TermSource, TermReader, Term
 // Valid reports whether a term kind off the wire is one this build knows.
 func (t TermKind) Valid() bool { return slices.Contains(TermKinds, t) }
 
-// MaxScopeTerms is the cap on a record's declared scope.
-//
-// FOUR: the widest record here names an artifact and its source address (a
-// source create, a transfer or a purge of a sourced artifact) or a reader and
-// the artifact it pins, beside one folder (a sourced create into a folder) or
-// two (a move from one folder into another). Nothing names more, so the cap is
-// a writer's mistake caught rather than a bound a writer has to handle.
+// MaxScopeTerms is the cap on a record's declared scope. The widest record
+// names an artifact and its source address, or a reader and the artifact it
+// pins, beside one folder (a sourced create into it) or two (a move between
+// folders). Nothing names more, so the cap catches a writer's mistake rather
+// than bounding a real record.
 const MaxScopeTerms = 4
 
 // ScopeTerm is one element of a record's blast radius.
@@ -155,16 +142,15 @@ func (t ScopeTerm) Path() string {
 	case TermComment:
 		return join(pathDomain, pathArtifact, t.Artifact, pathComment, t.ID)
 	}
-	// AN UNKNOWN TERM KIND IS THE DOMAIN, NOT A SKIPPED TERM: a term this
-	// build cannot interpret is a claim about a blast radius it cannot
-	// bound, and the only safe reading of an unbounded claim is the widest.
+	// AN UNKNOWN TERM KIND IS THE DOMAIN, NOT A SKIPPED TERM: a blast radius
+	// this build cannot bound is safe only read as the widest.
 	return pathDomain
 }
 
-// join builds a scope path from its segments through the framework's one
-// spelling of a path ([statelog.ScopePath]). A MISSING SEGMENT IS THE DOMAIN
-// rather than a path with a hole in it: a term whose id is empty cannot be
-// placed, and the widest reading is the only one that is not a guess.
+// join builds a scope path through the framework's one spelling of a path
+// ([statelog.ScopePath]). A MISSING SEGMENT IS THE DOMAIN, not a path with a
+// hole: a term with an empty id cannot be placed, and only the widest reading
+// is not a guess.
 func join(segments ...string) string {
 	for _, s := range segments {
 		if strings.TrimSpace(s) == "" {
@@ -176,10 +162,9 @@ func join(segments ...string) string {
 
 // ScopeSet is the COMPLETE set of objects a record's apply may write.
 //
-// NEVER EMPTY. The exactly-the-subject case encodes as the one-byte sentinel,
-// so the field can never be absent by accident. An absent or unreadable scope
-// on a record this build cannot decode is the DOMAIN term, never "just the
-// subject".
+// NEVER EMPTY: exactly-the-subject encodes as the one-byte sentinel, so the
+// field is never absent by accident, and an absent or unreadable scope on a
+// record this build cannot decode is the DOMAIN term, never "just the subject".
 type ScopeSet struct {
 	// Subject is true for the sentinel: this record touches exactly the
 	// object its subject names, and nothing else.
@@ -204,9 +189,9 @@ func (s ScopeSet) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON accepts both encodings, and reads anything else as the domain.
 //
-// A SCOPE THAT DOES NOT DECODE IS THE WIDEST TERM, never an error and never an
-// empty set: this runs on a node reading a record a newer build wrote, and an
-// error here would take the whole envelope pass down with it.
+// A SCOPE THAT DOES NOT DECODE IS THE WIDEST TERM, never an error or an empty
+// set: this reads records a newer build wrote, and an error would fail the
+// envelope pass that files, gates and reprocesses such a record.
 func (s *ScopeSet) UnmarshalJSON(b []byte) error {
 	var sentinel string
 	if err := json.Unmarshal(b, &sentinel); err == nil {
@@ -221,9 +206,7 @@ func (s *ScopeSet) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &terms); err != nil || len(terms) == 0 {
 		*s = ScopeSet{Terms: []ScopeTerm{{Kind: TermDomain}}}
 		//nolint:nilerr // WIDEST-ON-UNREADABLE IS THE CONTRACT, per the
-		// paragraph above: returning the decode error would fail the
-		// envelope pass that exists so such a record can be filed, gated
-		// and reprocessed rather than dropped.
+		// paragraph above.
 		return nil
 	}
 	*s = ScopeSet{Terms: terms}
@@ -293,15 +276,15 @@ func subjectPath(s Subject) string {
 	case KindAsset:
 		artifact, asset, err := SplitAssetID(s.ID)
 		if err != nil {
-			// AN UNPARSEABLE ASSET SUBJECT IS THE DOMAIN: a narrower
-			// guess would be a claim the record never made.
+			// AN UNPARSEABLE SUBJECT IS THE DOMAIN: a narrower guess would
+			// be a claim the record never made.
 			return pathDomain
 		}
 		return ScopeTerm{Kind: TermAsset, Artifact: artifact, ID: asset}.Path()
 	case KindComment:
 		artifact, thread, err := SplitCommentID(s.ID)
 		if err != nil {
-			// The asset's reason: a narrower guess is a claim never made.
+			// As for an asset: the domain, never a guess.
 			return pathDomain
 		}
 		return ScopeTerm{Kind: TermComment, Artifact: artifact, ID: thread}.Path()
@@ -310,10 +293,8 @@ func subjectPath(s Subject) string {
 	case KindReader:
 		return ScopeTerm{Kind: TermReader, ID: s.ID}.Path()
 	case KindBarrier, KindTrimmed:
-		// THE FRAMEWORK'S OWN SCOPE, so a framework record — the read
-		// index's barrier, or the trim's trimmed record, which writes no
-		// row of this domain's either — never intersects any
-		// read's closure.
+		// THE FRAMEWORK'S OWN SCOPE: the read index's barrier and the trim's
+		// record write no row of this domain's, so they intersect no read.
 		return statelog.FrameworkScope
 	case KindFolder:
 		return ScopeTerm{Kind: TermTree}.Path()
@@ -328,9 +309,9 @@ func subjectPath(s Subject) string {
 // artifactTerm is one artifact's term.
 func artifactTerm(id string) ScopeTerm { return ScopeTerm{Kind: TermArtifact, ID: id} }
 
-// FolderTerm is one folder's term, what an artifact record that reads the
-// folder names. The top level (”) is no folder and has no term: a record
-// filing an artifact at the top level reads no folder row.
+// FolderTerm is one folder's term, named by an artifact record that reads the
+// folder. The top level (”) is no folder and has no term: filing there reads
+// no folder row.
 func FolderTerm(id string) ScopeTerm { return ScopeTerm{Kind: TermFolder, ID: id} }
 
 // TreeTerm is the whole folder tree's term.
@@ -355,8 +336,8 @@ func ArtifactScope(id string) statelog.ScopeSet {
 }
 
 // TreeScope is the closure of a read about the folder tree alone: its folders,
-// their shares and history. A read that also counts the artifacts in each
-// folder reads artifact rows too, and is closed over [DomainScope].
+// their shares and history. A read that also counts each folder's artifacts
+// is closed over [DomainScope].
 func TreeScope() statelog.ScopeSet {
 	return statelog.ScopeSet{Paths: []string{TreeTerm().Path()}}
 }

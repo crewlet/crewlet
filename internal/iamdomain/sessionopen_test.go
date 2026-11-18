@@ -13,16 +13,11 @@ import (
 )
 
 // A SESSION OPENS AT THE COUNTERS THAT WOULD END IT, and a sign-in after either
-// has moved is a session that WORKS.
-//
-// The epoch and the generation used to be a caller's field no caller filled in,
-// so every bearer carried zero for both. Nothing looked wrong until somebody
-// used the gesture each counter exists for: after a person's first "sign out
-// everywhere" every new session of theirs validated as already ended, and after
-// the first `invalidate-all` nobody in the company could sign in again. The
-// cases here go through the real writer, the real applier and the real reader,
-// and judge the bearer the way every ingress node does — because each half
-// passes on its own and the bug lived in the seam between them.
+// has moved is a session that WORKS: otherwise, after "sign out everywhere" a
+// person's every new session is born ended, and after `invalidate-all` nobody
+// signs in again. The cases go through the real writer, applier and reader and
+// judge the bearer as every ingress node does, because each half passes on its
+// own and the fault lives in the seam between them.
 func TestASessionOpenedAfterARevocationIsLive(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -73,9 +68,9 @@ func TestASessionOpenedAfterAnInvalidationIsLive(t *testing.T) {
 	}
 }
 
-// AND THE COUNTERS STILL END WHAT PREDATES THEM, which is the control: a
-// session opened BEFORE the revocation is over, so the two cases above are
-// about when a session was opened rather than about counters that end nothing.
+// AND THE COUNTERS STILL END WHAT PREDATES THEM, the control: a session opened
+// BEFORE the revocation is over, so the cases above test when a session opened,
+// not counters that end nothing.
 func TestASessionOpenedBeforeARevocationIsEnded(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -96,13 +91,10 @@ func TestASessionOpenedBeforeARevocationIsEnded(t *testing.T) {
 	}
 }
 
-// A SUBJECT WITH NO PERSON ROW STILL HAS AN EPOCH.
-//
-// A session exchanged from a Tier A token names the token's login, which
-// nothing enrols, and signing out everywhere from it bumps the epoch under that
-// login. The epoch used to be read only beside a person row, so that
-// revocation was written and ended nothing: every session the token had opened
-// went on validating.
+// A SUBJECT WITH NO PERSON ROW STILL HAS AN EPOCH: a session exchanged from a
+// Tier A token names the token's login, which nothing enrols, and signing out
+// everywhere bumps the epoch under that login. Read only beside a person row,
+// that revocation would end nothing.
 func TestTheEpochIsReadForASubjectNobodyEnrolled(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -193,13 +185,11 @@ func openSession(t *testing.T, rig *writeRig, person string) (*session.Signer, s
 
 // A SESSION'S PROOF IS READ BACK AS ITS OWN FACT.
 //
-// A step-up surface asks how recently the holder proved who they are, and the
-// only honest answer is the instant the session was opened on a proof — every
-// node reading it off the replicated row rather than off the person, since
-// proof on one device says nothing about another. Nothing recorded it, so
-// the guard composed every session's deadline from zero and no step-up could
-// ever be satisfied. A session opened on NO proof reads back as none, never as
-// a stale-but-set instant.
+// A step-up asks how recently the holder proved who they are: the instant the
+// session was opened on a proof, read off the replicated session row, not the
+// person, since proof on one device says nothing about another. Unrecorded, no
+// step-up could ever be satisfied. A session opened on NO proof reads back as
+// none, never as a stale-but-set instant.
 func TestASessionsProofIsReadBackAsItsOwnFact(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

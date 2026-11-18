@@ -77,6 +77,13 @@ const (
 	WriteCreateBranch EngineWriteKind = "create_branch"
 	// WriteDeleteBranch deletes a branch at the head its caller read.
 	WriteDeleteBranch EngineWriteKind = "delete_branch"
+	// WriteCreateTag creates a tag at a commit the repository holds: a
+	// lightweight tag, or an annotated one built as its tag object where the
+	// write carries a message ([EngineWrite.Annotates]).
+	WriteCreateTag EngineWriteKind = "create_tag"
+	// WriteDeleteTag deletes a tag at the value its caller read: an
+	// annotated tag's object, a lightweight tag's commit.
+	WriteDeleteTag EngineWriteKind = "delete_tag"
 	// WriteApplySuggestions commits findings' suggestions onto a change's
 	// source branch at the head its caller read ([EngineWrite.Suggestions]):
 	// each suggestion's lines placed in the head's file by the one rule a
@@ -117,11 +124,15 @@ const (
 // EngineWriteKinds is the closed set, in the order a reader is told them.
 func EngineWriteKinds() []EngineWriteKind {
 	return []EngineWriteKind{WriteCommitFiles, WriteRevert, WriteCherryPick, WriteCreateBranch, WriteDeleteBranch,
-		WriteApplySuggestions, WriteMergeChange, WriteRebaseChange, WriteRevertChange}
+		WriteCreateTag, WriteDeleteTag, WriteApplySuggestions, WriteMergeChange, WriteRebaseChange,
+		WriteRevertChange}
 }
 
 // Valid reports a kind this build knows.
 func (k EngineWriteKind) Valid() bool { return slices.Contains(EngineWriteKinds(), k) }
+
+// Tags reports a kind that moves a tag (refs/tags/<tag>) rather than a branch.
+func (k EngineWriteKind) Tags() bool { return k == WriteCreateTag || k == WriteDeleteTag }
 
 // Commits reports whether the kind makes a commit — and so a pack, a
 // signature and a build — landed as ONE PUSH, rather than only moving a ref to
@@ -205,11 +216,13 @@ type EngineWrite struct {
 	// person's linearizable — which the Gitlet node's copy is brought to before
 	// anything is judged. A floor on another log is [ErrInvalid].
 	Fresh statelog.Freshness `json:"fresh"`
-	// Ref is the branch the write moves: refs/heads/<branch>.
+	// Ref is the ref the write moves: refs/heads/<branch>, or refs/tags/<tag>
+	// for a kind that [EngineWriteKind.Tags].
 	Ref string `json:"ref"`
 	// ExpectedHead is the commit the caller last read at Ref: required to
 	// move or delete a branch, and empty to create one, which needs the ref
-	// absent. The write's commit sits on it.
+	// absent. The write's commit sits on it. A tag's delete names the value
+	// it read, an annotated tag's object.
 	ExpectedHead string `json:"expected_head,omitempty"`
 	// Base is a commit_files CREATE's start: the commit the new branch's first
 	// commit sits on, so a commit onto a new branch is one push; empty with an
@@ -217,12 +230,12 @@ type EngineWrite struct {
 	Base string `json:"base,omitempty"`
 	// Message is the commit's message: required of a commit_files, and of a
 	// revert or a cherry-pick it replaces the message git's own revert and
-	// cherry-pick -x write.
+	// cherry-pick -x write. A create_tag carrying one is annotated with it.
 	Message string `json:"message,omitempty"`
 	// Files are a commit_files' operations, at most [MaxFileOps].
 	Files []FileOp `json:"files,omitempty"`
 	// Commit is a revert's or a cherry-pick's subject, and a create_branch's
-	// target.
+	// or a create_tag's target.
 	Commit string `json:"commit,omitempty"`
 	// Suggestions are an apply_suggestions' findings' suggestions, 1 to
 	// [MaxSuggestionOps], each finding at most once.
@@ -334,9 +347,9 @@ type EngineWriteResult struct {
 	// Command is the ref update as the landing answered it: its result, its
 	// reason and its sentence. Zero beside a Refusal.
 	Command Command `json:"command"`
-	// Commit is the commit the write made — or, for a create_branch, the
-	// commit the branch was created at — where the outcome is applied or
-	// pending.
+	// Commit is the commit the write made (for a create_branch, the commit
+	// the branch was created at; for a create_tag, the tag's value, an
+	// annotated tag's object) where the outcome is applied or pending.
 	Commit string `json:"commit,omitempty"`
 	// PushID is the push the write lands under ([WritePushID]).
 	PushID string `json:"push_id"`
@@ -647,6 +660,10 @@ func (w EngineWrite) Instant() time.Time {
 	return t.Truncate(time.Second)
 }
 
+// Annotates reports a create_tag carrying a message: built as an annotated
+// tag's object, signed as a commit is, rather than only moving its ref.
+func (w EngineWrite) Annotates() bool { return w.Kind == WriteCreateTag && w.Message != "" }
+
 // Validate refuses a write no party to it may act on ([ErrInvalid], naming the
 // field): the one rule the asking tool, the carrying router and the building
 // Gitlet node all hold it to. First, a written_for value this build does not
@@ -658,10 +675,10 @@ func (w EngineWrite) Validate() error {
 		return err
 	}
 	if !w.Kind.Valid() {
-		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, w.Kind, words.Or(EngineWriteKinds()))
+		return refusedf("%w: kind: %q is not one of %s", ErrInvalid, w.Kind, words.Or(EngineWriteKinds()))
 	}
 	if id, err := uuid.Parse(w.RepoID); err != nil || id.String() != w.RepoID {
-		return fmt.Errorf("%w: repo_id: %q is not a repository's id", ErrInvalid, w.RepoID)
+		return refusedf("%w: repo_id: %q is not a repository's id", ErrInvalid, w.RepoID)
 	}
 	// WHO WRITES IS NAMED, and is somebody who may: a seat with the run that
 	// made the write, whose push names it; a person through a credential
@@ -672,16 +689,16 @@ func (w EngineWrite) Validate() error {
 	}
 	switch {
 	case w.Principal.Kind == PrincipalAgent && w.Principal.Run.IsZero():
-		return fmt.Errorf("%w: principal.run: a seat's write names the run that made it — its turn at least, "+
+		return refusedf("%w: principal.run: a seat's write names the run that made it — its turn at least, "+
 			"stamped by the engine from the call", ErrInvalid)
 	case w.Principal.Run.RunID != "":
 		// A WRITE IS A TOOL CALL'S, whose run is its turn (an executor's box
 		// pushes through git), and Proposal.Validate refuses an engine-built
 		// push naming an executor: refused here, before a Gitlet node builds it.
-		return fmt.Errorf("%w: principal.run.run_id: a write the engine builds is a tool call's, whose run "+
+		return refusedf("%w: principal.run.run_id: a write the engine builds is a tool call's, whose run "+
 			"is its turn: it names no executor", ErrInvalid)
 	case w.Principal.Kind == PrincipalOperator && w.Principal.Seat == "":
-		return fmt.Errorf("%w: principal.seat: a write is a person's, through a credential bound to their human "+
+		return refusedf("%w: principal.seat: a write is a person's, through a credential bound to their human "+
 			"seat — a token bound to nobody writes nothing", ErrInvalid)
 	}
 	if w.Ceiling != nil {
@@ -705,15 +722,20 @@ func (w EngineWrite) Validate() error {
 	if err := w.Fresh.OnlyOn(topics.CodeLogStream); err != nil {
 		return fmt.Errorf("%w: fresh: %w", ErrInvalid, err)
 	}
-	if branch, ok := strings.CutPrefix(w.Ref, "refs/heads/"); !ok || !gitref.ValidBranch(branch) {
-		return fmt.Errorf("%w: ref: %q is not a branch: an engine write moves refs/heads/<branch>, a branch git "+
+	if w.Kind.Tags() {
+		if tag, ok := strings.CutPrefix(w.Ref, tagPrefix); !ok || !gitref.ValidTag(tag) {
+			return refusedf("%w: ref: %q is not a tag: a %s moves refs/tags/<tag>, a tag git takes", ErrInvalid,
+				w.Ref, w.Kind)
+		}
+	} else if branch, ok := strings.CutPrefix(w.Ref, branchPrefix); !ok || !gitref.ValidBranch(branch) {
+		return refusedf("%w: ref: %q is not a branch: an engine write moves refs/heads/<branch>, a branch git "+
 			"takes", ErrInvalid, w.Ref)
 	}
 	for _, id := range []struct{ field, oid string }{
 		{"expected_head", w.ExpectedHead}, {"base", w.Base}, {"commit", w.Commit},
 	} {
 		if id.oid != "" && (!gitref.ValidOID(id.oid) || id.oid == ZeroOID) {
-			return fmt.Errorf("%w: %s: %q is not a whole object id: a write names commits by the 40-digit ids a "+
+			return refusedf("%w: %s: %q is not a whole object id: a write names commits by the 40-digit ids a "+
 				"read resolved", ErrInvalid, id.field, id.oid)
 		}
 	}
@@ -722,11 +744,11 @@ func (w EngineWrite) Validate() error {
 	}
 	if w.Message != "" {
 		if strings.IndexByte(w.Message, 0) >= 0 {
-			return fmt.Errorf("%w: message: it holds a NUL byte, which git's own check of a commit refuses",
+			return refusedf("%w: message: it holds a NUL byte, which git's own check of a commit refuses",
 				ErrInvalid)
 		}
 		if why := gitref.CommitText(w.Message); why != "" {
-			return fmt.Errorf("%w: message: it %s", ErrInvalid, why)
+			return refusedf("%w: message: it %s", ErrInvalid, why)
 		}
 	}
 	if err := w.validPayload(); err != nil {
@@ -781,11 +803,11 @@ func (w EngineWrite) validPayload() error {
 			"bytes, past the %d one engine write may carry (gitlet.MaxCommitPayloadBytes); make a change this large "+
 			"in a checkout of the repository ("+toolname.CodeCheckout+")", ErrInvalid, n, MaxCommitPayloadBytes)
 	case len(w.Suggestions) > 0:
-		return fmt.Errorf("%w: suggestions: the change — its suggestions and its message, as JSON spells them — "+
+		return refusedf("%w: suggestions: the change — its suggestions and its message, as JSON spells them — "+
 			"is %d bytes, past the %d one engine write may carry (gitlet.MaxCommitPayloadBytes): apply them in two "+
 			"writes", ErrInvalid, n, MaxCommitPayloadBytes)
 	}
-	return fmt.Errorf("%w: message: it is %d bytes as JSON spells it, past the %d one engine write may carry "+
+	return refusedf("%w: message: it is %d bytes as JSON spells it, past the %d one engine write may carry "+
 		"(gitlet.MaxCommitPayloadBytes); shorten it, or leave it out to take git's own", ErrInvalid, n,
 		MaxCommitPayloadBytes)
 }
@@ -801,7 +823,7 @@ func (w EngineWrite) validSuggestions() error {
 		return nil
 	}
 	if len(w.Suggestions) > MaxSuggestionOps {
-		return fmt.Errorf("%w: suggestions: %d, past the %d one write applies (gitlet.MaxSuggestionOps)",
+		return refusedf("%w: suggestions: %d, past the %d one write applies (gitlet.MaxSuggestionOps)",
 			ErrInvalid, len(w.Suggestions), MaxSuggestionOps)
 	}
 	named := map[string]int{}
@@ -823,7 +845,7 @@ func (w EngineWrite) validSuggestions() error {
 		case !gitref.ValidOID(s.BlobOID) || s.BlobOID == ZeroOID:
 			return fmt.Errorf("%w: %s.blob_oid: %q is not a whole object id", ErrInvalid, at, s.BlobOID)
 		case s.LineStart < 1 || s.LineEnd < s.LineStart || s.LineEnd > MaxAnchorLine:
-			return fmt.Errorf("%w: %s: lines %d to %d: a finding's lines count from 1, the last at or past the "+
+			return refusedf("%w: %s: lines %d to %d: a finding's lines count from 1, the last at or past the "+
 				"first and at most %d, the most lines a file holds", ErrInvalid, at, s.LineStart, s.LineEnd,
 				MaxAnchorLine)
 		}
@@ -843,7 +865,7 @@ func (w EngineWrite) validKind() error {
 	want := func(fields ...field) error {
 		for _, f := range fields {
 			if !f.set {
-				return fmt.Errorf("%w: %s: a %s names it", ErrInvalid, f.name, w.Kind)
+				return refusedf("%w: %s: a %s names it", ErrInvalid, f.name, w.Kind)
 			}
 		}
 		return nil
@@ -851,7 +873,7 @@ func (w EngineWrite) validKind() error {
 	none := func(fields ...field) error {
 		for _, f := range fields {
 			if f.set {
-				return fmt.Errorf("%w: %s: a %s takes none", ErrInvalid, f.name, w.Kind)
+				return refusedf("%w: %s: a %s takes none", ErrInvalid, f.name, w.Kind)
 			}
 		}
 		return nil
@@ -877,7 +899,7 @@ func (w EngineWrite) validKind() error {
 			return err
 		}
 		if w.Change < 1 {
-			return fmt.Errorf("%w: change: %d is not a change's number, which counts from 1", ErrInvalid, w.Change)
+			return refusedf("%w: change: %d is not a change's number, which counts from 1", ErrInvalid, w.Change)
 		}
 		return nil
 	case WriteRevertChange:
@@ -888,7 +910,7 @@ func (w EngineWrite) validKind() error {
 			return err
 		}
 		if w.Change < 1 {
-			return fmt.Errorf("%w: change: %d is not a change's number, which counts from 1", ErrInvalid, w.Change)
+			return refusedf("%w: change: %d is not a change's number, which counts from 1", ErrInvalid, w.Change)
 		}
 		return nil
 	}
@@ -902,7 +924,7 @@ func (w EngineWrite) validKind() error {
 			return fmt.Errorf("%w: files: %d operations, past the %d one write may carry (gitlet.MaxFileOps); "+
 				"make a change this wide in a checkout of the repository ("+toolname.CodeCheckout+")", ErrInvalid, len(w.Files), MaxFileOps)
 		case w.Base != "" && w.ExpectedHead != "":
-			return fmt.Errorf("%w: base: a commit onto a branch sits on its head (expected_head); base starts a "+
+			return refusedf("%w: base: a commit onto a branch sits on its head (expected_head); base starts a "+
 				"branch the write creates", ErrInvalid)
 		}
 		if err := want(files, message); err != nil {
@@ -919,6 +941,11 @@ func (w EngineWrite) validKind() error {
 			return err
 		}
 		return none(head, files, base, message, suggestions)
+	case WriteCreateTag:
+		if err := want(commit); err != nil {
+			return err
+		}
+		return none(head, files, base, suggestions)
 	case WriteApplySuggestions:
 		// ONTO THE HEAD ITS CALLER READ, always: a suggestion is placed in the
 		// file at that head, so an apply that created a branch would place it
@@ -949,12 +976,12 @@ func (w EngineWrite) validMerge(fields ...error) error {
 	}
 	switch {
 	case w.Change < 1:
-		return fmt.Errorf("%w: change: %d is not a change's number, which counts from 1", ErrInvalid, w.Change)
+		return refusedf("%w: change: %d is not a change's number, which counts from 1", ErrInvalid, w.Change)
 	case !w.Method.Valid():
-		return fmt.Errorf("%w: method: %q is not one of %s", ErrInvalid, w.Method, words.Or(MergeMethods()))
+		return refusedf("%w: method: %q is not one of %s", ErrInvalid, w.Method, words.Or(MergeMethods()))
 	}
 	if why := textProblem(w.Override, MaxOverrideReasonBytes, "merge's override reason"); why != "" {
-		return fmt.Errorf("%w: override: %s", ErrInvalid, why)
+		return refusedf("%w: override: %s", ErrInvalid, why)
 	}
 	return nil
 }
@@ -1050,7 +1077,7 @@ func (f FileOp) valid(i int) error {
 func (f FileOp) validPut(at string) error {
 	switch {
 	case (f.Content == nil) == (f.BlobOID == ""):
-		return fmt.Errorf("%w: %s: a put carries exactly one of content and blob_oid", ErrInvalid, at)
+		return refusedf("%w: %s: a put carries exactly one of content and blob_oid", ErrInvalid, at)
 	case f.BlobOID != "" && (!gitref.ValidOID(f.BlobOID) || f.BlobOID == ZeroOID):
 		return fmt.Errorf("%w: %s.blob_oid: %q is not a whole object id", ErrInvalid, at, f.BlobOID)
 	}

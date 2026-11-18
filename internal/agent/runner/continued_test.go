@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -640,18 +641,18 @@ func TestARelaunchTellsANoteALostTakeRecordedWhereTheRecordReadIt(t *testing.T) 
 
 // A SESSION IS TOLD A NOTE ITS HARNESS WAS SERVED AS ONE IT MAY ALREADY SHOW. A
 // note the run's bridge served an OpenCode harness is recorded read only once
-// the harness confirms delivering it, so a session continued from that job may
-// hold one the record says waits, or that only a review read since. A relaunch
-// that continues it tells such a note under the header of notes it may already
-// show, never as one it had not read: still waiting, among the notes the brief
-// is the first to read — the header taking every note before it, so the order
-// read is kept, and only the notes after it following plainly — and read since
-// by a review, among the notes past the session's cursor. The fresh brief
-// beside it tells every note plainly, as it always does.
+// the harness confirms it, so a continued session may hold one the record says
+// waits, or that only a review read since; and a hook's note its session showed
+// taken before its last restart (steer.Reading.Restarted) it may not hold,
+// though the cursor counts it. A relaunch tells each under the header of notes
+// it may already show: a waiting one among the notes the brief is the first to
+// read, the header taking every note before it so the order read is kept, and
+// the others from their read on. The fresh brief beside it tells every note
+// plainly.
 //
 // Mutation: tell a served note plainly, take the notes after the last served
-// one under the header, or leave a served note a review read since plain, and a
-// case goes red.
+// one under the header, leave a served note a review read since plain, or count
+// a restarted read held, and a case goes red.
 func TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -670,7 +671,12 @@ func TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.
 	served := note("served", "the note served to the job's harness, its confirmation lost")
 	late := note("late", "the note filed after it")
 	msg := func(by, text string) string { return prompts.SteerMessage(by, text) }
+	restarted := read("restarted", "the note a hook's serve handed over before the session restarted", 2,
+		types.PhaseExecute, types.SteerBoundaryToolBatch)
+	restarted.Restarted = true
 	for name, tc := range map[string]struct {
+		// cursor is the capture's, 1 where unset.
+		cursor  int
 		steered []steer.Read
 		served  []string
 		waiting []steer.Note
@@ -678,6 +684,9 @@ func TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.
 		// it; none is the header absent.
 		again, plain []string
 	}{
+		"a hook's note its session took before it restarted": {cursor: 2, steered: []steer.Read{held, restarted},
+			waiting: []steer.Note{late}, again: []string{msg(restarted.By, restarted.Text)},
+			plain: []string{msg(late.By, late.Text)}},
 		"a served note still waiting": {steered: []steer.Read{held}, served: []string{"served"},
 			waiting: []steer.Note{early, served, late},
 			again:   []string{msg(early.By, early.Text), msg(served.By, served.Text)},
@@ -695,7 +704,7 @@ func TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.
 				box.Offer(n)
 			}
 			basis := keptBasis
-			basis.NoteCursor = 1
+			basis.NoteCursor = max(tc.cursor, 1)
 			relauncher := &probingLauncher{basis: basis}
 			resume := &runner.Resume{State: parked.State, Steered: tc.steered, Served: tc.served,
 				Asked: &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
@@ -895,8 +904,9 @@ func TestASessionContinuedInANewBoxIsToldWhatThatBoxHolds(t *testing.T) {
 // hold the launch to the floor of what it sends ([runner.Continuation]), where
 // whether the seat's budget can carry it at all is the launch's to decide.
 //
-// Mutation: hand the launch the context only of a kept capture it continues, or
-// withhold the box's own session for its size here, and this goes red.
+// Mutation: hand the launch the context only of a kept capture it continues
+// (SessionBasis.ContextTokens) in place of the copy's (SessionBasis.CopyContext),
+// or withhold the box's own session for its size here, and this goes red.
 func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -905,7 +915,7 @@ func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
 	relauncher := &probingLauncher{basis: runner.SessionBasis{
-		Why: "the newest capture of the job was not kept: refused", ContextTokens: 150000}}
+		Why: "the newest capture of the job was not kept: refused", CopyContext: 150000}}
 	asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
 		Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
@@ -924,10 +934,11 @@ func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
 // AN IN-PLACE CONTINUATION IS HELD TO THE LARGER OF ITS COPY'S AND ITS CAPTURE'S
 // MEASURE. A person's answer carries the asking run on in the session its box
 // holds, whose whole context it sends before the answer. Two figures say what
-// that context is: the job's newest capture's measure of its archive, and the
-// job's record's of the copy itself, which the read that collected the job took
-// off its run's own account of its requests ([runner.Resume.ContextTokens]),
-// and which a company that keeps no session has alone. The copy is the capture
+// that context is: the job's newest capture's measure of its archive
+// ([runner.SessionBasis.CopyContext]), and the job's record's of the copy
+// itself, which the read that collected the job took off its run's own account
+// of its requests ([runner.Resume.ContextTokens]), and which a company that
+// keeps no session has alone. The copy is the capture
 // or grew past it, so the launch is held to the larger of the two.
 //
 // Mutation: hand the launch the capture's measure alone, and a copy that grew
@@ -949,7 +960,7 @@ func TestAnInPlaceContinuationIsHeldToTheLargerOfItsCopysAndItsCapturesMeasure(t
 			parked, _ := launched.Suspended()
 			parked.State.ActiveTools = req.Surface.Active()
 			relauncher := &probingLauncher{basis: runner.SessionBasis{
-				Why: "the newest capture of the job was not kept: refused", ContextTokens: tc.capture}}
+				Why: "the newest capture of the job was not kept: refused", CopyContext: tc.capture}}
 			asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
 				Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
 			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
@@ -962,6 +973,57 @@ func TestAnInPlaceContinuationIsHeldToTheLargerOfItsCopysAndItsCapturesMeasure(t
 				again.Continue.ContextTokens != tc.want {
 				t.Fatalf("the relaunch continues in place %+v, want the asking run's own session carrying the %d "+
 					"tokens it sends first", again.Continue, tc.want)
+			}
+		})
+	}
+}
+
+// AN IN-PLACE COPY BESIDE AN OLDER KEPT CAPTURE IS HELD TO THE COPY'S MEASURE:
+// the kept continuation to its capture's own (SessionBasis.ContextTokens and
+// NextRequest), the job's copy to its newest capture's (CopyContext, or its
+// record's where larger, and CopyNextRequest, or its record's where it holds
+// one). Where the capture continued is older than the newest, the two differ,
+// and the copy held to the older's would be held to less than it sends.
+//
+// Mutation: hand the in-place launch basis.ContextTokens or basis.NextRequest,
+// and the copy is held to 40000 or 45000 while it sends 150000 or 155000.
+func TestAnInPlaceCopyBesideAnOlderKeptCaptureIsHeldToTheCopysMeasure(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ copied, want, recordNext, wantNext int64 }{
+		"its newest capture measured more than its record": {copied: 90000, want: 150000, wantNext: 155000},
+		"its record measured more than its newest capture": {copied: 180000, want: 180000, recordNext: 185000,
+			wantNext: 185000},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+			launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+			before := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"looking into it"}`)}})
+			parked, _ := launched.Suspended()
+			parked.State.ActiveTools = req.Surface.Active()
+			older := keptBasis
+			older.ContextTokens, older.CopyContext = 40000, 150000
+			older.NextRequest, older.CopyNextRequest = sandbox.NextRequest{Tokens: 45000},
+				sandbox.NextRequest{Tokens: 155000}
+			relauncher := &probingLauncher{basis: older}
+			asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
+				Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
+			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+				resume: &runner.Resume{State: parked.State, Asked: asked, Bridged: before, ContextTokens: tc.copied,
+					NextRequest: sandbox.NextRequest{Tokens: tc.recordNext}}})
+			if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			again := relauncher.last(t)
+			if again.Session == nil || again.Session.Basis.ContextTokens != 40000 ||
+				again.Session.Basis.NextRequest.Tokens != 45000 {
+				t.Fatalf("the relaunch continues kept %+v, want the older kept capture, held to its own 40000 "+
+					"and 45000", again.Session)
+			}
+			if again.Continue == nil || again.Continue.SessionID != "sess-ask" ||
+				again.Continue.ContextTokens != tc.want || again.Continue.NextRequest.Tokens != tc.wantNext {
+				t.Fatalf("the relaunch continues in place %+v, want the asking run's own copy carrying the %d "+
+					"tokens it sends first, estimated at %d", again.Continue, tc.want, tc.wantNext)
 			}
 		})
 	}

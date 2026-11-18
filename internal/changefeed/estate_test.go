@@ -11,17 +11,12 @@ import (
 // estate is an [changefeed.Opener] and [changefeed.Records] of this fixture's
 // own.
 //
-// # Why the tests do not open a real one
-//
-// Every case in this package is about the FEED's rules — the claim, the
-// dedupe, the wake ids, which outcomes ack and which nak — and none of them is
-// about an estate. The document families these tests were written against are
-// gone; the two that replaced them are domain LOGS, which would need a broker
-// per test to exercise a rule that has nothing to do with a broker.
-//
-// So the seam is filled directly, which is what the seam is for: `Opener` is
-// one method and `Records` is two, and a fixture that implements them
-// exercises the contract rather than one estate's satisfaction of it.
+// Every case here is about the FEED's rules (the claim, the dedupe, the wake
+// ids, which outcomes ack and which nak), none about an estate, and a real one
+// is a domain LOG needing a broker per test. So the seam is filled directly:
+// a fixture implementing `Opener` and `Records` exercises the contract rather
+// than one estate's satisfaction of it.
+
 // queued is one record and the earliest instant it may be delivered.
 type queued struct {
 	rec changefeed.Record

@@ -338,6 +338,20 @@ type RunAsk interface {
 	Gate(submit tools.Callable) tools.Callable
 }
 
+// Telling is one late call of the round a job's session is known to hold
+// ([Resume.Tellings]): its place in the round's log
+// ([BridgedCall.Appended]), and the place among the turn's reads of the write
+// that recorded it, which a capture's note cursor is read against
+// ([SessionBasis.NoteCursor]).
+type Telling struct {
+	Appended, Place int
+
+	// Hook says a hook's step read the call (sandbox.CallTelling.Hook): held as
+	// the job's session showed it, which a box whose release the resume was
+	// not read in may not rebuild ([UnheldTelling]).
+	Hook bool
+}
+
 // Resume is the collection of the executor run a turn parked on.
 type Resume struct {
 	State execstate.State
@@ -387,6 +401,19 @@ type Resume struct {
 	// tell.
 	Owed []int
 
+	// LateOwed is the late calls that same brief counted without listing them
+	// (sandbox.LaunchRecord.LateOmittedCalls), apart from Owed: every brief
+	// tells them again, and the copy, holding only that count of each, is
+	// credited no telling of one ([heldByTelling]).
+	LateOwed []int
+
+	// Tellings are the late calls of the round's log a job's own session is
+	// known to hold, each at the place among the turn's reads of the write
+	// that recorded it (sandbox.RunSteer.Tellings, those of the log's round
+	// alone): a continuation of a session that holds one is not told the call
+	// again ([heldByTelling]). Nil where none is.
+	Tellings []Telling
+
 	// ContextTokens is what the session the box of the job State parked holds
 	// carried at its newest request the engine measured, as the job's record
 	// keeps it (sandbox.LaunchRecord.Context): the request the read that
@@ -398,14 +425,24 @@ type Resume struct {
 	// record holds none.
 	ContextTokens int64
 
-	// Count is what Claude Code counts the copy the box of the job State
-	// parked holds at before its next request, as the read that collected the
-	// job found it (sandbox.LaunchRecord.ResumedCount): what a relaunch that
-	// carries the round on in that box judges its first request by, and, where
-	// it continues a kept capture of the job taken whole in the same box, the
-	// count the capture's own is held beside ([keptCount]). Nil where nothing
-	// read the copy, which reads as a copy that may compact.
-	Count *sandbox.ResumedCount
+	// NextRequest is the harness's own estimate of the next request of that
+	// copy, as the read that collected the job found it
+	// (sandbox.LaunchRecord.NextRequest): what a relaunch that carries the
+	// round on in the job's box is held to with its brief where it holds a
+	// figure ([Continuation.NextRequest]). Zero where the record holds none.
+	NextRequest sandbox.NextRequest
+
+	// Count is what the copy's harness counts the copy the box of the job
+	// State parked holds at before its next request, as the read that
+	// collected the job found it (sandbox.LaunchRecord.ResumedCount): what a
+	// relaunch that carries the round on in that box judges its first request
+	// by, and, where it continues a kept capture of the job taken whole in the
+	// same box, the count the capture's own is held beside ([keptCount]). Nil
+	// where nothing read the copy, which reads as a copy that may compact.
+	// CountProvider is the provider of the reply an OpenCode count is
+	// anchored on (sandbox.LaunchRecord.CountProvider), "" for any other.
+	Count         *sandbox.ResumedCount
+	CountProvider string
 
 	// BasisRestart is the newest restart of the session the job State parked
 	// took up, as its launch knew it (sandbox.LaunchRecord.RestartBasis): ""
@@ -629,10 +666,10 @@ type BridgedCall struct {
 	// relaunch that carried the round on (sandbox.BridgeCall.Late): a call of
 	// an earlier job of the round, which no brief of the round had told when
 	// the log took it and the session of the job that made it may not hold.
-	// HELD BY NO SAVE POINT ([heldAt]), so every continuation of the round
-	// built after it landed is told it, under words of its own, and no rebuilt
-	// guard counts a load it made; and never the round's submission
-	// ([sinceAnswer]).
+	// HELD BY NO SAVE POINT ([heldAt]): a continuation built after it landed
+	// is told it under words of its own but where a telling credits it
+	// ([heldByTelling]), no rebuilt guard counts a load it made, and it is
+	// never the round's submission ([sinceAnswer]).
 	Late bool
 
 	// Abandoned is a call nobody waited for by the time it returned
@@ -643,9 +680,9 @@ type BridgedCall struct {
 	// answered it as still running. It ran and its effect happened, while the
 	// session of the job that made it shows it with no outcome, a failed one
 	// or that "still running". HELD BY NO SAVE POINT, as a late call is
-	// ([heldAt]): every continuation of the round built after it landed is
-	// told it, under the late calls' words, and no rebuilt guard counts a load
-	// it made. Unlike a late call it may be the round's submission
+	// ([heldAt]): told as a late call is ([heldByTelling]), under the late
+	// calls' words, and no rebuilt guard counts a load it made. Unlike a late
+	// call it may be the round's submission
 	// ([sinceAnswer]): its job, which was never replaced, made it.
 	Abandoned bool
 
@@ -826,10 +863,10 @@ type Runner struct {
 
 	// placed is the place among the run's record's reads of every note this
 	// segment's source handed over, and of every note the launch's brief
-	// carries that the record holds read already, by id — what the last
-	// brief's source said ([steer.Briefing.Orders]), nil where it keeps no
-	// record. A brief tells the reads in that order ([Runner.inReadOrder]).
-	// Guarded by mu.
+	// carries whose place the record holds already, read already or placed by
+	// a hook's serve, by id: what the last brief's source said
+	// ([steer.Briefing.Orders]), nil where it keeps no record. A brief tells
+	// the reads in that order ([Runner.inReadOrder]). Guarded by mu.
 	placed map[string]int
 
 	// sent is every record this runner publishes off the path of the request
@@ -1031,15 +1068,15 @@ func (r *Runner) executorBrief(ctx context.Context, notes string, history []ledg
 		// the notes this brief is the first to read. The run is a fresh
 		// session with no conversation of the engine's to carry them in,
 		// so its brief does. See [Runner.steered]. IN THE ORDER THE RECORD
-		// READ THEM, a note a lost take recorded that this brief hands over
-		// among them ([Runner.inReadOrder]).
+		// READ THEM, a note a lost take recorded that this brief hands over,
+		// and one a hook's serve placed, among them ([Runner.inReadOrder]).
 		Steered: r.readFirst(fresh),
 	})
 }
 
 // readFirst is every note the turn has read, rendered, in the order its record
-// read them, and then the notes of fresh it has not read yet
-// ([Runner.inReadOrder]).
+// read them, a note of fresh whose place the record holds already among them,
+// and then the rest of fresh ([Runner.inReadOrder]).
 func (r *Runner) readFirst(fresh []steer.Note) []string {
 	reads, rest := r.inReadOrder(r.readsSince(0), fresh)
 	out := make([]string, 0, len(reads)+len(rest))
@@ -2357,7 +2394,11 @@ func (s phaseSteer) Drain(round int) []toolloop.SteerNote {
 		read := steer.Read{Note: n, Reading: at}
 		s.r.carrySteer(read)
 		emit.steered(s.ctx, read)
-		out = append(out, toolloop.SteerNote{ID: n.ID, Message: prompts.SteerMessage(n.By, n.Text)})
+		message := prompts.SteerMessage(n.By, n.Text)
+		if n.SentBefore {
+			message = prompts.SteerMessageSentBefore(n.By, n.Text)
+		}
+		out = append(out, toolloop.SteerNote{ID: n.ID, Message: message})
 	}
 	return out
 }

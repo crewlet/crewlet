@@ -12,18 +12,16 @@ import (
 )
 
 // Space access, the access a seat holds in Confluence, in Confluence's terms.
+// A Cloud site grants it one of two ways, the site's choice:
 //
-// A Confluence Cloud site grants access to a space in one of two ways, and
-// which one applies is the site's, not this engine's, choice:
+//   - Space roles (role-based access, a beta): Viewer, Collaborator, Manager,
+//     Admin and custom roles, assigned per space.
+//   - Space permissions by operation, without the beta: View, Add pages,
+//     Delete pages, Admin and so on, granted one by one per space.
 //
-//   - Space roles (Atlassian's role-based access, a beta): Viewer,
-//     Collaborator, Manager, Admin and any custom role, assigned per space.
-//   - Space permissions by operation, on a site without the beta: View, Add
-//     pages, Delete pages, Admin and so on, granted one by one per space.
-//
-// The engine reads which mode the site is in ([Client.SpaceRoleMode]) and
-// manages the seat's access in that mode only.
-// Sources: https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-space-roles/
+// The engine reads the site's mode ([Client.SpaceRoleMode]) and manages the
+// seat's access in that mode only. Sources:
+// https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-space-roles/
 // and https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-space-permissions/
 
 // apiV2Path is the prefix of Confluence Cloud's v2 REST surface, under the

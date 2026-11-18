@@ -33,27 +33,11 @@ import (
 //	PUT  /setup/integrations/{kind}/access          a draft saved as one revision, then synced
 //	POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}
 //
-// # The save is a revision like any other
-//
-// Each seat's setting lives in the company document (`roles[].integrations`),
-// so a save is one revision of it, written through the config surface's own
-// several-seat write ([configapi.Service.ApplySeats]): attributed, validated as
-// the whole document, held to the revision the tab was read at, and reverted
-// like any other change. Nothing here writes the document a second way.
-//
-// # The plan is the sync's
-//
-// What a draft would do is answered by the engine's own plan, the function the
-// sync takes its steps from ([Access.Plan]), so a preview cannot promise what a
-// sync will not do. This surface composes nothing about a vendor itself.
-//
-// # A seat's credential is never named here
-//
-// A seat's credential is sealed under the name the engine derives for it
-// ([seataccess.SinkName]), and no body this surface reads can carry a variable
-// name: the draft is on or off, the vendor's level, its permissions and its
-// scope, decoded strictly. The answers name the sealed variable and when it was
-// minted, never its value.
+// A save is one revision of the company document (`roles[].integrations`),
+// written through [configapi.Service.ApplySeats], never a second way. A
+// draft's plan is the sync's own ([Access.Plan]). A seat's credential is
+// sealed under [seataccess.SinkName]; no body here can carry a variable name,
+// and answers never carry a value.
 
 // Access is the engine's per-seat access, as the access routes need it.
 //
@@ -186,13 +170,11 @@ type AccessSync struct {
 	// ([Service.recheck]). Nil runs nothing.
 	//
 	// A SYNC ANSWERS FOR THE SEATS IT TOUCHED and records nothing else. The
-	// integration's status row (its issues, its notes, its card's phase) is
-	// written only by a pass, and the pass a save's revision brings forward
-	// loses the surface's lease to the very sync the save started, so the
-	// row stayed as the last pass left it until somebody pressed Check now.
-	// Not taken where the sync never ran (another writer held the surface,
-	// the store could not say, the ask was refused): that writer's own pass
-	// records, or nothing changed.
+	// integration's status row is written only by a pass, and the pass a save
+	// brings forward loses the surface's lease to the very sync the save
+	// started, so this pass observes the whole integration again. Not taken
+	// where the sync never ran (another writer held the surface, the store
+	// could not say, the ask was refused): that writer's own pass records.
 	Then func(ctx context.Context)
 }
 

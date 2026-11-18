@@ -17,15 +17,9 @@ import (
 // route resolves its path values, hands them to the SAME registry entry the
 // socket's query channel reaches, and renders the same answer; the four that
 // are not registry questions read the SAME functions that build the socket's
-// handshake snapshot. Two surfaces answering one question from two
-// implementations is how they end up disagreeing with nobody noticing, and
-// the registry exists so a route cannot read its own parameters and forget
-// the grant check on the way.
-//
-// They were documented before they were built. docs/reference/api-endpoints.md
-// has listed this table since the engine shipped and thirteen of the reads
-// answered 404 — a public API that only the generic /query/{what} form
-// actually served. The paths here are that document's, so the two now agree.
+// handshake snapshot. Two implementations of one question drift apart, and the
+// registry keeps a route from forgetting the grant check. The paths are those
+// of docs/reference/api-endpoints.md.
 
 // namedRoutes maps a path to the registry question behind it.
 //
@@ -223,20 +217,15 @@ var namedRoutes = []struct {
 		path: map[string]string{"channel_id": "channel_id", "root_id": "root_id"}},
 	{method: "GET", pattern: "/chatlet/channels/{channel_id}", what: "chat_channel",
 		path: map[string]string{"channel_id": "channel_id"}},
-	// WHAT NAMED ME. About the caller rather than about a room, which is
-	// why it is not under /chatlet/channels/ — and resolved to a seat by the
-	// server, because a caller may never name one.
+	// WHAT NAMED ME. About the caller, so not under /chatlet/channels/, and
+	// resolved to a seat by the server: a caller may never name one.
 	//
-	// THERE IS NO `GET /chatlet/read` beside it. Where somebody has read to
-	// is not a question of its own: it rides the rail, whose every room
-	// carries this viewer's unread count and mute, because a badge and
-	// the room it belongs to are read together or not at all. The WRITE
-	// half is the `mark_chat_read` tool, which the dashboard calls through
-	// /operator/act like every other write.
-	// THE READER'S OWN VIEWS, each about the caller rather than a room
-	// (Activity, the threads they follow, what they saved and what they
-	// sent), and a room's shared links and one of its messages, which are
-	// under the room they read.
+	// THERE IS NO `GET /chatlet/read`: where somebody has read to rides the
+	// rail, whose every room carries this viewer's unread count and mute. The
+	// WRITE half is the `mark_chat_read` tool, called through /operator/act.
+	//
+	// THE READER'S OWN VIEWS (Activity, followed threads, saved, sent) are about
+	// the caller; a room's links and one of its messages are under the room.
 	{method: "GET", pattern: "/chatlet/activity", what: "chat_activity"},
 	{method: "GET", pattern: "/chatlet/threads", what: "chat_threads"},
 	{method: "GET", pattern: "/chatlet/saved", what: "chat_saved"},
@@ -430,17 +419,14 @@ func (a *App) serveNamed(what string, path map[string]string) http.HandlerFunc {
 // for a caller whose audience receives a push of kind, in the shape that push
 // hands them.
 //
-// No registry entry, because there is no question to ask: these are the
-// sections of the handshake snapshot, and the socket reads the same functions
-// to assemble it. So they are decided by the same table the socket decides its
-// pushes by — see [stream.Audience] — over the audience the socket would open
-// with ([stream.Service.AudienceFor]), and what build returns is shaped for it
-// ([stream.ShapeFor]), so the whole bundle carries only what that caller may
-// read.
+// No registry entry: these are sections of the handshake snapshot, built by
+// the functions the socket uses. They are decided by the table that decides the
+// socket's pushes ([stream.Audience]) over the audience the socket would open
+// with ([stream.Service.AudienceFor]), and shaped for it ([stream.ShapeFor]),
+// so the bundle carries only what that caller may read.
 //
 // A PRINCIPAL ACTING THROUGH THE ASSISTANT reads them as its person does
-// (ADR-0052's parity): each is the overview its person's socket is pushed,
-// shaped for the same audience, and none carries a credential.
+// (ADR-0052's parity), shaped for the same audience, with no credential.
 func (a *App) serveFrom(kind stream.Kind, build func(stream.Audience) any) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := auth.Caller(w, r)
@@ -477,22 +463,18 @@ func (a *App) answerHTTP(w http.ResponseWriter, r *http.Request, what string, pa
 	writeAnswer(w, r, data)
 }
 
-// writeAnswer renders a question's answer, SHARED by every named route and the
-// generic form for [writeQueryError]'s reason: as JSON, and — for an answer
-// that is a function of the object ids its question named
-// ([queries.Immutable]), asked by a request that names who it is for — with
-// the entity tag and the caching that say it never changes, answered `304` to a
-// caller that already holds it ([httpjson.Immutable]). The socket sends the
-// same answer as JSON alone: [queries.Immutable] encodes as what it wraps.
+// writeAnswer renders a question's answer, shared by every named route and the
+// generic form (see [writeQueryError]): as JSON, and for an answer that is a
+// function of the object ids its question named ([queries.Immutable]), asked by
+// a request that names who it is for, with the entity tag and caching that say
+// it never changes, `304` to a holder ([httpjson.Immutable]). The socket sends
+// JSON alone: [queries.Immutable] encodes as what it wraps.
 //
 // A REQUEST THAT NAMES NOBODY IS KEPT BY NO CACHE. A browser keys a kept answer
-// on what its `Vary` names (the bearer, the dashboard's reader), so a tab that
-// opened the route itself, its session cookie alone, would keep it under one
-// key for everybody who signs in on that browser next — and a read of the
-// company's code is not the same for every person: one without the gitlet app
-// is answered none of it (ADR-0110), and would be served the last holder's
-// from the cache, never asking the node. So such a request is answered the
-// value itself, `no-store`.
+// on what `Vary` names (the bearer, the dashboard's reader), so a session-cookie
+// tab would keep one copy for whoever signs in next, and a read of the
+// company's code differs per person (ADR-0110). Such a request gets the value
+// itself, `no-store`.
 func writeAnswer(w http.ResponseWriter, r *http.Request, data any) {
 	if answer, ok := data.(queries.Immutable); ok {
 		if !namesItsReader(r) {

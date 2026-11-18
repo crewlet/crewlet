@@ -348,12 +348,13 @@ func TestACapturesOutcomeIsStampedInTheRoomTheReadLeavesIt(t *testing.T) {
 // under way that the turn's end waits on, with nobody to settle it. The take
 // stamps it refused in the room the read leaves, decided on the row as it
 // stands: its own begun place is advanced, and one another read reserved is
-// left, the take standing by for that read's capture
+// left as that read left it. The take's time is spent, so it spools nothing to
+// stand by with; one with time left stands by
 // (TestAReadWhoseReservationWentUnansweredBesideAnotherStandsByForIt).
 //
 // Mutation: leave a reservation that ended unanswered as it is, or settle the
-// place whoever reserved it, and a case goes red; walk away from the place
-// another read reserved, and that case spools nothing.
+// place whoever reserved it, and a case goes red; spool past the take's
+// deadline, and the case another read reserved spools as one standing by.
 func TestAPlaceReservedAsTheTakesTimeRanOutIsSettled(t *testing.T) {
 	t.Parallel()
 	for name, steal := range map[string]bool{
@@ -370,12 +371,8 @@ func TestAPlaceReservedAsTheTakesTimeRanOutIsSettled(t *testing.T) {
 				read, by := readUntil(t)
 				spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
 					readCapture(BoxReadCollect, Result{}, true))
-				switch {
-				case !steal && spooled != nil:
-					t.Fatalf("a take whose own place was never answered spooled %+v", spooled)
-				case steal && (spooled == nil || !spooled.standby):
-					t.Fatalf("a take that found its place another read's spooled %+v, want it standing by for "+
-						"that read's capture", spooled)
+				if spooled != nil {
+					t.Fatalf("a take whose time ran out spooled %+v, want nothing", spooled)
 				}
 				c := rig.get("t1").Capture
 				switch {
@@ -384,8 +381,8 @@ func TestAPlaceReservedAsTheTakesTimeRanOutIsSettled(t *testing.T) {
 				case steal && c.State != CaptureBegun:
 					t.Fatalf("another read's place stands %s (%q), want it begun as that read left it",
 						c.State, c.Reason)
-				case steal && !c.standsBy(spooled.stamp):
-					t.Fatalf("another read's place stands %+v, want the take named standing by for it", c)
+				case steal && !c.StandbyAt.IsZero():
+					t.Fatalf("another read's place stands %+v, want nobody standing by for it", c)
 				case !steal && (c.State != CaptureRefused || !strings.Contains(c.Reason, "time ran out")):
 					t.Fatalf("the take's own place stands %s (%q), want it refused, saying why", c.State, c.Reason)
 				}

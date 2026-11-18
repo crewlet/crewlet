@@ -317,25 +317,18 @@ func testKeyMaterial(t *testing.T) string {
 
 func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	t.Parallel()
-	// A real posture: api.port 0 runs no dashboard, no REST API and no
-	// webhook endpoint. Saying so is the point — an operator who expected
-	// an integration to work should learn it here rather than from a
-	// webhook that never arrives.
+	// A real posture: api.port 0 runs no dashboard, REST API or webhook
+	// endpoint, and says so rather than leave an operator waiting on a webhook.
+	// The engine is not built at all: the port check comes first.
 	//
-	// The engine is not built at all: the port check comes first
-	// precisely so a node that serves nothing does not pay to find out.
-	// THE LOGGER IS THE TEST'S OWN, not the process root. Configuring the
-	// root from a parallel test is a race with every other test in this
-	// package: the CLI dispatch reconfigures it to WARN-on-stderr for
-	// every non-`run` command, so whichever ran last decided where this
-	// assertion's record went.
+	// THE LOGGER IS THE TEST'S OWN, not the process root, which the CLI
+	// dispatch reconfigures for every non-`run` command: in a parallel test
+	// whichever ran last decided where this record went.
 	//
-	// AT WARN ONLY WHERE NOTHING ELSE WARNED. A node whose DECLARED roles
-	// name ingress or seats has been told at WARN already, by the `api.port`
-	// advisory its start logs, which leaves an undeclared node.roles out —
-	// so that node is the one this line warns, and every other is told at
-	// info. Mutation: warn on every ingress node and the declared-ingress
-	// row goes red; warn on none and the undeclared row does.
+	// AT WARN ONLY WHERE NOTHING ELSE WARNED: a node with DECLARED ingress or
+	// seats roles was told by the `api.port` advisory; an undeclared node.roles
+	// is left out, so that node is the one this line warns. Mutation: warn on
+	// every ingress node, or on none, and a row goes red.
 	for _, tc := range []struct {
 		name  string
 		roles []string
@@ -1751,16 +1744,12 @@ func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 // written, and it fails nothing: the engine runs a company assembled in
 // pieces, and a gate refusing one would refuse every intermediate state.
 //
-// EACH CARRIES ITS Kind, so a consumer branches on the field rather than on
-// the prose, and they arrive in [config.Company.Warnings]' own order: what is
-// broken first, what could be better after it.
+// EACH CARRIES ITS Kind, so a consumer branches on the field rather than the
+// prose, in [config.Company.Warnings]' own order: broken first.
 //
-// THE LEAD IS A HANDLE, which is what makes `ghost` a misspelling rather than
-// a name somebody wrote: nothing resolves a seat by its display name.
-//
-// AND A COMPANY OF AGENTS ALONE IS SAID TO BE ONE, after it: it declares no
-// human seat, so nobody can be invited into it or created in it — which is
-// right for a company its agents run alone and worth knowing for any other.
+// THE LEAD IS A HANDLE, so `ghost` is a misspelling: nothing resolves a seat
+// by its display name. AND A COMPANY OF AGENTS ALONE IS SAID TO BE ONE: it
+// declares no human seat, so nobody can be invited into it.
 func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	t.Parallel()
 	// THE CHANNEL KEEPS THIS CASE ABOUT THE TWO KINDS. A Chatlet
@@ -2110,16 +2099,12 @@ func TestUsageNamesBothTierBFlags(t *testing.T) {
 // A COMMAND THAT TALKS TO A NODE AUTHENTICATES WITH CREWLET_API_TOKEN AND
 // NOTHING ELSE — and the help, the flag set and the 401 all say so.
 //
-// The node commands registered a `-token` flag, documented, beside a comment
-// saying the token was never a flag: a token typed as an argument is in the
-// shell history, in `ps` and in any CI log that echoes the command. So the
-// flag was the one way to use this CLI that leaked the credential it carried,
-// and a 401 had two sources to send an operator to. The flag is refused as
-// unknown now, the variable is the token whatever else is on the line, and
-// the help names the variable because nothing else does.
+// A token typed as an argument is in the shell history, in `ps` and in any CI
+// log that echoes the command, so `-token` is refused as unknown and the
+// variable is the token whatever else is on the line. The help names the
+// variable because nothing else does.
 //
-// NOT PARALLEL, and handed the PROCESS's environment: that is its subject, and
-// it is what every run of the binary reads ([run]).
+// NOT PARALLEL, and handed the PROCESS's environment: that is its subject.
 func TestTheNodeCredentialIsTheEnvironmentAndNeverAFlag(t *testing.T) {
 	t.Setenv(apiTokenEnv, "from-the-environment")
 
@@ -2154,19 +2139,14 @@ func TestTheNodeCredentialIsTheEnvironmentAndNeverAFlag(t *testing.T) {
 
 // A WORKER-ONLY NODE STILL HAS A CONFIG WRITER.
 //
-// The writer was installed inside serveAPI, after its early return for
-// `api.port: 0` — so a node with no HTTP surface never got one. The reconcile
-// loop is armed regardless and is a FLEET SINGLETON, so it lands on exactly
-// that node as readily as on any other, and everything needing the writer
-// then failed for the life of the process: a disconnect answered "no config
-// surface is wired on this node" over an error whose own comment calls that
-// state momentary, a GitHub seat's discovered installation could never be
-// recorded, and the Atlassian pass repeated its "set cloud_id by hand" note
-// on every tick, for ever.
+// The reconcile loop is armed regardless of `api.port: 0` and is a FLEET
+// SINGLETON, so it can land on a node with no HTTP surface; a writer installed
+// inside serveAPI, past its early return, leaves everything needing it
+// failing for the life of the process.
 //
-// It is a SOURCE assertion because there is nothing at runtime to watch: the
-// bug is which function the call sits in, and a call in the wrong one still
-// compiles, still runs, and produces a node that looks healthy.
+// It is a SOURCE assertion because the bug is which function the call sits
+// in: a call in the wrong one compiles, runs, and yields a healthy-looking
+// node.
 func TestTheConfigWriterIsInstalledOutsideTheHTTPSurface(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
@@ -2207,21 +2187,15 @@ func TestTheConfigWriterIsInstalledOutsideTheHTTPSurface(t *testing.T) {
 
 // TestEveryNilMeansTrustOptionIsWiredAtTheOneAPICall.
 //
-// [api.Options] has a class of field whose nil is a REAL configuration rather
-// than a missing wire: the API treats it as "this node has nothing to gate on"
-// and serves. `Estate` is the one shipped today — nil is honest for a company
-// on Jira and Confluence, which runs no state-log domain at all — and that is
-// exactly what makes it dangerous here. An option the binary forgets to pass
-// compiles, boots, serves every route, and reports a healthy node whose
-// replicated rows have a hole nothing will fill. There is no runtime symptom
-// to watch for, because the absence IS the permissive answer.
+// [api.Options] has fields whose nil is a REAL configuration, not a missing
+// wire: the API serves with "nothing to gate on". `Estate` is one (nil is
+// honest for a Jira and Confluence company). An option the binary forgets to
+// pass compiles, boots and serves with no runtime symptom, because the
+// absence IS the permissive answer.
 //
-// A SOURCE ASSERTION for the same reason
-// [TestTheConfigWriterIsInstalledOutsideTheHTTPSurface] is one: the bug is a
-// field that is not in a composite literal, and nothing about the running
-// process distinguishes "deliberately nil" from "nobody wired it". The list
-// is a declaration — a new option of this class is added here in the same
-// change that adds it to the API, or the next one inherits the gap.
+// A SOURCE ASSERTION like [TestTheConfigWriterIsInstalledOutsideTheHTTPSurface]:
+// nothing at runtime tells "deliberately nil" from "nobody wired it". A new
+// option of this class is listed here in the change that adds it to the API.
 func TestEveryNilMeansTrustOptionIsWiredAtTheOneAPICall(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
@@ -2274,18 +2248,10 @@ func TestEveryNilMeansTrustOptionIsWiredAtTheOneAPICall(t *testing.T) {
 	}
 }
 
-// EVERY FLAG `run` REGISTERS APPEARS IN ITS OWN USAGE SYNOPSIS.
-//
-// That synopsis is the only help an operator sees at the moment they got the
-// arguments wrong, and a flag missing from it is one they do not reach for.
-// Its own comment records that it has been short THREE times — first the three
-// logging flags, which are exactly what somebody diagnosing this reaches for,
-// then -import-company, then -log-file — which is three silent regressions in
-// one string with nothing watching it. This is what watches it.
-//
-// A SOURCE ASSERTION because there is nothing at runtime to catch: a missing
-// flag parses, runs and works, and the only symptom is somebody not knowing it
-// exists.
+// EVERY FLAG `run` REGISTERS APPEARS IN ITS OWN USAGE SYNOPSIS: the only help
+// an operator sees on a wrong argument, and it has been short three times
+// with nothing watching it. A SOURCE ASSERTION because a missing flag parses,
+// runs and works; the only symptom is somebody not knowing it exists.
 //
 // -config is the one exclusion, and the synopsis says why: its value is the
 // leading positional, and naming it a second time is the error being reported.

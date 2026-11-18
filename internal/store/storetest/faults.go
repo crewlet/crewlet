@@ -12,23 +12,16 @@ import (
 
 // FailReadsAfter wraps a driver so that every result set fails after n rows.
 //
-// It exists to reach the branch no other technique can. A fail-open read has
-// two failure paths and they are NOT the same: the query failing outright, and
-// the result set failing PART WAY THROUGH iteration. Closing the database
-// reaches only the first. The second is what decides whether a caller gets
-// "nothing is known" or a silent PARTIAL answer — some rows found, the rest
-// unknown, with no way to tell which half arrived — and that is the failure
-// mode fail-open exists to avoid.
+// A fail-open read has two failure paths: the query failing outright (closing
+// the database reaches only this) and the result set failing PART WAY THROUGH
+// iteration, which decides whether a caller gets "nothing is known" or a
+// silent PARTIAL answer. This reaches the second; the driver is the real one
+// and only when the rows stop is fiction.
 //
-// The wrapped driver is the real, certified one. Only iteration is
-// intercepted, so the SQL, the schema and the encoding are all genuine; the
-// only fiction is when the rows stop.
-//
-// The returned [Fault] is both the wrapper and its switch: pass Fault.Wrap to
+// The [Fault] is both wrapper and switch: pass Fault.Wrap to
 // store.Options.WrapDriver, then Arm it once the setup writes and the CONTROL
-// read have run against a healthy store. Without a control, an assertion that
-// a failed read answers nothing also passes for a store that never found
-// anything.
+// read have run against a healthy store; without a control, "a failed read
+// answers nothing" also passes for a store that found nothing.
 func FailReadsAfter(n int, err error) *Fault {
 	return &Fault{after: n, err: err}
 }
@@ -178,19 +171,13 @@ func (r *faultRows) Next(dest []driver.Value) error {
 	if !r.corrupt {
 		return r.err
 	}
-	// NULL where a value is expected. database/sql refuses to convert it
-	// into any non-pointer, non-Null* destination — "converting NULL to
-	// string is unsupported" — so the failure lands on rows.Scan rather
-	// than rows.Err, which is the branch under test.
+	// NULL where a value is expected: database/sql refuses to convert it into
+	// a non-pointer, non-Null* destination, so the failure lands on rows.Scan
+	// rather than rows.Err, the branch under test. It is nil and not a
+	// time.Time, which DOES convert into a string destination.
 	//
-	// It is nil and not a time.Time: a time DOES convert into a string
-	// destination, so the first version of this helper produced a
-	// successful scan of a formatted timestamp and the test caught the
-	// instrument rather than the code.
-	//
-	// The real row is read first so the column count is right — otherwise
-	// the failure would be a shape mismatch, which fails for a different
-	// reason and would pass this test while proving nothing.
+	// The real row is read first so the column count is right; otherwise the
+	// failure would be a shape mismatch, which fails for a different reason.
 	if err := r.Rows.Next(dest); err != nil {
 		return err
 	}
@@ -204,17 +191,14 @@ func (r *faultRows) Next(dest []driver.Value) error {
 //
 // # Why a commit fault is its own instrument
 //
-// The read faults above reach a caller that got an incomplete answer. This one
-// reaches a caller that does not know what happened to a WRITE, and the two
-// have opposite remedies: an incomplete read is retried freely, while a
-// failed-looking write may or may not have landed. A rolled-back transaction
-// leaves rows, op ids and checkpoints consistent with each other, and the
-// applier contract's whole claim is that they move together — so the way to
-// prove it is to fail the commit and read all three back.
+// The read faults above reach a caller with an incomplete answer; this one
+// reaches a caller that does not know what happened to a WRITE. The remedies
+// are opposite: an incomplete read is retried freely, a failed-looking write
+// may have landed. The applier contract claims rows, op ids and checkpoints
+// move together, so the proof is to fail the commit and read all three back.
 //
-// It counts commits rather than firing on all of them so a test can let its
-// setup and its control transaction through and arm the fault at the one
-// commit under examination.
+// It counts commits so a test can let its setup and control transaction
+// through and arm the fault at the one commit under examination.
 func FailCommitAfter(n int, err error) *CommitFault {
 	return &CommitFault{after: n, err: err}
 }
@@ -222,19 +206,11 @@ func FailCommitAfter(n int, err error) *CommitFault {
 // LoseCommitAck wraps a driver so that the (n+1)th COMMIT SUCCEEDS and then
 // reports failure to the caller.
 //
-// # The only way to reach committed-but-unknown
-//
-// This is the branch nothing else can produce. The transaction is durable —
-// the pages are on disk, a reader sees them, a restart finds them — and the
-// caller was told it failed. Every other fault produces a state the caller's
-// belief matches; this one produces the state where it does not, which is the
-// state the three-valued write outcome exists for. A caller that treats it as
-// a failure and retries writes twice; one that treats it as a success reports
-// a durability it did not observe. The only correct answer is "unknown", and
-// without this injector no test can ever hand a caller that fact.
-//
-// A CRASH BETWEEN COMMIT AND ACK is the real-world shape of it, and it cannot
-// be produced in-process: the process is gone. This is that shape with the
+// The only way to reach committed-but-unknown, the state the three-valued
+// write outcome exists for: the transaction is durable and the caller was told
+// it failed. Retrying writes twice, and calling it success reports durability
+// not observed; the only correct answer is "unknown". It is the shape of a
+// CRASH BETWEEN COMMIT AND ACK, which cannot be produced in-process, with the
 // process still running to be asserted against.
 func LoseCommitAck(n int) *CommitFault {
 	return &CommitFault{after: n, lose: true}
@@ -424,27 +400,17 @@ func (t *commitFaultTx) Commit() error {
 }
 
 // HoldCommits wraps a driver so that, while it is armed ([CommitHold.Arm]),
-// every COMMIT of a write transaction waits until it is released: the
-// transaction's statements have run and its commit has not returned, which is
-// what a disk whose fsync has stalled looks like to everything waiting on that
-// commit.
+// every COMMIT of a write transaction waits until released: statements have
+// run, the commit has not returned, as with a stalled fsync. The faults above
+// end a commit at once; a HOLD asks what the code around it does WHILE it is
+// open (what an apply loop goes on doing, what waiting callers are told).
 //
-// # Why a hold is its own instrument
+// A READ'S TRANSACTION IS NEVER HELD: [store.DB.Read] begins it read-only.
+// Every write transaction on the handle is (a node's estate and the replicated
+// one share one wrapper), so a case arms it just before its one write.
 //
-// The two faults above end a commit at once, one way or the other. A HOLD keeps
-// it open for as long as the case says: it is how a case asks what the code
-// around a commit does WHILE the commit has not returned — what an apply loop
-// goes on doing, and what the callers waiting on it are told — which a stalling
-// disk produces for seconds at a time and which no other instrument can stage.
-//
-// A READ'S TRANSACTION IS NEVER HELD: [store.DB.Read] begins it read-only, and
-// what a read commits is nothing. Every write transaction on the handle it
-// wraps is — a node's own estate and the replicated one beside it share one
-// wrapper — so a case arms it at the moment the one write it is about is next.
-//
-// RELEASED AT CLEANUP whatever the case did, because a commit left held keeps
-// its connection, the file's write lock and every goroutine behind them past
-// the case's end.
+// RELEASED AT CLEANUP whatever the case did: a held commit keeps its
+// connection, the file's write lock and the goroutines behind them alive.
 func HoldCommits(t testing.TB) *CommitHold {
 	h := &CommitHold{changed: make(chan struct{})}
 	t.Cleanup(h.Release)

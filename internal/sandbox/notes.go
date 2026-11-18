@@ -2,51 +2,28 @@ package sandbox
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// A person's notes to a turn whose executor is out, on the run's own record.
-//
-// # Who has to agree on them: the whole company, now
-//
-// From a run's launch to its turn's end, the notes a person sends the turn wait
-// here, on the run's record in the coordination store — the same record that
-// carries its bridged calls, and for the same reason. The node a person's
-// request reaches, the node serving the run's tool bridge (the seat's holder),
-// the node that resumes the turn and the node that finishes the run's ending
-// can be four different processes across a restart and a seat moving, and each
-// of them already reads this record. A note held in one node's memory would be
-// lost with that node, or reachable from it alone.
-//
-// # What this package decides, and what it does not
-//
-// The record's shape, and the conditions every change to it is taken on: a
-// note filed while the run's ending is undecided, taken only by the job the
-// taker names and only while the run is in a status the taker names, every read
-// recorded by the write that hands the note over — and a take whose answer was
-// lost settled by its identity, its reads answered to a reader that can still
-// hand them over or marked unanswered where its reader never had them
-// ([PendingStore.SettleTake]). What a note SAYS it never
-// reads: a note is sealed by the engine under the fleet keyring before it is
-// filed ([RunNote.Sealed]), and opened by the engine before anything of it
-// reaches a model (internal/engine, runsteer.go, and ADR-0067). The store keeps
-// the seal as the bytes it was handed, as it keeps an answer's
-// ([RecordedAnswer.Sealed]).
-//
-// # Bounds are the caller's
-//
-// How many notes may wait, and how many a turn takes in all, are
-// internal/agent/steer's ([NoteFiling]): this package must not import the
-// agent layer, and a second copy of the two numbers here would be one that
-// drifts.
+// A person's notes to a turn whose executor is out, on the run's own record in
+// the coordination store, since the nodes that file, serve, resume and end can
+// all differ. This package decides the record's shape and the conditions on
+// every change: a hook's serve is no read ([PendingStore.ServeHook],
+// [PendingStore.SettleHook]); an item for one job ([RunNote.For]) reaches only
+// that job; a note is sealed and never read here ([RunNote.Sealed]), and a
+// filing is a person's note alone ([ErrNoteKind]). The bounds are
+// internal/agent/steer's ([NoteFiling]). See the package doc, "A turn's notes".
 
 // RunSteer is the notes a person sent the run's turn: on the record from the
 // run's launch to its turn's end.
@@ -84,8 +61,22 @@ type RunSteer struct {
 	// every read it records ([NoteRead.Order]). The order the turn read its
 	// notes in is that number, and no clock's: the writes are made by
 	// whichever nodes launch, serve the run's bridge and resume the turn,
-	// each stamping its own time.
+	// each stamping its own time. A write that serves a note no hook was
+	// served before takes one too, and stamps it on that note
+	// ([RunNote.Place]), where every later read of the note is recorded.
 	Reads int `json:"reads,omitempty"`
+
+	// Tellings are the late calls a job's own session is KNOWN TO HOLD
+	// ([CallTelling]), each recorded by the write that confirmed the item that
+	// handed it over ([RunNote.LateCall]): OpenCode's confirmation of a
+	// delivered item ([NoteTake.Confirms]), or the verdict of the job's own
+	// session that its hook took it after its last restart ([HookSettle.Held]).
+	// Kept by every relaunch that carries the round on, after the item itself
+	// is gone ([openNotes]); cleared by one that starts a new round, whose log
+	// numbers its calls afresh. One a call, at its highest place; at most
+	// [MaxCallTellings] ([withTelling]). See the package doc, "A late call its
+	// job's session took is told to no continuation of it again".
+	Tellings []CallTelling `json:"tellings,omitempty"`
 
 	// Extra is every key of the section this build does not know, kept
 	// verbatim and written back by every write of the record (wirekeys.go).
@@ -113,21 +104,60 @@ type RunNote struct {
 	// At is when the turn took it, on the clock of the node that filed it.
 	At time.Time `json:"at"`
 
-	// Read is where the turn read it, nil while it WAITS. Recorded by the
-	// write that hands the note over, so a note is never handed over and
-	// left waiting, nor recorded read and never handed over.
+	// Read is where the turn read it, nil while it WAITS: recorded by the
+	// write that hands the note over, or, for one a hook or a poll served
+	// ([RunNote.Served]), once its harness is shown to have taken it, so a
+	// note is never recorded read and never handed over.
 	Read *NoteRead `json:"read,omitempty"`
 
-	// Served is the job the run's bridge served the note to while it waited
-	// ([PendingStore.ServeNotes]): a harness that polls for its notes —
-	// OpenCode's plugin — is answered one only once this records it, and
-	// the note is recorded read only once the harness confirms delivering it.
-	// So a note served and not read may have been delivered all the same — its
-	// confirmation lost, or its harness cut off before it landed — and a
-	// launch that continues a session tells it as a note the session may
-	// already show (internal/agent/runner). Kept once the note is read; the
-	// latest job served it, where more than one was.
+	// Served is the job the run's bridge last served the note to while it
+	// waited: by a poll ([PendingStore.ServeNotes]), read once the harness
+	// confirms it, or by a hook's serve ([PendingStore.ServeHook]), read once
+	// the job's session shows the hook took it ([PendingStore.SettleHook]). So
+	// a note served and not read may have been delivered, and a continuing
+	// launch tells it as one the session may show (internal/agent/runner).
+	// Cleared where a settle leaves no live hook serve to that job; kept once
+	// read; the latest job, where several.
 	Served string `json:"served,omitempty"`
+
+	// Place is the note's place among the turn's reads ([RunSteer.Reads]),
+	// taken by the first write that served it to a job's hook
+	// ([PendingStore.ServeHook]): every read of the note recorded after it is
+	// recorded at this place, whoever reads it, so the note stays ahead of a
+	// correction a person filed after it in every later telling, whatever its
+	// harness happened to see first. Zero for a note no hook was served.
+	Place int `json:"place,omitempty"`
+
+	// Serves are the note's serves to ONE job's hooks, oldest first, at most
+	// [MaxNoteServes] ([HookServed]): a serve to another job replaces them. A
+	// serve is LIVE while no loss struck it, the note waits, and Served names
+	// its job ([RunNote.LiveServe]): a note a later job's poll served has no
+	// live hook serve. Kept once the note is read, as the history its read was
+	// confirmed from.
+	Serves []HookServed `json:"serves,omitempty"`
+
+	// For is the one job the item is for, where the store made it that job's
+	// alone. Filed by the store alone, never by a filer
+	// ([PendingStore.FileNote] refuses one with [ErrNoteKind]): a late-call
+	// item ([RunNote.LateCall]), the one kind this build files. Wherever one
+	// is, it is counted apart ([MaxJobItems]), handed over only inside that
+	// job ([RunNote.IsFor]), passed over by every reader of a person's notes
+	// (the ending, the carry, the review, a launch's brief, the capture's
+	// cursor), and removed by the launch that opens the next job
+	// ([openNotes]). Empty for a person's note, an item of the whole turn.
+	For string `json:"for,omitempty"`
+
+	// LateCall is the call a LATE-CALL ITEM hands its job, always beside For:
+	// a call of the round whose outcome the job's session lacks, one an
+	// earlier job made that the log took late ([BridgeCall.Late]) or one of
+	// the job's own its harness stopped waiting for ([BridgeCall.Abandoned]).
+	// FILED BY THE STORE ALONE, in the writes that decide the call is late or
+	// nobody waited for it ([CoordStore.fileLateItems]). UNSEALED: it is the
+	// log's account, which the log holds in the clear and no seal proves
+	// anything of, and it claims no person's authority, so it is never handed
+	// as anybody's note. Nil on every person's note. See the package doc, "A
+	// late call is handed to the job working as it lands".
+	LateCall *LateCall `json:"late_call,omitempty"`
 
 	// LostTake is TRANSIENT, and set on a note a launch's brief carries
 	// ([PendingRun.BriefNotes]) alone: the take that recorded the note read
@@ -147,8 +177,285 @@ type RunNote struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
+// LateCall is a late-call item's call ([RunNote.LateCall]).
+//
+// A SECTION WITH AN EXTRA OF ITS OWN (wirekeys.go), as a serve is.
+type LateCall struct {
+	// Round is the round whose log listed the call ([BridgeLog.Round]),
+	// which numbers it ([BridgeCall.Appended]).
+	Round string `json:"round"`
+
+	// Call is the call as the item keeps it ([itemCall]).
+	Call BridgeCall `json:"call"`
+
+	// Extra is every key of the section this build does not know: see
+	// [RunSteer.Extra].
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// CallTelling is one late call a job's session is known to hold
+// ([RunSteer.Tellings]).
+//
+// A SECTION WITH AN EXTRA OF ITS OWN (wirekeys.go), as a late call is.
+type CallTelling struct {
+	// Round is the round whose log numbered the call ([LateCall.Round]), and
+	// Appended its place in that log ([BridgeCall.Appended]).
+	Round    string `json:"round"`
+	Appended int    `json:"appended"`
+
+	// Launch is the job whose session took it.
+	Launch string `json:"launch"`
+
+	// Place is the place among the reads ([RunSteer.Reads]) of the write that
+	// recorded it, never the item's own: a capture or a save whose cursor was
+	// read off the row before that write is below it.
+	Place int `json:"place"`
+
+	// Hook says a hook's step read the call ([HookSettle.Held]): held as the
+	// job's session showed it, which a box whose release the resume was not
+	// read in may not rebuild ([UnheldTelling]), so such a box is not
+	// credited it.
+	Hook bool `json:"hook,omitempty"`
+
+	// Extra is every key of the section this build does not know: see
+	// [RunSteer.Extra].
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// withTelling is tellings with t recorded ([RunSteer.Tellings]): one a call, by
+// its round and its place in that round's log, at the HIGHEST place among the
+// reads either names; ordered by that place; and held to [MaxCallTellings], the
+// lowest places going first. A list of its own: tellings is the record's.
+//
+// The highest, since a session that took the call only there holds it from
+// there alone, and the lower credits a capture of it between the two; and a
+// hook's, where either is ([CallTelling.Hook]). No write hands one call to two
+// jobs (the package doc's ordering), so it is the safe side of a case that
+// does not arise.
+func withTelling(tellings []CallTelling, t CallTelling) []CallTelling {
+	out := slices.Clone(tellings)
+	if i := slices.IndexFunc(out, func(held CallTelling) bool {
+		return held.Round == t.Round && held.Appended == t.Appended
+	}); i >= 0 {
+		if out[i].Place >= t.Place {
+			out[i].Hook = out[i].Hook || t.Hook
+			return out
+		}
+		t.Hook = t.Hook || out[i].Hook
+		out = slices.Delete(out, i, i+1)
+	}
+	out = append(out, t)
+	slices.SortStableFunc(out, func(a, b CallTelling) int { return cmp.Compare(a.Place, b.Place) })
+	if past := len(out) - MaxCallTellings; past > 0 {
+		out = slices.Delete(out, 0, past)
+	}
+	return out
+}
+
+// tellingOf is the telling of the late call item hands its job, read by a write
+// at place, its session being known to hold it ([RunSteer.Tellings]), by a
+// hook's step where hook.
+func tellingOf(item RunNote, job string, place int, hook bool) CallTelling {
+	return CallTelling{Round: item.LateCall.Round, Appended: item.LateCall.Call.Appended, Launch: job,
+		Place: place, Hook: hook}
+}
+
+// lateItemID is the id of the late-call item of the call the round's log took
+// appended'th, for job: one per job and call, whichever write files it, never
+// a person's request id (a UUID).
+func lateItemID(job string, appended int) string {
+	return "call:" + job + ":" + strconv.Itoa(appended)
+}
+
 // Waiting reports whether nothing has read the note yet.
 func (n RunNote) Waiting() bool { return n.Read == nil }
+
+// IsFor reports whether a reader inside job may be handed the note: a person's
+// note, an item of the whole turn, by any reader; an item for one job
+// ([RunNote.For]) by a reader inside that job alone. A reader inside no job
+// (the review's, a launch's brief) names "" and is handed no job's item.
+func (n RunNote) IsFor(job string) bool { return n.For == "" || n.For == job }
+
+// LiveServe is the note's LIVE hook serve: the newest of its serves no loss
+// struck, while the note waits and [RunNote.Served] names that serve's job.
+// False where no hook holds a serve of it now: read, every serve lost, or
+// served since by another job's poll.
+func (n RunNote) LiveServe() (HookServed, bool) {
+	if n.Read != nil || n.Served == "" {
+		return HookServed{}, false
+	}
+	for i := len(n.Serves) - 1; i >= 0; i-- {
+		if s := n.Serves[i]; s.Launch == n.Served && s.Lost == "" {
+			return s, true
+		}
+	}
+	return HookServed{}, false
+}
+
+// asksReceipts reports whether r's copy holds a hook's serve to its job that
+// only the job's session settles ([askedTakes]): an unread note or item for the
+// job, served to it by a hook no loss struck or whose call its harness
+// cancelled. A stop's and a loss's read ask the job's main thread for these
+// ([asksMainThread]), and [BoxReadBudget] holds the verdict's share for them.
+func (r PendingRun) asksReceipts() bool { return len(askedTakes(r)) > 0 }
+
+// HookServed is one hook's serve of a note to a job, as the record keeps it
+// ([PendingStore.ServeHook]): the take that served it, the job and the step of
+// its harness's loop the hook answered, when, the call it answered, and why
+// the harness is known not to hold the note from it, once that is known.
+//
+// A SECTION WITH AN EXTRA OF ITS OWN (wirekeys.go), so a key a later build adds
+// to a serve rides every write this build makes.
+type HookServed struct {
+	// Take names the serve, fresh for every take: the name its answer carries
+	// to the job's session, and what a settle finds the serve by
+	// ([PendingStore.SettleHook]).
+	Take string `json:"take"`
+
+	// Launch is the job whose hook was served.
+	Launch string `json:"launch"`
+
+	// Boundary and Iteration are the step of the harness's loop the hook
+	// answered, on the agent layer's scale (its steer boundary as text:
+	// tool_batch or finish) and the job's iteration.
+	Boundary  string `json:"boundary"`
+	Iteration int    `json:"iteration,omitempty"`
+
+	// At is when, on the clock of the node whose write recorded the serve, as
+	// every read's is ([NoteRead.At]); a read confirmed off the serve is at it.
+	At time.Time `json:"at"`
+
+	// Call is the call the serve answered, as the harness names it when it
+	// gives the call up; nil where the bridge could not read it, or the store
+	// keeps none of its shape ([keptCallOf]), so only the job's session can
+	// settle the serve.
+	Call *NoteCall `json:"call,omitempty"`
+
+	// Lost is why the harness is known not to hold the note from this serve;
+	// empty while that is not known.
+	Lost ServeLoss `json:"lost,omitempty"`
+
+	// Extra is every key of the serve this build does not know: see
+	// [RunSteer.Extra].
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// MayHold reports whether the session of the serve's job may hold the note from
+// this serve: one no loss struck, or one its harness cancelled, whose answer
+// may have outrun the cancel. False for a serve the job's whole session proves
+// it never took. A loss this build does not know may hold it too, the reading
+// that never tells a session holding a note that it lacks it.
+func (s HookServed) MayHold() bool { return s.Lost != ServeAbsent }
+
+// NoteCall is the call a hook's serve answered, as its harness names it when it
+// gives the call up: the MCP session the call came on, and the call's JSON-RPC
+// id as canonical JSON text (7, or "a"). A serve keeps one only in the shape
+// every real call has, and records any other as no call, never cut
+// ([keptCallOf]).
+//
+// A SECTION WITH AN EXTRA OF ITS OWN (wirekeys.go), as a serve is.
+type NoteCall struct {
+	Session string `json:"session"`
+	ID      string `json:"id"`
+
+	// Extra is every key of the call this build does not know: see
+	// [RunSteer.Extra].
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// Is reports whether c and other name one call: one session AND one id, since
+// a harness numbers its calls per session. The one identity of a call, the
+// store's and the engine's alike.
+func (c NoteCall) Is(other NoteCall) bool { return c.Session == other.Session && c.ID == other.ID }
+
+// NoteCallID is a JSON-RPC id as a serve keeps it ([NoteCall.ID]), its
+// canonical JSON text: id is the id as go-sdk's jsonrpc.ID holds it (its Raw,
+// an int64 or a string), and false is an id a serve keeps as none
+// ([keptCallOf]), which no real call has. The one rule the bridge reads a
+// hook's call and its cancel by, so both name a call as the store keeps it.
+func NoteCallID(id any) (string, bool) {
+	var text string
+	switch v := id.(type) {
+	case int64:
+		text = strconv.FormatInt(v, 10)
+	case string:
+		text = `"` + v + `"`
+	default:
+		return "", false
+	}
+	if !validNoteCallID(text) {
+		return "", false
+	}
+	return text, true
+}
+
+// keptCallOf is call as a serve keeps it: whole where its session is of the id
+// charset ([ValidCallID]'s) and its id a JSON integer's text or a JSON string
+// of that charset, each at most [MaxNoteCallBytes], quotes counted; none
+// otherwise. The store's one rule, whatever bridge or build handed the call, as
+// with [keptCallID]. The charset refuses nothing real (Claude Code's integer
+// ids, go-sdk's base32 sessions) and holds the row's worst case
+// (TestTheWholeRowFitsItsBudget). Never cut, since cut calls could match. See
+// the package doc, "A turn's notes".
+func keptCallOf(call *NoteCall) *NoteCall {
+	if call == nil || !validNoteSession(call.Session) || !validNoteCallID(call.ID) {
+		return nil
+	}
+	kept := *call
+	return &kept
+}
+
+// validNoteSession reports whether session is a call's session a serve keeps:
+// of the id charset, at most [MaxNoteCallBytes] of it.
+func validNoteSession(session string) bool {
+	return session != "" && len(session) <= MaxNoteCallBytes && !strings.ContainsFunc(session, outsideIDCharset)
+}
+
+// validNoteCallID reports whether id is a call's id a serve keeps: a JSON
+// integer's text or a JSON string of the id charset, at most
+// [MaxNoteCallBytes] with its quotes.
+func validNoteCallID(id string) bool {
+	return len(id) <= MaxNoteCallBytes && (jsonInteger(id) || idString(id))
+}
+
+// jsonInteger reports whether text is a JSON integer's: an optional minus,
+// then digits with no leading zero but a lone one.
+func jsonInteger(text string) bool {
+	digits := strings.TrimPrefix(text, "-")
+	return digits != "" && (digits == "0" || digits[0] != '0') &&
+		!strings.ContainsFunc(digits, func(r rune) bool { return r < '0' || r > '9' })
+}
+
+// idString reports whether text is a JSON string of the id charset: two
+// quotes around letters, digits, `-` and `_`, none of which JSON escapes.
+func idString(text string) bool {
+	inner, opened := strings.CutPrefix(text, `"`)
+	inner, closed := strings.CutSuffix(inner, `"`)
+	return opened && closed && !strings.ContainsFunc(inner, outsideIDCharset)
+}
+
+// ServeLoss is why a hook's serve is known not to have reached its job's
+// session.
+type ServeLoss string
+
+const (
+	// ServeCancelled is a serve whose call its harness cancelled: whatever the
+	// hook was answered, the harness gave it up. Its session may hold the
+	// note all the same, where the answer outran the cancel, which only the
+	// session settles ([PendingStore.SettleHook]).
+	ServeCancelled ServeLoss = "cancelled"
+
+	// ServeAbsent is a serve the job's whole session proves it never took.
+	ServeAbsent ServeLoss = "absent"
+)
+
+// ServeLosses are the losses this build knows.
+var ServeLosses = []ServeLoss{ServeCancelled, ServeAbsent}
+
+// Valid reports whether this build knows the loss. A loss it does not know is a
+// loss all the same: every reader asks whether a serve is lost, and only
+// whether its session may hold the note asks which ([HookServed.MayHold]).
+func (l ServeLoss) Valid() bool { return slices.Contains(ServeLosses, l) }
 
 // EndedNote is a note on a run's record whose end the run's ending reports
 // ([PendingRun.EndedNotes]), what it reports it as, and where.
@@ -164,60 +471,31 @@ type EndedNote struct {
 	// that told it again; for one missed, the take's whose answer was lost —
 	// the note's own read, or, where a brief told the note again and its job
 	// never started, the take's read that brief kept ([NoteRead.Retold]). Nil
-	// for a note unconfirmed, which is at the job it was served to
-	// ([RunNote.Served]), and for one expired, at no step.
+	// for a note unconfirmed, which is at its hook's serve or at the job it was
+	// served to ([RunNote.Served]), for one missed at a hook's serve, and for
+	// one expired, at no step.
 	Read *NoteRead
+
+	// Serve is the hook's serve the outcome is at, where it is one: for a note
+	// unconfirmed, the serve that was live before every read of it that handed
+	// nothing over, a take marked unanswered or the brief of a job that never
+	// started ([RunNote.LiveServe] of the note unread), else the last of its
+	// lost serves, every one of them one its session may hold
+	// ([HookServed.MayHold]); for one missed that no read marked, the last of
+	// its serves, every one of them lost, one absent. Nil otherwise.
+	Serve *HookServed
 }
 
 // EndedNotes is every note on the run's record that no step reported reading,
-// each as what the record knows became of it: what the run's ending reports
-// ([CoordinatorOptions.SteersEnded]), decided in this order of precedence.
-//
-//   - DELIVERED: read by a launch's brief that told it again ([NoteRead.Retold])
-//     after a take that recorded it read was marked unanswered, where that
-//     job started. Its harness was handed the note in its brief; the step that
-//     took it first never handed it over, and nothing reported the telling.
-//   - UNCONFIRMED: SERVED to a job's harness ([RunNote.Served]) and read by no
-//     step that handed it over: still waiting, or read only by a take marked
-//     unanswered or by the brief of a job that never started. The session it
-//     was handed into may hold it, and nothing says it does; a note that may
-//     have reached the run is never said to have reached nothing.
-//   - MISSED: read by a take marked UNANSWERED ([NoteRead.Unanswered]), and
-//     told again by no launch whose job started: the take's write landed, its
-//     answer never reached its reader, and no later write records the note
-//     handed to a harness. A launch that tells it again records the telling
-//     and clears the mark ([PendingRun.RetoldNotes]), keeping the marked
-//     take's read beside it ([NoteRead.Retold]): so a note still marked is one
-//     no launch recorded telling again, and one whose telling's job never
-//     started is missed all the same, at that take, since the brief handed
-//     nothing over.
-//   - EXPIRED: still WAITING, or read by the BRIEF OF THE RECORD'S CURRENT JOB
-//     where that job never started and that brief was the first to tell it:
-//     the job's record never took its command ([LaunchRecord.Started]),
-//     because the launch failed, or was ended, between the write that opened
-//     the job and the job's start.
-//
-// A note any other step read is none of them: that step published it delivered
-// as it read it, and the ending reports nothing of it.
-//
-// NEVER THE ROW'S COMMAND ([PendingRun.CommandID]): that is the box's, and goes
-// with the box — a park's teardown and an expired pause clear it from a job
-// that ran — so a turn ending after either would report expired the notes its
-// job's brief carried, which its runner had already recorded delivered.
-//
-// THE RECORD IS THE ONE WITNESS. A launch records its brief's notes read in the
-// write that opens its job ([PendingStore.BeginLaunch]), before it knows whether
-// the job will run, and every way it can then fail ends the record
-// ([Coordinator.abandon]) — or meets an ending another party decided, which
-// finishes in its place. So the ending is the one party that sees both what the
-// brief took and that no job ran with it, and it reports those notes under the
-// same ids as the waiting ones: a launch that reported them itself could not
-// tell a note its own brief took from one another node's ending had already
-// reported, and published one twice. And the same holds of a take whose
-// answer was lost, which reports nothing as it is lost; of a note a brief told
-// again, whose job is known to have started only once the launch has returned;
-// and of a note a harness was handed and never confirmed, which nothing else
-// sees unconfirmed.
+// each as what the record knows became of it
+// ([CoordinatorOptions.SteersEnded]), in this precedence: delivered (told again
+// by a brief whose job started), unconfirmed (served to a harness, never
+// confirmed, or every lost serve one its session may hold), missed (read by a
+// take marked unanswered and told by no started launch, or every hook serve
+// lost, one absent), expired (waiting, or first told by a brief whose job never
+// started). Items for one job are not reported, and never the row's command.
+// The record is the one witness, since only the ending sees what a brief took
+// and that no job ran. See the package doc, "A turn's notes".
 func (r PendingRun) EndedNotes() []EndedNote {
 	var out []EndedNote
 	for _, n := range r.Steer.Notes {
@@ -235,12 +513,20 @@ func (r PendingRun) EndedNotes() []EndedNote {
 // of a note that brief read is what it knew before the brief: that nothing
 // read it, where the brief was the first to tell it, and that a take whose
 // answer was lost read it, where the brief told it again — the take's read
-// the brief kept ([NoteRead.Retold]).
+// the brief kept ([NoteRead.Retold]). NOR DID A TAKE MARKED UNANSWERED, whose
+// answer never reached its reader ([NoteRead.Unanswered]). So a hook's serve
+// that was live before every read of the note that handed nothing over is
+// live still, and a note unconfirmed is reported at it: the step its hook
+// answered, never a poll's.
 func (r PendingRun) endOf(n RunNote) (EndedNote, bool) {
+	if n.For != "" {
+		return EndedNote{}, false
+	}
 	read := n.Read
 	if r.briefNeverRan(n) {
 		read = read.Retold
 	}
+	lost, mayHold := lostServe(n)
 	end := EndedNote{Note: n}
 	switch {
 	case read != nil && read.Retold != nil:
@@ -248,13 +534,45 @@ func (r PendingRun) endOf(n RunNote) (EndedNote, bool) {
 	case read != nil && !read.Unanswered:
 		return EndedNote{}, false
 	case n.Served != "":
+		// EVERY READ OF THE NOTE HANDED NOTHING OVER here: none read it, or a
+		// take marked unanswered did, or the brief of a job that never
+		// started, so its serve is asked of the note as it stood unread.
 		end.Outcome = types.SteerUnconfirmed
+		unread := n
+		unread.Read = nil
+		if live, ok := unread.LiveServe(); ok {
+			end.Serve = &live
+		}
+	case lost != nil && mayHold:
+		// EVERY LOST SERVE ITS HARNESS GAVE UP ([ServeCancelled]), whose answer
+		// may have outrun the cancel: its session may hold the note, so it is
+		// unconfirmed at the last of them, never missed, whatever take marked
+		// unanswered read it since, as a live serve's note is.
+		end.Outcome, end.Serve = types.SteerUnconfirmed, lost
 	case read != nil:
 		end.Outcome, end.Read = types.SteerMissed, read
+	case lost != nil:
+		end.Outcome, end.Serve = types.SteerMissed, lost
 	default:
 		end.Outcome = types.SteerExpired
 	}
 	return end, true
+}
+
+// lostServe is the last of n's serves a loss struck, nil where none did, and
+// whether the session of every serve a loss struck may hold the note
+// ([HookServed.MayHold]).
+func lostServe(n RunNote) (*HookServed, bool) {
+	var last *HookServed
+	mayHold := true
+	for i := range n.Serves {
+		s := n.Serves[i]
+		if s.Lost == "" {
+			continue
+		}
+		last, mayHold = &s, mayHold && s.MayHold()
+	}
+	return last, mayHold
 }
 
 // briefNeverRan reports whether n was read by the brief of the record's job
@@ -274,7 +592,8 @@ func (r PendingRun) endsNotes() bool { return len(r.EndedNotes()) > 0 }
 // loop made. At is when, on the clock of the node whose write recorded it, for
 // a person to read; Order is the place of that write among the record's reads
 // ([RunSteer.Reads]), which is what orders them — a note's Seq orders the reads
-// one write recorded.
+// one write recorded. A note a hook was served is read at its own place, its
+// first serve's ([RunNote.Place]), whichever write reads it.
 type NoteRead struct {
 	At        time.Time `json:"at"`
 	Order     int       `json:"order,omitempty"`
@@ -317,6 +636,16 @@ type NoteRead struct {
 	// reader never had the note.
 	Retold *NoteRead `json:"retold,omitempty"`
 
+	// Restarted says the read is a hook's serve its job's session shows taken
+	// BEFORE the session's last restart ([PendingStore.SettleHook]): the
+	// harness took the note, and a resume of that session rebuilds its
+	// conversation from the restart on, which is not known to hold it.
+	// Delivered all the same, and carried; but no capture of the session
+	// counts it held ([notesHeld]), so a launch that continues one tells it
+	// again. A thread that compacted or rooted again decides no take, so marks
+	// none Restarted (executor's package doc, "A hook's note").
+	Restarted bool `json:"restarted,omitempty"`
+
 	// Extra is every key of the read this build does not know — see
 	// [RunSteer.Extra].
 	Extra map[string]json.RawMessage `json:"-"`
@@ -348,7 +677,9 @@ type NoteFiling struct {
 	// MaxWaiting is how many notes may wait unread at once, and MaxNotes how
 	// many the turn takes in all — internal/agent/steer's MaxPendingNotes and
 	// MaxTurnNotes, which the caller passes so the two numbers have one home.
-	// Both required.
+	// Both required. A PERSON'S BOUNDS: they count a person's notes alone,
+	// and an item for one job a record holds ([RunNote.For]) counts toward
+	// neither.
 	MaxWaiting, MaxNotes int
 }
 
@@ -364,7 +695,9 @@ type NoteFiling struct {
 type NoteTake struct {
 	// IDs are the notes to take, by id; one no longer waiting is skipped.
 	// Empty takes nothing — a taker names what it can deliver, and a note
-	// it could not open is one it must not record read.
+	// it could not open is one it must not record read. An item for a job
+	// the take's Read does not name is skipped too ([RunNote.IsFor]), so a
+	// Read that names no job, as the review's does, takes no item at all.
 	IDs []string
 
 	Launch   string
@@ -376,6 +709,14 @@ type NoteTake struct {
 	// answered an error can find what the call recorded
 	// ([PendingStore.SettleTake]).
 	Read NoteRead
+
+	// Confirms says the take is its harness's own confirmation that it
+	// delivered the notes into the job's session (OpenCode's plugin, once
+	// OpenCode reports a note delivered), never a step that hands them over:
+	// such a take records a telling of every late-call item it reads
+	// ([RunSteer.Tellings]). A hook's take, recorded before its answer reaches
+	// the harness, never does. In-process, never on the wire.
+	Confirms bool
 }
 
 // NoteServe is a poll of a run's notes serving them to the run's harness
@@ -383,11 +724,66 @@ type NoteTake struct {
 // poll serves, to the statuses it may serve in, and to an undecided ending.
 // Unlike a take it holds no lease: a poll is the bridge's, as its takes are.
 type NoteServe struct {
-	// IDs are the notes to serve, by id; one no longer waiting is skipped.
+	// IDs are the notes to serve, by id; one no longer waiting is skipped,
+	// and so is an item for another job ([RunNote.IsFor]).
 	IDs []string
 
 	Launch   string
 	Statuses []string
+}
+
+// HookServe is a hook's take serving notes to its job's harness
+// ([PendingStore.ServeHook]), PINNED as a poll's serve is ([NoteServe]): to the
+// job the hook serves, to the statuses it may serve in, and to an undecided
+// ending, with no lease, the hook's take being the bridge's.
+type HookServe struct {
+	// IDs are the notes to serve, by id.
+	IDs []string
+
+	Launch   string
+	Statuses []string
+
+	// Serve is the serve as the record keeps it ([HookServed]): its Take,
+	// fresh for every take, and the step it answers; and the Call it answers,
+	// held to [MaxNoteCallBytes] and the id charset and kept as none outside
+	// them ([keptCallOf]). The store stamps its job (Launch) and its At, and
+	// no loss.
+	Serve HookServed
+
+	// Cancelled are the calls the serving inbox heard its harness cancel:
+	// the write loses each live serve to the job that answered one, before it
+	// serves, so the note is served again in the same write.
+	Cancelled []NoteCall
+
+	// Unanswered are the serving inbox's takes whose hooks were answered
+	// nothing: the write removes each one's serve to the job before it
+	// serves, so the note is served again without spending its bound.
+	Unanswered []string
+}
+
+// HookSettle is a settle of a job's hooks' serves ([PendingStore.SettleHook]),
+// by their takes and the calls they answered: the facts a serving inbox learns
+// once its hook was answered, and the verdict of the job's own session.
+type HookSettle struct {
+	// Launch is the job whose serves are settled; required.
+	Launch string
+
+	// Unanswered are takes whose hooks were answered nothing: their serves go,
+	// and each note waits again, no session holding it from them.
+	Unanswered []string
+
+	// Cancelled are calls the job's harness cancelled.
+	Cancelled []NoteCall
+
+	// Held are takes the job's session shows taken, after its last restart.
+	Held []string
+
+	// Restarted are takes the job's session shows taken before its last
+	// restart ([NoteRead.Restarted]).
+	Restarted []string
+
+	// Absent are takes the job's whole session proves it never took.
+	Absent []string
 }
 
 // NoteSettle is a take settled once its answer was lost
@@ -449,7 +845,18 @@ func viewOf(update coord.SandboxRunUpdate) (NotesView, error) {
 // errNoteBounds is a filing that names no bounds.
 var errNoteBounds = errors.New("sandbox: a note is filed with the turn's bounds, and none were given")
 
-// FileNote files a note on a run's record. See the contract on [PendingStore].
+// ErrNoteKind is a filing of a note that is not a person's: one naming the job
+// it is for ([RunNote.For]) or a call it hands one ([RunNote.LateCall]),
+// refused by [PendingStore.FileNote] before anything is written. An item for
+// one job is the store's to file, in its own writes of the record, never a
+// filer's: the engine files a person's note, which reaches a job only as that
+// person's words, and a filer that could name a job could hand it words on the
+// store's account instead.
+var ErrNoteKind = errors.New("sandbox: a filed note is a person's: an item for one job is the " +
+	"store's to file, never a filer's")
+
+// FileNote files a person's note on a run's record. See the contract on
+// [PendingStore].
 //
 // NO FENCE, as [CoordStore.AppendBridgeCall] takes none: a person's note is an
 // append to the turn, never an ownership decision, and refusing one because the
@@ -460,6 +867,11 @@ func (s *CoordStore) FileNote(ctx context.Context, turnID string, filing NoteFil
 	switch {
 	case filing.MaxWaiting <= 0 || filing.MaxNotes <= 0:
 		return "", PendingRun{}, errNoteBounds
+	case note.For != "" || note.LateCall != nil:
+		// REFUSED, AND NO ANSWER OF A STATUS: whatever the record holds,
+		// nothing a filer hands in is filed as an item.
+		return "", PendingRun{}, fmt.Errorf("sandbox: note %s to run %s names job %q or a call: %w",
+			note.ID, turnID, note.For, ErrNoteKind)
 	case note.ID == "" || len(note.Sealed) == 0:
 		return "", PendingRun{}, fmt.Errorf("sandbox: a note to run %s needs its id and its seal", turnID)
 	case len(note.Sealed) > MaxNoteSealedBytes:
@@ -471,7 +883,9 @@ func (s *CoordStore) FileNote(ctx context.Context, turnID string, filing NoteFil
 	if note.At.IsZero() {
 		note.At = s.clock()
 	}
-	note.Read = nil
+	// FILED WAITING, SERVED TO NOBODY: what a note's reads and serves say is
+	// the store's to record, never a filer's to hand in.
+	note.Read, note.Served, note.Place, note.Serves = nil, "", 0, nil
 	var (
 		filed NoteFiled
 		read  PendingRun
@@ -479,20 +893,15 @@ func (s *CoordStore) FileNote(ctx context.Context, turnID string, filing NoteFil
 	run, won, found, err := s.writeFound(ctx, turnID, true, Fence{}, func(run *PendingRun) bool {
 		read = *run
 		notes := run.Steer.Notes
-		waiting := 0
-		for _, held := range notes {
-			if held.ID == note.ID {
-				filed = NoteDuplicate
-				return false
-			}
-			if held.Waiting() {
-				waiting++
-			}
+		if slices.ContainsFunc(notes, func(held RunNote) bool { return held.ID == note.ID }) {
+			filed = NoteDuplicate
+			return false
 		}
 		// SPENT BEFORE FULL, as a turn's box answers: a turn that has taken
 		// all it takes will never take this note.
+		mine, waiting := personsNotes(notes, run.LaunchID)
 		switch {
-		case len(notes) >= filing.MaxNotes:
+		case mine >= filing.MaxNotes:
 			filed = NoteSpent
 			return false
 		case waiting >= filing.MaxWaiting:
@@ -520,6 +929,118 @@ func (s *CoordStore) FileNote(ctx context.Context, turnID string, filing NoteFil
 	return filed, read, nil
 }
 
+// personsNotes is how many of notes are a person's, the turn's own and no job's
+// item, and how many of those wait to be read at the turn's next step: every
+// one unread but a note a hook's live serve handed to job, the record's own
+// ([RunNote.LiveServe]). A hook's answer hands its notes to the model at the
+// step it answers, so such a note no longer waits for a step to read it,
+// whatever its session's record later says; a note a poll served still does,
+// until its harness confirms delivering it at its next step.
+func personsNotes(notes []RunNote, job string) (mine, waiting int) {
+	for _, held := range notes {
+		if held.For != "" {
+			continue
+		}
+		mine++
+		if !held.Waiting() {
+			continue
+		}
+		if live, ok := held.LiveServe(); ok && live.Launch == job {
+			continue
+		}
+		waiting++
+	}
+	return mine, waiting
+}
+
+// LateCallStatuses are the statuses a late-call item is filed in: those a run's
+// own harness takes notes in, from the launch that opens its job to the claim
+// of its completion (internal/engine's steerTakeStatuses, held equal by a
+// test). A job parked, claimed or collected is handed nothing more, so the
+// call is left to the next continuation, which tells it.
+var LateCallStatuses = []string{StatusLaunching, StatusRunning}
+
+// fileLateItems files a late-call item for job, of the round round, for each of
+// calls the record does not hold one of yet ([RunNote.LateCall]): in ONE live
+// write of the record, pinned to the job, [LateCallStatuses] and an undecided
+// ending, in the calls' order and up to [MaxJobItems] items for the job. A call
+// an older build appended unnumbered, one a person approved and one no save
+// point leaves unheld are none. See the package doc, "A late call is handed
+// to the job working as it lands".
+//
+// NEVER AN ERROR TO ITS CALLER, whose own write landed: what became of a call
+// it did not file is said here, and the call's mark stands, which every
+// continuation of the round tells.
+func (s *CoordStore) fileLateItems(ctx context.Context, turnID, job, round string, calls []BridgeCall) {
+	calls = slices.DeleteFunc(slices.Clone(calls), func(c BridgeCall) bool {
+		return c.Appended == 0 || c.Approved || !c.unheld()
+	})
+	if job == "" || len(calls) == 0 {
+		return
+	}
+	var filed, spent int
+	moved := false
+	_, _, _, err := s.writeFound(ctx, turnID, true, Fence{}, func(run *PendingRun) bool {
+		filed, spent, moved = 0, 0, run.LaunchID != job || !slices.Contains(LateCallStatuses, run.Status)
+		if moved {
+			return false
+		}
+		notes := slices.Clone(run.Steer.Notes)
+		held := 0
+		for _, n := range notes {
+			if n.For == job {
+				held++
+			}
+		}
+		at := s.clock()
+		for _, c := range calls {
+			id := lateItemID(job, c.Appended)
+			if slices.ContainsFunc(notes, func(n RunNote) bool { return n.ID == id }) {
+				continue
+			}
+			if held >= MaxJobItems {
+				spent++
+				continue
+			}
+			run.Steer.Seq++
+			notes = append(notes, RunNote{ID: id, Seq: run.Steer.Seq, At: at, For: job,
+				LateCall: &LateCall{Round: round, Call: itemCall(c)}})
+			held, filed = held+1, filed+1
+		}
+		run.Steer.Notes = notes
+		return filed > 0
+	})
+	switch {
+	case errors.Is(err, ErrRunEnding):
+		moved = true
+	case err != nil:
+		log.WarnContext(ctx, "sandbox_late_call_unhanded", "turn_id", turnID, "launch_id", job,
+			"calls", placesOf(calls), "error", err.Error(),
+			"detail", "the job is handed none of these calls as they land; the next continuation tells them")
+		return
+	}
+	if moved {
+		log.DebugContext(ctx, "sandbox_late_call_not_handed", "turn_id", turnID, "launch_id", job,
+			"calls", placesOf(calls), "detail", "the record no longer names a job working that takes notes, "+
+				"so the next continuation tells these calls")
+	}
+	if spent > 0 {
+		log.InfoContext(ctx, "sandbox_late_calls_spent", "turn_id", turnID, "launch_id", job, "calls", spent,
+			"detail", fmt.Sprintf("the job holds the %d late calls it may be handed; the next continuation "+
+				"tells the rest", MaxJobItems))
+	}
+}
+
+// placesOf is each of calls as a log line names it: its tool and its number in
+// its round's log.
+func placesOf(calls []BridgeCall) []string {
+	out := make([]string, 0, len(calls))
+	for _, c := range calls {
+		out = append(out, c.Name+"#"+strconv.Itoa(c.Appended))
+	}
+	return out
+}
+
 // TakeNotes records notes read and answers the ones this take recorded. See the
 // contract on [PendingStore].
 func (s *CoordStore) TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error) {
@@ -540,13 +1061,25 @@ func (s *CoordStore) TakeNotes(ctx context.Context, turnID string, take NoteTake
 		}
 		// THIS WRITE'S PLACE among the record's reads, stamped on each read
 		// it records — see [RunSteer.Reads].
-		read.At, read.Order = s.clock(), run.Steer.Reads+1
-		notes := slices.Clone(run.Steer.Notes)
+		// But a note a hook was served is read at its own place
+		// ([RunNote.Place]), and the record moves its count only where a
+		// read took the write's new place.
+		read.At = s.clock()
+		order, placed := run.Steer.Reads+1, false
+		notes, tellings := slices.Clone(run.Steer.Notes), run.Steer.Tellings
 		for i, held := range notes {
-			if !held.Waiting() || !slices.Contains(take.IDs, held.ID) {
+			if !held.Waiting() || !held.IsFor(take.Read.Launch) || !slices.Contains(take.IDs, held.ID) {
 				continue
 			}
 			marked := read
+			if marked.Order = held.Place; marked.Order == 0 {
+				marked.Order, placed = order, true
+			}
+			// A CONFIRMATION OF A LATE CALL'S DELIVERY, told at this write's
+			// own place ([CallTelling.Place]), which the record's count moves to.
+			if take.Confirms && held.LateCall != nil {
+				tellings, placed = withTelling(tellings, tellingOf(held, take.Read.Launch, order, false)), true
+			}
 			held.Read = &marked
 			notes[i] = held
 			taken = append(taken, held)
@@ -554,8 +1087,10 @@ func (s *CoordStore) TakeNotes(ctx context.Context, turnID string, take NoteTake
 		if len(taken) == 0 {
 			return false
 		}
-		run.Steer.Notes = notes
-		run.Steer.Reads = read.Order
+		run.Steer.Notes, run.Steer.Tellings = notes, tellings
+		if placed {
+			run.Steer.Reads = order
+		}
 		return true
 	})
 	if err != nil || !won {
@@ -589,7 +1124,7 @@ func (s *CoordStore) ServeNotes(ctx context.Context, turnID string, serve NoteSe
 		notes := slices.Clone(run.Steer.Notes)
 		marked := false
 		for i, held := range notes {
-			if !held.Waiting() || !slices.Contains(serve.IDs, held.ID) {
+			if !held.Waiting() || !held.IsFor(serve.Launch) || !slices.Contains(serve.IDs, held.ID) {
 				continue
 			}
 			if held.Served != serve.Launch {
@@ -670,6 +1205,256 @@ func (s *CoordStore) SettleTake(ctx context.Context, turnID string, settle NoteS
 	return recorded, nil
 }
 
+// errHookServeUnnamed is a hook's serve that names no job, no status or no take.
+var errHookServeUnnamed = errors.New("sandbox: a hook's serve of a run's notes names its job, the statuses it " +
+	"may serve in and its take, and one was not given")
+
+// ServeHook records the notes a hook's serve names served to its job's hook, and
+// answers the ones this call served. See the contract on [PendingStore].
+//
+// THROUGH THE WRITE A LIVE RUN TAKES, pinned as a take is
+// ([CoordStore.TakeNotes]): a run whose ending is decided serves nothing more,
+// and a record gone, or on another job or in another status, is nothing
+// served, never an error.
+func (s *CoordStore) ServeHook(ctx context.Context, turnID string, serve HookServe) ([]RunNote, error) {
+	if serve.Launch == "" || len(serve.Statuses) == 0 || serve.Serve.Take == "" {
+		return nil, fmt.Errorf("sandbox: run %s: %w", turnID, errHookServeUnnamed)
+	}
+	var served []RunNote
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		served = nil
+		if run.LaunchID != serve.Launch || !slices.Contains(serve.Statuses, run.Status) {
+			return false
+		}
+		notes := slices.Clone(run.Steer.Notes)
+		changed := false
+		// FIRST WHAT THE SERVING INBOX KNOWS ITS HARNESS NEVER TOOK: a live
+		// serve whose call it heard cancelled is lost, and the serve of a
+		// take it answered nothing is removed, in this write, so the note is
+		// served again here whatever the inbox's view of the record, or a
+		// settle made off the hook's path, has caught up with.
+		for i, held := range notes {
+			if settled, touched := unserved(held, serve.Launch, serve.Cancelled, serve.Unanswered); touched {
+				notes[i], changed = settled, true
+			}
+		}
+		at := s.clock()
+		order, placed := run.Steer.Reads+1, false
+		for i, held := range notes {
+			if !slices.Contains(serve.IDs, held.ID) || !held.Waiting() || !held.IsFor(serve.Launch) {
+				continue
+			}
+			if live, ok := held.LiveServe(); ok && live.Launch == serve.Launch {
+				continue
+			}
+			// A LIST OF ANOTHER JOB'S SERVES COUNTS NONE, and is replaced:
+			// the bound is the serves of one note to one job.
+			serves := slices.DeleteFunc(slices.Clone(held.Serves), func(h HookServed) bool {
+				return h.Launch != serve.Launch
+			})
+			if len(serves) >= MaxNoteServes {
+				continue
+			}
+			// THE FIRST SERVE PLACES THE NOTE among the turn's reads, once a
+			// write: every later read of it is recorded at this place.
+			if held.Place == 0 {
+				held.Place, placed = order, true
+			}
+			next := serve.Serve
+			next.Launch, next.At, next.Lost, next.Call = serve.Launch, at, "", keptCallOf(serve.Serve.Call)
+			serves = append(serves, next)
+			held.Serves, held.Served = serves, serve.Launch
+			notes[i], changed = held, true
+			served = append(served, held)
+		}
+		if !changed {
+			return false
+		}
+		run.Steer.Notes = notes
+		if placed {
+			run.Steer.Reads = order
+		}
+		return true
+	})
+	if err != nil || !won {
+		// NOT SERVED unless the write landed: what a decision chose before it
+		// lost a race, to a record that then went or to the run's ending
+		// decided under it (which mutate answers as nothing won, never an
+		// error), was never recorded served.
+		return nil, err
+	}
+	return served, nil
+}
+
+// errHookSettleUnnamed is a settle of hooks' serves that names no job.
+var errHookSettleUnnamed = errors.New("sandbox: a settle of a hook's serves names the job they served, and none " +
+	"was given")
+
+// SettleHook settles a job's hooks' serves by their takes and the calls they
+// answered. See the contract on [PendingStore].
+//
+// THROUGH THE WRITE EVERY RUN TAKES, its ending decided or not, as a take's
+// settle is ([CoordStore.SettleTake]): what a hook's serve handed over is a
+// fact about the job, true whoever holds the record, and a serve's own write
+// can be in flight whatever the run's state. And ANSWERING NOTHING WHERE THE
+// LAST ATTEMPT FOUND NO RECORD: an attempt that decided and then lost its race
+// to the record's removal recorded nothing, and what it decided is no answer.
+func (s *CoordStore) SettleHook(ctx context.Context, turnID string, settle HookSettle) ([]RunNote, error) {
+	if settle.Launch == "" {
+		return nil, errHookSettleUnnamed
+	}
+	confirms := len(settle.Held) > 0 || len(settle.Restarted) > 0
+	var answered []RunNote
+	_, _, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		answered = nil
+		// A TAKE NAMED UNANSWERED THAT NO SERVE ON THE RECORD NAMES may have
+		// its own write in flight: sent before its caller gave up on it, and
+		// taken by the store only after this read. It was conditioned on a
+		// version this write moves past, so the record is written all the
+		// same, and once this lands that serve never can. Where the take's
+		// serve is on the record, its write landed and nothing of it is left
+		// in flight.
+		inFlight := slices.ContainsFunc(settle.Unanswered, func(take string) bool {
+			return !slices.ContainsFunc(run.Steer.Notes, func(n RunNote) bool {
+				return slices.ContainsFunc(n.Serves, func(h HookServed) bool { return h.Take == take })
+			})
+		})
+		notes, tellings := slices.Clone(run.Steer.Notes), run.Steer.Tellings
+		order, placed, changed := run.Steer.Reads+1, false, false
+		for i, held := range notes {
+			next, touched, tookPlace := settledServes(held, settle, order)
+			if touched {
+				notes[i], changed, placed = next, true, placed || tookPlace
+			}
+			// A LATE CALL THE JOB'S SESSION SHOWS ITS HOOK TOOK AFTER ITS LAST
+			// RESTART, told at this write's own place, never the item's
+			// ([CallTelling.Place]); one shown taken only before it is not.
+			if held.Waiting() && next.LateCall != nil && next.Read != nil && !next.Read.Restarted {
+				tellings, placed = withTelling(tellings, tellingOf(next, settle.Launch, order, true)), true
+			}
+			if touched || (confirms && readByServeOf(next, settle.Launch)) {
+				answered = append(answered, next)
+			}
+		}
+		if !changed {
+			return inFlight
+		}
+		run.Steer.Notes, run.Steer.Tellings = notes, tellings
+		if placed {
+			run.Steer.Reads = order
+		}
+		return true
+	})
+	switch {
+	case err != nil:
+		return nil, err
+	case !found:
+		return nil, nil
+	}
+	return answered, nil
+}
+
+// unserved is n with its serves to job settled by what its harness is known
+// never to have taken: the serve of a take named in unanswered is removed, its
+// hook having been answered nothing, and the LIVE serve whose call is one named
+// in cancelled is lost to the cancel; [RunNote.Served] is cleared where no live
+// serve to job is left. It reports whether anything changed. A note read is
+// left as it is: its serves are its read's history.
+func unserved(n RunNote, job string, cancelled []NoteCall, unanswered []string) (RunNote, bool) {
+	if n.Read != nil || (len(cancelled) == 0 && len(unanswered) == 0) {
+		return n, false
+	}
+	changed := false
+	serves := make([]HookServed, 0, len(n.Serves))
+	for _, h := range n.Serves {
+		switch {
+		case h.Launch != job:
+		case slices.Contains(unanswered, h.Take):
+			changed = true
+			continue
+		case h.Lost == "" && n.Served == job && h.Call != nil && slices.ContainsFunc(cancelled, h.Call.Is):
+			h.Lost, changed = ServeCancelled, true
+		}
+		serves = append(serves, h)
+	}
+	if !changed {
+		return n, false
+	}
+	n.Serves = nil
+	if len(serves) > 0 {
+		n.Serves = serves
+	}
+	return withoutDeadServe(n, job), true
+}
+
+// withoutDeadServe is n with [RunNote.Served] cleared where it names job and no
+// live serve to job is left ([RunNote.LiveServe]).
+func withoutDeadServe(n RunNote, job string) RunNote {
+	if _, live := n.LiveServe(); n.Served == job && !live {
+		n.Served = ""
+	}
+	return n
+}
+
+// settledServes is n with its serves to the settle's job settled
+// ([PendingStore.SettleHook]), whether anything changed, and whether the read
+// it recorded took next, the write's own place among the reads, which only a
+// note no serve placed can ([RunNote.Place]). A note read, or holding no serve
+// to the job, is left as it is.
+func settledServes(n RunNote, settle HookSettle, next int) (RunNote, bool, bool) {
+	if n.Read != nil || !slices.ContainsFunc(n.Serves, func(h HookServed) bool { return h.Launch == settle.Launch }) {
+		return n, false, false
+	}
+	n, changed := unserved(n, settle.Launch, nil, settle.Unanswered)
+	// THE SESSION OUTRANKS A CANCEL, and an absence the same settle names: a
+	// note one of whose serves its session shows taken is read, from the
+	// EARLIEST such serve, whatever any of them lost. One shown taken only
+	// before the session's last restart is read so, marked, where none is
+	// shown taken after it.
+	for _, restarted := range []bool{false, true} {
+		takes := settle.Held
+		if restarted {
+			takes = settle.Restarted
+		}
+		i := slices.IndexFunc(n.Serves, func(h HookServed) bool {
+			return h.Launch == settle.Launch && slices.Contains(takes, h.Take)
+		})
+		if i < 0 {
+			continue
+		}
+		h := n.Serves[i]
+		read := NoteRead{At: h.At, Order: n.Place, Phase: string(types.PhaseExecute), Iteration: h.Iteration,
+			Round: 1, Boundary: h.Boundary, Launch: settle.Launch, Take: h.Take, Restarted: restarted}
+		tookPlace := read.Order == 0
+		if tookPlace {
+			read.Order = next
+		}
+		n.Read, n.Served = &read, settle.Launch
+		return n, true, tookPlace
+	}
+	n, cancelled := unserved(n, settle.Launch, settle.Cancelled, nil)
+	changed = changed || cancelled
+	serves, absent := slices.Clone(n.Serves), false
+	for i, h := range serves {
+		if h.Launch == settle.Launch && (h.Lost == "" || h.Lost == ServeCancelled) &&
+			slices.Contains(settle.Absent, h.Take) {
+			serves[i].Lost, absent = ServeAbsent, true
+		}
+	}
+	if absent {
+		n.Serves, changed = serves, true
+		n = withoutDeadServe(n, settle.Launch)
+	}
+	return n, changed, false
+}
+
+// readByServeOf reports whether n is read off one of its serves to job: a read
+// a settle confirmed off the job's own session.
+func readByServeOf(n RunNote, job string) bool {
+	return n.Read != nil && n.Read.Launch == job && n.Read.Take != "" &&
+		slices.ContainsFunc(n.Serves, func(h HookServed) bool { return h.Launch == job && h.Take == n.Read.Take })
+}
+
 // MarkPulled records that a job's harness has asked for notes. See the
 // contract on [PendingStore].
 func (s *CoordStore) MarkPulled(ctx context.Context, turnID, launch string) (bool, error) {
@@ -723,36 +1508,14 @@ func (s *CoordStore) WatchNotes(ctx context.Context, turnID string) (<-chan Note
 }
 
 // openNotes is the write a launch makes of the turn's notes on the record it
-// opens, under the job it opens ([PendingStore.BeginLaunch]), in this order:
-//
-//   - the brief's notes ([PendingRun.BriefNotes]) are recorded READ by the job:
-//     a note the record already holds, still waiting, is recorded read; one it
-//     holds read by the take the brief names as lost ([RunNote.LostTake]) is
-//     recorded read by the job in that take's place, the brief being the first
-//     to tell it, and at that take's own place among the reads, which this
-//     write leaves as it was; one it holds read otherwise is left as it was
-//     read; and any other — a turn's first segment's own, which the record has
-//     never held — is added already read, numbered as if filed now. Every
-//     other read this write records takes its place among the record's reads
-//     ([RunSteer.Reads]);
-//   - the notes the brief tells again ([PendingRun.RetoldNotes]) are recorded
-//     read by the job, told again: each one the record holds read by a take
-//     marked unanswered, in that take's place and at that take's own place
-//     among the reads, which this write leaves as it was, the take's read kept
-//     beside the telling ([NoteRead.Retold]). A note the record holds
-//     otherwise is left as it is, and one it does not hold is never added:
-//     there is nothing to tell again;
-//   - then the notes the first segment's box still held ([PendingRun.HandedNotes])
-//     are filed WAITING, numbered after them — so they are on the record from
-//     the write that creates it, ahead of every note a person files there once
-//     it exists. A note the record already holds is left as it is.
-//
-// The handed notes are filed WHATEVER THE TURN'S BOUNDS SAY: the box answered
-// each one accepted under the same two bounds ([NoteFiling]), so each is a note
-// the person was told the turn holds, and a hand-over that refused one would
-// turn an accepted note into an expiry. They count against the bounds for every
-// filing after them.
+// opens ([PendingStore.BeginLaunch]), in order: every item for one job removed;
+// the brief's notes ([PendingRun.BriefNotes]) recorded read by the job; the
+// notes it tells again ([PendingRun.RetoldNotes]) recorded read, told again;
+// then the notes the first segment's box held ([PendingRun.HandedNotes]) filed
+// waiting, whatever the turn's bounds say, since the box accepted each under
+// them. See the package doc, "A turn's notes".
 func openNotes(steer *RunSteer, run PendingRun, launch string, at time.Time) {
+	steer.Notes = slices.DeleteFunc(steer.Notes, func(held RunNote) bool { return held.For != "" })
 	order := steer.Reads + 1
 	for _, note := range run.BriefNotes {
 		if note.ID == "" {
@@ -766,6 +1529,13 @@ func openNotes(steer *RunSteer, run PendingRun, launch string, at time.Time) {
 		read.Order = order
 		if i := slices.IndexFunc(steer.Notes, func(held RunNote) bool { return held.ID == note.ID }); i >= 0 {
 			switch held := steer.Notes[i]; {
+			case held.Waiting() && held.Place > 0:
+				// AT THE NOTE'S OWN PLACE, its first serve's: a note a person
+				// filed after it, correcting it, stays after it, whatever the
+				// harness it was served to happened to see first.
+				placed := read
+				placed.Order = held.Place
+				steer.Notes[i].Read = &placed
 			case held.Waiting():
 				steer.Notes[i].Read = &read
 				steer.Reads = order

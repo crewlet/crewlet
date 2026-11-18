@@ -11,26 +11,19 @@ import (
 )
 
 // FileCursor is one stream's committed checkpoint AS A COPY KEEPS IT: where
-// the applier had got to, and which stream it was applying.
-//
-// THE IDENTITY TRAVELS WITH THE POSITION for the reason [CursorFor]'s own doc
-// gives about the same three values — "reading them separately is how one of
-// them ends up describing a different checkpoint from the other two". This
-// read used to take the generation and the sequence and leave the instant in
-// the row, so a manifest stamped from it paired a position out of the FILE
-// with an identity out of the donor's live broker handle. Those are two
-// different streams the moment one is recreated, and the artefact that
-// resulted was self-consistent enough to pass every check a recipient made.
+// the applier had got to, and which stream it was applying. The identity
+// travels with the position for the reason [CursorFor] gives: a position out
+// of the file paired with an identity out of the live broker handle names two
+// streams once one is recreated, and still passes every check a recipient
+// makes.
 type FileCursor struct {
 	// Position is the checkpoint the copy committed.
 	Position Position
 
 	// StreamCreatedAt is the creation instant ([StreamCreatedAt]) of the
-	// stream the applier was reading when it committed that position. Zero
-	// only where that applier was built with no creation instant
-	// ([RunnerDeps].StreamCreatedAt's zero, which the engine never passes)
-	// — a claim about nothing rather than a claim about a stream created at
-	// the epoch.
+	// stream the applier was reading at that position. Zero only where the
+	// applier had none ([RunnerDeps].StreamCreatedAt's zero, which the engine
+	// never passes): a claim about nothing, not a stream created at the epoch.
 	StreamCreatedAt time.Time
 
 	// AppliedVersion is the highest record version the copy's rows on the
@@ -43,24 +36,13 @@ type FileCursor struct {
 // CursorsInFile reads every domain's committed checkpoint out of a COPY of the
 // replicated estate.
 //
-// # Why a position is read from the file and never from the live database
-//
-// The checkpoint commits in the SAME transaction as the rows it describes, so
-// the position inside a file is the only position that describes that file. A
-// caller that stamped its manifest from the live cursor would be writing down
-// where the node was when the copy started, not where the copy actually
-// finished — and a copy is taken while the applier is running, so those two
-// differ by however long it took.
-//
-// It is the same read for both artefacts a node produces, and that is why it
-// is here rather than beside either: a snapshot names its positions so a
-// recipient can refuse a stale donor, and a backup names them so a restore
-// knows which records the log still has to replay. Two implementations of one
-// query is how one of them starts reading a column the other dropped.
-//
-// The file is opened as ONE ESTATE. [store.OpenNode] would treat it as a node
-// — applying the node estate's whole migration sequence into this copy of the
-// replicated estate's file.
+// The position comes from the file, never the live database: the checkpoint
+// commits with the rows it describes, so only the file's own position
+// describes the file, while the live cursor moves on during the copy.
+// Snapshots (so a recipient can refuse a stale donor) and backups (so a
+// restore knows what to replay) share this one read, so neither reads a column
+// the other dropped. The file is opened as ONE ESTATE: [store.OpenNode] would
+// apply the node estate's migrations into this replicated copy.
 func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, error) {
 	db, err := store.OpenEstate(ctx, store.EstateReplicated, path, store.Options{})
 	if err != nil {
@@ -75,12 +57,10 @@ func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, err
 }
 
 // Cursors reads every domain's committed checkpoint out of one replicated
-// estate, keyed by stream: [CursorsInFile]'s read, over a handle the caller
+// estate, keyed by stream: [CursorsInFile]'s read over a handle the caller
 // already holds (a backup pins the live estate's positions before copying it).
-//
-// ONLY THE LOGS WITH A ROW. A row is written by a log's first apply, so a log
-// nobody has written yet is absent here, and a caller naming every log places
-// it at the zero position itself.
+// Only logs with a row appear: a log's first apply writes it, so a caller
+// naming every log places an absent one at the zero position itself.
 func Cursors(ctx context.Context, db ReadEstate) (map[string]FileCursor, error) {
 	out := map[string]FileCursor{}
 	if err := db.Read(ctx, func(tx *sql.Tx) error {
@@ -115,12 +95,11 @@ func Cursors(ctx context.Context, db ReadEstate) (map[string]FileCursor, error) 
 // CursorFor reads ONE stream's committed checkpoint out of the LIVE replicated
 // estate, reporting false when this node has never committed on it.
 //
-// Two callers need it and both need the same three values: the loop resumes
-// its broker consumer from the sequence, stamps its records with the
-// generation, and detects a recreated stream from the instant. Reading them
-// separately is how one of them ends up describing a different checkpoint from
-// the other two. [CheckpointOf] is the same read with the record the
-// checkpoint names beside it.
+// The three values come from one read: the loop resumes its consumer from the
+// sequence, stamps records with the generation and detects a recreated stream
+// from the instant, and reading them separately lets one describe a different
+// checkpoint from the other two. [CheckpointOf] is the same read with the
+// record the checkpoint names beside it.
 func CursorFor(ctx context.Context, db ReadEstate, stream string) (Position, time.Time, bool, error) {
 	cp, found, err := CheckpointOf(ctx, db, stream)
 	return cp.At, cp.KeyedTo, found, err

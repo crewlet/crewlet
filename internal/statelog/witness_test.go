@@ -34,8 +34,8 @@ func (r *witnessed) all() []statelog.Refusal {
 	return slices.Clone(r.seen)
 }
 
-// witnessedRunner rebuilds the harness's runner with a witness, over the same
-// database, applier and broker — the shape of a node process starting.
+// witnessedRunner rebuilds the harness's runner with a witness over the same
+// database, applier and broker, as a node process starts.
 func (h *applyHarness) witnessedRunner(w statelog.Witness) {
 	h.t.Helper()
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
@@ -99,12 +99,10 @@ func sealedUnder(t *testing.T, keyID string, e statelog.Envelope) []byte {
 // A RECORD SIGNED UNDER A KEY THIS NODE LACKS IS WITNESSED ONCE PER KEY, AND
 // AGAIN BY THE NEXT PROCESS THAT MEETS IT.
 //
-// Two records under one unknown id are one fact — an operator's keyring is
-// missing that key — and a row per record would put a rotation's whole
-// backlog on the feed. A second id is a second fact. And a restart meets the
-// retained records only through the reprocess, never through a decode, so a
-// witness wired to the decode alone would say nothing on the one boot an
-// operator is watching for it.
+// Records under one unknown id are one fact (the keyring lacks that key), so a
+// row per record would put a rotation's backlog on the feed. A restart meets
+// retained records only through the reprocess, never a decode, so a witness
+// wired to the decode alone says nothing on the boot an operator watches.
 //
 // Mutations: drop the dedupe and the first run witnesses three; drop the
 // reprocess arm and the second process witnesses none.
@@ -202,12 +200,8 @@ func TestATamperedRecordIsWitnessedAsTheApplierStops(t *testing.T) {
 }
 
 // THE KEY ID IS WHATEVER THE FRAME SAYS, SO WHAT A WITNESS HEARS IS CAPPED.
-//
-// Anything that can reach a cluster port can write frames naming a fresh id
-// each, and every id would otherwise be a row on the audit feed that a writer
-// who is not the fleet authored. Past [statelog.MaxWitnessedKeys] the records
-// are still retained, logged and counted — only the feed stops hearing about
-// new ids.
+// Past [statelog.MaxWitnessedKeys] the records are still retained, logged and
+// counted; only the feed stops hearing new ids.
 //
 // Mutation: drop the cap and every id is witnessed.
 func TestTheWitnessHearsAtMostTheCappedNumberOfKeys(t *testing.T) {
@@ -251,9 +245,8 @@ func TestARefusalNamesNoKeyForATruncatedFrame(t *testing.T) {
 	}
 }
 
-// keyedRunner rebuilds the harness's runner over the same database, applier
-// and broker with a verifier over ring — the shape of a node restarting after
-// an operator added a key to its secrets.keys.
+// keyedRunner rebuilds the harness's runner with a verifier over ring, as a
+// node restarts after an operator added a key to its secrets.keys.
 func (h *applyHarness) keyedRunner(ring recordseal.Keyring) {
 	h.t.Helper()
 	verifier, err := recordseal.NewVerifier(probeDomain{}.Name(), ring)
@@ -293,16 +286,12 @@ func (h *applyHarness) probeRowAt(seq uint64) bool {
 }
 
 // A RECORD RETAINED UNDER A KEY THIS NODE LACKED IS APPLIED ONCE THE KEY
-// ARRIVES.
-//
-// That is the whole of what "retained" promises: an unknown key id is a
-// rotation that reached another node first, so the record is kept rather than
-// refused, and the node that restarts with the key applies it — through the
-// reprocess, which is the one place a restarted process meets a retained
-// record again. The Verifier's own case proves the bytes open under the key;
-// this proves the RUNNER acts on it: the row lands, the operation is held and
-// the deferral is released, while the neighbour that verified all along was
-// applied in the first pass rather than waiting behind it.
+// ARRIVES, as "retained" promises: an unknown key is a rotation that reached
+// another node first, and the node restarted with the key applies the record
+// through the reprocess. The Verifier's case proves the bytes open; this
+// proves the RUNNER acts: the row lands, the operation is held and the
+// deferral released, while the neighbour that verified applied in the first
+// pass rather than waiting behind it.
 //
 // Mutations: count a Verified record as kept in the reprocess, or drop the
 // re-verify and hand the stored frame to the envelope decode, and either way
@@ -326,8 +315,7 @@ func TestARetainedRecordAppliesOnceItsKeyArrives(t *testing.T) {
 		t.Fatal("a record signed under a key this node lacks was applied")
 	}
 
-	// THE KEY ARRIVES: k9 with the material the writer signed under,
-	// beside the key this node already held.
+	// THE KEY ARRIVES: k9 with the material the writer signed under.
 	h.keyedRunner(recordseal.Keyring{ActiveID: "k1", Keys: []recordseal.Key{
 		{ID: "k1", Material: "test-material"},
 		{ID: "k9", Material: "material-this-node-lacks-k9"},
@@ -345,12 +333,9 @@ func TestARetainedRecordAppliesOnceItsKeyArrives(t *testing.T) {
 	}
 }
 
-// AND A RETAINED RECORD THAT FAILS UNDER THE KEY IT NAMES STOPS THE NODE.
-//
-// Filed under an unknown key, a record is only a claim that some node holds
-// that key. When the key arrives and the bytes do not verify under it, the
-// claim was false — the record was written by something that is not this
-// fleet — and applying it, or retaining it for ever, would both be wrong.
+// AND A RETAINED RECORD THAT FAILS UNDER THE KEY IT NAMES STOPS THE NODE: it
+// was written by something outside this fleet, so neither applying nor
+// retaining it for ever is right.
 //
 // Mutation: treat a reprocessed Tampered like KeyUnknown and the node goes on
 // retaining a forgery with the key in hand.

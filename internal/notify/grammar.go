@@ -121,22 +121,14 @@ func matchesName(token, name string) bool {
 // Mentions are the names an `@` addresses in a body, lowercased,
 // deduplicated, in the order they appear.
 //
-// THE SPINE'S OWN GRAMMAR, exported for the backends whose names are the
-// engine's own (a seat handle, not a vendor username), so Worklet and
-// Doclet read a mention exactly as the chat surfaces already do. A vendor
-// whose usernames follow a different rule brings its own (see
-// [gitlab.Mentions], [github.Mentions]); a backend the engine
-// itself hosts must not, because a fourth spelling of "what is a mention"
-// would let one surface wake a seat that another does not.
-//
-// DELIBERATELY PERMISSIVE about what it returns — `@here`, `@all`, a handle
-// nobody has — because the caller intersects the result against the seats it
-// can route to. Filtering here would mean this function had to know the
-// company, and the intersection has to happen anyway.
-//
-// Trailing sentence punctuation is trimmed, so "thanks @agent-swe." names
-// the seat. A handle that genuinely ends in `.` or `-` cannot exist — see
-// [org.ValidHandle] — so nothing is lost by it.
+// THE SPINE'S OWN GRAMMAR, for backends whose names are seat handles, so
+// Worklet and Doclet read a mention as chat does. A vendor with its own
+// username rule brings its own ([gitlab.Mentions], [github.Mentions]); an
+// engine-hosted backend must not, or one surface would wake a seat another
+// does not. DELIBERATELY PERMISSIVE (`@here`, a handle nobody has): the
+// caller intersects with routable seats, so filtering here would need the
+// company. Trailing `.`/`-` is trimmed ("thanks @agent-swe."); a handle cannot
+// end in either ([org.ValidHandle]).
 func Mentions(text string) []string {
 	var (
 		out  []string

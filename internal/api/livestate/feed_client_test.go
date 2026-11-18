@@ -11,17 +11,13 @@ import (
 // THE DASHBOARD KEEPS THE FEED THE ENGINE KEEPS.
 //
 // A tab trims its activity feed to `MAX_EVENTS` and the projection keeps, and
-// a snapshot ships, [livestate.EventFeedLimit]. They are one number written
-// twice, and the drift between them already happened once in this tree —
-// three numbers, so a feed streamed up to 250 rows and a refresh snapped it
-// back to 150. Shorter on the client and a reconnect's snapshot is cut to fit;
-// longer and the tab holds rows no snapshot can resend, so a refresh loses
-// them. Either way the screens that say "this tab keeps the last N events"
-// state a number that is not the one in force.
+// a snapshot ships, [livestate.EventFeedLimit]: one number written twice.
+// Shorter on the client and a reconnect's snapshot is cut to fit; longer and
+// the tab holds rows no snapshot can resend, so a refresh loses them. Either
+// way the screens saying "this tab keeps the last N events" state a wrong N.
 //
-// Read by its syntax through [clientsource.Scalar], which takes one literal
-// and refuses an expression — a `MAX_EVENTS = 200 * 2` would otherwise be read
-// as the half of it this could see.
+// Read through [clientsource.Scalar], which takes one literal and refuses an
+// expression — `MAX_EVENTS = 200 * 2` would otherwise be read as half of it.
 func TestTheDashboardKeepsTheFeedTheEngineKeeps(t *testing.T) {
 	t.Parallel()
 	raw, err := clientsource.Scalar(clientsource.Tree(t), "MAX_EVENTS")

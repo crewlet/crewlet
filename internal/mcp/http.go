@@ -34,43 +34,34 @@ const maxLoggedErrorBody = 8 << 10
 // maxBufferedErrorBody bounds how much of a failing response this process
 // holds in memory to log and replay.
 //
-// The read has to be WHOLE to be useful — handing the SDK a truncated body
-// turns a server's clear 403 into a JSON parse error — but "whole" was
-// unbounded, which let a remote server choose this process's allocation size.
-// It was the only unbounded io.ReadAll left in the tree, eight lines below a
-// constant whose entire purpose is bounding this same body.
+// The read must be WHOLE, since a truncated body turns a server's clear 403
+// into a JSON parse error, but unbounded lets a remote server choose this
+// process's allocation size.
 //
-// A MEBIBYTE, which is 128 times the logged slice above and far past any real
-// MCP error object; what it actually refuses is a gateway streaming an
-// unbounded HTML page under a 5xx. Past it nothing further is buffered: the
-// prefix already read is handed back in front of the still-open body, so the
-// SDK reads the same bytes it would have, and the response is neither
-// truncated nor held.
+// A MEBIBYTE: 128 times the logged slice above and far past any real MCP
+// error object; it refuses a gateway streaming an unbounded HTML page under a
+// 5xx. Past it nothing more is buffered: the prefix is handed back in front of
+// the still-open body, so the SDK reads the same bytes, untruncated.
 const maxBufferedErrorBody = 1 << 20
 
 // protocolVersionHeader is the header the streamable transport sends on every
 // request after the handshake.
 //
-// Named here because this package supplies it. The SDK normally fills it in
-// from a hook it reaches through an UNEXPORTED interface on its own connection
-// type — a hook the annotation probe's wrapper cannot implement (see
-// probe.go). Losing it silently would mean every request to a legacy remote
-// server going out without the version header the spec says to send, and a
-// server that enforces it answering 400 for reasons nothing in the engine
-// could explain. So it is restored explicitly, from the negotiated version the
-// session reports after Connect.
+// The SDK normally fills it in through an UNEXPORTED interface on its own
+// connection type, which the annotation probe's wrapper cannot implement (see
+// probe.go); losing it would send every request to a legacy remote server
+// without the header, and a server enforcing it would answer 400 unexplained.
+// So it is restored from the negotiated version the session reports after
+// Connect.
 const protocolVersionHeader = "Mcp-Protocol-Version"
 
 // newHTTPTransport builds the streamable transport and the round tripper that
 // carries the seat's identity, over d's transport ([httpx.Transport] when it
 // names none).
 //
-// DisableStandaloneSSE is on deliberately. The standalone GET stream exists to
-// deliver server-initiated notifications — tools/prompts/resources list
-// changed — and this engine registers no handler for any of them, so the
-// stream would carry nothing anyone reads. It is also the other thing the
-// probe's wrapper costs, so leaving it nominally enabled would be a lie about
-// what the connection does.
+// DisableStandaloneSSE is on deliberately: that GET stream only delivers
+// server-initiated list-changed notifications, which this engine registers no
+// handler for, and the probe's wrapper costs it anyway.
 //
 // A REDIRECT IS FOLLOWED WITHIN THE CONFIGURED ORIGIN ALONE ([sameOrigin]):
 // see [httpIdentity.redirect].
@@ -123,15 +114,12 @@ var ErrRedirectedAway = errors.New("mcp: the server redirected to another origin
 // else is refused.
 //
 // REFUSED, NOT FOLLOWED THROUGH THE GUARD. The configured address is the
-// operator's, dialled as it stands whatever network it is on, and carries the
-// headers configured for it; an address a redirect names is the server's
-// (ADR-0072). Followed, a 307 or a 308 would carry the JSON-RPC body to it,
-// and a hop the guard admitted would still reach an origin nobody configured.
-// Refused, the request fails with a sentence naming the origin it was sent
-// to, which an operator who trusts it writes as the server's address. The
-// round tripper sets the configured headers on a request to the configured
-// origin alone ([httpIdentity.RoundTrip]), so no credential leaves it either
-// way.
+// operator's and carries its configured headers; a redirect's address is the
+// server's (ADR-0072). Followed, a 307 or 308 would carry the JSON-RPC body
+// there, and a hop the guard admitted would still reach an origin nobody
+// configured. The error names the origin, which an operator who trusts it
+// writes as the server's address. Headers go on requests to the configured
+// origin alone ([httpIdentity.RoundTrip]), so no credential leaves it.
 func (h *httpIdentity) redirect(req *http.Request, via []*http.Request) error {
 	if !sameOrigin(req.URL, h.origin) {
 		return classify(FailNoEndpoint, fmt.Errorf("%w: it answered with a redirect to %s, which is not "+
@@ -218,23 +206,17 @@ type httpIdentity struct {
 	// the class of a session that ends for another reason now.
 	failed atomic.Pointer[answerFailure]
 
-	// deadline bounds ONE HTTP request, and it is here because nothing above
-	// it can do the job.
+	// deadline bounds ONE HTTP request. A caller's context bounds the
+	// JSON-RPC call, not the HTTP request under it, which the transport
+	// writes from the connection's own goroutine; so the call errors and
+	// closing the session then BLOCKS on the unbounded request (a 300ms
+	// startup budget produced a 10.3s connect against a silent endpoint).
 	//
-	// The context a caller passes to Connect or CallTool bounds the JSON-RPC
-	// CALL — the wait for an answer — but not the HTTP request underneath it:
-	// the transport writes from the connection's own goroutine, with the
-	// connection's context. So a caller's deadline expires, the call errors,
-	// and then closing the session BLOCKS waiting for the in-flight request
-	// nobody bounded. Measured against an endpoint that accepts a connection
-	// and never answers: a 300ms startup budget produced a 10.3s connect.
-	//
-	// Cannot be an http.Client.Timeout, which covers the body read too and
-	// would sever a streaming tool result mid-flight. Cannot be a fixed
-	// ResponseHeaderTimeout either: a non-streaming server sends its headers
-	// with the answer, so the legitimate wait for headers IS the tool's own
-	// budget. So it follows the phase — the startup budget during connect,
-	// the per-call budget afterwards.
+	// Not http.Client.Timeout, which covers the body and would sever a
+	// streaming result. Not a fixed ResponseHeaderTimeout: a non-streaming
+	// server sends headers with its answer, so that wait IS the tool's
+	// budget. So it follows the phase: startup budget during connect,
+	// per-call budget after.
 	deadline atomic.Int64 // time.Duration
 }
 
@@ -310,25 +292,16 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 		return resp, nil
 	}
 
-	// The SDK surfaces an HTTP failure only after its task group unwinds, by
-	// which point the body is closed and gone — and the body is where a
-	// remote server says WHY (a scope missing, a token expired, a workspace
-	// suspended). Read it here, log it, and hand the SDK an identical one.
+	// The SDK surfaces an HTTP failure only after the body is closed, and the
+	// body is where a server says WHY (scope missing, token expired). Read it
+	// here, log it, and hand the SDK an identical one (see
+	// maxBufferedErrorBody: never truncated, only a bounded slice logged).
 	//
-	// The REQUEST body is deliberately not logged. It is the JSON-RPC
-	// call, and its params are tool arguments an agent composed — which can carry a credential it was given
-	// to pass along. There is no redaction pass on this side of the engine
-	// yet, and a log line is a permanent place to put a secret.
+	// The REQUEST body is not logged: its params are tool arguments an agent
+	// composed, which can carry a credential, and no redaction pass runs here.
 	//
-	// Read whole up to maxBufferedErrorBody, and only a bounded slice is
-	// logged. Handing the SDK a truncated body would turn a server's clear
-	// 403 into a JSON parse error, which is a worse diagnostic than the one
-	// this exists to produce — so past the cap the body is not truncated
-	// either: what has been read is handed back in FRONT of the still-open
-	// original, and the SDK reads exactly the bytes it would have.
-	//
-	// One byte over the cap is read on purpose, so a body sitting exactly on
-	// it is not mistaken for an overflowing one.
+	// One byte over the cap is read on purpose, so a body exactly on it is not
+	// mistaken for an overflowing one.
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBufferedErrorBody+1))
 	// THE ADDRESS REDACTED: a server's address can carry its key in the query,
 	// which the log's own pass does not recognise by shape.

@@ -40,6 +40,22 @@
 //     with the same rule about what a phase means — and the transition that
 //     was written inline at the API set three of its fields and forgot three.
 //
+// # The tool roll-up, the certification suite and the owed look
+//
+// [Rollup] is decided here, one state per tool, because a screen that
+// re-derived it kept a second copy of the phase order and drifted.
+// [integrationtest] is the certification suite: one set of cases every
+// reconciler passes, because a promise about what a pass does to somebody's
+// workspace that nothing checks is the worst shape a rule can take. A teardown
+// is recorded under WHO ASKED ([State.RequestedBy]), since the loop finishes
+// it minutes later on whichever node holds the duty; without it the revision
+// that drops the block was recorded as the loop's own, not the person's who
+// forced the disconnect. A forced look at a held surface stays owed
+// ([Worker.visit]): an apply's sweep or a refresh that finds another writer
+// holding the lease records nothing and re-arms the look for the next tick,
+// because the ask was spent on the way there and dropping it left the surface
+// on its settled cadence.
+//
 // # What a disconnect is, and what it is NOT
 //
 // It is a REQUEST, made once, by a person who pressed a button and answered a
@@ -136,24 +152,15 @@ var Kinds = []Kind{
 // ConvergeOrder is the order the reconcile loop VISITS surfaces in, which is
 // not the order an operator reads them.
 //
-// ONE REAL DEPENDENCY, and it is the whole reason this is a second slice.
-// Atlassian is where an agent's service account is CREATED; Jira and
-// Confluence are products that account then works in, and each checks for the
-// account with the credential Atlassian minted. Visiting them in reading order
-// puts both products before the pass that creates what they are looking for.
+// ONE REAL DEPENDENCY: Atlassian is where an agent's service account is
+// CREATED, and Jira and Confluence check for that account with the credential
+// it minted. In reading order both products run before the pass that creates
+// what they look for, and over a reconnect report `401 Action required` at
+// the third-party app until Atlassian's own pass has run.
 //
-// Measured, over a reconnect: the tracker checked first, found the seat mapped
-// to the account a disconnect had deleted, and reported `401 Action required —
-// you, at the third-party app` for about thirty-five seconds, until Atlassian's
-// own pass ran and made the new one. Nothing was wrong and nobody had anything
-// to do; the card simply asked the products about an account that was one pass
-// away from existing.
-//
-// It is a separate value rather than a reordering of [Kinds] because the two
-// orders answer different questions and would drift the moment either moved
-// for its own reason. A test pins them to the same SET, so a surface added to
-// one and forgotten in the other is caught rather than silently never
-// converged.
+// A separate value rather than a reordering of [Kinds], because the orders
+// answer different questions and would drift. A test pins them to the same
+// SET, so a surface added to one and forgotten in the other is caught.
 var ConvergeOrder = []Kind{
 	// THE ACCOUNTS FIRST, then the products that authenticate as them.
 	KindAtlassian, KindJira, KindConfluence,
@@ -177,19 +184,15 @@ func (k Kind) String() string { return string(k) }
 // Ingress says WHO KEEPS a surface's inbound address pointing at this
 // deployment.
 //
-// A company's public base URL moves — a tunnel is restarted, a load balancer
-// is renamed, a deployment moves domain — and what happens next depends
-// entirely on who wrote the address down at the third-party app. This is the
-// distinction that makes [State.Endpoint] mean anything: recorded on a
-// surface the engine re-registers, it is a fact that repairs itself within a
-// tick; recorded on one a person typed into a settings page, it is the only
-// warning anybody gets that deliveries are now going nowhere.
+// A company's public base URL moves, and what happens next depends on who
+// wrote the address down at the third-party app. That is what makes
+// [State.Endpoint] mean anything: on a surface the engine re-registers it
+// repairs itself within a tick; on one a person typed into a settings page it
+// is the only warning that deliveries now go nowhere.
 //
-// Getting it wrong is silent in the direction that matters. A surface whose
-// address only a person can move, stamped as though a pass had moved it,
-// reports a healthy integration while every delivery lands at an address that
-// no longer answers — which is the exact failure the field was added to
-// catch.
+// Getting it wrong is silent: an address only a person can move, stamped as
+// though a pass had moved it, reports a healthy integration while every
+// delivery lands where nothing answers.
 type Ingress string
 
 const (
@@ -214,18 +217,15 @@ const (
 
 // Ingress reports who maintains this surface's inbound address.
 //
-// GitHub, GitLab, Jira, Confluence and Datadog all expose an API for
-// registering their delivery address, and each one's pass uses it. Slack's
-// Request URL is a field on a settings page with no write API behind it, so
-// it holds whatever address a person last typed. Mattermost is reached over a
-// websocket this engine dials out on and Atlassian only ever provisions
-// identities, so neither has an inbound address to go stale.
+// GitHub, GitLab, Jira, Confluence and Datadog expose an API for registering
+// their delivery address, which each pass uses. Slack's Request URL is a
+// settings-page field with no write API, so it holds whatever a person last
+// typed. Mattermost is dialled out over a websocket and Atlassian only
+// provisions identities, so neither has an inbound address to go stale.
 //
-// DATADOG WAS OPERATOR-OWNED AND IS NOT ANY MORE. Its webhook definition is
-// writable through the same organization credential pair the block already
-// carries for provisioning identities, and config validation now refuses an
-// enabled block without one — so there is no longer a shape in which a person
-// is the one holding that address.
+// DATADOG IS ENGINE-OWNED: its webhook definition is writable through the
+// organization credential pair the block carries for identities, which config
+// validation requires of an enabled block.
 func (k Kind) Ingress() Ingress {
 	switch k {
 	case KindGitHub, KindGitLab, KindJira, KindConfluence, KindDatadog:
@@ -239,24 +239,14 @@ func (k Kind) Ingress() Ingress {
 
 // Ingests reports whether anything ever arrives FROM this surface.
 //
-// NOT THE SAME QUESTION AS [Kind.Ingress], which says who keeps the inbound
-// ADDRESS current — and which answers None for two surfaces that could not be
-// more different. Mattermost has no address because the engine DIALS OUT, and
-// then receives everything said in its team; Atlassian has none because
-// nothing is ever addressed to an organization at all. It is where an agent's
-// account is CREATED, and the products that account then works in are Jira and
-// Confluence, each with its own surface, its own webhook and its own parser.
-//
-// The difference shows on the one screen an operator watches. "Deliveries are
-// verified and stored, and no parser turns them into work for a seat" is a
-// real warning about Mattermost and a meaningless one about Atlassian — which
-// reported it while its organization key was busy creating every agent's
-// account, beside a second badge saying the key had not resolved. Both were
-// answers to questions this surface is not asked.
-//
-// Cloudflare, Expo, DigitalOcean, Scaleway, AWS, Google Cloud and SSH are the
-// same in this build: each agent's credential or identity there is minted,
-// pasted or issued, and nothing they send is routed to a seat.
+// NOT THE SAME QUESTION AS [Kind.Ingress], which answers None for two very
+// different surfaces: Mattermost has no address because the engine DIALS OUT,
+// then receives everything said in its team; Atlassian only CREATES accounts
+// (Jira and Confluence have their own webhook and parser). So "no parser turns
+// deliveries into work" warns about Mattermost and means nothing for Atlassian.
+// Cloudflare, Expo, DigitalOcean, Scaleway, AWS, Google Cloud and SSH are
+// likewise: credentials there are minted, pasted or issued, and nothing they
+// send is routed to a seat.
 func (k Kind) Ingests() bool {
 	return k != KindAtlassian && k != KindCloudflare && k != KindExpo && k != KindDigitalOcean &&
 		k != KindScaleway && k != KindAWS && k != KindGoogleCloud && k != KindSSH

@@ -14,18 +14,17 @@ import (
 var reportedAt = time.Date(2026, time.October, 27, 23, 16, 0, 0, time.UTC)
 
 // A RESET NAMED AS A TIME OF DAY IS ITS NEXT OCCURRENCE AFTER THE REPORT, in
-// the zone the vendor named, else in the zone the harness was handed, and anything
-// this reading cannot take is no instant at all rather than a guess. A weekday
-// is that day's next occurrence strictly after the report; a date carries its
-// own day.
+// the zone the vendor named, else the zone the harness was handed; what this
+// reading cannot take is no instant, not a guess. A weekday is that day's next
+// occurrence strictly after the report; a date carries its own day.
 //
 // Mutation: read the time in UTC, and the Vancouver reset lands seven hours
 // early; take today's occurrence always, and "2am" at 11 pm lands in the past;
 // take the nearest occurrence, and a reset 13 or 23 hours ahead reads as this
-// morning's, which is no instant; drop the grace, and one a minute gone by is
+// morning's (no instant); drop the grace, and one a minute gone by is
 // tomorrow's; ignore the child's zone, and a zone-less sentence reads in UTC;
-// let a weekday be today when its hour has passed, and a weekly reset is
-// read as already over.
+// let a weekday be today when its hour has passed, and a weekly reset reads as
+// already over.
 func TestAClockResetIsTheNextOccurrenceInItsZone(t *testing.T) {
 	t.Parallel()
 	clock := harnessprofile.ResetReading{Separator: "resets ", Unit: harnessprofile.ResetClock}

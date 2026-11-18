@@ -26,6 +26,18 @@ publish refused because the object store has no room for its bytes
 a bad event: a full bucket refuses every publish until an operator makes room,
 and that is what the budget is there to burn.
 
+A caller that went away is no fault either. An event its caller cancelled
+before it was answered (a frame torn down, a browser that left, a client that
+dropped its connection, a stopped turn) is no event while it is inside its
+bound, since nobody can say how it would have ended. One already past its
+bound when its caller left was late before anybody gave up, and is a bad
+event, so a store that stops answering still burns the budget. Only a
+cancellation is a caller leaving: a request that runs into a deadline failed a
+bound, and is a bad event. The artifact origin counts such a request under
+`status="abandoned"` in `crewlet.artifacts.serve.requests` rather than as a
+`5xx`, and logs it at debug as `artifacts_serve_abandoned` rather than as the
+store being unavailable.
+
 ## The objectives
 
 | Objective | Measures | Where | Good event | Within | Target |

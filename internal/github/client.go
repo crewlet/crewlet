@@ -19,27 +19,21 @@ import (
 //
 // # One credential per question, and they are different questions
 //
-// The ENGINE's credential answers "who is taking part in this thread" — a
-// fact about the thread rather than about the viewer, so a seat's own token
-// would return the same list and cost a credential per seat to find out.
+// The ENGINE's credential answers "who is taking part in this thread", a fact
+// about the thread, so a seat's own token would return the same list at a
+// credential per seat.
 //
-// A SEAT's own credential answers "which account is this seat" and nothing
-// else. It is used once per distinct credential, at boot, and the answer is
-// cached against the credential rather than the seat.
-//
-// # Why the API version is pinned
-//
-// GitHub versions its REST API by date and serves the newest to a client
-// that names none. That makes an unpinned client's behaviour change under a
-// deployment that did not — the failure mode a versioned API exists to
-// prevent — so the header is sent on every request and the version is a
-// constant this build states.
+// A SEAT's own credential answers only "which account is this seat", once per
+// distinct credential at boot, cached against the credential rather than the
+// seat.
 
 // APIVersion is the REST API version every request names.
 //
-// Bumping it is a deliberate change with its own commit: GitHub's breaking
-// changes land between versions, so the value is the one this build's field
-// expectations were written against.
+// GitHub serves the newest date-versioned API to a client that names none, so
+// an unpinned client would change under an unchanged deployment. Bumping it is
+// a deliberate change with its own commit: GitHub's breaking changes land
+// between versions, so the value is the one this build's field expectations
+// were written against.
 const APIVersion = "2022-11-28"
 
 // Accept is the media type that selects the JSON representation.
@@ -273,23 +267,13 @@ func (c *Client) Me(ctx context.Context) (string, error) {
 // ParticipantsOf is everyone who has COMMENTED on an issue or pull request,
 // plus everyone who has REVIEWED a pull request.
 //
-// # Why this is computed rather than read
+// GitHub has no participants endpoint; authors, assignees and mentions are in
+// the webhook payload, so this reads the two only the API has.
 //
-// GitHub has no participants endpoint. Its own notification rule is that you
-// are subscribed once you author, are assigned, are mentioned, comment or
-// review — and of those five, three are already in the webhook payload and
-// one is in the text. What is left, and what this reads, is the two that are
-// only in the API.
-//
-// TWO CALLS FOR A PULL REQUEST rather than one, because GitHub keeps a pull
-// request's REVIEWS in a different collection from its comments and a review
-// with no comment appears in neither the other. A reviewer who approved
-// without writing anything is exactly the person who should hear that the
-// author pushed again.
-//
-// The two are read CONCURRENTLY: sequentially they are two round trips on
-// the inbound consumer's hot path, and the second does not depend on the
-// first.
+// TWO CALLS FOR A PULL REQUEST, because its REVIEWS are a different collection
+// from its comments: a reviewer who approved silently is exactly who should
+// hear the author pushed again. They are read CONCURRENTLY, as the second does
+// not depend on the first and this is the inbound consumer's hot path.
 func (c *Client) ParticipantsOf(ctx context.Context, owner, repo, kind string, number int) ([]string, error) {
 	base := "/repos/" + owner + "/" + repo
 	item := base + "/issues/" + strconv.Itoa(number)

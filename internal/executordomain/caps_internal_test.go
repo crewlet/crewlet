@@ -15,13 +15,11 @@ import (
 
 // EVERY RECORD AT EVERY CAP FITS THE DECLARED BOUND.
 //
-// The domain declares the largest record it publishes, and the declaration is a
-// LIMIT: the publisher refuses a record past it `record_too_large`, after the
-// turn it records already ended. So the worst record each bound admits is built
-// here through the writer's own encoder, every text field at its cap and made
-// of `<`, which JSON escapes to six bytes; and the declaration is held above a
-// quarter of that worst case, so the gate reserve it sizes is not room no
-// append could use.
+// The declared largest record is a LIMIT: the publisher refuses a record past
+// it `record_too_large`, after its turn already ended. So the worst record each
+// bound admits is built through the writer's own encoder, every text field at
+// its cap and of `<` (six bytes JSON-escaped), and the declaration is held
+// within four times it, or the gate reserve it sizes is room no append uses.
 //
 // Mutation: raise CompletedWorkMaxBytes to 64 KiB and the worst end no longer
 // fits; halve MaxRecordBytes and neither does it.

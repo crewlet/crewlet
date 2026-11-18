@@ -489,24 +489,12 @@ func TestVectorsNeedAKnowledgeBaseOrWorklet(t *testing.T) {
 // AN OPERATOR FLOOR NAMES EVERY CEILING THAT WILL REFUSE, not the mutation
 // log's alone.
 //
-// Until somebody acknowledges a backup of it nothing trims any of the
-// ordered logs, and none carries an age bound, so each grows until its own
-// ceiling refuses an append. Which one fills first depends on the volume and
-// the company rather than on the configuration this advisory reads, so a
-// message naming one field sends the operator to the wrong ceiling whenever
-// another log won.
-//
-// AND THE ACKNOWLEDGEMENT IS PER LOG — every log. It names one stream, and the
-// backup term blocks every log the counted point does not cover, so a message
-// saying the first acknowledgement unblocks the trim told an operator who
-// acknowledged the mutation log that the knowledge base's would trim as well;
-// and the two compacted logs, which never refuse a write, raise their
-// `backup_age` alarm without one, so a message naming only the ordered logs
-// left two alarms firing for ever.
-//
-// THE CEILINGS ARE READ OFF [config.Stream] rather than listed here: every
-// `*_max_bytes` field but the broker's own limit is one state log's, so a log
-// added with its ceiling and left out of the advisory fails this case.
+// Until a backup is acknowledged nothing trims any ordered log, so each grows
+// until its own ceiling refuses an append; which fills first depends on the
+// volume and company, so naming one field can send the operator to the wrong one.
+// THE ACKNOWLEDGEMENT IS PER LOG: the two compacted logs never refuse a write
+// but raise `backup_age` without one. THE CEILINGS ARE READ OFF [config.Stream]:
+// a log left out of the advisory fails this case.
 //
 // Mutation: drop any one field from the advisory, or put "first
 // acknowledgement" back, and this fails.
@@ -559,23 +547,12 @@ func TestAnOperatorFloorNamesEveryCeilingThatWillRefuse(t *testing.T) {
 }
 
 // A STATE LOG ON AN IN-MEMORY STREAM IS REFUSED BY TIER A ALONE, company or
-// none, on every broker MEMBER — and never on a leaf, which keeps no stream.
+// none, on every broker MEMBER, never on a leaf, which keeps no stream.
 //
-// A domain's write-ahead log lives on the stream, and an embedded stream with
-// no store directory keeps its streams in memory — so a restart recreates them
-// empty, and a node whose durable tables are ahead of a stream that restarted
-// from nothing refuses to serve PERMANENTLY: every snapshot it could adopt is
-// above the recreated stream too.
-//
-// # Why this is not a cross-tier rule any more
-//
-// It was one — `CheckTiers`, which asked the company too — while a node's
-// logs waited for its first company: only a company started one. Every data
-// node runs the core runtime from boot now, every domain's log and the
-// identity estate on it, and every member is a data node, so the pair's check
-// let through exactly the node it should have refused: one started with no
-// company, whose first person's invitation would be gone at its first restart.
-// So there is no company in these cases at all.
+// An embedded stream with no store directory is in memory: a restart recreates
+// it empty, and a node whose durable tables are ahead of it refuses to serve
+// PERMANENTLY. Every data node runs every domain's log from boot, so a check
+// that also asked the company would pass a node started with no company.
 //
 // Mutation: let `Durable` pass an embedded stream with a blank directory and
 // the first rows are accepted; drop the call from the stream's validator and
@@ -642,23 +619,18 @@ func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 	}
 }
 
-// A COMPANY WITH NO HUMAN SEAT IS ONE NOBODY CAN JOIN, and it is said before
-// anybody tries.
+// A COMPANY WITH NO HUMAN SEAT IS ONE NOBODY CAN JOIN, said before anybody tries.
 //
-// Every person holds a human seat for as long as they are here (ADR-0032):
-// an invitation and an administrator's create each name the seat the person
-// will hold, and both are refused without one. So a company declaring none
-// admits nobody — which an operator otherwise learns from the refusal of their
-// first invitation, after the revision is live. `crewlet validate` and the
-// builder's check read [config.Company.Warnings], so that is where it is said.
+// Every person holds a human seat (ADR-0032); an invitation and an
+// administrator's create are refused without one, which an operator otherwise
+// learns after the revision is live. `crewlet validate` and the builder read
+// [config.Company.Warnings], so that is where it is said.
 //
 // ADVISED, NEVER REFUSED: a company its agents run alone, administered through
-// the deployment's Tier A tokens, is legitimate and validates. And a human seat
-// ANYWHERE silences it — inside a unit as much as at the top — because the
-// remedy is a seat, not a seat in a particular place.
+// Tier A tokens, is legitimate. A human seat ANYWHERE silences it, in a unit too.
 //
-// Mutations: drop the advisory from AdvisoryWarnings and the first two cases
-// go quiet; walk only the top-level roles and the unit's seat is missed.
+// Mutations: drop the advisory from AdvisoryWarnings and the first two cases go
+// quiet; walk only the top-level roles and the unit's seat is missed.
 func TestACompanyNobodyCanJoinIsAdvisedNotRefused(t *testing.T) {
 	t.Parallel()
 	const agents = "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    main:\n" +

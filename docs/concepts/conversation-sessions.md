@@ -8,7 +8,9 @@ no transcript can say: how the conversation's earlier turns ended, that a new
 turn begins here, and that its box is new.
 
 Every launch's harness session is kept: taken out of its box when the run
-ends, sealed into the fleet's [object store](object-store.md) and named by the
+ends, and saved as it works where its harness is Claude Code
+([saved as it works](code-sandbox.md#a-running-jobs-session-saved-as-it-works)),
+sealed into the fleet's [object store](object-store.md) and named by the
 turn's row of the `executor` state log
 ([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md);
 [Code Sandbox](code-sandbox.md#each-launchs-session-kept)). The turn's own
@@ -22,7 +24,7 @@ schedule that fired it.
 
 | Launch | Continues |
 |---|---|
-| A relaunch of a turn whose job before left a kept capture | That capture, in any box ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
+| A relaunch of a turn whose job before left a kept capture | That job's newest kept capture, in any box, and in that job's own box, where the relaunch carries the round on there, its own copy where it went on past that capture ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)); a Claude Code job is saved as it works and as its node drains, so the relaunch of one lost with its box continues its newest save ([saved as it works](code-sandbox.md#a-running-jobs-session-saved-as-it-works)) |
 | A turn's **first** launch | The session its conversation's last turn left: the conversation's **head**, the ended turn whose row still names a kept session and whose read of the conversation was the latest ([Read once, frozen, held](#read-once-frozen-held)), restored into a box of the launch's own — a session that turn **went on past** included: an earlier capture its row keeps where its last word was not kept (its final capture refused, a stop or a loss whose box was gone, a relaunch that kept nothing), which its run is told ends where it was kept |
 | A relaunch of a turn that has kept no session of its own — its first job lost with its box, its capture refused or unanswered — in a box of its own | The head its first launch was handed (the turn's **base**), never a second read of the conversation, handed after its lead the relaunch's reseed whole: what became of the run before it, and every call the round's runs made so far ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
 | A schedule's **next fire** | The session the schedule's last fire left on the seat: a schedule is a conversation of each seat that runs it ([Schedules](#schedules)) |
@@ -189,8 +191,10 @@ schedule's fire, in the schedule's words: that its last fire did), and that
 which is the log's to say. Only where the seat is offered `read_session`, and
 never in the continuation a session reads; a relaunch that cannot take up the
 turn's own kept session names that one the same way, a round lost a second
-time included, and a relaunch of a turn that has kept nothing names the head
-its first launch froze only where the turn's row was read holding it.
+time included, and says it is kept only until the run first saves its own,
+which takes its place on the turn's row; a relaunch of a turn that has kept
+nothing names the head its first launch froze only where the turn's row was
+read holding it.
 
 ---
 
@@ -392,7 +396,11 @@ turn_engine:
     retention_days: 30            # days a seat's sessions are kept past their
                                   #   turn's last record, read at every pass
     max_bytes_per_seat: 67108864  # object-store bytes one seat's sessions
-                                  #   may hold (33 MiB..64 GiB)
+                                  #   may hold, and again its saves'
+                                  #   allowance (33 MiB..64 GiB)
+    save_interval_seconds: 600    # shortest time between saves of a running
+                                  #   Claude Code job's session (300..3600;
+                                  #   0 takes 600), paced by size beyond it
 ```
 
 Nested under `turn_engine` rather than beside it, which is load-bearing: it
@@ -431,9 +439,28 @@ handed is held until that turn keeps a session of its own or ends, so it
 counts beside the seat's live turns for as long. The default, 64 MiB, holds a
 live turn's session at its 32 MiB bound beside about twenty ordinary ones (a
 day's work compresses to one or two mebibytes); the least it accepts, 33 MiB,
-is one session at that bound once sealed, and every seat's sessions share the
-object store with the company's files, so a company of forty seats or more on
-the default `nats` bucket belongs on S3 (`store.objects.backend`).
+is one session at that bound once sealed. It is also the **allowance of the
+seat's saves** of its running sessions: a save another replaces is kept by the
+object store until its collector deletes it, a day and more, so a seat holds up
+to twice its budget. Every seat's sessions share the object store with the
+company's files, and on the default `nats` bucket, about 2.6 GiB at the
+smallest data volume crewlet-operator admits, five seats at both halves take a
+quarter of it, so a company of twenty seats or more belongs on S3
+(`store.objects.backend`): a full bucket refuses every upload, the company's
+files included.
+
+**`save_interval_seconds`** is the shortest time between saves of a running
+Claude Code job's session, 600 s by default, 300 to 3600 taken and anything
+else refused, never clamped (0 takes the default). It bounds what a run lost
+with its box does again: about the interval and one save's take. A seat's saves
+are spaced by size beyond it, so its superseded saves stay within its
+allowance: at the defaults a session past about 0.4 MiB sealed is saved about
+every 27 minutes per sealed MiB, about every 54 once the seat has saved for a
+day, so a session growing 1.2 to 1.8 MiB sealed an hour is saved every 0.54 to 0.81
+times its age, 1.1 to 1.6 in a busy seat
+([Paced by size](code-sandbox.md#a-running-jobs-session-saved-as-it-works)).
+Each node reads it off the revision it runs, since a cadence binds only the
+node driving the box.
 
 ---
 

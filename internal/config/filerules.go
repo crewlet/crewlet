@@ -16,25 +16,15 @@ import (
 
 // THE RULES ONLY A WHOLE DOCUMENT CAN CHECK.
 //
-// # Why they are collected rather than scattered
+// Every other rule here is a property of the thing it is written beside. The
+// five here compare one part of the document against another, or one seat
+// against every other, so they run together over the document whole.
 //
-// Every other rule in this package is a property of the thing it is written
-// beside: a provider key names a provider, a container key is well shaped, a
-// human seat holds no app. The five here are properties of the WHOLE
-// DOCUMENT — they compare one part of it against another, or one seat against
-// every other seat — so they run together, over the document whole. Each was
-// a real fault caught late, by a consumer, silently, or not at all.
-//
-// # Why they are ADMISSION rules
-//
-// None of them stops a company running — that is precisely what makes them
-// hard to find. A stored revision may carry any of them, from a build that
-// never checked, and it runs today exactly as it ran yesterday; refusing to
-// apply it would take a working company down on upgrade over a rule its
-// author never saw. So a SUBMITTED document is refused and a STORED one is
-// reported by [Company.AdmissionWarnings], which is the class every rule
-// added after companies existed belongs to. See [Company.ValidateRunnable]
-// for the distinction in full.
+// They are ADMISSION rules: none stops a company running, so a stored revision
+// from a build that never checked may carry any of them and must keep running
+// on upgrade. A SUBMITTED document is refused and a STORED one is reported by
+// [Company.AdmissionWarnings], the class every rule added after companies
+// existed belongs to. See [Company.ValidateRunnable].
 
 // validateFileRules is the five whole-document rules, run together.
 func (c *Company) validateFileRules() error {
@@ -50,23 +40,15 @@ func (c *Company) validateFileRules() error {
 // validateOptionalKeys refuses an `optional_keys` entry that leaves nothing
 // out.
 //
-// A key listed there is one whose value may resolve to nothing without holding
-// the server back ([MCPServer.OptionalKeys]). An entry naming no key the server
-// is started with is not an error anywhere at run time — it is simply never
-// consulted — and that silence is exactly what makes it worth refusing: the
-// key it was MEANT for stays required, so the server is not started on every
-// host that does not set the value, while the document reads as though the
-// operator had said the server could run without it. The shapes of that
-// mistake are told apart because their fixes are: a VARIABLE's name where a
-// key's belongs, a variable only the url references, and a name nothing
-// carries at all.
-//
-// A WHOLE-DOCUMENT RULE because the keys a server is started with are not all
-// the server's: a seat's or unit's `mcp_env` block for it lands in the same
-// environment or the same headers, so a key only seats write is still a key
-// the server reads. And an entry whose values carry no reference anywhere is
-// refused too: nothing in it can resolve to nothing, so the entry says
-// something the engine will never act on.
+// A listed key may resolve to nothing without holding the server back
+// ([MCPServer.OptionalKeys]). An entry naming no key the server is started with
+// is never consulted, so the key it was MEANT for stays required while the
+// document reads as if the server could run without it. Told apart by fix: a
+// VARIABLE's name where a key's belongs, a variable only the url references, a
+// name nothing carries. WHOLE-DOCUMENT because a seat's or unit's `mcp_env`
+// block lands in the same environment or headers, so a key only seats write is
+// still one the server reads. An entry whose values carry no reference is refused
+// too: nothing in it can resolve to nothing.
 func (c *Company) validateOptionalKeys() error {
 	var p problems
 	for i := range c.MCPServers {
@@ -251,20 +233,13 @@ func (h *heldKeys) check(p *problems, path Path, listed []string, among, refused
 // validateHeaderSpellings refuses one http header spelled two ways where the
 // engine cannot tell which value is meant.
 //
-// HTTP NAMES A HEADER IN ANY CASE, so `authorization` and `Authorization` are
-// one header, and a tool server is sent one value for it. The engine reads
-// them as one where it lays a seat's values over the server's own
-// ([MCPServer.ValueKey]): a seat's key replaces the template's however either
-// is spelled. Two spellings in ONE PLACE leave nothing to say which wins —
-// two keys of one map, or a unit's block and a member's, which the org chart
-// lays one under the other by the key as written ([org.MCPEnv.WithDefaults]),
-// keeping both. Sent as written, each request carried whichever of the two
-// came last out of a map, so a seat's identity went out on some requests and
-// its unit's on the rest.
-//
-// Only an http server's — keys are compared as the server reads them, and an
-// environment does tell `token` from `TOKEN` — and only within one place,
-// because seats are started apart and two of them spelling one header
+// HTTP NAMES A HEADER IN ANY CASE, and a tool server is sent one value for it.
+// The engine lays a seat's values over the server's own by case-folded key
+// ([MCPServer.ValueKey]), but two spellings in ONE PLACE (two keys of one map,
+// or a unit's block and a member's, which [org.MCPEnv.WithDefaults] lays one
+// under the other by the key as written) leave nothing to say which wins.
+// Only an http server's (an environment does tell `token` from `TOKEN`) and only
+// within one place, because seats start apart and two spelling one header
 // differently send one value each.
 func (c *Company) validateHeaderSpellings() error {
 	var p problems
@@ -366,19 +341,16 @@ type MCPServerReference struct {
 }
 
 // MCPServerReferences is every field of the document that names the MCP server
-// called name, in document order: each seat's `mcp_env` block keyed on it, its
-// `mcp_limits` block keyed on it and each entry of its `sandbox.mcp.servers`
-// listing it, at any depth, then each unit's `mcp_env` and `mcp_limits` blocks
-// keyed on it.
+// called name, in document order: each seat's `mcp_env` and `mcp_limits` blocks
+// keyed on it and each entry of its `sandbox.mcp.servers` listing it, at any
+// depth, then each unit's `mcp_env` and `mcp_limits` blocks keyed on it.
 //
-// THE WRITTEN FIELDS, whether or not a server of that name is declared and
-// whether or not it is on: a block kept for a server turned off is still in
-// the document, still what a removal has to clear, and still what
-// [Company.validateMCPServerReferences] reports once the server is gone.
-//
-// ONE IMPLEMENTATION with every reader: that rule, and the removal of a
-// server (`DELETE /config/mcp-servers/{name}`), which clears what this
-// answers in the same revision or is refused naming all of it.
+// THE WRITTEN FIELDS, whether or not a server of that name is declared or on: a
+// block kept for a server turned off is still what a removal has to clear and
+// what [Company.validateMCPServerReferences] reports once the server is gone.
+// ONE IMPLEMENTATION with every reader: that rule and the removal of a server
+// (`DELETE /config/mcp-servers/{name}`), which clears what this answers in the
+// same revision or is refused naming all of it.
 func (c *Company) MCPServerReferences(name string) []MCPServerReference {
 	var out []MCPServerReference
 	for _, ref := range c.mcpServerReferences() {
@@ -523,43 +495,14 @@ func (c *Company) mcpServerReferences() []MCPServerReference {
 // declares: an `mcp_env` or `mcp_limits` block keyed on one, or a
 // `sandbox.mcp.servers` entry listing one.
 //
-// A SEAT'S `mcp_env` IS KEYED BY SERVER NAME, and the engine reads it from
-// the other end: it walks `mcp_servers`, and for each one looks up that
-// seat's block (internal/engine/mcp.go). A key naming no server is therefore
-// never read by anything. It is not an error at run time, it is not a
-// warning, and it does not appear in any prompt: the credentials sit in the
-// document looking configured, the tool server they were meant for starts
-// with no credentials at all, and the seat's tools fail to authenticate
-// against a vendor nobody typed wrong.
-//
-// A BOX ENTRY IS READ THE SAME WAY ROUND. An executor box is given each
-// listed server the company declares (internal/engine/sandbox.go), and an
-// entry naming none gives it nothing but a log line on every launch: the
-// seat's run goes without the server it was listed for, and nothing the
-// operator reads says why. It is the same mistake one field over, and the
-// one a removal of a server leaves behind when it does not clear the entry.
-//
-// It is the exact fault the provider-key rule already catches one field over
-// ([Company.validateProviderRefs]), for the same reason: a key that misses
-// has no run-time symptom, so the document is the only place it can be seen.
-//
-// THE VENDOR BLOCKS ARE NAMED EVEN WITH NO SERVER, and leaving them out is
-// what makes this rule wrong rather than strict. Six `mcp_env` blocks are
-// read by the ENGINE directly, by name, whether or not a tool server of that
-// name exists (a GitHub App's per-seat token, a GitLab account's, a Datadog
-// application key, an Atlassian account's under the shared block or either
-// product's own), so a company running the GitHub App with an empty
-// `mcp_servers:` is an ordinary arrangement this must admit. The set comes
-// from [org.EngineReadMCPEnv], through [MCPServerReference.EngineRead],
-// rather than being listed here, because a private seventh copy of it is
-// precisely the drift that table exists to end. A box is given declared
-// servers only, so a box entry naming a vendor is refused like any other.
-//
-// THE BRIDGE NAME NEEDS NO CASE OF ITS OWN. A server may not be called
-// [ToolServerName] (that is refused where servers are declared), so a field
-// naming it names no server and is reported by this rule like any other.
-// Writing a second, better-worded case for it would be a second place to keep
-// the reserved name.
+// The engine reads a seat's `mcp_env` from the server end, walking `mcp_servers`
+// (internal/engine/mcp.go), so a key naming no server is never read and has no
+// run-time symptom: credentials look configured while the tool server starts
+// without them. A box is given declared servers only (internal/engine/sandbox.go).
+// THE VENDOR BLOCKS ARE NAMED EVEN WITH NO SERVER: the engine reads six `mcp_env`
+// blocks directly by name, so an empty `mcp_servers:` is ordinary. The set comes
+// from [org.EngineReadMCPEnv] through [MCPServerReference.EngineRead], never a
+// private copy. [ToolServerName] needs no case: no server may bear it.
 func (c *Company) validateMCPServerReferences() error {
 	// KEPT TO THE COMPANY'S OWN SERVERS, which is what the message lists:
 	// telling an operator who misspelled one of their two servers that the
@@ -637,27 +580,15 @@ func listOrNone(names []string, none string) string {
 // validateSeatEmails refuses two seats declaring one email address.
 //
 // THE PARTY REGISTRY INDEXES SEATS BY EMAIL AND THE FIRST ONE WINS
-// (internal/notify/registry.go): a second seat claiming an address is not
-// reported, not merged and not preferred — it is dropped from that index and
-// every lookup by address answers the first seat for ever. So mail addressed
-// to one person reaches another, and the person who is shadowed has no
-// symptom at all: nothing they do fails, they simply stop being found.
-//
-// The identical rule already exists one field over for every EXTERNAL
-// identity ([org.Organization.validateContactIdentities]) and was written for
-// the same registry behaviour. Email was the one address it did not cover.
-//
-// IN THE FORM THE REGISTRY MATCHES ON — [iam.NormalizeEmail], lower-cased
-// with the plus tag dropped — because agreeing with the consumer is the whole
-// point: a rule comparing `Ada@example.com` and `ada+ops@example.com` as
-// different values would pass a document the registry then collapses onto
-// one mailbox. A whole `${VAR}` is compared as written, since two seats naming
-// one variable are one address and validation resolves nothing to tell two
-// variables apart.
-//
-// REPORTED AT EVERY SEAT THAT HOLDS THE ADDRESS, not just the second: an
-// operator fixing this has to decide which seat keeps it, and a message
-// naming one of the two tells them nothing about the other.
+// (internal/notify/registry.go): a second seat claiming an address is dropped
+// from that index, so mail for one person reaches another and the shadowed one
+// has no symptom. [org.Organization.validateContactIdentities] is the same rule
+// for every EXTERNAL identity. Compared IN THE FORM THE REGISTRY MATCHES ON,
+// [iam.NormalizeEmail] (lower-cased, plus tag dropped), so `Ada@example.com` and
+// `ada+ops@example.com` do not pass a document the registry collapses onto one
+// mailbox; a whole `${VAR}` is compared as written, as validation resolves
+// nothing. REPORTED AT EVERY SEAT THAT HOLDS THE ADDRESS: an operator must
+// decide which keeps it, and a message naming one tells them nothing of the other.
 func (c *Company) validateSeatEmails() error {
 	type holder struct {
 		name string
@@ -708,32 +639,15 @@ func (c *Company) validateSeatEmails() error {
 // validateReferenceShapes refuses a `lead:`, `unit:` or `manages:` value that
 // is not shaped like the identity it has to name.
 //
-// # What this is and is not
-//
-// It checks the SHAPE, never the resolution. A reference that is well formed
-// and resolves to nothing stays a WARNING ([Company.ReferenceWarnings]), and
-// deliberately so: a chart is assembled in pieces and every intermediate
-// state is one every node applies, so a `lead:` naming a seat that has not
-// been hired yet must not refuse the document. What is refused here is a
-// value that could never resolve under any chart at all.
-//
-// # Why it is worth refusing
-//
-// These three fields named a seat's DISPLAY NAME once, and resolution fell
-// back to it. It does not any more: a seat is addressed by its handle and a
-// unit by its key, so `lead: QA Lead` went from a working reference to one
-// that resolves to nothing — with a space in it, which no handle may carry
-// and no chart will ever mint. A document carrying one has a typo the shape
-// alone proves, and reporting it as an ordinary dangling reference would put
-// it in the same list as the seat somebody is about to hire.
-//
-// # The two grammars, and why manages takes either
-//
-// A `lead:` names a seat, so it takes [org.ValidHandle]. A root seat's
-// `unit:` names a unit, so it takes the key grammar [entityID]. A `manages:`
-// entry names EITHER — that is the feature, since `manages: [engineering]`
-// expands to a division's every seat — so it is refused only when it is
-// neither.
+// It checks the SHAPE, never the resolution. A well-formed reference that
+// resolves to nothing stays a WARNING ([Company.ReferenceWarnings]): a chart is
+// assembled in pieces, so a `lead:` naming a seat not yet hired must not refuse
+// the document. What is refused could never resolve under any chart, such as a
+// stale display name (`lead: QA Lead`; seats are addressed by handle, units by
+// key), a typo the shape proves and a dangling-reference list would bury.
+// A `lead:` takes [org.ValidHandle]. A root seat's `unit:` takes the key grammar
+// [entityID]. A `manages:` entry names EITHER (`manages: [engineering]` expands
+// to a division's every seat), so it is refused only when it is neither.
 func (c *Company) validateReferenceShapes() error {
 	var p problems
 

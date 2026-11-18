@@ -117,7 +117,7 @@ func TestABriefToldByAReadingIsHandedOnlyToABoxThatAnswersItsRelease(t *testing.
 			logs := captureLogs(t)
 			rig, opened, req := exactRelaunch(t, true, tc.answers)
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, tc.reused, false)
+				rig.runner, tc.reused, false, RunSources{})
 			t.Cleanup(got.release)
 			kind := BriefContinuedNewBox
 			if tc.reused {
@@ -148,6 +148,82 @@ func TestABriefToldByAReadingIsHandedOnlyToABoxThatAnswersItsRelease(t *testing.
 	}
 }
 
+// A READING OF A CAPTURE THE BOX'S COPY WENT PAST IS SAID UNUSED. In its job's
+// own box, a kept capture taken while the job still worked is passed over for
+// the box's copy, which went on past it ([copyWentPast]), so a brief told by a
+// reading of it is not handed, and the launch says so once, naming the copy.
+// Said only where the copy is what the launch continues; unsaid where no
+// reading was carried, and in another box, where the capture is restored.
+//
+// Mutation: log nothing for the copy, or log it with no reading or where the
+// launch starts fresh, and a case goes red.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
+func TestAReadingOfACaptureTheBoxsCopyWentPastIsSaidUnused(t *testing.T) {
+	const copyBrief = "carry the box's copy on"
+	copyTold := BriefTold{Omitted: []int{7}}
+	for _, tc := range []struct {
+		name string
+		// reused is the job's own box; read carries a brief told by a
+		// reading beside the continuation; ranOut marks the copy's session
+		// one its job ran out of context in.
+		reused, read, ranOut bool
+		kind                 BriefKind
+		brief, session       string
+		told                 BriefTold
+		// exact is the brief told by the reading handed; unused, the
+		// reading said unused.
+		exact, unused bool
+	}{
+		{name: "its own box, the continuation read", reused: true, read: true, kind: BriefContinued,
+			brief: copyBrief, session: "s-1", told: copyTold, unused: true},
+		{name: "its own box, nothing read", reused: true, kind: BriefContinued, brief: copyBrief,
+			session: "s-1", told: copyTold},
+		{name: "its own box, the copy's session ran out", reused: true, read: true, ranOut: true,
+			kind: BriefFresh, brief: "the fresh brief"},
+		{name: "a new box, the continuation read", read: true, kind: BriefContinuedNewBox,
+			brief: readingNewBox, session: "s-1", told: toldByReading, exact: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			rig, opened, req := exactRelaunch(t, true, readFor)
+			// A SAVE: taken while its job still worked, of the session the
+			// box's copy is.
+			save := *opened.Kept
+			save.Final, save.SessionID = false, "s-1"
+			opened.Capture, opened.Kept = &save, &save
+			if tc.ranOut {
+				opened.ExhaustedSessions = []string{"s-1"}
+			}
+			if !tc.read {
+				req.Session.Exact = nil
+			}
+			req.Continue = &Continuation{SessionID: "s-1", Brief: copyBrief, Told: copyTold}
+			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
+				rig.runner, tc.reused, false, RunSources{})
+			t.Cleanup(got.release)
+			if got.kind != tc.kind || got.brief != tc.brief || got.session != tc.session || got.exact != tc.exact {
+				t.Fatalf("the launch hands a %s brief %q on session %q (by a reading: %v); want a %s brief %q on "+
+					"%q (%v)", got.kind, got.brief, got.session, got.exact, tc.kind, tc.brief, tc.session, tc.exact)
+			}
+			if !slices.Equal(got.told.Omitted, tc.told.Omitted) {
+				t.Errorf("the launch records %v left out, want %v: the told set of the brief it hands",
+					got.told.Omitted, tc.told.Omitted)
+			}
+			lines := unusedLines(logs)
+			switch {
+			case !tc.unused && len(lines) != 0:
+				t.Errorf("the launch logged %q, want no reading said unused", lines)
+			case tc.unused && (len(lines) != 1 || !strings.Contains(lines[0], copyWentPastUnused) ||
+				!strings.Contains(lines[0], exactUnusedOutcome) || !strings.Contains(lines[0], "turn_id=t1") ||
+				!strings.Contains(lines[0], "agent=swe")):
+				t.Errorf("the launch logged %q; want one line naming t1, swe, the copy it continues (%q) and "+
+					"what it hands", lines, copyWentPastUnused)
+			}
+		})
+	}
+}
+
 // AN EMPTY BRIEF TOLD BY A READING FALLS BACK TO THE BRIEF WITHOUT. A telling
 // may write no brief for the box the launch got; that is no reason to refuse a
 // session the brief told by the save point continues: the launch hands that
@@ -165,7 +241,7 @@ func TestAnEmptyBriefToldByAReadingFallsBackToTheBriefWithout(t *testing.T) {
 			rig, opened, req := exactRelaunch(t, true, readFor)
 			req.Session.Exact.Brief, req.Session.Exact.Replaced = "", ""
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-				rig.runner, reused, false)
+				rig.runner, reused, false, RunSources{})
 			t.Cleanup(got.release)
 			want := map[bool]string{true: savePointSameBox, false: savePointNewBox}[reused]
 			if got.brief != want || got.session != "s-1" || got.exact ||
@@ -198,16 +274,16 @@ func TestAKeptSessionTheBoxStillHoldsRecordsWhatItsBriefLeftOut(t *testing.T) {
 	rig, opened, req := exactRelaunch(t, false, readFor)
 	req.Continue = &Continuation{Fresh: BriefTold{Omitted: []int{2}}}
 	got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-		rig.runner, true, false)
+		rig.runner, true, false, RunSources{})
 	t.Cleanup(got.release)
 	if got.kind != BriefContinued || got.brief != savePointSameBox || got.carried != nil || got.exact {
 		t.Fatalf("the launch hands a %s brief %q (by a reading: %v), carrying %v; want the box's own copy "+
 			"continued with the brief told by the save point", got.kind, got.brief, got.exact, got.carried != nil)
 	}
 	brief, fresh := got.omitted(req)
-	if !slices.Equal(brief, toldBySavePoint.Omitted) || !slices.Equal(fresh, []int{2}) {
-		t.Errorf("the job records %v left out beside the fresh brief's %v, want %v beside [2]", brief, fresh,
-			toldBySavePoint.Omitted)
+	if !slices.Equal(brief.Omitted, toldBySavePoint.Omitted) || !slices.Equal(fresh.Omitted, []int{2}) {
+		t.Errorf("the job records %v left out beside the fresh brief's %v, want %v beside [2]", brief.Omitted,
+			fresh.Omitted, toldBySavePoint.Omitted)
 	}
 	if !slices.Equal(got.told.Own, toldBySavePoint.Own) {
 		t.Errorf("the job seals %+v as its brief's own leads, want %+v", got.told.Own, toldBySavePoint.Own)

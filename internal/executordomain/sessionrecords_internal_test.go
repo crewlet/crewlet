@@ -10,17 +10,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CAPTURE NAMES THE OBJECT ITS ROW NAMES. A seat's sessions are Required, so
-// a backup reads the executor log past its store copy and carries every object
-// a record names, because a restore replays those records into the rows: what
-// the declaration's reader says one record writes has to be the row the
-// applier wrote, spelled as the table's walk spells it, with the object the row
-// names. Read here off the bytes the harness applies, through the real applier.
-//
-// AND EVERY OTHER RECORD IS ANSWERED: none for one that names no object (an
-// end, the barrier, a capture the apply refuses on the record alone), and a
-// refusal the backup recognises for a record this build cannot read whose
-// scope reaches a seat's sessions.
+// A CAPTURE NAMES THE OBJECT ITS ROW NAMES. Sessions are Required, so a backup
+// carries every object a record of the log names, which a restore replays into
+// rows: the declaration's reader must answer the row the real applier wrote,
+// spelled as the table's walk spells it, with that row's object. Every other
+// record is answered too: none for one naming no object (an end, the barrier,
+// a capture the apply refuses on the record alone), and ErrRecordUnreadable
+// for an unreadable record whose scope reaches a seat's sessions.
 //
 // Mutation: answer a newer build's capture as none, spell the row turn-first,
 // or drop the subject check, and this fails.

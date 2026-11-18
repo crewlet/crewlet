@@ -381,7 +381,13 @@ const RecordWithin = 12 * time.Hour
 //     the stop's decision, dated by the deciding node's clock, given up by the
 //     node asking the box's host once it is the box timeout and twice this old
 //     by that node's own clock, so it never comes before the box timeout has
-//     passed in real time; argued at the rule.
+//     passed in real time; argued at the rule;
+//   - a seat's save ledger (sandbox's saveLedgerHold): an entry's end, stamped
+//     by the saving node's clock, read by any other's, so the hold carries
+//     twice this; pinned by sandbox's test of the hold;
+//   - a save's first sight (sandbox's firstSight): a launch's start and its
+//     newest capture's instant, read only to shorten a wait one save interval
+//     bounds, so no margin; argued in sandbox's package doc.
 //
 // One rule reads this machine's clock against itself: a node's sweep of its
 // spools (sandbox's Coordinator.sweepSpools) ages a spool an hour past the
@@ -390,31 +396,23 @@ const RecordWithin = 12 * time.Hour
 //
 // # Two readings, and every rule takes the second
 //
-// The alarm holds each clock within this of ONE clock, the fleet's, which
-// every node reads off the position register on its heartbeat: each data
-// node's row there carries the node's stamp and the instant the member stored
-// it, so the rows' offsets differ by how far their nodes' clocks stand apart,
-// and their median is the fleet's clock. So a machine the alarm holds and the
-// fleet's clock disagree by at most this, and any TWO such machines by up to
-// TWICE it — two nodes, or a node and a broker member stamping some other
-// log's records, which on an embedded fleet is a data node the alarm holds
-// too. Every rule bounded here compares two machines — the node deciding a
-// write against the node running the collector, the node sweeping a retired
-// row against the member that stamped its retirement, the node holding a
-// repository against the node passing over it, one committer against another,
-// a push history's reader against the broker's members, the node reading a
-// capture against the node that took it or stood by for it, the node asking a
-// box read against the box's host, the node asking a stopped run's host
-// against the node that decided the stop — so each is held to twice it. Not
-// every one of them is a machine the alarm holds: a rule judged on the clock
-// of a node that runs seats, a turn's hold on a repository, a capture's or a
-// standby's age, a box read's admission or a stop's give-up, rests on a clock
-// the alarm measures only where that node holds data too, since a node without
-// the data role writes no row to the register. The servers of an external NATS
-// cluster are not nodes, and nothing measures them but the one leading the
-// register. Those clocks are the operator's to keep, so NTP runs on every node
-// and every server, not only on the machines the alarm watches
-// (docs/guides/deployment.md).
+// The alarm holds each clock within this of ONE clock, the fleet's, which every
+// node reads off the position register on its heartbeat: each data node's row
+// there carries the node's stamp and the instant the member stored it, so the
+// rows' offsets differ by how far their nodes' clocks stand apart, and their
+// median is the fleet's clock. So a machine the alarm holds and the fleet's
+// clock disagree by at most this, and any TWO such machines by up to TWICE it —
+// two nodes, or a node and a broker member stamping some other log's records,
+// which on an embedded fleet is a data node the alarm holds too. Every rule
+// bounded here compares two machines, so each margin it takes is twice it. Not
+// every one of them is a machine the alarm holds: a rule judged on the clock of
+// a node that runs seats (a turn's hold on a repository, and every sandbox rule
+// above) rests on a clock the alarm measures only where that node holds data
+// too, since a node without the data role writes no row to the register. The
+// servers of an external NATS cluster are not nodes, and nothing measures them
+// but the one leading the register. Those clocks are the operator's to keep, so
+// NTP runs on every node and every server, not only on the machines the alarm
+// watches (docs/guides/deployment.md).
 //
 // AN HOUR: NTP keeps every machine within milliseconds, so a node an hour off
 // is one whose clock nothing keeps — a host with no NTP client, a virtual
@@ -426,8 +424,9 @@ const RecordWithin = 12 * time.Hour
 // two hours, and a seat's push days leave a whole day against those two hours;
 // a ref drop's fourteen days, a policy's edge, move by at most them; and a
 // push history's day series and narrowed pages, a capture's and a standby's
-// age, a capture's record still to be answered, a box read's admission and a
-// stop's give-up allow exactly the two hours, the spool sweep the one.
+// age, a capture's record still to be answered, a box read's admission, a
+// stop's give-up and a save ledger's hold allow exactly the two hours, the
+// spool sweep the one.
 const AssumedClockSkew = time.Hour
 
 // identifier is what a declared table or column may be spelled as, since each

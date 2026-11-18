@@ -265,22 +265,17 @@ func TestTheFoldedDocumentIsHeldToEveryTierARule(t *testing.T) {
 }
 
 // AND `crewlet run` ITSELF LOGS THEM: once its flags are folded in, and into
-// the log file it attached — the durable record a node nobody watched is
-// read from.
+// the log file it attached, the durable record of an unwatched node.
 //
-// The document leaves its backup owner unnamed and asks the embedded broker
-// for debug output; the run passes `-debug`, so the one advisory it may log is
-// the owner's. The run is made to stop at the step after the advisories, by a
-// CREWLET_NODE_ID no node may carry, which is a refusal of the ENVIRONMENT
-// and not of the file or the flags, so nothing earlier refuses it first and
-// nothing is opened.
+// The document leaves its backup owner unnamed and asks the embedded broker for
+// debug output; the run passes `-debug`, so the one advisory it may log is the
+// owner's. It stops after the advisories on a CREWLET_NODE_ID no node may carry.
 //
 // Mutation: drop the call from runEngine and no line is logged; move it ahead
-// of the logging fold and the stream.debug advisory joins the owner's; move
-// it ahead of the log file and the file holds none.
+// of the logging fold and stream.debug joins the owner's; ahead of the log file
+// and the file holds none.
 //
-// Not parallel: it reconfigures the process-wide logger and sets the
-// process's environment. See [TestMain].
+// Not parallel: it reconfigures the process-wide logger and environment. See [TestMain].
 func TestRunLogsTheAdvisoriesOfTheDocumentItApplies(t *testing.T) {
 	t.Cleanup(func() {
 		silenceProcessLog()

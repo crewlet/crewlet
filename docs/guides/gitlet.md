@@ -156,10 +156,14 @@ ref moved, as you:
   over;
 - **Branches**: **New branch** at a branch, a tag or a commit
   (`code_create_branch`), and **Delete** at the head the row shows
-  (`code_delete_branch`), after a confirmation;
+  (`code_delete_branch`), after a confirmation, its toast's **Undo** making
+  it again at that head; on **Tags**, **New tag** at a branch or a commit,
+  annotated where you give it a message (`code_create_tag`), and a tag's
+  **Delete** at the value the row shows (`code_delete_tag`), held where a
+  protection rule keeps the tag;
 - a commit's page bar: **Browse files**, **Revert** and **Cherry-pick** onto
   a branch you choose (`code_revert`, `code_cherry_pick`); a conflict commits
-  nothing. A commit's page says how it was pushed and how it landed, with the
+  nothing. **Tag** tags the commit (`code_create_tag`). A commit's page says how it was pushed and how it landed, with the
   gate it merged through.
 
 Its protection rules are set on its **Settings** tab ([Protecting a
@@ -490,9 +494,11 @@ change's **conversation** ([Reviews and
 findings](../concepts/gitlet.md#reviews-and-findings)), and each record
 tells the seats and people it concerns.
 
-**Find what waits on you.** **Gitlet › Changes** lists the open changes, and
-**Waiting on** narrows them to the ones waiting on you, on a review, on a fix
-or on a person. **Waiting on you**, above the list, names each change that waits on
+**Find what waits on you.** **Gitlet › Changes** lists the open changes.
+**Search changes**, at its top, finds changes by the words of their title and description,
+narrowed by qualifiers such as `is:draft`, `author:@me` or `waiting-on:review`; **Readiness**
+lists the open changes ready to merge or waiting on a review, on checks, on findings or on a
+person. **Waiting on you**, above the list, names each change that waits on
 your review or your fix and why, with **Review** opening its files. A record that concerns you leaves a notice in your
 **Inbox** — the change, why you hear of it ("asked for your review", "asked
 to look again") and where its merge stands — whose **Open the diff** opens the
@@ -571,7 +577,10 @@ applied](../concepts/gitlet.md#a-reviews-suggestions-applied)).
 **Discuss it.** A comment (`code_comment_on_change`) starts a thread — on a
 line of a revision, or on the change as a whole — or replies to a thread's
 first comment or to a finding: threads are one level deep. Whoever started a
-thread, an author, a maintainer or any person resolves it ([Comments and
+thread, an author, a maintainer or any person resolves it. A comment's menu
+edits it, for its author alone, and deletes it (`code_delete_comment`), for
+its author, a maintainer or any person: a deleted comment keeps its place in
+its thread with its words cleared, and every reply stays ([Comments and
 threads](../concepts/gitlet.md#comments-and-threads)).
 
 **See whether it is ready.** A live change's readiness is one judgement on
@@ -820,7 +829,9 @@ commit of yours on a **new branch** — `seats/<handle>/revert-<n>` for a seat,
 gated, reviewed and merged like any other; pass `merge` and it is merged as
 the call's second write, as far as its target's gate allows — a merge it
 could not make yet is said beside the opened change, and the revert stays
-open for you to merge.
+open for you to merge. The merged change's page then links its revert in
+place of **Revert** while the revert is open or merged, and offers Revert again
+once the revert is closed.
 
 - **Every way it was merged reverts the same way.** A merge commit is
   reverted against its first parent (git's `revert -m 1`), a squash against
@@ -1193,14 +1204,14 @@ reaches every matching line however many there are.
 ## Seats and code
 
 Nothing to set up: once the company hosts code, your seats work in its
-repositories through thirty-six of the [code
+repositories through thirty-eight of the [code
 tools](tools-and-mcp.md#the-companys-code), on the server and in their own
 names — every one but `code_report_check`, `code_purge_unreachable` and
 `code_import_repo`, each a person's. A seat holds no git credential and needs
 none. Every seat reads with thirteen of the tools and comments on a change; a
 `review` seat also asks for reviews, reviews and dismisses the findings it
 raised; a seat whose `role.code.access` is `full_access` changes the
-repositories with all twenty-three others; and a seat's executor checks a repository out into its
+repositories with all twenty-six others; and a seat's executor checks a repository out into its
 box with `code_checkout` and works in that clone besides. What each may do is its grant, derived from
 the chart ([Who may read and push](../concepts/gitlet.md#who-may-read-and-push)).
 
@@ -1245,18 +1256,19 @@ from, on `api.external_url`.
 
 ### What your seats change
 
-A seat at `full_access` changes the repositories with the other twenty-three code
+A seat at `full_access` changes the repositories with the other twenty-six code
 tools, one change a call: a commit of up to 1 000 file operations to a branch
 (`code_commit_files`), a commit reverted or picked onto one (`code_revert`,
 `code_cherry_pick`), a branch created or deleted (`code_create_branch`,
-`code_delete_branch`), a repository created, changed, renamed, archived,
+`code_delete_branch`), a tag created or deleted (`code_create_tag`,
+`code_delete_tag`), a repository created, changed, renamed, archived,
 deleted, restored or protected ([below](#scratch-repositories)), and a change
 opened, edited, closed, reviewed and discussed ([Or with a
 tool](#open-a-change-from-a-push)). A `read_only` seat — what a seat that
-sets none runs at — is offered one of the twenty-three, `code_comment_on_change`,
+sets none runs at — is offered one of the twenty-six, `code_comment_on_change`,
 and a `review` seat also `code_request_review`, `code_review_change` and
 `code_resolve_finding`, to dismiss the findings it raised: neither changes a
-repository, so neither is offered a write that would. Your assistant has the same twenty-three
+repository, so neither is offered a write that would. Your assistant has the same twenty-six
 and `code_report_check`, `code_purge_unreachable` and `code_import_repo`
 besides, each a person's alone, as you.
 

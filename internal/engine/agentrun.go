@@ -429,7 +429,8 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		return runner.Launched{}, err
 	}
 	// AND THE RUN'S NOTE INBOX, which its session serves to its harness between
-	// steps, bound to the job with the ledger once the job has a name.
+	// steps, bound to the job with the ledger once the job has a name, and
+	// before the bridge files the session ([Engine.openBridge]).
 	inbox := e.runSteers.inbox(identityOfRef(ref), req.Round)
 	if inbox != nil {
 		session.Steer = inbox
@@ -484,7 +485,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// opened, which the job's calls are numbered after.
 		bridgeFrom int
 	)
-	result, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
+	result, err := coordinator.Launch(ctx, manager, withRunsOwn(req, sandbox.LaunchRequest{
 		Turn:       ref,
 		ReadBox:    e.boxUnread(ctx, company, handle, cell),
 		Spec:       spec,
@@ -572,7 +573,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// [sandbox.LaunchRequest.Fence]: a stop that lands while this
 		// launch is being built either finds the row or is refused here.
 		Fence: req.Fence,
-	})
+	}))
 	holds.settle(err)
 	if err != nil {
 		if recorded == "" {
@@ -585,6 +586,8 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 			// closing it closes its inbox.
 			e.bridge.Close(l.turn.RunID)
 		} else {
+			// NO SESSION OPENED: the inbox's close stops the view a bind
+			// made ahead of the bridge's refusal started.
 			inbox.Close()
 		}
 		// A LAUNCH A PERSON'S STOP ENDED UNDER IT — its row's ending decided
@@ -671,7 +674,7 @@ const floorUnusedOutcome = "the launch offers the session told without the readi
 //
 // EACH SESSION HELD TO ITS OWN FLOOR, never to the other's. A relaunch may be
 // offered both the session it was asked to continue in any box and the job
-// before's own copy in its box, each with a brief of its own, and its box
+// before's copy in its box, each with its own brief and context, and its box
 // decides which it takes up as the run starts: the first where it can, and the
 // copy only where it cannot (internal/sandbox's continueSession). So a session
 // whose own floor no window or model can carry is dropped alone, and the launch
@@ -685,13 +688,13 @@ const floorUnusedOutcome = "the launch offers the session told without the readi
 // given: where that floor is past the most room a window can leave the launch,
 // it is held at the static floor, or at the room where that is below it.
 //
-// AND THE BRIEFS TOLD BY A READING OF A KEPT CAPTURE ARE DROPPED ALONE
-// ([runner.SessionContinuation.Exact]): counted in that session's floor
-// ([keptFloor]), since its box may be handed them, and where they are what
-// makes that floor one the launch cannot carry, the session is still offered,
-// told by its save point, held to the floor of its own briefs, and the line
-// (`executor_session_holdings_unused`) says why; where its own briefs cannot be
-// carried either, the session is dropped whole, as above.
+// AND THE BRIEFS TOLD BY A READING, AND THE UNHELD ONES, ARE EACH DROPPED ALONE
+// ([agentLauncher.droppedAlone]) where theirs is what makes the kept floor
+// ([keptFloor]) one the launch cannot carry: the session is still offered,
+// held to its own briefs' floor, told by its save point to every box but one
+// whose release the resume was not read in, which starts fresh where the unheld
+// briefs were dropped ([runner.SessionContinuation.UnheldDropped]). Where its
+// own briefs cannot be carried either, the session is dropped whole, as above.
 //
 // AND A LAUNCH WHOSE EARLIER TRY WAS REFUSED BELOW ITS FLOOR waits for that
 // floor one turnover at most ([agentLauncher.refusedIn], [meter.turnedOver]):
@@ -761,28 +764,28 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		return stillShort(f)
 	}
 	var keptWhy, inPlaceWhy string
+	// THE MODEL THE NEXT REQUEST GOES TO, whose rate the harness's estimate of
+	// a continued session's next request is read at ([continuedContext]).
+	var model string
+	if member != nil {
+		model = member.ModelArgument()
+	}
 	if s := req.Session; s != nil {
-		kept := keptFloor(static, s)
+		kept := keptFloor(static, s, model)
 		keptWhy = carried(kept)
-		// THE BRIEFS TOLD BY A READING DROPPED ALONE where theirs is the floor
-		// that cannot be carried and the session's own briefs' can: the
-		// session is still continued, told by its save point, which tells
-		// more and never less. On a copy of the session, never the caller's,
-		// whose continuation the runner still holds.
-		//
-		// AND WHERE THEIRS FAILS TOO, the session is dropped by its own
-		// briefs' floor, which its line names: the floor with the briefs told
-		// by a reading is one the session alone never needed.
-		if keptWhy != "" && s.Exact != nil {
-			without := *s
-			without.Exact = nil
-			told := keptFloor(static, &without)
-			if whyTold := carried(told); whyTold != "" {
-				keptWhy = whyTold
+		// THE BRIEFS TOLD BY A READING, AND THE UNHELD ONES, EACH DROPPED
+		// ALONE where theirs beside the session's own is a floor that cannot
+		// be carried and the session's own briefs' can; on a copy, never the
+		// caller's, which the runner still holds. Where the session's own
+		// floor fails too, it is dropped by that floor, which its line names.
+		if keptWhy != "" && (s.Exact != nil || s.Unheld != nil) {
+			own := *s
+			own.Exact, own.Unheld = nil, nil
+			if whyOwn := carried(keptFloor(static, &own, model)); whyOwn != "" {
+				keptWhy = whyOwn
 			} else {
-				log.InfoContext(ctx, "executor_session_holdings_unused", "seat", l.seat.Handle(),
-					"turn_id", l.turn.RunID, "detail", keptWhy, "outcome", floorUnusedOutcome)
-				req.Session, kept, keptWhy = &without, told, ""
+				without := l.droppedAlone(ctx, s, own, static, model, carried)
+				req.Session, kept, keptWhy = &without, keptFloor(static, &without, model), ""
 			}
 		}
 		if keptWhy == "" {
@@ -790,7 +793,11 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		}
 	}
 	if c := req.Continue; c != nil && c.SessionID != "" && inBox {
-		inPlace := static.continuing(c.ContextTokens, harness.EstimateTokens(c.Brief))
+		// THE LONGER OF ITS TWO BRIEFS, never the summarized one dropped
+		// alone: it is what the launch hands where the box's point does not
+		// prove the held one whole ([runner.Continuation.Summarized]).
+		inPlace := static.continuing(continuedContext(c.NextRequest, c.ContextTokens, model),
+			max(harness.EstimateTokens(c.Brief), harness.EstimateTokens(c.Summarized)))
 		if inPlaceWhy = carried(inPlace); inPlaceWhy == "" {
 			floor = floor.atLeast(inPlace)
 		}
@@ -847,6 +854,34 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 	return req, floor
 }
 
+// droppedAlone is s less each telling beside its own briefs whose floor, beside
+// own's, carried cannot carry ([agentLauncher.continuedFloor]): the briefs told
+// by a reading, logged, and the unheld briefs, marked dropped, so the launch
+// continues the session only in a box whose release the resume was read in.
+func (l *agentLauncher) droppedAlone(ctx context.Context, s *runner.SessionContinuation,
+	own runner.SessionContinuation, static launchFloor, model string,
+	carried func(launchFloor) string) runner.SessionContinuation {
+
+	without := *s
+	if s.Exact != nil {
+		with := own
+		with.Exact = s.Exact
+		if why := carried(keptFloor(static, &with, model)); why != "" {
+			log.InfoContext(ctx, "executor_session_holdings_unused", "seat", l.seat.Handle(),
+				"turn_id", l.turn.RunID, "detail", why, "outcome", floorUnusedOutcome)
+			without.Exact = nil
+		}
+	}
+	if s.Unheld != nil {
+		with := own
+		with.Unheld = s.Unheld
+		if carried(keptFloor(static, &with, model)) != "" {
+			without.Unheld, without.UnheldDropped = nil, true
+		}
+	}
+	return without
+}
+
 // refusedIn is every window an earlier try of this launcher's work was refused
 // below its floor in, none where none is known: on a resumed segment's
 // launcher, the one its run's job's record names
@@ -878,19 +913,32 @@ func (l *agentLauncher) refusedIn() []sandbox.BudgetWindow {
 // keptFloor is the floor of a launch that continues s, the session it was asked
 // to continue in any box ([runner.AgentRunRequest.Session]): the turn's kept
 // capture, in the longest of its briefs (its two, and the two told by a
-// reading of what it holds where it carries them,
-// [runner.SessionContinuation.Exact], since which box the launch gets, and
-// which release that box's harness answers, are the launch's to learn), or the
+// reading, [runner.SessionContinuation.Exact], and for a box whose release the
+// resume was not read in, [runner.SessionContinuation.Unheld], where it carries
+// them, since which box and release the launch gets are its to learn), or the
 // session its conversation's last turn left, in its one; static where s names
-// neither.
-func keptFloor(static launchFloor, s *runner.SessionContinuation) launchFloor {
+// neither. And the two told as a session that may be a summary, which the
+// launch hands where its box's point does not prove the others whole
+// ([runner.SessionContinuation.Summarized]), never dropped alone. The kept
+// capture's context is its harness's estimate of its next request at model's
+// rate where the capture holds one ([continuedContext]).
+func keptFloor(static launchFloor, s *runner.SessionContinuation, model string) launchFloor {
 	switch {
 	case s.Basis.Continues():
+		// THE KEPT CAPTURE'S OWN CONTEXT, as it measured it, never its job's
+		// copy's ([runner.SessionBasis.CopyContext]): that one sizes the
+		// in-place floor, and a restored capture sends what it holds.
 		brief := max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced))
 		if x := s.Exact; x != nil {
 			brief = max(brief, harness.EstimateTokens(x.Brief), harness.EstimateTokens(x.Replaced))
 		}
-		return static.continuing(s.Basis.ContextTokens, brief)
+		if x := s.Summarized; x != nil {
+			brief = max(brief, harness.EstimateTokens(x.Brief), harness.EstimateTokens(x.Replaced))
+		}
+		if u := s.Unheld; u != nil {
+			brief = max(brief, harness.EstimateTokens(u.Brief), harness.EstimateTokens(u.Replaced))
+		}
+		return static.continuing(continuedContext(s.Basis.NextRequest, s.Basis.ContextTokens, model), brief)
 	case s.Basis.ContinuesBase():
 		// THE BASE'S OWN CONTEXT, never the job before's: that one sizes the
 		// in-place floor, and a base is continued only in a box of its own,
@@ -898,6 +946,25 @@ func keptFloor(static launchFloor, s *runner.SessionContinuation) launchFloor {
 		return static.continuing(s.Basis.Base.ContextTokens, harness.EstimateTokens(s.Replaced))
 	}
 	return static
+}
+
+// continuedContext is the context a continued session sends again before a
+// word of its brief, which its launch's floor is made of: next, its harness's
+// own estimate of its next request, at the rate of model, the model the
+// launch's member hands its harness ([sandbox.NextRequest.At]), where it holds
+// a figure; else last, its last request's input, which under-counts the next
+// request by its reply and all after it, the figure of every record holding no
+// estimate (an older build's, a capture settled off the executor log, a thread
+// not read whole, a harness whose reader estimates none). Never the larger:
+// past a compaction no request has followed, last is the compacted-away
+// conversation's and the estimate the nearer, though short of the request by
+// its system prompt and tools until a reply anchors it (the residual
+// internal/sandbox/executor's package doc states).
+func continuedContext(next sandbox.NextRequest, last int64, model string) int64 {
+	if n := next.At(model); n > 0 {
+		return n
+	}
+	return last
 }
 
 // uncarried is why no launch on member can carry f, "" where one can: one
@@ -1034,24 +1101,16 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 
 // openBridge opens a job's bridge session under the job's own name, with its
 // ledger and its note inbox bound to the same job, and answers what the box is
-// given for it — its server entry, and where its harness asks for its turn's notes:
-// [sandbox.LaunchRequest.Opened], for the launch, and the same opening for a
-// run taken over while it works ([Engine.reopenAgentRun]), whose box already
-// holds the endpoint and is never handed the one minted here.
-//
-// THE SESSION NUMBERS ITS CALLS AFTER THE ONES THE LOG HOLDS
-// ([sandbox.OpenedJob.LastSeq]): a recovery's after its own job's, and a job
-// continuing one that asked a person after the asking job's, so the round's
-// calls keep the one order its collection reads them in.
-//
-// AND READS EACH CALL'S ID UNDER THE KEY THE JOB NAMES
-// ([sandbox.OpenedJob.CallIDMeta]): the one the runner starting the job's box
-// declares its harness sends it under, for the launch, and this node's runner
-// of the job's harness, for a run taken over while it works — each set here,
-// on the session the bridge opens, never on the launch's own literal.
-//
-// The inbox is bound once the session is open, never before: a session that
-// does not open serves no notes, and the caller closes the inbox.
+// given for it: its server entry, and where its harness asks for its turn's
+// notes ([sandbox.LaunchRequest.Opened]), for the launch and for a run taken
+// over while it works ([Engine.reopenAgentRun]), whose box already holds the
+// endpoint. The session numbers its calls after the ones the log holds
+// ([sandbox.OpenedJob.LastSeq]) and reads each call's id under the key the job
+// names ([sandbox.OpenedJob.CallIDMeta]), set here. THE INBOX IS BOUND BEFORE
+// THE BRIDGE FILES THE OPENING, which a recovery's box reaches at once: bound
+// after Open, it was served unbound until then. The caller closes the inbox of
+// a session that does not open. The package doc's "An OpenCode confirmation is
+// recorded once, and reported" says why.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
 	inbox *runInbox, job sandbox.OpenedJob,
 ) (_ sandbox.Opening, err error) {
@@ -1061,6 +1120,7 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// names it: what a collection on any node reads this process's liveness by.
 	ledger.runner = e.callRunner()
 	s.Launch, s.LastSeq, s.CallIDMeta = job.LaunchID, job.LastSeq, job.CallIDMeta
+	inbox.Bind(ctx, job.LaunchID, sessionFence(s.Surface))
 	endpoint := e.bridge.Open(ctx, s)
 	if endpoint == "" {
 		// UNREACHABLE past the refusals LaunchExecutor makes by name, which
@@ -1069,7 +1129,6 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 		return sandbox.Opening{}, fmt.Errorf("the tool bridge opened no session for run %s's "+
 			"job %s; this node's log says why (mcp_bridge_*)", s.RunID, job.LaunchID)
 	}
-	inbox.Bind(ctx, job.LaunchID)
 	// AS LONG AS THIS NODE'S BRIDGE CAN TAKE TO ANSWER A CALL is how long the
 	// box's harness waits for one, on every server it is handed: the bridge
 	// keeps a running call's answer going, so nothing else bounds the wait
@@ -1122,6 +1181,20 @@ func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait tim
 	return opening
 }
 
+// withRunsOwn is out with what req says of the run itself beside the launch's
+// decisions: its own context sources, which a launch charges an OpenCode
+// continuation in the box that holds its copy (internal/sandbox's RunSources),
+// what each server the run's bridge serves says it is for; and the leads its
+// fresh brief opened with, which the launch keeps for its job. Set beside
+// [agentLauncher.launch]'s literal rather than in it, since that literal is the
+// launch's decisions (member, cell, reach, environment, login), which
+// crewlet-operator mirrors, and neither is one.
+func withRunsOwn(req runner.AgentRunRequest, out sandbox.LaunchRequest) sandbox.LaunchRequest {
+	out.MCPGuidance = mcpbridge.Guidance(req.Surface)
+	out.FreshOwn = req.FreshOwn
+	return out
+}
+
 // sandboxContinuation is the runner's carry-on of an asking run in the sandbox
 // layer's terms, nil for every other launch — with the read its briefs were
 // built from, past which the job's opening marks the round's calls late
@@ -1132,6 +1205,10 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 	}
 	out := &sandbox.Continuation{SessionID: c.SessionID, Brief: c.Brief, BriefRead: c.BriefRead,
 		Told: c.Told, Fresh: c.Fresh}
+	if c.Summarized != "" {
+		out.Summarized, out.SummarizedTold = c.Summarized, c.SummarizedTold
+		out.Count, out.CountProvider = c.Count, c.CountProvider
+	}
 	switch {
 	case c.SignInReplaced:
 		out.Reason = sandbox.FollowUpSignInReplaced

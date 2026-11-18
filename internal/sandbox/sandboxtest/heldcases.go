@@ -104,27 +104,17 @@ func testAHeldCallIsRecordedWithItsQuestionAndPinnedToItsJob(t *testing.T, s san
 }
 
 // A HELD CALL IS MARKED ONCE, AND THE MARK OUTLIVES A CLAIM GIVEN BACK: the
-// first mark of an answer's claim is the one that makes the call; a second, on
-// the same claim or on the claim taken again after a failed attempt gave it
-// back, finds it marked and does not; the result is recorded once and read by
-// every later mark.
-//
-// AND THE CLAIM TAKEN AGAIN READS THEM: the row it returns holds the mark, and
-// the result once one is recorded. The resume it drives answers a call an
-// earlier attempt marked from that read, before it asks whether the call may
-// be made at all (internal/agent/runner's makeHeld).
-//
-// IN A BUBBLE, so the store's clock is the case's: the first mark is dated
-// the instant it is made, and the clock moves on before the call is marked or
-// claimed again. A repeat or a claim that wrote the mark again carries that
-// later instant, where on the machine's clock it read equal to the first
-// inside one tick.
+// first mark of an answer's claim makes the call; a second, on the same claim
+// or one taken again after a failed attempt, finds it marked and does not; the
+// result is recorded once. The claim taken again READS THEM: its row holds the
+// mark and result, which the resume answers from before asking whether the call
+// may be made at all (internal/agent/runner's makeHeld). IN A BUBBLE, a mark
+// written again carries a later instant, which one tick of the machine's clock
+// would read equal.
 //
 // Mutation: let ReleaseClaim clear the mark, or the mark write a call already
-// marked, and the call is made twice; return the claimed row without the held
-// call's mark or result, and a later attempt reads a call it made as one
-// nobody made; date the mark again on a repeat or a claim, and it is no longer
-// the first mark's.
+// marked, and the call is made twice; return the claimed row without the mark
+// or result, and a later attempt reads a made call as one nobody made.
 func testAHeldCallIsMarkedOnceAndTheMarkOutlivesAClaimGivenBack(t *testing.T, s sandbox.PendingStore) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
@@ -238,23 +228,16 @@ func testAHeldCallIsMarkedOnlyByTheClaimOfItsAnswer(t *testing.T, s sandbox.Pend
 
 // THE CALL A PERSON APPROVED IS A CALL OF ITS ROUND, IN ITS LOG: recording what
 // it returned on the row appends the call to the run's log beside every call
-// the job made over its bridge — answered as the tool answered it, its
-// arguments and output left sealed on the held call, named by the held call's
-// id — so the job that carries the work on keeps it in its round's log, a later
-// round finds it among the turn's earlier calls, and every reader of whether
-// the turn replied reads it. It was made on the engine host and recorded
-// nowhere a reader looked: a reply that went out read as one that did not. And
-// ONCE, though answered twice: the retry that finds the result recorded
-// appends only a call the log lacks. AND WITH NO ID OF A HARNESS'S
-// ([sandbox.BridgeCall.CallID]), whatever its resume handed: the resume made
-// the call on the engine host, where no harness named it, and the box's
-// session holds the held call's answer under the held call's own id.
+// the job made over its bridge (arguments and output left sealed, named by the
+// held call's id), so a later round finds it and every reader of whether the
+// turn replied reads it; recorded nowhere, a sent reply read as unsent. ONCE,
+// though answered twice: the retry appends only a call the log lacks. WITH NO
+// HARNESS ID ([sandbox.BridgeCall.CallID]), whatever its resume handed: no
+// harness named a call made on the engine host.
 //
-// Mutation: record the result alone in RecordHeldResult, and the round's log
-// holds nothing the approved call came to; append without the held call's id,
-// and the second answer puts it in the log twice; keep the id the resume
-// handed (approved-call-keeps-its-id), and the approved call carries an id no
-// harness gave it.
+// Mutation: record the result alone in RecordHeldResult; append without the
+// held call's id (the second answer logs it twice); keep the id the resume
+// handed (approved-call-keeps-its-id).
 func testTheCallAPersonApprovedIsACallOfItsRound(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	launch := heldParked(t, s, "t1")

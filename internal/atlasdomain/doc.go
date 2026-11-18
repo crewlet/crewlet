@@ -87,4 +87,11 @@
 // for named entries; [Reader.Activity] how many lines each entry took a day,
 // and each entry's newest record; and [Reader.Purges] what was purged, by whom
 // and when, never what.
+//
+// A withdrawal's line is derived at read, from a replaced claim whose voice
+// recorded nothing on its slot in the record that replaced it, so the applier
+// writes no column for it and two builds still write one row. A page's cursor
+// is the instant, the stream and the claim id: one read record writes several
+// claims at one instant, and a cursor of the instant alone would lose the rest
+// of them at a page boundary.
 package atlasdomain

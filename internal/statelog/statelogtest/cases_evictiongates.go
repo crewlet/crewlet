@@ -14,22 +14,17 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// EvictionGateCandidate is a domain whose ONLY gate that makes a durable
-// record apply nowhere is a node's EVICTION WINDOW — it keeps no deletion
-// marker on any object — together with the publisher-side reader,
-// [statelog.Gates], that has to report it.
+// EvictionGateCandidate is a domain whose only apply-nowhere gate is a node's
+// eviction window (it keeps no deletion marker on any object), with the
+// publisher-side reader, [statelog.Gates], that has to report it.
 //
-// A FAMILY OF ITS OWN rather than a [GateCandidate] with its Purge left nil,
-// for the reason that type is one: a hook a domain may leave out is a hook a
-// domain that HAS a marker can forget with nothing failing. A domain is one
-// shape or the other, and its test file names the family it is.
+// A family of its own rather than a [GateCandidate] with Purge nil, for that
+// type's reason: an optional hook is one a domain with a marker can forget.
 //
-// A domain of this shape may still install OTHER apply gates — records that
-// stop an applier rather than be deferred when a build cannot read them,
-// because deferring one is a node serving what every other node removed — and
-// those are what this candidate's ApplyGates name: every one of them must
-// answer false to [statelog.Domain.NodeGate], for the reason [NodeGates]
-// gives, and only its own records can show that.
+// Its ApplyGates name the domain's other apply gates (records an applier that
+// cannot read them stops on, since deferring one serves what every other node
+// removed); each must answer false to [statelog.Domain.NodeGate], for the
+// reason [NodeGates] gives.
 type EvictionGateCandidate struct {
 	Candidate
 
@@ -41,11 +36,11 @@ type EvictionGateCandidate struct {
 	// about one object is asked under.
 	Kind string
 
-	// SubjectKinds is EVERY subject kind the domain's records carry, and it
-	// holds Kind. The window is a fact about a WRITER, so a reader has to
-	// report it on every kind the applier drops it on — and a reader that
-	// asked about Kind alone would pass every question here that names
-	// Kind, so the coverage probe asks the applier about all of them.
+	// SubjectKinds is every subject kind the domain's records carry, and
+	// holds Kind. The window is a fact about a writer, so a reader must
+	// report it on every kind the applier drops; the coverage probe asks
+	// about all of them, since asking about Kind alone passes every question
+	// that names Kind.
 	SubjectKinds []string
 
 	// The records the cases publish, each for the object (or node) id, the
@@ -58,10 +53,8 @@ type EvictionGateCandidate struct {
 	Readmit func(node, writer, opID string) ([]byte, error)
 
 	// ApplyGates are the domain's other gate-installing records, by name,
-	// each built for an object id. EMPTY IS AN ANSWER and nil is not: a
-	// domain whose only gate is the eviction says so with an empty map,
-	// and one that left this out has not said whether its other gates
-	// are node gates.
+	// each built for an object id. Empty says the eviction is the only gate;
+	// nil has not said whether the others are node gates, and is refused.
 	ApplyGates map[string]func(id, writer, opID string) ([]byte, error)
 }
 
@@ -69,26 +62,17 @@ type EvictionGateCandidate struct {
 type EvictionGateFactory func(t *testing.T) EvictionGateCandidate
 
 // RunEvictionGates certifies the gate reader of a domain whose only
-// apply-nowhere gate is the eviction window, against the half of the rule
-// [statelog.Gates] states that such a reader keeps — the window, half-open at
-// both ends, reported as the eviction it is — on rows the domain's own applier
-// wrote.
+// apply-nowhere gate is the eviction window against the window half of the
+// rule [statelog.Gates] states (half-open at both ends, reported as an
+// eviction), on rows the domain's own applier wrote, holding the reader to the
+// applier's answer for every subject kind the records carry. It then bends the
+// candidate's reader and applier each plausible wrong way and requires every
+// bend reported, on [RunGates]' terms, and holds the domain's node-gate answer
+// to its eviction, readmission and other gates.
 //
-// IT ASKS THE APPLIER, for every subject kind the domain's records carry,
-// whether an evicted writer's record of that kind is dropped inside the window
-// and applied outside it, and holds the reader to the same answer — because
-// the reader is only right where it agrees with what every applier did.
-//
-// It then bends the candidate's own reader and applier each way they could
-// plausibly be written wrong, and requires every bend reported, on
-// [RunGates]' terms: every bend is of the candidate itself, so the candidate
-// is its own control. And it holds the domain's NODE-GATE answer to its
-// eviction, its readmission and every other gate it installs.
-//
-// The reader is handed each probe's own body, as the publisher hands it its
-// own append's, though nothing a window reads is in one: the window is a fact
-// about the WRITER, which every envelope names. So the reader that ignores the
-// body is a bend of the deletion family's alone.
+// The reader is handed each probe's body, as the publisher's append is, though
+// the window reads none (it is a fact about the writer), so a reader ignoring
+// the body is a bend only for the deletion family.
 func RunEvictionGates(t *testing.T, new EvictionGateFactory) {
 	t.Helper()
 	t.Run("the reader reports the window the rule names", func(t *testing.T) {
@@ -159,12 +143,11 @@ func RunEvictionGates(t *testing.T, new EvictionGateFactory) {
 		}
 	})
 	t.Run("the cases catch a domain that calls the wrong record a node gate", func(t *testing.T) {
-		// THE APPLY-GATE BEND IS SEEN ONLY THROUGH ANOTHER GATE: where the
-		// eviction is the domain's only one, its apply gate and its node
-		// gate are the same answer. So which bends apply is decided BEFORE
-		// any subtest exists — a subtest that returned without asserting
-		// would report a pass for a case nothing ran, which is a skip no
-		// gate can see.
+		// The apply-gate bend shows only through another gate: where the
+		// eviction is the only one, its apply and node gate answers coincide.
+		// Which bends apply is decided before any subtest exists, since one
+		// returning without asserting is a pass nothing ran, a skip no gate
+		// sees.
 		others := len(new(t).ApplyGates) > 0
 		for name, bend := range nodeGateLiars {
 			if name == applyGateNodeGateLiar && !others {
@@ -180,9 +163,8 @@ func RunEvictionGates(t *testing.T, new EvictionGateFactory) {
 			})
 		}
 	})
-	// NIL IS NOT AN ANSWER. A candidate that left its other apply gates out
-	// has not said whether they are node gates, and reading the silence as
-	// "none" would certify a domain whose erase is flagged one.
+	// Nil is not an answer: reading it as "none" would certify a domain
+	// whose erase is flagged a node gate.
 	t.Run("the cases catch a candidate that leaves its other gates unsaid", func(t *testing.T) {
 		c := new(t)
 		c.ApplyGates = nil
@@ -241,11 +223,11 @@ var windowQuestions = []gateQuestion{
 	{name: "a record the eviction drops",
 		id: windowObj1, writer: gateEvicted, opID: "window-evicted", seq: 4,
 		want: statelog.ReasonEvicted},
-	// THE WINDOW IS A FACT ABOUT THE WRITER, whatever the record is about.
+	// The window is a fact about the writer, whatever the record is about.
 	{name: "another kind's record by the evicted writer inside the window",
 		kind: ungatedKind, id: windowObj1, writer: gateEvicted,
 		opID: "window-other-kind", seq: 5, want: statelog.ReasonEvicted},
-	// THE WINDOW IS HALF-OPEN AT BOTH ENDS, as the applier's is.
+	// The window is half-open at both ends, as the applier's is.
 	{name: "a record at the eviction's own position",
 		id: windowObj1, writer: gateEvicted, opID: "window-at-eviction", seq: 3},
 	{name: "a record at the readmission's own position",
@@ -262,7 +244,7 @@ var windowQuestions = []gateQuestion{
 // own applier and asks its reader the rule's questions, reporting every answer
 // that breaks it.
 //
-// EXPORTED AND RETURNING THE VERDICT, for the reason [GateAgreement] is.
+// It returns the verdict for [GateAgreement]'s reason.
 func EvictionGateAgreement(t *testing.T, new EvictionGateFactory) error {
 	t.Helper()
 	c := new(t)
@@ -308,16 +290,14 @@ func EvictionGateAgreement(t *testing.T, new EvictionGateFactory) error {
 		strings.Join(problems, "\n  "))
 }
 
-// windowCoverage asks the APPLIER, for every subject kind the domain's records
-// carry, whether an evicted writer's record of that kind is dropped inside the
-// window and applied after the readmission — and requires the reader to answer
-// every one exactly as the applier did. It refuses a probe in which the
-// applier dropped nothing of the candidate's own kind, because agreement there
-// is agreement with any reader.
+// windowCoverage asks the applier, for every subject kind the records carry,
+// whether an evicted writer's record is dropped inside the window and applied
+// after the readmission, and requires the reader to answer each exactly as
+// the applier did. It refuses a probe in which the applier dropped nothing of
+// the candidate's own kind: agreement there is agreement with any reader.
 //
-// ASKED AND NEVER APPLIED, at positions the history already holds: what is
-// certified is the gate, read from the eviction row the history wrote, and an
-// apply would only be the domain's own business.
+// Asked, never applied, at positions the history holds: the gate is what is
+// certified, read from the eviction row the history wrote.
 func windowCoverage(t *testing.T, c EvictionGateCandidate, db store.ReplicatedHandle,
 	gates statelog.Gates, at func(uint64) statelog.Position) []string {
 
@@ -460,9 +440,8 @@ var windowApplierLiars = map[string]func(own string, a statelog.Applier) statelo
 			return "", false, nil
 		}}
 	},
-	// THE WINDOW NARROWED TO ONE KIND, on the applier's side: the history
-	// writes only the object's own kind, so only the coverage probe of
-	// every other kind can see it.
+	// The window narrowed to one kind on the applier's side: the history
+	// writes only the object's own kind, so only the coverage probe sees it.
 	"drops an evicted writer's records of its object's own kind alone": func(own string, a statelog.Applier) statelog.Applier {
 		return applierLiar{a, func(ctx context.Context, tx *sql.Tx,
 			rec statelog.Record) (statelog.Reason, bool, error) {
@@ -478,8 +457,8 @@ var windowApplierLiars = map[string]func(own string, a statelog.Applier) statelo
 // records, that exactly its eviction and readmission are node gates — and that
 // its create, its ordinary write and every other gate it installs are not.
 //
-// EXPORTED AND RETURNING THE VERDICT, so [RunEvictionGates] can bend the
-// candidate's own domain and require the bend to be reported.
+// It returns the verdict so [RunEvictionGates] can bend the candidate's
+// domain and require the bend reported.
 func EvictionGateNodeGates(c EvictionGateCandidate) error {
 	var errs []error
 	if c.ApplyGates == nil {

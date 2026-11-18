@@ -19,27 +19,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CONDITION OF THE NODE IS TOLD IN A PERSON'S WORDS FOR IT, on a write and on
-// a read of an artifact alike, under its own hint.
-//
-// A write the state log refused was answered "this node could not publish
-// right now: " and the refusal's own message, the framework's name and the
-// detail written for whoever runs the node; a read was "could not read version
-// 3 right now", which asked a person to come back to a log at its ceiling.
-// Both are told in [builtin.ConditionSentence], whose advice agrees with the
-// Retry-After, and the refusal's own text reaches neither.
-//
-// AND ITS ERROR GOES TO THIS SURFACE'S LOG, under its own component and with
-// what the gesture was — the verb and the operation of a write, what a read
-// was of — at WARN exactly where no wait clears it, since the answer no longer
-// carries it: a line with the error alone, under another package's component,
-// said something failed and nothing about what.
+// A CONDITION OF THE NODE IS TOLD IN A PERSON'S WORDS FOR IT, on a write and a
+// read alike, in [builtin.ConditionSentence] (advice agreeing with the
+// Retry-After), never the refusal's own text, which is for whoever runs the node.
+// Its error goes to THIS SURFACE'S LOG, under its own component with the
+// gesture's fields (a write's verb and operation, what a read was of), at WARN
+// exactly where no wait clears it, since the answer no longer carries it.
 //
 // Not parallel: it installs the process's log sink.
 //
-// Mutation: answer a write in [builtin.Condition]'s words again, or a read in
-// its fixed sentence, and its rows go red; log through another logger or
-// without the gesture's fields, and the log rows do.
+// Mutation: answer in a fixed sentence, or log through another logger or
+// without the gesture's fields, and the rows go red.
 func TestAConditionIsToldInAPersonsWords(t *testing.T) {
 	var out syncBuffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &out)

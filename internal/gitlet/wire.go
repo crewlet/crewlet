@@ -1461,9 +1461,13 @@ type ReadAnswer struct {
 	Resolved  *RepoRef      `json:"resolved,omitempty"`
 	Revisions []RevisionRow `json:"revisions,omitempty"`
 	Reviewers []ReviewerRow `json:"reviewers,omitempty"`
-	Comments  []CommentRow  `json:"comments,omitempty"`
-	Reviews   []ReviewRow   `json:"reviews,omitempty"`
-	Findings  []FindingRow  `json:"findings,omitempty"`
+	// Moves is a page of a change's moves ([PartMoves]).
+	Moves []ChangeMove `json:"moves,omitempty"`
+	// QueueEntries is a page of a change's queue entries ([PartQueue]).
+	QueueEntries []ChangeQueueEntry `json:"queue_entries,omitempty"`
+	Comments     []CommentRow       `json:"comments,omitempty"`
+	Reviews      []ReviewRow        `json:"reviews,omitempty"`
+	Findings     []FindingRow       `json:"findings,omitempty"`
 	// FindingPaths is a `finding_paths` page of a change ([ReadQuery.FindingPaths]).
 	FindingPaths []FindingPathRow `json:"finding_paths,omitempty"`
 	// Viewed is a `viewed` page of a change ([ReadQuery.Viewed]): the asker's own marks.
@@ -1915,13 +1919,14 @@ type ChangeResult struct {
 
 // ConversationWrite is one write of a change's conversation as its asker hands
 // it to the repository's committing data node ([ChangeWriter.Converse]):
-// EXACTLY ONE of an ask for review, a comment, a thread's resolution, a review,
-// an answer to findings and a revision's facts (each its op's payload,
-// [ConversationOps]), decided as a record of its own on the change's subject,
-// beside who asks and their read floor. OpID is the record's operation id, Seen
-// the publish's session floor. What no asker sends (who wrote it, a reviewer's
-// kind, a comment's id and thread, a review's and its findings' ids) the writer
-// stamps from its asker, the chart and its snapshot.
+// EXACTLY ONE of an ask for review, a comment, a thread's resolution, a
+// comment's edit or delete, a review, an answer to findings and a revision's
+// facts (each its op's payload, [ConversationOps]), decided as a record of its
+// own on the change's subject, beside who asks and their read floor. OpID is
+// the record's operation id, Seen the publish's session floor. What no asker
+// sends (who wrote it, a reviewer's kind, a comment's id and thread, a review's
+// and its findings' ids) the writer stamps from its asker, the chart and its
+// snapshot.
 type ConversationWrite struct {
 	// OpID is the record's operation id, as [ChangeProposal.OpID] is; a
 	// comment's id derives from it ([CommentID]).
@@ -1966,6 +1971,8 @@ type ConversationWrite struct {
 	Reviewers      *ReviewerRequest `json:"reviewers,omitempty"`
 	Comment        *Comment         `json:"comment,omitempty"`
 	ThreadResolve  *ThreadResolve   `json:"thread_resolve,omitempty"`
+	CommentEdit    *CommentEdit     `json:"comment_edit,omitempty"`
+	CommentDelete  *CommentDelete   `json:"comment_delete,omitempty"`
 	Review         *Review          `json:"review,omitempty"`
 	FindingResolve *FindingResolve  `json:"finding_resolve,omitempty"`
 	// Revise is a revision's facts, and Mergeability whether the change's head
@@ -2470,9 +2477,14 @@ type ChangeRow struct {
 	// at (MergeOID).
 	ClosedAt    time.Time `json:"closed_at,omitzero"`
 	CloseReason string    `json:"close_reason,omitempty" untrusted:"name"`
-	MergedAt    time.Time `json:"merged_at,omitzero"`
-	MergedVia   MergedVia `json:"merged_via,omitempty"`
-	MergeOID    string    `json:"merge_oid,omitempty"`
+	// ClosedBy is who closed it, while closed: the close's principal or the
+	// pusher who deleted its source (SourceDeleted), ClosedByKind which kind;
+	// each "" for a push nobody made (an import's, a mirror's).
+	ClosedBy     string    `json:"closed_by,omitempty"`
+	ClosedByKind PartyKind `json:"closed_by_kind,omitempty"`
+	MergedAt     time.Time `json:"merged_at,omitzero"`
+	MergedVia    MergedVia `json:"merged_via,omitempty"`
+	MergeOID     string    `json:"merge_oid,omitempty"`
 	// MergedBy is who merged it through its gate, a merge record's principal
 	// ([Merge]): a seat's handle or a person's human seat, MergedByKind which;
 	// MergedOperatorID the credential a person used; OverrideReason a person's
@@ -2525,6 +2537,10 @@ type ChangeSummary struct {
 	// Card is what a listing's row draws beside its readiness, where
 	// [ReadQuery.Cards] asks; nil is not answered, never "nothing to say".
 	Card *ChangeCard `json:"card,omitempty"`
+	// WaitsFor is, on a needs=me listing, the half that listed the change
+	// (review or fix); "" on every other listing. An answer field, so no
+	// versionedFields row.
+	WaitsFor Need `json:"waits_for,omitempty"`
 }
 
 // ChangeDetail is one change in detail: its summary, its description and its
@@ -2543,9 +2559,16 @@ type ChangeDetail struct {
 	// target, as its home recorded it; nil before the home merged any. One of
 	// an earlier revision or into another branch is the home's to merge again.
 	Mergeability *MergeabilityRow `json:"mergeability,omitempty"`
+	// TargetTip is its target branch's tip as read, "" with no live branch: what
+	// a stale Mergeability.TargetOID is checked against and a fast-forward needs
+	// its head to hold. An answer field, so no versionedFields row.
+	TargetTip string `json:"target_tip,omitempty"`
 	// Participants is who takes part in its conversation (code_participants),
 	// by handle, at most MaxDetailParticipants; nil where not answered.
 	Participants *ParticipantList `json:"participants,omitempty"`
+	// RevertedBy is the latest change opened to revert this merged one
+	// (code_changes.reverts), nil for none. An answer field: no versionedFields row.
+	RevertedBy *ChangeName `json:"reverted_by,omitempty"`
 }
 
 // ConversationRow is a change's conversation's counters (code_conversations):
@@ -2722,7 +2745,8 @@ type ReviewerRow struct {
 // finding it replies to, its author (a seat, or a person with the credential
 // used), the line a thread's first comment points at, whether and by whom its
 // thread is resolved, the turn that said it, its words, and its record's
-// position and broker instant.
+// position and broker instant; when its author last edited it, and when and by
+// whom it was deleted, which clears its words and keeps its place.
 type CommentRow struct {
 	ID               string            `json:"id"`
 	ThreadID         string            `json:"thread_id"`
@@ -2739,6 +2763,10 @@ type CommentRow struct {
 	Body             string            `json:"body" untrusted:"fence"`
 	Position         statelog.Position `json:"position"`
 	At               time.Time         `json:"at"`
+	EditedAt         time.Time         `json:"edited_at,omitzero"`
+	DeletedAt        time.Time         `json:"deleted_at,omitzero"`
+	DeletedBy        string            `json:"deleted_by,omitempty"`
+	DeletedByKind    PartyKind         `json:"deleted_by_kind,omitempty"`
 }
 
 // ChangeAuthor is one author of a change (code_change_authors): a seat's handle
@@ -2763,7 +2791,12 @@ type RevisionRow struct {
 	PushID     string            `json:"push_id,omitempty"`
 	Position   statelog.Position `json:"position"`
 	At         time.Time         `json:"at"`
-	Facts      *RevisionFactsRow `json:"facts,omitempty"`
+	// Via is how the push that made it was built ("" for one no push made) and
+	// Forced whether it rewrote the source branch: a force-push or, through the
+	// engine, a rebase onto its target ([WriteRebaseChange]).
+	Via    PushVia           `json:"via,omitempty"`
+	Forced bool              `json:"forced,omitempty"`
+	Facts  *RevisionFactsRow `json:"facts,omitempty"`
 }
 
 // RevisionFactsRow is a revision's facts as the change's home recorded them
@@ -3205,7 +3238,7 @@ func (q *CodeFilesQuery) validate() error {
 		return err
 	}
 	if f, ok := deployfiles.Classify(q.File); !ok || !f.Parsed() {
-		return fmt.Errorf("%w: code_files.file: not a deploy or dependency file the engine reads: a file off "+
+		return refusedf("%w: code_files.file: not a deploy or dependency file the engine reads: a file off "+
 			"the closed list is never read", ErrInvalid)
 	}
 	return nil
@@ -3492,7 +3525,7 @@ func ValidRev(rev string) bool {
 func GitPath(field, p, b64 string, root bool) (string, error) {
 	if b64 != "" {
 		if p != "" {
-			return "", fmt.Errorf("%w: %s: give the path as %s or as %s_b64, not both", ErrInvalid, field,
+			return "", refusedf("%w: %s: give the path as %s or as %s_b64, not both", ErrInvalid, field,
 				field, field)
 		}
 		raw, err := base64.StdEncoding.DecodeString(b64)
@@ -3505,7 +3538,7 @@ func GitPath(field, p, b64 string, root bool) (string, error) {
 		p = string(raw)
 	}
 	if why := validGitPath(p, root); why != "" {
-		return "", fmt.Errorf("%w: %s: %s", ErrInvalid, field, why)
+		return "", refusedf("%w: %s: %s", ErrInvalid, field, why)
 	}
 	return p, nil
 }
@@ -3559,10 +3592,10 @@ func WirePath(p string) (text, b64 string) {
 // kind's own is the node's to judge.
 func (q GitQuery) Validate() error {
 	if !q.Kind.Valid() {
-		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, q.Kind, words.Or(GitReadKinds()))
+		return refusedf("%w: kind: %q is not one of %s", ErrInvalid, q.Kind, words.Or(GitReadKinds()))
 	}
 	if id, err := uuid.Parse(q.RepoID); err != nil || id.String() != q.RepoID {
-		return fmt.Errorf("%w: repo_id: %q is not a repository's id", ErrInvalid, q.RepoID)
+		return refusedf("%w: repo_id: %q is not a repository's id", ErrInvalid, q.RepoID)
 	}
 	// WHO ASKS IS NAMED, or nothing is read: the answer is held to the asker's
 	// grant, and an absent asker would be somebody nobody named. The engine's
@@ -3571,7 +3604,7 @@ func (q GitQuery) Validate() error {
 	switch {
 	case q.Check != nil:
 		if q.Asker != (Principal{}) || q.CeilingSeat != "" {
-			return fmt.Errorf("%w: asker: a read made for a check is the engine's own, on the check's "+
+			return refusedf("%w: asker: a read made for a check is the engine's own, on the check's "+
 				"behalf — a check's box is no principal — which no principal makes", ErrInvalid)
 		}
 		if err := q.Check.validateAs("check."); err != nil {
@@ -3579,19 +3612,19 @@ func (q GitQuery) Validate() error {
 		}
 	case q.Kind.EnginesOwn():
 		if q.Asker != (Principal{}) || q.CeilingSeat != "" {
-			return fmt.Errorf("%w: asker: a %s read is the engine's own — its repository's home Gitlet node's — "+
+			return refusedf("%w: asker: a %s read is the engine's own — its repository's home Gitlet node's — "+
 				"which no principal makes", ErrInvalid, q.Kind)
 		}
 	default:
 		if why := q.Asker.invalid(); why != "" {
-			return fmt.Errorf("%w: asker: %s", ErrInvalid, why)
+			return refusedf("%w: asker: %s", ErrInvalid, why)
 		}
 		if why := ceilingInvalid(q.Asker, q.CeilingSeat); why != "" {
 			return fmt.Errorf("%w: %s", ErrInvalid, why)
 		}
 	}
 	if why := turnInvalid(q.Asker, q.Turn); why != "" {
-		return fmt.Errorf("%w: turn: %s", ErrInvalid, why)
+		return refusedf("%w: turn: %s", ErrInvalid, why)
 	}
 	if len(q.Cursor) > maxGitCursorBytes {
 		return fmt.Errorf("%w: cursor: %d bytes is no cursor a git read issues", ErrBadCursor, len(q.Cursor))
@@ -3616,9 +3649,9 @@ func (q GitQuery) Validate() error {
 		{GitSearch, q.Search != nil}, {GitFind, q.Find != nil}, {GitExcerpts, q.Excerpts != nil}} {
 		switch {
 		case s.kind == q.Kind && !s.present:
-			return fmt.Errorf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
+			return refusedf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
 		case s.kind != q.Kind && s.present:
-			return fmt.Errorf("%w: %s: a %s read carries no %s query", ErrInvalid, s.kind, q.Kind, s.kind)
+			return refusedf("%w: %s: a %s read carries no %s query", ErrInvalid, s.kind, q.Kind, s.kind)
 		}
 	}
 	if q.Check != nil {
@@ -3627,10 +3660,10 @@ func (q GitQuery) Validate() error {
 		}
 	}
 	if q.Unstamped && !q.Kind.Unstampable() {
-		return fmt.Errorf("%w: unstamped: a %s read answers no page to cut unstamped", ErrInvalid, q.Kind)
+		return refusedf("%w: unstamped: a %s read answers no page to cut unstamped", ErrInvalid, q.Kind)
 	}
 	if q.Unstamped && q.ReadsIndex() {
-		return fmt.Errorf("%w: unstamped: a history narrowed by who pushed it reads this node's index of "+
+		return refusedf("%w: unstamped: a history narrowed by who pushed it reads this node's index of "+
 			"pushes, which an unstamped page names nothing of", ErrInvalid)
 	}
 	switch q.Kind {
@@ -3686,11 +3719,11 @@ func (q GitQuery) atItsCheck() error {
 	case GitDiff:
 		field, rev = "diff.head", q.Diff.Head
 	default:
-		return fmt.Errorf("%w: kind: a read made for a check is a tree, a file or a diff of its commit, "+
+		return refusedf("%w: kind: a read made for a check is a tree, a file or a diff of its commit, "+
 			"never a %s read", ErrInvalid, q.Kind)
 	}
 	if rev != q.Check.OID {
-		return fmt.Errorf("%w: %s: %q is not the check's commit %s: a read made for a check reads that "+
+		return refusedf("%w: %s: %q is not the check's commit %s: a read made for a check reads that "+
 			"commit alone", ErrInvalid, field, rev, q.Check.OID)
 	}
 	return nil
@@ -3743,7 +3776,7 @@ func wholeID(field, id string, empty bool) error {
 	case id == "" && empty:
 		return nil
 	case !gitref.ValidOID(id) || id == ZeroOID:
-		return fmt.Errorf("%w: %s: %q is not a whole object id: a change's revisions are read by the 40-digit "+
+		return refusedf("%w: %s: %q is not a whole object id: a change's revisions are read by the 40-digit "+
 			"ids their rows record", ErrInvalid, field, id)
 	}
 	return nil
@@ -3752,7 +3785,7 @@ func wholeID(field, id string, empty bool) error {
 // validRev is ValidRev as a refusal naming field.
 func validRev(field, rev string) error {
 	if !ValidRev(rev) {
-		return fmt.Errorf("%w: %s: %q is not an object id — %d to 40 lowercase hex digits, never a ref "+
+		return refusedf("%w: %s: %q is not an object id — %d to 40 lowercase hex digits, never a ref "+
 			"or a revision expression; a ref is resolved to its id first", ErrInvalid, field, rev,
 			MinAbbrevDigits)
 	}
@@ -3776,11 +3809,11 @@ func (q BlobQuery) validate() error {
 	}
 	switch {
 	case q.StartLine < 0:
-		return fmt.Errorf("%w: blob.start_line: %d; lines count from 1", ErrInvalid, q.StartLine)
+		return refusedf("%w: blob.start_line: %d; lines count from 1", ErrInvalid, q.StartLine)
 	case q.EndLine < 0:
-		return fmt.Errorf("%w: blob.end_line: %d; lines count from 1", ErrInvalid, q.EndLine)
+		return refusedf("%w: blob.end_line: %d; lines count from 1", ErrInvalid, q.EndLine)
 	case q.EndLine > 0 && q.EndLine < max(q.StartLine, 1):
-		return fmt.Errorf("%w: blob.end_line: %d is before start_line %d", ErrInvalid, q.EndLine,
+		return refusedf("%w: blob.end_line: %d is before start_line %d", ErrInvalid, q.EndLine,
 			max(q.StartLine, 1))
 	}
 	return nil
@@ -3794,7 +3827,7 @@ func (q DiffQuery) validate() error {
 		return err
 	}
 	if len(q.Paths) > MaxDiffPaths {
-		return fmt.Errorf("%w: diff.paths: %d paths, past the %d one diff is filtered by", ErrInvalid,
+		return refusedf("%w: diff.paths: %d paths, past the %d one diff is filtered by", ErrInvalid,
 			len(q.Paths), MaxDiffPaths)
 	}
 	for i, p := range q.Paths {
@@ -3803,14 +3836,14 @@ func (q DiffQuery) validate() error {
 		}
 	}
 	if q.Patches && (q.File != "" || q.FileB64 != "") {
-		return fmt.Errorf("%w: diff.patches: every file's patch names no one file: give file or patches",
+		return refusedf("%w: diff.patches: every file's patch names no one file: give file or patches",
 			ErrInvalid)
 	}
 	if q.File == "" && q.FileB64 == "" {
 		return nil
 	}
 	if len(q.Paths) > 0 {
-		return fmt.Errorf("%w: diff.file: a patch names its one file and paths filter a stat — give one "+
+		return refusedf("%w: diff.file: a patch names its one file and paths filter a stat — give one "+
 			"or the other", ErrInvalid)
 	}
 	_, err := GitPath("diff.file", q.File, q.FileB64, false)
@@ -3830,13 +3863,13 @@ func (q LandedInQuery) validate() error {
 	}
 	switch {
 	case !strings.HasPrefix(q.Target, "refs/") || !ValidRef(q.Target):
-		return fmt.Errorf("%w: landed_in.target: %q is not a whole ref (refs/heads/<branch>, refs/tags/<tag>): a "+
+		return refusedf("%w: landed_in.target: %q is not a whole ref (refs/heads/<branch>, refs/tags/<tag>): a "+
 			"branch's short name is resolved to its ref first", ErrInvalid, q.Target)
 	case !gitref.ValidOID(q.TargetOID) || q.TargetOID == ZeroOID:
-		return fmt.Errorf("%w: landed_in.target_oid: %q is not the whole id of the tip the target was resolved to",
+		return refusedf("%w: landed_in.target_oid: %q is not the whole id of the tip the target was resolved to",
 			ErrInvalid, q.TargetOID)
 	case q.At.IsZero() || q.At.Stream != topics.CodeLogStream:
-		return fmt.Errorf("%w: landed_in.at: %s is not the code log position the target last moved at",
+		return refusedf("%w: landed_in.at: %s is not the code log position the target last moved at",
 			ErrInvalid, q.At)
 	}
 	return nil
@@ -3857,7 +3890,7 @@ func (q ReanchorQuery) validate() error {
 		return err
 	}
 	if n := len(q.Anchors); n == 0 || n > MaxReanchors {
-		return fmt.Errorf("%w: reanchor.anchors: %d anchors; a read places 1 to %d", ErrInvalid, n, MaxReanchors)
+		return refusedf("%w: reanchor.anchors: %d anchors; a read places 1 to %d", ErrInvalid, n, MaxReanchors)
 	}
 	ids := make(map[string]bool, len(q.Anchors))
 	for i, a := range q.Anchors {
@@ -3875,7 +3908,7 @@ func (q ReanchorQuery) validate() error {
 			return fmt.Errorf("%w: %s.side: an anchor on the old side is placed in the revision's base, which "+
 				"reanchor.base names", ErrInvalid, field)
 		case a.Start < 1 || a.End < a.Start || a.End > MaxAnchorLine:
-			return fmt.Errorf("%w: %s: lines %d to %d are no range: lines count from 1, end is at or after "+
+			return refusedf("%w: %s: lines %d to %d are no range: lines count from 1, end is at or after "+
 				"start, and no file holds a line past %d", ErrInvalid, field, a.Start, a.End, MaxAnchorLine)
 		}
 		ids[a.ID] = true
@@ -3910,7 +3943,7 @@ func (q InterdiffQuery) validate() error {
 		}
 	}
 	if q.Patches && (q.File != "" || q.FileB64 != "") {
-		return fmt.Errorf("%w: interdiff.patches: every file's patch names no one file: give file or patches",
+		return refusedf("%w: interdiff.patches: every file's patch names no one file: give file or patches",
 			ErrInvalid)
 	}
 	if q.File == "" && q.FileB64 == "" {
@@ -3935,19 +3968,19 @@ func (q LogQuery) validate() error {
 	}
 	switch {
 	case len(q.Grep) > MaxLogGrepBytes:
-		return fmt.Errorf("%w: log.grep: %d bytes, past the %d a log's literal may have", ErrInvalid,
+		return refusedf("%w: log.grep: %d bytes, past the %d a log's literal may have", ErrInvalid,
 			len(q.Grep), MaxLogGrepBytes)
 	case !utf8.ValidString(q.Grep) || strings.IndexByte(q.Grep, 0) >= 0:
-		return fmt.Errorf("%w: log.grep: a literal is valid UTF-8 holding no NUL", ErrInvalid)
+		return refusedf("%w: log.grep: a literal is valid UTF-8 holding no NUL", ErrInvalid)
 	case q.Limit < 0 || q.Limit > MaxLogLimit:
-		return fmt.Errorf("%w: log.limit: %d; a page lists 1 to %d commits, %d when left out", ErrInvalid,
+		return refusedf("%w: log.limit: %d; a page lists 1 to %d commits, %d when left out", ErrInvalid,
 			q.Limit, MaxLogLimit, DefaultLogLimit)
 	case q.Since.IsZero():
 	case q.Since.Before(time.Unix(0, 0)):
-		return fmt.Errorf("%w: log.since: %s is before 1970, the first instant a commit's date can name",
+		return refusedf("%w: log.since: %s is before 1970, the first instant a commit's date can name",
 			ErrInvalid, q.Since.UTC().Format(time.RFC3339))
 	case q.Since.After(time.Now().Add(logSinceAhead)):
-		return fmt.Errorf("%w: log.since: %s is not yet: give a date in the past", ErrInvalid,
+		return refusedf("%w: log.since: %s is not yet: give a date in the past", ErrInvalid,
 			q.Since.UTC().Format(time.RFC3339))
 	}
 	// Judged whatever Since is: the switch above ends at its first holding arm,
@@ -3956,17 +3989,17 @@ func (q LogQuery) validate() error {
 	case q.Until.IsZero():
 	case !q.Until.After(time.Unix(0, 0)):
 		// At the epoch the second before it is -1, which git reads as no bound.
-		return fmt.Errorf("%w: log.until: %s is not after 1970-01-01T00:00:00Z: a commit is kept only before an "+
+		return refusedf("%w: log.until: %s is not after 1970-01-01T00:00:00Z: a commit is kept only before an "+
 			"instant after the epoch", ErrInvalid, q.Until.UTC().Format(time.RFC3339Nano))
 	case q.Until.After(time.Now().Add(logSinceAhead)):
-		return fmt.Errorf("%w: log.until: %s is not yet: give a date no further than a day ahead", ErrInvalid,
+		return refusedf("%w: log.until: %s is not yet: give a date no further than a day ahead", ErrInvalid,
 			q.Until.UTC().Format(time.RFC3339))
 	case !q.Since.IsZero() && !q.Until.After(q.Since):
-		return fmt.Errorf("%w: log.until: %s is not after since %s: the window holds no instant", ErrInvalid,
+		return refusedf("%w: log.until: %s is not after since %s: the window holds no instant", ErrInvalid,
 			q.Until.UTC().Format(time.RFC3339Nano), q.Since.UTC().Format(time.RFC3339Nano))
 	}
 	if q.PushedBy != "" && !org.ValidHandle(q.PushedBy) {
-		return fmt.Errorf("%w: log.pushed_by: %q is not a seat's handle", ErrInvalid, q.PushedBy)
+		return refusedf("%w: log.pushed_by: %q is not a seat's handle", ErrInvalid, q.PushedBy)
 	}
 	return nil
 }
@@ -3981,13 +4014,13 @@ func (q BlameQuery) validate() error {
 	start, end := q.Range()
 	switch {
 	case q.StartLine < 0:
-		return fmt.Errorf("%w: blame.start_line: %d; lines count from 1", ErrInvalid, q.StartLine)
+		return refusedf("%w: blame.start_line: %d; lines count from 1", ErrInvalid, q.StartLine)
 	case q.EndLine < 0:
-		return fmt.Errorf("%w: blame.end_line: %d; lines count from 1", ErrInvalid, q.EndLine)
+		return refusedf("%w: blame.end_line: %d; lines count from 1", ErrInvalid, q.EndLine)
 	case end < start:
-		return fmt.Errorf("%w: blame.end_line: %d is before start_line %d", ErrInvalid, end, start)
+		return refusedf("%w: blame.end_line: %d is before start_line %d", ErrInvalid, end, start)
 	case end-start >= MaxBlameLines:
-		return fmt.Errorf("%w: blame.end_line: lines %d to %d are %d lines; a blame names at most %d",
+		return refusedf("%w: blame.end_line: lines %d to %d are %d lines; a blame names at most %d",
 			ErrInvalid, start, end, end-start+1, MaxBlameLines)
 	}
 	return nil
@@ -3999,12 +4032,12 @@ func (q BlameQuery) validate() error {
 func validTouched(field string, touched []string, all bool) error {
 	switch cost := TouchedCost(touched); {
 	case all && len(touched) > 0:
-		return fmt.Errorf("%w: %s: a revision that touches all lists no paths", ErrInvalid, field)
+		return refusedf("%w: %s: a revision that touches all lists no paths", ErrInvalid, field)
 	case len(touched) > MaxTouchedPaths:
-		return fmt.Errorf("%w: %s: %d paths, past the %d a revision's facts list", ErrInvalid, field,
+		return refusedf("%w: %s: %d paths, past the %d a revision's facts list", ErrInvalid, field,
 			len(touched), MaxTouchedPaths)
 	case cost > MaxTouchedBytes:
-		return fmt.Errorf("%w: %s: the list is %d bytes of JSON, past the %d a revision's facts list",
+		return refusedf("%w: %s: the list is %d bytes of JSON, past the %d a revision's facts list",
 			ErrInvalid, field, cost, MaxTouchedBytes)
 	}
 	for i, p := range touched {

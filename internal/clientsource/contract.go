@@ -508,9 +508,12 @@ var contract = []Entry{
 	{"REPO_NAME", ReadScalar, "internal/gitlet.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
 	{"REPO_NAME_MAX_BYTES", ReadScalar, "internal/gitlet.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
 	{"CHANGE_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfAChange"},
+	{"SOURCE_DELETED", ReadScalar, "internal/gitlet.TestTheDashboardKnowsWhyAPushClosedAChange"},
+	{"CHANGE_MOVE_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardDrawsEveryMoveOfAChange"},
 	{"CHANGE_NEEDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryNeedOfAListingOfChanges"},
 	{"CHANGE_WINDOWS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryWindowOfAListingOfChanges"},
 	{"CHANGE_SORTS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEverySortOfAListingOfChanges"},
+	{"READINESS_BUCKETS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryReadinessBucket"},
 	{"PRECONDITION_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryPreconditionOfAChange"},
 	{"PRECONDITION_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryPreconditionOfAChange"},
 	{"PUSHER_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardCountsEveryPusherKind"},
@@ -534,6 +537,7 @@ var contract = []Entry{
 	{"MERGE_METHODS", ReadLiteral, "internal/gitlet.TestTheDashboardOffersEveryMergeMethod"},
 	{"MERGE_REFUSALS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryMergeRefusal"},
 	{"MERGE_CONFLICT", ReadScalar, "internal/gitlet.TestTheDashboardKnowsEveryMergeRefusal"},
+	{"MERGE_NOT_FAST_FORWARD", ReadScalar, "internal/gitlet.TestTheDashboardKnowsEveryMergeRefusal"},
 
 	// cron.ts
 	{"CRON_FIELDS", ReadLiteral, "internal/cron.TestTheDashboardReadsTheFieldsTheGrammarHas"},

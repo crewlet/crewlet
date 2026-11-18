@@ -13,9 +13,8 @@ import (
 
 // Domain is the assistant log as the state-log framework sees it.
 //
-// A DECLARATION, not a behaviour: every method answers a question the framework
-// asks before it applies anything, and each has a failure mode that is silent if
-// the answer is wrong.
+// A DECLARATION, not a behaviour: each method answers a question the framework
+// asks before it applies anything, and a wrong answer fails silently.
 type Domain struct{}
 
 // Name is the register key, the manifest key and the operator's column. NEVER
@@ -23,35 +22,30 @@ type Domain struct{}
 func (Domain) Name() string { return "assistant" }
 
 // AssistantLogMaxBytes is the ceiling this domain declares for its log, which
-// is what the framework's own suites provision the stream with.
-//
-// 512 MiB, the Tier A default, and a node does not create the stream at it:
-// every state log's ceiling is a reservation the broker grants in full, so
-// the engine sizes them together from Tier A (`stream.assistant_log_max_bytes`,
-// unset taking config.DefaultAssistantLogMaxBytes, scaled down as far as its
-// 64 MiB floor where the broker is short, which states the arithmetic).
+// the framework's own suites provision the stream with: 512 MiB, the Tier A
+// default. A node does not create the stream at it: every state log's ceiling
+// is a reservation the broker grants in full, so the engine sizes them
+// together from Tier A (`stream.assistant_log_max_bytes`, unset taking
+// config.DefaultAssistantLogMaxBytes, scaled down to its 64 MiB floor where
+// the broker is short, which states the arithmetic).
 const AssistantLogMaxBytes = 512 << 20
 
 // AssistantMaxRecordBytes is the largest record this domain publishes.
 //
-// TWO MEBIBYTES, measured rather than guessed (spike S4,
-// [TestTheLargestRecordFitsItsDeclaration]). The largest record is a proposal:
-// a request body of [ProposalBodyMaxBytes], its query of [QueryMaxBytes] and a
-// card of [CardMaxBytes], each sealed (an AES-GCM nonce and tag, then base64,
-// four thirds of the plaintext) inside one JSON envelope, about 1.05 MiB at the
-// worst; a parked turn of [ParkedMaxBytes] is about 0.7 MiB. One mebibyte, the
-// first estimate, did not hold the proposal. The framework's own ceiling is the
-// transport's eight mebibytes less the four kibibytes a stored record carries
-// beside its payload, so no cap had to shrink. The gate reserve on this log is
-// sized by this number, so a declaration far above the records would hold back
-// room no append could use.
+// TWO MEBIBYTES, measured ([TestTheLargestRecordFitsItsDeclaration]). The
+// largest record is a proposal: a body of [ProposalBodyMaxBytes], a query of
+// [QueryMaxBytes] and a card of [CardMaxBytes], each sealed (AES-GCM nonce and
+// tag, then base64 at four thirds) in one JSON envelope, about 1.05 MiB at
+// worst; a parked turn of [ParkedMaxBytes] is about 0.7 MiB. It sits under the
+// framework's ceiling (the transport's 8 MiB less a stored record's 4 KiB),
+// and not far above the records: the log's gate reserve is sized by it, so
+// excess is room no append could use.
 const AssistantMaxRecordBytes = 2 << 20
 
 // AssistantLogDuplicates is the window the broker collapses a repeated
-// operation id in: AN OPTIMISATION, NEVER A MECHANISM (the ledger is what makes
-// a retry idempotent). Two minutes, the tracker's, the pages' and the
-// artifacts' window, because it must outlast a publisher's retry budget and no
-// longer.
+// operation id in: AN OPTIMISATION, NEVER A MECHANISM (the ledger makes a retry
+// idempotent). Two minutes, as the other state logs: it must outlast a
+// publisher's retry budget and no longer.
 const AssistantLogDuplicates = 2 * time.Minute
 
 // Stream is the assistant log, at the domain's whole budget.
@@ -107,10 +101,9 @@ func frameworkEnvelope(env RecordEnvelope) statelog.Envelope {
 }
 
 // InstallsGate reports a record whose unknown version must STOP the applier: an
-// eviction by its kind, a conversation's purge and an owner's erasure by their
-// ops. A deferred purge is a node that goes on serving a conversation every
-// other node has destroyed; a deferred erasure is one that goes on holding a
-// removed person's words.
+// eviction by its kind, a purge and an erasure by their ops. Deferred, a purge
+// leaves a node serving a conversation every other node destroyed, and an
+// erasure one holding a removed person's words.
 func (Domain) InstallsGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind).InstallsGate() || OpKind(env.Op).installsGate()
 }
@@ -148,9 +141,9 @@ func (Domain) Evicts(payload []byte) (bool, error) {
 	return !eviction.Readmitted, nil
 }
 
-// Evictions is every eviction this log's applied rows hold: the rows the trim
-// reads to stop counting an evicted node on THIS log once its fence window has
-// passed.
+// Evictions is every eviction this log's applied rows hold, which the trim
+// reads to stop counting an evicted node on THIS log once its fence window
+// has passed.
 func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	var out []statelog.EvictionRow
 	err := db.Read(ctx, func(tx *sql.Tx) error {
@@ -189,13 +182,12 @@ func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]state
 
 // Tables is every durable table this domain writes, with its class.
 //
-// THE SCRUB LIST, THE IDENTITY CLAIM AND THE LOCAL SWEEP ARE ALL DERIVED FROM
-// THIS MAP. Every reproducible table is Replicated: each is written only by
-// applying a record, from the record and same-log rows alone, with broker
-// instants and the writer's sealed bytes, so two nodes at one checkpoint hold
-// the same bytes. The ledger is Divergent: it travels so an adopter can answer
-// a retry of anything its donor applied, and its `applied_at` is each node's
-// own.
+// THE SCRUB LIST, THE IDENTITY CLAIM AND THE LOCAL SWEEP ARE DERIVED FROM IT.
+// A reproducible table is Replicated: written only by applying a record, from
+// the record and same-log rows, broker instants and the writer's sealed bytes,
+// so two nodes at one checkpoint hold the same bytes. The ledger is Divergent:
+// it travels so an adopter can answer a retry of anything its donor applied,
+// but its `applied_at` is each node's own.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass,
 		len(ReproducibleTables)+len(MachineryTables))
@@ -218,11 +210,10 @@ func (Domain) ScopeIndex() string { return "assistant_log_deferred_scope" }
 // OpsTable is the operation ledger: what this node has already applied.
 func (Domain) OpsTable() string { return "assistant_ops" }
 
-// GatesSeatAdmission reports that no seat depends on this domain's copy: no
-// seat reads a conversation on its turn path, so a stalled assistant copy must
-// not stop a node admitting seats. The copy is still judged and goes out of
-// service for its own readers (ADR-0079): a stalled strict replay is a fault,
-// and the framework refuses every read of it.
+// GatesSeatAdmission reports false: no seat reads a conversation on its turn
+// path, so a stalled assistant copy must not stop a node admitting seats. The
+// copy still goes out of service for its own readers (ADR-0079): a stalled
+// strict replay is a fault, and the framework refuses every read of it.
 func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that every node's Replicated tables must be

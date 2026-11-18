@@ -60,15 +60,12 @@ func setPassword(t *testing.T, rig *writeRig, person, verifier string,
 
 // A PASSWORD SET IS ONE RECORD THAT ENDS EVERY TOKEN AND EVERY LINK.
 //
-// Somebody sets a password when somebody else may have the old one, so the
-// record that replaces it moves the person's revocation epoch too — a machine
-// token minted before it is refused afterwards, and so is every session opened
-// before it — and revokes every reset link the person still holds, the one
-// spent included, so a link sets one password. Exactly one record lands, and
-// the person holds exactly one password: the new one.
-//
-// The CONTROL is a token minted after the set, which verifies. Mutation: state
-// the epoch the person is at instead of the next one and the old token still
+// Somebody else may hold the old password, so the record that replaces it moves
+// the person's revocation epoch (refusing every token and session from before
+// it) and revokes every reset link they hold, the spent one included, so a link
+// sets one password. One record lands; the person holds one password, the new
+// one. The CONTROL is a token minted after the set, which verifies. Mutation:
+// state the current epoch instead of the next and the old token still
 // verifies; leave the links alone and the spent link opens again.
 func TestAPasswordSetIsOneRecordThatEndsEveryTokenAndLink(t *testing.T) {
 	t.Parallel()
@@ -142,13 +139,11 @@ func TestAPasswordSetIsOneRecordThatEndsEveryTokenAndLink(t *testing.T) {
 
 // A PERMISSION GAINED REVOKES AN OUTSTANDING RESET LINK.
 //
-// A link is judged at its issue against the permissions of whoever issued it,
-// and the issuer is shown it and can spend it — so a permission the person
-// gains while it is outstanding, judged against nobody holding the link, would
-// reach whoever spends it. The edit that adds one revokes the link in its own
-// record. The CONTROLS are an edit that only takes a permission away, and one
-// that spells out an app the person already holds through admin — neither
-// adds anything, so the link keeps opening. Mutation: drop the revocation from
+// A link is judged at its issue against its issuer's permissions, and the
+// issuer can spend it, so a permission gained while it is outstanding would
+// reach whoever spends it unjudged: the edit that adds one revokes the link in
+// its own record. The CONTROL is an edit that only takes a permission away,
+// which keeps the link opening. Mutation: drop the revocation from
 // UpdatePerson and the link still opens once the person holds admin.
 func TestAGrantGainedRevokesAnOutstandingResetLink(t *testing.T) {
 	t.Parallel()
@@ -200,17 +195,14 @@ func TestAGrantGainedRevokesAnOutstandingResetLink(t *testing.T) {
 
 // A RESET LINK ENDS WITH ITS PERSON'S SESSIONS AND TOKENS.
 //
-// A link is sent out of band and its copy stays wherever it went. It was
-// judged only by its own row and its person's stage, so a suspension refused
-// it only while the stage stood: reactivated, the person's link from before
-// the suspension opened again, and whoever kept a copy set their password.
-// Signing out everywhere, an administrator ending their sessions and the
-// restore runbook's invalidate-all left it alone too. It is stamped with the
-// person's epoch and the company's generation at its issue, and ended by
-// either moving, as a machine token is — on the link's screen and in the
-// spend's own snapshot. The CONTROL is a link issued after the gesture, which
-// opens. Mutation: drop the counters from EndedBy's reset arm and every row
-// opens again.
+// A link's copy stays wherever it was sent, and judged by its stage alone a
+// reactivated person's old link would open again. So it is stamped with the
+// person's epoch and the company's generation at its issue and ended by either
+// moving, as a machine token is, on the link's screen and in the spend's own
+// snapshot: a suspension, signing out everywhere and the restore runbook's
+// invalidate-all each end it. The CONTROL is a link issued after the gesture,
+// which opens. Mutation: drop the counters from EndedBy's reset arm and every
+// row opens again.
 func TestAResetLinkEndsWithItsPersonsSessionsAndTokens(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -280,14 +272,12 @@ func TestAResetLinkEndsWithItsPersonsSessionsAndTokens(t *testing.T) {
 
 // A LINK THESE ROWS DO NOT HOLD IS DEAD ONLY WHERE THEY HOLD THE WHOLE LOG.
 //
-// The reset link's lookup and the invitation's answered the zero row for any
-// id they did not hold, and the screens answered that `410` — the link is no
-// longer valid, ask for a new one — and counted the holder as a guesser. On a
-// node behind the log, or holding a record it could not apply, a link issued
-// through a peer is exactly such an id. Each lookup now says whether the rows
-// vouch for what they answer at the log's end, read first: they do at the end
-// they have applied — the CONTROL — and do not at an end past it, for the link
-// they hold and the id they do not alike. Mutation: answer Vouched true
+// On a node behind the log, or holding a record it could not apply, a link
+// issued through a peer is an id these rows lack, and answering it `410` (ask
+// for a new one) and counting a guesser would be wrong. So the reset and
+// invitation lookups say whether the rows vouch for their answer at the log's
+// end, read first: they do at the end they applied (the CONTROL) and not past
+// it, for a held link and an unknown id alike. Mutation: answer Vouched true
 // without the proof and the case past the end reads vouched.
 func TestALinkTheseRowsDoNotHoldIsDeadOnlyWhereTheyHoldTheLog(t *testing.T) {
 	t.Parallel()
@@ -330,9 +320,8 @@ func TestALinkTheseRowsDoNotHoldIsDeadOnlyWhereTheyHoldTheLog(t *testing.T) {
 
 // A RESET LINK IS NO BEARER.
 //
-// It is a credential row like a machine token's, under an id in the clear and
-// a secret hashed beside it — so it must never verify where a token is
-// presented: presented as one, it is refused, and a link opens only as a link.
+// It is a credential row shaped like a machine token's (a clear id, a hashed
+// secret), so presented as a token it is refused; it opens only as a link.
 // The CONTROL is a real token, which verifies. Mutation: drop the method check
 // from the token read's verdict and the link's id is treated as a token's.
 func TestAResetLinkIsNoBearer(t *testing.T) {
@@ -371,11 +360,11 @@ func TestAResetLinkIsNoBearer(t *testing.T) {
 
 // A RESET LINK ITS PERSON USED IS LISTED AS USED, NOT AS WITHDRAWN.
 //
-// Setting a password revokes every reset link the person holds, the one spent
-// included, so a listing reading the revocation alone said the link they had
-// just used was one somebody withdrew. The spent link is marked; the CONTROL is
-// a second link the same set revoked, which is not. Mutation: leave the spent
-// link unmarked and both read as withdrawn.
+// Setting a password revokes every link the person holds, the spent one
+// included, so a listing reading the revocation alone would call the link they
+// just used withdrawn. The spent link is marked; the CONTROL is a second link
+// the same set revoked, which is not. Mutation: leave the spent link unmarked
+// and both read as withdrawn.
 func TestAResetLinkItsPersonUsedIsListedAsUsed(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

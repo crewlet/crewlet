@@ -2,39 +2,15 @@ package api_test
 
 // GATE G5 — the dashboard the binary embeds is a REAL, COMPLETE application.
 //
-// The dashboard is a React + TypeScript app built by Vite (see dashboard/) into
-// static/dashboard, which package `static` embeds. The build output is
-// COMMITTED, so `go build ./...` and `go install …@latest` work on a clean
-// checkout with no Node on the machine — an embed directive cannot run a
-// bundler. CI rebuilds it and diffs the tree, so a committed bundle that does
-// not match its source is a red build (.github/workflows/ci.yml, the
-// `dashboard` job).
-//
-// What THIS file asserts is the half a rebuild-and-diff cannot see: that the
-// committed tree is a coherent application, and that every file a browser is
-// sent to fetch — from the shell, through every static import, every lazy
-// `import()` and the preload list Vite writes beside one, to the faces a
-// stylesheet asks for — is reachable over HTTP from the server itself, with a
-// content type a browser will accept. The crawl that follows them is in
-// dashboardcrawl_test.go, certified there over a bundle with lazy chunks.
-//
-// Those are different failures. A tree can be perfectly in step with its source
-// and still be unservable — an ES module served as text/plain is REFUSED by the
-// module loader, and the page then fails with a MIME error rather than a
-// missing file, which sends a reader looking for the wrong problem.
-//
-// And one rule the dashboard keeps is checked here on the artefact as well as
-// on the source, because the artefact is what a browser runs: nothing it
-// serves renders a price (TestTheDashboardRendersNoPrice, rule 19 in
-// docs/reference/dashboard-design.md). And one property only the artefact
-// has at all: its size, held to one budget by TestTheDashboardFitsItsBudget.
-//
-// The dashboard's own assertions (its protocol, its router, its ordering
-// rules, and the measured contrast of every colour token in both themes) run
-// under Vitest — `npm test` in dashboard/, wired into `make dashboard-test` and
-// its own CI job. They are not driven from Go any more: they were, because
-// there was no package.json and no runner, and driving a real test runner from
-// a Go subprocess would be a second way to run one suite.
+// The build output (dashboard/ into static/dashboard, embedded by package
+// `static`) is COMMITTED so `go build` works with no Node, and CI's `dashboard`
+// job rebuilds and diffs it. This file asserts what a diff cannot see: every
+// file a browser is sent to fetch (the crawl is in dashboardcrawl_test.go) is
+// reachable from the server with a content type it accepts, since an ES module
+// as text/plain is REFUSED with a MIME error; nothing served renders a price
+// (TestTheDashboardRendersNoPrice, rule 19 of docs/reference/dashboard-design.md);
+// and the size fits TestTheDashboardFitsItsBudget. The dashboard's own
+// assertions run under Vitest (`make dashboard-test`), never from Go.
 
 import (
 	"bytes"
@@ -125,26 +101,17 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 			"into static/protocol")
 	}
 
-	// The faces are embedded rather than fetched, which is what makes the
-	// dashboard render identically on a closed network. A missing one falls
-	// back silently to a system font.
+	// The faces are embedded so the dashboard renders identically on a closed
+	// network; a missing one falls back silently to a system font.
 	//
-	// ASKED FOR AND PRESENT, rather than a list of names. The names used to be
-	// written out here; they are the design system's now, arriving through
-	// @crewlethq/tokens' own stylesheet, so a spelled list would be a second
-	// copy of a name this repository does not choose. Reading them out of the
-	// stylesheet is also the stronger claim: a hardcoded list cannot see a
-	// face the CSS asks for and the build did not emit, which is the failure
-	// that renders a fallback font with nothing missing from the tree.
+	// ASKED FOR AND PRESENT, rather than a list of names, which the design
+	// system owns (@crewlethq/tokens' stylesheet). Reading them out of the
+	// stylesheet is also stronger: a list cannot see a face the CSS asks for
+	// and the build did not emit.
 	//
-	// THE FACES ARE UNHASHED, UNDER `fonts/`, which is the opposite of what
-	// this said — it claimed they were "emitted under `assets/` with a content
-	// hash". They never were: dashboard/vite.config.ts routes every .woff2 to
-	// `fonts/[name][extname]` and everything else to `assets/[name]-[hash]`,
-	// and the claim was already false the day it was written (901ddeb1, when
-	// the faces were plain files under dashboard/public/fonts/). Nothing
-	// depended on the wrong half, because this reads whatever path the
-	// stylesheet names — which is why it went unnoticed.
+	// THE FACES ARE UNHASHED, UNDER `fonts/`: dashboard/vite.config.ts routes
+	// every .woff2 to `fonts/[name][extname]` and everything else to
+	// `assets/[name]-[hash]`. This reads whatever path the stylesheet names.
 	sheetPath := string(sheet.FindSubmatch(shell)[1])
 	css, err := os.ReadFile(filepath.Join(served, strings.TrimPrefix(sheetPath, "/static/dashboard/")))
 	if err != nil {
@@ -206,18 +173,15 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	}
 
 	// THE NOTICES TRAVEL WITH WHAT THEY COVER. The bundle redistributes React,
-	// the design system's three packages, the QR encoder the authenticator
-	// setup draws with, the Geist faces and the Lucide drawings, all under
-	// licenses that require their text alongside, and the release archives
-	// and image copy this file from here. Written by the build
-	// (vite.config.ts), so a build that lost `build.license` or the step
-	// appending the fonts and the glyphs leaves a tree that serves perfectly
-	// and owes notices it no longer carries.
+	// the design system's packages, the QR encoder, the Geist faces and the
+	// Lucide drawings, all under licenses that require their text alongside,
+	// and the release archives and image copy this file from here. The build
+	// writes it (vite.config.ts), so one that lost `build.license` or the step
+	// appending the fonts and glyphs serves perfectly and owes notices.
 	//
-	// AND WHAT IT NO LONGER COVERS IS GONE. The faces were Inter and JetBrains
-	// Mono and the glyphs Material Symbols until 0.5.0; a notice still naming
-	// them is a notice written from a file the build no longer reads, which
-	// means the step that appends the real ones is not running either.
+	// AND WHAT IT NO LONGER COVERS IS GONE: a notice still naming Inter,
+	// JetBrains Mono or Material Symbols was written from a file the build no
+	// longer reads, so the step appending the real ones is not running either.
 	notices, err := os.ReadFile(filepath.Join(served, "THIRD_PARTY_NOTICES.txt"))
 	if err != nil {
 		t.Errorf("no THIRD_PARTY_NOTICES.txt in the built tree; `npm run build` in "+
@@ -313,37 +277,31 @@ func TestTheShellLoadsFromTheBinary(t *testing.T) {
 }
 
 // hashedName is the shape the build writes under assets/: the module's or
-// asset's own name, a dash, Rolldown's content hash — eight characters of the
-// base64url alphabet, its default — and the extension.
+// asset's own name, a dash, Rolldown's content hash (eight base64url
+// characters, its default) and the extension.
 //
 // EXACTLY eight, because a looser count passes ordinary words:
 // `settings-overview-panel.js` satisfies eight-or-more. A bundler bump that
-// changes the length fails here, loudly, and the fix is this pattern.
+// changes the length fails here, and the fix is this pattern.
 //
-// It is a SHAPE, and a shape is all a Go test can check: the hash is the
-// bundler's, over its own chunk graph, and nothing here can recompute it. So
-// a fixed name that happens to end in a dash and eight such characters
-// (`use-keyboard.js`) would pass. Every way a hash has actually gone missing
-// from a build — `[hash]` dropped from a file-name pattern, an emitFile with
-// a fixed name, a `public/assets/` directory Vite copies verbatim — names the
-// file after its module alone (`index.js`, `react.js`,
-// `rolldown-runtime.js`), and each of those fails.
+// It is only a SHAPE: nothing here can recompute the bundler's hash, so a
+// fixed name ending in a dash and eight such characters (`use-keyboard.js`)
+// passes. Every way a hash has actually gone missing names the file after its
+// module alone (`index.js`, `react.js`), and fails.
 var hashedName = regexp.MustCompile(`^.+-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$`)
 
 // TestEveryFileUnderAssetsIsContentHashed holds the built tree to the promise
 // the server makes about it.
 //
 // internal/api/dashboard.go serves everything under dashboard/assets/ as
-// `public, max-age=31536000, immutable` — a browser that has the file never
-// asks for it again, reload or not. That is correct only because the build
-// names every file there `<name>-<hash>.<ext>`, so different bytes are a
-// different URL. A file under assets/ without one — a plugin's emitFile with
-// a fixed name, a `public/assets/` directory Vite copies verbatim, a
-// `chunkFileNames` that dropped `[hash]` — would be pinned in every reader's
-// browser for a year with nothing to say the page is running old code.
+// `public, max-age=31536000, immutable`, which is correct only because the
+// build names every file there `<name>-<hash>.<ext>`, so different bytes are a
+// different URL. A file without a hash (an emitFile with a fixed name, a
+// `public/assets/` directory Vite copies verbatim, a `chunkFileNames` that
+// dropped `[hash]`) would be pinned in every browser for a year.
 //
-// It reads what the BINARY embeds, the tree the server answers from, and
-// checks the server's answer for each file as well as its name.
+// It reads what the BINARY embeds and checks the server's answer for each
+// file as well as its name.
 func TestEveryFileUnderAssetsIsContentHashed(t *testing.T) {
 	t.Parallel()
 	a := embeddedDashboard.app
@@ -384,15 +342,12 @@ func TestEveryFileUnderAssetsIsContentHashed(t *testing.T) {
 // refuses.
 //
 // The policy allows scripts, styles, fonts and images from this origin only,
-// and no inline script, inline style or event-handler attribute. A browser
-// enforces that with nothing on screen but a console violation, so a build that
-// started inlining a theme bootstrap script, a critical-CSS block or a font
-// from a CDN would serve a blank or unstyled page while every other test here
-// passed. This reads what the binary serves and fails on the first of those.
+// and no inline script, style or event-handler attribute. A browser enforces it
+// with only a console violation, so an inlined theme script, critical-CSS block
+// or CDN font would serve a blank page with every other test green.
 // TestTheBootScreenPaintsBeforeTheAppsSheet holds the shell to the order a slow
-// connection needs. A stylesheet in the head blocks every paint until it arrives,
-// so with the app's megabyte there the boot screen drew nothing until the page
-// was nearly ready, which is the blank page it exists to replace.
+// connection needs: a stylesheet in the head blocks every paint until it
+// arrives, so the app's sheet ahead of the boot screen leaves a blank page.
 func TestTheBootScreenPaintsBeforeTheAppsSheet(t *testing.T) {
 	t.Parallel()
 	shell := string(mustFetch(t, embeddedDashboard.app, "/dashboard", "text/html"))
@@ -482,24 +437,13 @@ func sameOrigin(url string) bool {
 // TestTheDesignSystemCascadesInOrder checks the served stylesheet carries the
 // design system's baseline BEFORE the components that sit on it.
 //
-// Order is what decides a tie, and there is one. The baseline's `:focus-visible`
-// rule and a component's `.crewlet-btn` rule each count as a single class, so
-// whichever is written later wins every property they share. The baseline sets
-// `border-radius`, which means a baseline written last squares off every
-// button, input and dialog the moment a reader tabs to it, which is visible to
-// somebody using the keyboard and to nothing else in this suite.
-//
-// It is an ORDERING of two files, so nothing but the built artifact can show
-// it: the source says `import` and the cascade says which import was evaluated
-// first, which is the bundler's answer rather than the author's. This reads
-// what the browser is handed.
-//
-// The arrangement it holds is main.tsx's: the kit's token sheets (variables,
-// themes, density, fonts, base) above every module import, the components'
-// own sheets with the modules that import them, and this application's sheets
-// last. There is no alias layer between the kit and ours any more — every
-// sheet here reads the kit's tokens under their own names — so what is left
-// to order is exactly this one tie.
+// The baseline's `:focus-visible` rule and a component's `.crewlet-btn` rule
+// each count as one class, so whichever is written later wins every property
+// they share; written last, the baseline's `border-radius` squares off every
+// button, input and dialog a keyboard user tabs to. Only the built artifact
+// shows the order (the bundler's). This holds main.tsx's arrangement: the
+// kit's token sheets above every module import, the components' sheets with
+// their modules, this application's sheets last.
 func TestTheDesignSystemCascadesInOrder(t *testing.T) {
 	t.Parallel()
 	a := embeddedDashboard.app
@@ -561,16 +505,14 @@ func TestTheDesignSystemCascadesInOrder(t *testing.T) {
 // order: every design system rule is in the sheet the SHELL links, and none
 // arrives with a lazy chunk.
 //
-// The dashboard is split into a chunk per workspace, and a uilet component
-// imports its own stylesheet as a side effect of its module — so a component
-// reached only from one workspace takes its sheet into that workspace's chunk,
-// and a browser appends that sheet when the chunk loads, AFTER the dashboard's
-// own. Every one-class tie the dashboard's rules win against a component's is
-// then lost the moment a reader first opens that workspace, on that screen and
-// every screen after it, and on no screen before. The source says nothing
-// about it and a first-paint screenshot cannot see it. vite.config.ts's
-// `designSystemSheet` is what prevents it: the whole set in one sheet above
-// ours, and every per-component import answered empty.
+// A uilet component imports its own stylesheet as a side effect of its
+// module, so one reached only from a workspace takes its sheet into that
+// workspace's chunk, appended when the chunk loads, AFTER the dashboard's own.
+// Every one-class tie the dashboard's rules win against a component's is then
+// lost from the first open of that workspace on, which the source and a
+// first-paint screenshot cannot show. vite.config.ts's `designSystemSheet`
+// prevents it: the whole set in one sheet above ours, and every per-component
+// import answered empty.
 func TestNoLazyStylesheetCarriesTheDesignSystem(t *testing.T) {
 	t.Parallel()
 	c := embeddedDashboard.crawl
@@ -825,20 +767,12 @@ func pricesInModule(module []byte) []priceFound {
 // docs/reference/dashboard-design.md: the dashboard measures spend in tokens,
 // and never in money.
 //
-// The engine records a price where one is reported — only a subscription
-// harness quotes one — and it is on the wire. A currency covering that
-// minority of calls, beside a token count covering all of them, reads as the
-// company's spend and is a fraction of it, so the client declares no price
-// field and draws none. dashboard/src/money.test.tsx holds the source and the
-// rendered screens; this holds the artefact, because the bundle is what a
-// browser runs and a committed bundle can carry what the source no longer does
-// — which is exactly how this landed: red on the build that still parsed
-// `cost_usd` into a `costUSD` nothing drew.
-//
-// Every module the shell reaches, lazy chunks included, through the crawl
-// TestTheShellLoadsFromTheBinary uses: every script the engine serves, since
-// protocol.js, which no page imports, is built beside the served tree
-// (static/protocol) and served by nobody.
+// A price is on the wire only where reported (a subscription harness); beside
+// a token count covering all calls it reads as the company's spend and is a
+// fraction of it, so the client declares and draws none. money.test.tsx holds
+// the source; this holds the artefact, which can carry what the source no
+// longer does. It scans every script of the TestTheShellLoadsFromTheBinary
+// crawl, lazy chunks included; protocol.js (static/protocol) is served by nobody.
 func TestTheDashboardRendersNoPrice(t *testing.T) {
 	t.Parallel()
 	c := embeddedDashboard.crawl
@@ -1090,395 +1024,21 @@ func mustFetch(t *testing.T, a *api.App, url, wantType string) []byte {
 //
 // Script and stylesheet sizes are what the engine SENDS a browser that asks
 // for gzip, read off its own answer (servedSize): the file compressed at
-// gzip.BestCompression (internal/api/dashboard.go compresses each text file
-// once, at that level), or the file as it is where that is not smaller. A raw
-// byte count would measure minified whitespace and identifiers the wire never
-// carries, and a count recomputed here would agree with the server only while
-// it kept the server's level and rule in step by hand.
+// gzip.BestCompression (internal/api/dashboard.go), or as it is where that is
+// not smaller. A raw count would measure whitespace the wire never carries,
+// and one recomputed here would agree with the server only while kept in step
+// by hand.
 const (
 	// initialBudget is the entry, its static import graph and the stylesheet
 	// the shell links: everything a reader downloads before the first screen
-	// can draw. 300 KiB is under two seconds on a 1.5 Mbit/s link, the slow
-	// end of what a person opening a dashboard over a phone tether gets. The
-	// single-bundle build this replaced sent 403 KB here, the org builder —
-	// about 43% of the source — among it; the frame alone (the sidebar, the
-	// header, the palette, the socket client, React and the design system's
-	// sheet) measured about 230 KB when this budget was set. It had grown to
-	// 297 KiB by the time the rich editor came, which adds about 4 KiB here
-	// although its code is fetched only to edit: the shell sends every design
-	// system stylesheet in its one sheet, by rule (see
-	// TestNoLazyStylesheetCarriesTheDesignSystem), so the editor's 1.8 KiB of
-	// rules ride the first paint, and the Markdown grammar the reader's
-	// renderer and the editor share became a chunk of its own. It moved to
-	// 310 KiB then, still under two seconds on that link. The create pages
-	// took the load to 314.5 KiB, and it came back without a change here:
-	// their rules (3.1 KiB) arrive with them in create.css, and the command
-	// palette (about 10 KiB), mounted only while open, became a chunk of its
-	// own, which left it at 300.2 KiB. The settings tables, catalogue tiles
-	// and numbered lists of uilet 0.39.0 took it to 310.6 KiB: their rules
-	// (0.5 KiB) ride the one sheet by the same rule, and the shared screen
-	// helpers that grew with them (QueryState's empty-state action, the seat
-	// people helpers, 1.0 KiB) are in the entry's graph. 312 KiB, still under
-	// two seconds on that link. The kit's lists, page parts and navigation
-	// pieces (uilet 0.40 and 0.41) moved the dashboard's own rules into that
-	// sheet rather than adding to it, and the rail head's status, the
-	// engine's state beside the company's name, brought its rules and its
-	// component into the shell: 312.1 KiB. 314 KiB, the same two seconds.
-	// uilet 0.46 and 0.47's editing pieces (the inline editor, the character
-	// count, the list's undo, drag, limit and narrow-row rules, the one-line
-	// textarea, the passage and compact registers) ride the one sheet by the
-	// same rule (1.4 KiB), and FormField's limit brought the character count
-	// into the entry's graph with it (1.1 KiB): 315.1 KiB. 316 KiB, still
-	// under two seconds on that link. Artifact folders and the company brand
-	// (uilet 0.49) took it to 320.3 KiB. The one sheet carries 4.3 KiB more:
-	// the brand scope's rules (1.3 KiB), which restyle a doc or a board in the
-	// adopted brand and are design-system rules by the same rule, and the
-	// folder tile, selection, logo, colour, contrast, type, inline list and
-	// phone sheet rules. The brand page's and the folder screens' own rules
-	// load with those screens (brand.css, folders.css), the brand's contract
-	// rows stay in the lazy brand code (contract/brand.ts), and the theme
-	// palettes a logo slot reads stay in its lazy chunk (uilet 0.49.1). What
-	// the frame gained is the folder keys (0.6 KiB) and the Brand row, the
-	// folder and brand routes and the kind's words (0.5 KiB). 321 KiB, still
-	// under two seconds on that link. The brand setup wizard (uilet 0.50)
-	// brought the setup layout's and the vertical stepper's rules into the
-	// one sheet by the same rule (0.8 KiB); the setup page itself loads with
-	// the brand's screens: 321.1 KiB. 322 KiB, still under two seconds on
-	// that link. uilet 0.51 took it to 322.6 KiB with no module newly in the
-	// first paint: the bundler now splits Select (with app/fill.tsx) and Kbd
-	// out of the entry into chunks of their own, each compressed apart (about
-	// 1.1 KiB), beside 0.2 KiB of new kit code and 0.3 KiB of polished kit
-	// rules in the one sheet. 323 KiB, still under two seconds on that link.
-	// The Dashboard Assistant took it to 336.4 KiB: the kit's assistant
-	// pieces (the cards, the aside, the peek rail, the time range picker)
-	// ride the one sheet by the same rule; the Ask button's Orbit mark is
-	// about 8.8 KiB while it is imported from the icons package's main entry,
-	// which brings the vendor marks with it (the `@crewlethq/icons/product-mark`
-	// entry recovers it); and the frame's own half of the assistant (the
-	// button, the page context registry, the bus, the aside's arithmetic) is
-	// the rest. The drawer, its store, its reducer, its cards and its stream
-	// client are a chunk of their own, fetched when the panel first opens.
-	// 337 KiB, still under two seconds on that link. uilet 0.56.0 measured
-	// 336.0 KiB here: its icons package's main entry now tree-shakes to the
-	// one mark asked for, so the Orbit mark costs the same through it as
-	// through `@crewlethq/icons/product-mark`, which the frame imports anyway.
-	// The assistant's page actions took it to 337.8 KiB (measured with and
-	// without them on that release): the registry merging every mounted
-	// screen's actions, the undo a view change leaves, the contract's table
-	// of page actions, the question the palette queues for the panel, and the
-	// object kinds a peek is named by, which a page's selection reads. Every
-	// screen's own actions are in that screen's chunk. 338 KiB, still under
-	// two seconds on that link. uilet 0.57.1 measured 338.1 KiB with the same
-	// dashboard source: the design system's one stylesheet, which first paint
-	// carries whole, gained the proposal card's decision refusal and
-	// unconfirmed outcome, the non-modal overlay aside and table cells that
-	// wrap. 339 KiB, still under two seconds on that link. uilet 0.63.0
-	// measured 340.4 KiB with the same dashboard source: the deep work card,
-	// the file list and the attachment chip join the one stylesheet, and the
-	// labelled value field moves the form field, the text area and the
-	// character count into the shared chunk the entry already loads. Moving
-	// the setup form and its dialogs onto that field took it to 340.3 KiB.
-	// 341 KiB, still under two seconds on that link. One vocabulary for seat
-	// states and the plain sentence for each failure kind, which the frame's
-	// shared seat words carry into the entry, took it to 341.1 KiB. 342 KiB,
-	// still under two seconds on that link. uilet 0.66.0 and choosing screen
-	// shapes by the screen's width took it to 345.6 KiB, the one sheet (the
-	// 0.64.1 alignment and spacing pass across every component family, the
-	// stacking grid and the screen width hooks) 115.5 KiB of it. 346 KiB,
-	// still under two seconds on that link. uilet 0.67.0's product marks took
-	// it to 346.6 KiB with the same dashboard source: each mark now carries a
-	// 16 grid drawing beside its master, and the Ask button draws the
-	// assistant's spark, whose motion and soon rules ride the one sheet. 347
-	// KiB, still under two seconds on that link. uilet 0.69.0 took it to 348.3
-	// KiB while the entry's own script shrank by 2 KiB (the drawer's Needs you
-	// reads gone): BriefCard's rules ride the one sheet, and the release splits
-	// the status card and suggestion row code BriefCard shares into chunks of
-	// their own, each one more request's overhead in the entry's graph. 349
-	// KiB, still under two seconds on that link. A read named in the answer
-	// rather than drawn as a card (ADR-0061): the renderer saying which run
-	// of prose opens its block, in the shared Markdown module the entry
-	// loads, took it to 349.1 KiB. 350 KiB, still under two seconds on that
-	// link. A model's usage limit as one condition per entry (ADR-0064): the
-	// queue's wording of it and the harness names it is said in, the time of day
-	// it lifts, its remedy in the link table, and the store keeping a row a
-	// push leaves as it was, all in the attention queue and the store the
-	// frame loads, took it to 351.0 KiB. 352 KiB, still under two seconds on
-	// that link. Steering a turn whose executor is out, merged beside it (the
-	// shared write hook reading a press label's own sentence for its receipt,
-	// `landed`, which says when a note is read, in the seats chunk the entry
-	// loads), measured 350.9 KiB with it (359,293 bytes), under 351 KiB:
-	// 351 KiB again, still under two seconds on that link.
-	// Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client,
-	// its routes and its rail are the frame's, because a reader is told of a
-	// mention on whatever screen they are on, and no part of it is fetched
-	// later without a reader waiting for it. The frame it joined measured
-	// 349.0 KiB (357,410 bytes): the steering above came to 348.8 KiB once
-	// merged beside the flattening that drawing what prose names moved out of
-	// the renderer (`lib/markdownText.ts`), and an executor's question asked
-	// as a decision added 0.2 KiB. With Chatlet the load measured 355.0 KiB
-	// (363,549 bytes), 29 bytes past 355 KiB, so it moved to 356 KiB, which is
-	// 1.94 seconds on that link. Merged beside Settings › Models, whose frame
-	// measured 351.0 KiB (359,385 bytes), the load measured 357.0 KiB (365,596
-	// bytes), 28 bytes past 357 KiB, so it moved to 358 KiB, which is 1.96
-	// seconds on that link. The Chatlet redesign (uilet 0.82.0) took it to
-	// 373.8 KiB. The one sheet carries 9.2 KiB more: the kit's conversation
-	// parts (the transcript, a message and its tray, reactions, mentions,
-	// link and action cards, day pills) and the compact rail, whose rules
-	// ride it by the rule above. The entry script carries 3.9 KiB more: the
-	// compact rail, the sidebar's one reading of the reader's rooms that
-	// badges Chatlet, and the toast stack's top edge. The kit's shared chunks
-	// and SeatAvatar add about 4.6 KiB. It moved to 374 KiB, which is 2.04
-	// seconds on that link, past the two seconds every move before it kept.
-	// The Chatlet follow-ups on uilet 0.83.0 took it to 375.6 KiB: the kit's
-	// shared chunks carry 1.4 KiB more (the rail's fold motion, which every
-	// page loads with the shell), the one sheet 0.4 KiB more (the fold's
-	// keyframes, the compact rail's status row and face, and the dock
-	// column's rules), and the entry's own files 0.2 KiB less. It moved to
-	// 376 KiB, which is 2.05 seconds on that link. uilet 0.84.0 took it to
-	// 378.5 KiB: the one sheet carries 2.4 KiB more (the inbox row's leave
-	// and its arrival wash, the reading pane's entrance, the rail's chevron
-	// and its flyout, the calmer ActionCard, the catalogue tiles' status and
-	// the fill screens' scrollbars), and the entry script and the kit's
-	// shared chunks 0.2 KiB more each. It moved to 379 KiB, which is 2.07
-	// seconds on that link. A follow-up ships the conversation parts' rules
-	// as a lazy Chatlet sheet, which brings it back under. uilet 0.86.1 took
-	// it from about 378.2 KiB to 380.3 KiB (+2.1 KiB): the one sheet carries
-	// 1.5 KiB more (the inbox row's head with its time floated on the first
-	// line, a ListDetail list that scrolls, and the rules of 0.85.0 and
-	// 0.86.0's AttentionList, MemberPicker, KeyValueRows, TableTwoLineCell
-	// and RailList), the kit's shared chunks 1.0 KiB more, and the entry
-	// script 0.4 KiB less. It moved to 381 KiB, which is 2.08 seconds on that
-	// link. The MCP sign-in (the Inbox's words for its two alarm kinds, which
-	// the entry carries as it carries every MCP kind's, and the settings code
-	// Rollup shares into the Access chunk) took it past 381.0 KiB by about
-	// 0.2 KiB: the entry script +105 bytes and the Access chunk +76 bytes,
-	// gzipped. It moved to 382 KiB, which is 2.09 seconds on that link.
-	// Gitlet, merged beside all of it, adds what it added to the frame
-	// it was built on, about 3 KiB there: its own changes to the frame (the
-	// store_full refusal's sentence among the act errors, a wait said in
-	// hours, and Not Found's hint said as a sentence, about 0.4 KiB, all in
-	// the entry's graph because the frame answers every write and every
-	// unknown address), the formatter cache's frozen shapes and fixes (about
-	// 0.2 KiB: every module's date and number shapes are frozen constants
-	// whose key the cache reads once, in lib/formatters.ts, which every
-	// screen formats through), and the Gitlet workspace (its row, its two
-	// routes, its trail, its service notice and its words in the frame, about
-	// 0.3 KiB of the entry, and about 1.4 KiB of the bundler regrouping what
-	// the first paint already loaded: the code screens reach the peek rail
-	// through the grid and nothing of the lazy-screen table beside it, so the
-	// two are compressed apart). Merged, the load measured 381.7 KiB
-	// (390,899 bytes), so it moved to 382 KiB, which is 2.08 seconds on that
-	// link. Gitlet's next round, merged in (My work's sections read
-	// from the services that run them, Gitlet's own word on an act's
-	// refusal and its not_ready class among the act errors, and the
-	// workspace's service notice for My work's queue), took it to 382.2 KiB,
-	// with no screen's module in the entry, so it moved to 383 KiB, still
-	// 2.08 seconds on that link. Code search, a repository's import,
-	// mirrors, index and purge, and the checks' latest attempts and window
-	// end, merged in, took it to 382.5 KiB with no screen newly in the first
-	// paint: a seat's Code tab in the seats workspace the first paint loads,
-	// the frame's code routes, keys, palette hits and sheet rules, and the
-	// bundler splitting two helpers into chunks of their own beside a merge
-	// of two shared ones. Still under 383 KiB.
-	// Merged with main's uilet 0.86.1 and MCP sign-in, each measured on its
-	// own side above, the two add: Gitlet's 4.3 KiB over the 378.2 KiB
-	// both sides started from, on main's 381.2 KiB, is about 385.5 KiB, so it
-	// moved to 386 KiB.
-	// Main's kit 0.92.0 (a StatusDot's word that wraps) regroups the kit's
-	// shared code the first paint loads: two small chunks of its own (about
-	// 0.7 and 0.4 KiB gzipped, each its own gzip stream) against about
-	// 0.6 KiB less entry script, and the wrap's rules in the one sheet. It
-	// took main's by about 0.7 KiB, which main's 382 KiB still held. Merged,
-	// the same regrouping took this from about 385.6 KiB to 386.3 KiB, past
-	// 386 KiB by main's own growth alone, so it moved to 387 KiB, which is
-	// 2.11 seconds on that link.
-	// Kit 0.100.2 and a steady Chatlet room took it from 386.9 KiB to 387.4
-	// KiB (+530 bytes gzipped): the one sheet +427 (the kit's tree grid and
-	// live surfaces, and ChatThread's and ChatDay's anchoring rules), the
-	// boundaries chunk +34, the authority remedy chunk +25, the entry +24 and
-	// the write access chunk +21 (one value per answer for the viewer, a
-	// write's access and an act). So it moved to 388 KiB, 2.12 seconds.
-	// The frame's share of a UI sweep took it from 387.4 KiB to 388.4 KiB
-	// (+873 bytes gzipped): the entry +541, the keymap chunk +283, the
-	// authority remedy chunk +141 and the boundaries chunk +22 (the page
-	// bar's phone line and Edit Home's bar, Ask's reason on hover and focus,
-	// the company name and services remembered for a cold load, the frame's
-	// popovers closed by a route change, an unconfirmed write's warning
-	// settled by its answer, one 24-hour clock), against the one sheet -125
-	// (the event log's, a trace's and a turn's hand-built rows are the kit's
-	// grids now), with no screen's module in the entry. So it moved to 389
-	// KiB, 2.13 seconds.
-	// Kit 0.101.0 (the data grid's row shapes and the tree grid's head and
-	// foot) took it from 388.4 KiB to 389.3 KiB (+982 bytes gzipped): the one
-	// sheet +986, the kit's shared chunks regrouped under new names to within
-	// a few bytes, and the entry and the keymap chunk -5 each. So it moved to
-	// 390 KiB, 2.13 seconds.
-	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it from
-	// 388.8 KiB to 390.4 KiB (+1,611 bytes gzipped): the shell's boot script +447
-	// (the stored mode set before the first paint) and the boot screen's own sheet
-	// +365 (it paints before the app's sheet lands), the one sheet +361 (the table's
-	// and seat's layout rules), the authority remedy and write access chunks +305
-	// (who may answer a seat's run), the entry +100 and the turns chunk +35, with no
-	// screen's module in the entry. So it moved to 391 KiB, 2.14 seconds.
-	// Settings › Diagnostics put it just past that: a new section is a row of the
-	// nav, its address in the route table and its lazy chunk's name, all in the
-	// entry, with its screen in the settings chunk. So it moved to 392 KiB, still
-	// 2.14 seconds.
-	// Kit 0.106.0 took it to 392.6 KiB: the one sheet's chat rules +1,015 bytes
-	// gzipped (the chat rows' scale, the toolbar's narrow rule, the emoji picker's
-	// preview) and the turns chunk +271, less 119 in the seat avatar chunk. So it
-	// moved to 393 KiB, 2.15 seconds.
-	// Landed together with the rest of that Chatlet work on kit 0.107.0, it
-	// measured 393.1 KiB, from main's 391.1 KiB: the one sheet about +990 bytes
-	// gzipped and the kit's shared chunks about +680 (the kit's chat rules and
-	// the regrouping that came with them), the turns chunk +274 and the
-	// authority remedy chunk +79, less 125 in the seat avatar chunk, with no
-	// screen's module in the entry. So it moved to 394 KiB, still 2.15 seconds.
-	// Kit 0.112.0, the chat round, took it from 393.1 KiB to 397.1 KiB: the one
-	// sheet about +2,080 bytes gzipped (the kit's chat rules: the dark tooltip,
-	// the code block's frame, the emoji picker's tabs, the mention list's chat
-	// density), the turns chunk about +1,200 (the kit's SidebarNav, whose unread
-	// pills and divider come with the shell's sidebar) and the kit's shared
-	// chunks about +690, with no screen's module in the entry. So it moved to
-	// 398 KiB, 2.17 seconds.
-	// Kit 0.117.0 (the list-detail modes, the inbox's chat density, line
-	// clamps, context line and quick actions, and the kit's other releases since
-	// 0.114.0) took it from 397.9 KiB to 398.7 KiB: the one sheet +0.8 KiB
-	// gzipped and the authority remedy chunk +0.1, with no screen's module in
-	// the entry. So it moved to 399 KiB, 2.18 seconds.
-	// Kit 0.121.0 (the SSH integration's own mark) took it from 398.7 KiB to
-	// 399.0 KiB, past that by bytes (+302 gzipped): the kit's theme swatch
-	// helpers left the entry for a shared chunk of their own in its graph
-	// (+735, the entry -471), the one sheet +8 (the mark's colour rule) and the
-	// shell's chunks +29. The SSH drawing itself is in a lazy chunk, and no
-	// screen's module is in the entry. So it moved to 400 KiB, 2.18 seconds.
-	// The administrators' platform notices and the advisor's unread sources in
-	// Needs you took it from 399.6 KiB to 400.1 KiB: the entry +523 bytes gzipped
-	// (the attention queue's notice rows and each unread source's sentence), the
-	// alarm words already in the shell's engine panel and no screen's module in
-	// the entry. So it moved to 401 KiB, 2.19 seconds.
-	// Delegated decisions took it to 401.0 KiB, past that by bytes (+251
-	// gzipped): the new Settings section's row, route, crumb and lazy screen
-	// and one storage key, +207 over the entry and its shared chunks, and the
-	// one sheet the escalation note's rules, +44; every screen's module of it
-	// is lazy. So it moved to 402 KiB, 2.20 seconds.
-	// Kit 0.122.0 and Company › Atlas took it to 403.1 KiB, past that by
-	// bytes (about +1,470 gzipped): the one sheet +937 (the kit's GraphCanvas
-	// rules, which ride it by rule while the map's code is the atlas chunk's),
-	// the kit's shared chunks +430 (the by-line verbs and the six glyphs'
-	// registry names) and the entry +79 (the Atlas row, its routes, crumb and
-	// peek kind). Every screen's module of it is lazy. So it moved to 404 KiB,
-	// 2.21 seconds.
-	// Every page action's arguments held to the engine's bounds for a schema
-	// before a page context is sent took it from 400.8 KiB to 401.3 KiB on the
-	// tree it was built on: the chunk the assistant's page registry is built
-	// in +404 bytes gzipped (the guard, and the words it names an action it
-	// leaves out in), since every page context is built there, with no
-	// screen's module in the entry. Merged on top of delegated decisions it
-	// measured 401.7 KiB, inside 402 KiB. With the atlas's access words merged
-	// on top it measured 401.8 KiB (411,426 bytes), 222 bytes inside 402 KiB.
-	// A page action's report held to the engine's line and a seat or a space
-	// declared by its grammar past an enum's 64 add 26 bytes to it (the
-	// report's bound beside the page registry's other bounds), so it measured
-	// 401.8 KiB (411,452 bytes), 196 bytes inside 402 KiB. Merged on top of
-	// each delegated rule's required checks it measured 401.8 KiB (411,449
-	// bytes), 199 bytes inside 402 KiB, and on top of the atlas and dead-wait
-	// train it measured 402.0 KiB (411,607 bytes), 41 bytes inside 402 KiB.
-	// Merged on top of Company › Atlas on kit 0.122.0 and every end of a
-	// person's note said in the trace it measured 403.8 KiB (413,481 bytes),
-	// 215 bytes inside 404 KiB. A new project's key, a deck's title and the
-	// copied engine bounds held to the engine's (+181), then the sidebar's pin
-	// page in a contract module of its own and the projects' page beside the
-	// work bounds the entry already reads (+15), took it to 402.0 KiB (411,648
-	// bytes), the budget itself, on the tree before the required checks. The
-	// artifacts' contract split in two, the frame's half in the entry and
-	// every declaration only the workspace reads out of it (the formats'
-	// bounds held to the engine's among them, and the pin page folded into the
-	// frame's half), took it to 400.5 KiB (410,133 bytes, -1,515) there.
-	// Merged with main since the required checks it measures 402.5 KiB
-	// (412,160 bytes), 1,536 bytes inside 404 KiB. Ask Crewlet reading the
-	// atlas took it to 402.5 KiB (412,164 bytes), and every declared draft
-	// held in branded state, merged on top of it, to 402.5 KiB (412,161
-	// bytes, -3), 1,535 bytes inside it: the next addition to the entry moves
-	// this budget only with a reason of its own.
-	// Kit 0.123.0 and the one-page Company › Atlas took it to 406.1 KiB
-	// (about +3,690 gzipped): the one sheet +3,376 (the kit's layered service
-	// map, its colour steps per palette and mode, the ring, the disc and the
-	// pointed row, which ride it by rule while the map's code is the atlas
-	// chunk's) and the kit's shared chunks about +310. Every screen's module
-	// of it is lazy. So it moved to 407 KiB, 2.22 seconds.
-	// The advisor's two sentences for an atlas it could not read, which the
-	// attention queue says to an administrator and so the entry carries,
-	// took it to 407.02 KiB (416,788 bytes), 20 bytes past it: 408 KiB,
-	// 2.23 seconds.
-	// A task's atlas entries took it to 407.1 KiB, 86 bytes gzipped in
-	// modules the entry already reads: the act row's argument and the atlas
-	// questions it refreshes, the three questions' names, and the history's
-	// wording for the count. The rail's group, the link dialog, the Work tab
-	// and the marks are the Worklet and atlas chunks'. So it moved to 408
-	// KiB, 2.23 seconds.
-	// The Inbox badge counting what waits on the reader, and nothing else,
-	// took it to 408.5 KiB: the frame now reads the engine's decisions and
-	// counts the stopped seats the reader can act on and the conditions they
-	// decide, so the stopped-seat rule left a lazy row module for the entry's
-	// decisions module, and the attention queue gained each platform notice's
-	// fix destination and the reader's put-off marks (a small store beside
-	// the Home board's). Every list that draws these rows stays lazy. So it
-	// moved to 409 KiB, 2.23 seconds.
-	// The Inbox badge, a task's own menu and a kept range, built together on
-	// kit 0.126.1, took it to 409.8 KiB (419,627 bytes), 811 bytes past it.
-	// Each fit its own budget alone: over the 407.3 KiB they were built on,
-	// the badge added 1,628 bytes, a task's own menu 656 (its rules ride the
-	// one sheet, and it widened the write and work helpers the entry already
-	// reads) and a kept range 257 (the per-reader range store the page header
-	// reads), and main's own change and the kit 35 more. So it moved to 410
-	// KiB, 2.24 seconds.
-	// Kit 0.126.3 (a menu's header beside its items in the menu's panel, the
-	// scroller a palette's results and a modal's body take a Tab stop by, a
-	// card counting its titles) with the frame's own first-dial chip in the
-	// page bar and the sidebar's landing rule took it to 408.7 KiB: 409 KiB,
-	// 2.23 seconds.
-	// The release train of a page's own operations, the settings and
-	// schedule writes, and the repository and room writes, merged on kit
-	// 0.126.3 with the train before it, took it to 411.4 KiB (421,258 bytes),
-	// 1,631 bytes over the 409.8 KiB it was built on: nearly all of it the kit
-	// and the frame's first-dial chip and landing rule, as they measured
-	// alone. So it moved to 412 KiB, 2.25 seconds.
-	// Kit 0.129.1 (a setting's key behind a copy control, a canvas's held
-	// zoom controls, a chart kept in view after an add) with the operations
-	// fixes (a refused control's refusal drawn outside the row of controls in
-	// the frame's page bar, object header and dialogs, a config warning and a
-	// config refusal in their owner's words, a limit's range, an engine pause
-	// drawn as a pause) took it to 414.1 KiB, most of it the refusal words and
-	// places the frame now reads. So it moved to 415 KiB, 2.27 seconds.
-	// Worklet's task operations on kit 0.130.1 took it to 412.7 KiB, about
-	// 700 bytes past it (the kit's share of it its copyable setting keys and
-	// a comment thread's own Edit and Delete in the shared chunks), the rest
-	// in modules every first screen already reads: a due or start date
-	// read on the company's calendar (a row's due mark, through a lean
-	// lib/companyDay.ts rather than range.ts, whose windows had ridden into the
-	// entry with it and cost 2 KiB), a watch said as the gesture and a feed's
-	// labels in the change renderer, the act rows for a merge and a task's
-	// dependencies, and a read's last answer dropped once the engine says it
-	// is gone. The merge, priorities, link and project dialogs are Worklet's
-	// chunk. So it moved to 413 KiB, 2.26 seconds.
-	// The release train of Worklet's task operations and the Doclet,
-	// Artifacts and Chatlet polish, merged with main's Gitlet listing on kit
-	// 0.131.0, measures 417.0 KiB, 3.1 KiB over the 413.9 KiB of main it was
-	// built on: Worklet's task operations and the polish, the kit's
-	// punctuation peel a marked chip now takes among it, in the shared chunk.
-	// So it moved to 418 KiB, 2.28 seconds.
-	// Delegated decisions made readable, on kit 0.134.0: 418.0 KiB, 508 bytes over main: 419 KiB, 2.29 seconds.
-	// Code host glyphs, colours and kit marks, on kit 0.137.0: 419.8 KiB, 1,511 bytes over main: 420 KiB, 2.29 seconds.
-	// The model wizard as a chunk of its own, every harness and reasoning effort, on kit 0.137.0: 421.5 KiB,
-	// the kit's shared modules regrouped around the new chunk: 422 KiB, 2.30 seconds.
-	// Doclet's newest change read as the page reads, on kit 0.141.1, whose one sheet adds its new parts: 420.3 KiB: 421 KiB, 2.30 seconds.
-	// The Settings polish, on kit 0.143.0: 420.2 KiB, the kit's shared chunk most of it: 421 KiB, 2.30 seconds.
-	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0: 422.2 KiB: 423 KiB, 2.31 seconds.
-	// Gitlet's commits as a timeline on one list, on kit 0.144.0: 423.1 KiB: 424 KiB, 2.32 seconds.
-	// Setting editors and SettingsTable on DataGrid's anatomy, on kit 0.150.0, whose one sheet adds their rules: 424.4 KiB: 425 KiB, 2.32 seconds.
-	// Configuration warnings as one quiet line, on kit 0.151.0, whose one sheet adds the collapsible
-	// callout's and compact list's rules: 425.1 KiB: 426 KiB, 2.33 seconds.
+	// can draw. It began at 300 KiB, under two seconds on a 1.5 Mbit/s link
+	// (the slow end of a phone tether), and has moved up with each kit release
+	// and frame feature; the last measure was 425.1 KiB, about 2.3 seconds.
+	// The one sheet carries every design-system rule by rule (see
+	// TestNoLazyStylesheetCarriesTheDesignSystem), so kit releases grow it even
+	// when no screen joins the entry. A raise names the measured size and its
+	// cause in its commit; a screen's module in the entry is the failure to fix
+	// rather than raise for.
 	initialBudget = 429 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -1493,1233 +1053,14 @@ const (
 	// is the four of them and room for the design system to re-cut them — and
 	// a FIFTH face, which every text-bearing screen would fetch, does not fit.
 	fontBudget = 90_000
-	// treeBudget is the whole of static/dashboard, raw, which is what every
-	// engine binary and image carries whether or not anybody opens the page.
-	// It measured about 2.3 MB when first set at 3 MiB. The artifacts
-	// workspace (the gallery, the viewer, the native sheet, presence and
-	// version compare) took it from about 2.85 MiB to about 3.05 MiB, the
-	// screen that room was left for, and it moved to 3.5 MiB then: room for
-	// the screens still to come, while a bundle that doubled from the 2.3 MB
-	// baseline is still refused. The rich editor that Doclet's pages and doc
-	// tabs are edited in took it from about 3.23 MiB to about 3.53 MiB: its
-	// chunk is about 270 KB raw, ProseMirror being 228 KB of it, and the
-	// notices of the ten packages it brings add 15 KB. That chunk is fetched
-	// only when somebody edits, so no reader's first paint pays for it, and it
-	// moved to 4 MiB then, which still refuses a doubled baseline. Artifact
-	// folders and the company brand took it from about 3.99 MiB to about
-	// 4.14 MiB: the brand page, its adoption review and the brand kind's own
-	// view are about 65 KB, the folder screens, the Move dialog and the
-	// gallery's selection about 50 KB, and the design system's new rules in
-	// the one sheet about 41 KB raw. Each of those screens is fetched only
-	// when it is opened, and it moved to 4.25 MiB then, which still refuses a
-	// doubled baseline. The Dashboard Assistant took it from 4285.7 KiB to
-	// 4400.5 KiB: its panel is a chunk of about 51 KiB fetched when the
-	// panel first opens, and the rest is the kit's assistant components and
-	// rules and the frame code that came with them. It moved to 4.3 MiB
-	// then, which still refuses a doubled baseline. The assistant's page
-	// actions took it to 4427.2 KiB, 26.6 KiB of it theirs (measured with
-	// and without them on uilet 0.56.0): each screen's parser, gate and
-	// setters in that screen's chunk, the claim and report flow in the
-	// panel's, and the address helper and contract table they share. 4432
-	// KiB, which still refuses a doubled baseline. uilet 0.57.2 measured
-	// 4432.4 KiB, up from 4431.6 KiB with the same dashboard source but the
-	// drawer's one prop: the release drops the result table's first column
-	// truncation and a flush side panel body's scrolling, and the drawer
-	// keeps a scrolling body for its offline notice. 4433 KiB, which still
-	// refuses a doubled baseline. Telling a person the assistant's model
-	// cannot answer before they ask took it to 4434.2 KiB: the drawer's
-	// notice, its words and the viewer's model member, in the panel's chunk
-	// and the frame's. 4435 KiB, which still refuses a doubled baseline.
-	// Folding the assistant's supporting reads and moving the Ask button's
-	// dot onto its mark, on uilet 0.60.0, took it to 4438.7 KiB: the kit's
-	// card fold and IndicatorAnchor and their rules in the one sheet, and
-	// the panel's fold store and summaries. 4439 KiB, which still refuses a
-	// doubled baseline. Drawing the assistant at work with the kit's
-	// ThinkingIndicator in place of the caret and the skeleton, and the new
-	// SendButton's held tint, running arc and glyph cross fade, on uilet
-	// 0.61.0, took it to 4444.1 KiB: their rules in the one sheet, the
-	// Assistant mark in the panel's chunk and the indicator's status words.
-	// 4445 KiB, which still refuses a doubled baseline. Telling the
-	// assistant which draft is open took it from 4444.3 KiB to 4479.1 KiB:
-	// the one draft hook and its parser in the frame, each editing screen's
-	// field list, help and setters in that screen's chunk (about thirty
-	// screens), the card's file thumbnail in the panel's, and the brand and
-	// integration field lists. 4480 KiB, which still refuses a doubled
-	// baseline. uilet 0.63.0 measured 4483.0 KiB with the same dashboard
-	// source: the assistant's deep work card, file list and attachment chip,
-	// and their rules in the one sheet. Moving the dashboard's own labelled
-	// field and its secret completion onto uilet's ValueField took it back
-	// to 4480.0 KiB (the field, its completion helper and its list's rules
-	// leave the bundle). 4481 KiB, which still refuses a doubled baseline.
-	// The assistant's deep work, delivered files and image attachments took
-	// it from 4480.0 KiB to 4491.9 KiB on uilet 0.63.0: in the panel's chunk,
-	// the run card's mapping and its nested steps, the file card, the
-	// composer's pick, drop and paste with their bounds and uploads, and the
-	// preview hook the draft file card now shares. 4493 KiB, which still
-	// refuses a doubled baseline. Merging main's MCP tool route (#371) beside
-	// the assistant's card rendering took it to 4499.8 KiB: the live view's
-	// harness runs, their calls in flight and a run drawn before its first round.
-	// 4501 KiB, which still refuses a doubled baseline. uilet 0.64.0 and a
-	// card value drawn as what it is (a list as its items, a body as code,
-	// page text as an inert preview, a colour beside its chip) took it to
-	// 4503.4 KiB, in the panel's chunk and ChangeList's block rules in the one
-	// sheet. 4504 KiB, which still refuses a doubled baseline. Marking the
-	// open conversation in the assistant's history, showing each one's last
-	// activity and telling the assistant of a brand draft in progress took it
-	// to 4504.1 KiB: the menu's checked answers and the summary's member in
-	// the panel's chunk, and the Brand page's read-only draft and its help in
-	// that page's. 4505 KiB, which still refuses a doubled baseline. Telling
-	// the assistant what each page action takes, built from each screen's
-	// own declaration (the address keys' schema in the entry's registry, the
-	// org builder's operation vocabulary, an open draft's fields), and each
-	// action's own revision took it to 4509.5 KiB. 4510 KiB, which still
-	// refuses a doubled baseline. Telling the assistant what the Inbox's
-	// "Needs you" holds, from the model the page draws it with, and reading
-	// dates on the company clock took it to 4510.4 KiB, in the Inbox's chunk
-	// and the shared format module. 4511 KiB, which still refuses a doubled
-	// baseline. Drawing the assistant's cards in a person's terms (a seat cell
-	// by its name, a refusal by its kind, a pending change as pending, an
-	// administrator's technical rows), in the panel's chunk, took it to 4511.5
-	// KiB. 4512 KiB, which still refuses a doubled baseline. One vocabulary for
-	// seat states, the plain sentence for each failure kind with the engine's
-	// message behind a disclosure, the assistant's credit in every history and
-	// the org chart's reveal of a new seat took it to 4513.6 KiB. 4514 KiB,
-	// which still refuses a doubled baseline. uilet 0.66.0 (the 0.64.1
-	// alignment and spacing pass across every component family, the stacking
-	// grid and the screen width hooks, a card title registered once,
-	// ProposalCard's danger tone and details, the thread's jumps and
-	// near-future times) and choosing screen shapes by the screen's width took
-	// it to 4545.4 KiB. 4546 KiB, which still refuses a doubled baseline.
-	// Drawing a brand draft in its own cards with one next step, who last
-	// changed it and a confirmed discard, in the Brand page's chunk less the
-	// kit view's copy of the cards, which now shares the page's board, took it
-	// to 4547.1 KiB. 4548 KiB, which still refuses a doubled baseline. Saying
-	// which revision each node runs, a refusal included, took it to 4553.1
-	// KiB: the one rule a node's standing is read by (the sidebar's Nodes
-	// figure counts by it, so it is in the frame), its words beside the
-	// Settings screens that say them, the Nodes screen's Running panel and
-	// Lag fact, the Configuration screen's revision states, the after-save
-	// strip and the ceiling and charter followers settling on a refusal
-	// rather than "applying…", and the tab's last push kept through a
-	// dropped socket. 4554 KiB, which still refuses a doubled baseline. uilet
-	// 0.67.0's product marks (a 16 grid drawing beside each master, the spark's
-	// motion and the soon keyline) and its artifact kit took it to 4557.3 KiB.
-	// 4558 KiB, which still refuses a doubled baseline. Keeping an answered
-	// inbox row legible in place with its answer under it, the closed Answered
-	// group of the last week's answers and the answered ask's pane with its
-	// four steps, on uilet 0.68.0's inbox row outcome and status and its
-	// collapsible group, took it to 4566.4 KiB. 4567 KiB, which still refuses
-	// a doubled baseline. A brief of the page or its open record in the
-	// drawer, drawn by uilet 0.69.0's BriefCard, with the record each screen
-	// has open reported to the assistant, took it to 4574.6 KiB. 4575 KiB,
-	// which still refuses a doubled baseline. Reading a landed write's
-	// caveats in a person's words off the act answer, each with whether the
-	// person must act, so the toast stays only when they must (ADR-0060),
-	// took it to 4576.5 KiB. 4577 KiB, which still refuses a doubled
-	// baseline. Telling a change nobody could confirm in the dashboard's
-	// own words, rather than the operation key's retry rule for a client
-	// (ADR-0060), took it to 4577.4 KiB. 4578 KiB, which still refuses a
-	// doubled baseline. Sortable column heads with a default order, aligned
-	// columns, the filter pill in place of a tag of three spans, waits said
-	// as times and a link-only row opened by Enter, on uilet 0.70.0
-	// (FilterPill, the grid's align and icon columns, the value trigger),
-	// took it to 4581.4 KiB. 4582 KiB, which still refuses a doubled
-	// baseline. uilet 0.71.0's toast that stays up for as long as its words
-	// take to read took it to 4582.1 KiB. 4583 KiB, which still refuses a
-	// doubled baseline. A brief that says its verdict once and ranks its
-	// rows, on uilet 0.72.0, and the record chip and words-sized table
-	// columns uilet 0.73.0 ships beside it, took it to 4585.1 KiB. 4586 KiB,
-	// which still refuses a doubled baseline. A read named in the answer
-	// rather than drawn as a card (ADR-0061): its chip and peek, the mention
-	// rule, the oversize card and a page that says it is one, less the folded
-	// read cards they replace, took it to 4591.9 KiB. 4592 KiB, which still
-	// refuses a doubled baseline. A limit's refusal naming where its ceiling
-	// is raised (ADR-0060's remedy): the link table and its gate, the press
-	// drawn on every surface a spent budget is shown on, a section arrived
-	// at on Budgets, each person's assistant ceiling edited there, and the
-	// one rule a refused question goes back in the box by, took it to
-	// 4601.7 KiB. 4602 KiB, which still refuses a doubled baseline. The
-	// review's fixes (a restore decided once per turn in the session, a
-	// section matched by its path and name, Home's spent week through the
-	// remedy gate) took it to 4602.0 KiB, past it by bytes. 4603 KiB, which
-	// still refuses a doubled baseline. A model's usage limit as one
-	// condition per entry (ADR-0064): its wording, the harness names and its
-	// remedy, the store keeping a row a push leaves as it was, and the Inbox
-	// keeping the rows it drew, took it to 4606.9 KiB. 4607 KiB, which still
-	// refuses a doubled baseline. The review's fixes (a failure's own text
-	// and the spend by model entry kept to an admin, the provider split
-	// offered to an admin alone, and the card that says so) took it to
-	// 4607.0 KiB, past it by bytes. 4608 KiB, which still refuses a doubled
-	// baseline. Saying what became of an answer to a parked executor (sent,
-	// recorded while its seat is busy and on what, answered, or not used and
-	// why) off the run's own record, drawn with uilet 0.74.0's pending tone
-	// while it is on its way, took it to 4610.7 KiB. 4611 KiB, which still
-	// refuses a doubled baseline. Drawing what prose names with its mark
-	// (the recogniser, the link hosts and project keys the frame reads, and
-	// uilet 0.75.0's InlineRef with every vendor's mark) took it to
-	// 4624.2 KiB, all of it in the lazy chunks that render Markdown: the
-	// flattening moved out of the renderer (`lib/markdownText.ts`), so the
-	// first load fell to 349.1 KiB. 4625 KiB, which still refuses a doubled
-	// baseline. Linking only what the dashboard built in the assistant and the
-	// Inbox (each address rebuilt on the company's own host), placing a bare
-	// `#11` by its message, a bare `owner/repo` under the company's owners and
-	// uilet 0.75.1's smaller marks took it to 4629.3 KiB, again all in the lazy
-	// chunks that render Markdown: the first load is 348.9 KiB. 4630 KiB, which
-	// still refuses a doubled baseline. Saying that a person's stop ended a
-	// seat's executor (a stopped turn's tag and a stopped run's span drawn
-	// closed rather than failed, a seat whose last turn "was stopped", the
-	// task's "stopped by a person" pill and the pause dialog's words) and
-	// steering a turn whose executor is out (Steer offered on a parked turn,
-	// and a note read inside a run drawn on the run's bar in the words of its
-	// step), merged beside it, took it to 4631.8 KiB. 4632 KiB, which still
-	// refuses a doubled baseline. The hardening of inline links merged beside
-	// that (a cited address drawn by the checked rule, a reply scoped by its
-	// own words, references linked only under the company's owners, a
-	// Confluence page rebuilt from its space and id, and uilet 0.75.2's
-	// unclipped marks) took it to 4632.7 KiB, again in the lazy chunks that
-	// render Markdown, the first load 348.8 KiB. 4633 KiB, which still
-	// refuses a doubled baseline. An executor's question asked and answered
-	// as a decision (the run's ask drawn with the decision components, its
-	// options read back with the chosen one marked, and its answered history
-	// in the Inbox's Answered group), all in lazy chunks, took it to
-	// 4637.3 KiB. 4638 KiB, which still refuses a doubled baseline. Its
-	// review's fixes (a run's question drawn whole and clamped with Show all
-	// rather than split, an answer naming the question it answers, a choice
-	// read back with the words beside it, and the focus kept on the outcome)
-	// took it to 4638.7 KiB. 4639 KiB, which still refuses a doubled
-	// baseline. A model's cloud or gateway sign-in (auth.mode env) named on the
-	// Models screen, its words in the shared models module every chunk that
-	// imports it carries, took it to 4639.1 KiB. The Audit log's row for a
-	// model gesture (`model_acted`, its action and its entry linked to the
-	// models) took it to 4639.4 KiB.
-	// 4640 KiB, which still refuses a doubled baseline. Settings › Models built
-	// on the engine's model answers (the list with its alarms, By job, a page
-	// per model, the one wizard that adds and edits a model, and the test,
-	// retry, device sign-in and removal flows), with uilet 0.76.0's choice
-	// cards and setup wizard, took it to 4758.3 KiB: the Settings chunk the
-	// first load does not fetch grew from 192 KiB to 303 KiB, and the first
-	// load is 350.1 KiB. 4759 KiB, which still refuses a doubled baseline.
-	// The device sign-in statuses held to the engine's set, with uilet
-	// 0.76.1, kept it within 4759 KiB. The secret dialogs reading whether the
-	// company switched to a write (`reload`), and saying so when it did not
-	// rather than closing on the 200 (#457), took it to 4760.1 KiB. 4761 KiB,
-	// which still refuses a doubled baseline. The models round (the Datadog
-	// keys tested together, each failure named at its own key; one reading of
-	// a /config failure by whether the engine answered, its sentence shared
-	// by every screen that writes the company; and the Models fixes from the
-	// owner's review: a removal on its entry's own tag, Review's list of who
-	// changes model, an edit keeping its seats; an answer read as the
-	// engine's only where it carries the engine's mark; every path segment
-	// through one rule; rgb channels and trailing slashes read in linear
-	// time; and uilet 0.77.0, its compact cards and CheckGrid in place of the
-	// seat grid) took it to 4773.5 KiB. 4774 KiB, which still refuses a
-	// doubled baseline.
-	// Chatlet (its workspace, its rail and its screens) took it from 4773.6
-	// KiB to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline:
-	// the 2.3 MiB the tree measured when this budget was first set, doubled,
-	// is about 4710 KiB. From here the budget holds the tree to what each
-	// change says it costs rather than refusing a bundle that doubled.
-	// Per-seat integration access (each integration's Agents tab and an
-	// agent's Access tab on uilet 0.79.0's DataTable: the table in the
-	// vendor's own terms, the review of the engine's plan, the permissions,
-	// rotate and removal dialogs, their readings and copy, and their
-	// stylesheet) took it from 4912.3 KiB to 4947.1 KiB (+34.8 KiB), each
-	// module once, in one chunk the integrations screen and the agent page
-	// share and the first load does not fetch. 4948 KiB. The Agents tab's
-	// polish (notes under the agents led by their titles, the review's change
-	// as a line of chips and its steps marked with Crewlet's mark or a
-	// person's, the integration read again when a sync ends) on uilet
-	// 0.81.1 (a DataTable sized to its content, an inline ChangeList, a
-	// counted tab beside its attention dot) took it to 4951.1 KiB, in the same
-	// chunk. 4952 KiB. The Chatlet redesign on uilet 0.82.0 took it from
-	// 4950.7 KiB to 5214.2 KiB (+263.5 KiB): the Chatlet workspace (its top
-	// bar, Rooms panel, room, panes, dialogs and views, and their lazy sheets)
-	// +136.6 KiB, the one sheet (the kit's conversation parts and the compact
-	// rail) +93.3 KiB, the kit's shared chunks +24.4 KiB and the entry script
-	// +13.0 KiB, less 3.8 KiB elsewhere. 5215 KiB. The Chatlet follow-ups on
-	// uilet 0.83.0 (the rail's fold motion, its compact status row and face,
-	// the kit's dock column for the Rooms panel, stable trigger refs) took it
-	// from 5214.2 KiB to 5221.4 KiB (+7.2 KiB): the one sheet +3.8 KiB, the
-	// kit's shared chunks +3.7 KiB and the Chatlet chunk +0.2 KiB (its script
-	// +0.6 KiB, its sheet less 0.4 KiB), less 0.5 KiB elsewhere. 5222 KiB.
-	// uilet 0.84.0 and the round of Inbox and Chatlet fixes beside it took
-	// it from 5221.4 KiB to 5250.9 KiB (+29.5 KiB): the one sheet +24.2 KiB,
-	// the kit's shared chunks +3.5 KiB, the writes chunk +0.9 KiB and the
-	// entry script +0.8 KiB, all the kit's, and +0.2 KiB net elsewhere (the
-	// Inbox's answer motion +1.3 KiB, against the Overview tab Settings no
-	// longer draws, 1.0 KiB less, and My work's seat row, 0.4 KiB less).
-	// 5251 KiB. The Inbox review fixes (a row answered here opened as
-	// answered, read-only until the engine lists it, the move guarded as it
-	// is written, the last answer opening Answered, an arrival washed once)
-	// took it to 5251.2 KiB (+0.3 KiB, the Inbox chunk). 5252 KiB.
-	// The Home polish on uilet 0.84.1 (one row a decision under a band per
-	// asker, the integration issue tile with its agents' chips, and the
-	// smaller status badge) took it from 5251.2 KiB to 5253.0 KiB (+1.9 KiB):
-	// the settings chunk +0.7 KiB and its sheet +0.4 KiB, the decision rows
-	// +0.3 KiB, the writes chunk +0.2 KiB, the integrations model +0.2 KiB
-	// and Home +0.2 KiB, less 0.2 KiB in the one sheet. 5254 KiB.
-	// Each launch of an executor's run drawn inside its round's Execute card
-	// rather than as a phase of its own (the `executor_collected` record read
-	// by the turn, the phase lists, the waterfall and the executors board)
-	// took it from 5253.5 KiB to 5259.0 KiB (+5.5 KiB): the settled turn
-	// chunk +2.1 KiB, the phases module +2.1 KiB, the live screens +0.8 KiB
-	// and the wire protocol +0.6 KiB. 5260 KiB.
-	// uilet 0.86.1 (an inbox row's head that wraps with its time floated on
-	// the first line, a leading slot that fits a 32px face and a ListDetail
-	// list that scrolls in its own column, with 0.85.0 and 0.86.0's
-	// AttentionList, MemberPicker, KeyValueRows, TableTwoLineCell and
-	// RailList) and Chatlet's Activity fixes took it from 5259.8 KiB to
-	// 5280.3 KiB (+20.5 KiB): the one sheet +11.5 KiB, the kit's chunks
-	// +8.2 KiB net (its dist chunk +6.8 KiB and shared chunks +4.0 KiB, less
-	// 2.6 KiB out of the entry script), the lazy sheets +0.3 KiB and +0.6 KiB
-	// elsewhere, Chatlet's chunk +0.1 KiB of it. 5281 KiB.
-	// The MCP alarms in an administrator's Inbox (each kind's words, and the
-	// MCP servers question asked of a reader the MCP section opens for, in the
-	// attention queue the entry loads) took it from 5280.7 KiB to 5282.3 KiB
-	// (+1.6 KiB): the entry script +1.4 KiB, the remedy chunk +0.1 KiB and the
-	// Inbox chunk under 0.1 KiB. The initial load went from 380.3 KiB to
-	// 380.8 KiB, inside its budget. 5283 KiB.
-	// uilet 0.89.0 (RoomRow, a List or PersonRow row's own action and note,
-	// a Switch held with a reason or drawn without its label, 0.87.0's
-	// DeliveryReceipt and the queued ThinkingIndicator) and Chatlet's
-	// membership work (each agent member's gets-every-message switch, the
-	// team room choice in New room, the star on a team's room read from
-	// outside it, the composer wherever the engine takes the post, Browse
-	// rows on RoomRow) took it from 5282.3 KiB to 5288.0 KiB (+5.7 KiB):
-	// Chatlet's chunk +3.5 KiB, the one sheet +2.7 KiB, the kit's chunks
-	// +0.6 KiB, the protocol +0.2 KiB and authorityRemedy +0.1 KiB, less
-	// 1.3 KiB of Chatlet's own sheet for the Browse rows the kit now draws.
-	// 5288 KiB.
-	// Chatlet's delivery receipts (DeliveryReceipt under a person's message,
-	// and the composer's line saying whom a draft will reach, read from
-	// chat_reach once the typing settles) took it from 5288.0 KiB to
-	// 5290.7 KiB (+2.7 KiB): Chatlet's chunk +2.7 KiB and Chatlet's sheet
-	// under 0.1 KiB, with the debounce moving out of its own chunk into the
-	// shared links chunk. The receipt's own styles were already in the one
-	// sheet with 0.89.0. 5291 KiB.
-	// Settings › MCP & tools rebuilt with page tabs (the Servers tab's alarms,
-	// figures and table, a server's page with four tabs, the restart, disable
-	// and remove flows, the built-in catalogue and its drawer, and the page's
-	// words for every engine value), replacing the shipped Tools screen, took
-	// it from 5290.7 KiB to 5328.2 KiB (+37.5 KiB): the settings chunk
-	// +31.0 KiB, its sheet +2.9 KiB (mcp.css), the Access chunk +3.0 KiB of
-	// shared settings code Rollup moved into it, and +1.0 KiB in the kit's
-	// chunks, less 0.4 KiB of the old table's rules out of the one sheet. The
-	// page is all in the settings chunk, so the initial load only lost that
-	// 0.4 KiB. 5329 KiB.
-	// The Sessions view under an agent's Memory tab (the seat's executor
-	// sessions, the latest begun first, and one session's transcript a page
-	// at a time: its entries, the states a session that cannot be read is
-	// answered in, and the account of how its turn ended) took it from
-	// 5328.4 KiB to 5338.0 KiB (+9.6 KiB), all of it the agents chunk the
-	// view loads in. The initial load is unchanged: keepInView, which
-	// Conversations and Sessions share, is a module of the Memory tab's own
-	// rather than of lib/scroller.ts, which the shell imports, and a
-	// transcript's prose takes the shared .prose rule rather than a rule of
-	// its own in the one sheet. 5339 KiB.
-	// The MCP sign-in (the state, auth method, alarm kinds and fix the page
-	// and the Inbox name, the Remove dialog's sentence, and the contract's
-	// view) took it from 5338.8 KiB to 5340.1 KiB (+1.4 KiB): the settings
-	// chunk +0.7 KiB, the entry script +0.4 KiB and the Access chunk
-	// +0.3 KiB. 5341 KiB.
-	// The changed-tools alarm (its kind and review fix in the Inbox's and the
-	// page's words, and the page's alarm row) took it from 5341.0 KiB to
-	// 5341.7 KiB (+0.8 KiB): the settings chunk +0.5 KiB, the entry script
-	// +0.2 KiB and the Access chunk +0.1 KiB. 5342 KiB.
-	// Settings › MCP & tools' add and edit wizard (its source, name,
-	// connection, sign-in, test and review steps, the Test and Replace value
-	// dialogs), net of the Add dialog and its form helpers it replaces, took
-	// it from 5341.7 KiB to 5384.9 KiB (+43.2 KiB). Measured before the MCP
-	// sign-in, from 5338.8 KiB to 5381.5 KiB, that was the settings chunk
-	// +40.2 KiB and its sheet +2.2 KiB, the kit's chunks +5.9 KiB net (the
-	// setup wizard, key and value rows, source editor and file drop the
-	// wizard is the first settings screen to draw), and 5.6 KiB less of
-	// shared code Rollup moved between chunks and of the Add dialog's rules
-	// out of the one sheet. The page is all in the settings chunk, so the
-	// initial load did not grow. 5385 KiB.
-	// Gitlet's screens, merged beside it (the Gitlet workspace: its
-	// repositories, a repository's files and history, its changes with their
-	// reviews, checks and merge queue, and their words), took it from 5253.0
-	// KiB to 5377.4 KiB (+124.4 KiB), nearly all of it in chunks a reader
-	// fetches on opening Gitlet; the frame's part is in initialBudget's history
-	// above. 5378 KiB. Gitlet's next round, merged in (the merge
-	// queue's and the checks' screens, the merge controls on a change,
-	// Settings › Gitlet and the changes on Home), took it to 5428.4 KiB
-	// (+50.9 KiB): the Gitlet workspace +15.5 KiB, a change's page +7.7 KiB,
-	// Settings +6.1 KiB, the shared chunks +5.9 KiB, the change list +2.8
-	// KiB, Home +2.6 KiB and the checks' screens +2.5 KiB, less 4.2 KiB in
-	// the entry, nearly all of it fetched on opening Gitlet. 5429 KiB. Code
-	// search and a repository's import, mirrors, index and purge, merged in,
-	// left it at 5271.9 KiB, because the bundle got smaller beside them:
-	// protocol.js, the wire protocol alone that internal/e2e replays frames
-	// through and no page loads, was built into static/dashboard and so
-	// embedded, about 124 KiB every binary carried for a test. Built into
-	// static/protocol, which nothing embeds, it is out of the tree. Still
-	// 5429 KiB.
-	// Merged with main's executor launches, uilet 0.86.1 and 0.89.0, Chatlet's
-	// receipts and membership, the Sessions view and Settings › MCP & tools
-	// above, each measured on its own side from about 5253 KiB, the two add:
-	// Gitlet's +28 KiB on main's 5384.9 KiB, less main's 0.8 KiB of
-	// wire protocol that static/protocol keeps out of the tree, measured
-	// 5412.5 KiB. 5413 KiB.
-	// Gitlet's round merged on top (a change list's open findings,
-	// updated column and window, a change's reviews, comments and findings a
-	// page at a time, who set each protection rule, every protected
-	// repository and any repository found in the pickers, a file's earlier
-	// lines a page at a time) took it to 5415.6 KiB (+3.1 KiB): the changes
-	// chunk +1.7 KiB, the Gitlet workspace +0.5 KiB, Settings +0.4 KiB, the
-	// quiet-input hook +0.3 KiB and the Inbox +0.2 KiB, less 0.3 KiB of the
-	// page-link module and +0.3 KiB net elsewhere, all of it fetched on
-	// opening Gitlet or Settings. 5416 KiB. The diff reader's next round (a
-	// failed check's line revealed wherever its window is, the patch read on
-	// to the page holding it, the line dropped when the reader opens another
-	// file, and a change's reviews and comments asked again only once spoken)
-	// took it to 5416.6 KiB (+1.0 KiB): the DiffView chunk +0.7 KiB and the
-	// Gitlet workspace +0.2 KiB, all of it fetched on opening Gitlet. 5417 KiB.
-	// A team's MCP limits in the Remove dialog (each seat's and unit's
-	// mcp_limits block a removal clears, listed and counted with the other
-	// fields that name the server) took it from 5384.9 KiB to 5385.2 KiB
-	// (+0.2 KiB, 238 bytes), all of it the settings chunk, which the initial
-	// load does not fetch. 5386 KiB.
-	// Settings › MCP & tools' grants, levels, approvals and changed tools
-	// (the Access tab and its grant picker with each agent's team limits, the
-	// Tools tab's levels, default and held-back marks, the Agent access view,
-	// the wizard's Who gets it and Tool approvals steps, the calls held for
-	// approval on a server's page, the review of a server's changed tools)
-	// and a held call answered from the Inbox's decision row took it from
-	// 5385.2 KiB to 5422.9 KiB (+37.7 KiB): the settings chunk +32.0 KiB and
-	// its sheet +1.1 KiB, the Access chunk +1.6 KiB of shared settings code
-	// Rollup moved into it, and the writes chunk +1.5 KiB and the decision
-	// row's +1.4 KiB (the held call's answers and row). The initial load did
-	// not grow. 5423 KiB.
-	// Signing MCP servers in with OAuth and client credentials (the Sign in
-	// and Revoke dialogs, the Connection tab's sign-in card, a client's
-	// secret named as one, the sign-in alarm opening the dialog, and the
-	// wizard's OAuth and client-credentials choices) took it from 5422.9 KiB
-	// to 5436.1 KiB (+13.2 KiB): the settings chunk +11.8 KiB and its sheet
-	// +0.1 KiB, and useLatestHandlers, which the Sign in dialog is the first
-	// settings screen to read, became a chunk of its own (+1.5 KiB) as Rollup
-	// moved 1.2 KiB of shared settings code into the Access chunk. 5437 KiB.
-	// An executor whose ending is decided drawn as ending (the executors
-	// board, a run's page, the Inbox's busy seat and answer fates), and on a
-	// run's page the call a person approved and the call its run held for
-	// that approval each drawn as what it is, took it from 5436.4 KiB to
-	// 5437.3 KiB (+0.9 KiB, 970 bytes): the Executors chunk +0.7 KiB, the
-	// inbox chunk +0.2 KiB, and 44 bytes of the home, live and entry scripts.
-	// 5438 KiB.
-	// Merged with Gitlet, each measured on its own side (main's from
-	// 5384.9 KiB, Gitlet's at 5416.6 KiB, 5,546,592 bytes), the two
-	// add: main's MCP grants, levels, held calls, changed tools, sign-in and
-	// ending executors above are +52.4 KiB (53,639 bytes) — the settings
-	// chunk +44.0 KiB and its sheet +1.2 KiB, the Access chunk +2.8 KiB,
-	// useLatestHandlers +1.5 KiB, the writes chunk +1.5 KiB, the decision
-	// row's +1.4 KiB and the Executors chunk +0.7 KiB, less 0.7 KiB net
-	// elsewhere (1.4 KiB out of the shared chunks against 0.7 KiB more in the
-	// inbox, its column, the entry and the one sheet) — and the merge itself
-	// 158 bytes: the changed tools' review drawn in components/DiffView
-	// rather than the package's diffs (151 bytes of the settings chunk) and
-	// 7 bytes of minified names. Measured 5469.1 KiB (5,600,389 bytes). It
-	// moved by main's own 53 KiB, from Gitlet's 5417 KiB: 5470 KiB.
-	// The Cloudflare integration (its catalogue entry, story and Agents tab
-	// lane words, and the org builder reading a seat's vendor accounts from
-	// its access blocks) took it from 5437.3 KiB to 5438.6 KiB (+1.3 KiB,
-	// 1300 bytes): the integrations model chunk +1.0 KiB, the catalogue chunk
-	// +0.2 KiB and the settings chunk 72 bytes. 5439 KiB.
-	// A session's row saying whether, and where, a relaunch would continue it
-	// (the sentence under its account for a session continued in any box,
-	// only in the box its run parked in, not at all, or not decidable now,
-	// keyed by the engine's set of places a relaunch continues a session in,
-	// SessionContinuesIn, so a place the engine adds is a typecheck failure in
-	// the view) took it from 5438.6 KiB to 5439.3 KiB (+0.7 KiB, 760 bytes),
-	// all of it the agents chunk the view loads in (+281 bytes gzipped): 339
-	// bytes past 5439 KiB. The initial load did not grow. 5440 KiB.
-	// Merged again with those two, measured on the merged tree: main's
-	// +2.0 KiB (2,060 bytes, the 1,300 and the 760 above) took it from
-	// 5469.3 KiB (5,600,519 bytes) to 5471.3 KiB (5,602,579 bytes). It moved
-	// by main's own 2 KiB, from 5470 KiB: 5472 KiB.
-	// The Expo integration (its catalogue entry, story and Agents tab words,
-	// with its box tool remedy, the org builder's Expo facts, and @crewlethq
-	// 0.90.0 for the Expo mark) took it from 5439.3 KiB to 5441.5 KiB (+2.2
-	// KiB, 2228 bytes): the integrations model chunk +1.3 KiB, the icons chunk
-	// +0.6 KiB, the catalogue chunk +0.2 KiB, the settings chunk 67 bytes and
-	// the org builder's nodes chunk 12 bytes. The initial load did not grow.
-	// 5442 KiB.
-	// The Cloudflare connect polish (a setup field's help kept as its lines,
-	// a refused value placed beside its field, Test as listing only the agents
-	// an integration has on, the access review laid out as labels and values
-	// and read again when the document moved, and a variable's bare name drawn
-	// as code) and the kit's move to 0.90.1 (secret fields that refuse saved
-	// logins) took it from 5441.5 KiB to 5443.7 KiB (+2.2 KiB, 2249 bytes):
-	// the settings chunk +1134 bytes, the integrations model chunk +485 bytes
-	// and its sheet +179 bytes, the kit's chunks +313 bytes net, the Problems
-	// chunk +66 bytes, and 72 bytes across the rest. 5444 KiB.
-	// Merged again with those two, measured on the merged tree (main's
-	// Cloudflare configure level and pasted-token checks after them add no
-	// byte to the bundle): main's +4.4 KiB (4,477 bytes, the 2228 and the
-	// 2249 above) came to 4,424 bytes here, 53 fewer in minified names,
-	// taking it from 5471.3 KiB (5,602,579 bytes) to 5475.6 KiB (5,607,003
-	// bytes). It moved by main's own 4 KiB, from 5472 KiB: 5476 KiB.
-	// The kit's move to 0.91.0 (the Scaleway and DigitalOcean marks) took it
-	// from 5443.7 KiB to 5444.6 KiB (+0.9 KiB, 967 bytes): the icons chunk
-	// +1409 bytes for the two marks, less 442 bytes net across the kit's
-	// renamed chunks, the shell page and the stylesheet. 5445 KiB.
-	// Merged again with that, measured on the merged tree: main's +967 bytes
-	// came to 1,022 bytes here, 55 more, taking it
-	// from 5475.6 KiB (5,607,003 bytes) to 5476.6 KiB (5,608,025 bytes). It
-	// moved by main's own 1 KiB, from 5476 KiB: 5477 KiB.
-	//
-	// The Agents tab's generic scope and tool mechanics (scope names, a list
-	// that could not be read, a required scope and its single-entry pre-fill,
-	// an open connection's typed entries, a refusal drawn beside its control,
-	// each seat's box lines from the engine and a lane's two tool routes) took
-	// main's from 5444.6 KiB to 5447.7 KiB (+3.1 KiB, 3165 bytes): the
-	// integrations model chunk +3096 bytes, its sheet +61 bytes and 8 bytes
-	// elsewhere. Merged again with it, main's +3165 bytes came to 3,163 bytes
-	// on the merged tree, taking it from 5476.6 KiB (5,608,025 bytes) to
-	// 5479.7 KiB (5,611,188 bytes). It moved by main's own 3 KiB, from
-	// 5477 KiB: 5480 KiB.
-	// A level an agent cannot be given drawn disabled with its reason, a
-	// setup verdict that wraps, and the kit's move to 0.92.0 (a StatusDot's
-	// word that wraps) took main's from 5447.7 KiB to 5449.2 KiB (+1.5 KiB,
-	// 1529 bytes): the kit +1467 bytes net across its renamed chunks and its
-	// stylesheet, and the access and settings chunks +62 bytes. Merged again
-	// with it, main's +1529 bytes came to 1,508 bytes on the merged tree,
-	// taking it from 5479.7 KiB (5,611,188 bytes) to 5481.1 KiB (5,612,696
-	// bytes). It moved by main's own 2 KiB, from 5480 KiB: 5482 KiB.
-	// The Expo handoff (the Set up sheet a person walks to make each agent's
-	// robot at Expo and paste its token, a rotate through it, the reminder of
-	// an old credential still at the vendor, keeping a turned-off robot, and
-	// the Cloud and Infrastructure group) took main's from 5449.2 KiB to
-	// 5456.5 KiB (+7.3 KiB, 7475 bytes): the integrations model chunk +7310
-	// bytes and its stylesheet +152 bytes, and 13 bytes across the chunks that
-	// import them. The initial load did not grow. Merged again with it, main's
-	// +7475 bytes came to 7,477 bytes on the merged tree, taking it from
-	// 5481.1 KiB (5,612,696 bytes) to 5488.4 KiB (5,620,173 bytes). It moved by
-	// main's own 7 KiB, from 5482 KiB: 5489 KiB.
-	// A conversation's next turn continuing the session its last turn left —
-	// the Sessions view saying which launch would continue each session
-	// (`continued_by`), naming the session a turn's first launch was handed
-	// (`base_turn`, a link to that session) and whether its reply reached the
-	// party waiting, net of the Memory tab's Conversations section it
-	// replaces, with its thread list and their turns — took main's from 5456.5
-	// KiB to 5454.2 KiB (-2.3 KiB, 2367 bytes), all of it the agents chunk
-	// the tab loads in (271 bytes gzipped). The initial load did not grow:
-	// its files are the same bytes but for the chunk names they list.
-	// Merged again with it, main's -2367 bytes came to -2,380 bytes on the
-	// merged tree, taking it from 5488.4 KiB (5,620,173 bytes) to 5486.1 KiB
-	// (5,617,793 bytes). It moved down by main's own 2 KiB, from 5489 KiB to
-	// the measured size's next KiB: 5487 KiB.
-	// The Agents tab reading an issued credential, a tool's reason and the
-	// box's files, the connect form's public view of a minted value, and a
-	// lane naming its issued token's period took the merged tree from 5486.1
-	// KiB (5,617,793 bytes) to 5486.9 KiB (5,618,603 bytes, +810 bytes), all
-	// of it the integrations model chunk. It stays at 5487 KiB.
-	// Reading a box file's type where the details list it, and the public
-	// view taking the shell's ceiling, took it to 5,618,606 bytes (+3). It
-	// stays at 5487 KiB.
-	// DigitalOcean (its catalogue entry, and the Set up sheet taught a token
-	// that is the agent's whole identity: the team to switch to, the name to
-	// type, and a numbered guide to the scope picker derived from the levels'
-	// grants and the lane's refused and unneeded scopes, with Regenerate Token
-	// on a rotate), with Expo's story and builder facts aligned with its
-	// hand-off, took main's from 5486.1 KiB (5,617,793 bytes) to 5492.0 KiB
-	// (5,623,824 bytes, +6,031 bytes): the integrations model chunk +5,666
-	// bytes, the catalogue chunk +241 and the org nodes chunk +92, the
-	// initial load unchanged. The measured size's next KiB: 5493 KiB.
-	// Merged again with it, main's +6,031 bytes came to 6,032 bytes on the
-	// merged tree, taking it from 5486.9 KiB (5,618,606 bytes) to 5492.8 KiB
-	// (5,624,638 bytes). It moved by main's own 6 KiB, from 5487 KiB: 5493 KiB.
-	// The Scaleway integration (its catalogue entry, story and Agents tab
-	// words, its tool named server first as DigitalOcean's is, and the org
-	// builder's Scaleway facts), merged onto that tree, took it from 5492.8 KiB
-	// (5,624,638 bytes) to 5494.6 KiB (5,626,424 bytes, +1,786 bytes). The
-	// initial load did not grow. It moved up to the measured size's next KiB:
-	// 5495 KiB, 456 bytes clear.
-	// A bridged call the run's log keeps in part drawn as such on a run's page
-	// (its "partly kept" tag, and over its arguments and its result how much
-	// the call sent and answered), a long log's dropped middle said by tool in
-	// its callout, a collected run's dropped calls said by tool on its execute
-	// card, a sealed call drawn as one wherever the turn page draws a call (the
-	// execute card, a call's span and the Tools tab's outcome), and the calls
-	// a collected executor's record did not keep counted in the turn's Tool
-	// calls fact, said on the Tools tab and counted by a call's span and the
-	// executors board's rail, with their failures in its failure tag, took it
-	// from 5494.6 KiB (5,626,424 bytes) to 5497.5 KiB (5,629,434 bytes; +2.9
-	// KiB, 3010 bytes): the Executors chunk +804 bytes, the shared chunk the
-	// wording landed in +794, the live chunk +518, the settled chunk +496 and
-	// the phases chunk +398; every other chunk kept its size. The initial load
-	// did not grow: its files are the same bytes but for the chunk names they
-	// list. 5498 KiB.
-	// AWS (its catalogue entry and story, the Agents tab's words and the org
-	// builder's leftover IAM role) and the kit's move to 0.94.0 (the AWS
-	// tile's cloud glyph) took it from 5497.5 KiB (5,629,434 bytes) to 5499.5
-	// KiB (5,631,527 bytes, +2,093 bytes). 5500 KiB.
-	// A schedule's next fire continuing the session its last fire left — the
-	// Sessions view's words for the launch that continues a fire's session
-	// (`continued_by: next_fire`), a schedule's conversation key printed with
-	// its parts decoded by a conversation label that moved out of
-	// lib/format.ts, which the shell loads first, into lib/conversationKey.ts,
-	// which only the screens that print a key load, and a fire's turn naming
-	// its schedule's conversation as one on the Turn page's rail and a phase
-	// card's footer, saying whether a key is the external conversation the
-	// turn served or the schedule the turn was a fire of — took it from 5499.5
-	// KiB (5,631,527 bytes) to 5500.1 KiB (5,632,112 bytes), +585 bytes: the
-	// phases chunk the phase card and the Memory tab share +452, the agents
-	// chunk +210, the settled and live chunks that print a key +33 and +25,
-	// less the 132 the label took out of the shared chunk the shell loads and
-	// 3 across the chunks whose imports the bundler renamed. The initial load
-	// (the entry, what the page preloads and the page itself) is 136 bytes
-	// lighter raw. 112 bytes past 5500 KiB, it moved to the measured size's
-	// next KiB: 5501 KiB.
-	// Google Cloud (its catalogue entry, its Agents tab words with the link
-	// to preparing a project, the issued period and the note on gcloud, and
-	// the org builder's leftover service account), merged onto that tree with
-	// the kit's Google Cloud mark already in 0.94.0, took it from 5500.1 KiB
-	// (5,632,112 bytes) to 5502.4 KiB (5,634,465 bytes, +2,353 bytes). The
-	// measured size's next KiB: 5503 KiB.
-	// The frame saying the engine has not answered who this is (its panel,
-	// its words and the session read's own deadline) took it from 5502.5
-	// KiB (5,634,510 bytes) to 5503.0 KiB (5,635,097 bytes, +587 bytes):
-	// the entry +485 and the chunk the session reads share +102. 25 bytes
-	// past 5503 KiB, the measured size's next KiB: 5504 KiB.
-	// The kit's move to 0.95.0 (Timeline's agent hues and compact density,
-	// and a reference chip that breaks inside its name) took it from 5503.0
-	// KiB (5,635,097 bytes) to 5505.5 KiB (5,637,626 bytes, +2,529 bytes):
-	// the stylesheet +1,801 and the kit's shared chunks +728. The measured
-	// size's next KiB: 5506 KiB.
-	// The access review drawn as a card per agent (its face, the change in a
-	// word, a danger edge for one turned off, and the steps as a timeline in
-	// its colour) took it from 5505.5 KiB (5,637,626 bytes) to 5507.2 KiB
-	// (5,639,357 bytes, +1,731 bytes): the integrations model chunk +1,366
-	// and its sheet +45, the kit's Timeline a chunk of its own (+1,376) out
-	// of the schema chunk (-1,205), and +149 net across chunks whose imports
-	// the bundler renamed. The initial load did not grow. 5508 KiB.
-	// The ask composer's cap moving from six options to four (ADR-0100) left
-	// it at 5507.2 KiB (5,639,357 bytes, +0 bytes): one digit for another.
-	// 5508 KiB stands.
-	// A connect form's split words took it from 5507.2 KiB to 5509.8 KiB
-	// (+2,715 bytes, the integrations model chunk and its sheet): 5510 KiB.
-	// The Setup steps column on kit 0.96.0 took it to 5512.9 KiB (+3,186): 5513 KiB.
-	// Kit 0.97.0's slim scrollbar and hanging list markers took it to 5513.4 KiB
-	// (+463: the one sheet +374, the List chunk +60, the integrations model +31,
-	// layout -2): 5514 KiB.
-	// Structure in place of the org chart, Roster and Teams, on kit 0.98.0,
-	// took it from 5512.0 KiB (5,644,284 bytes) to 5515.1 KiB (5,647,420
-	// bytes, +3,136 bytes): the org chunk took in the pages it replaces
-	// (+121,847 against -108,246 for the chart's chunk and -75,328 across the
-	// agents, people, profile and work chunks), the live seat model is a chunk
-	// of its own (+12,916), the entry +3,641 and the sheet +3,153. The
-	// measured size's next KiB: 5516 KiB.
-	// The audit's fixes (a seat's problem said on its row when the Problems
-	// column folds, a lead's Table tab counting the seats drawn, and a seat
-	// page's section scroll held while its tab fills, with the hold shared
-	// with the router) took it from 5515.6 KiB (5,647,939 bytes) to 5516.3 KiB
-	// (5,648,681 bytes, +742 bytes): the org chunk +335, the shared chunk the
-	// hold landed in +330 and the agents chunk +118, less 41 across chunks the
-	// bundler renamed. The measured size's next KiB: 5517 KiB.
-	// The second audit's fixes to Structure and the seat page (a return
-	// restoring the chart's view, Live and the Inbox loading until the engine
-	// answers, a row's dialogs drawn over the window, the seat page's and the
-	// panel's controls on one row, a limit's callout saying who changes the
-	// company's models, a page keeping room for a toast, a phone's selection
-	// bar and toolbar on one row, and a narrow Table's names given Status's
-	// share) took it from 5516.3 KiB (5,648,681 bytes) to 5520.2 KiB
-	// (5,652,641 bytes, +3,960 bytes): the entry +1,789 (the toast room
-	// every stack reports to, and the seat words it shares), the org chunk
-	// +654, the limit remedy a chunk of its own +492, the live seat model
-	// +384, the dialog presenter a chunk of its own +294, the live chunk +290
-	// and +454 net elsewhere, less 397 in the agents chunk. The measured
-	// size's next KiB: 5521 KiB.
-	// Kit 0.100.2 and a steady Chatlet room (rows drawn only when their
-	// message changes, the pane sized by its track, the transcript on the
-	// kit's anchoring) took it from 5520.9 KiB (5,653,362 bytes) to 5528.1
-	// KiB (5,660,814 bytes, +7,452 bytes): the one sheet +2,492 and the kit's
-	// shared chunks +1,522, the Chatlet chunk +2,308 and its sheet +170, the
-	// stable list hook +505 now that the room shares it, the authority remedy
-	// chunk +224, the org chunk +208, the boundaries chunk +121 and the entry
-	// +113, less 293 in the inbox chunk and +82 net elsewhere. Merged with
-	// the live views that hold still, the whole measured 5530.0 KiB
-	// (5,662,732 bytes). The measured size's next KiB: 5531 KiB.
-	// A UI sweep of Home, the Inbox, Live, Spend, the assistant and the frame
-	// took it from 5530.0 KiB (5,662,732 bytes) to 5540.6 KiB (5,673,620
-	// bytes, +10,888): script +12,411 (the event log's grid, a trace's tree
-	// grid and its address binding, a turn's and an executor's grids, Chatlet's
-	// room grid, the frame's fixes and the Inbox's and Home's), less 1,523 in
-	// the sheets, whose hand-built ledgers went. The measured size's next KiB:
-	// 5541 KiB.
-	// Kit 0.101.0 took it from 5540.6 KiB (5,673,541 bytes) to 5557.7 KiB
-	// (5,691,086 bytes, +17,545): the one sheet +8,133 (the data grid's row
-	// shapes and the tree grid's head and foot) and the kit's shared chunks
-	// +9,412 net, regrouped under new names. The measured size's next KiB:
-	// 5558 KiB.
-	// The Chatlet sweep (a reply drawn once in its thread, reactions sent as
-	// shortcodes and drawn as glyphs, a pane never over part of a room, a room
-	// that is not there, a seatless reader's remedy, the offline hold) took it
-	// from 5557.7 KiB (5,691,086 bytes) to 5565.2 KiB (5,698,721 bytes,
-	// +7,635): the Chatlet chunk +5,473 and its sheet +537, the people chunk
-	// +527, the authority remedy chunk +336, the message body chunk +243, the
-	// write access chunk +191, the entry +166 and the markdown chunk +132,
-	// +30 net elsewhere. The measured size's next KiB: 5566 KiB.
-	// The Settings, Integrations, Models, MCP and Code polish (their tables
-	// on the data grid, Files and log retention among them, readiness worded
-	// for people, a draft's ready step, connect forms checked before they
-	// write, and alarms said once) took it from 5565.2 KiB (5,698,721 bytes)
-	// to 5585.1 KiB (5,719,142 bytes, +20,421): the settings chunk +7,501,
-	// the integrations model +3,101, the code chunk +2,820, Changes +2,563
-	// and Access +2,106, with the rest in chunks the bundler renamed and
-	// regrouped. The measured size's next KiB: 5586 KiB.
-	// A UI sweep of Worklet, My work, Artifacts and Doclet and kit 0.102.0 took it
-	// from 5585.1 KiB (5,719,142 bytes) to 5563.6 KiB (5,697,106 bytes, -22,036):
-	// the hand-built ledgers and rows that went and the kit's own sweep outweigh
-	// the tables' moves onto the kit's grids and the fixes' script. The measured
-	// size's next KiB: 5564 KiB.
-	// A UI sweep of Structure, seats, Brand, Schedules and Budgets took it from
-	// 5563.6 KiB (5,697,106 bytes) to 5581.0 KiB (5,714,970 bytes, +17,864): script
-	// +14,813 (the table's sort and give-way columns and its live store, the chart's
-	// opening view and add form, the seat's grids, a held answer's access check),
-	// the sheets +2,432 (the boot screen's own among them) and +619 elsewhere. The
-	// measured size's next KiB: 5582 KiB.
-	// Kit 0.102.1 (its sweep of the kit's own components) took it from 5581.0
-	// KiB (5,714,970 bytes) to 5587.8 KiB (5,721,898 bytes, +6,928): script
-	// +3,845 and the sheets +3,185 (a seat page's own floor for its last crumb
-	// gone, now that the kit's is the same), less 102 in the notices, with the
-	// kit's shared chunks regrouped under new names. The measured size's next
-	// KiB: 5588 KiB.
-	// Settings › Diagnostics took it from 5587.8 KiB (5,721,898 bytes) to 5595.1 KiB
-	// (5,729,349 bytes, +7,451): the settings chunk, where the screen lives, with the
-	// nav entry and route table beside it. The measured size's next KiB: 5596 KiB.
-	// A crash kept private took it from 5595.0 KiB (5,729,261 bytes) to 5596.1 KiB
-	// (5,730,451 bytes, +1,190): the settings chunk, for the status and the private
-	// report it offers. The measured size's next KiB: 5597 KiB.
-	// Kit 0.104.0 (its chat skeleton and the releases since 0.102.1) and
-	// Chatlet's read states (one loading shape and one failure with Try again
-	// for a room, a thread and a search) took it from 5594.9 KiB (5,729,182
-	// bytes) to 5598.8 KiB (5,733,155 bytes, +3,973): the sheets +2,636 and
-	// script +1,337. The measured size's next KiB: 5599 KiB.
-	// Kit 0.105.0 (the chat skeleton, the chat scale's motion steps and 64px
-	// words, the reduced-motion rule that zeroes transitions, and the kit's
-	// other releases since 0.102.1), with the dashboard's own copy of that
-	// rule gone, took it from 5594.9 KiB (5,729,182 bytes) to 5598.3 KiB
-	// (5,732,632 bytes, +3,450): the sheets +2,499 and script +951. The
-	// measured size's next KiB: 5599 KiB.
-	// Kit 0.106.0 (the chat thread's anchor fixes, the chat rows' scale, the emoji
-	// picker's preview) and reading older Chatlet history ahead of the reader took
-	// it from 5594.9 KiB (5,729,182 bytes) to 5605.5 KiB (5,740,026 bytes, +10,844):
-	// the sheets +7,298 and script +3,546. The measured size's next KiB: 5606 KiB.
-	// Chatlet's one message box took it from 5594.7 KiB (5,728,938 bytes) to
-	// 5597.3 KiB (5,731,663 bytes, +2,725): script +1,390 (the box the room, a
-	// thread and a rewrite share, the editor's own module, typing in a thread) and
-	// the sheets +1,335 (the kit's folding toolbar row and the composer's rhythm).
-	// The measured size's next KiB: 5598 KiB.
-	// The entries since Settings › Diagnostics, each measured on its own branch,
-	// landed together with the rest of that Chatlet work on kit 0.107.0, which took
-	// it from 5595.0 KiB (5,729,261 bytes) to 5615.6 KiB (5,750,400 bytes, +21,139):
-	// script +13,478 (the message body chunk +7,489 with the Chatlet chunk -3,319,
-	// the kit's shared chunks +7,190, the settings chunk +1,189 and the turns chunk
-	// +837) and the sheets +7,661 (the one sheet +7,145 and Chatlet's +516). The
-	// measured size's next KiB: 5616 KiB.
-	// Kit 0.112.0 (the chat round: rows, toolbar, code blocks with a copy control,
-	// the time and edit tooltips, the emoji picker's tabs, the unread glow and
-	// pills, the dark tooltip, the composer edge, the caret-anchored mention list,
-	// menu active descendant, instant popups and the dense room list) took it from
-	// 5615.6 KiB (5,750,400 bytes) to 5639.9 KiB (5,775,294 bytes, +24,894): the
-	// sheets +15,799 (the one sheet +15,882) and script +9,095. The measured
-	// size's next KiB: 5640 KiB.
-	// Home and End reaching a windowed transcript's held edges took it to 5640.3
-	// KiB (5,775,671 bytes, +377, the Chatlet chunk). The measured size's next
-	// KiB: 5641 KiB.
-	// Chatlet's reader views drawing their title and tools in the top bar took it
-	// from 5640.2 KiB (5,775,602 bytes) to 5641.6 KiB (5,777,000 bytes, +1,398):
-	// script +1,313 (the bar's view slots and their host) and the sheets +85. The
-	// measured size's next KiB: 5642 KiB.
-	// Every agent at work in Chatlet on one compact line (kit 0.113.2's
-	// WorkingLine in the thread pane, under a message and at the room's foot)
-	// took it from 5641.6 KiB (5,777,000 bytes) to 5649.3 KiB (5,784,929 bytes,
-	// +7,929): the sheets +5,189 (the one sheet +5,582, Chatlet's -393) and
-	// script +2,740 (the Chatlet chunk +2,689). The measured size's next KiB:
-	// 5650 KiB.
-	// Chatlet's Activity read full width until an item opens beside it, the
-	// Direct messages page, and Chatlet's rows run edge to edge with one status
-	// line under the box, on kit 0.117.0 (the list-detail modes, the inbox's
-	// chat density and arrow keys, flush chat logs, and the measured rich-text,
-	// composer-tool and day-pill steps), took it from 5649.0 KiB (5,784,598
-	// bytes) to 5667.4 KiB (5,803,441 bytes, +18,843): script +11,328 (the
-	// Chatlet chunk +8,139) and the sheets +7,515 (the one sheet +5,834,
-	// Chatlet's +1,681). The measured size's next KiB: 5668 KiB.
-	// Every message box sending on Enter, page toolbars on one compact rhythm
-	// and no panel scrolling sideways, on kit 0.119.2 (the send keys, one edge
-	// and one height for a row of controls, and references and whole code
-	// chips that wrap inside any box), took it from 5667.4 KiB (5,803,441
-	// bytes) to 5671.5 KiB (5,807,659 bytes, +4,218): script +2,373 and the
-	// sheets +1,845 (the one sheet). The measured size's next KiB: 5672 KiB.
-	// References kept with their punctuation, the Inbox's Updates a closed
-	// group, each reading pane item opened at its head and Activity's open
-	// item filling its column, on kit 0.120.1 (peelPunctuation, a title that
-	// fills its first line, and the kit's side panel that fills its column),
-	// took it from 5671.6 KiB (5,807,684 bytes) to 5673.4 KiB (5,809,565
-	// bytes, +1,881): script +1,969 and the sheets +14, with 102 fewer
-	// elsewhere. The measured size's next KiB: 5674 KiB. The SSH integration's
-	// catalogue tile and its words took it to 5674.9 KiB (5,811,097 bytes,
-	// +1,532, all script). The measured size's next KiB: 5675 KiB. The SSH
-	// tools' catalogue group and gates took it to 5675.1 KiB (5,811,351 bytes,
-	// +254, all script). The measured size's next KiB: 5676 KiB. An SSH
-	// operate call's review before Allow once took it to 5676.9 KiB (5,813,150
-	// bytes, +1,240, all script). The measured size's next KiB: 5677 KiB. A
-	// held call answered in the Inbox's reading pane by its own buttons took
-	// it to 5677.9 KiB (5,814,186 bytes, +1,036, all script). The measured
-	// size's next KiB: 5678 KiB. The SSH integration's own mark, on kit
-	// 0.121.0 (VendorMark's key in place of the brand mark), took it to 5679.1
-	// KiB (5,815,396 bytes, +1,210): script +1,044 (the drawing), the sheets
-	// +64 (its colour rule) and 102 more in index.html. The measured size's
-	// next KiB: 5680 KiB. Gitlet behind its own permission (its workspace, Home's
-	// card, a seat's Code tab, a work item's changes and the palette's
-	// repositories and code search locked as Worklet's are), merged on top of it,
-	// took it to 5680.1 KiB (5,816,420 bytes, +1,024, all script). The measured
-	// size's next KiB: 5681 KiB. The access change review's Inbox note and the
-	// access save's review callout, merged on top of it, took it to 5681.3 KiB
-	// (5,817,698 bytes, +1,104, all script). The measured size's next KiB:
-	// 5682 KiB. My work's Holding up section (a person's open work that other
-	// work waits on, how much and on whom), on top of it, took it to 5683.5 KiB
-	// (5,819,942 bytes, +1,703 over the tree it was built on, all script). The
-	// measured size's next KiB: 5684 KiB. Settings › Advisor (the setup
-	// findings, a change's preview from the entity route's dry run and what the
-	// integrations need from a person), merged on top of it, took it to 5689.4
-	// KiB (5,825,921 bytes, +5,979, all script). The measured size's next KiB:
-	// 5690 KiB. The advisor's go-live check and its blockers in Needs you,
-	// merged on top of it, took it to 5691.1 KiB (5,827,714 bytes, +1,793, all
-	// script). The measured size's next KiB: 5692 KiB. The administrators'
-	// platform notices in Needs you, the rubber-stamp finding's draft with Ask
-	// Crewlet and the advisor's every unread source, merged on top of it, took it
-	// to 5692.9 KiB (5,829,572 bytes, +1,858, all script). The measured size's
-	// next KiB: 5693 KiB. A conversation the engine holds, as a row in Needs
-	// you and a note on its item, on top of it, took it to 5694.2 KiB
-	// (5,830,844 bytes, +1,272, all script). The measured size's next KiB:
-	// 5695 KiB. An agent's access request (its grant drawn in the engine's
-	// words, previewed and applied before the answer), merged on top of it,
-	// took it to 5696.5 KiB (5,833,239 bytes, +2,395, all script). The
-	// measured size's next KiB: 5697 KiB. Spend's turns that changed nothing
-	// took it to 5699.4 KiB (5,836,141 bytes, +2,713, all script): 5700 KiB.
-	// Usage insights in Settings › Diagnostics and the held conversation's
-	// out-of-memory reason, merged on top of it, took it to 5708.4 KiB
-	// (5,845,450 bytes, +9,309, all script): 5709 KiB. The go-live review of
-	// what each agent can do took it to 5711.6 KiB (5,848,639 bytes, +3,189,
-	// all script): 5712 KiB. A pull request settling the work that waits on it,
-	// and why an item waits (its Waits for line, an overtaken question in the
-	// Inbox), merged on top of it, took it to 5712.1 KiB (5,849,155 bytes, +516,
-	// all script): 5713 KiB. A held call naming the decision it carries out, the
-	// vendor permission a built-in needs, the insights and runs fixes, an item's
-	// wait reason once its date has come and a skill's loads beside its offers,
-	// merged on top of it, took it to 5712.5 KiB (5,849,583 bytes, +428, all
-	// script): still 5713 KiB. An agent's permissions and scope read as their
-	// values beside a pencil, the scope changed in a dialog of its own, took it
-	// to 5715.6 KiB (5,852,813 bytes, +3,230, all script): 5716 KiB. The work
-	// grid's Key, Status, Type and Assignee sort heads, merged with a session's
-	// relaunch note on Executors, took it to 5716.1 KiB (5,853,244 bytes, +431,
-	// all script): 5717 KiB. A tool change reviewed whole, a part it cannot
-	// show said rather than drawn as unchanged, and wording changes to
-	// read-only tools listed and accepted together, merged on top of it, took
-	// it to 5718.9 KiB (5,856,204 bytes, +2,960, all script): 5719 KiB. A
-	// withdrawn question read with its asker's reason and what covers it, and
-	// the Inbox leading with the agent work a person holds up, merged on top of
-	// it, took it to 5720.6 KiB (5,857,851 bytes, +1,647, all script): 5721 KiB.
-	// An agent's two access clocks, the note on what its GitHub App holds past
-	// its grant, the engine's status word and Ask Crewlet taking images only
-	// where deep work reads them, merged on top of it, took it to 5721.9 KiB
-	// (5,859,202 bytes, +1,351, all script): 5722 KiB. Delegated decisions
-	// (an escalated call's delegates read before the call, an answer a
-	// delegate gave marked with its rule, Settings › Delegated decisions and
-	// Home's digest notices) took it to 5737.3 KiB (5,874,972 bytes, +15,770:
-	// script +15,542, the sheets +228): 5738 KiB. Merges and deploys decided
-	// under delegation (a held merge's and a deploy's request drawn as text,
-	// who may answer it, a rule's always-escalate paths and the merge and
-	// deploy conditions' words) took it to 5741.6 KiB (5,879,381 bytes,
-	// +4,409: script +4,310, the sheets +99): 5742 KiB. A lane status this
-	// bundle does not know drawn in the engine's words, an image dropped where
-	// none is taken refused in place, a server's tools drawn a page at a time,
-	// a tool change's schema always drawn whole, the wording list frozen at its
-	// first press, a decision written in part said as such and a work list
-	// starting again from its first page when the engine refuses its cursor,
-	// merged on top of it, took it to 5743.0 KiB (5,880,861 bytes, +1,480, all
-	// script): 5744 KiB. Atlas named among the apps People grants, and each
-	// delegated rule's required checks with Settings › Delegated decisions
-	// opening on today so far, took it to 5744.2 KiB (5,882,014 bytes, +1,153,
-	// all script): 5745 KiB. The atlas and dead-wait train took it to 5745.0
-	// KiB (5,882,829 bytes, +815), still inside it. Company › Atlas on kit
-	// 0.122.0 took it to 5824.7 KiB (5,964,471 bytes, +81,642: script +73,130,
-	// of which the atlas chunk, its screens and the map code, is 68,179; the
-	// sheets +8,512, the kit's GraphCanvas rules in the one sheet and the
-	// atlas screens' own 1,083): 5825 KiB. Every end of a person's note to a
-	// running turn said in its trace as the run's record knows it (missed,
-	// unconfirmed, told again after a step that never handed it over, and an
-	// end this bundle does not know said as that, never as expired), merged on
-	// top of it, took it to 5826.0 KiB (5,965,816 bytes, +1,345, all script):
-	// 5826 KiB.
-	// An open draft held to what the engine takes (draft.set's arguments
-	// declared only while one schema holds them, and sizes counted as the
-	// engine encodes them), Ask Crewlet reading and proposing to the agents'
-	// access draft (an integration's Agents tab and an agent's Access tab, one
-	// draft over its tabs) with draft.set written in its fields' order, every
-	// page action's arguments and the page context held to the engine's
-	// bounds, the Budgets ceiling's seat held to a handle's grammar past an
-	// enum's 64, and the org builder's identities and a mention held to the
-	// engine's, +11,156 bytes on the tree they were built on, then a page
-	// action's report held to the engine's line (a refusal written within it,
-	// the report cut at a whole character) and a seat or a space declared by
-	// its grammar past an enum's 64, +1,462 on the tree they were built on,
-	// merged on top of it, took it to 5838.4 KiB (5,978,501 bytes, +12,685,
-	// all script): 5839 KiB.
-	// A new project's key checked by the engine's grammar, a deck's title held
-	// to its bytes with Save held past it or past a slide's notes, a model's
-	// secret named by the secret store's grammar and every other copied engine
-	// bound held to the engine's own (+922 bytes when they were merged on the
-	// tree before these two fixes), then every create page's task text held to
-	// what a task holds and the artifact listing, datastore, board, project and
-	// change part bounds held to the engine's (+1,713 when they were merged on
-	// the tree before the required checks), then the artifacts' contract split
-	// in two, the workspace's half a module of its own (+547 there), merged on
-	// top of it, took it to 5840.6 KiB (5,980,762 bytes, +2,261, all script):
-	// 5841 KiB. Ask Crewlet reading the atlas (an entry's chip with the map
-	// glyph, matched by its name and worded as an entry) and the atlas's
-	// certificate kind, the facts and the relation an integration's read
-	// fills, named in the atlas words, merged on top of it, took it to 5841.0
-	// KiB (5,981,148 bytes, +386, all script), 36 bytes inside it.
-	// Every draft a screen declares to Ask Crewlet held in branded state, so
-	// the draft gate reads through the checker which modal a page hands its
-	// draft to (draft.ts's mints, and every declaring screen, box and store
-	// moved onto them), merged on top of it, took it to 5841.8 KiB
-	// (5,982,024 bytes, +876, all script): 5842 KiB.
-	// A monitor's state and since when, and the three signals a monitor
-	// raises on what it watches, named in the atlas words, took it to 5842.0
-	// KiB (5,982,209 bytes, +185, all script), one byte past it: 5843 KiB.
-	// The one-page Company › Atlas on kit 0.123.0, merged on top of it, took
-	// it to 5895.6 KiB (6,037,106 bytes, +54,642: script about +26,500, of
-	// which the atlas chunk, the band, the catalogue, the neighbourhood
-	// diagram and the timeline, is about +22,300 at 28.8 KiB gzipped; the
-	// sheets about +28,100, the kit's layered service map in the one sheet
-	// +24,572 and the atlas screens' own +3,528): 5896 KiB.
-	// Kit 0.124.0 and the decision rows read in product words took it to
-	// 5898.0 KiB (6,039,547 bytes, +2,441: script +1,811, a held call's
-	// title from its own arguments, the one escalation heading and the row's
-	// detail; the sheets +630, the kit's quiet callout and compact finding
-	// list in the one sheet), 5 bytes inside 5898 KiB: the next addition
-	// moves this budget with a reason of its own.
-	// Adding, correcting and confirming in the atlas (Add entry, an entry's
-	// actions and their dialogs, History, Changes, Review and its bulk
-	// decision, and the vocabulary's fact and relation tables the dialogs
-	// offer from), merged on top of it, added 48,677 bytes, nearly all of it
-	// the atlas chunk's script. The SSH integration's Servers section (each
-	// server's "Read for Atlas" switch and the dialog that lists the commands
-	// first) and the atlas's workload kind, image and open ports, named in
-	// the atlas words, added 3,572, all script. A repository's files as an
-	// atlas source, with the workload's rows in the tables the dialogs offer
-	// from, added 360. Together they took it to 5949.4 KiB (6,092,156 bytes,
-	// +52,609): 5950 KiB.
-	// Atlas, Sources (each source's card with its last read in figures, what
-	// it was refused, the servers' table and Refresh now, with the route, the
-	// band's link and the question's and the action's declarations) added
-	// 6,268 bytes, script +6,171 and the atlas sheet +97, and took it to
-	// 5955.5 KiB (6,098,424 bytes): 5956 KiB.
-	// An agent's evidence in Review (each report's by-line and the call it
-	// cited, under a waiting entry and beside an agent's value), the bulk
-	// dialog's reporter and the Inbox's notice of drift on what the reader
-	// set added 2,322 bytes, script +2,286 and the atlas sheet +36. Built
-	// beside Sources the tree measures 5957.8 KiB (6,100,752 bytes, 6 over
-	// the sum of the two): 5958 KiB.
-	// The setup advisor's atlas findings (the fix dialog in the atlas chunk,
-	// with its owner, monitor, decision and read-now rows, and the advisor's
-	// row, lazy mount and unread words) added 4,452 bytes, all script, and
-	// took it to 5962.1 KiB (6,105,204 bytes): 5963 KiB.
-	// The work that touches an entry (its Work tab and sheet section, the
-	// open-work notch and count, and a task's Atlas entries group with its
-	// link dialog) added 8,469 bytes, all script, and took it to 5966.0 KiB
-	// (6,109,221 bytes): 5967 KiB.
-	// Built together, the advisor's findings and the work that touches an
-	// entry measure 5970.4 KiB (6,113,724 bytes), 51 bytes over the two
-	// added to 5958 KiB's tree: 5971 KiB.
-	// The atlas's Home widget (its card, the two reads behind it, the board
-	// kit's shared "more on the page" link and a two-line row held to its
-	// width) added 2,283 bytes, nearly all script, and took it to 5972.7 KiB
-	// (6,116,007 bytes): 5973 KiB.
-	// An artifact on a page of its own (the standalone route, the frame with
-	// no sidebar, Open in new tab in the bar, in its More and in a listed
-	// artifact's menu) on kit 0.125.0 added 1,048 bytes, nearly all script,
-	// and took it to 5973.7 KiB (6,117,055 bytes): 5974 KiB.
-	// What any phase's record does not list (the rounds past the most a
-	// record lists and the tool names past its lists' share on the phase
-	// card, the calls a host phase's record drops, which no one round's count
-	// claims, and a failed phase's call frozen with what its record left out)
-	// added 972 bytes, nearly all script, and took it to 5974.6 KiB
-	// (6,118,027 bytes): 5975 KiB.
-	// A running phase's card saying what its frame left out in the live
-	// view's words, and the calls in flight it does not list, added 416
-	// bytes, nearly all script, and took it to 5975.0 KiB (6,118,443 bytes):
-	// 5976 KiB.
-	// A task's own menu on every Worklet shape and its page (Move to project,
-	// Move to trash with the subtask question and Undo, Restore and Delete
-	// permanently with its confirmation), a list's selection and its bar, the
-	// Start, Created and Updated filters, group by parent, and one writer for
-	// the grouping keys added 14,693 bytes, nearly all script, and took it to
-	// 5989.0 KiB (6,132,720 bytes): 5990 KiB.
-	// My work's Watching and Collaborating as the work list with its toolbar,
-	// the Queue's order folded into a phone's More, a saved view's settings
-	// in words with its Edit view, and Subgroup by placed with the grouping
-	// added 3,450 bytes, nearly all script, and took it to 5992.4 KiB
-	// (6,136,170 bytes): 5993 KiB.
-	// What waits on a person in one place (the engine's standing on every
-	// parked run read by Home, the Inbox, Live and a seat's page, the Inbox's
-	// group of what a reader may answer for somebody else, a badge counting
-	// what waits on them alone, a platform notice's fix and put-off marks,
-	// which standing alarms are in Needs you, and a failed read said with its
-	// Try again on every screen that drew it as empty) added 8,775 bytes,
-	// nearly all script, and took it to 5983.2 KiB (6,126,802 bytes): 5984 KiB.
-	// A range kept for its reader (the per-reader store and its hook), a
-	// model wizard that names its wait and returns to where it was opened, an
-	// atlas that says why a change is held and links what needs attention,
-	// and a skeleton on the screens that drew nothing while their read was
-	// out added 4,142 bytes, nearly all script, and took it to 5979.1 KiB
-	// (6,122,607 bytes): 5980 KiB.
-	// Kit 0.126.0 (a map's three levels of detail with its held titles, and a
-	// pill row that scrolls with its ring inside the tab), less this tree's
-	// own copy of the pill row's scroll rule, added 2,540 bytes, script and
-	// sheet, and took it to 5981.6 KiB (6,125,147 bytes): 5982 KiB.
-	// Built together on kit 0.126.1, a task's own menu, what waits on a person
-	// in one place and a kept range measure 6008.7 KiB (6,152,941 bytes), 409
-	// bytes over the three and the running phase's card added to the tree
-	// they were built on: 6009 KiB.
-	// The train's own fixes (one Try again where a screen draws its own, and a
-	// failed REST read asked again by the shared one) added 318 bytes, all
-	// script, and took it to 6009.0 KiB (6,153,259 bytes), 43 bytes past it:
-	// 6010 KiB.
-	// A model's test polled while it runs on its node's own time (the
-	// `llm_check` question, and what a test that found nothing says) added
-	// 1,284 bytes, nearly all script, and took it to 5976.3 KiB (6,119,749
-	// bytes): 5977 KiB.
-	// The release train merged with that poll, on kit 0.126.2, measures
-	// 6010.7 KiB (6,154,943 bytes), 703 bytes past 6010 KiB: 6011 KiB.
-	// A page tidied from its own screen (Rename, Labels, Move, the trash with
-	// Restore and Delete permanently, a space's trash list), a draft's
-	// Publish on the page, in More and in the editor, an empty space's header,
-	// a disconnect the settings hold said as theirs, and the seat gestures'
-	// dialog held by the screen added 12,312 bytes, nearly all script, and
-	// took it to 5987.1 KiB (6,130,755 bytes): 5988 KiB.
-	// The settings that change the company document from the screens that
-	// show it (a limit's editor, the delegated-decision rules' switch, sheet
-	// and removal, a revision's Revert with its diff, Reload, and the whole
-	// document's editor with its check, problems and import), an artifact's
-	// Files panel, Move to's New folder and the new HTML page's question on
-	// leaving took it to 6016.0 KiB; a schedule's create, edit, pause,
-	// delete and run controls with the clock its times are drawn on added
-	// 20.1 KiB more, nearly all script, and took it to 6036.1 KiB
-	// (6,180,959 bytes, 62,516 over the last): 6037 KiB.
-	// A person's Gitlet writes (a new repository, its branches and their
-	// rules, a file edited, added or deleted, a commit reverted or picked, a
-	// change rebased, taken out of the queue or reverted, a finding
-	// answered, a repository deleted and restored), a room's archive and an
-	// administrator's retention, prune and erase, and the notice for a
-	// service the node starts on its restart added 46,844 bytes, nearly all
-	// script, and took it to 6020.8 KiB (6,165,287 bytes): 6021 KiB.
-	// Kit 0.126.3, its grid's named action column, a menu's panel and the
-	// palette's and modal's scrollers, added 5,634 bytes and took it to
-	// 6026.3 KiB (6,170,921 bytes): 6027 KiB.
-	// The release train of a page's own operations, the settings and
-	// schedule writes, and the repository and room writes, merged on kit
-	// 0.126.3 with the train before it, measures 6132.4 KiB (6,279,549
-	// bytes), 124,606 bytes over the 6010.7 KiB it was built on: 6133 KiB.
-	// Kit 0.128.0 (one-sentence delivery receipts, a thread line as long as
-	// what it says, an avatar centred on its line, Clamp) with a long task
-	// thread folded behind Show more, Jump to latest, the watchers' stack
-	// and a Chatlet transcript laid out where the page draws it added 3,713
-	// bytes, nearly all script, over the 6132.6 KiB of main on kit 0.127.0,
-	// and took it to 6136.3 KiB (6,283,579 bytes): 6137 KiB.
-	// A Gitlet repository laid out as a code host lays one out (its Code tab
-	// with the latest commit across the files, the README and the About rail,
-	// a file's card with its blame runs, Clone, commits banded by day, the
-	// Changes tab and an empty repository's card), on a sheet of its own,
-	// added 16,451 bytes, script and sheet, and took it to 6152.4 KiB
-	// (6,300,030 bytes): 6153 KiB.
-	// A Gitlet change reviewed as a code host lays one out (its byline, the
-	// merge box and its checklist, the activity rail of cards with faces, the
-	// rail of reviewers, a file tree beside the diff with a head on each
-	// file, revisions as cards, the commit page's cards and the listing's
-	// richer row) added 24,076 bytes, script and sheet, and took it to
-	// 6175.9 KiB (6,324,106 bytes): 6176 KiB.
-	// Gitlet's listings drawn as a code host lists them (a repository's row
-	// with its glyph, marks and description, a push's refs with their glyphs
-	// and the comparison each moved ref opens, and a search's file cards)
-	// added 2,313 bytes, script and sheet, and took it to 6178.1 KiB
-	// (6,326,419 bytes): 6179 KiB.
-	// Kit 0.128.1 (value pickers, the search field and the make-row tiles
-	// named by the words they show) with the second audit's Worklet, Inbox,
-	// Home and Doclet fixes (an ask's context, a frozen trashed task, a moved
-	// task's address, a New task draft kept for the tab, saved views deleted
-	// where they are read, one Inbox row per engine pause) added 4,934 bytes,
-	// script and sheet, and took it to 6183.0 KiB (6,331,353 bytes): 6183 KiB.
-	// Gitlet's audit fixes (Edit details on a repository's settings, a
-	// reviewer picker, the change bar drawn by its state and its reader, and
-	// a repository whose default branch holds nothing read from its other
-	// branches) added 5,828 bytes, nearly all script, and took it to
-	// 6188.7 KiB (6,337,181 bytes): 6189 KiB.
-	// Kit 0.129.1 with the operations fixes (the event log drawn a page at a
-	// time, a refused control's refusal placed outside its row on every page
-	// bar, header and dialog, a schedule's controls following its saved switch
-	// and its cron fields named, a limit's range, the org chart's warnings and
-	// counts, a session's device, Live's words) took it to 6196.4 KiB: 6197 KiB.
-	// Kit 0.129.0 (each trunk count placed clear of the map's titles, cards
-	// and other counts, the legend's switches tied to what they draw, the
-	// zoom steppers held at their limits) and an Atlas round (an address
-	// read against the closed sets, one grouping of what an entry touches,
-	// the retired filter, a failed source said in a sentence) added 7,464
-	// bytes, script and sheet, and took it to 6185.4 KiB (6,333,883 bytes):
-	// 6186 KiB.
-	// The audit's follow-up fixes on kit 0.128.1 (one toast per Mark all
-	// read, a board card's menu beside its badge, a rail's labelled estimate,
-	// History's single Load older, a blocker named by its edge's key, Home's
-	// figures and bar on a phone) added 981 bytes, script and sheet, and took
-	// it to 6183.9 KiB (6,332,334 bytes): 6184 KiB.
-	// Kit 0.128.2 (a setting's key behind a copy control, a sheet's subtitle in
-	// its body) and the Settings, Account, Spend, Advisor and Configuration
-	// fixes beside it (credentials and duties in words, the audit log's Where,
-	// the grid key registry, empty spend drawn empty, the diff's per-line
-	// marks) added 13,042 bytes and took it to 6195.7 KiB (6,344,395 bytes):
-	// 6196 KiB.
-	// The release train of those four (the operations fixes, the Atlas round,
-	// the Worklet follow-up and the Settings and Account fixes), merged with
-	// main's Gitlet audit fixes on kit 0.129.1, measures 6217.9 KiB
-	// (6,367,157 bytes), 29,976 bytes over the 6188.7 KiB of main it was
-	// built on: 6218 KiB.
-	// Kit 0.130.1 (a comment thread's own Edit and Delete, copyable setting
-	// keys) with Worklet's task operations (relation kinds and their removal,
-	// Merge into, a task on the reader's priorities, a remark edited and taken
-	// down on a task and on a page, a project's labels, fields, default
-	// assignee and archive, its files uploaded, replaced and removed, and
-	// every day field on the company's calendar) added 35,861 bytes, script
-	// and sheet, and took it to 6223.7 KiB (6,373,042 bytes): 6224 KiB.
-	// A Doclet page's bar without the search, recent activity read by page
-	// and a trashed page read only, an empty sheet's columns named in place,
-	// New design's own Create design, and Chatlet's switcher, phone rows,
-	// wording and toasts at the foot added 5,540 bytes and took it to
-	// 6138.1 KiB (6,285,406 bytes): 6139 KiB.
-	// Kit 0.131.0 (a reader's own remarks edited and deleted in a comment
-	// thread, a grid's short columns drawn at their content, the rail's
-	// field and rows kept wide, words kept readable in columns, trails and
-	// identifiers, and the Gitlet product mark) added 8,562 bytes, and Gitlet
-	// listed on Company › Integrations (its line, card and page) 1,572 more,
-	// script and sheet, and took it to 6227.8 KiB (6,377,291 bytes): 6228 KiB.
-	// The release train of Worklet's task operations and the Doclet,
-	// Artifacts and Chatlet polish, merged with main's Gitlet listing on kit
-	// 0.131.0, measures 6260.4 KiB (6,410,635 bytes), 33,344 bytes over the
-	// 6227.8 KiB of main it was built on: 6261 KiB.
-	// An agent's grants beside its level (the Agents tab's grants column and
-	// Add grant dialog, and the Inbox's grant of an agent's request) added
-	// 8,852 bytes, script and sheet, and took it to 6226.6 KiB (6,376,009
-	// bytes): 6227 KiB.
-	// The release train of an agent's grants (Cloudflare, then Scaleway, AWS
-	// and Google Cloud) and the settings changed in place, merged with main's
-	// audit follow-ups on kit 0.131.0, measures 6267.7 KiB (6,418,107 bytes),
-	// 11,535 bytes over the 6256.4 KiB of main it was built on: 6268 KiB.
-	// A repository's rename, archive, readers and path owners, every field of
-	// a merge gate in its form and its line, the SSH servers' add, edit,
-	// setup, test and remove, and an MCP server's timeouts in its wizard
-	// added 23,241 bytes, script and sheet, and took it to 6279.1 KiB
-	// (6,429,813 bytes): 6280 KiB.
-	// Editing work and seats in place (a chat member removed, the company's
-	// task types, a seat's per-phase models, learning, workers, placement
-	// and box, the diagnostics switches on the one setting write, and the
-	// schedule cap and audit window said from the engine) added 19,037 bytes
-	// over main's 6256.4 KiB and took it to 6275.0 KiB (6,425,609 bytes):
-	// 6276 KiB.
-	// Settings changed in place (the shared limit editor and the rows it
-	// draws on Delegated decisions, Gitlet, Worklet and Atlas, then one
-	// editor for the settings that are not numbers: Doclet's four, Gitlet's
-	// identity domain, Chatlet's message horizon and the company clock, and
-	// a person's name) take it to 6227.3 KiB (6,376,767 bytes): 6228 KiB.
-	// The release train of a repository's, an SSH server's and an MCP
-	// server's edits, work and seats edited in place, and the settings that
-	// are not numbers changed in place, merged on kit 0.131.0, measures
-	// 6313.1 KiB (6,464,594 bytes), 46,487 bytes over the 6267.7 KiB of main
-	// it was built on: 6314 KiB.
-	// A proposal's caution, step-up and expiry (kit 0.132.0) take it to
-	// 6316.2 KiB (6,467,757 bytes): 6317 KiB.
-	// Think harder and Settings › Ask Crewlet take it to 6324.8 KiB (6,476,618
-	// bytes), 11,693 over main's 6313.4 KiB: 6325 KiB.
-	// Held reasons for every reader, field errors and kit 0.133.0: 6317.9 KiB
-	// (6,469,591 bytes), 4,666 bytes over main's 6313.4 KiB: 6318 KiB.
-	// The company's sign-in policy changed in place (Settings › Sign-in
-	// policy's pencils, a duration typed as one) takes it to 6316.7 KiB
-	// (6,468,275 bytes): 6317 KiB.
-	// Delegated decisions made readable, on kit 0.134.0: 6322.5 KiB, 9,271 bytes over main: 6323 KiB.
-	// The Ask Crewlet, sign-in policy, settings and Delegated decisions train,
-	// on kit 0.134.0, measures 6342.3 KiB (6,494,479 bytes), 29,554 bytes over
-	// main's 6313.4 KiB: 6343 KiB.
-	// Saying a time inside Gitlet's sentences in words added 742 bytes and
-	// took it to 6314.1 KiB (6,465,667 bytes): 6315 KiB.
-	// Code host glyphs, colours and kit marks, on kit 0.137.0: 6350.7 KiB, 8,666 bytes over main: 6351 KiB.
-	// The Gitlet history, tips, branches, committers and file finder train, on
-	// kit 0.137.0, measures 6351.5 KiB (6,503,931 bytes), 9,452 bytes over main: 6352 KiB.
-	// The Ask Crewlet reads train, on kit 0.137.0: 6354.3 KiB (6,506,836 bytes): 6355 KiB.
-	// The Gitlet tags and times in words train, on kit 0.137.0: 6355.5 KiB (6,508,053 bytes), 1,217 over main: 6356 KiB.
-	// Every harness in the model wizard, its own chunk, and reasoning effort, on kit 0.137.0: 6370.6 KiB: 6371 KiB.
-	// The model effort and every harness train, on kit 0.137.0: 6371.8 KiB (6,524,759 bytes), 16,686 over main: 6372 KiB.
-	// Gitlet's code host colours (diffs, change states, branches), on kit 0.137.0:
-	// 6358.5 KiB (6,511,153 bytes), 3,100 bytes over main: 6359 KiB.
-	// The Gitlet code host colours train, on kit 0.137.0: 6374.8 KiB (6,527,838 bytes), 3,079 over main: 6375 KiB.
-	// Doclet's newest change read as the page reads, on kit 0.141.1: 6505.7 KiB (6,661,846 bytes), 153,793 over main,
-	// 133,990 of them the kit's coding-harness vendor marks in the icons chunk: 6506 KiB.
-	// The Settings polish, on kit 0.143.0: 6491.8 KiB (6,647,648 bytes), 119,810 over main, the
-	// kit's newer components most of it: 6492 KiB.
-	// One notice system, on kit 0.142.0: 6511.6 KiB (6,667,924 bytes), 140,086 over main, about
-	// 134 KiB of it the coding harness marks kit 0.139.0 added to the vendor mark chunk: 6512 KiB.
-	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0:
-	// 6521.2 KiB (6,677,673 bytes), 149,862 over main: 6522 KiB.
-	// Anchored comments on kit 0.139.0: 6523.1 KiB (6,679,624 bytes); its vendor marks are 130.8 KiB: 6524 KiB.
-	// The artifacts' half of a person's inbox: 6525.6 KiB (6,682,224 bytes): 6526 KiB.
-	// Gitlet's code coloured by kind in its file view and blame, on kit 0.137.0:
-	// 6410.9 KiB (6,564,755 bytes), 36,917 bytes over main: 6411 KiB.
-	// The artifact comments, their inbox, Gitlet syntax and harness marks train, on kit 0.144.0:
-	// 6595.4 KiB (6,753,705 bytes), 76,032 over main: 6596 KiB.
-	// Gitlet's diffs and search hits coloured by kind: 6598.0 KiB (6,756,345 bytes), 2,640 over main: 6598 KiB.
-	// Gitlet's commits as a timeline on one list, Gitlet split into three chunks:
-	// 6615.3 KiB (6,774,070 bytes), 17,725 over main: 6616 KiB.
-	// A comment's picture drawn as the reader sees the page, scrolled: 6618.9 KiB (6,777,740 bytes),
-	// 3,670 over main: 6619 KiB.
-	// Gitlet's commits with their checks, landing change and tags, filtered by seat and time:
-	// 6631.3 KiB (6,790,461 bytes), 12,721 over main: 6632 KiB.
-	// A comment's draft beside its pin, its picture fitted in a well, on kit 0.146.0: 6633.1 KiB
-	// (6,792,312 bytes), 1,851 over main: 6634 KiB.
-	// A repository's branches and tags as tables, on kit 0.146.0: 6652.0 KiB (6,811,622 bytes), 19,310 over main: 6652 KiB.
-	// Codex's, Muse Code's and Kimi Code's vendor marks, on kit 0.147.0: 6643.3 KiB
-	// (6,802,790 bytes), 10,478 over main: 6644 KiB.
-	// The model alias versions and harness marks train, on kit 0.147.0: 6662.4 KiB
-	// (6,822,314 bytes), 10,692 over main: 6663 KiB.
-	// Chat receipts as marks, records coloured by kind and the coding harness marks, on kit
-	// 0.149.0: 6651.8 KiB, about 18.7 KiB over main: 6652 KiB.
-	// Artifact links drawn as artifact references, Show latest and the comment pin, on kit 0.148.0:
-	// 6650.0 KiB (6,809,588 bytes), 17,276 over main: 6651 KiB.
-	// Setting editors and SettingsTable on DataGrid's anatomy, on kit 0.150.0: 6661.5 KiB (6,821,388 bytes),
-	// 29,076 over main, the kit's editors in the settings editors' chunk and kit 0.147.0 to 0.150.0: 6662 KiB.
-	// A Gitlet repository's home as a code host, on kit 0.147.0: 6676.2 KiB
-	// (6,836,450 bytes), 14,136 over main: 6677 KiB.
-	// The setting editors, artifact references, chat receipts and Gitlet repository home train,
-	// on kit 0.150.1: 6700.2 KiB (6,861,017 bytes), 38,703 over main: 6701 KiB.
-	// Configuration warnings as one quiet line with compact rows, on kit 0.151.0: 6706.0 KiB
-	// (6,866,978 bytes), 5,961 over main: 6707 KiB.
-	// A branch and tag picker in a panel and a repository's Code menu: 6711.5 KiB (6,872,599 bytes),
-	// 11,582 over main: 6712 KiB.
-	// A repository's rail: its open changes, pushers, push spark, mirror and newest tag, on kit
-	// 0.150.1: 6728.1 KiB (6,889,605 bytes), 17,006 over the picker's: 6729 KiB.
-	// The quiet configuration warnings, inline delivery receipt, Code menu and repository rail
-	// train, on kit 0.151.0: 6734.2 KiB (6,895,802 bytes), 34,785 over main: 6735 KiB.
-	// Gitlet's repositories as rows with their changes, checks and pushes by day: 6740.8 KiB
-	// (6,902,550 bytes), 6,748 over the train's: 6741 KiB.
-	// A file beside its repository's tree, with raw, download, copy and line actions: 6755.8 KiB
-	// (6,917,984 bytes), 22,182 over main: 6756 KiB.
-	// The Gitlet repository rows and file beside its tree train, on kit 0.151.0: 6762.4 KiB
-	// (6,924,733 bytes), 28,931 over main: 6763 KiB.
-	// Gitlet's changes as code-host rows wherever they are listed, with their cards, state totals
-	// and sort: 6780.7 KiB (6,943,394 bytes), 18,661 over main: 6781 KiB.
-	// A change's conversation as a timeline with finding excerpts: 6801.9 KiB (6,965,137 bytes),
-	// 21,743 over main: 6802 KiB.
-	treeBudget = 5<<20 + 1865<<10
+	// treeBudget is the whole of static/dashboard, raw, which every engine
+	// binary and image carries whether or not anybody opens the page. It began
+	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
+	// baseline is still refused; screens fetched only when opened (the rich
+	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
+	// kit releases account for its growth, and the last measure was 7025.6 KiB.
+	// A raise names the measured size and its cause in its commit.
+	treeBudget = 5<<20 + 1906<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
@@ -2727,14 +1068,11 @@ const (
 // TestTheShellLoadsFromTheBinary makes, partitioned by initialLoad into what a
 // reader waits for before the first paint and what a screen fetches later.
 //
-// It exists because the cost of a bundle is paid by every reader on every cold
-// load, and nothing else in the build notices it growing. The split that made
-// each workspace its own chunk is undone by ONE static import of a screen's
-// module from the frame — the bundler follows it and pulls the whole workspace
-// back into the entry with every test still green — and a design-system bump
-// that doubled its sheet or added a face would ride in the same way. A failure
-// lists the files by size, largest first, because the fix is almost always in
-// the biggest one.
+// Nothing else notices a bundle growing. ONE static import of a screen's
+// module from the frame pulls the whole workspace back into the entry with
+// every other test green, and a design-system bump that doubled its sheet or
+// added a face rides in the same way. A failure lists the files by size,
+// largest first, because the fix is almost always in the biggest one.
 func TestTheDashboardFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	c := embeddedDashboard.crawl
@@ -2859,13 +1197,9 @@ func TestGitletIsThreeChunks(t *testing.T) {
 // TestTheDesignReferenceQuotesTheBudgets holds the design reference's budget
 // table (docs/reference/dashboard-design.md, "The bundle has a budget") to the
 // four constants above: a row for each and none other, each quoting its
-// constant in the unit the row is written in.
-//
-// The page is where a reader sizing a deployment's first paint learns the
-// budget, and it drifted while nothing read it: the initial load stayed at
-// 316 KiB through four moves of its constant, to 324, and the tree at 4 MiB
-// after its constant moved to 4.25. A move of a constant now carries the page
-// with it, as the history beside each constant already asks.
+// constant in the unit the row is written in. The page is where a reader
+// sizing a deployment's first paint learns the budget, and it drifts unless
+// something reads it.
 //
 // Mutation: move initialBudget and leave the page, and its row quotes the old
 // value; drop a row, and the table has three.

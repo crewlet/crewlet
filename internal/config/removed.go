@@ -8,18 +8,11 @@ import "strings"
 //
 // # A removed key is not a typo, and is not reported as one
 //
-// Both tiers decode with unknown keys refused, which is right: a misspelled
-// setting that decoded to nothing is how a deployment runs on half its
-// configuration. But the generic refusal tells somebody upgrading a file
-// that once carried one of these keys to check its spelling, and no
-// spelling of them works. Each entry here names the key, says it was
-// removed, and says what replaces it.
-//
-// ONLY THE KEYS THE IDENTITY AND ACCESS REWRITE, PER-SEAT ACCESS AND THE
-// COMPANY'S SIGN-IN POLICY (ADR-0152) REMOVED.
-// Every one of them changes who can reach the deployment, or what an agent may
-// do at a vendor, so the file that still carries one is the file whose author
-// most needs to read what changed.
+// The generic unknown-key refusal sends an upgrader to check spelling, and no
+// spelling of these works, so each entry says the key was removed and what
+// replaces it. Only keys removed by the identity and access rewrite (ADR-0152)
+// are here: each changes who reaches the deployment or what an agent may do at
+// a vendor, so its file's author most needs to read what changed.
 var removedKeys = map[string]string{
 	"APIAuth.allow_anonymous_read": "`api.auth.allow_anonymous_read` was " +
 		"removed. Remove it; every request now needs a credential. For a " +

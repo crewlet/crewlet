@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
-	"net"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +11,7 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
@@ -60,13 +60,7 @@ func TestNoSentenceNamingAServerCarriesTheCredentialItsURLHolds(t *testing.T) {
 
 	t.Run("a dial that fails", func(t *testing.T) {
 		t.Parallel()
-		// A port nothing listens on: bound, read and released.
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("find a free port: %v", err)
-		}
-		host := l.Addr().String()
-		_ = l.Close()
+		host := httpxtest.Refusing(t)
 		for _, tc := range []struct{ name, secret, userinfo string }{
 			{"a token", token, token + "@"},
 			{"a user and a password", password, user + ":" + password + "@"},

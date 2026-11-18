@@ -15,6 +15,20 @@
 // [sandbox.CoordStore]. The record operations it is built on are certified on
 // both coordination backends by coordtest, and this suite certifies every
 // conditional flip built on top of them.
+//
+// # A later build's keys
+//
+// The pending-run record is rewritten whole by every node that touches it, so
+// a field a newer build adds to the notes section, to one note, to where a
+// note was read, to a hook's serve of a note, to the call that serve answered
+// or to the job's own record is gone the moment this build writes the record
+// back, unless every level that can grow keeps what it does not know. The log
+// beside the record ([sandbox.BridgeLog]) is rewritten whole by every append,
+// so the same holds at its top, in each bridged call it keeps and in each
+// identity of a call it dropped: nine levels in all. One loss is meant: a
+// relaunch's reset replaces the job's record whole, so the key a later build
+// added to it goes with the job it was about. Every level is held by
+// testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite (notes.go).
 package sandboxtest
 
 import (
@@ -72,9 +86,11 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARelaunchsBoxMovesTheRowToItsCell", testARelaunchsBoxMovesTheRowToItsCell},
 		{"EveryLaunchRecordsTheNodeThatLaunchedIt", testEveryLaunchRecordsTheNodeThatLaunchedIt},
 		{"ALossIsRecordedOnlyOnTheJobItWasJudgedOn", testALossIsRecordedOnlyOnTheJobItWasJudgedOn},
+		{"AClaimsCollectionRecordsItsJobLostOnItsClaimAlone", testAClaimsCollectionRecordsItsJobLostOnItsClaimAlone},
 		{"ARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn", testARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn},
 		{"AHeldReleaseHoldsTheResumeUntilItsConditionLifts", testAHeldReleaseHoldsTheResumeUntilItsConditionLifts},
 		{"AHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts", testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts},
+		{"AHeldReleaseOwesItsCompletionOnTheJobsRecord", testAHeldReleaseOwesItsCompletionOnTheJobsRecord},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
@@ -83,10 +99,15 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AJobItsCapEndedIsRecordedOnceForItsOwnJob", testAJobItsCapEndedIsRecordedOnceForItsOwnJob},
 		{"AJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands", testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands},
 		{"AJobsHarnessEndRidesEveryWriteOfItsRecord", testAJobsHarnessEndRidesEveryWriteOfItsRecord},
+		{"AReleaseRecordsTheHarnessEndByTheRecordsRule", testAReleaseRecordsTheHarnessEndByTheRecordsRule},
 		{"AJobsMeasureIsItsOwnOrCarriedAlongItsCopy", testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy},
 		{"AMeasureLandsWhereTheEndIsAlreadyRecorded", testAMeasureLandsWhereTheEndIsAlreadyRecorded},
 		{"AJobsCountIsItsOwnReadsAndNeverCarried", testAJobsCountIsItsOwnReadsAndNeverCarried},
 		{"ACountLandsWhereTheEndIsAlreadyRecorded", testACountLandsWhereTheEndIsAlreadyRecorded},
+		{"TheNextRequestIsNeverCarried", testTheNextRequestIsNeverCarried},
+		{"AHarnessEndWritesTheNextRequest", testAHarnessEndWritesTheNextRequest},
+		{"AHarnessEndWritesTheCountsProvider", testAHarnessEndWritesTheCountsProvider},
+		{"TheCopysWriterIsHandedToTheRelaunchAndNeverCarried", testTheCopysWriterIsHandedToTheRelaunchAndNeverCarried},
 		{"ALaunchRecordsWhatTheBriefItHandedLeftOut", testALaunchRecordsWhatTheBriefItHandedLeftOut},
 		{"TheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch", testTheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch},
 		{"AResumedTurnsCarryIsItsClaimsOwn", testAResumedTurnsCarryIsItsClaimsOwn},
@@ -129,6 +150,10 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AReleaseOfAMissingRunIsNotAnError", testAReleaseOfAMissingRunIsNotAnError},
 		{"AReleaseRecordsTheClaimsCharge", testAReleaseRecordsTheClaimsCharge},
 		{"AReleaseCountsAFailedCollectionOntoTheJob", testAReleaseCountsAFailedCollectionOntoTheJob},
+		{"AReleaseWhoseReadAnsweredEndsTheRunOfFailures", testAReleaseWhoseReadAnsweredEndsTheRunOfFailures},
+		{"AReleaseRecordsWhatTheHostsStoreLastSaid", testAReleaseRecordsWhatTheHostsStoreLastSaid},
+		{"AnOwedRefusalIsRecordedOnceAndSettledByThePark", testAnOwedRefusalIsRecordedOnceAndSettledByThePark},
+		{"AnOwedRefusalIsRecordedOnAClaimOfItsCompletion", testAnOwedRefusalIsRecordedOnAClaimOfItsCompletion},
 		{"AReleaseNeverClearsAChargeRecord", testAReleaseNeverClearsAChargeRecord},
 		{"ARefusedReleaseRecordsNoCharge", testARefusedReleaseRecordsNoCharge},
 		{"OnlyALaunchClearsAChargeRecord", testOnlyALaunchClearsAChargeRecord},
@@ -201,8 +226,11 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, refusalCases...)
 	cases = append(cases, standbyCases...)
 	cases = append(cases, lateCases...)
+	cases = append(cases, lateItemCases...)
+	cases = append(cases, tellingCases...)
 	cases = append(cases, briefReadCases...)
 	cases = append(cases, inFlightCases...)
+	cases = append(cases, savingCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -222,6 +250,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	}
 	raw = append(raw, noteRawCases...)
 	raw = append(raw, bytesRawCases...)
+	raw = append(raw, savingRawCases...)
 	for _, tc := range raw {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -229,7 +258,16 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 			tc.fn(t, store, runs)
 		})
 	}
-	for _, tc := range slices.Concat(stagedLogCases, lateStagedCases) {
+	// TWO NODES' STORES OVER ONE BACKEND, for the cases whose subject is what
+	// one node's write leaves the other.
+	for _, tc := range savingFleetCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, runs := newStore(t)
+			tc.fn(t, store, over(runs))
+		})
+	}
+	for _, tc := range slices.Concat(stagedLogCases, lateStagedCases, lateItemStagedCases) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, runs := newStore(t)
@@ -241,8 +279,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, runs := newStore(t)
-			vanishing := &vanishingRuns{records: runs}
-			tc.fn(t, vanishing, over(vanishing))
+			overtaking := &overtakingRuns{records: runs}
+			tc.fn(t, overtaking, over(overtaking))
 		})
 	}
 }
@@ -572,21 +610,45 @@ func testAJobsHarnessEndRidesEveryWriteOfItsRecord(t *testing.T, s sandbox.Pendi
 	}
 }
 
+// A RELEASE RECORDS HOW THE JOB'S HARNESS ENDED BY THE RECORD'S OWN RULE, in the
+// write that returns the row to running ([sandbox.Release.HarnessEnd]): an end
+// over nothing is recorded, a cut-off end over an own run too, and an own run
+// over a recorded cut-off leaves the cut-off standing.
+//
+// Mutation: write the release's end over the record's whenever it carries one,
+// and the cut-off is lost.
+func testAReleaseRecordsTheHarnessEndByTheRecordsRule(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-released-end"
+	mustLaunched(t, s, run(turn))
+	for _, step := range []struct{ carries, want sandbox.HarnessEnd }{
+		{sandbox.HarnessEndOwnRun, sandbox.HarnessEndOwnRun},
+		{sandbox.HarnessEndCutOff, sandbox.HarnessEndCutOff},
+		{sandbox.HarnessEndOwnRun, sandbox.HarnessEndCutOff},
+	} {
+		release := releaseOf(mustClaim(t, s, turn))
+		release.HarnessEnd = step.carries
+		if released, err := s.ReleaseClaim(ctx, turn, release); err != nil || !released {
+			t.Fatalf("a release carrying %q = %v, %v", step.carries, released, err)
+		}
+		if got := mustGet(t, s, turn).Launch.HarnessEnd; got != step.want {
+			t.Fatalf("a release carrying %q left the record saying %q, want %q", step.carries, got, step.want)
+		}
+	}
+}
+
 // A JOB'S MEASURE IS ITS OWN, OR CARRIED ALONG ITS COPY. The read that collects a
 // job records what the newest request of the session its box ran carried, beside
 // how its harness ended, by the copy's lineage: a request the job's own run
-// made is the job's own measure, of that job; an earlier request of the session
-// it took up is the measure the record carried where its figure is the same and
-// the box did not say it started a session of its own, and else the session's,
-// whose job is not known; none keeps what the record
-// carried, the measure of the session its launch handed its run, unless its box
-// said it started a session of its own, whose figure the carried one never was.
-// And every write of the job's record after it writes it back as it read it,
-// under its own key, until the next launch's record, which starts with none.
+// made is that job's own measure; an earlier request of the session it took up
+// is the measure the record carried where its figure is the same and the box did
+// not say it started a session of its own, else the session's, whose job is not
+// known; none keeps what the record carried, unless its box said it started a
+// session of its own, whose figure the carried one never was. Every later write
+// of the job's record writes it back as read, until the next launch's record.
 //
 // Mutation: invert any of the four, record a carried figure as the job's own
-// request, or rebuild the job's record in a write that is not a relaunch's, and
-// a check goes red.
+// request, or rebuild the record in a write that is not a relaunch's.
 func testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy(t *testing.T, s sandbox.PendingStore) {
 	carried := &sandbox.SessionMeasure{Tokens: 61000, Source: sandbox.MeasureCapture, Launch: "job-earlier"}
 	// launched opens turn's job, its attach naming its command and the measure
@@ -688,21 +750,16 @@ func testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy(t *testing.T, s sandbox.Pendi
 }
 
 // A JOB'S COUNT IS ITS OWN READS', AND NEVER CARRIED. The read that collects a job
-// records what Claude Code counts the copy its box holds at beside how its harness
-// ended: the read's count wherever it made one, a mark among them, so a later
-// read that could not bound the copy replaces an earlier bound; the record's own
-// where a read made none; a mark longer than a record carries written as
-// unread; and a restart longer than a uuid's written as none read and the count
-// as unread whatever its mark, as the read of a thread whose newest restart's
-// uuid does not read writes it, so a record never keeps a mark that leaves the
-// identity known beside no identity. Every write of the job's record after it
-// keeps it, and the next launch's record starts with none: a count is the read
-// of this job's copy, never a lineage's.
-//
-// Mutation: carry the count through the relaunch's reset, write a mark or a
-// restart past its bound whole, keep a marked count's mark beside the restart
-// its bound drops, or keep an earlier bound over a later mark, and a check goes
-// red.
+// records what its harness counts the copy its box holds at beside how its
+// harness ended: the read's count wherever it made one, a mark among them, so a
+// later read that could not bound the copy replaces an earlier bound; the
+// record's own where a read made none; a mark longer than a record carries
+// written as unread; a restart longer than a uuid's written as none read and the
+// count as unread, so a record never keeps a mark beside no identity. Every
+// later write of the record keeps it, and the next launch's starts with none: a
+// count is the read of this job's copy, never a lineage's. Mutation: carry the
+// count through the reset, write a mark or restart past its bound whole, keep a
+// mark beside a dropped restart, or keep an earlier bound over a later mark.
 func testAJobsCountIsItsOwnReadsAndNeverCarried(t *testing.T, s sandbox.PendingStore) {
 	const turn = "t-count-own"
 	launch := mustLaunched(t, s, run(turn))
@@ -777,6 +834,150 @@ func testACountLandsWhereTheEndIsAlreadyRecorded(t *testing.T, s sandbox.Pending
 	}
 }
 
+// THE NEXT REQUEST IS NEVER CARRIED. The read that collects a job records what
+// the harness estimates the next request of the copy its box holds at beside
+// how its harness ended: the read's wherever it made one, and the record's own
+// where a read made none, since the copy of a job that is over does not change.
+// Every write of the job's record after it keeps it, and the next launch's
+// record starts with none: an estimate is the read of this job's copy, never a
+// lineage's, since a job that made no request of its own may have grown the
+// copy it took up by its brief.
+//
+// Mutation: carry the estimate through the relaunch's reset, and this goes red.
+func testTheNextRequestIsNeverCarried(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-next-own"
+	launch := mustLaunched(t, s, run(turn))
+	claimed := mustClaim(t, s, turn)
+	estimate := sandbox.NextRequest{Tokens: 42_000, OlderTokens: 31_500}
+	mark := func(read sandbox.NextRequest) {
+		t.Helper()
+		if _, err := s.MarkHarnessEnd(t.Context(), turn, launch, sandbox.EndRead{End: sandbox.HarnessEndOwnRun,
+			Next: read}); err != nil {
+			t.Fatalf("MarkHarnessEnd: %v", err)
+		}
+	}
+	check := func(step string, want sandbox.NextRequest) {
+		t.Helper()
+		if got := mustGet(t, s, turn).Launch.NextRequest(); got != want {
+			t.Errorf("after %s the job's record holds the next request %+v, want %+v", step, got, want)
+		}
+	}
+	mark(estimate)
+	check("the read that collected the job", estimate)
+	mark(sandbox.NextRequest{})
+	check("a read that made none", estimate)
+	mustRelease(t, s, claimed)
+	check("the release of its claim", estimate)
+	if err := s.SetStatus(t.Context(), turn, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	check("a status write", estimate)
+	park(t, s, turn)
+	check("a park", estimate)
+	mustBeginLaunch(t, s, run(turn))
+	check("the next launch's begin", sandbox.NextRequest{})
+}
+
+// A HARNESS END WRITES THE NEXT REQUEST. The read that collects a job records its
+// harness's end, its newest request's measure, its count and its estimate of the
+// next request in one write, which lands where any changes: a collection made
+// again, whose end the first read recorded already, brings an estimate the
+// first had none of, or another. The same read again changes nothing.
+//
+// Mutation: leave the estimate out of the write's test of a change, and this
+// goes red.
+func testAHarnessEndWritesTheNextRequest(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-next-after-end"
+	launch := mustLaunched(t, s, run(turn))
+	mustClaim(t, s, turn)
+	if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, sandbox.EndRead{End: sandbox.HarnessEndCutOff}); err != nil ||
+		!ok {
+		t.Fatalf("the first read's record = %v, %v", ok, err)
+	}
+	for _, estimate := range []sandbox.NextRequest{{Tokens: 42_000, OlderTokens: 31_500}, {Tokens: 43_000}} {
+		read := sandbox.EndRead{End: sandbox.HarnessEndCutOff, Next: estimate}
+		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || !ok {
+			t.Fatalf("a read bringing the estimate %+v beside the end recorded = %v, %v, want it written",
+				estimate, ok, err)
+		}
+		if got := mustGet(t, s, turn).Launch.NextRequest(); got != estimate {
+			t.Errorf("the job's record holds the next request %+v, want %+v", got, estimate)
+		}
+		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || ok {
+			t.Errorf("the same read again = %v, %v, want nothing written", ok, err)
+		}
+	}
+}
+
+// A HARNESS END WRITES THE COUNT'S PROVIDER AND WRITER: a read that brings an
+// OpenCode count whose figure is already on the job's record, anchored on
+// another provider's reply or read off a copy another release wrote, is a
+// change to record beside the end, since a figure is the report of the provider
+// and the release beside it; and the same read again writes nothing.
+//
+// Mutation: leave the provider or the writer out of the write's test of a
+// change, and this goes red.
+func testAHarnessEndWritesTheCountsProvider(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-provider-after-end"
+	launch := mustLaunched(t, s, run(turn))
+	mustClaim(t, s, turn)
+	count := &sandbox.ResumedCount{Tokens: 42_000, Restart: new("msg_c")}
+	for _, said := range []struct{ provider, release string }{{"stub", "2.3.0"}, {"openrouter", "2.3.0"},
+		{"openrouter", "2.2.7"}} {
+		read := sandbox.EndRead{End: sandbox.HarnessEndOwnRun, Count: count, CountProvider: said.provider,
+			CountRelease: said.release}
+		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || !ok {
+			t.Fatalf("a read bringing %+v beside the count recorded = %v, %v, want it written", said, ok, err)
+		}
+		if got := mustGet(t, s, turn).Launch; got.CountProvider != said.provider ||
+			got.CountRelease != said.release {
+			t.Errorf("the job's record names the provider %q written by %q, want %+v", got.CountProvider,
+				got.CountRelease, said)
+		}
+		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || ok {
+			t.Errorf("the same read again = %v, %v, want nothing written", ok, err)
+		}
+	}
+}
+
+// THE COPY'S WRITER IS HANDED TO THE RELAUNCH AND NEVER CARRIED. The release
+// the read that collected a job names beside its count is kept by a later read
+// that brings no count, and the relaunch that replaces the job's record is
+// handed it as the writer of the copy the box holds, in the write that replaces
+// the record, whose own record names none: the next job's copy is its own run's.
+//
+// Mutation: hand the relaunch no writer, or carry it onto the new record, and
+// this goes red.
+func testTheCopysWriterIsHandedToTheRelaunchAndNeverCarried(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-writer-handed"
+	launch := mustLaunched(t, s, run(turn))
+	claimed := mustClaim(t, s, turn)
+	count := &sandbox.ResumedCount{Tokens: 42_000, Restart: new("msg_c")}
+	for _, read := range []sandbox.EndRead{
+		{End: sandbox.HarnessEndOwnRun, Count: count, CountProvider: "stub", CountRelease: "2.3.0"},
+		{End: sandbox.HarnessEndOwnRun},
+	} {
+		if _, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil {
+			t.Fatalf("MarkHarnessEnd: %v", err)
+		}
+		if got := mustGet(t, s, turn).Launch.CountRelease; got != "2.3.0" {
+			t.Errorf("after a read bringing %+v the job's record names the writer %q, want 2.3.0", read, got)
+		}
+	}
+	mustRelease(t, s, claimed)
+	park(t, s, turn)
+	opened, err := s.BeginLaunch(t.Context(), run(turn), sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	if opened.Prior.Writer != "2.3.0" {
+		t.Errorf("the relaunch was handed the writer %q, want 2.3.0", opened.Prior.Writer)
+	}
+	if got := mustGet(t, s, turn).Launch.CountRelease; got != "" {
+		t.Errorf("the relaunch's own record names the writer %q, want none", got)
+	}
+}
+
 // sameCount reports whether a and b say the same of a session's count, a nil one
 // none at all.
 func sameCount(a, b *sandbox.ResumedCount) bool {
@@ -831,18 +1032,15 @@ func testAMeasureLandsWhereTheEndIsAlreadyRecorded(t *testing.T, s sandbox.Pendi
 }
 
 // A LAUNCH RECORDS WHAT THE BRIEF IT HANDED LEFT OUT, AND EVERY WRITE OF THE
-// JOB'S RECORD KEEPS IT. The reads of the round the brief a job's run read
-// counted without listing them, and those of the fresh brief its box falls back
-// to beside a brief that continues a session, are written with the brief by the
-// attach that names the job's command (never by the attach before the job,
-// which names none and unsays nothing), and every write of the record after it
-// writes them back as it read them, under their own keys: a status, a lease, a
-// park, a bridged call, a claim and its release, each of which comes before the
-// relaunch that reads them. Only the next launch, which replaces the job's
-// record whole, says none again.
+// JOB'S RECORD KEEPS IT. The reads of the round its brief counted without
+// listing them, and those of the fresh brief its box falls back to, each with
+// the late calls it left out apart ([sandbox.BriefTold.LateOmitted]), are
+// written by the attach that names the job's command (never the one before
+// it), and every later write of the record writes them back unchanged under
+// their own keys. Only the next launch, replacing the record whole, says none.
 //
-// Mutation: drop either set from the attach, record them on the attach before
-// the job, or leave them off the wire, and a check goes red.
+// Mutation: drop any set from the attach, record them before the job, or leave
+// them off the wire, and a check goes red.
 func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	const turn = "t-omitted"
@@ -856,8 +1054,8 @@ func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.Pendi
 			got.BriefOmitted, got.FreshOmitted)
 	}
 	if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-omitted", CommandID: "cmd-omitted",
-		Brief: sandbox.BriefContinued, BriefOmitted: []int{13, 14}, FreshOmitted: []int{15}},
-		sandbox.Fence{}); err != nil {
+		Brief: sandbox.BriefContinued, BriefOmitted: []int{13, 14}, FreshOmitted: []int{15},
+		BriefLateOmitted: []int{3}, FreshLateOmitted: []int{4}}, sandbox.Fence{}); err != nil {
 		t.Fatalf("the attach that names the job's command: %v", err)
 	}
 	check := func(step string) {
@@ -866,6 +1064,10 @@ func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.Pendi
 		if !slices.Equal(got.BriefOmitted, []int{13, 14}) || !slices.Equal(got.FreshOmitted, []int{15}) {
 			t.Errorf("after %s the job's record says its briefs left out %v and %v, want [13 14] and [15]",
 				step, got.BriefOmitted, got.FreshOmitted)
+		}
+		if !slices.Equal(got.BriefLateOmitted, []int{3}) || !slices.Equal(got.FreshLateOmitted, []int{4}) {
+			t.Errorf("after %s the job's record says its briefs left out late calls %v and %v, want [3] and [4]",
+				step, got.BriefLateOmitted, got.FreshLateOmitted)
 		}
 	}
 	check("the attach that names the job's command")
@@ -894,27 +1096,24 @@ func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.Pendi
 	park(t, s, turn)
 	check("a park on a question")
 	mustBeginLaunch(t, s, run(turn))
-	if got := mustGet(t, s, turn).Launch; len(got.BriefOmitted)+len(got.FreshOmitted) != 0 {
-		t.Errorf("the next launch's job reads %v and %v left out, the job before's, want none", got.BriefOmitted,
-			got.FreshOmitted)
+	if got := mustGet(t, s, turn).Launch; len(got.BriefOmitted)+len(got.FreshOmitted)+
+		len(got.BriefLateOmitted)+len(got.FreshLateOmitted) != 0 {
+		t.Errorf("the next launch's job reads %v, %v, %v and %v left out, the job before's, want none",
+			got.BriefOmitted, got.FreshOmitted, got.BriefLateOmitted, got.FreshLateOmitted)
 	}
 }
 
 // THE TURN'S LEADS ARE KEPT BESIDE ITS ROW AND OUTLIVE EVERY RELAUNCH. What
 // carried each session of the turn on is kept beside the run's record, in a
 // part of its own (sandbox.PendingStore.Leads): the attach that names a job's
-// command takes the leads its brief opened with of its own into it, each once,
+// command takes into it the leads its brief opened with of its own, each once,
 // numbered as taken, held to their share with the oldest dropped first and
 // still counted, and marks on the job's record, by those numbers, every lead
 // its brief told (sandbox.LaunchRecord.LeadMarks). The record keeps the marks
-// and the count of the leads taken, never a lead's bytes. The reset that opens
-// the next job clears the job's marks with the rest of its record and leaves
-// the leads as they are, the very bytes and every key a later build added to
-// one, and the count with them, whatever the reset's run carries.
-//
-// Mutation: clear the part at a reset or keep the job before's marks there,
-// write a lead back without its carried keys, lose the cut, put a lead's bytes
-// on the record, or let a reset drop the count, and a check goes red.
+// and the count, never a lead's bytes. The reset opening the next job clears
+// the marks and leaves the leads and their count as they are, every key a later
+// build added included. Mutation: clear the part at a reset, keep the job
+// before's marks, write a lead back without its carried keys, lose the cut.
 func testTheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	const turn = "t-leads"
@@ -1189,19 +1388,17 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 	// IN A BUBBLE, so the store's clock is the case's: the box is dated the
 	// instant it is attached, and the relaunch comes a second later.
 	synctest.Test(t, func(t *testing.T) {
-		// A second launch in one turn presents the same turn id, and
-		// the box on that row is the paused checkout it may reattach to. A
-		// launch that erased it would re-clone the work instead — and one that
-		// did not tell the launch which box it was would leave the launch no
-		// way to reclaim it when the next job runs elsewhere.
+		// A second launch in one turn presents the same turn id, and the box
+		// on that row is the paused checkout it may reattach to. A launch
+		// that erased it would re-clone the work, and one that did not name
+		// the box could not reclaim it when the next job runs elsewhere.
 		//
-		// AND WHOSE HOST IT IS ON, with it: a box in a local cell is a process
-		// tree on the host of the node that launched the job it was made for, so
-		// the relaunch may continue in it only there — and until this launch
-		// attaches a box of its own, the row's box is still that one, reclaimed by
-		// that host. What was the previous JOB's and not its box's — its command,
-		// its session — is not the relaunch's: a reader that found it would read
-		// the finished job back as this one.
+		// AND WHOSE HOST IT IS ON, with it: a box in a local cell is a
+		// process tree on the launching node's host, so the relaunch may
+		// continue in it only there, and until this launch attaches a box of
+		// its own the row's box is still that one. What was the previous
+		// JOB's and not its box's (command, session) is not the relaunch's:
+		// a reader finding it would read the finished job back as this one.
 		first := run("t1")
 		first.Placement, first.LaunchNode = "direct", "node-a"
 		mustLaunched(t, s, first)
@@ -1389,6 +1586,88 @@ func testALossIsRecordedOnlyOnTheJobItWasJudgedOn(t *testing.T, s sandbox.Pendin
 	}
 	// Nor does a run with no record.
 	if marked, err := s.MarkLost(ctx, "t-none", "l", lost); err != nil || marked {
+		t.Errorf("a verdict on no run: marked=%v err=%v; want refused", marked, err)
+	}
+}
+
+// A CLAIM'S COLLECTION RECORDS ITS JOB LOST ON ITS CLAIM ALONE. The collection
+// of a job whose box only its node's host can read, from a host that has not
+// been able to read the run's row for the box timeout, records the job lost
+// with that host on the claim it holds, and that claim carries the job's round
+// on: the relaunch that does counts the loss. A job still running is the
+// waiter's to judge, and a verdict on another job, another node's box, or a
+// claim under a lease since outranked is one about a claim no collection
+// holds, which would have a round carried on that nothing found lost. Recorded
+// once, it stands at its first instant and cause.
+func testAClaimsCollectionRecordsItsJobLostOnItsClaimAlone(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := run("t-claim-lost")
+	first.LaunchNode = "node-a"
+	launch := mustLaunched(t, s, first)
+	at := base.Add(time.Hour)
+	lost := sandbox.JobLoss{Cause: sandbox.LossLaunchNodeStoreSilent, Node: "node-a", At: at}
+	holder := sandbox.Fence{Owner: "node-b:1", Epoch: 3}
+	if _, err := s.ClaimOwnership(ctx, "t-claim-lost", holder.Owner, holder.Epoch); err != nil {
+		t.Fatalf("own: %v", err)
+	}
+
+	// RUNNING, the job is the waiter's to judge.
+	if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", launch, lost, holder); err != nil || marked {
+		t.Fatalf("a verdict on a running job: marked=%v err=%v; want refused", marked, err)
+	}
+	mustClaim(t, s, "t-claim-lost")
+	for _, refused := range []struct {
+		name, launch, node string
+		fence              sandbox.Fence
+	}{
+		{"another job", "not-" + launch, "node-a", holder},
+		{"another node", launch, "node-b", holder},
+		{"no job", "", "node-a", holder},
+		{"a lease the claim's outranks", launch, "node-a", sandbox.Fence{Owner: "node-c:1", Epoch: 2}},
+	} {
+		loss := lost
+		loss.Node = refused.node
+		if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", refused.launch, loss, refused.fence); err != nil ||
+			marked {
+			t.Errorf("a verdict on %s: marked=%v err=%v; want refused", refused.name, marked, err)
+		}
+	}
+	if got := mustGet(t, s, "t-claim-lost"); got.Lost != nil {
+		t.Fatalf("a refused verdict landed: %+v", *got.Lost)
+	}
+
+	if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", launch, lost, holder); err != nil || !marked {
+		t.Fatalf("the verdict on the claim's own job: marked=%v err=%v", marked, err)
+	}
+	got := mustGet(t, s, "t-claim-lost")
+	if got.Status != sandbox.StatusResumed || got.Lost == nil || !got.Lost.At.Equal(at) ||
+		got.Lost.Cause != sandbox.LossLaunchNodeStoreSilent || got.Lost.Node != "node-a" {
+		t.Fatalf("the row is %s and records %+v; want the claim kept with the verdict %+v on it",
+			got.Status, got.Lost, lost)
+	}
+	// It STANDS: asked again, the row still carries the first.
+	again := sandbox.JobLoss{Cause: sandbox.LossBoxGone, Node: "node-a", At: at.Add(time.Minute)}
+	if marked, err := s.MarkClaimLost(ctx, "t-claim-lost", launch, again, holder); err != nil || !marked {
+		t.Errorf("a second verdict on the same claim: marked=%v err=%v; want the verdict standing", marked, err)
+	}
+	if got := mustGet(t, s, "t-claim-lost"); got.Lost == nil || !got.Lost.At.Equal(at) ||
+		got.Lost.Cause != sandbox.LossLaunchNodeStoreSilent {
+		t.Errorf("a second verdict moved the first to %+v", got.Lost)
+	}
+
+	// THE RELAUNCH THAT CARRIES THE ROUND ON counts the loss, and its job is
+	// one nothing has judged.
+	next := run("t-claim-lost")
+	next.LaunchNode = "node-b"
+	next.Continues = true
+	mustBeginLaunch(t, s, next)
+	if got := mustGet(t, s, "t-claim-lost"); got.Lost != nil || got.RoundLosses != 1 {
+		t.Errorf("the relaunch left the verdict %+v and counts %d losses; want it cleared and counted once",
+			got.Lost, got.RoundLosses)
+	}
+
+	// Nor does a run with no record.
+	if marked, err := s.MarkClaimLost(ctx, "t-none", "l", lost, holder); err != nil || marked {
 		t.Errorf("a verdict on no run: marked=%v err=%v; want refused", marked, err)
 	}
 }
@@ -1986,6 +2265,10 @@ func testADecidedRunTakesNoOtherWrite(t *testing.T, s sandbox.PendingStore) {
 			return ok, err
 		},
 		"ExpirePause": func() (bool, error) { return s.ExpirePause(ctx, "t1") },
+		"MarkClaimLost": func() (bool, error) {
+			return s.MarkClaimLost(ctx, "t1", launch,
+				sandbox.JobLoss{Cause: sandbox.LossLaunchNodeStoreSilent, At: base}, sandbox.Fence{})
+		},
 	}
 	for name, write := range refusedQuietly {
 		if ok, err := write(); err != nil || ok {
@@ -2572,6 +2855,70 @@ func testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts(t *testing.T, s sand
 	mustClaim(t, s, "t1")
 }
 
+// A HELD RELEASE OWES ITS COMPLETION ON THE JOB'S RECORD. The hold spends the
+// completion's delivery, and a lift clears the hold, so the release that writes
+// it records the completion as owed in the same write: the hold's condition and
+// the store's instant, which a lift of the hold leaves, so a restart after the
+// lift still finds the job owed. Only where the record owes none yet, so an
+// earlier refusal's condition and instant stand; and a hold whose condition is
+// past what an owed refusal records is refused, the claim left as it was.
+func testAHeldReleaseOwesItsCompletionOnTheJobsRecord(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	until := time.Now().UTC().Add(time.Hour)
+	mustLaunched(t, s, run("t1"))
+	held := releaseOf(mustClaim(t, s, "t1"))
+	held.Hold = &sandbox.Refusal{Condition: "budget", Until: until}
+	if released, err := s.ReleaseClaim(ctx, "t1", held); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "budget" || got.Launch.RefusalOwedSince.IsZero() {
+		t.Fatalf("the held job's record owes %q since %v; want the hold's condition owed, since the release",
+			got.Launch.RefusalOwed, got.Launch.RefusalOwedSince)
+	}
+	if lifted, err := s.LiftHold(ctx, "t1", "budget"); err != nil || !lifted {
+		t.Fatalf("a lift of the hold: lifted=%v err=%v", lifted, err)
+	}
+	if lifted := mustGet(t, s, "t1"); lifted.HeldFor != "" || lifted.Launch.RefusalOwed != "budget" {
+		t.Fatalf("the lifted row is held for %q and owes %q; want the hold gone and the completion still owed",
+			lifted.HeldFor, lifted.Launch.RefusalOwed)
+	}
+
+	// AN EARLIER REFUSAL STANDS.
+	first := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	launch := mustLaunched(t, s, run("t2"))
+	row := mustGet(t, s, "t2")
+	if wrote, err := s.OweRefusal(ctx, "t2", launch, sandbox.OwedRefusal{Condition: "provider", Since: first},
+		sandbox.Fence{Owner: row.Owner, Epoch: row.OwnerEpoch}); err != nil || !wrote {
+		t.Fatalf("an owed refusal on a running job = %v, %v; want it written", wrote, err)
+	}
+	again := releaseOf(mustClaim(t, s, "t2"))
+	again.Hold = &sandbox.Refusal{Condition: "budget", Until: until}
+	if released, err := s.ReleaseClaim(ctx, "t2", again); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t2"); got.HeldFor != "budget" || got.Launch.RefusalOwed != "provider" ||
+		!got.Launch.RefusalOwedSince.Equal(first) {
+		t.Fatalf("the held job's record, owing provider since %v before its hold, is held for %q and owes %q "+
+			"since %v; want it held and the first refusal standing", first, got.HeldFor,
+			got.Launch.RefusalOwed, got.Launch.RefusalOwedSince)
+	}
+
+	// PAST THE BOUND, refused, the claim standing.
+	mustLaunched(t, s, run("t3"))
+	long := releaseOf(mustClaim(t, s, "t3"))
+	long.Hold = &sandbox.Refusal{Condition: sandbox.Condition(strings.Repeat("c", sandbox.MaxOwedConditionBytes+1)),
+		Until: until}
+	if released, err := s.ReleaseClaim(ctx, "t3", long); err == nil || released {
+		t.Fatalf("a release holding the run for a condition past the bound = %v, %v; want it refused",
+			released, err)
+	}
+	if got := mustGet(t, s, "t3"); got.Status != sandbox.StatusResumed || got.HeldFor != "" ||
+		got.Launch.RefusalOwed != "" {
+		t.Fatalf("the refused release left the run %s, held for %q, owing %q; want the claim as it was",
+			got.Status, got.HeldFor, got.Launch.RefusalOwed)
+	}
+}
+
 func testAReleaseHandsTheClaimBackWhereItFoundIt(t *testing.T, s sandbox.PendingStore) {
 	// The retry a failed resume opens has to find the run exactly where the
 	// signal it is retrying can take it: a completion's job running, an
@@ -2814,6 +3161,248 @@ func testAReleaseCountsAFailedCollectionOntoTheJob(t *testing.T, s sandbox.Pendi
 	mustBeginLaunch(t, s, run("t1"))
 	if got := mustGet(t, s, "t1").Launch; got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {
 		t.Errorf("a new launch inherited the last job's failed collections: %+v", got)
+	}
+}
+
+// A RELEASE WHOSE COLLECTION READ THE BOX ENDS THE RUN OF FAILURES WITHOUT
+// COLLECTING THE JOB. A collection whose read answered, and that a later step
+// handed back uncounted (a coordination store that did not answer the step, or
+// a node that stopped), ends the job's run of failed collections as a
+// collected one does, so the next failure starts a run of its own. But the job
+// is not collected: it stays stoppable, and the collection made again charges
+// and records it. And a release cannot both count a failed collection and end
+// the run of failures it counts onto.
+func testAReleaseWhoseReadAnsweredEndsTheRunOfFailures(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t1"))
+	first := base.Add(3 * time.Second)
+	failed := releaseOf(mustClaim(t, s, "t1"))
+	failed.CollectFailedAt = first
+	if released, err := s.ReleaseClaim(ctx, "t1", failed); err != nil || !released {
+		t.Fatalf("release of a failed collection = %v, %v", released, err)
+	}
+
+	answered := releaseOf(mustClaim(t, s, "t1"))
+	answered.BoxAnswered = true
+	if released, err := s.ReleaseClaim(ctx, "t1", answered); err != nil || !released {
+		t.Fatalf("release of a collection whose read answered = %v, %v", released, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusRunning || got.Launch.CollectFailures != 0 ||
+		!got.Launch.CollectFailingSince.IsZero() {
+		t.Fatalf("the job's row reads %s with %d failed collections since %v; want it running with its "+
+			"run of failures ended", got.Status, got.Launch.CollectFailures, got.Launch.CollectFailingSince)
+	}
+	if got.Launch.Collected || !got.Launch.CollectedAt.IsZero() {
+		t.Fatalf("a release whose read answered recorded the job collected (%v at %v)", got.Launch.Collected,
+			got.Launch.CollectedAt)
+	}
+	stop := sandbox.RunStop{By: "founder"}
+	if decided, ok, err := s.DecideEnding(ctx, "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Stoppable, Launch: launch}, Reclaim: true, Stop: &stop,
+	}); err != nil || !ok || decided.Stop == nil {
+		t.Fatalf("a stop of a job whose read answered = %+v, %v, %v; want it decided, the job uncollected",
+			decided.Stop, ok, err)
+	}
+
+	mustLaunched(t, s, run("t2"))
+	claimed := mustClaim(t, s, "t2")
+	both := releaseOf(claimed)
+	both.BoxAnswered, both.CollectFailedAt = true, first
+	if _, err := s.ReleaseClaim(ctx, "t2", both); err == nil {
+		t.Error("a release that both counts a failed collection and ends the run it counts onto was accepted")
+	}
+	if got := mustGet(t, s, "t2"); got.Status != sandbox.StatusResumed || got.Launch.CollectFailures != 0 {
+		t.Errorf("the refused release wrote the row: %s with %d failed collections", got.Status,
+			got.Launch.CollectFailures)
+	}
+	mustRelease(t, s, claimed)
+}
+
+// A RELEASE RECORDS WHAT THE STORE OF THE HOST OF THE JOB'S BOX LAST SAID, on
+// the job's record, where its claim learned anything of it: a release whose
+// collection found that store silent marks the job with when its clock
+// started, a later one with the later start, one that learned that store
+// answers clears the mark, and one that learned nothing leaves it as it
+// stands. A release cannot say both, and one that does is refused and writes
+// nothing. The job's next launch starts without it: the host of its box, and
+// what that host's store says, are that job's.
+func testAReleaseRecordsWhatTheHostsStoreLastSaid(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	later := first.Add(time.Minute)
+	mustLaunched(t, s, run("t1"))
+	silent := releaseOf(mustClaim(t, s, "t1"))
+	silent.HostStoreSilentSince = first
+	if released, err := s.ReleaseClaim(ctx, "t1", silent); err != nil || !released {
+		t.Fatalf("release of a collection whose host found its store silent = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning ||
+		!got.Launch.HostStoreSilentSince.Equal(first) {
+		t.Fatalf("the row reads %s, its host's store silent since %v; want it running and marked since %v",
+			got.Status, got.Launch.HostStoreSilentSince, first)
+	}
+
+	mustRelease(t, s, mustClaim(t, s, "t1"))
+	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilentSince.Equal(first) {
+		t.Fatalf("a release that learned nothing of the host's store left it silent since %v; want %v",
+			got.Launch.HostStoreSilentSince, first)
+	}
+
+	again := releaseOf(mustClaim(t, s, "t1"))
+	again.HostStoreSilentSince = later
+	if released, err := s.ReleaseClaim(ctx, "t1", again); err != nil || !released {
+		t.Fatalf("release of a later collection whose host found its store silent = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilentSince.Equal(later) {
+		t.Fatalf("a later clock's release left the job silent since %v; want the later start, %v",
+			got.Launch.HostStoreSilentSince, later)
+	}
+
+	claimed := mustClaim(t, s, "t1")
+	both := releaseOf(claimed)
+	both.HostStoreSilentSince, both.HostStoreAnswered = first, true
+	if _, err := s.ReleaseClaim(ctx, "t1", both); err == nil {
+		t.Error("a release that says the host's store was both silent and answering was accepted")
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed ||
+		!got.Launch.HostStoreSilentSince.Equal(later) {
+		t.Errorf("the refused release wrote the row: %s, its host's store silent since %v", got.Status,
+			got.Launch.HostStoreSilentSince)
+	}
+	answered := releaseOf(claimed)
+	answered.HostStoreAnswered = true
+	if released, err := s.ReleaseClaim(ctx, "t1", answered); err != nil || !released {
+		t.Fatalf("release of a claim that learned the host's store answers = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilentSince.IsZero() {
+		t.Fatalf("a release that learned the host's store answers left the job silent since %v",
+			got.Launch.HostStoreSilentSince)
+	}
+
+	marked := releaseOf(mustClaim(t, s, "t1"))
+	marked.HostStoreSilentSince = first
+	if released, err := s.ReleaseClaim(ctx, "t1", marked); err != nil || !released {
+		t.Fatalf("release marking the job again = %v, %v", released, err)
+	}
+	mustBeginLaunch(t, s, run("t1"))
+	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilentSince.IsZero() {
+		t.Error("the job's next launch inherited what the last job's host's store said")
+	}
+}
+
+// AN OWED REFUSAL IS RECORDED ONCE, ON A RUNNING JOB, AND SETTLED BY THE PARK.
+// The seat's holder records a refused delivery of a job's completion it
+// acknowledges: the job's record takes the condition and the instant, a second
+// refusal writes nothing and leaves the first standing, and one that names no
+// condition, one past the bound, or no instant is refused. A claim leaves it,
+// a claim handed back puts the completion back still owed, the park on the
+// job's question clears it in its own write, and the job's next launch starts
+// without it. Only a running job of the launch named takes it, and a row a
+// newer lease owns refuses it.
+func testAnOwedRefusalIsRecordedOnceAndSettledByThePark(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	launch := mustLaunched(t, s, run("t1"))
+	row := mustGet(t, s, "t1")
+	fence := sandbox.Fence{Owner: row.Owner, Epoch: row.OwnerEpoch}
+	owe := func(owed sandbox.OwedRefusal) (bool, error) {
+		return s.OweRefusal(ctx, "t1", launch, owed, fence)
+	}
+	for _, bad := range []sandbox.OwedRefusal{
+		{Since: first},
+		{Condition: sandbox.Condition(strings.Repeat("c", sandbox.MaxOwedConditionBytes+1)), Since: first},
+		{Condition: "provider"},
+	} {
+		if wrote, err := owe(bad); err == nil || wrote {
+			t.Errorf("an owed refusal %+v was taken (%v, %v); want it refused", bad, wrote, err)
+		}
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "" {
+		t.Fatalf("a refused record wrote the row: it owes %q", got.Launch.RefusalOwed)
+	}
+	if wrote, err := owe(sandbox.OwedRefusal{Condition: "provider", Since: first}); err != nil || !wrote {
+		t.Fatalf("an owed refusal on a running job = %v, %v; want it written", wrote, err)
+	}
+	if wrote, err := owe(sandbox.OwedRefusal{Condition: "pause", Since: first.Add(time.Minute)}); err != nil || wrote {
+		t.Fatalf("a second owed refusal = %v, %v; want nothing written", wrote, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "provider" ||
+		!got.Launch.RefusalOwedSince.Equal(first) {
+		t.Fatalf("the job's record owes %q since %v; want the first refusal's, provider since %v",
+			got.Launch.RefusalOwed, got.Launch.RefusalOwedSince, first)
+	}
+	if wrote, err := s.OweRefusal(ctx, "t1", "another-launch", sandbox.OwedRefusal{Condition: "pause",
+		Since: first}, fence); err != nil || wrote {
+		t.Errorf("an owed refusal of another launch = %v, %v; want nothing written", wrote, err)
+	}
+
+	claimed := mustClaim(t, s, "t1")
+	if wrote, err := owe(sandbox.OwedRefusal{Condition: "pause", Since: first}); err != nil || wrote {
+		t.Errorf("a second owed refusal on a claimed job = %v, %v; want nothing written", wrote, err)
+	}
+	mustRelease(t, s, claimed)
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "provider" {
+		t.Fatalf("a claim handed back left the job's record owing %q; want it still owed", got.Launch.RefusalOwed)
+	}
+	newer := sandbox.Fence{Owner: "node-c:1", Epoch: fence.Epoch + 5}
+	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: first}); err != nil {
+		t.Fatalf("parking the run: %v", err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "" || !got.Launch.RefusalOwedSince.IsZero() {
+		t.Fatalf("the park left the job's record owing %q since %v; want it settled", got.Launch.RefusalOwed,
+			got.Launch.RefusalOwedSince)
+	}
+
+	launch = mustLaunched(t, s, run("t2"))
+	if won, err := s.ClaimOwnership(ctx, "t2", newer.Owner, newer.Epoch); err != nil || !won {
+		t.Fatalf("fencing t2 to a newer lease = %v, %v", won, err)
+	}
+	if wrote, err := s.OweRefusal(ctx, "t2", launch, sandbox.OwedRefusal{Condition: "provider", Since: first},
+		sandbox.Fence{Owner: "node-a:1", Epoch: newer.Epoch - 1}); !errors.Is(err, sandbox.ErrSeatNotHeld) || wrote {
+		t.Errorf("an owed refusal under a lease a newer one outranks = %v, %v; want it refused, the seat not "+
+			"held", wrote, err)
+	}
+	if wrote, err := s.OweRefusal(ctx, "t2", launch, sandbox.OwedRefusal{Condition: "provider", Since: first},
+		newer); err != nil || !wrote {
+		t.Fatalf("an owed refusal under the row's lease = %v, %v; want it written", wrote, err)
+	}
+	mustBeginLaunch(t, s, run("t2"))
+	if got := mustGet(t, s, "t2"); got.Launch.RefusalOwed != "" {
+		t.Error("the job's next launch inherited the refusal the last job owed")
+	}
+}
+
+// AN OWED REFUSAL IS RECORDED ON A JOB CLAIMED FOR ITS COMPLETION, NEVER ON A
+// RECORDED ANSWER'S CLAIM. A claim settles nothing by itself: one handed back
+// puts the completion back as it was, so a refusal acknowledged while another
+// attempt holds the job's claim is recorded on the claimed row, and is still
+// owed once that claim is handed back. A recorded answer's claim holds a job
+// that parked on its question, which settled its completion, and takes none.
+func testAnOwedRefusalIsRecordedOnAClaimOfItsCompletion(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	at := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	owed := sandbox.OwedRefusal{Condition: "provider", Since: at}
+	launch := mustLaunched(t, s, run("t1"))
+	claimed := mustClaim(t, s, "t1")
+	fence := sandbox.Fence{Owner: claimed.Owner, Epoch: claimed.OwnerEpoch}
+	if wrote, err := s.OweRefusal(ctx, "t1", launch, owed, fence); err != nil || !wrote {
+		t.Fatalf("an owed refusal on a job claimed for its completion = %v, %v; want it written", wrote, err)
+	}
+	mustRelease(t, s, claimed)
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning || got.Launch.RefusalOwed != "provider" ||
+		!got.Launch.RefusalOwedSince.Equal(at) {
+		t.Fatalf("the claim handed back left the run %s owing %q since %v; want it running and still owing "+
+			"provider since %v", got.Status, got.Launch.RefusalOwed, got.Launch.RefusalOwedSince, at)
+	}
+
+	asking := claimedAnswerOn(t, s, "t2", answerOf("r1", "use main"), false)
+	if wrote, err := s.OweRefusal(ctx, "t2", asking, owed, sandbox.Fence{}); err != nil || wrote {
+		t.Errorf("an owed refusal on a recorded answer's claim = %v, %v; want nothing written", wrote, err)
+	}
+	if got := mustGet(t, s, "t2"); got.Launch.RefusalOwed != "" {
+		t.Errorf("a recorded answer's claim owes %q; want nothing owed of a job its question settled",
+			got.Launch.RefusalOwed)
 	}
 }
 
@@ -3896,21 +4485,16 @@ func testABridgedRunsSpendIsTheNewestTotal(t *testing.T, s sandbox.PendingStore)
 
 // A CALL FROM A ROUND THAT IS OVER IS NOT THE NEXT ROUND'S. Every append names
 // the job its session was opened for and the round that job works in, and once
-// the row has moved on to a new round — a second launch on the same turn that
-// carries no round on, as a send-back's does — a call still in flight from the
-// first is not recorded, neither its log entry nor its spend: the new round
-// numbers its own calls, and its job's resume would pay for the call as its
-// own. The second job starts with nothing bridged. (A relaunch that carries
-// the round on lists such a call, marked late, and pays it to nobody:
-// lateCases.)
+// the row has moved on to a new round (a second launch on the same turn that
+// carries no round on, as a send-back's does) a call still in flight from the
+// first is recorded neither as log entry nor as spend: the new round numbers
+// its own calls, and its job's resume would pay for the call as its own. (A
+// relaunch carrying the round on lists such a call, marked late: lateCases.)
+// BOTH SHAPES: a session whose earlier call landed, and one whose FIRST call is
+// the late one (a delegated worker still running when the reviewer relaunched),
+// which a session that learned its job from the row got wrong.
 //
-// BOTH SHAPES, and the second is the one a session that learned its job from
-// the row got wrong: a session whose earlier call landed, and a session whose
-// FIRST call is the late one — a delegated worker the harness opened with, still
-// running when the reviewer relaunched. Neither may land.
-//
-// Mutation: list a late call by its round whatever the log's round, and it
-// lands in the new round.
+// Mutation: list a late call by its round whatever the log's round.
 func testABridgedCallOutlivingItsRoundIsNotTheNextRounds(t *testing.T, s sandbox.PendingStore) {
 	for _, tc := range []struct {
 		name   string
@@ -4277,12 +4861,10 @@ func testCollectPublishesThePhase(t *testing.T, s sandbox.PendingStore) {
 	// nothing never takes that back. A second launch is a second job with a
 	// record of its own.
 	//
-	// IN A BUBBLE, so the store's clock is the case's: it stands still while
-	// the case writes and reads, and moves only by the case's own wait. Each
+	// IN A BUBBLE, so the store's clock moves only by the case's own wait: each
 	// job is dated exactly the instant it launched, the second a second after
-	// the first, where two readings of the machine's clock held a date only
-	// to an order a coarse clock stamps equal and a stepped one reverses, and
-	// a second job dated the first one's instant passed.
+	// the first, where the machine's clock held a date only to an order a
+	// coarse clock stamps equal and a stepped one reverses.
 	synctest.Test(t, func(t *testing.T) {
 		launched := time.Now().UTC()
 		r := run("t1")
@@ -5087,17 +5669,13 @@ func testATurnTakesTheAnswerItsClaimDrives(t *testing.T, s sandbox.PendingStore)
 // A DEAD CLAIM'S ANSWER IS REVIVED ONCE, FENCED AND COUNTED. The seat's next
 // holder gives a claim whose node stopped before its turn took the answer back
 // to that answer: the run answered again, owed its resume, stamped with the
-// holder's lease and the loss counted on the answer — all in one write, because
+// holder's lease and the loss counted on the answer, all in one write, because
 // a revival without its fence is one the stalled claimant could still take, and
 // one without its count is a resume that kills its node revived for ever. Only
-// the claim it names is revived — that job, that answer, no newer lease — and
+// the claim it names is revived (that job, that answer, no newer lease) and
 // only once: a revived run is no longer the claim, so a take under the dead
-// claim's lease finds nothing to take.
-//
-// IN A BUBBLE, so the store's clock is the case's: the first loss is dated the
-// instant it is counted, and the next a second later, where a revival that
-// dated the first loss again read equal to it inside one tick of the machine's
-// clock.
+// claim's lease finds nothing. IN A BUBBLE, the next loss is dated a second
+// later; one tick of the machine's clock would read a re-dated loss equal.
 func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.PendingStore) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
@@ -5860,25 +6438,16 @@ func testACheckoutIsGrantedToTheRunningJobOnly(t *testing.T, s sandbox.PendingSt
 
 // A RUN WORKS FOR ONE REQUESTER (ADR-0109): whom its turn works for goes on its
 // row with its first checkout (PendingRun.CodeWorkingFor), and the box's pushes
-// and the change its collection opens carry it, so a later checkout made for
-// anybody else — another credential, a seat, nobody — is a conflict that
-// writes nothing; one made for the same credential holding fewer apps narrows
-// the row's to those, and one holding more never widens it. A launch that
-// carries a round on carries whom its job worked for with its grants, and one
-// given no repositories carries nobody. NOBODY IS ONE REQUESTER TOO: a run
-// whose grants were taken for nobody is never used for somebody, whichever
-// build wrote its row — its first checkout made for nobody, or its grants
-// carried on with no carrier at all, as a build before the carrier wrote every
-// row, here under a colleague's ceiling — so a checkout made for somebody
-// under the row's own ceiling is a conflict, of a repository the row holds
-// already as much as of another, and the row is as it was.
-//
-// Mutations: GrantRepo admitting a second requester — the seat's and nobody's
-// checkouts added, red; the narrowing left out — the row keeps doclet, red;
-// a reset keeping the previous job's — the relaunch given none reads the
-// credential, red; a row granted for nobody adopting whom a later checkout is
-// made for — the person's, the credential's and the colleague's checkouts
-// taken, red.
+// and the change its collection opens carry it, so a later checkout for anybody
+// else (another credential, a seat, nobody) is a conflict that writes nothing;
+// one for the same credential holding fewer apps narrows the row's to those,
+// and one holding more never widens it. A launch that carries a round on
+// carries whom its job worked for with its grants, one given no repositories
+// nobody. NOBODY IS ONE REQUESTER TOO: a run whose grants were taken for nobody
+// (or carried on with no carrier) is never used for somebody, so a checkout for
+// somebody under the row's own ceiling is a conflict. Mutations: GrantRepo
+// admitting a second requester; the narrowing left out; a reset keeping the
+// previous job's; a nobody-row adopting whom a later checkout is for.
 func testARunWorksForOneRequester(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	web, api := runRepo("web", webID), runRepo("api", apiID)

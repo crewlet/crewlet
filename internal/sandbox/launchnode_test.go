@@ -228,8 +228,8 @@ func lostAt(run PendingRun) time.Time {
 // with it, and nothing else can poll, collect or reclaim it, so the seat would
 // wait behind the run for ever. The verdict is recorded on the row as the
 // node's loss and the completion announced, for the seat's holder to carry the
-// job's round on — and announced again on the next pass, as a finished job's
-// is, until a claim takes it.
+// job's round on — and announced again on its schedule, as a finished job's
+// is, until a claim takes it: the first time on the pass an interval later.
 //
 // NEVER AT ONE INSTANT'S ABSENCE: a node that drains gives up its presence at
 // the drain's first step, and is merely restarting.

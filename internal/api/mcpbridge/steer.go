@@ -1,49 +1,31 @@
 package mcpbridge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A NOTE INBOX: a person's notes to the run's turn, at the run's own steps.
-//
-// An executor is its harness's own loop, so the engine has no round of it to open
-// with a note. What the harness has is boundaries of its own — Claude Code's hooks
-// after a batch of tool calls and as it is about to finish, OpenCode's next
-// step — and a way to ask for something there. So a run's session carries the
-// run's note INBOX ([Session.Steer]), and the bridge serves it two ways, both
-// behind the run's own token and nothing else:
-//
-//   - THE steer_take TOOL ([SteerTool]) on the run's existing MCP server, which
-//     a hook calls. It is NEVER LISTED, so no harness offers it to its model, and
-//     it is answered by the server's own receiving middleware, so the call never
-//     reaches the run's surface and is never recorded on its ledger: it is the
-//     harness asking, not the model. Its answer is ALWAYS text — empty for nothing
-//     — never an error: measured on Claude Code, a hook's call that failed made
-//     the harness drop and re-initialise the whole bridge, telling the model its
-//     tools were still connecting.
-//   - THE NOTES ROUTE ([SteerPattern]) a plugin inside the harness polls: GET
-//     `notes?after=<seq>` holds for a note for up to [steerHold] and answers the
-//     ones waiting past the cursor, rendered, each recorded served to the run's
-//     job before it is answered (the inbox's [SteerInbox.Wait]); POST `read`
-//     records the notes the harness reported putting in front of its model.
-//
-// THE BRIDGE DECIDES NOTHING ABOUT NOTES. What waits, what fits, what is read
-// and what is recorded is the inbox's (internal/engine, runsteer.go); the
-// bridge routes a call to the session that holds the inbox — relayed to the
-// seat's holder like every bridged call ([Bridge.Join]) — keeps a hook's call to
-// the boundaries the main agent's loop makes, and bounds how long either is
-// held.
+// A run's session carries its note inbox ([Session.Steer]), which the bridge
+// serves two ways behind the run's own token: the steer_take tool
+// ([SteerTool]) a hook calls, never listed and always answered text, and the
+// notes route ([SteerPattern]) a plugin polls and confirms reads on. The
+// bridge decides nothing about notes; the package doc's "A note inbox" has
+// the argument and what was measured.
 
 // SteerTool is the tool a harness's hook calls on the bridge for its turn's
 // notes.
@@ -62,9 +44,17 @@ const (
 type SteerInbox interface {
 	// Take answers one hook of the run's main agent, at event
 	// ([SteerEventToolBatch] or [SteerEventFinish]): the hook's whole answer,
-	// in the shape the harness reads, or empty for nothing. Never an error — a
-	// note that could not be taken waits for the next step.
-	Take(ctx context.Context, event string) string
+	// in the shape the harness reads, or empty for nothing. Every note
+	// answered is recorded SERVED to the run's job first, and read only once
+	// the job's session shows it. Never an error: a note that could not be
+	// served waits for the next step. call is the hook's call as the box sent
+	// it, nil where the bridge could not read it; ctx ends with the hook's
+	// request, cancelled where its harness gave the call up.
+	Take(ctx context.Context, event string, call *sandbox.NoteCall) string
+
+	// Cancelled says the box's harness gave up on the hook call named:
+	// whatever it was answered, it never took it. Never blocks on the store.
+	Cancelled(ctx context.Context, call sandbox.NoteCall)
 
 	// Wait is the notes waiting past the cursor after, oldest first, and a
 	// channel closed when the inbox's view of them next changes or the inbox
@@ -79,13 +69,32 @@ type SteerInbox interface {
 	// earlier read of the same job recorded is reported again, as the same
 	// record; an error is a read that could not be confirmed written, and its
 	// notes wait, or, where the write landed, are reported when the harness
-	// confirms them again.
+	// confirms them again. An inbox that serves no job, not yet bound or
+	// closed, takes no read and answers [ErrNoteUntaken], and so does one
+	// whose job the run's record takes no read of any more, for a note named
+	// that still waits. So does one that cannot open a note named that still
+	// waits for the job, its node not holding the key the note is sealed
+	// under, once it has taken every other note named.
 	Read(ctx context.Context, ids []string) error
 
 	// Close ends the inbox: its watch stops, every channel [SteerInbox.Wait]
-	// handed out closes, and every later call answers nothing.
+	// handed out closes, every later Take and Wait answers nothing, and every
+	// later Read [ErrNoteUntaken].
 	Close()
 }
+
+// ErrNoteUntaken is what a [SteerInbox] answers a [SteerInbox.Read] with
+// where it left a note the read names untaken that the read made again can
+// have taken: an inbox that serves no job that takes notes (closed, not yet
+// bound, or bound to a job the run's record takes no read of any more, a
+// named note still waiting there), or one whose node does not hold the key a
+// named note is sealed under, which recorded every other note named. Declared
+// here, by the consumer, which tells it from a write that could not be
+// confirmed: the read is turned away to ask again ([Bridge.serveSteer]), its
+// next try reaching the inbox that serves the job now, the run that goes on
+// once a claim is handed back, or a node that holds the key. The package
+// doc's "A note inbox" has each case.
+var ErrNoteUntaken = errors.New("mcpbridge: the run's note inbox left a note the read names untaken, for the read made again")
 
 // SteerNote is one waiting note as the notes route answers it.
 type SteerNote struct {
@@ -142,9 +151,16 @@ const steerTakeBudget = 5 * time.Second
 // harness polls, answered from memory.
 const steerHold = 10 * time.Second
 
-// steerReadBody bounds a read's body: a read names at most a turn's notes
-// ([steer.MaxTurnNotes]), a few hundred bytes, and 64 KiB is far past that
-// while far inside what the relay carries (internal/httprelay's MaxBody).
+// steerReadIDs is the most notes one read names: everything one job can be
+// owed, a turn's notes ([steer.MaxTurnNotes]) and the job's own items
+// ([sandbox.MaxJobItems]). OpenCode's plugin names every note it owes in one
+// read and sends it again on every retry, so a read refused for its count is
+// refused again forever and confirms nothing more for the rest of the run.
+const steerReadIDs = steer.MaxTurnNotes + sandbox.MaxJobItems
+
+// steerReadBody bounds a read's body: a read names at most [steerReadIDs]
+// notes, each a short id, a couple of kilobytes in all, and 64 KiB is far past
+// that while far inside what the relay carries (internal/httprelay's MaxBody).
 const steerReadBody = 64 << 10
 
 // steerRead is a read's body.
@@ -168,12 +184,23 @@ func (b *Bridge) SteerHandler() http.Handler { return b.routed(b.serveSteer) }
 // address and the Host ([loopbackRefusal]), are judged by the routing it
 // shares with the MCP endpoint ([Bridge.routed]) before it is reached, and a
 // relayed call for a held session never reaches it ([Bridge.admitRelayed]).
+//
+// A CALL THAT REACHES ITS OPENING AS IT ENDS IS TURNED AWAY TO ASK AGAIN, a
+// 503 with a Retry-After, as a poll the opening can no longer hold is
+// ([Bridge.pollNotes]), and so is a read the end overtakes ([readNotes]):
+// NEVER THE 404 of a session with no inbox, which ends the OpenCode plugin's
+// asking for the rest of its run (package doc, "A note inbox").
 func (b *Bridge) serveSteer(w http.ResponseWriter, r *http.Request, opened *binding) {
+	if opened.session.Steer == nil {
+		// A SESSION WITH NO INBOX (a run with nothing to steer, the
+		// assistant's deep work) has no notes route at all.
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+		return
+	}
 	inbox := opened.inbox()
 	if inbox == nil {
-		// A SESSION WITH NO INBOX — a run with nothing to steer, the
-		// assistant's deep work — has no notes route at all.
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+		// THE OPENING ENDED, which took the inbox its session has.
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
 		return
 	}
 	switch verb := r.PathValue("verb"); {
@@ -314,11 +341,17 @@ func (s *statusWriter) Write(b []byte) (int, error) {
 func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 // steerPollRetry is the Retry-After a poll the bridge cannot hold is turned
-// away with: the pace the bridge's own relay reads a seat's lease again at
-// while it waits for the seat's next holder ([holderRetryCeiling]), because
-// that holder is what serves the session's next opening — a node that is
-// going hands its seats on, and an opening that ended was replaced, moved
-// with its seat, or ended with its run, whose route then answers 401.
+// away with, and a read that reached its opening as it ended, that its inbox
+// did not take ([ErrNoteUntaken]), or that a run whose tools are closed
+// takes no more ([Bridge.serveSteer], [readNotes]): the pace the bridge's own
+// relay reads a seat's lease again at while it waits for the seat's next
+// holder ([holderRetryCeiling]), because that holder is what serves the
+// session's next opening: a node that is going hands its seats on, and an
+// opening that ended was replaced, moved with its seat, or ended with its run,
+// whose route then answers 401. No client keeps to it: OpenCode's notes
+// plugin, the route's one client, reads no Retry-After and asks again after a
+// pause of its own, a second doubling to thirty (internal/sandbox/executor,
+// opencode_steer.js).
 const steerPollRetry = holderRetryCeiling
 
 func writeNotes(w http.ResponseWriter, notes []SteerNote) {
@@ -328,9 +361,16 @@ func writeNotes(w http.ResponseWriter, notes []SteerNote) {
 	httpjson.Write(w, http.StatusOK, steerNotes{Notes: notes})
 }
 
-// readNotes records the notes a read names — none for a run whose tools are
-// closed, which takes nothing more from its notes (see [Bridge.pollNotes]); its
-// read is answered as done, because there is nothing for the poller to retry.
+// readNotes records the notes a read names through the opening's inbox.
+//
+// A READ IS RECORDED OR TURNED AWAY TO ASK AGAIN, NEVER ANSWERED DONE WITH
+// NOTHING RECORDED, since the plugin would never confirm its notes again: as
+// a read reaching the opening after its end is ([Bridge.serveSteer]), at
+// either of its last two steps. A RUN WHOSE TOOLS ARE CLOSED records no read
+// (see [Bridge.pollNotes]), its opening ended or not, and AN INBOX THAT
+// SERVES NO JOB, whose job takes no read any more, or that lacks a named
+// note's key says it took the read nowhere ([ErrNoteUntaken]). The package
+// doc's "A note inbox" has why each is turned away.
 func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox SteerInbox) {
 	var body steerRead
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, steerReadBody))
@@ -343,22 +383,25 @@ func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox St
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
-	if len(body.IDs) == 0 || len(body.IDs) > steer.MaxTurnNotes {
+	if len(body.IDs) == 0 || len(body.IDs) > steerReadIDs {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
 	if fence(opened.session) != nil {
-		w.WriteHeader(http.StatusNoContent)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
 		return
 	}
-	if err := inbox.Read(r.Context(), body.IDs); err != nil {
+	switch err := inbox.Read(r.Context(), body.IDs); {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, ErrNoteUntaken):
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(steerPollRetry))
+	default:
 		log.WarnContext(r.Context(), "mcp_bridge_steer_read_failed", "error", err.Error(),
 			"detail", "the notes wait; the poller confirms them again, and the review "+
 				"reads any it never does")
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(time.Second))
-		return
 	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // Shutdown releases every poll for notes this bridge holds — one it serves from
@@ -395,9 +438,32 @@ func (o *binding) steerMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 			return next(ctx, method, req)
 		}
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: o.takeSteer(ctx, call.Params.Arguments)}},
+			Content: []mcp.Content{&mcp.TextContent{Text: o.takeSteer(ctx, call.Params.Arguments,
+				o.noteCall(ctx, call))}},
 		}, nil
 	}
+}
+
+// noteCall is the hook's call as the bridge's front read it off its POST
+// ([Bridge.steerFront]): the MCP session it came on and the id the front set
+// in [steerCallHeader]. Nil where the front read none, said once an opening
+// (mcp_bridge_steer_call_unread): only the job's session then settles what
+// the call is served.
+func (o *binding) noteCall(ctx context.Context, call *mcp.CallToolRequest) *sandbox.NoteCall {
+	var id string
+	if call.Extra != nil {
+		id = call.Extra.Header.Get(steerCallHeader)
+	}
+	if id == "" || call.Session == nil {
+		o.callUnread.Do(func() {
+			log.WarnContext(ctx, "mcp_bridge_steer_call_unread", "run_id", o.session.RunID,
+				"seat", o.session.Handle, "detail", "a hook's steer_take came with a JSON-RPC id the bridge "+
+					"could not read, so a cancel of it cannot be matched: what it is served is settled by the "+
+					"job's session alone, at its collection")
+		})
+		return nil
+	}
+	return &sandbox.NoteCall{Session: call.Session.ID(), ID: id}
 }
 
 // steerArgs is what a hook passes steer_take: the event that fired it and the
@@ -408,10 +474,15 @@ type steerArgs struct {
 }
 
 // takeSteer is steer_take's answer: the inbox's, for a boundary of the main
-// agent's loop, and nothing for any other.
-func (o *binding) takeSteer(ctx context.Context, raw json.RawMessage) string {
-	inbox := o.inbox()
-	if inbox == nil || o.over() {
+// agent's loop, and nothing for any other. Whatever it answers, the opening's
+// end waits for that answer to be out before it closes the box's sessions
+// ([binding.holdHook]), so a take whose write landed is never answered into
+// the close while its box still waits for it: a box that gave the call up, or
+// whose connection failed, lets the hold go before any write, and reads no
+// answer.
+func (o *binding) takeSteer(ctx context.Context, raw json.RawMessage, call *sandbox.NoteCall) string {
+	inbox := o.holdHook(ctx.Done())
+	if inbox == nil {
 		return ""
 	}
 	var args steerArgs
@@ -448,5 +519,95 @@ func (o *binding) takeSteer(ctx context.Context, raw json.RawMessage) string {
 	}
 	takeCtx, cancel := context.WithTimeout(ctx, steerTakeBudget)
 	defer cancel()
-	return inbox.Take(takeCtx, args.Event)
+	return inbox.Take(takeCtx, args.Event, call)
+}
+
+// steerCallHeader carries a hook's steer_take call's JSON-RPC id, as canonical
+// JSON text, from the bridge's front to its steer middleware
+// ([Bridge.steerFront], [binding.noteCall]): the middleware cannot learn the
+// id of the call it answers, which the SDK keeps under an unexported key.
+// Always the front's own: a box-sent one is dropped.
+const steerCallHeader = "Crewlet-Steer-Call"
+
+// steerPeekBytes is how much of a POST's body the front reads to tell a hook's
+// call or a cancel: FOUR KIB, past the largest either is (a cancel's id and
+// reason, a steer_take's two short arguments, each well under one KiB), and
+// small beside what the SDK reads of every POST anyway. A longer body is no
+// hook's, and is handed on unread.
+const steerPeekBytes = 4 << 10
+
+// steerFront is what the bridge reads of every POST before the SDK does, the
+// package doc's "A hook's cancel is heard before the SDK": it drops a box-sent
+// [steerCallHeader]; it peeks at most [steerPeekBytes] of the body, handing
+// the SDK those bytes and the rest; and of one JSON-RPC message, decoded as
+// the SDK decodes it (jsonrpc.DecodeMessage, keys matched exactly, [rpcParam])
+// so the two never read one body two ways, it sets the header to a steer_take
+// call's id, or hands a cancel to the opening's inbox ([binding.cancelInbox]),
+// which never blocks. Either id is named as a serve keeps it
+// ([sandbox.NoteCallID]). Anything else goes straight on.
+func (b *Bridge) steerFront(r *http.Request, opened *binding) {
+	r.Header.Del(steerCallHeader)
+	if r.Method != http.MethodPost || r.Body == nil || r.Body == http.NoBody {
+		return
+	}
+	peek := make([]byte, steerPeekBytes+1)
+	n, err := io.ReadFull(r.Body, peek)
+	peek = peek[:n]
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(peek), r.Body), r.Body}
+	if n > steerPeekBytes || (err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF)) {
+		return
+	}
+	msg, err := jsonrpc.DecodeMessage(peek)
+	if err != nil {
+		return
+	}
+	req, isRequest := msg.(*jsonrpc.Request)
+	if !isRequest {
+		return
+	}
+	switch req.Method {
+	case "tools/call":
+		if name, _ := rpcParam(req.Params, "name").(string); name != SteerTool {
+			return
+		}
+		if id, ok := sandbox.NoteCallID(req.ID.Raw()); ok {
+			r.Header.Set(steerCallHeader, id)
+		}
+	case "notifications/cancelled":
+		requested, idErr := jsonrpc.MakeID(rpcParam(req.Params, "requestId"))
+		if idErr != nil {
+			return
+		}
+		id, ok := sandbox.NoteCallID(requested.Raw())
+		session := r.Header.Get(sessionHeader)
+		if !ok || session == "" {
+			return
+		}
+		if inbox := opened.cancelInbox(); inbox != nil {
+			inbox.Cancelled(r.Context(), sandbox.NoteCall{Session: session, ID: id})
+		}
+	}
+}
+
+// rpcParam is the value under key in a JSON-RPC message's params, decoded as
+// into an any (a number a float64, as the SDK reads a request id), or nil
+// where there is none: the key matched exactly, as the SDK matches it, never
+// case-insensitively as encoding/json matches a struct's fields.
+func rpcParam(params json.RawMessage, key string) any {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(params, &fields) != nil {
+		return nil
+	}
+	raw, ok := fields[key]
+	if !ok {
+		return nil
+	}
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return nil
+	}
+	return v
 }

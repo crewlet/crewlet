@@ -33,6 +33,19 @@ type UnsettledBatch struct {
 	WrittenAt time.Time
 }
 
+// ErrCustodyRefused marks a custody batch [EventLog.WriteCustody] refuses to
+// store whatever node is asked to: one naming no id or origin, or holding a
+// record that cannot be stored ([ErrIncompleteRecord]), refused by every node
+// before anything is written. It is the batch's own failure, and the only one
+// a custody write marks. Every other failure of WriteCustody (its transaction,
+// once every record has validated) and every failure of
+// [EventLog.SettleCustody], which takes only the batch's id and the fleet's
+// answer and refuses nothing a batch carries, is this node's store failing: a
+// full disk or a busy store fails a healthy batch that another node, or this
+// one a moment later, writes whole. internal/observe's keeper tells the two
+// apart by this mark.
+var ErrCustodyRefused = errors.New("store: the custody batch cannot be stored")
+
 // rowIdentity is one row of a batch by the event log's own (time, id) key, as
 // stored — the shape [keptSQL] binds a list of names in.
 type rowIdentity struct {
@@ -61,16 +74,16 @@ type rowIdentity struct {
 //
 // Every record is checked before anything is written, and one that cannot be
 // stored refuses the batch: a batch partly written and recorded as whole would
-// be released incompletely.
+// be released incompletely. Only that refusal is marked ([ErrCustodyRefused]).
 func (l *EventLog) WriteCustody(ctx context.Context, b CustodyBatch, at time.Time) error {
 	if b.ID == "" || b.Origin == "" {
-		return errors.New("store: a custody batch needs an id and an origin")
+		return fmt.Errorf("%w: it needs an id and an origin", ErrCustodyRefused)
 	}
 	rows := make([]eventRow, 0, len(b.Records))
 	for _, rec := range b.Records {
 		row, err := prepareEvent(rec, l.db.eventSeatsNow())
 		if err != nil {
-			return fmt.Errorf("store: custody batch %s: %w", b.ID, err)
+			return fmt.Errorf("%w: custody batch %s: %w", ErrCustodyRefused, b.ID, err)
 		}
 		rows = append(rows, row)
 	}

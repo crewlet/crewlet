@@ -17,10 +17,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE APPLIER ALONE, over records formed by hand: the cases a writer that keeps
-// its rules can never produce, which is exactly what the applier's own checks
-// exist for. Each is a refusal the applier makes deterministically, written as
-// the record's history row on every data node alike.
+// THE APPLIER ALONE, over records formed by hand: cases a writer that keeps its
+// rules never produces, which the applier's own checks exist for. Each refusal
+// is deterministic, written as the record's history row on every data node.
 
 // estate is one node's replicated estate and applier, fed records by hand.
 type estate struct {
@@ -160,10 +159,10 @@ func handPublish(t *testing.T, id, opID string, number int, prune []int, files .
 // newID is a fresh artifact id.
 func newID() string { return artifacts.IDFor(uuid.NewString()).String() }
 
-// A CARRIED OBJECT MUST BE NAMED WHERE IT IS CARRIED FROM: the apply
-// writes a carried entry only when its own transaction finds the object named by
-// this artifact, with the digest and size the entry claims; otherwise the
-// record is refused on every data node and its writer told the paths to upload.
+// A CARRIED OBJECT MUST BE NAMED WHERE IT IS CARRIED FROM: the apply writes a
+// carried entry only when its own transaction finds the object named by this
+// artifact with the claimed digest and size; otherwise every data node refuses
+// the record and its writer is told the paths to upload.
 //
 // Mutation: drop the carry check in planObjects and the dangling carry applies.
 func TestACarriedObjectMustBeNamedWhereItIsCarriedFrom(t *testing.T) {
@@ -245,8 +244,8 @@ func TestNoCarryCrossesAnArtifact(t *testing.T) {
 }
 
 // A RETIRED VERSION UNNAMES AN OBJECT ONLY WHEN NO RETAINED VERSION NAMES IT:
-// the reference table counts manifest entries, and a row goes, letting the
-// collector reclaim the file, at zero and not before.
+// the reference table counts manifest entries, and its row goes (letting the
+// collector reclaim the file) at zero, not before.
 //
 // Mutation: delete an object row on any decrement in applyObjects and the
 // object version 3 still carries reads as unnamed.
@@ -488,10 +487,10 @@ func TestASourceAddressIsHeldByOneArtifact(t *testing.T) {
 	}
 }
 
-// A CREATE NAMES A KIND THIS BUILD SERVES, at the apply as at the writer: the
-// kind table is what every reader of the row draws by, so a row whose kind has
-// no row would be an artifact nothing can open. A newer kind arrives under a
-// raised record version, which this build defers rather than applies.
+// A CREATE NAMES A KIND THIS BUILD SERVES, at the apply as at the writer: every
+// reader draws a row by the kind table, so an unknown kind would be an artifact
+// nothing can open. A newer kind arrives under a raised record version, which
+// this build defers rather than applies.
 //
 // Mutation: check only that the kind is non-empty and the unknown kind applies.
 func TestACreateOfAKindThisBuildDoesNotServeIsRefused(t *testing.T) {

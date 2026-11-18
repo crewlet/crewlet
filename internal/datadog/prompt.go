@@ -11,17 +11,14 @@ import (
 //
 // # It tailors to the ROUTING REASON, not to the transition
 //
-// A seat named by a monitor's own tag owns that monitor: it is being told
-// about its own service. A seat reached through the company's fallback is
-// there only because nothing named anybody, so the first thing it has to
-// establish is whether this is even its problem. Asking both of them to
-// "investigate and mitigate" tells the second one to start work on something
-// it may have no context for at all.
+// A seat named by a monitor's own tag owns that monitor. A seat reached through
+// the company's fallback is there only because nothing named anybody, so it
+// must first establish whether this is its problem; "investigate and mitigate"
+// would start work on something it may have no context for.
 //
-// NOTHING HERE NAMES A TOOL. The prompt describes the capability, and the
-// model finds the matching tool in its own catalogue, because the deployed
-// MCP server's tool names are not knowable by the engine. See
-// docs/concepts/tool-capabilities.md.
+// NOTHING HERE NAMES A TOOL: the prompt describes the capability and the model
+// finds the tool in its own catalogue, as the deployed MCP server's tool names
+// are not knowable by the engine. See docs/concepts/tool-capabilities.md.
 type Prompt struct{}
 
 var _ notify.Prompt = Prompt{}
@@ -60,30 +57,16 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 
 // PartitionKey implements [notify.Prompt]: the MONITOR is the conversation.
 //
-// Keyed on the monitor rather than on the alert, and the two are opposite
-// choices. The alert id is unique per NOTIFICATION, so keying on it would
-// make every firing its own conversation and a seat would never see that this
-// is the fourth time tonight. The monitor is the thing that keeps firing, so
-// a trigger, its recovery and its re-trigger coalesce into one thread, which
-// is what a person paging through an incident actually reads. The digest
-// coalescer partitions on this key too, so it is also what keeps that story
-// together inside one window.
+// Keyed on the monitor, not the alert: the alert id is unique per
+// NOTIFICATION, so every firing would be its own conversation. A trigger, its
+// recovery and its re-trigger coalesce into one thread, and the digest
+// coalescer partitions on this key too. THE ID, NOT THE TITLE: a title carries
+// the STATE ("[Triggered] ..." then "[Recovered] ..."), splitting them.
 //
-// THE ID, NOT THE TITLE, and that distinction is the whole of it. A Datadog
-// title carries the STATE — "[Triggered] API latency" and then "[Recovered]
-// API latency" — so keying on it put a trigger and its recovery in two
-// threads, which is the precise opposite of what this function exists to do.
-// It was keyed on the title on the reasoning that "there is no $MONITOR_ID
-// variable"; true of that spelling, but the payload template is this engine's
-// own to write and Datadog's $ALERT_ID is the monitor.
-//
-// The title remains the fallback, for an alert delivered by a webhook
-// definition that does not carry the id — an operator's hand-made one, or
-// this engine's own after somebody edited its payload at Datadog, until the
-// next pass rewrites it. A
-// retitled monitor then starts a new conversation, which is the correct
-// behaviour for the one case it costs anything: renaming a monitor is usually
-// redefining what it watches.
+// The title remains the fallback for a webhook definition lacking the id
+// (hand-made, or this engine's own after an edit, until the next pass rewrites
+// it). A retitled monitor then starts a new conversation, right for the one
+// case it costs anything: a rename usually redefines what it watches.
 func (Prompt) PartitionKey(metadata map[string]string, subject string) string {
 	if id := metadata[MonitorIDField]; id != "" {
 		return "monitor:" + id

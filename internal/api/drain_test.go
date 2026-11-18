@@ -87,32 +87,17 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 }
 
 // startsWork is every kind of request the gate refuses, one of each route
-// family: the webhook edge (a delivery, and both of its GET landings, one of
-// which acts and the other of which is refused with it), the config and
-// credential writes, the setup pass, the deployment's controls (the backup,
-// the retention gestures and the fleet broker's membership), a project's file
-// bytes, the operator writes, the operator MCP surface, a new git fetch — its
-// advertisement, which would begin one — a git push, its advertisement as well
-// as its upload, and a verify of the node's git cache, which may rebuild it.
+// family: the webhook edge, config and credential writes, the setup pass,
+// deployment controls, file bytes, operator writes and MCP, a new fetch's
+// advertisement, a push, and a verify of the git cache, which may rebuild it.
 //
-// WHETHER THIS FIXTURE MOUNTS THE ROUTE IS DECLARED, because the gate is
-// middleware and runs BEFORE the mux: it refuses on path and method alone, so
-// a refusal proves the rule whether or not a handler exists behind it. That is
-// what makes the refusal case above meaningful for every entry — and it is
-// also what would let an entry naming a path nothing serves sit here for ever
-// looking exactly like one that works. [TestNothingIsRefusedForDrainingBeforeADrain]
-// holds the declaration in BOTH directions for that reason, in the idiom
-// [solo]'s roster guard uses: a mounted entry that starts answering 404 has
-// drifted from the routes, and an unmounted one that stops is a fixture that
-// grew a surface and left its declaration behind.
-//
-// [drainingApp] is a node with no store, no coordination store and no company,
-// so the three surfaces that need one (/config, /secrets, /setup) and the ones
-// that need a tracker, a knowledge base or an object store (the write surface
-// under /worklet/items and /doclet/pages, a project's file bytes under
-// /worklet/files, /operator/mcp and /operator/act/{tool}) are not mounted on
-// it. Its git routes and the verify are, over a host that answers every
-// request it is handed.
+// WHETHER THE FIXTURE MOUNTS THE ROUTE IS DECLARED: the gate runs BEFORE the
+// mux and refuses on path and method alone, so an entry naming a path nothing
+// serves would look like one that works.
+// [TestNothingIsRefusedForDrainingBeforeADrain] holds it in BOTH directions.
+// [drainingApp] has no store, coordination store or company, so the surfaces
+// needing one (/config, /secrets, /setup, tracker, knowledge base and object
+// writes, /operator/*) are unmounted; its git routes and the verify are mounted.
 var startsWork = []struct {
 	method, path string
 	mounted      bool
@@ -204,18 +189,13 @@ func TestNothingIsRefusedForDrainingBeforeADrain(t *testing.T) {
 	}
 }
 
-// A DRAINING NODE FINISHES A FETCH AND BEGINS NO GIT WORK. A fetch is git
-// processes, and a sync from the object store before them, so a draining node
-// begins none: a fetch's advertisement is refused, which is where every new
-// one starts. What it serves is the upload-pack RPC, which continues a fetch
-// already begun — here or on a peer, since git keeps no state between an
-// exchange's requests — and a refusal there would break a fetch half done.
-// A push is refused at every request of it, its advertisement included,
-// because the GET is where git prints a refusal's reason — on the POST it
-// prints only `RPC failed; HTTP 503`. Every refusal is in git's own form,
-// text/plain, since git prints the API's JSON as nothing at all. A coding
-// box's git, classified as a person's, is drained by the same rules. A
-// download is new work, refused in its own words.
+// A DRAINING NODE FINISHES A FETCH AND BEGINS NO GIT WORK. A fetch's
+// advertisement is refused, where every new fetch starts; the upload-pack RPC
+// is served, continuing a fetch begun here or on a peer. A push is refused at
+// every request, the GET included, because that is where git prints the reason
+// (on the POST only `RPC failed; HTTP 503`). Refusals are text/plain, since git
+// prints the API's JSON as nothing. A coding box's git is drained by the same
+// rules; a download is new work, refused in its own words.
 //
 // Mutation: serve a download as a read through a drain.
 func TestADrainingNodeFinishesAFetchAndBeginsNoGitWork(t *testing.T) {

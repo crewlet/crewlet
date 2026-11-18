@@ -118,19 +118,16 @@ func (l *Link) onlyPair(t *testing.T) *pair {
 
 // EVERY SOCKET A LINK CARRIES OVER HOLDS THE BUFFERS IT REPORTS, the one it
 // accepted from the node and the one it dialled to the broker, each way, once
-// a bulk has crossed each way — what an unpinned buffer grows with: what the
-// kernel granted for the size the relay asks, which a case allows for whole
-// wherever an assertion rests on what a kernel holds that the relay has not
-// read. Granted is at least what was asked and at most twice it (Linux
-// doubles it for its own bookkeeping, darwin rounds it up to whole segments,
+// a bulk has crossed each way (what an unpinned buffer grows with): what the
+// kernel granted for the size the relay asks. Granted is at least the ask and
+// at most twice it (Linux doubles it, darwin rounds up to whole segments,
 // [Link.Buffers]).
 //
-// Red first: a relay that pinned nothing reported Linux's unpinned send
-// buffer of 16 KiB, a quarter of what it asks. Mutants: the dialled socket
-// left unpinned, and its buffers are not the ones the link reports; the
-// receive buffer left unpinned, and the bulk grows it past what was granted
-// (on every link that reads as fast as bytes come; a first-in, first-out
-// link reads too slowly for it to grow).
+// Red first: a relay that pinned nothing reported Linux's unpinned send buffer
+// of 16 KiB, a quarter of the ask. Mutants: the dialled socket left unpinned;
+// the receive buffer left unpinned, and the bulk grows it past what was
+// granted (on every link that reads as fast as bytes come; a first-in,
+// first-out link reads too slowly for it to grow).
 func TestEverySocketALinkCarriesOverHoldsTheBuffersItReports(t *testing.T) {
 	// bulk is what crosses each way before the sockets are read: enough for
 	// an unpinned receive buffer to grow, as Linux's grows with the traffic
@@ -172,21 +169,15 @@ func TestEverySocketALinkCarriesOverHoldsTheBuffersItReports(t *testing.T) {
 // A BLACKHOLED CONNECTION'S SENDER HAS NO MORE ACKNOWLEDGED THAN THE LINK READ
 // AND ITS PINNED RECEIVE BUFFER: a node's kernel counts a byte as delivered
 // once the relay's kernel takes it, so what a sender's socket says it
-// delivered — what it wrote less what its socket still holds — is at most
-// what the link read of the connection plus [Buffers.Receive], at every
-// reading, and once the relay's window has shut it is at most the link's read
-// plus what waits unread in its socket. The link reads none of it while
-// blackholed, and once mended carries every byte on. After a bulk
-// has crossed first, as a link carries before a case blackholes it.
+// delivered (written less what it holds) is at most what the link read plus
+// [Buffers.Receive], and once the relay's window has shut, the link's read plus
+// what waits unread in its socket. The link reads none of it while blackholed
+// and carries every byte on once mended, after a bulk has crossed first.
 //
-// Red first: a Blackhole that read and held what came read on, megabytes
-// past what it had read when the blackhole began, every one of them a byte
-// the sender's socket said it had delivered and the link never carried.
-// Mutants: the listener left unpinned, and the receive buffer the bulk grew
-// takes a hundred kilobytes and more past the one the link reports (on every
-// link that reads as fast as bytes come; a first-in, first-out link reads
-// too slowly for it to grow); Blackhole reads and holds, and the link's read
-// moves.
+// Red first: a Blackhole that read and held read on, megabytes past where it
+// began. Mutants: the listener left unpinned, so the grown receive buffer
+// passes the reported one (not on a first-in, first-out link, which reads too
+// slowly for it to grow); Blackhole reads and holds, and the link's read moves.
 func TestABlackholedSenderHasNoMoreAcknowledgedThanTheLinkReadAndItsBuffer(t *testing.T) {
 	const (
 		account = "BULK"

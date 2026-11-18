@@ -18,50 +18,24 @@ import (
 
 // Removing an MCP server: `DELETE /config/mcp-servers/{id}`.
 //
-// # One revision, every field that names it cleared in it
+// An `mcp_servers` entry is named by each seat's and unit's `mcp_env` block
+// and each `sandbox.mcp.servers` entry; removed alone it leaves them naming
+// nothing, which validation refuses ([config.Company.MCPServerReferences]).
+// So the route takes the entry and, with `clear`, every such field as ONE
+// write; without it a server anything names is refused naming all of it, each
+// at its field, so the person sees the whole of what goes with it.
 //
-// An `mcp_servers` entry is named by its name from two other places: each
-// seat's and unit's `mcp_env` block keyed on it, which holds that seat's or
-// team's credentials for it, and each `sandbox.mcp.servers` entry listing it,
-// which gives a seat's executor box the server. Removed alone, the entry
-// leaves every one of them naming nothing, which validation refuses
-// ([config.Company.MCPServerReferences] is the one walk both read). So the
-// route takes the entry and, with `clear`, every such field as ONE write.
-// Without it, a server anything names is refused naming all of it, each at its
-// field, so a page draws the list from the refusal and the person removing
-// the server sees the whole of what goes with it before it does.
-//
-// A FIELD IS CLEARED WHOLE, never repointed as a model's chain is: a block of
-// credentials for a server that no longer exists has nowhere to move. And one
-// the engine reads by its name besides the server's (a seat's `mcp_env.github`
-// is also its GitHub App token) is not the server's, so it stays
+// A FIELD IS CLEARED WHOLE, never repointed. One the engine also reads by the
+// server's name (a seat's `mcp_env.github`, its GitHub App token) stays
 // ([config.Company.MCPServerDependants]).
-//
-// # The values only it read may go with it
-//
-// What a server and its blocks read are `${VAR}` references into the
-// company's credential store. Once the removal is written some of them are
-// read by nothing: the ones the store holds are offered as
-// `dependants.secrets`, and the caller may name any of them in
-// `delete_secrets`. ONLY those: a name anything else in the document reads
-// (another server, a seat's integration, a model) is refused at its index,
-// because deleting it would sign that reader out. "Read" is
-// [config.Company.VariablesRead], the one answer `/secrets` gives an operator
-// about to delete a row, so a value it calls unread is one deleting breaks
-// nothing that answer knows of.
-//
-// DELETING A VALUE IS `secrets.write`, on top of the route's `config.write`,
-// decided before anything is read or written: the Dashboard Assistant never
-// takes `secrets.write`, so it may remove a server and never its credentials.
-//
-// THE VALUES GO AFTER THE REVISION IS WRITTEN, never before: deleted first, a
-// removal that then lost its write would leave the server running with its
-// credentials gone. And each is asked again of the fleet's revision just before
-// it goes, so a value a write that landed meanwhile reads is kept, and the
-// answer says which revision paths read it. Nothing here reads or answers a
-// value: only names.
 
 // MCPRemovalRequest is the body `DELETE /config/mcp-servers/{id}` reads.
+//
+// THE VALUES GO AFTER THE REVISION IS WRITTEN, never before: a removal that
+// then lost its write would leave the server running with its credentials
+// gone. Each is asked again of the fleet's revision just before it goes, so a
+// value a write that landed meanwhile reads is kept, and the answer says which
+// revision paths read it. Only names are read or answered here.
 type MCPRemovalRequest struct {
 	// Clear clears every field that names the server alone, in the same
 	// revision. Without it, a server anything names is refused naming all of
@@ -69,7 +43,13 @@ type MCPRemovalRequest struct {
 	Clear bool `json:"clear"`
 	// DeleteSecrets names stored values to delete once the removal is
 	// written, each one nothing reads once the server and the fields it
-	// clears are gone.
+	// clears are gone. ONLY those: a name anything else reads (another
+	// server, an integration, a model) is refused at its index, since deleting
+	// it would sign that reader out. "Read" is [config.Company.VariablesRead],
+	// the answer `/secrets` gives before a row is deleted. Deleting needs
+	// `secrets.write` on top of `config.write`, decided before anything is
+	// read: the Dashboard Assistant never takes it, so it never removes
+	// credentials.
 	DeleteSecrets []string `json:"delete_secrets"`
 }
 

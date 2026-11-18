@@ -8,53 +8,24 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// LocalReader is a domain's read authority over rows that are already applied,
-// with no broker behind it.
-//
-// # What it is for, and what it deliberately is not
-//
-// A domain's own tests are about its SQL — which rows a filter selects, what a
-// projection renders — and they seed those rows by running records through the
-// applier directly, with no stream and no runner. They still have to go
-// through [statelog.Reader], because that is where the level is honoured and a
-// reader that bypassed it in tests would be testing a path production does not
-// take.
-//
-// So this supplies the two seams a local read needs and nothing else: a waiter
-// already at the position, and a health that serves — over the domain's
-// log ([statelog.Domain.Stream]), which is the one its rows are keyed
-// to in a domain's own tests. It has NO read index, so
-// a `linearizable` read through it refuses rather than silently degrading —
-// which is the honest answer for a harness with no quorum to commit against,
-// and it is what stops this helper being mistaken for a way to test the
-// barrier. Those cases belong in internal/statelog, against a real broker.
+// LocalReader is a domain's read authority over rows already applied, with no
+// broker behind it, for a domain's tests of its own SQL that seed rows through
+// the applier directly. They still read through [statelog.Reader], where the
+// level is honoured, so they test the path production takes. It supplies only
+// a waiter already at the position and a health that serves, over the
+// domain's log ([statelog.Domain.Stream]). It has no read index, so a
+// `linearizable` read refuses rather than degrading: with no quorum that is
+// the honest answer, and barrier cases belong in internal/statelog against a
+// real broker.
 func LocalReader(domain statelog.Domain, db DB, at statelog.Position) (*statelog.Reader, error) {
 	return LocalReaderBehind(domain, db, at, 0)
 }
 
 // LocalReaderBehind is [LocalReader] over a node that reports itself `lag`
-// records behind the stream's end.
-//
-// # Why the lag is a parameter and not always zero
-//
-// Because a caller's staleness bound cannot be exercised against a node that
-// is caught up: `max_lag_seconds` and `max_lag_seq` are enforced by comparing
-// them against this figure, so at lag zero every bound passes and a domain
-// reader that dropped the caller's bound on the floor looks exactly like one
-// that carried it.
-//
-// That is not hypothetical. `max_lag_seconds` was validated against the level
-// and then never carried, so a tile polling every twenty seconds and declaring
-// a twenty-second bound was served an answer of any age and rendered it live;
-// `max_lag_seq` was fixed for one question and left in for nine more, because
-// nothing on either side of the call could tell. A test that sets a lag and a
-// tighter bound is what makes the last hop — the domain's query into
-// [statelog.Query] — observable at all.
-//
-// The node is still HEALTHY in every other sense: it has drained the log at
-// least once, the floor reads, the position is the one given, and nothing is
-// deferred. The only thing this changes is how far behind the node says it is
-// right now.
+// records behind the stream's end, and is healthy in every other sense. At
+// lag zero every `max_lag_seconds` and `max_lag_seq` bound passes, so a domain
+// reader that drops the caller's bound looks like one that carries it; a lag
+// and a tighter bound make the domain's hop into [statelog.Query] observable.
 func LocalReaderBehind(domain statelog.Domain, db DB, at statelog.Position,
 	lag uint64) (*statelog.Reader, error) {
 
@@ -74,8 +45,8 @@ func LocalReaderBehind(domain statelog.Domain, db DB, at statelog.Position,
 				TrimFloor: &floor,
 			}, nil
 		},
-		// THE SHIPPED FIGURE, so a retry hint a case renders is the one an
-		// operator would see rather than a number invented here.
+		// The shipped figure, so a rendered retry hint is the one an
+		// operator would see.
 		Drain: func() float64 { return 2000 },
 	})
 }
@@ -97,21 +68,12 @@ func (w localWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Po
 	return nil
 }
 
-// LocalReaderOver is [LocalReader] over a node whose applied position MOVES:
-// the waiter is the caller's own, so a read that has to wait for a position
-// waits on it, and the health reports wherever it currently is.
-//
-// # Why a third constructor
-//
-// Because the other two cannot exercise a wait. [LocalReader]'s waiter is
-// already at its position and never blocks, which is the right shape for a
-// case about which rows a filter selects — and exactly the wrong one for a
-// case about the caller's floor: a reader handed a position past what this
-// node has applied must REFUSE `behind` rather than serve the rows from
-// before it, and a waiter that returns at once makes the two indistinguishable.
-// A harness that drains records through its own applier and advances a waiter
-// as it goes is what makes "not yet applied" a state a test can hold a read
-// in.
+// LocalReaderOver is [LocalReader] over a node whose applied position moves:
+// the waiter is the caller's own, so a read waits on it, and the health
+// reports wherever it is. It exists for cases about the caller's floor: a
+// reader handed a position past what the node applied must refuse `behind`,
+// not serve older rows, and [LocalReader]'s waiter, which never blocks, cannot
+// tell the two apart.
 func LocalReaderOver(domain statelog.Domain, db DB, waiter statelog.Waiter) (*statelog.Reader, error) {
 	return statelog.NewReader(statelog.ReaderDeps{
 		Domain: domain,

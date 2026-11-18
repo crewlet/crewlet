@@ -27,59 +27,18 @@ import (
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
-// THE ASSISTANT GRANT: how the Dashboard Assistant acts as the person who
-// asked it, and nothing else (ADR-0050).
-//
-// # A sibling of the view ticket, not a credential of its own
-//
-// The assistant has no identity. What it holds for a turn is a grant DERIVED
-// from the request the guard resolved to a person acting through a browser
-// session, and the grant carries the NAME of that session (`session:<lineage>`)
-// rather than any authority: every request it rides is re-composed by
-// [Lineages.Principal] from the identity rows, exactly as an artifact view
-// ticket's document request is (ADR-0035). So a sign-out, a revocation, a
-// suspension, a lost permission or a seat move stops the assistant at its next
-// step, and nothing the grant says can widen what the person may do now.
-//
-// # Useless outside this process
-//
-// The grant is accepted only on a request carrying an UNEXPORTED context marker
-// that [Dispatcher.Do] sets, and a request off the wire cannot carry a context
-// value. Presented over a socket it is refused 401 and logged as
-// `assist_over_wire`, whatever it says and whether or not it is still live. That
-// is what makes a grant something no proxy log, no local process and no
-// misconfigured bind can use: the in-process call never crosses a socket, and a
-// copy that did would open nothing.
-//
-// # Every clause subtracts
-//
-//   - SCOPE. A read grant takes GET and HEAD only; an exec grant takes the ONE
-//     request its approval bound, by the request's digest
-//     ([opkey.RequestDigestOf]), once. The authority table's assistant column
-//     (ADR-0052) is decided inside [authz.Decide] beside these, so a nested verb
-//     a tool asks is held to it too.
-//   - LIFETIME. A read grant lives [AssistReadLifetime], an exec grant
-//     [AssistExecLifetime], and neither outlives the session's absolute or idle
-//     deadline as the deriving request presented them.
-//   - FRESHNESS. The re-composed principal's step-up instant is clamped to the
-//     deriving request's ([AssistClaims.ReauthCeiling]), so a grant never proves
-//     a fresher identity than the click that started the turn.
-//   - REVOCATION. Every grant is in a NODE-LOCAL registry keyed by its id: the
-//     turn and every call it makes run in this process and die with it, so
-//     nothing else has to agree on it. A grant the registry does not hold live
-//     is refused whatever its signature says.
-//   - EDGES. A grant never reaches the surfaces that are not action-routed or
-//     that would let the assistant act on itself: the credential surface, the
-//     sockets, both MCP surfaces, telemetry, webhooks and the assistant's own
-//     routes, so it can never approve its own proposal ([assistRefusedPrefixes]).
-//
-// # Who may derive one
-//
-// A PERSON, active, acting through a whole browser session: never a machine
-// token (whose own owner is the person but whose presence is nobody's), never a
-// Tier A token or a session exchanged from one, never a session that may only
-// enrol a second factor, and never a request already riding a grant, so the
-// assistant cannot mint itself a fresher one (decision D04).
+// THE ASSISTANT GRANT: how the Dashboard Assistant acts as the person who asked
+// it, and nothing else (ADR-0050). It carries only the NAME of the deriving
+// person's browser session, re-composed by [Lineages.Principal] on every request
+// (ADR-0035), so a sign-out or revocation stops it at its next step. It is accepted only with an UNEXPORTED context
+// marker [Dispatcher.Do] sets, which a wire request cannot carry: over a socket
+// it is refused 401 and logged `assist_over_wire`, live or not. Every clause
+// subtracts: SCOPE (read: GET and HEAD; exec: the ONE request its approval
+// bound, [opkey.RequestDigestOf], once; ADR-0052's column also applies);
+// LIFETIME (never past the session's); FRESHNESS ([AssistClaims.ReauthCeiling]);
+// REVOCATION (a NODE-LOCAL registry: a grant it lacks is refused); EDGES
+// ([assistRefusedPrefixes]). Only an active PERSON in a whole browser session
+// derives one, never a token or a grant, so it cannot mint a fresher one (D04).
 
 // AssistDomain separates the grant's signing keys from every other runtoken's,
 // so a token minted for the OTLP receiver, the MCP bridge or a view ticket never
@@ -119,18 +78,12 @@ const assistOperatorMCP = "/operator/mcp"
 
 // assistRefusedPrefixes are the paths no grant reaches, refused before routing:
 //
-//   - the credential surface (`/auth/`), where somebody signs in, steps up,
-//     enrols a factor or ends sessions, and the assistant must never;
+//   - the credential surface (`/auth/`): sign-in, step-up, factors, sessions;
 //   - the socket (`/ws/`), whose connection outlives any one request;
-//   - both MCP surfaces, the operator's and the sandbox bridge's, which are
-//     transports into the tools rather than routes with a row of their own;
+//   - both MCP surfaces and Gitlet's git transports (a person's `/git/`, ADR-0085;
+//     a coding box's `/box/git/`, `/box/gitlet/`, ADR-0093): transports with no
+//     route row of their own, whose credential is never a grant;
 //   - telemetry and webhooks, which authenticate by other means;
-//   - Gitlet's git transports — a person's (`/git/`), which git
-//     itself drives with the person's own bound token (ADR-0085), and a
-//     coding box's (`/box/git/`, `/box/gitlet/`), admitted by its run's
-//     credential (ADR-0093) — which, like the MCP surfaces, are transports
-//     rather than routes with a row of their own, and whose credential is
-//     never a grant;
 //   - the assistant's own routes, so it cannot recurse or approve itself.
 var assistRefusedPrefixes = []string{
 	PathAuthPrefix, "/ws/", assistOperatorMCP, mcpbridge.PathPrefix, OTLPPrefix,

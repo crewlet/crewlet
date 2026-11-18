@@ -67,23 +67,17 @@ func TestAWorkConfigDirIsInsideTheCallAndHoldsWhatTheHarnessReads(t *testing.T) 
 }
 
 // THE BUILT-IN OPENCODE PROFILE'S CHILD READS NO PROJECT CONFIGURATION AND ONLY
-// THE CALL'S OWN. Both variables, with exactly these values: without the
-// first, every ancestor's opencode.json and .opencode/ is configuration for
-// every seat — measured on 2.0.32, an allow-all one handed every call a shell
-// and an ancestor plugin ran its code — and without the second the seat's agent
-// file and tool policy are read from nowhere.
+// THE CALL'S OWN. Both variables, with exactly these values: without the first,
+// every ancestor's opencode.json and .opencode/ configures every seat (on 2.0.32
+// an allow-all one handed every call a shell); without the second the seat's
+// agent file and tool policy are read from nowhere.
 //
-// The switch is the name OpenCode 2 reads FIRST, OPENCODE_CONFIG_PROJECT_DISABLE:
-// it reads `OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG`,
-// so a child given only the second, beside any value of the first — an empty
-// one included — walked every ancestor again. Which is why the operator's
-// own spelling of the second, handed through env, changes nothing here:
-// the first is set, so the second is never read.
-//
-// And ONLY A CALL gets the directory: a command run in a home — a credential
-// store's import and export, a login — has no working directory, and pointing
-// the variable at the home would put one call's system prompt where every
-// concurrent call of the seat reads it. The walk stays off for those too.
+// The switch is the name OpenCode 2 reads FIRST, OPENCODE_CONFIG_PROJECT_DISABLE
+// (`... ?? OPENCODE_DISABLE_PROJECT_CONFIG`): a child given only the second,
+// beside any value of the first (empty included), walked every ancestor again.
+// ONLY A CALL gets the directory: a command run in a home (credential import,
+// export, a login) has none, and pointing the variable at the home would put one
+// call's system prompt where every concurrent call reads it.
 func TestTheOpenCodeChildReadsOnlyTheCallsOwnConfiguration(t *testing.T) {
 	t.Parallel()
 	p, ok := harnessprofile.Builtin("opencode")

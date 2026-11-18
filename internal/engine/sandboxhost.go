@@ -194,7 +194,7 @@ func (b *boxReads) answer(ctx context.Context, raw []byte) ([]byte, error) {
 		// past its deadline and the channel's allowance for two clocks, or
 		// taken already: nothing is read, and only the node it names says
 		// so — the asker hears a host that did not answer, and the host's
-		// own next poll announces the run again.
+		// own waiter announces the run again on its schedule.
 		if admitted.Request.Node == b.node {
 			log.WarnContext(ctx, "sandbox_box_read_refused", "disposition", string(admitted.Disposition),
 				"turn_id", admitted.Request.TurnID, "detail", admitted.Why+"; no box was read")
@@ -220,6 +220,20 @@ func (b *boxReads) answer(ctx context.Context, raw []byte) ([]byte, error) {
 			Node: b.node, Error: "this node runs no sandbox runtime to read the box with"})
 	}
 	waited, held := b.slots.take(ctx, arrived, share)
+	if !held && errors.Is(ctx.Err(), context.Canceled) {
+		// THIS NODE WITHDREW AS AN ANSWERER while the read waited for a slot,
+		// draining or restarting: the host is going, not busy. Answered busy,
+		// its asker would hold the host present and start its silence again,
+		// asking a node on its way out; answered withdrawn, it hears now a
+		// host that did not answer (sandbox.BoxReadReply.Withdrawn), as it
+		// does of a read the withdrawal cut.
+		log.InfoContext(ctx, "sandbox_box_read_withdrawn", "turn_id", req.TurnID, "read", string(req.Read),
+			"waited", waited.String(), "detail", "this node stopped answering box reads while the read "+
+				"waited for one of its slots; nothing was read, and the asker hears a host that did not answer")
+		return b.seal(sandbox.BoxReadReply{Version: sandbox.BoxReadWireVersion, Request: req.ID,
+			Node: b.node, Withdrawn: true, Error: "this node stopped answering box reads while the read " +
+				"waited for one of its slots"})
+	}
 	if !held {
 		log.InfoContext(ctx, "sandbox_box_read_busy", "turn_id", req.TurnID, "read", string(req.Read),
 			"waited", waited.String(), "detail", "this node was making as many reads of its boxes as it "+
@@ -234,7 +248,10 @@ func (b *boxReads) answer(ctx context.Context, raw []byte) ([]byte, error) {
 	// Counted from the request's arrival on this node's clock, so a read that
 	// waited for a slot ends at the same instant as its wait for one would
 	// have, and the asker's last quarter stays whole for the crossings
-	// ([sandbox.BoxReadRequest.AnswerBudget]).
+	// ([sandbox.BoxReadRequest.AnswerBudget]). Beneath it, this node's own
+	// lifetime as an answerer, which its withdrawal cancels: a read that ends
+	// cut by that is answered as the host stopping
+	// (sandbox.BoxReadReply.Withdrawn), never as the box's failure.
 	readFor, _ := req.AnswerBudget(waited)
 	readCtx, cancel := context.WithTimeout(ctx, readFor)
 	defer cancel()

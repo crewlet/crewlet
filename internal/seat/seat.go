@@ -102,6 +102,23 @@
 // holds their mail. Nothing can be signalled out of that, because the code
 // that would handle the signal is the code that is stuck. [Watchdog] converts
 // it into "gone";
+//
+// # The presence status is the node's live core alone
+//
+// What grows with a company's configuration (its MCP, model and runner rows)
+// rides the node's status record, which the engine writes beside the
+// presence, so a beat re-sends a few hundred bytes whatever a company
+// declares ([Host.RenewPeriod] is the pace that record keeps). A placement
+// input never rides the status: a beat that gives up on the hook drops it
+// whole, and every peer would read the node as not saying.
+//
+// # A refusal to start reaches the sandbox's claims through a gate of its own
+//
+// [Host.MayStart] refuses a turn on a seat still establishing, and that
+// refusal carries to every claim of the seat's runs the sandbox coordinator
+// makes, an apply's recovery and a deadline's claim included, which do not
+// ask MayStart: they pass a gate of their own that keeps a seat's recovery
+// exclusive with every claim of its runs (internal/sandbox's recoverygate.go).
 package seat
 
 import (
@@ -123,31 +140,22 @@ var log = logging.Get("seat.host")
 const (
 	// SeatLeaseTTL is how long a seat stays claimed without a heartbeat.
 	//
-	// Measured, and the measurement moved where the constraint lives. The
-	// broker imposes no floor: a cleanly-closed consumer releases its
-	// messages in ~9 ms and a successor attaches in ~5 ms, so a peer is
-	// productive the instant it claims. What bounds the TTL is heartbeat
-	// reliability — 45 s is three heartbeat intervals, which tolerates two
-	// consecutive missed renewals (a GC pause, a store blip, a scheduling
-	// hiccup) with a full interval left to recover in.
-	//
-	// Shorter would drop healthy nodes' seats on ordinary jitter, and each
-	// spurious handoff costs a real MCP respawn. Longer is time a dead
-	// node's seats sit dark, since nothing can claim them until the TTL
-	// runs out.
+	// The broker imposes no floor (a closed consumer releases in ~9 ms, a
+	// successor attaches in ~5 ms); heartbeat reliability bounds the TTL: 45 s
+	// is three intervals, tolerating two consecutive missed renewals with a
+	// full interval left. Shorter drops healthy seats on ordinary jitter,
+	// each handoff costing an MCP respawn; longer leaves a dead node's seats
+	// dark until the TTL runs out.
 	SeatLeaseTTL = 45 * time.Second
 
 	// HeartbeatRatio is how many heartbeats fit in a lease — the standard
 	// lease ratio, for the standard reason: one third is the largest
 	// interval that still leaves room for two failures.
 	//
-	// A RATIO rather than a duration, because the interval has to follow
-	// THIS host's TTL rather than the shipped one. A deployment that
-	// shortened its lease to ten seconds while the interval stayed at
-	// fifteen would renew every seat strictly after it had already
-	// expired: every heartbeat fails, every seat is lost, and the fleet
-	// hands its seats around forever with every node reading healthy.
-	// AcquireBackoff below is tied to the same TTL for the same reason.
+	// A RATIO, because the interval must follow THIS host's TTL: a ten second
+	// lease with a fifteen second interval renews every seat after it expired,
+	// so the fleet hands seats around forever with every node reading healthy.
+	// AcquireBackoff is tied to the same TTL.
 	HeartbeatRatio = 3
 
 	// HeartbeatInterval is the interval for the DEFAULT TTL. A host with a
@@ -157,18 +165,14 @@ const (
 	// StatusBudgetRatio is the share of ONE heartbeat interval the status
 	// hook may spend before the beat gives up on it.
 	//
-	// The hook is allowed to read a store — this node's config posture
-	// lives in the control plane — and it runs on the path that renews
-	// this node's PRESENCE lease, which is what keeps it counted in the
-	// fleet. A display column must never be able to delay that. One fifth
-	// of the interval (3 s at the shipped TTL) is far more than two
-	// indexed reads need and still leaves four fifths of the beat for the
-	// renewal itself; a hook that does not answer within it publishes
-	// nothing, which reads as "did not say" rather than as an idle node.
+	// The hook may read a store (the config posture lives in the control
+	// plane) on the path that renews the PRESENCE lease, which a display
+	// column must never delay. One fifth (3 s at the shipped TTL) is far more
+	// than two indexed reads need and leaves four fifths for the renewal; a
+	// hook past it publishes nothing, read as "did not say", not idle.
 	//
-	// A RATIO for the same reason [HeartbeatRatio] is one: a deployment
-	// that shortens its TTL shortens this with it, instead of leaving a
-	// fixed budget that swallows the whole beat.
+	// A RATIO for the reason [HeartbeatRatio] is one: a fixed budget would
+	// swallow the whole beat of a shortened TTL.
 	StatusBudgetRatio = 5
 
 	// SweepInterval is how often placement is re-evaluated.
@@ -193,51 +197,36 @@ const (
 	// ReleaseLimitPerSweep is how many seats one sweep may hand back to
 	// rebalance.
 	//
-	// The mirror of the claim limit, sized the same way and for the same
-	// reason: giving a seat up is an MCP teardown and, on the node that
-	// takes it, an MCP spawn. Two rather than four because a release is the
-	// more disruptive half — it interrupts a live agent at a turn boundary,
-	// while a claim only starts one — and because the fleet has no deadline
-	// to meet here. Nothing is dark during a rebalance; the seats are
-	// served the whole time, just by the wrong node.
+	// The mirror of the claim limit: a release is an MCP teardown and, on the
+	// taking node, a spawn. Two rather than four because a release interrupts
+	// a live agent at a turn boundary and nothing is dark during a rebalance
+	// (the wrong node serves meanwhile), so there is no deadline.
 	ReleaseLimitPerSweep = 2
 
 	// AcquireBackoff is how long a seat whose acquire pipeline failed is
 	// not re-attempted HERE.
 	//
-	// A failed acquire is almost never transient at the seat level — a bad
-	// MCP command, a credential the role's config resolves to nothing, a
-	// sandbox template that no longer exists. Retrying it on the next
-	// five-second sweep spins: claim, spawn, fail, release, repeat, forever,
-	// at the cost of an MCP fork each time, and the seat is dark throughout
-	// either way.
+	// A failed acquire (bad MCP command, an unresolved credential, a missing
+	// sandbox template) is almost never transient, and retrying on the next
+	// sweep spins: claim, spawn, fail, release, with an MCP fork each time.
+	// A TTL of backoff gives a peer a clear run at it and cuts the noise from
+	// twelve attempts a minute to one. Not permanent: config changes.
 	//
-	// Backing off for a TTL gives a peer a clear run at it (its own claim
-	// order is unaffected) and, if every node fails the same way, reduces
-	// the noise from twelve attempts a minute to one. Deliberately not
-	// permanent: the cause is often config, and config changes.
-	//
-	// It is ONE TTL, not the number 45: a host built with a shorter TTL
-	// derives its backoff from that TTL rather than from this constant, so
-	// the two cannot drift. This is the value at the shipped TTL.
+	// ONE TTL, not the number 45: a host with a shorter TTL derives its
+	// backoff from it. This is the value at the shipped TTL.
 	AcquireBackoff = SeatLeaseTTL
 
 	// UndeadAlarmInterval is how often a seat stranded by an unproven
 	// teardown re-raises its alarm.
 	//
-	// The teardown is retried on every heartbeat, so nothing here changes
-	// what the host DOES — this is purely how long a stranded seat is
-	// allowed to be quiet. It used to log once, at the moment it happened,
-	// and then never again: a seat could be out of service for a week with
-	// the only evidence a single line that had long since rotated out.
+	// The teardown is retried every heartbeat; this is only how long a
+	// stranded seat may be quiet, so its evidence outlives log rotation.
 	//
-	// Five minutes: twenty heartbeats at the shipped TTL, and a DURATION
-	// rather than a count of this host's heartbeats, because both of its
-	// reasons are about time. Frequent enough that the alarm outlives log
-	// rotation and that a stranded seat is still visible to whoever comes
-	// on shift next; rare enough that one stuck seat cannot fill a log with
-	// its own retries — which at the 15 s floor a count of twenty would
-	// have made every minute and forty seconds.
+	// Five minutes (twenty heartbeats at the shipped TTL), a DURATION rather
+	// than a heartbeat count because both reasons are about time: frequent
+	// enough to be seen by whoever comes on shift next, rare enough that one
+	// stuck seat cannot fill a log (a count of twenty at the 15 s floor
+	// would fire every 100 s).
 	UndeadAlarmInterval = HeartbeatInterval * 20
 )
 
@@ -269,16 +258,12 @@ var unmannedHints = map[placement.NodeRole]string{
 // ReleaseReason is why a seat is being given up. The two families are
 // opposites.
 //
-// VOLUNTARY — this node still holds the lease and is choosing to let go.
-// There is time: quiesce, let the in-flight handler finish under a bounded
-// wait, then detach and release.
+// VOLUNTARY: the lease is still held. Quiesce, let the in-flight handler
+// finish under a bounded wait, then detach and release.
 //
-// FENCED — the lease is gone or must be treated as gone. There is NO time
-// and no exclusivity: a peer may already be running this seat, so in-flight
-// work is abandoned rather than finished, and nothing is republished —
-// republishing hands the peer a second copy of work it is already doing, and
-// sends those messages to the topic tail while the successor replays its
-// prefetched siblings from the head, reordering the conversation.
+// FENCED: the lease is gone or treated as gone, so NO time and no
+// exclusivity: in-flight work is abandoned and nothing republished, which
+// would give the peer a second copy and reorder the conversation.
 type ReleaseReason string
 
 const (
@@ -365,45 +350,30 @@ func (r ReleaseReason) String() string { return string(r) }
 // test or a diagnostic wants. Implement whichever methods matter and use
 // [HookFuncs] for the rest.
 type Hooks interface {
-	// OnAcquire establishes the seat, and ATTACHES ITS CONSUMER LAST:
-	// agent instance, budget cap, per-role MCP children, interrupted
-	// sandbox-run recovery, and only THEN the inbox and control
-	// subscriptions. A seat that starts receiving work before its MCP
-	// children are up runs its first turn with an empty tool surface.
+	// OnAcquire establishes the seat, and ATTACHES ITS CONSUMER LAST (agent,
+	// budget cap, MCP children, sandbox-run recovery, THEN the inbox and
+	// control subscriptions): earlier, a first turn has no MCP tools.
 	//
-	// The lease carries the epoch every write made on this seat's behalf
-	// must be fenced with. Returning an error gives the seat straight back
-	// (ReasonAcquireFailed) and backs this node off it for one TTL, because
-	// a takeover that failed would otherwise read as owned to the whole
-	// fleet while nothing runs it.
+	// The lease carries the epoch writes are fenced with. An error gives the
+	// seat back (ReasonAcquireFailed) and backs this node off for one TTL.
 	//
-	// ctx is CUT — ended — when the seat's lease is lost or this node begins
-	// its drain while the hook runs, so a hook that has no total of its own
-	// should stop on it. The heartbeat never waits for one that does not,
-	// and a drain waits for it only within its own bound ([Host.AwaitCut]).
-	// Whatever it returns after a cut, the seat is given back as never
-	// established (ReasonAcquireFailed), backed off after a lost lease and
-	// not after a drain. ctx also ends once the hook has returned: what outlives the
-	// hook detaches from it.
+	// ctx is CUT when the lease is lost or a drain begins mid-hook, so a hook
+	// with no total should stop on it; the heartbeat never waits for one
+	// that does not, a drain only within [Host.AwaitCut]'s bound. After a cut
+	// the seat is given back as never established (ReasonAcquireFailed),
+	// backed off after a lost lease, not a drain. ctx also ends on return.
 	OnAcquire(ctx context.Context, seat placement.Seat, lease coord.Lease) error
 
 	// OnEstablished reports that a seat OnAcquire returned for is
 	// ESTABLISHED: from this call on, [Host.MayStart] admits turns on it.
 	//
-	// It exists because establishment is the one transition into admission
-	// nothing else announces. The acquire hook runs while the seat is still
-	// refusing every turn, so a decision made inside it about whether the
-	// seat may run something — the engine's recovery of a run whose answer
-	// a previous holder recorded and never resumed with, retried from the
-	// hook — is told no, and has nothing to wait on but the clock: the next
-	// renew is a heartbeat away (15 s at the default TTL) and reports
-	// nothing to anyone, because an established seat's first renew is not an
-	// admission EDGE (see OnAdmission). This is that edge.
+	// The one transition into admission nothing else announces: the acquire
+	// hook runs while the seat refuses every turn, and the next renew is a
+	// heartbeat away and no admission EDGE (see OnAdmission). This is it.
 	//
-	// Called once per acquisition, after OnAcquire returned nil and the seat
-	// stopped establishing, under the seat's own lock like OnAcquire. It
-	// cannot fail the acquisition — the seat is already serving — so it
-	// returns nothing; anything it does that can fail is its own to retry.
+	// Called once per acquisition, after OnAcquire returned nil, under the
+	// seat's lock. It cannot fail the acquisition; a failure is its own to
+	// retry.
 	OnEstablished(ctx context.Context, seat placement.Seat, lease coord.Lease)
 
 	// OnRelease tears the seat down. The reason decides whether in-flight
@@ -424,20 +394,14 @@ type Hooks interface {
 	// or provable again. Only for seats this node keeps — a seat it loses
 	// goes through OnRelease instead.
 	//
-	// It exists because the lease grace and the consumer are two different
-	// clocks. A store blip freezes the last-renew stamp, so MayStart stops
-	// admitting turns within one heartbeat while the seat itself is
-	// correctly kept (the row is untouched; shedding on a blip would tear a
-	// healthy company down). The consumer, meanwhile, is still attached and
-	// still being handed deliveries, each of which is refused. Without a
-	// signal on the way back up, a delivery that arrived during the blip
-	// leaves the attachment stopped for good: the node owns the seat, is
-	// attached to it, and reads nothing from it ever again.
+	// The lease grace and the consumer are two clocks. A store blip stops
+	// MayStart admitting within one heartbeat while the seat is kept
+	// (shedding would tear a healthy company down), refusing every delivery.
+	// Without a signal on the way back up, a delivery during the blip leaves
+	// the attachment stopped for good.
 	//
-	// Fires only on the EDGE, so a store that is down for an hour produces
-	// one call, not one per heartbeat. Errors are logged and swallowed —
-	// this runs inside the heartbeat, which is what keeps every OTHER seat
-	// on this node alive.
+	// Fires only on the EDGE. Errors are logged and swallowed: this runs
+	// inside the heartbeat, which keeps every OTHER seat alive.
 	OnAdmission(ctx context.Context, seat placement.Seat, admitted bool) error
 }
 

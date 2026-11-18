@@ -435,19 +435,16 @@ func TestACredentialsWriterCarriesOnlyTheAppsItsRecordNames(t *testing.T) {
 
 // AN AGENT'S WRITER CARRIES WHOM ITS RECORD WAS WRITTEN FOR, AND SO DOES THE
 // ENGINE'S (ADR-0109): the turn the write wakes works for them, never for the
-// writing seat; and the engine's record about an agent's earlier act made for
-// somebody — Gitlet's merge queue's ejection and a close it could not make,
-// the amendment's one exception to the engine writing for nobody but itself —
-// carries that act's carrier, so the turn it wakes works for them too. A
-// person and a credential write for nobody but themselves, so a carrier
-// handed for one of them rides nothing. The carrier is the writer's own copy,
-// with a credential's apps held to the apps this build knows, once each, in
-// iam.Apps order, as a credential writer's own are.
+// writing seat. The engine's record about an agent's earlier act made for
+// somebody (Gitlet's merge queue's ejection, a close it could not make)
+// carries that act's carrier. A person and a credential write for nobody but
+// themselves, so a carrier handed for one rides nothing. The carrier is the
+// writer's own copy, a credential's apps held to those this build knows, once
+// each, in iam.Apps order.
 //
 // Mutation: keep the carrier for every kind, and the person's writer works
-// its turn for ada; drop it for the agent, and the agent's write wakes its
-// seat for the agent; drop it for the engine, and the queue's ejection wakes
-// its seats for themselves.
+// for ada; drop it for the agent or the engine, and their writes wake seats
+// for the wrong party.
 func TestAnAgentsWriterCarriesWhomItWroteFor(t *testing.T) {
 	t.Parallel()
 	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
@@ -732,15 +729,10 @@ func firstPartyDelivery(source string) *events.Event {
 // FOR A PEER; A VENDOR'S, AND ONE FROM A DECLARED SOURCE NOBODY RUNS, ARE
 // ACKNOWLEDGED.
 //
-// Every node takes inbound mail from one group, so a delivery acked here is
-// gone for every node. A first-party source this build neither parses nor
-// declares is one a newer build's producer added — a domain given a wake feed
-// during a roll — and a peer on that build parses it: acked as a source
-// nothing parses, its wake was lost for the whole fleet. It is passed, as a
-// newer record is, with no skip recorded. A vendor's webhook nothing parses
-// is an integration wired at the edge alone, and a declared first-party source
-// this company does not run is one nobody here will ever parse: both are
-// acknowledged and recorded, as before.
+// A delivery acked here is gone for every node. A first-party source this
+// build neither parses nor declares was added by a newer build's producer, so
+// it is passed with no skip recorded. A vendor's webhook nothing parses and a
+// declared source this company does not run are acknowledged and recorded.
 //
 // Mutation: read no first-party mark, and the newer source is acknowledged
 // away; pass every unparsed delivery, and the vendor's and the unrun source's
@@ -1064,15 +1056,12 @@ func TestAParseFailureIsRecordedAndNotRetried(t *testing.T) {
 // A RECORD A NEWER BUILD WROTE IS PASSED TO A PEER THAT READS IT, never acked
 // as a parse failure.
 //
-// Every node takes inbound mail from ONE fleet-wide group, so a delivery this
-// node acks is one no peer ever sees: a wake an older node met during a roll
-// was recorded as a parse failure and acked, gone fleet-wide (crewlet#993). A
-// parser's deferral — here wrapped, as a parser may return it — is handed back
-// for a peer instead, as a pass: neither a failure, which a NAK would log it
-// as, nor a deferral, which would stop this node taking its other mail. And no
-// skip is recorded, because the delivery was not skipped: a peer takes it.
-// TestAParseFailureIsRecordedAndNotRetried is the other half: an error that
-// carries no deferral is still a parse failure, recorded and acked.
+// Every node takes inbound mail from ONE group, so a delivery this node acks
+// no peer ever sees (crewlet#993). A parser's deferral, here wrapped, is
+// passed back for a peer: not a failure, which a NAK would log, nor a
+// deferral, which would stop this node's other mail. No skip is recorded; a
+// peer takes it. TestAParseFailureIsRecordedAndNotRetried is the other half:
+// an error carrying no deferral is a parse failure, recorded and acked.
 //
 // Mutation: ack a parser's deferral, and the delivery is gone; record the
 // parse-failed skip for it, and the event log says it reached nobody.
@@ -1170,13 +1159,11 @@ func TestAWakeWhoseParserDerivedNoIDTakesOneFromItsDelivery(t *testing.T) {
 // A WAKE THIS NODE COULD NOT PUBLISH IS THE NODE'S FAILURE, NOT THE
 // DELIVERY'S.
 //
-// A broker the node could not reach, a queue no longer live, a stop that ended
-// the handler: the delivery is returned as any failure is, but never counted
-// against it (queue.NakNode), so one whose budget such a failure spends — a
-// newer record's wake whose last delivery reached a newer node that could not
-// publish it — is kept with the group's unhandled deliveries, which a replay
-// delivers, and not with its poison, which nothing replays. A wake that failed
-// for a reason no node's retry changes is the delivery's own.
+// An unreachable broker, a queue no longer live, a stop that ended the
+// handler: never counted against the delivery (queue.NakNode), so one whose
+// budget it spends is kept with the unhandled deliveries, which a replay
+// delivers, not the poison, which nothing replays. A failure no node's retry
+// changes is the delivery's own.
 //
 // Mutation: answer every failed wake with a plain Nak, and the node's own
 // rows count against the delivery; treat any error as the node's, and the

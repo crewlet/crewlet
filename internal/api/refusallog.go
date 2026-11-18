@@ -14,27 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 )
 
-// A REFUSED WRITE TO THE COMPANY LEAVES ONE LOG LINE. A write to the config,
-// the secrets or a model that the engine answers with a 4xx (a stale
-// If-Match, a validation problem, a missing step-up, a grant the caller does
-// not hold, a guard refusing it before the route ran) used to leave nothing in
-// the engine's log, so an operator asking why a save "did nothing" had the
-// dashboard's sentence and no record of it. Each now logs `write_refused`
-// (not a config write's alone: a model's check, retry and host sign-in are
-// POSTs on the same surfaces): the route's pattern, the method, the status, the
-// problem's code, who asked, the revision they wrote against and the request
-// id.
+// A REFUSED WRITE TO THE COMPANY LEAVES ONE LOG LINE: a 4xx on a config,
+// secrets or model write logs `write_refused` with the route's pattern, method,
+// status, the problem's code, who asked, the revision written against and the
+// request id.
 //
-// NEVER WHAT WAS WRITTEN. The route is the PATTERN the request was served on
-// (`PUT /secrets/{name}`), never the path, which would carry a secret's name;
-// the problem is the envelope's code, read off the answer, never its body or
-// its detail, which can quote a document; and nothing of the request's body
-// is read at all.
+// NEVER WHAT WAS WRITTEN. The route is the PATTERN (`PUT /secrets/{name}`),
+// never the path, which would carry a secret's name; the problem is the
+// envelope's code, never its body or detail, which can quote a document; the
+// request body is not read.
 //
-// AT INFO, NOT WARN: a refusal is the engine doing its job, answering a
-// request it was right not to take, and a stale tab or an expired step-up
-// refuses routinely. A warning is for something an operator should act on
-// unprompted; this is the record they look for when somebody asks.
+// AT INFO, NOT WARN: a stale tab or expired step-up refuses routinely, and a
+// warning is for something an operator should act on unprompted.
 
 // refusalMux is the mux a guarded surface mounts on, wrapping each route so
 // that a write it answers with a 4xx logs to log. It forwards the policy each route

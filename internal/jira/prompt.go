@@ -10,23 +10,15 @@ import (
 
 // Prompt is what a Jira webhook asks of the seat it reached.
 //
-// # It tailors to the ROUTING REASON, not to the event type
+// It tailors to the ROUTING REASON, not the event type: one
+// "jira:issue_updated" reaches an assignee (owns the work), a watcher and a
+// lead (named by nobody else), and a prompt keyed on the event would tell all
+// three the weakest thing. [Parser] stamped which a copy is as
+// [RoutedViaField]; the prompt reads that back rather than re-deriving it.
 //
-// One "jira:issue_updated" payload reaches an assignee, a watcher and a
-// project lead, and it asks each of them for something different: the
-// assignee owns the work, the watcher is following it, and the lead is there
-// only because nobody else here was named. A prompt keyed on the event would
-// have to tell all three the same thing, which in practice means telling all
-// three the weakest thing.
-//
-// [Parser] already decided which of those a copy is and stamped it as
-// [RoutedViaField], so the prompt reads that back rather than re-deriving a
-// judgement the router made with more information than the prompt has.
-//
-// NOTHING HERE NAMES A TOOL. The prompt describes the capability — "fetch the
-// issue", "set the assignee" — and lets the model find the matching tool in
-// its own catalogue, because the deployed MCP server's tool names are not
-// knowable by the engine. See docs/concepts/tool-capabilities.md.
+// NOTHING HERE NAMES A TOOL: the prompt describes the capability ("fetch the
+// issue") because the deployed MCP server's tool names are not knowable by
+// the engine. See docs/concepts/tool-capabilities.md.
 type Prompt struct{}
 
 var _ notify.Prompt = Prompt{}

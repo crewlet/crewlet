@@ -60,8 +60,9 @@
 //
 // # A change is rows on its repository's subject
 //
-// A change (web!42) is code_changes, code_change_bodies, code_change_authors
-// and code_revisions (replicated migrations 0086 and 0094), written by records
+// A change (web!42) is code_changes, code_change_bodies, code_change_authors,
+// code_revisions and code_change_moves (replicated migrations 0086, 0094 and
+// 0188: the moves of its lifecycle, changemoves.go), written by records
 // on its REPOSITORY's subject and on no subject of its own, so its lifecycle
 // and the pushes that move its branches meet at one committer and one
 // arbitration, and its number — the repository's code_repos.next_change, read
@@ -236,6 +237,17 @@
 // of its conversation — its reviewers, its comments a thread at a time, its
 // reviews or its findings — the detail on its revisions' first page counting
 // it.
+//
+// A DELETED COMMENT IS A TOMBSTONE, as a deleted branch's commits stay and a
+// closed change stays listed: its row keeps its place, its thread and its
+// author, its words cleared, with who deleted it and when, so a thread whose
+// root is deleted keeps every reply, anyone's, and takes replies still. Its
+// author edits it ([CommentEdit], marked edited) and deletes it, as do a
+// principal that maintains the repository and a person ([CommentDelete]); a
+// delete also clears the excerpt every notice of its record quotes. Neither
+// tells anybody. The code log keeps the original record until the log's own
+// retention trims it: a delete takes the words out of every read, not out of
+// the log.
 //
 // A REVISION'S FACTS ARE ON THE CHANGE'S SUBJECT TOO (revise.go): what the
 // repository's home Gitlet node read of the change's head revision against its
@@ -853,6 +865,14 @@
 // reads the repository in a turn nobody woke. A person or a stranger as the
 // requester never reaches here: a person maintains every repository, and a
 // stranger reads none, both settled where the turn runs.
+//
+// A PAGE IS HELD TO ITS KIND'S BOUND ([ReadQuery.PageMax]): a read asking past
+// it is refused naming the bound, never clamped, so a caller reading a kind to
+// its end pages at that bound, never at [MaxSnapshotItems], which caps every
+// page the reader serves rather than naming any kind's. A limit the engine
+// chooses is the same on every call, so one past the bound would refuse every
+// call: TestEveryEngineReadAsksAPageItsKindCarries holds each such limit in the
+// module to the bound where it is written.
 //
 // # Every read of the rows seeks a named index
 //

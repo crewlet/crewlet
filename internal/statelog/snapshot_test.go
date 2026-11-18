@@ -234,8 +234,8 @@ func TestASnapshotNamesEveryDomainAndItsManifestIsTheClaim(t *testing.T) {
 // silently omit whatever a deployment actually has.
 //
 // The ledger is fleet-visible in exactly that sense: its rows are what every
-// node's applier writes from the same records. Scrubbed, it left the adopter
-// unable to tell a first attempt from a retry of anything the donor applied.
+// node's applier writes from the same records. Scrubbed, the adopter could not
+// tell a first attempt from a retry of anything the donor applied.
 func TestADonorScrubsItsOwnTablesBeforeItOffersAnything(t *testing.T) {
 	t.Parallel()
 	h := newSnapHarness(t)
@@ -389,8 +389,8 @@ func TestEverySnapshotPreconditionSaysWhyItSkipped(t *testing.T) {
 	// BUT RECENT MEANS ADOPTABLE: once a reanchor has moved a domain to a new
 	// generation, the artefact from before it is one no joiner can take —
 	// they ask at the generation the domain is on — so the next take runs
-	// inside the interval. Skipped as recent, every peer the reanchor left
-	// behind had no donor until the interval ran out.
+	// inside the interval, or every peer the reanchor left behind has no
+	// donor until the interval runs out.
 	t.Run("the recent one is from a generation a domain has left", func(t *testing.T) {
 		t.Parallel()
 		h := newSnapHarness(t)
@@ -419,17 +419,13 @@ func TestEverySnapshotPreconditionSaysWhyItSkipped(t *testing.T) {
 
 // A TAKE KEEPS ROOM FOR THE LOG ITS COPY HOLDS BACK, as well as for the copy.
 //
-// A copy stops every checkpoint at its moment for its whole run, so the live
-// file's write-ahead log grows by what the node writes meanwhile, on the volume
-// the applier commits to (store.DB.CopyHoldsBack). The gate kept room for the
-// copy and a tenth beside it, and a node writing its log at more than a tenth
-// of the rate a copy reads the file outgrew the tenth. Here a copy is held
-// while the estate is written beside it, so the handle has measured what a
-// copy holds back; then the gate is shown volumes with room for the copy and
-// its tenth but one byte short of that log as well, which it declines; the
-// snapshots on a volume of their own with every room, and the live file's
-// volume one byte short of the log alone, which it declines too; and one
-// volume with exactly what the take needs, which it takes.
+// A copy stops every checkpoint for its whole run, so the live file's
+// write-ahead log grows by what the node writes meanwhile, on the applier's
+// volume (store.DB.CopyHoldsBack); a copy and a tenth is not enough for a node
+// writing faster than a tenth of the copy's read rate. A copy is held while the
+// estate is written, then the gate declines one volume one byte short of copy,
+// tenth and log; declines the live file's volume one byte short of the log
+// alone, with snapshots elsewhere; and takes one volume with exactly enough.
 func TestASnapshotKeepsRoomForTheLogItsCopyHoldsBack(t *testing.T) {
 	t.Parallel()
 	hold := storetest.NewCopyHold()
@@ -650,17 +646,12 @@ func slicesContains(in []string, want string) bool {
 // THE MANIFEST NAMES THE POSITION THE FILE KEEPS, not the one the node was
 // at when it decided to take a snapshot.
 //
-// A recipient verifies the manifest against the checkpoint inside the copy and
-// refuses one that differs, because a metadata claim the file does not keep is
-// a corrupt snapshot. The checkpoint commits with the rows, so on a node that
-// is applying, the file the copy captures is ahead of any health reading
-// taken before it — by however many records landed in between. Stamped from
-// health, every snapshot taken under write load was refused by the joiner that
-// needed it, and only an idle fleet's snapshots were ever adoptable.
-//
-// The applier's commit between the health read and the copy is staged
-// deterministically: the health the gate reads says 4 200 while the file the
-// copy is taken from already holds 4 207.
+// A recipient refuses a manifest that differs from the checkpoint inside the
+// copy, and the checkpoint commits with the rows, so on a node that is
+// applying the file is ahead of any earlier health reading. Stamped from
+// health, every snapshot taken under write load is refused by its joiner.
+// Staged deterministically: the health the gate reads says 4 200 while the
+// file the copy is taken from already holds 4 207.
 func TestASnapshotNamesThePositionTheFileKeeps(t *testing.T) {
 	t.Parallel()
 	h := newSnapHarness(t)
@@ -790,15 +781,12 @@ func TestADomainWithNoCheckpointIsSnapshottedAtZero(t *testing.T) {
 // A SNAPSHOT NAMES THE STREAM THE FILE WAS APPLYING, NOT THE ONE ITS DONOR IS
 // LIVE ON.
 //
-// Every other checkpoint field is read out of the copy, for the reason the
-// package states: the checkpoint commits in the same transaction as the rows,
-// so the position inside a file is the only position that describes that file.
-// The identity was the exception — taken from the donor's live registration —
-// and the two are the same stream only until one is rebuilt. A donor restarted
-// onto a recreated stream therefore stamped OLD rows with the NEW stream's
-// identity, and the artefact was self-consistent enough to pass every check a
-// recipient could make: its position matched the file, its identity matched
-// the recipient's live stream, and its history no longer existed.
+// Every checkpoint field is read out of the copy, the identity included: the
+// donor's live registration and the file's stream differ once a stream is
+// rebuilt. A donor restarted onto a recreated stream would stamp OLD rows with
+// the NEW stream's identity, an artefact that passes every check a recipient
+// can make (position matches the file, identity matches its live stream) and
+// whose history no longer exists.
 func TestASnapshotNamesTheStreamItsFileWasApplying(t *testing.T) {
 	t.Parallel()
 	h := newSnapHarness(t)
@@ -902,18 +890,12 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 // A SECOND TAKE AT THE SAME POSITION PUBLISHES ITS OWN PAIR, NOT OVER THE
 // FIRST.
 //
-// The pair used to be named for the highest sequence it covered, and nothing
-// required that sequence to have MOVED: a company quiet for a whole snapshot
-// interval takes its next snapshot at the same position, which resolved to the
-// previous pair's name. Publishing then went THROUGH the only artefact this
-// node had — remove the old manifest, rename over the old database, and, if
-// writing the new manifest failed there, remove the replacement as well. A
-// disk that filled between the copy and the manifest destroyed the last usable
-// snapshot, at the one moment a node most needs to still have one.
-//
-// The names must therefore differ, which is what lets the new pair be written
-// beside the old one and the old one rotated away only once the new manifest
-// is durable.
+// A company quiet for a whole interval takes its next snapshot at the same
+// position, so a pair named for its position would publish THROUGH the only
+// artefact this node has, and a disk that filled between the copy and the
+// manifest would destroy the last usable snapshot. The names must differ, so
+// the new pair is written beside the old and the old rotated away only once
+// the new manifest is durable.
 func TestASecondTakeAtTheSamePositionDoesNotPublishOverTheFirst(t *testing.T) {
 	t.Parallel()
 	h := newSnapHarness(t)

@@ -174,6 +174,14 @@ export function ejectionWords(e: CodeEjectedRow): { why: string; onto?: string }
       ? { why: `${failed} on the train's merge onto ${target} at`, onto: e.tested_in.base_oid }
       : { why: `${failed} on the train it was tested in` };
   }
+  if (e.reason === "checks_undefined" && (e.checks?.length ?? 0) > 0) {
+    // NOTHING RAN: the train's base defines the check in no form that runs, so no
+    // candidate can pass it, and the change waits on the branch, not on its code.
+    const one = e.checks!.length === 1;
+    return {
+      why: `${target} requires ${fewNames(e.checks!)}, which ${target}'s .crewlet/checks.yaml does not define in a form that runs, so the queue could not test it. Define ${one ? "it" : "them"} there, or change ${target}'s gate, then add it again`,
+    };
+  }
   if (e.reason === "conflict" && (e.paths?.length ?? 0) > 0) {
     const [first, ...rest] = e.paths!;
     const more = rest.length > 0 ? ` and ${plural(rest.length, "more path")}` : "";

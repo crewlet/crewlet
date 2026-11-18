@@ -16,21 +16,17 @@ import (
 // emDash is spelled by its code point, so this file holds none of its own.
 const emDash = "—"
 
-// personFacing is the source a person reads the sentences of: what the API
-// answers as a `detail` or a `hint`, what the CLI prints, what configuration
-// validation reports (on `crewlet validate` and as a `/config` refusal), the
-// tracker's tag refusals, which reach the dashboard as an `invalid` detail,
-// and the files the retention gestures are decided in (a capacity change, a
-// reanchor, an eviction and a readmission), whose told refusals, and the state
-// log's details a gate's per-log hint splices in, the API and the CLI answer
-// word for word. A directory is walked whole, a file alone.
+// personFacing is the source a person reads the sentences of: API `detail`s
+// and `hint`s, CLI output, configuration validation (`crewlet validate` and a
+// `/config` refusal), the tracker's tag refusals, and the files the retention
+// gestures (capacity change, reanchor, eviction, readmission) are decided in,
+// whose refusals the API and CLI answer word for word. A directory is walked
+// whole, a file alone.
 //
-// GROWN AS THE SWEEP REACHES MORE OF THE ENGINE, never shrunk: the domain
-// refusal sentences a person also reads as a `detail` (the rest of
-// Worklet, Chatlet, Doclet, the identity directory, the tools' own invalid and
-// forbidden answers), the `crewlet llm doctor` and integration reports are
-// still written with em dashes, and each joins this list in the change that
-// rewrites it.
+// GROWN AS THE SWEEP REACHES MORE OF THE ENGINE, never shrunk: the rest of
+// Worklet, Chatlet, Doclet, the identity directory, the tools' answers and the
+// `crewlet llm doctor` and integration reports still carry em dashes, and each
+// joins this list in the change that rewrites it.
 var personFacing = []string{
 	"internal/api",
 	"cmd/crewlet",
@@ -47,17 +43,12 @@ var personFacing = []string{
 
 // NO SENTENCE A PERSON READS CARRIES AN EM DASH.
 //
-// The engine's sentences for a person are short, and use commas, colons,
-// parentheses and full stops: a dash was how a sentence went on past where
-// it should have stopped, and the dashboard's copy gate (`app/copy.test.ts`)
-// already refused one in everything it ships while the API details it draws,
-// the CLI's lines and the configuration problems carried dozens.
+// A dash is how a sentence goes on past where it should have stopped; the
+// dashboard's copy gate (`app/copy.test.ts`) already refuses one.
 //
 // Every string literal in [personFacing] is judged except where nobody reads
-// it as a sentence: a log line's (the log is for whoever runs the node), a
-// panic's (a wiring mistake), a struct tag (the schema's descriptions are
-// documentation), and an em dash standing alone as a table cell, which is
-// how the CLI's tables mark an empty value.
+// a sentence: a log line, a panic, a struct tag, and an em dash alone as a
+// table cell, which is how the CLI marks an empty value.
 //
 // Mutation: put an em dash back into any `detail`, CLI line or problem in
 // those trees and this names its line; drop the log exemption and the walk

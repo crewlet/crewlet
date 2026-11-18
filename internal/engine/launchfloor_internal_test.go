@@ -1005,11 +1005,13 @@ func TestATurnsOwnSpendNeverHoldsItsLaunchForEver(t *testing.T) {
 				r.now = berlinMidnight.Add(time.Duration(day)*24*time.Hour + time.Second)
 				r.mu.Unlock()
 				if tc.moves && day == 0 {
-					// THE SEAT LEAVES THIS NODE, its parks forgotten as its
-					// release forgets them, and its mail is handed back at
-					// once to the node that holds it next: the same engine
-					// here, which holds nothing of the park it forgot.
-					r.e.forgetBudgetPark(t.Context(), seatOf("lead"))
+					// THE SEAT LEAVES THIS NODE, its inbox detached and its
+					// parks forgotten as its release does both, and its mail
+					// is handed back at once to the node that holds it next:
+					// the same engine here, which holds nothing of the park it
+					// forgot.
+					r.release(t)
+					r.retake(t)
 					continue
 				}
 				alarms[0].fire()

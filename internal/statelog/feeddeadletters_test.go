@@ -22,11 +22,8 @@ func deadLettered(domains ...statelog.DomainInputs) (statelog.Alarm, bool) {
 }
 
 // FEED_DEAD_LETTERED IS RAISED FROM A LOG'S FIRST DEAD LETTER AND CLEARS WITH
-// ITS LAST.
-//
-// Every entry is a wake nobody has had, so one is enough: the alarm names the
-// log whose feed holds it, and a log whose feed holds none — every entry
-// replayed, or let go — raises nothing.
+// ITS LAST: every entry is a wake nobody has had. The alarm names the log whose
+// feed holds it; a log whose feed holds none raises nothing.
 //
 // Mutation: raise it past a count of entries rather than from the first, or
 // raise it for a log that holds none, and this is red.
@@ -53,13 +50,10 @@ func TestFeedDeadLetteredIsRaisedFromTheFirstEntryAndClearsWithTheLast(t *testin
 	}
 }
 
-// ITS DETAIL NAMES EACH ENTRY'S AGE AND THE TIME IT HAS LEFT, the soonest to
-// expire first, AND COUNTS WHAT EXPIRES WITHIN A DAY — from the reading of
-// now, so the count moves as the entries age.
-//
-// An entry within a day of its retention is a wake about to be lost for good,
-// which is what an operator acts on first; past the five it names, the detail
-// says how many more there are rather than burying them in one line.
+// ITS DETAIL NAMES EACH ENTRY'S AGE AND TIME LEFT, the soonest to expire
+// first, AND COUNTS WHAT EXPIRES WITHIN A DAY from the reading of now: such an
+// entry is a wake about to be lost for good, which an operator acts on first.
+// Past the five it names, the detail says how many more there are.
 //
 // Mutation: count what expires within a day off the kept instant rather than
 // the time left, or name the entries in the order kept rather than by expiry,

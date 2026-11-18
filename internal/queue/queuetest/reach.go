@@ -26,23 +26,14 @@ const reachWithin = 500 * time.Millisecond
 // runReachability certifies what a verb answers once the broker it would have
 // to reach has gone away under a queue that is still live.
 //
-// # Why a group of its own
-//
-// Because it is the one point in a queue's life no other case visits — every
-// other case runs against a healthy broker — and its answer is read by callers
-// who decide opposite things on it. Marked [queue.ErrUnavailable], a tool tells
-// its model to try again shortly and a person's surface answers 503 with a
-// Retry-After. Unmarked, the same blip read above the queue as this node's own
-// fault: `internal_error`, "trying again does not fix it", the broker's
-// message only in the log. And marked [queue.ErrNotLive] it would be worse
-// than either, because a seat release reads that as proof the mailbox is torn
-// down and hands the seat to a peer while this node's consumers are still
-// attached and resume when the connection does.
-//
-// THE WHOLE MATRIX, for the reason lifecycleVerbs gives: a case that sent the
-// two verbs somebody thought of — Publish and Ask, the two a tool sends — would
-// certify those two and leave the other seventeen to whatever their backend
-// happened to do.
+// It is a group of its own because no other case runs against a gone broker,
+// and callers decide opposite things on the answer. Marked
+// [queue.ErrUnavailable], a tool tells its model to retry and a person's
+// surface answers 503 with Retry-After; unmarked, it reads as this node's own
+// `internal_error`. Marked [queue.ErrNotLive] it would be worse: a seat
+// release reads that as a torn-down mailbox and hands the seat to a peer
+// while this node's consumers are still attached.
+// The whole matrix runs, for the reason lifecycleVerbs gives.
 func (s *suite) runReachability(t *testing.T) {
 	ctx := t.Context()
 
@@ -96,26 +87,14 @@ func (s *suite) runReachability(t *testing.T) {
 			}
 		}
 
-		// AN ASK IS REFUSED, NOT SENT — and the only thing a caller can see
-		// of that is WHEN it is refused. A backend that wrote the request
-		// into a reconnect buffer answers the same mark once the deadline
-		// ends, having queued a request that goes out to its servers after
-		// the asker was told it failed; one that refuses answers at once.
-		// So it is read off the deadline itself, which a refusal answers
-		// ahead of and a buffered request ends on, never off a reading of
-		// the clock held to a margin of it, which a loaded runner lost on a
-		// refusal.
+		// AN ASK IS REFUSED, NOT SENT, and a caller sees that only in WHEN. A
+		// backend that wrote the request into a reconnect buffer answers the same
+		// mark once the deadline ends, having queued a request that goes out after
+		// the asker was told it failed; one that refuses answers at once. So it is
+		// read off the deadline itself, never a clock margin (#1204).
 		//
-		// STALLFOR, not reachWithin: this ask must NOT end on its
-		// deadline, so the deadline only sets how long a backend that
-		// buffered it takes to be caught, and a refusal never comes near
-		// it — at the pause every positive wait allows, which a loaded
-		// runner's refusal does not reach either. What it catches is a
-		// request held until its ASKER gives up. A backend that held it for
-		// a timer of its own shorter than that, and then answered the same
-		// mark, answers inside it and is not caught here: only a clock
-		// tells that from a refusal, and a clock that decided it would fail
-		// a healthy build a loaded runner paused (#1204).
+		// STALLFOR, not reachWithin: the ask must NOT end on its deadline, which
+		// only sets how long a buffering backend takes to be caught.
 		//
 		// Mutation: have the refusal wait out the ask's deadline before it
 		// answers, and the ask returns with its deadline passed.
@@ -171,10 +150,12 @@ func (s *suite) runReachability(t *testing.T) {
 				}
 			}
 		}
+		at, atErr := q.Attachment(ctx, "reach.t", "g")
 		local(
 			verbResult{"Quiesce", second(q.Quiesce(ctx, "reach.t", "g"))},
-			verbResult{"PauseTopic", q.PauseTopic(ctx, "reach.t", "g", holdReason)},
-			verbResult{"ResumeTopic", q.ResumeTopic(ctx, "reach.t", "g", holdReason)},
+			verbResult{"Attachment", atErr},
+			verbResult{"PauseTopic", q.PauseTopic(ctx, "reach.t", "g", at, holdReason)},
+			verbResult{"ResumeTopic", q.ResumeTopic(ctx, "reach.t", "g", at, holdReason)},
 			verbResult{"Unquiesce", second(q.Unquiesce(ctx, "reach.t", "g"))},
 		)
 		// AND A RESUME HANDS OUT NOTHING the broker cannot deliver: the
@@ -224,7 +205,7 @@ func deadlineState(err error) string {
 
 // brokerVerbs sends every verb that has to REACH the broker, concurrently and
 // under ctx, and reports what each answered. The complement of the attachment
-// verbs runReachability sends itself, and together with them the twenty-one
+// verbs runReachability sends itself, and together with them the twenty-two
 // lifecycleVerbs sends.
 func brokerVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbResult {
 	topic := ns + ".broker"

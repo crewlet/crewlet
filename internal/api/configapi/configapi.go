@@ -12,8 +12,9 @@
 // unit — the whole-document writes, a revert and the seat and unit entity
 // routes — are `config.org.write`, and the two entity reads
 // `config.org.read`: admin as before, or a lead inside the units they lead.
-// What a lead's write changes is decided place by place (admission.go), and a
-// setting, a credential or a `${VAR}` is never theirs.
+// What a lead's write changes is decided place by place (admission.go): a lead
+// narrows and never widens, and a setting, a credential, a `${VAR}` or a seat
+// role's grants are never theirs.
 //
 // THE ROUTES USED TO DECIDE NOTHING, which was sound while the only credential
 // was an operator token and stopped being sound the day a person could sign in
@@ -53,7 +54,9 @@
 // ([ActivationUnknownError], [RefuseActivationUnknown]), whichever surface the
 // write came through, never the plain 503 that says nothing was written and
 // sends a client to write a second revision over one that may already be the
-// company. A write that lost its activation keeps its revision too, inert, and
+// company. It carries no `op_id`: a config write is a compare-and-set on what it
+// was built on, and the pointer naming the stored revision tells a caller
+// whether it landed. A write that lost its activation keeps its revision too, inert, and
 // its 409 or 412 names that node beside it the same way ([KeptRevision]):
 // every answer naming a stored revision names the one node it can be diffed and
 // reverted on.
@@ -72,6 +75,40 @@
 // hint names exactly that. One SEALED, under a key the keyring lacks or in a
 // form this build does not read, is replaced by nothing: it is somebody's
 // document, which the key or the build that sealed it recovers whole.
+//
+// # What a write is held to
+//
+// A document is held to what its activation carries: a write whose document,
+// sealed into the pointer, would pass [coord.MaxValueBytes] is 413 before the
+// revision is stored ([DocumentTooLargeError]), since a patch grows a document
+// by up to a body each time and a stored one nothing can activate is dead
+// history. With no pointer the answer is the company this node knows
+// ([store.Configs.Restorable]) and a write built on it is create-only. The
+// answers that wait on the coordination store carry `Retry-After`
+// ([authz.RetryUndecidedSeconds]): "the fleet has no company" and "I could not
+// ask" send a write to opposite outcomes, so neither is guessed locally.
+//
+// A lost race answers 412 where its If-Match named the revision it lost and
+// 409 where it named none ([RacedError.Stated]), carried from the
+// precondition check so a revert, a reload and an entity write lose as 409
+// whatever header they carry. A reload takes an expectation like every write,
+// because one over a document that moved republishes a company that never
+// reads the value a `/setup` rotation just sealed.
+//
+// An unsealed revision is replaced only by a whole document: no mask is
+// restored from it, the write is judged as replacing nothing, which only an
+// admin passes, and every seat the new document does not keep as a human seat
+// is asked about ([Service.checkHeldSeats]).
+//
+// # Removals
+//
+// A model and an MCP server are the two entities removed by address, on one
+// skeleton (removal.go), because other fields name each by key. The removal
+// and the repoint or clearing of every dependant land as one revision; a
+// dependant left unanswered is 422 naming every one. An MCP server's stored
+// values and OAuth grant go only after the revision is written, each value
+// asked again of the fleet's revision first, so a write that lost leaves
+// nothing half-removed (mcpremoval.go).
 package configapi
 
 import (
@@ -126,16 +163,14 @@ const (
 // writes it.
 //
 // NOTHING HERE READS OR MOVES WHAT THIS NODE BOOTS ON, and the interface is
-// what holds that: the company this surface answers for is the fleet's pointer
-// ([Service.current]), and the boot row is the reconciler's alone to move,
-// once its engine has applied a revision. A write here stores its revision as
-// history and moves the pointer; the reconciler makes it what each node boots
-// on as each applies it.
+// what holds that: this surface answers for the fleet's pointer
+// ([Service.current]); the boot row is the reconciler's alone to move, once its
+// engine has applied a revision. A write stores history and moves the pointer.
 //
 // A WRITE IS STORED ON ITS BASE ([store.Configs.InsertOn]), which keeps the
-// base first where this node holds no row for it. Insert, which keeps nothing
-// but the write, is for the one base that is never kept: a body the pointer
-// carried without a seal, which a whole document replaces ([Service.commit]).
+// base first where this node holds no row for it. Insert, which keeps only the
+// write, is for the one base never kept: a body the pointer carried without a
+// seal, which a whole document replaces ([Service.commit]).
 type revisionStore interface {
 	Get(ctx context.Context, revisionID string) (store.Revision, bool, error)
 	List(ctx context.Context, limit, offset int) ([]store.Revision, error)
@@ -509,17 +544,15 @@ func (s *Service) Routes(mux authz.Mux) error {
 // noStore marks every response it wraps as never to be stored.
 //
 // EVERY ONE, reads, refusals and 304s alike. A /config body is the company's
-// settings: which integrations are wired and where, the ${VAR} name behind every
-// credential and the shape of the rest. Answered with an ETag and no
-// Cache-Control, a browser keeps it in its HTTP disk cache, where it outlives
-// the tab, the session and the operator token that was needed to read it. An
-// error body is included because it can quote the document back (a validation
-// failure names the field and the value it refused).
+// settings: the integrations wired, the ${VAR} name behind every credential.
+// Without Cache-Control a browser keeps it in its disk cache, outliving the
+// tab, the session and the operator token needed to read it. An error body is
+// included because it can quote the document back (a validation failure names
+// the value it refused).
 //
-// no-store rather than private or no-cache: private still permits the browser's
-// own cache, and no-cache only forces revalidation of what is stored.
-// Conditional reads keep working, because a client that wants a 304 sends
-// If-None-Match itself; nothing here depends on a cache holding the body.
+// no-store, not private (which permits the browser's cache) or no-cache (which
+// only forces revalidation). Conditional reads still work: a client wanting a
+// 304 sends If-None-Match itself.
 func noStore(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -606,18 +639,13 @@ func etagOf(revision store.Revision) string { return `"` + revision.ID + `"` }
 
 // matchesTag reports whether a precondition header selects this tag.
 //
-// `*` means "any current representation" and matches unconditionally here,
-// because EVERY CALLER HAS ONE: each checks `found` (or holds the revision
-// already) before asking, and answers the no-representation case itself with
-// the message that case needs. This took that as a parameter and every call
-// site passed true — a knob with one value, which reads as a decision the
-// caller gets to make and is not one.
+// `*` matches unconditionally, because EVERY CALLER HAS ONE: each checks
+// `found` (or holds the revision) before asking and answers the
+// no-representation case itself.
 //
 // A list is comma-separated and any member matching is a match. A bare
-// revision id — unquoted, which is not a legal entity-tag — is accepted
-// because this surface documented and shipped that form before it had tags,
-// and breaking every script that reads a revision id out of a write response
-// to add two quotes would be a cost with nothing on the other side.
+// revision id (unquoted, not a legal entity-tag) is accepted because scripts
+// read the id out of a write response and send it back as is.
 func matchesTag(header, tag string) bool {
 	header = strings.TrimSpace(header)
 	if header == "" {
@@ -660,16 +688,13 @@ func (s *Service) writeDocument(w http.ResponseWriter, r *http.Request, company 
 // patchMediaTypes are the patch document formats this resource accepts.
 //
 // The registered type for RFC 7396 is application/merge-patch+json. Plain
-// application/json and an absent type are accepted too: every example this
-// project has published sends one of those, and refusing them would break
-// working callers to make a point about a header.
+// application/json and an absent type are accepted too: published examples
+// send one of those.
 //
-// What this DOES refuse is a patch format that is not this one —
-// application/json-patch+json above all, whose document is a LIST of
-// operations. A merge patch that is not an object replaces the target
-// outright, so an RFC 6902 document arriving here does not mean what its
-// author intended; it used to be refused as a malformed merge patch, which
-// told them the shape was wrong rather than that the format was.
+// A different patch format is refused, application/json-patch+json above all:
+// its document is a LIST of operations, and a merge patch that is not an
+// object replaces the target outright, so the error must say the format was
+// wrong, not the shape.
 var patchMediaTypes = []string{"application/merge-patch+json", "application/json"}
 
 // acceptPatch is the Accept-Patch value, RFC 5789 §3.1.
@@ -932,20 +957,13 @@ var errEmptyPatch = errors.New("the patch is empty")
 
 // patch serves PATCH /config — a JSON Merge Patch over the active document.
 //
-// # It is a READ-MODIFY-WRITE, which is the one thing it is not free
+// A READ-MODIFY-WRITE: merged against whatever is active AT THIS INSTANT, so
+// patches to one section resolve by arrival order with nothing telling the
+// loser. `If-Match` closes that, and matters MORE here than on a full PUT
+// ([Service.checkPrecondition]).
 //
-// A full PUT carries the caller's whole intended document, so a lost update
-// costs whatever they did not know about. A patch is merged against whatever
-// is active AT THIS INSTANT, so two patches to different sections both apply
-// and two patches to the same section resolve by arrival order — with nothing
-// telling the loser. `If-Match` is what closes that, and it matters MORE here
-// than on the full write for exactly that reason: see [Service.checkPrecondition].
-//
-// # It refuses when nothing is active
-//
-// A patch is defined against a document. With no active revision there is
-// nothing to merge onto, and building a company out of one section is not
-// what this route is for — `PUT /config` shows the whole thing.
+// It refuses when nothing is active: there is nothing to merge onto, and
+// `PUT /config` builds a whole document.
 func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 	if s.refusedManaged(w, r) {
 		return
@@ -1055,20 +1073,14 @@ func writeApplied(w http.ResponseWriter, applied Applied) {
 // entity's PUT) that leaves it exactly as it is: `200` with `changed: false`
 // and the revision that already says it, storing and activating nothing.
 //
-// A PATCH OR AN ENTITY'S PUT IS "CHANGE THESE FIELDS", and one that changes
-// none has nothing to apply. Stored, it was a second revision with nothing in
-// it under a summary that says what the first one did ("Add three human seats"
-// twice, a diff of nothing between them), and its activation rebuilt every
-// node's seats for no reason. Re-activating the document unchanged is a
-// gesture of its own, POST /config/reload, which the dashboard's Reload and a
-// rotated credential use. A WHOLE DOCUMENT sent with PUT /config is not
-// answered here: it is the activation a caller who renders the document makes
-// after writing the values it reads (crewlet-operator's), and stays one. The
-// charter answers the same way for the same reason ([Service.writeCharter]).
+// A change that changes nothing has nothing to apply: stored, it would be an
+// empty revision whose activation rebuilds every node's seats. Re-activating
+// is POST /config/reload. A WHOLE DOCUMENT sent with PUT /config is not
+// answered here: it is the activation crewlet-operator makes after writing the
+// values it reads. The charter answers likewise ([Service.writeCharter]).
 //
-// AFTER ADMISSION, which refuses a lead's unchanged write as it always did
-// (admission.go): answering it would tell somebody who may not read a setting
-// whether it already holds a value they guessed.
+// AFTER ADMISSION (admission.go): earlier, it would tell somebody who may not
+// read a setting whether it holds a value they guessed.
 func writeUnchanged(w http.ResponseWriter, p *prepared) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"changed": false, "revision_id": p.base.ID,
@@ -1247,28 +1259,15 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 
 // RefuseActivationUnknown answers a write that was stored and whose activation
 // was not answered: an unknown outcome ([httpjson.UnknownOutcome]) naming the
-// stored revision, never "nothing was written", whichever surface the write
-// came through.
+// stored revision, never "nothing was written".
 //
-// NO OPERATION ID, because a config write carries none: what tells the caller
-// whether it landed is the pointer, which `GET /config` reads, naming the
-// stored revision or not. Sending the write again makes another revision —
-// over this one, if it landed — so the hint says how to look first, and how
-// to make the stored revision the company if it did not land.
+// NO OPERATION ID: `GET /config`'s pointer tells whether it landed, and a resend
+// makes another revision, so the hint says how to look first.
 //
-// AND THE NODE, because that remedy is one node's. The revision is stored in
-// the history of the node that took the write and nowhere else, and only an
-// activation naming it carries it to the others: if it did not land, its diff
-// and its revert answer on that node alone, and every other answers 404. A
-// client behind a shared address told only to revert it reached another node,
-// was told the revision does not exist, and concluded the write was lost. So
-// the body names the node (`node`) and the hint sends both requests there —
-// what the command line's own unknown answer and a withheld offline change's
-// remedy already said.
-//
-// extra is a surface's own detail beside it — the setup surface's names of the
-// credentials it sealed first — and never wins over the revision, the node or
-// the hint.
+// AND THE NODE: the revision is in that node's history alone, so its diff and
+// revert answer 404 elsewhere and a client behind a shared address would
+// conclude the write was lost. The body names it (`node`), and the hint sends
+// both requests there. extra never wins over the revision, node or hint.
 func RefuseActivationUnknown(w http.ResponseWriter, e *ActivationUnknownError, extra httpjson.Detail) {
 	body := make(httpjson.Detail, len(extra)+4)
 	maps.Copy(body, extra)
@@ -1454,25 +1453,14 @@ const importSource = "file"
 // mayImport decides `PUT /config?import=true`, answering the refusal itself;
 // it reports whether the write may go on.
 //
-// # An import is a restore, not an edit
+// AN IMPORT IS A RESTORE, NOT AN EDIT: judged as one, a file whose charter
+// carries a fault in a part differing from the stored company's would be
+// refused, and the restore with it. So the charter is judged WARN-ONLY
+// ([importRules]), as an offline and a boot import do; every other rule holds.
 //
-// `crewlet config import` against a running node sends the file here. It is
-// how a company is restored and migrated, and a file that ran under an earlier
-// build must import today: judged as an edit, a file whose charter still
-// carries a fault in a part that differs from the stored company's (a policy
-// a newer revision rewrote, restored to its older, longer self) was refused,
-// and the restore with it. So an import judges the charter WARN-ONLY
-// ([importRules]), exactly as an offline import and a boot import do; every
-// other rule holds as it does for any write, and its faults are named in the
-// answer's warnings.
-//
-// ADMIN'S, never a lead's: the route admits a lead for a write inside their
-// own units, and an import replaces the whole document and relaxes a rule, so
-// it is asked of the company (`config.write`, a recent proof included) before
-// the body is read. It is recorded as any write is (its author, kind and
-// credential, the summary and the activation event), under [importSource].
-// The dashboard never sends it: the org builder and the Principles editor are
-// edits, and an edit is judged on what it changes.
+// ADMIN'S, never a lead's: an import replaces the whole document and relaxes a
+// rule, so `config.write` (a recent proof included) is asked before the body
+// is read. Recorded under [importSource]; the dashboard never sends it.
 func (s *Service) mayImport(w http.ResponseWriter, r *http.Request) bool {
 	p, ok := principalOf(w, r)
 	if !ok {
@@ -1869,15 +1857,12 @@ func (e *UnreadableRevisionError) Said() string {
 
 // Remedy is what brings the revision's document back: the refusal's `hint`.
 //
-// AN UNSEALED REVISION NAMES THE TWO WRITES THAT REPLACE ONE, and only those:
-// a whole document sent with PUT /config, which reads nothing from the revision
-// it replaces ([Service.prepare]), and `crewlet config import`, which is that
-// same PUT through a running node and writes this node's store while the node
-// is stopped. Every other write is built from the active document and is
-// refused over one exactly as this read is, so the hint used to send whoever
-// read it to a PUT that was refused in the same words. AN ADMIN'S, because a
-// document replacing a revision nobody can read is judged as replacing nothing,
-// which reaches every setting a lead's subtree write may not.
+// AN UNSEALED REVISION NAMES THE TWO WRITES THAT REPLACE ONE: a whole document
+// sent with PUT /config, which reads nothing from the revision it replaces
+// ([Service.prepare]), and `crewlet config import`. Every other write is built
+// from the active document and refused over one as this read is. AN ADMIN'S,
+// because a document replacing an unreadable revision is judged as replacing
+// nothing, reaching settings a lead's subtree write may not.
 //
 // A SEAL THIS BUILD DOES NOT READ NAMES THE BUILD THAT SEALED IT, and no write:
 // it is somebody's document, and every write here would replace it unread.
@@ -1916,16 +1901,12 @@ func (e *UnreadableRevisionError) Remedy() string {
 // whether err was one: on this surface, and on a surface built on it that
 // reads the fleet's revision through [Service.FleetCompany].
 //
-// 409 under the code its cause and origin name ([UnreadableRevisionError.Code])
-// — one code per cause and origin, a seal this build does not read one code
-// for either origin since its remedy is the same for both, and never one code
-// carrying every hint, because an envelope's message is
-// the table's sentence and always wins: under one code, an unsealed revision
-// was answered with a message telling the caller to put a key back that was
-// never involved, and a body this node never held with one telling it to put
-// back a key the deployment still has. It names the revision, what happened in
-// a person's words as the detail ([UnreadableRevisionError.Said]) and the
-// remedy as the hint; the keyring's own error goes to the log.
+// 409 under the code its cause and origin name ([UnreadableRevisionError.Code]),
+// never one code carrying every hint: an envelope's message is the table's
+// sentence and always wins, so a shared code would tell a caller to restore a
+// key that was never involved. It names the revision, what happened in a
+// person's words as the detail ([UnreadableRevisionError.Said]) and the remedy
+// as the hint; the keyring's own error goes to the log.
 func RefuseUnreadable(w http.ResponseWriter, err error) bool {
 	return RefuseUnreadableWith(w, err, nil)
 }

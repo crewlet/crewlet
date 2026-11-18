@@ -182,17 +182,15 @@ func (s *suite) runLane(t *testing.T) {
 		// A PARK REQUEUES WHAT IT WAS HANDED AS ONE UNIT (queue.Together):
 		// the person's message and the follow-up the drain took with it
 		// both return to the lane and are delivered together again, ahead
-		// of the backlog, rather than the marked one alone to the lane and
-		// the follow-up to the topic's tail.
+		// of the backlog, not the marked one alone with the follow-up at
+		// the topic's tail.
 		//
 		// PARKED AS THE ENGINE PARKS: the inbox is held before the requeue
-		// (internal/engine's dispatcher pauses a seat's inbox before every
-		// park), and the hold lifts once the copies wait on the lane.
-		// Requeued with no hold, the drain after the handler can ask the
-		// lane before a broker that signals its consumers asynchronously has
-		// counted the copies — a no-wait pull on JetStream answers "no
-		// messages" until it has — and the backlog goes first on a race the
-		// engine never runs.
+		// (internal/engine's dispatcher), and the hold lifts once the copies
+		// wait on the lane. With no hold the drain can ask the lane before
+		// JetStream's asynchronous consumer signalling has counted the
+		// copies (a no-wait pull answers "no messages"), and the backlog
+		// goes first on a race the engine never runs.
 		q := s.start(ctx, t)
 		topic := inbox()
 		queueBacklog(ctx, t, q, topic, "g", append(append([]*events.Event{followUp()},
@@ -213,7 +211,7 @@ func (s *suite) runLane(t *testing.T) {
 				t.Errorf("the person's first delivery was %v, want the follow-up the drain "+
 					"took with it", labelsOf(evs))
 			}
-			if err := q.PauseTopic(ctx, topic, "g", holdReason); err != nil {
+			if err := q.PauseTopic(ctx, topic, "g", attachmentOf(ctx, t, q, topic, "g"), holdReason); err != nil {
 				t.Errorf("PauseTopic: %v", err)
 				return queue.Nak(err)
 			}
@@ -232,7 +230,7 @@ func (s *suite) runLane(t *testing.T) {
 		// the drain after the hold will see, and the first half of the
 		// claim, since a follow-up requeued apart would wait on the topic.
 		waitingIs(t, q, topic, queue.Waiting{Priority: 2, Background: 5})
-		if err := q.ResumeTopic(ctx, topic, "g", holdReason); err != nil {
+		if err := q.ResumeTopic(ctx, topic, "g", attachmentOf(ctx, t, q, topic, "g"), holdReason); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		batches.await(t, "every event settled exactly once", func(got [][]string) bool {
@@ -277,7 +275,7 @@ func (s *suite) runLane(t *testing.T) {
 		if _, err := q.EnsureSubscription(ctx, topic, "g"); err != nil {
 			t.Fatalf("EnsureSubscription: %v", err)
 		}
-		if err := q.PauseTopic(ctx, topic, "g", holdReason); err != nil {
+		if err := q.PauseTopic(ctx, topic, "g", attachmentOf(ctx, t, q, topic, "g"), holdReason); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		started := make(chan struct{})
@@ -296,7 +294,7 @@ func (s *suite) runLane(t *testing.T) {
 			publish(ctx, t, q, topic, ev)
 		}
 		go func() {
-			if err := q.ResumeTopic(context.WithoutCancel(ctx), topic, "g", holdReason); err != nil {
+			if err := q.ResumeTopic(context.WithoutCancel(ctx), topic, "g", attachmentOf(context.WithoutCancel(ctx), t, q, topic, "g"), holdReason); err != nil {
 				t.Errorf("ResumeTopic: %v", err)
 			}
 		}()
@@ -325,7 +323,7 @@ func (s *suite) runLane(t *testing.T) {
 		// consumed past the hold would start a turn on a stopped seat.
 		q := s.start(ctx, t)
 		topic := inbox()
-		if err := q.PauseTopic(ctx, topic, "g", holdReason); err != nil {
+		if err := q.PauseTopic(ctx, topic, "g", attachmentOf(ctx, t, q, topic, "g"), holdReason); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		batches := newBatchJournal()
@@ -333,7 +331,7 @@ func (s *suite) runLane(t *testing.T) {
 			queue.DefaultBatchOptions())
 		publish(ctx, t, q, topic, person())
 		batches.staysAt(ctx, t, 0, "a priority event delivered past its topic's hold")
-		if err := q.ResumeTopic(ctx, topic, "g", holdReason); err != nil {
+		if err := q.ResumeTopic(ctx, topic, "g", attachmentOf(ctx, t, q, topic, "g"), holdReason); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		batches.await(t, "the held message after the hold lifts", func(got [][]string) bool {

@@ -112,21 +112,35 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return sandbox.TakenSession{}, fmt.Errorf("executor: the session's archive is %d bytes, past the %d "+
 			"a session is kept at", archive.Size, take.MaxBytes)
 	}
-	bounds := boundsFor(take.MaxBytes)
+	// ONE PASS, the scrub and its meter: held to the base, past it the one
+	// large slot both share while either holds a piece past it (the package
+	// doc's "A collection's read of a thread"). Each one's wait for it ends
+	// with the take's reader, as the scrub's reads of the box do
+	// ([takenBody]); the meter's apart, as it walks on past the scrub's end.
+	large := new(passBudget)
+	scrubbing, stopScrub := context.WithCancel(ctx)
+	metering, stopMeter := context.WithCancel(ctx)
+	bounds := boundsFor(take.MaxBytes).gatedBy(scrubbing, large)
 	scrub := newScrubber(take.Scrub)
 	archive.RunStart = keptRunStart(scrub, archive.RunStart)
 	read, write := io.Pipe()
-	out := &takenBody{PipeReader: read, done: make(chan struct{})}
+	out := &takenBody{PipeReader: read, done: make(chan struct{}), stopScrub: stopScrub, stopMeter: stopMeter}
 	if !out.reading(body) {
 		_ = body.Close()
 	}
 	sum := &cksum{}
-	// WHAT THE SESSION'S LAST REQUEST CARRIED, and what Claude Code counts it
+	// WHAT THE SESSION'S LAST REQUEST CARRIED, and what its harness counts it
 	// at, read off the archive as it is kept (measure.go), beside the take and
 	// within its context, never holding it up.
-	meter := newContextMeter(ctx, carries.layout(), archive.SessionID, archive.Version)
+	meter := newContextMeter(metering, carries.layout(), archive.SessionID, archive.Version, large)
 	go func() {
 		defer close(out.done)
+		defer stopScrub()
+		// THE TAKE ENDS WITH ITS METER, which may still wait for the slot.
+		defer func() {
+			<-meter.done
+			stopMeter()
+		}()
 		reopen := func() (io.ReadCloser, error) {
 			again, openErr := box.OpenFile(ctx, archive.Path)
 			if openErr != nil {
@@ -159,7 +173,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return keepDigest(ctx, box, paths, archive.SessionID, digest)
 	}
 	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
-		Count: meter.count}, nil
+		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next}, nil
 }
 
 // keptRunStart is where an archive's run began in its session as the take
@@ -196,6 +210,10 @@ var errTakeClosed = errors.New("executor: the session's reader was closed while 
 type takenBody struct {
 	*io.PipeReader
 	done chan struct{}
+	// stopScrub ends the scrub's wait for a large slot ([passBudget]), and
+	// stopMeter the meter's, where the scrub did not write the whole take:
+	// the meter of one that did walks its tail whatever the reader does.
+	stopScrub, stopMeter context.CancelFunc
 
 	mu     sync.Mutex
 	src    io.Closer
@@ -204,6 +222,13 @@ type takenBody struct {
 	// the whole archive; failed is why it did not.
 	sum    string
 	failed error
+}
+
+// whole reports whether the scrub wrote the whole archive.
+func (t *takenBody) whole() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sum != ""
 }
 
 // reading names src as the archive the scrub reads now, false where the reader
@@ -260,6 +285,10 @@ func (t *takenBody) Close() error {
 	t.mu.Unlock()
 	if src != nil {
 		_ = src.Close()
+	}
+	t.stopScrub()
+	if !t.whole() {
+		t.stopMeter()
 	}
 	<-t.done
 	return err
@@ -454,9 +483,9 @@ const packReleaseFloor = 5 * time.Second
 // its staging directory gone, and every other save's archive as it was. EVERY
 // SAVE IN A STAGING DIRECTORY OF ITS OWN ([Paths.SessionSaveStaging]), named
 // here for that save alone, as a pack on demand's is: two saves of one taker
-// at once never clear each other's lists or archive. A save packed and never
-// taken stays in the box until the clear before its next run, which removes
-// every save's files.
+// at once never clear each other's lists or archive. A save never taken is
+// removed by its release ([Runner.ReleaseSave]), or else by the clear before
+// its next run, which removes every save's files.
 //
 // A zero description where there is nothing to save: a harness whose session
 // the engine packs none of beside its run (OpenCode's, [saver]), a run whose
@@ -490,6 +519,50 @@ func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string
 		return sandbox.SessionArchive{}, err
 	}
 	return *described, nil
+}
+
+// Saves reports whether this runner packs saves of a session its run still
+// works in ([Runner.PackSave]): only a runner of a harness that is a [saver],
+// Claude Code's. Asked before anything else of a save, so a run on a harness
+// that packs none (OpenCode's) costs its node no slot, no box call and no read
+// of the store.
+func (r *Runner) Saves() bool {
+	_, ok := r.harness.(saver)
+	return ok
+}
+
+// Streamed is how far the event stream of the job in box has run, in bytes:
+// the size of the file the wrapper redirects the harness's stdout into
+// ([Output.Stdout]), Claude Code's stream-json and OpenCode's event log, read
+// by its size alone, as [Runner.archiveAt] reads an archive's. That stream,
+// and not the session's transcript, because it is the one file every step of
+// the run moves: a subagent's calls and results are printed on it too, where
+// they reach no line of the main thread's transcript, so a session whose only
+// work is a subagent's still reads as moved. Zero where the job has written
+// none, a missing file reading as empty.
+func (r *Runner) Streamed(ctx context.Context, box sandbox.Sandbox) (int64, error) {
+	tail, err := box.ReadTail(ctx, r.harness.Output(PathsFor(box)).Stdout, 0)
+	if err != nil {
+		return 0, fmt.Errorf("executor: reading how far %s's event stream has run: %w", r.harness.Name(), err)
+	}
+	return tail.Size, nil
+}
+
+// ReleaseSave removes the save at path ([Runner.PackSave]) from box, for a
+// save no take will read: one its saver gave up on between its pack and its
+// take, which no take's release removes. Within the bound a take's release has
+// ([Runner.dropPack]), past ctx's cancellation, which is often what gave the
+// save up; a box that does not answer it leaves the file to the clear before
+// its next run, said in the log. A path that is no save of the box's
+// ([savePath]) is refused and nothing is removed: a release removes one save's
+// archive, never another file of the box.
+func (r *Runner) ReleaseSave(ctx context.Context, box sandbox.Sandbox, path string) error {
+	if !savePath(PathsFor(box), path) {
+		return fmt.Errorf("executor: %q is no save a runner packed in the box, and a release removes a save "+
+			"and nothing else", path)
+	}
+	r.dropPack(ctx, box, path)
+	return nil
 }
 
 // openSave streams the save at path ([Runner.PackSave], [Paths.SessionSave]),

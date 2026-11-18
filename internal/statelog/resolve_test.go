@@ -217,8 +217,9 @@ func TestTheReplicationGuideSaysWhatTheWriteGatedLineCarries(t *testing.T) {
 // which a record the broker accepted applies on no node, and so the reason a
 // `statelog_record_gated` line, the records-gated counter and a write refused
 // over such a record all carry — and, for a gate, whether it BLAMES the
-// record's writer ([statelog.Reason.BlamesWriter]).
-type reasonDecision struct{ gate, blames bool }
+// record's writer ([statelog.Reason.BlamesWriter]); and whether it refuses the
+// write for what the write itself is or names ([statelog.Reason.RefusesTheWrite]).
+type reasonDecision struct{ gate, blames, write bool }
 
 // reasonDecisions decides both for EVERY reason this build names — not only
 // the ones that are true — so a reason added to [statelog.Reasons] fails
@@ -230,8 +231,9 @@ var reasonDecisions = map[statelog.Reason]reasonDecision{
 	statelog.ReasonEvicted:   {gate: true, blames: true},
 	statelog.ReasonAbandoned: {gate: true, blames: true},
 	statelog.ReasonOvertaken: {gate: true, blames: true},
-	// A gate every writer's record meets alike: the object's marker.
-	statelog.ReasonDeleted: {gate: true},
+	// A gate every writer's record meets alike: the object's marker, which
+	// refuses every write of the object for what it names.
+	statelog.ReasonDeleted: {gate: true, write: true},
 	// Not a gate's at all: refusals made before or instead of an append,
 	// about this node, the log or the operation.
 	statelog.ReasonEvictionUnknown: {},
@@ -241,13 +243,42 @@ var reasonDecisions = map[statelog.Reason]reasonDecision{
 	statelog.ReasonFloorUnknown:    {},
 	statelog.ReasonUsageUnknown:    {},
 	statelog.ReasonLogFull:         {},
-	statelog.ReasonRecordTooLarge:  {},
+	statelog.ReasonRecordTooLarge:  {write: true},
 	statelog.ReasonBrokerRefused:   {},
 	statelog.ReasonSkew:            {},
-	statelog.ReasonOpReused:        {},
+	statelog.ReasonOpReused:        {write: true},
 	statelog.ReasonLogTruncated:    {},
 	statelog.ReasonWrongStream:     {},
-	statelog.ReasonSuperseded:      {},
+	statelog.ReasonSuperseded:      {write: true},
+}
+
+// ONLY A REFUSAL OF THE WRITE ITSELF IS THE WORK'S. A record too large, an
+// object deleted for good, an operation id that names another write and an
+// operation a later record undid refuse the write for what it is, on every
+// node and every attempt, so a piece of work that asked for one failed for
+// what it asked; every other refusal is of the node, the log or the broker,
+// which another node, a later attempt or an operator's gesture gets past. The side decides whose a
+// failed seat's delivery is (internal/agent/builtin's kinds), so every reason
+// this build names has an explicit answer here ([reasonDecisions]).
+//
+// Mutation: drop a reason from [statelog.Reason.RefusesTheWrite]'s switch, or
+// add one, and its row goes red; add a reason to [statelog.Reasons] with no
+// decision and the gate above goes red.
+func TestOnlyARefusalOfTheWriteItselfIsTheWorks(t *testing.T) {
+	t.Parallel()
+	for _, reason := range statelog.Reasons() {
+		want, ok := reasonDecisions[reason]
+		if !ok {
+			continue // TestOnlyAGateThatHoldsAWriterBlamesIt names it.
+		}
+		if got := reason.RefusesTheWrite(); got != want.write {
+			t.Errorf("%q.RefusesTheWrite() = %v, want %v", reason, got, want.write)
+		}
+	}
+	if statelog.Reason("from-a-newer-peer").RefusesTheWrite() {
+		t.Error("a reason this build does not name refuses the write itself — nothing here " +
+			"knows what it refuses")
+	}
 }
 
 // ONLY A GATE THAT HOLDS A WRITER BLAMES IT — the three that drop a record for

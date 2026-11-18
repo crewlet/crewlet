@@ -48,19 +48,14 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("a_negative_linger_behaves_as_no_linger", func(t *testing.T) {
 		t.Parallel()
-		// The linger clamp has two halves and exactly one is reachable from
-		// here. The CEILING (60s) is not: this suite may never depend on a
-		// window above it, so no behaviour above it is observable, and unlike
-		// a lease deadline a linger has no reported value to compare — the
-		// only observable is elapsed time, so probing it would cost a test
-		// that sleeps for a minute. That half stays a documented gap.
+		// Only one half of the linger clamp is reachable. The CEILING (60s)
+		// is not: the suite may not depend on a window above it, and a linger
+		// has no reported value to compare, so probing it would mean sleeping
+		// a minute. That half stays a documented gap.
 		//
-		// The FLOOR is reachable and costs nothing: a negative window must
-		// behave as no window at all. A backend handing a negative duration
-		// straight to a broker API is entitled to nothing in particular from
-		// it, which is exactly why the contract clamps and why a backend that
-		// forwards the raw value should be caught here rather than in
-		// production.
+		// The FLOOR costs nothing: a negative window must behave as no
+		// window. A backend forwarding the raw negative duration to a broker
+		// API gets nothing defined from it, so it must be caught here.
 		q := s.start(ctx, t)
 		batches := newBatchJournal()
 		subscribeBatch(ctx, t, q, "t.neg", "g", recordingBatchHandler(batches),
@@ -73,39 +68,16 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("linger_coalesces_same_key_events_into_one_batch", func(t *testing.T) {
 		t.Parallel()
-		// What a POSITIVE window is for: a burst reaching an IDLE seat —
-		// somebody typing several messages, a webhook cluster — joins the
-		// batch its first event opened, so it costs one turn rather than
-		// one per event.
-		//
-		// THE SECOND EVENT ARRIVES AFTER THE WINDOW OPENED, deliberately:
-		// once the backend reports the first event's window past what a
-		// window of nothing collects (Capabilities.Lingering). Published
-		// back to back, a pull backend's drain collects both in the one
-		// short tail fetch it runs at ANY window, zero included, so a
-		// backend that ignored the linger passed this case. A fixed gap
-		// stood here, and a runner that scheduled the drain later than the
-		// gap had it fetch both events at once: the case passed whether the
-		// window did anything or not.
-		//
-		// AND THE WINDOW ENDS ON THE CASE'S CLOCK (Capabilities.LingerClock),
-		// because that arrival is SETUP which has to land while the window
-		// is still open. On the wall clock it was a race: at lingerFor with
-		// nothing but the second publish's round trip in it, and a loaded
-		// runner's round trip outlasts fifty milliseconds; at a window of a
-		// second it was still one, and measured with each publish 1.2 s late
-		// the window ended first, split the batch, and failed a healthy
-		// build.
-		//
-		// THE ORDER: the first event opens the window (Lingering), the second
-		// is published, the window holds it (Capabilities.InWindow), and only
-		// then does the clock move past the window's end.
-		//
-		// Mutation: dispatch a backend's first event without its window
-		// (a linger of nothing), or end the window at its first fetch, and
-		// the window is never reported, so the case waits out its bound; a
-		// backend that never counts what its window holds fails the wait
-		// for the second event.
+		// A burst reaching an IDLE seat joins its first event's batch. The
+		// second event is published only AFTER the backend reports the window
+		// open (Capabilities.Lingering): back to back, a pull drain's one
+		// tail fetch collects both at ANY window, so a backend ignoring the
+		// linger would pass. The window ends on the case's clock
+		// (Capabilities.LingerClock), since wall-clock loses that publish on
+		// a loaded runner; InWindow holds it, then the clock passes the end.
+		// Mutation: a linger of nothing, or ending the window at its first
+		// fetch, leaves it unreported; never counting what it holds fails
+		// the wait for the second event.
 		lingering := s.needLingering(t)
 		inWindow := s.needInWindow(t)
 		onClock := s.needLingerClock(t)
@@ -221,57 +193,17 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("a_partition_at_mixed_counts_tells_each_message_its_own_headroom", func(t *testing.T) {
 		t.Parallel()
-		// TWO NUMBERS, BECAUSE ONE CANNOT ANSWER BOTH QUESTIONS.
-		//
-		// A partition's messages sit at different delivery counts as a
-		// matter of course: a conversation whose first message has been
-		// handed back keeps collecting fresh replies, and each of those
-		// arrives with a whole budget. So a handler is told BOTH — the
-		// partition's own headroom ([queue.DeliveriesLeft], the smallest,
-		// which answers "will handing this batch back dead-letter
-		// something") and each message's ([queue.DeliveriesLeftFor],
-		// which answers "how much is left of THIS one").
-		//
-		// Reading the first where the second is meant is a defect with a
-		// name: the engine's sandbox answer route gated its offer on the
-		// partition's number and so refused a person's clarification
-		// reply that was on its FIRST delivery, because an older message
-		// on the same conversation was near its own budget — and kept
-		// refusing every later reply on that conversation, since the
-		// spent message stays in the partition. See
-		// internal/sandbox.MayOfferAnswer.
-		//
-		// HOW THE MIXED PARTITION IS BUILT. It needs a message that has
-		// gone back to the broker and one that has never been delivered to
-		// meet in ONE drain, and it builds that meeting the way
-		// a_redelivered_event_rejoins_its_conversation_in_timestamp_order
-		// does, for the reason given there:
-		//
-		//   - the fresh message is published BY THE HANDLER, on its first
-		//     invocation, before that invocation hands the first message
-		//     back — so it is in the mailbox before the return is.
-		//   - the first message goes back by DEFERRAL, which spends a
-		//     delivery exactly as a failure does (queue.OutcomeDefer) and
-		//     is all this case needs of it, but which every backend
-		//     returns at once and which stops the attachment: nothing is
-		//     fetched until the case resumes it with both waiting.
-		//
-		// IT USED TO HAND THE FIRST ONE BACK AS A FAILURE, which comes
-		// back on the backend's redelivery backoff, so whether the two met
-		// was a race between a broker timer and this case's window. A
-		// handler that saw them apart handed BOTH back and tried again,
-		// spending the fresh message's budget on the way. Measured with
-		// the harness at the shipped one-second spacing: three runs in
-		// four never paired them inside the three seconds the suite then
-		// waited, and the fourth paired them only after the fresh one had
-		// gone round too, at EQUAL counts — the very reading this case
-		// exists to refuse. A retry loop is not a construction.
-		//
-		// The assertion is RELATIONAL rather than two literals, because
-		// a backend is entitled to an extra redelivery on the way here
-		// and the rule does not depend on how many: the two counts must
-		// DIFFER, and the partition's must be the smaller. On the common
-		// path the numbers are attempts-2 and attempts-1.
+		// TWO NUMBERS, BECAUSE ONE CANNOT ANSWER BOTH QUESTIONS. A
+		// conversation's handed-back message keeps collecting fresh replies,
+		// each with a whole budget. A handler is told the partition's
+		// headroom ([queue.DeliveriesLeft], the smallest: "will handing this
+		// back dead-letter something") and each message's
+		// ([queue.DeliveriesLeftFor]: "how much is left of THIS one").
+		// Reading the first for the second refuses a reply on its FIRST
+		// delivery, and every later one. See internal/sandbox.MayOfferAnswer.
+		// The assertion is RELATIONAL, since a backend may add a redelivery:
+		// the counts must DIFFER, the partition's smaller (on the common
+		// path attempts-2 and attempts-1).
 		newQueueWithAttempts := s.needAttempts(t)
 		quiescing := s.needQuiescing(t)
 		const attempts = 6
@@ -298,9 +230,16 @@ func (s *suite) runBatch(t *testing.T) {
 				mu.Unlock()
 
 				if first {
-					// Published from INSIDE the handler; see above.
-					// A failure here is recorded rather than
-					// fataled: this is not the test goroutine.
+					// The mixed partition: a handed-back message and a
+					// never-delivered one must meet in ONE drain, as in
+					// a_redelivered_event_rejoins_its_conversation_in_timestamp_order.
+					// So the fresh one is published FROM the handler, before
+					// the first goes back by DEFERRAL (queue.OutcomeDefer):
+					// it spends a delivery as a failure does, returns at
+					// once and stops the attachment until the case resumes
+					// it. A failure return waits on the redelivery backoff,
+					// a race with the case's window.
+					// A failure here is recorded: not the test goroutine.
 					if err := q.Publish(hctx, topic, fresher); err != nil {
 						j.record("publish failed: " + err.Error())
 						return queue.Ack()
@@ -391,12 +330,9 @@ func (s *suite) runBatch(t *testing.T) {
 		// the other conversation from the same flush.
 		//
 		// QUEUED BEFORE THE ATTACHMENT, so the two conversations ARE one
-		// flush. Published to an attached consumer, the second had to land
-		// inside the first's window, and a runner that published it later
-		// handed them over in two drains, where the case passed without a
-		// flush to share: measured with every publish 1.2 s late, a backend
-		// whose failed partition failed the rest of its drain — c2's event
-		// handled, and handed back all the same — passed. See queueBacklog.
+		// flush: published to an attached consumer, a late second publish
+		// splits them into two drains and the case passes with no flush to
+		// share. See queueBacklog.
 		//
 		// Mutation: let a failed partition fail the rest of its drain —
 		// the other conversation handled, and handed back with the failure
@@ -438,42 +374,17 @@ func (s *suite) runBatch(t *testing.T) {
 	})
 
 	// A PASSED PARTITION GOES BACK FOR A PEER, BEHIND THE WAITING MAIL, AND THE
-	// REST OF ITS DRAIN RUNS. A backend answers a partition's outcome in a
-	// switch of its own, so the batch path owes what the single path owes a
-	// pass (Core's
+	// REST OF ITS DRAIN RUNS, as on the single path (Core's
 	// a_pass_returns_behind_waiting_mail_keeps_consuming_and_dead_letters_once_spent):
-	// the passed conversation comes back behind the mail that was waiting
-	// when it was passed, and again until its budget is spent, and is then
-	// dead-lettered with the group's unhandled deliveries; the other
-	// conversation of the same flush is handled once; and the attachment is
-	// never quiesced.
-	//
-	// QUEUED BEFORE THE ATTACHMENT, so c1 and c2 are one flush, for
-	// failing_partition_redelivers_only_itself's reason.
-	//
-	// THE WAITING MAIL IS A THIRD CONVERSATION, c3, published while c1's
-	// first delivery is handled: after the flush was taken, so it waits for
-	// the next, and before c1 is passed. From then on a drain takes ONE event
-	// (BatchOptions.Set, read at the next cycle), so the next drain holds c3
-	// or the returned c1 and never both: inside one drain partitions are
-	// ordered by their events' timestamps, which would put c1, the older,
-	// first however it had been returned. c3 must be handled before c1 comes
-	// back. Nothing races the shipped spacing: c3 is stored before c1 is
-	// passed, as the single path's case holds its mail before it is
-	// published. On the twin the order is the return's place in the
-	// mailbox, exactly; on JetStream it is the spacing's, since a return
-	// made at once and the next fetch reach the broker through two queues
-	// of its own, which is why internal/queue/jetstream pins the spacing of
-	// each message of a passed partition itself
-	// (TestAPassedPartitionIsSpacedByEachMessagesDeliveries).
-	//
-	// Mutation: return a passed partition at the head, as a deferral's, and
-	// c1 comes back ahead of c3 on the twin (and on JetStream its messages
-	// are not spaced, which the backend's own case reads); leave the pass
-	// out of a backend's partition
-	// outcomes, and c1 is never returned or dead-lettered; quiesce on a
-	// passed partition, and c2 is never handled; count a passed partition as
-	// a failure of its messages, and its copy is kept with the group's poison.
+	// it returns until its budget is spent, then is dead-lettered with the
+	// group's unhandled deliveries; the flush's other conversation is
+	// handled once; the attachment is never quiesced. QUEUED BEFORE THE
+	// ATTACHMENT, so c1 and c2 are one flush.
+	// Mutation: return a passed partition at the head, and c1 comes back
+	// ahead of c3 on the twin; leave the pass out of a backend's outcomes,
+	// and c1 is never returned or dead-lettered; quiesce on it, and c2 is
+	// never handled; count it as a failure, and its copy is kept with the
+	// group's poison.
 	t.Run("a_passed_partition_returns_for_a_peer_and_the_rest_of_its_drain_runs", func(t *testing.T) {
 		t.Parallel()
 		newQueueWithAttempts := s.needAttempts(t)
@@ -494,8 +405,16 @@ func (s *suite) runBatch(t *testing.T) {
 				}
 				if passedOnce.CompareAndSwap(false, true) {
 					opts.Set(0, 1)
-					// Recorded rather than fataled: this is not the
-					// test goroutine.
+					// c3 is the waiting mail: published after the flush was
+					// taken, before c1 is passed. A drain now takes ONE
+					// event (Set is read at the next cycle), so holds c3 or
+					// the returned c1, never both: inside a drain,
+					// timestamps would put the older c1 first however it
+					// was returned. On the twin the order is the return's
+					// place in the mailbox; on JetStream the spacing's,
+					// pinned in internal/queue/jetstream by
+					// TestAPassedPartitionIsSpacedByEachMessagesDeliveries.
+					// Recorded rather than fataled: not the test goroutine.
 					if err := q.Publish(hctx, "t", newConvEvent("c", "c3")); err != nil {
 						attempts.record("publish failed: " + err.Error())
 					}
@@ -546,9 +465,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// QUEUED BEFORE THE ATTACHMENT, so both events are in ONE drain,
 		// where per-event partitions are a question: two drains of one
 		// event each give one partition apiece whatever the fallback does.
-		// Published to an attached consumer, the second had to land inside
-		// the first's window, and measured with every publish 1.2 s late, a
-		// fallback that gave every event one key passed. See queueBacklog.
+		// See queueBacklog.
 		//
 		// Mutation: fall back to one key for every event, and the drain's
 		// two events become one partition.
@@ -570,37 +487,18 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("live_options_mutation_takes_effect_next_cycle", func(t *testing.T) {
 		t.Parallel()
-		// A hot config reload changes linger and batch size with no
-		// re-subscription: the consume loop re-reads the options for every
-		// batch.
-		//
-		// THE NEXT BATCH, ON A SUBSCRIPTION THAT WAS IDLE WHEN THE RELOAD
-		// LANDED — the ordinary case, and the one that was wrong. A pull
-		// backend's idle cycle waits in a fetch for its first event, and
-		// JetStream read the options BEFORE that wait, so a reload made
-		// during it opened the next batch's window at the old length. See
-		// queue.BatchOptions.
-		//
-		// WHY THE THIRD EVENT WAITS, and why that case could not see it:
-		// published back to back, the two events land in the one tail
-		// fetch a pull drain runs at any window, zero included, so the old
-		// length collected both and this passed with the reload ignored.
-		// The third event is published once the backend reports the
-		// second's window past what a zero window collects — the same
-		// construction as linger_coalesces_same_key_events_into_one_batch,
-		// with the window ending on the case's clock for the reason given
-		// there.
-		//
-		// THE ORDER: the first event goes out with no window; the reload
-		// lands; the second event opens the reloaded window (Lingering); the
-		// third is published, the window holds both (InWindow); and only then
-		// does the clock move past the window's end. The reloaded options
-		// say one batch of the two.
-		//
-		// Mutation: read the options before the idle wait, or once at
-		// subscribe, and the second event's window is the old one, of
-		// nothing, which is never reported; a backend that never counts what
-		// its window holds fails the wait for the third event.
+		// A hot reload changes linger and batch size with no re-subscription:
+		// the consume loop re-reads the options for every batch, including
+		// the next one on a subscription IDLE when the reload landed (a pull
+		// backend's idle cycle waits in a fetch, so options read BEFORE it
+		// open the window at the old length; see queue.BatchOptions). The
+		// third event waits as in linger_coalesces_same_key_events_into_one_batch
+		// (back-to-back events share one tail fetch). ORDER: first event, no
+		// window; reload; the second opens the reloaded window (Lingering);
+		// the third is published, the window holds both (InWindow); the
+		// clock passes the end. Mutation: read the options before the idle
+		// wait, or once at subscribe, and the window is never reported;
+		// never counting what it holds fails the wait for the third event.
 		lingering := s.needLingering(t)
 		inWindow := s.needInWindow(t)
 		onClock := s.needLingerClock(t)
@@ -632,35 +530,25 @@ func (s *suite) runBatch(t *testing.T) {
 
 	// THE THREE CASES BELOW END THEIR WINDOW ON A CLOCK THEY MOVE
 	// (Capabilities.LingerClock): each needs a window open when its verb lands
-	// and ended after it, and on the wall clock nothing orders the two. They
-	// paid a window of a second (five, for the stop) for the verb to land
-	// inside, and a loaded runner still landed it late. Measured with the verb
-	// landing just past the window (1.2 s behind its opening for the pause and
-	// the hold, 5.2 s for the stop), every one of them failed a healthy build,
-	// and the pause and the stop blamed the suite's own lost race in the very
-	// words they gave a backend that flushed past the verb under the same
-	// delay. Here the window is opened, read off the backend's report that it
-	// holds the mail (Capabilities.Lingering), the verb lands, the consumer
-	// takes it in (Capabilities.Parked, or Settle behind a stop, which leaves
-	// no consumer to park), and only then is the window ended, at
-	// clockedWindow: the clock moves behind a signal, never behind elapsed
-	// time, and how late the verb lands changes nothing.
+	// and ended after it, and on the wall clock nothing orders the two: a
+	// loaded runner lands the verb late and fails a healthy build. So the
+	// window is opened (the backend reports it holds the mail,
+	// Capabilities.Lingering), the verb lands, the consumer takes it in
+	// (Capabilities.Parked, or Settle behind a stop, which leaves no
+	// consumer to park), and only then is the window ended, at clockedWindow:
+	// the clock moves behind a signal, never elapsed time.
 
 	t.Run("stop_cancels_pending_lingered_flush", func(t *testing.T) {
 		t.Parallel()
-		// A stop that lands while a window holds mail ends the window
-		// undelivered, and the window's end coming afterwards delivers
-		// nothing.
-		//
-		// THE ORDER: the window opens (Lingering reports it holding the
-		// mail), the stop lands, the stopped queue settles (Settle: on
-		// JetStream its consume loop has ended), and only then does the
-		// clock move past the window's end.
-		//
-		// Mutation: a Stop that leaves the client's consumers attached —
-		// the window still open on the twin, which then never settles, a
-		// drain's batch dispatched on JetStream past every gate the stop
-		// shuts — and the batch is not retained.
+		// A stop landing while a window holds mail ends the window
+		// undelivered; the window's end afterwards delivers nothing.
+		// ORDER: the window opens (Lingering), the stop lands, the queue
+		// settles (Settle: on JetStream its consume loop has ended), then
+		// the clock passes the window's end.
+		// Mutation: a Stop that leaves the client's consumers attached (the
+		// window still open on the twin, which never settles; a batch
+		// dispatched on JetStream past every gate the stop shuts) and the
+		// batch is delivered, not retained.
 		backlog := s.needBacklog(t)
 		lingering := s.needLingering(t)
 		onClock := s.needLingerClock(t)
@@ -695,23 +583,17 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("pause_during_linger_retains_pending", func(t *testing.T) {
 		t.Parallel()
-		// Dropping them meant a graceful drain silently destroyed
-		// whatever was mid-window.
-		//
-		// THE ORDER: the window opens (Lingering reports it holding the
-		// mail), the pause lands, the consumer parks on it (Parked), and only
-		// then does the clock move past the window's end. So what holds the
-		// mail is the pause and never the clock: a consumer that read its
-		// gate only at the window's end would flush nothing here either, but
-		// it would be the end of the window that stopped it.
-		//
-		// Mutation: let a paused consumer dispatch — on the twin, drop the
+		// A graceful drain must keep whatever was mid-window, not destroy it.
+		// ORDER: the window opens (Lingering), the pause lands, the consumer
+		// parks on it (Parked), then the clock passes the window's end, so
+		// what holds the mail is the pause, never the clock.
+		// Mutation: let a paused consumer dispatch (on the twin, drop the
 		// pause from the gate a window's flush reads; on JetStream, drop the
-		// gates behind the drain, after it and before each partition — and
+		// gates behind the drain, after it and before each partition) and
 		// the batch is delivered. Drop JetStream's gate from the drain too,
-		// or from the drain alone, and the consumer never parks on the
-		// pause; keep the twin's window on the wall clock, whatever clock it
-		// was handed, and it never settles.
+		// or from the drain alone, and the consumer never parks; keep the
+		// twin's window on the wall clock, whatever clock it was handed, and
+		// it never settles.
 		backlog := s.needBacklog(t)
 		lingering := s.needLingering(t)
 		onClock := s.needLingerClock(t)
@@ -740,34 +622,18 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("a_hold_during_linger_is_released_in_place", func(t *testing.T) {
 		t.Parallel()
-		// The reversible half of the case above, and the half that was
-		// missing. PauseDelivery is one-way — the node is shutting down —
-		// so a backend may legitimately stop consuming for good. A
-		// PauseTopic HOLD is the opposite: ResumeTopic clears it and the
-		// attachment is expected to carry on.
-		//
-		// A backend that ends its consume loop on a hold taken during a
-		// linger window leaves the seat ATTACHED, owning its lease, and
-		// reading nothing for the rest of the process's life. Nothing
-		// detects that — the seat looks owned and healthy while its mail
-		// accumulates — which is why it survived: every other assertion
-		// about holds pauses BEFORE anything is in the window, and the
-		// single-event path answers the same condition correctly.
-		//
-		// THE ORDER: the window opens (Lingering reports it holding the
-		// mail), the hold lands, the consumer parks on it (Parked), the clock
-		// moves past the window's end, and the batch stays undelivered. Then
-		// the hold lifts, the held mail opens a window again (Lingering), the
-		// clock moves past that one, and the batch arrives; then an event
-		// published after it opens one more, the clock moves past it, and
-		// that event arrives too.
-		//
+		// The reversible half of the case above: a PauseTopic HOLD is lifted
+		// by ResumeTopic and the attachment must carry on. A backend ending
+		// its consume loop on a hold taken mid-window leaves the seat
+		// ATTACHED, owning its lease, reading nothing, looking healthy;
+		// other hold assertions pause BEFORE the window. ORDER: window opens
+		// (Lingering), hold lands, consumer parks (Parked), clock passes the
+		// end, nothing delivered; hold lifts, the batch then arrives.
 		// Mutation: let a held consumer dispatch (the twin's gate without
-		// its holds; JetStream's gates behind the drain), and the held batch
-		// is delivered; end JetStream's loop on the hold rather than going
-		// round it, or read its gate only at the window's end, and it never
-		// parks; keep either backend's window on the wall clock, whatever
-		// clock it was handed, and a window of clockedWindow never ends.
+		// its holds; JetStream's gates behind the drain), and the batch is
+		// delivered; end JetStream's loop on the hold, or read its gate only
+		// at the window's end, and it never parks; a wall-clock window
+		// never ends.
 		lingering := s.needLingering(t)
 		onClock := s.needLingerClock(t)
 		clock := &Clock{}
@@ -785,14 +651,14 @@ func (s *suite) runBatch(t *testing.T) {
 		// Open the window, then take the hold while it is open.
 		publish(ctx, t, q, "t.hold", newConvEvent("during", "c1"))
 		awaitWindow("the window to hold the published event")
-		if err := q.PauseTopic(ctx, "t.hold", "g", "test"); err != nil {
+		if err := q.PauseTopic(ctx, "t.hold", "g", attachmentOf(ctx, t, q, "t.hold", "g"), "test"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		s.awaitParked(ctx, t, q, "t.hold", "g")
 		clock.Advance(clockedWindow)
 		batches.staysAt(ctx, t, 0, "a held attachment dispatched its window")
 
-		if err := q.ResumeTopic(ctx, "t.hold", "g", "test"); err != nil {
+		if err := q.ResumeTopic(ctx, "t.hold", "g", attachmentOf(ctx, t, q, "t.hold", "g"), "test"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		awaitWindow("the held event to open a window once the hold lifts")
@@ -852,23 +718,15 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("an_aged_conversation_dispatches_before_a_fresher_one", func(t *testing.T) {
 		t.Parallel()
-		// Between-partition fairness, asserted against the BACKEND rather
-		// than against the ordering function.
-		//
-		// Receive order alone starves a quiet conversation behind a hot
-		// one under deferral: the quiet conversation's requeued copies
-		// re-enter the topic AFTER whatever arrived during the hot
-		// conversation's turn, so receive-ordered dispatch picks the hot
-		// one on every drain, for ever. Timestamps carry the aging signal
-		// and survive requeue, so the conversation that has waited longest
-		// must go first.
-		//
-		// Every other batch subtest publishes in timestamp order, which
-		// makes oldest-first and receive-order indistinguishable — so this
-		// deliberately puts the two in conflict: the hot conversation
-		// ARRIVES first and the quiet one is OLDER. Measured, a backend
-		// that partitions correctly and dispatches in receive order passes
-		// the whole suite without this case.
+		// Between-partition fairness, asserted against the BACKEND, not the
+		// ordering function. Receive order alone starves a quiet
+		// conversation behind a hot one under deferral: its requeued copies
+		// re-enter AFTER whatever arrived during the hot one's turn.
+		// Timestamps carry the aging signal and survive requeue, so the
+		// conversation that has waited longest must go first. Every other
+		// batch subtest publishes in timestamp order, hiding the difference,
+		// so this puts them in conflict: the hot conversation ARRIVES first
+		// and the quiet one is OLDER.
 		q := s.start(ctx, t)
 
 		now := time.Now().UTC()
@@ -879,15 +737,9 @@ func (s *suite) runBatch(t *testing.T) {
 
 		// Queued before anything attaches, so both are in one drain as two
 		// partitions; delivered one at a time there is no dispatch order
-		// to observe. See queueBacklog.
-		//
-		// This took a hold AFTER subscribing, the shape holdForOneBatch
-		// documents as unable to promise what it reads as promising: an
-		// attachment already in a long poll is served the first publish
-		// and hands it back, so `hot` reached the next drain as a
-		// redelivery racing its own return — and when the return lost,
-		// `quiet` went alone and `hot` after it, which this case accepted
-		// without ever having ordered two partitions.
+		// to observe. See queueBacklog. A hold taken AFTER subscribing (the
+		// shape holdForOneBatch documents) would let `hot` race its own
+		// return and `quiet` go alone, ordering nothing.
 		queueBacklog(ctx, t, q, "topic.age", "grp", hot, quiet)
 		batches := newBatchJournal()
 		subscribeBatch(ctx, t, q, "topic.age", "grp", recordingBatchHandler(batches),
@@ -903,19 +755,14 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("within_a_partition_events_are_ordered_by_timestamp", func(t *testing.T) {
 		t.Parallel()
-		// A partition must read in its own chronological order no matter
-		// how the broker handed the events over, because the broker's
-		// order is not chronological: a message that went back returns at
-		// the head on one backend and behind fresh mail on the other —
-		// a_redelivered_event_rejoins_its_conversation_in_timestamp_order
-		// is that interleaving. So the order inside a partition comes from
-		// the timestamps the engine already trusts and already preserves
-		// across requeue — never from delivery order — and this case makes
-		// arrival order and timestamp order deliberately disagree.
-		//
-		// QUEUED BEFORE THE ATTACHMENT. The subject is what a backend does
-		// with two events it holds, not whether two publishes land in one
-		// window; see queueBacklog.
+		// A partition reads in chronological order however the broker handed
+		// the events over: a message that went back returns at the head on
+		// one backend and behind fresh mail on the other
+		// (a_redelivered_event_rejoins_its_conversation_in_timestamp_order).
+		// So order inside a partition comes from the timestamps, which
+		// survive requeue, never delivery order; this case makes the two
+		// disagree. QUEUED BEFORE THE ATTACHMENT: the subject is what a
+		// backend does with two events it holds; see queueBacklog.
 		q := s.start(ctx, t)
 
 		t0 := time.Now().UTC()
@@ -938,39 +785,17 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("a_redelivered_event_rejoins_its_conversation_in_timestamp_order", func(t *testing.T) {
 		t.Parallel()
-		// A message that went back to the broker and comes round again
-		// takes its CHRONOLOGICAL place among the fresh mail of its
-		// conversation that it shares a partition with — whichever end of
-		// the mailbox the backend returned it to, and with the stamp it
-		// was published with, since a hand-back is the same message and
-		// not a republish.
-		//
-		// THREE EVENTS, SO THE REDELIVERY BELONGS IN THE MIDDLE. It is
-		// handed back while two more of its conversation arrive, one
-		// stamped before it and one after — and all three stamped in the
-		// past, so a redelivery stamped afresh would sort LAST. A backend
-		// that put it at the head without sorting, at the tail without
-		// sorting, or stamped it as it went round hands over a different
-		// list, and no arrival order makes the sort unnecessary — which
-		// with two events one of the backends always did: the twin
-		// returned the older one to the head, already in order.
-		//
-		// WHAT THIS NO LONGER ASSERTS: that a FAILED delivery and a newer
-		// event of its conversation reach one handler call. The contract
-		// does not promise it — a failure waits out its redelivery
-		// backoff and the newer event is dispatched without it, see
-		// queue.OrderForDispatch — and the case only ever saw it because
-		// the JetStream harness cuts that backoff to 25ms against a 50ms
-		// window: a race between a broker timer and a constant, which a
-		// loaded runner lost, and which the shipped spacing (a second,
-		// against a default window of zero) never wins at all.
-		//
-		// SO THE MESSAGE GOES BACK BY DEFERRAL, which every backend
-		// returns at once rather than on a timer, and which quiesces the
-		// attachment: nothing is fetched until the case resumes it, by
-		// which time the two fresh events are in the mailbox and the
-		// return has been sent. The window bounds only the broker TAKING
-		// that return — see handBackLinger.
+		// A message that went back to the broker takes its CHRONOLOGICAL
+		// place among its partition's fresh mail, whichever end of the
+		// mailbox it returned to, with its published stamp.
+		// THREE EVENTS, SO IT BELONGS IN THE MIDDLE: two more arrive, one
+		// stamped before it and one after, all in the past so a redelivery
+		// stamped afresh sorts LAST; with two the twin's head return was
+		// already in order. A FAILED delivery waits out its backoff
+		// (queue.OrderForDispatch), so the message goes back by DEFERRAL:
+		// returned at once on every backend, it quiesces the attachment
+		// until the case resumes it with both fresh events in the mailbox.
+		// The window bounds only the broker TAKING the return (handBackLinger).
 		quiescing := s.needQuiescing(t)
 		q := s.start(ctx, t)
 		const topic, group, conv = "t.rejoin", "g", "c1"
@@ -1061,27 +886,15 @@ func (s *suite) runBatch(t *testing.T) {
 
 		// Held while publishing so all three land in ONE batch as three
 		// partitions: delivered one at a time, the multi-partition loop
-		// this covers never runs.
+		// this covers never runs. The hold must precede the attachment, as
+		// holdForOneBatch states: a first publish handed straight back
+		// returns BEHIND later ones on JetStream.
 		//
-		// THE PUBLISH SIDE IS NOW RACE-FREE AND WAS NOT. This case failed
-		// intermittently on JetStream, and the cause was recorded here as
-		// unattributed alongside the claim that the hold put every event
-		// in the mailbox before the attachment could read one. That claim
-		// was false: the hold used to be taken AFTER the subscription, so
-		// an attachment already sitting in a long poll was served the
-		// first publish and handed it straight back — which on this
-		// backend returns it BEHIND the events published after it, so the
-		// partition this case expects first arrived second.
-		// holdForOneBatch takes the hold before the attachment exists and
-		// states the mechanism in full.
-		//
-		// The DRAIN side is still an assumption: nothing obliges a backend
-		// to hand all three partitions to one handler call. If this case
-		// recurs, capture the BACKLOG ORDER from the final assertion
-		// before anything else — a deferral pushes its partition to the
-		// front, so the order distinguishes a split (which is timing) from
-		// partitions handled past a deferral (which is the ordering defect
-		// this case exists to catch).
+		// The DRAIN side is an assumption: nothing obliges a backend to hand
+		// all three partitions to one handler call. If this recurs, read the
+		// BACKLOG ORDER first: a deferral pushes its partition to the front,
+		// so it tells a split (timing) from partitions handled past a
+		// deferral (the defect this case catches).
 		fill("a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
@@ -1116,7 +929,7 @@ func (s *suite) runBatch(t *testing.T) {
 				seen.record(firstConv(t, evs))
 				// The seat parks mid-conversation, so the hold lands while
 				// the rest of this very batch is still waiting to run.
-				if err := q.PauseTopic(hctx, "topic.hold", "grp", "queuetest-park"); err != nil {
+				if err := q.PauseTopic(hctx, "topic.hold", "grp", attachmentOf(hctx, t, q, "topic.hold", "grp"), "queuetest-park"); err != nil {
 					t.Errorf("PauseTopic: %v", err)
 				}
 				return queue.Ack()
@@ -1135,36 +948,18 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("a_detach_taken_mid_batch_stops_the_rest", func(t *testing.T) {
 		t.Parallel()
-		// THE FOURTH CONDITION, and the one that was stated in two
-		// backend comments and certified on neither.
-		//
-		// The contract names four things that stop a partition loop
-		// between partitions — a deferral just applied, a hold, a pause,
-		// a DETACH (see queue.DeliveriesLeft). The two cases above cover
-		// the first two, and the twin's guard was written to cover all
-		// four; its comment said so. It did not cover this one, because a
-		// detach is the only one that is not a FLAG: it is a consumer
-		// leaving the subscription's member list, and the partition loop
-		// holds the consumer directly and never re-reads that list. So
-		// the twin ran the remaining partitions, ACKED them, and reported
-		// the seat's mail consumed — on a consumer this node had already
-		// given up.
-		//
-		// WHICH IS THE ONE THAT MATTERS MOST. A detach is the fenced
-		// release: internal/node detaches when a seat's lease is lost,
-		// precisely to abandon in-flight work rather than finish it on a
-		// seat a peer already owns. An engine or node test asserting that
-		// path against the twin was certifying the exact opposite of what
-		// the shipped broker does — and this suite, which exists to stop
-		// that, had no case to ask with.
-		//
-		// The undispatched partitions come back like any other stopped
-		// drain's: charged one delivery each and left in the
-		// subscription's retained mail, which outlives every attachment,
-		// so whoever attaches next gets them. What that costs is
-		// an_undispatched_partition_pays_for_its_hand_back's subject and
-		// is deliberately not re-asserted here — this case is about the
-		// loop STOPPING.
+		// THE FOURTH CONDITION. Four things stop a partition loop between
+		// partitions: a deferral, a hold, a pause, a DETACH (see
+		// queue.DeliveriesLeft). A detach is the only one that is not a
+		// FLAG: a consumer leaves the member list, which a loop holding the
+		// consumer directly never re-reads, so the twin would run and ACK
+		// the remaining partitions on a consumer already given up. That
+		// matters most because a detach is the fenced release: internal/node
+		// detaches on a lost seat lease to abandon in-flight work.
+		// Undispatched partitions come back charged one delivery each, in
+		// retained mail that outlives every attachment; that cost is
+		// an_undispatched_partition_pays_for_its_hand_back's subject, not
+		// this case's: it is about the loop STOPPING.
 		backlog := s.needBacklog(t)
 		q := s.start(ctx, t)
 		fill := holdForOneBatch(ctx, t, q, "topic.detach", "grp")
@@ -1198,35 +993,17 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("a_pause_taken_mid_batch_stops_the_rest", func(t *testing.T) {
 		t.Parallel()
-		// AND THE LAST OF THE FOUR, added with the detach case above
-		// rather than after the next finding, because the detach one was
-		// found by reading the enumeration and this is what reading the
-		// rest of it produced.
+		// THE LAST OF THE FOUR. Deleting the process-wide delivery pause
+		// from the between-partition guard fails only this case, on either
+		// backend: a condition the contract names and no case asks about is
+		// one delete away from gone, however it rides the hold's predicate.
 		//
-		// MEASURED, not assumed. Deleting the process-wide delivery
-		// pause from the between-partition guard fails THIS case and
-		// nothing else, on either backend — so before it existed, that
-		// condition was held by no case at all. Both backends answer it
-		// correctly and always have; it rides the same predicate as the
-		// hold and the quiesce. But "rides the same predicate" is exactly
-		// the argument that was made for the detach condition, in a
-		// comment, while that condition was not in the predicate at all.
-		// A condition the contract names and no case asks about is one
-		// delete away from being gone, whether or not anything is wrong
-		// with it today.
-		//
-		// THE DRAIN PAUSE IS A DIFFERENT GATE FROM THE TWO NEAR IT, which
-		// is why it cannot borrow their coverage. A hold is per
-		// (topic, group) and reversible; a quiesce is per attachment and
-		// reversible; this is per PROCESS and one-way, because it is the
-		// shutdown drain — the node has stopped taking work and is
-		// waiting out its in-flight handlers. Landing mid-batch is its
-		// ordinary case rather than an exotic one: a drain that began
-		// while a seat was working arrives exactly here.
-		//
+		// THE DRAIN PAUSE IS A DIFFERENT GATE from the hold (per topic and
+		// group, reversible) and the quiesce (per attachment, reversible):
+		// it is per PROCESS and one-way, the shutdown drain waiting out
+		// in-flight handlers, and landing mid-batch is its ordinary case.
 		// pause_during_linger_retains_pending covers the same verb at the
-		// OTHER gate — a window open when the pause lands — which is a
-		// different branch in both backends.
+		// OTHER gate, a window open when the pause lands.
 		backlog := s.needBacklog(t)
 		q := s.start(ctx, t)
 		fill := holdForOneBatch(ctx, t, q, "topic.drain", "grp")
@@ -1258,59 +1035,18 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("an_undispatched_partition_pays_for_its_hand_back", func(t *testing.T) {
 		t.Parallel()
-		// WHAT THE REST OF A STOPPED DRAIN COSTS, which is the same as
-		// what the partition that stopped it costs: one delivery each.
+		// WHAT THE REST OF A STOPPED DRAIN COSTS: one delivery each, as the
+		// partition that stopped it (the cases above leave the charge
+		// unasserted). JetStream FETCHES a drain, so its counter has moved on
+		// every message before the loop stops, and the remainder goes back
+		// through the failure budget check. The twin spliced undispatched
+		// partitions back untouched, so a message on a seat whose drains
+		// keep stopping rode round for ever on a counter that never moved.
+		// queue.DeliveriesLeft states one rule; this certifies it, not
+		// either mechanism.
 		//
-		// The two cases above certify that the loop STOPS and that the
-		// undispatched partitions come back in order. Neither says what
-		// coming back is charged, and the two backends answered that
-		// differently for as long as nothing asked. JetStream FETCHES a
-		// drain, so its counter has already moved on every message in it
-		// before the loop discovers it may not finish — the remainder
-		// goes back through the same budget check as a failure. The twin
-		// spliced its undispatched partitions into the mailbox untouched,
-		// so on a seat whose drains are stopped over and over — a lease
-		// that keeps moving, an inbox held for one detached executor
-		// after another — the same message rode round for ever on a
-		// counter that never moved, while the identical message on the
-		// shipped broker was walking through its twenty-five.
-		//
-		// That is the LAST HALF of the divergence the deferral's own cost
-		// had: one partition of a drain paying the broker's price and
-		// every other partition of the same drain paying nothing. The
-		// contract states one rule for all of it — see
-		// queue.DeliveriesLeft — so this certifies the rule rather than
-		// either backend's mechanism.
-		//
-		// A HOLD RATHER THAN A DEFERRAL, because the hold is released in
-		// place: ResumeTopic clears it and the same attachment carries
-		// on, so the held-back partition comes back to a handler that can
-		// read what it has left. A deferral would quiesce the attachment,
-		// and un-quiescing it is a different verb testing a different
-		// thing.
-		//
-		// OBSERVED AGAINST BOTH LITERALS, and it used to be a bare
-		// comparison of the two readings — handed back must be LESS than
-		// never-delivered — on the stated ground that an extra redelivery
-		// on the way here could not then turn the rule into a timing test.
-		// That reasoning was inverted, and it cost a CI failure: a
-		// comparison of two DIFFERENT messages presumes they entered the
-		// drain at the same delivery count, and nothing here established
-		// that. An early delivery of the stopping partition and nothing
-		// else — which is exactly what holdForOneBatch now prevents, and
-		// what the hold used to allow — lowers the baseline by one and
-		// makes the two readings EQUAL while the hand-back was charged
-		// correctly. Reported, of course, as a hand-back that was free.
-		//
-		// So the precondition is asserted rather than presumed. The
-		// stopping partition must read a full budget less one, which says
-		// it was delivered exactly once and therefore that the fill held
-		// everything back; and the handed-back one must read exactly one
-		// less than that, which is the rule — ONE delivery, not two. Both
-		// numbers follow from queue.DeliveriesLeft's contract and from the
-		// attempts configured here, not from either backend's shape, and
-		// each failure names which half it is: a broken fill and a
-		// mischarged hand-back send a reader to opposite places.
+		// A HOLD, NOT A DEFERRAL: ResumeTopic clears it in place, so the
+		// held-back partition returns to a handler that can read its count.
 		newQueueWithAttempts := s.needAttempts(t)
 		const attempts = 5
 		q := s.startQueue(ctx, t, newQueueWithAttempts(t, attempts))
@@ -1341,7 +1077,7 @@ func (s *suite) runBatch(t *testing.T) {
 					// still waiting to run, so the second partition
 					// goes back having been drained and never
 					// dispatched — the state this case is about.
-					if err := q.PauseTopic(hctx, topic, group, "queuetest-charged"); err != nil {
+					if err := q.PauseTopic(hctx, topic, group, attachmentOf(hctx, t, q, topic, group), "queuetest-charged"); err != nil {
 						t.Errorf("PauseTopic: %v", err)
 					}
 				}
@@ -1353,7 +1089,7 @@ func (s *suite) runBatch(t *testing.T) {
 		j.awaitLabels(t, "only the first partition to be handled", "a")
 		j.staysAt(ctx, t, 1, "the hold did not stop the batch")
 
-		if err := q.ResumeTopic(ctx, topic, group, "queuetest-charged"); err != nil {
+		if err := q.ResumeTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "queuetest-charged"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		j.awaitLabels(t, "the held-back partition to come back", "a", "b")
@@ -1367,6 +1103,13 @@ func (s *suite) runBatch(t *testing.T) {
 				"a backend that states nothing cannot be asked what a hand-back "+
 				"cost", first)
 		}
+		// The precondition is asserted, not presumed: comparing two
+		// DIFFERENT messages presumes the same delivery count on entry, and
+		// an early delivery of the stopping partition (what holdForOneBatch
+		// prevents) makes the readings EQUAL though the charge was right.
+		// So it reads a full budget less one (delivered once, the fill held
+		// everything back) and the handed-back one exactly one less (ONE
+		// delivery, not two). Each failure names its half.
 		if fresh != attempts-1 {
 			t.Fatalf("the partition that stopped the drain reported %d deliveries "+
 				"left of %d attempts, want %d: it is dispatched on its FIRST "+
@@ -1391,19 +1134,14 @@ func (s *suite) runBatch(t *testing.T) {
 	t.Run("a_drain_the_backend_hands_back_itself_is_kept_with_the_unhandled_deliveries", func(t *testing.T) {
 		t.Parallel()
 		// WHERE THE BACKEND'S OWN HAND-BACK KEEPS A MESSAGE IT SPENT. A
-		// partition the consumer was told mid-drain it may not run — here,
-		// by the deferral of the partition before it — is handed back by
-		// the backend itself, no handler run, and that hand-back spends a
-		// delivery as every return does (an_undispatched_partition_pays_for_
-		// its_hand_back). On the budget's last delivery it retires the
-		// message, and a hand-back is no failure: the copy is kept with the
-		// group's unhandled deliveries, where a reader that can handle it
-		// finds it, beside the deferred partition's own.
-		//
-		// A BUDGET OF ONE, so the drain's one delivery of each is its last.
-		// Filled while held, for an_undispatched_partition_pays_for_its_
-		// hand_back's reason, so the two are one drain.
-		//
+		// partition the consumer may not run mid-drain (here, after the
+		// deferral of the one before it) is handed back by the backend, no
+		// handler run, spending a delivery as every return does
+		// (an_undispatched_partition_pays_for_its_hand_back). On the last
+		// delivery it retires the message, but a hand-back is no failure:
+		// the copy is kept with the group's unhandled deliveries, beside the
+		// deferred partition's own. A BUDGET OF ONE makes the drain's one
+		// delivery its last; filled while held so the two are one drain.
 		// Mutation: charge the backend's own hand-back of an undispatched
 		// partition as a failure (the twin's restoreLocked, JetStream's
 		// handBackUndispatched), and b's copy is kept with the poison.
@@ -1443,15 +1181,10 @@ func (s *suite) runBatch(t *testing.T) {
 		if err := q.SubscribeBatch(ctx, "topic.c", "grp",
 			func(hctx context.Context, evs []*events.Event) queue.Result {
 				seen.record(firstConv(t, evs))
-				// Grow the tail under the loop, exactly as a concurrent
-				// producer would — ONCE.
-				//
-				// A handler that published on every invocation would be
-				// an unbounded work generator: on a backend that drains
-				// inline it feeds its own drain loop, which then never
-				// reaches an empty mailbox and never returns. The test
-				// only needs the tail to grow once, so it must not be
-				// the thing that wedges a suite it shares a binary with.
+				// Grow the tail under the loop like a concurrent producer,
+				// but ONCE: publishing on every invocation feeds the drain
+				// loop of a backend that drains inline, which then never
+				// returns and wedges the suite's binary.
 				if !grown {
 					grown = true
 					_ = q.Publish(hctx, "topic.c", newConvEvent("late", "late"))
@@ -1473,59 +1206,18 @@ func (s *suite) runBatch(t *testing.T) {
 
 // holdForOneBatch holds a subscription's deliveries so several events can be
 // put in ONE batch, and returns the function that publishes them and releases
-// the hold.
-//
-// TWO CALLS RATHER THAN ONE, and their order is the whole of it: the hold has
-// to be in place BEFORE the caller attaches. So a case takes the hold, then
-// subscribes, then fills — and a single pause/publish/resume helper called
-// after SubscribeBatch, which is what this was, cannot give the guarantee
-// while reading exactly as though it does.
-//
-// A HOLD CANNOT RETRACT A FETCH THAT IS ALREADY IN FLIGHT. An idle attachment
-// on a pull backend sits in a long poll, and a hold is a flag on the client:
-// an event published a moment after the flag is set is served straight into
-// that outstanding request, delivered, and then handed back by the very guard
-// the hold exists for. It reaches the next drain having ALREADY SPENT a
-// delivery — and, on a backend where a redelivery returns behind
-// never-delivered mail (which is measured true of JetStream), behind the
-// events published after it.
-//
-// That is not hypothetical and it is not one case's problem. It was
-// reproduced by letting the attachment reach its first fetch before the hold
-// lands, and it accounts for two intermittent failures in this group, with
-// two different symptoms:
-// an_undispatched_partition_pays_for_its_hand_back read the STOPPING
-// partition's headroom one lower than the remainder's and so reported a
-// hand-back as free, and a_deferral_stops_the_rest_of_a_batch had its first
-// partition arrive other than first.
-//
-// Holding before the attachment exists removes it BY CONSTRUCTION rather than
-// by a wait: the attachment's own first look at the flag already sees the
-// hold, so nothing is ever outstanding while the fill publishes. A wait would
-// have had to outlast a poll window the suite cannot see — the backend's, not
-// the contract's — which is how a suite acquires a race it cannot measure.
-//
-// WHAT IT STILL DOES NOT PROMISE IS THE DRAIN SIDE, and that half is an
-// assumption rather than a guarantee. Holding the subscription makes the
-// events available together, which is the most any caller can arrange through
-// the contract — but nothing obliges a backend to hand them over as ONE batch.
-// A backend that delivers them singly makes the cases built on this pass
-// without exercising the multi-partition loop they are named for: the first
-// single-partition batch defers, the attachment quiesces, and there never was
-// a "rest of the batch" to stop. That is a vacuous pass, not a false one, and
-// it is invisible from most of the assertions —
-// an_undispatched_partition_pays_for_its_hand_back is the exception, because
-// it can tell a split from a hand-back that cost nothing and says which it
-// saw.
-//
-// The in-memory twin is where these genuinely exercise the loop, because it
-// drains everything available into one delivery. Treat a green result on an
-// asynchronous backend as "did not contradict" rather than "certified", and if
-// that distinction ever needs closing it needs an observable the contract does
-// not currently have — how many partitions a delivery was drawn from.
+// the hold. The hold must precede the attachment: a case holds, subscribes,
+// then fills. One taken after SubscribeBatch cannot retract a fetch in
+// flight: an idle pull attachment sits in a long poll, so an event published
+// just after is delivered and handed back by the hold's own guard, reaching
+// the next drain with a delivery SPENT (on JetStream behind later events).
+// THE DRAIN SIDE IS AN ASSUMPTION: nothing obliges a backend to hand the events
+// over as ONE batch, and one delivering them singly passes the cases built on
+// this vacuously; only an_undispatched_partition_pays_for_its_hand_back can
+// tell. Read a green asynchronous backend as "did not contradict".
 func holdForOneBatch(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string) func(convs ...string) {
 	t.Helper()
-	if err := q.PauseTopic(ctx, topic, group, "queuetest-fill"); err != nil {
+	if err := q.PauseTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "queuetest-fill"); err != nil {
 		t.Fatalf("PauseTopic: %v", err)
 	}
 	return func(convs ...string) {
@@ -1533,7 +1225,7 @@ func holdForOneBatch(ctx context.Context, t *testing.T, q queue.EventQueue, topi
 		for _, conv := range convs {
 			publish(ctx, t, q, topic, newConvEvent(conv, conv))
 		}
-		if err := q.ResumeTopic(ctx, topic, group, "queuetest-fill"); err != nil {
+		if err := q.ResumeTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "queuetest-fill"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 	}
@@ -1542,19 +1234,14 @@ func holdForOneBatch(ctx context.Context, t *testing.T, q queue.EventQueue, topi
 // queueBacklog puts events in a subscription's mailbox before anything is
 // attached to it, so the first drain finds them ALREADY AVAILABLE.
 //
-// For a case whose subject is what a drain does with the mail it holds — the
-// partitioning, the order, the cap — rather than how an arrival joins a window
-// that is already open. Published to an attached consumer instead, such a case
-// asserts that every publish lands inside one linger window, which is a
-// property of the runner's round trips rather than of the backend, and a loaded
-// runner loses it. The mail waits in the mailbox, which retains what is
-// published while nothing is attached; the subscription is created first
-// because a publish to a topic with no subscription is dropped (see
-// queue.EventQueue.EnsureSubscription).
-//
-// What the drain still has to do is collect mail the broker already holds, and
-// nothing here can say how fast a backend does that: the window the case opens
-// is the bound on it, as it always was for max_batch_chunks_oversized_buffers.
+// For a case whose subject is what a drain does with the mail it holds (the
+// partitioning, the order, the cap), not how an arrival joins an open window.
+// Published to an attached consumer, such a case asserts that every publish
+// lands inside one linger window, a property of the runner's round trips that
+// a loaded runner loses. The subscription is created first because a publish
+// to a topic with no subscription is dropped (queue.EventQueue.EnsureSubscription).
+// How fast a backend collects the held mail is unobservable here: the case's
+// window bounds it.
 func queueBacklog(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string, evs ...*events.Event) {
 	t.Helper()
 	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
@@ -1568,27 +1255,15 @@ func queueBacklog(ctx context.Context, t *testing.T, q queue.EventQueue, topic, 
 // runContractPolicy exercises the pure policy functions in the contract
 // package — NOT any backend's use of them.
 //
-// SCOPE, stated because this group's line in the output sits under
-// TestConformance and a PASS there reads like backend coverage. Every case
-// below calls a function in internal/queue directly, so its result is identical
-// for every backend by construction and it CANNOT certify that a backend calls
-// that function, or calls it correctly. Measured: a backend that partitions
-// correctly but dispatches partitions in receive order passed all six of these
-// while ignoring the aging policy outright.
-//
-// What owns the backend side, by name:
-//   - between-partition aging  -> Batch/an_aged_conversation_dispatches_before_a_fresher_one
-//   - within-partition order   -> Batch/within_a_partition_events_are_ordered_by_timestamp
-//   - partition membership     -> Batch/linger_partitions_by_key_preserving_arrival_order
-//   - the max_batch cap        -> Batch/max_batch_chunks_oversized_buffers
-//
-// The linger ceiling has no backend counterpart: nothing here checks that a
-// backend honours the clamp rather than waiting the unclamped window, because
-// asserting it costs a test that sleeps for a minute.
-//
-// These run inside the conformance suite only because internal/queue has no
-// test binary of its own. When it gets one they belong there, and this group
-// should go rather than be duplicated.
+// A PASS under TestConformance reads like backend coverage, but every case
+// calls internal/queue directly, so it CANNOT certify that a backend calls
+// that function, or correctly. The backend side is owned by Batch/
+// an_aged_conversation_dispatches_before_a_fresher_one (aging),
+// within_a_partition_events_are_ordered_by_timestamp (order),
+// linger_partitions_by_key_preserving_arrival_order (membership) and
+// max_batch_chunks_oversized_buffers (the cap). The linger ceiling has none:
+// asserting it costs a minute's sleep. These run here only because
+// internal/queue has no test binary; when it gets one, this group moves there.
 func (s *suite) runContractPolicy(t *testing.T) {
 	t.Run("effective_linger_clamps_to_ceiling", func(t *testing.T) {
 		t.Parallel()
