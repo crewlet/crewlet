@@ -274,6 +274,16 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			"1 mirror(s) of repositories this node is home to have not been brought level for longer than " +
 				"their refresh (the longest: web, 40m)",
 		},
+		// ONE run fires it: the sandbox judged its failure at the
+		// classification the give-up reads, so the rule fires at any count.
+		"a finished job's resume waiting for an operator": {
+			statelog.KindExecutorResumeBlocked,
+			statelog.Reading{ExecutorResumesBlocked: 1, ExecutorResumeBlockedSeat: "swe",
+				ExecutorResumeBlockedNode: "sat-1", ExecutorResumeBlockedKind: "disk_full",
+				ExecutorResumeBlockedFor: 40 * time.Minute},
+			"1 run(s) of seats finished their executor's job but cannot be resumed until an operator " +
+				"clears a condition (the longest: swe's, held by sat-1, on disk_full, for 40m)",
+		},
 		"a service objective burning its budget": {
 			statelog.KindObjectiveBurn,
 			statelog.Reading{ObjectiveBurns: burning(objectives.ArtifactReady, 90, 10)},

@@ -59,10 +59,18 @@
 // result as a call that failed, and a model makes a failed call again. The
 // server writes such an answer as it writes any, after the beat is stopped and
 // waited for. What the dispatcher may need besides is when that answer is out
-// ([Call.Over]: the request's end, which the SDK reaches only once the
-// answer's write has returned), since a session whose close has begun writes
-// no answer: the bridge waits on it before it closes the sessions of the
-// opening that ended.
+// ([Call.Over]), since a session whose close has begun writes no answer: the
+// bridge waits on it before it closes the sessions of the opening that ended.
+//
+// Over is the request's context's Done, which the SDK ends only once the
+// answer's write has returned (go-sdk v1.8.0). That is the SDK's behaviour and
+// not its promise, so TestACallsRequestIsOverOnlyOnceItsAnswerIsWritten holds
+// it. The SDK ends it sooner only where it cancels the request first: on the
+// harness's `notifications/cancelled` while the answer is still to come, and
+// on the connection's failure. Then nobody reads the answer, so a wait on Over
+// that lets go before its write loses nothing. Unlike [Call.Abandoned],
+// nothing here widens it: a progress that finds the call's response gone, and
+// the handler's own return, close Abandoned and leave Over to the transport.
 //
 // An answer may carry images ([Result.Images]), written after its text so a
 // client reading none still reads it, and held to internal/mcp's CheckImages.

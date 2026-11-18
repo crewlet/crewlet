@@ -116,7 +116,8 @@ func answerHeldRPC(line string) {
 // approval over the server's own bridge endpoint, which answers it held; the
 // submission the bridge refuses it after; and the Stop hook its harness runs as
 // it ends its turn.
-func codingCallHeld(ctx context.Context, args codingArgs, hooks codingHooks, stream codingStream) error {
+func codingCallHeld(ctx context.Context, args codingArgs, hooks codingHooks, thread *codingSessionThread,
+	stream codingStream) error {
 	server, err := bridgedServerURL(args.mcpConfig, heldServer)
 	if err != nil {
 		return err
@@ -155,7 +156,7 @@ func codingCallHeld(ctx context.Context, args codingArgs, hooks codingHooks, str
 		return fmt.Errorf("a submission after the held call answered %q (failed %v), want it refused as parked",
 			out, failed)
 	}
-	_, err = hooks.play(ctx, session, codingEventFinish, stream)
+	_, err = hooks.play(ctx, session, codingEventFinish, thread, stream)
 	return err
 }
 

@@ -17,34 +17,22 @@ import (
 )
 
 // THE MODEL ALARMS' INPUTS (M15 of the Models design): each entry's condition
-// across the fleet, which the alarm table judges at the owner's fixed
-// thresholds ([statelog.KindLLMCredentialExpiring] and the four beside it).
-//
-// MOSTLY FLEET-WIDE: the live nodes' status records' model rows (a limit met on one node, a
-// refusal on another) and the secret store's write instants are the fleet's,
-// as `backup_age` reads the fleet's one backup register, so a refusal, a limit,
-// a wait and a stored credential's age read the same whichever node a person
-// asks. Two inputs are this node's own reading, and say so: whether anything
-// signs an entry in here, and its harness's token lifetime.
-//
-// A READ THAT FAILS CARRIES THE LAST GOOD ONE. The status records and the secret
-// store are read on every evaluation, and a blip in either must not read as
-// "no model sits out" or "no token expires": that cleared every standing model
-// alarm on the blip and raised each again on the next tick, two log lines per
-// entry per blip, and a health count that flickered. So each input that cannot
-// be read is the last one that could, and the failure is logged. Only a node
-// that has never read the records judges nothing about models.
-//
-// ONE LISTING OF THE RECORDS FEEDS THE MCP ALARMS TOO ([mcpConditions]), read
-// here once per evaluation, so a model's and a server's conditions are judged
-// on the same records of every node, and a blip carries both on the last good
-// listing.
+// across the fleet, judged at the owner's fixed thresholds
+// ([statelog.KindLLMCredentialExpiring] and the four beside it), read off the
+// live nodes' status records and the secret store, save whether anything signs
+// an entry here and its harness's token lifetime, which are this node's own. A
+// read that fails carries the last good one, so a blip neither clears nor
+// raises an alarm; a live node whose record is not counted keeps its last one
+// at the same epoch, all but this node, whose rows are its memory; and one
+// listing feeds the MCP alarms too ([mcpConditions]). The package doc's "The
+// model alarms' inputs" holds the why of each.
 
 // entryInputs is the last good read of each fleet-wide input the per-entry
 // alarms judge.
 type entryInputs struct {
 	mu sync.Mutex
-	// statuses is every live node's status record, by node id.
+	// statuses is every live node's status record, by node id, a live node
+	// whose record is not counted keeping the one it last had.
 	statuses map[string]coord.NodeStatusRecord
 	// stored is when the secret store last wrote each secret, by name.
 	stored map[string]time.Time
@@ -63,13 +51,18 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 		return
 	}
 	in := &e.entryInputs
-	statuses, err := e.liveStatusRecords(ctx)
+	leases, records, err := e.statusListings(ctx)
 	in.mu.Lock()
+	var statuses map[string]coord.NodeStatusRecord
 	if err != nil {
 		log.WarnContext(ctx, "entry_alarms_status_unread", "error", err,
 			"detail", "the model and MCP alarms are judged on the last status records this node read")
 		statuses = in.statuses
 	} else {
+		// NEVER THIS NODE'S OWN, which its memory answers below.
+		last := maps.Clone(in.statuses)
+		delete(last, e.selfNode())
+		statuses = coord.LiveNodeStatusesKept(records, leases, last)
 		in.statuses = statuses
 	}
 	in.mu.Unlock()
@@ -78,8 +71,9 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 	}
 	statuses = maps.Clone(statuses)
 	if _, reported := statuses[e.selfNode()]; !reported {
-		// THIS NODE'S OWN ROWS, read now where no record of its counts
-		// yet (a node before its first write at its presence epoch).
+		// THIS NODE'S OWN ROWS, read now where no record of its counts in
+		// this listing: a node before its first write at its presence
+		// epoch, or one whose record aged out while its writes failed.
 		statuses[e.selfNode()] = coord.NodeStatusRecord{Node: e.selfNode(),
 			Models: e.modelStatus(ctx), MCP: e.mcpStatus(ctx)}
 	}

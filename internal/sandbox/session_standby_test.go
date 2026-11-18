@@ -632,7 +632,7 @@ func TestALossReadStandsByForACaptureOfTheJobStillBeingKept(t *testing.T) {
 		session := rig.runner.Session
 		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
 		rig.now = rig.now.Add(time.Second)
-		spooled, _ := rig.coordinator.readLost(t.Context(), lostRow())
+		spooled, _, _ := rig.coordinator.readLost(t.Context(), lostRow())
 		if spooled == nil || !spooled.standby || spooled.stamp.CaptureSeq != 1 {
 			t.Fatalf("the loss's read beside node-a's capture spooled %+v, want it standing by for it", spooled)
 		}

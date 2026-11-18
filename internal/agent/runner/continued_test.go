@@ -640,18 +640,18 @@ func TestARelaunchTellsANoteALostTakeRecordedWhereTheRecordReadIt(t *testing.T) 
 
 // A SESSION IS TOLD A NOTE ITS HARNESS WAS SERVED AS ONE IT MAY ALREADY SHOW. A
 // note the run's bridge served an OpenCode harness is recorded read only once
-// the harness confirms delivering it, so a session continued from that job may
-// hold one the record says waits, or that only a review read since. A relaunch
-// that continues it tells such a note under the header of notes it may already
-// show, never as one it had not read: still waiting, among the notes the brief
-// is the first to read — the header taking every note before it, so the order
-// read is kept, and only the notes after it following plainly — and read since
-// by a review, among the notes past the session's cursor. The fresh brief
-// beside it tells every note plainly, as it always does.
+// the harness confirms it, so a continued session may hold one the record says
+// waits, or that only a review read since; and a hook's note its session showed
+// taken before its last restart (steer.Reading.Restarted) it may not hold,
+// though the cursor counts it. A relaunch tells each under the header of notes
+// it may already show: a waiting one among the notes the brief is the first to
+// read, the header taking every note before it so the order read is kept, and
+// the others from their read on. The fresh brief beside it tells every note
+// plainly.
 //
 // Mutation: tell a served note plainly, take the notes after the last served
-// one under the header, or leave a served note a review read since plain, and a
-// case goes red.
+// one under the header, leave a served note a review read since plain, or count
+// a restarted read held, and a case goes red.
 func TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -670,7 +670,12 @@ func TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.
 	served := note("served", "the note served to the job's harness, its confirmation lost")
 	late := note("late", "the note filed after it")
 	msg := func(by, text string) string { return prompts.SteerMessage(by, text) }
+	restarted := read("restarted", "the note a hook's serve handed over before the session restarted", 2,
+		types.PhaseExecute, types.SteerBoundaryToolBatch)
+	restarted.Restarted = true
 	for name, tc := range map[string]struct {
+		// cursor is the capture's, 1 where unset.
+		cursor  int
 		steered []steer.Read
 		served  []string
 		waiting []steer.Note
@@ -678,6 +683,9 @@ func TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.
 		// it; none is the header absent.
 		again, plain []string
 	}{
+		"a hook's note its session took before it restarted": {cursor: 2, steered: []steer.Read{held, restarted},
+			waiting: []steer.Note{late}, again: []string{msg(restarted.By, restarted.Text)},
+			plain: []string{msg(late.By, late.Text)}},
 		"a served note still waiting": {steered: []steer.Read{held}, served: []string{"served"},
 			waiting: []steer.Note{early, served, late},
 			again:   []string{msg(early.By, early.Text), msg(served.By, served.Text)},
@@ -695,7 +703,7 @@ func TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.
 				box.Offer(n)
 			}
 			basis := keptBasis
-			basis.NoteCursor = 1
+			basis.NoteCursor = max(tc.cursor, 1)
 			relauncher := &probingLauncher{basis: basis}
 			resume := &runner.Resume{State: parked.State, Steered: tc.steered, Served: tc.served,
 				Asked: &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",

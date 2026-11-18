@@ -1,6 +1,8 @@
 package mcpbridge_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -23,6 +25,7 @@ var handed = map[string]string{"crewlet:mcp-github": "mcp:github"}
 type skillsFixture struct {
 	loader   *stubTool
 	ledger   *ledger
+	bridge   *mcpbridge.Bridge
 	server   *httptest.Server
 	endpoint string
 }
@@ -45,12 +48,12 @@ func newSkillsFixture(t *testing.T, skills map[string]string,
 		[]string{"read_page", toolname.LoadToolSkill}).ForTurn(seatTurn())
 	f.server = httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(f.server.Close)
-	bridge := bridgeFor(t, mcpbridge.Options{
+	f.bridge = bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL,
 	})
 	mux := http.NewServeMux()
-	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
-	mux.Handle(mcpbridge.SkillPattern, bridge.SkillHandler())
+	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
+	mux.Handle(mcpbridge.SkillPattern, f.bridge.SkillHandler())
 	f.server.Config.Handler = mux
 	session := &mcpbridge.Session{
 		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
@@ -59,7 +62,7 @@ func newSkillsFixture(t *testing.T, skills map[string]string,
 	for _, ready := range configure {
 		ready(session)
 	}
-	f.endpoint = bridge.Open(t.Context(), session)
+	f.endpoint = f.bridge.Open(t.Context(), session)
 	if f.endpoint == "" {
 		t.Fatal("the bridge opened no session")
 	}
@@ -150,17 +153,7 @@ func TestTheSkillRouteRecordsAPluginsReport(t *testing.T) {
 	t.Parallel()
 	send := func(f *skillsFixture, method, body string) int {
 		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), method, mcpbridge.SkillURL(f.endpoint),
-			strings.NewReader(body))
-		if err != nil {
-			t.Fatalf("NewRequest: %v", err)
-		}
-		resp, err := f.server.Client().Do(req)
-		if err != nil {
-			t.Fatalf("%s %s: %v", method, req.URL, err)
-		}
-		_ = resp.Body.Close()
-		return resp.StatusCode
+		return f.send(t, method, body)
 	}
 
 	f := newSkillsFixture(t, handed)
@@ -182,4 +175,92 @@ func TestTheSkillRouteRecordsAPluginsReport(t *testing.T) {
 	if code := send(newSkillsFixture(t, nil), http.MethodPost, `{"skill":"crewlet:mcp-github"}`); code != http.StatusNotFound {
 		t.Errorf("a session handed no skills answered its route %d, want 404", code)
 	}
+}
+
+// send makes one request of the fixture's skill route, and answers its status.
+func (f *skillsFixture) send(t *testing.T, method, body string) int {
+	t.Helper()
+	code, err := f.request(t.Context(), method, body)
+	if err != nil {
+		t.Fatalf("%s the skill route: %v", method, err)
+	}
+	return code
+}
+
+// request makes one request of the fixture's skill route, from any goroutine.
+func (f *skillsFixture) request(ctx context.Context, method, body string) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, method, mcpbridge.SkillURL(f.endpoint), strings.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	resp, err := f.server.Client().Do(req)
+	if err != nil {
+		return 0, err
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
+// A SKILL REPORT ITS OPENING CANNOT COUNT IS ANSWERED 204 ALL THE SAME, NEVER
+// TURNED AWAY: one reaching the opening as the run ends, its route having found
+// the opening first, and one on a run whose tools are closed. Neither load
+// counts. Unlike a notes read, which is turned away to ask again
+// (TestAReadItsOpeningsEndOvertookIsTurnedAwayToAskAgain), the report is never
+// posted again, whatever it is answered, and a 401 or a 404 ends the plugin's
+// reports for the rest of the run, which goes on with the seat's next holder;
+// the required-skill guard names the skill to load afresh at the run's next
+// call to a tool the skill covers.
+//
+// Mutation: turn away a report on an opening that has ended or whose fence has
+// closed (a 503 before the load), and both go red.
+func TestASkillReportItsOpeningCannotCountIsAnsweredAsAnyReportIs(t *testing.T) {
+	t.Parallel()
+	t.Run("the run ends as the report reaches it", func(t *testing.T) {
+		t.Parallel()
+		parked := newParkedFence()
+		t.Cleanup(parked.letGo)
+		// PARKED AS THE OPENING IS TOLD WHICH SESSION THE BOX STARTED: after
+		// the routing found the opening, before the route serves the report.
+		f := newSkillsFixture(t, handed, func(s *mcpbridge.Session) {
+			s.Started = func(context.Context, bool) { _ = parked.fence() }
+		})
+		parked.arm()
+		type answer struct {
+			code int
+			err  error
+		}
+		answered := make(chan answer, 1)
+		go func() {
+			code, err := f.request(t.Context(), http.MethodPost, `{"skill":"crewlet:mcp-github"}`)
+			answered <- answer{code, err}
+		}()
+		select {
+		case <-parked.entered:
+		case got := <-answered:
+			t.Fatalf("the report was answered %d (%v) before its route reached the opening", got.code, got.err)
+		}
+		f.bridge.Close("run-1")
+		parked.letGo()
+		if got := <-answered; got.err != nil || got.code != http.StatusNoContent {
+			t.Errorf("a report reaching its opening as the run ended was answered %d (%v), want 204",
+				got.code, got.err)
+		}
+		if rows := f.ledger.rows(); len(rows) != 0 {
+			t.Errorf("a report reaching an ended opening recorded %+v", rows)
+		}
+	})
+	t.Run("the run's tools are closed", func(t *testing.T) {
+		t.Parallel()
+		f := newSkillsFixture(t, handed, func(s *mcpbridge.Session) {
+			s.Fence = func() error { return errors.New("the seat left this node") }
+		})
+		if code := f.send(t, http.MethodPost, `{"skill":"crewlet:mcp-github"}`); code != http.StatusNoContent {
+			t.Errorf("a report on a run whose tools are closed was answered %d, want 204", code)
+		}
+		for _, row := range f.ledger.rows() {
+			if !row.Failed {
+				t.Errorf("a report on a run whose tools are closed counted as a load: %+v", row)
+			}
+		}
+	})
 }

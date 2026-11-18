@@ -517,6 +517,14 @@ func newProbeRig(t *testing.T, model llm.Provider) *probeRig {
 	r.e = &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}, clock: r.clock}
 	r.e.epoch.current.Store(c)
 	r.e.providerParks.after = r.alarms.after
+	// EVERY SEAT HELD HERE: each park's hold names its inbox's attachment.
+	for _, handle := range []string{"lead", "pm", "qa"} {
+		id, err := r.e.seatID(handle)
+		if err != nil {
+			t.Fatalf("seatID(%s): %v", handle, err)
+		}
+		takeInbox(t, r.e, q, id)
+	}
 	return r
 }
 
@@ -535,9 +543,16 @@ func (r *probeRig) at(now time.Time) {
 // park parks handle on the entry's limit, tried again at retry.
 func (r *probeRig) park(t *testing.T, handle string, retry time.Time) {
 	t.Helper()
-	refusal := &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: retry,
+	r.parkOn(t, handle, "default", retry)
+}
+
+// parkOn parks handle on the limit of a chain of the one entry key, tried
+// again at retry.
+func (r *probeRig) parkOn(t *testing.T, handle, key string, retry time.Time) {
+	t.Helper()
+	refusal := &llm.Error{Kind: llm.KindRateLimit, Key: key, RetryAt: retry,
 		Err: errors.New("You've hit your 5-hour limit")}
-	limit, limited := chain.Limited(&chain.Error{Attempted: []string{"default"},
+	limit, limited := chain.Limited(&chain.Error{Attempted: []string{key},
 		Failures: []error{refusal}, Err: refusal})
 	if !limited {
 		t.Fatalf("the fixture's refusal is not a limit: %v", refusal)
@@ -772,14 +787,16 @@ func TestAnOlderProbeCallLeavesTheNewerOnesCancel(t *testing.T) {
 }
 
 // A RELEASED SEAT'S PROVIDER PARK TAKES ITS HOLD WITH IT. The release detaches
-// the seat's inbox, which drops every hold on it, and forgets the seat's parks
-// after; a park a turn took in between (a resume, or a delivery the release did
-// not wait for) holds an inbox the detach is done with, and forgotten without
-// its hold, it kept the seat deaf on this node, with no park left to lift it.
-// The probe rig's inbox has no attachment, as a released seat's has not.
+// the seat's inbox, which drops every hold on it and ends the attachment they
+// were taken for, and forgets the seat's parks after; a park a turn asks for in
+// between (a resume, or a delivery the release did not wait for) names that
+// ended attachment, and the queue refuses it. Taken anyway, as it was when
+// holds were keyed by the subscription alone, its hold kept the seat deaf on
+// this node once it came back, with no park left to lift it.
 //
-// Mutation: forget the park without lifting its hold (seatParks.forget), and
-// the provider's hold stays on the seat's inbox.
+// Mutation: take a park's hold for the inbox's current attachment rather than
+// the one the seat held, and the park asked between the detach and the forget
+// holds the seat's inbox.
 func TestAReleasedSeatsProviderParkTakesItsHoldWithIt(t *testing.T) {
 	t.Parallel()
 	r := newProbeRig(t, answers{})
@@ -789,15 +806,32 @@ func TestAReleasedSeatsProviderParkTakesItsHoldWithIt(t *testing.T) {
 		t.Fatalf("the premise: the park holds the inbox under %q, holds %v", pauseReasonProvider, holds)
 	}
 
+	// THE RELEASE'S DETACH, and a park asked before the release tells the
+	// engine.
+	if _, err := r.q.Detach(t.Context(), inbox, group); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	refusal := &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: parkedAt.Add(time.Hour),
+		Err: errors.New("You've hit your 5-hour limit")}
+	limit, limited := chain.Limited(&chain.Error{Attempted: []string{"default"},
+		Failures: []error{refusal}, Err: refusal})
+	if !limited {
+		t.Fatalf("the fixture's refusal is not a limit: %v", refusal)
+	}
+	if _, parked, err := r.e.providerPark(t.Context(), "lead", limit); !errors.Is(err, queue.ErrAttachmentGone) || parked {
+		t.Fatalf("a park asked once the release detached the inbox = %v, %v; want it refused", parked, err)
+	}
+	r.e.detachInbox(seatOf("lead"))
 	r.e.forgetProviderPark(t.Context(), seatOf("lead"))
 	if holds := r.q.PauseHolds(inbox, group); slices.Contains(holds, pauseReasonProvider) {
-		t.Fatalf("the released seat's inbox is still held %v by the park it forgot", holds)
+		t.Fatalf("the released seat's inbox is still held %v by a park asked after its detach", holds)
 	}
 }
 
 // A PARK ITS SEAT'S RELEASE FORGOT BEFORE THE PARK WAS WHOLE IS UNDONE ALL THE
 // SAME. The release's forget can land between a park's take and the park's own
-// look at the seat: it drops the record and lifts the hold, and the park joins
+// look at the seat: it drops the record (the release's detach having dropped
+// the hold), and the park joins
 // its chain's probe and says the seat parked after it. With no record left to
 // release, the park that finds its seat gone still leaves the probe and says
 // the seat released: kept on the probe, the seat's alarm went on calling the
@@ -829,6 +863,46 @@ func TestAParkItsSeatsReleaseForgotFirstIsUndoneWhole(t *testing.T) {
 	}
 	if got := released.Load(); got != 1 {
 		t.Fatalf("%d releases published, want the one saying the seat was released", got)
+	}
+}
+
+// A PARK ITS SEAT'S RELEASE FORGOT FIRST LEAVES NO WAIT BEHIND.
+//
+// The release's forget can land between a park's take and its join of the
+// chain's probe ([Engine.unparkReleased]): it forgets the seat's wait and drops
+// the park's record, and the join after it begins a wait again. The park's
+// undoing left that wait, which nothing then ended: it outlived the seat on
+// this node, and a park once the node held the seat again carried its start,
+// so a seat that had just met the limit read as waiting since before it let
+// go, past the fifteen minutes `llm_limit_waiting` is judged at.
+//
+// Mutation: undo the park without forgetting the seat's wait, and this fails.
+func TestAParkItsSeatsReleaseForgotFirstLeavesNoWaitBehind(t *testing.T) {
+	t.Parallel()
+	r := newProbeRig(t, answers{})
+	lead := seatOf("lead")
+	// WHAT THE PARK LEFT AFTER THE RELEASE'S FORGET: the wait its join began,
+	// its place on the probe, and no record.
+	basis := providerBasis{models: r.e.Company().Models, keys: []string{"default"}}
+	r.e.joinLimitProbe(t.Context(), basis, lead, "lead", parkedAt.Add(time.Hour))
+	r.e.unparkReleased(t.Context(), lead, "lead", basis)
+
+	// THE SEAT HELD HERE AGAIN, a day later, meeting the limit.
+	again := parkedAt.Add(24 * time.Hour)
+	r.at(again)
+	r.park(t, "lead", again.Add(time.Hour))
+	rows := 0
+	var since time.Time
+	for _, row := range r.e.parkedByEntry()["default"] {
+		if row.Seat == lead {
+			rows++
+			since = row.Since
+		}
+	}
+	if rows != 1 || !since.Equal(again) {
+		t.Errorf("the seat parked once this node held it again waits from %v (%d rows), want "+
+			"one new wait from %v: the park its release forgot first left its wait behind",
+			since, rows, again)
 	}
 }
 
@@ -888,5 +962,361 @@ func TestAProbeRefusedWithANextTryAlreadyPastWaitsBeforeItAsksAgain(t *testing.T
 	if len(parks) != 2 || !parks[1].RetryAt.Equal(parkedAt.Add(harness.ShortestSitOut)) {
 		t.Errorf("parks = %+v, want the renewal saying the seat is tried again %s on",
 			parks, harness.ShortestSitOut)
+	}
+}
+
+// A PARK TAKEN WHILE A RELEASE OF THE SEAT IS LIFTING KEEPS THE SEAT HELD.
+//
+// A release drops its record under the parks' lock and resumes outside it; a
+// park taken in between re-holds the same attachment and records itself, and
+// the late resume would lift its hold, leaving the seat recorded parked with
+// its inbox not held. So the release reads the record again after its resume
+// (the package doc's "A lift takes back a hold taken in its window"). Shared by
+// both kinds of park; the provider's is the one taken with no alarm.
+//
+// Mutation: drop the read after the resume, and the seat is left recorded
+// parked with its inbox unheld.
+func TestAParkTakenAsItsSeatsReleaseLiftsKeepsTheSeatHeld(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e, q := engineOn(t)
+	seat := seatOf("ceo")
+	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
+	if err := e.providerParks.take(ctx, e, providerParkSpec, seat, "ceo", providerBasis{},
+		time.Time{}, "every model is limited"); err != nil {
+		t.Fatalf("take: %v", err)
+	}
+
+	staged := &foldAtResume{EventQueue: q, subject: subject, hold: providerParkSpec.hold,
+		fold: func() {
+			if err := e.providerParks.take(ctx, e, providerParkSpec, seat, "ceo",
+				providerBasis{}, time.Time{}, "every model is limited again"); err != nil {
+				t.Errorf("the park in the release's window: %v", err)
+			}
+		}}
+	e.backends.Queue = staged
+	if !e.providerParks.release(ctx, e, providerParkSpec, seat, "a probe was answered") {
+		t.Fatal("the release lifted nothing")
+	}
+
+	if !staged.fired.Load() {
+		t.Fatal("the release lifted no park hold, so nothing was staged in its window")
+	}
+	parking := e.providerParks.parking(seat)
+	if parking == nil {
+		t.Fatal("the park taken in the release's window is not recorded")
+	}
+	if !slices.Contains(q.(*memory.Queue).PauseHolds(subject, group), providerParkSpec.hold) {
+		t.Errorf("the seat is recorded parked with its inbox unheld %v: the release's late "+
+			"resume took the hold the park in its window owns",
+			q.(*memory.Queue).PauseHolds(subject, group))
+	}
+	if parking.inbox != e.inboxOf(seat) {
+		t.Errorf("the park is recorded for attachment %d, want %d, which its release lifts",
+			parking.inbox, e.inboxOf(seat))
+	}
+}
+
+// A PARK TAKEN IN A RELEASE'S WINDOW KEEPS ITS WAIT.
+//
+// A release marks the seat's wait released, or a probe's answer ends it, once
+// its resume has returned, and a turn that meets the limit again in between
+// parks the seat on that record first. Landed on the standing park's record,
+// the late end or mark made a later re-park begin a new wait, so a seat that
+// had waited throughout read as newly waiting and `llm_limit_waiting`, judged
+// at fifteen minutes, went out (the package doc's "A provider park's release
+// and its wait").
+//
+// Mutation: let either the release's mark or the probe's end land on the
+// record of a park that stands, and its subtest fails.
+func TestAParkTakenInAReleasesWindowKeepsItsWait(t *testing.T) {
+	t.Parallel()
+	for _, answered := range []bool{true, false} {
+		name := "a probe's answer ends the wait under a park in its window"
+		if !answered {
+			name = "a release marks the wait released under a park in its window"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			reset := parkedAt.Add(time.Hour)
+			model := &limitedModel{reset: reset}
+			r := newProbeRig(t, model)
+			model.now = r.clock
+			e, q := r.e, r.q
+			lead, err := e.seatID("lead")
+			if err != nil {
+				t.Fatalf("seatID: %v", err)
+			}
+			r.park(t, "lead", reset)
+
+			since := func(key string) time.Time {
+				t.Helper()
+				for _, row := range e.parkedByEntry()[key] {
+					if row.Seat == lead {
+						return row.Since
+					}
+				}
+				t.Fatalf("the seat is not waiting on %s: %+v", key, e.parkedByEntry())
+				return time.Time{}
+			}
+			staged := &foldAtResume{EventQueue: q, subject: topics.AgentInbox(lead),
+				hold: pauseReasonProvider, fold: func() { r.park(t, "lead", reset.Add(time.Hour)) }}
+			e.backends.Queue = staged
+			released := reset.Add(time.Second)
+			r.at(released)
+			if answered {
+				live := r.alarms.live()
+				if len(live) != 1 {
+					t.Fatalf("%d alarms armed for one seat's park, want its probe's one", len(live))
+				}
+				live[0].fire()
+			} else if !e.releaseProviderPark(ctx, lead, "the seat's models changed") {
+				t.Fatal("the release lifted nothing")
+			}
+			if !staged.fired.Load() {
+				t.Fatal("the release lifted no park hold, so nothing was staged in its window")
+			}
+			if e.providerParks.parking(lead) == nil {
+				t.Fatal("the park taken in the release's window is not recorded")
+			}
+			if got := since("default"); !got.Equal(parkedAt) {
+				t.Fatalf("the park in the release's window waits from %v, want %v, the wait it "+
+					"carried", got, parkedAt)
+			}
+
+			if answered {
+				// THE WINDOW PARK'S OWN RELEASE, by an apply, and its
+				// re-park within the carry window.
+				r.at(released.Add(time.Minute))
+				if !e.releaseProviderPark(ctx, lead, "the seat's models changed") {
+					t.Fatal("the window park's release lifted nothing")
+				}
+				r.at(released.Add(time.Minute + parkCarryWindow/2))
+				// AND BETWEEN THE TWO, while a park would continue the
+				// wait, the heartbeat reports it.
+				if got := since("default"); !got.Equal(parkedAt) {
+					t.Errorf("between the window park's release and its re-park the seat "+
+						"waits from %v, want %v", got, parkedAt)
+				}
+				r.park(t, "lead", reset.Add(2*time.Hour))
+				if got := since("default"); !got.Equal(parkedAt) {
+					t.Errorf("the re-park within %v of the window park's release waits from "+
+						"%v, want %v: the probe's answer ended the wait that park stood on",
+						parkCarryWindow, got, parkedAt)
+				}
+				return
+			}
+			// THE STANDING SEAT PARKED ON ANOTHER CHAIN, longer after the
+			// release than a park would carry a released wait.
+			r.at(released.Add(2 * parkCarryWindow))
+			r.parkOn(t, "lead", "spare", reset.Add(2*time.Hour))
+			if got := since("spare"); !got.Equal(parkedAt) {
+				t.Errorf("the standing seat's park on another chain waits from %v, want %v: "+
+					"the release marked released the wait the park in its window stood on",
+					got, parkedAt)
+			}
+		})
+	}
+}
+
+// A PROBE'S ANSWER ENDS THE WAIT OF EVERY SEAT IT RELEASES.
+//
+// The answer releases each seat's park and then ends its wait, which a park of
+// the seat that stands keeps ([Engine.unlessParked]). Ended before the
+// release, the wait would meet the very park being released and be kept, and
+// the release would only mark it released, so a seat that met a new limit
+// within [parkCarryWindow] of the answer read as waiting since before its
+// models answered.
+//
+// Mutation: end the wait before the release, and this fails.
+func TestAProbesAnswerEndsTheWaitOfEverySeatItReleases(t *testing.T) {
+	t.Parallel()
+	reset := parkedAt.Add(time.Hour)
+	model := &limitedModel{reset: reset}
+	r := newProbeRig(t, model)
+	model.now = r.clock
+	lead, err := r.e.seatID("lead")
+	if err != nil {
+		t.Fatalf("seatID: %v", err)
+	}
+	r.park(t, "lead", reset)
+	answered := reset.Add(time.Second)
+	r.at(answered)
+	live := r.alarms.live()
+	if len(live) != 1 {
+		t.Fatalf("%d alarms armed for one seat's park, want its probe's one", len(live))
+	}
+	live[0].fire()
+	if r.e.providerParks.parking(lead) != nil {
+		t.Fatal("the probe's answer left the seat parked")
+	}
+
+	again := answered.Add(parkCarryWindow / 2)
+	r.at(again)
+	r.park(t, "lead", again.Add(time.Hour))
+	rows := 0
+	var since time.Time
+	for _, row := range r.e.parkedByEntry()["default"] {
+		if row.Seat == lead {
+			rows++
+			since = row.Since
+		}
+	}
+	if rows != 1 || !since.Equal(again) {
+		t.Errorf("the seat that met a new limit %v after its models answered waits from %v "+
+			"(%d rows), want one new wait from %v", parkCarryWindow/2, since, rows, again)
+	}
+}
+
+// A SEAT'S RELEASE FORGETS ITS WAIT, PARKED OR NOT.
+//
+// A release that finds a park standing leaves the seat's wait record to it
+// ([Engine.unlessParked]), but the seat's release by this node forgets the
+// record before it forgets the park, and a wait is this node's only while it
+// holds the seat. Left to the park it was about to forget, the record outlived
+// the seat, and a park after the node took the seat again carried a start from
+// before it let go.
+//
+// Mutation: forget the wait on the seat's release only where no park stands,
+// and this fails.
+func TestASeatsReleaseForgetsItsWaitUnderItsPark(t *testing.T) {
+	t.Parallel()
+	reset := parkedAt.Add(time.Hour)
+	model := &limitedModel{reset: reset}
+	r := newProbeRig(t, model)
+	model.now = r.clock
+	lead, err := r.e.seatID("lead")
+	if err != nil {
+		t.Fatalf("seatID: %v", err)
+	}
+	r.park(t, "lead", reset)
+	r.e.forgetProviderPark(t.Context(), lead)
+
+	again := parkedAt.Add(10 * time.Second)
+	r.at(again)
+	r.park(t, "lead", reset)
+	for _, row := range r.e.parkedByEntry()["default"] {
+		if row.Seat == lead && !row.Since.Equal(again) {
+			t.Errorf("the seat parked after its release waits from %v, want a new wait at %v: "+
+				"the release left its wait to the park it forgot", row.Since, again)
+		}
+	}
+}
+
+// A RELEASE THAT TOOK A PARK'S HOLD BACK SAYS THE INBOX STAYS HELD.
+//
+// A park taken while a release was in flight holds the seat again once the
+// release's resume returns ([seatParks.reholdParked]), and that park logged its
+// own line before the release's. The release's line (`seat_budget_park_released`,
+// `seat_provider_park_released`: one release serves both) then read as the
+// seat's last word, a seat whose mail flows again, while its inbox was held.
+// So the line says what the release's re-read found.
+//
+// NOT PARALLEL: it reads the process's log, which [logging.Configure] owns.
+//
+// Mutation: log the release without what its re-read found, and this fails.
+func TestAReleaseThatTookAParksHoldBackSaysTheInboxStaysHeld(t *testing.T) {
+	ctx := t.Context()
+	lines := processLog(t)
+	e, q := engineOn(t)
+	seat := seatOf("ceo")
+	park := func(why string) {
+		t.Helper()
+		if err := e.providerParks.take(ctx, e, providerParkSpec, seat, "ceo", providerBasis{},
+			time.Time{}, why); err != nil {
+			t.Errorf("take: %v", err)
+		}
+	}
+	park("every model is limited")
+	if !e.providerParks.release(ctx, e, providerParkSpec, seat, "a probe was answered") {
+		t.Fatal("the plain release lifted nothing")
+	}
+	park("every model is limited")
+
+	staged := &foldAtResume{EventQueue: q, subject: topics.AgentInbox(seat),
+		hold: providerParkSpec.hold, fold: func() { park("every model is limited again") }}
+	e.backends.Queue = staged
+	if !e.providerParks.release(ctx, e, providerParkSpec, seat, "a probe was answered") {
+		t.Fatal("the release lifted nothing")
+	}
+	if !staged.fired.Load() {
+		t.Fatal("the release lifted no park hold, so nothing was staged in its window")
+	}
+
+	saysHeldAgain(t, lines, providerParkSpec.released, "agent_id", seat.String())
+}
+
+// A PARK ON ITS CHAIN TAKEN AS THE PROBE'S RELEASE LIFTS IS LEFT WHOLE: HELD,
+// PROBED AND ANNOUNCED.
+//
+// The park is taken in the release's window, before its resume reaches the
+// queue (a turn on another partition) or once it has (the resumed mail, which
+// the in-memory twin hands over inside the resume). So the release's own
+// effects on the seat are decided with its record's drop, before any later
+// park can be taken (the package doc's "A provider park's release and its
+// wait").
+//
+// Mutation: take the seat off its probe after the resume, and the park is left
+// on no probe; announce the release after it, and the seat is drawn released.
+func TestAParkOnItsChainTakenAsItsProbesReleaseLiftsIsLeftWhole(t *testing.T) {
+	t.Parallel()
+	for _, late := range []bool{false, true} {
+		name := "before the resume reaches the queue"
+		if late {
+			name = "once the resume has reached the queue"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			reset := parkedAt.Add(time.Hour)
+			model := &limitedModel{reset: reset}
+			r := newProbeRig(t, model)
+			model.now = r.clock
+			e, q := r.e, r.q
+			lead, err := e.seatID("lead")
+			if err != nil {
+				t.Fatalf("seatID: %v", err)
+			}
+			subject, group := topics.AgentInbox(lead), topics.AgentInboxGroup(lead)
+			r.park(t, "lead", reset)
+
+			staged := &foldAtResume{EventQueue: q, subject: subject, hold: pauseReasonProvider,
+				late: late, fold: func() { r.park(t, "lead", reset.Add(time.Hour)) }}
+			e.backends.Queue = staged
+			r.at(reset.Add(time.Second))
+			live := r.alarms.live()
+			if len(live) != 1 {
+				t.Fatalf("%d alarms armed for one seat's park, want its probe's one", len(live))
+			}
+			live[0].fire()
+
+			if !staged.fired.Load() {
+				t.Fatal("the probe's answer lifted no park hold, so nothing was staged in its window")
+			}
+			parking := e.providerParks.parking(lead)
+			if parking == nil {
+				t.Fatal("the park taken in the release's window is not recorded")
+			}
+			if !slices.Contains(q.PauseHolds(subject, group), pauseReasonProvider) {
+				t.Errorf("the seat is recorded parked with its inbox unheld %v",
+					q.PauseHolds(subject, group))
+			}
+			e.limitProbes.mu.Lock()
+			probe := e.limitProbes.probes[probeKeyOf(parking.basis)]
+			probed := probe != nil && probe.seats[lead] != ""
+			e.limitProbes.mu.Unlock()
+			if !probed || len(r.alarms.live()) != 1 {
+				t.Errorf("the seat is parked on no probe (on one: %v, alarms armed: %d): the "+
+					"release took it off the probe its new park joined, and nothing releases it",
+					probed, len(r.alarms.live()))
+			}
+			e.parkNotices.mu.Lock()
+			last := string(e.parkNotices.sent["lead"])
+			e.parkNotices.mu.Unlock()
+			if !strings.HasPrefix(last, `{"type":"seat_provider_parked"`) {
+				t.Errorf("the last notice published for the seat is %s, want its new park: the "+
+					"release was announced after the park that followed it", last)
+			}
+		})
 	}
 }

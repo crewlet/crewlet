@@ -26,18 +26,14 @@ import "time"
 // seat's control topic alone.
 
 // reannounceCeilingPolls is the most poll intervals a job its holder has not
-// resumed waits between two announcements: twenty, which at
-// [DefaultPollInterval] is five minutes.
-//
-// IN POLLS, NOT A DURATION, for the reason [ConnectGiveUp] gives the other
-// way round: the schedule is the poll's, and a waiter driven at a faster
-// cadence (the e2e suite's 100 ms) keeps the same shape at its own scale,
-// where a fixed five minutes would leave a job its condition released
-// unannounced for longer than any of its tests run. At the default cadence a
-// condition that clears with nothing to signal it resumes its job within five
-// minutes, and a job held for a day is announced a few hundred times rather
-// than on every poll. The resume give-up ([ResumeGiveUp]) still sees several
-// attempts inside its half hour.
+// resumed waits between two announcements: twenty, five minutes at
+// [DefaultPollInterval]. In polls, so a faster waiter keeps the same shape at
+// its own scale. A condition that clears unsignalled resumes its job within
+// five minutes, and [ResumeGiveUp] still sees several attempts. And inside the
+// broker's delivery budget (internal/queue/jetstream's LeastTimeToDeadLetter),
+// which TestAJobsNextAnnouncementIsOutBeforeItsLastCanDeadLetter holds, so a
+// store's silence never leaves a completion whose only copy is its dead letter.
+// See the package doc, "Collection failures".
 const reannounceCeilingPolls = 20
 
 // announced is one turn's last announced job and its schedule.

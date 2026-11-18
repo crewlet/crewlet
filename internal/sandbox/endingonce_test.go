@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -335,6 +336,42 @@ func TestAResumeBrokenBeforeItsTurnIsAnnouncedOnce(t *testing.T) {
 			t.Fatalf("announced %+v for a resume whose turn ran and published its own completion", got)
 		}
 	})
+}
+
+// A COMPLETION WHOSE RUN MOVED ON BEFORE THIS NODE COULD END IT IS SETTLED HERE,
+// never handed back. The resume broke before its turn began, and the ending it
+// owes found the run fenced by the seat's next holder, whose recovery reaped the
+// claim and announced the run as abandoned: what becomes of the run is that
+// holder's, which drives it from the row and needs no delivery of this
+// completion (a redelivery reaching it claims nothing). Handed back, it failed
+// as the message's on the control topic (internal/engine's controlOutcome), a
+// mark that could send a healthy completion to the poison, for a routing
+// failure; the answer route reads the same answer as not this node's to say.
+//
+// Mutation: return the moved-on answer from OnCompleted again, and the
+// completion is handed back.
+func TestACompletionWhoseRunMovedOnIsSettledHere(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	rig.resumer.failWith(ErrResumeAbandoned)
+	rig.resumer.beforeTurn = true
+	var moved atomic.Bool
+	rig.resumer.during = func(ctx context.Context, _ PendingRun) {
+		// THE SEAT'S NEXT HOLDER fences the claim and reaps it while this
+		// resume is still on its way to its turn.
+		reaper(ctx, t, rig, rig.pending, 2, nil)
+		moved.Store(true)
+	}
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted = %v; want the delivery settled, since the run's next holder drives it", err)
+	}
+	if !moved.Load() {
+		t.Fatal("the premise: the resume ran, and the next holder reaped its claim")
+	}
+	abandonedOnce(t, rig, false)
 }
 
 // AN ENDING THE LAST HOLDER DECIDED BEFORE THE NEXT HOLDER'S FENCE IS FINISHED

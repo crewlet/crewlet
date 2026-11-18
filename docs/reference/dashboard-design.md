@@ -8399,12 +8399,17 @@ that can.
   it over is *read by the executor in Execute, in its brief, told again after a
   step that never handed it over*. The other ends, each tagged with its word:
   *expired*, *the turn finished before it read the note*; *missed*, *taken for
-  the executor in Execute, after a tool batch, but never handed to it* (*taken
-  at round 2 of Review but never handed over* for a review's), drawn at that
-  step; *unconfirmed*, *handed to the executor in Execute, at its next step,
-  which never confirmed reading it (its session may hold it)*, on the launch's
-  bar, the bar's badge saying each end at its step; and an end a newer build
-  names and this one does not, *this version of the dashboard cannot say what
+  the executor in Execute, after a tool batch, but it never reached it* (a
+  hook's serves all lost, a serve's session proving it absent; *taken at
+  round 2 of Review but never handed over* for a review's take whose answer
+  was lost; *taken by the turn in Execute, but it never reached its reader*
+  at a step a newer build names), drawn at that step, its badge *Your note
+  was taken here and never reached its reader*; *unconfirmed*, *handed to the
+  executor in Execute, at its next step, which never confirmed reading it
+  (its session may hold it)*, on the launch's bar (a note whose every lost
+  serve its harness gave up among them, since the answer can outrun the
+  cancel), the bar's badge saying each end at its step; and an end a newer
+  build names and this one does not, *this version of the dashboard cannot say what
   became of it*, drawn nowhere. *Pause* is the seat's
   (with *Also stop the current turn*), *Open task* its item — by the task's
   id, since a turn's item carries no word on whether its key is one another

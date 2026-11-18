@@ -951,9 +951,13 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		if unresumable != nil {
 			return unresumable
 		}
-		// Any other state this build cannot read is a ROUTING failure, not a
-		// run failure: a peer on the version that wrote it can resume this,
-		// so the completion must go back rather than be settled here.
+		// A VERSION THIS BUILD DOES NOT READ is a ROUTING failure, not a run
+		// failure: a peer on the version that wrote it can resume this, so
+		// the completion must go back rather than be settled here. Bytes
+		// that are no state at all are met again on every node.
+		if errors.Is(err, execstate.ErrUnknownVersion) {
+			return fmt.Errorf("%w: %w", sandbox.ErrResumeElsewhere, err)
+		}
 		return fmt.Errorf("%w: %w", sandbox.ErrResumeUnavailable, err)
 	}
 	if !ok {
@@ -983,7 +987,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		// a peer that has one can. Read through a nil company this was a
 		// nil dereference.
 		return fmt.Errorf("%w: this node has no applied company to resume run %s into",
-			sandbox.ErrResumeUnavailable, req.Run.TurnID)
+			sandbox.ErrResumeElsewhere, req.Run.TurnID)
 	}
 	seat := company.Org.AgentSeatByHandle(req.Run.AgentHandle)
 	if seat == nil {
@@ -991,7 +995,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		// is on a revision that never had it. Either way the resume belongs
 		// somewhere else.
 		return fmt.Errorf("%w: seat %q is not in this node's company",
-			sandbox.ErrResumeUnavailable, req.Run.AgentHandle)
+			sandbox.ErrResumeElsewhere, req.Run.AgentHandle)
 	}
 	return r.engine.resumeTurn(ctx, resumeInput{
 		Company:      company,
@@ -1345,7 +1349,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// Not a second read of the epoch, which is the one thing this
 		// must not do (see [resumeInput.Company]). Handed back rather
 		// than settled: a caller that assembled a resume without its
-		// epoch is a defect here, and a peer can still resume the run.
+		// epoch is a defect here. A defect of this build, which every
+		// node of it meets, so it is no resume another node can make
+		// ([sandbox.ErrResumeElsewhere]), and the give-up counts it.
 		return fmt.Errorf("%w: run %s was handed to resumeTurn without the "+
 			"company its seat was resolved in", sandbox.ErrResumeUnavailable, in.Run.TurnID)
 	}
@@ -1373,6 +1379,16 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			return &sandbox.TurnRefused{Refusal: refusal}
 		}
 	}
+	// THE TURN'S NOTES AS ITS RUN'S RECORD HOLDS THEM NOW, under the same
+	// claim: the read that collected the job settled its hooks' serves after
+	// the claim read the row ([runSteers.claimedNotes]). One place for every
+	// road here: a completion, the cap's collection, a parked job's answer, a
+	// lost carry. A RETRY, like every early return below.
+	claimed, err := e.runSteers.claimedNotes(ctx, in.Run)
+	if err != nil {
+		return err
+	}
+	in.Run = claimed
 	// THE TURN'S NOTES ARE ON ITS RUN'S RECORD, which this segment claimed:
 	// taken there, pinned to the claim — the job it collects, the resumed
 	// status and the lease the claim stamped — and carried from there, every
@@ -2275,20 +2291,21 @@ func resumeInputFor(in resumeInput, reply turn.Reply) turn.Input {
 // sees the trigger that raised the obligation, and the event that carries the
 // completion here is the run FINISHING rather than the ask, so [ReplyFor] over
 // it would answer "nobody is waiting" for every turn somebody is waiting on.
-//
-// A value this build does not recognise is refused rather than defaulted: it
-// was written by a build that knows a kind this one does not, and guessing at
-// who is waiting is the half of the delivery question this engine exists to get
-// right. The refusal is a ROUTING failure, like a state this build cannot
-// decode, so the completion goes back for a peer that can read it. An absent
-// value is no kind at all — every launch writes one, `none` included — and is
-// refused the same way.
+// A value this build does not recognise is refused rather than defaulted, as a
+// ROUTING failure a peer can get past ([sandbox.ErrResumeElsewhere]); an absent
+// one, which no build writes, as one no peer gets past
+// ([sandbox.ErrResumeUnavailable]). The package doc's "A resume another node or
+// build can make" says why.
 func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 	reply := turn.ParseReply(run.Reply)
 	if !reply.Valid() {
+		routed := sandbox.ErrResumeElsewhere
+		if run.Reply == "" {
+			routed = sandbox.ErrResumeUnavailable
+		}
 		return turn.Reply{}, fmt.Errorf(
 			"%w: run %s carries reply %q, which is not one of %q, %q or %q",
-			sandbox.ErrResumeUnavailable, run.TurnID, run.Reply,
+			routed, run.TurnID, run.Reply,
 			turn.ReplyNone, turn.ReplyTool, turn.ReplyEngine)
 	}
 	return reply, nil
@@ -3075,8 +3092,16 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 	opts := sandbox.CoordinatorOptions{
 		Queue: e.backends.Queue, Pending: pending, Manager: manager,
 		FailureKind: runner.ErrorKind,
-		Resume:      &resumer{engine: e},
-		Account:     e.sandboxAccountant(),
+		// A resume this node or its infrastructure failed is handed back
+		// uncounted toward the give-up that ends a run, by the answer the
+		// seat's deliveries are NAKed by ([nodesFailure]).
+		NodesFailure:       nodesFailure,
+		ResumableElsewhere: e.resumableElsewhere,
+		// And one only an operator clears is said while the run waits for
+		// one, by the one classification of conditions ([operatorsCondition]).
+		OperatorsCondition: operatorsCondition,
+		Resume:             &resumer{engine: e},
+		Account:            e.sandboxAccountant(),
 		// Who a parked question is put to, resolved against the live
 		// chart at the park — see audience.go.
 		Audience: audienceResolver{engine: e},
@@ -3108,6 +3133,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// (delivered where a later launch told it again, unconfirmed, missed
 		// or expired), before the record goes. See runsteer.go.
 		SteersEnded: e.runSteers.ended,
+		// AND EVERY NOTE A HOOK'S SERVE HANDED OVER THAT ITS JOB'S SESSION
+		// SHOWED IT TOOK is recorded delivered by every read of the job's box
+		// that settles its serves. See runsteer.go.
+		SteersConfirmed: e.runSteers.confirmed,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,
@@ -3427,20 +3456,20 @@ type seatHold struct{ engine *Engine }
 
 var _ sandbox.SeatHold = seatHold{}
 
-func (h seatHold) Hold(ctx context.Context, handle string) error {
+func (h seatHold) Hold(ctx context.Context, handle string, at queue.Attachment) error {
 	subject, group, err := h.inboxOf(handle)
 	if err != nil {
 		return err
 	}
-	return h.engine.backends.Queue.PauseTopic(ctx, subject, group, string(inbox.HoldSandbox))
+	return h.engine.backends.Queue.PauseTopic(ctx, subject, group, at, string(inbox.HoldSandbox))
 }
 
-func (h seatHold) Release(ctx context.Context, handle string) error {
+func (h seatHold) Release(ctx context.Context, handle string, at queue.Attachment) error {
 	subject, group, err := h.inboxOf(handle)
 	if err != nil {
 		return err
 	}
-	return h.engine.backends.Queue.ResumeTopic(ctx, subject, group, string(inbox.HoldSandbox))
+	return h.engine.backends.Queue.ResumeTopic(ctx, subject, group, at, string(inbox.HoldSandbox))
 }
 
 // inboxOf is the inbox a hold on handle sits on, named by the seat's id — the
@@ -3519,14 +3548,14 @@ const (
 	// and otherwise lifted on the clock when the first is tried again, which
 	// the refusal names (see providerpark.go).
 	waitProvider sandbox.Condition = "provider"
-
-	// waitDrain: this node is draining, and starts no turn. Nothing
-	// signals it, because nothing in the engine undoes a drain
-	// ([Engine.Drain] latches): the wait ends when the drain hands the seat
-	// back, which lets go of the answer for the seat's next holder to
-	// resume ([sandbox.Coordinator.ReleaseSeat]), or when the node stops.
-	waitDrain sandbox.Condition = "drain"
 )
+
+// A draining node's refusal is [sandbox.Draining], which the sandbox package
+// names because it decides whether a refusal leaves an acknowledgement owed:
+// nothing in the engine undoes a drain ([Engine.Drain] latches), so the wait
+// ends when the drain hands the seat back, which lets go of the answer for the
+// seat's next holder to resume ([sandbox.Coordinator.ReleaseSeat]), or when
+// the node stops.
 
 // turnGate is the gate the coordinator resumes through: [Engine.admitResume],
 // wrapped by [Options.resumeGate] where a case in this package set one.
@@ -3568,7 +3597,7 @@ func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.R
 		return ctx, release, nil
 	case errors.Is(err, node.ErrDraining):
 		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
-			Condition: waitDrain, Reason: err.Error()}}
+			Condition: sandbox.Draining, Reason: err.Error()}}
 	case errors.Is(err, node.ErrSeatBusy):
 		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
 			Condition: waitSeatBusy, Reason: err.Error()}}
@@ -3884,8 +3913,9 @@ func (e *Engine) mayResumeAnswer(_ context.Context, handle string) (sandbox.Refu
 // ([sandbox.PendingRun.HeldFor]); see [sandbox.Coordinator.Readmit]. It is THE
 // hook for whatever ends a condition a refusal names: call it with that
 // condition and the seat, and a refused completion resumes now rather than at
-// the waiter's next poll. Nothing to do on a node with no sandbox runtime,
-// which owes no answer, kept no completion and holds no resume.
+// the waiter's next announcement of it. Nothing to do on a node with no
+// sandbox runtime, which owes no answer, kept no completion and holds no
+// resume.
 func (e *Engine) readmitResumes(cond sandbox.Condition, handles ...string) {
 	if rt := e.sandbox.Load(); rt != nil {
 		rt.coordinator.Readmit(cond, handles...)
@@ -4006,9 +4036,18 @@ func waiterDutyTTL(interval time.Duration) time.Duration {
 }
 
 // prepareSeat is the node's SeatReady hook: recover this seat's in-flight runs
-// and start listening for their completions, BEFORE its mailbox opens.
-func (e *Engine) prepareSeat(ctx context.Context, seat placement.Seat, epoch int64, owner string) error {
+// and start listening for their completions, BEFORE its mailbox opens. inbox is
+// the attachment of the mailbox the node is about to make, which every hold of
+// it is taken for until the seat's release (seatinbox.go).
+func (e *Engine) prepareSeat(ctx context.Context, seat placement.Seat, epoch int64, owner string,
+	inbox queue.Attachment) error {
 	handle := seat.Handle
+	// THE ATTACHMENT FIRST, before any step below can hold the seat's inbox,
+	// and with it a person's pause hold where the seat is paused, taken
+	// before the node attaches the inbox (seatpause.go).
+	if err := e.acquireInbox(ctx, seat.ID, inbox); err != nil {
+		return err
+	}
 	// THE SEAT'S OWN TOOLS FIRST, because OnAcquire's whole contract is
 	// that everything the first turn needs is ready before the mailbox
 	// opens. A seat that started consuming before its per-role children
@@ -4079,19 +4118,28 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	if control == "" {
 		return nil
 	}
-	// The subscription is attached BEFORE recovery, so a completion
-	// published in the window between the two is held rather than dropped.
-	// A detached run outlives its node, so that window is not hypothetical.
-	if err := e.backends.Queue.Subscribe(ctx, control, group,
-		func(ctx context.Context, ev *events.Event) queue.Result {
-			return controlOutcome(rt.coordinator.OnEvent(ctx, ev))
-		}); err != nil {
-		return fmt.Errorf("attaching the sandbox control topic: %w", err)
+	// The subscription is attached BEFORE the recovery reads the seat's
+	// runs, so a completion published in the window between the two is held
+	// rather than dropped. A detached run outlives its node, so that window
+	// is not hypothetical. And INSIDE the recovery's gate, which the pass
+	// closes before it attaches: a delivery from here is refused its claim,
+	// and handed back, until the pass is done, so none is claimed and
+	// resumed while the pass reads the runs, which on a seat already held
+	// (an apply bringing the runtime up) this node's admission alone did not
+	// keep from happening (internal/sandbox's recoverygate.go).
+	attach := func(ctx context.Context) error {
+		if err := e.backends.Queue.Subscribe(ctx, control, group,
+			func(ctx context.Context, ev *events.Event) queue.Result {
+				return controlOutcome(ctx, rt.coordinator.OnEvent(ctx, ev))
+			}); err != nil {
+			return fmt.Errorf("attaching the sandbox control topic: %w", err)
+		}
+		// ATTACHED FROM HERE, whatever recovery says: a release has to
+		// detach what this call attached, and a refused seat is released.
+		e.markSandboxSeat(handle, true)
+		return nil
 	}
-	// ATTACHED FROM HERE, whatever recovery says: a release has to detach
-	// what this call attached, and a refused seat is released.
-	e.markSandboxSeat(handle, true)
-	if err := rt.coordinator.RecoverSeat(ctx, handle, owner, epoch); err != nil {
+	if err := rt.coordinator.RecoverSeat(ctx, handle, owner, epoch, e.inboxOf(seat.ID), attach); err != nil {
 		return err
 	}
 	// A SEAT TAKEN WHILE A PERSON'S STOP IS ON IT ends the runs its last
@@ -4114,62 +4162,35 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 }
 
 // controlOutcome is what a seat's control-topic delivery leaves with the broker,
-// given what the coordinator made of it.
+// given what the coordinator made of it under ctx, the delivery's context.
 //
-// # A refusal is handed back by the condition it names
-//
-// A completion the node's admission refused ([Engine.admitResume]) left its run
-// unclaimed and running, so the delivery carries nothing that is lost with it:
-// the waiter announces a finished run again on every poll for as long as its
-// row is running ([sandbox.Waiter]). What a refusal does to the delivery is
-// therefore keyed on the condition it names ([sandbox.TurnRefused]), never on
-// which error caused it, so a condition a later change adds is handed back by
-// the rule for its kind with nothing here to edit:
-//
-//   - A CONDITION THAT CLEARS BY WAITING (the seat's ownership not yet proven
-//     again, and any limit a seat sits out) is ACKED. A Nak or a deferral each
-//     spend one of the broker's deliveries ([queue.OutcomeDefer]), so handing a
-//     healthy completion back on a wait would walk it to the dead-letter
-//     boundary while nothing was wrong with it, and a deferral would also
-//     quiesce the attachment, which nothing undoes. The coordinator keeps the
-//     completion and re-fires it when the condition clears
-//     ([Engine.readmitResumes]), and the poll's next announcement is the
-//     backstop for a clearing nothing signals, one poll interval at most.
-//   - A DRAINING NODE ([waitDrain]) DEFERS: the condition does not clear on this
-//     node, which is leaving, so the attachment is quiesced for the rest of the
-//     drain, as a mailbox's is, and the completion goes back to the head of the
-//     topic for the seat's next holder. It costs one delivery, as every handoff
-//     does, which the delivery budget is sized for.
-//   - A SEAT THIS NODE HAS LET GO OF ([sandbox.SeatLost]) DEFERS for the same
-//     reason, and it is the condition a person's answer is refused on as well
-//     as a completion: the delivery belongs to the seat's holder. Naked, it
-//     came back here on every backoff while the attachment outlived the lease,
-//     one delivery each, and an answer walked to the dead-letter subject; the
-//     deferral hands it to the holder for one, and the release that follows
-//     detaches the quiesced attachment, so a later claim attaches a fresh one.
-//
-// # Everything else NAKs
-//
-// A completion this node could not settle (the store failing, a refusal that
-// names no condition, a row the store says a newer lease owns while this
-// node's lease still stands, which the heartbeat settles within a beat) comes
-// back on the broker's backoff: to this node once its store recovers, or to
-// the seat's next owner. Acking it would lose the turn.
-func controlOutcome(err error) queue.Result {
+// A refusal is handed back by the condition it names ([sandbox.TurnRefused]),
+// never by its error: one that clears by waiting is ACKED, the coordinator
+// keeping the completion and the waiter announcing the run again; a draining
+// node and a seat let go of DEFER. A refusal marked [sandbox.ErrUnannounced]
+// is NAKED, never acked. Nil (a run settled elsewhere, a renewal) is ACKED.
+// Everything else NAKs, as the node's ([queue.NakNode]) wherever [nodesFailure]
+// or a routing failure says it is not the message's. The package doc's
+// sections from "A refused completion is handed back by the condition it
+// names" to "Everything else on the control topic NAKs" hold the why.
+func controlOutcome(ctx context.Context, err error) queue.Result {
 	if err == nil {
 		return queue.Ack()
 	}
 	var refused *sandbox.TurnRefused
-	if !errors.As(err, &refused) || refused.Condition == "" {
-		return queue.Nak(err)
-	}
-	switch refused.Condition {
-	case waitDrain:
+	waits := errors.As(err, &refused) && refused.Condition != ""
+	switch {
+	case waits && refused.Condition == sandbox.Draining:
 		return queue.Defer(queue.DeferDraining, err.Error())
-	case sandbox.SeatLost:
+	case waits && refused.Condition == sandbox.SeatLost:
 		return queue.Defer(queue.DeferSeatMoved, err.Error())
+	case waits && !storeUnheard(err):
+		return queue.Ack()
+	case nodesFailure(ctx, err), errors.Is(err, sandbox.ErrResumeElsewhere),
+		errors.Is(err, sandbox.ErrSeatNotHeld), errors.Is(err, sandbox.ErrSeatRecovering):
+		return queue.NakNode(err)
 	}
-	return queue.Ack()
+	return queue.Nak(err)
 }
 
 // sandboxSeatAttached reports whether this node attached the seat's sandbox
@@ -4292,6 +4313,9 @@ func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 // it refers to is still real.
 func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	handle := seat.Handle
+	// THE INBOX'S ATTACHMENT, which the node's detach has ended: a hold asked
+	// from here names none, and the queue refuses it (seatinbox.go).
+	e.detachInbox(seat.ID)
 	// FIRST, while the queue is still reachable and before anything this
 	// release tears down: a seat that went away with no event left its
 	// last state standing on every dashboard — stuck "working" in a phase
@@ -4320,11 +4344,18 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	e.stopSeatServers(ctx, handle)
 	// The seat's parks die with it too: a budget park's alarm and a
 	// provider park's probe would only fire into a seat a peer now serves.
-	// The detach that released the inbox dropped their holds, all but the
-	// hold of a park a turn took after it, which goes here with its park
+	// The detach that released the inbox dropped their holds and ended the
+	// attachment each was taken for, so a park a turn asks for after it is
+	// refused and records nothing, and this drops only the records
 	// ([seatParks.forget]).
-	e.forgetBudgetPark(ctx, seat.ID)
+	e.forgetBudgetPark(seat.ID)
 	e.forgetProviderPark(ctx, seat.ID)
+	// AND THE RECORDS OF ITS PAUSE HOLDS, a person's and the no-model one,
+	// for the same reason: the detach dropped the holds, and a record left
+	// names the attachment that ended, which a later lift lifts nothing on
+	// and reports lifted.
+	e.forgetPauseHold(seat.ID)
+	e.forgetModelHold(seat.ID)
 	// AND WHAT IT READ OF THE SEAT'S HELD CONVERSATIONS: the next holder reads its own.
 	e.conversations.forget(seat.ID)
 	// AND THE TOOL SESSIONS OF ITS EXECUTOR RUNS, which the seat's next
