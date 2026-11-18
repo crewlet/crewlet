@@ -3,25 +3,32 @@
 import type { ReactNode } from "react";
 import {
   EmptyState,
+  Menu,
   Meter,
   SegmentedMeter,
   Skeleton,
   Spinner,
   Tag,
   VisuallyHidden,
+  useToast,
 } from "@crewlethq/ui";
 import {
   ArrowRightGlyph,
   ClockGlyph,
+  EllipsisGlyph,
   GitCommitVerticalGlyph,
   InfoGlyph,
+  LinkGlyph,
   ListChecksGlyph,
   ListOrderedGlyph,
+  ShieldGlyph,
   SquareCodeGlyph,
 } from "@crewlethq/icons/glyphs";
+import { href, useNavigator } from "~/app/router.tsx";
 import { AgoTime } from "~/components/AgoTime.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { changeRef, refName, shortOID } from "~/lib/code.ts";
+import { changeRef, refName, repoPath, shortOID } from "~/lib/code.ts";
+import { copyLink } from "~/lib/pageLink.ts";
 import { queueStateWord, type QueueBand, type QueuePlace } from "~/lib/checks.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeCheckRow } from "~/protocol/index.ts";
@@ -84,6 +91,51 @@ export function RequiredChecks({ gate }: { gate: GateRead }) {
           Required checks: <strong>{checks.join(", ")}</strong>
         </span>
       )}
+    </span>
+  );
+}
+
+/** More on a box: only what the engine serves, its target's gate and commits and a link to copy. */
+export function BoxMore({ band }: { band: QueueBand }) {
+  const nav = useNavigator();
+  const toast = useToast();
+  const branch = branchOf(band);
+  return (
+    <span className="code-queue__more">
+      <Menu
+        label={`More on ${band.repo}'s queue into ${branch}`}
+        icon={<EllipsisGlyph size="sm" />}
+        triggerVariant="ghost"
+        align="end"
+        items={[
+          {
+            key: "gate",
+            label: "Protection and merge gate",
+            icon: <ShieldGlyph size="sm" />,
+            onSelect: () => nav.to(repoPath(band.repo), { tab: "settings" }),
+          },
+          {
+            key: "commits",
+            label: `Commits on ${branch}`,
+            icon: <GitCommitVerticalGlyph size="sm" />,
+            onSelect: () => nav.to(repoPath(band.repo), { tab: "commits", ref: branch }),
+          },
+          {
+            key: "link",
+            label: "Copy a link to this queue",
+            icon: <LinkGlyph size="sm" />,
+            onSelect: () =>
+              void copyLink(href(["gitlet", "queue"], { repo: band.repo })).then((word) =>
+                word === "Copied"
+                  ? toast.ok(`Copied a link to ${band.repo}'s queues`)
+                  : toast.show({
+                      variant: "warning",
+                      message: "The browser refused the clipboard",
+                    }),
+              ),
+          },
+        ]}
+      />
     </span>
   );
 }

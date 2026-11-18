@@ -24,6 +24,7 @@ import { RepoPicker } from "./RepoPicker.tsx";
 import {
   BaseRow,
   BoxHead,
+  BoxMore,
   BoxNote,
   EntryChecks,
   EntryMeta,
@@ -35,7 +36,7 @@ import {
 } from "./queue/Box.tsx";
 import { Ejections } from "./queue/Ejection.tsx";
 import { Requeue } from "./queue/Requeue.tsx";
-import { gateAsksApproval, gateChecks } from "./queue/words.ts";
+import { gateAsksApproval, gateChecks, summaryWords } from "./queue/words.ts";
 
 /** A queue moves when a check ends, at the checks listings' pace. */
 const QUEUE_POLL_MS = CHECKS_POLL_MS;
@@ -138,7 +139,12 @@ export function Queue() {
         return {
           key: band.key,
           heading: <BoxHead band={band} atLeast={paged.more && index === bands.length - 1} />,
-          aside: <RequiredChecks gate={gate} />,
+          aside: (
+            <>
+              <RequiredChecks gate={gate} />
+              <BoxMore band={band} />
+            </>
+          ),
           first: train && (
             <BaseRow repo={band.repo} branch={refName(band.target).name} base={train.base_oid} />
           ),
@@ -162,6 +168,12 @@ export function Queue() {
     <>
       <PageToolbar>
         <RepoPicker size="sm" repo={repo} onChoose={setRepo} every="Every repository" />
+        {(repo === "" || named) && (
+          <QueueSummary
+            repo={named ? repo : ""}
+            out={read.error ? null : (read.data?.ejected_total ?? null)}
+          />
+        )}
       </PageToolbar>
       {repo !== "" && !named ? (
         <Callout variant="warning">
@@ -259,6 +271,33 @@ export function Queue() {
         </>
       )}
     </>
+  );
+}
+
+/** "2 changes queued · 1 taken out in the last day": each half drawn only where answered. */
+function QueueSummary({
+  repo,
+  out,
+}: {
+  repo: string;
+  out: { total: number; more?: boolean } | null;
+}) {
+  const counts = useCodeQuery("code_counts", repo ? { parts: "queue", repo } : { parts: "queue" }, {
+    pollMs: QUEUE_POLL_MS,
+  });
+  const queued = counts.error ? null : (counts.data?.counts?.queue ?? null);
+  const halves = summaryWords(queued, out, repo);
+  if (halves.length === 0) return null;
+  return (
+    <p className="code-queue__summary">
+      {halves.map((half, i) => (
+        <span key={i}>
+          {i > 0 && " · "}
+          {half.figure && <strong>{half.figure}</strong>}
+          <span className="t-caption">{half.words}</span>
+        </span>
+      ))}
+    </p>
   );
 }
 

@@ -581,6 +581,56 @@ test.each([
   expect(acted).toEqual([]);
 });
 
+// Mutation: draw 0 for a refusal.
+test("the summary counts what is queued and what was taken out, and a refused half is not drawn", async () => {
+  const urls = story();
+  mountCode("#/gitlet/queue", <Queue />);
+  const said = () => document.querySelector(".code-queue__summary")?.textContent;
+  await screen.findByText(WEB44.title);
+  await afterMicrotasks();
+  expect(said()).toBe("2 changes queued · 1 taken out in the last day");
+  const counts = asked(urls, "/query/code_counts")[0]!;
+  expect(counts.searchParams.get("parts")).toBe("queue");
+  expect(counts.searchParams.get("repo")).toBeNull();
+  cleanup();
+  const named = story({
+    "/query/code_counts": () =>
+      jsonAnswer({ error: "bad_params", detail: "queue is not a part this node counts" }, 400),
+  });
+  mountCode("#/gitlet/queue?repo=web", <Queue />);
+  await screen.findByText(WEB44.title);
+  await afterMicrotasks();
+  expect(said()).toBe("1 taken out in the last day");
+  expect(asked(named, "/query/code_counts")[0]!.searchParams.get("repo")).toBe("web");
+});
+
+// Mutation: offer an item the engine does not serve, or copy the hash alone.
+test("More offers the target's protection and gate, its commits and the queue's link", async () => {
+  const writeText = vi.fn(async () => undefined);
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  story();
+  mountCode("#/gitlet/queue", <Queue />);
+  const more = await screen.findByRole("button", { name: "More on web's queue into main" });
+  fireEvent.click(more);
+  const items = await screen.findAllByRole("menuitem");
+  expect(items.map((i) => i.textContent)).toEqual([
+    "Protection and merge gate",
+    "Commits on main",
+    "Copy a link to this queue",
+  ]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Copy a link to this queue" }));
+  await afterMicrotasks();
+  expect(writeText).toHaveBeenCalledWith(new URL("#/gitlet/queue?repo=web", location.href).href);
+  fireEvent.click(screen.getByRole("button", { name: "More on web's queue into main" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Commits on main" }));
+  expect(location.hash).toBe("#/gitlet/repos/web?tab=commits&ref=main");
+  location.hash = "#/gitlet/queue";
+  await afterMicrotasks();
+  fireEvent.click(await screen.findByRole("button", { name: "More on web's queue into main" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Protection and merge gate" }));
+  expect(location.hash).toBe("#/gitlet/repos/web?tab=settings");
+});
+
 // Mutation: fall back to the listing without trains.
 test("a fleet that refuses trains says so, with no listing in its place", async () => {
   const urls = story({

@@ -231,9 +231,17 @@ test("an entry's checks and Take out keep their columns at 1024 px", async () =>
   }
 });
 
-// Mutation: drop the narrow rule that puts the facts under the entry's words.
+// Mutation: drop the narrow rule that puts the facts under the entry's words, the marks'
+// `flex: 1 1 auto`, or the head's rule that keeps More on the heading's line.
 test("the queues hold their width at 390 px", async () => {
   const list = await mount(390);
+  marksHaveWidth(list);
+  const band = list.querySelector(".code-list__band")!;
+  const heading = band.querySelector(".code-list__heading")!.getBoundingClientRect();
+  const more = band.querySelector(".code-queue__more")!.getBoundingClientRect();
+  const required = band.querySelector(".code-queue__required")!.getBoundingClientRect();
+  expect(more.top).toBeLessThan(heading.bottom);
+  expect(required.top).toBeGreaterThanOrEqual(Math.floor(Math.max(heading.bottom, more.bottom)));
   const acts = await eventually(() => {
     const run = [...list.querySelectorAll("a")].find((a) => a.textContent === "View the run");
     expect(run).toBeTruthy();

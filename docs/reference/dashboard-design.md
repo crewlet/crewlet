@@ -9246,7 +9246,9 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   required checks as a `SegmentedMeter` with an elapsed bar against the slowest
   timeout; every repository's trains and ejections, not only a named one's.
   Each box names its gate's required checks (the branch's matched rules and the
-  repository's gates). **Load more** follows `next` through the pager every
+  repository's gates) and a More menu of what is served: its protection and
+  gate in Settings, its commits, a link to copy. Above the boxes, how many
+  changes are queued and how many were taken out in the last day. **Load more** follows `next` through the pager every
   code listing shares, and each live entry's **Take out** is the change page's
   (`code_dequeue_change`), confirmed in the page. A change taken out lately is
   a danger callout with why in words, **View the run** of the check that failed

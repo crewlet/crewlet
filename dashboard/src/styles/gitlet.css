@@ -3491,6 +3491,19 @@
   gap: var(--spacing-2) var(--spacing-3);
 }
 
+/* At the toolbar's end; under the picker, full width, on a phone. */
+.code-queue__summary {
+  margin: 0 0 0 auto;
+  font-size: var(--font-size-sm);
+}
+
+@media (width < 640px) {
+  .code-queue__summary {
+    flex-basis: 100%;
+    margin-inline-start: 0;
+  }
+}
+
 .code-queue__refused {
   margin: 0;
   font-weight: var(--font-weight-medium);
@@ -3525,6 +3538,20 @@
 
   .code-queue__out {
     grid-area: out;
+  }
+
+  /* More stays at the end of the heading's line; Required checks wraps alone under it. */
+  .code-list__band > .code-list__aside:has(> .code-queue__required) {
+    display: contents;
+  }
+
+  .code-queue__required {
+    flex-basis: 100%;
+    order: 1;
+  }
+
+  .code-queue__more {
+    margin-inline-start: auto;
   }
 }
 
