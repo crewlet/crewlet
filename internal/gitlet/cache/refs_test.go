@@ -89,13 +89,11 @@ func TestPackedRefsCarryPeeledTags(t *testing.T) {
 	}
 }
 
-// A DAMAGED REFS FILE IS REWRITTEN WHOLE: a delta merges onto the file this
-// cache wrote, and a file it did not write is not merged onto — a flipped
-// byte, because the merge would carry the damage forward; a file an
-// operator's rm or a disk fault took away, or a directory in its place,
-// because there is nothing to carry. Either way the round reads the
-// repository whole and writes the file afresh, rather than failing every
-// delta that moves a ref until the process restarts.
+// A DAMAGED REFS FILE IS REWRITTEN WHOLE: a delta merges only onto the file
+// this cache wrote. A flipped byte would carry the damage forward; a file an
+// operator's rm or a disk fault took, or a directory in its place, leaves
+// nothing to carry. Either way the round reads the repository whole and writes
+// the file afresh, rather than failing every delta until a restart.
 func TestADamagedRefsFileIsRewrittenWhole(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -159,32 +157,18 @@ func TestADamagedRefsFileIsRewrittenWhole(t *testing.T) {
 	}
 }
 
-// A DELTA'S MERGE ALLOCATES FOR WHAT MOVED, NEVER FOR THE FILE: every Gitlet node
-// merges every push that moves a ref into a packed-refs of up to
-// gitlet.MaxRefsPerRepo lines, so a line carried is checked and copied straight
-// from the read buffer — and moving one ref in a file twenty times larger
-// allocates no more.
+// A DELTA'S MERGE ALLOCATES FOR WHAT MOVED, NEVER FOR THE FILE: moving one ref
+// in a packed-refs twenty times larger allocates no more (mergeDelta).
 //
-// ONE MERGE A COUNT, AND THE LEAST OF TEN COUNTS. testing.AllocsPerRun reads
-// the whole process's allocations, and this binary is never quiet:
-// nats-server, which it links, samples the process's CPU on a timer of its own
-// once a second (server/pse), nine allocations a sample — the only ones a
-// memory profile found beside a hundred merges' own, the ten collections
-// among them making none. Samples come at a RATE, so more runs do not divide
-// them away: a window of n merges holds n merges' time of them, and carries
-// AllocsPerRun's rounded-down average once a merge takes a ninth of a second,
-// whatever n is. A merge of 20 000 refs takes 25 ms under the race detector on
-// two CPUs of its own, a margin of four that make test, running each test
-// binary beside three others on a four-CPU runner, can take; and over five
-// merges, the sample one window in ten held read as a carried line allocating.
-// A sample only ever adds to a count, and a window of one merge mostly holds
-// none, so the least of ten such counts is the merge's own, exactly: all ten
-// hold a sample only once ten merges and their warm-ups span nine seconds,
-// merges near half a second each.
+// The least of ten one-merge counts: AllocsPerRun counts the whole process, and
+// nats-server, which this binary links, allocates on a timer (server/pse's
+// once-a-second CPU sample). Samples come at a rate, so more runs do not average
+// them away; a sample only adds, and all ten windows hold one only if a merge
+// nears half a second, so the least count is the merge's own.
 //
-// Mutation: carry a line as a string (io.WriteString(w, string(line.raw)))
-// and a merge of 20 000 refs allocates some 19 000 times more than one of
-// 1 000; allocate once every 10 000 lines carried, and it allocates two more.
+// Mutation: carry a line as a string (io.WriteString(w, string(line.raw))) and
+// 20 000 refs allocate ~19 000 times more than 1 000; allocate once every
+// 10 000 carried lines, and two more.
 func TestADeltaMergeAllocatesForWhatMovedNotForTheFile(t *testing.T) {
 	// Not parallel: testing.AllocsPerRun counts every goroutine's
 	// allocations, and refuses to run beside a parallel case.

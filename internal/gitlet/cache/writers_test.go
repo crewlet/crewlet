@@ -23,27 +23,15 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree/decltype"
 )
 
-// TestNothingButSyncWritesACache holds the one rule a cache rests on: a cache
-// is a FUNCTION OF ROWS — its refs are exactly the repository's code_refs at
-// the position it records and its packs exactly the code_packs there — and
-// the cache's own steps are what write it, by convergence. Its two halves
-// hold the rule from the two sides it can break on.
-//
-// STATIC: no file under internal/gitlet writes the filesystem, or runs a git
-// process that may write the repository it runs in, unless this test's
-// allowance names the file, what it does and why. A new writer is therefore
-// an argued diff rather than an accident that serves an object no row names
-// (writersStatic says exactly what is read and what is not).
-//
-// INTERLEAVINGS: after any interleaving of what a node's cache meets —
-// pushes, tags, deletions, refused pushes, adoptions, syncs at every level,
-// syncs killed mid-step, restarts, evictions, rebuilds, maintenance, swept
-// tombstones, a log recreated backwards, compactions and the swaps that take
-// their packs out, killed or crashed mid-way, publications by this node and
-// by another, the installer's passes, layers the store lost or spoiled, and
-// the node's tip — every cache equals a cache rebuilt from nothing at the
-// same position, its installed chain a prefix of the rows', and no file under
-// repos/ holds a pack a refused push uploaded (interleavings_test.go).
+// TestNothingButSyncWritesACache holds that a cache is a function of rows,
+// written only by its own steps' convergence (package doc, "A cache is a
+// function of rows"), from both sides that can break it. Static
+// (writersStatic): no file under internal/gitlet writes the filesystem or runs
+// a git process that may write unless cacheWriters names it and why, so a new
+// writer is an argued diff. Interleavings (interleavings_test.go): after any
+// interleaving of the operations interleavingOutcomes names, every cache
+// equals one rebuilt from nothing at the same position, its installed chain a
+// prefix of the rows', and no file under repos/ holds a refused push's pack.
 func TestNothingButSyncWritesACache(t *testing.T) {
 	t.Parallel()
 	t.Run("static", func(t *testing.T) {
@@ -82,143 +70,17 @@ func TestNothingButSyncWritesACache(t *testing.T) {
 	})
 }
 
-// THE STATIC HALF.
-//
-// # Where it looks
-//
-// Every .go file under internal/gitlet that is not a _test.go file, but
-// testdata, which is not compiled, and every directory whose name ends in
-// "test" — the tree's test harnesses, gittest among them, which write
-// fixtures by design and serve no cache. Every file is read WHOLE, in its
-// package's scope and wherever it is built, through
-// internal/sourcetree/decltype — the one walk that types a value from the
-// declarations it reaches — because a value can be a Cmd in a file that
-// imports nothing: an alias of Cmd declared in the file beside it, a Cmd a
-// function of another file returns. A file the walk cannot parse fails the
-// walk rather than passing unjudged.
-//
-// # What it flags
-//
-//   - A FILESYSTEM MUTATION: a selector, through the file's own import name
-//     (a renamed import included, a local variable of the same name not), of
-//     a function that creates, renames, links, removes, truncates or changes
-//     the metadata of a path — the os, io/ioutil and syscall/unix names in
-//     fsMutators — called or taken as a value. A write through an *os.File
-//     or an *os.Root needs one of the opens that make it (os.Create,
-//     os.OpenFile, os.CreateTemp, os.OpenRoot), which are matched. A dot
-//     import of one of those packages is a mutation in itself: its calls
-//     carry no qualifier to judge.
-//   - A CMD LITERAL THAT MAY WRITE: every composite literal whose type is
-//     gitproc's Cmd — named by gitproc, by an alias of Cmd or by a type Cmd
-//     defines, or elided inside a literal of a collection of Cmds or of
-//     pointers to them, at any depth — is judged by its Args. A []string
-//     literal (or an append to one) whose first element is a string literal
-//     naming one of gitReaders, spelling none of that reader's writing
-//     option and holding nothing the walk cannot read beside one, is a read
-//     and passes; any other subcommand is a writer, and Args the literal does
-//     not spell — a variable, a call, a constant first word, a literal
-//     without field names — are arguments built at run time, which the
-//     allowance must argue for like a writer. A literal with no Args passes:
-//     handed straight to the pool it runs nothing (Run refuses a Cmd with no
-//     subcommand before any process starts), and given Args anywhere else it
-//     reaches git only by being handed on, which the next rule judges. The
-//     reader set is CLOSED: a subcommand this test has not heard of is a
-//     writer until it is argued to be a read, because the dangerous ones do
-//     not announce themselves — merge-tree --write-tree, pack-objects with a
-//     base name, hash-object -w, archive --output and rev-list --output each
-//     write objects or files into wherever they run. A gitproc imported with
-//     a dot is a hit in itself: decltype does not follow a dot import, so
-//     its Cmd is one the walk cannot type.
-//   - A CMD HANDED ON THAT ITS CALL DOES NOT SPELL: a Cmd reaches git only
-//     by being handed to a call — the pool's Run, or whatever stands between
-//     the code that builds it and Run: a helper, an interface, a function
-//     value, a method it is the receiver of — so every argument that is a
-//     Cmd, by the parameter it is handed to or by its own type, and every
-//     Cmd a method is selected on (called there, or kept as a method value),
-//     must be a Cmd literal spelled there (behind & or a conversion between
-//     Cmd types included), which the rule above has judged. Any other is
-//     arguments built at run time, however it was built — Args assigned
-//     after the literal, a Cmd from new, an element of Args overwritten, a
-//     helper that changed them in place, a conversion from another struct of
-//     the same fields — because what its Args hold by the time it is handed
-//     on is decided outside every literal the walk reads, and this is the
-//     one place all of those meet. A Cmd handed to a call is a hit whatever
-//     the call is — a builtin, a log line — since the walk does not follow
-//     where a call takes it.
-//   - The one handoff passed is GITPROC'S OWN PLUMBING passing on the Cmd its
-//     function was handed: from a file of gitproc, to one of gitproc's
-//     unexported functions or methods (never a variable of a function type,
-//     which may hold any function), a PARAMETER of a function the call is in
-//     (its own, or one a closure it is in shares) — never a named result,
-//     which the function builds, nor a receiver — handed singly to a
-//     parameter its callee declares as a Cmd: never into a variadic one, one
-//     of an interface type or one of a type parameter's. Both ends are
-//     therefore Cmd parameters, which the next rule holds unchanged, so the
-//     Cmd arrives as its caller handed it, and a Cmd gitproc builds for
-//     itself is judged here like any other.
-//   - A CMD GITPROC WAS HANDED, CHANGED: in gitproc's files, every use of a
-//     Cmd parameter — closures included, matched by the object it declares
-//     rather than by its name, which a local may shadow — that writes it,
-//     its Args or an element of them (an assignment, an operator
-//     assignment, a range clause, or the slice handed first to copy, clear
-//     or append), takes the address of any of those, or copies the Cmd or
-//     its Args anywhere but into a call (a copy shares the Args' elements),
-//     followed through parentheses, a dereference, slicing and a conversion
-//     that keeps it what it was. Its other fields are the pool's to set: a
-//     Cmd is judged by its Args. Only gitproc is judged so, because only
-//     gitproc runs git without handing a Cmd to a call — its one exec, held
-//     by TestOnlyGitprocExecsGit, takes a parameter's Args — so a Cmd it was
-//     handed and changed may run whether or not it is handed on; anywhere
-//     else a Cmd reaches git only by being handed on, where it must be
-//     spelled.
-//   - A VALUE THE WALK CANNOT TYPE, handed to a call whose parameter it
-//     cannot type either — a type switch's variable, decltype's own
-//     boundary — because "cannot tell" is not "not a Cmd". What can be no
-//     Cmd passes unread: nil, a constant (no constant is a struct), the type
-//     make or new is handed, and a value of a type parameter, which is a Cmd
-//     only once a conversion or an assertion makes it one — a typed
-//     expression the rule above judges wherever it is handed on.
-//   - And, in a file that runs git, every []string literal whose first
-//     element names a git writer (gitWriterWords) wherever it is assembled,
-//     so an argument list built away from its Cmd is named by its
-//     subcommand rather than only as arguments built at run time.
-//
-// # Coverage boundary
-//
-// It sees the call that touches the disk and the argv git is handed, in the
-// file that holds them, and nothing that reaches either another way:
-//
-//   - a write through one of a package's OWN helpers is that helper's file's
-//     row — durable.go's stage and place write the state, packed-refs, HEAD,
-//     config, a skeleton's files and the hook script that state.go, refs.go,
-//     sweep.go, entry.go and open.go decide, and layout.go's toTrash is every
-//     rename into trash/ — so which code calls a helper is the interleavings
-//     half's to judge, by what the directory ends up holding;
-//   - a path laundered through another package (flock's lock file,
-//     hostbox) or reached by reflection, unsafe or cgo;
-//   - a Cmd that comes back from a function of a package the walk does not
-//     read — one of the standard library's generic functions, cmp.Or among
-//     them — and is handed straight to a callee it cannot type: a value only
-//     an unread package can type is taken for no Cmd, which nothing outside
-//     this module can name;
-//   - inside gitproc, what a function does with a Cmd parameter's Args once
-//     they are handed to it — run hands them to exec.Command, prepare to its
-//     checks — or once converted to a type of a package the walk does not
-//     read, which only its declaration could tell from a function: the walk
-//     does not follow a call, so the pool running exactly the Cmd its Run is
-//     handed is gitproc's contract past that point, its own suite's to hold;
-//   - a file written by a child process: git's own writes are judged by the
-//     subcommand it was handed, not by what it then opens.
-//
-// The declared half ties each WRITER to a declaration of derived.go — its file,
-// its subcommand and its argument list's literal — and never the FILES that
-// writer leaves, which a static walk cannot see because a child process
-// writes them: those are held to the declarations by
-// TestEveryDerivedFileIsDeclared, which runs real git and reads what it left.
-//
-// If the rule a cache rests on ever goes away, DELETE this half rather than
-// widening the allowance: an allowance kept past its subject is how a list
-// of excuses quietly grows.
+// writersStatic is the static half: every non-test .go file under
+// internal/gitlet (walkForWriters), read whole in its package's scope through
+// internal/sourcetree/decltype (a Cmd may be an alias or a return another
+// file declares), is judged for a filesystem mutation (mutation), a Cmd
+// literal that may write (judgeCmd; gitReaders is CLOSED), a Cmd handed on
+// that its call does not spell (handoff, receiver; passedOn is gitproc's one
+// exception), a Cmd gitproc was handed and changed (unchanged), an untypeable
+// value handed on (typed), and a writer's argv assembled away from its Cmd
+// (gitWriterWords). Its declared half (derivedHalf) ties each writer to
+// derived.go; TestEveryDerivedFileIsDeclared holds the files they leave. If
+// the rule goes away, DELETE this half rather than widen the allowance.
 func writersStatic(t *testing.T) {
 	found, err := codeWalk()
 	if err != nil {
@@ -286,27 +148,17 @@ func writersStatic(t *testing.T) {
 	}
 }
 
-// derivedHalf holds the allowance's rows to the cache's declarations of its
-// derived files (cache.DerivedFiles) in both directions, over the argument
-// lists each file that runs git spells (argv), and answers everything that
-// breaks:
+// derivedHalf, pure so controlDerivedHalf can judge made-up values, holds the
+// rows to cache.DerivedFiles both ways, over each git-running file's argv:
 //
-//  1. a declared write whose writer — its file and git subcommand — has no
-//     row naming its declaration: a declaration naming a writer that does
-//     not exist;
-//  2. a row running one git subcommand in the cache that names no
-//     declaration: every git writer in a cache writes a derived file, or it
-//     writes what no row names;
-//  3. a row naming a declaration with no write in the row's file — for a
-//     row of one git subcommand, none with that subcommand;
+//  1. a declared write whose writer (file and subcommand) no row names;
+//  2. a row running one git subcommand in the cache that names no declaration
+//     (every git writer in a cache writes a derived file);
+//  3. a row naming a declaration with no write by its file (of its subcommand);
 //  4. a row naming a name DerivedFiles does not hold;
 //  5. a row naming a declaration in a file that is no declaration's writer;
-//  6. a declared write whose argument list is no list its writer's file
-//     spells whole, element for element: Args are read where git runs them,
-//     or what a write hands git is a value the gate never read.
-//
-// A pure function over values, so its control (controlWriters) judges
-// declarations and rows it makes up.
+//  6. a declared write whose Args its writer's file does not spell whole, so
+//     what a write hands git is read where git runs.
 func derivedHalf(decls []cache.Derived, rows []writerRow, argv map[string][][]string) []string {
 	var out []string
 	names := map[cache.DerivedName]*cache.Derived{}
@@ -391,18 +243,16 @@ const (
 
 // writerRow is one entry of the allowance: a file under internal/gitlet that
 // may write the filesystem or run a git writer, the kind of write, why it
-// cannot go through the cache's own steps, and the declarations of derived
-// files (cache.DerivedFiles) its writes are writes of — none for a write that
-// makes no derived file. derivedHalf holds the last field to the
-// declarations in both directions.
+// cannot go through the cache's own steps, and the cache.DerivedFiles
+// declarations its writes are writes of (none for a write making no derived
+// file), which derivedHalf holds in both directions.
 type writerRow struct {
 	file, kind, why string
 	derived         []cache.DerivedName
 }
 
-// cacheWriters is the closed set of files under internal/gitlet that may write
-// the filesystem or run a git writer, each with what it does and why it
-// cannot go through the cache's own steps. Exact in both directions.
+// cacheWriters is the closed set of writerRow entries, exact in both
+// directions (writersStatic).
 var cacheWriters = []writerRow{
 	{"internal/gitlet/gitproc/gitproc.go", kindOS,
 		"HOME for every git process, created and kept empty and private by the pool (gitproc.New)", nil},
@@ -685,7 +535,8 @@ type writerKey struct{ file, kind string }
 
 // fsMutators is, for each package that can write the filesystem, the names
 // in it that create, rename, link, remove, truncate or change the metadata
-// of a path.
+// of a path. A write through an *os.File or *os.Root needs one of the opens
+// listed here to make it, so the methods need no entry.
 var fsMutators = map[string]map[string]bool{
 	"os": setOf("Create", "CreateTemp", "OpenFile", "WriteFile", "Rename", "Remove", "RemoveAll", "Link",
 		"Symlink", "Mkdir", "MkdirAll", "MkdirTemp", "Chmod", "Chown", "Lchown", "Chtimes", "Truncate",
@@ -700,22 +551,21 @@ var syscallMutators = setOf("Rename", "Renameat", "Renameat2", "Unlink", "Unlink
 	"Creat", "Truncate", "Chmod", "Fchmodat", "Chown", "Lchown", "Fchownat", "Utimes", "UtimesNano",
 	"UtimesNanoAt", "Lutimes", "Setxattr", "Lsetxattr", "Removexattr", "Lremovexattr")
 
-// gitReader is a git subcommand that never writes the repository it runs in,
-// given the pool's fixed configuration — unless handed writes, the one
-// option that makes it a writer, always a long option, or short, its
-// one-letter spelling where git has one. Every spelling git
-// may accept of it is refused (spellsOption): its name — what comes before
-// any "=" — whole or an unambiguous prefix of it, with the value attached or
-// as the next argument. fsck's option parser takes a prefix (`fsck --lost`
-// is --lost-found); the revision walker under rev-list does not (`rev-list
-// --outp` exits 129) — refused for both, since refusing a spelling git
-// itself refuses costs nothing and one rule cannot then be the wrong one for
-// a reader. Beside a writing option, an argument the walk cannot read is
-// refused too: it may spell the option.
+// gitReader is a git subcommand that never writes the repository it runs in
+// under the pool's fixed configuration, unless handed writes (its one writing
+// option, long) or short (that option's one-letter spelling, where git has
+// one). Every spelling git may accept is refused (spellsOption): the name
+// before any "=", whole or an unambiguous prefix. fsck takes a prefix (`fsck
+// --lost` is --lost-found) and rev-list does not (`rev-list --outp` exits
+// 129); both are refused, since refusing what git refuses costs nothing. An
+// argument the walk cannot read beside a writing option is refused too: it
+// may spell the option.
 type gitReader struct{ writes, short, why string }
 
 // gitReaders is the CLOSED set of git subcommands judged to read; every
-// other is a writer until argued here.
+// other is a writer until argued here, since the dangerous ones do not
+// announce themselves (merge-tree --write-tree, pack-objects with a base
+// name, hash-object -w).
 var gitReaders = map[string]gitReader{
 	"cat-file": {why: "reads objects by id"},
 	"grep": {writes: "--open-files-in-pager", short: "-O", why: "searches a tree's files by id for a pattern, reading " +
@@ -833,12 +683,21 @@ var codeWalk = sync.OnceValues(func() (writerWalk, error) {
 	return walkForWriters(root)
 })
 
-// harnessDir is a directory the walk does not enter: a test harness, named
-// as the tree names them.
+// harnessDir is a directory the walk does not enter: a test harness (gittest
+// among them), which writes fixtures by design and serves no cache.
 var harnessDir = regexp.MustCompile(`^[a-z0-9]+test$`)
 
-// walkForWriters reads every non-test .go file under root's internal/gitlet
-// and collects its writes.
+// walkForWriters reads every non-test .go file under root's internal/gitlet,
+// but testdata and harnessDir's, and collects its writes; a file it cannot
+// parse fails the walk. Its coverage boundary: it sees the call that touches
+// the disk and the argv git is handed, in the file holding them, and not a
+// write through a package's own helper (the helper's file's row; who calls it
+// is the interleavings half's), a path laundered through another package
+// (flock, hostbox), reflection, unsafe or cgo, a Cmd an unread package's
+// function returns (cmp.Or) handed to a callee it cannot type, what a gitproc
+// callee does with Args it is handed (gitproc's own suite holds that the pool
+// runs what Run is handed), or a file a child process writes (judged by its
+// subcommand).
 func walkForWriters(root string) (writerWalk, error) {
 	start := filepath.Join(root, "internal", "gitlet")
 	gitprocDir := filepath.Join(start, "gitproc")
@@ -1106,7 +965,7 @@ func (m *writerMatch) receiver(sel *ast.SelectorExpr) {
 // slice or array type, or a pointer to one, which may share their elements.
 // Its callee is read as a type spelled there, so a function's name is none,
 // and nor is a type of a package the walk does not read, which only its
-// declaration could tell from a function (the coverage boundary).
+// declaration could tell from a function (walkForWriters).
 func (m *writerMatch) conversion(call *ast.CallExpr, reach int) bool {
 	to := decltype.Spelled(ast.Unparen(call.Fun), m.f)
 	switch reach {
@@ -1167,7 +1026,7 @@ func (m *writerMatch) unchanged(body *ast.BlockStmt, name *ast.Ident) {
 // write to them. "" for every other use: a read of an element, a comparison,
 // a range over the Args, a field other than Args — the Cmd is judged by its
 // Args — and a call handed the Cmd, which handoff judges, or its Args, which
-// the coverage boundary leaves to the callee.
+// the coverage boundary (walkForWriters) leaves to the callee.
 func (m *writerMatch) change(id *ast.Ident, stack []ast.Node) string {
 	var cur ast.Node = id
 	reach := reachWhole
@@ -1254,7 +1113,7 @@ path:
 // of the slice it is handed first, or may hand back a slice sharing them:
 // copy's destination, clear's operand, append's slice. They are the
 // language's own, so the walk knows what they do; what a function does with
-// a slice it is handed, the walk does not follow (the coverage boundary).
+// a slice it is handed, the walk does not follow (walkForWriters).
 func (m *writerMatch) writesFirst(call *ast.CallExpr) bool {
 	// A name the file declares shadows the builtin; one only another file of
 	// the package declares is taken for it, the stricter reading.
@@ -1415,7 +1274,12 @@ func spellsShort(short, arg string) bool {
 		strings.Contains(arg[1:], short[1:])
 }
 
-// handoff judges one call: every Cmd it is handed is one spelled in it.
+// handoff judges one call: every Cmd it is handed must be a literal spelled
+// in it, since what a Cmd's Args hold when handed on (assigned after the
+// literal, from new, overwritten, converted from a like struct) is decided
+// outside every literal the walk reads, and the handoff is where all of those
+// meet. Any call counts, a builtin or a log line too: the walk does not follow
+// where a call takes it.
 func (m *writerMatch) handoff(call *ast.CallExpr) {
 	if m.isCmd(decltype.Spelled(ast.Unparen(call.Fun), m.f)) {
 		// A conversion between Cmd types hands the value to nothing: the
@@ -1774,20 +1638,16 @@ func controlWriters(t *testing.T) {
 			"var _ = cmds{{Args: []string{\"bisect\", \"start\"}}}\n\n" +
 			"var _ = map[string][]*alias{\"x\": {{Args: []string{\"filter-branch\"}}}}\n\n" +
 			"var _ = defined{Dir: \"x\"}\n",
-		// Cmds handed on: Args assigned after the literal; a Cmd from new
-		// with Args assigned, handed as a value and as a pointer; one handed
-		// through the interface, to a function value, to a function the
-		// walk does not read and as an element of a variadic parameter; one
-		// handed to a method of the defined type as its receiver, converted
-		// from the Cmd above; a receiver of the defined type converted and
-		// handed to the pool; a parameter, its Args replaced, passed on to
-		// an unexported function outside gitproc, which is no plumbing of
-		// the pool's — one hit, where it is handed on, since only gitproc's
-		// files are judged for changing a parameter itself — and, spelled
-		// in the call, a literal, a converted literal of the defined type,
-		// one through the alias, one behind & and one spelled as a method's
-		// receiver, which pass, beside a conversion that hands nothing on
-		// and a slice handed whole to the variadic parameter.
+		// Cmds handed on, each a hit: Args assigned after the literal; a Cmd
+		// from new, as a value and a pointer; through the interface, a
+		// function value, an unread function and a variadic element; as a
+		// method's receiver after a conversion; a converted receiver handed
+		// to the pool; a parameter with Args replaced passed on outside
+		// gitproc (one hit, where handed: only gitproc is judged for changing
+		// a parameter). Passing: spelled in the call as a literal, a
+		// converted literal, through the alias, behind & or as a method's
+		// receiver; a conversion handing nothing on; a slice handed whole to
+		// the variadic parameter.
 		"internal/gitlet/c/handoff.go": "package c\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\n\tg " + gp + "\n)\n\n" +
 			"func k(ctx context.Context, p *g.Pool, r runner, run func(g.Cmd), o string, extra []string, cs cmds) {\n" +
 			"\tc := g.Cmd{Dir: o}\n\tc.Args = []string{\"replay\", \"--onto\", o}\n\t_ = p.Run(ctx, c)\n" +
@@ -1822,31 +1682,18 @@ func controlWriters(t *testing.T) {
 			"func (n names[T]) show() {\n\tfor _, v := range n {\n\t\tfmt.Println(v)\n\t}\n}\n",
 		// gitproc imported with a dot: its Cmd is one the walk cannot type.
 		"internal/gitlet/d/dot.go": "package d\n\nimport . " + gp + "\n\nvar _ = Cmd{Args: []string{\"rerere\"}}\n",
-		// gitproc's own Cmd, named unqualified, and its plumbing. What
-		// passes: its Run passing the Cmd it was handed on; run reading
-		// that Cmd's Args (len, an element, a comparison, a range, a
-		// function's one argument, a map's key, copy's source, append's
-		// later arguments, a local function named clear), writing a field
-		// other than Args, naming a struct field like it, writing a local
-		// that shadows it, passing it on from a closure and handing its
-		// Args to a call; a function literal's parameter passed on; and a
-		// blank parameter, which nothing names, beside a blank assignment.
-		// What does not — every subcommand outside gitWriterWords, so only
-		// these rules can find it: a Cmd it builds itself, a named result
-		// and a receiver, each handed to the plumbing; a receiver built at
-		// run time, beside one spelled in the selector and a method
-		// expression, which pass; a parameter handed into a variadic
-		// parameter, to one that is no Cmd, to a type parameter and to a
-		// variable of a function type hook.go declares; and a parameter
-		// replaced, its Args replaced (directly and in a closure), an
-		// element written by =, by an operator, through parentheses,
-		// through a slice and by a range clause, its Args handed first to
-		// copy, clear and append, its Args' address taken, a pointer to it
-		// written through, the whole copied — as it is, converted to
-		// Cmd, to a type of hook.go and through a pointer — and its Args
-		// copied — sliced, converted to a slice and converted to a pointer
-		// to an array — each changed where it was handed, so a hit where
-		// the change is, handed on or not.
+		// gitproc's own Cmd, unqualified, and its plumbing. Passing: Run
+		// passing its Cmd on; run reading its Args every way own.go spells
+		// (a local named clear included), writing another field, a like-named
+		// struct field, a shadowing local, passing it on from a closure and
+		// handing its Args to a call; a function literal's parameter passed
+		// on; a blank parameter. Hits, each subcommand outside gitWriterWords
+		// so only these rules find it: a Cmd built here, a named result and a
+		// receiver handed to the plumbing; a receiver built at run time (a
+		// spelled one and a method expression pass); a parameter handed
+		// variadically, to a non-Cmd, a type parameter or hook.go's function
+		// variable; and every way own.go replaces, writes or copies a
+		// parameter or its Args, a hit where the change is, handed on or not.
 		"internal/gitlet/gitproc/hook.go": "package gitproc\n\ntype local Cmd\n\nvar hook func(Cmd) error\n",
 		"internal/gitlet/gitproc/own.go": `package gitproc
 

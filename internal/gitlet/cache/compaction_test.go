@@ -16,12 +16,11 @@ import (
 )
 
 // THE LIVE PACKS A PLAN WEIGHS ARE THE ROWS: Packs answers the incarnation's
-// live rows, sorted by pack id, each with the figures a compaction's plan reads
-// — its checksum, its bundle's bytes and both indexes', and its objects — as
-// the rows the cache synced to name them.
+// live rows, sorted by pack id, with the figures a plan reads (checksum,
+// bundle and both index bytes, objects) as the synced rows name them.
 //
-// Mutation: answer a row's objects from its index's size rather than the row,
-// and the figures disagree with the rows.
+// Mutation: answer a row's objects from its index's size, and the figures
+// disagree with the rows.
 func TestPacksAreTheLiveRowsAPlanWeighs(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -44,13 +43,12 @@ func TestPacksAreTheLiveRowsAPlanWeighs(t *testing.T) {
 }
 
 // A COMPACTION LEAVES THE MAINTAINER'S RESERVED SLOT, AND THE ROOM A PASS KEPT:
-// a compaction's build holds a maintenance slot for its whole length, as a
-// maintainer's run does, so it is admitted as one — at the maintainer's limit,
-// every slot of the lane but the one a person's verify needs, and beside the
-// room the latest pass kept for a repository it held back for memory — never
-// beside them as a person's check is, which takes no slot of the maintainer's.
-// And it counts as a run until it is released: a pass meanwhile starts nothing
-// the lane has no slot for.
+// its build holds a maintenance slot throughout, so it is admitted as a
+// maintainer's run (every lane slot but the one a person's verify needs, and
+// only beside the room the latest pass kept for a repository it held back for
+// memory), never as a person's check, which takes no maintainer slot. It
+// counts as a run until released, so a pass meanwhile starts nothing the lane
+// has no slot for.
 //
 // Mutation: admit a compaction as a check is (admitOther), and it is admitted
 // beside the maintainer's run, and beside the room the pass kept.
@@ -153,11 +151,10 @@ func TestACompactionLeavesTheMaintainersReservedSlot(t *testing.T) {
 	})
 }
 
-// A COMPACTION THE NODE'S MEMORY CANNOT HOLD IS REFUSED, AND SAID ONCE: its
+// A COMPACTION THE NODE'S MEMORY CANNOT HOLD IS REFUSED, AND SAID ONCE: a
 // charge alone past the budget answers ErrNoMemory, logged
-// code_cache_compaction_refused and counted once an incarnation however often
-// it is asked again — a compactor asks at every pass, since the budget is read
-// again at every maintainer pass and a node may grow under it.
+// code_cache_compaction_refused and counted once an incarnation, though the
+// compactor asks at every pass (the budget is reread every maintainer pass).
 func TestACompactionPastTheBudgetIsRefusedOnce(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -187,22 +184,17 @@ func TestACompactionPastTheBudgetIsRefusedOnce(t *testing.T) {
 }
 
 // A COMPACTION'S CHARGE FOLLOWS ITS MERGE, NEVER ITS REPOSITORY: its build is
-// charged CompactBytesPerObject an object of the packs it merges, room beside
-// them for a transfer of as many — gitproc.TransferBytesPerObject an object
-// MERGED, never an object of the repository — and its delta window, so a merge
-// of a large repository's few small packs is admitted on a budget that holds no
-// clone of the repository. The maintainer alone merges a repository's packs,
-// and a charge that grew with the repository would refuse its every merge for
-// as long as the node's memory stays as it is, and once its live packs reached
-// gitlet.MaxPacksPerRepo its every push carrying one. A budget a byte short of
-// the merge's own charge refuses it ErrNoMemory, naming that charge, and that
-// budget admits it.
+// charged CompactBytesPerObject and gitproc.TransferBytesPerObject an object
+// MERGED, plus its delta window, so a large repository's merge of a few small
+// packs fits a budget that holds no clone of it. A charge growing with the
+// repository would refuse the maintainer, its only merger, while memory stays
+// as it is, and at gitlet.MaxPacksPerRepo every push carrying a pack. A
+// budget a byte short refuses it ErrNoMemory, naming the charge; the charge
+// admits it.
 //
-// Mutation: keep room for a clone of the whole repository
-// (chargeOver(inputs, CompactBytesPerObject, the incarnation's objects)), and
-// the refusal a byte short of the merge's own charge names the charge of the
-// repository's clone room instead, and a budget of the merge's own charge
-// refuses it too.
+// Mutation: keep clone room for the whole repository (chargeOver(inputs,
+// CompactBytesPerObject, the incarnation's objects)): the refusal names that
+// charge, and a budget of the merge's own charge refuses it too.
 func TestACompactionsChargeFollowsItsMergeNotItsRepository(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -234,10 +226,9 @@ func TestACompactionsChargeFollowsItsMergeNotItsRepository(t *testing.T) {
 			gitproc.TransferBytesPerObject)
 	}
 	cache.SetMaintenanceBudget(c, charge)
-	// ASKED AGAIN WHILE BUSY: the maintainer may hold the lane a moment for
-	// the commit-graph a sync leaves due, and at a budget of exactly this
-	// charge nothing may stand beside the build — ErrBusy is a moment's state,
-	// which the compactor asks again at its next poll.
+	// ASKED AGAIN WHILE BUSY: the maintainer may briefly hold the lane for the
+	// commit-graph a sync leaves due, and at exactly this charge nothing may
+	// stand beside the build; ErrBusy is momentary, asked again at the next poll.
 	deadline := time.Now().Add(hangDetector)
 	for {
 		adm, err := c.AdmitCompaction(s, inputs, limits)

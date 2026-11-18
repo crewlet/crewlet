@@ -23,20 +23,16 @@ var (
 	stale        = statelog.Freshness{Level: statelog.ReadStale}
 )
 
-// A CACHE IS EXACT FROM ANY STARTING POINT: a crash, a full disk, an
-// operator's rm or a hand edit leaves a directory the next process's FIRST
-// round reads the repository's whole rows for and converges — so each row
-// below prepares a directory, restarts, and holds one linearizable sync to
-// the image a cache built from nothing at the same position has. Every row's
-// first call is a full read (Since zero): the incarnation's first round in a
-// process is.
+// A CACHE IS EXACT FROM ANY STARTING POINT: whatever a crash, a full disk, an
+// rm or a hand edit leaves, the next process's FIRST round reads the whole
+// rows (Since zero) and converges to the image a cache built from nothing at
+// the same position has.
 func TestSyncConvergesFromAnyStartingPoint(t *testing.T) {
 	t.Parallel()
 	for _, row := range []struct {
 		name string
-		// prepare damages a warm cache of repo, whose packs are rows; it
-		// answers how many downloads the converging round may make (-1:
-		// any).
+		// prepare damages a warm cache of repo (its packs: rows) and answers
+		// how many downloads the converging round may make (-1: any).
 		prepare func(t *testing.T, w *syncWorld, c *cache.Cache, repo string, rows []gitlet.PackRow) int
 	}{
 		{"no incarnation", func(t *testing.T, w *syncWorld, c *cache.Cache, repo string, _ []gitlet.PackRow) int {
@@ -137,8 +133,7 @@ func TestSyncConvergesFromAnyStartingPoint(t *testing.T) {
 	}
 }
 
-// removePack removes a pack's files from an incarnation, as a disk fault or
-// an operator's rm would.
+// removePack removes a pack's files from an incarnation.
 func removePack(t *testing.T, dir, checksum string, exts ...string) {
 	t.Helper()
 	for _, ext := range exts {
@@ -148,10 +143,10 @@ func removePack(t *testing.T, dir, checksum string, exts ...string) {
 	}
 }
 
-// A DELTA CARRIES DELETIONS: a ref deleted in the log is a tombstone row, which
-// a warm cache's delta reads and its packed-refs drops. Once the tombstones
-// are swept, a cache older than the sweep cannot learn of a deletion from a
-// delta, so it is answered whole — and the ref is gone all the same.
+// A DELTA CARRIES DELETIONS: a deleted ref is a tombstone row a warm cache's
+// delta reads and drops from packed-refs. A cache older than the tombstones'
+// sweep cannot learn of it from a delta, so it is answered whole, the ref
+// gone all the same.
 func TestADeltaCarriesDeletions(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -193,10 +188,10 @@ func TestADeltaCarriesDeletions(t *testing.T) {
 }
 
 // A CALLER WHOSE NEED THE CACHE MEETS COSTS NO ESTATE CALL: stale, and session
-// at a floor the cache has reached, are answered from what it holds — once
-// this process has read the repository whole. Past the floor, on a repository
-// it has never read, with a lag bound only the estate can measure, or from a
-// state a previous process left, a caller is not.
+// at a floor the cache has reached, are answered from what it holds once this
+// process has read the repository whole. A caller past the floor, on a
+// repository never read, with a lag bound (only the estate measures lag), or
+// from a previous process's state is not.
 func TestAStaleCallerIsAnsweredWithoutAnEstateCall(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -243,11 +238,10 @@ func TestAStaleCallerIsAnsweredWithoutAnEstateCall(t *testing.T) {
 		t.Errorf("a stale caller of a repository never read cost %d calls, want one", calls(cold))
 	}
 
-	// A state a previous process left names a position on the log it was
-	// read from, which a log restored while the node was down reuses for
-	// other records: a caller after a restart is not handed it on its word.
-	// The first round reads the repository whole, and then a stale caller
-	// is answered at once again.
+	// A previous process's state names a position a log restored while the
+	// node was down may reuse for other records, so it is not trusted: the
+	// first round reads whole, and only then is a stale caller answered at
+	// once.
 	c = w.reopen(t, c)
 	before = calls(warm)
 	if s := ask(warm, stale); s.Kind != cache.SyncFull || calls(warm) != before+1 {
@@ -260,8 +254,8 @@ func TestAStaleCallerIsAnsweredWithoutAnEstateCall(t *testing.T) {
 			calls(warm)-before)
 	}
 
-	// A directory with no state says nothing about what it reflects: a
-	// stale caller is not handed it on its word.
+	// A directory with no readable state says nothing about what it reflects,
+	// so a stale caller is not answered from it.
 	write(t, filepath.Join(w.dir(t, c, warm), "crewlet-state.json"), `{"format":`)
 	c = w.reopen(t, c)
 	before = calls(warm)
@@ -271,12 +265,11 @@ func TestAStaleCallerIsAnsweredWithoutAnEstateCall(t *testing.T) {
 	}
 }
 
-// A REPOSITORY IS PURGED ONLY BY THE LOG'S HEAD: a copy that has not applied a
-// repository's create — or is behind it some other way — answers "no such
-// repository" exactly as a purge does, so a not-found read below
-// linearizable is asked again at the log's head before anything is retired;
-// and a caller that arrived while that round ran is answered by a read that
-// began after it, never by a stale copy's word.
+// A REPOSITORY IS PURGED ONLY BY THE LOG'S HEAD: a copy behind a repository's
+// create answers "no such repository" as a purge does, so a not-found read
+// below linearizable is asked again at the log's head before anything is
+// retired, and a caller arriving during that round is answered by a read that
+// began after it.
 func TestARepositoryIsPurgedOnlyByTheLogsHead(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -301,8 +294,7 @@ func TestARepositoryIsPurgedOnlyByTheLogsHead(t *testing.T) {
 		}
 	})
 	before := len(w.log.callsOf(repo))
-	// A bounded stale caller: only the estate can measure its lag, so it
-	// is never answered from the cache at once.
+	// Bounded: only the estate measures its lag, so never answered at once.
 	bounded := statelog.Freshness{Level: statelog.ReadStale, MaxLagSeq: 5}
 	var a, b cache.Synced
 	var aErr, bErr error
@@ -337,12 +329,10 @@ func TestARepositoryIsPurgedOnlyByTheLogsHead(t *testing.T) {
 	}
 }
 
-// THE GAUGES ARE KEPT, NOT RECOUNTED: what every incarnation holds is a running
-// total, moved where it moves — an install, a refs write, a sweep's measure, a
-// discard — so a round sets the gauges in two loads rather than a walk of
-// every repository on the node, and the total is always the files on disk: a
-// purged incarnation a reader still holds counted until its last release
-// moves it away.
+// THE GAUGES ARE KEPT, NOT RECOUNTED: the bytes held are a running total moved
+// at each install, refs write, sweep and discard (no round walks every
+// repository), yet always equal the files on disk; a purged incarnation a
+// reader holds counts until its last release.
 func TestTheGaugesAreTheFilesOnDisk(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -406,8 +396,8 @@ func heldBy(t *testing.T, dir string) int64 {
 			t.Fatal(err)
 		}
 	}
-	// And the cache's own files under crewlet/: the tag index from the first
-	// round, the index of pushes' runs once a delta has folded a push.
+	// crewlet/: the tag index, and the index of pushes' runs once a delta
+	// folds a push.
 	if statOK(t, filepath.Join(dir, "crewlet")) {
 		for _, name := range names(t, filepath.Join(dir, "crewlet")) {
 			info, err := os.Stat(filepath.Join(dir, "crewlet", name))
@@ -420,10 +410,9 @@ func heldBy(t *testing.T, dir string) int64 {
 	return total
 }
 
-// CONCURRENT LINEARIZABLE CALLERS SHARE ONE SYNC: twenty callers of one cold
-// repository cost the round running when they arrive and one round queued
-// behind it — two page-1 reads, never twenty — and every caller is handed one
-// directory.
+// CONCURRENT LINEARIZABLE CALLERS SHARE ONE SYNC: twenty callers of a cold
+// repository cost the running round and one queued behind it (two page-1
+// reads), and all are handed one directory.
 func TestConcurrentLinearizableCallersShareOneSync(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -467,10 +456,9 @@ func TestConcurrentLinearizableCallersShareOneSync(t *testing.T) {
 	}
 }
 
-// A LINEARIZABLE CALLER IS NEVER ANSWERED BY AN OLDER SYNC: a round already
-// running read its barrier before the caller asked, and may predate the write
-// the caller is about to read — so a caller that arrives while it runs is
-// answered by the round after it, at a position past that write.
+// A LINEARIZABLE CALLER IS NEVER ANSWERED BY AN OLDER SYNC: a running round's
+// barrier may predate the write the caller expects, so a caller arriving
+// mid-round is answered by the next round, past that write.
 func TestALinearizableCallerIsNeverAnsweredByAnOlderSync(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -514,11 +502,10 @@ func TestALinearizableCallerIsNeverAnsweredByAnOlderSync(t *testing.T) {
 }
 
 // A CALLER THAT HANGS UP NEVER CANCELS THE SYNC: rounds run under the cache's
-// own lifetime, so the others waiting on one are answered whatever the first
-// caller's context does — and the pin a round takes for a caller that has gone
-// is never left behind. The caller that hung up releases what it was
-// answered, the zero Synced, which releases nothing: a holder deferring the
-// release of a variable a later Sync may overwrite relies on it.
+// lifetime, so the other waiters are answered and no pin is left for the
+// caller that went. Releasing the zero Synced it got is a no-op, which a
+// holder deferring the release of a variable a later Sync may overwrite
+// relies on.
 func TestACallerThatHangsUpNeverCancelsTheSync(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -609,9 +596,8 @@ func TestARequestThatIsNotASyncIsRefused(t *testing.T) {
 	}
 }
 
-// THE STATE IS WRITTEN ONLY WHEN THE DIRECTORY CHANGED: a repository fetched a
-// hundred times a second while nobody pushes to it writes nothing, its
-// position moving in memory alone — which is correct because nothing between
+// THE STATE IS WRITTEN ONLY WHEN THE DIRECTORY CHANGED: a sync that changes
+// nothing moves the position in memory alone, correct since nothing between
 // the state's position and the new one changed the directory.
 func TestTheStateIsWrittenOnlyWhenTheDirectoryChanged(t *testing.T) {
 	t.Parallel()
@@ -655,9 +641,9 @@ func TestTheStateIsWrittenOnlyWhenTheDirectoryChanged(t *testing.T) {
 	}
 }
 
-// A REPOSITORY NO ROW HOLDS COSTS NO DIRECTORY: an incarnation is made once
-// the rows say the repository exists, so a sync of an id nobody holds is told
-// so and leaves nothing under repos/ or in trash/ — and no entry behind it.
+// A REPOSITORY NO ROW HOLDS COSTS NO DIRECTORY: an incarnation is made only
+// once the rows say the repository exists, so a sync of an unknown id leaves
+// nothing in repos/, trash/ or the cache's entries.
 func TestARepositoryNoRowHoldsCostsNoDirectory(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -678,17 +664,15 @@ func TestARepositoryNoRowHoldsCostsNoDirectory(t *testing.T) {
 	}
 }
 
-// A CACHE HOLDS A COPY ONLY ONCE IT HAS ONE OR IS FILLING ONE — what a Gitlet node
-// asks before a read it was not asked to fill (ADR-0089), so that one node a
-// walk fills a repository nobody holds. Not one it never synced, nor one whose
-// only round ended before any copy (its estate read refused); one whose round
-// is filling it now, before the round has made its copy; one it synced; one a
-// restarted process finds on its disk before any round has run on it; and
-// never one purged.
+// A CACHE HOLDS A COPY ONLY ONCE IT HAS ONE OR IS FILLING ONE, what a node
+// asks before a read it was not asked to fill (ADR-0089), so one node a walk
+// fills a repository nobody holds. Held: one a round is filling, one synced,
+// one a restarted process finds on disk before any round. Not held: one never
+// synced, one whose only round failed before a copy, one purged.
 //
-// Mutations: answer from the entry alone (any entry not purged) — the round
-// that ended with no copy leaves the repository held, red; leave the running
-// round out — the cache filling the repository holds nothing, red.
+// Mutations: answering from the entry alone leaves the failed round's
+// repository held, red; leaving the running round out holds nothing while
+// filling, red.
 func TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -750,9 +734,9 @@ func TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne(t *testing.T) {
 	}
 }
 
-// A PURGED REPOSITORY IS REMOVED ONCE UNPINNED: the rows are gone, so the
-// cache's entry is too and every sync is told so — but a reader already in the
-// directory finishes on it, and only its release moves it into trash/.
+// A PURGED REPOSITORY IS REMOVED ONCE UNPINNED: its entry goes with its rows,
+// but a reader already in the directory finishes on it, and only its release
+// moves it into trash/.
 func TestAPurgedRepositoryIsRemovedOnceUnpinned(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)

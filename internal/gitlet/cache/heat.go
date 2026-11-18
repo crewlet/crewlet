@@ -12,69 +12,22 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// HEAT: what this node served of each repository over the last hour and the
-// last day — the git operations clients ran against it here and the bytes git
-// sent them — and what its cache spent on its own account over the same two
-// windows: the copies it evicted and the repairs it made. The host counts a
-// repository's use into it as it answers (internal/gitlet/host); the host's
-// status reads it back (host.Server.Status), and the engine answers its
-// peers' status scatter with that (topics.CodeStatus).
-//
-// IT DECIDES NOTHING. The budget evicts by last use, the maintainer indexes by
-// what a copy holds, and neither reads it: heat is reported, for a person or
-// a granted seat to judge (a hot repository whose copy is not in service here
-// is a budget too small for what this node is asked), and the health tools
-// set no thresholds of their own over it.
-//
-// IN MEMORY, AND THIS PROCESS'S ALONE. It answers a question about one node,
-// which only that node can answer, so no other node has to agree on it — and
-// it is what an instrument is: counted as requests are answered, and lost
-// with the process. Persisting it would be a write per fetch to say what the
-// last day looked like; a restarted node says instead since when it counts
-// ([Status.Since]), so a "day" of ten minutes reads as one. It is not a
-// metric because a repository's id is no closed set: an attribute per
-// repository would grow the collector's series with every repository the
-// company ever made, where this holds what was used within the day and
-// reports the HotRepos hottest of it.
-//
-// TWO WINDOWS OF heatBuckets BUCKETS EACH. A bucket counts one slot of time —
-// a heatBuckets-th of its window — and names the slot it counts, so a bucket a
-// later slot comes round to starts again from nothing, and a window's sum
-// reads only the buckets of its last heatBuckets slots. Slots are counted on
-// the clock's monotonic reading from the instant the cache opened, so a wall
-// clock NTP steps moves no count from one bucket to another. A repository
-// nothing used within the day holds no bucket a sum reads, and is dropped: by
-// the first count of each slot of the day's window, or by a read that finds
-// it so.
-//
-// EACH WINDOW'S NOW IS READ UNDER ITS LOCK, AND NEVER RUNS BACK (heatNow): a
-// count, a sweep and a read act at the slots the clock reads once they hold
-// the lock, or at the latest slots a holder of that lock already acted at
-// where the clock reads earlier. So no window is counted, summed or judged at
-// a slot older than one it was counted at, and no caller whose reading went
-// stale while it waited for the lock judges a repository idle that a later
-// caller had just counted — which deleted the repository with every count it
-// held, at an hour's turn under contention.
+// HEAT is what this node served of each repository, and what its cache spent
+// on its own account, over the last hour and day: counted by the host as it
+// answers, reported by its status, and read by no decision (package doc,
+// "What each repository costs the node is counted, and decides nothing").
 
-// heatBuckets is how many buckets each of heat's windows is kept in.
-//
-// TWENTY-FOUR, so a window's sum reaches back between 23/24 of the window and
-// all of it — a fetch leaves the hour's count between 57.5 and 60 minutes
-// after it, and the day's between 23 and 24 hours — at 1.5 KiB a repository for
-// both windows (twenty-four buckets of 32 bytes, twice). One number for both
-// keeps one rule a reader can hold: a count is short of its window by at most
-// a twenty-fourth of it. Finer buckets would buy an accuracy nobody reading
+// heatBuckets is how many buckets each of heat's windows is kept in: 24, so a
+// count leaves its window between 23/24 and all of it (an hour's fetch 57.5 to
+// 60 minutes on), at 1.5 KiB a repository for both windows (24 buckets of 32
+// bytes, twice). One number for both keeps one rule: a count is short of its
+// window by at most a twenty-fourth. Finer buckets buy accuracy nobody reading
 // "the last hour" needs, paid by every repository used within the day.
 const heatBuckets = 24
 
-// The two windows heat is counted over.
-//
-// THE HOUR is what is hot now: the window a person looking at a busy node is
-// asking about. THE DAY is what was hot today, a working day's traffic and a
-// nightly job's alike — a CI pipeline that clones a repository once an hour
-// shows there and never in a single hour. Both fixed: a window is what makes
-// two nodes' counts comparable, and a reader comparing a node's hour with
-// another's must be comparing the same span.
+// The two windows heat is counted over: the hour is what is hot now, the day
+// what was hot today (an hourly CI clone shows there and never in one hour).
+// Both fixed, so two nodes' counts cover the same span and compare.
 const (
 	// HeatHour is the shorter window.
 	HeatHour = time.Hour
@@ -83,62 +36,50 @@ const (
 )
 
 // HotRepos is how many repositories of each window a node's status reports:
-// the hottest of the hour and the hottest of the day, at most twice this many
-// in one list.
+// the hottest of the hour and of the day, at most twice this many in one list.
 //
-// TWENTY, the figure the status was specified with, held to two bounds. What a
-// person reads at a glance: a hot list longer than a screen is a table nobody
-// reads to its end. And what one node's answer carries to whoever asks: forty
-// repositories with both windows' counts and their copies is about sixteen
-// kilobytes (some 400 bytes each), far inside a broker message
-// (queue.MaxPayloadBytes, 8 MiB), and the twenty a fleet's merged list keeps
-// leave it room inside the 64 KiB a seat's tool answer is held to
-// (builtin.ToolAnswerBytes). A repository below the twentieth of both windows
-// is still reported by id to a status that asks for it ([Heat.Of]).
+// TWENTY fits a screen, and forty entries (some 400 bytes each, ~16 KiB) sit
+// far inside a broker message (queue.MaxPayloadBytes, 8 MiB) and leave a
+// fleet's merged list room in a seat's tool answer (builtin.ToolAnswerBytes,
+// 64 KiB). A repository below the twentieth of both is still reported by id
+// to a status that asks for it ([Heat.Of]).
 const HotRepos = 20
 
 // Use is how much of a repository a node served: one request's, as the host
 // counts it into the heat ([Heat.Add]), or a window's sum, as the heat
 // reports it ([RepoHeat]).
 type Use struct {
-	// Fetches is git processes that read the repository here. Every clone,
-	// fetch, pull and ls-remote — and every fetch a partial clone makes of
-	// what it lacks — is one git process, and every one opens with an
-	// advertisement of upload-pack; each advertisement served is one fetch,
-	// however many negotiation rounds follow it, and whether or not a pack
-	// does: a fetch that finds its client up to date costs this node its
-	// advertisement and its ls-refs, and is counted. So is every download of
-	// a file or a ZIP (host/download.go), one git process that read it.
+	// Fetches is git processes that read the repository here: every clone,
+	// fetch, pull and ls-remote, and a partial clone's fetch of what it lacks.
+	// Each opens with an upload-pack advertisement, and each advertisement
+	// served is one fetch, however many negotiation rounds follow and whether
+	// or not a pack does (an up-to-date client still cost its advertisement).
+	// So is every download of a file or a ZIP (host/download.go).
 	Fetches int64 `json:"fetches"`
 	// Clones is the fetches whose transfer named wants and no `have`, served
-	// to their end: a client offering nothing to subtract is sent each
-	// want's whole history, the costliest answer a node gives. That is every
-	// fresh clone — full, shallow or partial — and a partial clone's fetch of
-	// what it lacks, which asks for its objects the same way (git negotiates
-	// nothing for one): a repository read through blobless clones counts a
-	// clone for each such fetch, each light, and its bytes out say how light.
+	// to their end: the costliest answer, each want's whole history. That is
+	// every fresh clone (full, shallow or partial) and a partial clone's fetch
+	// of what it lacks (git negotiates nothing for one), so blobless clones
+	// count a clone per such fetch, and their bytes out say how light.
 	Clones int64 `json:"clones"`
-	// Pushes is the pushes this node received for the repository, whatever
-	// became of each — applied, refused or failed — since each is work the
-	// node did: every push is one record of the node that received it.
+	// Pushes is the pushes this node received for the repository, applied,
+	// refused or failed alike: each is work this node did.
 	Pushes int64 `json:"pushes"`
 	// BytesOut is what git's processes here wrote to their clients for the
 	// repository: every advertisement, negotiation, pack and push report.
 	BytesOut int64 `json:"bytes_out"`
 }
 
-// heat is a window's heat: how many git operations it served — fetches and
-// pushes, each a git process this node ran for the repository. What a
-// hot list is ordered by; its bytes out break a tie.
+// heat is a window's heat: its git operations, fetches and pushes. A hot list
+// orders by it, bytes out breaking a tie.
 func (u Use) heat() int64 { return u.Fetches + u.Pushes }
 
 // zero reports a use that counts nothing.
 func (u Use) zero() bool { return u == Use{} }
 
-// served is one bucket of a repository's heat: uint32 counts — past four
-// billion in a bucket, over a million a second for a whole hour on one
-// repository, a count saturates rather than wraps — so a bucket and the slot
-// it names are 32 bytes.
+// served is one bucket of a repository's heat. Its counts are uint32 and
+// saturate rather than wrap (past four billion, over a million a second for an
+// hour), so a bucket and the slot it names are 32 bytes.
 type served struct {
 	fetches, clones, pushes uint32
 	bytesOut                uint64
@@ -184,12 +125,10 @@ type Churn struct {
 }
 
 // ring is the slot each of a window's heatBuckets buckets counts, zero for a
-// bucket never written: the window's arithmetic, kept once, beside which each
-// kind of window keeps its counts (servedWindow, churnWindow). Concrete types
-// rather than one generic window, because add is all the two share: each sums
-// its buckets into an answer of its own — a Use, whose bytes saturate, and a
-// Churn — and Go gives an instantiation no methods of its own, so a generic
-// window would still spell out each kind's sum beside it.
+// bucket never written: the windows' shared arithmetic. Two concrete windows
+// (servedWindow, churnWindow) rather than one generic one, because add is all
+// they share: each sums into its own answer (a Use, whose bytes saturate, or a
+// Churn), which a generic window would still spell out beside it.
 type ring [heatBuckets]int64
 
 // claim is the bucket slot is counted in, and whether that bucket last counted
@@ -285,10 +224,9 @@ type heatClock struct {
 // newHeatClock is a clock counting from now.
 func newHeatClock(now func() time.Time) heatClock { return heatClock{now: now, origin: now()} }
 
-// at is the slots now falls in. Slot zero is no slot — a bucket never written
-// names it, and a sum passes it over — so the first slot is one, and an
-// instant before the origin (a clock with no monotonic reading, set back)
-// falls in it. A window reads it only through its heatNow.
+// at is the slots now falls in. Slot zero is no slot (a never-written bucket
+// names it), so the first is one, and an instant before the origin (a clock
+// with no monotonic reading, set back) falls in it. Read only via heatNow.
 func (k heatClock) at() slots {
 	since := max(k.now().Sub(k.origin), 0)
 	return slots{hour: int64(since/(HeatHour/heatBuckets)) + 1, day: int64(since/(HeatDay/heatBuckets)) + 1}
@@ -296,22 +234,16 @@ func (k heatClock) at() slots {
 
 // heatNow is the now one lock's holder counts, sums and judges its windows
 // at: the slots heat's clock reads, or the latest slots a holder of the same
-// lock acted at where the clock reads earlier. Each of heat's two structures
-// keeps one beside its windows, under the lock they are counted and read
-// under (Heat.mu, cacheChurn.mu), and reads it only there.
+// lock acted at where the clock reads earlier. Heat and cacheChurn each keep
+// one under their lock (Heat.mu, cacheChurn.mu) and read it only there.
 //
-// READ UNDER THE LOCK, so the slots a window is acted at follow the order its
-// callers took the lock in. Read before the lock, a caller that read the
-// clock just before a slot's turn and took the lock only after another had
-// counted a repository in the new slot judged that repository at the older
-// slot — nothing in the day's span that ends there — and deleted it with all
-// its counts; a count's sweep moved the slot it had swept in back.
-//
-// NEVER EARLIER THAN THE LATEST, so the same holds whatever the clock reads:
-// a clock with no monotonic reading, set back, or a case's own. No bucket is
-// ever newer than the slot that sums or judges it, so the span a sum reads
-// (ring.live) is the one rule a judgement of idleness needs too, and a sweep
-// only ever moves forward.
+// READ UNDER THE LOCK, so a window's slots follow the order its callers took
+// the lock in: a caller whose reading went stale waiting would judge idle, and
+// delete, a repository another had just counted in the new slot. NEVER EARLIER
+// THAN THE LATEST, whatever the clock reads (no monotonic reading, set back, a
+// test's own), so no bucket is newer than the slot that sums or judges it:
+// ring.live is then the one rule idleness needs too, and a sweep only moves
+// forward.
 type heatNow struct {
 	clock  heatClock
 	latest slots
@@ -347,10 +279,9 @@ type Heat struct {
 	// mu (heatNow).
 	now   heatNow
 	repos map[string]*repoHeat
-	// swept is the day's slot the last sweep of repositories nothing used
-	// within the day ran in: one sweep a slot of the day's window, an hour,
-	// on the first count of the slot, and never one at a slot older than
-	// the last.
+	// swept is the day's slot of the last sweep of repositories idle for a
+	// day: one sweep per day slot (an hour), on its first count, never at an
+	// older slot than the last.
 	swept int64
 }
 
@@ -404,11 +335,7 @@ func (h *Heat) sweep(day int64) {
 }
 
 // Hot is the n hottest repositories of the hour and the n hottest of the day,
-// in one list of at most 2n: those hottest in the hour first, each window's
-// heat its count of git operations, its bytes out breaking a tie and its id
-// the next ([Hottest]). A repository with nothing in a window is never one of
-// that window's hottest. So a reader may order the list by either window and
-// cut it at n, and read that window's n hottest exactly.
+// in one list of at most 2n, by [Hottest]'s rule.
 func (h *Heat) Hot(n int) []RepoHeat {
 	if n <= 0 {
 		return nil
@@ -432,18 +359,16 @@ func (h *Heat) Hot(n int) []RepoHeat {
 	return out
 }
 
-// Hottest is which of entries a hot list keeps, as their indices in entries,
-// in the list's order: the n hottest of the hour and the n hottest of the day,
-// at most 2n, those hottest in the hour first — each window's heat its count
-// of git operations, its bytes out breaking a tie, then its id, then its place
-// in entries. An entry with nothing in a window is never one of that window's
-// hottest. So a reader may order the list by either window and cut it at n,
-// and read that window's n hottest exactly.
+// Hottest is which of entries a hot list keeps, as indices in entries, in the
+// list's order: the n hottest of the hour and the n hottest of the day, at
+// most 2n, the hour's first. A window's heat is its git operations, then bytes
+// out, then id, then place in entries; an entry with nothing in a window is
+// never that window's hottest. So a reader may order the list by either window
+// and cut it at n, and read that window's n hottest exactly.
 //
-// ONE RULE for one node's list ([Heat.Hot]) and for a list several nodes'
-// lists make — a fleet's, where one repository stands once for every node that
-// served it, which is why the answer is indices rather than ids: two entries
-// may name one repository, and the caller knows which node each came from.
+// One rule for one node's list ([Heat.Hot]) and a fleet's, where a repository
+// stands once for every node that served it: hence indices rather than ids,
+// so the caller knows which node each came from.
 func Hottest(entries []RepoHeat, n int) []int {
 	if n <= 0 {
 		return nil

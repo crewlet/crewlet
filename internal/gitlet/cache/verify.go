@@ -25,30 +25,15 @@ import (
 
 // VERIFY: an operator's question — does this node's cache of a repository
 // hold exactly what its rows say? — answered by reading every byte of it
-// against the rows, and, when asked, repaired by a rebuild that is checked the
-// same way. Not a hot path: it hashes every pack, one at a time, and runs git's
-// connectivity check over the repository.
+// against the rows and, when asked, repaired and checked again. Not a hot
+// path: it hashes every pack and runs git's connectivity check.
 //
-// # Admitted before it reads anything, and only of a copy this node holds
-//
-// A check is ADMITTED ([Cache.AdmitVerify]) before a byte of it is read: a
-// slot of the maintenance lane taken — a free one or none, the lane's rule —
-// and the connectivity check's memory charged against the budget the
-// background work shares, both held until the check is let go. A check
-// admitted only at its fsck read up to the largest repository the defaults
-// admit (twenty gibibytes) before a busy node told it to run again, and the
-// retry read it all again for as long as a bitmap held the lane; and nothing
-// bounded how many such reads ran at once, beside the clones the node serves
-// from the same disk. Admitted first, a refusal costs nothing, and the lane
-// bounds the checks.
-//
-// And only of a copy this node HOLDS ([ErrNotHeld]): a check of a repository
-// with no incarnation here would sync it from nothing — a GET for every push
-// the repository ever took — into a cache that then keeps it and evicts warm
-// repositories to do so, undoing the routing that keeps each repository warm
-// on one or two Gitlet nodes. Verifying every Gitlet node of a fleet would cost a
-// whole download a node. The node that holds no copy has nothing to check, and
-// says so for free.
+// A check is ADMITTED ([Cache.AdmitVerify]) before it reads a byte — a free
+// maintenance slot and its fsck's memory taken, or refused at once — so a
+// refusal costs nothing and the lane bounds how many run; and only of a copy
+// this node HOLDS ([ErrNotHeld]): checking a copy it lacks would download the
+// whole repository into the cache and evict warm ones to keep it (package
+// doc, "Damage is repaired once, in place where nothing is lost").
 
 // VerifyReport is what Verify found in one incarnation of a repository.
 type VerifyReport struct {
@@ -63,51 +48,42 @@ type VerifyReport struct {
 	Packs int `json:"packs"`
 	Refs  int `json:"refs"`
 	// RepairedBySync is what the sync before the check found failing by its
-	// own check and repaired in place — a derived file dropped, a pack fetched
-	// again over its files — each a sentence naming the file: damage the
-	// copy held when the check began and no longer holds, so no problem of
-	// the copy checked and nothing a repair rebuilds; shown first, because a
-	// disk that damaged one file may hold others damaged.
+	// own check and repaired in place (a derived file dropped, a pack fetched
+	// again), each a sentence naming the file: no problem of the checked copy
+	// and nothing a repair rebuilds. Shown first: a disk that damaged one file
+	// may hold others damaged.
 	RepairedBySync []string `json:"repaired_by_sync,omitempty"`
 	// Problems is everything the incarnation holds that its rows do not say,
 	// each a sentence naming the file and both values; none is a cache
 	// exactly its rows.
 	Problems []string `json:"problems,omitempty"`
-	// RepairedInPlace: every problem the first check found was the copy's
-	// OWN DIRECTORY's (inPlaceOnly), and the repair read the copy whole IN
-	// PLACE — the same incarnation, every pack and derived file it holds
-	// kept, nothing downloaded — and checked it again; Problems is what that
-	// check found. Rebuilt: the problems — the first check's, or what the
-	// read in place left — sent the repository to a rebuild, and Problems is
-	// what the incarnation that replaced the damaged one holds — a problem a
-	// rebuild left is in the object store or the rows, and its own words say
-	// which. Found is what the first check found, before either.
+	// RepairedInPlace: every problem the first check found was the copy's own
+	// directory's (inPlaceOnly), so the copy was read whole in place — same
+	// incarnation, nothing downloaded — and checked again. Rebuilt: the
+	// problems (the first check's, or what the read in place left) sent it to
+	// a rebuild; a problem a rebuild left is in the object store or the rows.
+	// Problems is then the last check's, and Found the first's.
 	RepairedInPlace bool     `json:"repaired_in_place,omitempty"`
 	Rebuilt         bool     `json:"rebuilt,omitempty"`
 	Found           []string `json:"found,omitempty"`
 
-	// damaged: a problem is DAMAGE no read of the copy in place ends — a
-	// pack the rows name missing, at another size or hashing to anything
-	// but its row's bundle, a derived file failing its checksum, or damage
-	// the sync's own git met that is no shape — so a repair rebuilds. A
-	// report with problems and none of these is the copy's own directory
-	// out of place (inPlaceOnly).
+	// damaged: a problem is DAMAGE no read in place ends — a pack the rows
+	// name missing, at another size or hashing to another bundle, a derived
+	// file failing its checksum, or damage the sync's git met that is no
+	// shape — so a repair rebuilds. Problems without it are the copy's own
+	// directory out of place (inPlaceOnly).
 	damaged bool
 }
 
 // inPlaceOnly reports whether r found problems and every one is the copy's
-// OWN DIRECTORY out of place, which a full round of the copy repairs in place
-// (sweep.go): an entry outside the image, a fixed file missing or not what a
-// full round writes, packed-refs not the file this cache wrote, a pack no row
-// names, a shape the pool refuses, or git's connectivity check failing over
-// packs that all hash to their rows.
+// own directory out of place, which a full round repairs in place (sweep.go;
+// the classes are Cache.check's).
 func (r VerifyReport) inPlaceOnly() bool { return len(r.Problems) > 0 && !r.damaged }
 
-// met names first among r's problems the damage d that a sync's own git met
-// in the copy r checks — by says which sync — when there was any: a check
-// names what it finds, and the copy was handed to it as it stands
-// (damagedRound). A shape is the copy's own directory, which a read in place
-// puts right; anything else git met is damage.
+// met names first among r's problems the damage d a sync's own git met in the
+// copy (by says which sync), if any: the check was handed the copy as it
+// stands (damagedRound). A shape is the copy's own directory, which a read in
+// place puts right; anything else is damage.
 func (r *VerifyReport) met(by string, d *damaged) {
 	if d == nil {
 		return
@@ -118,12 +94,11 @@ func (r *VerifyReport) met(by string, d *damaged) {
 }
 
 // Verification is one check of a repository's cache this node holds:
-// admitted by [Cache.AdmitVerify] before anything of it is read, run once by
-// [Verification.Run], and let go by [Verification.Release], which its holder
-// defers. From admission to release it holds a slot of the maintenance lane,
-// the connectivity check's charge against the node's memory budget, a pin of
-// the incarnation it was admitted over — so the budget never evicts the copy
-// being checked — and the maintainer off the repository (holdMaintainer).
+// admitted by [Cache.AdmitVerify], run once by [Verification.Run], and let go
+// by [Verification.Release], which its holder defers. Until released it holds
+// a maintenance slot, the fsck's memory charge, a pin of the admitted
+// incarnation (so the budget never evicts the copy being checked) and the
+// maintainer off the repository (holdMaintainer).
 type Verification struct {
 	c     *Cache
 	e     *entry
@@ -144,25 +119,18 @@ type Verification struct {
 	released bool
 }
 
-// AdmitVerify admits a check of repoID's cache on this node, BEFORE ANYTHING
-// OF IT IS READ (see the file's doc), or refuses it at once, having read and
-// downloaded nothing:
+// AdmitVerify admits a check of repoID's cache on this node before anything
+// of it is read (see the file's doc), or refuses it at once, having read
+// nothing:
 //
-//   - [ErrNotHeld] when this node holds no copy of the repository — it never
-//     served it here, or evicted it — since a check would build one;
-//   - [gitproc.ErrBusy] when the maintenance lane has no free slot, or the
-//     background work in flight leaves the check's memory no room: a moment's
-//     state, answered when it is asked again;
-//   - [ErrNoMemory] when the connectivity check's charge alone is past what
-//     this node can give its background work: definite for this node, and a
-//     node with more memory can run it;
+//   - [ErrNotHeld]: this node holds no copy (never served here, or evicted);
+//   - [gitproc.ErrBusy]: no free maintenance slot, or the background work in
+//     flight leaves the check's memory no room — ask again;
+//   - [ErrNoMemory]: the charge (verifyCharge) alone is past what this node
+//     gives its background work — a node with more memory can run it;
 //   - [ErrStopped] and [ErrInvalid] as for every request of a cache.
 //
-// The charge is the incarnation's objects at [FsckBytesPerObject] — those of
-// the packs its dropping view holds included — and room beside it for one
-// transfer of the repository (verifyCharge): what the check's fsck holds, and
-// the most of the node's memory any step of it holds — its hashing reads
-// through one buffer. Every holder defers the answer's Release.
+// Every holder defers the answer's Release.
 func (c *Cache) AdmitVerify(repoID string) (*Verification, error) {
 	switch {
 	case c.isStopped():
@@ -202,16 +170,12 @@ func (c *Cache) AdmitVerify(repoID string) (*Verification, error) {
 		nil
 }
 
-// verifyCharge is what a check of inc holds of the node's memory: its
-// connectivity check's [FsckBytesPerObject] for every object it walks — the
-// objects/pack objects the incarnation counts AND those of the packs its
-// dropping view holds, since fsck runs through the view (heldView) and git
-// marks every object of every object directory it is handed — and room
-// beside it for one transfer of the objects a clone sends, which are
-// objects/pack's alone: charged by objects alone, a check run while an
-// expunge is open (a person's purge has no bound on its dropping view beside
-// the live objects) would be admitted for less than its fsck holds, beside
-// background work the budget had no room for. e.mu is held.
+// verifyCharge is what a check of inc holds of the node's memory, the most
+// any step holds (its hashing reads through one buffer): [FsckBytesPerObject]
+// for every object its fsck walks — the dropping view's too, since fsck runs
+// through the view (heldView) and marks every object directory it is handed,
+// and an open expunge's view has no bound — and room for one transfer of what
+// a clone sends, objects/pack's alone. e.mu is held.
 func verifyCharge(inc *incarnation) int64 {
 	return chargeOver(inc.objects+inc.droppingObjects, FsckBytesPerObject, inc.objects)
 }
@@ -235,10 +199,9 @@ func (c *Cache) admitCheck(label string, mem, already int64) error {
 	return nil
 }
 
-// charge raises what v holds of the node's memory to what the objects of the
-// incarnation s pins need now: a sync or a rebuild between the admission and
-// the check may have brought the repository pushes of its own. Refused like
-// the admission — before anything of the incarnation is read. Read under s's
+// charge raises v's memory charge to what the objects of the incarnation s
+// pins need now: a sync or rebuild since admission may have brought more.
+// Refused like the admission, before the incarnation is read. Read under s's
 // own entry, which is v's unless the repository was purged and declared again
 // meanwhile.
 func (v *Verification) charge(s Synced) error {
@@ -272,110 +235,18 @@ func (v *Verification) Release() {
 	v.unhold()
 }
 
-// Run checks the repository's cache against its rows, after a sync to what
-// how.Fresh asks — of the copy this node holds, so a delta, or a full round
-// reusing every pack it holds on an incarnation a previous process left — ONCE:
-// a second Run, or one after Release, is refused ([ErrInvalid]).
-//
-// A SYNC WHOSE OWN GIT MEETS DAMAGE OF THE COPY — a delta's peel refused for
-// the directory's shape, or meeting an object gone from the packs — REPAIRS
-// NOTHING FOR THE CHECK: the check is handed the copy as it stands, at the
-// position it held, and names that damage first among its problems
-// (damagedRound). Repaired under it instead, a plain check would download the
-// repository and report the repaired copy clean, the damage it was asked to
-// name hidden; only Repair repairs, by the repair below. (A request waiting
-// on the same round is still answered by the repair its own damage asks.)
-//
-//  1. its directory listed against the image grammar (sweep.go) — every
-//     entry it does not admit is a problem — with the repository's rounds
-//     held off, so no step half done reads as damage, and the files a
-//     maintenance run in flight holds while it runs admitted: the run is
-//     left to finish, and none starts until the check is let go
-//     (holdMaintainer);
-//  2. the repository's whole rows read at least as fresh as the listing,
-//     AFTER it: a pack installed between the two has its row applied first,
-//     so it is in the answer, and nothing removes a row-named pack;
-//  3. every pack a row added at or before the listing's position held to its
-//     row: installed, each section at its row's size, and the three files
-//     back to back — .pack, .idx, .rev, the bundle the push stored — hashing
-//     to the row's Hash; a pack no row names is a stray;
-//  4. every derived file the listing found — the multi-pack-index with its
-//     bitmap and reverse index, and the commit-graph — held to its own
-//     trailer (checkDerived): git reads each without checking it, and no git
-//     command names a damaged bitmap; and a published chain's two chain files
-//     to the layers the copy installed;
-//  5. every layer the copy installed held to the row it was installed from
-//     (checkLayers, gitlet.CheckLayer): its sections, its packs, its counts and
-//     its base's graph layers, which no trailer says;
-//  6. packed-refs hashed against the digest this cache wrote with it;
-//  7. git's connectivity check, `fsck --connectivity-only`, in the
-//     maintenance slot the admission took.
-//
-// What the sync before it found failing by its own check — a full round,
-// the first of a process — and repaired in place (check.go) is named first,
-// apart from the problems (RepairedBySync): the copy the check is handed no
-// longer holds it, so it asks no rebuild. Counted among the problems, an
-// operator's repair after the cache had already put a damaged bitmap right
-// rebuilt a sound copy into a new incarnation — no download, the rebuild
-// seeded, but no multi-pack-index, bitmap or graph either until the
-// maintainer wrote them again: minutes to hours of bitmapless clones of a
-// large repository, for nothing.
-//
-// With repair and any problem, the copy is repaired and checked again, the
-// way the problems ask (check classes each where it is found):
-//
-//   - when every one is the copy's OWN DIRECTORY out of place — an entry
-//     outside the image, a fixed file missing or not what a full round
-//     writes, packed-refs not the file this cache wrote, a pack no row names,
-//     a shape the pool refuses, git's connectivity check failing over packs
-//     that all hash to their rows — it is read whole IN PLACE
-//     (repairInPlace), counted under reason verify once it has read the copy
-//     whole: the full round's sweep moves the entries aside and writes the
-//     fixed files again, reusing every pack, the multi-pack-index, its bitmap
-//     and the graph, with no download and no new incarnation — but for a pack
-//     no row names, which leaves the copy this check holds by a SWAP into its
-//     next incarnation (swap.go), every live pack linked and none downloaded,
-//     the multi-pack-index and the graph built over it left behind with it,
-//     and the second pass checks that incarnation, the one the round
-//     answered; RepairedInPlace, Found the first check's problems, Problems
-//     the second's. Rebuilt instead, the copy had no index, bitmap or graph until
-//     the maintainer wrote them again — minutes to hours of bitmapless clones
-//     of a large repository, and for good on a node whose memory now refuses
-//     the bitmap — for what the sweep puts right. The read is the CHECK's, as
-//     the sync before it is: damage its own git meets — a shape written past
-//     its sweep, refused by the pool's own shape check — is the second
-//     check's finding, first, never handed to the repair a git process asks
-//     for, whose rebuild would be unseeded, counted under shape and refused by
-//     its windows. What that read leaves is rebuilt, below.
-//   - otherwise — a pack missing, at another size or hashing to another
-//     bundle, a derived file failing its checksum, damage the sync's git met
-//     that is no shape — the repository is rebuilt: a whole read at the log's
-//     head into the next incarnation (Rebuild), counted under reason verify
-//     and refused by none of a git process's windows, since an operator asked
-//     and the damage is named — SEEDED with every pack step 3 found whole,
-//     linked rather than downloaded (seedRebuild), so a repair asks the
-//     object store only for what it found damaged — and the rebuilt
-//     incarnation checked again: Rebuilt, Found the first check's problems,
-//     Problems the second's.
-//
-// A repair that fails answers the report before it beside its failure, which
-// names what it could not repair. A repair that left no problem has ENDED the
-// damage it was for (endLine), so the incarnation is rebuilt at once on any
-// later failure rather than held to the window a rebuild made at a git
-// process's word is (rebuild.go): that window exists because the cache never
-// sees a request succeed, and Verify has just seen the whole of it whole.
-//
-// EACH CHECK PASS HAS A BOUND OF ITS OWN, CheckBudget over what the copy it
-// checks holds, counted from the pass's start and told to how.Checking as it
-// begins: a pass past it is ended, ErrPastBound. The sync before it and a
-// repair — the read in place, the rebuild — are not under it — each read of
-// the object store they make is bounded on its own (objstore.ReadBudget,
-// objstore.Stall), as every sync's is — and how.Checking is told zero as a
-// repair begins.
-//
-// EVERY ANSWER CARRIES THE REPORT SO FAR beside its error — what the check
-// found before it failed, the repository named whenever it was known — so a
-// check cut short by a stop or a failure still says what it saw.
+// Run checks the repository's cache against its rows (Cache.check) after a
+// sync to how.Fresh, ONCE: a second Run, or one after Release, is [ErrInvalid].
+// Damage the sync's own git meets is named first, never repaired under the
+// check, which would hide it (damagedRound); what the sync's own check
+// repaired in place is RepairedBySync, apart from the problems: it asks no
+// rebuild. With how.Repair and any problem, the copy is repaired the way the
+// problems ask and checked again; a repair that fails answers the report
+// before it (package doc, "Damage is repaired once, in place where nothing is
+// lost"). Each check pass has its own bound (pass); the sync and a repair are
+// bounded by their object-store reads (objstore.ReadBudget, objstore.Stall).
+// Every answer carries the report so far beside its error, so a check cut
+// short still says what it saw.
 func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, error) {
 	repair := how.Repair
 	v.mu.Lock()
@@ -402,26 +273,23 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 		return report, err
 	}
 	report, whole, err := v.pass(ctx, s, how.Checking)
-	// What the sync's own check found failing — and repaired in place, as
-	// every full round does before it answers (check.go) — is told first,
-	// and is no problem of the copy this check was handed, which no longer
-	// holds it.
+	// What the sync's own check repaired in place (check.go) is no problem of
+	// the copy this check was handed.
 	report.RepairedBySync = slices.Clone(found)
-	// What the sync's own git met is a finding of the check's, first: the
-	// copy is checked as it stands, never repaired under it.
+	// What the sync's own git met is the check's first finding, never
+	// repaired under it; a request waiting on the same round is still
+	// repaired as its own damage asks.
 	report.met("the sync before the check", damage)
 	if err != nil || !repair || len(report.Problems) == 0 {
 		return report, err
 	}
 	first := report
 	if first.inPlaceOnly() {
-		// THE COPY'S OWN DIRECTORY OUT OF PLACE is repaired IN PLACE first
-		// (repairInPlace): a rebuild would make a new incarnation with no
-		// multi-pack-index, bitmap or graph until the maintainer wrote them
-		// again — minutes to hours of bitmapless clones of a large
-		// repository, and on a node whose memory now refuses a bitmap, for
-		// good — for what a full round of the copy puts right with every
-		// pack and derived file it holds kept.
+		// The copy's own directory out of place is repaired IN PLACE first
+		// (repairInPlace): a rebuild leaves no multi-pack-index, bitmap or
+		// graph until the maintainer writes them again — hours of bitmapless
+		// clones of a large repository, for good on a node whose memory now
+		// refuses a bitmap.
 		if how.Checking != nil {
 			how.Checking(0)
 		}
@@ -443,12 +311,9 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 		second, secondWhole, err = v.pass(ctx, inPlace, how.Checking)
 		second.RepairedInPlace, second.Found = true, first.Problems
 		second.RepairedBySync = append(slices.Clone(first.RepairedBySync), repaired...)
-		// What the read's own git met — a shape written past its sweep, met
-		// by the pool's own shape check — is the second check's finding,
-		// first, as the first sync's is the first's: answered to the check
-		// with the copy as it stands, it is rebuilt below under this
-		// operator's repair, seeded with what the check found whole, rather
-		// than handed to the repair a git process asks for.
+		// What the read's own git met (a shape written past its sweep) is the
+		// second check's first finding, rebuilt below under this repair,
+		// seeded, never handed to the repair a git process asks for.
 		second.met("reading it whole in place", met)
 		if err != nil {
 			return second, err
@@ -457,10 +322,9 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 			endLine(inPlace)
 			return second, nil
 		}
-		// WHAT THE READ IN PLACE LEFT — something writing into the directory
-		// past the sweep, or damage the first check could not see behind a
-		// directory git refused — is rebuilt, seeded with what this check
-		// found whole.
+		// What the read in place left (a write past the sweep, or damage the
+		// first check could not see behind a directory git refused) is
+		// rebuilt, seeded with what this check found whole.
 		s, report, whole = inPlace, second, secondWhole
 	}
 	if how.Checking != nil {
@@ -485,10 +349,9 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 
 // endLine records that Verify has just seen the incarnation s pins whole
 // after a repair: the damage its line of rebuilds was for has ENDED, so its
-// next failure is new damage, rebuilt at once rather than held to the window
-// a rebuild made at a git process's word is (rebuild.go) — that window exists
-// because the cache never sees a request succeed, and Verify has seen the
-// whole of the copy whole.
+// next failure is rebuilt at once rather than held to the window a rebuild at
+// a git process's word stands in (rebuild.go), which exists only because the
+// cache never sees a request succeed.
 func endLine(s Synced) {
 	s.entry.mu.Lock()
 	s.inc.rebuilds, s.inc.unmoved = 0, false
@@ -496,29 +359,17 @@ func endLine(s Synced) {
 }
 
 // repairInPlace is Verify's repair of a copy whose problems are all its own
-// directory's (VerifyReport.inPlaceOnly): the incarnation s pins marked to be
-// read WHOLE, IN PLACE (markWhole), counted under RebuildVerify once the read
-// has converged, and the copy answered pinned by a linearizable round begun
-// after the mark — a full one, whose sweep moves every entry outside the
-// image into trash/ and writes config, HEAD, packed-refs and the state again,
-// reusing every pack, the multi-pack-index, its bitmap and the graph, with no
+// directory's (VerifyReport.inPlaceOnly): the incarnation s pins is marked to
+// be read WHOLE, IN PLACE (markWhole), counted under RebuildVerify once read,
+// and answered pinned by a linearizable full round begun after the mark, whose
+// sweep puts the directory right reusing every pack and derived file, with no
 // download and no new incarnation. An incarnation replaced or purged since s
-// was pinned answers as the current one does, by an ordinary linearizable
-// sync, which the check after it holds to its rows.
+// was pinned answers by an ordinary linearizable sync.
 //
-// THE READ IS THE CHECK'S, as the sync before the first pass is (Cache.sync):
-// a round whose own git meets damage — a shape something wrote past the
-// sweep, refused by the pool's own shape check — answers it with that damage
-// and the copy pinned as it stands, beside what the round's own check
-// repaired, rather than with the repair a git process asks for
-// (damagedRound). As an ordinary caller, the read had that damage rebuilt at
-// a git process's word: unseeded — every pack downloaded again, though the
-// check had just found each whole — counted under shape, and refused by the
-// window a copy already rebuilt at a git process's word stands in, the
-// operator's repair failing with the shape left in place. Answered to the
-// check, it is the second check's finding, and Verification.Run rebuilds it
-// under the operator's repair: seeded, counted under verify, held to none of
-// those windows.
+// The read is the CHECK'S, as the sync before the first pass is: damage its
+// own git meets is answered with the copy as it stands (damagedRound), for
+// Verification.Run to rebuild seeded and counted under verify, rather than
+// at a git process's word: unseeded, and refused by that process's windows.
 func (c *Cache) repairInPlace(ctx context.Context, s Synced) (Synced, *damaged, []string, error) {
 	e := s.entry
 	linearizable := statelog.Freshness{Level: statelog.ReadLinearizable}
@@ -544,46 +395,37 @@ type VerifyRun struct {
 	// where every problem is the copy's own directory out of place, by a
 	// rebuild otherwise or for what that leaves — and checks it again.
 	Repair bool
-	// Fresh is what the copy is brought to before it is checked: the zero
-	// value is the log's head — linearizable, a barrier appended to the
-	// code log — and a caller that already holds a position on the log
-	// names it as a session floor instead, which a copy at or past it
-	// answers at once and anything else reads with no barrier. The check
-	// itself holds the copy to its rows at whatever position it reached.
+	// Fresh is what the copy is brought to before the check: the zero value is
+	// the log's head (linearizable, a barrier on the code log); a caller
+	// holding a position names it as a session floor instead, answered at once
+	// by a copy at or past it, with no barrier. The check holds the copy to
+	// its rows at whatever position it reached.
 	Fresh statelog.Freshness
-	// Checking, when set, is told the bound of each check pass as the pass
-	// begins (CheckBudget over what the copy it checks holds), and zero as
-	// a repair — a read in place, a rebuild — begins: what the caller says of
+	// Checking, when set, is told each check pass's bound as the pass begins
+	// (CheckBudget), and zero as a repair begins: what the caller says of
 	// when the node ends what it is doing. Called on the verification's own
 	// goroutine.
 	Checking func(bound time.Duration)
 }
 
-// CheckBudget bounds one check pass over a copy holding bytes on disk — its
-// packs and packed-refs, and the maintainer's files beside them: its hash
-// (HashBudget: the listing's wait for a round of the repository in flight and
-// the read of its rows, one read attempt, and every bundle hashed at
-// VerifyHashPerMiB); and git's connectivity check at
-// gitproc.PackWorkDeadline, the deadline its fsck already runs under. A
-// BOUND, never a schedule: BenchmarkVerify measured a whole check at 9.4 ms
-// a mebibyte over 100 MB of a source repository's composition (296 000
-// objects), the connectivity check most of it, where this gives about 1.1 s
-// — the gigabyte about nineteen minutes. What is past it is a disk or a node
-// far slower than every bound of the cache's own work allows for, or a check
-// wedged, and is ended rather than holding its maintenance slot and the
-// operator's sweep.
+// CheckBudget bounds one check pass over a copy holding bytes on disk (its
+// packs, packed-refs and the maintainer's files): its hash (HashBudget) and
+// git's connectivity check at gitproc.PackWorkDeadline, the deadline its fsck
+// runs under. A BOUND, never a schedule: a whole check measured 9.4 ms a
+// mebibyte (BenchmarkVerify; package doc, "Measured") where this gives about
+// 1.1 s. Past it is a disk or node far slower than every bound of the cache's
+// work allows for, or a wedged check, ended rather than holding its
+// maintenance slot and the operator's sweep.
 func CheckBudget(bytes int64) time.Duration {
 	return HashBudget(bytes) + gitproc.PackWorkDeadline(bytes)
 }
 
 // HashBudget bounds a HASH of bytes of a copy's files held to their rows:
-// the read of the rows, one read attempt (gitproc.ReadDeadline), and the
-// bytes hashed at VerifyHashPerMiB. It is CheckBudget's hash term, so the
-// two cannot drift, and the whole bound of a hint's confirmation (hint.go),
-// which hashes one bundle and runs no fsck: under CheckBudget a bundle of the
-// largest pack a push stores (MaxPackBytes, about 1 300 MiB with its index)
-// was allowed about 24 minutes, the fsck's PackWorkDeadline nine tenths of
-// it, where its hash is allowed about 2.3.
+// the read of the rows and one read attempt (gitproc.ReadDeadline), and the
+// bytes hashed at VerifyHashPerMiB. It is CheckBudget's hash term, so the two
+// cannot drift, and the whole bound of a hint's confirmation (hint.go), which
+// hashes one bundle and runs no fsck: about 2.3 minutes for the largest pack
+// (MaxPackBytes), where CheckBudget would allow some 24.
 func HashBudget(bytes int64) time.Duration {
 	mib := max(bytes+objstore.MiB-1, 0) / objstore.MiB
 	return gitproc.ReadDeadline + time.Duration(mib)*VerifyHashPerMiB
@@ -620,19 +462,15 @@ func (v *Verification) pass(ctx context.Context, s Synced, checking func(time.Du
 }
 
 // holdMaintainer keeps the maintainer from starting a run on e until the
-// function it answers is called, which lets it go and kicks the maintainer, so
-// a repository that fell due meanwhile is taken up at once rather than at the
-// next tick. A check holds it from its admission to its release, because its
-// LISTING reads whether a run is in flight once, as it begins, and admits a
-// running run's lock and temporary files only on that reading: a run started
-// while the listing reads the directory would leave files the listing reports
-// as damage, and one started between a repair's two checks the same in the
-// second. A run ALREADY in flight is left to finish, never stopped: work
-// thrown away for a check is work the maintainer does again at once, and its
-// lock and temporary files are admitted by the listing instead
-// (Write.Holds). The check's fsck no longer races it for a slot: the
-// admission holds one. NOTHING IS REPAIRED UNDER A CHECK either: a report
-// recorded meanwhile is repaired by the round its release asks (report.go).
+// function it answers is called, which lets go and kicks the maintainer so a
+// repository that fell due meanwhile is taken up at once. A check holds it
+// from admission to release because its listing reads once, as it begins,
+// whether a run is in flight, and admits a run's lock and temporary files only
+// then: a run started later, or between a repair's two checks, would leave
+// files reported as damage. A run already in flight is left to finish, its
+// files admitted (Write.Holds): work thrown away is work redone at once.
+// Nothing is repaired under a check either: a report recorded meanwhile is
+// repaired by the round its release asks (report.go).
 func (c *Cache) holdMaintainer(e *entry) func() {
 	e.mu.Lock()
 	e.verifying++
@@ -656,19 +494,16 @@ func (r VerifyReport) label() string {
 }
 
 // check is one pass of Verify over the incarnation s pins, its fsck run in
-// slot. Beside its report it answers the checksums of the packs it held WHOLE
-// to their rows — every section at its row's size and the bundle hashing to
-// the row's Hash — which a repair need not download again.
+// slot: the listing (list), the rows, every pack (checkPacks), derived file
+// (checkDerived) and installed layer (checkLayers), packed-refs (checkRefs),
+// then fsck. Beside its report it answers the checksums of the packs it found
+// WHOLE, which a repair need not download again.
 //
-// EACH PROBLEM IS CLASSED BY WHAT REPAIRS IT, where it is found: the
-// listing's (an entry outside the image, a fixed file missing or not what a
-// full round writes), packed-refs not the file this cache wrote, a pack no
-// row names and git's connectivity check failing are the copy's own directory
-// — or the rows, which no repair on this node ends — and a full round of the
-// copy puts the directory right in place (sweep.go, refs.go); a pack the rows
-// name missing, at another size or hashing to another bundle, and a derived
-// file failing its checksum, are DAMAGE (VerifyReport.damaged). Classed by its
-// sentence instead, a reworded problem would move between them unseen.
+// Each problem is classed by what repairs it where it is found, never by its
+// sentence, which a rewording would move unseen: the listing's, packed-refs,
+// a stray pack and fsck are the copy's own directory (or the rows, which no
+// repair here ends), put right by a full round in place (sweep.go, refs.go);
+// the rest is DAMAGE (VerifyReport.damaged).
 func (c *Cache) check(ctx context.Context, s Synced, slot *gitproc.Reserved) (VerifyReport, []string, error) {
 	e, inc := s.entry, s.inc
 	r := VerifyReport{Repo: e.id, Name: s.Repo.Name, Position: s.Position}
@@ -679,9 +514,9 @@ func (c *Cache) check(ctx context.Context, s Synced, slot *gitproc.Reserved) (Ve
 	defer l.close()
 	r.Name, r.Position, r.Problems = cmp.Or(l.repo.Name, r.Name), l.at, l.problems
 
-	// No retirement asked: the check holds the listing to the rows alone, and
-	// a pack file the copy holds that no row names — one its swap has not
-	// taken out yet among them — is the copy's own directory out of place,
+	// The rows are read AFTER the listing, at least as fresh: a pack installed
+	// between the two has its row applied first. No retirement asked: a pack
+	// file no row names, one a swap has not taken out yet included, is a stray,
 	// which a read in place answers by the swap.
 	snap, err := c.read(ctx, e.id, l.at, statelog.Position{}, l.stream, true, false,
 		statelog.FloorAt(statelog.ReadSession, l.at))
@@ -721,13 +556,10 @@ func (c *Cache) check(ctx context.Context, s Synced, slot *gitproc.Reserved) (Ve
 	if err != nil {
 		return r, whole, fmt.Errorf("cache: verify %s: %w", r.label(), err)
 	}
-	// git's connectivity check failing is NO DAMAGE OF ITS OWN: over packs
-	// every one of which hashes to its row's bundle — what makes a report
-	// damaged above — it is the directory's (a loose ref, a stray object, a
-	// HEAD or a shape git refuses), which a read in place puts right, or the
-	// rows', which nothing on this node does: a rebuild links the same packs
-	// and writes the same refs. Counted as damage, a stray loose ref fsck
-	// trips over sent the copy to a rebuild.
+	// fsck failing is NO DAMAGE of its own: over packs that all hash to their
+	// rows it is the directory's (a loose ref, a stray object, HEAD, a shape),
+	// which a read in place puts right, or the rows', which a rebuild linking
+	// the same packs and writing the same refs would not.
 	problem, err = c.fsck(ctx, e, inc, r.label(), slot)
 	if problem != "" {
 		r.Problems = append(r.Problems, problem)
@@ -753,11 +585,10 @@ type listing struct {
 	// (derived.go), with its declaration, in declaration order.
 	derived []ownedFile
 	// installed is the published chain the incarnation holds (layers.go),
-	// each layer with the row it was installed from; chains what each chain
-	// file holds when it is sound (chainWants), and mark the chain files'
-	// writes in place as chains was read (markChain) — the node's tip is
-	// written in place by a run the listing leaves to finish; and chained
-	// every pack an installed layer names, which the chain holds whatever its
+	// each layer with its row; chains what each chain file holds when sound
+	// (chainWants); mark the chain files' in-place writes as chains was read
+	// (markChain), since a run the listing leaves to finish writes the tip in
+	// place; chained every pack an installed layer names, held whatever its
 	// rows say.
 	installed []gitlet.LayerRow
 	chains    map[string][]byte
@@ -776,12 +607,10 @@ func (l *listing) close() {
 }
 
 // list reads inc's directory against the image grammar with no round writing
-// it (entry.write, waited for under ctx). A maintenance run may be: one in
-// flight on inc when the listing begins is left to finish — the check holds
-// the maintainer off (holdMaintainer), so none starts — and the files it holds
-// only while it runs are admitted (Write.Holds), since a writer's own
-// lock and temporary files are no damage. With no run in flight they are,
-// and named as such.
+// it (entry.write, waited for under ctx). A maintenance run in flight on inc
+// is left to finish (holdMaintainer starts no other), and the files it holds
+// only while it runs are admitted (Write.Holds); with no run in flight they
+// are damage, and named as such.
 func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing, error) {
 	if c.knobs != nil && c.knobs.verifyWaits != nil {
 		c.knobs.verifyWaits(inc.dir)
@@ -953,13 +782,12 @@ type packFindings struct {
 }
 
 // checkPacks holds every pack a row added at or before the listing's position
-// to its row, one at a time, where its rows place it (packPlace: objects/pack,
-// or the dropping view for a pack only dropping rows name), and names every
-// pack file no row places where it lies — no row names it, or its rows place
-// it at the other place, a pack only dropping rows name in objects/pack among
-// them, which a push could rely on; it answers how many packs it checked, the
-// checksums of those it found whole, and what it found. A row added after the
-// listing is not asked about: what the listing saw of it says nothing.
+// to its row, one at a time, where its rows place it (packPlace), and names as
+// a stray every pack file lying where no row places it — a pack only dropping
+// rows name in objects/pack among them, which a push could rely on. It
+// answers how many packs it checked, the checksums of those found whole, and
+// its findings. A row added after the listing is not asked about: what the
+// listing saw of it says nothing.
 func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int, []string, packFindings,
 	error) {
 
@@ -1059,24 +887,17 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 	return checked, whole, found, nil
 }
 
-// checkDerived is step 4: every derived file the listing found held to its
-// bytes as its declaration's Check says (ownedFile.held, check.go) — today
-// git's hashfile trailer — the one check that names damage in a file git
-// reads without checking: a bitmap no git command verifies, a graph or an
-// index that answers wrong rather than failing. A file replaced or removed
-// since the listing (a repair round may run between the listing and the hash:
-// the check holds rounds off for its listing alone) gives no verdict and is
-// no finding, and so does a chain file written in place since its record was
-// read (chainVerdict). No read slot is taken a piece at a time: the check
-// holds its maintenance slot across the whole of it. A declaration whose
-// every read holds its files (Check.hashed: the memo's tree, admitted whole)
-// has nothing for a hash to add, and is passed over; and so is every file of
-// a layer the incarnation installed, which the layer pass reads once
-// (checkLayers: gitlet.CheckLayer holds each file to its trailer as it holds it
-// to its row) — read here as well, a layer's every byte was read and hashed
-// twice, some 2.6 GB more for the root layer of the largest repository the
-// defaults admit. A chain file, which carries no trailer, and a layer file no
-// installed layer names are this pass's.
+// checkDerived holds every derived file the listing found to its bytes as its
+// declaration's Check says (ownedFile.held, check.go), today git's hashfile
+// trailer: the one check naming damage git reads unchecked — a bitmap no git
+// command verifies, a graph or index answering wrong. A file replaced or
+// removed since the listing (rounds are held off for the listing alone), or a
+// chain file written in place since its record was read (chainVerdict), is no
+// finding. No read slot is taken a piece: the check holds its maintenance slot
+// throughout. Passed over: a declaration whose every read holds its files
+// (Check.hashed), and every file of an installed layer, which checkLayers
+// reads once; a chain file and a layer file no installed layer names are
+// this pass's.
 func (c *Cache) checkDerived(ctx context.Context, e *entry, inc *incarnation, l *listing) ([]string, error) {
 	var problems []string
 	p := c.pieces(nil)
@@ -1113,18 +934,13 @@ func (c *Cache) checkDerived(ctx context.Context, e *entry, inc *incarnation, l 
 	return problems, nil
 }
 
-// checkLayers is the LAYER PASS, after the packs' hashes and before the fsck:
-// every layer the incarnation installed held to the row it was installed from
-// (gitlet.CheckLayer — each of its files read once, by this pass alone, its
-// trailers, its sections, its packs, its counts and its base's graph layers),
-// beside what a trailer can see: a file whose hashfile trailer is sound over
-// bytes the row does not describe. Each
-// finding names the layer and what differed, and is damage: a rebuild seeds
-// every layer that passes and fetches the rest (seedRebuild). A file gone is
-// one finding, as the listing would name it. Its bytes are within the pass's
-// bound, which counts every file the copy holds (CheckBudget), and, as
-// checkDerived's, are hashed with no read slot a piece: the check holds its
-// maintenance slot across the whole of it.
+// checkLayers holds every layer the incarnation installed to the row it was
+// installed from (gitlet.CheckLayer, each file read once, by this pass alone):
+// its trailers, sections, packs, counts and base's graph layers, which catches
+// a trailer sound over bytes the row does not describe. Each finding names the
+// layer and is damage: a rebuild seeds every layer that passes (seedRebuild).
+// A file gone is one finding. Its bytes are within the pass's bound (CheckBudget), hashed with no read
+// slot a piece, as checkDerived's.
 func (c *Cache) checkLayers(ctx context.Context, dir string, l *listing) ([]string, error) {
 	var problems []string
 	p := c.pieces(nil).layer()
@@ -1173,12 +989,10 @@ func checkLayerAt(ctx context.Context, dir string, row gitlet.LayerRow, base []s
 }
 
 // hashBundle is the SHA-256 of the pack at stem as the push stored it: its
-// .pack, .idx and .rev back to back. Streamed through buf, ctx checked
-// between reads — over files up to gitlet.MaxPackBytes. hold, when set, is the
-// slot each piece of CheckPieceBytes is hashed in (gitproc.Pool.HoldRead),
-// taken before the piece and given back after it; nil for a caller that
-// holds a slot of its own across the whole hash (a check, in its reserved
-// maintenance slot).
+// .pack, .idx and .rev back to back, streamed through buf with ctx checked
+// between reads. hold, when set, is the read slot each CheckPieceBytes piece
+// is hashed in (gitproc.Pool.HoldRead); nil for a caller holding its own slot
+// across the hash (a check, in its reserved maintenance slot).
 func hashBundle(ctx context.Context, stem string, buf []byte,
 	hold func(context.Context) (func(), error)) (objstore.Hash, error) {
 
@@ -1191,13 +1005,11 @@ func hashBundle(ctx context.Context, stem string, buf []byte,
 	return objstore.Hash(hex.EncodeToString(sum.Sum(nil))), nil
 }
 
-// hashFile adds the bytes of the file at path to sum, a piece of at most
-// CheckPieceBytes at a time, each in a slot hold takes (none when nil) and
-// gives back once the piece is read — the one piece loop every hash of this
-// node's files reads by (gitlet.HashPieces), so a hint's hash of a pack holds
-// the read lane exactly as a check's of its index does. It hashes the bytes
-// the file held when it was opened: one rewritten meanwhile is its caller's
-// to see, by the files' identity (hashPack).
+// hashFile adds the bytes of the file at path to sum, a CheckPieceBytes piece
+// at a time, each in a slot hold takes (none when nil): the one piece loop
+// every hash of this node's files reads by (gitlet.HashPieces), so each holds
+// the read lane alike. It hashes the bytes the file held when opened; a
+// rewrite meanwhile is its caller's to see, by the files' identity (hashPack).
 func hashFile(ctx context.Context, sum io.Writer, path string, buf []byte,
 	hold func(context.Context) (func(), error)) error {
 
@@ -1250,15 +1062,10 @@ func (r *refLines) Write(p []byte) (int, error) {
 }
 
 // fsck runs git's connectivity check in inc, in the maintenance slot the
-// check's admission holds, and answers a problem when git found one.
-//
-// Its memory was charged at the admission, and raised to the incarnation it
-// runs over (Verification.charge): a connectivity check holds
-// FsckBytesPerObject an object of its repository — some 11 GB over the
-// largest the defaults admit, and an object of the dropping view's beside
-// them while an expunge is open — and is charged that and room beside it for
-// one transfer of the repository against the budget the maintenance in flight
-// shares (verifyCharge, memory.go).
+// check's admission holds, and answers a problem when git found one. Its
+// memory, FsckBytesPerObject an object (some 11 GB over the largest
+// repository the defaults admit), was charged at admission and raised to inc
+// (verifyCharge, Verification.charge).
 func (c *Cache) fsck(ctx context.Context, e *entry, inc *incarnation, label string,
 	slot *gitproc.Reserved) (string, error) {
 
@@ -1277,10 +1084,9 @@ func (c *Cache) fsck(ctx context.Context, e *entry, inc *incarnation, label stri
 	if c.knobs != nil && c.knobs.verifyFsck != nil {
 		c.knobs.verifyFsck(inc.dir)
 	}
-	// THROUGH THE DROPPING VIEW where the copy holds one (heldView): the
+	// Through the dropping view where the copy holds one (heldView): the
 	// check is of what the copy serves, and a ref a push revived onto a
-	// dropping object in an expunge's window reaches one, which the
-	// expunge's commit keeps live (its rescue).
+	// dropping object in an expunge's window reaches it, kept live (its rescue).
 	_, err := slot.Run(ctx, gitproc.Cmd{
 		Dir: inc.dir, Dropping: heldView(inc.dir),
 		Args:   []string{"fsck", "--connectivity-only", "--no-dangling", "--no-progress"},

@@ -23,58 +23,27 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A PROVENANCE RUN: one immutable file of the index of which push introduced
-// each commit (provenance.go), SELF-CONTAINED — every push it names, every
-// ref those pushes moved, every move and every introduced commit, so a lookup
-// reads one run and nothing beside it — and COMPLETE OVER ITS RANGE: every
-// push of the repository with a position in (from, through] is in it. Runs
-// never overlap, so no push is in two of them and no lookup weighs duplicates.
-// Big-endian throughout:
-//
-//	header   "CRPV" | version u8 (1) | oid bytes u8 (20) | reserved u16
-//	         pushes u32 | refs u32 | commits u64 | moves u64 | push bytes u64 | name bytes u64 |
-//	         from i64 | through i64                                     (64 bytes)
-//	offsets  pushes × u64          — each push record's offset in the push section
-//	pushes   push bytes            — the records back to back, in (position, push id) order:
-//	         push id [16] | position i64 | at unix-µs i64 | via u8 | principal kind u8 |
-//	         fields (tag u8 | uvarint length | bytes), each only when it is not empty:
-//	         1 operator id, 2 seat, and a seat's run — 3 turn id, 4 work backend,
-//	         5 work key, 6 model, and a coding box's 7 run id, 8 harness;
-//	         an unknown tag skipped
-//	refs     refs × (ref key [8] | name offset u32 | name length u16 | ordinal u8 | reserved u8)
-//	                                                          sorted by (ref key, ordinal)
-//	names    name bytes            — the refs' names back to back
-//	moves    moves × (ref key [8] | ordinal u8 | position i64 | push index u32 | old [20] |
-//	         new [20] | flags u8 (1 forced, 2 a deletion))
-//	                                                          sorted by (ref key, ordinal, position)
-//	commits  commits × (oid [20] | push index u32)            sorted by (oid, push index)
+// A PROVENANCE RUN is one immutable file of the index of which push introduced
+// each commit (provenance.go). It is SELF-CONTAINED (every push it names, and
+// every ref, move and commit of them), so a lookup reads one run alone, and
+// COMPLETE over (from, through]: every push of the repository at a position in
+// that range is in it. Runs never overlap, so no lookup weighs duplicates.
+// Every record but a push has a fixed width, and the offsets table gives a
+// push's start, so a lookup is a binary search over the mapped file, never a
+// read call a probe.
+
+// A run's layout, big-endian:
+//	header   "CRPV" | version u8 (1) | oid bytes u8 (20) | reserved u16 | pushes u32 | refs u32 | commits u64 |
+//	         moves u64 | push bytes u64 | name bytes u64 | from i64 | through i64                      (64 bytes)
+//	offsets  pushes × u64, each push record's offset in the push section
+//	pushes   records in (position, push id) order: push id [16] | position i64 | at unix-µs i64 | via u8 |
+//	         principal kind u8 | fields (tag u8 | uvarint length | bytes), each only when not empty (field*)
+//	refs     refs × (ref key [8] | name offset u32 | name length u16 | ordinal u8 | reserved u8), by (key, ordinal)
+//	names    the refs' names back to back
+//	moves    moves × (ref key [8] | ordinal u8 | position i64 | push index u32 | old [20] | new [20] | flags u8),
+//	         by (key, ordinal, position, landing order: chainMoves)
+//	commits  commits × (oid [20] | push index u32), by (oid, push index)
 //	trailer  SHA-256 of every byte before it [32]
-//
-// A REF IS NAMED BY ITS KEY AND ITS ORDINAL. The key is the first eight bytes
-// of the SHA-256 of the ref's name: a fixed width, so the moves section sorts
-// and seeks by it. Two refs of one run sharing a key — about one chance in a
-// billion at gitlet.MaxRefsPerRepo — are two ordinals of it, each with its name
-// in the refs section, so a lookup finds its ref's ordinal by NAME and the
-// moves of each ref stay contiguous: a collision costs nothing, and never a
-// wrong answer. A run that does not hold a ref's name holds none of its moves,
-// whatever key another ref of it has.
-//
-// MOVES OF ONE REF AT ONE POSITION ARE IN THE ORDER THEIR PUSHES LANDED them.
-// Group commit lands up to gitlet.MaxPushesPerRecord pushes in one record, each
-// decided against the ones before it (gitlet's decide), so two moves of one ref
-// in one record chain — the second's old is the first's new — and the chain
-// is their order. The push id is no such order: the rows keep none within a
-// record.
-//
-// Every record has a fixed width but a push's, whose start the offsets table
-// gives, so a lookup is a binary search over memory the page cache backs once
-// the run is mapped (provenance.go), never a read call a probe.
-//
-// A PUSH'S FIELDS ARE TAGGED, so a field a later build adds — a seat's run
-// gained four, and a coding box's two more — moves no version: a reader skips
-// a tag it does not know, a run this build writes is read by an older one as
-// the push less what it cannot name, and the index is a cache any build
-// rebuilds from the rows.
 
 // The format's fixed parts.
 const (
@@ -99,9 +68,12 @@ const (
 	moveDeleted = 1 << 1
 )
 
-// The push record's fields after its fixed part: the principal's credential
-// and seat, and a seat's run (gitlet.RunProvenance) — a coding box's naming the
-// run that pushed and its harness beside the turn.
+// The push record's tagged fields after its fixed part: the principal's
+// credential and seat, and a seat's run (gitlet.RunProvenance), a coding box's
+// naming its run and harness. Tagged so a field a later build adds moves no
+// version: a reader skips a tag it does not know, so an older build reads a
+// newer run as the push less what it cannot name (and any build rebuilds the
+// index from the rows).
 const (
 	fieldOperatorID  = 1
 	fieldSeat        = 2
@@ -113,8 +85,8 @@ const (
 	fieldHarness     = 8
 )
 
-// The codes a push record names its way and its principal's kind by: one
-// table each, so a kind or a way a later build adds is a code here — and
+// The codes a push record names its way and its principal's kind by: a kind
+// or way a later build adds is a code here, and
 // TestEveryPushPrincipalAndWayHasARunCode holds every value of gitlet's closed
 // sets to one.
 var (
@@ -201,7 +173,12 @@ func parseRunHeader(data []byte) (runHeader, runLayout, error) {
 }
 
 // refKey is the key a run files ref under: the first eight bytes of the
-// SHA-256 of its name.
+// SHA-256 of its name, a fixed width the moves section sorts and seeks by.
+// Refs of one run sharing a key (about one chance in a billion at
+// gitlet.MaxRefsPerRepo) are its ordinals, each named in the refs section, so
+// a lookup finds its ordinal by NAME, each ref's moves stay contiguous, and a
+// collision never gives a wrong answer. A run that does not hold a ref's name
+// holds none of its moves.
 func refKey(ref string) [runKeyBytes]byte {
 	sum := sha256.Sum256([]byte(ref))
 	var k [runKeyBytes]byte
@@ -258,18 +235,16 @@ type builtCommit struct {
 }
 
 // buildRun is the run of rows over (from, through]: rows in (position, push
-// id) order, each a push of the repository at a position in that range, and
-// every push of it there — what a delta's pushes phase or a page of the
-// backfill answered, held to that already (validPush). An error is a row
-// this build cannot write: a push id that is no UUID, a principal kind or a
-// way it has no code for, or a ref name past what a run can hold.
+// id) order, every push of the repository in that range, as validPush already
+// holds a delta's pushes phase or a backfill page to. An error is a row this
+// build cannot write: a push id that is no UUID, a principal kind or way with
+// no code, or a ref name past what a run can hold.
 func buildRun(from, through int64, rows []gitlet.IntroducedRow) (runRows, error) {
 	return buildRunKeyed(from, through, rows, refKey)
 }
 
-// buildRunKeyed is buildRun filing every ref under the key keyOf answers for
-// its name: refKey, but for the suite's case of two refs sharing a key, which
-// one chance in a billion would otherwise have to arrange.
+// buildRunKeyed is buildRun filing every ref under keyOf(name): refKey, but
+// for the suite's case of two refs sharing a key.
 func buildRunKeyed(from, through int64, rows []gitlet.IntroducedRow, keyOf func(string) [runKeyBytes]byte) (
 	runRows, error) {
 
@@ -354,11 +329,12 @@ func buildRunKeyed(from, through int64, rows []gitlet.IntroducedRow, keyOf func(
 	return r, nil
 }
 
-// chainMoves gives every move its place among the moves of its ref at its
-// position (builtMove.chain): the order their pushes landed them, which the
-// moves' own values spell — each one after the first starts where the one
-// before it ended. A group of one is its own chain; a group whose moves do
-// not chain — which no decide lands — keeps its pushes' order.
+// chainMoves sets builtMove.chain: the order the pushes landed the moves of
+// one ref at one position. Group commit lands up to gitlet.MaxPushesPerRecord
+// pushes in one record, each decided against the ones before it (gitlet's
+// decide), so such moves chain (each one's old is the one before's new) and
+// the chain is their order; the push id gives none within a record. Moves
+// that do not chain, which no decide lands, keep their pushes' order.
 func chainMoves(moves []builtMove) {
 	type group struct {
 		key      [runKeyBytes]byte
@@ -398,7 +374,7 @@ func chainMoves(moves []builtMove) {
 			cur = next
 		}
 		if len(placed) != len(idx) {
-			// No chain: the pushes' own order, which is all that is left.
+			// No chain: keep the pushes' order.
 			for n, i := range idx {
 				moves[i].chain = n
 			}
@@ -617,9 +593,9 @@ func (o *runWriter) close() error {
 	return err
 }
 
-// runFile is a run's bytes as a lookup reads them — a mapped file
-// (provenance.go) or, in a case, bytes in memory — with its header and
-// sections, and the key a ref's name is filed under (refKey).
+// runFile is a run's bytes as a lookup reads them (a mapped file,
+// provenance.go, or a test's bytes) with its header, sections and ref key
+// function (refKey).
 type runFile struct {
 	data  []byte
 	h     runHeader
@@ -627,17 +603,17 @@ type runFile struct {
 	keyOf func(string) [runKeyBytes]byte
 }
 
-// openRunBytes is data, a whole run, as a lookup reads it; its trailer is the
-// caller's to have checked (CheckRunTrailer) — this holds its sections to its
-// length, so no lookup reads outside it.
+// openRunBytes is data, a whole run, as a lookup reads it, its sections held
+// to its length so no lookup reads outside it. The caller checks its trailer
+// (CheckRunTrailer).
 func openRunBytes(data []byte) (runFile, error) {
 	h, l, err := parseRunHeader(data)
 	if err != nil {
 		return runFile{}, err
 	}
 	f := runFile{data: data, h: h, l: l, keyOf: refKey}
-	// The offsets table rises within the push section, every record holding
-	// at least its fixed part: what pushPayload reads by.
+	// Offsets rise within the push section, each record at least its fixed
+	// part, so push never slices backwards and decodePush has its fixed part.
 	prev := uint64(0)
 	for i := range int64(h.pushes) {
 		off := binary.BigEndian.Uint64(data[l.offsets+i*runOffsetBytes:])
@@ -769,10 +745,9 @@ func (f runFile) moveSpan(key [runKeyBytes]byte, ordinal uint8, above, through i
 	return lo, hi
 }
 
-// commitPush is the index of the push that introduced oid in f — the newest
-// of the run's pushes that list it, a commit a later push brought back after
-// every ref that reached it was deleted being listed by both — at a position
-// above floor, or false.
+// commitPush is the index of the push at a position above floor that
+// introduced oid in f, or false. Of several that list it (a later push
+// brought it back after every ref reaching it was deleted), the newest.
 func (f runFile) commitPush(oid [runOIDBytes]byte, floor int64) (int, bool) {
 	n := int(f.h.commits)
 	rec := func(i int) []byte {
@@ -797,25 +772,18 @@ func (f runFile) commitPush(oid [runOIDBytes]byte, floor int64) (int, bool) {
 	return best, best >= 0
 }
 
-// mergeRuns writes to w the run of ins — adjacent runs in position order, each
-// one's range below the next's, nothing between them but positions with no
-// push — without the pushes at or below floor (the index's horizon) and what
-// they moved and introduced, and answers its header.
+// mergeRuns writes to w the run of ins (adjacent runs in position order,
+// nothing between them but positions with no push) less the pushes at or
+// below floor (the index's horizon) and what they moved and introduced, and
+// answers its header.
 //
-// STREAMED, holding nothing a push or a ref: the inputs' pushes are each in
-// (position, push id) order over disjoint ranges, so the merged run's are
-// theirs one after another and a push's new index is its old one moved by a
-// constant; the commits are each sorted, and merge in one pass; and the refs —
-// every name a run holds, which a repository whose every push moves a ref of
-// its own holds by the hundred thousand — are merged ONE KEY AT A TIME
-// (refGroups), every input's refs of the key beside every input's moves of
-// it, since both sections are in key order, so all a merge holds of them is
-// one key's ordinals: at most 256 an input. Held whole, by name, the refs of
-// two runs of 200 000 pushes each moving a ref of its own took 198 MB, and a
-// repository at gitlet.MaxRefsPerRepo churning its seat branches every 14 days
-// would have taken some 0.7 GB a merge. A merge reads each input in order from
-// its mapped file — once to count what it writes, then once a section — and
-// writes each record once.
+// STREAMED, holding nothing per push or per ref: the inputs' pushes cover
+// disjoint ranges in order, so a push's new index is its old one plus a
+// constant; the commits merge in one pass; and the refs, which a repository
+// whose every push moves its own ref holds by the hundred thousand, merge ONE
+// KEY AT A TIME (refGroups), so a merge holds one key's ordinals, at most 256
+// an input. It reads each input's mapped file once to count, then once a
+// section, and writes each record once.
 func mergeRuns(w io.Writer, ins []runFile, floor int64) (runHeader, error) {
 	if len(ins) < 2 {
 		return runHeader{}, fmt.Errorf("cache: a merge of %d runs: a merge reads two at least", len(ins))
@@ -963,16 +931,13 @@ func mergeRuns(w io.Writer, ins []runFile, floor int64) (runHeader, error) {
 	return h, out.close()
 }
 
-// refGroups is a merge's walk of its inputs' refs ONE KEY AT A TIME, in key
-// order (mergeRuns): each input's refs filed under the key and its moves of
-// them — both sections keep a key's records together, and in key order — and
-// the refs of every input merged by name, a name several inputs hold being
-// one ref of the merged run, KEPT where a move of it in any input is above
-// the floor, its ordinal the next of its key in name order. What it holds is
-// a key's ordinals, at most 256 an input: a few kilobytes, however many refs
-// the runs hold. A run whose sections do not agree — a move of a key or an
-// ordinal no ref holds, names out of order, a key's refs past 256 — is no run
-// this build wrote (errRunMalformed).
+// refGroups is a merge's walk of its inputs' refs ONE KEY AT A TIME in key
+// order (mergeRuns): each input's refs and moves of the key, which both
+// sections keep together, the refs merged by name into one ref a name, KEPT
+// where any input moves it above the floor, its ordinal the next of its key in
+// name order. It holds a few kilobytes however many refs the runs hold.
+// Sections that disagree (a move of a key or ordinal no ref holds, names out
+// of order, a key's refs past 256) are errRunMalformed.
 type refGroups struct {
 	ins   []runFile
 	floor int64
