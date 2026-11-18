@@ -1011,7 +1011,9 @@ const FileSection = memo(function FileSection({
             minBlockSize: `${Math.min(entry.added + entry.deleted + 3, FOLD_FROM_LINES) * ROW_ESTIMATE_PX}px`,
           }}
         >
-          <Skeleton variant="text" rows={3} label={`Reading the changes to ${path}`} />
+          {/* NO LIVE REGION A FILE: a long stack's every unread file announced itself. */}
+          <Skeleton variant="text" rows={3} />
+          <VisuallyHidden>{`Reading the changes to ${path}`}</VisuallyHidden>
         </div>
       );
     }

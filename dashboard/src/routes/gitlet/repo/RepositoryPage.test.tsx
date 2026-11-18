@@ -1845,7 +1845,8 @@ test("a history is a timeline of the reader's days, a day met again opening its 
   ]);
   mount("#/gitlet/repos/web?tab=commits");
   const history = await screen.findByRole("group", { name: /History of/ });
-  const headings = within(history).getAllByRole("heading", { level: 3 });
+  // AN H2 EACH, under the repository's title: the kit's level where the history stands.
+  const headings = within(history).getAllByRole("heading", { level: 2 });
   expect(headings.map((h) => h.textContent)).toEqual([
     "Commits on Oct 22, 2026",
     "Commits on Oct 21, 2026",
@@ -2684,6 +2685,39 @@ test("a declared repository's delete and protection are held with where they are
   expect(screen.getByRole("button", { name: "Protect a branch" }).getAttribute("title")).toBe(
     DECLARED_LIFE,
   );
+});
+
+// THE EXEMPTIONS FROM APPROVAL ARE OFFERED ONLY WHERE AN APPROVAL IS ASKED,
+// and a tick kept while hidden is not sent. Mutation: draw them under No
+// approval, or send the hidden tick, and this fails.
+test("the protect form offers exemptions from approval only beside an approval asked", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+
+  const protect = await screen.findByRole("button", { name: "Protect a branch" });
+  await waitFor(() => expect(protect.getAttribute("title")).toBeNull());
+  fireEvent.click(protect);
+  const dialog = await screen.findByRole("dialog", { name: "Protect a branch of web" });
+  fireEvent.change(within(dialog).getByLabelText(/Branches or tags/), {
+    target: { value: "main" },
+  });
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: /Gate merges into it/ }));
+  const exemption = /No approval for a change of only whitespace/;
+  expect(within(dialog).queryByRole("checkbox", { name: exemption })).toBeNull();
+
+  const approvals = () => within(dialog).getByRole("combobox", { name: "Approvals" });
+  fireEvent.click(approvals());
+  fireEvent.mouseDown(screen.getByRole("option", { name: "One approval" }));
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: exemption }));
+  fireEvent.click(approvals());
+  fireEvent.mouseDown(screen.getByRole("option", { name: "No approval" }));
+  expect(within(dialog).queryByRole("checkbox", { name: exemption })).toBeNull();
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Protect" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]?.args).not.toHaveProperty("approvals_unless");
+  expect(acted[0]?.args).toMatchObject({ approvals: "none" });
 });
 
 // A DELETED REPOSITORY SAYS SO ABOVE ITS TABS and offers its restore, one

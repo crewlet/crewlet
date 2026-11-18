@@ -155,6 +155,8 @@ test("asks the address's search over REST, at no floor, and links each line at i
   const repo = screen.getByRole("region", { name: "web" });
   expect(within(repo).getAllByRole("article")).toHaveLength(1);
   expect(within(repo).getByRole("link", { name: "9" })).toBeTruthy();
+  // AN H2 UNDER THE PAGE'S TITLE, the kit's level where the results stand: an h3 skipped one.
+  expect(within(repo).getByRole("heading", { name: /^web/ }).tagName).toBe("H2");
 });
 
 test("says the coverage where nothing matched, rather than only that nothing did", async () => {

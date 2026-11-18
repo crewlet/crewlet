@@ -15,7 +15,7 @@ import { CommandPalette } from "./Palette.tsx";
 import { AssistantControlContext, type AssistantControl } from "../assistant/control.ts";
 import { ProjectSwitcherProvider } from "../header/ProjectSwitcher.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
-import { ANSWER_IDLE_MS, CODE_HITS, destinationHits } from "./hits.ts";
+import { ANSWER_IDLE_MS, CODE_HITS, CODE_PLACE_HITS, destinationHits } from "./hits.ts";
 import { QUIET_MS } from "~/lib/useQuiet.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { COLLEAGUE_QUERY_MAX, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
@@ -1781,6 +1781,88 @@ describe("code", () => {
     expect(location.hash).toBe(
       href(["gitlet", "repos", "web"], { ref: TIP, path: "src/app.ts", lines: "7" }),
     );
+  });
+
+  // A REPOSITORY IS FOUND BY ITS NAME AND A CHANGE BY ITS TITLE, above the
+  // lines, each opening its page; All carries the term into Code and asks
+  // neither. Mutations: drop either question, ask them from All, or open the
+  // search rather than the repository, and this fails.
+  test("Code lists the repositories a name begins and the changes a title holds, each opening its page", async () => {
+    const asked: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.href);
+        asked.push(url);
+        const page = { position: "CREWLET_CODE_LOG@1:12", level: "session" };
+        if (url.pathname === "/query/code_repos") {
+          return Promise.resolve(
+            json({ ...page, repos: [{ name: "nimbuscore", description: "The core service" }] }),
+          );
+        }
+        if (url.pathname === "/query/code_changes") {
+          return Promise.resolve(
+            json({
+              ...page,
+              changes: [
+                {
+                  repo: "nimbuscore",
+                  ref: "nimbuscore!3",
+                  number: 3,
+                  title: "Nimbus retries",
+                  state: "open",
+                },
+              ],
+            }),
+          );
+        }
+        return new Promise<Response>(() => {});
+      }),
+    );
+    const of = (what: string) => asked.filter((u) => u.pathname === `/query/${what}`);
+    const p = mount();
+    await p.type("Nimbus");
+    await act(async () => {
+      fireEvent.click(p.row("Find “Nimbus” in code →"));
+    });
+    expect(p.tab()).toBe("Code");
+    const repo = await screen.findByText("nimbuscore");
+    expect(
+      within(screen.getByRole("group", { name: "Repositories" })).getByText("nimbuscore"),
+    ).toBe(repo);
+    expect(await screen.findByText("Nimbus retries")).toBeTruthy();
+    expect(of("code_repos")[0]?.searchParams.get("prefix")).toBe("nimbus");
+    expect(of("code_repos")[0]?.searchParams.get("limit")).toBe(String(CODE_PLACE_HITS));
+    expect(of("code_changes")[0]?.searchParams.get("text")).toBe("Nimbus");
+    expect(of("code_changes")[0]?.searchParams.has("state")).toBe(false);
+    await act(async () => {
+      fireEvent.click(p.row("Nimbus retries"));
+    });
+    expect(location.hash).toBe(href(["gitlet", "repos", "nimbuscore", "changes", "3"]));
+  });
+
+  test("a repository row opens the repository", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.href);
+        return url.pathname === "/query/code_repos"
+          ? Promise.resolve(
+              json({ position: "", level: "session", repos: [{ name: "nimbuscore" }] }),
+            )
+          : new Promise<Response>(() => {});
+      }),
+    );
+    const p = mount();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: "Code" }));
+    });
+    await p.type("nimbuscore");
+    const row = (await screen.findByText("nimbuscore")).closest('[role="option"]')!;
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(location.hash).toBe(href(["gitlet", "repos", "nimbuscore"]));
   });
 
   // A READER WITHOUT GITLET IS ASKED NO CODE SEARCH (ADR-0110): the engine
