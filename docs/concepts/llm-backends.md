@@ -4220,7 +4220,10 @@ counted is shown as one that did not say,
 never as a node where nothing happened. Each model's **Limits** draw one bar per
 window from the newest report across nodes, a warning from 80% used, the window
 it sits out as reached until it is tried again, and a reading older than half an
-hour as stale; a model whose harness reports none says "None reported".
+hour as stale; a model whose harness reports none says "None reported". The
+list draws each window on one line; hovering or focusing it lists every
+window's use and exact reset, one line each, as each bar's accessible name
+says them. The model's own page also writes the reset under each bar.
 Members read every model's condition;
 only an admin reads the credential's name, its hint, who stored it and when, the
 account a login names and the vendor's own sentence.
