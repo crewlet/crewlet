@@ -294,7 +294,8 @@ func TestAPushRecordWritesTheChangesItMovesInBatches(t *testing.T) {
 			// statement clearing the ended changes' readiness; no authors
 			// (the pusher is one already) and no opens.
 			want := chunks(n-2, changeColumns) + chunks(1, changeColumns) + chunks(1, changeColumns) +
-				chunks(n-2, "change_id, n, head_oid, pusher, pusher_kind, push_id, position, at") +
+				chunks(n-2, "change_id, n, head_oid, pusher, pusher_kind, push_id, position, at, working_for, "+
+					"via, forced") +
 				chunks(1, "change_id, position, kind, by_handle, by_kind, reason, was, became, at") + 1
 			if issued != want {
 				t.Errorf("the record's changes took %d statements, want %d: a statement a chunk of each kind "+
