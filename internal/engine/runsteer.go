@@ -1776,7 +1776,7 @@ func (i *runInbox) Take(ctx context.Context, event string, call *sandbox.NoteCal
 	}
 	messages := make([]string, 0, len(candidates))
 	for _, c := range candidates {
-		messages = append(messages, hookMessage(c, notes, launch))
+		messages = append(messages, hookMessage(c, notes, launch, unanswered, candidates))
 	}
 	fit := executor.ClaudeNotesThatFit(messages)
 	candidates, messages = candidates[:fit], messages[:fit]
@@ -1881,10 +1881,14 @@ func (i *runInbox) servable(ctx context.Context, launch string, candidates []ope
 // RENDERING a candidate, said as sent before ([prompts.SteerMessageSentBefore])
 // where a person's note filed after it was already served to job or read by
 // it on notes, the record the take chose on, since the harness would otherwise
-// take it as the later word.
-func hookMessage(c openedNote, notes []sandbox.RunNote, job string) string {
+// take it as the later word. A later note among this answer's candidates
+// reaches the harness after c anyway, in this answer or a later one, so it
+// cues nothing.
+func hookMessage(c openedNote, notes []sandbox.RunNote, job string, unanswered []string,
+	candidates []openedNote) string {
 	if c.held.For == "" && slices.ContainsFunc(notes, func(n sandbox.RunNote) bool {
-		return n.For == "" && n.Seq > c.held.Seq && handedTo(n, job)
+		return n.For == "" && n.Seq > c.held.Seq && handedTo(n, job, unanswered) &&
+			!slices.ContainsFunc(candidates, func(o openedNote) bool { return o.held.ID == n.ID })
 	}) {
 		return prompts.SteerMessageSentBefore(c.note.By, c.note.Text)
 	}
@@ -1892,12 +1896,15 @@ func hookMessage(c openedNote, notes []sandbox.RunNote, job string) string {
 }
 
 // handedTo reports whether n was read by job, or served to its hook by a serve
-// its session may hold.
-func handedTo(n sandbox.RunNote, job string) bool {
+// its session may hold: none whose take the inbox answered nothing
+// (unanswered, [hookMemory]).
+func handedTo(n sandbox.RunNote, job string, unanswered []string) bool {
 	if n.Read != nil {
 		return n.Read.Launch == job
 	}
-	return slices.ContainsFunc(n.Serves, func(h sandbox.HookServed) bool { return h.Launch == job && h.MayHold() })
+	return slices.ContainsFunc(n.Serves, func(h sandbox.HookServed) bool {
+		return h.Launch == job && h.MayHold() && !slices.Contains(unanswered, h.Take)
+	})
 }
 
 // answeredNothing hands the run's settle loop take, whose hook launch's inbox
