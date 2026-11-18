@@ -25,11 +25,10 @@ const (
 	receiptVersion = 9901
 )
 
-// unknownWriter answers every tracker write `unknown` with a nil error — what a
-// write whose acknowledgement was lost returns, and what one whose operation
-// this node's ledger cannot vouch for returns WITHOUT having published
-// anything. The rest of each result is a receipt's (a key, a version), so a
-// tool that reports it anyway is caught reporting it.
+// unknownWriter answers every tracker write `unknown` with a nil error, as a
+// lost acknowledgement or an operation this node's ledger cannot vouch for
+// (having published nothing) does. Each result still holds a receipt (a key, a version), so a tool that
+// reports it anyway is caught.
 type unknownWriter struct {
 	*fakeTracker
 	unvouched bool
@@ -163,17 +162,14 @@ func (u *unknownWriter) operatorSurface(t *testing.T) *tools.Registry {
 }
 
 // receipt is what an answer about a write that may not exist must never carry:
-// the fields of a success, and the key and version the fake's result holds.
-// It is looked for in the answer with its operations taken out
-// ([withoutOperations]), which are random hex that spells a version now and
-// then.
+// the fields of a success, and the fake result's key and version. It is looked
+// for with the answer's operations taken out ([withoutOperations]).
 var receipt = []string{`"version"`, `"comment_id"`, `"key"`, `"id"`, `"outcome"`,
 	`"position"`, receiptKey, strconv.Itoa(receiptVersion), "NOT made"}
 
 // unknownOperatorCalls is one call to every tracker write on the operator's
-// surface. A fresh table on every call rather than a package variable: two
-// parallel tests hand these arguments to tools, and one shared map would be a
-// data race the moment a tool wrote to its arguments.
+// surface. A fresh table per call, not a package variable: parallel tests hand
+// these to tools, and a shared map races once a tool writes its arguments.
 func unknownOperatorCalls() map[string]map[string]any {
 	return map[string]map[string]any{
 		builtin.UpdateWorkItemTool: {"item": "ENG-1", "status": "done"},
@@ -201,15 +197,9 @@ var restatingTools = map[string]bool{
 }
 
 // EVERY TRACKER WRITE WHOSE OUTCOME IS UNKNOWN IS ANSWERED AS UNKNOWN, on
-// every surface, and never with a receipt.
-//
-// Only the create and the page tools held the rule. A comment the engine
-// answered `unknown` without publishing — its operation minted before this
-// node's ledger lost rows, a seat re-running a turn whose trigger predates the
-// ledger's sweep — came back as a comment_id with its mentions and its ask, and
-// the seat told whoever asked that it had answered. An update handed back a
-// `version` a model passes as `if_match`, naming a version the item may never
-// have had, and a saved view an id for a view that may not exist.
+// every surface, and never with a receipt: a comment_id tells the asker the
+// seat answered, a `version` goes back as `if_match` naming a version the item
+// may never have had, and a view id names a view that may not exist.
 func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T) {
 	t.Parallel()
 	operatorCalls := unknownOperatorCalls()
@@ -232,9 +222,8 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 				}
 				continue
 			}
-			// THE op_id IT NAMES IS THE ONE THAT FINISHES IT: brought back
-			// with the same call, every write derives the id it derived
-			// the first time.
+			// THE op_id IT NAMES IS THE ONE THAT FINISHES IT: the same call
+			// brought back under it derives the same ids.
 			op := answeredOp(t, got)
 			again := map[string]any{"op_id": op}
 			for k, v := range args {
@@ -295,20 +284,15 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 // AN OPERATION WHOSE ID SPELLS THE RECEIPT IS NOT A RECEIPT, and a receipt
 // printed right beside it still is.
 //
-// An operation id is random hex ([statelog.NewOpID]) and every decimal digit
-// is a hex digit, so a minted id spells the fake's version now and then, and
-// the test above, which mints a fresh id for every operator call, read one as
-// the version leaking a run or two in every few hundred. This pins that case on
-// EVERY run, under the id it happened on, for every tool an operator can bring
-// an operation back to — and pins the other side with it, in three doctored
-// answers the check must still refuse: the version printed after the id, the
-// version GLUED to the id's last character, which only a removal by exact value
-// reads correctly (a pattern that ate the id's run of characters would eat the
-// version with it), and an operation the writer was never handed.
+// An operation id is random hex ([statelog.NewOpID]), so a minted id can spell
+// the fake's version. This pins that case on every run, for every tool an
+// operator can bring an operation back to, and three doctored answers the
+// check must still refuse: the version printed after the id, the version GLUED
+// to the id's last character (only removal by exact value reads it; a pattern
+// would eat it with the id), and an operation the writer was never handed.
 func TestAnOperationWhoseIDSpellsTheReceiptIsNotReadAsOne(t *testing.T) {
 	t.Parallel()
-	// spelled is the operation that test failed on in CI: its last group is
-	// b9901477cd19.
+	// spelled is an operation whose last group spells the version.
 	const spelled = "01a102c5-54a2-7eb9-a00e-b9901477cd19"
 	version := strconv.Itoa(receiptVersion)
 	if !strings.Contains(spelled, version) {
@@ -381,10 +365,8 @@ func unknownAnswerProblems(got tools.Result, unvouched bool, ops []string) []str
 	}
 	said := withoutOperations(got.Output, ops)
 	var problems []string
-	// AND THE CAUSE SAYS SO, because a surface answering in status codes
-	// reads that rather than the sentence: without it the HTTP write surface
-	// rendered an unknown as a refusal, telling a client its change was NOT
-	// made when it may well have been.
+	// AND THE CAUSE SAYS SO: a surface answering in status codes reads it, not
+	// the sentence, or renders an unknown as a refusal ("NOT made").
 	var outcome *builtin.UnknownOutcome
 	if !errors.As(got.Cause, &outcome) || !errors.Is(got.Cause, builtin.ErrOutcomeUnknown) {
 		problems = append(problems, fmt.Sprintf("carries cause %v, want an UnknownOutcome",
@@ -405,10 +387,9 @@ func unknownAnswerProblems(got tools.Result, unvouched bool, ops []string) []str
 		problems = append(problems, fmt.Sprintf("says this node cannot tell %v",
 			!unvouched))
 	}
-	// AN ID LEFT OVER is an operation the writer was never handed. Named in an
-	// answer it is a pointer the reader cannot use — and here it is also the
-	// one thing that would let the false positive above back in, since only the
-	// ids this call wrote under are taken out before the receipt is looked for.
+	// AN ID LEFT OVER is an operation the writer was never handed: a pointer
+	// the reader cannot use, and the one thing that could hide a receipt, since
+	// only this call's ids are taken out before it is looked for.
 	for _, id := range uuidPattern.FindAllString(said, -1) {
 		problems = append(problems, "names "+id+", which it was not made under")
 	}
@@ -431,21 +412,14 @@ const (
 // each id the writer was handed, and each gesture one of them is a step of —
 // the call's own operation, which is what an operator is told to bring back.
 //
-// # Why a receipt is looked for only in what is left
+// An id the answer must carry is random hex ([statelog.NewOpID]) that can
+// spell the version; nothing a write reports is inside an id minted before
+// it, so taking them out hides no leak, and an id the writer was NOT handed
+// stays and is refused ([unknownAnswerProblems]).
 //
-// Because an operation id is random hex the answer is REQUIRED to carry
-// ([statelog.NewOpID]), and every decimal digit is a hex digit, so now and then
-// a minted id spells "9901" somewhere, and a check over the whole answer read
-// that as the version leaking. Nothing a write reports can be inside an id
-// minted before the write was made, so taking the ids out hides no leak — and
-// an id the writer was NOT handed is never taken out, and is itself refused
-// ([unknownAnswerProblems]).
-//
-// BY VALUE, NEVER BY PATTERN: only the exact ids this call wrote under come
-// out, so a version printed right beside one is still read. And only ids the
-// engine's grammar minted ([statelog.OpMintedAt]): a test's literal like "op"
-// carries no random part to take out, and taking it out would take words
-// with it.
+// BY VALUE, NEVER BY PATTERN, so a version printed right beside an id is still
+// read; and only ids the engine's grammar minted ([statelog.OpMintedAt]), since
+// a test literal like "op" has no random part and would take words with it.
 func withoutOperations(output string, ops []string) string {
 	var named []string
 	for _, op := range ops {
@@ -495,9 +469,8 @@ func TestAnUnknownUpdateStopsBeforeItsDependencies(t *testing.T) {
 }
 
 // AN UPDATE THAT ONLY CHANGES DEPENDENCIES REPORTS THE ITEM'S OWN VERSION. The
-// dependency sequence's last commit is usually another item's — a blocker's
-// mirror — and its version, handed back as `if_match` on this item, was refused
-// as stale.
+// dependency sequence's last commit is usually a blocker's mirror, whose
+// version would be refused as stale as `if_match` on this item.
 func TestADependencyOnlyUpdateReportsTheItemsOwnVersion(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -534,12 +507,10 @@ func TestADependencyOnlyUpdateReportsTheItemsOwnVersion(t *testing.T) {
 
 // AN UPDATE THAT CHANGES THE ITEM AND ITS DEPENDENCIES REPORTS THE ITEM'S
 // NEWEST VERSION, AND ITS OWN CALL'S LATEST POSITION. The patch lands first
-// (the fake's version 12, at S@1:12) and the dependency's authored
-// `waiting_on` commit lands on the same item's subject after it (88), with a
-// blocker's mirror last of all (90). The answer carried the patch's 12 and
-// its position: sent back as `if_match`, 12 was refused as stale by the
-// call's own second write, and a caller settling at S@1:12 read its own
-// dependencies back missing.
+// (version 12, at S@1:12), the dependency's `waiting_on` commit on the same
+// item after it (88), a blocker's mirror last (90). Reporting the patch's 12
+// would be stale as `if_match`, and settling at S@1:12 would read the call's
+// own dependencies back missing.
 func TestAnUpdateThatAlsoChangesDependenciesReportsTheItemsNewestVersion(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -592,12 +563,10 @@ func TestAnUpdateThatAlsoChangesDependenciesReportsTheItemsNewestVersion(t *test
 // A GESTURE THAT STOPPED AT A STEP WHOSE OUTCOME IS UNKNOWN IS AN UNKNOWN TO A
 // CALLER ANSWERING IN STATUS CODES, and never a refusal.
 //
-// Its sentence already said so to a model; its CAUSE was the writer's error
-// alone, which the HTTP write surface has no status for but its default — a
-// refusal telling a client that nothing had been written, about a gesture
-// whose earlier steps had landed and whose stopped step may have. The error
-// stays reachable inside the cause, so whether this node can vouch for the
-// step is still a question [errors.Is] answers.
+// A cause of the writer's error alone falls to the HTTP write surface's
+// default, a refusal saying nothing was written, though earlier steps landed
+// and the stopped one may have. The error stays reachable inside the cause,
+// so [errors.Is] still answers whether this node can vouch for the step.
 func TestAStoppedGestureCarriesAnUnknownOutcome(t *testing.T) {
 	t.Parallel()
 	for _, unvouched := range []bool{false, true} {
@@ -642,9 +611,8 @@ func TestAStoppedGestureCarriesAnUnknownOutcome(t *testing.T) {
 				case outcome.OpID == "":
 					t.Errorf("the cause names no operation: %+v", outcome)
 				// THE SAME OPERATION IS OFFERED BACK where it finishes the
-				// gesture here; unvouched, it stops at the same step on
-				// this node, so the answer sends the caller elsewhere and
-				// only the cause still names what it was.
+				// gesture here; unvouched, it would stop at the same step on
+				// this node, so only the cause names it.
 				case !unvouched && !strings.Contains(got.Output, outcome.OpID):
 					t.Errorf("the cause names operation %q, which the answer does "+
 						"not offer back: %s", outcome.OpID, got.Output)

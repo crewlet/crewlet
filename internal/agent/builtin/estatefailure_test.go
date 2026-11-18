@@ -22,15 +22,12 @@ import (
 const unservedDetail = "data-b: out_of_service: applier halted at tracker 2:41; " +
 	"data-c: no answer"
 
-// AN ESTATE NOBODY SERVED IS A CONDITION, NOT A FAULT. Every read and write a
-// seat or a person makes of the tracker and the knowledge base goes through
-// the estate's router, which answers [estate.ErrUnserved] once every data node
-// it asked ran nothing — a copy out of service, a peer restarting, a node that
-// did not answer. That clears when a data node serves again, so each tool
-// answers `unavailable` and invites the retry, in fixed words: the router's
-// detail names nodes and their faults. It wrapped no sentinel the rule knew,
-// so every one of these was `internal_error` and told the caller that trying
-// again could not help.
+// AN ESTATE NOBODY SERVED IS A CONDITION, NOT A FAULT. Every tracker and
+// knowledge-base read or write goes through the estate's router, which answers
+// [estate.ErrUnserved] once every data node it asked ran nothing. That clears
+// when a data node serves again, so each tool answers `unavailable` and
+// invites the retry, in fixed words: the router's detail names nodes and their
+// faults.
 //
 // Mutation: drop the ErrUnserved arm from [builtin.Condition] and every case
 // goes red; tell it in the error's own words and the detail check does.
@@ -78,14 +75,12 @@ func TestAnEstateNobodyServedIsACondition(t *testing.T) {
 }
 
 // A REQUEST NO DATA NODE'S BUILD READS WHOLE IS A CONDITION AN ADMINISTRATOR
-// CLEARS. Mid-upgrade, a data node of an older build refuses a request carrying
-// a key it does not declare rather than run it short, and where none of a newer
-// build is up the router answers [estate.ErrUnknownKeys] over the walk's
-// [estate.ErrUnserved]. Read as the estate nobody served it wraps, it was told
-// as a wait — "try again shortly" — which nothing but finishing the upgrade
-// clears: so it is a condition of its own, recorded as one, carrying no
-// Retry-After, and told to a person as the administrator's to act on, in words
-// that carry none of the router's.
+// CLEARS. Mid-upgrade, an older data node refuses a request carrying a key it
+// does not declare rather than run it short, and with no newer one up the
+// router answers [estate.ErrUnknownKeys] over the walk's [estate.ErrUnserved].
+// No wait clears it, only finishing the upgrade: so it is a condition of its
+// own, with no Retry-After, told to a person as the administrator's to act on,
+// in none of the router's words.
 //
 // Mutation: read an estate nobody served before this refusal in the
 // classification and every assertion here goes red.
@@ -109,10 +104,9 @@ func TestARequestNoDataNodesBuildReadsWholeIsAConditionAnAdministratorClears(t *
 
 // THE FLEET'S TWO BUILDS ARE TOLD IN THE DIRECTION THEY WERE MET. A request no
 // data node's build reads whole ran nowhere; an answer this node's build cannot
-// read whole was given by a data node that ran the request, and it is this node
-// that is behind. One clause for both told a model that nothing ran where the
-// read had run — so each says its own, and the answer's wraps no walk nobody
-// served, since one node served it.
+// read whole came from a data node that ran it, so this node is behind and
+// nothing may be said not to have run. The answer's error wraps no
+// [estate.ErrUnserved], since one node served it.
 //
 // Mutation: tell the request's clause for both directions and the answer is
 // said to have run nowhere.
@@ -161,15 +155,12 @@ func assertUnserved(t *testing.T, what string, got tools.Result) {
 	}
 }
 
-// A PAGE WRITE NOBODY ANSWERED FOR IS AN UNKNOWN, NEVER A FAULT. A page write
-// naming no operation of its own — an operator's assistant's, which carries no
-// key — is sent to ONE data node, since a second would be a second write; a
-// node that never answers may have run it, so the router answers
-// [estate.ErrOutcomeUnknown]. That was a fault — `internal_error`, "do not make
-// it again … say it could not be made" — which is the one thing it is not.
-// Answered as an unknown, it says neither done nor failed, and to read the
-// page before writing again; and a save whose RENAME met it says the edit
-// landed and the rename may have.
+// A PAGE WRITE NOBODY ANSWERED FOR IS AN UNKNOWN, NEVER A FAULT. An unkeyed
+// page write (an operator's assistant's) goes to ONE data node, since a second
+// would be a second write; one that never answers may have run it, so the
+// router answers [estate.ErrOutcomeUnknown]. The tool says neither done nor
+// failed and to read the page before writing again; a save whose RENAME met it
+// says the edit landed and the rename may have.
 //
 // Mutation: drop the arm from pageWriteFailure and the first half goes red;
 // drop the UnknownOf branch in save_page's rename and the second does.
@@ -222,26 +213,18 @@ func TestAPageWriteNobodyAnsweredForIsAnUnknown(t *testing.T) {
 	}
 }
 
-// A WRITE NO DATA NODE ANSWERED IS AN UNKNOWN, NEVER "NOT MADE".
-//
-// A tracker write carries its caller's operation, so the estate's router asks
-// every data node under it before giving up — and when none answered, each that
-// stayed silent may have run it, so the router answers
-// [estate.ErrOutcomeUnknown]. The mapper fell through to its remainder for it:
-// "did not land … The change was NOT made", the one sentence nobody can say,
-// and the one a seat acts on by doing it again by other means. One whose
-// caller's context ended while it waited carries the deadline too, and the
-// condition's "it ran out of time" said the same thing.
-//
-// So every place a write's error is told says it in the unknown's own fixed
-// words, with the retry that settles it for THIS caller — the same call for a
-// seat, the op_id for an operator — and never the router's node list: the
-// write itself, the dependency write after a filed item, and the label
-// declaration before one.
+// A WRITE NO DATA NODE ANSWERED IS AN UNKNOWN, NEVER "NOT MADE". A tracker
+// write carries its operation, so the router asks every data node and, when
+// none answered (or the caller's deadline ended first), answers
+// [estate.ErrOutcomeUnknown]: any of them may have run it, and "NOT made" is
+// what a seat acts on by doing it again. The write, the dependency write after
+// a filed item and the label declaration before one each say it in the
+// unknown's fixed words, with THIS caller's retry (the same call for a seat,
+// the op_id for an operator), never the router's node list or "ran out of time".
 //
 // Mutation: drop the arm from writeFailure and the first two cases go red;
-// drop toldOf's arm and the dependency case does; drop the arm from
-// labelFailure and the declaration case does.
+// drop toldOf's arm and the dependency case does; drop labelFailure's arm and
+// the declaration case does.
 func TestAWriteNoDataNodeAnsweredIsAnUnknown(t *testing.T) {
 	t.Parallel()
 	for name, unanswered := range map[string]error{
@@ -348,13 +331,10 @@ func assertUnanswered(t *testing.T, what string, got tools.Result) {
 	}
 }
 
-// A KEYED PAGE WRITE NOBODY ANSWERED IS OFFERED ITS OWN REPEAT.
-//
-// A turn's comment carries its key, so the router asks every data node before
-// it answers [estate.ErrOutcomeUnknown] — and the same call again is the same
-// comment, the safe retry. The answer told every caller that writing it again
-// makes it twice, which is true only of a caller with no key (an operator's
-// assistant over MCP), whose answer still says to read first.
+// A KEYED PAGE WRITE NOBODY ANSWERED IS OFFERED ITS OWN REPEAT: a turn's
+// comment carries its key, so the same call again is the same comment. Only a
+// caller with no key (an operator's assistant over MCP) is told to read first,
+// since its repeat is a second comment.
 //
 // Mutation: pass the comment tool's unkeyed sentence to pageWriteFailure and
 // the turn's case goes red.

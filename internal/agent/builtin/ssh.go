@@ -26,23 +26,17 @@ import (
 	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
-// The SSH tools (ADR-0107): a seat's reach into the company's servers through
-// certificates the engine signs at use.
-//
-// ssh_read runs a command on one of the seat's hosts as its read user, whose
-// every command the server's own gate holds to its read allowlist; no person
-// is asked. ssh_operate asks a person before every call, offering Allow once
-// and Deny alone, and only an administrator or an approver the integration
-// names answers it, at a fresh step-up; once approved, the engine signs a
-// certificate whose force-command is exactly the approved command and runs it
-// itself. Neither ever puts a key or a certificate in a box.
-//
-// IN A TURN SOMEBODY WOKE, FOR THE COMPANY ALONE: a turn woken by a person of
-// the company, a colleague seat, a schedule or the engine may use the seat's
-// grant; one woken by somebody the company does not know reaches no server
-// ([companyRequester]). Output is fenced as text a server printed, at external
-// trust, and returns only into the turn that ran it: the audit keeps its sizes
-// and digest, never the text.
+// The SSH tools (ADR-0107; package doc, "The company's servers") reach a seat's
+// servers through certificates the engine signs at use. ssh_read runs as the
+// host's read user, held by the server's own gate to its read allowlist; no
+// person is asked. ssh_operate asks before every call (Allow once or Deny,
+// answered by an administrator or the integration's named approver at a fresh
+// step-up), then signs a certificate whose force-command is exactly the
+// approved command and runs it itself. Neither puts a key or certificate in a
+// box. A turn woken by a company person, a colleague seat, a schedule or the
+// engine may use the seat's grant; one woken by a stranger reaches no server
+// ([companyRequester]). Output is fenced at external trust and returns only
+// into the turn that ran it: the audit keeps its sizes and digest, never text.
 
 // The SSH tools' names: each is its authority row's action.
 const (

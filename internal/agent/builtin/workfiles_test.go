@@ -282,11 +282,9 @@ func TestASeatWritesReadsListsAndRemovesAFile(t *testing.T) {
 }
 
 // A SEAT'S FILE LISTING IS A PAGE ITS ANSWER CARRIES, whatever the call asks
-// for: fifty files by default and a hundred at most, each page with the next
-// to go on from. The tracker's own page — two hundred by default, a thousand
-// at most — is past what one tool answer carries ([builtin.ToolAnswerBytes]),
-// so a listing of a project of three hundred files was refused as too large,
-// asked for nothing at all.
+// for: fifty files by default and a hundred at most, each page with a next.
+// The tracker's own page (two hundred by default, a thousand at most) is past
+// what one tool answer carries ([builtin.ToolAnswerBytes]).
 //
 // Mutation: hand the tracker the limit the call asked for again, and the rows
 // asking for no page and for more than a page are refused as too large.
@@ -430,13 +428,12 @@ func TestAMissingFileIsNamedAndAFailedReadIsNot(t *testing.T) {
 	}
 }
 
-// A FILE TOOL ABOUT WHAT IS NOT THERE ANSWERS not_found: a listing of a
-// project that is not there, a read of a project or a file that is not there,
-// and a removal of a file that is not there are each ABOUT what is missing, so
-// each is refused not_found, with the tracker's own sentinel beneath it. A
-// copy that only NAMES the file answers the same words invalid
-// (TestACopyNamingWhatIsNotThereIsTheArgumentToChange): the class is each
-// call's own statement, which is why fileReadFailure takes it from its caller.
+// A FILE TOOL ABOUT WHAT IS NOT THERE ANSWERS not_found, with the tracker's
+// sentinel beneath it: a listing of a missing project, a read of a missing
+// project or file, a removal of a missing file. A copy that only NAMES the file
+// answers the same words invalid
+// (TestACopyNamingWhatIsNotThereIsTheArgumentToChange), so fileReadFailure
+// takes the class from its caller.
 //
 // Mutation: pass invalid from the listing, the read or the removal and that
 // tool's rows go red.
@@ -476,10 +473,8 @@ func TestAFileToolAboutWhatIsNotThereAnswersNotFound(t *testing.T) {
 	}
 }
 
-// A PATH THE TRACKER REFUSES IS TOLD IN THE TRACKER'S WORDS, without the
-// "worklet:" its error opens with: the read, write and remove tools printed the
-// path refusal whole, so a model read the package's name in front of what to
-// change.
+// A PATH THE TRACKER REFUSES IS TOLD IN THE TRACKER'S WORDS by the read, write
+// and remove tools, without the "worklet:" its error opens with.
 //
 // Mutation: print NormalizeFilePath's error with %v again in normalizePath and
 // every row goes red.
@@ -549,10 +544,8 @@ func TestCorruptContentIsNotAReadToRetry(t *testing.T) {
 }
 
 // WRITING WHAT THE FILE ALREADY HOLDS STORES NOTHING: every upload is an
-// object of its own, so a seat re-saving an unchanged file would upload all of
-// it again, and the store would hold both copies until the collector's first
-// pass after the replaced one is a day old. A change of content, or of type,
-// is written.
+// object of its own, so a re-save would store a second copy until the
+// collector removes the first. A change of content, or of type, is written.
 func TestWritingTheSameContentAgainStoresNothing(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()
@@ -585,14 +578,11 @@ func TestWritingTheSameContentAgainStoresNothing(t *testing.T) {
 }
 
 // A FILE THE OBJECT STORE HAS NO ROOM FOR IS REFUSED AS FULL: the store
-// refuses the same content the same way until an operator makes room, so the
-// seat is told that, with the room the store names — never "try again
-// shortly", which had it upload the same bytes into the same full bucket —
-// under the class a person's surface answers 507 rather than a 503 asking it
-// back. Nothing is recorded, and the store's own words, naming its bucket,
-// stay in the node's log. Over the fleet's own bucket's twin, and over the
-// store itself on S3 whose provider has no room (MinIO's drives at their
-// floor), through the production backend.
+// refuses the same content until an operator makes room, so the seat is told
+// that, with the room the store names, never "try again shortly", under the
+// class a person's surface answers 507. Nothing is recorded, and the store's
+// own words stay in the node's log. Over the nats twin, and over the
+// production backend on S3 with no room (MinIO's drives at their floor).
 //
 // Mutation: answer the full store through the catch-all (`unavailable`, "Try
 // again shortly") and this fails on the class and on the sentence; splice a
@@ -659,11 +649,10 @@ func TestAFileTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
 	}
 }
 
-// AN UPLOAD TOO OLD TO RECORD IS ONE THE SAME CALL FIXES: the call uploads the
-// content anew, under a fresh key — so the seat is told to make it again,
-// rather than that the write failed. Its class is the upload's state, a
-// conflict, as the artifacts' stale upload and the file route's own 409 are:
-// no wait changes it.
+// AN UPLOAD TOO OLD TO RECORD IS ONE THE SAME CALL FIXES, uploading anew under
+// a fresh key, so the seat is told to make it again. Its class is a conflict,
+// as the artifacts' stale upload and the file route's 409 are: no wait
+// changes it.
 func TestAnUploadTooOldToRecordIsMadeAgain(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()
@@ -682,11 +671,10 @@ func TestAnUploadTooOldToRecordIsMadeAgain(t *testing.T) {
 }
 
 // A FILE IS TAKEN OUT OF A PROJECT BY ITS LEAD, and kept in it by anybody who
-// files work: removing one deletes its content, which is the destructive
-// class's question — and it is asked on the project the call SETTLED, a call
-// naming none being about the caller's own team's, which the gate could not
-// know. A colleague who leads nothing is refused before anything is written,
-// in the authority's own words.
+// files work: removing deletes its content, the destructive class's question,
+// asked on the project the call SETTLED (a call naming none is about the
+// caller's own team's). A colleague who leads nothing is refused before
+// anything is written, in the authority's own words.
 func TestAFileIsRemovedByItsProjectsLeadOnly(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -729,10 +717,9 @@ func TestAFileIsRemovedByItsProjectsLeadOnly(t *testing.T) {
 // A FAILED PUT IS TOLD BY ITS CAUSE: a store that did not answer is a
 // condition, invited back with "try again shortly", and a failure the store
 // classed as neither that nor full is a fault of the node, as every other
-// surface storing a file answers it (it was "try again shortly" here and a
-// fault on the artifact tools). A full store is its own class
-// (TestAFileTheStoreHasNoRoomForIsRefusedAsFull). Mutation: answer a
-// fault as a condition, and its row fails.
+// surface storing a file answers it. A full store is its own class
+// (TestAFileTheStoreHasNoRoomForIsRefusedAsFull). Mutation: answer a fault as
+// a condition, and its row fails.
 func TestAFailedPutIsToldByItsCause(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {

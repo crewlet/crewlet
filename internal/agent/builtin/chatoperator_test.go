@@ -24,11 +24,10 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The chat gestures only a person makes, as the operator surface serves them —
-// to the dashboard's act transport and to a person's own assistant. Their
-// receipts' outcome and position and the same operations on a retry are held
-// with every other operator write in actanswer_test.go; these cases hold what
-// each one hands the store, and what each refuses before it reaches it.
+// The chat gestures only a person makes, as the operator surface serves them
+// (the dashboard's act transport, a person's own assistant). Their receipts and
+// retries are held in actanswer_test.go; these cases hold what each hands the
+// store, and what each refuses before reaching it.
 
 // operatorChatActor is what the operator surface's chat actor builds for a
 // token bound to a person: the human seat as the handle every message carries,
@@ -117,11 +116,10 @@ func callOperatorAs(ctx context.Context, t *testing.T, tool tools.Callable,
 	return got
 }
 
-// invokeOperator makes one call as the operator surface's transports do —
-// through tools.Invoke, which holds it to the tool's schema before the tool
-// runs (ADR-0059) — as the person jane holding every grant, and fails t when
-// that check refused it, so what comes back is the tool's own answer to a
-// call the check admitted.
+// invokeOperator makes one call as the operator surface's transports do,
+// through tools.Invoke's schema check (ADR-0059), as jane holding every grant,
+// and fails t when the check refused it: what comes back is the tool's own
+// answer to a call the check admitted.
 func invokeOperator(t *testing.T, tool tools.Callable, raw map[string]any) tools.Result {
 	t.Helper()
 	got, refused, err := tools.Invoke(personBoundTo("jane", iam.AllGrants...),
@@ -138,11 +136,10 @@ func invokeOperator(t *testing.T, tool tools.Callable, raw map[string]any) tools
 
 // EVERY GESTURE HANDS THE STORE WHAT THE PERSON ASKED, AS THE PERSON.
 //
-// A field dropped between the call and the store is a setting a person
-// believes they made: a member missing from a private room's founding set is
-// somebody who cannot read it, and an empty topic read as "no change" is a
-// topic that will not clear. And the actor is the operator surface's, every
-// time — the author field is never something a call can name.
+// A field dropped on the way is a setting a person believes they made: a
+// member missing from a private room's founding set cannot read it, and an
+// empty topic read as "no change" will not clear. The actor is always the
+// operator surface's: no call can name the author.
 func TestAPersonsChatGesturesReachTheStoreAsAsked(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -201,8 +198,7 @@ func TestAPersonsChatGesturesReachTheStoreAsAsked(t *testing.T) {
 		t.Errorf("edit_message handed the store %+v", edit)
 	}
 	// AND THE LINKS CHANGE ONLY WHEN NAMED: an edit that leaves them out
-	// keeps them — the typo fix that used to remove every one — while a
-	// named list, an empty one included, replaces them.
+	// keeps them, while a named list, an empty one included, replaces them.
 	if edit := f.edits[0]; edit.Links != nil {
 		t.Errorf("an edit naming no links handed the store %v, which replaces them",
 			*edit.Links)
@@ -240,12 +236,11 @@ func TestAPersonsChatGesturesReachTheStoreAsAsked(t *testing.T) {
 
 // WHAT A GESTURE CANNOT READ IS REFUSED NAMING IT, AND REACHES NOTHING.
 //
-// Each of these used to be the shape that is silently read as something else:
-// a list with an entry nobody could read is a member left out of a private
-// room, an `archived: "yes"` is no archive at all, and an update naming no
-// field is a record on the log for a change nobody made. A null is nothing
-// sent, as the check at the surface reads it (ADR-0059): a membership sent as
-// null emptied the room, and an archive sent as null names no change.
+// Each is a shape otherwise silently read as something else: an unreadable
+// list entry is a member left out of a private room, `archived: "yes"` no
+// archive, and an update naming no field a log record of no change. A null is
+// nothing sent, as the check at the surface reads it (ADR-0059): a null
+// membership must not empty the room, and a null archive names no change.
 func TestAPersonsChatGestureThatCannotBeReadIsRefusedNamingIt(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -301,21 +296,16 @@ func TestAPersonsChatGestureThatCannotBeReadIsRefusedNamingIt(t *testing.T) {
 
 // A MEMBERSHIP IS READ AS THE CHECK AT THE SURFACE ADMITS IT (ADR-0059).
 //
-// Every call reaches these tools through tools.Invoke, which holds it to the
-// tool's schema before the tool runs. An entry the schema declared an object
-// alone was a bare handle refused there as a misread, though the tool read it,
-// its description offered it and the dashboard's new-room dialog sends
-// nothing else. So each spelling a model or a screen writes is admitted by the
-// check AND read by the tool as the same members: bare handles, objects, the
-// two together, the one string a model sends where a list belongs, and a
-// list carrying a null, which is a member not named. A value that names
-// nobody at all is the one the tool refuses after the check admitted it, and
-// only where it would empty a room (TestOnlyTheEmptyListEmptiesARoom).
+// Every call passes tools.Invoke's schema check first, so each spelling a
+// model or a screen writes (the dashboard's new-room dialog sends bare
+// handles) is admitted by the check AND read by the tool as the same members:
+// bare handles, objects, both, one string where a list belongs, and a null
+// entry, a member not named. Only a value naming nobody is refused after the
+// check, where it would empty a room (TestOnlyTheEmptyListEmptiesARoom).
 //
-// Mutation: declare an entry an object alone and the bare handles are refused
-// as misread; read the list by a rule of its own that takes no single string,
-// and "bob, ana" is refused after the check admitted it; read a null entry as
-// a handle, and it is refused as an entry naming none.
+// Mutation: declare an entry an object alone and bare handles are refused as
+// misread; read the list without the single string and "bob, ana" is refused;
+// read a null entry as a handle and it is refused as naming none.
 func TestAMembershipIsReadAsTheCheckAdmitsIt(t *testing.T) {
 	t.Parallel()
 	bob, ana := chatlet.Member{Handle: "bob"}, chatlet.Member{Handle: "ana"}
@@ -353,14 +343,11 @@ func TestAMembershipIsReadAsTheCheckAdmitsIt(t *testing.T) {
 
 // ONLY THE EMPTY LIST EMPTIES A ROOM.
 //
-// set_channel_members states the whole membership, so a value naming nobody
-// takes everybody out, and a private room emptied has nobody left who can
-// read it or set its members again. The check at the surface admits a string
-// where the list belongs (ADR-0059), and one naming no handle reads as an
-// empty list, as a list of nulls does; each is likelier a caller that meant
-// to send nothing than one that meant to empty the room. So the tool empties
-// a room for `[]` alone, and refuses every other value naming nobody with
-// nothing written, saying how to empty it.
+// set_channel_members states the whole membership, and an emptied private
+// room has nobody left to read it or set its members again. A string naming
+// no handle and a list of nulls (both admitted by the check, ADR-0059) are
+// likelier a caller meaning to send nothing, so only `[]` empties a room;
+// every other value naming nobody is refused, nothing written, saying how.
 //
 // Mutation: drop the tool's empty-list test, and "", " , " and [null] each
 // empty the room, answered `applied`.
@@ -403,13 +390,12 @@ func TestOnlyTheEmptyListEmptiesARoom(t *testing.T) {
 
 // THE MEMBERSHIP A CALLER READ REACHES THE STORE AS ITS EXPECTATION.
 //
-// `expected_members` is what makes a whole set stated from a screen safe: the
-// store refuses the write when the room moved since that read
-// (chatlet.Store.SetMembers). So absent is no expectation, a list is handed
-// over exactly as read (following included), the empty list expects an empty
-// room, and a value naming nobody by mistake is refused rather than read as
-// an empty room, which would refuse every change against a room with people
-// in it.
+// `expected_members` makes a whole set stated from a screen safe: the store
+// refuses the write when the room moved since that read
+// (chatlet.Store.SetMembers). Absent is no expectation, a list is handed over
+// exactly as read (following included), `[]` expects an empty room, and a
+// value naming nobody is refused rather than read as an empty room, which
+// would refuse every change to a room with people in it.
 //
 // Mutation: drop the argument, read it as members, or read a blank string as
 // the empty list, and a case here fails.
@@ -462,12 +448,9 @@ func TestTheMembershipACallerReadIsHandedOverAsItsExpectation(t *testing.T) {
 
 // A MEMBERSHIP STATED AGAINST MEMBERS THAT CHANGED IS TOLD AS THAT.
 //
-// The store refuses a whole set whose expectation the room has moved past
-// (chatlet.ErrMembersChanged): a stale read, which the caller cures by reading
-// the members again. The conflict sentence ("the room kept changing under this
-// write") is not what happened, and a person approving or pressing the change
-// is owed their own words for it, so the tool says which read to make again
-// and carries the person's refusal.
+// chatlet.ErrMembersChanged is a stale read the caller cures by reading the
+// members again, not the generic conflict ("kept changing under this write"),
+// so the tool names the read to make again and carries the person's refusal.
 //
 // Mutation: drop the ErrMembersChanged case, and the generic sentence and no
 // person's words come back.
@@ -493,17 +476,14 @@ func TestAMembershipStatedAgainstChangedMembersSaysSo(t *testing.T) {
 }
 
 // A NULL IS NOTHING SENT, to a gesture as to the check at the surface
-// (ADR-0059), so it changes nothing it names: the check admits it as absent,
-// and read as named it cleared a room's topic, removed every link of a
-// message and ended a do-not-disturb. The empty value is still the one that
-// clears, which TestAPersonsChatGesturesReachTheStoreAsAsked and
-// TestAPersonsReadStateIsWrittenAsStated hold. A null position in a flush's
-// cursors is a room not named, so the rest of the flush is recorded, where
-// it was refused whole after the check had admitted it.
+// (ADR-0059), so it changes nothing: read as named, it would clear a room's
+// topic, remove a message's links or end a do-not-disturb. The empty value
+// still clears (TestAPersonsChatGesturesReachTheStoreAsAsked,
+// TestAPersonsReadStateIsWrittenAsStated). A null position in a flush's
+// cursors is a room not named, so the rest of the flush is recorded.
 //
-// Mutation: read any of them as named whenever its key is present, and the
-// change it makes is named here; read the cursors without dropping a null
-// position, and the flush naming one is refused.
+// Mutation: read any of them as named whenever its key is present, or keep a
+// null cursor position, and a case here fails.
 func TestANullIsNothingSent(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -565,9 +545,9 @@ func TestANullIsNothingSent(t *testing.T) {
 
 // A GESTURE WHOSE OUTCOME IS UNKNOWN IS NEITHER DONE NOR FAILED.
 //
-// The settings, the members, the words and the tombstone are each STATED, so
-// their repeat is offered as harmless. A room's create ADDS, so its answer
-// says to look first — and why a second create is safe if the first landed.
+// Settings, members, words and the tombstone are STATED, so a repeat is
+// offered as harmless. A create ADDS, so its answer says to look first, and
+// why a second create is safe if the first landed.
 func TestAPersonsChatGestureWhoseOutcomeIsUnknownSaysSo(t *testing.T) {
 	t.Parallel()
 	const op = "01a11a61-ff0c-77c1-8cb1-7b9e5497550e"
@@ -630,14 +610,13 @@ func (f fakeCursors) AdvanceChatRead(_ context.Context, handle string,
 
 // A PERSON'S READ STATE IS WRITTEN AS THEY STATED IT, AND ANSWERED AS THEIRS.
 //
-// Three facts travel and each has its own "absent": a cursor only moves
-// forward, a mute and an unmute each name the ROOMS whose state changes — so a
-// room neither names keeps its own, and muting one needs nothing read first —
-// and an empty do-not-disturb ends it. A cursor is a packed log position whose
-// generation sits above bit 40, so it is read exactly rather than through a
-// float. The record is the caller's OWN, kept under the seat the call acts as,
-// and the answer is that state, named by its person, applied at no position,
-// and never the reconcile's own stamp.
+// Each fact has its own "absent": a cursor only moves forward, a mute and an
+// unmute name the ROOMS that change (a room neither names keeps its state, and
+// muting needs no read first), and an empty do-not-disturb ends it. A cursor
+// is a packed log position with its generation above bit 40, so it is read
+// exactly, never through a float. The record is kept under the seat the call
+// acts as; the answer is that state, named by its person, applied at no
+// position, without the reconcile's stamp.
 func TestAPersonsReadStateIsWrittenAsStated(t *testing.T) {
 	t.Parallel()
 	var flushed []flush
@@ -695,9 +674,8 @@ func TestAPersonsReadStateIsWrittenAsStated(t *testing.T) {
 		t.Fatalf("the answer carries no read state: %s", got.Output)
 	}
 	// NAMED BY ITS PERSON, as the push and the rail's `read` are: the screen
-	// that flushed applies this, and a state that did not say whose it is
-	// could not be told from the one a tab held for whoever its credential
-	// named before.
+	// applying it must tell it from a state held for a credential's earlier
+	// person.
 	if read["handle"] != "jane" {
 		t.Errorf("the answer's read state names %v, want the bound person: %s",
 			read["handle"], got.Output)
@@ -737,11 +715,9 @@ func TestAPersonsReadStateIsWrittenAsStated(t *testing.T) {
 
 // A MUTE NAMES ONE ROOM AND KEEPS EVERY OTHER, through the real merge.
 //
-// The screen's toggle sends the one room it is on. A tool that sent the list —
-// or a merge that took what it was sent as the list — would have a person who
-// muted one room find every other room they had muted unmuted, and a fresh tab
-// that has seen no state could not mute anything without reading the list
-// first.
+// The screen's toggle sends the one room it is on. Sending, or merging as, the
+// whole list would unmute every other room the person had muted, and a fresh
+// tab could not mute without reading the list first.
 func TestAMuteNamesOneRoomAndKeepsTheRest(t *testing.T) {
 	t.Parallel()
 	tool := operatorChat(t, newFakeChat(), coordmem.NewFleet(), nil)[chatlet.MarkChatReadTool]
@@ -780,7 +756,7 @@ func TestAMuteNamesOneRoomAndKeepsTheRest(t *testing.T) {
 // place all land in one call and come back in the answer the screen applies,
 // and a later call about one of them leaves the rest as they were.
 //
-// Mutation: drop any of the new arguments from the delta and its field comes
+// Mutation: drop any of these arguments from the delta and its field comes
 // back empty.
 func TestTheReadersMarksAreWrittenAsStated(t *testing.T) {
 	t.Parallel()
@@ -897,13 +873,11 @@ func TestAReadStateThatCannotBeWrittenIsRefusedWithItsClass(t *testing.T) {
 			"saying nothing was recorded", got)
 	}
 
-	// A FLUSH THE MERGE REFUSED is the caller's to change, the same way
-	// every time it is sent — so it is invalid, not the store's condition,
-	// and told in the merge's own words rather than behind the Go package's
-	// prefix, which says "refused" a second time inside a refusal.
+	// A FLUSH THE MERGE REFUSED is refused the same way every time, so it is
+	// invalid, not the store's condition, told in the merge's own words
+	// without the Go package's prefix (a second "refused").
 	//
-	// Mutation: drop the ErrInvalidReadState arm and it reads as the store
-	// that could not take it, `unavailable`.
+	// Mutation: drop the ErrInvalidReadState arm and it reads `unavailable`.
 	merge := fmt.Errorf("%w: room %s is both muted and unmuted in one flush",
 		coord.ErrInvalidReadState, chatRoomID)
 	got = callOperator(t, operatorChat(t, newFakeChat(), fakeCursors{err: merge},
@@ -924,11 +898,10 @@ func TestAReadStateThatCannotBeWrittenIsRefusedWithItsClass(t *testing.T) {
 // A FLUSH WHOSE ANSWER WAS LOST MAY HAVE LANDED, AND IS NEVER REPORTED AS ONE
 // THAT DID NOT.
 //
-// The read state is a compare-and-set in the coordination store, and a put
-// whose reply never came is [coord.ErrWriteUnknown]: answering it "nothing
-// was recorded" tells a person whose badge cleared that it did not, and the
-// act transport renders that as a refusal the dashboard retries as one. It is
-// `unknown` — and it says the repeat is safe, because the merge is idempotent.
+// A read-state put whose reply never came is [coord.ErrWriteUnknown]:
+// "nothing was recorded" would tell a person whose badge cleared that it did
+// not, rendered as a refusal the dashboard retries. It is `unknown`, and says
+// the repeat is safe because the merge is idempotent.
 //
 // Mutation: drop the ErrWriteUnknown arm and it reads as "nothing was
 // recorded".
@@ -950,10 +923,9 @@ func TestAFlushWhoseAnswerWasLostIsUnknown(t *testing.T) {
 		}
 	}
 
-	// AND A FLUSH THE STORE'S OWN MERGE REFUSES IS THE CALLER'S TO CHANGE.
-	// One room past the mute cap is refused the same way however often it
-	// is sent, so "try again" — the node's class — is advice nobody can
-	// follow. Through the real merge, over the coordination store's twin.
+	// AND A FLUSH THE STORE'S OWN MERGE REFUSES IS THE CALLER'S TO CHANGE:
+	// one room past the mute cap is refused however often it is sent, so the
+	// node's "try again" is advice nobody can follow. Through the real merge.
 	muted := make([]any, coord.MaxReadCursors+1)
 	for i := range muted {
 		muted[i] = fmt.Sprintf("room-%d", i)
@@ -975,10 +947,8 @@ func TestAFlushWhoseAnswerWasLostIsUnknown(t *testing.T) {
 	if strings.Contains(got.Output, "try again") {
 		t.Errorf("a refused flush told its caller to try again: %s", got.Output)
 	}
-	// AND IN THE MERGE'S OWN WORDS: this answer is read by the model that
-	// made the call for the person who muted those rooms, and a Go
-	// package's prefix — with a second "refused" inside the first — is not
-	// an instruction anybody can follow.
+	// AND IN THE MERGE'S OWN WORDS: a model reads this for the person, and a
+	// Go package's prefix with a second "refused" is no instruction.
 	if strings.Contains(got.Output, "coord:") ||
 		strings.Count(got.Output, "refused") != 1 {
 
@@ -986,11 +956,10 @@ func TestAFlushWhoseAnswerWasLostIsUnknown(t *testing.T) {
 	}
 }
 
-// A CURSOR IS A PERSON'S. An agent is woken rather than reading, and a
-// surface that handed an agent's identity to this tool would be recording
-// attention nobody paid — refused by the table first (the verb is a person's)
-// and by the tool itself for a surface wired without the table, because the
-// coordination store keys a read state by whatever handle it is given.
+// A CURSOR IS A PERSON'S: an agent is woken rather than reading, so its read
+// state is attention nobody paid. The table refuses it (the verb is a
+// person's), and so does the tool for a surface wired without the table,
+// since the coordination store keys a read state by whatever handle it gets.
 //
 // Mutation: drop the tool's IsHuman check and the agent's read state is
 // written behind an allow-all decision.

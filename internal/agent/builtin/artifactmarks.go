@@ -17,9 +17,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A PERSON'S MARKS OVER THEIR COMMENT NOTICES: `artifact_mark_inbox`, the
+// artifact_mark_inbox is a person's marks over their comment notices: the
 // artifacts log's `mark_inbox`, decided on the person's own reader subject
-// with the caller's `seen` floor. A person's alone: a seat has no inbox.
+// with the caller's `seen` floor. A seat has no inbox.
 
 // ArtifactMarkInboxTool is the tool's name, its authority row's action.
 const ArtifactMarkInboxTool = string(authz.ActionArtifactMarkInbox)
@@ -101,7 +101,7 @@ func (t *artifactMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	// A PERSON'S OWN, by the human seat they hold: the table admits nobody
+	// A person's own, by the human seat they hold: the table admits nobody
 	// else, and the writer refuses anybody else again.
 	if c.actor.Kind != iam.ActorHuman || c.principal.Seat == "" {
 		return refusedBy(tools.RefusalForbidden, artifactsdomain.ErrInvalid, fmt.Sprintf("%s marked nothing: "+

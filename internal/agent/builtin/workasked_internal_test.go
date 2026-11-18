@@ -12,14 +12,11 @@ import (
 
 // AN AUTHORIZER THAT CONTRADICTS ITSELF IS A FAULT, NOT A REFUSAL.
 //
-// A comment that is no answer is refused to somebody admitted only as the
-// person an ask names by asking the table again on the bare kind, whose own
-// refusal names the tracker. An authorizer that ADMITS there has answered one
-// question about one principal two ways within one call — which the real table
-// cannot — so the call is this node's fault: classed internal_error, its words
-// in the log. It was a refusal made up on the spot, ErrRefused with no
-// decision behind it, which every surface had to render as `unauthorized`
-// naming no reason and no permission.
+// A non-answer comment from somebody admitted only as the person an ask names
+// is refused by asking the table again on the bare kind. An authorizer that
+// ADMITS there has answered one question about one principal two ways in one
+// call, which the real table cannot, so the call is this node's fault: classed
+// internal_error, never a refusal (ErrRefused) naming no reason or permission.
 //
 // Mutation: answer the contradiction with authorityRefusal(…, ErrRefused) again
 // and this goes red.

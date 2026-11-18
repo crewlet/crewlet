@@ -16,27 +16,16 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// AN OPERATOR'S CALL IS AN OPERATION THE OPERATOR CAN BRING BACK.
+// AN OPERATOR'S CALL IS AN OPERATION THE OPERATOR CAN BRING BACK. A seat's
+// ids derive from its turn; the operator has none, so a repeat without its
+// op_id is a new operation (a second item), and only the op_id brought back
+// finishes an `unknown` or a stopped gesture.
 //
-// # What was wrong
-//
-// A seat's writes derive their operation ids from its turn, so the same call
-// made again — a re-run, or a repeat after an `unknown` — is the same
-// operation, and the ledger answers what landed. The operator's surface has no
-// turn, so every call minted every id afresh: the one thing an `unknown` or a
-// gesture stopped part of the way through asks for, the same operation again,
-// could not be asked for at all. And the failure text told an operator's
-// assistant to "call create_work_item again with exactly the same arguments" —
-// which, under a fresh id, derives a fresh task id and files a second item.
-//
-// # What is asserted
-//
-// The OPERATION IDS and the DERIVED IDENTITIES, not rows: the writers here are
-// fakes, so the ledger that collapses is not in this suite. Two equal ids are
-// two writes any ledger collapses, which is the property.
+// These cases assert the operation ids and derived identities, not rows: the
+// writers are fakes, and two equal ids are two writes any ledger collapses.
 
-// retrySurface is the operator's own catalogue over the fake tracker — the
-// surface the op_id belongs to — with every write seam the retry cases reach.
+// retrySurface is the operator's catalogue over the fake tracker, with every
+// write seam the retry cases reach.
 func retrySurface(t *testing.T, trk *fakeTracker, views builtin.ViewWriter) *tools.Registry {
 	t.Helper()
 	reg := tools.NewRegistry()
@@ -65,9 +54,8 @@ func answerOf(t *testing.T, got tools.Result) map[string]any {
 	return out
 }
 
-// answeredOp is the op_id an operator's answer carried: a receipt's field, or
-// the one a failed answer tells the caller to bring back — held to the rule
-// the surface holds a brought-back id to.
+// answeredOp is the op_id an operator's answer carried (a receipt's field, or
+// the one a failed answer names), held to statelog.CheckCallerOpID.
 func answeredOp(t *testing.T, got tools.Result) string {
 	t.Helper()
 	var receipt map[string]any
@@ -121,18 +109,17 @@ func TestAnOperatorsCreateBroughtBackIsTheSameCreate(t *testing.T) {
 			"second item", trk.created[1].ID, trk.created[0].ID)
 	}
 
-	// AND A CALL THAT BRINGS NOTHING BACK IS A NEW OPERATION, or an
-	// operator could file exactly one item per title for ever.
+	// A CALL THAT BRINGS NOTHING BACK IS A NEW OPERATION, or an operator
+	// could file one item per title for ever.
 	callNoTurn(t, reg, builtin.CreateWorkItemTool, args)
 	if trk.opIDs[2] == trk.opIDs[0] || trk.created[2].ID == trk.created[0].ID {
 		t.Errorf("a call with no op_id reused the first call's operation %q", trk.opIDs[0])
 	}
 }
 
-// A COMMENT AND A NEW VIEW ARE IDENTIFIED BY THE CALL TOO. Each is a row
-// keyed by its id — the subject a view's create arbitrates on, and the row a
-// comment's post creates — so an id minted per call made the call brought
-// back a second comment and a second view whatever its operation id said.
+// A COMMENT AND A NEW VIEW ARE IDENTIFIED BY THE CALL TOO: each is a row keyed
+// by its id, so an id minted per call would make the call brought back a
+// second comment or view whatever its operation id said.
 func TestAnOperatorsCommentAndViewBroughtBackAreTheSameObject(t *testing.T) {
 	t.Parallel()
 	t.Run("comment", func(t *testing.T) {
@@ -185,9 +172,8 @@ func TestAnOperatorsCommentAndViewBroughtBackAreTheSameObject(t *testing.T) {
 func TestOpIDIsOfferedOnlyOnTheOperatorsWrites(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	// EVERY WRITE SEAM WIRED — the move included, which this fixture lacked,
-	// so nothing asserted the one tool the API reference lists as taking an
-	// op_id that no case here ever registered.
+	// EVERY WRITE SEAM WIRED, the move included, so every tool the API
+	// reference lists as taking an op_id is registered here.
 	operator := builtin.OperatorTools(builtin.OperatorDeps{Work: builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Dependencies: trk.depends, Merges: trk.merges,
 		Moves: trk.moves,
@@ -234,8 +220,8 @@ func TestOpIDIsOfferedOnlyOnTheOperatorsWrites(t *testing.T) {
 	}
 }
 
-// AN OP_ID IS HELD TO THE RULE EVERY SURFACE HOLDS ONE TO, and a turn's call
-// is refused one outright rather than silently ignoring it.
+// AN OP_ID IS HELD TO statelog.CheckCallerOpID, and a turn's call is refused
+// one outright rather than having it silently ignored.
 func TestABroughtBackOpIDIsCheckedAndATurnIsRefusedOne(t *testing.T) {
 	t.Parallel()
 	for name, bad := range map[string]string{
@@ -263,10 +249,8 @@ func TestABroughtBackOpIDIsCheckedAndATurnIsRefusedOne(t *testing.T) {
 				"title": "x", "project": "ENG",
 				"op_id": statelog.NewOpID(time.Now(), "create_work_item"),
 			})
-		// REFUSED AT THE TOOLS' OWN GATE, because a seat's schema does not
-		// declare `op_id` at all ([builtin.ErrUndeclaredArgument]) — the
-		// same refusal every argument a tool does not read meets, rather
-		// than one of the operation binding's own.
+		// REFUSED AT THE TOOLS' OWN GATE ([builtin.ErrUndeclaredArgument]):
+		// a seat's schema does not declare `op_id` at all.
 		if !got.Failed || !errors.Is(got.Cause, builtin.ErrUndeclaredArgument) ||
 			!strings.Contains(got.Output, "op_id") {
 			t.Errorf("a turn's call with an op_id gave %q", got.Output)
@@ -275,8 +259,8 @@ func TestABroughtBackOpIDIsCheckedAndATurnIsRefusedOne(t *testing.T) {
 			t.Errorf("a refused op_id still wrote %d item(s)", len(trk.created))
 		}
 	})
-	// AN EMPTY ONE IS NONE, which is what a model filling an optional field
-	// writes — refusing it would refuse half of every assistant's creates.
+	// AN EMPTY ONE IS NONE: a model fills optional fields with it, and
+	// refusing it would refuse half of every assistant's creates.
 	t.Run("empty", func(t *testing.T) {
 		t.Parallel()
 		trk := newFakeTracker()
@@ -290,8 +274,7 @@ func TestABroughtBackOpIDIsCheckedAndATurnIsRefusedOne(t *testing.T) {
 
 // A GESTURE STOPPED PART OF THE WAY THROUGH TELLS EACH CALLER HOW IT FINISHES:
 // a seat by repeating its arguments before anything else, an operator by
-// bringing its op_id back — and never an operator by a bare repeat, which is a
-// new operation.
+// bringing its op_id back, never by a bare repeat (a new operation).
 func TestAStoppedGestureTellsEachCallerHowToFinishIt(t *testing.T) {
 	t.Parallel()
 	stopped := fmt.Errorf("stopped: %w", worklet.ErrStepUnresolved)
@@ -308,8 +291,8 @@ func TestAStoppedGestureTellsEachCallerHowToFinishIt(t *testing.T) {
 	if strings.Contains(got.Output, "before calling it with any others") {
 		t.Errorf("an operator was told a seat's repeat: %s", got.Output)
 	}
-	// AND BRINGING IT BACK IS THE SAME OPERATION: every write it makes
-	// derives the id it derived the first time.
+	// BRINGING IT BACK IS THE SAME OPERATION: every write derives the id it
+	// derived the first time.
 	trk.writeErr = nil
 	if again := callNoTurn(t, reg, builtin.UpdateWorkItemTool, map[string]any{
 		"item": "ENG-1", "priority": "urgent", "op_id": op,
@@ -331,9 +314,8 @@ func TestAStoppedGestureTellsEachCallerHowToFinishIt(t *testing.T) {
 	}
 }
 
-// A CREATE WHOSE DEPENDENCIES STOPPED NAMES THE ITEM IT FILED, and the tool
-// that finishes them on it — never a repeat of the create, which is a second
-// item for every caller whose repeat is a new operation.
+// A CREATE WHOSE DEPENDENCIES STOPPED NAMES THE ITEM IT FILED and the tool that
+// finishes them, never a repeat of the create, which would file a second item.
 func TestACreateWhoseDependenciesStoppedNamesTheItemItFiled(t *testing.T) {
 	t.Parallel()
 	for name, operator := range map[string]bool{"seat": false, "operator": true} {
@@ -372,8 +354,8 @@ func TestACreateWhoseDependenciesStoppedNamesTheItemItFiled(t *testing.T) {
 }
 
 // AN OPERATOR'S UNKNOWN CREATE NAMES THE OP_ID TO BRING BACK, and only that
-// one. The create's own write id is a step of the call's operation; handed
-// back as an op_id it would be a NEW call's operation, deriving a new task.
+// one: the create's own write id is a step, and handed back as an op_id it
+// would be a NEW call's operation, deriving a new task.
 func TestAnOperatorsUnknownCreateNamesTheOperationToBringBack(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()

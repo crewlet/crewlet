@@ -17,13 +17,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// fakeData is the datastore as the tools see it: collections and their rows in
-// memory, read under the reading the call made, every write recorded with the
-// authority it was stamped with.
-//
-// IT APPLIES THE READ RULE THE STORE APPLIES ([artifactdata.Readable]), so a
-// case about which rows a caller sees is about the tools' own filtering on top
-// of it rather than about a fake that showed everything.
+// fakeData is the datastore in memory: read under the call's reading, every
+// write recorded with its stamped authority. It applies the store's own read
+// rule ([artifactdata.Readable]), so a case about which rows a caller sees
+// tests the tools' filtering on top of it, not a fake that showed everything.
 type fakeData struct {
 	mu sync.Mutex
 
@@ -136,8 +133,6 @@ func (f *fakeData) Schema(context.Context, artifacts.ID) ([]artifacts.Collection
 	return slices.Clone(f.schema), nil
 }
 
-// CarriedSchema is the schema as read_artifact_data hands it to a model to send
-// back: the same collections, which in this fake no wire stands between.
 // State is the reading's own per-viewer keys: the rows of the state
 // collection the reading's record wrote, keyed by their id.
 func (f *fakeData) State(_ context.Context, _ artifacts.ID, rd artifactdata.Reading) (
@@ -154,6 +149,8 @@ func (f *fakeData) State(_ context.Context, _ artifacts.ID, rd artifactdata.Read
 	return out, nil
 }
 
+// CarriedSchema is the schema read_artifact_data hands a model to send back:
+// here the same collections, since no wire stands between.
 func (f *fakeData) CarriedSchema(ctx context.Context, id artifacts.ID) ([]artifacts.Collection, error) {
 	return f.Schema(ctx, id)
 }

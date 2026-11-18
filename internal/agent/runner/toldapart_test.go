@@ -11,29 +11,25 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A TOLD CALL ANOTHER CALL OF ITS BRIEF COULD BE TAKEN FOR IS MARKED. The words
-// over the late calls, and over the calls the session may already show, say a
-// call shown twice is ONE call, made once; where the same message tells
-// another call a model could take for the told one (a line of its other list,
-// a held call a lead of it tells, work already done it renders), the two could
-// be read as one and one lost. Listing again answers a call the session may
-// show; one the message tells is in front of the model already, so the told
-// call's line ends with a note that it is a call of its own (runner's notes,
-// prompts.ToldApartNote).
+// A TOLD CALL ANOTHER CALL OF ITS BRIEF COULD BE TAKEN FOR IS MARKED. The
+// words over the late calls, and over calls the session may already show, say
+// a call shown twice is ONE call; where the same message tells another call a
+// model could take for the told one (a line of its other list, a held call a
+// lead tells, rendered work already done), one could be lost. Listing again
+// is for a call only the session shows; this one is already in front of the
+// model, so its line ends with a note (prompts.ToldApartNote).
 
 // toldApart is the note a marked line ends with, after the space the ledger
 // puts before a note.
 const toldApart = " (a call of its own: another call this message tells could be taken for it)"
 
 // TWO TOLD CALLS THAT COULD BE TAKEN FOR EACH OTHER ARE EACH MARKED. A cut-off
-// capture saved at the round's first call: one job's post landed late, and
-// another job's post of the same words was made after the save, so the brief
-// tells one under the late calls' words and the other under the words of calls
-// the session may already show, both saying a call shown twice is ONE call.
-// Each line ends with the note. A post of other words reads apart, and two
-// alike late calls are two lines of one list, so neither is marked; a read is
-// marked beside an alike read the cap shows, and never beside one the cap left
-// out, whose line no reader sees.
+// capture saved at the round's first call: one job's post landed late, another
+// post of the same words came after the save, so the brief tells one under the
+// late calls' words and one under those of calls the session may show. Each
+// line is marked. A post of other words reads apart, and two alike late calls
+// are lines of one list, so neither is marked; a read is marked beside an alike
+// read the cap shows, never one the cap left out, whose line no reader sees.
 //
 // Mutation: mark nothing, mark within one list, or read a partner the cap left
 // out, and a case goes red.
@@ -88,19 +84,14 @@ func TestTwoToldCallsThatCouldBeTakenForEachOtherAreEachMarked(t *testing.T) {
 	}
 }
 
-// A TOLD CALL LIKE A HELD CALL A LEAD TELLS IS MARKED. A later attempt at an
-// answer tells, in its lead, the `tr_close_issue` a person allowed once and
-// what it returned, and lists that call nowhere; a late `tr_close_issue` the
-// brief tells could be taken for it, its arguments being in no line, so the
-// late line is marked, and the approved call is still in no list.
-//
-// And never the lead's own held call where nothing was approved: a run of its
-// own, carrying on a round whose held call a person denied, tells that held
-// call among the round's calls, and the lead tells its fate; marked, the note
-// would say another call this message tells could be taken for it, and the
-// lead tells only that the call was not made. Beside a late call of its tool,
-// both are marked, truly: the late call is another call the message tells.
-// And a lead whose held call names no id tells a call of its tool all the same.
+// A TOLD CALL LIKE A HELD CALL A LEAD TELLS IS MARKED. A later attempt's lead
+// tells the `tr_close_issue` a person allowed once, which no list shows; a late
+// `tr_close_issue` could be taken for it, so the late line is marked. Never the
+// lead's own held call where nothing was approved: a fresh run carrying on a
+// round whose held call was denied tells it among the round's calls, and the
+// lead tells only that it was not made. Beside a late call of its tool both
+// are marked, the late call being another call the message tells. A lead
+// whose held call names no id still tells a call of its tool.
 //
 // Mutation: drop the lead partners, mark the lead's own held call, or count a
 // lead only by its held call's id, and a case goes red.
@@ -143,8 +134,7 @@ func TestAToldCallLikeAHeldCallALeadTellsIsMarked(t *testing.T) {
 		!strings.Contains(brief, `- tr_close_issue({"id":"9"}) → success`+toldApart) {
 		t.Errorf("the held call and a late call of its tool are not both marked:\n%s", brief)
 	}
-	// A LEAD WHOSE HELD CALL NAMES NO ID still tells a call of its tool, which
-	// the late call could be taken for.
+	// A LEAD WHOSE HELD CALL NAMES NO ID still tells a call of its tool.
 	brief = denied("", asked, lateAsk)
 	if !strings.Contains(brief, `- tr_close_issue({"id":"9"}) → success`+toldApart) {
 		t.Errorf("a late call like the held call a lead naming no id tells is not marked:\n%s", brief)
@@ -152,12 +142,10 @@ func TestAToldCallLikeAHeldCallALeadTellsIsMarked(t *testing.T) {
 }
 
 // A HELD CALL BESIDE AN EARLIER ROUND'S ANSWER OF ITS TOOL IS MARKED. A lead
-// spares the held calls of its own round and tool, whose fate it tells; but a
-// lead of an earlier round tells what became of another call, approved and
-// made, whose arguments no line shows. A run of its own carrying round 2 on,
-// told round 1's answer that allowed `vendor_post` once, could take round 2's
-// held `vendor_post` for that approved call and lose it, so the held line is
-// marked.
+// spares held calls of its own round and tool, whose fate it tells, but an
+// earlier round's lead tells of another call, approved and made, that no line
+// shows: a fresh run carrying round 2 on, told round 1 allowed `vendor_post`
+// once, could take round 2's held `vendor_post` for it and lose it.
 //
 // Mutation: spare a held call from every lead of its tool, whatever its round,
 // and the case goes red.
@@ -178,17 +166,15 @@ func TestAHeldCallBesideAnEarlierRoundsAnswerOfItsToolIsMarked(t *testing.T) {
 	}
 }
 
-// A LATE CALL LIKE WORK ALREADY DONE IS MARKED. A run of its own carrying round
-// 2 on is told round 1 as work already done (its prior work, whose words say
-// a call marked `→ success` ALREADY RAN) and round 2's late post under words
-// that say each late call is ONE call, made once. Where round 1 posted the
-// same words, the late post's error could be read as that post's, or the post
-// as one that failed: the late line is marked, and the prior-work line is
-// not, its render being the reviewer's too. A late post of other words is not
-// marked. A round folded into a tally keeps no arguments, so a tally of the
-// post's tool, or of no tool it names, marks it, and one of another tool does
-// not. A task told again renders its rounds the same way, and a late post
-// alike one of them is marked there too.
+// A LATE CALL LIKE WORK ALREADY DONE IS MARKED. A fresh run carrying round 2
+// on is told round 1 as prior work (a `→ success` ALREADY RAN) and round 2's
+// late post as ONE call, made once; where round 1 posted the same words,
+// either could be read as the other, so the late line is marked, not the
+// prior-work line, whose render the reviewer shares. A post of other words is
+// not. A round folded into a tally keeps no arguments, so a tally of the
+// post's tool, or of no tool, marks it; one of another tool does not. A task
+// told again renders its rounds the same way, and a late post alike one is
+// marked.
 //
 // Mutation: drop the rendered rounds' lines, or their tallies, as partners,
 // and a case goes red.

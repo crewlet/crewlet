@@ -5,18 +5,16 @@ import (
 	"testing"
 )
 
-// THE SEARCH GUIDANCE NEEDS THE SEARCH: it is rendered, as its own section
-// after the reading guidance, for a seat that holds code_search and for no
-// other, so no prompt tells a seat to search before reading whole trees when
-// it has no search to make. And it promises no search of EVERY repository:
-// an unfiltered search reads only the repositories that keep an index, a
-// `search: grep` one only where a repo: filter names it (the tool's own
+// THE SEARCH GUIDANCE NEEDS THE SEARCH: it renders, as its own section after
+// the reading guidance, only for a seat holding code_search, so no seat without
+// one is told to search before reading whole trees. And it promises no
+// search of EVERY repository: an unfiltered search reads only the indexed ones,
+// a `search: grep` one only where a repo: filter names it (the tool's
 // description says how), so a seat told otherwise would read a grep
 // repository's silence as an answer.
 //
-// Mutation: the gate dropped (rendered unconditionally) → red; the section
-// folded into code_history → the outline holds no code_search part, red; the
-// sentence promising every repository → red.
+// Mutation: render it unconditionally, fold it into code_history (the outline
+// holds no code_search part), or promise every repository, and it goes red.
 func TestTheCodeSearchGuidanceNeedsTheSearchTool(t *testing.T) {
 	t.Parallel()
 	const heading = "## Searching the company's code"

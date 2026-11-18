@@ -57,8 +57,7 @@ func TestTheArtifactSkillsTeachOneContract(t *testing.T) {
 
 // THE TOOL SKILL IS LOADED BEFORE THE FIRST BYTE IS PUBLISHED OR WRITTEN: it is
 // enforced, and its trigger covers every tool that writes an artifact's bytes
-// or its datastore's schema or rows, and no read (a read never waits on the
-// design contract).
+// or its datastore's schema or rows, and no read (a read never waits on it).
 func TestTheArtifactToolSkillGuardsEveryPublishingTool(t *testing.T) {
 	t.Parallel()
 	s, err := skills.Parse(readRepoFile(t, artifactToolSkill), skills.Source{PageID: "artifacts.md"})
@@ -98,12 +97,9 @@ func TestTheArtifactSkillsNameOnlyRegisteredTools(t *testing.T) {
 	}
 }
 
-// A SEAT IS TAUGHT EVERY SOURCE THE INLINE BOUND SENDS IT TO. Past the bound a
-// publish is refused, naming the sources that carry a larger build; a seat
-// that learned one only from that refusal would have spent the call and the
-// bytes it carried. So each source the refusal names is in the Tool Skill a
-// seat loads before its first publish. Mutation: drop `from_sandbox` from the
-// skill's contract and this fails.
+// A SEAT IS TAUGHT EVERY SOURCE THE INLINE BOUND SENDS IT TO: each source the
+// past-the-bound refusal names is in the Tool Skill a seat loads before its
+// first publish, so no seat learns one only by spending a call on the refusal.
 func TestASeatIsTaughtTheSourcesTheInlineBoundNames(t *testing.T) {
 	t.Parallel()
 	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)

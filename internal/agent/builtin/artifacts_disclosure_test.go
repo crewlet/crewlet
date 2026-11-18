@@ -16,8 +16,8 @@ import (
 )
 
 // WHAT A TOOL MAY HAND BACK OF AN ARTIFACT'S CONTENT: an administrator's
-// override is recorded before a row or a file is shown (D09), an artifact in
-// the trash serves nothing, and a write the requester does not bound (an
+// override is recorded before a row or a file is shown (D09), a trashed
+// artifact serves nothing, and a write the requester does not bound (an
 // agent's edit to its own work) hands back nothing the requester could not
 // read (D11).
 
@@ -106,13 +106,11 @@ func TestAnElevatedStalePublishRecordsTheLiveRead(t *testing.T) {
 }
 
 // AN ARTIFACT IN THE TRASH SERVES NO CONTENT: get_artifact, read_artifact_data
-// and query_artifact_data on a trashed artifact are refused, naming the trash,
-// and read nothing. Mutation: drop the status check from dataTools.admit and
-// the rows are read.
-//
-// THE REFUSAL NAMES THE ARTIFACT AS THE MODEL DID — here by its label — and
-// never by a uuid it did not pass, which is what it said. Mutation: name h.ID
-// in artifactTrashed again and every row goes red.
+// and query_artifact_data on it are refused, naming the trash, and read
+// nothing; the refusal names the artifact as the model did (its label), never
+// by a uuid it did not pass. Mutation: drop the status check from
+// dataTools.admit and the rows are read; name h.ID in artifactTrashed and
+// every row goes red.
 func TestATrashedArtifactsContentIsNotRead(t *testing.T) {
 	t.Parallel()
 	r := newDataRig(t, artifactChart{}, requesters{})
@@ -148,12 +146,10 @@ func TestATrashedArtifactsContentIsNotRead(t *testing.T) {
 }
 
 // A STALE PUBLISH TO THE AGENT'S OWN WORK HANDS BACK NO TEXT ITS REQUESTER
-// COULD NOT READ (D11): the publish skips the requester, as an edit to the
-// agent's own work does, but the live files it would inline are a read, so a
-// requester the artifact is not shared with is answered the numbers, the
-// author and the paths alone, while one who views it is handed the text.
-// Mutation: inline the live files without ArtifactDeps.discloses and the
-// stranger to the artifact reads it.
+// COULD NOT READ (D11): the publish skips the requester, but inlining the live
+// files is a read, so a requester it is not shared with gets the numbers, the
+// author and the paths alone, and a viewer gets the text. Mutation: inline the
+// live files without ArtifactDeps.discloses and the stranger reads them.
 func TestAStaleOwnPublishHandsBackNoTextTheRequesterCouldNotRead(t *testing.T) {
 	t.Parallel()
 	req := requesters{"founder": founderPrincipal(iam.Apps...)}
@@ -187,11 +183,10 @@ func TestAStaleOwnPublishHandsBackNoTextTheRequesterCouldNotRead(t *testing.T) {
 }
 
 // A CONFLICTING DATA WRITE HANDS BACK ONLY THE ROWS THE REQUESTER COULD READ
-// (D11): on the agent's own artifact, which a requester steers without being
-// shared it, no row at all; on somebody else's, the agent's own row in a
-// private collection is left out, exactly as the read path leaves it out,
-// while a row the requester wrote is shown. Mutation: answer res.Conflict
-// unfiltered and both cases hand the requester rows they could not read.
+// (D11): on the agent's own artifact, not shared with the requester, no row
+// at all; on somebody else's, the agent's own row in a private collection is
+// left out as the read path leaves it, and the requester's own row is shown.
+// Mutation: answer res.Conflict unfiltered and both cases go red.
 func TestAConflictingDataWriteHandsBackOnlyWhatTheRequesterCouldRead(t *testing.T) {
 	t.Parallel()
 	req := requesters{"founder": founderPrincipal(iam.Apps...)}
@@ -239,13 +234,11 @@ func TestAConflictingDataWriteHandsBackOnlyWhatTheRequesterCouldRead(t *testing.
 	}
 }
 
-// A MODEL IS TOLD THE ARTIFACT AS IT NAMED IT, on every refusal about one: a
-// base past the head, a base the artifact no longer keeps, an asset on an
-// artifact with no asset store and a path a version does not hold each named
-// the resolved uuid, which a model that passed a label or a link never typed
-// and does not know the artifact by. Each call here names it by its label, and
-// a path the version does not hold names no artifact at all. Mutation: name
-// h.ID in any of the four sentences again and its row goes red.
+// A MODEL IS TOLD THE ARTIFACT AS IT NAMED IT on every refusal about one (a
+// base or version past the head or no longer kept, an asset with no asset
+// store), never by the resolved uuid, which a model that passed a label or a link never typed; a
+// path the version does not hold names no artifact at all. Mutation: name h.ID
+// in any of those refusals and its row goes red.
 func TestARefusalNamesTheArtifactAsTheModelDid(t *testing.T) {
 	t.Parallel()
 	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)
@@ -263,8 +256,8 @@ func TestARefusalNamesTheArtifactAsTheModelDid(t *testing.T) {
 				"never its uuid", name, got.Output)
 		}
 	}
-	// A PATH THE VERSION DOES NOT HOLD names no artifact at all: the call
-	// that asked is the one reading the answer.
+	// A PATH THE VERSION DOES NOT HOLD names no artifact: the caller knows
+	// which it asked about.
 	got := r.call(t, turn, builtin.GetArtifactTool, map[string]any{
 		"artifact": label, "path": "missing.html"})
 	if !got.Failed || !strings.Contains(got.Output, "has no file") ||

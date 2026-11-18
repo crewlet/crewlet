@@ -9,16 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 )
 
-// THE CALLS DROPPED AFTER A SAVE ARE NEVER UNDER-COUNTED. A continued session is
-// told how many of the calls its run made after the save its round's log
-// dropped from the middle: the log's appends past the save point — the calls it
-// lists and the ones it tallies — less the listed calls numbered past it, which
-// is exact where every call is numbered. A call an older build appended in a
-// fleet mid-upgrade has no number, so its place is unknown and it is never
-// taken off: the count may take a call the brief lists for a dropped one, never
-// leave a dropped one out, and it is held to the dropped calls the round counts
-// at all. A save point past every call the resume hands over — a capture placed
-// off a copy of the log that counted a call no resume reads — counts none.
+// THE CALLS DROPPED AFTER A SAVE ARE NEVER UNDER-COUNTED. A continued session
+// is told how many calls after its save the round's log dropped: the log's
+// appends past the save point (listed and tallied) less the listed calls
+// numbered past it, exact where every call is numbered. A call an older build
+// appended mid-upgrade has no number and is never taken off, so the count may
+// over-count, never under-count, and is held to the round's dropped calls. A
+// save point past every call the resume hands over (a capture placed off a log
+// copy that counted a call no resume reads) counts none.
 //
 // Mutation: take a call with no number off the count, drop the hold to the
 // round's dropped calls, or let a save point past the round's calls count
@@ -79,13 +77,12 @@ func TestTheDroppedCallsAfterASaveAreNeverUnderCounted(t *testing.T) {
 	}
 }
 
-// THE CALLS A BRIEF LEFT OUT ARE THE ONES ITS RENDER COUNTED. The reads a brief
-// counts without listing them are what its launch records it left out, for the
-// next brief to tell, so they are read off the render's own walk
-// ([ledger.ShownCallGroups]), never off a rule of the runner's: two identical
-// reads side by side either side of the read cap are told apart by their
-// places, the earlier shown and the later left out, a write is never named, and
-// as many are named as the render's omitted line counts.
+// THE CALLS A BRIEF LEFT OUT ARE THE ONES ITS RENDER COUNTED. A launch records
+// the reads its brief counted without listing, for the next brief to tell, so
+// they are read off the render's own walk ([ledger.ShownCallGroups]), never a
+// rule of the runner's: two identical reads either side of the read cap are
+// told apart by place (the earlier shown, the later left out), a write is never
+// named, and as many are named as the render's omitted line counts.
 //
 // Mutation: match a shown call to the last equal call of the group rather than
 // the next, walking it from its end, and the earlier read is named in the later

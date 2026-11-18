@@ -15,14 +15,12 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// CodeCheckoutTool is the tool a seat's executor checks a repository of
-// Gitlet out through, declared in internal/toolname: like
-// `ask_and_wait` it is a tool the executor run's surface offers of its own,
-// which no row of the authority table names, because what it may grant is
-// decided by Gitlet's read verb for the seat and for whoever woke its
-// turn ([CodeDeps.ResolveRunRepos], on [authz.ActionCodeRead]) and by every
-// repository's grant — never by a permission of its own a role could hold
-// without the grant.
+// CodeCheckoutTool is the tool a seat's executor checks a Gitlet repository
+// out through. Like `ask_and_wait` the executor run's surface offers it and no
+// authority-table row names it: what it grants is decided by Gitlet's read
+// verb for the seat and its turn's waker ([CodeDeps.ResolveRunRepos], on
+// [authz.ActionCodeRead]) and each repository's grant, never by a permission a
+// role could hold without the grant.
 const CodeCheckoutTool = toolname.CodeCheckout
 
 // RunCheckouts is where `code_checkout` gives a running job a repository: the
@@ -46,23 +44,15 @@ type Checkout struct {
 // NewCodeCheckout is the tool a seat's executor checks a repository out
 // through, or nil without the engine's checkouts.
 //
-// # Why one repository per call, made from inside the run
-//
-// An executor is the seat's own harness run in a box (ADR-0066), launched with no
-// repository: what it needs is decided while it works, by the agent that does
-// the work. So the box holds Gitlet's address and the run's credential
-// from its launch, and nothing else, and each checkout is a call over the
-// run's bridge that the bridge holds to the seat's gates like any other: the
-// engine resolves the repository for the seat and for whoever woke its turn,
-// writes the grant onto the job's row, and Gitlet's box admission,
-// which reads that row on every request, lets the box clone it from the next
-// request on (ADR-0093). Nothing the run did not check out is ever reachable
-// from its box, and what it may push is decided per checkout — the branch,
-// the access and a change to open at its collection — rather than for every
-// repository the seat can reach.
-//
-// It is offered on the executor run's surface alone, beside `ask_and_wait`:
-// no other phase has a job whose row a grant goes on.
+// An executor (ADR-0066) launches with no repository, its box holding only
+// Gitlet's address and the run's credential. Each checkout is a bridge call
+// held to the seat's gates; the engine resolves the repository for the seat
+// and its turn's waker and writes the grant onto the job's row, which Gitlet's
+// box admission reads on every request, so the box clones it from its next
+// request (ADR-0093). Nothing the run did not check out is reachable from its
+// box, and what it may push (branch, access, a change to open at its
+// collection) is decided per checkout. Only the executor run's surface offers
+// it: no other phase has a job row a grant goes on.
 func NewCodeCheckout(desk RunCheckouts) *CodeCheckout {
 	if desk == nil {
 		return nil
@@ -141,9 +131,9 @@ func (t *CodeCheckout) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	const tool = CodeCheckoutTool
 	launch := turnctx.JobOf(ctx)
 	if turn == nil || turn.RunID == "" || launch == "" {
-		// NOT A RUN'S CALL: nothing names the job whose row the grant goes
-		// on. The tool is offered on an executor run's surface alone, so
-		// this is a wiring fault, said as one rather than as the model's.
+		// NOT A RUN'S CALL: nothing names the job row the grant goes on. Only
+		// an executor run's surface offers the tool, so this is a wiring
+		// fault, said as one rather than as the model's.
 		return refusedBy(tools.RefusalUnavailable, waitless(), tool+" is unavailable here: it gives a "+
 			"repository to an executor, and this call was not made by one. Read the repository with "+
 			CodeReadTool+" instead."), nil
@@ -175,8 +165,8 @@ func checkoutAnswer(req RepoRequest, got Checkout) tools.Result {
 	case sandbox.GrantConflict:
 		if r.RepoID == "" {
 			// ONE RUN WORKS FOR ONE REQUESTER, nobody among them: a run whose
-			// grants were taken for nobody — a turn for its own seat's, or
-			// one a build before the carrier launched — is never used for
+			// grants were taken for nobody (its own seat's turn, or a run an
+			// older build launched without the carrier) is never used for
 			// somebody, so the seat is told what it can do instead.
 			return refused(tools.RefusalConflict, fmt.Sprintf("%s: this run's repositories were checked out "+
 				"for nobody, or for another requester than this turn works for, and one run works for one "+
@@ -224,13 +214,11 @@ func checkoutAnswer(req RepoRequest, got Checkout) tools.Result {
 		}
 	}
 	b.WriteString("```")
-	// WHAT THE COMMANDS MAKE TRUE, each step's own brief: where the checkout
-	// is, that its clone holds the default branch alone and how another
-	// branch is fetched, and how it pushes — or that a push of a repository
-	// given to read is refused. A run is given no repository at launch, so
-	// no environment block names its checkouts; the answer that gives it one
-	// is the one place it can be told, and without it the run spends rounds
-	// rediscovering how its git reaches Gitlet.
+	// WHAT THE COMMANDS MAKE TRUE, each step's brief: where the checkout is,
+	// that the clone holds only the default branch and how to fetch another,
+	// and how it pushes (or that a read grant's push is refused). A run
+	// launches with no repository, so no environment block can say this, and
+	// without it the run spends rounds rediscovering how its git reaches Gitlet.
 	for _, step := range got.Steps {
 		if brief := strings.TrimSpace(step.Brief); brief != "" {
 			b.WriteString("\n\n")
@@ -247,25 +235,18 @@ var (
 	openChangeKeys = []string{"target", "title", "draft"}
 )
 
-// checkoutArgs is the call's request, read STRICTLY — a key the schema does
-// not name, a field the check at the surface would misread (a list or an
-// object where a string belongs, anything but true or false where a bool
-// does), an empty `repo`, an `access` outside its two values, a `change` beside the `branch`
-// or `base` it decides, an `open_change` beside a `change` or asked with
-// `read`, or a cone past its bound is refused naming the field, before the
-// engine is asked.
-//
-// STRICT, unlike the tolerant readers beside it, because what a repository is
-// given is a GRANT: an `acess: write` misspelt and dropped would hand the run
-// the default access, which may be more than the model meant to ask for — and
-// so would an `"access": ["read"]` read as no access asked, which argString,
-// tolerant of a value of the wrong type by design, answers as "" (repoField).
-// Strict is not a rule of its own, though: every value is read through
-// argval, the reader the check at the surface admits it by (ADR-0059), so
-// what the check lets through as lossless — a number or a bool where a string
-// belongs, read as the model spelt it; one string where the list of `paths`
-// belongs, read as argval reads a list of strings — is what the checkout
-// asks for, and only what the check would misread is refused here.
+// checkoutArgs is the call's request, read STRICTLY: an unknown key, a value
+// the surface check would misread (a list or object for a string, a non-bool
+// for a bool), an empty `repo`, an `access` outside its two values, a `change`
+// beside the `branch` or `base` it decides, an `open_change` beside a `change`
+// or with `read`, or a cone past its bound is refused naming the field, before
+// the engine is asked. Strict, unlike the tolerant readers beside it, because
+// a checkout is a GRANT: a misspelt `acess: write` dropped, or
+// `"access": ["read"]` read as "" by argString, would hand the run the default
+// access, maybe more than it asked for. Every value is still read through
+// argval, as the surface check admits it (ADR-0059): what that check passes as
+// lossless (a number or bool for a string, one string for `paths`) is read as argval
+// reads it, and only what it would misread is refused here.
 func checkoutArgs(args map[string]any) (RepoRequest, *tools.Result) {
 	refuse := func(format string, a ...any) (RepoRequest, *tools.Result) {
 		r := failed(CodeCheckoutTool + ": " + fmt.Sprintf(format, a...) + " Nothing was checked out.")
@@ -332,16 +313,13 @@ func checkoutArgs(args map[string]any) (RepoRequest, *tools.Result) {
 	return req, nil
 }
 
-// repoField is one string field of a checkout, read by [argval.String] and
-// trimmed — "" where the call leaves it out or sets it null, which the
-// resolution reads as the field's default; a number or a bool as the model
-// spelt it (`"change": 42` is change 42), as the check at the surface admits
-// it — and false where it holds a list or an object. That is REFUSED rather
-// than read as argString reads it (""): the default of every field is a
-// choice made on the model's behalf (the most its grant allows, the seat's
-// own branch, the branch's own head), so a value it did send in the wrong
-// shape is a request it made, and is answered as one it must make again,
-// never as one it did not make.
+// repoField is one trimmed string field of a checkout, read by
+// [argval.String]: "" where left out or null (the field's default), a number
+// or bool as spelt (`"change": 42` is change 42), and false for a list or an
+// object. That is REFUSED, not read as "" as argString would: every default
+// is a choice made for the model (the most its grant allows, the seat's own
+// branch, the branch's head), so a value sent in the wrong shape must be
+// asked again, never answered as one it did not send.
 func repoField(fields map[string]any, key string) (string, bool) {
 	v, ok := argval.String(fields[key])
 	if !ok {
@@ -350,12 +328,11 @@ func repoField(fields map[string]any, key string) (string, bool) {
 	return strings.TrimSpace(v), true
 }
 
-// openChangeField is the checkout's `open_change`, read as strictly as the
-// checkout — nil where it leaves the field out or sets it null; an object of
-// only `target` and `title`, each a string, and `draft`, a bool; anything else
-// refused naming it — for the checkout's reason: an ask the engine acts on as
-// the seat once the run is done, which a misspelt key would have made another
-// one.
+// openChangeField is the checkout's `open_change`, read as strictly as
+// [checkoutArgs] and for its reason (the engine acts on it as the seat once
+// the run is done, and a misspelt key would make it another ask): nil when
+// left out or null, else an object of only `target` and `title` (strings) and
+// `draft` (a bool), anything else refused naming it.
 func openChangeField(fields map[string]any) (*OpenChangeRequest, *tools.Result) {
 	refuse := func(format string, a ...any) (*OpenChangeRequest, *tools.Result) {
 		r := failed(CodeCheckoutTool + ": " + fmt.Sprintf(format, a...) + " Nothing was checked out.")
@@ -396,20 +373,18 @@ func openChangeField(fields map[string]any) (*OpenChangeRequest, *tools.Result) 
 	return &out, nil
 }
 
-// CheckoutUnavailable is a checkout this deployment cannot make at all — a
-// company that hosts no repositories, a node with no address a box clones
-// from — refused in words the run reads, naming what an operator changes. No
-// wait clears a configuration, so it carries no wait ([waitless]): a run told
-// to come back in two seconds would ask again for nothing.
+// CheckoutUnavailable is a checkout this deployment cannot make at all (a
+// company hosting no repositories, a node with no address a box clones from),
+// refused in words the run reads, naming what an operator changes. It carries
+// no wait ([waitless]): no wait clears a configuration.
 func CheckoutUnavailable(why string) *RefusedCheckout {
 	return &RefusedCheckout{Result: refusedBy(tools.RefusalUnavailable, waitless(), CodeCheckoutTool+": "+why+".")}
 }
 
 // CheckoutNotServedNow is a checkout this node cannot make while Gitlet
-// is not served here (starting, stopping, or in a maintenance window):
-// met is what it found, so [RetryAfter] answers it as that condition says, and
-// an unknown one under this node's wait, because the next call may land once
-// Gitlet is up.
+// is not served here (starting, stopping, or in a maintenance window).
+// [RetryAfter] answers it as met, the condition found, says, and an unknown
+// one under this node's wait: the next call may land once Gitlet is up.
 func CheckoutNotServedNow(met error, why string) *RefusedCheckout {
 	return &RefusedCheckout{Result: refusedBy(tools.RefusalUnavailable, met, CodeCheckoutTool+": "+why+".")}
 }

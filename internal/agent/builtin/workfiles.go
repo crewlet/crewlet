@@ -21,52 +21,18 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The project file tools.
+// The project file tools. A file is a tracker row naming an object plus the
+// object, so these tools take [FileReader] and [FileWriter] for the row and
+// [ObjectStore] for the bytes, and a write puts the bytes first: the row first
+// would publish a file whose content is nowhere yet. A read answers a page of
+// text, or base64 when asked; a file that is not text is described.
 //
-// A file is TWO THINGS in two places: a row in the tracker saying it exists
-// and which object holds it, and the object itself in the object store. So
-// these tools take both halves — [FileReader] and [FileWriter] for the row,
-// [ObjectStore] for the bytes — and a write is always bytes first, row second:
-// the other order would publish a file whose content is not anywhere yet.
-//
-// # What a model is handed
-//
-// Text, and a PAGE of it: a read answers at most [maxFileRead] bytes from an
-// offset, and says where the next page starts, because a tool answer has a
-// ceiling ([ToolAnswerBytes]) and a file does not. A file that is not text is
-// described rather than dumped — unless the caller asks for base64, which is
-// what a seat moving bytes between a file and a sandbox needs.
-//
-// # What a failure says
-//
-// The tracker half fails as every work tool's read and write does
-// ([readFailure], [writeFailure]). The object store's half is said in fixed
-// words with its error in the node's log ([objectFailure]), because an object
-// store's error names its endpoint, its bucket and its keys, and the sentence
-// reaches a model's prompt, an operator's assistant and a person's screen —
-// none of whom can act on them. Three of its answers are told apart from the
-// rest: content that IS there but is not what the file records
-// ([objstore.ErrCorrupt]), and a file row naming no content at all, are
-// damage no retry reads past, so they are [tools.RefusalInternalError]; and a
-// write the store refused because it has no room for it ([objstore.Full]) is
-// [tools.RefusalStoreFull], naming the room an operator makes, in the store's
-// own words for it ([objstore.Full.Remedy]), because the same content is
-// refused the same way until then — "try again shortly" uploaded it again into
-// the same full bucket. Any other failure to reach the content is the store not
-// answering, which is [tools.RefusalUnavailable] — the class the HTTP file
-// routes answer the same failure with — and invites the retry that reaches it.
-//
-// # A copy reads as read_project_file does
-//
-// A file another write copies — an artifact's `from_project_file` — is
-// decided, read and refused by the same rules ([WorkDeps.copyFrom]): this
-// tool's verb, the path rule ([normalizePath]), the tracker's half
-// ([fileReadFailure]) and the object store's ([fileContent],
-// [fileContentFailure]), so a seat told why a copy failed is told what the read
-// would have told it. One thing differs, and it is the class rather than the
-// words: a project or a file that is not there is not-found to a read, which is
-// ABOUT the file, and an invalid argument to a copy, which only NAMES it — a
-// copy is about what it writes, and a not-found there would say that is gone.
+// The object store's failures are told in fixed words, its error only in the
+// node's log ([objectFailure]), since it names endpoints, buckets and keys.
+// Wrong content ([objstore.ErrCorrupt]) or a row naming none is damage no retry
+// reads past ([tools.RefusalInternalError]); no room ([objstore.Full]) is
+// [tools.RefusalStoreFull] naming [objstore.Full.Remedy], since a retry is
+// refused the same; else the store is not answering ([tools.RefusalUnavailable]).
 
 // FileReader is the tracker's read side for files.
 type FileReader interface {
@@ -88,27 +54,20 @@ type ObjectStore interface {
 	ReadAt(ctx context.Context, o objstore.Object, off, n int64) ([]byte, error)
 }
 
-// The read page.
-//
-// THIRTY-TWO KIBIBYTES BY DEFAULT AND FORTY-EIGHT AT MOST: the answer carries
-// the page beside a dozen fields of metadata, and base64 grows a page by a
-// third, so forty-eight is what keeps the largest answer inside
-// [ToolAnswerBytes] with room for the envelope.
+// The read page: 32 KiB by default and 48 at most, since base64 grows a page by
+// a third and 48 keeps the largest answer, metadata and envelope included,
+// inside [ToolAnswerBytes].
 const (
 	defaultFileRead = 32 << 10
 	maxFileRead     = 48 << 10
 )
 
-// The listing page, as a seat asks the tracker for one ([fileListPage]).
-//
-// FIFTY BY DEFAULT AND A HUNDRED AT MOST, well below the tracker's own page
-// ([worklet.DefaultFilePage], [worklet.MaxFilePage]): a file's row is about
-// 420 bytes of the answer with a short path, so [ToolAnswerBytes] holds about
-// 150 of them, and the tracker's default page of two hundred was refused as
-// too large in any project holding more files than that. A hundred rows are
-// about 41 KiB, which leaves the envelope its room and paths two hundred bytes
-// longer than a short one theirs; fifty is the default of the tracker's other
-// listings ([worklet.PageDefault]).
+// The listing page a seat asks the tracker for ([fileListPage]): 50 by default
+// and 100 at most, below the tracker's own ([worklet.DefaultFilePage],
+// [worklet.MaxFilePage]). A row is about 420 bytes with a short path, so
+// [ToolAnswerBytes] holds about 150; 100 rows (~41 KiB) leave room for the
+// envelope and longer paths. 50 is the tracker's other listings' default
+// ([worklet.PageDefault]).
 const (
 	defaultFileList = 50
 	maxFileList     = 100
@@ -141,10 +100,9 @@ func (d WorkDeps) fileArgs(actor *Actor, args map[string]any) (string, string, s
 }
 
 // normalizePath is a file's path as the tracker keeps it
-// ([worklet.NormalizeFilePath]), or the refusal naming what is wrong with it
-// in the tracker's sentence ([worklet.Sentence]) — never its error, which
-// opens with the package's name. Every tool that names a file holds its path
-// to this one rule, so a path is refused in the same words through each.
+// ([worklet.NormalizeFilePath]), or its refusal in the tracker's sentence
+// ([worklet.Sentence]), never its error, which opens with the package's name.
+// Every tool naming a file holds its path to this one rule.
 func normalizePath(tool, raw string) (string, *tools.Result) {
 	p, err := worklet.NormalizeFilePath(raw)
 	if err != nil {
@@ -231,9 +189,9 @@ func (t *listProjectFiles) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return fileReadFailure(ctx, t.Name(), tools.RefusalNotFound, project, "", err), nil
 	}
-	// A FILE'S PATH is a name its writers chose (ADR-0040): each row names
-	// who created the file and who wrote it last, and a path renamed between
-	// them had a writer neither names.
+	// A path is a name its writers chose (ADR-0040): each row names its
+	// creator and last writer, and one renamed between them had a writer
+	// neither names.
 	read := newForeignRead(turn, actor.Handle)
 	for _, f := range listing.Files {
 		var named []provenance.Author
@@ -350,9 +308,8 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return fileContentFailure(ctx, t.Name(), f, err), nil
 	}
 	if encoding == "base64" {
-		// NOT FENCED, because base64 is bytes rather than prose a model
-		// reads as words and its alphabet holds no bracket, but LABELLED:
-		// the envelope still says whose bytes they are.
+		// Not fenced, since base64 is not prose and its alphabet holds no
+		// bracket, but labelled with whose bytes they are.
 		read.attribute(writers, partial)
 		answer["encoding"], answer["content"] = "base64", base64.StdEncoding.EncodeToString(page)
 		return read.answer(ctx, t.Name(), withNext(answer, offset, int64(len(page)), f.Size), narrow)
@@ -370,44 +327,39 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return read.answer(ctx, t.Name(), withNext(answer, offset, int64(len(text)), f.Size), narrow)
 }
 
-// copySource is a project's file a copy reads from, as [WorkDeps.copyFrom]
-// decided and read it: the project and the path as the call named them,
-// normalised, the file's row, and the object holding its bytes.
+// copySource is a project's file a copy reads from ([WorkDeps.copyFrom]): the
+// normalised project and path, the file's row, and the object holding its bytes.
 type copySource struct {
 	project, filePath string
 	file              worklet.File
 	object            objstore.Object
 }
 
-// copyFrom decides and reads the project file another write copies — an
-// artifact's `from_project_file` — as read_project_file decides and reads
-// one (see the file's head): a company that runs Worklet, then that tool's
-// verb asked of the caller's authority, the path held to the tracker's rule,
-// the row read at a seat's level, and its content named. A project or a file
-// that is not there is [tools.RefusalInvalid], the caller's argument to
-// change, since a copy only names its source ([fileReadFailure]).
+// copyFrom decides and reads the project file another write copies (an
+// artifact's `from_project_file`) by read_project_file's rules, so a failed
+// copy says what the read would: Worklet run, that tool's verb asked of the
+// caller, the path held to [normalizePath], the row read at a seat's level and
+// its content named. A missing project or file is [tools.RefusalInvalid], since
+// a copy only names its source ([fileReadFailure]).
 //
-// THE BYTES ARE THE CALLER'S TO READ, from [WorkDeps.Objects] and under its
-// own bound, each failure told with [fileContentFailure]: an artifact's copy
-// reads the whole file at its transfer and holds it to the row's digest, and
-// what a copy may hold is the write's to say, not the read's.
+// The bytes are the caller's to read, from [WorkDeps.Objects] under its own
+// bound, each failure told with [fileContentFailure]: what a copy may hold is
+// the write's to say, not the read's.
 func (d WorkDeps) copyFrom(ctx context.Context, tool, project, filePath string) (copySource, *tools.Result) {
 	if d.Files == nil || d.Objects == nil {
 		r := refusedBy(tools.RefusalUnavailable, waitless(), tool+" cannot read project files: this "+
 			"company does not run Worklet.")
 		return copySource{}, &r
 	}
-	// READING THE FILE IS read_project_file's VERB, asked as that tool's own
-	// gate asks it: a caller who may not read a project's files may not copy
-	// one anywhere either.
+	// read_project_file's verb, asked as its gate asks it: a caller who may
+	// not read a project's files may not copy one either.
 	if refusal := askAuthority(ctx, d.Authorize, authz.Action(worklet.ReadProjectFileTool),
 		authz.Object{}); refusal != nil {
 		return copySource{}, refusal
 	}
 	key := worklet.ProjectKey(project)
-	// THE PATH AS read_project_file HOLDS IT, before the tracker is read:
-	// handed to the reader as typed, a path it refuses was told as a fault
-	// of this node.
+	// Held to the path rule before the tracker is read: a path the reader
+	// refuses would be told as this node's fault.
 	at, refusal := normalizePath(tool, filePath)
 	if refusal != nil {
 		return copySource{}, refusal
@@ -425,13 +377,10 @@ func (d WorkDeps) copyFrom(ctx context.Context, tool, project, filePath string) 
 }
 
 // fileWriters are who wrote a file's content, and whether writers the row does
-// not name had a hand in it.
-//
-// A PUT SENDS THE WHOLE CONTENT, so a file written once is its creator's,
-// every byte. A file written again names only its first and its latest writer,
-// and the latest may have sent back an earlier writer's words unchanged (the
-// reason [fencePage] gives for a page), so its content is labelled as text with
-// writers this read cannot name.
+// not name had a hand in it. A put sends the whole content, so a file written
+// once is wholly its creator's; a rewritten one names only its first and latest
+// writer, and the latest may have sent earlier words back unchanged (as
+// [fencePage] says of a page), so it is partial.
 func fileWriters(read *foreignRead, f worklet.File) ([]provenance.Author, bool) {
 	created, updated := strings.TrimSpace(f.CreatedBy), strings.TrimSpace(f.UpdatedBy)
 	var writers []provenance.Author
@@ -476,17 +425,13 @@ func withNext(answer map[string]any, offset, read, size int64) map[string]any {
 	return answer
 }
 
-// fileReadFailure explains a file read that could not be served, keeping a
-// file that is not there apart from a read that failed — the second must never
-// read as the first. The tracker's own sentinel rides beneath the class, so a
-// caller branching on it and a reader asking for the class read one value.
-//
-// ABSENT IS THE CALL'S OWN STATEMENT ([refusedBy]): [tools.RefusalNotFound]
-// to a call ABOUT the file or its project — a read, a listing, a removal — and
-// [tools.RefusalInvalid] to one that only NAMES it, as the source of a copy
-// ([WorkDeps.copyFrom]): that call is about what it writes — an artifact —
-// and a not-found there is a 404 about the artifact, which a person's screen
-// reads as gone. The words are the same either way.
+// fileReadFailure explains a file read that could not be served, never telling
+// a failed read as a file that is not there; the tracker's sentinel rides
+// beneath the class. absent, the class of a missing project or file, is the
+// call's own statement ([refusedBy]): [tools.RefusalNotFound] to a call ABOUT
+// the file (a read, a listing, a removal), [tools.RefusalInvalid] to one that
+// only NAMES it, as a copy's source ([WorkDeps.copyFrom]), where a not-found
+// would read as the artifact gone. The words are the same either way.
 func fileReadFailure(ctx context.Context, tool string, absent tools.Refusal,
 	project, filePath string, err error) tools.Result {
 
@@ -503,11 +448,9 @@ func fileReadFailure(ctx context.Context, tool string, absent tools.Refusal,
 }
 
 // fileContent is the object holding a file's bytes ([worklet.File.Content]),
-// or the refusal of a file whose row names none.
-//
-// A LIVE FILE NAMING NO OBJECT is one the applier refuses to write, so
-// reaching it is the engine's own fault — never a file that is gone, and never
-// a read a retry will fix.
+// or the refusal of a live file whose row names none: the applier refuses to
+// write one, so it is the engine's fault, never a file that is gone or a read a
+// retry fixes.
 func fileContent(ctx context.Context, tool string, f worklet.File) (objstore.Object, *tools.Result) {
 	object, named := f.Content()
 	if !named {
@@ -522,14 +465,11 @@ func fileContent(ctx context.Context, tool string, f worklet.File) (objstore.Obj
 }
 
 // fileContentFailure is a read of a file's content the object store could not
-// serve, told as the file's head says: content that is there and is not what
-// the file records is damage no retry reads past, and any other failure is the
-// store not answering, which a retry may reach — each in fixed words, the
-// store's own error in the node's log ([objectFailure]).
+// serve, told as the file's head says ([objectFailure]).
 func fileContentFailure(ctx context.Context, tool string, f worklet.File, err error) tools.Result {
 	if errors.Is(err, objstore.ErrCorrupt) {
-		// NOT A FAILED READ: the store answered, with bytes that are not
-		// the ones the file records, and a retry reads the same bytes.
+		// Not a failed read: the store answered with bytes that are not the
+		// file's, and a retry reads the same bytes.
 		return objectFailure(ctx, tool, tools.RefusalInternalError, err,
 			fmt.Sprintf("%s: %s in %s exists, and the object store holds content "+
 				"for it that is not what was written. Trying again will not help — do "+
@@ -545,9 +485,8 @@ func fileContentFailure(ctx context.Context, tool string, f worklet.File, err er
 }
 
 // objectFailure is the failed result of a call the object store could not
-// serve: class and sentence as the caller decided them, the error beneath the
-// class for [errors.Is], and the error itself in the node's log and never in
-// the sentence — see the file's head.
+// serve: the caller's class and sentence, the error beneath the class for
+// [errors.Is] and in the node's log, never in the sentence (the file's head).
 func objectFailure(ctx context.Context, tool string, class tools.Refusal, err error,
 	sentence string) tools.Result {
 
@@ -670,10 +609,9 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"again is refused the same until %s — say so, and say the file "+
 				"was not written.", t.Name(), filePath, full.Remedy)), nil
 	case err != nil:
-		// A STORE THAT DID NOT TAKE THE BYTES is a condition, told as one
-		// and invited back ([objstore.ErrUnanswered]); anything else is a
-		// fault of this node, whose words are the log's — the reading
-		// every surface storing a file gives the same failure.
+		// A store that did not take the bytes is a condition, invited back
+		// ([objstore.ErrUnanswered]); anything else is this node's fault, as
+		// every surface storing a file tells it.
 		if why, ok := Condition(err); ok {
 			return objectFailure(ctx, t.Name(), tools.RefusalUnavailable, err,
 				fmt.Sprintf("%s: %s was not written, and nothing was recorded: its "+
@@ -683,20 +621,18 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return faulted(ctx, t.Name(), err, fmt.Sprintf("%s: %s was not written, and "+
 			"nothing was recorded: %s.", t.Name(), filePath, faultSaid)), nil
 	}
-	// NOTHING IS DELETED ON A REFUSAL BELOW: a retry under one operation can
-	// be refused on one node after another committed it, and the object
-	// would then be that file's content. The collector removes what no row
-	// names.
+	// Nothing is deleted on a refusal below: a retry under one operation can
+	// be refused on one node after another committed it, making the object
+	// that file's content. The collector removes what no row names.
 	opID := opIDFor(actor, t.Name(), "file", project+"/"+filePath, args)
 	result, err := t.deps.FileWriter(actor).PutFile(ctx, opID, worklet.FilePut{
 		Project: project, Path: filePath, ContentType: contentType, Object: object,
 		IfMatch: ifVersion,
 	})
 	if errors.Is(err, worklet.ErrUploadStale) {
-		// THE UPLOAD'S STATE, which no wait changes — a conflict, as the
-		// artifacts' stale upload and this file route's own 409
-		// `upload_expired` are — and the one the same call fixes, since
-		// it uploads the content anew, under a fresh key.
+		// The upload's state, which no wait changes: a conflict, as the
+		// artifacts' stale upload and the file route's 409 `upload_expired`
+		// are, which the same call fixes by uploading anew under a fresh key.
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s: %s was not "+
 			"written: %s. Make the same call again.", t.Name(), filePath,
 			worklet.Sentence(err))), nil
@@ -720,16 +656,11 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // unchanged answers the live file at project/filePath when writing content
-// there would change nothing: the same bytes and the same type, and no
-// if_version it has moved past.
-//
-// SKIPPED RATHER THAN WRITTEN AGAIN because a write is no longer free when its
-// content is: every upload is an object of its own (ADR-0026), so a seat that
-// re-saves a report it did not change would upload the whole of it again, and
-// the store would hold both copies until the collector's first pass after the
-// one it replaced is a day old. The tool holds the content in memory, so the
-// comparison is one digest against the row's.
-// Anything this read cannot settle — no reader, a failed read — is written.
+// there would change nothing: the same bytes and type, and no if_version it has
+// moved past. Every upload is an object of its own (ADR-0026), so a re-save
+// would store a second copy until the collector removes the first; the content
+// is in memory, so the check is one digest against the row's. Anything this
+// read cannot settle (no reader, a failed read) is written.
 func (t *writeProjectFile) unchanged(ctx context.Context, project, filePath,
 	contentType string, content []byte, ifVersion uint64) (worklet.File, bool) {
 
@@ -821,10 +752,9 @@ func (t *removeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if badPath != nil {
 		return *badPath, nil
 	}
-	// THE PROJECT IT IS KEPT IN DECIDES, once the call has settled which
-	// that is — see the `inTool` entries in authority.go. A colleague may
-	// keep a file in a project and may not take one out again: removing
-	// deletes the content, which is the project lead's decision.
+	// The project it is kept in decides, once the call has settled which
+	// (the `inTool` entries in authority.go). A colleague may keep a file in
+	// a project but not remove one: that deletes the content, the lead's call.
 	if denied := t.deps.mayWrite(ctx, authz.ActionFileRemove, authz.Object{
 		Kind: authz.KindProject, Container: project,
 	}); denied != nil {

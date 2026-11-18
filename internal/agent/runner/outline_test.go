@@ -15,8 +15,8 @@ import (
 )
 
 // chatTask is a chat trigger's body as internal/notify renders it, with the
-// engine's own sections written INTO the body — the headings a reader
-// splitting the prompt on "##" lines filed outside the task.
+// engine's own "##" sections INTO the body, which a reader splitting on
+// headings files outside the task.
 const chatTask = "Ana in #eng — \"post the deploy summary? 🚀\"\n" +
 	"\n## Triage — decide BEFORE replying\n1. Is this addressed to you?\n" +
 	"\n## Thread context\n- Bo: café rollout done ✅\n"
@@ -53,11 +53,10 @@ func keysOf(sections []types.PromptSection) []string {
 }
 
 // EVERY PROMPT A PHASE SENDS CARRIES ITS OUTLINE: the dashboard draws a
-// prompt's parts from the map its builder recorded, so a trigger's own
-// "## Triage" stays inside the task it belongs to rather than becoming a
-// section of the prompt beside it. The live opening frame carries it for
-// every phase — for the executor, it is the one record of what its run was
-// sent — and an engine-driven phase's completion record carries the same.
+// prompt's parts from the builder's map, so a trigger's own "## Triage" stays
+// inside its task. Every phase's live opening frame carries it (the
+// executor's one record of what its run was sent), and an engine-driven
+// phase's completion record carries the same.
 func TestThePromptsAPhaseSendsCarryTheirOutlines(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -76,8 +75,8 @@ func TestThePromptsAPhaseSendsCarryTheirOutlines(t *testing.T) {
 		phase    string
 		userKeys []string
 		// Whether each user section opens on its own heading: the
-		// executor's task does ("## Task"), the reviewer's two are parts
-		// the builder named, whatever the trigger's body opens with.
+		// executor's task does ("## Task"); the reviewer's two never do,
+		// whatever the trigger's body opens with.
 		userHeaded []bool
 	}{
 		{"execute", []string{"task"}, []bool{true}},
@@ -125,10 +124,10 @@ func TestThePromptsAPhaseSendsCarryTheirOutlines(t *testing.T) {
 	}
 }
 
-// A PROMPT THAT IS NOT UTF-8 PUBLISHES NO MAP. Its text travels as JSON, which
-// rewrites each invalid byte to three, so a map measured over the bytes the
-// builder joined no longer tiles the text a reader receives. A vendor's body
-// is where such bytes come from, and the reader falls back to the headings.
+// A PROMPT THAT IS NOT UTF-8 PUBLISHES NO MAP: JSON rewrites each invalid
+// byte (a vendor's body brings them) to three, so a map measured over the
+// builder's bytes no longer tiles the text a reader receives, and the reader
+// falls back to the headings.
 func TestAPromptThatIsNotUTF8PublishesNoOutline(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -146,10 +145,8 @@ func TestAPromptThatIsNotUTF8PublishesNoOutline(t *testing.T) {
 	}
 }
 
-// A COLLECTED RUN OPENED NO CONVERSATION, so the record its collection
-// publishes carries no prompt and no outline — an empty map rather than one
-// describing a prompt this segment did not send. The launch's opening frame
-// is where what the run was sent is on the record.
+// A COLLECTED RUN OPENED NO CONVERSATION, so its collection's record carries
+// no prompt and no outline; the launch's opening frame records what was sent.
 func TestACollectedRunCarriesNoOutline(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()

@@ -21,23 +21,17 @@ import (
 )
 
 // FOLDERS, AS AN AGENT FILES IN THEM (ADR-0047: an artifact lives in one
-// folder, and a folder grants nothing).
+// folder, and a folder grants nothing). Filing is safe to hand an agent, since
+// a persuaded agent can only misfile, never widen who may open anything. It
+// still takes two decisions through the requester ceiling: the artifact's
+// (`move_artifact`, editor on it) and the destination's
+// (`artifacts.folder.file`, contributor on it), so an agent outside Finance
+// cannot plant a page in Finance's tree. Reorganising (rename, move, remove,
+// unfile) is the folder owner's gesture as a person, never a tool's.
 //
-// A folder organises; it never shares. So filing is safe to hand an agent: the
-// worst a persuaded agent can do is misfile, never widen who may open
-// anything. What filing still asks is two decisions, each through the
-// requester ceiling: the artifact's (`move_artifact`, editor on it) and the
-// destination's (`artifacts.folder.file`, contributor on it), so an agent
-// outside Finance cannot plant a page in Finance's tree. Reorganising a
-// team's folders (rename, move, remove, unfile) is the folder owner's and a
-// person's gesture, never a tool's.
-//
-// A FOLDER NAME IS SOMETHING A REQUESTER MAY NOT SEE: a reference resolves only
-// among the folders the caller AND the person the turn acts for can both see,
-// a missing one is answered with the nearest paths they both see, and a turn
-// a stranger woke sees no folder at all and files nothing in one (a stranger
-// opens no artifact, and a folder's name is as much the company's as an
-// artifact's title is).
+// A FOLDER NAME IS THE COMPANY'S, AS A TITLE IS: a reference resolves only among
+// folders the caller AND the requester both see, a miss is answered with the
+// nearest of those, and a stranger's turn sees and files in no folder.
 
 // folderView is who a call's folder references resolve among: the caller and,
 // where the turn acts for somebody, that requester.
@@ -85,9 +79,8 @@ type visibleFolder struct {
 
 // visibleFolders is every live folder the caller and the requester can both
 // see, with its path from the top level ("Marketing/Q3"), parents first: the
-// caller's own tree read, narrowed by deciding each folder's visibility for the
-// requester (a tree's visibility is its top-level folder's, so every ancestor
-// of a folder kept is kept).
+// caller's tree narrowed to what the requester sees (a folder's visibility is
+// its top-level folder's, so every ancestor of a folder kept is kept).
 func (d ArtifactDeps) visibleFolders(ctx context.Context, c artifactCaller, view folderView) (
 	[]visibleFolder, error) {
 
@@ -183,9 +176,8 @@ func (d ArtifactDeps) resolveFolder(ctx context.Context, c artifactCaller, tool,
 	}
 	p := pathOf(visible, f.ID)
 	if p == "" {
-		// RESOLVED AMONG BOTH, and absent from the tree read a moment
-		// later: removed, moved or narrowed in between. The one answer for
-		// a folder the call may not name.
+		// RESOLVED, then absent from the tree read after it: removed, moved
+		// or narrowed in between, so answered as a folder it may not name.
 		r := folderNotFound(tool, ref, nearestFolders(visible, ref))
 		return artifactsdomain.Folder{}, "", nil, &r
 	}
@@ -442,8 +434,8 @@ func (t *createArtifactFolder) CallForTurn(ctx context.Context, turn *turnctx.Tu
 		return *refusal, nil
 	}
 	// THE TURN'S GUARDRAIL, an agent's alone, charged before the write and
-	// given back when the write made nothing. A chain the call can already
-	// see is answered as it is, and charges nothing even past the bound.
+	// refunded when it made nothing; a chain the call already sees charges
+	// nothing, even past the bound.
 	refund := func() {}
 	if c.agent() && c.turn != nil && !chainExists(visible, parentPath, names) {
 		give, used, ok := t.deps.FolderTurns.spend(c.turn.RunID, c.key)

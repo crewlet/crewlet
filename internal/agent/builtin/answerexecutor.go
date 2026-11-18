@@ -25,10 +25,10 @@ import (
 // AnswerExecutorTool is the tool's wire name.
 const AnswerExecutorTool = "answer_executor"
 
-// RunDesk is what answer_executor needs: the run an answer names, the way to
-// put the answer on the control topic of the seat that holds it, and who gave
-// the answer a run already has, which only its seal says ([sandbox.AnswerSeal]).
-// [sandbox.AnswerDesk] is the implementation.
+// RunDesk is what answer_executor needs: the run an answer names, delivery to
+// the control topic of the seat that holds it, and who gave a run's recorded
+// answer, which only its seal says ([sandbox.AnswerSeal]). [sandbox.AnswerDesk]
+// implements it.
 type RunDesk interface {
 	Run(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
 	Deliver(ctx context.Context, given types.ExecutorAnswerGiven) (uuid.UUID, error)
@@ -42,69 +42,30 @@ type RunDeps struct {
 	// Desk reads the run and delivers the answer. Nil omits the tool.
 	Desk RunDesk
 
-	// Actor is who is answering, off the caller's own credential — the same
-	// resolution every other operator write takes ([WorkDeps.Actor]).
+	// Actor is who is answering, off the caller's credential ([WorkDeps.Actor]).
 	// Required with Desk: an answer nobody can be named for is refused.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (Actor, error)
 }
 
-// The run's identity on its row, as a decision and the answer read it: the
-// seat that holds it, by id and by its handle, and the seat whose
-// wake started the turn that launched it.
+// runParties is the run's identity on its row: its seat by id and handle, and
+// its requester, the seat whose wake started the turn that launched it.
 type runParties struct {
 	seat      uuid.UUID
 	handle    string
 	requester string
 }
 
-// answerExecutor answers an executor that stopped to ask a person something,
-// by naming its turn.
+// answerExecutor answers a parked executor by naming its turn, so a run with
+// no conversation to reply into (launched by an assignment, a colleague's ask
+// or a schedule: internal/notify's Derived) is answerable too. Its requester
+// (through the rule's self arm, only when the caller IS them, never their
+// lead), the seat's lead or an admin may answer ([authz.ActionExecutorAnswer]).
 //
-// # Why by turn
-//
-// A reply on the conversation the question was asked in is matched to the run
-// by that conversation — and a run launched by a task assignment or a
-// colleague's ask has no conversation at all, while one a schedule launched
-// has its schedule's, which nobody can reply into (internal/notify's Derived).
-// Its question could not be answered: there was nowhere to reply, and it
-// waited out its pause TTL. This tool names the run instead, so any parked run
-// is answerable whatever woke the turn that launched it.
-//
-// # Whose question it is
-//
-// Its REQUESTER's — the person whose message, notice or ask woke the turn that
-// launched the run, recorded on its row by the handle their seat was created
-// under — or whoever leads the run's seat, or an admin
-// ([authz.ActionExecutorAnswer]). The requester is admitted through the rule's
-// SELF arm, asked about their own seat, so it is the table that says so; and
-// only when the caller IS that person, so nobody who merely leads them answers
-// a question the run put to them.
-//
-// # What it promises, and what it does not
-//
-// It answers `pending`: the answer is on the seat's control topic, and the
-// node holding the seat records it on the run when it takes it off (the run
-// then reads `answered`) and resumes the run with it once the seat is free of
-// any other executor, any turn in flight and a person's pause. That node is
-// the only one that can, and it may be restarting, so the answer's fate is
-// settled there and not here. The result names the question it answers
-// (`launch_id`) and the answer's own id (`answer_id`), and the run's record is
-// what says what became of it: `answered` on that question once it is
-// recorded, the id among the question's `declined_answers` if the run let it
-// go, or a new question if the run moved past this one first. Each is also
-// announced as `executor_answered` (`resumed`, `not_awaiting`, `gone`,
-// `declined` or `unoffered`). What it refuses up front is what this node can know: a run that
-// is not waiting for an answer (`not_running`).
-//
-// # It answers the question it was given against
-//
-// The answer names the QUESTION as well as the run — the job the run held when
-// it asked, off the row read here — because it reaches the seat
-// some time after it was given, and by then the run may have been resumed by
-// somebody else's answer and parked on a new question. An answer that named
-// only the run resumed it a second time, as the answer to a question this
-// person never saw. Carrying the question, it resumes the run only while the
-// run still waits on that one, and is announced `not_awaiting` otherwise
+// It answers `pending`: only the node holding the seat records and resumes, so
+// the run's record, read by `launch_id` and `answer_id`, says what became of it
+// (`answered`, among `declined_answers`, or a new question). Naming the
+// question too, an answer landing after the run moved on is announced
+// `executor_answered` `not_awaiting` instead of resuming it
 // ([sandbox.Coordinator.AnswerByTurn]).
 type answerExecutor struct {
 	deps      RunDeps
@@ -193,12 +154,9 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(AnswerExecutorTool + " needs a `choice` naming the option chosen, or an " +
 			"`answer` saying what the harness should be told, or both."), nil
 	case len(answer) > sandbox.MaxAnswerTextBytes:
-		// THE BOUND AN ANSWER IS HELD TO, refused here at its source with
-		// why and the figure, before anything is delivered — ON THE STRING
-		// THE COORDINATOR MEASURES WHERE IT RECORDS: the answer as given,
-		// trimmed, before any secret in it is redacted
-		// ([sandbox.MaxAnswerTextBytes]), so an answer this accepts is never
-		// refused there for a redaction marker it did not write.
+		// Measured as the coordinator measures where it records: trimmed,
+		// before redaction ([sandbox.MaxAnswerTextBytes]), so an answer
+		// accepted here is never refused there for a redaction marker.
 		return failed(fmt.Sprintf("That answer is %d KiB and one answer may be at most %d KiB: "+
 			"it becomes the executor's next message, or a fresh launch's brief where the "+
 			"executor cannot carry on in its own session, and its harness reads it again "+
@@ -214,21 +172,15 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"read the executor of turn %s", clip(turnID)), "This does NOT mean it is gone, and "+
 			"nothing was answered."), nil
 	case !found:
-		// NOT_RUNNING RATHER THAN NOT_FOUND: a run that has ended has no
-		// record, exactly like a turn id that never named one, and a
-		// person holding the id of a run that finished is told the true
-		// thing about both — nothing there is waiting for them.
+		// not_running, not not_found: an ended run has no record, like an id
+		// that never named one, and of both it is true nothing waits.
 		return refused(tools.RefusalNotRunning, fmt.Sprintf("No executor is "+
 			"parked under turn %s: it has finished or ended, or the id names no turn "+
 			"with one.", clip(turnID))), nil
 	case !slices.Contains(sandbox.Awaiting, run.Status) && run.Answer != nil:
-		// THE FIRST RECORDED ANSWER WINS, and a later one is told whose it
-		// was and when, rather than taken quietly: an answer is recorded the
-		// moment the seat takes it, so a second person answering the same
-		// question finds it answered here. A REFUSAL CLOSED THE QUESTION THE
-		// SAME WAY, and is never told as an answer the executor resumes
-		// with: the reply was too large to take, the executor is resumed
-		// told so, and it asks again if it still needs the answer (ADR-0114).
+		// The first recorded answer wins, and a later one is told whose and
+		// when. A refused oversized reply closed the question the same way,
+		// and is never told as an answer the executor resumes with (ADR-0114).
 		by := t.deps.Desk.Answerer(run)
 		if refusal, isRefusal := run.Refused(); isRefusal {
 			return toPerson(refused(tools.RefusalAlreadyAnswered, refusedAlready(run, refusal, by)),
@@ -242,30 +194,25 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			clip(turnID), run.Status)), nil
 	}
 	if run.HeldCall != nil {
-		// A HELD CALL IS APPROVED BY ITS OWN ROUTE (ADR-0077), which asks
-		// whether the caller may approve a call for this seat, and which
-		// writes the level an Always allow sets. This tool asks only
-		// whether the caller may answer the run, which a run's requester
-		// may, so an answer here would approve a call on a narrower grant.
+		// A held call is approved by its own route (ADR-0077), which asks
+		// whether the caller may approve a call for this seat and writes the
+		// level Always allow sets; this tool admits the run's requester, so it
+		// would approve on a narrower grant.
 		return toPerson(refused(tools.RefusalForbidden, fmt.Sprintf("The executor of turn %s is "+
 			"waiting for a person to approve a call to %s, which is answered with POST "+
 			"/mcp-approvals/%s by a person its approval admits, not by this tool. Nothing was "+
 			"answered.", clip(turnID), run.HeldCall.Tool, run.HeldCall.ID)), caveat.HeldCallAnswer()), nil
 	}
-	// THE QUESTION THE PERSON READ, never the one the run asks now if
-	// those differ: a run that moved on to another question since would
-	// otherwise take an answer, or a choice by id, given to one it no
-	// longer asks.
+	// The question the person read: a run that moved on since must not take
+	// an answer, or a choice by id, given to one it no longer asks.
 	if launchID != run.LaunchID {
 		return toPerson(refused(tools.RefusalStaleVersion, fmt.Sprintf("The executor of "+
 			"turn %s has moved on to another question since the one you answered (launch "+
 			"%s): read its question again on the executors board and answer that one. "+
 			"Nothing was answered.", clip(turnID), clip(launchID))), caveat.QuestionChanged()), nil
 	}
-	// THE CHOICE NAMES AN OPTION OF THIS QUESTION, checked against the
-	// row just read as waiting, whose job the answer is pinned to: a run
-	// asks a new question only under a new job, so the options this checks
-	// are the ones the answer reaches.
+	// The choice is checked against the row just read as waiting: a run asks a
+	// new question only under a new job, and the answer is pinned to this one.
 	if _, unoffered := sandbox.AnswerText(run.Decision, choice, answer); unoffered != nil {
 		return refusedBy(tools.RefusalInvalid, unoffered, fmt.Sprintf(AnswerExecutorTool+
 			" was refused: %s. Nothing was answered.", unoffered.Error())), nil
@@ -278,27 +225,23 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 
-	// WHO ANSWERED, as [iam.ActorFor] names them: a person bound to a seat
-	// answers AS that seat, kind human, with the credential they acted
-	// through beside it. The desk reads the run's row again to stamp the
-	// seat it delivers to, so a seat named here is only ever the same one.
+	// Named as [iam.ActorFor] names them: a person bound to a seat answers AS
+	// it, kind human, beside the credential used. The desk re-reads the row to
+	// stamp the seat it delivers to, so it is the seat named here.
 	given := types.ExecutorAnswerGiven{
 		TurnID: run.TurnID, Agent: parties.seat.String(), AgentHandle: parties.handle,
 		Answer: answer, Choice: choice, AnsweredBy: actor.Handle,
 		AnsweredByKind: string(actor.Kind),
 		OperatorID:     actor.OperatorID,
-		// THE QUESTION THIS ANSWERS, off the row just checked as waiting:
-		// the answer resumes the run only while it still waits on it.
+		// The run resumes with the answer only while it still waits on this.
 		LaunchID: run.LaunchID,
 	}
 	outcome := statelog.OutcomePending
 	answerID, err := t.deps.Desk.Deliver(ctx, given)
 	if err != nil {
-		// THE PUBLISH MAY HAVE LANDED, so this is `unknown` rather than a
-		// refusal — see [sandbox.AnswerDesk.Deliver]. Answering it again is
-		// safe: both copies name the question they answer, so whichever is
-		// consumed second finds that question no longer waiting — even when
-		// the run has moved on to another question by then.
+		// The publish may have landed, so `unknown`, not a refusal
+		// ([sandbox.AnswerDesk.Deliver]). A retry is safe: both copies name
+		// their question, so the one consumed second finds it not waiting.
 		log.WarnContext(ctx, "answer_executor_delivery_unknown",
 			"turn_id", run.TurnID, "seat", parties.handle, "error", err.Error())
 		outcome = statelog.OutcomeUnknown
@@ -306,8 +249,7 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	result := map[string]any{
 		"turn_id": run.TurnID, "agent_handle": parties.handle,
 		"question": run.Question, "outcome": string(outcome),
-		// THE QUESTION IT ANSWERS AND THE ANSWER'S OWN ID, which the run's
-		// record is read against to learn what became of it.
+		// With answer_id, what the run's record is read against.
 		"launch_id": run.LaunchID,
 	}
 	if answerID != uuid.Nil {
@@ -316,11 +258,8 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if choice != "" {
 		result["choice"] = choice
 	}
-	// THE QUESTION IS THE RUN'S WORDS, written by the seat's harness in
-	// the seat's name, and whoever answers it is usually reading through an
-	// assistant: it goes back fenced by the one rule for an executor's words
-	// ([provenance.Executor]), as every other door to them reads them
-	// (ADR-0040), not as a line of the engine's receipt.
+	// The question is the harness's words, usually read through an assistant:
+	// fenced by [provenance.Executor] like every door to them (ADR-0040).
 	read := newForeignRead(turn, actor.Handle)
 	asked := provenance.Executor(parties.handle)
 	read.fenceAt(fieldPath{}.key("question"), asked.Source, asked.Trust, asked.Authors,
@@ -328,20 +267,14 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return read.answer(ctx, AnswerExecutorTool, result, "")
 }
 
-// refusedAlready is the refusal an answer gets for a question a reply too
-// large to take reached first, as the model reads it: whose reply (by, as the
-// refusal's seal names them, or "someone" where it does not open here), when
-// its refusal was recorded (RFC 3339), its figures — never a word of it, which
-// no record of the run keeps — and that the executor is resumed told it did
-// not reach it and asks again if it still needs an answer, which is the
-// question to answer then.
+// refusedAlready is the model's refusal for a question an oversized reply
+// reached first: whose (by, from the refusal's seal, or "someone"), when (RFC
+// 3339), its figures but never its words, which no record keeps, and that the
+// executor is resumed told so and asks again if it still needs an answer.
 //
-// NEVER WORDED AS AN ANSWER, which the run did not get: told the question was
-// answered, the person's assistant would tell them the executor carries on
-// with a reply it was given none of. And WORDED AS WHAT IS RECORDED: the
-// refusal is the question's outcome now, and the resume that tells the
-// executor is owed, not done — a refusal let go of before any turn told it
-// puts the question back to waiting, which its own record then says.
+// Never worded as an answer, which the run did not get, and worded as what is
+// recorded: the resume that tells the executor is owed, not done (a refusal
+// let go of before any turn told it puts the question back to waiting).
 func refusedAlready(run sandbox.PendingRun, refusal sandbox.AnswerRefusal, by string) string {
 	if by == "" {
 		by = "someone"
@@ -358,12 +291,10 @@ func refusedAlready(run sandbox.PendingRun, refusal sandbox.AnswerRefusal, by st
 		by, when, kept.SizeUp(refusal.Bytes), kept.Size(refusal.MaxBytes))
 }
 
-// answeredAlready is the refusal an answer gets for a question already
-// answered, as the model reads it: by whom (by, as the answer's seal names
-// them, or "someone else" where it does not open here), when (RFC 3339, the
-// instant as the record holds it), and what became of that answer as far as
-// the record says. A person's surface shows [caveat.AnsweredAlready] instead,
-// with the instant read off the run's row on the person's own clock.
+// answeredAlready is the model's refusal for a question already answered: by
+// whom (by, from the answer's seal, or "someone else"), when (RFC 3339, as
+// recorded), and what the record says became of it. A person's surface shows
+// [caveat.AnsweredAlready] instead, on the person's own clock.
 func answeredAlready(run sandbox.PendingRun, by string) string {
 	if by == "" {
 		by = "someone else"
@@ -383,18 +314,16 @@ func answeredAlready(run sandbox.PendingRun, by string) string {
 	return said
 }
 
-// errUnreadableSeatID is the error a pending run's row carries when the seat
-// id on it is not one: absent, the nil id, or not a uuid at all.
+// errUnreadableSeatID is a pending run's seat id that is absent, nil or not a
+// uuid.
 var errUnreadableSeatID = errors.New("builtin: a pending run's seat id is unreadable")
 
-// parties is the run's seat and requester as its row records them: the seat by
-// its id and its handle, the requester by handle. A handle is immutable
+// parties is the run's seat and requester off its row; a handle is immutable
 // (ADR-0013), so the row names the same seats for as long as they exist.
 //
-// A row with no seat id this build can read names no seat a gate can ask
-// about, and is refused rather than answered on a guess — as a FAULT
-// ([faulted]): the row is this node's own and stays unreadable however long
-// anybody waits, so "try again" would be a promise nothing keeps.
+// A row with no readable seat id is refused as a FAULT ([faulted]), never
+// answered on a guess: it is this node's own row and stays unreadable, so
+// "try again" would be a promise nothing keeps.
 func (t *answerExecutor) parties(ctx context.Context, run sandbox.PendingRun) (runParties, *tools.Result) {
 	parties, err := partiesOf(run)
 	if err != nil {
@@ -407,7 +336,7 @@ func (t *answerExecutor) parties(ctx context.Context, run sandbox.PendingRun) (r
 }
 
 // partiesOf is [answerExecutor.parties] without the refusal: errUnreadableSeatID
-// for a row with no seat id this build can read.
+// for an unreadable seat id.
 func partiesOf(run sandbox.PendingRun) (runParties, error) {
 	id, err := uuid.Parse(run.AgentID)
 	if err != nil || id == uuid.Nil {
@@ -417,22 +346,19 @@ func partiesOf(run sandbox.PendingRun) (runParties, error) {
 	return runParties{seat: id, handle: run.AgentHandle, requester: run.Requester}, nil
 }
 
-// mayAnswer asks the authority about this run: about the REQUESTER's own seat
-// when the caller is that requester — the rule's self arm — and about the
-// run's seat otherwise, where its lead and an admin are admitted.
-// The actor is named by [iam.ActorFor], whose name for a bound person is their
-// seat's handle.
+// mayAnswer asks the authority about the object [runParties.answeredBy] names
+// for the actor, whose handle for a bound person is their seat's
+// ([iam.ActorFor]).
 func (t *answerExecutor) mayAnswer(ctx context.Context, actor Actor,
 	parties runParties) *tools.Result {
 
 	return askAuthority(ctx, t.authorize, authz.ActionExecutorAnswer, parties.answeredBy(actor.Handle))
 }
 
-// answeredBy is what answering the run asks the authority about for the caller
-// named handle: the requester's own seat where the caller is the requester (the
-// rule's self arm), and the run's seat otherwise, where its lead is admitted.
-// [runanswer.QuestionOf] states it, so the screens that offer the answer read
-// the same object this decides on.
+// answeredBy is the object answering the run asks about for the caller named
+// handle: the requester's own seat when the caller is the requester (the rule's
+// self arm), the run's seat otherwise. [runanswer.QuestionOf] states it, so the
+// screens that offer the answer read the same object this decides on.
 func (p runParties) answeredBy(handle string) authz.Object {
 	return runanswer.QuestionOf(p.seat, p.handle, p.requester, handle).Object
 }

@@ -61,17 +61,13 @@ func (s *viewStore) DeleteView(_ context.Context, _, id string,
 
 // A SAVE IS DECIDED ON THE VIEW IT REPLACES AS WELL AS THE ONE IT WRITES.
 //
-// `save_work_view` replaces a view whole, by id, and its gate decided only on
-// the arguments — so anybody who may keep a view of their own could name any
-// id and overwrite it with one: a project's SHARED tab taken over by somebody
-// who does not lead the project, or a colleague's personal view rewritten as
-// the caller's. The stored view is a row, and the tool asks the same action on
-// its owner and container once it has read it — and hands the write the prior
-// it decided on, so the write refuses a view that changed in between.
-//
-// Both refusals, and the controls: the project's lead replaces the shared tab,
-// and a save naming no id is the caller's own new view, or a tool that refused
-// every replacement would pass.
+// `save_work_view` replaces a view whole, by id, so a gate on the arguments
+// alone would let anybody overwrite a project's SHARED tab or a colleague's
+// personal view. The tool asks the same action on the stored row's owner and
+// container, and hands the write that prior, so a view that changed in
+// between is refused. Controls, so a tool refusing every replacement fails:
+// the project's lead replaces the shared tab, and a save naming no id is the
+// caller's own new view.
 func TestASaveCannotTakeOverAViewItMayNotWrite(t *testing.T) {
 	t.Parallel()
 	eng := worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
@@ -153,12 +149,10 @@ func TestASaveCannotTakeOverAViewItMayNotWrite(t *testing.T) {
 
 // A SAVE NAMING AN ID NO VIEW HOLDS IS REFUSED, and writes nothing.
 //
-// The argument is "the view to replace", and a view's id is the one its
-// create minted. A save that took any string for a missing view CREATED one
-// under it — dots, spaces and a path were all a primary key and the subject
-// its writes arbitrate on — so the only ids that reach the write are ones this
-// engine minted. Refused as not found rather than as an authority refusal,
-// because there is nothing the caller may not do: there is nothing there.
+// The argument is "the view to replace", so only an id a create minted
+// reaches the write; any other string would become a primary key and the
+// subject writes arbitrate on. Not found, not an authority refusal: there is
+// nothing there to be refused.
 func TestASaveNamingNoViewIsRefused(t *testing.T) {
 	t.Parallel()
 	views := &viewStore{stored: map[string]worklet.View{}}

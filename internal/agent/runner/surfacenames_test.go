@@ -16,16 +16,11 @@ import (
 // EVERY TOOL A PHASE SURFACE OFFERS OF ITS OWN IS A NAME THE WALK READS.
 //
 // internal/toolname's walk holds every string literal in the module to the
-// tool names a model is offered ([toolnametest.Names]): the authority table's
-// tool-shaped verbs, which builtin's walks hold equal to the tools its
-// registry and the operator catalogue register, and the names internal/toolname
-// declares. A phase surface offers tools BEYOND the seat's registry, which no
-// row names: the submissions, the discovery pair, `delegate`, and the tool the
-// executor's run asks a person through, which the engine hands the runner from
-// outside every registry. One the set lacks is a name the walk never reads,
-// so a literal copy of it compiles and passes: `ask_and_wait` was one,
-// declared beside its implementation alone. So every such tool is held to the
-// set here, where the surfaces are built, and the set fails closed.
+// tool names a model is offered ([toolnametest.Names]). A phase surface also
+// offers tools no registry row names (the submissions, the discovery pair,
+// `delegate`, the executor's ask tool); one the set lacks is a name the walk
+// never reads, so a literal copy of it passes. So each is held to the set
+// here, where the surfaces are built.
 //
 // Mutation: declare `ask_and_wait` beside its implementation alone again
 // (builtin.AskAndWaitTool a literal and toolname.AskAndWait gone) and the
@@ -93,8 +88,8 @@ func TestEveryToolAPhaseSurfaceOffersOfItsOwnIsANameTheWalkReads(t *testing.T) {
 			}
 		}
 	}
-	// THE CONTROL: the executor's own tools are the run's two endings among
-	// the rest, so the case read the surface the run is offered.
+	// THE CONTROL: the run's two endings are among the executor's tools, so
+	// the case read the surface the run is offered.
 	executor := toolNames(launcher.last(t).Surface.ToolDefs())
 	for _, ending := range []string{runner.SubmitWorkTool, builtin.AskAndWaitTool} {
 		if !slices.Contains(executor, ending) {

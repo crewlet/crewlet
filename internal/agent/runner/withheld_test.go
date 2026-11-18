@@ -13,15 +13,14 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// THE WITHHELD FINISHING CORRECTIVE, on the one engine-driven phase whose
-// ceiling sits above its budget: the onboarding pass, which finishes by
-// calling mark_onboarded. A pass that answers in prose on the round its budget
-// ends on has done its work and is missing only the call that reports it — so
-// it is asked again where its ceiling allows, without the extension judge, and
-// never past one allowance of such rounds.
+// THE WITHHELD FINISHING CORRECTIVE, on the onboarding pass (the one
+// engine-driven phase whose ceiling sits above its budget; it finishes by
+// calling mark_onboarded). A pass answering in prose on its budget's last round
+// is missing only the call that reports its work, so it is asked again where
+// its ceiling allows, without the extension judge, within one allowance.
 
-// countingJudge grants every request and counts them: what these cases assert
-// is that a phase missing only its finishing call is NOT the judge's question.
+// countingJudge grants every request and counts them: a phase missing only its
+// finishing call is NOT the judge's question.
 type countingJudge struct{ calls atomic.Int32 }
 
 func (j *countingJudge) Decide(context.Context, extension.Request) (extension.Decision, error) {
@@ -58,12 +57,10 @@ func passed(t *testing.T, r *runner.Runner, pub *capture) *types.AgentPhaseCompl
 	return completedPhase(t, pub, "onboarding")
 }
 
-// A DECLINE ON THE BUDGET'S LAST ROUND IS ASKED AGAIN WHERE THE CEILING ALLOWS.
-// The round the budget ends on is the one a phase most naturally finishes on,
-// and the same prose one round earlier was re-asked and finished — so the
-// outcome turned on which round the decline landed on, and the ceiling's
-// rounds went unspent while the pass ended unmarked. Nor is the judge asked:
-// the work is done and only the call reporting it is missing.
+// A DECLINE ON THE BUDGET'S LAST ROUND IS ASKED AGAIN WHERE THE CEILING ALLOWS,
+// as one a round earlier is: otherwise the outcome turns on which round the
+// decline lands on, and the pass ends unmarked with ceiling rounds unspent. Nor
+// is the judge asked: only the call reporting the work is missing.
 func TestADeclineOnTheBudgetsLastRoundIsAskedAgainWithinTheCeiling(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{onboarding: []llmtest.Response{
@@ -79,8 +76,7 @@ func TestADeclineOnTheBudgetsLastRoundIsAskedAgainWithinTheCeiling(t *testing.T)
 	if got := prov.roundsOf("onboarding"); got != 3 {
 		t.Fatalf("the pass was asked %d times, want 3", got)
 	}
-	// Round 3 is a harness run of its own — the one the declined round ended, the
-	// corrective it was owed opening the next.
+	// Round 3 is a harness run of its own, opened by the declined round's corrective.
 	reqs := prov.requestsFor("onboarding")
 	if len(reqs) != 2 {
 		t.Fatalf("the pass took %d harness runs, want the declined one and the corrected one", len(reqs))
@@ -96,8 +92,8 @@ func TestADeclineOnTheBudgetsLastRoundIsAskedAgainWithinTheCeiling(t *testing.T)
 	}
 }
 
-// The same at the end of an EXTENSION window, which is where the extension
-// nudge sends a phase to finish — and so where a decline is likeliest.
+// The same at the end of an EXTENSION window, where the extension nudge sends a
+// phase to finish, so where a decline is likeliest.
 func TestADeclineOnTheLastRoundOfAnExtensionIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{onboarding: []llmtest.Response{
@@ -146,9 +142,8 @@ func TestADeclineOnTheLastRoundEndsThePassWhereTheCapIsHard(t *testing.T) {
 	}
 }
 
-// ONE ALLOWANCE FOR THE PHASE, NOT ONE PER INVOCATION. A run of declines that
-// already had a corrective inside the budget gets only the one it has left
-// past it: two in all, exactly as if the budget had been one round longer.
+// ONE ALLOWANCE FOR THE PHASE, NOT ONE PER INVOCATION: declines that had a
+// corrective inside the budget get only one more past it, two in all.
 func TestAContinuationSharesTheFinishingAllowance(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{onboarding: []llmtest.Response{
@@ -168,11 +163,9 @@ func TestAContinuationSharesTheFinishingAllowance(t *testing.T) {
 	}
 }
 
-// A CONTINUATION IS AS LONG AS THE CORRECTIVES IT MAY STILL READ, and no
-// longer. One that turns back to WORK has stopped being a phase missing only
-// its finishing call: when its rounds run out with the model still calling
-// tools, that is an exhausted budget, and the judge decides whether it
-// deserves more.
+// A CONTINUATION IS AS LONG AS THE CORRECTIVES IT MAY STILL READ. One that
+// turns back to WORK is no longer missing only its finishing call: its rounds
+// running out mid-call are an exhausted budget, and the judge decides.
 func TestAContinuationThatGoesBackToWorkIsTheJudgesQuestion(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{onboarding: []llmtest.Response{
@@ -192,10 +185,9 @@ func TestAContinuationThatGoesBackToWorkIsTheJudgesQuestion(t *testing.T) {
 	}
 }
 
-// AND NEVER AN EXTENSION BY THE BACK DOOR. A phase that works and declines by
-// turns would otherwise earn a fresh pair past every budget it reaches, and
-// run on to its ceiling on nobody's decision: the rounds a phase runs past its
-// budget without the judge are capped at that same allowance.
+// AND NEVER AN EXTENSION BY THE BACK DOOR: rounds past the budget without the
+// judge are capped at that same allowance, or a phase working and declining by
+// turns runs on to its ceiling on nobody's decision.
 func TestRoundsPastTheBudgetWithoutTheJudgeAreBounded(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{onboarding: []llmtest.Response{
@@ -217,11 +209,10 @@ func TestRoundsPastTheBudgetWithoutTheJudgeAreBounded(t *testing.T) {
 	}
 }
 
-// A PHASE THAT FINISHED ON ITS BUDGET'S LAST ROUND IS FINISHED, not
-// exhausted. Its last message is still a call, which is what an exhausted
-// phase's looks like, and it was read as one: the judge was asked, and
-// charged, about a phase with nothing left to do, and its grant ran more
-// priced rounds after the finishing call.
+// A PHASE THAT FINISHED ON ITS BUDGET'S LAST ROUND IS FINISHED, not exhausted,
+// though its last message is a call as an exhausted phase's is: otherwise the
+// judge is asked, and charged, and its grant runs priced rounds past the
+// finishing call.
 func TestAFinishingCallOnTheLastRoundIsNotExhaustion(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{onboarding: []llmtest.Response{

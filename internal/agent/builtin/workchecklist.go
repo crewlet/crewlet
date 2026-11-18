@@ -13,28 +13,20 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The two arguments update_work_item grew for the item's own page: a REASON an
-// assignment carries, and a CHECKLIST gesture.
+// update_work_item's `reason` (an assignment's line) and `checklist` (a gesture).
 
 // MaxAssignmentReason is how long the one line an assignment carries may be,
-// in characters.
-//
-// FIVE HUNDRED because it is a sentence to the person receiving the work —
-// "you own the rollout now, ops has the rest" — and anything longer is the
-// conversation, which has a comment thread of its own. It rides the change's
-// excerpt ([worklet.Notify.Excerpt]), which is what the history row stores and
-// the wake renders, so it is also held to that excerpt's byte ceiling
-// ([worklet.MaxExcerpt]) and REFUSED past either rather than cut: a reason
-// silently truncated is a reason somebody reads as finished.
+// in characters: a sentence to the new assignee; anything longer belongs in a
+// comment. It rides the change's excerpt ([worklet.Notify.Excerpt]), so it is
+// also held to [worklet.MaxExcerpt] bytes, and REFUSED past either rather than
+// cut: a silently truncated reason reads as finished.
 const MaxAssignmentReason = 500
 
 // assignmentReason is the `reason` argument checked, or the refusal.
 //
-// ONLY BESIDE AN ASSIGNEE. A reason is what an assignment says to the person
-// it moves the work to; on any other edit it would land on a history row as an
-// excerpt nothing announced and nobody asked for — and the explanation of a
-// status change or a close belongs in a comment, which the tool's own
-// description already asks for.
+// ONLY BESIDE AN ASSIGNEE or reviewer: on any other edit it would land on a
+// history row as an excerpt nothing announced; other explanations go in a
+// comment.
 func assignmentReason(args map[string]any) (string, string) {
 	raw, held := args["reason"]
 	if !held {
@@ -95,10 +87,9 @@ func checklistSchema() map[string]any {
 // checklistIntent reads the `checklist` argument into a gesture, minting the
 // ids an addition names, or answers the refusal.
 //
-// THE IDS ARE DERIVED FROM THE OPERATION, the way a comment's is ([commentID]):
-// a retried request carries the same operation, so it names the same list
-// rather than adding a second one, and two different gestures in one turn are
-// two operations with ids of their own.
+// THE IDS DERIVE FROM THE OPERATION, as a comment's do ([commentID]): a retry
+// names the same list rather than adding a second, and two gestures in one
+// turn are two operations with ids of their own.
 func (d WorkDeps) checklistIntent(ctx context.Context, args map[string]any,
 	opID string) (*worklet.ChecklistIntent, string) {
 

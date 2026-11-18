@@ -14,10 +14,9 @@ import (
 // ---- list_dashboard_sources --------------------------------------------- //
 
 // dashboardSources lists the engine source catalogue a dashboard's `engine`
-// datasets may read. It holds no row of any domain: what a source answers is
-// decided as each board's viewer when the board is read (adr/0043), so the
-// agent that writes a board is told the reads it may name, never what they
-// answer.
+// datasets may read, and no row of any domain: a source answers as each
+// board's viewer when the board is read (adr/0043), so the board's writer
+// learns the reads it may name, never what they answer.
 type dashboardSources struct{}
 
 var _ tools.SeatCallable = (*dashboardSources)(nil)

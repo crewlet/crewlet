@@ -33,80 +33,55 @@ import (
 
 // Answering a person's question from the company's knowledge: the command
 // palette's answer block.
-//
+
 // # A person's question, not a seat's
 //
-// Nobody's seat runs this and no turn exists: a person typed a question into
-// the dashboard and is waiting for a paragraph. So it is an OPERATOR tool, and
-// one only a PERSON BOUND TO A SEAT may call ([authz.ActionKnowledgeAnswer]
-// admits whoever uses either app, and is human-only and SEATED): it runs on
-// the auxiliary model of the seat the identity directory binds them to — the
-// human seat every person holds (ADR-0032). A principal no seat binds — a
-// pipeline's token or a service account, never a person (ADR-0032) — has no
-// seat whose model to run on, and the table refuses it `unseated` rather than
-// letting it be answered on the company's default model, because "a CI token"
-// is not somebody the spend can be attributed to; a refusal there is also what
-// keeps a screen from offering the control to such a caller at all. The tool
-// asks the same of the actor it is handed, as the arm a surface wired without
-// the table would otherwise reach. A seat is never given it: a seat has
-// `search_knowledge` and its own model, and an answer written by a second
-// model into its context would be one it could not check.
-//
+// No turn exists: a person at the dashboard is waiting for a paragraph. So it
+// is an OPERATOR tool only a PERSON BOUND TO A SEAT may call
+// ([authz.ActionKnowledgeAnswer], human-only and SEATED), run on the auxiliary
+// model of the human seat the identity directory binds them to (ADR-0032). A
+// principal no seat binds (a pipeline's token, a service account) is refused
+// `unseated` rather than answered on the default model: nobody to attribute the
+// spend to, and the refusal keeps a screen from offering it the control. The
+// tool checks its actor too, for a surface wired without the table. A seat
+// never gets it: it has `search_knowledge` and its own model, and a second
+// model's answer in its context is one it could not check.
+
 // # Why it is a write
 //
-// It reads, but it SPENDS — one model call per question — and the dashboard's
-// reads are refetched on focus and on reconnect. Served as a read it would be
-// asked again every time a person tabbed back to the window, each time for
-// tokens. As a write it is sent once, when a person asks.
-//
+// It reads, but it SPENDS a model call per question, and the dashboard refetches
+// reads on focus and on reconnect: as a read it would spend again every time a
+// person tabbed back. As a write it is sent once, when a person asks.
+
 // # What it spends, and against what
 //
-// The AUXILIARY model of the person's own seat, resolved through the engine's
-// one auxiliary seam like every auxiliary pass — so a company that pointed its
-// cheap work at a small model answers questions on it too — under the
-// OPERATOR stage, which the seam charges to the COMPANY's windows alone: a
-// person has no seat budget (`token_budget` is on the company and on roles
-// that run turns), so the company's day, week and month are what an answer is
-// judged against. It is GATED here before the call — a company whose window
-// has no room is refused `budget_exhausted` and spends nothing — and CHARGED by
-// the seam after, because an answer's size is known only from its reply (see
-// [coord.Budgets.PostChargeOrg]). The seam also RECORDS it, as
-// `auxiliary_spend` for the person, so the company's spend history holds what
-// its people's questions cost — the answer, and every source condensed for it,
-// each under its own purpose.
-//
-// ONE CHARGE SITE, the seam's. The answer used to charge its own completion and
-// wrap the condensing calls in a second charger of its own, so two copies of
-// "record what a person's question cost" existed beside the seam every other
-// auxiliary call went through — and neither reached an event.
-//
+// The person's seat's AUXILIARY model, through the engine's one auxiliary seam
+// (so a company's cheap model answers questions too), under the OPERATOR stage,
+// which the seam charges to the COMPANY's windows alone: a person has no seat
+// budget. It is GATED here before the call (no room: `budget_exhausted`, nothing
+// spent) and CHARGED by the seam after, since an answer's size is known only from
+// its reply ([coord.Budgets.PostChargeOrg]). The seam is the ONE charge site: it
+// also records the answer and every source condensed for it as
+// `auxiliary_spend` for the person, each under its own purpose.
+
 // # Cached, and on what
 //
-// A question asked again — by the same person pressing Enter twice, or by a
-// colleague on the same node — gets the same answer while nothing it could
-// have been written from has changed. The cache is the NODE's
-// ([AnswerDeps.Cache]), handed in rather than built with the catalogue: a
-// surface builds its catalogue per request, and a cache built with it would
-// hold one request's answers. The key is the normalised question, the APPS
-// the asker uses and the CORPUS POSITION: where this node's pages, tracker and
-// vector rows last changed, which a write moves and a read — a barrier on a
-// log — never does ([AnswerDeps.Corpus]). A cache hit spends nothing and says
-// `cached: true`. A company whose knowledge base is not native has no position
-// to key on — an external wiki can change under the answer without this node
-// hearing — so its answers are never cached.
-//
+// A repeated question gets the same answer while nothing it could be written
+// from has changed. The cache is the NODE's ([AnswerDeps.Cache]), not built with
+// the catalogue, which a surface builds per request. The key is the normalised
+// question, the asker's APPS and the CORPUS POSITION ([AnswerDeps.Corpus]),
+// which a write moves and a read never does. A hit spends nothing and says
+// `cached: true`. A knowledge base that is not native has no position (an
+// external wiki changes unheard), so its answers are never cached.
+
 // # Each corpus only for an asker who uses its app
 //
-// The pages are the knowledge base's and the work items the tracker's, and an
-// answer QUOTES them: an answer written from a work item, read by somebody
-// kept off the tracker, is the work item read. So the pages are searched only
-// for an asker holding Doclet and the items only for one holding
-// the tracker ([authz.Shows], the one per-app filter every cross-app answer
-// goes through), and the table refuses an asker holding neither before
-// anything is searched ([authz.ClassAnyApp]). The apps are in the cache key for
-// the same reason: two askers who may read different corpora asked different
-// questions, however alike they typed them, and one's answer handed to the
-// other would carry what the second may not read.
+// An answer QUOTES its sources: one written from a work item, read by somebody
+// kept off the tracker, is the work item read. So pages are searched only for an
+// asker holding Doclet and items only for one holding the tracker
+// ([authz.Shows]), and the table refuses an asker holding neither
+// ([authz.ClassAnyApp]). The apps are in the cache key for the same reason: one
+// asker's answer handed to another could carry what the second may not read.
 
 // AnswerKnowledgeTool is the tool's wire name.
 const AnswerKnowledgeTool = "answer_knowledge"
@@ -115,47 +90,36 @@ const AnswerKnowledgeTool = "answer_knowledge"
 const (
 	// AnswerCacheEntries is how many answers one node keeps.
 	//
-	// 256: the palette asks at most once per settled question and a
-	// company's people ask the same few dozen things, so a hit is a
-	// repeated question at an unchanged corpus — and any write to a page,
-	// a task or a vector changes the position and makes every older entry
-	// unreachable, which is what bounds how long one lives. Each is a few
-	// kilobytes of Markdown and a source list, so the cache is a megabyte
-	// at most.
+	// 256: people ask the same few dozen things, and any write to a page, a
+	// task or a vector moves the corpus position and strands every older
+	// entry, which bounds how long one lives. At a few kilobytes each, the
+	// cache is a megabyte at most.
 	AnswerCacheEntries = 256
 
 	// AnswerPageSources and AnswerTaskSources are how many pages and work
 	// items one answer is written from.
 	//
-	// Five pages and three items: the page search's own turn-start depth
-	// is six ([searchHits]) and an answer reads each source whole rather
-	// than a title and a snippet, so it takes fewer; items are the
-	// secondary corpus — a knowledge answer is about what is WRITTEN
-	// DOWN, and a work item is usually a pointer to the work rather than
-	// an account of it.
+	// Five pages, under the search's turn-start depth of six ([searchHits]),
+	// because an answer reads each source whole; three items, the secondary
+	// corpus: an answer is about what is WRITTEN DOWN, and a work item usually
+	// points at the work rather than giving an account of it.
 	AnswerPageSources = 5
 	AnswerTaskSources = 3
 
 	// AnswerSourceBytes is the most of one source the answering model is
-	// handed — and a source longer than it is CONDENSED to it, for the
-	// question, never cut.
+	// handed. A longer source is CONDENSED to it for the question, never cut:
+	// a cut runbook loses the step four the question may be about.
 	//
 	// Four kilobytes, about a thousand tokens: a task's whole description,
 	// most runbooks whole, and at eight sources a prompt of about eight
-	// thousand tokens — small enough for any auxiliary model's context and
-	// for a person waiting on the answer. It used to be where every page
-	// was cut, unmarked, so an answer written from the first four
-	// kilobytes of a runbook could only conclude that it had no step four.
-	// A page past it is now rewritten by the same auxiliary model, told the
-	// question, keeping what bears on it — so the step four the question
-	// is about survives wherever on the page it is.
+	// thousand tokens, small enough for any auxiliary model and a waiting
+	// person.
 	AnswerSourceBytes = 4 << 10
 
 	// AnswerTimeout bounds the one model call.
 	//
-	// A minute: eight thousand tokens in and up to a thousand out on a
-	// small model is ten to thirty seconds at the tail, and a person is
-	// waiting — past a minute the answer is not worth waiting for.
+	// A minute: eight thousand tokens in and a thousand out on a small model
+	// is ten to thirty seconds at the tail, and a person is waiting.
 	AnswerTimeout = time.Minute
 )
 
@@ -191,10 +155,10 @@ type AnswerBudget interface {
 	// Refusing reports the company window with no room left, if any.
 	// THREE-VALUED: an unreadable counter is an error, never "room".
 	//
-	// A YES IS A REFUSAL, not an observation: it is asked immediately
-	// before the answer's first call, and the question is refused on yes,
-	// so an implementation records it as the gate turning that call away
-	// (the window's refusal stamp). Never ask it only to look.
+	// A YES IS A REFUSAL, not an observation: it is asked just before the
+	// answer's first call, so an implementation records it as the gate
+	// turning that call away (the window's refusal stamp). Never ask it only
+	// to look.
 	Refusing(ctx context.Context) (BudgetRefusal, bool, error)
 }
 
@@ -213,13 +177,13 @@ type AnswerDeps struct {
 	Models AnswerModels
 
 	// Budget is the company's windows, as the gate reads them. Nil omits
-	// the tool: an answer that could spend tokens against no counter at
-	// all is the one shape this is built to refuse.
+	// the tool: an answer spending against no counter is what the gate
+	// exists to refuse.
 	Budget AnswerBudget
 
-	// Corpus is where this node's knowledge corpus last changed — a token a
-	// write moves and a read never does — and false where it cannot say: the
-	// cache key's second half. Nil caches nothing.
+	// Corpus is where this node's knowledge corpus last changed (a token a
+	// write moves and a read never does), false where it cannot say: the
+	// cache key's corpus position. Nil caches nothing.
 	Corpus func() (string, bool)
 
 	// Actor is who is asking, off the caller's own credential
@@ -232,10 +196,9 @@ type AnswerDeps struct {
 	// surface builds — see [NewAnswerCache]. Nil caches nothing.
 	Cache *AnswerCache
 
-	// Rewrites is the cache a source condensed for a question is kept in,
-	// so the same question at the same corpus pays for each rewrite once.
-	// Nil keeps none; every rewrite is still charged and recorded by the
-	// seam Models resolves through.
+	// Rewrites keeps each source condensed for a question, so the same
+	// question at the same corpus pays for each rewrite once. Nil keeps
+	// none; every rewrite is still charged and recorded through Models.
 	Rewrites *compact.Cache
 }
 
@@ -252,10 +215,9 @@ type AnswerSource struct {
 	// wiki's page, which the dashboard has no route for.
 	URL string `json:"url,omitempty"`
 
-	// Written is what the source was read as — the label the door that found
-	// it gave it, which the model writing the answer read it under — and
-	// what the answer's envelope says of it ([answerKnowledge.answered]).
-	// Not on the wire: the envelope says it once for the whole answer.
+	// Written is the label the door that found the source gave it: what the
+	// answering model read it under and the envelope reports
+	// ([answerKnowledge.answered]). Not on the wire: the envelope says it once.
 	Written provenance.Label `json:"-"`
 }
 
@@ -330,11 +292,9 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalForbidden, AnswerKnowledgeTool+
 			" answers the person whose credential calls it, and this call carries none."), nil
 	}
-	// A PERSON BOUND TO A SEAT, and nobody else: [iam.ActorFor] names
-	// exactly that asker kind human, by the seat. The table's seated row
-	// refuses everybody else first; this is the arm that keeps the rule
-	// where the actor is read, so a surface wired without the table is not
-	// the one that answers an unbound credential. See the file head.
+	// A PERSON BOUND TO A SEAT only: [iam.ActorFor] names that asker kind
+	// human, by the seat. The table's seated row refuses everybody else
+	// first; this arm holds for a surface wired without the table.
 	if actor.Kind != worklet.AuthorHuman || strings.TrimSpace(actor.Handle) == "" {
 		return refused(tools.RefusalForbidden, fmt.Sprintf("%s runs on the auxiliary "+
 			"model of the seat its asker is bound to, and %q is bound to no seat, so "+
@@ -347,12 +307,9 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(AnswerKnowledgeTool + " needs `q` — the question, in plain words."), nil
 	}
 	if knowledge.CheckQuery(question) != nil {
-		// REFUSED, NOT CUT. The question IS the search text, so it takes
-		// the search's own bound ([knowledge.MaxQueryBytes]) — a longer one
-		// reaches no ranker usefully — and an answer to the first four
-		// hundred bytes of a question is an answer to a different one. It
-		// used to be cut to fit, silently, so the answer a person read was
-		// to a question they had not quite asked and nothing said so.
+		// REFUSED, NOT CUT: the question IS the search text, so it takes the
+		// search's bound ([knowledge.MaxQueryBytes]), and an answer to its
+		// first four hundred bytes answers a different question.
 		return failed(fmt.Sprintf("The question is %d bytes and %s takes at most %d. "+
 			"Ask it in a sentence or two — the search reads keywords, not a document.",
 			len(question), AnswerKnowledgeTool, knowledge.MaxQueryBytes)), nil
@@ -376,9 +333,8 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	principal, _ := iam.From(ctx)
 	reach := answerReachOf(principal)
 	if !reach.pages && !reach.tasks {
-		// THE TABLE REFUSES THIS before the tool runs; refused here too,
-		// because an answer from nothing would be one written from what
-		// the model already believes rather than from the company.
+		// The table refuses this first; refused here too, since an answer
+		// from nothing is what the model believes, not what the company wrote.
 		return refused(tools.RefusalForbidden, AnswerKnowledgeTool+" answers from "+
 			"Doclet and Worklet, and your access includes neither. An admin can "+
 			"give it to you."), nil
@@ -393,9 +349,8 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 
-	// THE GATE BEFORE ANY SPEND, and fail closed: tokens leave the
-	// building on the call, so a counter nobody can read does not let one
-	// through.
+	// THE GATE BEFORE ANY SPEND, failing closed: a counter nobody can read
+	// lets no call through.
 	refusal, refusing, err := t.deps.Budget.Refusing(ctx)
 	if err != nil {
 		// A CONDITION IS WRITTEN HERE, with the seat, since [nodeFailure]
@@ -462,10 +417,8 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if retryAt, resetsAt, limited := llm.LimitedUntil(err); limited {
 		// A LIMIT ALREADY REPORTED IS A WAIT, NOT A FAILURE, as every
 		// auxiliary caller reads one: the backend sat the entry out and
-		// launched nothing. Logged at warn as a failure, each press during
-		// the limit was another line burying the one that reported it, and
-		// answered as "busy" under this node's two-second hint, a person was
-		// sent back every two seconds to a limit that lifts in an hour.
+		// launched nothing. So no warn line per press, and the person is told
+		// when it lifts rather than sent back under a two-second busy hint.
 		log.InfoContext(ctx, "knowledge_answer_limited", "seat", actor.Handle,
 			"model", member.Key, "retry_at", instantOrNone(retryAt),
 			"resets_at", instantOrNone(resetsAt))
@@ -861,18 +814,14 @@ func instantOrNone(at time.Time) string {
 }
 
 // modelFailed is a failed answer as the person who asked reads it, by the
-// kind of failure the provider layer classified ([llm.KindOf]) — what
-// happened, and whether trying again can help — and whether a wait can clear
-// it, which the answer's Retry-After follows: a model that took too long and a
-// harness that ran and gave no usable answer may answer next time, while no retry
-// gets past a login the harness reports expired or missing, or a call the engine
-// itself cannot make ([llm.KindFatal]). A model at its usage limit is not one
-// of these: it is the wait [limitedSentence] tells.
+// provider layer's failure kind ([llm.KindOf]), and whether a wait can clear it,
+// which the answer's Retry-After follows: a timeout or a harness that gave no
+// usable answer may answer next time; no retry gets past an expired or missing
+// login, or a call the engine cannot make ([llm.KindFatal]). A usage limit is
+// not one of these: it is the wait [limitedSentence] tells.
 //
 // NEVER THE ERROR ITSELF, which went to the log: it names the provider entry,
-// the model and what the harness said, which was the whole of the sentence ("The
-// model could not answer (llm harness/claude-code/aux-small: rate_limit:
-// usage limit reached …). Try again shortly.") and nothing a person acts on.
+// the model and the harness's words, nothing a person acts on.
 func modelFailed(err error) (string, bool) {
 	if err == nil {
 		return "The model answered nothing. Try again shortly.", true

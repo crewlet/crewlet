@@ -16,9 +16,8 @@ import (
 )
 
 // handleChart is a chart whose one relation is between HANDLES: `lead` leads
-// `dev`, and nothing else leads anybody. It answers only what it is asked, by
-// the exact string, which is the point — a relation asked with a display name
-// is asked about somebody the chart has never heard of.
+// `dev`, and nothing else leads anybody. It matches the exact string, so a
+// relation asked with a display name is about somebody it never heard of.
 type handleChart struct{}
 
 func (handleChart) Leads(_ context.Context, actor, subject string) (bool, error) {
@@ -57,17 +56,13 @@ func (handleChart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, 
 
 // A LEAD NAMES A REPORT THE WAY A MODEL TYPES THEM, and is admitted.
 //
-// `set_priorities` resolves its `handle` against the chart — a model types
-// what it remembers, a role name as often as a handle — and then asks the lead
-// relation of the seat that resolves to. The registration gate used to decide
-// FIRST, on the raw argument, so a lead writing "Staff Engineer" was refused
-// as leading nobody of that name before the tool ever resolved it, while the
-// tool's own comment said the gate left the owner unnamed.
-//
-// Through [builtin.Decide] over a chart that knows only handles, so the one
-// relation decision is the one taken after the resolution. And the other half:
-// naming by role somebody the caller does NOT lead is still refused — the gate
-// stepping aside is only safe because the tool asks.
+// `set_priorities` resolves its `handle` against the chart (a model types a
+// role name as often as a handle) and only then asks the lead relation of the
+// resolved seat; a gate deciding on the raw argument would refuse "Staff
+// Engineer" as nobody. [builtin.Decide] runs over a chart that knows only
+// handles, so the one decision is the one after resolution. The other half:
+// naming by role somebody the caller does NOT lead is still refused, since
+// the gate stepping aside is safe only because the tool asks.
 func TestALeadNamesAReportTheWayAModelTypesThem(t *testing.T) {
 	t.Parallel()
 	dev := &org.Role{Name: "Staff Engineer", DeclaredHandle: "dev"}

@@ -11,13 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A CALL IS DECIDED WHOLE BEFORE ITS FIRST WRITE.
-//
-// Declaring a write's missing labels is that call's first append, on the
-// project's own subject. It ran ahead of the re-route's authority, the
-// relations' and the blockers' resolution — so a call refused for any of those
-// had already put its labels on the project's tag set, under a refusal telling
-// the caller nothing had been written.
+// A CALL IS DECIDED WHOLE BEFORE ITS FIRST WRITE: declaring missing labels
+// appends to the project's subject, so it follows the re-route's authority and
+// the relations' and blockers' resolution, or a refused call has already tagged
+// the project under a refusal saying nothing was written.
 func TestARefusedCallDeclaresNoLabelFirst(t *testing.T) {
 	t.Parallel()
 	labels := map[string]any{"labels": []any{"regression"}, "labels_create_missing": true}
@@ -74,11 +71,9 @@ func TestARefusedCallDeclaresNoLabelFirst(t *testing.T) {
 	}
 }
 
-// AN UPDATE WHOSE FIELDS LANDED SAYS SO when its dependencies did not.
-//
-// The call is two writes, and a refusal of the second was answered with the
-// default failure — "the change was NOT made" — about fields the first had
-// already set. A create has always answered this case with the item it filed;
+// AN UPDATE WHOSE FIELDS LANDED SAYS SO when its dependencies did not: the call
+// is two writes, and a refusal of the second must not say "the change was NOT
+// made" about fields the first set. As a create answers with the item it filed,
 // an update answers with the change it made.
 func TestAnUpdateWhoseDependenciesFailedReportsTheChangeItMade(t *testing.T) {
 	t.Parallel()
@@ -123,9 +118,9 @@ func TestAnUpdateWhoseDependenciesFailedReportsTheChangeItMade(t *testing.T) {
 	}
 }
 
-// A DEPENDENCY THIS BUILD CANNOT RECORD IS REFUSED BEFORE THE PATCH, not after
-// it: refused after, the fields had landed and the answer said the tracker was
-// not configured.
+// A DEPENDENCY THIS BUILD CANNOT RECORD IS REFUSED BEFORE THE PATCH: refused
+// after, the fields would land under an answer that the tracker is not
+// configured.
 func TestAnUnrecordableDependencyRefusesBeforeAnyWrite(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -140,16 +135,13 @@ func TestAnUnrecordableDependencyRefusesBeforeAnyWrite(t *testing.T) {
 	}
 }
 
-// A REFERENCE THIS NODE COULD NOT READ IS NOT A REFERENCE TO NOTHING.
-//
-// Every argument naming another item — a parent, a blocker, a link, the
-// question a comment answers — is read before anything is written, and a read
-// that failed came back as a sentence alone. The HTTP write surface reads its
-// status from a result's CAUSE, so a node that could not read its own Worklet
-// answered 422 "refused" rather than 503, and a client never came back. The
-// read's error is the cause now; and an item that plainly does not exist
-// still carries none of the tracker's not-found errors, because it is not the
-// object the call is about — the call is what is refused.
+// A REFERENCE THIS NODE COULD NOT READ IS NOT A REFERENCE TO NOTHING. Every
+// argument naming another item (a parent, a blocker, a link, the question a
+// comment answers) is read before any write, and a failed read is the result's
+// cause: the HTTP write surface reads its status from the CAUSE, so a sentence
+// alone answers 422 "refused" rather than 503 and a client never retries. An
+// item that does not exist carries none of the tracker's not-found errors: it
+// is not the object the call is about; the call is what is refused.
 func TestAnUnreadableReferenceCarriesTheReadsError(t *testing.T) {
 	t.Parallel()
 	down := fmt.Errorf("the tracker could not be read: %w", statelog.ErrUnavailable)

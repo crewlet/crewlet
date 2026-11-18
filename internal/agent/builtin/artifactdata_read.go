@@ -17,10 +17,9 @@ import (
 )
 
 // dataPageDefault and dataPageMax are how many rows one read answers by
-// default and at most: a page of rows is fenced field by field into a tool
-// answer, so it is held well under a model's useful context, and a sheet
-// larger than that is read a page at a time or asked a narrower question with
-// query_artifact_data.
+// default and at most: every row is fenced into the answer, so a page stays
+// well under a model's useful context; a larger sheet is paged, or narrowed
+// with query_artifact_data.
 const (
 	dataPageDefault = 25
 	dataPageMax     = 100
@@ -83,9 +82,9 @@ func (t *readArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if doc != "" {
 			return failed(t.Name() + ": a `doc` belongs to a `collection`; send both."), nil
 		}
-		// THE SCHEMA A MODEL SENDS BACK: set_artifact_schema replaces every
-		// collection and says to read them here first, so it is read whole
-		// or refused, never shown short and written back short.
+		// Whole or refused, never short: set_artifact_schema replaces every
+		// collection, and a model sends back what it read here, so a short read
+		// would drop collections.
 		schema, err := t.d.data.Store.CarriedSchema(ctx, a.head.ID)
 		if err != nil {
 			return dataFailure(ctx, t.Name(), err), nil
@@ -122,8 +121,8 @@ func (t *readArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return dataFailure(ctx, t.Name(), err), nil
 	}
-	// A PAGE TOO LARGE FOR AN ANSWER is read again at the size that fits,
-	// so its `next` resumes exactly after the last row it carried.
+	// A page too large for one answer is read again at the size that fits,
+	// so its `next` resumes right after the last row it carried.
 	if fit := rowsThatFit(page.Docs); fit < len(page.Docs) {
 		if page, err = read(fit); err != nil {
 			return dataFailure(ctx, t.Name(), err), nil
@@ -259,11 +258,10 @@ func queryOf(args map[string]any) (query.Query, error) {
 
 // ---- the rows, fenced ---------------------------------------------------- //
 
-// visible is docs as both readers may see them: the store has already applied
-// the agent's own reading, and where the turn acts for somebody, a row is kept
-// only when their reading admits it too, by the collection's own rule. A rule
-// the schema does not hold admits nobody: the collection appeared after the
-// schema was read, and the closed end is the safe one.
+// visible is docs as both readers may see them: the store applied the agent's
+// reading, and where the turn acts for somebody a row is kept only when their
+// reading admits it too ([dataAdmission.shows]). A collection the schema does
+// not hold (it appeared after the schema was read) admits nobody: the closed end.
 func (a dataAdmission) visible(schema []artifacts.Collection, collection string,
 	docs []artifactdata.Doc) []artifactdata.Doc {
 
@@ -327,10 +325,8 @@ func dataRows(ctx context.Context, turn *turnctx.Turn, tool string, a dataAdmiss
 		}
 		if len(d.Fields) > 0 {
 			row["fields"] = string(d.Fields)
-			// THE ROW'S TWO RECORDED WRITERS, and partial: a row's
-			// fields may each have been written by somebody between
-			// its creator and its last writer, whom the row does not
-			// name.
+			// The row's two recorded writers, partial: a field may have
+			// been written by somebody in between, whom the row does not name.
 			writers := []provenance.Author{read.writer(d.UpdatedBy.Name, d.UpdatedBy.Kind)}
 			if d.CreatedBy != d.UpdatedBy {
 				writers = append(writers, read.writer(d.CreatedBy.Name, d.CreatedBy.Kind))

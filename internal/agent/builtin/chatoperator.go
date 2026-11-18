@@ -18,46 +18,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
-// The chat gestures a PERSON makes, which no seat's registry holds.
+// The chat gestures a PERSON makes, which no seat's registry holds (why each is
+// withheld from a seat: [chatlet.OperatorOnlyTools]). They are tools because
+// the dashboard writes nothing of its own (ADR-0024): each is one
+// `POST /operator/act/{tool}` as the token's person, served to the act
+// transport and to that person's own assistant alike through [ChatDeps].
 //
-// # Why they exist as tools at all
-//
-// Because the dashboard writes nothing of its own (ADR-0024): every change a
-// person makes from it is `POST /operator/act/{tool}`, one tool of the operator
-// catalogue per request, made as the person the token is bound to — so a room
-// a person creates, a message they edit or take back, a conversation they open
-// and how far they have read are each a tool here, served to the act transport
-// and to that person's own assistant alike. The same seam carries every one of
-// them ([ChatDeps]).
-//
-// # Who may
-//
-// THE AUTHORITY TABLE DECIDES WHO, and the store decides WHICH ROOM. Every one
-// is a person's verb, so the table refuses a seat and a credential acting as
-// itself before anything is read. What the arguments cannot say is decided
-// after a read: whose words a message is ([ChatDeps.remarkAuthority]), and
-// who made a room and which unit holds it, which is what its archive turns on
-// ([updateChannel]). The rest is the store's, the same rules a seat meets: only
-// an author edits, a private room refuses whoever is outside it, a unit's room
-// is the org chart's.
-//
-// # Why no seat is given them
-//
-// Each for its own reason, written beside its name in internal/chatlet's
-// vocabulary ([chatlet.OperatorOnlyTools]). In short: a seat corrects itself by
-// saying so rather than rewriting the record, a room and its membership are a
-// company's furniture and a private room's readership, and a read cursor is a
-// person's attention.
-//
-// # How a repeat is the same gesture
-//
-// Through the call's key ([callOpKey]), exactly as for the seat tools: under
-// the act transport the key is the one the request carried, so a person's
-// retry after an `unknown` is the first attempt's operation and is answered
-// with what landed; over MCP each call is a new operation. The one exception
-// is [markChatRead], which is not a record on the log and needs no operation —
-// a cursor only advances and a mute or an unmute states one fact about one
-// room, so the same flush twice leaves the same state.
+// THE AUTHORITY TABLE DECIDES WHO (refusing a seat, or a credential acting as
+// itself, before any read) and the store decides WHICH ROOM. What the arguments
+// cannot say is decided after a read: whose words a message is
+// ([ChatDeps.remarkAuthority]), a room's creator and unit ([updateChannel]).
+// A repeat is the same gesture through [callOpKey], as for the seat tools; only
+// [markChatRead], on no log and idempotent, needs no operation.
 
 // ---- create_channel ---------------------------------------------------- //
 
@@ -78,11 +50,9 @@ func (t *createChannel) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			// `channel`, AS EVERY CHAT TOOL NAMES ITS ROOM: a room's name
-			// is its address, and the room this makes answers to it from
-			// the moment it exists — so a failed create names the room a
-			// caller looks up to see what became of it, as every other
-			// failed chat write does.
+			// `channel`, AS EVERY CHAT TOOL NAMES ITS ROOM: the name is the
+			// address, so a failed create names the room a caller looks up
+			// to see what became of it.
 			"channel": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("The new room's name, which is its "+
@@ -137,10 +107,8 @@ func (t *createChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Members: members,
 	}
 	again := callRepeat(turn, actor.OpKey, name)
-	// A ROOM NOBODY CAN SAY WAS MADE IS NOT ONE TO REPORT: the id below
-	// would be a create's that may never have landed. Looking first is safe
-	// either way — a second create of the same name is refused because the
-	// name is taken.
+	// AN UNKNOWN CREATE REPORTS NO ROOM: its id may never have landed. Looking
+	// first is safe, since a second create of the name is refused as taken.
 	next := func(unvouched bool) string {
 		return unknownNext(unvouched, again, "List the rooms with "+ListChannelsTool,
 			"the second is refused because the name is taken")
@@ -290,11 +258,9 @@ func (t *updateChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if t.deps.Writer == nil {
 		return unconfiguredChat(name), nil
 	}
-	// A NAMED FIELD IS SET AND AN ABSENT ONE IS LEFT ALONE, which is the
-	// record's own rule: an empty topic is a topic cleared, never "no change".
-	// A NULL IS ABSENT, as the check at the surface reads it (ADR-0059): it
-	// names nothing, where read as named it cleared a topic or a purpose and
-	// refused an archive the check had admitted.
+	// A NAMED FIELD IS SET AND AN ABSENT ONE LEFT ALONE, the record's own rule:
+	// an empty topic clears it. A NULL IS ABSENT, as the surface check reads it
+	// (ADR-0059), or it would clear a field or refuse an archive it admitted.
 	var patch chatlet.ChannelPatch
 	if args["topic"] != nil {
 		topic := strings.TrimSpace(argString(args, "topic"))
@@ -342,10 +308,9 @@ func (t *updateChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		authority = decided
 	}
 	if patch.AutoJoin != nil {
-		// AN ADMINISTRATOR'S, asked of the authority table here and carried
-		// to the store as the decision, as the archive's is: the room's
-		// kind, which only a public room passes, is the store's to judge
-		// against its own snapshot.
+		// AN ADMINISTRATOR'S, decided by the table here and carried to the
+		// store like the archive's; the room's kind (public only) is the
+		// store's to judge against its own snapshot.
 		if refused := t.deps.mayWrite(ctx, authz.ActionChatAutoJoin, authz.Object{
 			Kind: authz.KindChannel, ID: id,
 		}); refused != nil {
@@ -362,10 +327,9 @@ func (t *updateChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if written.Outcome.Outcome == statelog.OutcomeUnknown {
 		return stated(name, written, look, nil)
 	}
-	// THE ROOM'S SETTINGS AS THEY NOW STAND, which this call wrote only
-	// part of: the topic or the purpose it left alone is whoever set it
-	// last, so each is fenced as list_channels fences it — a room's label
-	// by writers the room does not name (ADR-0040).
+	// THE ROOM'S SETTINGS AS THEY NOW STAND: a topic or purpose this call
+	// left alone is whoever set it last, so each is fenced as list_channels
+	// fences it, by writers the room does not name (ADR-0040).
 	read := newForeignRead(turn, actor.Name())
 	read.fence(fieldPath{}.key("topic"), provenance.SourceChatRoom, nil, true, written.Channel.Topic)
 	read.fence(fieldPath{}.key("purpose"), provenance.SourceChatRoom, nil, true, written.Channel.Purpose)
@@ -378,22 +342,14 @@ func (t *updateChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // archiveAuthority decides whether the caller may archive the room, or open it
-// again, against the room as it is stored ([authz.ActionChatArchive]).
+// again, against the room as stored ([authz.ActionChatArchive]): who may is ON
+// THE ROW, never in the arguments — its creator, and the lead of the unit the
+// org chart now records a unit's room under.
 //
-// # Why after a read
-//
-// Because both halves of who may are ON THE ROW and never in the arguments: a
-// room's creator archives it, and so does the lead of the unit a unit's room
-// is recorded under — and which unit that is, the org chart moves. Decided on
-// the arguments, every caller but an admin was refused as naming nobody, and
-// a unit's own lead could not close their unit's room.
-//
-// # Why the unit is carried
-//
-// The room was read outside the write's snapshot, so the unit the decision
-// was taken on travels as a PRECONDITION ([chatlet.ChannelAuthority.ArchiveUnit]):
-// a room re-homed to another unit between the read and the write is refused
-// as a conflict, rather than archived by a lead of the unit it left.
+// The room is read outside the write's snapshot, so the unit decided on
+// travels as a PRECONDITION ([chatlet.ChannelAuthority.ArchiveUnit]): a room
+// re-homed between the read and the write is refused as a conflict rather
+// than archived by a lead of the unit it left.
 func (d ChatDeps) archiveAuthority(ctx context.Context, viewer, channelID string) (
 	chatlet.ChannelAuthority, *tools.Result) {
 
@@ -444,9 +400,8 @@ func (t *setChannelMembers) Parameters() map[string]any {
 			"members": membersSchema("Everybody who is in the room after this " +
 				"call. An empty list empties it."),
 			// THE READ THE SET WAS BUILT FROM, compared inside the write's
-			// own snapshot ([chatlet.Store.SetMembers]): a screen restating
-			// everybody to change one member's following must not write
-			// back over a member somebody took out a moment before.
+			// snapshot ([chatlet.Store.SetMembers]), so restating everybody
+			// cannot write back over a member somebody just took out.
 			"expected_members": membersSchema("The room's membership as you " +
 				"read it, each member with their follow_all, which the change " +
 				"was built from. If the room holds anybody else now, or " +
@@ -468,11 +423,9 @@ func (t *setChannelMembers) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if t.deps.Writer == nil {
 		return unconfiguredChat(name), nil
 	}
-	// AN ABSENT LIST IS REFUSED, AN EMPTY ONE IS A GESTURE. Emptying a room
-	// is real, so "you sent nothing" cannot be read as "nobody" — and null
-	// is nothing sent, as the check at the surface reads it (ADR-0059): it
-	// names `members` required and missing, and a null read as the empty
-	// list emptied the room under that very finding.
+	// AN ABSENT LIST IS REFUSED, AN EMPTY ONE EMPTIES THE ROOM: "sent nothing"
+	// is never "nobody". Null is nothing sent, as the surface check reads it
+	// (ADR-0059).
 	if args["members"] == nil {
 		return failed(chatlet.SetChannelMembersTool + " needs `members` — the whole " +
 			"membership after this call; an empty list empties the room."), nil
@@ -482,9 +435,8 @@ func (t *setChannelMembers) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	// ABSENT IS NO EXPECTATION, and the same reader as `members` otherwise:
-	// an expectation naming nobody by mistake would be compared against an
-	// empty room and refuse every change, so it too has the one spelling.
+	// ABSENT IS NO EXPECTATION; otherwise the same reader as `members`, since
+	// one naming nobody by mistake would refuse every change.
 	var expected *[]chatlet.Member
 	if args["expected_members"] != nil {
 		read, readRefusal := argMemberSet(name, args, "expected_members", "everybody "+
@@ -644,25 +596,22 @@ func (t *editMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	// WHOSE WORDS THEY ARE decides it, and the store refuses anybody but
-	// their author an edit whoever the table admitted — an edit puts words
-	// in somebody's mouth, so there is no moderator's edit to carry.
+	// WHOSE WORDS THEY ARE decides it: the store refuses anybody but the
+	// author an edit, since an edit puts words in somebody's mouth — there is
+	// no moderator's edit.
 	if _, refusal := t.deps.remarkAuthority(ctx, authz.ActionChatEdit, actor.Name(),
 		id, messageID); refusal != nil {
 		return *refusal, nil
 	}
-	// THE MENTIONS ARE RE-READ FROM THE NEW WORDS, because the body is what
-	// they are derived from: an edit that carried the first draft's set
-	// would leave the row naming whoever the first draft named.
+	// THE MENTIONS ARE RE-READ FROM THE NEW WORDS: the first draft's set would
+	// leave the row naming whoever that draft named.
 	in := chatlet.EditMessage{Body: body}
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)
 	}
-	// THE LINKS ARE NOT: they change only when the call names them, so a typo
-	// fixed without re-sending them keeps every one ([chatlet.EditMessage]). A
-	// named list replaces them — an empty one included, which is how they are
-	// removed, so it must arrive as empty rather than as absent. A null names
-	// none, as the check at the surface reads it (ADR-0059), and keeps them.
+	// THE LINKS ARE NOT: they change only when named ([chatlet.EditMessage]).
+	// A named list replaces them, and an empty one removes them, so it must
+	// arrive empty rather than absent; a null names none (ADR-0059).
 	if args["links"] != nil {
 		links := argStrings(args, "links")
 		if links == nil {
@@ -670,9 +619,8 @@ func (t *editMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		in.Links = &links
 	}
-	// STATED: the same words again replace the message with what it already
-	// says, so a repeat after an `unknown` changes nothing if the first
-	// landed.
+	// STATED: the same words again change nothing, so a repeat after an
+	// `unknown` is safe.
 	const look = "Read the message with " + ReadChannelTool
 	written, err := t.deps.Writer.Edit(ctx, actor, id, messageID, in)
 	if err != nil {
@@ -933,9 +881,8 @@ func (t *markChatRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				coord.ThreadRef{ChannelID: ref[0], RootID: ref[1]})
 		}
 	}
-	// A ROOM AT A TIME, never the list: the person names the rooms whose
-	// state changes and every other keeps its own, so muting one room needs
-	// nothing read first — [coord.ChatReadDelta]'s own contract.
+	// A ROOM AT A TIME, never the list: every room not named keeps its state,
+	// so muting one needs nothing read first ([coord.ChatReadDelta]).
 	delta.Mute = argStrings(args, "mute")
 	delta.Unmute = argStrings(args, "unmute")
 	if args["dnd_until"] != nil {
@@ -965,38 +912,31 @@ func (t *markChatRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	// A CURSOR IS A PERSON'S, and the table refuses a seat this verb before
-	// anything is read. This is the same rule where the record is written,
-	// for a surface wired without the table: the coordination store keys a
-	// read state by whatever handle it is given and knows no kinds.
+	// A CURSOR IS A PERSON'S. The table already refuses a seat; this holds a
+	// surface wired without it, since the coordination store keys a read
+	// state by any handle and knows no kinds.
 	if !actor.IsHuman() {
 		return refused(tools.RefusalForbidden, fmt.Sprintf("%s is a person's: "+
 			"%s is a %s, and a seat is woken rather than reading, so it has no "+
 			"place in a room to record.", name, actor.Name(), actor.Kind)), nil
 	}
-	// THE RECORD IS THE CALLER'S OWN, kept under the seat they hold — the
-	// actor's name, which is [iam.RecordOwner]'s answer for a bound person —
-	// and the tool takes no handle, so nobody marks another's.
+	// THE RECORD IS THE CALLER'S OWN, under the actor's name ([iam.RecordOwner]'s
+	// answer for a bound person); the tool takes no handle, so nobody marks
+	// another's.
 	state, err := t.deps.Cursors.AdvanceChatRead(ctx, actor.Name(), delta)
 	switch {
 	case errors.Is(err, coord.ErrInvalidReadState):
-		// THE MERGE REFUSED WHAT WAS SENT, and it refuses it the same way
-		// every time, so this is the caller's to change rather than to
-		// retry. Two refusals reach it from here — a mute that would take
-		// the set past its cap, and one room both muted and unmuted in one
-		// call — because [argCursors] refuses a cursor naming no room and
-		// [argStrings] drops an empty room id before any flush is sent; and
-		// the caller that named those rooms reads it, so it is said in the
-		// merge's own words rather than with the Go package's prefix.
+		// THE MERGE REFUSED WHAT WAS SENT, the same way every time: the
+		// caller's to change, not retry. Only a mute past the set's cap or a
+		// room both muted and unmuted reach here ([argCursors] and
+		// [argStrings] stop a room-less entry first), so it is said in the
+		// merge's own words, without the Go package's prefix.
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: "+
 			"%s. Nothing was recorded.", name, coord.ReadStateSentence(err))), nil
 	case errors.Is(err, coord.ErrWriteUnknown):
-		// SENT, AND THE ANSWER LOST: it may have landed, so "nothing was
-		// recorded" is exactly what nobody can say — a compare-and-set whose
-		// reply never came. Unlike a log write, the repeat is not a second
-		// operation to warn against: the merge is idempotent, so a flush
-		// that did land is merged again to the same record. No operation
-		// names it, because none exists.
+		// SENT, AND THE ANSWER LOST: it may have landed. Unlike a log write,
+		// a repeat is no second operation to warn against — the merge is
+		// idempotent — and no operation exists to name.
 		return failedUnknown("", false, fmt.Sprintf("%s: whether this landed is "+
 			"unknown — the coordination store took the write and its answer "+
 			"was lost. It may have been recorded and it may not — do not report "+
@@ -1004,9 +944,8 @@ func (t *markChatRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"again is safe: a place in a room only moves forward, and a mute, "+
 			"an unmute or a do-not-disturb sent twice is stated twice.", name)), nil
 	case err != nil:
-		// THE COORDINATION STORE'S CONDITION, before any write: it could not
-		// be read, or every compare-and-set lost to another writer — each a
-		// write the store never took.
+		// THE COORDINATION STORE'S CONDITION: unreadable, or every
+		// compare-and-set lost to another writer — a write it never took.
 		why := "the coordination store could not take it"
 		if words, ok := Condition(err); ok {
 			why = words
@@ -1026,28 +965,22 @@ func (t *markChatRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // markChatReadAnswer is what a `mark_chat_read` that landed answers.
 type markChatReadAnswer struct {
 	// Read is the caller's whole read state as the write left it, NAMED BY
-	// ITS PERSON ([coord.PersonChatRead]) — the one form a client is handed a
-	// read state in, so the live channel's push and the rail's own `read`
-	// carry exactly this.
+	// ITS PERSON ([coord.PersonChatRead]): the one form a client is handed a
+	// read state in, the live channel's push and the rail's `read` included.
 	//
-	// THE SCREEN THAT FLUSHED APPLIES IT, which is why it is the same form.
-	// The push reaches every socket of the person, the pressing tab's
-	// included, and the record's revision orders the two: whichever arrives
-	// first is the state, and the other is the same revision and moves
-	// nothing. Answered as anything else — a bare state, or no state at all —
-	// the pressing tab re-read its rooms on the answer AND on the push, and a
-	// tab could not tell this person's state from the last person's.
+	// THE SCREEN THAT FLUSHED APPLIES IT, as it applies the push that reaches
+	// every socket of the person; the record's revision orders the two, so
+	// the second moves nothing. Any other form made the tab re-read its rooms
+	// twice and left it unable to tell this person's state from the last's.
 	Read coord.PersonChatRead `json:"read"`
 
 	// Outcome is always applied: a read state is a compare-and-set in the
 	// coordination store, which has landed when it answers.
 	Outcome statelog.Outcome `json:"outcome"`
 
-	// Position is always null — APPLIED AT NO POSITION, since a read state is
-	// on no log and there is nothing for a read to wait for. Stated rather
-	// than omitted, because the act transport reads an absent position and a
-	// null one alike and a reader of the tool's answer should not have to know
-	// that.
+	// Position is always null: a read state is on no log, so a read has
+	// nothing to wait for. Stated rather than omitted, so a reader of the
+	// answer need not know the act transport reads absent and null alike.
 	Position *string `json:"position"`
 }
 
@@ -1057,10 +990,8 @@ type markChatReadAnswer struct {
 // is taken.
 //
 // AN ENTRY IS AN OBJECT OR A STRING, because a bare handle is a member and the
-// schema is the call's contract: the check at the surface holds every call to
-// it before the tool runs (ADR-0059), so an entry declared an object alone was
-// a bare handle refused as a misread — the dashboard's founding members and
-// every model that writes one — while the description below offered it.
+// surface check holds every call to this schema before the tool runs
+// (ADR-0059): declared an object alone, a bare handle would be refused.
 func membersSchema(description string) map[string]any {
 	return map[string]any{
 		"type": "array",
@@ -1084,21 +1015,14 @@ func membersSchema(description string) map[string]any {
 // argMembers reads a list of members: each `{handle, follow_all}`, or a bare
 // handle, which is what a model writes when nobody follows everything.
 //
-// BY THE CHECK'S OWN READERS (ADR-0059), so the members the check at the
-// surface admits ([membersSchema]) are the members read here: the list as
-// [argval.StringItems] reads one (a list, or the one string a model sends
-// where a list belongs, split on commas into bare handles), an entry as
-// [argval.Object] reads an object or else as [argval.String] reads a handle,
-// and `follow_all` as [argval.Bool] reads a flag. Null is absent to each, as
-// it is to the check: the list, an entry of it (a member not named, as
-// [argval.Strings] drops one) and a `follow_all`.
+// BY THE CHECK'S OWN READERS (ADR-0059), so it reads exactly what
+// [membersSchema] admits: the list by [argval.StringItems] (a comma-split
+// string included), an entry by [argval.Object] or else [argval.String], and
+// `follow_all` by [argval.Bool]. Null is absent to each.
 //
-// ANYTHING ELSE IS REFUSED NAMING THE ENTRY, rather than dropped: a member a
-// caller listed and this did not read is somebody left out of a private room
-// with nothing to say so. Nil for a value that names nobody — absent, an empty
-// list, a string naming no handle, a list of nulls — and the caller decides
-// which of those it can tell apart ([setChannelMembers] empties a room for
-// the empty list alone).
+// ANYTHING ELSE IS REFUSED NAMING THE ENTRY, never dropped: a dropped member
+// is somebody silently left out of a private room. Nil for any value naming
+// nobody; [argMemberSet] tells the empty list apart.
 func argMembers(tool string, args map[string]any, key string) ([]chatlet.Member, *tools.Result) {
 	if args[key] == nil {
 		return nil, nil
@@ -1142,18 +1066,14 @@ func argMembers(tool string, args map[string]any, key string) ([]chatlet.Member,
 	return members, nil
 }
 
-// argMemberSet reads a WHOLE membership under key, which a value that is
-// present and names nobody must spell as the empty list.
+// argMemberSet reads a WHOLE membership under key, where only the empty list
+// means nobody; want is what the refusal asks for in its place, and the caller
+// has already decided what an absent key means.
 //
-// ONLY THE EMPTY LIST IS NOBODY. Every other value naming nobody is refused:
-// a string where the list belongs that names no handle ("", " , "), which the
-// check at the surface admits as a list, and a list whose every entry is
-// null. Each is likelier a caller that meant to send nothing than one that
-// meant nobody, and for `members` nobody empties a private room, which leaves
-// nobody who can read it or set its members again. So the gesture has the
-// one spelling that cannot be anything else, read by the list's own reader
-// ([argval.List]) rather than as text. want is what the refusal asks for in
-// the value's place. The caller has already decided what an ABSENT key means.
+// Any other value naming nobody (a handle-less string such as " , ", a list of
+// nulls) is refused: likelier a caller meaning to send nothing, and for
+// `members` nobody empties a private room beyond anyone's reach to read it or
+// set its members again. Hence the one unambiguous spelling, by [argval.List].
 func argMemberSet(tool string, args map[string]any, key, want string) (
 	[]chatlet.Member, *tools.Result) {
 
@@ -1172,22 +1092,16 @@ func argMemberSet(tool string, args map[string]any, key, want string) (
 	return []chatlet.Member{}, nil
 }
 
-// argCursors reads read cursors: room id to a packed log position.
+// argCursors reads read cursors, id to a packed log position, for each of
+// `cursors`, `rewind` and `thread_cursors`, naming key in a refusal.
 //
-// BY THE CHECK'S OWN READER ([argval.Object]), so a room whose position is
-// null is a room not named, as the check at the surface admits it (ADR-0059):
-// the rooms named beside it are recorded, and the mutes the same call names.
-// Nil when the object names no room — empty, or every position null — so a
-// call naming nothing else is refused as naming nothing to record, rather
-// than flushed empty and answered `applied` having recorded nothing.
+// BY THE CHECK'S OWN READER ([argval.Object], ADR-0059): a null position is an
+// id not named. Nil when no id is named, so a call naming nothing else is
+// refused rather than answered `applied` having recorded nothing.
 //
 // A POSITION THAT IS NOT A WHOLE, NON-NEGATIVE NUMBER IS REFUSED, never read
-// as zero: a zero cursor is ignored by the merge, so a cursor that failed to
-// parse would answer `applied` and leave the badge where it was.
-//
-// ONE READER FOR THE THREE MAPS OF PLACES (`cursors` and `rewind` keyed by a
-// room, `thread_cursors` by a thread's root), named by key in a refusal, so a
-// call is told which of them it sent wrong.
+// as zero: the merge ignores a zero cursor, so a parse failure would answer
+// `applied` and leave the badge where it was.
 func argCursors(key string, raw any) (map[string]int64, *tools.Result) {
 	given, ok := argval.Object(raw)
 	if !ok {
@@ -1282,12 +1196,9 @@ func argMarkRefs(args map[string]any, key, idKey string) ([][2]string, *tools.Re
 
 // argPositionValue reads a packed log position, reporting whether it could.
 //
-// [argIntValue]'s discipline, which is the check's own integer reader
-// ([argval.Whole]): a whole, finite number, the whole string. It reads a
-// decoded JSON literal (a json.Number) as an INTEGER, exactly — which a
-// packed position needs, since it puts the generation above bit 40 and
-// through a float it is exact only below 2^53 — so no reading of its own is
-// kept here for the check to disagree with (ADR-0059).
+// By [argIntValue], the check's own integer reader ([argval.Whole], ADR-0059),
+// which reads a json.Number exactly as an INTEGER: a packed position puts the
+// generation above bit 40, and a float is exact only below 2^53.
 func argPositionValue(raw any) (int64, bool) {
 	v, ok := argIntValue(raw)
 	return int64(v), ok
