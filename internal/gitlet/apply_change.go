@@ -311,7 +311,7 @@ func writeChanges(ctx context.Context, tx store.Execer, maxVariables int, w chan
 				r.head, r.revision, r.owner, string(r.ownerKind), r.operator, string(r.work.Backend), r.work.ID,
 				r.work.Key, r.work.Project, r.turn, r.run, r.openedAt, r.opened, r.closedAt, r.closeReason,
 				r.mergedAt, string(r.mergedVia), r.mergeOID, r.mergedBy, string(r.mergedByKind), r.mergedOperator,
-				r.overrideReason, r.version, r.position, r.updatedAt}
+				r.overrideReason, r.version, r.position, r.updatedAt, r.reverts}
 		})
 	return err
 }
@@ -494,5 +494,5 @@ const (
 	// insertChangesSQL and changeValuesSQL are [writeChanges]' statement, a
 	// chunk each: every column [changeColumns] names, in its order.
 	insertChangesSQL = `INSERT INTO code_changes (` + changeColumns + `) VALUES `
-	changeValuesSQL  = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	changeValuesSQL  = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 )

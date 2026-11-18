@@ -443,6 +443,10 @@ func (p Proposal) validFields() error {
 		if err := p.Change.validFields(); err != nil {
 			return err
 		}
+		if r := p.Change.Reverts; r < 0 || (r > 0 && p.Via != ViaEngine) {
+			return badField("change.reverts", "%d — only an engine-built revert names the change it reverts, "+
+				"by its number", r)
+		}
 		if _, r, why := ChangeSource(p.Commands); r != "" {
 			return badField("change", "%s — its receiver proposes a change only beside the one branch a "+
 				"push sets", why)

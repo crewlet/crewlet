@@ -24,7 +24,7 @@ import (
 // every push to main ships as main's image, so a later shape may meet a build
 // without it: what a record gains is a [versionedFields] row, and each version
 // past 1 is a constant below naming what it added.
-const RecordVersion = TestedInVersion
+const RecordVersion = RevertsVersion
 
 // WorkingForVersion is the version from which a record carries whom an agent's
 // write was made for (ADR-0109; concerns.go, "Whom the actor acted for"): on a
@@ -55,6 +55,10 @@ const CheckCountsVersion = 6
 // TestedInVersion is the version from which a failed check's ejection names the train it failed on
 // (code_queue.ejected's tested_in); an ejection below it names none.
 const TestedInVersion = 7
+
+// RevertsVersion is the version from which a push opening a change names the change it reverts
+// (code_changes.reverts), as a revert_change's push does; a record below it names none.
+const RevertsVersion = 8
 
 // baseRecordVersion is version 1, the base format: what every build reads, and
 // what a record carrying no versioned field is stamped at. The barrier, the
@@ -113,6 +117,8 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "tail_cut"}},
 	{Name: "Ejection.TestedIn", Since: TestedInVersion, Op: string(OpEject),
 		Path: []string{"mutation", "entries", "tested_in"}},
+	{Name: "ChangeOption.Reverts", Since: RevertsVersion, Op: string(OpPush),
+		Path: []string{"mutation", "pushes", "change", "reverts"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

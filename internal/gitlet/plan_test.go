@@ -1267,6 +1267,8 @@ func registeredStatements() map[string]statement {
 			[]string{changesWorkKey + " (work_backend=? AND work_id=? AND opened_position<=?)"}},
 		"change by number": {changeByNumberSQL, []any{"repo-1", 3},
 			[]string{changesNumberKey + " (repo_id=? AND number=?)"}},
+		"reverted by": {revertedBySQL, []any{"repo-1", 3},
+			[]string{changesRevertsKey + " (repo_id=? AND reverts=?)"}},
 		"change authors": {changeAuthorsSQL, []any{"repo-1-change-000001"}, []string{authorKey + " (change_id=?)"}},
 		"revisions": {revisionsSQL, []any{"repo-1-change-000001", 200},
 			[]string{revisionKey + " (change_id=?)", factsKey + " (change_id=? AND n=?)"}},

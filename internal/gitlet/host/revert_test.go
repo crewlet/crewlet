@@ -35,8 +35,11 @@ func (c *mergeCase) mainTip() string {
 // base). The push's record opens "Revert <repo>!<n>" from that branch into
 // main at that commit; main does not move.
 //
+// The reverted change's read then answers the revert as reverted_by.
+//
 // Mutations: revert a fast-forward against its merge_oid's first parent →
-// the first commit's file survives, red; open no change in the push → red.
+// the first commit's file survives, red; open no change in the push → red;
+// leave Reverts off the revert's change option → reverted_by nil, red.
 func TestARevertOpensAChange(t *testing.T) {
 	t.Parallel()
 	c := newMergeCase(t, gitlettest.SoloOptions{}, gitlettest.Settings(), map[string]string{"README.md": "one\n"})
@@ -78,6 +81,15 @@ func TestARevertOpensAChange(t *testing.T) {
 			!opened.State.Live() {
 			t.Errorf("%s: the revert opened %+v, want %q from %s into main at %s", method, opened.ChangeRow, want,
 				branch, got.Commit)
+		}
+		// THE REVERTED CHANGE ANSWERS ITS REVERT, from the number the push's record names.
+		by := c.change(n).RevertedBy
+		if wantRef := fmt.Sprintf("%s!%d", gitlettest.RepoName, got.Change.Number); by == nil ||
+			by.Ref != wantRef || by.State != gitlet.ChangeStateOpen || by.Title != opened.Title {
+			t.Errorf("%s: %s!%d is reverted by %+v, want %s, open", method, gitlettest.RepoName, n, by, wantRef)
+		}
+		if opened.RevertedBy != nil {
+			t.Errorf("%s: the revert itself reads reverted by %+v", method, opened.RevertedBy)
 		}
 	}
 }
