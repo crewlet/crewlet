@@ -46,10 +46,10 @@ type HeldCall struct {
 	// would run is not what the person approved.
 	Unopened string
 
-	// outcome is what became of the call, set by [makeHeld], and kept what it
-	// returned as the run's row sealed it, set by makeHeld where a result is
-	// recorded ([HeldCommit.Record], [HeldPrior.Kept]): what the answer's lead
-	// keeps of it, for a later brief to tell again ([Asked.lead]).
+	// outcome is what became of the call, and kept its result as the run's row
+	// sealed it, where one was recorded ([HeldCommit.Record], [HeldPrior.Kept]),
+	// both set by [makeHeld]:
+	// the answer's lead keeps it for a later brief to tell again ([Asked.lead]).
 	outcome heldOutcome
 	kept    *sandbox.HeldKept
 }
@@ -60,47 +60,32 @@ type HeldCall struct {
 // opening the result under the fleet keyring.
 type HeldCommit interface {
 	// Marked is how an earlier attempt at the same answer left the call, as
-	// the claim that carries the run on read its row, and false where no
-	// attempt had marked it ([sandbox.HeldCall.Calling]): Made says whether
-	// that attempt recorded what the call returned (Result), and Unread that
-	// it did where what it recorded cannot be opened here.
+	// the claim carrying the run on read its row, false where none marked it
+	// ([sandbox.HeldCall.Calling]); Made and Unread as for Begin.
 	//
-	// THE CLAIM'S OWN READ, which needs no other: nothing clears a mark but
-	// the next job's opening, which ends the claim, so a call the claim read
-	// as marked stays marked for as long as the claim holds the row. A call
-	// it read as unmarked is the one [HeldCommit.Begin] marks, and Begin's
-	// answer is the store's word on whether its mark was the first.
+	// THE CLAIM'S OWN READ needs no other: only the next job's opening clears
+	// a mark, and it ends the claim, so a call read as marked stays marked
+	// while the claim holds the row. One read as unmarked is the one
+	// [HeldCommit.Begin] marks, whose answer is the store's word on whether
+	// its mark was the first.
 	Marked(ctx context.Context) (HeldPrior, bool)
 	// Begin marks the call as being made. First is true where this mark is
-	// the first, and the caller makes the call; false where some earlier
-	// attempt at the same answer marked it, and Made says whether that
-	// attempt recorded what the call returned (Result), and Unread that it did
-	// where what it recorded cannot be opened here.
+	// the first, and the caller makes the call; otherwise Made says whether
+	// the earlier attempt recorded what the call returned (Result), and Unread
+	// that it did where that record cannot be opened here.
 	Begin(ctx context.Context) (HeldPrior, error)
-	// Record records what the call returned — result, as the run that
-	// carries the work on is handed it — and the call itself as a call of the
-	// run's round, with what the surface that made it answered (answered:
-	// whether it failed and why, and who answered it)
-	// ([sandbox.PendingStore.RecordHeldResult]): every reader of whether the
-	// turn replied reads the round's calls, and a call made and recorded
-	// nowhere among them was a reply that read as never sent. The result and
-	// the call's entry land on the row in one write and the call reaches the
-	// round's log after it; an error after the row's write leaves the call to
-	// the next job's opening, which appends it ([sandbox.OwedCall]).
-	//
-	// It answers the result as it sealed it, with the fields its seal binds
-	// ([sandbox.HeldKept]), wherever it sealed one, the write's error beside
-	// it or not: the answer's lead keeps it, since no record holds it once
-	// the next job opens, and a later brief to a session that may lack the
-	// answer tells it again with what the call returned. Zero where it sealed
-	// nothing.
-	//
-	// WITHOUT ITS ARGUMENTS AND WITHOUT THEIR DIGEST: they ride the row
-	// sealed on the held call (ADR-0077), and a digest of them in the clear
-	// beside the tool's name would confirm a guess at what the seal hides.
-	// A later segment's call log counts the call as one of its tool whose
-	// arguments are not known (sandbox.BridgeCall.Withheld) — an over-count
-	// of a tool no operation id reads, since no builtin is ever held.
+	// Record records result, as the run is handed it, and the call as one of
+	// the run's round with the surface's answer
+	// ([sandbox.PendingStore.RecordHeldResult]): a call missing from the
+	// round's calls reads as a reply never sent. Both land on the row in one
+	// write, the round's log after; an error past that write leaves the call to
+	// the next job's opening ([sandbox.OwedCall]). It answers the result as
+	// sealed ([sandbox.HeldKept]), error or not, zero for none: the answer's
+	// lead keeps it, as no record holds it once the next job opens.
+	// NO ARGUMENTS OR THEIR DIGEST: they ride the row sealed (ADR-0077), and a
+	// clear digest would confirm a guess at the seal. Call logs count it
+	// withheld (sandbox.BridgeCall.Withheld), an over-count no operation id
+	// reads, since no builtin is ever held.
 	Record(ctx context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) (sandbox.HeldKept, error)
 }
 
@@ -112,18 +97,15 @@ type HeldPrior struct {
 	Made   bool
 	Result sandbox.HeldResult
 
-	// Unread is a call made whose result its attempt recorded, where what
-	// the result says cannot be opened on the node carrying the run on — no
-	// key it was sealed under is there (internal/engine's heldCommit.prior):
-	// Made is set, and Result holds only whether the tool reported a failure,
-	// off the call's entry recorded with it (sandbox.HeldCall.Call), never
-	// its output.
+	// Unread is a call made and its result recorded, where no key it was
+	// sealed under is on the node carrying the run on (internal/engine's
+	// heldCommit.prior): Made is set, and Result holds only whether the tool
+	// failed, off the call's entry (sandbox.HeldCall.Call), never its output.
 	Unread bool
 
 	// Kept is the result that attempt recorded, as the row sealed it
-	// ([sandbox.HeldCall.Kept]), an unread one included: the answer's lead
-	// keeps it, so a later node that holds its key opens it where this one
-	// could not. Nil where none was recorded.
+	// ([sandbox.HeldCall.Kept]), an unread one included, for the answer's lead
+	// to keep so a later node holding its key can open it. Nil for none.
 	Kept *sandbox.HeldKept
 }
 
@@ -173,54 +155,18 @@ const (
 	heldUnread
 )
 
-// makeHeld makes the held call the person allowed, through the seat's own
-// rebuilt surface, at most once, and records what became of it on held.
+// makeHeld makes the held call the person allowed, through the seat's rebuilt
+// surface, at most once, and records what became of it on held. An error is
+// the resume's to retry: the mark was not written, or the context ended.
 //
-// # At most once
-//
-// A resume can be attempted more than once for one answer, and every attempt
-// reaches here. So the call is marked on the run's row BEFORE it is made, and
-// only the attempt whose mark is the first makes it; a later attempt hands the
-// run the result the first recorded, or, where the first stopped before it
-// recorded one, tells the run the call may or may not have taken effect. It is
-// never made twice, which a person who allowed it once is owed.
-//
-// A LATER ATTEMPT ANSWERS FROM THE MARK FIRST ([HeldCommit.Marked]), before it
-// asks anything below of the call. Those checks ask whether a call nobody has
-// made may be made now, of a surface every attempt rebuilds from the live
-// tools and skills, and an attempt that made the call can still be refused
-// after it — at the launch, by the floor of the session it continues or by
-// every member sitting out — and its answer attempted again hours on. Asked
-// first, a skill made required in between, or a tool blocked or changed,
-// told the run that the call it had made was not made: its result was lost,
-// the run asked the person again, and their second approval made the call
-// twice.
-//
-// # The call the person approved, or none
-//
-// The tool is resolved against the surface the run carries on with, never what
-// it was when the call was held: a tool blocked since, or removed with its
-// server, is no longer filed, and a tool whose definition changed since is
-// not the one the person read (A12 holds such a tool at Needs approval). Either
-// way the call is not made, and the run is told why and may call again, which
-// asks afresh. Checked before the mark, so a call not made leaves nothing on
-// the row that would keep a later attempt from making it.
-//
-// AND SO IS THE SURFACE'S SKILL GUARD ([tools.Surface.GuardRefusal]), as the
-// rebuild armed it for the session that asked: the guard the call is made
-// under is that one, and it need not be the guard that held the call. A skill
-// made required, or its trigger widened, while the call waited covers it now;
-// and a job whose box's word on its session never reached its record is
-// rebuilt holding only its own loads ([Resume.parked]), not the skills its
-// launch armed — the safe direction, which asks the run to load them again.
-// Met only as the call ran, after the mark, that refusal was recorded as the
-// call's result: the run told the call was made and failed, and the person's
-// approval used up on a call that never ran. Met here, the call is not made,
-// and the run is told why: it can load the skill and call again, which asks
-// the person afresh.
-//
-// An error is the resume's to retry: the mark could not be written, or the
-// turn's context ended while the call ran.
+// AT MOST ONCE: every attempt at one answer reaches here, so the call is
+// marked on the run's row BEFORE it is made, and only the first mark makes it.
+// A later attempt answers from the mark FIRST ([HeldCommit.Marked]): asked
+// hours on of a rebuilt surface, [HeldCall.notMade] could call a made call
+// unmade, and the person's second approval would make it twice. Its checks
+// come before the mark, so a call they stop leaves nothing on the row and the
+// run may call again, asking afresh; met after it, a guard's refusal would
+// use up the approval on a call that never ran.
 func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) (err error) {
 	defer origin.Stamp(&err)
 	ctx = tools.WithApproval(ctx, tools.Approval{By: held.Approver, HeldID: held.HeldID, Binding: held.Binding})
@@ -302,9 +248,13 @@ func (h *HeldCall) recordDenied(ctx context.Context, surface *tools.Surface) err
 }
 
 // notMade is why h is not to be made through surface, "" where it may be: its
-// arguments did not open, its tool is no longer filed or not the definition the
-// person approved, or the surface's guard would refuse it. Asked only of a call
-// no attempt has marked ([makeHeld]).
+// arguments did not open, its tool is no longer filed (blocked, or its server
+// removed) or not the definition the person approved (A12 holds a changed tool
+// at Needs approval), or the surface's skill guard would refuse it. That guard
+// is the rebuilt one, not the one that held the call: a skill made required
+// since covers it, and a job rebuilt holding only its own loads
+// ([Resume.parked]) asks the run to load them again, the safe direction.
+// Asked only of a call no attempt has marked ([makeHeld]).
 func (h *HeldCall) notMade(surface *tools.Surface) string {
 	if h.Unopened != "" {
 		return h.Unopened
@@ -357,9 +307,8 @@ func (h *HeldCall) told(b provenance.Boundary) string {
 			"recorded, so it may or may not have taken effect. Check its effect before you call " +
 			"the tool again."
 	case heldUnread:
-		// MADE, AND SAID SO: never as a call whose result is unknown, which
-		// it is not — what it returned is on its record, and the round's log
-		// lists it made — and with whether it failed, which that record says.
+		// MADE, AND SAID SO, with whether it failed: its result is on record
+		// and the round's log lists it made, so it is never "unknown".
 		if o.result.Failed {
 			return "The call was made, and the tool reported a failure. What it said is recorded, but " +
 				"cannot be read on the node carrying this run on."

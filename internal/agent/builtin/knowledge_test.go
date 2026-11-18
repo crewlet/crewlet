@@ -21,9 +21,8 @@ type stubSearcher struct {
 	hits    []knowledge.Hit
 	queries []knowledge.Query
 
-	// outcome is what the search says it did. The zero value is filled
-	// in as a complete hybrid answer, which is what every case that is
-	// not about the outcome wants.
+	// outcome is what the search says it did; nil is a complete hybrid
+	// answer, which every case not about the outcome wants.
 	outcome *knowledge.Outcome
 	// refused is the vendor's status refusing the searching credential, and
 	// self whether that credential was the seat's own.
@@ -112,10 +111,9 @@ func TestSearchKnowledgeExcludesAutoDrafts(t *testing.T) {
 	}
 }
 
-// THE CHEAP GATE FIRST. A seat whose search could not hit anything is told
-// so, rather than waiting on a round trip that was always going to be empty —
-// and the message says which of the two states it is in, because "no backend"
-// and "no scope" send an operator to different places.
+// THE CHEAP GATE FIRST: a seat whose search could hit nothing is told so
+// without a round trip, and in which state, because "no backend" and "no
+// scope" send an operator to different places.
 func TestAnUnsearchableSeatIsToldSoWithoutASearch(t *testing.T) {
 	t.Parallel()
 	backend := &stubSearcher{can: false}
@@ -160,8 +158,8 @@ func TestSearchKnowledgeRefusesAnEmptyQuery(t *testing.T) {
 }
 
 // The scope and the credential are the SEAT's, so a call with no turn cannot
-// search — and must say so rather than panicking: a tool surface built
-// outside a turn is a real state (a validate command, a test).
+// search, and says so rather than panicking: a surface built outside a turn
+// is a real state (a validate command, a test).
 func TestSearchKnowledgeWithNoTurnRefusesRatherThanPanicking(t *testing.T) {
 	t.Parallel()
 	tool := &searchKnowledge{search: &stubSearcher{can: true}}
@@ -174,9 +172,8 @@ func TestSearchKnowledgeWithNoTurnRefusesRatherThanPanicking(t *testing.T) {
 	}
 }
 
-// A QUERY PAST ITS LIMIT IS REFUSED, NOT CUT. A search on the first four
-// hundred bytes of a pasted thread is a different search, and the old cut was
-// echoed back as though it were the query the model wrote.
+// A QUERY PAST ITS LIMIT IS REFUSED, NOT CUT: a search on the first four
+// hundred bytes of a pasted thread is a different search.
 func TestALongQueryIsRefusedNotCut(t *testing.T) {
 	t.Parallel()
 	backend := &stubSearcher{can: true, hits: []knowledge.Hit{{Title: "x"}}}
@@ -200,12 +197,8 @@ func TestALongQueryIsRefusedNotCut(t *testing.T) {
 }
 
 // A SEARCH OVER PART OF THE KNOWLEDGE BASE SAYS SO, and one that could not run
-// is not "nothing matched".
-//
-// Both used to reach the seat as the same short list: the partial fan-out was
-// logged on the coordinating node and nowhere else, and a search that failed
-// outright was an empty list the tool rendered as "No team documents match" —
-// which is the sentence a seat acts on by writing the page again.
+// is not "No team documents match", the sentence a seat acts on by writing the
+// page again.
 func TestSearchKnowledgeSaysWhenItCoveredPartOrNothing(t *testing.T) {
 	t.Parallel()
 	partial := &stubSearcher{can: true,
@@ -287,12 +280,12 @@ func TestSearchKnowledgeFencesWhatAPageSays(t *testing.T) {
 	}
 }
 
-// A VENDOR'S REFUSAL IS SAID ONLY FROM WHAT THE ENGINE KNOWS: a refusal
-// of the company's connection is the company's; on the agent's own credential a
-// 401 is that credential, a 403 the engine's grant does not hold (as the seat
-// access ledger observed it) is vendor_forbidden naming the declared permission,
-// a 403 the grant holds, or one whose grant cannot be read, is forbidden, and a
-// 401 is unavailable until an administrator renews the credential.
+// A VENDOR'S REFUSAL IS SAID ONLY FROM WHAT THE ENGINE KNOWS: a refusal of the
+// company's connection is the company's; on the agent's own credential a 401 is
+// that credential, unavailable until an administrator renews it; a 403 the
+// grant does not hold (as the seat access ledger observed it) is
+// vendor_forbidden naming the declared permission; a 403 the grant holds, or
+// whose grant cannot be read, is forbidden.
 func TestSearchKnowledgeSaysTheVendorRefusedFromWhatTheEngineKnows(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

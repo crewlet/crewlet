@@ -13,59 +13,29 @@ import (
 // example host would read as part of it.
 const boxURLShape = "https://host[:port][/path]"
 
-// ParseBoxURL is the value of variable — an engine address a box dials: the
-// OTLP receiver's ([OtelReceiverURLVar]), the tool bridge's
-// (CREWLET_MCP_BRIDGE_URL) and Gitlet's ([BoxGitURLVar]) — as a box
-// will use it: an absolute http or https
-// URL with a host a box's URL parser accepts (the WHATWG URL Standard's, as
-// boxHostRefusal holds it), a port a client can dial where it names one (1 to
-// 65535), and no user information, query or fragment, its trailing '/'
-// trimmed, since each caller appends its own path. "" (after trimming space)
-// is unset and returns "", nil: the caller's feature is off.
+// ParseBoxURL is the value of variable, an engine address a box dials (the
+// OTLP receiver's [OtelReceiverURLVar], the tool bridge's
+// CREWLET_MCP_BRIDGE_URL, Gitlet's [BoxGitURLVar]), as a box will use it: an
+// absolute http or https URL with a host a box's URL parser accepts
+// ([boxHostRefusal]), a port from 1 to 65535 if it names one, no user
+// information, query or fragment, and no trailing '/', since each caller
+// appends its own path. A blank value is unset: "", nil, the feature off.
 //
-// WHAT IT RETURNS IS SPELLED BY net/url's OWN SERIALIZER, never put together
-// from the parsed parts, because the parser hands back the host UNESCAPED: a
-// host written "ex%C3%A9.example" comes back as raw UTF-8, which is an IRI
-// rather than the URI RFC 3986 §3.2.2 spells, and an IPv6 zone written
-// "[fe80::1%25eth0]" came back "[fe80::1%eth0]", an escape no parser reads
-// (zones are refused below, for their clients' sake). The serializer escapes
-// the host's non-ASCII bytes again, so every answer parses back to itself,
-// here and in the box's client, which parses it with the engine's own path
-// appended. It is spelled as RFC 3986 spells a URI but for one character: a
-// '"' in a name, which net/url and the WHATWG URL Standard both read and RFC
-// 3986's reg-name does not, is kept — the line this grammar holds is the box
-// parser's, and that parser reads it. An empty port ("host:") is omitted, as
-// RFC 3986 §3.2.3 asks a normalizer to.
-//
-// Any other value is an error that names the variable and the part that is
-// wrong, and the caller refuses the boot on it: a value that is set and
-// unusable is a deployment that asked for the feature and would get none. The
-// alternative is the failure this replaced — every box handed an endpoint its
-// client cannot use, so a run's telemetry went nowhere and an executor run's
-// every tool call failed, each silently, inside a box the engine never hears
-// from again.
-//
-// THE VALUE IS NEVER ECHOED, nor any piece of it — not even the parser's own
-// message, which quotes the port or the escape it stopped at. A URL's user
-// information is a credential, and the refusal goes to a log and to whatever
-// terminal a deploy script captured; the operator holds the value already.
-//
-// THE SCHEME IS NEVER JUDGED BEYOND HTTP OR HTTPS: a local cell dials the
-// engine over the host's own network (172.17.0.1, host.docker.internal), where
-// TLS buys nothing and a certificate for that address is one nobody holds;
-// whether a URL's path leaves the box's host — always for a remote cell, and
-// for a local one whose URL names another node or a balancer — is a fact about
-// the network this function cannot see, so the docs, not the engine, say where
-// https is needed (docs/concepts/code-sandbox.md, "Security model").
+// Any other value is an error naming the variable and the wrong part, and
+// the caller refuses the boot: a box handed an endpoint it cannot use fails
+// silently, where the engine never hears. The error NEVER ECHOES the value or
+// any piece of it, not even the parser's: user information is a credential.
 func ParseBoxURL(variable, raw string) (string, error) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return "", nil
 	}
-	// THE SCHEME FIRST, BY HAND. url.Parse reads "engine.example.com:80"
-	// as the scheme "engine.example.com" and an opaque "80", and refuses
-	// "127.0.0.1:8080" as a path segment with a colon — two answers to the
-	// one mistake, neither of which says what it is.
+	// THE SCHEME FIRST, BY HAND: url.Parse reads "engine.example.com:80" as the
+	// scheme "engine.example.com" and refuses "127.0.0.1:8080" as a path, neither
+	// saying what is wrong. It is judged no further than http or https: a local
+	// cell dials over the host's own network, where TLS buys nothing, and whether
+	// the path leaves the host is a network fact this cannot see, so
+	// docs/concepts/code-sandbox.md ("Security model") says where https is needed.
 	scheme, _, absolute := strings.Cut(value, "://")
 	if !absolute {
 		return "", fmt.Errorf("%s is not an absolute URL: it does not start with a scheme "+
@@ -95,11 +65,9 @@ func ParseBoxURL(variable, raw string) (string, error) {
 	if err := boxHostRefusal(variable, u); err != nil {
 		return "", err
 	}
-	// THE PORT'S RANGE, because url.Parse checks only that a port is
-	// digits: ":99999" parses here and no box's client reads it (Go's
-	// dialer: "invalid port"; Node and Bun: "Invalid URL"), and ":0" is a
-	// port nothing listens on, so every dial of it fails. The digits are not
-	// repeated, for the reason nothing of the value is.
+	// THE PORT'S RANGE: url.Parse checks only that a port is digits, so ":99999"
+	// parses and no box's client reads it, and nothing listens on ":0". The
+	// digits are not repeated, as nothing of the value is.
 	if port := u.Port(); port != "" {
 		if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 {
 			return "", fmt.Errorf("%s names a port no client can dial: a port is a number "+
@@ -119,49 +87,28 @@ func ParseBoxURL(variable, raw string) (string, error) {
 			"value, which a client would then never send; remove the # and what follows it",
 			variable)
 	}
-	// The path as the parser ESCAPED it, trimmed of its trailing '/' in that
-	// form, so "/a%2Fb/" stays the one segment "a/b" rather than being
-	// re-escaped from a decoded "/a/b".
+	// SPELLED BY net/url's SERIALIZER, never from the parsed parts: the parser
+	// hands the host back unescaped (raw UTF-8, an IRI rather than a URI), and
+	// the serializer escapes it again, so every answer parses back to itself,
+	// here and in the box. Only a '"' in a name is kept against RFC 3986, since
+	// the box's parser reads it; an empty port is dropped (RFC 3986 section 3.2.3).
+	// The path is the parser's ESCAPED one, so "/a%2Fb/" stays the one segment.
 	origin := url.URL{Scheme: u.Scheme, Host: strings.TrimSuffix(u.Host, ":")}
 	return origin.String() + strings.TrimRight(u.EscapedPath(), "/"), nil
 }
 
-// boxHostRefusal holds the host url.Parse read out of a box URL to what the
-// URL parser in the box accepts: the WHATWG URL Standard's host parser
-// (https://url.spec.whatwg.org/#host-parsing), by which every harness
-// this build launches parses a URL — claude-code on Node, opencode on Bun.
-// net/url reads RFC 3986 and is laxer about a host in four ways, each of which
-// booted a node whose every box failed on its first request; Node 22's and
-// Bun's `new URL` answer "Invalid URL" for each, measured:
-//
-//   - An IPv6 zone ("[fe80::1%25eth0]", RFC 6874): the standard has no zone
-//     syntax.
-//   - A character the standard forbids in a domain — its forbidden domain
-//     code points: every C0 control, space, DEL and # % / : < > ? @ [ \ ] ^ |.
-//     net/url passes '%' (written %25), '<', '>' and ']', so an unfilled
-//     placeholder ("http://<engine-host>:8000", the style these docs write an
-//     address in) booted. The rest of the set is held here too though
-//     url.Parse refuses it first today, so the rule is the standard's whatever
-//     net/url passes — its GODEBUG urlstrictcolons=0 already lets a second ':'
-//     into an http host.
-//   - Escapes that decode to no UTF-8 ("%FF"), which the standard decodes to
-//     U+FFFD, a code point no domain may hold.
-//   - A name that ENDS IN A NUMBER and is no IPv4 address. The standard reads
-//     a host whose last label is a number (decimal, or hex after 0x) as an
-//     IPv4 address and fails one that is not, so a typo'd "10.0.0.300", a
-//     fifth part or "engine.123" is refused here, while the shorthand it does
-//     read ("127.1", "0x7f.1") boots: the box dials the address its parser
-//     makes of it, and nothing in the engine dials this URL at all.
-//
-// WHAT IT DOES NOT REPRODUCE is the standard's UTS 46 mapping of a non-ASCII
-// name (its case and width folding, and the code points it disallows). Those
-// tables follow the Unicode version of the box's own runtime, which this
-// process cannot know, so a copy here would refuse a name some boxes read or
-// pass one they refuse; a non-ASCII name is held to its encoding and to the
-// rules above as written, and the box's parser judges the rest.
-//
-// The refusal names the variable and what is wrong with the host, never the
-// value, for the reason [ParseBoxURL] gives.
+// boxHostRefusal holds the host url.Parse read to what a box's URL parser
+// accepts: the WHATWG URL Standard's host parser, by which every harness this
+// build launches (claude-code on Node, opencode on Bun) parses a URL. net/url
+// is laxer in four ways, each booting a node whose every box fails its first
+// request: an IPv6 zone (RFC 6874); a forbidden domain code point
+// ([forbiddenInADomain]), as in an unfilled "<engine-host>" placeholder, held
+// in full whatever net/url passes (GODEBUG urlstrictcolons=0 loosens it);
+// escapes that decode to no UTF-8; and a name ending in a number that is no
+// IPv4 address ("10.0.0.300"), while shorthand ("127.1") boots, the box
+// dialing what its parser makes of it. The standard's UTS 46 mapping is not
+// copied: its tables follow the box runtime's Unicode version, unknown here.
+// The refusal never names the value ([ParseBoxURL]).
 func boxHostRefusal(variable string, u *url.URL) error {
 	host := u.Hostname()
 	if strings.HasPrefix(u.Host, "[") {
@@ -202,11 +149,10 @@ func forbiddenInADomain(r rune) bool {
 }
 
 // endsInANumber is the standard's "ends in a number checker": whether a
-// name's last label — one trailing dot ignored — is decimal digits, or any
-// other part [ipv4Number] reads, which beyond digits can only be hex after
-// "0x". The standard runs it on the name UTS 46 has mapped; this runs on the
-// name as written, which differs only where a non-ASCII character maps to a
-// digit or a dot.
+// name's last label, one trailing dot ignored, is decimal digits or another
+// part [ipv4Number] reads (hex after "0x"). The standard runs it on the UTS 46
+// mapped name; this runs on the name as written, which differs only where a
+// non-ASCII character maps to a digit or a dot.
 func endsInANumber(name string) bool {
 	labels := strings.Split(name, ".")
 	if labels[len(labels)-1] == "" {

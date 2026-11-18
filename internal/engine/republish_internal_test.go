@@ -53,18 +53,11 @@ func (l *republishLog) waitFor(t *testing.T, n int) {
 	}
 }
 
-// THE FIRST REQUEST RUNS AT ONCE, because somebody is watching.
+// THE FIRST REQUEST RUNS AT ONCE, because somebody is watching: a credential
+// a pass just minted goes live without the operator doing anything else.
 //
-// The whole point of the rebuild is that a credential a pass just minted goes
-// live without the operator doing anything else. Making them wait out a
-// coalescing window for the first one would trade the incident this bounds
-// for the one it was built to fix.
-//
-// AT ONCE IS NOT ON THE CALLER'S GOROUTINE. It used to be both, and the
-// second half was spending a lease margin that belongs to the status write —
-// see [republisher.request]. So the run is awaited rather than asserted
-// synchronously, which is the same claim about latency and a different one
-// about who blocks.
+// At once is not on the caller's goroutine ([republisher.request]), so the
+// run is awaited rather than asserted synchronously.
 func TestTheFirstRepublishRunsImmediately(t *testing.T) {
 	t.Parallel()
 	log := newRepublishLog()
@@ -79,22 +72,18 @@ func TestTheFirstRepublishRunsImmediately(t *testing.T) {
 	}
 }
 
-// AND THE CALLER DOES NOT WAIT FOR IT.
-//
-// The caller is a provisioning pass's Flush, inside the surface lease, and
-// the minute [setup.PassDeadline] leaves inside [setup.LeaseTTL] is what the
-// status write that records the pass has to complete in. Running the reload
-// inline spent that minute here and left the record asking for another, so it
-// landed with the lease already lapsed and a peer free to hold the surface.
+// AND THE CALLER DOES NOT WAIT FOR IT: the caller is a provisioning pass's
+// Flush inside the surface lease, and a reload run inline spends the margin
+// the pass's status write needs, landing that write outside the lease
+// ([republisher.request]).
 func TestTheCallerDoesNotWaitForTheRebuild(t *testing.T) {
 	t.Parallel()
 	log := newRepublishLog()
 	r := &republisher{now: func() time.Time { return time.Unix(0, 0) }}
 	t.Cleanup(r.stop)
 
-	// A RUN THAT DOES NOT RETURN, which is the shape that matters: a
-	// coordination store having a bad afternoon, or a config apply waiting
-	// on a peer.
+	// A run that does not return: a coordination store having a bad
+	// afternoon, or a config apply waiting on a peer.
 	blocked := make(chan struct{})
 	t.Cleanup(func() { close(blocked) })
 	done := make(chan struct{})
@@ -113,32 +102,18 @@ func TestTheCallerDoesNotWaitForTheRebuild(t *testing.T) {
 	_ = log
 }
 
-// A BURST IS ONE APPLY, AND NOTHING IN IT IS DROPPED.
+// A BURST IS ONE APPLY, AND NOTHING IN IT IS DROPPED: one Connect writes a
+// request per surface, and those inside the window are coalesced, not
+// skipped, since a skipped rebuild leaves a sealed credential nothing running
+// reads.
 //
-// Connecting a third-party app from the dashboard writes one request per
-// surface — Atlassian's alone applies three revisions in a row — and each seal
-// used to be a whole-company rebuild and a permanent config revision. Twenty
-// of one deployment's fifty-six revisions were these.
+// On the bubble's clock, so "during the window" is a state the case holds
+// rather than a race with a real timer: the read follows [synctest.Wait] and
+// precedes any clock advance.
 //
-// The requests inside the window are COALESCED rather than skipped, which is
-// the distinction that matters: a skipped rebuild is exactly the state this
-// mechanism exists to prevent — a credential sealed, resolvable, and read by
-// nothing that is running.
-//
-// ON THE BUBBLE'S CLOCK. The window's end is a real timer (`time.AfterFunc` in
-// [republisher.request]), and the case read "during the window" against it: a
-// runner that descheduled the case for more than the window between the first
-// run and the read saw the coalesced run too (crewlet/crewlet#1112). In a
-// synctest bubble the timer runs on the bubble's clock, which moves only once
-// every goroutine in it is blocked, so the window is a state the case holds:
-// the read comes after [synctest.Wait] has let the immediate run finish and
-// before anything has advanced the clock, and the coalesced run is released by
-// the case's own wait for it.
-//
-// Mutation: drop the coalesced run (the window's timer never armed), and the
-// second call never comes; fire it at once rather than at the window's end,
-// and two calls are read during the window; credit the burst to its first
-// request rather than its last, and the operator is wrong.
+// Mutation: never arm the window's timer, and the second call never comes;
+// fire it at once, and two calls are read during the window; credit the
+// burst's first request, and the operator is wrong.
 func TestABurstOfSealsBecomesOneRepublish(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -161,9 +136,9 @@ func TestABurstOfSealsBecomesOneRepublish(t *testing.T) {
 			r.request(as(who), log.run)
 		}
 
-		// One ran immediately; the other five are owed, not gone. READ ONCE
-		// EVERYTHING DUE NOW HAS RUN, and before the clock has moved: a
-		// coalesced run fired early is then among the calls read.
+		// One ran immediately; five are owed. Read once everything due now
+		// has run and before the clock moves, so a coalesced run fired early
+		// is among the calls read.
 		log.waitFor(t, 1)
 		synctest.Wait()
 		if got := log.calls(); len(got) != 1 {
@@ -175,8 +150,8 @@ func TestABurstOfSealsBecomesOneRepublish(t *testing.T) {
 		if len(got) != 2 {
 			t.Fatalf("calls = %v, want the immediate one and one for the burst", got)
 		}
-		// THE LATEST OPERATOR, because the burst collapses to one revision and
-		// it is credited to whoever most recently caused it.
+		// The latest operator: the burst's one revision is credited to
+		// whoever caused it last.
 		if got[1] != "founder" {
 			t.Errorf("the coalesced re-activation was credited to %q, want the "+
 				"last request's operator", got[1])
@@ -184,18 +159,10 @@ func TestABurstOfSealsBecomesOneRepublish(t *testing.T) {
 	})
 }
 
-// A PASS THAT CANNOT CONVERGE IS BOUNDED, which the inline rebuild was not.
-//
-// An apply marks every surface stale and brings the reconcile loop's next tick
-// forward, so a pass that seals on every tick seals as fast as an apply
-// completes. The inline version argued this could not happen because every
-// reconciler is certified against "a converged pass writes nothing" — an
-// argument about a CONVERGED world, which is not the world a broken vendor
-// pass is in. GitLab's minted a year-long `api`-scoped token every five
-// seconds, 144 of them from one connect.
-//
-// This does not make that pass correct — it is fixed where it lives — it makes
-// the next one survivable.
+// A PASS THAT CANNOT CONVERGE IS BOUNDED: an apply brings the reconcile tick
+// forward, so a pass sealing on every tick would seal as fast as an apply
+// completes. Certifying reconcilers against "a converged pass writes nothing"
+// says nothing of a broken vendor pass; this makes the next one survivable.
 func TestARunawayPassCannotOutrunTheWindow(t *testing.T) {
 	t.Parallel()
 	log := newRepublishLog()
@@ -215,12 +182,9 @@ func TestARunawayPassCannotOutrunTheWindow(t *testing.T) {
 	}
 }
 
-// A NODE THAT IS LEAVING DOES NOT RE-ACTIVATE ON ITS WAY OUT.
-//
-// The timer is a goroutine's lifetime and it belongs to the engine. Left armed
-// through a shutdown it writes a config revision from a node that has already
-// released its seats — crediting an operator and waking every peer on behalf
-// of a process that is going away.
+// A NODE THAT IS LEAVING DOES NOT RE-ACTIVATE ON ITS WAY OUT: an owed timer
+// left armed through shutdown would write a config revision from a node that
+// has released its seats.
 func TestStoppingDisarmsAnOwedRepublish(t *testing.T) {
 	t.Parallel()
 	log := newRepublishLog()
@@ -230,9 +194,8 @@ func TestStoppingDisarmsAnOwedRepublish(t *testing.T) {
 	}
 
 	r.request(as("first"), log.run)
-	// AWAITED BEFORE THE SECOND, so "the one that ran before the stop" is a
-	// fact rather than a race: the immediate run is no longer complete when
-	// request returns.
+	// Awaited before the second, so "the one that ran before the stop" is a
+	// fact rather than a race with the asynchronous immediate run.
 	log.waitFor(t, 1)
 	r.request(as("owed"), log.run)
 	r.stop()
@@ -268,9 +231,7 @@ func TestTheWindowReopensForALaterSeal(t *testing.T) {
 	t.Cleanup(r.stop)
 
 	r.request(as("first"), log.run)
-	// AWAITED, so the clock only moves once the first run has happened: the
-	// immediate run is asynchronous now, and moving the clock under it would
-	// be asserting the reopened window against a race.
+	// Awaited, so the clock moves only after the asynchronous first run.
 	log.waitFor(t, 1)
 	mu.Lock()
 	clock = clock.Add(time.Hour + time.Second)
@@ -286,18 +247,11 @@ func TestTheWindowReopensForALaterSeal(t *testing.T) {
 
 // STOP WAITS FOR A RE-ACTIVATION THAT HAS ALREADY BEGUN, AND CANCELS IT.
 //
-// Disarming the timers covers a run that has not started. It does nothing at
-// all about one that HAS: a fired timer's callback is already past the
-// `stopped` check, and Timer.Stop on it reports false and changes nothing. So
-// stop returned while a config revision was still being written — by a node
-// whose seats were being released, with [Engine.Stop] closing the store and
-// the broker underneath it. That is the exact write stop exists to prevent,
-// reached through the one window it did not cover.
-//
-// Both halves are asserted, because either alone leaves the defect reachable:
-// the run's context must be CANCELLED, so an apply in flight gives up rather
-// than finishing, and stop must not RETURN until the run has unwound, so a
-// caller can treat it as "nothing is writing any more".
+// Disarming does nothing for a fired timer, already past the `stopped`
+// check. Both halves are asserted, since either alone leaves a leaving node
+// writing beside [Engine.Stop]: the run's context is CANCELLED, so an apply
+// in flight gives up, and stop does not RETURN until the run has unwound, so
+// a caller can treat it as "nothing is writing any more".
 func TestStoppingWaitsForARepublishAlreadyRunning(t *testing.T) {
 	t.Parallel()
 	var (
@@ -310,8 +264,8 @@ func TestStoppingWaitsForARepublishAlreadyRunning(t *testing.T) {
 
 	r.request(as("founder@example.com"), func(ctx context.Context, _ iam.Actor) {
 		close(entered)
-		// HELD INSIDE THE RUN, which is the window: stop is called while
-		// this goroutine is between its own guard and its return.
+		// Held inside the run: stop is called between its guard and its
+		// return.
 		<-release
 		cancelled = ctx.Err() != nil
 		close(returned)

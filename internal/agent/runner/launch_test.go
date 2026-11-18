@@ -21,9 +21,8 @@ import (
 )
 
 // playLauncher is the engine's launch seam with no box behind it: it records
-// every request it is handed — the prompt, the surface, the bridged-spend
-// meter — and starts nothing. What a run then DOES is the test's to say, with
-// [play], against the surface the launch was handed.
+// every request it is handed and starts nothing. What a run then does is the
+// test's to say, with [play], against the surface the launch was handed.
 type playLauncher struct {
 	mu   sync.Mutex
 	reqs []runner.AgentRunRequest
@@ -31,21 +30,18 @@ type playLauncher struct {
 	// took is how long each launch takes before it returns, as a real one
 	// provisions a box and starts its job.
 	took time.Duration
-	// decides is how each launch decides its run takes up a session, told
-	// to the runner before the run starts as a real launch tells it
-	// ([runner.AgentRunRequest.Decided]); nil decides as a launch whose box
-	// takes up what it was asked to continue ([decidedAsAsked]).
+	// decides is how each launch decides its run takes up a session, told to
+	// the runner before the run starts ([runner.AgentRunRequest.Decided]); nil
+	// decides as asked ([decidedAsAsked]).
 	decides func(runner.AgentRunRequest) runner.SessionDecision
-	// says is what each launch's box says it started, told to the runner
-	// after the launch decides, as a real box's first request to its bridge
-	// tells it ([runner.AgentRunRequest.Started]): that it continued the
-	// session the launch chose, or started one of its own in that one's
-	// place. Nil says nothing, as a box whose harness has not reached its
-	// bridge yet.
+	// says is what each launch's box says it started, told to the runner after
+	// the launch decides, as a box's first bridge request does
+	// ([runner.AgentRunRequest.Started]): that it continued the chosen session,
+	// or started its own in that one's place. Nil says nothing, as a box whose
+	// harness has not reached its bridge yet.
 	says *bool
-	// during is what each launch's run does once its launch has decided and
-	// before the launch returns, as a harness that reaches its bridge as its
-	// run starts does; nil does nothing then.
+	// during is what each launch's run does after its launch decides and before
+	// it returns, as a harness reaching its bridge at once does; nil does nothing.
 	during func(runner.AgentRunRequest)
 }
 
@@ -75,11 +71,10 @@ func (l *playLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequ
 	return runner.Launched{LaunchID: fmt.Sprintf("job-%d", n)}, nil
 }
 
-// decidedAsAsked is how a launch whose box takes up what it was asked to
-// continue decides: the session the conversation's last turn left where it was
-// handed that one — always in a new box — the turn's kept session where it was
-// handed one — in a new box, as a relaunch after a collection gets — else the
-// job before's own session in its box, else none.
+// decidedAsAsked decides as a launch whose box takes up what it was asked to
+// continue: the conversation's last-turn session where handed one, in a new
+// box; else the turn's kept session, in a new box as a relaunch after a
+// collection gets; else the job before's own session in its box; else none.
 func decidedAsAsked(req runner.AgentRunRequest) runner.SessionDecision {
 	switch {
 	case req.Session != nil && req.Session.Basis.ContinuesBase():
@@ -127,13 +122,11 @@ func call(t *testing.T, name, argsJSON string) llm.ToolCall {
 	return llm.ToolCall{Name: name, Arguments: args}
 }
 
-// play performs r against the surface a launch was handed, call by call as
-// the bridge dispatches every bridged call — admitted to its place in the
-// run's call log ([tools.Surface.Admit]), then run — and returns what the
-// bridge's durable log holds for it: each call's name, arguments, answer and
-// whether it failed, its place in the order the bridge admitted the run's
-// calls and in the order its log took them, and the bridge's measurement of it
-// — when it started, how long it took and who answered.
+// play performs r against the surface a launch was handed, as the bridge
+// dispatches each call (admitted to its place in the run's call log by
+// [tools.Surface.Admit], then run), and returns what the bridge's durable log
+// holds: each call's outcome, its place in admission and log order, and the
+// bridge's measurement (start, duration, who answered).
 func play(t *testing.T, req runner.AgentRunRequest, r run) []runner.BridgedCall {
 	t.Helper()
 	out := make([]runner.BridgedCall, 0, len(r.calls))
@@ -228,17 +221,16 @@ func executeRound(t *testing.T, entries []phase.Entry, opts buildOpts, round int
 }
 
 // A PERSON'S ANSWER CARRIES THE RUN ON; IT IS NEVER THE RUN'S REPORT. A run
-// asks only when it cannot go on without the answer, so the round it asked in
-// is not over. Filed as the run's report, the answer reached the turn as a run
-// that ended without submitting — rescued as incomplete, its delivery judged
-// on a reply rather than on any work — and the run that asked never saw it. So
-// the resume relaunches the executor in the same round: the asking run's
-// session continued with the answer, its brief for a fresh run carrying the
-// question and the answer, and the turn parked on it again.
+// asks only when it cannot go on without the answer, so its round is not over.
+// Filed as the report, the answer reaches the turn as a run that ended without
+// submitting, rescued as incomplete and judged on a reply rather than work, and
+// the asking run never sees it. So the resume relaunches the executor in the
+// same round: the asking run's session continued with the answer, a fresh
+// run's brief carrying question and answer, and the turn parked on it again.
 //
-// Mutation: collect the answer as resumeAgentRun did and the work is the
-// rescued report; drop the continuation and the run starts a conversation that
-// knows nothing.
+// Mutation: collect the answer as the run's report and the work is the rescued
+// report; drop the continuation and the run starts a conversation that knows
+// nothing.
 func TestAnAnswerCarriesTheRunOnRatherThanReportingIt(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -289,12 +281,11 @@ func TestAnAnswerCarriesTheRunOnRatherThanReportingIt(t *testing.T) {
 }
 
 // A CARRIED-ON RUN IS SERVED THE SURFACE THE ASKING RUN HELD, and may cite
-// what it delivered. The run that asked made deliveries over the bridge after
-// its launch recorded the park, and the run carrying it on — the same round,
-// often the same harness session — goes on calling those tools and reports
-// those deliveries. Judged against the relaunch's own calls alone, its
-// submission citing a delivery made before the question was refused as it was
-// made, though the collection accepts it.
+// what it delivered. The asking run delivered over the bridge after its launch
+// recorded the park, and the run carrying it on (same round, often the same
+// harness session) keeps calling those tools and reports those deliveries;
+// judged against the relaunch's own calls alone, a submission citing them
+// would be refused though the collection accepts it.
 //
 // Mutation: leave the asking run's calls out of the submission's record, or
 // rebuild the relaunch's surface without the tools its launch held, and this

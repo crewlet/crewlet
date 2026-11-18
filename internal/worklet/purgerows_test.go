@@ -22,21 +22,16 @@ import (
 
 // A PURGE THIS BUILD WRITES LEAVES NO COPY OF THE TASK BEHIND, in any table.
 //
-// The object tables went and the history did not: every history row keeps its
-// record's whole mutation — each title, body and comment the task was ever
-// given — beside an excerpt, an inbox notice keeps an excerpt of its own, and
-// turn records and the dependency mirror stayed keyed on an id nothing
-// resolves. So a task purged because it held something that must not be kept
-// stayed readable on every data node for the life of the company, while the
-// purge report and the docs said it was destroyed.
+// History rows, inbox notices, turn records and dependency mirrors all hold
+// copies of the task's content or id, so a purge that removed only the object
+// tables left a purged task readable on every data node.
 //
-// What survives is the purge's own account — that it happened, to which key,
-// by whom and why — the lead's `purged` notice, which is read through it, and
-// the census's SKELETON of the task: its creation and its status, assignee and
-// project changes with nothing else in them, because the flow census answers
-// the past from those rows and a purge takes a task out of it only from the
-// instant it happened. [TestAPurgeDestroysWhatItsTaskWroteThroughTheFramework]
-// holds the same apply through the real framework loop.
+// What survives is the purge's own account, the lead's `purged` notice, and
+// the census's SKELETON of the task (creation, status, assignee and project
+// changes, no content): the flow census answers the past from those rows, and
+// a purge leaves it only from its own instant.
+// [TestAPurgeDestroysWhatItsTaskWroteThroughTheFramework] holds the same apply
+// through the real framework loop.
 func TestAPurgeLeavesNoCopyOfTheTaskBehind(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -44,11 +39,10 @@ func TestAPurgeLeavesNoCopyOfTheTaskBehind(t *testing.T) {
 	filedTask(t, r, "t-1")
 	filedTask(t, r, "t-2")
 
-	// THE CONTENT, in every place a record puts it: a comment that
-	// mentions somebody (a history row, its document and an inbox
-	// notice) — somebody other than the writer, whom no notice names
-	// ([worklet.Reason.WakesActor]), a turn's spend, and a dependency
-	// whose mirror is a row on the task.
+	// The content, in every place a record puts it: a comment mentioning
+	// somebody other than the writer, whom no notice names
+	// ([worklet.Reason.WakesActor]); a turn's spend; and a dependency whose
+	// mirror is a row on the task.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-comment", "t-1", "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{
 			Comment: &worklet.Comment{ID: "c-1", Body: secret, Author: "jane"},
@@ -89,8 +83,8 @@ func TestAPurgeLeavesNoCopyOfTheTaskBehind(t *testing.T) {
 			WHERE subject_id = ? AND (CAST(document AS TEXT) LIKE '%Contoso%'
 			                          OR excerpt LIKE '%Contoso%')`
 	)
-	// THE FIXTURE HOLDS WHAT IT SAYS, or the assertions below pass on
-	// a task that never had any of it.
+	// The fixture holds what it says, or the assertions below pass
+	// vacuously.
 	for name, query := range map[string]string{
 		"history": histories, "a notice": notices, "a turn": turns,
 		"a mirror": mirrors, "a copy of the comment": copies,
@@ -108,9 +102,8 @@ func TestAPurgeLeavesNoCopyOfTheTaskBehind(t *testing.T) {
 	}
 	r.drain()
 
-	// THE PURGE'S OWN ROW, AND THE SKELETON THE CENSUS WALKS: every other
-	// row is a count the flow series undoes, carrying nothing but its kind,
-	// its instant and the three deltas.
+	// Only the purge's own row and the census skeleton remain: kind,
+	// instant and the three deltas, nothing else.
 	if got := about(histories); !slices.Contains(got, "op-purge") {
 		t.Errorf("after the purge the task's history is %v, with no purge row", got)
 	}
@@ -158,10 +151,8 @@ func TestAPurgeDestroysWhatItsTaskWroteThroughTheFramework(t *testing.T) {
 	filedTask(t, r, "t-1")
 	filedTask(t, r, "t-2")
 	filedTask(t, r, "t-3")
-	// THE CONTENT, in every place a record puts it: a comment mentioning
-	// somebody (a history row, its document and an inbox notice), a turn's
-	// spend, a dependent (an edge on it, a mirror row on the purged task),
-	// and a child (re-parented).
+	// The content, in every place a record puts it: a mentioning comment,
+	// a turn's spend, a dependent (edge and mirror row), and a child.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-comment", "t-1", "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{
 			Comment: &worklet.Comment{ID: "c-1", Body: secret, Author: "jane"},
@@ -197,9 +188,8 @@ func TestAPurgeDestroysWhatItsTaskWroteThroughTheFramework(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode the purge: %v", err)
 	}
-	// SEALED AS THE WRITER SEALS IT: the node's loop verifies every frame
-	// before the domain decodes a byte, so a replacement handed it bare
-	// would be a record this fleet never signed.
+	// Sealed as the writer seals it: the loop verifies every frame before
+	// decoding, so a bare replacement would be refused as unsigned.
 	before, after := applyPurgeThroughARunner(t, r, purgeAt,
 		testSigner(t, worklet.Domain{}).Seal(body))
 	if _, held := after["tracker_tasks"]; !held {
@@ -210,8 +200,7 @@ func TestAPurgeDestroysWhatItsTaskWroteThroughTheFramework(t *testing.T) {
 	}) {
 		t.Fatal("the purged task's row survives the purge")
 	}
-	// The rows the fixture is about, named, so a failure below has a
-	// premise to read against.
+	// The premise, so a failure below has something to read against.
 	for _, table := range []string{"tracker_turns", "tracker_task_dependents"} {
 		if len(before[table]) == 0 {
 			t.Errorf("the premise: the fixture wrote no %s row", table)
@@ -229,9 +218,8 @@ func assertTheTasksRecordsAreGone(t *testing.T, after map[string][]string, secre
 		if !strings.Contains(row, `"t-1"`) || strings.HasPrefix(row, `["op-purge",`) {
 			continue
 		}
-		// THE SKELETON MAY STAY — the census walks it — and nothing else
-		// of a row may: the comment's row goes whole, and a kept row
-		// holds no title, no excerpt and no document.
+		// Only the census skeleton may stay: the comment's row goes
+		// whole, and a kept row holds no title, excerpt or document.
 		if strings.HasPrefix(row, `["op-comment",`) || strings.Contains(row, `title`) {
 			t.Errorf("a purge left content in a history row about "+
 				"the task: %s", row)

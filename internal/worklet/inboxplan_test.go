@@ -12,22 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// AN ALL-READ INBOX SCANS NO ROW BELOW THE SEEN-THROUGH POSITION.
+// AN ALL-READ INBOX SCANS NO ROW BELOW THE SEEN-THROUGH POSITION. ana has read
+// through tracker@1:9000 and marked nothing unread, so an `unread` page (the
+// badge's question, asked every minute from every tab) is ONE seek of
+// tracker_notifications_inbox_idx above the position, never a walk of every
+// notice she holds. An unread mark below the position adds one statement
+// seeking what it names by the table's key alone. A read that is not `unread`
+// is bounded by nothing but her. Planned with no statistics, as a deployment
+// plans it ([seededPlanStore]).
 //
-// ana has read through tracker@1:9000 and marked nothing unread, so an
-// `unread` page is ONE seek of tracker_notifications_inbox_idx on her and a
-// lower bound — the position itself — and never a walk of every notice she
-// holds, the whole retention, filtered row by row to nothing; that is the
-// badge's question, asked every minute from every tab. An unread mark below
-// the position adds the one statement that seeks what the mark names by the
-// table's key and reads no other notice. A read that is not `unread` keeps
-// what she has read, so its range is bounded by nothing but her. Planned with
-// no statistics, as a deployment plans it ([seededPlanStore]).
-//
-// Mutation: bound the range by `since` alone whatever the read asks — the
-// all-read page's lower bound is 0, red; seek the unread marks through the
-// inbox range — the second statement reaches tracker_notifications_inbox_idx,
-// red.
+// Mutation: bound the range by `since` alone (the lower bound is 0, red); seek
+// the unread marks through the inbox range (the second statement reaches
+// tracker_notifications_inbox_idx, red).
 func TestAnAllReadInboxScansNoRowBelowTheSeenThroughPosition(t *testing.T) {
 	t.Parallel()
 	db := seededPlanStore(t, func(context.Context, *sql.Tx, int) error { return nil })
@@ -40,10 +36,9 @@ func TestAnAllReadInboxScansNoRowBelowTheSeenThroughPosition(t *testing.T) {
 	page := statements[0]
 	plan := storetest.Plan(t, db, page.sql, page.args)
 	shown := strings.Join(plan, "\n")
-	// THE BOUND IS IN THE SEEK: the page names no cursor, so the one
-	// log_seq term its range can seek on is the lower bound — which the
-	// pinned planner prints mirrored, `log_seq<?`, over the index's DESC
-	// key.
+	// THE BOUND IS IN THE SEEK: with no cursor the one log_seq term is the
+	// lower bound, which the pinned planner prints mirrored, `log_seq<?`,
+	// over the index's DESC key.
 	if !slices.ContainsFunc(plan, func(line string) bool {
 		return strings.Contains(line, "tracker_notifications_inbox_idx (recipient=? AND log_seq")
 	}) {

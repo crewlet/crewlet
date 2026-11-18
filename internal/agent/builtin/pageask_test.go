@@ -14,8 +14,8 @@ import (
 
 // AN AGENT'S PAGE COMMENT THAT ASKS A PERSON IT NAMES IS REFUSED (ADR-0100):
 // a page comment carries no decision, so the question goes on a work item.
-// Only mentioning a person, asking an agent, naming a team, or a person's own
-// comment are posted as before.
+// Merely mentioning a person, asking an agent, naming a team, or a person's
+// own comment is posted.
 //
 // Mutation: return no persons from askedInWords, and the agent's request
 // that names a person on a page is posted.

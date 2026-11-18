@@ -110,15 +110,13 @@ func (twoDataNodes) Holders() ([]string, error) { return []string{"data-peer", "
 func (twoDataNodes) Unanswered(string)          {}
 
 // THE OPERATOR'S SURFACES ARE ANSWERED THROUGH THE ROUTER, AS THE SEATS' TOOLS
-// ARE — the dashboard's and the REST routes' reads, the file routes, the purge,
-// the rooms and their erase, and the operator's own MCP. Read straight off this node's own copy, a data
-// node whose copy was out of service — wrong rather than behind, or its file
-// shut — sent its seats' calls to a peer and went on answering its operator
-// from the copy it had stopped serving, or refused outright where the file was
-// shut. Here this node's copies of the tracker, of the knowledge base and of
-// chat are wrong, and every surface is answered by the peer — the operator's own
-// writes included, attributed to the operator. (A wrong copy of one domain
-// sends only that domain's surfaces to a peer — ADR-0079.)
+// ARE: the dashboard's and REST routes' reads, the file routes, the purge, the
+// rooms and their erase, and the operator's own MCP. Read off this node's own
+// copy, a node whose copy is out of service (wrong, or its file shut) would
+// answer its operator from a copy it no longer serves, or refuse. Here this
+// node's tracker, knowledge base and chat are wrong, and the peer answers every
+// surface, the operator's own writes attributed to the operator. (A wrong copy
+// of one domain sends only that domain's surfaces to a peer: ADR-0079.)
 func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()

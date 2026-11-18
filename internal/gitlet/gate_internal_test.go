@@ -22,15 +22,12 @@ func gatedRules() []Protection {
 	}
 }
 
-// AN UNCHANGED GATE COMPARES EQUAL, however many times it is read. A gate is
-// a pointer, so two decodes of one record's settings are two gates in memory,
-// and every comparison that decides whether settings changed — the
-// reconcile's and a lifecycle request's — compares them by value: by ==, a
-// gated repository's unchanged declaration would be written again at every
-// activation. (The push decide reads no gate at all, its rules
-// [PushRule]s compared by ==.) And the comparison reads EVERY field of a gate,
-// held to the type by reflection, so a field it skipped would be a change of
-// that field every activation drops.
+// AN UNCHANGED GATE COMPARES EQUAL, however many times it is read: two
+// decodes of one record hold two gate pointers, and the reconcile and a
+// lifecycle request compare settings by value, or every activation would
+// rewrite a gated repository's unchanged declaration. Every field of a gate
+// counts, held to the type by reflection: a skipped field's change would be
+// dropped.
 //
 // Mutation: compare the rules with slices.Equal in RepoSettings.equal — two
 // decodes of one record's settings compare unequal, red; drop Checks from

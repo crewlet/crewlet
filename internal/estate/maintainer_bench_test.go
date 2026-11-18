@@ -10,13 +10,12 @@ import (
 
 // BenchmarkMaintainerOf is what a Gitlet node pays to judge every repository a
 // maintainer's pass lists against ONE listing of who serves git and what each
-// Gitlet node advertises ([Router.MaintainerOf]): repos=10000 ids over a fleet of
-// gitlet-nodes={8,16}, every node advertising a budget that holds the charge, this
-// node one of them and maintaining its share — ns/repo, the one read of the
-// listing included, and maintains, the repositories it maintains. It is what
-// each repository this node does NOT maintain costs a pass, since only a
-// repository's maintainer ever remembers a plan of it found not due
-// (internal/gitlet/compact's poll arms price the rest of the pass).
+// node advertises ([Router.MaintainerOf]): 10000 repos over 8 or 16 Gitlet
+// nodes, each advertising a budget that holds the charge, this node one of
+// them, reporting ns/repo (the listing's read included) and maintains. Only a
+// repository's maintainer remembers a plan found not due, so this is what each
+// repository it does NOT maintain costs a pass (internal/gitlet/compact's poll
+// arms price the rest).
 func BenchmarkMaintainerOf(b *testing.B) {
 	const charge = int64(1) << 30
 	for _, n := range []int{8, 16} {

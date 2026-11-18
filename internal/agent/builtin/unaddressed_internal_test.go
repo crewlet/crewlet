@@ -10,12 +10,10 @@ import (
 
 // A COMMENT THAT LEAVES THE ASSIGNEE UNASKED IS WARNED ABOUT, IN THE ROUTING'S
 // OWN TERMS, AND ONE THAT ASKS THEM NEVER IS. Another agent's remark naming
-// nobody is warned that it does not wake the assignee at all, and so is a
-// reply in a thread the assignee wrote in (ADR-0113); a reply in a thread
-// where the assignee still owes an answer, that it wakes them without asking
-// them anything; a person's remark is the ask, so it carries no warning. An answer
-// closes a question and expects no reply, so warning its author that nobody is
-// asked to reply is wrong.
+// nobody, or its reply in a thread the assignee wrote in (ADR-0113), is warned
+// that it does not wake the assignee; a reply where the assignee still owes
+// an answer, that it wakes them without asking anything. A person's remark is the ask, and an answer
+// expects no reply, so neither is warned.
 //
 // Mutation: decide the warning from the comment alone rather than from the
 // record it publishes, and the person's remark or the thread reply is red.

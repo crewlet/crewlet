@@ -26,10 +26,8 @@ func dated(t *testing.T, r *roundTrip, id, due string) {
 
 // AN UNDATED TASK IS NOT THE SOONEST THING IN THE COMPANY.
 //
-// SQLite puts NULLs FIRST on an ascending order, so `sort=due` answered with
-// every undated task ahead of the one due tomorrow — on the list, in a board
-// column and in every tool that reads this grammar. "Soonest first" is a
-// question about values and a row that has none is not its answer.
+// SQLite puts NULLs FIRST ascending; "soonest first" is about values, and a row
+// with none goes last, in either direction.
 func TestSortingByADateLeavesTheUndatedLast(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -43,8 +41,7 @@ func TestSortingByADateLeavesTheUndatedLast(t *testing.T) {
 		t.Errorf("sort=due answers %v, want the soonest first and the undated "+
 			"last — an absent deadline is not an earlier one", ascending)
 	}
-	// AND THE SAME WAY ROUND DESCENDING: "latest first" is the same kind of
-	// question, and a row with no value is not its answer either.
+	// AND LAST DESCENDING TOO.
 	descending := ids(r.ask(map[string]any{
 		"container": "project:ENG", "sort": "-due",
 	}))
@@ -56,10 +53,8 @@ func TestSortingByADateLeavesTheUndatedLast(t *testing.T) {
 
 // AND A PAGE BOUNDARY LANDS IN THE SAME PLACE THE ORDER PUT IT.
 //
-// The cursor's comparison is the order's own, written out. The moment the two
-// spellings disagree a paged answer skips whatever falls between them —
-// silently, and only for the callers who paged, which is every board column
-// and every tool that walks a backlog.
+// The cursor's comparison is the order's own, written out again: where the two
+// disagree, a paged answer silently skips what falls between them.
 func TestPagingThroughADateSortLosesNobody(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

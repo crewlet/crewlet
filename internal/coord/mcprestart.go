@@ -11,44 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// AN MCP RESTART is a person's request that an MCP server be restarted now:
-// every instance of it on every node, or one seat's instance on the node that
-// holds the seat ("restart" on a server's page). The model retry's shape
-// (modelretry.go), for the same reasons.
+// AN MCP RESTART is a person's request to restart a server now: every instance
+// on every node, or one seat's on the node holding it. One record per server
+// or restarted seat, watched by every node (internal/engine's mcprestart.go),
+// shaped as the model retry (modelretry.go).
 //
-// # Who has to agree on it
-//
-// The whole company, now. A server's instances are each node's own children,
-// so a request served by one node changes nothing on another unless every node
-// hears it. It is one record per server, and one per seat a person restarted
-// one instance of, in the coordination store; every node keeps a watched copy
-// of all of them (internal/engine's mcprestart.go), as it does of the model
-// retries.
-//
-// # A stamp, not a command
-//
-// The record carries the instant it was asked for, and a node restarts the
-// instances whose current state BEGAN BEFORE it: a session started earlier, or
-// an outage that began earlier. An instance that came up, or went down, after
-// the request is already what was asked for. That makes the rule order-free
-// and idempotent: a node that hears the record twice, late, or after a restart
-// restarts exactly what it would have restarted on time, and a record left
-// standing for a week restarts nothing that started since. So the record needs
-// no consumer bookkeeping and no expiry; the apply that removes the server
-// deletes it.
-//
-// # The seat's holder alone
-//
-// A record naming a seat is heard by every node and acted on by the one that
-// holds the seat: that node runs the seat's child and no other node does. A
-// seat that moves after the request is a fresh child on its new holder,
-// started after the stamp, and is left alone.
-//
-// # The latest request wins
-//
-// Two people restarting one server at once want the same thing, and the later
-// stamp restarts a superset of what the earlier one does. So a write keeps
-// whichever stamp is LATER ([MCPRestarts.PutMCPRestart]).
+// A STAMP, NOT A COMMAND: a node restarts the instances whose current state (a
+// session, or an outage) BEGAN BEFORE the record's instant, so a record heard
+// twice, late or after a restart does exactly what it would have on time, and
+// needs no expiry: the apply that removes the server deletes it. Only the
+// seat's holder acts on a seat's record, and a seat that moved runs a child
+// started after the stamp. A write keeps the LATER stamp, which restarts a
+// superset ([MCPRestarts.PutMCPRestart]).
 
 // MCPRestart is one restart request, as the coordination store holds it.
 type MCPRestart struct {

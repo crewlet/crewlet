@@ -11,11 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// How a call's entry is written on its run's record before it runs (the
-// package doc's "A call is on its run's record before it runs").
+// The package doc's "A call is on its run's record before it runs".
 
-// entryReader is a tool that reads, as it runs, every entry its run's ledger
-// holds — whether its own call's was written ahead of it.
+// entryReader is a tool that reads its run's ledger's entries as it runs.
 type entryReader struct {
 	ledger *ledger
 	saw    chan []mcpbridge.Begun
@@ -33,13 +31,9 @@ func (r *entryReader) Call(context.Context, map[string]any) (tools.Result, error
 	return tools.Result{Output: "written"}, nil
 }
 
-// A CALL IS ON ITS RUN'S RECORD BEFORE ITS TOOL RUNS. The bridge writes the
-// call's entry — its tool, its place, the instant it took it, the digest it was
-// admitted under and the bound past which nobody waits for it — on the run's
-// ledger ahead of the call, and runs the call only once that write is taken:
-// so a call that runs is a call a resumed segment counts, whatever becomes of
-// its record afterwards. Its one update then carries the same identity, so it
-// finds that entry.
+// A CALL IS ON ITS RUN'S RECORD BEFORE ITS TOOL RUNS: its entry (tool, place,
+// instant, digest and bound) is taken first, so a resumed segment counts every
+// call that ran, and its update carries the same identity to find that entry.
 //
 // Mutation: run the call without writing its entry (`false &&` before the
 // ledger's begin), and its tool runs with nothing on the record.
@@ -71,14 +65,10 @@ func TestACallIsOnItsRunsRecordBeforeItsToolRuns(t *testing.T) {
 	})
 }
 
-// A CALL WHOSE ENTRY CANNOT BE WRITTEN IS NOT RUN, AND IS REFUSED. A call that
-// ran with no record of it could be counted by no later call of its run, which
-// could then derive its operation id again; so a call whose entry the ledger
-// did not take is never run. Its box is told why, FAILED — nothing ran, so the
-// call can be made again: where the store refused every attempt, that it could
-// not be recorded and may be made again, in the words a call reaching a closing
-// session is told; where the run's log takes no more calls of its job, that its
-// run has ended. Nothing is recorded of it.
+// A CALL WHOSE ENTRY CANNOT BE WRITTEN IS NOT RUN, AND IS REFUSED: a call off
+// the record could have its operation id derived again by a later call. The box
+// is answered failed, so it may retry: UnrecordedNote where the store refused
+// every attempt, EndedNote where the run's log takes no more of the job.
 //
 // Mutation: run the call whatever its entry's write answered (`false &&` before
 // the begin's error), and its tool runs off the record.
@@ -118,9 +108,8 @@ func TestACallWhoseEntryCannotBeWrittenIsNotRunAndIsRefused(t *testing.T) {
 	}
 }
 
-// lostAnswer takes every entry and then answers its write as failed, as a
-// coordination store does whose answer to a compare-and-swap that landed was
-// lost on its way back.
+// lostAnswer takes every entry and answers failed, as a store whose answer to a
+// landed compare-and-swap was lost.
 type lostAnswer struct{ *ledger }
 
 func (l lostAnswer) Begin(ctx context.Context, runID string, b mcpbridge.Begun) error {
@@ -131,15 +120,10 @@ func (l lostAnswer) Begin(ctx context.Context, runID string, b mcpbridge.Begun) 
 }
 
 // A CALL WHOSE ENTRY IS STILL BEING WRITTEN IS NEVER RUN WHERE ITS OPENING ENDS
-// OR ITS SEAT'S FENCE CLOSES MEANWHILE. An opening's end answers a call it holds
-// whose entry is still being written that it was not run — failed, in the words
-// a call reaching the opening after its end gets, so its box makes it again
-// where it goes on — and a seat's fence found closed once the entry is written
-// tells the box its session was closing; either way the call never runs, and
-// its entry, written all the same, is withdrawn in the same step, so no
-// collection waits on it and no continuation is told of a call that never
-// happened. AND AN ENTRY WHOSE WRITE LANDED AND LOST ITS ANSWER as the end came
-// is withdrawn as well: the log may hold it, and only a withdrawal finds out.
+// OR ITS SEAT'S FENCE CLOSES MEANWHILE: the box is answered failed (EndedNote or
+// ClosingNote) so it retries where it goes on, and the entry is withdrawn, so
+// no collection waits on it and no continuation hears of it. An entry whose
+// write landed but lost its answer is withdrawn too: only a withdrawal finds out.
 //
 // Mutation: answer a call the end finds not yet begun as still running (`false
 // &&` before the end's test of it), and its box is told a call that never runs
@@ -150,8 +134,7 @@ func TestACallWhoseEntryIsStillBeingWrittenIsNeverRunWhereItsOpeningEnds(t *test
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		// stop ends the opening, or closes the seat's fence, while the call's
-		// entry is being written.
+		// stop ends the opening or closes the fence mid-write.
 		stop func(b *bubbled, fenced *atomic.Bool)
 		want string
 		// lost is an entry whose write lands and answers failed.

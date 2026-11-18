@@ -50,8 +50,10 @@ type Fix struct {
 	Setting string `json:"setting,omitempty"`
 	// URL is where an external_step is taken, where the vendor named one.
 	URL string `json:"url,omitempty"`
-	// Page is the dashboard page an open_page fix is taken on.
-	Page Page `json:"page,omitempty"`
+	// Page is the dashboard page an open_page fix is taken on, and Target
+	// what that page opens on: an item's key, a seat's handle.
+	Page   Page   `json:"page,omitempty"`
+	Target string `json:"target,omitempty"`
 	// Prompt is the question a draft_with_assistant fix asks Ask Crewlet, in
 	// the engine's words: the evidence and the change to draft, nothing more.
 	Prompt string `json:"prompt,omitempty"`
@@ -63,11 +65,16 @@ type Fix struct {
 // dashboard knows it by (`ADVISOR_PAGES` in its contract, held to [Pages]).
 type Page string
 
-// PageBackups is Backups & retention, whose Take a backup takes one now.
-const PageBackups Page = "backups"
+// The pages: Backups & retention, whose Take a backup takes one now; a work
+// item, by its key; and an agent's page, by its handle.
+const (
+	PageBackups Page = "backups"
+	PageItem    Page = "item"
+	PageSeat    Page = "seat"
+)
 
 // Pages is every page an open_page fix may name.
-func Pages() []Page { return []Page{PageBackups} }
+func Pages() []Page { return []Page{PageBackups, PageItem, PageSeat} }
 
 // Valid reports whether p is a page this build names.
 func (p Page) Valid() bool { return slices.Contains(Pages(), p) }

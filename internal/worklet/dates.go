@@ -8,31 +8,17 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 )
 
-// Relative dates, and why they are resolved HERE rather than in SQL.
+// Relative dates resolve HERE, once, at parse time, against the company's ONE
+// timezone, never in SQL: a WHERE clause would compute the calendar per row, and
+// two nodes in two datacentres would compute it differently. The store sees two
+// instants, and every token is a pure function of an instant and a location.
 //
-// A filter a person types is "due this week", and a filter a database
-// understands is a pair of instants. Resolving the first into the second needs
-// a calendar — the company's ONE timezone, where a week starts, what the end
-// of a month is — and none of that belongs in a WHERE clause: a query that
-// computed it would compute it per row, and two nodes in two datacentres would
-// compute it differently.
-//
-// So the resolution happens once, at parse time, against the company's clock,
-// and what reaches the store is two numbers. That is also what makes it
-// testable: every token below is a pure function of an instant and a location.
-//
-// # These are predicates on a task's OWN dates
-//
-// Never on its storage age. "Due before today" is a question about the work;
-// "written more than a year ago" is a question about the log, and the log's
+// These are predicates on a task's OWN dates, never its storage age: the log's
 // retention is not a filter anybody types.
 
-// DateAlias expands one of the vendor's own dynamic tokens into this grammar.
-//
-// ACCEPTED AS ALIASES rather than implemented separately, so the alias and the
-// token it expands to can never disagree — which is the whole failure the
-// second implementation would have: `overdue` as its own predicate would drift
-// from the preset that means the same thing the first time either was tuned.
+// DateAlias expands one of the vendor's own dynamic tokens into this grammar,
+// as an alias rather than a second implementation that would drift from the
+// token it means.
 func DateAlias(value string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "next7":
@@ -54,12 +40,9 @@ func DateAlias(value string) (string, bool) {
 // DateOp is a comparison against a date column.
 type DateOp string
 
-// The five comparisons, and each constant IS the token a filter value carries:
-// [ParseDateFilter] cuts `lt:today` at the first colon, lowercases the prefix
-// and casts it to a [DateOp]. So these spellings are a wire format rather than
-// a naming choice — they are what a person or a model types, and what a saved
-// view's params hold, so renaming one turns every filter already spelling it
-// the old way into a refusal.
+// The five comparisons. Each constant IS the token a filter value carries
+// ([ParseDateFilter] casts the `lt:` prefix to a [DateOp]), so the spellings are
+// a wire format: renaming one refuses every saved view already spelling it.
 const (
 	DateLT    DateOp = "lt"
 	DateLTE   DateOp = "lte"
@@ -72,14 +55,13 @@ const (
 type DateFilter struct {
 	Op DateOp
 
-	// From and To are the resolved bounds. For every op but a range, only
-	// From is meaningful.
+	// From and To are the resolved bounds; only a range uses To.
 	From period.Anchor
 	To   period.Anchor
 
 	// Overdue marks the one alias that is not purely a date: it carries an
-	// open-status condition with it, and the preset that means the same
-	// thing compiles to exactly this — so the two can never disagree.
+	// open-status condition, and the preset meaning the same compiles to
+	// exactly this, so the two cannot disagree.
 	Overdue bool
 }
 

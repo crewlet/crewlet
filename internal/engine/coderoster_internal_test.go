@@ -86,23 +86,18 @@ func spellings(u *org.Unit) []string {
 	return out
 }
 
-// THE CODE ROSTER IS THE CHART: every answer it gives is the one the org model
-// gives for the same seat or unit — a seat's unit is its unit's key, a unit's
-// lead its EFFECTIVE lead, the lead chain the effective lead of each unit from
-// it to the top, and a subtree the units a seat's chain passes through — held
-// to the org model's own functions (UnitFor, UnitChainFor, EffectiveLead) for
-// every seat and every unit, by every spelling a row may hold, never to a
-// table written beside it. A unit a reference names nothing of answers no
-// lead, no chain and no subtree.
-//
-// And a REFERENCE OUTLIVES ITS SPELLING: a repository made under a unit's
-// name, after the unit gains an id, still names its unit — its lead
-// maintains it and its members write to it.
+// THE CODE ROSTER IS THE CHART: every answer (a seat's unit key, a unit's
+// EFFECTIVE lead, the lead chain, a subtree) is held to the org model's own
+// functions (UnitFor, UnitChainFor, EffectiveLead) for every seat and unit, by
+// every spelling a row may hold, never to a table written beside it; a
+// reference naming no unit answers nothing. And a REFERENCE OUTLIVES ITS
+// SPELLING: a repository made under a unit's name still names that unit after
+// it gains an id, its lead maintaining it and its members writing.
 //
 // Mutations: Leads skipping the unit's own effective lead → every chain row
-// red; the units resolved by an exact read of their Key → the renamed row and
-// every by-name row red; Lead read off the unit's declared lead → Infra's
-// and Tools' rows red.
+// red; units resolved by an exact read of their Key → the renamed row and
+// every by-name row red; Lead read off the declared lead → Infra's and Tools'
+// rows red.
 func TestTheCodeRosterIsTheChart(t *testing.T) {
 	t.Parallel()
 	roster, o := rosterOfChart(t, rosterChart(""))
@@ -198,17 +193,14 @@ func agent(handle string) gitlet.Principal {
 }
 
 // THE ENGINE'S CODE READER JUDGES A SEAT BY THE CHART THE NODE SERVES NOW: the
-// reader the native runtime builds is handed the engine's roster, read per
-// call, so a seat outside a `visibility: unit` repository's owning unit is
-// refused it, one inside reads it at its tier's cap, a root seat with no lead
-// above it reads nothing — and an activation that moves the outside seat into
-// the unit lets it read with no restart, because the roster is the current
-// epoch's and not the one the runtime was built under.
+// native runtime's reader reads the engine's roster per call, so a seat
+// outside a `visibility: unit` repository's owning unit is refused, one inside
+// reads at its tier's cap, a root seat reads nothing, and an activation moving
+// the outside seat in lets it read with no restart.
 //
-// Mutations: the reader built with no Roster → swe's read is unserved, the one
-// data node refusing it as a node that holds no chart; the epoch installed
-// without its roster → the same; the roster captured once, at its first read,
-// rather than read per call → rep is still refused after the move.
+// Mutations: the reader built with no Roster, or the epoch installed without
+// its roster → swe's read is refused as by a node holding no chart; the roster
+// captured at its first read → rep is still refused after the move.
 func TestTheEnginesCodeReaderJudgesASeatByTheCurrentChart(t *testing.T) {
 	t.Parallel()
 	web := "    - name: web\n      owner: {unit: Engineering}\n      visibility: unit\n" +
@@ -248,13 +240,11 @@ func TestTheEnginesCodeReaderJudgesASeatByTheCurrentChart(t *testing.T) {
 	}
 }
 
-// BenchmarkBuildingTheCodeRoster is the roster's build — paid once an epoch, by
-// the first agent code read after an activation, on that read's own goroutine
-// and with every agent read arriving meanwhile waiting behind it — over a chart
-// of divisions each led by a seat of its own, with ten teams of three seats
-// under each that inherit the division's lead: 30 divisions (330 units, 930
-// seats) and 100 (1 100 units, 3 100 seats). The figures are at newCodeRoster's
-// doc comment.
+// BenchmarkBuildingTheCodeRoster is the roster's build, paid once an epoch by
+// the first agent code read after an activation with every read behind it
+// waiting, over divisions each led by a seat of its own with ten teams of three
+// seats inheriting its lead: 30 divisions (330 units, 930 seats) and 100
+// (1 100 units, 3 100 seats).
 func BenchmarkBuildingTheCodeRoster(b *testing.B) {
 	for _, divisions := range []int{30, 100} {
 		o := &org.Organization{Name: "T"}

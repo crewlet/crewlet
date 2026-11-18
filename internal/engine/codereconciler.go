@@ -17,59 +17,17 @@ import (
 var errCodeReconcileStopped = errors.New("engine: the engine stopped before the reconcile finished")
 
 // codeReconciler runs this node's reconciles of code.repos
-// ([reconcileCodeRepos]) BESIDE the applies that ask for them rather than
-// inside them: [Engine.applyCodeRepos] asks and returns.
+// ([reconcileCodeRepos]) beside the applies that ask ([Engine.applyCodeRepos]),
+// never inside: ten thousand repositories take 16–19 s to write
+// (internal/gitlet's doc.go, measured section), time behind on the epoch that
+// past configplane.LagGrace sheds the node while a peer has applied it; nothing
+// the node serves waits for a repository to exist.
 //
-// # Why not inside the apply
-//
-// A reconcile costs a write for every repository that CHANGED, each one this
-// node waits to apply, and a document may declare ten thousand: an activation
-// that declares them all for the first time, removes them all or restores them
-// all is that many writes — 16–19 s on one 4-core node (internal/gitlet's
-// doc.go, measured section) — and in a fleet every data node decides the same
-// writes at once, the losers of each race deciding it again from the winner's
-// record, each node's applier applying every record. Inside the apply, that
-// time is time the node is BEHIND on the epoch, and a node behind longer than
-// configplane.LagGrace (45 s) while a peer has applied the epoch is shed: how
-// many repositories code.repos declares, and how fast this node and its peers
-// write, would decide whether a node keeps its seats. Nothing the node serves
-// waits for a repository to exist — every node's rows come from the log,
-// whichever node wrote them — so the apply asks for the reconcile, reports the
-// epoch applied, and the repositories follow.
-//
-// # The newest activation wins
-//
-// One reconcile runs at a time, for the newest activation asked for. Asked
-// again while one runs, the reconciler keeps only the newest request, and ENDS
-// a running reconcile of an older activation: the newer one decides every
-// repository again from its own document, and the fence it raises first
-// refuses, on every node, what the older one would still write — so letting it
-// finish spends those writes for nothing and holds the newer one back by them.
-// It is ended with [gitlet.ErrSuperseded] as its cause, which is what its log
-// line says. A request for the activation already running or waiting — to run,
-// or to run again — or for an older one, is dropped: the activation asked for
-// last is decided whole.
-//
-// # What a reconcile leaves undone is run again
-//
-// Out of the apply, a reconcile has no apply outcome to fail: the control
-// plane reports the epoch applied whatever the reconcile met, and no peer
-// covers for it where this is the only data node. So a reconcile that leaves
-// something undone a second run can apply ([reconcileCodeRepos] says what) is
-// RUN AGAIN — the same activation, from the rows as they are by then, which
-// costs a batch read where nothing changed — after [codeReposRetryWait], which
-// grows with each run in a row that leaves something undone, until one leaves
-// nothing. A newer request drops the retry, since the newer activation decides
-// every repository; a run its context ended (a newer request, the stop) is
-// never run again, whatever it answered; and the stop does not wait the retry
-// out.
-//
-// # Stopped before the admission is withdrawn
-//
-// A reconcile publishes on the code log, so it is stopped with every other
-// state-log publisher, before [Engine.withdraw] ([Engine.teardown]): the one in
-// flight is ended, a retry waiting is dropped, and nothing begins after — the
-// next boot reconciles.
+// One reconcile runs at a time, for the newest activation asked for: a newer
+// request ends a running older one with [gitlet.ErrSuperseded] as its cause,
+// since the newer decides every repository again and its fence refuses what
+// the older would still write; a request no newer than one running or waiting
+// is dropped. What a run leaves undone is run again ([codeReconciler.next]).
 type codeReconciler struct {
 	// run is one reconcile of the activation asked for, run to its end or
 	// until its context ends, answering what it left undone that running it
@@ -108,35 +66,25 @@ type codeReposWanted struct {
 }
 
 const (
-	// codeReposRetryBase is how long the reconciler waits before it runs
-	// again a reconcile that left something undone, doubled for each run in
-	// a row that does, up to [codeReposRetryCeiling].
-	//
-	// ONE WRITE BUDGET ([statelog.DefaultResolveBudget], five seconds), for
-	// the failures that clear on their own: a node catching up at boot has
-	// every decision refused once the activation's fence is not applied
-	// inside that budget, and is given as long again before it is asked
-	// again; a stream that lost its leader has elected another well inside
-	// it.
+	// codeReposRetryBase is the first wait before a reconcile that left
+	// something undone runs again, doubled each run in a row up to
+	// [codeReposRetryCeiling]. One write budget
+	// ([statelog.DefaultResolveBudget], 5 s), for failures that clear on
+	// their own: a node catching up at boot whose fence was not applied
+	// inside that budget, a stream electing a new leader.
 	codeReposRetryBase = statelog.DefaultResolveBudget
 
-	// codeReposRetryCeiling is the longest the reconciler waits between runs
-	// of a reconcile that keeps leaving something undone.
-	//
-	// FIVE MINUTES, reached at the seventh run in a row, about five minutes
-	// after the first failure. From there a failure that does not clear costs
-	// one reconcile every five minutes — an empty fence decision, a paged
-	// walk of the rows, and one batch read of the unchanged declarations,
-	// 0.47–0.59 s at the ten thousand a document may declare (internal/gitlet's
-	// measured section) — plus a write and a line for each repository still
-	// not applied, which is the point: a declaration not in force is said
-	// every five minutes until it is, rather than once and then never.
+	// codeReposRetryCeiling is the longest wait between runs, reached at the
+	// seventh in a row. Five minutes: a failure that does not clear then costs
+	// one reconcile every five minutes (an empty fence decision, a paged walk
+	// and one batch read, 0.47–0.59 s at ten thousand declarations,
+	// internal/gitlet's measured section) plus a write and a line for each
+	// repository not applied, so one not in force is said until it is.
 	codeReposRetryCeiling = 5 * time.Minute
 
-	// codeReposRetryJitter spreads each wait across a fifth of itself either
-	// way — the skill sync's spread for its retry — so the data nodes of a
-	// fleet that failed together, under one broker that lost its leader, do
-	// not run again on the same second and race each other's decisions.
+	// codeReposRetryJitter spreads each wait a fifth either way, as the skill
+	// sync's retry does, so data nodes that failed together under one broker
+	// do not run again on the same second and race each other's decisions.
 	codeReposRetryJitter = 0.2
 )
 
@@ -246,8 +194,11 @@ func (r *codeReconciler) retryNow() {
 }
 
 // next runs the pending request, if there is one and life has not ended, and
-// reports whether it ran one. A run that answers something left undone, and
-// whose context nothing ended, is the activation to run again.
+// reports whether it ran one. A run that leaves undone what a second run can
+// apply ([reconcileCodeRepos] says what) is run again after
+// [codeReposRetryWait], from the rows as they are by then: out of the apply it
+// has no outcome to fail, and where this is the only data node no peer covers
+// for it.
 func (r *codeReconciler) next(life context.Context) bool {
 	r.mu.Lock()
 	w := r.pending
@@ -291,8 +242,10 @@ func (r *codeReconciler) next(life context.Context) bool {
 }
 
 // stop ends the reconcile in flight with [errCodeReconcileStopped] as its
-// cause, drops a retry waiting and every request after, and returns once the
-// loop has.
+// cause, drops a waiting retry without waiting it out and every request after,
+// and returns once the loop has. A reconcile publishes on the code log, so
+// this runs with every other state-log publisher, before [Engine.withdraw]
+// ([Engine.teardown]); the next boot reconciles.
 func (r *codeReconciler) stop() {
 	r.mu.Lock()
 	r.stopped = true

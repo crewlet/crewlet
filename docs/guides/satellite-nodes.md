@@ -461,10 +461,10 @@ the dependency surface before choosing a host for it:
   to. A seat's hydration takes what its bytes take: its 29 round trips cost
   about 2.9 seconds across a 100 ms leaf link before its rows' own bytes
   (145 ms at 5 ms a round trip, 29 ms at 1 ms), and a year of episodes about
-  a minute across a 100 ms, 100 Mbit/s link. Time refuses it only when
-  nothing arrives for its stall (20.5 seconds for a pull across a link)
-  while the leaf link carries nothing, or when nothing is delivered to a
-  table's replay for a minute, whichever copies of the changelog it is
+  two and a half minutes across a 100 ms, 100 Mbit/s link. Time refuses it
+  only when nothing arrives for its stall (9.1 seconds for a pull across a
+  link) while the leaf link carries nothing, or when nothing is delivered to
+  a table's replay for a minute, whichever copies of the changelog it is
   placed on, and it says once a minute that it is still running
   (`memory_hydration_slow`); the answers that refuse a seat whatever the
   time, such as a row larger than the node's connection carries, still
@@ -476,16 +476,27 @@ the dependency surface before choosing a host for it:
   the fleet's presence reads, pings and heartbeats — has to stay under that
   line, as the presence reads of the fleets these pages document do, at
   under two fifths of the floor. A replay that hears nothing on a moving link
-  is placed again once the link has read 8.9 MB since its last word, and
+  is placed again once the link has read 8.5 MB since its last word, and
   refused once it has heard nothing for about 253 seconds; its other requests
   are held up to 248 seconds past their own bounds the same way
-  ([across a link, silence is the link's](../concepts/seat-ownership.md#a-seats-memory-follows-it)). It windows its pulls to what the link carries
-  within one lease heartbeat at the floor, so the node's lease renewals cross
-  behind them in time; below about 0.84 Mbit/s a renewal sent behind a full
-  window can still miss its own five-second term, as one behind an upload
-  can, and with an upload and a hydration both in flight a renewal can wait
-  behind both windows, which misses its term below about 1.68 Mbit/s
-  ([#1035](https://github.com/crewlet/crewlet/issues/1035)). Meanwhile the
+  ([across a link, silence is the link's](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
+  It windows its pulls to what the link carries in four seconds at the
+  floor, as an upload is windowed to one 128 KiB message, so a request sent
+  behind either alone on the link — a lease renewal among them — is still
+  answered inside its five-second term at any rate the engine allows. Until
+  [#1035](https://github.com/crewlet/crewlet/issues/1035), more still holds
+  a request past its term. Each direction has a window of its own, so with
+  an upload and a hydration both in flight a request whose bytes wait behind
+  the one and whose reply waits behind the other can take 7.75 seconds at the
+  floor beyond its own round trip. Nothing windows the object store's other
+  reads toward the node — a download, which holds four 128 KiB messages in
+  hand, fifteen seconds at the floor, a listing's walk, or a read's check of
+  what the stream's leader holds, answered with a whole message — nor an
+  event delivered to one of the node's seats, which crosses whole, so a
+  request whose reply crosses behind them waits for all of it, as one sent
+  behind what the node sends whole does (next item). A hydration's next row
+  waiting there is waited for while the link moves, as above, but a lease
+  renewal is not. Meanwhile the
   node's placement pass waits for it (see
   [a seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
   A restart costs that
@@ -501,6 +512,32 @@ the dependency surface before choosing a host for it:
   every lap of the seats
   ([#1040](https://github.com/crewlet/crewlet/issues/1040); see
   [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
+- **A fair queue at the link's bottleneck, each way.** The satellite
+  windows its uploads, one 128 KiB message at a time, and its memory
+  replay's pulls toward it, four seconds at the floor, so a small request
+  sent behind either alone is answered inside its five-second term even at
+  thirty seconds a mebibyte. Whatever else a first-in-first-out queue at a
+  bottleneck holds is added to that wait: another flow's bulk, such as a
+  harness's own upload or download, keeps the queue full for as long as it
+  takes to drain, and a request on the leaf link waits as long — a 256 KiB
+  buffer is 7.5 seconds at the floor, a cellular modem's buffer of
+  megabytes minutes — and behind a full window, a queue of more than a
+  fraction of a second of the link's rate puts the request past its term
+  ([#1035](https://github.com/crewlet/crewlet/issues/1035)). So the queue at
+  each direction's bottleneck must be fair (`fq_codel` or CAKE), which sends
+  a sparse flow's packets ahead of a bulk flow's, and the node's broker
+  traffic must get at least the floor beside the other flows. The host's own
+  queue discipline counts only where the host is the bottleneck: a host
+  whose interface is faster than its link queues at the modem or the router
+  instead, and keeps the queue its own only by shaping its egress just below
+  the uplink's rate and its ingress just below the downlink's (CAKE in
+  `ingress` mode on an IFB device). Neither reorders the bytes of one flow, and a
+  satellite's broker traffic is one flow, its leaf link, so what it sends
+  whole — an event or a dead letter of up to 8 MiB, a fleet record of up to
+  6 MiB — still holds every request sent after it on that link for the whole
+  of its crossing, about four minutes at the floor for 8 MiB, a lease
+  renewal among them
+  ([#1035](https://github.com/crewlet/crewlet/issues/1035)).
 - **A leaf link that reaches the members' own sockets.** A message on
   the link can be megabytes, and at the slowest pace the engine allows
   one takes minutes to cross; the node tells a link that is carrying such

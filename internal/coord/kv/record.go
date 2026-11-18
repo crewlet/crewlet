@@ -8,37 +8,24 @@ import (
 )
 
 // claimingEpoch marks a record whose owner has won the exclusivity CAS but has
-// not yet committed a fencing token.
-//
-// Zero is exactly the right marker because it is exactly the wrong token: a
-// conditional write predicated on epoch 0 matches an unset column, so no caller
-// can ever be handed one and no write can ever be fenced by one. A record in
-// this state blocks a peer's claim (it names an owner) and is never returned as
-// a coord.Lease.
+// not yet committed a fencing token. Zero, because it is never a valid token:
+// a write predicated on epoch 0 matches an unset column. Such a record blocks a
+// peer's claim and is never returned as a coord.Lease.
 const claimingEpoch int64 = 0
 
 // leaseValue is the JSON body of a key in the leases or the duties bucket, the
-// EPHEMERAL half of a resource's state. Its deadline, or on the seat lease
-// bucket the bucket's MaxAge, ends it, which is exactly what makes a dead
-// node's seat or duty reclaimable — and what takes a dead node's presence out
-// of the listings that count it.
-//
-// Schema evolution here is additive-only, for the reason coord.ProtocolVersion
-// states: a rolling upgrade has two builds reading each other's records, and a
-// field one build requires that the other does not write is a crash rather
-// than a missing feature.
+// EPHEMERAL half of a resource's state: its deadline (on the seat bucket, the
+// bucket's MaxAge) ends it, which makes a dead node's seat or duty reclaimable
+// and drops its presence from the listings. Its schema changes additively only,
+// for the reason coord.ProtocolVersion states.
 type leaseValue struct {
-	// Resource is redundant with the key, which is escaped and therefore
-	// not immediately readable. It is here for the operator running
-	// `nats kv get crewlet_leases seat=3Aalice` at 3am; the decoded KEY is
-	// what the backend trusts.
+	// Resource repeats the escaped key for an operator reading the bucket
+	// with `nats kv get`; the backend trusts only the decoded KEY.
 	Resource string `json:"resource"`
 
-	// Owner is empty in a TOMBSTONE — the record Release leaves behind so
-	// the lease expires in place instead of being deleted. A reader treats
-	// an empty owner as unheld; the bucket's MaxAge reaps the tombstone
-	// later, and the epoch it was written at is untouched in the other
-	// bucket.
+	// Owner is empty in a TOMBSTONE, the record Release leaves so the lease
+	// expires in place rather than being deleted. A reader treats it as
+	// unheld; MaxAge reaps it, and the epochs bucket keeps its epoch.
 	Owner string `json:"owner"`
 
 	// Epoch is claimingEpoch while a claimant holds the record but has not
@@ -46,36 +33,26 @@ type leaseValue struct {
 	Epoch int64 `json:"epoch"`
 
 	// Claim names the ONE CALL that wrote a record in the claiming state,
-	// and is empty on every other record.
-	//
-	// The owner cannot say it: one owner runs several claims of one
-	// resource at once — the heartbeat, the sweep and a recovery path — so
-	// a claiming record under this owner may be a sibling's, one round trip
-	// from committing. A call that fails part way gives back only the record
-	// carrying its own claim ([Store.abandon]), which is what lets it give
-	// back a record whose write it could not confirm without ever tearing
-	// down a sibling's. Nothing but that call writes a record carrying it,
-	// so once the record no longer does, it is no longer that call's.
+	// and is empty on every other record. The owner cannot say it: one
+	// owner runs several claims of a resource at once (heartbeat, sweep,
+	// recovery), so a claiming record may be a sibling's. A call that fails
+	// part way gives back only a record carrying its own claim
+	// ([Store.abandon]), never tearing down a sibling's; only that call
+	// writes it.
 	Claim string `json:"claim,omitempty"`
 
-	// TTLNanos is the deadline the claimant asked for. On the seat lease
-	// bucket it equals the bucket's own TTL in every production path, in which
-	// case the record's disappearance IS its expiry and nothing consults a
-	// clock. On the duty bucket it is always judged against the store's clock.
-	// See the package doc on the two lease buckets.
-	//
-	// Nanoseconds rather than the milliseconds an operator would rather
-	// read: time.Duration IS nanoseconds, so this round-trips exactly, and
-	// a TTL that truncated to zero on the way in would mint a lease that
-	// was already lapsed — a seat nobody can hold.
+	// TTLNanos is the deadline the claimant asked for: on the seat bucket it
+	// equals the bucket's TTL in production, on the duty bucket it is judged
+	// against the store's clock (package doc, "Two lease buckets, because
+	// seats and everything else want opposite TTLs"). Nanoseconds, so a
+	// time.Duration round-trips exactly: a TTL truncated to zero would mint
+	// an already-lapsed lease.
 	TTLNanos int64 `json:"ttl_ns"`
 
-	// AcquiredAt is the store's timestamp of the write that WON this
-	// tenure — the claiming record's own revision — and is carried
-	// unchanged by every renewal; see coord.Lease.AcquiredAt. A record
-	// still in the claiming state carries none (the commit stamps it), and
-	// is never handed out as a lease; omitzero keeps Go's zero instant off
-	// the wire for it.
+	// AcquiredAt is the store's timestamp of the claiming write that WON
+	// this tenure, carried unchanged by every renewal (coord.Lease.AcquiredAt).
+	// A claiming record has none until the commit stamps it; omitzero keeps
+	// the zero instant off the wire.
 	AcquiredAt time.Time `json:"acquired_at,omitzero"`
 
 	Preferred string         `json:"preferred,omitempty"`
@@ -85,34 +62,26 @@ type leaseValue struct {
 
 func (v leaseValue) ttl() time.Duration { return time.Duration(v.TTLNanos) }
 
-// resourceValue is the JSON body of a key in the epochs bucket — the
-// PERSISTENT half, which has no TTL and is never deleted.
-//
-// It holds the two facts that must outlive a tenure. The epoch, because a
-// counter that restarts hands the next owner a token a zombie from the
-// previous tenure is still fencing its writes with. And the placement hint,
-// because the hint's whole purpose is to bring a RESTARTED node's own seats
-// back to it — a hint that lived only in the lease record would be reaped
-// with it, and would therefore answer nothing in exactly the case it exists
-// for.
+// resourceValue is the JSON body of a key in the epochs bucket, the
+// PERSISTENT half (no TTL, never deleted). It holds what must outlive a
+// tenure: the epoch, since a restarted counter would reissue a token a zombie
+// still fences with, and the placement hint, which exists to bring a RESTARTED
+// node's seats back and would be reaped with the lease record otherwise.
 type resourceValue struct {
 	Resource  string `json:"resource"`
 	Epoch     int64  `json:"epoch"`
 	Preferred string `json:"preferred,omitempty"`
 }
 
-// entry is one decoded lease record plus the store metadata every write needs:
-// the revision a CAS is predicated on, and the server-assigned timestamp the
-// deadline is computed from.
+// entry is one decoded lease record plus the revision a CAS is predicated on
+// and the server timestamp the deadline is computed from.
 type entry struct {
 	resource string
-	// lane is the bucket the record was read from, which decides how its
-	// expiry is judged and against whose clock.
+	// lane is the bucket read from; it decides how expiry is judged.
 	lane     *lane
 	revision uint64
-	// created is the store's own clock at the moment of this revision.
-	// coord.Lease.ExpiresAt is derived from it and never from time.Now, so
-	// two nodes with skewed clocks still agree on when a lease ends.
+	// created is the store's clock at this revision. ExpiresAt derives from
+	// it, never time.Now, so nodes with skewed clocks agree on expiry.
 	created time.Time
 	value   leaseValue
 }
@@ -131,16 +100,13 @@ func (e entry) lease() *coord.Lease {
 	}
 }
 
-// encodeValue is a lease bucket's or the epochs bucket's record as the store
-// writes it: coord's one lease encoding ([coord.EncodeLeaseRecord]), which the
-// bound on a lease's Meta is measured by — so what [Store.TryAcquire] holds a
-// Meta to is the bytes that cross.
+// encodeValue encodes a lease or epochs record with [coord.EncodeLeaseRecord],
+// the encoding the Meta bound in [Store.TryAcquire] is measured by.
 func encodeValue(v any) ([]byte, error) {
 	data, err := coord.EncodeLeaseRecord(v)
 	if err != nil {
-		// Only reachable through Meta, which is caller-supplied and may
-		// hold something JSON cannot express. That is an argument the
-		// caller got wrong, so it must not read as a refusal.
+		// Only caller-supplied Meta can fail here: a bad argument, not a
+		// refusal.
 		return nil, fmt.Errorf("coord/kv: encode record: %w", err)
 	}
 	return data, nil

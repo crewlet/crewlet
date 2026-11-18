@@ -15,9 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
-// leafFleetAuth is the keyring this package's members serving leaves and the
-// leaves joined to them hold: every leaf link is admitted only on a key its
-// member holds. A literal placeholder, never a key anybody deploys.
+// leafFleetAuth is the keyring this package's leaf-serving members and their
+// leaves share: a leaf link is admitted only on a key its member holds. A
+// placeholder, never a deployed key.
 var leafFleetAuth = sync.OnceValue(func() js.FleetAuth {
 	auth, err := js.FleetAuthFrom(runtoken.OneKey("kv-leaf",
 		"the coordination store's leaf cases' placeholder key material"))
@@ -29,13 +29,11 @@ var leafFleetAuth = sync.OnceValue(func() js.FleetAuth {
 
 // A LEAF'S COORDINATION STORE IS CERTIFIED ON THE SAME SUITES AS A MEMBER'S.
 //
-// A node without the `data` role joins the fleet as a leaf: its broker runs no
-// JetStream, and every bucket its coordination store opens is a member's,
-// reached across one leaf link in the fleet's domain. Its leases, its epochs,
-// the activation pointer and the company's secrets are all read and written
-// there — so the only way to know such a node agrees with the fleet about who
-// holds what is to run every case a member's store runs against one. The
-// queue's own half is internal/queue/jetstream's TestConformanceThroughALeaf.
+// A node without the `data` role is a leaf: its broker runs no JetStream, and
+// every bucket its store opens (leases, epochs, the activation pointer,
+// secrets) is a member's, across one leaf link. Only running every member case
+// against one shows it agrees with the fleet on who holds what. The queue's
+// half is internal/queue/jetstream's TestConformanceThroughALeaf.
 func TestContractThroughALeaf(t *testing.T) {
 	t.Parallel()
 	client := leafClient(t)
@@ -44,17 +42,14 @@ func TestContractThroughALeaf(t *testing.T) {
 	})
 }
 
-// AND THE FLEET'S SHARED STATE: the counters, the ledgers, the claims and the
-// secrets, whose every write is a compare-and-set a leaf's request has to
-// reach a member's stream leader to win or lose.
+// AND THE FLEET'S SHARED STATE: counters, ledgers, claims and secrets, whose
+// every write is a compare-and-set a leaf's request must reach a member's
+// stream leader to win or lose.
 //
-// EVERY NODE A LEAF OF ITS OWN, joined to one member, which is where the
-// counter failed: a round trip through a leaf is longer than one on a member,
-// so the fixed 32 ms backoff ceiling that spread a member's writers no longer
-// spread these, and the org's counter lost every one of its sixteen attempts
-// to the contract's thirty-two concurrent charges under the solo half's load.
-// The contention cases put [coordtest.ContendedCharges] charges through each of
-// [coordtest.ContendingNodes] leaves at once, so they meet that topology.
+// EVERY NODE A LEAF OF ITS OWN, joined to one member: a leaf's round trip is
+// longer than a member's, which defeats a backoff tuned on members, so the
+// contention cases put [coordtest.ContendedCharges] charges through each of
+// [coordtest.ContendingNodes] leaves at once.
 func TestFleetContractThroughALeaf(t *testing.T) {
 	t.Parallel()
 	port := leafMember(t)
@@ -85,16 +80,15 @@ func TestNodeStatusRecordContractThroughALeaf(t *testing.T) {
 }
 
 // leafClient starts a member serving leaves and a leaf joined to it, and is a
-// JetStream client of the LEAF — in the embedded fleet's domain, the only API
-// a leaf's broker carries across its link.
+// JetStream client of the LEAF, in the embedded fleet's domain: the only API a
+// leaf carries across its link.
 func leafClient(t *testing.T) jetstream.JetStream {
 	t.Helper()
 	return leafClientOf(t, leafMember(t), "leaf")
 }
 
 // leafClientOf starts a leaf named name joined to the member serving leaves on
-// port, and is a JetStream client of it — one node of a fleet of leaves, each
-// with a link of its own.
+// port, and is a JetStream client of it.
 func leafClientOf(t testing.TB, port int, name string) jetstream.JetStream {
 	t.Helper()
 	return leafClientAt(t, fmt.Sprintf("127.0.0.1:%d", port), name)
@@ -124,14 +118,9 @@ func leafClientAt(t testing.TB, addr, name string) jetstream.JetStream {
 }
 
 // leafMember starts a member serving leaves and returns the port its leaf
-// listener bound.
-//
-// ON [js.AnyPort], which the OS binds and the member names afterwards
-// ([js.Server.LeafPort]), so nothing else can take the port between its
-// choosing and its binding — in this binary, most likely one of the cluster
-// cases running beside these. It used to reserve a loopback port nothing held
-// a moment ago and name it, and to retry on another whenever the member's own
-// probe found it taken: a retry for a race this way has no window for.
+// listener bound: [js.AnyPort], which the OS binds and the member reports
+// ([js.Server.LeafPort]), so no concurrent cluster case can take the port
+// between its choosing and its binding.
 func leafMember(t testing.TB) int {
 	t.Helper()
 	// A MEMBER THAT SERVES LEAVES PERSISTS, or it is refused.

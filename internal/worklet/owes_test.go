@@ -12,12 +12,10 @@ import (
 
 // AN INFORMED ANSWER OWES ITS ASKER'S CHAT SURFACE, AND NOBODY ELSE'S TURN.
 //
-// The asker said it would report the outcome in a channel, and the person who
-// answered is told it will: the asker's `answered` wake names that surface in
-// [notify.Inbound.Owes], which is what the turn engine holds the turn open on.
-// A thread participant on the same item receives the same record under its own
-// reason and owes nothing (the promise was the asker's), and an answer to a decision
-// that asked for no inform owes nothing at all.
+// The asker promised to report the outcome in a channel: its `answered` wake
+// names that surface in [notify.Inbound.Owes], which the turn engine holds the
+// turn open on. A thread participant on the same item owes nothing (the promise
+// was the asker's), nor does an answer to a decision that asked for no inform.
 func TestAnInformedAnswerOwesItsAskerAndNobodyElse(t *testing.T) {
 	t.Parallel()
 	answers := "c-ask"
@@ -65,13 +63,11 @@ func TestAnInformedAnswerOwesItsAskerAndNobodyElse(t *testing.T) {
 
 // A WAKE THAT OWES A SURFACE IS ITS OWN PARTITION OF THE CONVERSATION.
 //
-// A turn owes one surface, and a coalesced partition is one turn — so two
-// answers on one item promising two different surfaces, merged, would lose one
-// of the promises. The partition key cuts the conversation by the surface owed
-// while the conversation identity stays the task's (`task:<id>`, never its
-// key: see [worklet.Prompt.ConversationIdentity]), so every wake about the
-// task is a turn of one conversation, whose next turn reads how the others
-// ended and continues the session the last one left.
+// A coalesced partition is one turn and a turn owes one surface, so merging two
+// answers that promise different surfaces loses one promise. The partition key
+// cuts by the surface owed while the conversation identity stays the task's
+// (`task:<id>`, never its key: see [worklet.Prompt.ConversationIdentity]), so
+// every wake about the task continues one conversation.
 func TestAnOwedWakeIsItsOwnPartitionOfTheTask(t *testing.T) {
 	t.Parallel()
 	meta := func(via worklet.Reason, inform string) map[string]string {
@@ -116,10 +112,9 @@ func TestAnOwedWakeIsItsOwnPartitionOfTheTask(t *testing.T) {
 
 // ONLY AN AGENT SEAT MAY ASK THE ENGINE TO INFORM.
 //
-// The engine keeps the promise by holding the asker's answered turn open, and
-// a person has no turn: an inform on their ask would put "posts it to
-// #releases" on the answering person's card as a promise nothing keeps. The
-// writer refuses it in its own decide, whichever surface wrote it.
+// The engine keeps the promise by holding the asker's answered turn open, and a
+// person has no turn: their inform would show the answerer a promise nothing
+// keeps. The writer refuses it in its own decide, whichever surface wrote it.
 func TestOnlyAnAgentAskerMayPromiseToInform(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

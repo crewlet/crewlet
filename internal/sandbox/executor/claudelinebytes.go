@@ -2,52 +2,17 @@ package executor
 
 import "bytes"
 
-// A THREAD LINE'S BYTE FACTS: WHAT A READER OF ITS BYTES READS OF IT.
-//
-// Claude Code's large-file readers read a line by its bytes, never by its
-// decode ([threadChain], THE LARGE FILE): whether it begins `{"parentUuid":`
-// and then its parent, whether it carries that key at its object's depth one,
-// the uuid after `"uuid":"` they key it by, and whether it holds
-// `"isSidechain":true` anywhere. The resumed count marks a line by the bytes
-// its media and its server's clearing edit are written with
-// ([resumedReading]). So every whole line, a record or one the layer refuses,
-// carries what those readers read of its bytes ([threadBytes]), beside what
-// its accessors read of its decode ([lineFacts]).
-//
-// BYTE FACTS STAY BYTE FACTS, never read off the decode. A pattern can begin
-// inside a name, through an escaped quote: a call's input keyed
-// `x"isSidechain` and valued true is written `"x\"isSidechain":true`, whose
-// bytes hold `"isSidechain":true`, so every reader of bytes reads that record
-// as a sidechain's where a reader of its decode reads none; and the decode
-// reads `{"parent\u0055uid":null}` as a parent no reader of bytes reads. Read
-// off the decode, the chain would judge such a thread path-free where the
-// readers start elsewhere, which is a false hold.
-//
-// WHAT IS HELD IS OF A FIXED SIZE, whatever the line: its length, its first
-// [lineHeadBytes] bytes, one bit for the key the dispatch takes a slot by,
-// the 36 bytes the readers key it by, and one bit a mark ([byteMark]).
-//
-// READ AS THE LINE STREAMS PAST ([lineBytes]), in pieces of any size, so a
-// reader of a line need never hold it to read what its bytes say. The scan is
-// the readers' own ([jsonDepth]), stepped over every byte but those inside a
-// string that step it nowhere, which it jumps past to the next quote or
-// backslash. So it visits EVERY QUOTE OF THE LINE, an escaped one too, and
-// reads the depth at each before stepping it; and since every pattern a
-// reader reads begins with a quote, every pattern is compared at each quote
-// with the bytes from it, a comparison a piece ends inside kept with how far
-// it matched and finished from the next piece. A comparison reads its bytes
-// from the pieces, never from what the scan stepped, so the jumps skip no
-// byte a comparison needs. Of the uuid keys, one is taken only 8 bytes or
-// more past the last taken, as the readers' search resumes past a key's own
-// bytes, and the 51 bytes after it (its 36 and `","timestamp":"`) are read
-// into a window of its own; the key the line is keyed by is chosen at its end
-// ([lineBytes.facts]). What the stream keeps is bounded whatever the line
-// holds: the facts, the scan, a few dozen comparisons and at most eight
-// windows, about 650 bytes.
-//
-// THE WHOLE-LINE FUNCTIONS THE READERS USED BEFORE ARE ITS ORACLE, in the
-// tests (claudelinebytes_internal_test.go): what the stream reads of a line
-// in pieces of any size is what they read of the whole line.
+// A THREAD LINE'S BYTE FACTS: what Claude Code's large-file readers read of a
+// line's bytes, never its decode ([threadChain], THE LARGE FILE), and the marks
+// the resumed count reads ([resumedReading]), carried by every whole line, a
+// refused one too ([threadBytes]), beside its decode's facts ([lineFacts]).
+// Never read them off the decode: a call input keyed `x"isSidechain` valued
+// true is written `"x\"isSidechain":true`, a sidechain's bytes where the decode
+// reads none, and `{"parent\u0055uid":null}` decodes to a parent no byte reader
+// reads, so the chain would judge a thread path-free where the readers start
+// elsewhere, a false hold. They are of a fixed size and read as the line
+// streams past ([lineBytes]); the whole-line functions in
+// claudelinebytes_internal_test.go are the oracle they are held to.
 
 // slotKeyLen is how many bytes a large-file reader keys a slot by, and reads a
 // parent as: a canonical uuid's.
@@ -153,12 +118,17 @@ func lineBytesOf(raw []byte) threadBytes {
 	return l.facts()
 }
 
-// lineBytes reads a whole line's byte facts ([threadBytes]) off its bytes as
-// they stream past ([lineBytes.write]), in pieces of any size, never holding
-// the line: its zero value is a line of no bytes read yet, and
-// [lineBytes.facts] the facts of the bytes written so far, read as a whole
-// line. What it keeps is bounded whatever the line holds (READ AS THE LINE
-// STREAMS PAST, above).
+// lineBytes reads a whole line's byte facts ([threadBytes]) as its bytes stream
+// past in pieces of any size ([lineBytes.write]), never holding the line; its
+// zero value has read nothing, and [lineBytes.facts] reads what is written so
+// far as a whole line. It steps the readers' own scan ([jsonDepth]), jumping
+// inside a string only to the next quote or backslash, so it meets every quote,
+// an escaped one too, and compares there each pattern (each begins with a
+// quote), resuming one a piece ends inside from the next piece. It compares the
+// pieces' bytes, never the scan's, so a jump skips none it needs. A uuid key is
+// taken 8 or more bytes past the last taken, as the readers' search resumes,
+// its 51 bytes after read into a window of its own. It keeps the facts, the
+// scan, a few dozen comparisons and at most eight windows: about 650 bytes.
 type lineBytes struct {
 	// out is the facts read so far: the length, the head, the dispatch's key
 	// and the marks as met; the key the readers key the line by is chosen at
@@ -238,9 +208,9 @@ func (l *lineBytes) write(p []byte) {
 		l.out.headLen = uint8(base) + uint8(copy(l.out.head[base:], p))
 	}
 	l.out.n += int64(len(p))
-	// WHAT THE BYTES BEFORE p LEFT OPEN goes first, in the order begun: the
-	// windows of keys taken, then the comparisons a quote began, whose keys
-	// taken here are newer than every window.
+	// WHAT THE BYTES BEFORE p LEFT OPEN goes first, in the order begun: the key
+	// windows, then the comparisons, whose keys taken here are newer than every
+	// window.
 	keys := l.keys[:0]
 	for i := range l.keys {
 		if !l.fill(&l.keys[i], p) {
@@ -261,12 +231,8 @@ func (l *lineBytes) write(p []byte) {
 			cmps = append(cmps, c)
 		}
 	}
-	// THEN p, BYTE BY BYTE AS THE READERS SCAN IT: every byte the scan
-	// steps is stepped, a quote compared with each pattern before it is, and
-	// inside a string the scan jumps to the next quote or backslash, past
-	// bytes that step it nowhere. Every quote of the line is visited, an
-	// escaped one too (its backslash's next byte), so a pattern that begins
-	// inside a name through an escaped quote is met as the readers meet it.
+	// THEN p, BYTE BY BYTE AS THE READERS SCAN IT, each quote compared with every
+	// pattern before the scan steps it ([lineBytes]).
 	l.cmps = cmps
 	quote, backslash := -1, -1
 	for i := 0; i < len(p); i++ {

@@ -14,12 +14,12 @@ import (
 // A PAGE THAT NAMES NO SPACE LANDS IN THE WRITER'S TEAM SPACE, asked of the
 // handle the write is recorded under.
 //
-// A person writes AS their seat whichever credential carried the write, so a
-// person's page lands where their seat's own pages do. Without a default on
-// the operator surface, the dashboard's "Save as a page" was refused for every
-// person who used it. A credential nobody is bound through writes under its
-// login, which no seat matches, so its write is refused naming the argument it
-// left out rather than filed somewhere guessed for it.
+// A person writes AS their seat whichever credential carried the write, so
+// their page lands where their seat's own pages do; without the default the
+// dashboard's "Save as a page" was refused for every person. A credential
+// nobody is bound through writes under its login, which no seat matches, so its
+// write is refused naming the argument it left out rather than filed somewhere
+// guessed.
 func TestAPageWithNoSpaceLandsInTheWritersTeamSpace(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

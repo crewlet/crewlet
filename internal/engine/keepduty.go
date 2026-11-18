@@ -11,86 +11,25 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule"
 )
 
-// A fleet duty KEPT while its work runs.
+// A fleet duty KEPT while its work runs. A duty is claimed once a turn, but
+// some turns outlast its TTL (the embedding duty's training, the object
+// collector's audit), and a lease renewed only between turns lapses mid-work,
+// so two nodes run the singleton at once. So the work renews the lease while
+// it runs ([dutyRenewal.keep]) and is ENDED once it cannot say it holds it.
 //
-// # Why a duty's work renews its lease
-//
-// A duty is claimed once a turn, and its holder stays the holder by claiming
-// again at the next turn, before the TTL runs out. Some turns run longer than
-// that: the embedding duty's training of the semantic index, the object
-// collector's audit of a store holding millions of objects. Renewed only
-// between turns, such a lease lapses mid-work, a peer takes the duty, and two
-// nodes do the singleton's work at once — the collector's two holders then
-// writing the fleet's one record of it in turn, the older pass's last. So the
-// work renews the lease while it runs ([dutyRenewal.keep]), and is ENDED when
-// it can no longer say it holds it.
-//
-// # Three answers, three outcomes (ADR-0005)
-//
-// A renewal that answers HELD extends the window the work may run in. One that
-// answers NOT HELD ends the work at once: another node holds the duty and runs
-// its own. One the store does NOT ANSWER — refuses with an error, or HOLDS ON
-// TO until the call gives up — changes nothing yet: the last confirmation
-// still keeps every other node out until its window ends
-// ([coord.ExclusiveThrough]), and the work ends only once that window has run
-// out with no renewal confirming it, when another node may hold the duty. A
-// store blip is not a lost duty, and treating it as one cut a training off
-// over a single renewal nobody answered.
-//
-// HELD ON TO is the shape that matters on this broker. A claim begins with a
-// read from the coordination stream's LEADER, and a member that is not the
-// leader drops that request rather than refusing it — so while the leader is
-// moving, through an election or a member restarting in a rolling upgrade, a
-// renewal hears nothing at all until its own deadline. So each renewal's call
-// is bounded by ONE RENEWAL INTERVAL as well as by the window: given the rest
-// of the window, as it once was, the first such call held the work until the
-// window had run out, and the renewal after it was never asked.
-//
-// # Four renewals a lease
-//
-// The renewals are PHASED FROM THE CONFIRMATION — the first one interval after
-// the claim was asked, each after it an interval after the one before — never
-// from when the work began, which a slow claim puts up to its own length
-// later. The work stops one renewal interval before its lease can lapse — the
-// margin [coord.ExclusiveThrough] takes, because the window's end is noticed at
-// a renewal's tick — so a confirmation buys three intervals of the four a
-// lease holds ([coord.KeptRenewals]): the renewal due at the first may go
-// unanswered for its whole interval, and the one due at the second is still
-// asked inside the window, with an interval to answer in. Renewed at the
-// cadence the duty is claimed on, a third of a lease, the window would hold
-// two intervals and the renewal after an unanswered one would fall on its end,
-// never asked: one blip would end a half-hour audit.
-//
-// # A duty declined while its work runs
-//
-// A duty that decides from a domain's rows is DECLINED by a node whose copy of
-// one of them is out of service (ADR-0079, [dutyDecline]) — and the
-// code-retention duty also by a node that does not serve the revision the
-// fleet's activation pointer names ([Engine.servedFleetRevision]) — and either
-// can become true while the work runs: a training tick of the embedding duty
-// runs for minutes, and the fleet can activate a revision this node fails to
-// apply while a pass is under way. So work kept with a decline check
-// ([dutyRenewal.declining]) asks it before every renewal, and when it answers
-// that the node now declines, the work is ENDED with [errDutyDeclined] and the
-// duty is not renewed: renewed, the work would go on deciding from a copy that
-// went wrong, or against a revision the fleet replaced, after it began. The
-// lease is given back by the work's holder once the work has RETURNED, never
-// by the renewal that ended it, because something the work already sent could
-// otherwise land after another node had taken the duty.
-//
-// Lifted from the embedding duty's own keepClaimed, because written twice the
-// rule is what would differ between the two — and its count from here into
-// [coord.KeptRenewals], once the sandbox's taker lease came to need it too.
+// Three answers, three outcomes (ADR-0005): HELD extends the window the work
+// may run in; NOT HELD ends it at once; NO ANSWER (an error, or a call the
+// store holds on to) changes nothing until the last confirmation's window
+// ([coord.ExclusiveThrough]) runs out unrenewed. A store blip is not a lost
+// duty.
 
 // errDutyLost is the cause work holding a duty is ended with when a renewal
 // answers that another node holds the duty.
 var errDutyLost = errors.New("engine: another node holds the duty now")
 
 // errDutyDeclined is the cause work holding a duty is ended with when this
-// node declines the duty as the work runs ([dutyRenewal.declining]): a copy
-// the work decides from has gone out of service (ADR-0079), or — for a duty
-// that waits for it — this node no longer serves the revision the fleet's
-// activation pointer names. The duty's `_declined` line says which.
+// node declines the duty as the work runs ([dutyRenewal.declining]). The
+// duty's `_declined` line says why.
 var errDutyDeclined = errors.New("engine: this node declines the duty now")
 
 // errDutyUnconfirmed is the cause work holding a duty is ended with when no
@@ -100,9 +39,8 @@ var errDutyDeclined = errors.New("engine: this node declines the duty now")
 var errDutyUnconfirmed = errors.New("engine: no renewal has confirmed the duty for as long as its lease is sure to last")
 
 // dutyClock is the clock a kept duty's renewals are asked, timed and bounded
-// on — the system's, or a test's own, so a pass many leases long is driven
-// renewal by renewal in microseconds, a renewal the store holds on to
-// included.
+// on: the system's, or a test's, which drives a pass many leases long renewal
+// by renewal.
 type dutyClock interface {
 	// Now is the instant a renewal is asked at.
 	Now() time.Time
@@ -149,18 +87,28 @@ func newDutyRenewal(duty string, ttl time.Duration) dutyRenewal {
 	return dutyRenewal{duty: duty, ttl: ttl, clock: systemClock{}}
 }
 
-// declining is r with declined asked before every renewal: when it answers
-// that this node now declines the duty — a copy the work decides from went out
-// of service, or this node stopped serving the fleet's revision ([dutyDecline])
-// — the work is ended with [errDutyDeclined] and the duty is not renewed, and
-// [keptDuty.Stop] says so, for the work's holder to give the lease back once
-// the work has returned.
+// declining is r with declined asked before every renewal: a node declines a
+// duty when a copy it decides from is out of service (ADR-0079, [dutyDecline])
+// or, for code retention, when it does not serve the fleet's revision
+// ([Engine.servedFleetRevision]), and either can turn true mid-work. Then the
+// work ends with [errDutyDeclined], unrenewed, rather than go on deciding from
+// a copy gone wrong or a replaced revision. The holder gives the lease back
+// once the work has RETURNED ([keptDuty.Stop]), never the renewal that ended
+// it, or something the work already sent could land after another node took
+// the duty.
 func (r dutyRenewal) declining(declined func(context.Context) bool) dutyRenewal {
 	r.declined = declined
 	return r
 }
 
-// every is how often a kept duty is renewed.
+// every is how often a kept duty is renewed: a [coord.KeptRenewals]th of the
+// TTL. The work stops one interval before the lease can lapse (the margin
+// [coord.ExclusiveThrough] takes, since the window's end is noticed at a
+// tick), so a confirmation buys three intervals: the renewal due at the first
+// may go unanswered for its whole interval and the next is still asked inside
+// the window. At the claim cadence, a third of a TTL, the renewal after an
+// unanswered one would fall on the window's end, and one blip would end a
+// half-hour audit.
 func (r dutyRenewal) every() time.Duration { return r.ttl / coord.KeptRenewals }
 
 // through is the window a confirmation asked at buys: the TTL from then, less
@@ -169,15 +117,14 @@ func (r dutyRenewal) through(asked time.Time) time.Time {
 	return coord.ExclusiveThrough(asked, r.ttl, r.every())
 }
 
-// keep renews the duty for the work it returns, from a claim that answered held
-// having been asked at confirmed. The first renewal is due one interval after
-// confirmed — at once, when the claim itself took that long — and each after it
-// an interval after the one before ([dutyRenewal.next]), so every renewal falls
-// where the window the last confirmation bought counts on it, however long the
-// claim took. A nil claim is the single node with no fleet, which always holds
-// its duties: the work runs undisturbed and Stop answers held.
+// keep renews the duty for the work it returns, from a claim that answered
+// held when asked at confirmed. Renewals are phased from confirmed (the first
+// one interval after it, at once when the claim took that long), never from
+// when the work began, so each falls where the window the last confirmation
+// bought counts on it. A nil claim is the single node with no fleet, which
+// always holds its duties: the work runs undisturbed and Stop answers held.
 //
-// The work's context ends with ctx, at Stop, or when a renewal ends it — its
+// The work's context ends with ctx, at Stop, or when a renewal ends it with
 // cause [errDutyLost], [errDutyDeclined], or an error wrapping
 // [errDutyUnconfirmed]. Stop MUST be called; it waits for the renewals'
 // goroutine, so none outlives the work.
@@ -215,15 +162,13 @@ func (r dutyRenewal) keep(ctx context.Context, claim schedule.DutyFunc,
 	return work, k
 }
 
-// next is when the renewal after the one due at due is due: an interval on, or
-// now where that has passed.
+// next is when the renewal after the one due at due is due: an interval on,
+// or now where that has passed.
 //
-// FROM THE LAST RENEWAL'S DUE TIME, never from when it answered: a renewal the
-// store held on to for its whole interval ([keptDuty.renew]) is followed by the
-// next at once, still inside the window, where an interval after its answer
-// would fall on the window's end. And RE-ANCHORED ON NOW rather than catching
-// up, so a node that stopped running for several intervals asks once, not once
-// for each renewal it slept through.
+// From the last renewal's DUE time, never its answer: after a renewal the
+// store held for its whole interval ([keptDuty.renew]) the next is asked at
+// once, still inside the window. Re-anchored on now rather than catching up,
+// so a node stalled for several intervals asks once.
 func (r dutyRenewal) next(due time.Time) time.Time {
 	due = due.Add(r.every())
 	if now := r.clock.Now(); due.Before(now) {
@@ -300,10 +245,9 @@ func (k *keptDuty) finish() (bool, error) {
 func (k *keptDuty) renew(work context.Context, claim schedule.DutyFunc) bool {
 	r := k.renewal
 	if r.declined != nil && r.declined(work) {
-		// DECLINED FIRST, whatever the window says: a node that now
-		// declines — its copy gone out of service under the work, or the
-		// fleet's revision moved past it — decides nothing more, and a
-		// renewal would only keep the duty from a node that does not.
+		// DECLINED FIRST, whatever the window says: a node that declines
+		// decides nothing more, and a renewal would only keep the duty from a
+		// node that does not.
 		k.mu.Lock()
 		k.declined = true
 		k.mu.Unlock()
@@ -320,13 +264,12 @@ func (k *keptDuty) renew(work context.Context, claim schedule.DutyFunc) bool {
 		k.unconfirmed(work, until, last)
 		return false
 	}
-	// ONE INTERVAL, AND NEVER PAST THE WINDOW IT IS TRYING TO EXTEND. A
-	// renewal the store holds on to — a request no member answers while the
-	// leader moves, which ends only at the call's own deadline — gives up
-	// in time for the next to be asked inside the window: bounded by the
-	// window alone, it held the work until the window had run out, and the
-	// renewal after it was never asked. And none may keep the work running
-	// past what the last confirmation covers.
+	// ONE INTERVAL, AND NEVER PAST THE WINDOW. A claim reads from the
+	// coordination stream's leader, and a non-leader member drops the request
+	// rather than refusing it, so while the leader moves (an election, a
+	// rolling restart) a renewal hears nothing until its deadline. Bounded by
+	// the window alone, that one call held the work until the window ran out,
+	// the next renewal never asked.
 	call, cancel := r.clock.WithTimeout(work, min(r.every(), until.Sub(asked)))
 	held, err := claim(call)
 	cancel()
@@ -345,8 +288,8 @@ func (k *keptDuty) renew(work context.Context, claim schedule.DutyFunc) bool {
 		k.end(errDutyLost)
 		return false
 	case work.Err() != nil:
-		// THE WORK ENDED — Stop, or the engine stopping — and the renewal
-		// failed for that reason: it says nothing about the duty.
+		// The work ended (Stop, or the engine stopping) and the renewal failed
+		// for that reason: it says nothing about the duty.
 		return false
 	}
 	k.mu.Lock()

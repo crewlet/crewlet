@@ -15,42 +15,22 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A task's own account of the agent work done on it: one entry per TURN, newest
-// first, each numbered "Turn n" by the task.
+// A task's turn list: one entry per TURN, newest first. A turn that parks on
+// its executor charges a row per SEGMENT under one run id (the engine's
+// turnspend.go), so rows fold by run id: tokens, rounds, wall time and tools
+// summed, phases unioned in first-run order, and outcome, summary and review
+// from the newest segment that states one.
 //
-// # A turn, not a segment
-//
-// A turn that parks on its executor completes more than once under one run id,
-// and each completion charges a row of its own (see the engine's turnspend.go)
-// — so the rows are SEGMENTS and a list of them would show one turn as three
-// cards, the second and third headed by an outcome of "suspended" that is not
-// how the turn ended. The list groups them by run id: the tokens, rounds, wall
-// time and tools are summed, the phases are the union in first-run order, and
-// the outcome, summary and review are the NEWEST segment's that states one.
-//
-// # "Turn n" is the task's count, not the list's
-//
-// The ordinal is the 1-based position of the turn's COUNTED row among every
-// counted row on the task — a row whose spend carries `turns`, which exactly
-// one segment of a charged turn does (the dispatch, or the segment that paid
-// for a dispatch charged to nothing). So the newest turn's number IS the
-// task's `spend_turns`, and "Turn 3" on a card and "3 turns" in the cost
-// panel beside it are one fact counted once. A turn whose every segment on
-// this task carries no count — more of a turn charged to another item — has
-// no ordinal, which the answer states as zero rather than inventing one.
-//
-// # Paged by the turn's first segment
-//
-// A cursor is the log position of the oldest turn a page returned, and the
-// next page is the turns whose FIRST segment is below it. The first segment
-// and not the newest, because a turn's later segments arrive as its executor's
-// launches are collected, and a cursor on the newest would move a turn from one
-// page to another while a reader walked them.
+// "Turn n" is the 1-based position of the turn's first COUNTED row (spend
+// carries `turns`, which one segment of a charged turn does) among the task's
+// counted rows, so the newest turn's number is the task's `spend_turns`; a turn
+// with no counted row here has ordinal zero. Pages are cut by each turn's FIRST
+// segment: later ones arrive as launches are collected, and a cursor on the
+// newest would move a turn between pages mid-walk.
 
 // DefaultTaskTurns is the page a task's turn list answers when none is named;
-// MaxTaskTurns the most one page holds — the ceiling every other paged tracker
-// read holds, which keeps a page of fifty turns with a summary and a review
-// each near 60 KiB.
+// MaxTaskTurns the most one page holds: every paged tracker read's ceiling,
+// which keeps fifty turns with a summary and a review each near 60 KiB.
 const (
 	DefaultTaskTurns = 20
 	MaxTaskTurns     = 50
@@ -209,9 +189,8 @@ func (r *Reader) TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
 func readTaskTurns(ctx context.Context, tx *sql.Tx, task string, below int64,
 	limit int) ([]TaskTurn, string, error) {
 
-	// THE PAGE'S TURNS, by the position of each one's first segment. One
-	// more than the page, so the cursor is only handed out when a page
-	// past this one exists.
+	// The page's turns, by each one's first segment; one more than the page,
+	// so a cursor is handed out only when a later page exists.
 	rows, err := tx.QueryContext(ctx, `
 		SELECT turn_id, MIN(log_seq)
 		  FROM tracker_turns
@@ -256,8 +235,8 @@ func readTaskTurns(ctx context.Context, tx *sql.Tx, task string, below int64,
 		return nil, "", err
 	}
 
-	// EVERY SEGMENT OF THOSE TURNS, oldest first, folded in that order so
-	// "the newest segment that states one" is simply the last write.
+	// Every segment of those turns, oldest first, so "the newest segment that
+	// states one" is the last write.
 	args := []any{task}
 	for _, key := range keys {
 		args = append(args, key)
@@ -340,9 +319,8 @@ func readTaskTurns(ctx context.Context, tx *sql.Tx, task string, below int64,
 }
 
 // turnOrdinals numbers every counted row on a task in log order and answers,
-// per turn, the number of its first counted row. One pass over the task's own
-// rows through the task's index; the count is read off the record, which is
-// where [TurnSpend.Turns] lives.
+// per turn, the number of its first counted row. The count is read off the
+// record, where [TurnSpend.Turns] lives.
 func turnOrdinals(ctx context.Context, tx *sql.Tx, task string) (map[string]int, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT turn_id

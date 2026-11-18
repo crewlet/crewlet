@@ -29,13 +29,11 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE THREE ALARMS ABOUT THE MACHINE, and the fields nothing filled.
+// THE THREE ALARMS ABOUT THE MACHINE ARE FILLED AND FIRE.
 //
 // `volume_low`, `wal_large` and `pool_starved` each read a field of
-// [statelog.Reading] that no code assigned, so all three were permanently
-// silent — which on a node running out of disk is the worst possible silence.
-// Filling the field is only half of it: a field filled in and never read is
-// the same silence with an extra step, so this asserts the table fires too.
+// [statelog.Reading]: this asserts the reading fills them and the table fires
+// on them, since a field filled and never read is just as silent.
 func TestTheCapacityAlarmsFireOnWhatThisNodesDiskIsDoing(t *testing.T) {
 	t.Parallel()
 	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
@@ -53,15 +51,14 @@ func TestTheCapacityAlarmsFireOnWhatThisNodesDiskIsDoing(t *testing.T) {
 		t.Error("the volume measured zero free bytes, which is not a disk any " +
 			"test runs on — the statfs did not happen")
 	}
-	// A -wal MAY OR MAY NOT EXIST on a freshly opened store, and both are
-	// legitimate. What must never happen is an error becoming a size.
+	// A fresh store may or may not have a -wal; an error must never
+	// become a size.
 	if reading.WALBytes < 0 {
 		t.Errorf("the write-ahead log measured %d bytes", reading.WALBytes)
 	}
 
-	// AND THE TABLE FIRES. The numbers are forced rather than provoked:
-	// filling a real volume is not a test, and what is under test here is
-	// that the reading reaches the condition.
+	// And the table fires, on forced numbers: what is under test is that
+	// the reading reaches the condition, not filling a real volume.
 	fired := map[statelog.Kind]bool{}
 	for _, alarm := range statelog.Evaluate(statelog.Reading{
 		FreeBytes: 1 << 20, StoreBytes: 4 << 30,
@@ -80,15 +77,11 @@ func TestTheCapacityAlarmsFireOnWhatThisNodesDiskIsDoing(t *testing.T) {
 }
 
 // THE VOLUME ALARM IS ABOUT THE VOLUME WITH THE LEAST ROOM, measured per
-// volume. `store.replicated_path` may put the replicated estate on a volume of
-// its own, and the reading measured the node estate's volume alone against
-// both files' bytes: a replicated estate filling its own disk never fired. Here
-// the replicated estate sits on a nearly full volume and the node estate on an
-// empty one, and the reading is the nearly full one's — its free space against
-// its own file, never the other volume's space or both files' bytes — and the
-// alarm NAMES it, since an operator has two disks and must know which to grow.
-// A volume that cannot be measured is said and alarmed on, never skipped: the
-// node would otherwise be judged on its roomy volume alone.
+// volume (`store.replicated_path`). With the replicated estate on a nearly full
+// volume and the node estate on an empty one, the reading is the full one's
+// free space against its own file alone, and the alarm NAMES it, so an
+// operator knows which disk to grow. An unmeasurable volume is alarmed on,
+// never skipped for the roomy one.
 func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 	t.Parallel()
 	nodeDir, replicatedDir := t.TempDir(), t.TempDir()
@@ -124,8 +117,7 @@ func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 		t.Errorf("volume_low does not name the volume to grow: %q", alarms[0].Detail)
 	}
 
-	// A VOLUME THAT CANNOT BE MEASURED beside a roomy one is the alarm,
-	// naming it — not a node judged on the roomy one alone.
+	// An unmeasurable volume beside a roomy one is the alarm, naming it.
 	r.volumes = func(dir string) (string, int64, error) {
 		if dir == replicatedDir {
 			return "", 0, fmt.Errorf("engine: measure the free space on %s: input/output error", dir)
@@ -157,17 +149,12 @@ func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 // A COPY HOLDING THE LOG IS NAMED, AND WHAT IT HELD BACK IS ROOM THE NEXT ONE
 // NEEDS.
 //
-// A backup's or a donor snapshot's copy stops every checkpoint at its moment
-// for its whole run (store.DB.Copies), so the live file's write-ahead log grows
-// under it on the volume the node commits to. Both alarms that read the disk
-// were blind to that: `wal_large` told an operator a reader was holding a
-// snapshot open where a copy was, and `volume_low` kept room for the next copy
-// and not for the log it holds back. Here the replicated estate is copied while
-// it is written beside the copy: while the copy runs, the reading names the
-// file whose log is largest and the copy holding it, and the table says so;
-// once it has finished, the reading counts what it held back on the estate's
-// own volume, so a volume with room for a second copy and its tenth but not for
-// that log fires `volume_low`, and one with room for both does not.
+// A copy stops every checkpoint for its whole run (store.DB.Copies). While the
+// replicated estate is copied and written, the reading names the file with the
+// largest log and the copy holding it, and `wal_large` says so rather than
+// blaming a reader. Once done, the estate's volume counts what it held back:
+// room for a second copy and its tenth but not that log fires `volume_low`;
+// room for both does not.
 func TestTheReadingNamesACopyHoldingTheLogAndCountsWhatItHoldsBack(t *testing.T) {
 	t.Parallel()
 	hold := storetest.NewCopyHold()
@@ -215,7 +202,7 @@ func TestTheReadingNamesACopyHoldingTheLogAndCountsWhatItHoldsBack(t *testing.T)
 		t.Fatalf("while a copy held the estate's log the reading named %q holding it for %s, "+
 			"want the copy's part file and how long", during.WALCopy, during.WALCopyFor)
 	}
-	// THE TABLE SAYS IT, past the threshold no test writes its way to.
+	// The table says it, past a threshold no test writes its way to.
 	large := during
 	large.WALBytes = statelog.WALAlarmBytes + 1
 	alarm, fired := alarmOf(statelog.Report{Alarms: statelog.Evaluate(large)}, statelog.KindWALLarge)
@@ -236,8 +223,7 @@ func TestTheReadingNamesACopyHoldingTheLogAndCountsWhatItHoldsBack(t *testing.T)
 		t.Fatalf("the estate measured a copy holding back %d after one held its log under "+
 			"64 commits", held)
 	}
-	// ROOM FOR A SECOND COPY AND ITS TENTH, which the rule before the log
-	// counted as room — and not for the log as well.
+	// Room for a second copy and its tenth, but not the log as well.
 	room := int64(math.Ceil(statelog.VolumeHeadroomFactor * float64(size)))
 	free := map[string]int64{nodeDir: 1 << 40, replicatedDir: room}
 	r.volumes = func(dir string) (string, int64, error) { return dir, free[dir], nil }
@@ -253,7 +239,7 @@ func TestTheReadingNamesACopyHoldingTheLogAndCountsWhatItHoldsBack(t *testing.T)
 		t.Fatalf("a volume with room for a second copy and not for the log it holds back "+
 			"raised %+v (fired %v), want volume_low naming the log", alarm, fired)
 	}
-	// AND ROOM FOR BOTH IS ROOM.
+	// And room for both is room.
 	free[replicatedDir] = room + held
 	var roomy statelog.Reading
 	r.space(&roomy, time.Now())
@@ -273,9 +259,8 @@ func mustFileBytes(t *testing.T, path string) int64 {
 	return n
 }
 
-// THE TIGHTEST VOLUME IS THE ONE WITH THE SMALLEST ROOM FOR THE NEXT COPY OF ITS
-// OWN BYTES AND THE LOG THAT COPY HOLDS BACK, and a volume holding nothing is
-// never it.
+// THE TIGHTEST VOLUME HAS THE LEAST ROOM FOR THE NEXT COPY OF ITS OWN BYTES AND
+// THE LOG THAT COPY HOLDS BACK, and a volume holding nothing is never it.
 func TestTheTightestVolumeIsTheOneNearestItsAlarm(t *testing.T) {
 	t.Parallel()
 	file := func(volume string, free, size int64) storedFile {
@@ -298,14 +283,13 @@ func TestTheTightestVolumeIsTheOneNearestItsAlarm(t *testing.T) {
 			[]storedFile{file("empty", 1, 0), file("full", 10, 100)}, storeVolume{"/full", 10, 100, 0}},
 		"a full volume beside an empty one": {
 			[]storedFile{file("full", 10, 100), file("empty", 1, 0)}, storeVolume{"/full", 10, 100, 0}},
-		// THE SAME RATIO OF FREE TO STORED on both, and the second the
-		// tighter for the log its copy holds back: 1 000 free against a
-		// copy of 500 is room on the first, and not beside 400 of log.
+		// The same free-to-stored ratio on both; the second is tighter for
+		// its held-back log: 1 000 free fits a copy of 500, not 400 of log too.
 		"the larger log a copy holds back, at the same ratio": {
 			[]storedFile{file("quiet", 1000, 500), holding(file("busy", 1000, 500), 400)},
 			storeVolume{"/busy", 1000, 500, 400}},
-		// Tens of terabytes each: the cross products overflow an int64,
-		// and wrapped they choose the roomier volume in either order.
+		// Tens of terabytes: int64 cross products overflow and pick the
+		// roomier volume.
 		"sizes past what a product of int64s holds": {
 			[]storedFile{file("a", 14773780071959, 34330076720781), file("b", 27431250736051, 18740855235886)},
 			storeVolume{"/a", 14773780071959, 34330076720781, 0}},
@@ -321,9 +305,8 @@ func TestTheTightestVolumeIsTheOneNearestItsAlarm(t *testing.T) {
 
 // A MISSING SIDECAR IS ZERO BYTES, NOT AN UNMEASURABLE ONE.
 //
-// A database with nothing uncheckpointed has no -wal at all, which is the
-// healthiest state `wal_large` has. Reading that as a failure would leave the
-// field unset — indistinguishable from the same node with a gibibyte in it.
+// Nothing uncheckpointed means no -wal, the healthiest state `wal_large` has;
+// read as a failure it would leave the field unset.
 func TestAnAbsentWriteAheadLogMeasuresZeroRatherThanFailing(t *testing.T) {
 	t.Parallel()
 	got, err := fileBytes(t.TempDir() + "/nothing-is-here-wal")
@@ -333,9 +316,8 @@ func TestAnAbsentWriteAheadLogMeasuresZeroRatherThanFailing(t *testing.T) {
 	if got != 0 {
 		t.Errorf("a missing sidecar measured %d bytes", got)
 	}
-	// THE CONTROL: a file that exists is measured rather than reported as
-	// zero, or the assertion above would pass on a helper that always
-	// answers zero.
+	// The control: an existing file is measured, or the assertion above
+	// passes on a helper that always answers zero.
 	if got, err := fileBytes("retentioncapacity.go"); err != nil || got <= 0 {
 		t.Errorf("this source file measured %d bytes (%v), so the helper "+
 			"cannot tell an absent file from a present one", got, err)
@@ -345,11 +327,8 @@ func TestAnAbsentWriteAheadLogMeasuresZeroRatherThanFailing(t *testing.T) {
 // THE POOL WAIT IS A DELTA, and a tick in which nobody queued is not a tick in
 // which somebody queued for no time.
 //
-// `sql.DBStats` counts since the process started. Recorded raw, the histogram
-// would fill with one ever-growing total and its p95 would be a number that
-// only rises — so `pool_starved`, once fired, could never clear. Recorded as a
-// delta with no observation when the delta is empty, the series describes the
-// interval it was taken over.
+// `sql.DBStats` counts since the process started: recorded raw, the p95 only
+// rises and `pool_starved` could never clear.
 func TestAnIdlePoolRecordsNothingRatherThanAZeroWait(t *testing.T) {
 	t.Parallel()
 	recorder, err := metrics.New()
@@ -371,10 +350,8 @@ func TestAnIdlePoolRecordsNothingRatherThanAZeroWait(t *testing.T) {
 		}
 	}
 
-	// THE CONTROL, on the arithmetic rather than on a provoked queue: a
-	// pool that HAS waited records the interval's mean, which is what a
-	// tick's worth of queuing means when the driver reports a total and a
-	// count rather than the individual waits.
+	// The control, on the arithmetic rather than a provoked queue: a pool
+	// that has waited records the interval's mean.
 	r.pooled["index.db"] = poolCounters{count: -4, waited: -2 * time.Second}
 	r.poolWait(db, "index.db")
 	var observations int
@@ -389,17 +366,12 @@ func TestAnIdlePoolRecordsNothingRatherThanAZeroWait(t *testing.T) {
 	}
 }
 
-// THE FOUR WINDOWED COUNTERS FOUR MORE ALARMS READ, and nothing read them.
+// THE FOUR WINDOWED COUNTERS FOUR MORE ALARMS READ REACH THE READING.
 //
 // `pool_starved`, `records_gated` and `feed_unreadable` each take a field of
-// [statelog.Reading] off this process's own recorder, and `census_drift` takes
-// each log's from the same recorder ([retention.census]). Every
-// one of those fields was left at its zero value, so four conditions in a
-// twenty-row table could not fire — and three of them are the only report
-// their subject has: a gated record is recoverable by nothing, an
-// untranslatable change record is a wake nobody gets until a build that reads
-// it runs, and a company that has outgrown its log's sizing has no other
-// symptom until the log is full.
+// [statelog.Reading] off this process's recorder, and `census_drift` each log's
+// ([retention.census]). Three are their subject's only report: a gated record,
+// an untranslatable change record, a company outgrowing its log's sizing.
 func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	t.Parallel()
 	recorder, err := metrics.New()
@@ -435,11 +407,10 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 		t.Errorf("three untranslatable records reached the reading as %d",
 			reading.FeedUnreadable)
 	}
-	// THE CENSUS IS EACH LOG'S, as the report evaluates it
-	// ([statelog.DomainInputs.LinearizableReads]).
+	// The census is each log's ([statelog.DomainInputs.LinearizableReads]).
 	held, counted := r.census(r.state.running())[trackerLog.Name()]
-	// THE TRACKER'S LOG COUNTS NO READERS OF ITS OWN, so no ceiling enters
-	// its census ([clientBarriers]).
+	// The tracker's log counts no readers of its own, so no ceiling
+	// enters its census ([clientBarriers]).
 	expected, _ := held.expectedAt(0, true, 0)
 	if !counted || expected != trackerCensus.Expected() ||
 		held.reads != 3*expected {
@@ -466,8 +437,8 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 		}
 	}
 
-	// THE CONTROL: an untouched recorder fires none of them, or every
-	// assertion above would pass on a table that always fires.
+	// The control: an untouched recorder fires none of them, or the above
+	// passes on a table that always fires.
 	quiet, err := metrics.New()
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
@@ -492,18 +463,12 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	}
 }
 
-// THE ALARM TABLE HAD ONE SURFACE OF THREE.
+// THE ALARM TABLE REACHES ALL THREE SURFACES, ON A NODE HOLDING NO DUTY.
 //
-// [statelog.Tracker] turns each evaluation into the two surfaces that are not
-// a screen — the `crewlet.alarm.active{kind}` gauge a collector scrapes, and
-// one WARN on entry and one on exit — and it had no production caller at all.
-// So an alarm reached whoever happened to be looking at `work_retention` and
-// nothing else: no collector series, no log line, no page.
-//
-// AND IT IS EVALUATED ON A NODE THAT HOLDS NO DUTY, which is the other half. A
-// reading describes ONE node, so a table evaluated only where the trim's
-// singleton lease happens to sit would report the lease holder's health as the
-// fleet's — and the wedged node is the one nobody hears from.
+// [statelog.Tracker] turns each evaluation into the `crewlet.alarm.active{kind}`
+// gauge and one WARN on entry and one on exit, beside `work_retention`. A
+// reading describes ONE node, so a table evaluated only on the trim's lease
+// holder would report its health as the fleet's.
 func TestTheAlarmTableIsEvaluatedOnANodeThatHoldsNoDuty(t *testing.T) {
 	t.Parallel()
 	recorder, err := metrics.New()
@@ -545,14 +510,9 @@ func TestTheAlarmTableIsEvaluatedOnANodeThatHoldsNoDuty(t *testing.T) {
 
 // THE VECTOR COVERAGE IS MEASURED ON EVERY TICK, AND ONLY ON A TICK.
 //
-// It used to be measured inside the report whenever the cached figure was a
-// whole interval old — which the next tick's report usually was not, because
-// the ticker fires on a fixed period and the report starts after the tick's
-// other measurements. Whenever the previous tick's took longer, the figure was
-// a few milliseconds short of an interval old, the scan was skipped, and
-// `recall_below_floor` read a coverage half an hour stale beside inputs a
-// quarter of an hour old. And a report is assembled on every dashboard poll,
-// so the scan must never run from one.
+// A scan gated on the cached figure's age is skipped whenever the last tick
+// ran long, leaving `recall_below_floor` an interval stale; and a report runs
+// on every dashboard poll, so the scan must never run from one.
 func TestTheVectorCoverageIsMeasuredOnEveryTickAndReadByTheReport(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -569,7 +529,7 @@ func TestTheVectorCoverageIsMeasuredOnEveryTickAndReadByTheReport(t *testing.T) 
 
 	r.measureCoverage(ctx)
 	fraction = 0.5
-	// THE NEXT TICK, however little time the drift left between them.
+	// The next tick, however little time drift left between them.
 	r.measureCoverage(ctx)
 	if scans != 2 {
 		t.Fatalf("two ticks scanned %d time(s): a tick skipped its measurement", scans)
@@ -583,7 +543,7 @@ func TestTheVectorCoverageIsMeasuredOnEveryTickAndReadByTheReport(t *testing.T) 
 		t.Errorf("reading the report scanned the corpus %d more time(s)", scans-2)
 	}
 
-	// A FAILED SCAN LEAVES NOTHING: an unreadable corpus is not the
+	// A failed scan leaves nothing: an unreadable corpus is not the
 	// covered one the last tick saw.
 	fail = errors.New("store closed")
 	r.measureCoverage(ctx)
@@ -604,19 +564,13 @@ func censusLogs(domains ...statelog.Domain) *stateLog {
 
 // A LOG IS HELD TO ITS OWN CENSUS, AT THE RATE IT RECEIVES.
 //
-// Two things the fixed, node-local figure got wrong. It was one number for
-// every company, so a two-hundred-seat company doing the reference company's
-// work per seat read as drifting. And it was compared with the barriers THIS
-// NODE appended, which on a fleet is only this node's share of the reads — the
-// rate the log receives, from every node, is what its sizing is about, and it
-// is what every data node's applier sees. The vector log, which no read
-// appends to, is held to nothing.
+// The census scales with the company's seats, and is compared with the rate
+// the log receives from every node, which its sizing is about, not this node's
+// share. The vector log, which no read appends to, is held to nothing.
 //
-// AND THE ENGINE'S OWN READS ARE PART OF WHAT A LOG TAKES. The object store's
-// collector pins the tracker's estate on a fixed cadence, whatever the seats
-// do, so a small company doing exactly its census would put more barriers on
-// its log than its seats' share allowed — and fire the alarm, louder the
-// smaller it was.
+// The engine's own reads count too: the object collector pins the tracker's
+// estate on a fixed cadence, which would push a small company past its seats'
+// share.
 func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 	t.Parallel()
 	var trackerLog, vectorLog statelog.Domain = worklet.Domain{}, search.Domain{}
@@ -636,10 +590,8 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 	}{
 		{
 			name: "one seat, at its census beside the collector",
-			// 125 a day from the seat and the collector's pins
-			// beside it: counted in the census, so the seat's own
-			// reads are measured against what the log really
-			// carries.
+			// 125 a day from the seat plus the collector's pins,
+			// both in the census.
 			logs: []statelog.Domain{trackerLog}, seats: 1,
 			background: map[string]int{"tracker": collect.PinsPerDay},
 			applied:    map[statelog.Domain]int{trackerLog: 125 + collect.PinsPerDay},
@@ -686,49 +638,41 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 		},
 		{
 			name: "the identity estate's log, whose domain declares no read, quiet",
-			// HUNDREDS OF SEATS AND NOT ONE BARRIER: no read of the
-			// estate takes one, so its census is zero however many
-			// seats the company has — the whole company's figure,
-			// charged here, was a census its ceiling was never sized for.
+			// Hundreds of seats and not one barrier: no read of the
+			// estate takes one, so its census is zero.
 			logs: []statelog.Domain{iamLog}, seats: 300,
 			fires: false, log: "iam", expected: 0,
 		},
 		{
 			name: "the identity estate's log on its first barrier",
-			// A DECLARED ZERO IS A CENSUS: the first barrier is a
-			// linearizable reader nobody counted, and the log's ceiling
-			// has no bytes for it.
+			// A declared zero is a census: the first barrier is a
+			// reader nobody counted, with no bytes in the ceiling.
 			logs: []statelog.Domain{iamLog}, seats: 300,
 			applied: map[statelog.Domain]int{iamLog: 1},
 			fires:   true, log: "iam", expected: 0,
 		},
 		{
 			name: "the chat log, held to its own per-seat rate",
-			// 120 a seat a day, chat's own declaration, rather than the
-			// tracker's 125 borrowed: 12 000 for 100 seats.
+			// 120 a seat a day, chat's own declaration, not the
+			// tracker's 125: 12 000 for 100 seats.
 			logs: []statelog.Domain{chatLog}, seats: 100,
 			applied: map[statelog.Domain]int{chatLog: 12_500},
 			fires:   false, log: "chat", expected: 12_000,
 		},
 		{
 			name: "the chat log past twice its own census, inside twice the tracker's",
-			// 24 500 a day is under twice the tracker's 12 500 and over
-			// twice chat's 12 000, so a census that held the chat log to
-			// the tracker's rate stays quiet here.
+			// 24 500 a day: under twice the tracker's 12 500, over twice
+			// chat's 12 000, so the tracker's rate would stay quiet.
 			logs: []statelog.Domain{chatLog}, seats: 100,
 			applied: map[statelog.Domain]int{chatLog: 24_500},
 			fires:   true, log: "chat", expected: 12_000,
 		},
 		{
 			name: "the executor log, held to its own per-seat rate, past twice the tracker's",
-			// 150 a seat a day, the executor's own declaration (a
-			// head read at a turn's dispatch, the base's row read at
-			// its first launch, two reads of the turn's row at a
-			// relaunch, and one of its executor's reads of the seat's
-			// sessions): 15 000 for 100 seats. 27 000 a day is over
-			// twice the tracker's 12 500 and inside twice the
-			// executor's own, so a census that held this log to the
-			// tracker's rate fires here.
+			// 150 a seat a day, the executor's own declaration:
+			// 15 000 for 100 seats. 27 000 a day is over twice the
+			// tracker's 12 500 and inside twice the executor's, so
+			// the tracker's rate would fire here.
 			logs: []statelog.Domain{executorLog}, seats: 100,
 			applied: map[statelog.Domain]int{executorLog: 27_000},
 			fires:   false, log: "executor", expected: 15_000,
@@ -765,8 +709,8 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 				background: func(domain string) int { return tc.background[domain] }}
 			census := r.census(r.state.running())
 			held, counted := census[tc.log]
-			// NONE OF THESE LOGS COUNTS READERS OF ITS OWN, so no ceiling
-			// enters a census here ([clientBarriers]).
+			// None of these logs counts readers of its own, so no ceiling
+			// enters a census ([clientBarriers]).
 			expected, _ := held.expectedAt(0, true, 0)
 			if !counted || expected != tc.expected {
 				t.Errorf("the census holds %q to %d a day (counted %v), want %d",
@@ -775,8 +719,8 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 			if _, counted := census[vectorLog.Name()]; counted {
 				t.Error("the vector log, which no read appends to, is held to a census")
 			}
-			// PER LOG, as the report evaluates it: each log's reads against
-			// its own census, and the alarm names the log.
+			// Per log: each log's reads against its own census, and the
+			// alarm names the log.
 			fired := false
 			for _, c := range census {
 				sized, _ := c.expectedAt(0, true, 0)
@@ -796,10 +740,8 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 
 // THE CENSUS COUNTS THE RUNNING COMPANY'S AGENT SEATS.
 //
-// A log's census is per seat, so the trim's reading has to be handed the
-// company this node is running — and a wiring that handed it none would still
-// produce a number, the one seat an empty company is counted as, and hold a
-// company of any size to that: an alarm firing on every company past two
+// A log's census is per seat, so the reading must be handed the running
+// company: handed none, it counts one seat and fires on any company past two
 // seats' worth of reads.
 func TestTheCensusCountsTheRunningCompanysSeats(t *testing.T) {
 	t.Parallel()
@@ -847,11 +789,9 @@ roles:
 
 // THE ENGINE'S OWN READS ARE THE OBJECT COLLECTOR'S PINS, ONCE FOR THE FLEET.
 //
-// The collector pins the estate of every domain a declared table names, on a
-// fixed cadence — a collection hourly and an audit daily — and ONE collector
-// runs in the fleet, so the barriers a day the engine puts on each of those
-// logs is its count, never a count per member; on any other log, nothing; and
-// on a node running no object store, nothing.
+// The collector pins every domain a declared table names, hourly and in a
+// daily audit, and ONE runs in the fleet: its count, never one per member; on
+// any other log, or a node running no object store, nothing.
 func TestTheEnginesOwnReadsAreTheCollectorsPins(t *testing.T) {
 	t.Parallel()
 	if got := (&Engine{}).backgroundBarriers(worklet.Domain{}.Name()); got != 0 {
@@ -877,13 +817,10 @@ func TestTheEnginesOwnReadsAreTheCollectorsPins(t *testing.T) {
 
 // THE BACKUP GAUGE IS THIS NODE'S OWN MANIFESTS, AGED ON THE DUTY'S CLOCK.
 //
-// `crewlet.backup.age` reads the directories of the points THIS node announced
-// — the only ones whose disk this process can see — and nothing else: another
-// node's fresher point and the operator's acknowledgement name directories on
-// other hosts. A node whose own manifest is gone publishes no series rather
-// than an age, since zero is the freshest backup imaginable. And the age is
-// taken against the duty's clock, which every report beside it reads, so a
-// manifest from a host whose clock runs ahead is zero rather than negative.
+// `crewlet.backup.age` reads only the points THIS node announced, the only
+// disk it can see. A node whose manifest is gone publishes no series, since
+// zero is the freshest age. The age is taken on the duty's clock, and a
+// manifest from a clock running ahead is zero, not negative.
 //
 // Mutation: drop the owner check, and the gauge ages node-b's fresher copy;
 // read the wall clock instead of [retention.clock], and a manifest finished in
@@ -892,8 +829,8 @@ func TestTheEnginesOwnReadsAreTheCollectorsPins(t *testing.T) {
 func TestTheBackupGaugeAgesThisNodesOwnManifestsOnTheDutysClock(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	// FAR FROM ANY WALL CLOCK a test machine has, so an age read off the
-	// wall clock cannot pass for one read off the duty's.
+	// Far from any test machine's wall clock, so an age read off it
+	// cannot pass for one read off the duty's.
 	at := time.Date(2041, 3, 9, 12, 0, 0, 0, time.UTC)
 	manifest := func(t *testing.T, finished time.Time) string {
 		t.Helper()

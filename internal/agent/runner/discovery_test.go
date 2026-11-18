@@ -20,9 +20,8 @@ func discoveryEntries() []phase.Entry {
 }
 
 // discoverySurface is the fixture's registry as a surface holding the
-// discovery pair and the first-party tools, its MCP tools left to discover —
-// the shape the onboarding pass's surface has, and a worker's. The executor's
-// never does: it holds every tool its seat does from its launch
+// discovery pair and the first-party tools, its MCP tools left to discover:
+// the onboarding pass's and a worker's shape, never the executor's
 // ([TestTheExecutorHoldsEveryToolItsSeatDoes]). Its pair is bound to this one
 // surface, as [runner.DiscoveryTools] binds every pair.
 func discoverySurface(t *testing.T) (*tools.Surface, map[string]tools.Callable) {
@@ -54,11 +53,9 @@ func ask(t *testing.T, pair map[string]tools.Callable, name string, args map[str
 	return res
 }
 
-// THE PAIR LISTS ONE SERVER'S TOOLS AND ACTIVATES ONE OF THEM, which is the
-// whole reason it exists on a phase shown server names rather than tool names:
-// the onboarding pass, and a worker. The delivery check's correction for a
-// wrong-guessed name on such a phase tells the model to use exactly these two
-// tools.
+// THE PAIR LISTS ONE SERVER'S TOOLS AND ACTIVATES ONE OF THEM, on a phase
+// shown server names rather than tool names (the onboarding pass, a worker),
+// whose delivery-check correction for a guessed name points at these two.
 func TestTheDiscoveryPairListsOneServerAndActivatesOneTool(t *testing.T) {
 	t.Parallel()
 	surface, pair := discoverySurface(t)
@@ -72,12 +69,9 @@ func TestTheDiscoveryPairListsOneServerAndActivatesOneTool(t *testing.T) {
 	if strings.Contains(listing, "lookup_colleague") {
 		t.Errorf("the listing leaked a first-party tool:\n%s", listing)
 	}
-	// ONE BULLET PER TOOL, description whole. A real server publishes
-	// paragraphs, and the entry that used to be cut to its first line was
-	// cut exactly where the usable part starts: "Accepts a cursor for
-	// paging" is what a phase needs to call the tool correctly, and this
-	// listing is the only place it is ever shown. Continuation lines are
-	// indented so the shape survives without paying for it in content.
+	// ONE BULLET PER TOOL, description whole: past the first line is what a
+	// phase needs to call it ("Accepts a cursor for paging"), and this listing
+	// is the only place it is shown. Continuation lines are indented.
 	if !strings.Contains(listing, "\n  Accepts a cursor") {
 		t.Errorf("a description was cut, or its continuation line not indented:\n%s", listing)
 	}
@@ -106,10 +100,8 @@ func TestTheDiscoveryPairListsOneServerAndActivatesOneTool(t *testing.T) {
 
 func TestAnUnknownServerListsTheOnesThatExist(t *testing.T) {
 	t.Parallel()
-	// A named server with no tools and a wrong server name read very
-	// differently to a model: one means "ask again later", the other means
-	// "you have the name wrong". Listing what exists turns the second into
-	// a recoverable call.
+	// A wrong server name is answered with the servers that exist, so the
+	// call is recoverable.
 	_, pair := discoverySurface(t)
 	reply := ask(t, pair, toolname.ListMCPServerTools, map[string]any{"server": "slacck"}).Output
 	if !strings.Contains(reply, "slack") {
@@ -119,9 +111,8 @@ func TestAnUnknownServerListsTheOnesThatExist(t *testing.T) {
 
 func TestActivatingAGuessedNameSaysHowToFindTheRealOne(t *testing.T) {
 	t.Parallel()
-	// A miss is almost always a guessed MCP tool name. Saying so, and
-	// naming the way to find the real one, is the difference between a
-	// recoverable call and a phase that keeps guessing.
+	// A miss is almost always a guessed MCP tool name: the answer names the
+	// way to the real one.
 	_, pair := discoverySurface(t)
 	reply := ask(t, pair, toolname.Activate, map[string]any{"name": "slack_send_msg"}).Output
 	if !strings.Contains(reply, "list_mcp_server_tools") {
@@ -134,10 +125,8 @@ func TestActivatingAGuessedNameSaysHowToFindTheRealOne(t *testing.T) {
 
 func TestOneSurfacesActivationDoesNotLeakIntoAnother(t *testing.T) {
 	t.Parallel()
-	// The discovery pair is per-SURFACE for the same reason the submission
-	// tools are: activation mutates one surface, and a shared registry
-	// would carry one phase's activation into the next — or into the next
-	// turn.
+	// The pair is per-SURFACE: in a shared registry one phase's activation
+	// would carry into the next phase or turn.
 	first, firstPair := discoverySurface(t)
 	second, _ := discoverySurface(t)
 	ask(t, firstPair, toolname.Activate, map[string]any{"name": "slack_history"})
@@ -150,11 +139,10 @@ func TestOneSurfacesActivationDoesNotLeakIntoAnother(t *testing.T) {
 }
 
 // THE DISCOVERY TOOLS ARE EXACTLY THE PAIR internal/toolname NAMES, as a set:
-// the skill guard exempts that list, the worker deny list keeps a child off
-// it, the ledger skips it and the prompts tell a model to call it, so a third
-// discovery tool registered here and not there would be guarded, inherited,
-// recorded and never mentioned. Mutation: a third tool in DiscoveryTools, or
-// a name changed on one of the two, is red.
+// the skill guard, the worker deny list, the ledger and the prompts all read
+// that list, so a third tool registered here alone would be guarded,
+// inherited, recorded and never mentioned. Mutation: a third tool in
+// DiscoveryTools, or a name changed on one of the two, is red.
 func TestTheDiscoveryToolsAreExactlyTheNamedPair(t *testing.T) {
 	t.Parallel()
 	var got []string
@@ -172,11 +160,8 @@ func TestTheDiscoveryToolsAreExactlyTheNamedPair(t *testing.T) {
 
 func TestDiscoveryRefusesAnEmptyArgument(t *testing.T) {
 	t.Parallel()
-	// A model that calls a tool with no argument gets a failure it can act
-	// on. Without the guard, listing an empty server name reports "no tools
-	// found on server """ — which reads as a server that exists and is
-	// empty — and activating an empty name reports no tool called "", which
-	// says nothing at all.
+	// A call with no argument gets a failure it can act on, not "no tools
+	// found on server """ (an existing, empty server) or no tool called "".
 	_, pair := discoverySurface(t)
 	listed := ask(t, pair, toolname.ListMCPServerTools, map[string]any{"server": "  "}).Output
 	if !strings.Contains(listed, "Name a server") {
@@ -194,11 +179,10 @@ func TestDiscoveryRefusesAnEmptyArgument(t *testing.T) {
 // THE REVIEWER CANNOT DISCOVER A TOOL.
 //
 // It grades the round from the evidence in front of it, and its prompt promises
-// it no domain tools. activate_tool reaches every tool in the registry, MCP
-// writes included, so a reviewer offered the discovery pair could post to the
-// thread in the middle of judging whether the executor should have. Every
-// phase surface used to get the pair, the reviewer's included. A reviewer that
-// asks for activate_tool anyway is refused, and slack_post never reaches it.
+// it no domain tools; activate_tool reaches every registered tool, MCP writes
+// included, so a reviewer holding it could post to the thread while judging
+// whether the executor should have. A reviewer that asks for activate_tool
+// anyway is refused, and slack_post never reaches it.
 func TestTheReviewerIsOfferedOnlyItsSubmission(t *testing.T) {
 	t.Parallel()
 	r, prov, _ := fixture(t, &scriptedProvider{

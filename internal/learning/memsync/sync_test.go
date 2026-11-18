@@ -23,10 +23,10 @@ import (
 )
 
 // broker starts an in-process JetStream holding the account a node's broker
-// holds: every stream the queue provisions, by the queue's own declaration
-// ([js.EngineStreams]). The memory stream among them retains one message per
-// subject, which is what turns it from a log into a keyed table, and carries
-// the creation instant its create stamped, as the queue's create stamps it.
+// holds: every stream the queue provisions ([js.EngineStreams]). The memory
+// stream among them retains one message per subject, which makes it a keyed
+// table, and carries the creation instant its create stamped, as the queue's
+// create stamps it.
 func broker(t *testing.T) *nats.Conn {
 	t.Helper()
 	_, conn := brokerServer(t)
@@ -57,9 +57,8 @@ func brokerServerCarrying(t *testing.T, maxPayload int32) (*server.Server, *nats
 }
 
 // brokerServerWith is [brokerServer] with configure's changes to its options,
-// provisioned through, and answering with, a connection made with connect's
-// options as well: a case about what a server's settings refuse a connection
-// configures the server here and connects as it needs.
+// provisioned through and answering on a connection made with connect's
+// options too, for a case about what a server's settings refuse a connection.
 func brokerServerWith(t *testing.T, configure func(*server.Options),
 	connect ...nats.Option) (*server.Server, *nats.Conn) {
 
@@ -92,15 +91,11 @@ func brokerServerWith(t *testing.T, configure func(*server.Options),
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}
-	// PROVISIONED ONCE, AS THE QUEUE PROVISIONS IT. A case about a stream
-	// made again deletes it and creates it, and nothing else: provisioned
-	// here as a plain stream, a case that needed the queue's stamp cleared
-	// it and made it again first, and on a busy runner that create failed
-	// ("error creating store for stream") — the broker removes a deleted
-	// stream's files after its delete answers, and the account's stream
-	// directory with them when the account holds nothing else, from under
-	// the create that has begun. A node's account holds the engine's other
-	// streams, and so does this one (crewlet/crewlet#734).
+	// PROVISIONED ONCE, AS THE QUEUE PROVISIONS IT, beside the engine's other
+	// streams: a case about a remade stream only deletes and creates it. The
+	// broker removes a deleted stream's files after the delete answers, and
+	// the account's stream directory with them when nothing else is in it,
+	// from under a create already begun ("error creating store for stream").
 	for _, stream := range js.EngineStreams(js.Config{StoreDir: dir}, time.Now()) {
 		if _, err := client.CreateStream(t.Context(), stream); err != nil {
 			t.Fatalf("provision %s as the queue provisions it: %v", stream.Name, err)
@@ -134,8 +129,8 @@ func syncerOn(t *testing.T, db *store.DB, conn *nats.Conn) *Syncer {
 	return heldFromEmpty(s, seat.Handle)
 }
 
-// THE FIX, end to end and through a real broker: a seat runs on one node,
-// then moves to a node that has never seen it, and arrives remembering.
+// A seat moved to a node that has never seen it arrives remembering, end to
+// end through a real broker.
 func TestASeatCarriesItsMemoryToANewNode(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
@@ -182,11 +177,10 @@ func TestASeatCarriesItsMemoryToANewNode(t *testing.T) {
 // A HYDRATION WHOSE IDENTITY READ A MEMBER DROPS ASKS AGAIN RATHER THAN
 // REFUSING THE SEAT.
 //
-// Before a single row is read the changelog's identity is read from its
-// stream's info, which only the stream's leader answers: a member that still
-// believes in a leader its group has just lost drops the request without a
-// word. Sent once, it waited out the hydration's whole bound and refused the
-// seat for an election a second long.
+// The changelog's identity comes from its stream's info, which only the
+// leader answers; a member still believing in a lost leader drops the
+// request silently, so asked once it waited out the hydration's whole bound
+// and refused the seat over a second-long election.
 func TestAHydrationWhoseIdentityReadAMemberDropsAsksAgain(t *testing.T) {
 	t.Parallel()
 	ns, conn := brokerServer(t)
@@ -214,15 +208,12 @@ func TestAHydrationWhoseIdentityReadAMemberDropsAsksAgain(t *testing.T) {
 // A HYDRATION WHOSE BARRIER A MEMBER DROPS ASKS AGAIN RATHER THAN REFUSING THE
 // SEAT.
 //
-// Before its first table a hydration publishes the seat's barrier, which every
-// table's replay reads to. Only the stream's leader takes a publish, and a
-// member that still believes it leads after its group has moved on drops one
-// without a reply, which the client's own retry, on `no responders` alone,
-// never asks again: sent once, the barrier waited out the hydration's whole
-// fifteen-second bound and refused the seat over a reply nobody would send.
-// It is asked again at the read term, as a metadata read is, and the second
-// request reaches the leader. The broker here drops the first publish to the
-// seat's barrier subject without a word, as such a member does.
+// The barrier every table's replay reads to is published before the first
+// table, and only the leader takes it; a member that still believes it leads
+// drops it with no reply, which the client's own retry (on `no responders`
+// alone) never re-asks, so sent once it waited out the fifteen-second bound.
+// It is asked again at the read term, as a metadata read is. The broker here
+// silently drops the first publish to the seat's barrier subject.
 //
 // Mutation: publish the barrier once, with no re-ask, and this goes red.
 func TestAHydrationWhoseBarrierAMemberDropsAsksAgain(t *testing.T) {
@@ -274,13 +265,11 @@ func (j *noLeaderOnceJS) Publish(ctx context.Context, subject string, data []byt
 
 // A BARRIER NO STREAM LEADER TOOK IS PUBLISHED AGAIN.
 //
-// While the changelog has no leader, no member subscribes to its subjects, and
-// a publish meets `no responders`: the client asks again twice, a quarter of a
-// second apart, and then gives up with jetstream.ErrNoStreamResponse, so an
-// election longer than half a second outlasts its retries. That is the silence
-// of a stream with nobody to answer, not an answer, and the barrier is asked
-// again after the read's pause, by when the group has a leader again. Here the
-// first publish of the barrier finds none.
+// With no leader nothing subscribes to the changelog's subjects: the client
+// retries `no responders` twice, a quarter of a second apart, then answers
+// jetstream.ErrNoStreamResponse, which an election past half a second
+// outlasts. That is silence, not an answer, so the barrier is asked again
+// after the read's pause. Here the first publish finds no leader.
 //
 // Mutation: take the client's no-stream-response for an answer, and this goes
 // red.
@@ -327,12 +316,10 @@ func (j refusingJS) Publish(ctx context.Context, subject string, data []byte,
 
 // A BROKER AT ITS STORAGE LIMIT REFUSES THE SEAT WITH ITS OWN ANSWER.
 //
-// A hydration writes before it reads a row: the seat's barrier. An account at
-// its storage limit answers that publish with its refusal, as it refuses the
-// seat's mailbox and its memory's publishes, and the seat is refused with the
-// broker's answer whole, which says what to raise. Here the broker answers the
-// barrier as an account at its limit does (nats-server's
-// JSAccountResourcesExceededErr).
+// A hydration's first write is the seat's barrier; an account at its storage
+// limit refuses it, and the seat is refused with the broker's answer whole,
+// which says what to raise. Here the broker answers as nats-server's
+// JSAccountResourcesExceededErr does.
 //
 // Mutation: word the refusal without wrapping the broker's answer, and this
 // goes red.
@@ -363,16 +350,13 @@ func TestABrokerAtItsStorageLimitRefusesTheSeatWithItsOwnAnswer(t *testing.T) {
 
 // A BARRIER THE BROKER WILL NOT LET THIS NODE PUBLISH IS REFUSED BY NAME.
 //
-// A hydration writes before it reads a row: the seat's barrier. A broker that
-// refuses a connection publish permission on the memory subjects answers that
-// publish with nothing at all: it sends the connection a permissions error
-// instead, which the client keeps as the connection's last error, so the
-// barrier waits for an acknowledgement that never comes, and the seat was
-// refused once nobody had answered, naming nothing an operator could act on.
-// It names the broker's refusal. Here a user may publish anywhere but on
-// crewlet.memory.>, the seat's rows were published by another, and the
+// A broker denying publish permission on the memory subjects never answers
+// the barrier: it sends a permissions error the client keeps as the
+// connection's last error, and the hydration names that refusal rather than
+// timing out on nothing an operator can act on. Here a user may publish
+// anywhere but crewlet.memory.>, another published the seat's rows, and the
 // hydration is cut at three seconds, which its first two requests fit in,
-// rather than waiting out the thirty its barrier is asked for.
+// rather than the barrier's thirty.
 //
 // Mutation: refuse an unanswered barrier without reading the connection's last
 // error, and this goes red.
@@ -429,9 +413,8 @@ func TestRepublishingCollapsesOntoOneMessagePerRow(t *testing.T) {
 	seedMemory(t, db)
 
 	for range 4 {
-		// A fresh syncer each time, with no watermark, is what a restarted
-		// node is, and it is the case that would grow the stream if
-		// compaction were not doing its job.
+		// A fresh syncer, with no watermark, is a restarted node: the case that
+		// would grow the stream if compaction were not doing its job.
 		if _, err := syncerOn(t, db, conn).PublishOwn(ctx, seat.Handle); err != nil {
 			t.Fatalf("publish: %v", err)
 		}
@@ -502,7 +485,7 @@ func TestHydrationTakesOnlyTheSeatItAsksFor(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed a peer's episode: %v", err)
 	}
-	// Publish both seats. The peer's syncer resolves its own agent id.
+	// The peer's syncer resolves its own agent id.
 	syncerOn(t, db, conn).PublishOwn(ctx, seat.Handle)
 	peer := heldFromEmpty(newSyncer(db, jsOn(t, conn), func(string) string { return "other-agent-id" }),
 		"ceo")
@@ -546,15 +529,13 @@ func TestHydratingASeatWithNoMemoryIsAQuietNoOp(t *testing.T) {
 // A broker that cannot answer must FAIL the hydration, not report an empty
 // memory.
 //
-// "Nothing recorded" and "could not ask" are different facts, and this is the
-// one place in the package where collapsing them is worse than losing a row:
-// hydration runs inside seat acquisition and every other failure path refuses
-// the seat, so a swallowed error is the single way a seat is admitted with an
-// empty memory AND a success reported to the caller that gates on it.
+// "Nothing recorded" and "could not ask" are different facts: hydration runs
+// inside seat acquisition, which gates on its error alone, so a swallowed
+// error admits the seat with an empty memory and reports success.
 //
-// This one covers a broker gone before the hydration asks anything. A replay
-// that cannot open has its own case below, because it is a second place the
-// same mistake fits and a closed connection never reaches it.
+// This covers a broker gone before the hydration asks anything; a replay
+// that cannot open, which a closed connection never reaches, has its own
+// case below.
 func TestAnUnreachableBrokerFailsTheHydrationRatherThanReportingNoMemory(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
@@ -568,8 +549,7 @@ func TestAnUnreachableBrokerFailsTheHydrationRatherThanReportingNoMemory(t *test
 		t.Fatalf("publish: %v", err)
 	}
 
-	// Now take the broker away. Everything below asks a connection that
-	// cannot reach a server.
+	// Now take the broker away.
 	conn.Close()
 
 	carried, err := syncer.Hydrate(context.Background(), seat.Handle)
@@ -583,11 +563,9 @@ func TestAnUnreachableBrokerFailsTheHydrationRatherThanReportingNoMemory(t *test
 	}
 }
 
-// openFailsJS is a JetStream whose consumers the broker will not make.
-//
-// Embedded rather than stubbed: the real thing satisfies everything except
-// the one call under test, so this is one method instead of the whole
-// interface — and it stays correct when the interface grows.
+// openFailsJS is a JetStream whose consumers the broker will not make. It
+// embeds the real one, so it overrides only the call under test and stays
+// correct as the interface grows.
 type openFailsJS struct {
 	jetstream.JetStream
 }
@@ -596,16 +574,13 @@ func (openFailsJS) CreateConsumer(context.Context, string, jetstream.ConsumerCon
 	return nil, errors.New("the broker did not answer")
 }
 
-// The hydration has read the changelog's identity and published its barrier,
-// and then the broker stops answering before a table's replay can open — the
-// request whose reply says how much there is to carry, since that count
-// arrives with the consumer's creation.
+// The broker stops answering after the hydration has read the changelog's
+// identity and published its barrier, before a table's replay opens (the
+// request whose reply carries how much there is to carry).
 //
-// The narrow window the case above cannot reach: a connection that is up for
-// the hydration's first round trips and gone at the next. Read as a table with
-// nothing to carry it returns SUCCESS with an empty memory, which is the one
-// shape that gets a seat admitted having forgotten everything — the seat host
-// gates on this error and on nothing else.
+// The window the case above cannot reach. Read as an empty table, it returns
+// SUCCESS with an empty memory, admitting a seat that forgot everything: the
+// seat host gates on this error alone.
 //
 // Mutation: read a replay that could not open as an empty table, and this
 // goes red.
@@ -640,20 +615,11 @@ func TestABrokerThatCannotOpenAReplayFailsTheHydration(t *testing.T) {
 // A RECREATED CHANGELOG IS DETECTED, and the node REFUSES the seat rather
 // than hydrating it empty.
 //
-// # The failure this is the whole guard against
-//
-// A stream that is deleted and remade restarts at sequence 1 and holds
-// nothing. Every check in Hydrate then reads it as a seat with nothing to
-// carry: the hydration's barrier lands on the new stream, every table's replay
-// delivers it and no row, and the seat is admitted as one that never wrote
-// any, with no line.
-// Nothing is wrong anywhere — and every seat on the node has silently lost
-// its diary and its episodes, which it reports to a colleague as never having
-// spoken to them.
-//
-// The stream's creation instant is the only thing that can tell the two
-// apart. A sequence cannot: a recreated stream's sequences are plausible. A
-// count cannot: an empty stream and an emptied one are the same count.
+// A stream deleted and remade restarts at sequence 1 holding nothing, which
+// every check in Hydrate reads as a seat with nothing to carry: the seat is
+// admitted having silently lost its diary and episodes. Only the stream's
+// creation instant tells the two apart: a recreated stream's sequences are
+// plausible, and an empty stream and an emptied one count the same.
 func TestMemoryChangelogRecreationIsDetected(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
@@ -670,14 +636,11 @@ func TestMemoryChangelogRecreationIsDetected(t *testing.T) {
 		t.Fatalf("the first hydration failed: %v", err)
 	}
 
-	// THE STREAM IS LOST AND THE QUEUE PROVISIONS IT AGAIN. Same name, same
-	// subjects, same settings — nothing on it, and stamped anew by the
-	// create that makes it, as the queue stamps every create
-	// ([statelog.CreatedAtKey]): the recreation the detector exists for.
-	// Two stamps are compared at a microsecond ([statelog.IdentityOf]), and
-	// this one is minted after a publish and a hydration that the first
-	// one's create preceded, so the two differ with no wait for the clock
-	// to move.
+	// THE STREAM IS LOST AND THE QUEUE PROVISIONS IT AGAIN: same name,
+	// subjects and settings, empty, stamped anew by its create
+	// ([statelog.CreatedAtKey]). Stamps compare at a microsecond
+	// ([statelog.IdentityOf]), and this one is minted after a publish and a
+	// hydration the first create preceded, so the two differ with no clock wait.
 	client := jsOn(t, conn)
 	lost, err := client.Stream(ctx, topics.MemoryStream)
 	if err != nil {
@@ -705,13 +668,11 @@ func TestMemoryChangelogRecreationIsDetected(t *testing.T) {
 
 // A RESTORED CHANGELOG IS THE ONE THIS NODE SAW.
 //
-// A snapshot restore of the stream estate makes the changelog again from the
-// configuration its snapshot names, every row back in it — and the broker dates
-// the stream to the restore. Read off the broker, a node restored from a backup
-// refused every seat it ran as hydrating from a recreated changelog, with
-// nothing to do about it but clear its identity row by hand. The changelog
-// carries the instant the create that made it stamped, which the restore hands
-// back with the rest of its configuration.
+// A snapshot restore remakes the changelog from its snapshot's configuration,
+// every row back, and the broker dates the stream to the restore: read off
+// the broker, a restored node would refuse every seat as recreated. The
+// changelog carries its create's stamp in its configuration, which the
+// restore hands back.
 func TestARestoredChangelogIsTheOneThisNodeSaw(t *testing.T) {
 	t.Parallel()
 	conn := broker(t) // the changelog stamped by its create, as the queue makes it
@@ -732,10 +693,10 @@ func TestARestoredChangelogIsTheOneThisNodeSaw(t *testing.T) {
 		t.Fatalf("read the changelog: %v", err)
 	}
 
-	// RESTORED: made again from its own configuration, every row back. The
-	// delete and the create are the restore itself; the account holds the
-	// engine's other streams ([broker]), so the delete leaves no empty
-	// stream directory for the broker's cleanup to take from under the create.
+	// RESTORED: the delete and the create are the restore itself, from the
+	// stream's own configuration, every row back. The account holds the
+	// engine's other streams ([broker]), so the delete leaves no empty stream
+	// directory for the broker's cleanup to take from under the create.
 	if err := client.DeleteStream(ctx, topics.MemoryStream); err != nil {
 		t.Fatalf("delete the changelog: %v", err)
 	}
@@ -788,20 +749,17 @@ func TestAStreamThisNodeHasNeverSeenIsNotARecreation(t *testing.T) {
 		t.Fatalf("carried %d rows, want %d", carried, len(tables))
 	}
 
-	// AND THE SECOND HYDRATION IS THE SAME STREAM, which is what makes the
-	// first one a record rather than a shrug: a node that never wrote what
-	// it saw would treat every boot as a first sight and the guard would
-	// never fire at all.
+	// AND THE SECOND HYDRATION IS THE SAME STREAM: a node that never recorded
+	// what it saw would treat every boot as a first sight, and the guard would
+	// never fire.
 	if _, err := syncerOn(t, fresh, conn).Hydrate(ctx, seat.Handle); err != nil {
 		t.Fatalf("the second hydration was refused: %v", err)
 	}
 }
 
-// THE COMPARISON ITSELF, over the four answers it can give.
-//
-// A pure function over two instants, so every consumer reaches the same
-// verdict — and so the one answer that is neither "same" nor "recreated" is
-// reachable in a test at all.
+// THE COMPARISON ITSELF, over the four answers it can give. A pure function
+// over two instants, so every consumer reaches the same verdict and the one
+// answer that is neither "same" nor "recreated" is reachable in a test.
 func TestIdentityTellsTheFourCasesApart(t *testing.T) {
 	t.Parallel()
 	early := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
@@ -855,9 +813,9 @@ func TestASeatWhoseIDMovedFindsNoneOfItsMemory(t *testing.T) {
 }
 
 // A SEAT WITH NO ID HAS NO ADDRESS, so neither half touches the changelog for
-// it. Published, its rows went to `crewlet.memory..<table>.<hash>` — an empty
-// seat token, which the broker refuses — so every flush failed, and the
-// failure read as a broker fault in the warning it logged.
+// it: published, its rows would go to `crewlet.memory..<table>.<hash>`, an
+// empty seat token the broker refuses, failing every flush with a warning
+// that reads as a broker fault.
 //
 // The control is the same seat with its id: its rows publish, so the empty
 // answer is what kept them off the stream.

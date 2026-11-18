@@ -12,49 +12,26 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The company's work as a series: how many tasks sat in each status group at
-// the end of each of the last N days or weeks, and how many were completed in
-// each — `work_flow`.
-//
-// # REPLAYED BACKWARD FROM THE CENSUS, never forward from the beginning
-//
-// Today's census is exact and cheap: it is the task rows as they stand. The
-// past is today minus every change since, so the reader takes the census and
-// walks `tracker_history` BACKWARD over the window, undoing each row that
-// moved a task between status groups, into or out of existence (created,
-// removed, restored, purged) or between projects. A forward replay would need
-// the state at the window's start, which is the very thing being computed —
-// and replaying from the company's first commit reads a table nothing sweeps.
-//
-// The walk touches only the rows that MOVE a count, through the partial index
-// replicated migration 0029 adds for exactly this predicate
-// ([historyMoves]), so its cost is the window's changes rather than the
-// company's history.
-//
-// # The day is the COMPANY's, and the instant is the fleet's
-//
-// Windows are cut on the company clock (`period`), so "Tuesday" is Tuesday in
-// the company's zone on every node; a row belongs to the window its
-// `effective_at` falls in — the fleet-agreed instant every duration is
-// measured on — so two nodes at one checkpoint draw the same bars.
-//
-// # What it cannot say, said
-//
-// A task's BLOCKED state is derived from other tasks' rows (its blockers'
-// groups), and the history records no transition of it, so the past cannot be
-// replayed: `blocked` is answered for NOW only and the answer carries
-// `blocked_history: false` rather than a series that would be today's number
-// drawn as a flat line.
+// `work_flow`: tasks per status group at the end of each of the last N days or
+// weeks, and the completions in each. It walks `tracker_history` BACKWARD from
+// today's exact census, undoing each row that moved a task between groups,
+// into or out of existence or between projects: a forward replay needs the
+// window-start state being computed, or a walk over a table nothing sweeps.
+// Only rows that move a count are read ([historyMoves]'s partial index), so
+// the cost is the window's changes. Windows are cut on the company clock
+// (`period`) and a row falls in the window its fleet-agreed `effective_at`
+// does, so every node draws the same bars. BLOCKED is derived from blockers'
+// rows and has no history, so it is answered for now only, with
+// `blocked_history: false` rather than today's number drawn as a flat line.
 
-// historyMoves is the one predicate over `tracker_history` both company-wide
-// readers state — the backward walk here and the feed's tracker page — WORD FOR
-// WORD the WHERE of `tracker_history_moves_idx` (replicated 0029), which is what
-// lets the planner prove the implication and search the partial index rather
-// than scan a table nothing sweeps. `h` qualifies each column for a statement
-// that joins (empty for one that does not); the planner matches the columns,
-// not the spelling of the table. Edited here, the index must be replaced in a
-// new migration: TestTheFlowAndFeedReadsSearchTheirIndex fails the day the
-// planner can no longer prove this predicate implies the index's.
+// historyMoves is the predicate over `tracker_history` both company-wide
+// readers (this walk and the feed's tracker page) state, WORD FOR WORD the
+// WHERE of `tracker_history_moves_idx` (replicated 0029), so the planner can
+// prove the implication and search the partial index rather than scan a table
+// nothing sweeps. `h` qualifies each column for a join (empty otherwise); the
+// planner matches columns, not the table's spelling. Edited, the index is
+// replaced in a new migration; TestTheFlowAndFeedReadsSearchTheirIndex fails
+// once the planner cannot prove this implies the index's predicate.
 func historyMoves(h string) string {
 	return h + `subject_kind = 'task' AND (
         ` + h + `kind IN ('created', 'removed', 'restored', 'purged')
@@ -63,12 +40,9 @@ func historyMoves(h string) string {
         OR json_extract(` + h + `fields_json, '$.project.to') IS NOT NULL)`
 }
 
-// MaxFlowPoints bounds one series.
-//
-// NINETY: a quarter of days, or most of two years of weeks — the longest span
-// a trend chart draws, and the bound on how much history one poll walks. The
-// walk is linear in the changes the window holds, so the bound is a bound on
-// the read's cost rather than on the answer's size.
+// MaxFlowPoints bounds one series: ninety is a quarter of days or most of two
+// years of weeks, the longest span a trend chart draws. The walk is linear in
+// the window's changes, so this bounds the read's cost more than the answer's.
 const MaxFlowPoints = 90
 
 // FlowQuery asks for the series.
@@ -79,9 +53,8 @@ type FlowQuery struct {
 	Project string
 
 	// Bucket is the window each point covers: [period.Day] or
-	// [period.Week]. A month series is not offered: ninety months is a
-	// span no history this engine keeps is long enough to be worth
-	// walking, and a chart of four is a table.
+	// [period.Week]. No month series: no history kept makes ninety months
+	// worth walking, and a chart of four is a table.
 	Bucket period.Period
 
 	// Points is how many windows, the last being the one now falls in:
@@ -95,14 +68,10 @@ type FlowQuery struct {
 	MaxLagSeq uint64
 }
 
-// FlowPoint is one window of the series.
-//
-// THE CENSUS IS AT THE WINDOW'S END — what the board would have shown at the
-// last instant of that day or week — and at NOW for the window now falls in,
-// whose end has not happened. Completed is every change in the window that
-// took a task from not-delivered to delivered (see [Delivered]), so a task
-// cancelled is not a completion and a task moved from done to closed is not a
-// second one.
+// FlowPoint is one window of the series. Its census is the board at the
+// window's last instant (at NOW for the current window). Completed counts the
+// window's changes from not-delivered to delivered ([Delivered]), so a
+// cancellation is none and done to closed is not a second one.
 type FlowPoint struct {
 	// Window is the period's label (`2026-09-23`, `2026-W39`) and Start
 	// and End its half-open interval, in UTC on the wire.
@@ -137,9 +106,8 @@ type FlowAnswer struct {
 	Points  []FlowPoint   `json:"points"`
 	Now     FlowNow       `json:"now"`
 
-	// BlockedHistory is always false: see the file's head. Carried so a
-	// chart that wants a blocked line reads that there is none rather
-	// than drawing zeros.
+	// BlockedHistory is always false (see the file's head), so a chart
+	// reads that there is no blocked line rather than drawing zeros.
 	BlockedHistory bool `json:"blocked_history"`
 
 	Level          statelog.ReadLevel `json:"read_level,omitempty"`
@@ -173,9 +141,8 @@ func (r *Reader) Flow(ctx context.Context, q FlowQuery, now time.Time,
 	out := FlowAnswer{Bucket: q.Bucket, Project: q.Project, BlockedHistory: false}
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
-		// THE DOMAIN, for [Reader.Workload]'s reason: a series over the
-		// company reads every container, and a narrower closure would
-		// certify the answer complete while a deferred record held a
+		// THE DOMAIN, as [Reader.Workload]: a narrower closure would
+		// certify the series complete while a deferred record held a
 		// change it should have undone.
 		Scope:     statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
 		Session:   q.Session,
@@ -239,11 +206,8 @@ type flowRow struct {
 	fields    map[string]Delta
 }
 
-// undo is the state before a row, given the state after it.
-//
-// A purge is the one row this cannot undo from the row alone — the task's
-// rows are gone — so its prior state is the forward replay of the task's own
-// history below the purge, which [readFlow] supplies.
+// undo is the state before a row, given the state after it. A purge cannot
+// be undone from the row alone; [stateBeforePurge] supplies that.
 func (s flowState) undo(row flowRow) flowState {
 	if moved, ok := row.fields["status"]; ok {
 		s.status = Status(moved.From)
@@ -295,7 +259,6 @@ func readFlow(ctx context.Context, tx *sql.Tx, q FlowQuery, now time.Time,
 		}
 	}
 
-	// TODAY'S CENSUS, exact, from the rows as they stand.
 	var current census
 	censusQuery, censusArgs := flowCensusStatement(q.Project)
 	rows, err := tx.QueryContext(ctx, censusQuery, censusArgs...)
@@ -338,10 +301,8 @@ func readFlow(ctx context.Context, tx *sql.Tx, q FlowQuery, now time.Time,
 	next := 0
 	for i := len(windows) - 1; i >= 0; i-- {
 		w := windows[i]
-		// UNDO EVERYTHING AT OR AFTER THIS WINDOW'S END, which leaves the
-		// census as it stood at its last instant. The newest window's
-		// end is in the future, so nothing is undone for it and its
-		// census is today's.
+		// UNDO EVERYTHING AT OR AFTER THIS WINDOW'S END, leaving its
+		// census at its last instant (today's, for the newest window).
 		for ; next < len(walk) && !walk[next].effective.Before(w.End); next++ {
 			if err = undoRow(ctx, tx, walk[next], state, states, q.Project, &current); err != nil {
 				return err
@@ -352,8 +313,8 @@ func readFlow(ctx context.Context, tx *sql.Tx, q FlowQuery, now time.Time,
 			NotStarted: current[0], Active: current[1],
 			Done: current[2], Closed: current[3],
 		}
-		// AND COUNT THE COMPLETIONS INSIDE IT while undoing them, so the
-		// next (older) window's census starts from this one's start.
+		// Count the completions inside it while undoing them, so the
+		// older window's census starts from this one's start.
 		for ; next < len(walk) && !walk[next].effective.Before(w.Start); next++ {
 			row := walk[next]
 			after, stateErr := state(row.subject)
@@ -433,11 +394,9 @@ func readFlowRows(ctx context.Context, tx *sql.Tx, from time.Time) ([]flowRow, e
 	return out, nil
 }
 
-// historyDeltas decodes a history row's `fields_json`.
-//
-// A COLUMN THAT DOES NOT DECODE MOVED NOTHING this walk can undo, rather than
-// failing the read: the column is the applier's own JSON, and one malformed row
-// must not take a company's chart down with it.
+// historyDeltas decodes a history row's `fields_json`. One that does not
+// decode moved nothing, rather than failing the read: one malformed row must
+// not take a company's chart down with it.
 func historyDeltas(fields string) map[string]Delta {
 	var out map[string]Delta
 	if err := json.Unmarshal([]byte(fields), &out); err != nil {
@@ -474,11 +433,9 @@ const purgedHistoryStatement = `
 		WHERE subject_id = ? ORDER BY log_seq`
 
 // stateBeforePurge is a purged task as it stood just before its purge: the
-// forward replay of its own rows below the purge row.
-//
-// The purge deleted the task's rows but not its history, and the history is
-// the only account left of where it stood — whether it was still counted (a
-// purge does not require a removal first) and in which group.
+// forward replay of its own history below the purge row, the only account
+// left of whether it was still counted (a purge needs no removal first) and
+// in which group.
 func stateBeforePurge(ctx context.Context, tx *sql.Tx, id string) (flowState, error) {
 	rows, err := tx.QueryContext(ctx, purgedHistoryStatement, id)
 	if err != nil {
@@ -542,8 +499,7 @@ func readFlowNow(ctx context.Context, tx *sql.Tx, project string, now time.Time,
 	loc *time.Location, current census, out *FlowNow) error {
 
 	out.NotStarted, out.Active = current[0], current[1]
-	// THE DAY BOUNDARY every board's overdue mark is cut on — see
-	// [readWorkload].
+	// The day boundary every board's overdue mark is cut on ([readWorkload]).
 	anchor, err := period.Resolve("today", now, loc)
 	if err != nil {
 		return err

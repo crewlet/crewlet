@@ -85,11 +85,10 @@ func TestATestsBrokerDeclaresItsSize(t *testing.T) {
 
 // A TEST'S BROKER KEEPS ITS STORE IN A brokertest.TempDir, whichever way it is
 // started: in a test binary an embedded broker whose store directory is
-// neither one brokertest.TempDir made nor under one refuses to start, naming
-// the directory and brokertest.TempDir, and before it writes anything there,
-// since a t.TempDir's removal tries once and a stopped broker's last write can
-// land after it stopped (crewlet/crewlet#1079). One in such a directory, or
-// under it, starts, and so does one whose streams are in memory.
+// neither one brokertest.TempDir made nor under one refuses to start
+// ([ErrStoreOutsideTempDir] has why), naming the directory and
+// brokertest.TempDir, before it writes anything there. One in such a
+// directory, or under it, starts, and so does one whose streams are in memory.
 //
 // Mutations: start the broker without the check (the t.TempDir rows start);
 // read only the store directory's own name (the row under a brokertest.TempDir

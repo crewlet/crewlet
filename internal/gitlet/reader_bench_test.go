@@ -13,33 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// BenchmarkRunPushes is the engine's whole read of what one executor pushed —
-// every page of a `run_pushes` read at its default limit, each in a read
-// transaction of its own, as each is an estate request of its own — over a
-// repository taking 70 pushes a minute (the large model's monorepo), for a run
-// of an hour and one of a week that pushed once every five minutes, beside an
-// hour's run in a quiet repository that takes a push every ten minutes. What
-// it costs is the scan: the read has no index of its own (replicated 0098), so
-// it reads every push the repository took during the run, a lookup of each
-// row to test the run it names, and `rows/op` is how many. Each row is a push
-// of one command and three introduced commits, about 400 bytes, as an
-// ordinary push row is; the repositories' pushes below the run's launch are
-// what its seek steps over. And beside them, the two shapes a page's bound
-// is for:
-//
-//   - run=hour/repo=wide: the busy repository's hour with 200 of the other
-//     pushes WIDE — one branch beside 999 refused refs at MaxRefNameBytes,
-//     403 KB of commands as stored, scanIntroduced's widest — so its pages end at
-//     their bytes, each read held to MaxPageBytes and one row;
-//   - run=hour/repos=8: MaxRunRepos repositories each taking 70 pushes a
-//     minute, the run pushing to each every five minutes — the most
-//     repositories a run is given.
-//
-// `max-page-ms` is the slowest page of the read: what one request costs the
-// node that serves it. WHAT IT DECIDES: every page must come in under a tenth
-// of statelog.ReadBudget, wide rows included, and the week's whole read under
-// twice statelog.ReadBudget, or the page's row bound — MaxSnapshotItems, an
-// engine read's — is set lower; runPushes states the figures.
+// BenchmarkRunPushes is every page of a `run_pushes` read, each in its own read
+// transaction as each is its own estate request, for a run pushing every five
+// minutes to a repository taking 70 a minute (the large model's monorepo), over
+// an hour and a week, and for an hour in a quiet repository (a push per ten
+// minutes). The read has no index of its own (replicated 0098), so it scans
+// every push since the run's launch: `rows/op`. Rows are ~400-byte ordinary
+// pushes; `repo=wide` makes 200 of them 999 refused refs at MaxRefNameBytes
+// (403 KB, scanIntroduced's widest) so pages end at MaxPageBytes, and
+// `repos=8` is MaxRunRepos such repositories. WHAT IT DECIDES: `max-page-ms`,
+// the slowest page (one request's cost to its node), under a tenth of
+// statelog.ReadBudget and the week's read under twice it, or the page's row
+// bound (MaxSnapshotItems) is set lower; runPushes states the figures.
 func BenchmarkRunPushes(b *testing.B) {
 	quiet(b)
 	ctx := context.Background()
@@ -47,15 +32,12 @@ func BenchmarkRunPushes(b *testing.B) {
 		perMinute = 70
 		hour      = 60 * perMinute
 		week      = 7 * 24 * hour
-		// every is how many of the busy repository's pushes there are to
-		// one of the run's: a push of the run every five minutes.
+		// every is the busy repository's pushes per one of the run's.
 		every = 5 * perMinute
-		// quietPushes is a week of the quiet repository's pushes, one every
-		// ten minutes, and quietHour an hour of them.
+		// quietPushes is a week of the quiet repository's, quietHour an hour.
 		quietPushes = 7 * 24 * 6
 		quietHour   = 6
-		// wideEvery is how many of the wide repository's hour of pushes
-		// there are to one wide push: 200 of its 4 200, none the run's.
+		// wideEvery makes 200 of the wide hour's 4 200 pushes wide.
 		wideEvery = 21
 	)
 	weekRun, hourRun, quietRun := "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", "7d2e1f0a-9b8c-4d7e-a6f5-e4d3c2b1a090",
@@ -65,9 +47,8 @@ func BenchmarkRunPushes(b *testing.B) {
 	commands := `[{"ref":"refs/heads/seats/swe/eng-42","old":"` + strings.Repeat("a", 40) + `","new":"` +
 		strings.Repeat("b", 40) + `","result":"ok"}]`
 	introduced := strings.Repeat("c", 40) + " " + strings.Repeat("d", 40) + " " + strings.Repeat("e", 40)
-	// THE BUSY REPOSITORY'S WEEK: the week's run pushes every `every` pushes
-	// from its first; the hour's run every `every` pushes in the last hour,
-	// half way between the week run's.
+	// The busy week: the hour's run pushes in the last hour, half way between
+	// the week run's.
 	e.exec(`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?1)
 		INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat, via, turn_id,
 			run_id, harness, commands, introduced, introduced_count, received_at, row_bytes)
@@ -84,10 +65,8 @@ func BenchmarkRunPushes(b *testing.B) {
 			CASE WHEN i > ?1 - ?2 AND i % 2 = 0 THEN 'claude-code' ELSE '' END,
 			?4, ?5, 3, i, ?6 FROM k`,
 		quietPushes, quietHour, quietRun, commands, introduced, len(commands)+len(introduced))
-	// THE WIDE REPOSITORY'S HOUR, the busy one's last hour again — the hour's
-	// run every `every` pushes, half way along — with every wideEvery-th
-	// other push wide: positions 1 mod 21, which are 1 mod 7 and so never
-	// the run's, at 0 mod 7.
+	// The wide hour: positions 1 mod 21 are wide, never the run's (which sit
+	// at `every`/2 mod `every`).
 	wideCmds := []Command{{Ref: "refs/heads/topic", Old: ZeroOID, New: strings.Repeat("f", 40),
 		Result: ResultOK}}
 	long := strings.Repeat("x", MaxRefNameBytes-len("refs/heads/")-len("-000"))
@@ -109,8 +88,7 @@ func BenchmarkRunPushes(b *testing.B) {
 			CASE WHEN i % ?4 = 1 THEN ?8 ELSE ?9 END FROM k`,
 		hour, every, hourRun, wideEvery, string(wide), commands, introduced, len(wide)+len(introduced),
 		len(commands)+len(introduced))
-	// MaxRunRepos REPOSITORIES, each an hour of the busy one's pushes, the
-	// hour's run pushing to each every `every` pushes, half way along.
+	// MaxRunRepos repositories, each an hour of the busy one's pushes.
 	repos := make([]string, MaxRunRepos)
 	for k := range repos {
 		repos[k] = fmt.Sprintf("many-%d", k)
@@ -131,8 +109,8 @@ func BenchmarkRunPushes(b *testing.B) {
 		repos  []string
 		run    string
 		launch int64
-		// rows is what the read scans — every push above the launch — and
-		// pushes what it answers.
+		// rows is what the read scans (every push above launch), pushes
+		// what it answers.
 		rows, pushes int
 	}{
 		{"run=hour/repo=busy", []string{"busy"}, hourRun, week - hour, hour, hour / every},
@@ -175,30 +153,18 @@ func BenchmarkRunPushes(b *testing.B) {
 	}
 }
 
-// BenchmarkServeASnapshotPage is one full page of a full snapshot's refs — the
-// MaxSnapshotItems a cold sync of a large repository reads a page at a time —
-// served from a repository of 100 000 refs (MaxRefsPerRepo): the read, the
-// scan and the page's measure, in one read transaction. Its `serve` arms hold
-// no tombstones and the most a repository may (MaxTombstonesPerRepo) — the
-// full read's walk passes every one of them in its pages' key ranges, since
-// it reads the refs' primary key and skips the deleted — laid out two ways:
-// INTERLEAVED, one after every live ref in key order, which is what a whole
-// snapshot pays (every page walks its share), and CLUSTERED, every one sorting
-// before the first live ref, which is the worst ONE page pays (a clean-up of
-// one prefix: the first page walks the whole cluster). Its `decide` arms
-// price page 1's choice between a full answer and a delta (choose) where it
-// reads the most: a delta from below every row of the interleaved repository,
-// beside MaxFullRetirements retirements — the most a full answer serves, so
-// the choice counts every one. `decide/cache` asks as a Gitlet node's cache
-// does, from one position for both floors, so the full answer would serve
-// the very retirements the delta carries and the refs are counted one row
-// past the full answer's own rows deep; `decide/worst` asks the full answer's
-// retirements from below the delta's floor, every one of them between the
-// two, which is the deepest any ask reads: every retirement counted, and the
-// refs one row past the full answer's rows and those retirements deep. Its
-// `measure` sub-benchmarks price the measure alone over the same page, computed
-// (rowbytes.go) against the encoding it replaced, which every row of every
-// page on the serving node used to pay.
+// BenchmarkServeASnapshotPage is one full page (MaxSnapshotItems) of a full
+// snapshot's refs from a repository of MaxRefsPerRepo refs: read, scan and
+// measure in one read transaction. The `serve` arms hold no tombstones or
+// MaxTombstonesPerRepo, which the walk passes since it reads the refs' primary
+// key and skips the deleted: INTERLEAVED, one after each live ref (what a
+// whole snapshot pays), and CLUSTERED before the first live ref (the worst
+// one page pays). The `decide` arms price page 1's choose where it reads the
+// most, a delta from below every row beside MaxFullRetirements retirements:
+// `decide/cache` asks as a node's cache does, one position for both floors;
+// `decide/worst` asks retirements from below the delta's floor, the deepest
+// any ask reads. The `measure` arms price the computed measure (rowbytes.go)
+// against encoding each row.
 func BenchmarkServeASnapshotPage(b *testing.B) {
 	quiet(b)
 	at := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 2}
@@ -235,8 +201,7 @@ func BenchmarkServeASnapshotPage(b *testing.B) {
 	for _, arm := range []struct {
 		name       string
 		tombstones int
-		// spelled is a tombstone's ref as a printf of its number: after
-		// "r000001" and before "r000002", or before every live ref.
+		// spelled is a tombstone's ref as a printf of its number.
 		spelled string
 	}{
 		{"tombstones=0", 0, ""},
@@ -258,21 +223,13 @@ func BenchmarkServeASnapshotPage(b *testing.B) {
 		if arm.spelled != "refs/heads/r%06d-gone" {
 			continue
 		}
-		// THE CHOICE WHERE IT READS THE MOST, of a full repository holding
-		// its bound of tombstones, every row of it moved (to position 3)
-		// above the delta's floor, beside MaxFullRetirements retirements (at
-		// position 2): the most a full answer serves, so it would serve every
-		// one and the choice counts every one before it answers in full.
-		// Asked as a Gitlet node's cache asks it, from one position (1) for
-		// both floors, the full answer would serve the very retirements the
-		// delta carries: they cancel, and the refs are counted one row past
-		// the full answer's own rows deep. Asked for the full answer's
-		// retirements from below the delta's floor (1 and 2), every
-		// retirement lies between the two, the delta carrying none and the
-		// full answer every one: the refs are counted one row past the full
-		// answer's rows AND those retirements deep, the deepest any ask
-		// reads. One retirement more and the full answer would serve none,
-		// and either count of the refs stops about a page shallower.
+		// Every row moves above the delta's floor (position 3) beside
+		// MaxFullRetirements retirements at 2: the most a full answer serves,
+		// so choose counts every one. From 1 for both floors (cache) the full
+		// answer's retirements cancel the delta's; from 1 and 2 (worst) every
+		// one lies between the floors, so the refs are counted past them too.
+		// One retirement more and the full answer serves none, and either ask
+		// stops about a page shallower.
 		e.exec(`UPDATE code_refs SET position = 3 WHERE repo_id = 'repo-a'`)
 		e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
 			INSERT INTO code_packs_retired (repo_id, pack_id, part, object, hash, size, index_bytes,

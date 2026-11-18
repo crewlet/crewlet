@@ -11,55 +11,26 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// A GATE'S HUMAN PATHS, MATCHED ON THE HOME: which of the human paths a
-// change's target's merge gate names ([GateRules.HumanPaths]) hold its head
-// revision to a person — an entry matching a path it touches, unless every
-// path the entry matched is of a class its unless names — is a GLOB MATCH,
-// and no judgment makes it. A target's human paths are the union of every
-// rule matching it, up to MaxProtectionsPerRepo × MaxHumanPaths entries and
-// ChecksDirGlob, against up to MaxTouchedPaths paths: some two thousand globs
-// at twenty nanoseconds a typical match against a thousand paths is some
-// forty milliseconds, and the costliest glob gitref measures, 3.2 ms against
-// a whole touched list, seconds — paid on every read of a change, every row
-// of a listing and every round of every enqueue's and mergeability's decide,
-// inside the repository's one committer. It is the cost M5-D5 refused for
-// path owners, at the same bound, and it is answered the same way.
-//
-// So the repository's HOME matches, once a revision, beside the path owners
-// ([MatchOwners]), and its revise records the answer ([Revise.HumanPaths]):
-// each entry that holds the revision and each its unless waived, by its PLACE
-// in the target's human paths in their one order — the order [GateRulesOf]
-// sorts them in, a function of the rules alone — beside the DIGEST of the
-// repository's rules' human paths it matched against ([HumanPathsDigest]).
-// The applier writes the same digest on the repository's row beside the rules
-// (code_repos.human_paths_digest), and every reader holds the recorded match
-// to it, as it holds the owners' match to theirs: a revise matched against
-// other rules is refused superseded, a change whose facts were matched
-// against rules changed since is due its facts again ([ReadChangesDue]), and
-// the gate judges human_approval COMPUTING meanwhile, never on a match of
-// rules the repository no longer has. A place names one entry only under the
-// digest it was matched under, which is what lets a place stand for a glob.
-//
-// THE DIGEST IS THE REPOSITORY'S, NOT THE TARGET'S: a statement compares it
-// with the row's, and no statement can tell which rules match a branch. So a
-// change of any rule's human paths — its pattern, its globs, its unless, or
-// whether it requires checks and so holds ChecksDirGlob — makes every live
-// change of the repository due its facts again, and no other change of a
-// rule does: its merge_by, its approvals, its queue and its owners_approve
-// are not in it (the path owners have a digest of their own, OwnersDigest).
+// A GATE'S HUMAN PATHS ARE MATCHED ON THE HOME: which entries of a target's
+// [GateRules.HumanPaths] hold a revision to a person is a match of up to ~2000
+// globs against MaxTouchedPaths paths (up to seconds), too costly for every
+// read, listing row and decide in the one committer, as M5-D5 found for path
+// owners. So the home matches once a revision, beside [MatchOwners], and its
+// revise records each entry by PLACE ([GateRulesOf]'s order) beside the
+// [HumanPathsDigest] it matched under, which alone gives a place its meaning.
+// Readers hold it to code_repos.human_paths_digest: a stale revise is refused
+// superseded, a stale change is due its facts again ([ReadChangesDue]) and
+// human_approval reads COMPUTING meanwhile. The digest is the REPOSITORY'S (no
+// statement can tell which rules match a branch): a change to any rule's human
+// paths, and to no other field, re-dues every live change (cf. OwnersDigest).
 
-// HumanPathMatch is which of the human paths a revision's target is held to
-// hold it: each by its place in the target's human paths ([GateRules.HumanPaths],
-// counted from 0), Held those holding the revision to a person and Waived
-// those whose every matched path is of a class their unless names. Each list
-// ascending, no place in both; an entry matching no touched path is in
-// neither.
-//
-// A PLACE AND NOT A GLOB: a target's human paths are up to
-// [MaxTargetHumanPaths] entries of up to a gate's bytes, and a record carrying
-// them again by name would carry up to a gate's bytes for every rule matching
-// the target; a place is a few bytes, and names its entry under the digest
-// the match was made under ([Revise.HumanPathsDigest]).
+// HumanPathMatch is which of a target's human paths ([GateRules.HumanPaths])
+// hold a revision, each by its place counted from 0: Held those holding it to
+// a person, Waived those whose every matched path is of a class their unless
+// names. Each list ascending, no place in both; an entry matching no touched
+// path is in neither. A PLACE AND NOT A GLOB, which would carry up to a gate's
+// bytes per matching rule; a place names its entry only under
+// [Revise.HumanPathsDigest].
 type HumanPathMatch struct {
 	Held   []int `json:"held,omitempty"`
 	Waived []int `json:"waived,omitempty"`
@@ -105,18 +76,13 @@ func humanPathMatchProblem(m HumanPathMatch) error {
 	return nil
 }
 
-// MatchHumanPaths is which of humanPaths — a target's, in their one order
-// ([GateRules.HumanPaths]) — hold a revision touching touched, or every path
-// where touchesAll, its paths classed by classes ([HumanPathMatch]): an entry
-// matching a touched path holds it, unless every path it matched is of a
-// class its unless names, which waives it — a whitespace_only change being a
-// comment_only one too. A revision that touches all is held by every entry,
-// which no class can waive, and a glob this build cannot read holds it too,
-// FAIL CLOSED: every stored glob passed validation before a record carried it.
-//
-// ON THE HOME, NEVER IN A JUDGMENT (this file's head): up to
-// [MaxTargetHumanPaths] globs against MaxTouchedPaths paths, each path's class
-// looked up by its place.
+// MatchHumanPaths is which of humanPaths (a target's, in [GateRules.HumanPaths]
+// order) hold a revision touching touched, or every path where touchesAll,
+// its paths classed by classes ([HumanPathMatch]): an entry matching a
+// touched path holds it unless its unless waives every path it matched
+// ([waives]). Touching all is held by every entry, waivable by
+// none, and a glob this build cannot read holds it too, FAIL CLOSED: every
+// stored glob passed validation. Run ON THE HOME only (this file's head).
 func MatchHumanPaths(humanPaths []HumanPath, touched []string, touchesAll bool,
 	classes RevisionClasses) HumanPathMatch {
 
@@ -199,14 +165,12 @@ func MatchTargetHumanPaths(gates []RuleGate, target string, touched []string, to
 }
 
 // HumanPathsDigest is the digest of a repository's rules' human paths: the
-// SHA-256, in lowercase hex, of the JSON of every rule whose gate holds a
-// target to one — its pattern and the human paths it holds a target it
-// matches to, ChecksDirGlob among them where it requires checks and does not
-// set agents_edit_checks ([humanPathsOf]), each sorted — in pattern order.
-// gates are the rules that carry a gate; a rule with none holds no human
-// path, and none at all is the digest of an empty list. The applier writes it
-// on the repository's row beside the rules (code_repos.human_paths_digest),
-// and its home sends it beside the match it made against them.
+// lowercase-hex SHA-256 of the JSON, in pattern order, of each gated rule
+// holding a target to any: its pattern and its sorted human paths
+// ([humanPathsOf]; ChecksDirGlob among them where it requires checks without
+// agents_edit_checks). No such rule is the digest of an empty list. The
+// applier writes it on the repository's row (code_repos.human_paths_digest),
+// and the home sends it beside its match.
 func HumanPathsDigest(gates []RuleGate) string {
 	type ruleHumanPaths struct {
 		Pattern    string      `json:"pattern"`
@@ -227,8 +191,7 @@ func HumanPathsDigest(gates []RuleGate) string {
 	slices.SortFunc(canonical, func(a, b ruleHumanPaths) int { return strings.Compare(a.Pattern, b.Pattern) })
 	encoded, err := json.Marshal(canonical)
 	if err != nil {
-		// A list of strings and named strings always encodes; reaching here
-		// is a broken encoder, which no digest could be taken past.
+		// Strings always encode; reaching here is a broken encoder.
 		panic(fmt.Sprintf("gitlet: encoding human paths: %v", err))
 	}
 	sum := sha256.Sum256(encoded)

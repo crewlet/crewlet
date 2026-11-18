@@ -16,17 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// What a comment's routing needs to know about the conversation it lands in.
-//
-// # Why this is a read of its own rather than part of the task detail
-//
-// A task's comments are a thread that can be hundreds of rows, and a comment
-// needs exactly three facts from them: who is already in THIS thread, who is
-// owed an answer, and whether this comment answers an open ask. Loading the
-// whole conversation to find three handles would make every comment pay for
-// the length of the discussion it joins — and the cap on what travels is
-// sixteen ([MaxThreadParticipants]), so the read is bounded where the thread
-// is not.
+// What a comment's routing needs from the conversation it lands in: who is in
+// THIS thread, who is owed an answer, and whether it answers an open ask. A
+// read of its own rather than the task detail, so a comment pays for at most
+// [MaxThreadParticipants] handles, not the length of the discussion it joins.
 
 // ThreadQuery is what a comment about to be written needs resolved.
 type ThreadQuery struct {
@@ -34,37 +27,30 @@ type ThreadQuery struct {
 	Task string
 
 	// ReplyTo is the comment this one replies to, empty for a top-level
-	// remark. It is what bounds the participant read to ONE thread: a task
-	// is a set of conversations, and waking everybody who ever spoke on it
-	// is the broadcast this design refuses.
+	// remark. It bounds the participant read to ONE thread: waking everybody
+	// who ever spoke on the task is the broadcast this design refuses.
 	ReplyTo string
 
 	// Ask is the handle this comment asks, as the caller stated it.
 	Ask string
 
-	// Answers is the comment this one answers, as the caller stated it —
-	// or empty, in which case [Reader.Thread] INFERS it when exactly one
-	// open ask on this task is addressed to the author — unless the
-	// comment is already posted, which answers what its row says (Comment).
+	// Answers is the comment this one answers, as the caller stated it. Empty,
+	// [Reader.Thread] INFERS it when exactly one open ask on this task is
+	// addressed to the author, unless the comment is already posted (Comment).
 	Answers string
 
 	// Author is who is writing, which the inference needs: an ask is
 	// answered by the person it was addressed to.
 	Author string
 
-	// Comment is the id the comment being written will carry.
-	//
-	// A REMARK ALREADY ON THE TASK UNDER IT is this call made again — a
-	// retried write, a redelivered turn, an approval retried after its
-	// outcome went unknown — whose first attempt landed, and the write
-	// answers it from that row ([PostedRemark]). So the read resolves it
-	// from that row too, before anything is inferred: it asked whom the
-	// remark asked and answers what the remark answered, nothing when it
-	// answered nothing, however the asks open to its author have moved
-	// since. Inferred again, a re-run of an answer found its own question
-	// closed — a choice refused, a person warned that nobody was asked to
-	// reply — or claimed a question asked since, which its write never
-	// closed. Empty treats the comment as new.
+	// Comment is the id the comment being written will carry; empty treats
+	// it as new. A remark already on the task under it is this call made
+	// again (a retried write, a redelivered turn, an approval retried after
+	// an unknown outcome) whose first attempt landed. The write answers it
+	// from that row ([PostedRemark]), so the read does too, before inferring
+	// anything: it asked and answers exactly what the row says, however the
+	// author's open asks have moved since. Inferred again, a re-run would find
+	// its own question closed, or claim one asked since that it never closed.
 	Comment string
 
 	// Choice is the option the comment chooses, checked against the
@@ -80,30 +66,25 @@ type ResolvedThread struct {
 	// one the caller named or the one that was inferred.
 	Answers string
 
-	// AnswersDecision is the decision the answered ask carries, or nil —
-	// what a wake needs to say which option was chosen, and what the
-	// caller shows beside the choice. Immutable once asked, so reading it
-	// here rather than inside the write's snapshot cannot go stale.
+	// AnswersDecision is the decision the answered ask carries, or nil: what
+	// a wake and the caller show beside the choice. Immutable once asked, so
+	// reading it outside the write's snapshot cannot go stale.
 	AnswersDecision *decision.Decision
 }
 
 // AlreadyAnsweredError reports an `answers` naming a question that already
-// has its answer, and WHO gave it and WHEN — because the useful move is to
-// read that answer, and a refusal that does not name it sends the caller
-// looking. It is [ErrAlreadyAnswered].
+// has its answer, naming WHO gave it and WHEN so the caller can read it. It
+// is [ErrAlreadyAnswered].
 type AlreadyAnsweredError struct {
 	Task    string
 	Comment string
 
-	// By is who answered — the author of the answering comment — or who
-	// resolved the question without an answer: a seat handle exactly as
-	// the rows hold it, which never changes (ADR-0013), so nothing
-	// re-reads it.
+	// By is the answering comment's author, or who resolved the question:
+	// a seat handle as the rows hold it, which never changes (ADR-0013).
 	By string
 	At time.Time
 
-	// Resolved is a question closed by a resolve rather than by an
-	// answer, which the sentence has to tell apart.
+	// Resolved is a question closed by a resolve rather than an answer.
 	Resolved bool
 }
 
@@ -131,9 +112,8 @@ func (e *AlreadyAnsweredError) Unwrap() error { return ErrAlreadyAnswered }
 // ErrAmbiguousAnswer reports a comment whose `answers` could not be inferred
 // because more than one open ask is addressed to its author.
 //
-// A TYPED ERROR carrying the candidates, because the caller has to name them:
-// "which one" is the whole of the question, and a refusal that does not list
-// them leaves a model guessing at ids it has not read.
+// It carries the candidates, because the caller has to name one, and a
+// refusal that does not list them leaves a model guessing at ids.
 type ErrAmbiguousAnswer struct {
 	Task  string
 	Asks  []AskCandidate
@@ -142,11 +122,9 @@ type ErrAmbiguousAnswer struct {
 
 // AskCandidate is one open ask, as a refusal names it.
 //
-// WHOLE, never an excerpt: the refusal exists so the caller can tell which
-// question it is answering, and two questions that share an opening are
-// exactly the two an excerpt cannot tell apart. The renderer decides how many
-// it can carry whole and names the rest by id — see the builtin's
-// ambiguousText.
+// WHOLE, never an excerpt: two questions sharing an opening are exactly the
+// two an excerpt cannot tell apart. The renderer decides how many it carries
+// whole and names the rest by id (the builtin's ambiguousText).
 type AskCandidate struct {
 	Comment string
 	Author  string
@@ -165,16 +143,14 @@ func (e *ErrAmbiguousAnswer) Error() string {
 
 // Thread resolves a comment's conversation.
 //
-// BEST EFFORT ON THE PARTICIPANTS and STRICT ON THE ANSWER, which are two
-// different kinds of fact: a participant list that came up short means one
-// person is woken as a watcher instead of under `thread`, while an `answers`
-// resolved to the wrong comment closes somebody else's question. So a read
-// failure empties the first and refuses the second.
+// Best effort on the participants, strict on the answer: a short participant
+// list wakes one person as a watcher instead of under `thread`, while a wrong
+// `answers` closes somebody else's question.
 //
-// A COMMENT ALREADY POSTED IS RESOLVED FROM ITS ROW, before anything is
-// inferred — see [ThreadQuery.Comment] — because its write is answered from
-// that row ([postedComment], the one read both take), and a resolution of the
-// thread as it stands now would describe a write that was never made.
+// A comment already posted is resolved from its row before anything is
+// inferred ([ThreadQuery.Comment]): its write is answered from that row
+// ([postedComment], the one read both take), and the thread as it stands now
+// would describe a write that was never made.
 func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 	fresh statelog.Freshness) (ResolvedThread, error) {
 
@@ -185,12 +161,10 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 		ThreadParties: ThreadParties{Asked: q.Ask},
 		Answers:       q.Answers,
 	}
-	// THE TASK'S OWN TERM, like every other point read here: a record
-	// this node cannot decode covering this task means the comment rows
-	// it is about to read may already be wrong, and routing a wake from
-	// them would wake the wrong people. Resolved from the rows, because
-	// the task is filed under its project and the query names only the
-	// task.
+	// The task's own term, like every point read here: an undecodable record
+	// covering it means the comment rows may be wrong, and a wake routed from
+	// them wakes the wrong people. Resolved from the rows, because the task
+	// is filed under its project and the query names only the task.
 	_, err := r.log.Read(ctx, fresh.Resolved(func(ctx context.Context,
 		tx *sql.Tx) (statelog.ScopeSet, error) {
 		return taskReadScope(ctx, tx, q.Task)
@@ -216,8 +190,7 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 		}
 		switch {
 		case posted != nil:
-			// THIS CALL MADE AGAIN, whose post landed: it asked and
-			// answers what its row says, and nothing is inferred.
+			// This call made again, whose post landed: nothing is inferred.
 			out.Asked, out.Answers = posted.Asked, posted.Answers
 		case out.Answers == "" && q.Author != "":
 			inferred, err := inferAnswer(ctx, tx, q.Task, q.Author)
@@ -233,10 +206,9 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 		if err != nil {
 			return err
 		}
-		// A POSTED ANSWER IS NOT ASKED AGAIN WHETHER IT MAY BE GIVEN: it was
-		// given, and the decide answers it from its row whatever has become
-		// of the question since. The choice is still checked, against a
-		// decision that never changes once asked.
+		// A posted answer was given, and the decide answers it from its row
+		// whatever became of the question since; only its choice is checked,
+		// against a decision that never changes once asked.
 		if posted == nil {
 			if err := ask.answerableBy(q.Author); err != nil {
 				return err
@@ -257,12 +229,10 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 
 // threadParticipants is everyone already in ONE thread.
 //
-// THE ROOT AND ITS REPLIES, resolved from whichever end the caller named: a
-// model replying to a reply names the reply, and the thread is still the one
-// hanging off the root. Ordered by the conversation's own order and cut at the
-// cap, so the sixteen carried are the sixteen who spoke FIRST — the people the
-// thread is actually between, rather than the sixteen who happened to arrive
-// last.
+// The root and its replies, from whichever end the caller named: a reply to a
+// reply is still in the thread off the root. Cut at the cap in conversation
+// order, so those carried are the ones who spoke FIRST, whom the thread is
+// between, not the latest arrivals.
 func threadParticipants(ctx context.Context, tx *sql.Tx, task, replyTo string) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, `
 		WITH root AS (
@@ -340,7 +310,7 @@ func threadStakes(ctx context.Context, tx *sql.Tx, task, replyTo, author string)
 		if len(awaiting) == MaxThreadParticipants {
 			break
 		}
-		// A CO-ASKER'S CHATTER: an author whose only stake is awaiting the
+		// A co-asker's chatter: an author whose only stake is awaiting the
 		// addressee this asker awaits does not wake it.
 		if author != "" && asker != author && !owes && slices.ContainsFunc(asked[asker],
 			func(a string) bool { return slices.Contains(asked[author], a) }) {
@@ -351,27 +321,14 @@ func threadStakes(ctx context.Context, tx *sql.Tx, task, replyTo, author string)
 	return owing, awaiting, nil
 }
 
-// inferAnswer is the one open ask addressed to this author, or nothing.
-//
-// INFERRED ONLY WHEN THERE IS EXACTLY ONE, and refused by name when there are
-// several: answering the wrong question closes somebody's ask silently, and
-// the two failures a caller could make here — naming none and naming the wrong
-// one — are not equally recoverable.
-//
-// NONE IS NOT AN ERROR. Most comments answer nothing, and a comment from
-// somebody with no open ask is the ordinary case rather than a mistake.
 // openAsksStatement is the open asks on one task addressed to one author,
-// oldest first, at most its last argument of them: the candidates
-// [inferAnswer] chooses among.
+// oldest first, at most its last argument of them: [inferAnswer]'s candidates.
 //
-// THE NON-EMPTY ASK IS STATED THOUGH `ask = ?` IMPLIES IT, because the index
-// this selects on is PARTIAL — over (task_id, ask), holding only the open
-// comments whose ask is not the empty string — and a planner matches a partial
-// index by SYNTACTIC implication. A bound parameter could be the empty string
-// as far as it can tell, so without the literal term the index is skipped and
-// this reads every comment on the task. Named, so the gate that holds it to
-// that index (TestTheOpenAskInferenceIsIndexServed) plans this text rather
-// than a copy a deletion here would leave green.
+// The non-empty ask is stated though `ask = ?` implies it: the index is PARTIAL
+// (task_id, ask over open comments with a non-empty ask), and a planner
+// matches one by SYNTACTIC implication, so without the literal it reads every
+// comment on the task. Named so TestTheOpenAskInferenceIsIndexServed plans
+// this text rather than a copy a deletion here would leave green.
 const openAsksStatement = `
 		SELECT id, author, body, document
 		FROM tracker_comments
@@ -380,6 +337,9 @@ const openAsksStatement = `
 		ORDER BY created_at, id
 		LIMIT ?`
 
+// inferAnswer is the one open ask addressed to this author, or nothing (most
+// comments answer nothing). Several are refused by name, never guessed:
+// answering the wrong question closes somebody's ask silently.
 func inferAnswer(ctx context.Context, tx *sql.Tx, task, author string) (string, error) {
 	rows, err := tx.QueryContext(ctx, openAsksStatement, task, author, MaxOpenAsksNamed+1)
 	if err != nil {
@@ -430,9 +390,8 @@ type openAsk struct {
 
 // readAsk reads the comment an answer names, with what answered it.
 //
-// ONE READ FOR BOTH CALLERS — the thread read that routes the wake, and the
-// write's own decide that makes the answer authoritative — because two
-// spellings of "is this ask still open" are how one of them stops agreeing.
+// One read for both callers, the thread read that routes the wake and the
+// write's decide, so their "is this ask still open" cannot disagree.
 func readAsk(ctx context.Context, tx *sql.Tx, task, comment string) (openAsk, error) {
 	out := openAsk{id: comment, task: task}
 	var resolved, removed int
@@ -478,24 +437,17 @@ func readAsk(ctx context.Context, tx *sql.Tx, task, comment string) (openAsk, er
 	return out, nil
 }
 
-// answerableBy is the check that this ask is an open question addressed to
-// this author — or, with author empty, to anybody, which is the decide's
-// re-check of the facts that can move between the thread read and the append.
+// answerableBy checks that this ask is an open question addressed to author,
+// or with author empty to anybody: the decide's re-check of what can move
+// between the thread read and the append.
 //
-// REFUSED RATHER THAN IGNORED. An `answers` naming a comment that asked
-// somebody else would close that person's question on their behalf, one
-// naming a comment that is not an ask would stamp a remark as answered, and
-// one naming a question already answered would land a second answer beside
-// the first — which the applier's `answered_by IS NULL` guard kept off the
-// ask while the answering comment still claimed to answer it.
-//
-// NO ANSWER ALREADY POSTED IS ASKED: an ask the comment being written already
-// answered is that comment's call made again, which both callers resolve from
-// the comment's own row before asking this ([postedComment]). So an ask
-// answered here is answered by another comment, always.
-//
-// The rows and the author are seat handles, compared as such, and every
-// refusal NAMES them, because the caller reads the refusal to find the person.
+// Refused rather than ignored: an `answers` naming another's ask would close
+// their question for them, a non-ask would stamp a remark answered, and an
+// answered question would get a second answer the applier's `answered_by IS
+// NULL` guard keeps off the ask while the comment claims it. An answer this
+// comment already posted never reaches here (both callers resolve it from its
+// row, [postedComment]), so an answered ask was answered by another comment.
+// Every refusal names the seat handles, so the caller can find the person.
 func (a openAsk) answerableBy(author string) error {
 	switch {
 	case a.asked == "":
@@ -523,9 +475,7 @@ func (a openAsk) answerableBy(author string) error {
 
 // MaxOpenAsksNamed is how many candidates an ambiguous-answer refusal lists.
 //
-// FIVE, which is what a refusal a model READS can carry without becoming a
-// wall: past that the answer is "read the task", and the message says so. It
-// bounds the query too, which is why it is a constant rather than a slice
-// length — the read takes one more than it will name, so it can tell "five"
-// from "at least five".
+// Five is what a refusal a model reads carries without becoming a wall; past
+// it the message says "read the task". It bounds the query too: the read
+// takes one more than it names, to tell "five" from "more than five".
 const MaxOpenAsksNamed = 5

@@ -111,18 +111,14 @@ func TestMailIsRetainedWithNothingAttached(t *testing.T) {
 	}
 }
 
-// TestPublishWithNoSubscriptionIsDropped pins the contract's stated
-// behaviour rather than treating it as a surprise: interest retention means
-// a message published where no subscription covers it is gone, which is
-// exactly why EnsureSubscription must run before anything publishes.
+// TestPublishWithNoSubscriptionIsDropped pins the contract: under interest
+// retention a message no subscription covers is gone, which is why
+// EnsureSubscription must run before anything publishes.
 //
-// PROVED BY ORDER, NOT BY A QUIET WINDOW. A second publish, made once the
-// subscription exists, is a SENTINEL: the subscription starts at the earliest
-// message the stream holds, so a first publish the stream had kept would be
-// delivered ahead of it. The first delivery being the sentinel is therefore
-// the proof, however long the broker took to drop the first — where "nothing
-// arrived within two seconds" spent two seconds on every run and proved only
-// that nothing arrived in them.
+// PROVED BY ORDER, NOT BY A QUIET WINDOW: the subscription starts at the
+// earliest message the stream holds, so a SENTINEL published once it exists
+// comes after anything kept. The first delivery being the sentinel is the
+// proof, however long the broker took to drop the first publish.
 func TestPublishWithNoSubscriptionIsDropped(t *testing.T) {
 	t.Parallel()
 	q := newQueue(t)
@@ -288,13 +284,11 @@ func TestBatchCoalescesByConversation(t *testing.T) {
 // TestMalformedSubjectsAreRefused guards the failure that never raises on
 // its own: a publish to a subject nobody can consume.
 //
-// Note what is NOT refused: a well-formed subject in a namespace the engine
-// does not itself define. The subject space belongs to the engine and its
-// extensions, not to this backend, so an unfamiliar namespace is provisioned
-// rather than rejected. Only subjects that cannot be consumed at all are
-// errors — and an EMPTY SEGMENT is the important one, because that is what
-// an unroutable handle produces (crewlet.agent..inbox), a real subject
-// nobody subscribes to that would swallow events in silence.
+// A well-formed subject in a namespace the engine does not define is NOT
+// refused: the subject space belongs to the engine and its extensions, so it
+// is provisioned. An EMPTY SEGMENT matters most: an unroutable handle makes
+// one (crewlet.agent..inbox), a real subject nobody subscribes to that would
+// swallow events in silence.
 func TestMalformedSubjectsAreRefused(t *testing.T) {
 	t.Parallel()
 	q := newQueue(t)
@@ -315,20 +309,12 @@ func TestMalformedSubjectsAreRefused(t *testing.T) {
 // A SUBJECT WHOSE STREAM THE BROKER WILL NOT MAKE IS REFUSED IN A ROUND TRIP,
 // with the broker's own reason and nothing appended to it.
 //
-// `crewlet.events` matches no stream the engine defines — every one of them
-// needs a segment past it — so it derives a namespace stream for `crewlet`,
-// whose subjects overlap every stream the engine does define, and the broker
-// refuses the create. That refusal used to fall through to the read-back kept
-// for a peer that won a create race: it polled for the whole read-back window
-// after a stream nobody was making, and then reported the overlap wrapped in
-// "(and it is not there: stream not found)" — on every publish, because only
-// a stream that exists is remembered.
-//
-// NOT READ BACK is read off the broker, never the clock: every request the
-// queue sends about the derived stream is listened for where the broker
-// receives it, in the order it read them, and none may follow the refused
-// create. It used to be the publish held under the read-back window by the
-// test's clock, which a runner that lost five seconds in the publish failed.
+// `crewlet.events` matches no engine stream, so it derives a namespace stream
+// for `crewlet` overlapping all of them, and the broker refuses the create.
+// Read back like a peer's create-race win, the refusal would poll the whole
+// read-back window on every publish and arrive wrapped in "it is not there".
+// Judged off the broker, never the clock: no request about the derived stream
+// may follow the refused create.
 //
 // Mutation: read a refused create back as a peer's win is, and info requests
 // follow the create.
@@ -367,17 +353,12 @@ func TestAStreamTheBrokerRefusesIsNotReadBack(t *testing.T) {
 
 func TestAClusteredServerMustBeNamed(t *testing.T) {
 	t.Parallel()
-	// Refused rather than defaulted, because both halves of the
-	// requirement matter and only one is obvious. Unique: NATS rejects a
-	// route from a server whose name it already knows, so a fleet of
-	// identically-named members never forms — which is what every embedded
-	// server in this package used to be. Stable: JetStream places replicas
-	// by server name, so a member returning under a new name is a new
-	// peer, its old replicas are stranded on a server that no longer
-	// exists, and the stream sits below quorum waiting for it.
-	//
-	// A generated name satisfies the first and quietly breaks the second on
-	// every restart, which is why this is an error and not a default.
+	// Refused rather than defaulted. Unique: NATS rejects a route from a
+	// server whose name it already knows, so identically-named members
+	// never form a fleet. Stable: JetStream places replicas by server
+	// name, so a member back under a new name is a new peer, its old
+	// replicas stranded and the stream below quorum. A generated name
+	// meets the first and breaks the second on every restart.
 	_, err := StartServer(t.Context(), Config{ClusterName: "unnamed", ClusterPort: 0})
 	if err == nil {
 		t.Fatal("a clustered server started with no ServerName")
@@ -525,41 +506,17 @@ func selfSignedPEM(t *testing.T) (certPEM, keyPEM []byte) {
 }
 
 // THE LINGER WINDOW IS FIXED, NOT SLIDING: it ends at its opening plus its
-// length, whatever arrives inside it.
+// length, whatever arrives. The config doc's `0` adds no latency and the 60 s
+// ceiling (collection plus one handler run inside the 30-minute ack budget)
+// both rest on it.
 //
-// The drain used to end only on a fetch that produced NOTHING and a passed
-// deadline, so any arrival kept collection going: under a steady trickle the
-// real bound was maxBatch × drainWait rather than the window an operator set.
-// That matters twice over — the config doc promises `0` adds no latency, and
-// the 60 s ceiling on the window is justified by "collection plus one handler
-// run must fit inside the 30-minute ack budget", which is only an argument if
-// collection is actually bounded by the window.
-//
-// HELD ON A CLOCK THE CASE MOVES (Config.clock), never on arrivals paced
-// against the wall clock. This published a trickle for five times the window
-// and asserted the first batch had not run to the cap; on a runner slow enough
-// that each publish outlasted the window every fetch came back empty, and a
-// window that moved its end with each arrival — or the old one, ended only by
-// an empty fetch — closed on time and passed (measured, a quarter of a second
-// per publish).
-//
-// THE ORDER, every step behind a signal and none behind elapsed time: the
-// first event opens the window (Lingering), the clock moves halfway through
-// it, the second event is published and the broker has handed it to the drain
-// (its consumer counts both delivered and neither settled), and only then does
-// the clock move to the window's original end. The window flushes there, both
-// events in it, by the handler's own reading of the clock. One that moved its
-// end with the arrival is still open there and never flushes, since the clock
-// moves no further.
-//
-// An arrival in every fetch past the end, which the old slide needed to keep
-// going, is the broker's timing to give rather than the case's to arrange:
-// TestTheLingerWindowEndsAtItsDeadlineWhateverItsFetchesBring holds the drain
-// to that, fetch by fetch.
-//
-// Mutation: move the window's end to each arrival, and it never flushes; keep
-// it on the wall clock, whatever clock the drain was handed, and a window of a
-// minute never flushes inside the bound either.
+// On a clock the case moves (package doc, "A linger window ends on a clock
+// the conformance suite can move"), each step behind a signal: the first event
+// opens the window (Lingering), the clock moves halfway, the second reaches
+// the drain (awaitHandedOver), and the clock moves to the original end, where
+// both must flush; TestTheLingerWindowEndsAtItsDeadlineWhateverItsFetchesBring
+// holds it fetch by fetch. Mutation: slide the end with each arrival, or keep
+// it on the wall clock, and it never flushes.
 func TestTheLingerWindowDoesNotSlideWithArrivals(t *testing.T) {
 	t.Parallel()
 	// A minute, which on this clock costs nothing, and which a drain that

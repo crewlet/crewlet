@@ -24,17 +24,14 @@ func importTool(t *testing.T, writer *codeWrites) tools.SeatCallable {
 		builtin.CodeImportRepoTool)
 }
 
-// ONLY A PERSON IMPORTS: the authority table's row is human-only — an import
-// has Gitlet dial another host for the company, which a model's say-so
-// would point anywhere (U49 a) — so a seat, whatever it holds, is refused by
-// the table before anything is read; a token bound to nobody is refused as
-// every code write is (gitlet.UnboundDetail); and a credential that is not a
-// variable's NAME — a token pasted where its name belongs — is refused before
-// anything is sent. Nothing is sent for any of them. A person bound to a seat
-// creates the project, as themselves, with its source on the create: an
-// import's URL and the `${NAME}` reference the record carries, or — asked for
-// a mirror — the same on its settings' pull mirror and no import beside it;
-// and is answered with the repository `importing`.
+// ONLY A PERSON IMPORTS: the authority table's row is human-only, so a seat,
+// whatever it holds, is refused before anything is read; a token bound to
+// nobody is refused as every code write is (gitlet.UnboundDetail); and a
+// credential that is not a variable's NAME (a pasted token) is refused before
+// anything is sent. A person bound to a seat creates the project as themselves,
+// the source on the create — the import's URL and the `${NAME}` reference, or
+// for a mirror the same on the settings' pull mirror and no import — and is
+// answered with the repository `importing`.
 //
 // Mutation: drop humanOnly from code_import_repo's row, or let `mirror` put
 // the source on the import → red.

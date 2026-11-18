@@ -21,9 +21,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// quiet keeps a benchmark's output to its figures: every estate a benchmark
-// opens logs at info, and an info line in the middle of benchmark output is a
-// line benchstat cannot read (`make bench` runs this package).
+// quiet keeps a benchmark's output to its figures: an estate logs at info, and
+// benchstat cannot read an info line amid the figures (`make bench` runs this
+// package).
 func quiet(b *testing.B) {
 	logging.SetVerbosity(slog.LevelWarn, logging.FormatConsole)
 	b.Cleanup(func() { logging.SetVerbosity(slog.LevelInfo, logging.FormatConsole) })
@@ -31,9 +31,8 @@ func quiet(b *testing.B) {
 
 // widestPushRow is the commands and introduced ids of the widest row a push
 // stores: MaxCommandsPerPush commands at MaxRefNameBytes refs, each refused
-// with the longest code a command records, and MaxIntroduced ids — about
-// 470 KB, which is what makes code_pushes the domain's widest table, some
-// fourteen times a change's body at MaxChangeBodyBytes.
+// with the longest code a command records, and MaxIntroduced ids. About 470 KB,
+// some fourteen times a body at MaxChangeBodyBytes: the domain's widest row.
 func widestPushRow(b *testing.B) (commands, introduced string) {
 	b.Helper()
 	longest := Refusal("")
@@ -61,8 +60,8 @@ func widestPushRow(b *testing.B) (commands, introduced string) {
 }
 
 // seedWide writes n push rows of a repository at the widest a row can be,
-// stamped at the epoch — expired by decades, so the history horizon may take
-// them, and oldest first, so a purge takes them first.
+// stamped at the epoch, so the history horizon may take them and a purge takes
+// them first.
 func (e *estate) seedWide(b *testing.B, id string, n int) {
 	b.Helper()
 	commands, introduced := widestPushRow(b)
@@ -83,8 +82,7 @@ func (e *estate) seedWide(b *testing.B, id string, n int) {
 }
 
 // seedNarrow writes n push rows of a repository of about a kilobyte each,
-// stamped at the epoch — the history of a repository whose pushes move a few
-// refs each.
+// stamped at the epoch: pushes moving a few refs each.
 func (e *estate) seedNarrow(id string, n int) {
 	e.t.Helper()
 	commands := `[` + strings.Repeat(`{"ref":"refs/heads/main","result":"ok"},`, 25) +
@@ -111,7 +109,7 @@ func (e *estate) seedSpread(id string, n, days int) {
 
 // seedChangeRows writes changes of a repository, numbered from 1, each with
 // revisions revisions, authors authors and, where body is not 0, a body of
-// that many bytes, which its change weighs — the rows a purge part walks.
+// that many bytes its change weighs: the rows a purge part walks.
 func (e *estate) seedChangeRows(id string, changes, revisions, authors, body int) {
 	e.t.Helper()
 	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
@@ -141,10 +139,10 @@ func (e *estate) seedChangeRows(id string, changes, revisions, authors, body int
 	e.rederive()
 }
 
-// seedNotices writes perChange notices of each of a repository's first
-// changes changes seedChangeRows wrote — each read by a handle of its own and
-// carrying an excerpt at MaxNoticeExcerpt, the widest a notice is — and
-// counts them on their change, as the applier does (code_changes.notices).
+// seedNotices writes perChange notices on each of a repository's first changes
+// changes (seedChangeRows), each to a handle of its own with an excerpt at
+// MaxNoticeExcerpt, the widest notice, and counts them on their change as the
+// applier does (code_changes.notices).
 func (e *estate) seedNotices(id string, changes, perChange int) {
 	e.t.Helper()
 	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
@@ -157,13 +155,11 @@ func (e *estate) seedNotices(id string, changes, perChange int) {
 	e.exec(`UPDATE code_changes SET notices = ? WHERE repo_id = ? AND number <= ?`, perChange, id, changes)
 }
 
-// seedLiveChanges writes n live changes of a repository at one revision each,
-// as seedChangeRows does, and what a live change stands on: its source branch
-// (liveSource), live at the change's head (liveHead) and counted, as a push's
-// apply counts a branch; and the operator every pushEntry and benchProposal
-// names ("op") as one of its authors, as a bot that pushed the changes it now
-// pushes again is — so a push moving one costs its record the change's row and
-// its revision, and no author: the most changes one record can move.
+// seedLiveChanges writes n live changes of a repository at one revision each
+// (seedChangeRows), each source branch (liveSource) live at its head
+// (liveHead) and counted, and "op", whom every pushEntry and benchProposal
+// names, as an author of each: so a push moving one costs its record the
+// change's row and revision but no author, the most changes one record moves.
 func (e *estate) seedLiveChanges(id string, n int) {
 	e.t.Helper()
 	e.seedChangeRows(id, n, 1, 0, 0)
@@ -181,14 +177,12 @@ func (e *estate) seedLiveChanges(id string, n int) {
 func liveSource(i int) string { return fmt.Sprintf("refs/heads/change-%06d", i) }
 func liveHead(i int) string   { return fmt.Sprintf("%040d", i) }
 
-// rebasingChanges is the shape of the record that moves the most live
-// changes: heads, a push of MaxCommandsPerPush fast-forwards of changes'
-// sources by a pusher already their author — a ref, and the change's row and
-// its revision, each — and closes, a push deleting the sources of as many
-// more changes as the record's rows leave beside it — a ref, the sweep's room
-// for its tombstone and the object it left ([commandRows]), and the change's
-// row, each. Counted as the push decide counts a record's rows, which
-// [estate.decidedRecord] holds the shape to.
+// rebasingChanges is the record that moves the most live changes: heads, a
+// push of MaxCommandsPerPush fast-forwards of sources by their author (a ref,
+// the change's row and its revision each), and closes, a push deleting as many
+// more sources as the record's rows leave (a ref, the sweep's room for its
+// tombstone and the object it left ([commandRows]), and the change's row
+// each). Counted as the push decide counts; [estate.decidedRecord] holds it.
 func rebasingChanges() (heads, closes int) {
 	heads = MaxCommandsPerPush
 	moving := PushEntry{Pack: &PackRef{}, Commands: make([]Command, heads)}
@@ -207,13 +201,11 @@ func rebasingChanges() (heads, closes int) {
 	}
 }
 
-// decidedRecord is the record the push decide forms over e's rows of repo
-// from pushes — each proposed as its commands, undecided, with a pack minted
-// at the decide's instant — failing b unless it admits every one whole into
-// one record within MaxRecordRows, as a committer appends it: so a record a
-// benchmark applies is one a committer forms, its change rows counted by the
-// decide that holds the record to its bound ([estate.admitted]'s rule, for a
-// push). It answers the record's entries and those change rows ([changeBook]).
+// decidedRecord is the record the push decide forms over e's rows of repo from
+// pushes (undecided, each pack minted at the decide's instant), failing b
+// unless every push is in it whole within MaxRecordRows: a benchmark applies
+// only a record a committer forms ([estate.admitted]'s rule, for a push). It
+// answers the entries and the change rows the decide counted ([changeBook]).
 func (e *estate) decidedRecord(b *testing.B, repo string, pushes []PushEntry) ([]PushEntry, int) {
 	b.Helper()
 	batch := make([]Proposal, len(pushes))
@@ -257,9 +249,8 @@ func (e *estate) decidedRecord(b *testing.B, repo string, pushes []PushEntry) ([
 	return entries, changeRows
 }
 
-// changeRowsOf is every row of a repository's changes seedChangeRows wrote
-// that the estate still holds, revisions, authors and bodies found by their
-// ids.
+// changeRowsOf counts the rows of a repository's changes (seedChangeRows) the
+// estate still holds, revisions, authors and bodies found by their ids.
 func (e *estate) changeRowsOf(id string) int64 {
 	e.t.Helper()
 	prefix := id + "-change-%"
@@ -279,9 +270,8 @@ func (e *estate) seedTombstones(id string, n int, at time.Time) {
 	e.exec(`UPDATE code_repos SET tombstones = tombstones + ? WHERE id = ?`, n, id)
 }
 
-// applyTimed applies one record into the estate inside the benchmark's timer
-// — Apply and the commit, which is the time it holds the write lane — and
-// holds the rows it reported to at least rows.
+// applyTimed times one record's Apply and commit, the time it holds the write
+// lane, and holds the rows it reported to at least rows.
 func (e *estate) applyTimed(b *testing.B, a *Applier, r built, rows int) {
 	b.Helper()
 	ctx := context.Background()
@@ -309,11 +299,9 @@ func (e *estate) applyTimed(b *testing.B, a *Applier, r built, rows int) {
 
 // fullest is the pushes of the record the committer forms with the most
 // commands of one kind: pushes of MaxCommandsPerPush commands, each with its
-// pack, and a last push of whatever room the record's row bound leaves —
-// held, by [rowBound] and [recordRows] themselves, to leave the bound no
-// room for another command, so a shape priced or applied here is one the
-// committer admits and the largest of its kind. command is the c-th command
-// of push p.
+// pack, and a last push of what the row bound leaves, held by [rowBound] and
+// [recordRows] themselves to leave no room for another command. command is
+// the c-th command of push p.
 func fullest(tb testing.TB, prefix string, i int, command func(p, c int) Command) []PushEntry {
 	tb.Helper()
 	var entries []PushEntry
@@ -341,74 +329,18 @@ func fullest(tb testing.TB, prefix string, i int, command func(p, c int) Command
 	return entries
 }
 
-// BenchmarkApplyAPushRecord is a push record APPLIED AND COMMITTED — the time
-// it holds the replicated estate's one write lane, which every other domain's
-// applier on the node waits behind — into a repository of its own each
-// iteration, set up outside the timer: one holding 10 000 refs, or, for the
-// sweeps, one holding expired tombstones. Its shapes are the records the
-// committer forms and the ones the horizons make longest:
-//
-//   - maximal: the most ref creations a record the committer forms carries —
-//     three pushes of MaxCommandsPerPush and a fourth of the 921 the row
-//     bound leaves, 3 930 rows and the day and pusher rows they are counted
-//     in, with nothing left for the sweep, since it makes no tombstone;
-//   - maximal+history: that, with HorizonDeletesPerRecord expired push rows
-//     waiting, each at the widest a row can be — the history's removal is
-//     bounded by HorizonBytesPerRecord and takes three of them;
-//   - group: MaxPushesPerRecord pushes of one command each, what group commit
-//     turns a CI's burst of tag pushes into;
-//   - group+pushers: that, each push by a seat of its own: a pusher day each;
-//   - one: one push of one command, the common case;
-//   - one+history: that, with HorizonDeletesPerRecord expired push rows each on
-//     a day and by a pusher of its own: the activity's widest move;
-//   - sweep: one push of one command whose record sweeps every expired
-//     tombstone its row budget leaves room for — 3 995;
-//   - deletions: the most ref deletions a record the committer forms carries
-//     (a push of MaxCommandsPerPush and one of the 309 left), each deletion
-//     counted three times in the bound (rowBound: its tombstone, the sweep's
-//     room for one and the object it left), at a repository holding
-//     MaxTombstonesPerRepo expired tombstones, so the record writes 1 309
-//     tombstones and as many ref drops and sweeps the 1 376 its rows leave:
-//     the most rows a record can both write and delete;
-//   - deletions+history: that, with the widest expired push rows waiting too
-//     — the longest shape of a record that moves no live change;
-//   - removal: three pushes of MaxCommandsPerPush ref deletions at a
-//     repository already holding MaxTombstonesPerRepo fresh tombstones, so
-//     the record writes its deletions as removals and the objects they left
-//     as 3 000 ref drops — a record no committer of this build forms (it
-//     counts each deletion three times, and two such pushes never share a
-//     record), whose cost the applier still bounds;
-//   - expiry: one push of one command at a repository holding MaxRecordRows
-//     ref drops past their grace, whose record forgets every one its row
-//     budget leaves room for — 3 996, the drops' counterpart of sweep;
-//   - forced: one push of MaxCommandsPerPush forced updates at a repository
-//     holding MaxRecordRows ref drops past their grace, so the record writes
-//     a thousand refs and as many drops and forgets the 1 997 its rows leave
-//     — the most drops a record both writes and forgets;
-//   - changes: the most live changes one record moves — a push moving the
-//     heads of MaxCommandsPerPush of them by a pusher already their author,
-//     which costs each change its row and its revision beside its ref, then
-//     one deleting the sources of as many more as the record's rows leave,
-//     which closes them (rebasingChanges): 1 231 changes, each row
-//     rewritten, the bulk rebase a bot's force-push of every change it
-//     rebased makes;
-//   - group+changes: MaxPushesPerRecord pushes of one command each, each
-//     moving the head of a live change of its own — group commit, where
-//     every push is a change's next revision;
-//   - notices: one small push whose routing tells the most handles its rows
-//     leave room for — it merges sixty-one changes, each telling
-//     MaxRoutedParticipants authors of its own — so its apply writes 3 904
-//     notices and counts them on their changes: the notice write at its
-//     widest, on every data node.
-//
-// The two change arms are DECIDED over the rows before they are applied
+// BenchmarkApplyAPushRecord is a push record APPLIED AND COMMITTED, the time it
+// holds the replicated estate's one write lane that every other domain's
+// applier on the node waits behind, into a repository of its own each
+// iteration, set up outside the timer (10 000 refs unless its shape seeds
+// otherwise). Its shapes, each described at its entry, are the records the
+// committer forms and the ones the horizons make longest; removal alone is a
+// record no committer of this build forms, whose cost the applier still
+// bounds. The change shapes are decided over the rows first
 // ([estate.decidedRecord]), since what a record writes about changes is what
-// the repository holds: so each is a record the committer forms, its change
-// rows counted by the decide that holds it to MaxRecordRows.
-//
-// Each is held against statelog.ApplyTxTimeBudget (250 ms), which a record
-// is checked against only at its boundary; doc.go's measured section records
-// the figures.
+// the repository holds. Each is held against statelog.ApplyTxTimeBudget
+// (250 ms), checked only at a record's boundary; doc.go's "Measured" section
+// records the figures.
 func BenchmarkApplyAPushRecord(b *testing.B) {
 	quiet(b)
 	// A PUSH ID IS THE FLEET'S, not the repository's, so every iteration's
@@ -540,42 +472,53 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 		seed    func(e *estate, repo string)
 		history bool
 		rows    int
-		// decide is a shape decided over the rows before it is applied
-		// ([estate.decidedRecord]), whose rows are its entries' and the
-		// change rows the decide counted; revised and closed are the
-		// changes its record must leave at their second revision and
-		// closed.
+		// decide shapes are decided over the rows first, their rows their
+		// entries' and the change rows the decide counted; revised and closed
+		// are the changes the record must leave at revision 2 and closed.
 		decide          bool
 		revised, closed int
 	}{
+		// MAXIMAL: the most ref creations a record carries (fullest), nothing
+		// left for the sweep since it makes no tombstone; +history waits
+		// HorizonDeletesPerRecord of the widest expired push rows, of which
+		// HorizonBytesPerRecord bounds the removal to three.
 		{name: "maximal", entries: maximal, rows: written(maximal(0))},
 		{name: "maximal+history", entries: maximal, history: true, rows: written(maximal(0))},
+		// GROUP: what group commit turns a CI's burst of tag pushes into.
 		{name: "group", entries: group, rows: 2 * MaxPushesPerRecord},
 		// THE ACTIVITY AT ITS WIDEST: a pusher day an entry, and one move of every expired row's day and
 		// pusher day down beside the push's up.
 		{name: "group+pushers", entries: pushers, rows: 2*MaxPushesPerRecord + 1 + MaxPushesPerRecord},
+		// ONE: the common case; +history waits HorizonDeletesPerRecord expired
+		// rows, each on a day and by a pusher of its own: the activity's widest move.
 		{name: "one", entries: one, rows: 3},
 		{name: "one+history", entries: one, seed: func(e *estate, repo string) {
 			e.seed(repo, 0, 10_000, 0)
 			e.seedSpread(repo, HorizonDeletesPerRecord, HorizonDeletesPerRecord)
 		}, rows: 3 + HorizonDeletesPerRecord + 2 + 2*HorizonDeletesPerRecord},
+		// SWEEP: every expired tombstone the row budget leaves room for.
 		{name: "sweep", entries: one, seed: func(e *estate, repo string) {
 			e.seedTombstones(repo, MaxRecordRows, expired)
 		}, rows: MaxRecordRows},
-		// EVERY ROW OF THE BUDGET TOUCHED: the deletions' tombstones and
-		// their record's own rows, and the sweep taking what they leave.
+		// EVERY ROW OF THE BUDGET TOUCHED: the most deletions a record carries,
+		// each three rows in the bound (rowBound: its tombstone, the sweep's
+		// room for one, the object it left), and the sweep taking what they
+		// leave of MaxTombstonesPerRepo expired: the most rows a record both
+		// writes and deletes. +history is the longest record moving no change.
 		{name: "deletions", entries: deleting, seed: deletionsAt, rows: MaxRecordRows},
 		{name: "deletions+history", entries: deleting, seed: deletionsAt, history: true, rows: MaxRecordRows},
 		// A RECORD THAT REMOVES: every ref it deletes at a repository already
 		// holding MaxTombstonesPerRepo fresh tombstones, which no sweep can
-		// take, so its 3 000 deletions are removals rather than rows — each
-		// still writing the object it left.
+		// take, so its 3 000 deletions are removals rather than rows, each
+		// still writing the object it left. No committer forms it: two such
+		// pushes never share a record.
 		{name: "removal", entries: removing, seed: func(e *estate, repo string) {
 			e.seed(repo, 0, 3*MaxCommandsPerPush, 0)
 			e.seedTombstones(repo, MaxTombstonesPerRepo, applyClock.Add(-time.Hour))
 		}, rows: 3 * (1 + 2*MaxCommandsPerPush + 1)},
 		// EVERY ROW OF THE BUDGET TOUCHED BY THE DROPS: the record's own rows
-		// and the expiry forgetting what they leave.
+		// and the expiry forgetting what they leave; forced writes a thousand
+		// drops too, the most a record both writes and forgets.
 		{name: "expiry", entries: one, seed: func(e *estate, repo string) {
 			e.seedDrops(repo, 1, expired, MaxRecordRows)
 		}, rows: MaxRecordRows},
@@ -583,14 +526,15 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 			e.seed(repo, 0, MaxCommandsPerPush, 0)
 			e.seedDrops(repo, 1, expired, MaxRecordRows)
 		}, rows: MaxRecordRows},
-		// EVERY CHANGE ROW A RECORD CAN REWRITE: the heads and the closes
-		// of rebasingChanges, and a group of revisions.
+		// EVERY CHANGE ROW A RECORD CAN REWRITE: rebasingChanges, a bot's
+		// force-push of every change it rebased, and a group whose every push
+		// is a change's next revision.
 		{name: "changes", entries: rebasing, seed: liveAt(heads + closes), decide: true, revised: heads,
 			closed: closes},
 		{name: "group+changes", entries: revising, seed: liveAt(MaxPushesPerRecord), decide: true,
 			revised: MaxPushesPerRecord},
 		// EVERY ROW THE PUSH'S OWN LEAVE A NOTICE OR A COUNT: the widest
-		// routing, against the changes it names.
+		// routing, against the changes it names: the notice write at its widest.
 		{name: "notices", entries: noticing, seed: func(e *estate, repo string) {
 			e.seed(repo, 0, 10_000, 0)
 			e.seedChangeRows(repo, merged, 1, 1, 0)
@@ -657,56 +601,14 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 	}
 }
 
-// BenchmarkApplyAPurgePart is a purge record APPLIED AND COMMITTED, in each of
-// the shapes its bounds allow, into a repository of its own each iteration,
-// seeded outside the timer:
-//
-//   - narrow: PurgePartRows push rows of about a kilobyte, which the row
-//     bound stops at;
-//   - pushers: PurgePartRows push rows over 182 days, each by its own pusher,
-//     so the part moves their days and pusher days on top of its rows;
-//   - left: PurgePartRows pusher days no push stands for, which a part finding
-//     no push takes;
-//   - wide: a hundred push rows at the widest a row can be, which the byte
-//     bound stops at — about seventy-two of them, PurgePartBytes and at most
-//     one row past it;
-//   - wide+refs: the widest rows short of PurgePartBytes and as many refs as
-//     PurgePartRows leaves, which neither bound cuts — the most one part can
-//     take of push rows and narrow ones;
-//   - final: the purge itself over what wide+refs seeds, with
-//     MaxProtectionsPerRepo rules: the most the gate record's unbounded
-//     statements can meet, since the decide forms it only once what is left
-//     fits a part;
-//   - changes: a quarter of PurgePartRows changes of a revision, an author
-//     and a body at MaxChangeBodyBytes, which the part takes whole — the most
-//     changes one part's walk counts and its four deletes take, with 24 MiB
-//     of bodies;
-//   - wide+changes: the widest rows short of PurgePartBytes, then a thousand
-//     such changes: the bodies share the pushes' bytes, so the part takes only
-//     the few whose bodies fill what the pushes left — weighed by their rows
-//     alone it would take them to the row bound, 732 of them and 24 MB more;
-//   - wide+bodies: both bounds at once — as many such changes as the rows
-//     leave room for beside the widest rows that fill what their bodies leave
-//     of PurgePartBytes: the most one part can take of push rows and changes;
-//   - final+bodies: the purge itself over what wide+bodies seeds, with
-//     MaxProtectionsPerRepo rules;
-//   - cut: one change of PurgePartRows revisions, an author and a body at the
-//     bound, which the part cuts, its oldest revisions first, leaving the
-//     author, the body and the row;
-//   - notices: changes of a revision, an author and the notices of the
-//     widest audience one comment tells — MaxRoutedParticipants of its
-//     thread, MaxMentions and its raiser, each excerpt at MaxNoticeExcerpt —
-//     a hundred rows a change, which the part takes whole, thirty of them:
-//     PurgePartRows rows, 2 910 of them notices, each deleted and announced;
-//   - cut+notices: one change of a revision, an author and PurgePartRows
-//     notices, which the part cuts through its notices, oldest first, and
-//     takes what it charged off the change's count;
-//   - final+notices: the purge itself over twenty-nine such changes of a
-//     hundred rows, with MaxProtectionsPerRepo rules: the most notices its
-//     unbounded statements meet, since the decide counts them.
-//
-// Each is held against statelog.ApplyTxTimeBudget (250 ms), which cannot
-// split a record; doc.go's measured section records the figures.
+// BenchmarkApplyAPurgePart is a purge record APPLIED AND COMMITTED, in each
+// shape its bounds allow (described at its entry), into a repository of its
+// own each iteration, seeded outside the timer. The final shapes are the purge
+// itself with MaxProtectionsPerRepo rules: the most its gate record's
+// unbounded statements can meet, since the decide forms it only once what is
+// left fits a part. Each is held against statelog.ApplyTxTimeBudget (250 ms),
+// which cannot split a record; doc.go's "Measured" section records the
+// figures.
 func BenchmarkApplyAPurgePart(b *testing.B) {
 	quiet(b)
 	commands, introduced := widestPushRow(b)
@@ -748,19 +650,25 @@ func BenchmarkApplyAPurgePart(b *testing.B) {
 		// push rows and of the rows of its changes.
 		pushes, changes int
 	}{
+		// NARROW: push rows of about a kilobyte, which the row bound stops at.
 		{"narrow", func(e *estate, repo string) { e.seedNarrow(repo, PurgePartRows+500) },
 			false, PurgePartRows, 500, 0},
 		// THE ACTIVITY ON TOP: a part's pushes over every day the history keeps, each by its own pusher,
 		// and a part taking what is left of it once no push is.
 		{"pushers", func(e *estate, repo string) { e.seedSpread(repo, PurgePartRows+500, 182) },
 			false, PurgePartRows + 182 + PurgePartRows, 500, 0},
+		// LEFT: pusher days no push stands for, which a part finding no push takes.
 		{"left", func(e *estate, repo string) {
 			e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
 				INSERT INTO code_pusher_days (repo_id, day, pusher_kind, pusher, pushes)
 				SELECT ?, 0, 'person', printf('person-%06d', i), 1 FROM k`, PurgePartRows, repo)
 		}, false, PurgePartRows, 0, 0},
+		// WIDE: the widest push rows, which the byte bound stops at most one
+		// row past PurgePartBytes.
 		{"wide", func(e *estate, repo string) { e.seedWide(b, repo, 100) },
 			false, (PurgePartBytes + width - 1) / width, 100 - (PurgePartBytes+width-1)/width, 0},
+		// WIDE+REFS: the widest rows short of PurgePartBytes and the refs
+		// PurgePartRows leaves, which neither bound cuts; final purges it.
 		{"wide+refs", func(e *estate, repo string) {
 			e.seedWide(b, repo, under)
 			e.seed(repo, 0, PurgePartRows-under, 0)
@@ -770,12 +678,18 @@ func BenchmarkApplyAPurgePart(b *testing.B) {
 			e.seed(repo, 0, PurgePartRows-under, 0)
 			ruled(e, repo)
 		}, true, PurgePartRows + MaxProtectionsPerRepo, 0, 0},
+		// CHANGES at their widest, taken whole: the most changes one part's
+		// walk counts and its four deletes take, 24 MiB of bodies.
 		{"changes", func(e *estate, repo string) { bodied(e, repo, PurgePartRows/perChange) },
 			false, PurgePartRows, 0, 0},
+		// WIDE+CHANGES: the bodies share the pushes' bytes, so the part takes
+		// only those filling what the pushes left; weighed by rows alone it
+		// would take 732 and 24 MB more.
 		{"wide+changes", func(e *estate, repo string) {
 			e.seedWide(b, repo, under)
 			bodied(e, repo, 1000)
 		}, false, under + after*perChange, 0, (1000 - after) * perChange},
+		// WIDE+BODIES: both bounds at once (mixed, beside); final+bodies purges it.
 		{"wide+bodies", func(e *estate, repo string) {
 			e.seedWide(b, repo, mixed)
 			bodied(e, repo, beside)
@@ -785,8 +699,14 @@ func BenchmarkApplyAPurgePart(b *testing.B) {
 			bodied(e, repo, beside)
 			ruled(e, repo)
 		}, true, mixed + beside*perChange + MaxProtectionsPerRepo, 0, 0},
+		// CUT: one change's revisions taken oldest first, leaving its author,
+		// body and row.
 		{"cut", func(e *estate, repo string) { e.seedChangeRows(repo, 1, PurgePartRows, 1, MaxChangeBodyBytes) },
 			false, PurgePartRows, 0, 3},
+		// NOTICES: changes the widest comment's audience heard of, taken whole,
+		// each notice deleted and announced; cut+notices cuts one change's
+		// oldest first and takes them off its count; final+notices is the most
+		// notices the purge's unbounded statements meet.
 		{"notices", func(e *estate, repo string) { noticed(e, repo, wholeNoticed+10) },
 			false, wholeNoticed * perNoticed, 0, 10 * 3},
 		{"cut+notices", func(e *estate, repo string) {
@@ -832,19 +752,14 @@ func BenchmarkApplyAPurgePart(b *testing.B) {
 	}
 }
 
-// BenchmarkApplyARetireSweep is a retire_sweep record APPLIED AND COMMITTED —
-// the time it holds the replicated estate's one write lane, on every data node
-// — into a repository of its own each iteration, its retired rows seeded
-// outside the timer as one earlier record's retirements:
-//
-//   - rows=8: a sweep of a few rows, what the pass takes of a repository one
-//     small compaction retired from, whose cost is its commit's;
-//   - rows=3999: RetireSweepRows, the most rows one record removes.
-//
-// Each is held against statelog.ApplyTxTimeBudget (250 ms), which cannot split
-// a record; doc.go's measured section records the figures, and limits.go's
-// RetentionLaneShare and RetentionPassBudget reason from them beside
-// BenchmarkRetireSweepStep's whole step.
+// BenchmarkApplyARetireSweep is a retire_sweep record APPLIED AND COMMITTED,
+// the time it holds every data node's one write lane, into a repository of its
+// own each iteration, its retired rows seeded outside the timer as one earlier
+// record's: rows=8, a small compaction's few, whose cost is its commit's, and
+// RetireSweepRows, the most one record removes. Each is held against
+// statelog.ApplyTxTimeBudget (250 ms), which cannot split a record; doc.go's
+// "Measured" section records the figures, and limits.go's RetentionLaneShare
+// and RetentionPassBudget reason from them beside BenchmarkRetireSweepStep.
 func BenchmarkApplyARetireSweep(b *testing.B) {
 	quiet(b)
 	old := applyClock.Add(-RetireGrace - time.Hour)
@@ -872,23 +787,16 @@ func BenchmarkApplyARetireSweep(b *testing.B) {
 	}
 }
 
-// BenchmarkApplyALandRecord is a land record APPLIED AND COMMITTED — the
-// time it holds the replicated estate's one write lane, on every data node —
-// the queue's hot path: every change it lands merged by its enqueuer, every
-// entry landed, its train's landed candidates removed, a landing row an entry
-// and the green row moved, and a push an entry through the one apply every
-// push takes, the target moved onto the entry's commit and its source branch
-// deleted. Into a repository of its own each iteration, seeded outside the
-// timer as a train of the entries testing in candidates of MaxQueueBatch, its
-// changes live on their source branches:
-//
-//   - entries=1: a queue landing one change, what a quiet target lands;
-//   - entries=64: MaxLandEntries, the most one record lands — every entry
-//     deleting its source, so the most refs one landing moves.
-//
-// Each is held against statelog.ApplyTxTimeBudget (250 ms), which cannot split
-// a record; doc.go's measured section records the figures, and
-// MaxLandEntries reasons from them.
+// BenchmarkApplyALandRecord is a land record APPLIED AND COMMITTED, the time it
+// holds every data node's one write lane: the queue's hot path. Each change it
+// lands is merged by its enqueuer, each entry landed, its train's landed
+// candidates removed, a landing row an entry, the green row moved, and a push
+// an entry through the one apply every push takes, moving the target and
+// deleting the source. Seeded outside the timer as one train (seedLanding):
+// entries=1, a quiet target's, and MaxLandEntries, the most one record lands
+// and the most refs one landing moves. Each is held against
+// statelog.ApplyTxTimeBudget (250 ms), which cannot split a record; doc.go's
+// "Measured" section records the figures, and MaxLandEntries reasons from them.
 func BenchmarkApplyALandRecord(b *testing.B) {
 	quiet(b)
 	for _, n := range []int{1, MaxLandEntries} {
@@ -919,11 +827,10 @@ func BenchmarkApplyALandRecord(b *testing.B) {
 	}
 }
 
-// seedLanding writes what a land of n entries of repo lands over — n live
-// changes into main (seedLiveChanges), main at the landing's base, and the n
-// entries testing in one train, its candidates of MaxQueueBatch entries in
-// order — and answers that land: each entry onto the commit its candidate
-// built of it, deleting its source.
+// seedLanding writes what a land of n entries of repo lands over (n live
+// changes into main, main at the base, the entries testing in one train of
+// candidates of MaxQueueBatch) and answers that land: each entry onto the
+// commit its candidate built, deleting its source.
 func (e *estate) seedLanding(repo string, n int) Land {
 	e.t.Helper()
 	e.seedLiveChanges(repo, n)
@@ -958,21 +865,16 @@ func (e *estate) seedLanding(repo string, n int) Land {
 	return land
 }
 
-// BenchmarkApplyAQueueSweep is a queue_sweep record APPLIED AND COMMITTED —
-// the time it holds the replicated estate's one write lane, on every data node
-// — over a repository of its own each iteration holding QueueSweepRows ended
-// entries past QueueHistory, seeded outside the timer:
-//
-//   - narrow: landed entries, which weigh nothing, so the step is the
-//     QueueSweepRows its row bound cuts — a retire sweep's shape;
-//   - widest: conflict ejections, each naming MaxEjectedPaths paths within
-//     MaxConflictBytes, the widest row a sweep removes, so the step is the
-//     some 2 000 of them QueueSweepBytes cuts. Bounded by its rows alone, the
-//     step removed all 3 999, about 64 MiB of overflow pages.
-//
+// BenchmarkApplyAQueueSweep is a queue_sweep record APPLIED AND COMMITTED, the
+// time it holds every data node's one write lane, over a repository of its own
+// each iteration holding QueueSweepRows ended entries past QueueHistory:
+// narrow, landed entries weighing nothing, cut by the row bound; widest,
+// conflict ejections naming MaxEjectedPaths paths within MaxConflictBytes, the
+// widest row a sweep removes, cut by QueueSweepBytes at some 2 000 (by rows
+// alone the step would remove all 3 999, about 64 MiB of overflow pages).
 // Each is held against statelog.ApplyTxTimeBudget (250 ms), which cannot split
-// a record, and against the third of it PurgePartBytes is sized to; doc.go's
-// measured section records the figures, and QueueSweepBytes reasons from them.
+// a record, and the third of it PurgePartBytes is sized to; doc.go's
+// "Measured" section records the figures, and QueueSweepBytes reasons from them.
 func BenchmarkApplyAQueueSweep(b *testing.B) {
 	quiet(b)
 	paths := make([]string, MaxEjectedPaths)
@@ -989,9 +891,8 @@ func BenchmarkApplyAQueueSweep(b *testing.B) {
 	old := applyClock.Add(-QueueHistory - time.Hour)
 	for _, arm := range []struct {
 		name, ejected string
-		// swept is how many entries the step removes: every one, or as many
-		// as its bytes reach QueueSweepBytes with — the first whatever it
-		// weighs, and at most one past.
+		// swept is how many entries the step removes: every one, or those
+		// reaching QueueSweepBytes, at most one past it.
 		swept int
 	}{
 		{"narrow", "", QueueSweepRows},
@@ -1047,12 +948,10 @@ func (e *estate) seedEndedRows(repo string, n int, at time.Time, ejected string)
 	}
 }
 
-// widestCheck is the widest queued attempt and the widest ending of it a
-// writer forms, key's: every field at its bound, of text JSON escapes to six
-// bytes a character, as TestTheLargestCheckRecordsFitARecord builds them — so
-// the row they join to is the widest a check row can be, its definition
-// stored as the record carries it and its failures as JSON beside its
-// summary, tail and link.
+// widestCheck is the widest queued attempt and ending of it a writer forms for
+// key: every field at its bound, of text JSON escapes to six bytes a character
+// (as TestTheLargestCheckRecordsFitARecord builds them), so the row they join
+// to is the widest check row.
 func widestCheck(tb testing.TB, key CheckKey, at time.Time) (CheckQueued, CheckFinished) {
 	tb.Helper()
 	wide := func(n int) string { return strings.Repeat("&", n) }
@@ -1099,10 +998,9 @@ func widestCheck(tb testing.TB, key CheckKey, at time.Time) (CheckQueued, CheckF
 	return queued, ended
 }
 
-// seedPastTheHorizon writes one more failed check row of a repository than an
-// ending's horizon removes (CheckHorizonRows), each ended at the instant at,
-// each with its log and few bytes of its own — what a repository running a
-// narrow check on every push holds.
+// seedPastTheHorizon writes CheckHorizonRows+1 narrow failed check rows of a
+// repository, each ended at at and with its log: one more than an ending's
+// horizon removes.
 func (e *estate) seedPastTheHorizon(repo string, at time.Time) {
 	e.t.Helper()
 	n := CheckHorizonRows + 1
@@ -1124,34 +1022,22 @@ func (e *estate) seedPastTheHorizon(repo string, at time.Time) {
 }
 
 // BenchmarkApplyACheckRecord is a record on a repository's checks subject
-// APPLIED AND COMMITTED — the time it holds the replicated estate's one write
-// lane, on every data node — into a repository of its own each iteration, its
-// attempt's earlier records applied and its old rows seeded outside the timer.
-// Every data node applies every one of these records, four an attempt (queued,
-// claimed, its box named, ended), and every ending runs its repository's
-// horizon:
-//
-//   - claim: a runner's check_started of the widest queued attempt — a join
-//     reading the row whole and writing it back;
-//   - ending: the widest ending a writer forms (a failed run's, every field at
-//     its bound, with its log) of a claimed attempt, nothing of its
-//     repository past the history — an ending's own cost;
-//   - ending+narrow: that, with CheckHorizonRows+1 narrow rows past the
-//     history, each with its log, so its horizon removes CheckHorizonRows of
-//     them and their logs: the most rows an ending's apply touches;
-//   - ending+wide: that, with rows of the widest a check row can be past the
-//     history, each with its log, so its horizon removes them until their
-//     bytes reach CheckHorizonBytes — about a mebibyte of overflow pages, which
-//     a check row carries five secondary indexes beside.
-//
-// Each is held against statelog.ApplyTxTimeBudget (250 ms), which cannot
-// split a record; doc.go's measured section records the figures, and
-// CheckHorizonRows' and CheckHorizonBytes' docs reason from them.
+// APPLIED AND COMMITTED, the time it holds every data node's one write lane,
+// into a repository of its own each iteration, set up outside the timer.
+// Every data node applies four an attempt (queued, claimed, box named, ended),
+// and every ending runs its repository's horizon. claim is a runner's
+// check_started of the widest attempt, a join reading the row whole and
+// writing it back; ending is the widest ending alone; ending+narrow removes
+// CheckHorizonRows rows and logs, the most an ending touches; ending+wide
+// removes widest rows to CheckHorizonBytes, about a mebibyte of overflow
+// pages beside a check row's five secondary indexes. Each is held against
+// statelog.ApplyTxTimeBudget (250 ms); doc.go's "Measured" section records the
+// figures, and CheckHorizonRows' and CheckHorizonBytes' docs reason from them.
 func BenchmarkApplyACheckRecord(b *testing.B) {
 	quiet(b)
 	old := applyClock.Add(-CheckHistory - time.Hour)
 	// width is what a row of the widest attempt weighs, and through how many
-	// of them a horizon's bytes reach CheckHorizonBytes.
+	// of them a horizon reaches CheckHorizonBytes.
 	probe := CheckKey{RepoID: checkRepo, OID: oid("probe"), Target: "refs/heads/main", Name: "probe", Attempt: 1}
 	pq, pf := widestCheck(b, probe, applyClock)
 	pe, err := finishedPart(pf, applyContext{})
@@ -1206,8 +1092,7 @@ func BenchmarkApplyACheckRecord(b *testing.B) {
 					continue
 				}
 				e.apply(claim)
-				// ITS ROW, ITS LOG, AND EACH ROW ITS HORIZON REMOVES WITH ITS
-				// LOG.
+				// ITS ROW AND LOG, AND EACH ROW AND LOG ITS HORIZON REMOVES.
 				e.applyTimed(b, a, rec(b, subject, OpCheckFinished, scope, ended), 2+2*removed)
 				if left := e.num(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ?`, repo); left != held+1-int64(removed) {
 					b.Fatalf("the ending left %d of the repository's %d rows and its own, want its horizon to "+
@@ -1218,51 +1103,18 @@ func BenchmarkApplyACheckRecord(b *testing.B) {
 	}
 }
 
-// BenchmarkApplyACompaction is a compaction record APPLIED AND COMMITTED — the
-// time it holds the replicated estate's one write lane, on every data node —
-// into a repository of its own each iteration, holding MaxPacksPerRepo live
-// packs seeded outside the timer:
-//
-//   - inputs=8, 64 and MaxCompactInputs: a compaction of that many inputs
-//     into as many outputs as one of that many may write (at most
-//     MaxCompactOutputs), so every arm is the most rows its input count can
-//     touch — compactDecidedRows of them, every input retired and removed and
-//     every output written;
-//   - publication/inputs=0 and publication/inputs=1024: a PUBLICATION. The
-//     repository's chain is MaxPublishedLayers layers naming every live pack,
-//     MaxPacksPerRepo/MaxPublishedLayers of them a layer, each layer cut into
-//     MaxLayerParts parts and published as its packs arrived — every one
-//     decided and applied outside the timer. The publication's own layer, of
-//     MaxLayerParts parts, replaces every layer but the root — their
-//     MaxPublishedLayers−1 rows and their parts deleted — beside a repack of
-//     none of the packs they covered (545 rows) or of MaxCompactInputs of
-//     them into MaxCompactOutputs outputs: every bound at once, the 2 609
-//     rows compactDecidedRows counts. A publication's apply also reads what
-//     no other compaction's does — the chain whole before, 2 048 checksums
-//     here, and the live packs again for the recount after — so the widest
-//     record of the op is publication/inputs=1024, not inputs=1024;
-//   - expunge/begin: an expunge's BEGIN, the other rewrite that takes a
-//     compaction's bound on its inputs, at every bound at once: the chain the
-//     publication arms seed, MaxExpungeInputs inputs — the first packs, which
-//     the root names, so it drops every layer and its parts — into
-//     MaxExpungeOutputs outputs, half kept live and half left dropping: the
-//     2 625 rows expungeBeginRows counts, the widest record the code domain
-//     forms, beside the chain read whole before and the live packs again for
-//     the recount after;
-//   - expunge/commit: the COMMIT of a purge's begin of MaxExpungeInputs inputs
-//     that left MaxExpungeOutputs packs dropping, retiring them all into as
-//     many rescue packs — expungeCommitRows' 97 rows — and judging the open
-//     request by one seek of the packs' content index.
-//
-// Every shape is held to what a committer forms: its proposal is Validated and
-// decided over the rows, outside the timer, before its record is applied.
-//
-// inputs=1024, publication/inputs=1024 and expunge/begin are held under a third
-// of statelog.ApplyTxTimeBudget, which a record is checked against only at its
-// boundary: MaxCompactInputs is halved until the first is, a publication's
-// repack bounded below it until the second is, and MaxExpungeInputs halved
-// below MaxCompactInputs until the third is (their docs, and doc.go's
-// measured section).
+// BenchmarkApplyACompaction is a compaction record APPLIED AND COMMITTED, the
+// time it holds every data node's one write lane, into a repository of its own
+// each iteration holding MaxPacksPerRepo live packs, seeded outside the timer
+// and held to what a committer forms ([estate.admitted]). inputs=N writes as
+// many outputs as N inputs may, the most rows N can touch; a publication
+// replaces every layer of a full chain but the root (widestPublication) and
+// also reads the chain whole and recounts the live packs, so
+// publication/inputs=1024, not inputs=1024, is the op's widest; expunge/begin
+// (widestBegin) is the code domain's widest record; expunge/commit is
+// widestCommit. The 1024 arms and expunge/begin are held under a third of
+// statelog.ApplyTxTimeBudget, which sizes MaxCompactInputs, a publication's
+// repack and MaxExpungeInputs (their docs, and doc.go's "Measured" section).
 func BenchmarkApplyACompaction(b *testing.B) {
 	quiet(b)
 	for _, arm := range []struct {
@@ -1381,12 +1233,11 @@ func ones(n int) []int64 {
 	return out
 }
 
-// widestBegin seeds repository id as the publication arms do — MaxPacksPerRepo
-// live packs under a chain of MaxPublishedLayers layers of MaxLayerParts parts
-// naming every one — and answers an expunge's begin at every bound at once:
-// MaxExpungeInputs inputs, the first packs, which the chain's root names, so
-// it drops every layer; MaxExpungeOutputs outputs, half kept and half left
-// dropping — expungeBeginRows' 2 625 rows.
+// widestBegin seeds repository id's chain as the publication arms do
+// (seedChain) and answers an expunge's begin at every bound at once:
+// MaxExpungeInputs inputs, the first packs, which the root names, so it drops
+// every layer; MaxExpungeOutputs outputs, half kept and half left dropping:
+// expungeBeginRows' 2 625 rows.
 func (e *estate) widestBegin(b *testing.B, id string) ExpungeBegin {
 	b.Helper()
 	chain := e.seedChain(b, id)
@@ -1404,12 +1255,11 @@ func (e *estate) widestBegin(b *testing.B, id string) ExpungeBegin {
 	return begin
 }
 
-// widestCommit seeds repository id with MaxPacksPerRepo live packs, asks for a
-// purge of it, and applies — outside any timer — that purge's begin of
-// MaxExpungeInputs inputs, leaving MaxExpungeOutputs packs dropping and
-// keeping none; and answers the commit at every bound: it retires all of them
-// and writes as many rescue packs — expungeCommitRows' 97 rows — and, a
-// request being open, judges it with one seek of the packs' content index.
+// widestCommit seeds repository id with MaxPacksPerRepo live packs and applies
+// a purge request's begin of MaxExpungeInputs inputs leaving MaxExpungeOutputs
+// dropping, and answers the commit at every bound: it retires them all into as
+// many rescue packs (expungeCommitRows' 97 rows) and judges the open request
+// with one seek of the packs' content index.
 func (e *estate) widestCommit(b *testing.B, id string) ExpungeCommit {
 	b.Helper()
 	e.seed(id, 0, 0, MaxPacksPerRepo)
@@ -1445,8 +1295,8 @@ func (e *estate) expungeAdmitted(b *testing.B, p ExpungeProposal) {
 }
 
 // admitted fails b unless c is a compaction the committer takes and whose
-// decide over e's rows forms its record — so a record a benchmark applies is
-// one a committer appends, never one no build forms.
+// decide over e's rows forms its record, so a benchmark never applies a record
+// no build forms.
 func (e *estate) admitted(b *testing.B, c Compaction) {
 	b.Helper()
 	if err := (CompactionProposal{Compaction: c}).Validate(); err != nil {
@@ -1474,11 +1324,10 @@ func widestLayer(name, base string, replaces []string, packs ...string) LayerRef
 	return l
 }
 
-// seedChain publishes MaxPublishedLayers layers on repository id as its packs
-// arrive — MaxPacksPerRepo/MaxPublishedLayers packs seeded, then a layer of
-// MaxLayerParts parts over them on the layer before, decided over the rows
-// and applied — so the chain names every live pack and is one its committer
-// formed. It answers the layers, root first.
+// seedChain publishes MaxPublishedLayers layers (widestLayer) on repository
+// id as its packs arrive, each over MaxPacksPerRepo/MaxPublishedLayers packs,
+// decided and applied, so the chain names every live pack and is one its
+// committer formed. It answers the layers, root first.
 func (e *estate) seedChain(b *testing.B, id string) []LayerRef {
 	b.Helper()
 	per := MaxPacksPerRepo / MaxPublishedLayers
@@ -1499,11 +1348,10 @@ func (e *estate) seedChain(b *testing.B, id string) []LayerRef {
 	return chain
 }
 
-// widestPublication is the publication of repository id that replaces every
-// layer of chain but its root with one layer of MaxLayerParts parts, beside a
-// repack of inputs of the packs the replaced layers cover, the first after the
-// root's, into as many outputs as that many inputs may write: the layer covers
-// what the replaced layers did but those inputs, and the outputs.
+// widestPublication replaces every layer of chain but its root with one layer
+// of MaxLayerParts parts, beside a repack of inputs of the first packs the
+// replaced layers cover into as many outputs as inputs may write; the layer
+// covers the outputs and what the replaced layers did but those inputs.
 func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, inputs int) Compaction {
 	b.Helper()
 	per := MaxPacksPerRepo / MaxPublishedLayers
@@ -1528,84 +1376,18 @@ func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, in
 	return publication(id, e.next-1, widestLayer(id+"/top", chain[0].LayerID, replaces, sums...), retire, add...)
 }
 
-// BenchmarkPushHistoryBytes is what ONE PUSH LEAVES ON EVERY DATA NODE'S DISK:
-// the replicated estate's growth over records each landing one push, divided
-// by the pushes — the whole file's (bytes/row), and each of the push's two
-// rows' by the pages its own table's b-trees grew by (the estate's
-// [pageTally]), since the two have two lifetimes:
-//
-//   - code_pushes-bytes/row is the push's code_pushes row and its index
-//     entries, which the push-history horizon keeps usage.History (181
-//     days) — the id and size of the push's pack among its columns, where it
-//     carries one;
-//   - code_packs-bytes/row is its pack's code_packs row and its index
-//     entries, which live as long as the pack does — until a compaction
-//     retires it, or the repository is purged.
-//
-// BY THE TABLES, never by the file's growth with a pack less its growth
-// without one: that difference counts the push row's pack columns, kept 181
-// days, as the pack row's, kept while the pack is live, and moves with how
-// many rows of each shape fit a page, so one pack row weighed differently
-// beside a person's push and beside a seat's. What a deployment's push
-// history costs a data node is the first figure times its pushes a day times
-// 181, plus the second times the live packs its repositories hold — about
-// CompactTargetPacks a compacted repository, never past MaxPacksPerRepo, and
-// a full pack (FullPackBytes) more for each that its history has filled —
-// plus the retired arm's figure times the packs a compaction retired in the
-// last RetireGrace and the code-retention pass's interval; every data node
-// holds all three, since every one holds the whole estate.
-//
-// Two arms by the pack — pack=yes, a push carrying objects, and pack=no, one
-// carrying none (a deletion, or a ref moved to a commit the repository
-// holds), whose row names no pack and which leaves no pack row — and four by
-// the push:
-//
-//   - push=typical: one command moving a ref named in 40 bytes, one
-//     introduced commit id — a person's push of a commit through the token
-//     bound to them, received by git;
-//   - push=agent: the same commit pushed by a seat and built by the engine,
-//     its row naming the seat as its actor and the run behind it at each
-//     field's usual size — a turn id (a UUID), a tracker's work item
-//     (`native`, `ENG-1234`) and a model id of a provider's usual length —
-//     so the difference from typical is what a seat's provenance costs;
-//   - push=box: the same commit pushed by the seat's coding box, received by
-//     git, its run naming as well the executor that pushed (its launch, a
-//     UUID) and its harness (`claude-code`) — so the difference from
-//     agent is what a box's two fields cost;
-//   - push=widest: MaxCommandsPerPush commands on refs of MaxRefNameBytes and
-//     MaxIntroduced introduced ids — the widest row a push stores.
-//
-// And one arm by what a pack's row becomes once a compaction merges it,
-// retired/inputs=CompactMinMerge: typical pushes landed CompactMinMerge at a
-// time, each group merged into one output by a compaction — held to what a
-// committer forms, Validated and decided over the rows before its record is
-// applied — so the code_packs_retired-bytes/row it reports is a retired
-// pack's row and its three index entries, which code_packs_retired keeps
-// RetireGrace until the code-retention duty's retire_sweep removes it. How
-// many a data node holds is that figure times the packs retired a day — a
-// push's pack, and the outputs a later compaction merges again
-// (internal/gitlet/compact's steady arm counts them, retired/push) — times
-// RetireGrace and RetentionInterval over a day.
-//
-// EVERY ID IS THE SHAPE PRODUCTION WRITES, AND IN ITS ORDER, since an id is
-// in a row and in the index entries beside it, and an index takes its
-// entries at its end only while they come in order: the repository's and
-// each push's a UUIDv7, each push's minted after the one before as a
-// receiver mints one, its pack's id the push's own and its pack's object key
-// minted at its put as the object store mints one (objstore.KeyAt), and a
-// person's credential a token's name — `pat:` and its id, the push row's
-// actor — beside the human seat they hold; and a compaction's id a UUIDv7
-// minted as its home builds it, its output's object key at its put. Ids of a
-// dozen bytes and object keys in no order once made every row these figures
-// price lighter than the rows a data node holds.
-//
-// Every push moves refs that exist before the file is measured, so a ref's
-// row is rewritten in place and never counted: a ref lives as long as it is
-// kept, not as long as the history. Every other row a push writes is
-// rewritten in place as well — its repository's counters — and the tables
-// beside the two growing past [inPlaceShare] of what the push rows grow by
-// fails the benchmark, as a third row each push leaves that nothing here
-// prices. doc.go's measured section records the arms.
+// BenchmarkPushHistoryBytes is what ONE PUSH LEAVES ON EVERY DATA NODE'S DISK,
+// per push over records each landing one: the whole file's growth (bytes/row)
+// and, since they live differently, each of the push's two rows' by its own
+// table's pages ([pageTally]): code_pushes-bytes/row, the push row and its
+// index entries, kept usage.History (181 days), and code_packs-bytes/row,
+// its pack's, kept while the pack is live. Never the file's growth with a
+// pack less without one: that counts the push row's pack columns as the pack
+// row's and moves with how many rows fit a page. A data node's push history
+// costs the first times pushes a day times 181, plus the second times its
+// live packs (about CompactTargetPacks a compacted repository, one more per
+// FullPackBytes of history, never past MaxPacksPerRepo), plus the retired
+// arm's. doc.go's "Measured" section records the arms.
 func BenchmarkPushHistoryBytes(b *testing.B) {
 	quiet(b)
 	const typicalRef = "refs/heads/feature/push-history-measured"
@@ -1616,13 +1398,16 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 		ref := fmt.Sprintf("refs/heads/%08d", c)
 		return ref + strings.Repeat("w", MaxRefNameBytes-len(ref))
 	}
-	// person is who makes a person's push as git hands it over: the token
-	// bound to them, by its name, and the human seat they hold.
+	// EVERY ID IS PRODUCTION'S SHAPE, IN ITS ORDER: an index appends its
+	// entries at its end only while they arrive in order, so short ids or
+	// unordered keys would price every row lighter than a data node's. A
+	// repository, push or compaction id is a UUIDv7 minted in turn, a pack
+	// takes its push's id and an object key minted at its put
+	// (objstore.KeyAt), and a person's credential is a token's name (`pat:`
+	// and its id) beside the human seat they hold.
 	person := Principal{Kind: PrincipalOperator, Seat: "ada",
 		OperatorID: iam.MachineTokenName(uuid.NewSHA1(uuid.NameSpaceOID, []byte("ada's token")).String())}
-	// pushed is one person's push of cmds, its id minted as a receiver mints
-	// one, which its pack carries too, and its pack stored under a key the
-	// object store mints at the put.
+	// pushed is one person's push of cmds, ids and key minted as production's.
 	pushed := func(cmds ...Command) PushEntry {
 		entry := pushEntry(uuid.Must(uuid.NewV7()).String(), cmds...)
 		entry.Principal, entry.Pack.Object = person, objstore.KeyAt(time.Now())
@@ -1648,11 +1433,16 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 		// a person's, through git.
 		by func(e *PushEntry, r int)
 	}{
+		// TYPICAL: a person's push through git of one commit on a 40-byte ref.
 		{"typical", 4_000, func(int) string { return typicalRef }, 1, 1, nil},
+		// AGENT: the same by a seat, built by the engine: what a seat's
+		// provenance costs over typical.
 		{"agent", 4_000, func(int) string { return typicalRef }, 1, 1, func(e *PushEntry, r int) {
 			e.Principal = Principal{Kind: PrincipalAgent, Seat: "docs-writer", Run: seatRun(r)}
 			e.Via = ViaEngine
 		}},
+		// BOX: the same by the seat's coding box through git: what its launch
+		// and harness fields cost over agent.
 		{"box", 4_000, func(int) string { return typicalRef }, 1, 1, func(e *PushEntry, r int) {
 			run := seatRun(r)
 			run.RunID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprint("launch-", r))).String()
@@ -1662,6 +1452,8 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 		}},
 		{"widest", 100, widestRef, MaxCommandsPerPush, MaxIntroduced, nil},
 	} {
+		// pack=no carries no objects (a deletion, or a ref moved to a commit
+		// the repository holds): its row names no pack and leaves no pack row.
 		for _, pack := range []string{"no", "yes"} {
 			b.Run("push="+shape.name+"/pack="+pack, func(b *testing.B) {
 				var perRow, pushRow, packRow float64
@@ -1670,8 +1462,11 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 					e := openApplyEstate(b)
 					repo := uuid.Must(uuid.NewV7()).String()
 					e.apply(create(b, repo, "history"))
-					// THE REFS EXIST BEFORE THE FILE IS MEASURED: each record
-					// moves them on from what the one before left.
+					// THE REFS EXIST BEFORE THE FILE IS MEASURED, so a ref's row
+					// is rewritten in place, never counted: it lives as long as
+					// it is kept, not as long as the history. Any other table
+					// growing past [inPlaceShare] of the push rows fails the
+					// benchmark, as a third row nothing here prices.
 					cmds := make([]Command, shape.cmds)
 					for c := range cmds {
 						cmds[c] = move(shape.ref(c), ZeroOID, oid(fmt.Sprint("tip-0-", c)))
@@ -1733,6 +1528,12 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 			})
 		}
 	}
+	// RETIRED: typical pushes merged CompactMinMerge at a time by a compaction
+	// a committer forms, so the figure is a retired pack's row and its three
+	// index entries, kept RetireGrace until the code-retention duty's
+	// retire_sweep. A data node holds it times the packs retired a day (a
+	// push's, and the outputs merged again: internal/gitlet/compact's steady
+	// arm's retired/push) times RetireGrace and RetentionInterval over a day.
 	b.Run(fmt.Sprintf("retired/inputs=%d", CompactMinMerge), func(b *testing.B) {
 		// retiredRows is how many packs the arm's compactions retire: enough
 		// that code_packs_retired grows by hundreds of pages, so a page's
@@ -1757,9 +1558,8 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 					retire, tip = append(retire, entry.Pack.PackID), next
 				}
 				slices.Sort(retire)
-				// AS ITS HOME BUILDS ONE: the compaction's id minted when it
-				// is built, its output's key at its put — each after the
-				// last, as the object index takes production's.
+				// AS ITS HOME BUILDS ONE: the id minted when built, the
+				// output's key at its put, each after the last.
 				cid := statelog.NewOpID(time.Now(), "")
 				c := Compaction{RepoID: repo, CompactionID: cid, Node: "node-a", Seen: codeAt(e.next - 1),
 					Retire: retire, Add: []PackRef{outputOf(cid, 0, int64(len(retire)), time.Now())}}
@@ -1781,10 +1581,9 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 			after := e.tally(b)
 			retired := after.tables["code_packs_retired"] - before.tables["code_packs_retired"]
 			retiredRow = float64(retired*after.pageBytes) / retiredRows
-			// THE RETIREMENT LEAVES ONE ROW: beside the retired rows, a
-			// compaction moves its inputs out of code_packs and its output
-			// in, and the pushes the arm lands leave theirs — every other
-			// table a record touches is rewritten in place.
+			// THE RETIREMENT LEAVES ONE ROW: beside code_packs and the arm's
+			// own pushes, every other table a record touches is rewritten in
+			// place.
 			var elsewhere int64
 			var grown []string
 			for table, pages := range after.tables {
@@ -1807,16 +1606,14 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 	})
 }
 
-// inPlaceShare is how small, against what the push rows grow by over a
-// history benchmark's records, the growth of every table a push only rewrites
-// in place — its refs, its repository's counters — must stay: a HUNDREDTH.
-// Such a table grows at all only as a rewrite splits a page or a rewritten
-// row's numbers widen: code_refs by four pages over the widest arm's hundred
-// records of a thousand refs each, against its push rows' 10 256, and nothing
-// else at all (measured with the bound at zero). A third row each push left
-// would be a few percent of a push row at the least (a 30-byte counter row is
-// five percent of one), and under a hundredth no figure these rows forecast
-// moves past its rounding.
+// inPlaceShare is how small, against the push rows' growth over a history
+// benchmark, the growth of every table a push only rewrites in place (its
+// refs, its repository's counters) must stay: a HUNDREDTH. Such a table grows
+// only as a rewrite splits a page or a row's numbers widen (code_refs by four
+// pages over the widest arm, against its push rows' 10 256, and nothing else,
+// measured with the bound at zero); a third row each push left would be a few
+// percent of a push row at least (a 30-byte counter row is five), and under a
+// hundredth no forecast figure moves past its rounding.
 const inPlaceShare = 100
 
 // BenchmarkApplyAViewedMark prices a viewed record's apply on the shared write lane, in three arms:

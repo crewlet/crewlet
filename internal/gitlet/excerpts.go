@@ -8,7 +8,7 @@ import (
 )
 
 // A FINDING'S EXCERPT is its blob's lines around its range, marked as its revision's diff
-// changes them, as the change's files tab shows that file.
+// changes them, as the change's files tab shows them.
 
 // MaxExcerptAnchors is the most anchors one read excerpts: the findings one review raises.
 const MaxExcerptAnchors = MaxFindingsPerReview

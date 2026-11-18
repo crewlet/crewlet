@@ -10,13 +10,8 @@ import (
 )
 
 // A REMARK IS TAKEN DOWN BY WHOEVER MADE IT, OR BY A MODERATOR, AND THEN NOTHING
-// QUOTES IT.
-//
-// The authority table admits the author and an admin; the writer takes the
-// removal from the author and, where the caller says it moderates, from
-// anybody else, deciding both against the row it read. Once taken down the
-// remark keeps its row (a reply under it still resolves) with no words, and
-// neither its post's history row nor the inbox notice it left quotes it.
+// QUOTES IT: the remark keeps its row (a reply under it still resolves) with no
+// words, and neither its history row nor its inbox notice quotes it.
 //
 // Mutation: drop the author check and bob's removal lands; drop the unquoting
 // statements and bo's notice still quotes the words; drop the applier's arm and
@@ -116,13 +111,9 @@ func TestARemarkIsTakenDownByItsAuthorOrAModerator(t *testing.T) {
 	}
 }
 
-// A QUESTION OR AN ANSWER IS NEVER TAKEN DOWN, by its author or a moderator.
-//
-// A question closes by its asker withdrawing it or by an answer, each saying
-// why; an answer closed a question and said what was decided. Taking either
-// down would leave an ask with no question behind it, or a question closed with
-// no answer, so the writer refuses both and names what to do instead, and
-// publishes nothing.
+// A QUESTION OR AN ANSWER IS NEVER TAKEN DOWN, by its author or a moderator:
+// either would leave an ask with no question, or a question closed with no
+// answer. The writer refuses, names what to do instead, and publishes nothing.
 //
 // Mutation: drop either refusal and that remark is taken down.
 func TestAQuestionOrAnAnswerIsNotTakenDown(t *testing.T) {

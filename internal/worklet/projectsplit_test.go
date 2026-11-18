@@ -56,11 +56,10 @@ func setStatus(t *testing.T, r *roundTrip, id, project string, status worklet.St
 
 // THE ACTIVE COUNT IS EXACT ACROSS EVERY WAY A TASK ARRIVES AND LEAVES.
 //
-// It is a MAINTAINED column: nothing aggregates it back into agreement, so a
-// path that forgets it leaves the number wrong on every node for ever. The
-// paths are a status change into and out of the `active` group, a move to
-// another project while started, a removal, a restore, and a purge — the one
-// departure that deletes the row instead of writing it.
+// A MAINTAINED column: nothing re-aggregates it, so a path that forgets it is
+// wrong on every node for ever. The paths: a status change into and out of the
+// `active` group, a move to another project while started, a removal, a
+// restore, and a purge (which deletes the row instead of writing it).
 func TestTheActiveCountIsExactAcrossMoveRemoveRestoreAndPurge(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -131,12 +130,10 @@ func TestTheActiveCountIsExactAcrossMoveRemoveRestoreAndPurge(t *testing.T) {
 
 // THE BACKFILL EQUALS A RECOUNT.
 //
-// A node whose checkpoint's rule set differs from this build's — a cursor a
-// reanchor created at derivation 0, or rows adopted from a build with different
-// rules — runs [Applier.Rederive] once. What it computes has to be exactly what
-// the incremental rule reached by applying the same records, or the re-derived
-// node and one that applied them disagree on a table the fleet compares byte
-// for byte.
+// A node whose checkpoint's rule set differs from this build's (a reanchor's
+// cursor at derivation 0, or rows from a build with other rules) runs
+// [Applier.Rederive] once, and it must reach exactly what the incremental rule
+// did, or two nodes disagree on a table the fleet compares byte for byte.
 func TestTheActiveBackfillEqualsTheMaintainedCount(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -264,9 +261,8 @@ func TestATargetDateIsCoercedOnTheCompanysClock(t *testing.T) {
 
 // A CHART APPLY CARRIES THE TARGET THROUGH.
 //
-// The target is the lead's and the name is the chart's, and both live on one
-// document: a chart reconcile that rebuilt the document from the chart alone
-// would erase every target in the company on the next config apply.
+// The target is the lead's and the name the chart's, on one document: a
+// reconcile that rebuilt it from the chart alone would erase every target.
 func TestAChartApplyCarriesTheTargetThrough(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

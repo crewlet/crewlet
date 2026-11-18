@@ -38,13 +38,12 @@ func heldBoxCall(ctx context.Context, session *mcp.ClientSession, name string) <
 }
 
 // A SEAT HANDED ON WHILE A CALL OF ITS RUN IS HELD IS RELEASED AT ONCE. A node
-// gives a seat's lease back once its release of the seat returns, and the
-// release ends the bridge sessions of the seat's executor runs: an end that
-// waited out a call still running — a delegate up to its call cap, a routed
-// code write — held the seat's lease for as long, so no peer could take the
-// seat over and the box's next calls waited for a holder. So the release
-// returns while the call is held, and the box is answered at once that its
-// call is still running, as a run that goes on, never told to end its turn.
+// gives the lease back once its release returns, and the release ends the
+// seat's executor runs' bridge sessions: waiting out a running call (a
+// delegate, a routed code write) would hold the lease as long, so no peer could
+// take the seat. So the release returns while the call is held, and the box is
+// told at once its call is still running, as a run that goes on, never to end
+// its turn.
 //
 // Mutation: let an opening's end answer no call still running (`false &&`
 // before its cut), and the box is not answered while its call is held.

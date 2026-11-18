@@ -13,18 +13,12 @@ import (
 )
 
 // EVERY TOOL'S SENTENCE ABOUT A CONDITION NO WAIT CLEARS tells a model that
-// trying again won't help and what to say instead, and only a condition that
-// clears is offered the retry.
-//
-// A model neither chooses the node a call goes to nor has an administrator to
-// ask, so the person's advice ("try another node", "an administrator needs
-// to make room") is nothing it can act on, and a read that dropped the tool's
-// own "say you could not check" for it lost the one instruction a model can
-// follow. And "could not read X right now" promises a wait the advice then
-// rules out. Driven through every failure helper a tool answers a condition
-// through — the tracker's, the knowledge base's, the chat's (a direct
-// message's included), the artifacts', the datastore's and the node's own —
-// with a full log, and with a node behind as the control that clears.
+// trying again won't help and what to say instead; only one that clears is
+// offered the retry. A model neither picks a node nor has an administrator to
+// ask, so the person's advice ("try another node", "an administrator needs to
+// make room") must not replace the tool's "say you could not check", and
+// "right now" promises a wait that never clears. Driven through every failure
+// helper, with a full log, and a node behind as the control.
 //
 // Mutation: answer any helper's stuck condition with its `soon` (or with the
 // person's advice), put "right now" back in a read's sentence, or drop the
@@ -91,9 +85,8 @@ func TestEveryToolTellsAModelWhatAConditionNoWaitClearsLeavesIt(t *testing.T) {
 			return nodeFailure(ctx, "remember", err, "Could not save your note",
 				"Nothing was changed.")
 		}, stuckWrite, false, true},
-		// THE CODE TOOLS', whose own words offer the retry in lower case
-		// ("try again shortly", "make the same call again"), so the
-		// capitalised retry this table looks for is never theirs.
+		// The code tools offer their retry in lower case ("try again
+		// shortly"), never the capitalised one this table looks for.
 		{"code read", func(err error) tools.Result {
 			return codeFailure(ctx, CodeReadTool, "app", err)
 		}, stuckRead, true, false},

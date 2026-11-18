@@ -87,23 +87,17 @@ func decideSeats(t *testing.T, e *estate, limits Limits, batch ...Proposal) ([]P
 }
 
 // THE DECIDE REFUSES WHAT THE GRANT REFUSES (decide rule 2b, ADR-0088): every
-// command of every kind — a branch created, fast-forwarded and deleted, a tag
-// created and deleted, a command under the pusher's own namespace, one under
-// another seat's, and one under refs/heads/<its handle>/, which is NOT its
-// namespace — is answered exactly as [Grant.RefRule] answers it for the
-// principal on the deciding epoch's chart: refused not_permitted with the
-// rule's own sentence, or decided by the rules after it, which every command
-// here passes. A refusal is RECORDED — on its command, in the entry of a push
-// that has an ok command left — and a push git received left with none is an
-// attempt: an entry of its refused commands alone. The
-// principals are a full_access seat of the owning unit, which writes; a
-// read_only seat of it, which reads; a full_access seat of another unit,
-// which writes its own namespace on a company repository and nothing on a
-// `unit` one; the owning unit's lead, which maintains; and a person, who
-// maintains every repository with no chart.
+// command kind (branch and tag create, update, delete; the pusher's own
+// namespace, another seat's, and refs/heads/<its handle>/, which is NOT its
+// namespace) is answered exactly as [Grant.RefRule] answers it on the deciding
+// epoch's chart: refused not_permitted with the rule's sentence, or passed to
+// later rules every command here passes. A refusal is RECORDED on its command;
+// a push left with no ok command is an attempt of its refused commands alone.
+// Principals: the owning unit's full_access and read_only seats and lead,
+// another unit's full_access seat (its own namespace on a company repository,
+// nothing on a `unit` one), and a person, who maintains with no chart.
 //
-// Mutation: skip rule 2b — the seats' deletions and the read_only seat's
-// creates are ok, red.
+// Mutation: skip rule 2b — seats' deletions, read_only creates are ok, red.
 func TestTheDecideRefusesWhatTheGrantRefuses(t *testing.T) {
 	t.Parallel()
 	commands := func(handle string) []Command {
@@ -507,16 +501,12 @@ func TestASeatsPushIsNeverDecidedWithNoChart(t *testing.T) {
 }
 
 // THE SEAT COUNTER IS A FUNCTION OF THE LOG (W24): three appliers given one
-// seat's pushes on three days — the second day's interleaved with a record
-// decided late on the first, a person's push beside one, and a record
-// redelivering a push already applied beside a new one — hold identical
-// code_seat_days rows after every record: the second day's records keep the
-// first day's row, so the late record adds to its day's whole count; the
-// third day's first entry forgets the first day, the oldest beyond the seat's
-// two newest; the person's push is counted nowhere; and the redelivered push
-// id is counted once. And the rows a count touches are counted in the
-// record's: a seat's first push of a third day reports two rows more than a
-// person's push of the same shape, the day's row and the oldest it forgot.
+// seat's pushes over three days (a late record of day one among day two's, a
+// person's push, a redelivered push) hold identical code_seat_days rows after
+// every record. Day two keeps day one's row, so the late record adds to its
+// day's whole count; day three forgets day one, beyond the seat's two newest;
+// a person's push counts nowhere; a redelivered push id once. A seat's first
+// push of day three reports two rows more than a person's (day's, forgotten).
 //
 // Mutations: count every entry the record carries rather than the ones it
 // inserts — the redelivery is counted twice, red; forget the seat's day

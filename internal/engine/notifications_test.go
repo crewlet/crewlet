@@ -15,11 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
-// The registry is DERIVED from one org and answers for it permanently, so an
-// apply must build a new one — a node that indexed only its first company
-// would resolve every party against an org that is no longer running, and a
-// seat added by an apply would be permanently unreachable with nothing
-// failing.
+// The registry is DERIVED from one org, so an apply must build a new one: a
+// reused one resolves parties against an org no longer running, and a seat an
+// apply added stays unreachable with nothing failing.
 func TestThePartyRegistryFollowsTheAppliedCompany(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
@@ -33,8 +31,7 @@ func TestThePartyRegistryFollowsTheAppliedCompany(t *testing.T) {
 			t.Errorf("%s is not addressable", handle)
 		}
 	}
-	// A human seat's declared contact ids are reconciled in, so a message
-	// from that person resolves to the seat rather than to a stranger.
+	// A human seat's declared contact ids resolve to the seat, not a stranger.
 	if p, ok := reg.ByExternalID("slack", "U0FOUNDER"); !ok || p.Handle != "founder" {
 		t.Fatalf("the founder's Slack id resolved to %+v", p)
 	}
@@ -55,8 +52,7 @@ func TestThePartyRegistryFollowsTheAppliedCompany(t *testing.T) {
 	if _, ok := e.Registry().ByHandle("staff"); !ok {
 		t.Fatal("a seat added by an apply is not addressable")
 	}
-	// And the registry is a NEW one: the old org's answer must not
-	// survive into a company that no longer has that seat.
+	// A NEW registry: the old org's answers must not survive the apply.
 	if e.Registry() == reg {
 		t.Fatal("the apply reused the previous registry")
 	}
@@ -65,12 +61,10 @@ func TestThePartyRegistryFollowsTheAppliedCompany(t *testing.T) {
 // A PERSON ON MATTERMOST IS THE SEAT THEIR USERNAME NAMES, from boot and
 // across an apply.
 //
-// The chart names a person by username and a post names its author by user
-// id, so the registry used to hold a key no post ever looked up and every
-// person reached the agents as a stranger. The engine hands the chat
-// transport its people at boot and on every apply, and the transport asks the
-// server what each name holds: a name nobody holds after the apply takes the
-// person's old account back and is reported.
+// The chart names a person by username and a post its author by user id, so
+// the engine hands the transport its people at boot and on every apply, and
+// the transport asks the server what each name holds: a name nobody holds
+// after the apply takes the person's old account back and is reported.
 func TestAMattermostPersonIsTheSeatTheirUsernameNames(t *testing.T) {
 	t.Parallel()
 	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -89,8 +83,7 @@ func TestAMattermostPersonIsTheSeatTheirUsernameNames(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/config/client"):
 			w.Write([]byte(`{}`))
 		default:
-			// The websocket among them: the seat keeps reconnecting in
-			// the background, which is no part of what is asserted.
+			// The websocket too: the seat's reconnects are not under test.
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(`{"message":"not here"}`))
 		}
@@ -145,19 +138,16 @@ integrations:
 	}
 }
 
-// A node with no company answers "nobody matches" rather than panicking —
-// which is what `crewlet validate` and a node that has not applied a
-// revision both do.
+// A node with no company (`crewlet validate`, or one that has applied no
+// revision) answers "nobody matches" rather than panicking.
 func TestARegistryIsNeverNil(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
 	if got := e.Registry(); got == nil {
 		t.Fatal("Registry returned nil")
 	}
-	// With no chat backend the driver set is EMPTY rather than absent, so
-	// the turn engine says what phase it is in without first asking
-	// whether indicators exist anywhere — a question about this node's
-	// wiring that a turn has no business knowing the answer to.
+	// With no chat backend the driver set is EMPTY, not nil, so a turn
+	// reports its phase without asking about this node's wiring.
 	driver := e.Status()
 	if driver == nil {
 		t.Fatal("Status returned nil")
@@ -177,16 +167,14 @@ func TestARegistryIsNeverNil(t *testing.T) {
 	session.End(context.Background(), false)
 }
 
-// A chat instance being unreachable at boot is an ordinary state — it
-// restarts, it moves, its certificate lapses — and refusing to start the
-// company over it takes down every seat's scheduled and tracker work too.
+// A chat instance unreachable at boot is an ordinary state (a restart, a
+// move, a lapsed certificate); refusing to start over it would take down
+// every seat's scheduled and tracker work too.
 func TestAnUnreachableChatBackendDoesNotStopTheCompany(t *testing.T) {
 	t.Parallel()
-	// A seat with a real bot token, so Start actually tries to reach the
-	// instance — without one there are no seats and the failure path is
-	// never taken. UNREACHABLE rather than refusing, because that is the
-	// start that blocks — every call spends the client's retry budget —
-	// and a company must still come up once it has.
+	// A real bot token, so Start tries the instance at all. UNREACHABLE
+	// rather than refusing: that is the start that blocks, each call
+	// spending the client's retry budget, and the company must still come up.
 	doc := strings.Replace(companyDoc, `  - name: CEO
     handle: ceo
     llm: zulu`, `  - name: CEO
@@ -221,10 +209,9 @@ integrations:
 // is not enforcing.
 func TestTheValveIsOffWithoutAStore(t *testing.T) {
 	t.Parallel()
-	// The default engine has a store, so the valve is available — the
-	// assertion here is that the rate limit is read LIVE off the epoch
-	// rather than captured, so an apply that changes the cap takes effect
-	// on the next notification rather than on the next restart.
+	// The default engine has a store, so the valve is available; what is
+	// held is that the cap is read LIVE off the epoch, not captured, so an
+	// apply changes it without a restart.
 	e := newEngine(t, engine.Options{})
 	if got := e.Company().Config.NotificationRateLimit; got != 0 {
 		t.Fatalf("the shipped default cap is %d, want off", got)
@@ -242,22 +229,14 @@ func TestTheValveIsOffWithoutAStore(t *testing.T) {
 
 // AN INTEGRATION'S ADDRESS IS RESOLVED, and every integration resolves it.
 //
-// A ${VAR} stays verbatim in the stored config — that is what makes
-// re-activating an unchanged revision pick up a rotated value — so every
-// consumer resolves at construction. Three wirings do that, and one of them
-// forgot: Mattermost handed each seat the literal "${MATTERMOST_URL}", all
-// seven failed at the URL parse, and the engine reported the company running
-// "without its chat surface" on a host where the address was exported
-// correctly.
-//
-// It is a class, not a typo, so this checks all three at once: the failure
-// is silent per-integration, and a fourth third-party app would repeat it.
+// A ${VAR} stays verbatim in the stored config, so re-activating an unchanged
+// revision picks up a rotated value, and every wiring resolves it at
+// construction. A wiring that forgets fails silently, so this checks all three.
 func TestEveryIntegrationResolvesItsAddress(t *testing.T) {
 	t.Parallel()
 	// A CHAT SERVER THAT REFUSES THE BOT, so the transport's start fails at
-	// once: what is under test is the address the wiring built, and an
-	// unreachable one costs a retry budget per call to learn nothing more
-	// (TestAnUnreachableChatBackendDoesNotStopTheCompany is that case).
+	// once: an unreachable one costs a retry budget per call and tests
+	// nothing more (TestAnUnreachableChatBackendDoesNotStopTheCompany).
 	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`{"message":"Invalid or expired session"}`))
@@ -298,9 +277,7 @@ integrations:
 		t.Fatal("the company did not start")
 	}
 
-	// The addresses answer nothing useful on purpose: what is under test
-	// is the string each wiring BUILT, not whether the third-party app
-	// answered.
+	// Under test is the address each wiring BUILT, not whether it answers.
 	mm := e.Mattermost()
 	if mm == nil {
 		t.Fatal("no chat transport was built")
@@ -308,9 +285,8 @@ integrations:
 	if got := mm.URL(); got != chat.URL {
 		t.Errorf("mattermost url = %q, want the resolved address", got)
 	}
-	// The other two wirings refuse a url that failed to resolve outright,
-	// so reaching a live company at all is the assertion for them: an
-	// unresolved reference would have taken the surface down instead.
+	// The other two refuse an unresolved url outright, taking the surface
+	// down, so a live company is their assertion.
 	if e.Company() == nil {
 		t.Error("the company stopped, which is what an unresolved address does")
 	}
@@ -319,10 +295,9 @@ integrations:
 // AN ADDRESS THAT RESOLVED TO NOTHING IS REFUSED, and the refusal names the
 // reference.
 //
-// The validator already rejected an enabled Mattermost with no url, so an
-// empty one here is a ${VAR} that answered nothing — a different problem
-// with a different fix. Starting anyway builds clients pointed at "" and
-// fails at every call with a message that names neither.
+// The validator refuses an enabled Mattermost with no url, so an empty one
+// here is a ${VAR} that answered nothing; started anyway, every call fails
+// with a message naming neither.
 func TestAnUnresolvedChatAddressIsRefusedByName(t *testing.T) {
 	t.Parallel()
 	doc := strings.Replace(companyDoc, `  - name: CEO
@@ -340,8 +315,7 @@ integrations:
     url: ${TEST_MM_URL_THAT_IS_NEVER_SET}
     team: eng
 `
-	// AN ENVIRONMENT THAT CANNOT HOLD the address, which the process's
-	// could: whatever the runner exports, this one answers only the token.
+	// AN ENVIRONMENT THAT CANNOT HOLD the address, whatever the runner exports.
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc),
 		Environment: config.MapSource{"MM_CEO_TOKEN": "tok-ceo"}})
 	if mm := e.Mattermost(); mm != nil {
@@ -352,15 +326,10 @@ integrations:
 
 // THE INBOUND EDGE VERIFIES WITH VALUES, never with references.
 //
-// Secrets live in the config as ${VAR}s. The edge's material was assembled
-// from the config WITHOUT resolving, so every route verified against the
-// literal "${GITLAB_SIGNING_SECRET}", every delivery from every third-party app
-// refused, with the third-party app's settings page showing a healthy hook. Measured
-// against a real GitLab, where the only trace was one warning per delivery.
-//
-// And the literal is not a secret. It is a config field the dashboard
-// renders, so a forged delivery would have verified against a string an
-// attacker could read.
+// Secrets are ${VAR}s in the config. An edge built from it unresolved refuses
+// every delivery while the vendor shows a healthy hook, and the literal is no
+// secret: the dashboard renders it, so a forged delivery could verify against
+// a string an attacker can read.
 func TestTheWebhookEdgeGetsResolvedSecrets(t *testing.T) {
 	t.Parallel()
 	doc := companyDoc + `
@@ -395,15 +364,10 @@ func TestAnUnconfiguredNodeHasNoWebhookSecrets(t *testing.T) {
 	}
 }
 
-// A CONFIGURED VENDOR MUST ACTUALLY ROUTE, which is the whole distinction
-// RoutedSources exists to draw.
-//
-// Four third-party apps once had config models, webhook routes and generated schema
-// and no parser behind any of them, so a company naming one got a block that
-// validated, appeared in the dashboard's Company › Integrations beside the
-// working ones, and woke nobody. This is what catches a third-party app whose config
-// ships without its wiring and, in the other direction, a third-party app whose
-// wiring is dropped from startNotifications by a refactor.
+// A CONFIGURED VENDOR MUST ACTUALLY ROUTE, the distinction RoutedSources
+// draws: a vendor whose config ships without its parser, or whose wiring a
+// refactor drops from startNotifications, validates and shows in the
+// dashboard's Integrations yet wakes nobody.
 func TestAConfiguredTrackerActuallyRoutes(t *testing.T) {
 	t.Parallel()
 	doc := companyDoc + `
@@ -420,24 +384,16 @@ integrations:
 	if !slices.Contains(e.RoutedSources(), "jira") {
 		t.Fatalf("a company on the Atlassian tracker routes %v", e.RoutedSources())
 	}
-	// And the inbound route has something to verify with, which is the
-	// other half: a parser with no secret behind it answers 503 to every
-	// delivery it would have routed.
+	// And the route has a secret: without one it answers 503 to every
+	// delivery the parser would have routed.
 	if got := e.WebhookSecrets().Jira; got != "jira-secret" {
 		t.Errorf("jira webhook secret = %q", got)
 	}
 }
 
-// AND SO DOES THE ALERTING SURFACE, which is the case this test was written
-// for and did not cover.
-//
-// Datadog shipped with a config block, a webhook route, a generated schema
-// entry and a docs page saying an alert wakes a seat "exactly as a comment on
-// a merge request" does. It had no parser, so the spine logged
-// inbound_source_unparsed and skipped every delivery: verified, stored,
-// counted on the dashboard, and read by nobody. That is precisely the shape
-// the comment above describes, and the third-party app list here is what lets it
-// happen again for the next one.
+// AND SO DOES THE ALERTING SURFACE: an alert source with config and a route
+// but no parser has every delivery verified, stored and counted, then skipped
+// by the spine as inbound_source_unparsed.
 func TestAConfiguredAlertingSurfaceActuallyRoutes(t *testing.T) {
 	t.Parallel()
 	doc := companyDoc + `
@@ -489,14 +445,13 @@ integrations:
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// The workspace is unreachable, so no seat identity resolves and the
-	// transport reports itself unavailable — which is the documented
-	// degradation, not a company that failed to start.
+	// The workspace is unreachable: the transport reports itself
+	// unavailable, the documented degradation, and the company still runs.
 	if e.Company() == nil {
 		t.Fatal("an unreachable workspace stopped the company")
 	}
-	// The per-seat signing secret reaches the edge either way: it is what
-	// answers a delivery, and it comes from config rather than from Slack.
+	// The seat's signing secret comes from config, so it reaches the edge
+	// either way.
 	if got := e.WebhookSecrets().Slack["ceo"]; got != "ceo-signing-secret" {
 		t.Errorf("the seat's signing secret = %q", got)
 	}
@@ -516,14 +471,10 @@ func TestAnAbsentTrackerRoutesNothing(t *testing.T) {
 	}
 }
 
-// THE KNOWLEDGE BASE IS THE ONE INTEGRATION WHOSE ABSENCE IS INVISIBLE.
-//
-// A routing gap surfaces as an agent that never answers. A search gap
-// surfaces as an empty "## Relevant knowledge" block in every turn's prompt,
-// which is indistinguishable from a company that has written nothing down —
-// so a configured Confluence has to produce a searcher, and a company with
-// no knowledge backend has to produce a nil one rather than a typed nil that
-// answers as though a search had run.
+// THE KNOWLEDGE BASE IS THE ONE INTEGRATION WHOSE ABSENCE IS INVISIBLE: a
+// search gap is an empty "## Relevant knowledge" block in every prompt,
+// indistinguishable from a company that wrote nothing down, so a configured
+// Confluence has to produce a searcher.
 func TestAConfiguredKnowledgeBaseProducesASearcher(t *testing.T) {
 	t.Parallel()
 	doc := companyDoc + `
@@ -553,13 +504,9 @@ knowledge:
 }
 
 // A COMPANY WITH NO KNOWLEDGE BACKEND ANSWERS A NIL INTERFACE, not a typed
-// nil: consumers check `searcher == nil`, and a typed nil passes that check
-// and then answers as though a search had run and found nothing — which
-// hides the fact that nothing is configured.
-//
-// It takes SAYING SO now. A company that declares nothing runs Doclet, so
-// `backend: none` is the gesture that means none, and this test is the one
-// place that distinguishes "off" from "not mentioned".
+// nil: consumers check `searcher == nil`, and a typed nil passes it and
+// answers as though a search found nothing. A company that declares nothing
+// runs Doclet, so `backend: none` is how it says none.
 func TestNoKnowledgeBackendIsANilInterface(t *testing.T) {
 	t.Parallel()
 	doc := companyDoc + `
@@ -575,13 +522,9 @@ knowledge:
 	}
 }
 
-// A COMPANY THAT DECLARES NOTHING RUNS DOCLET, and its searcher is this
-// node's own index rather than a vendor's.
-//
-// The default is what almost every company will run, so it is the case worth
-// pinning: an engine whose Knowledge() answered nil here would give every
-// seat an empty knowledge block and no search tool, on a company whose pages
-// are sitting in its own store.
+// A COMPANY THAT DECLARES NOTHING RUNS DOCLET, its searcher this node's own
+// index: the default almost every company runs, where a nil Knowledge() would
+// leave every seat no knowledge block and no search tool.
 func TestTheDefaultKnowledgeBackendIsDoclet(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
@@ -597,14 +540,10 @@ func TestTheDefaultKnowledgeBackendIsDoclet(t *testing.T) {
 	}
 }
 
-// A VENDOR A REVISION RETIRES STOPS ROUTING, AND STOPS INGESTING.
-//
-// Every reconciler converged only toward "configured", so removing a block —
-// or setting `enabled: false`, the gesture after a credential leak — applied
-// cleanly and changed nothing: the boot-time parser went on routing
-// deliveries under the credential being revoked, RoutedSources went on
-// listing the third-party app as reachable, and SecretsOf never consulted Enabled so
-// the webhook route kept verifying and ingesting.
+// A VENDOR A REVISION RETIRES STOPS ROUTING, AND STOPS INGESTING: removing
+// its block, or `enabled: false` after a credential leak, must take its
+// parser, its RoutedSources entry and its webhook secret, or deliveries go on
+// being handled under the credential being revoked.
 func TestAVendorARevisionRetiresStopsRouting(t *testing.T) {
 	t.Parallel()
 	with := companyDoc + `
@@ -678,18 +617,11 @@ integrations:
 
 // A RECONCILER THAT ONLY RETIRES IS NOT A RECONCILER.
 //
-// Confluence's converged in one direction: it returned early unless a parser
-// was ALREADY running, on the reasoning that boot owns the first build. Boot
-// owns the first one and nothing owned the second (the parser set is
-// assembled once, in New), so a revision that ADDED Confluence after boot
-// registered nothing.
-//
-// Disconnecting and reconnecting is exactly that sequence, and it is the one
-// an operator makes most: the route went on verifying and storing every
-// delivery while nothing turned one into work for a seat, and the only cure
-// was restarting the process. The dashboard reported it honestly and looked
-// like it was lying, because the card said Connected and the line under it
-// said nothing routes.
+// The parser set is assembled once, in New, so a reconciler acting only on a
+// running parser never registers one a revision adds after boot.
+// Disconnecting and reconnecting, the sequence an operator makes most, would
+// leave the route verifying and storing every delivery while nothing turned
+// one into work for a seat, until a restart.
 func TestConfluenceRoutesAgainAfterBeingRemovedAndAddedBack(t *testing.T) {
 	t.Parallel()
 	with := companyDoc + `
@@ -707,7 +639,7 @@ integrations:
 		t.Fatalf("a company on Confluence routes %v", e.RoutedSources())
 	}
 
-	// Disconnected: the parser goes, which has always worked.
+	// Disconnected: the parser goes.
 	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("Apply without confluence: %v", err)
 	}
@@ -715,8 +647,7 @@ integrations:
 		t.Fatalf("a removed knowledge base still routes %v", e.RoutedSources())
 	}
 
-	// Connected again: the parser has to come back, and this is the half
-	// that did not.
+	// Connected again: the parser has to come back.
 	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with), time.Now()); err != nil {
 		t.Fatalf("Apply with confluence: %v", err)
 	}
@@ -781,17 +712,12 @@ integrations:
 
 // EVERY INTEGRATION HAS TO SURVIVE BEING ADDED AFTER BOOT.
 //
-// The parser set is assembled once, in New, so anything that is not rebuilt
-// on a config apply is registered only if it happened to be configured when
-// the process started. Connecting it afterwards leaves its route verifying
-// and storing every delivery while nothing turns one into work for a seat,
-// and the dashboard says so in a line that reads like a lie next to a card
-// tagged Connected.
-//
-// Confluence had exactly this and was fixed by making its reconciler revive
-// as well as retire. This is the same question asked of the rest, because a
-// reconciler nobody calls is indistinguishable from one that converges in one
-// direction.
+// The parser set is assembled once, in New, so an integration not rebuilt on
+// an apply routes only if configured when the process started; connected
+// later, its route verifies and stores every delivery while nothing turns one
+// into work for a seat. TestConfluenceRoutesAgainAfterBeingRemovedAndAddedBack
+// asks it of one; this asks every integration, since a reconciler nobody
+// calls looks like one that converges in one direction.
 func TestEveryIntegrationRoutesWhenAddedAfterBoot(t *testing.T) {
 	t.Parallel()
 	for _, tc := range integrationBlocks {
@@ -817,14 +743,10 @@ func TestEveryIntegrationRoutesWhenAddedAfterBoot(t *testing.T) {
 	}
 }
 
-// AND ON A NODE THAT BOOTED WITH NO COMPANY AT ALL, which is how every company
-// created from the dashboard, or by the first PUT /config, begins.
-//
-// The reconcilers above rebuild a running inbound edge; they cannot start one,
-// and each returned early without it. Boot starts the edge only for a company
-// it already has, so the first company such a node was handed verified and
-// stored every delivery and routed none of them to a seat until the process
-// was restarted.
+// AND ON A NODE THAT BOOTED WITH NO COMPANY AT ALL, as every company created
+// from the dashboard, or by the first PUT /config, begins: boot starts the
+// inbound edge only for a company it has, and the reconcilers rebuild a
+// running edge, so the apply must start one or nothing routes until a restart.
 func TestTheFirstCompanyOnAnUnconfiguredNodeRoutesItsIntegrations(t *testing.T) {
 	t.Parallel()
 	for _, tc := range integrationBlocks {
@@ -850,13 +772,9 @@ func TestTheFirstCompanyOnAnUnconfiguredNodeRoutesItsIntegrations(t *testing.T) 
 	}
 }
 
-// AND A ROUTING SETTING CHANGES WITHOUT A RESTART.
-//
-// Datadog's parser carries the two settings that decide where an alert goes:
-// the monitor tag key and the fallback seat. With the parser built once at
-// boot, a company that moved its fallback from one seat to another went on
-// waking the old one until the process was restarted, and nothing on any
-// surface said so.
+// AND A ROUTING SETTING CHANGES WITHOUT A RESTART: Datadog's parser carries
+// the monitor tag key and the fallback seat, so one built once at boot would
+// go on waking the old fallback after an apply moved it, silently.
 func TestDatadogRoutingFollowsTheAppliedRevision(t *testing.T) {
 	t.Parallel()
 	with := func(route string) string {

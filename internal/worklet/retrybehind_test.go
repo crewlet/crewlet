@@ -12,14 +12,13 @@ import (
 
 // A RETRIED CREATE ON A NODE THAT IS BEHIND NEVER TAKES ANOTHER TASK'S KEY.
 //
-// Two nodes over one log. Node a files ENG-1 and ENG-2, and then an operation
-// whose counter step lands — it takes ENG-3 — and whose task step is refused.
-// Node b has applied ENG-1 and nothing after it when the caller retries that
-// operation there: b's mint decides ENG-2 from its stale counter, the broker
+// Node a files ENG-1 and ENG-2, then an operation whose counter step lands
+// (taking ENG-3) and whose task step is refused. Node b, applied to ENG-1 only,
+// gets the retry: its mint decides ENG-2 from its stale counter, the broker
 // refuses it against the earlier copy, and the refusal's answer is lost. The
-// probe finds the earlier copy, b catches up and its ledger records the
-// operation — and the publisher answered that as the application of b's own
-// decision, so the retry filed its task as ENG-2, beside the task that is.
+// probe finds the earlier copy and b's ledger records the operation; answered
+// as the application of b's own decision, the retry would file its task as
+// ENG-2, beside the task that is.
 func TestARetriedCreateOnANodeBehindTakesAKeyOfItsOwn(t *testing.T) {
 	t.Parallel()
 	a := newRoundTrip(t)
@@ -74,12 +73,10 @@ func TestARetriedCreateOnANodeBehindTakesAKeyOfItsOwn(t *testing.T) {
 }
 
 // A FRESH MINT WHOSE ANSWER IT CANNOT PROVE ITS OWN IS MINTED AGAIN, and the
-// create still files one task under a key nobody else holds.
-//
-// A lost acknowledgement the ledger resolves is collapsed now, whoever's copy
-// it names — so a create's own counter step, and then the fresh mint it
-// resumes on, each come back as a number that cannot be built on. Each is a
-// gap; the create takes the next.
+// create still files one task under a key nobody else holds: a lost
+// acknowledgement the ledger resolves is collapsed whoever's copy it names, so
+// the create's counter step and its fresh mint each come back as a number that
+// cannot be built on. Each is a gap; the create takes the next.
 func TestAFreshMintAnsweredFromTheLedgerIsMintedAgain(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

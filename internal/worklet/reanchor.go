@@ -7,59 +7,27 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE TRACKER'S HALF OF A REANCHOR, and it is one record.
+// THE TRACKER'S HALF OF A REANCHOR, and it is one record. A reanchor recovers
+// a recreated stream (the tables are the truth, the stream a replay window) as
+// a GENERATION TRANSITION, not a re-stamp, so an old position stays comparable
+// and safely stale. [statelog.Reanchor] owns the steps and their order; this
+// domain records that the transition happened, applied by [Applier] as the
+// `tracker_log_generations` audit row, so a replay of the log reproduces it.
 //
-// A reanchor is the one recovery for a genuinely recreated stream: the durable
-// tables are the record of truth and the stream is a replay window, so
-// re-anchoring says "these rows are what they are; follow the new stream from
-// its head". It is a GENERATION TRANSITION rather than a re-stamp, which is
-// what makes an old position comparable and safely stale rather than
-// indistinguishable from a current one.
-//
-// [statelog.Reanchor] owns the steps and their order. What lives here is what
-// only this domain can do: say, in its own record format, that the transition
-// happened. The audit row is what that record APPLIES as ([Applier] writes
-// `tracker_log_generations` from it), so it is derived like every other row
-// rather than written beside the checkpoint where no replay of the log could
-// reproduce it.
-//
-// # There is no version reset, and there must not be one
-//
-// This file used to rewrite every object row's `version` into the new
-// generation before the record went out, on the reasoning that a version from
-// a dead number space forms an expectation the broker cannot arbitrate. That
-// stopped being true when the expectation moved to the ARBITRATION ANCHOR: a
-// version is what a caller's `if_match` and the applier's guard compare, and
-// both compare it against a position in the NEW generation, which is above
-// every old version by construction. The anchor below the current generation
-// is already "no anchor here" to the publisher, which asks the broker and
-// publishes at zero under the floor theorem. So the reset bought nothing — and
-// it never ran: its table list named `version` columns that `tracker_comments`,
-// `tracker_task_keys` and `tracker_tags` do not have, so every reanchor failed
-// on its first statement, and it included `tracker_body_revisions`, whose
-// `version` is the BODY's revision counter and a primary-key column, which it
-// would have collapsed. Had it run, it would also have made every task's
-// vector stale — a vector is current while its `source_rev` equals the task's
-// version — and re-billed the company's whole embedding corpus.
+// There is no version reset, and there must not be one: `if_match` and the
+// applier's guard compare a version against a position in the NEW generation,
+// above every old version by construction. A reset would collapse
+// `tracker_body_revisions`' key column and make every task's vector stale
+// (current while `source_rev` equals the task's version), re-billing embeddings.
 
 // GenerationRecord is the tracker's [statelog.GenerationEncoder].
 type GenerationRecord struct{}
 
-// generationReason is the audit row's account of why the log was adopted,
-// which differs by case.
-//
-// BY CASE, because `tracker_log_generations.reason` is the one place a later
-// reader learns what happened to the log, and the cases are different
-// incidents with different consequences: a recreated log lost whatever this
-// node never applied, a restored one was followed from its end because the
-// rows already held it, and an abandoned one skipped a generation whose history
-// only an evicted node held. Every reanchor used to record the first, restored
-// brokers included.
-//
-// AND WHAT A RESTORED ONE DISCARDED, when the operator accepted discarding
-// records written after the restore: they are on the log below this record,
-// applied on no node, and this row is the one place a later reader can learn
-// that it was decided rather than lost.
+// generationReason is the audit row's account of why the log was adopted, BY
+// CASE: `tracker_log_generations.reason` is the one place a later reader learns
+// what happened to the log, and the cases have different consequences. A
+// restored log also names what the operator accepted discarding, so the row
+// says it was decided rather than lost.
 func generationReason(f statelog.GenerationFacts) string {
 	switch f.Case {
 	case statelog.ReanchorRestored:
@@ -81,18 +49,10 @@ func generationReason(f statelog.GenerationFacts) string {
 }
 
 // generationActor is the author, the author kind and the credential a
-// generation record carries — the three columns every other record here does.
-//
-// [statelog.GenerationFacts.Author]'s party, which every domain's generation
-// record names alike, in this package's words — which are the actor kinds
-// themselves. THE FACTS' OWN KIND AND CREDENTIAL, never the author's name
-// standing in for both: it used to record every operator as kind `operator`
-// with their NAME as the credential, so a reanchor run by a person through
-// their machine token read as an API token named after them, and the
-// credential that actually ran it — the one a revocation would be about — was
-// on no record.
-//
-// NOBODY NAMED IS THE NODE, recorded as the node's own writer records itself.
+// generation record carries, from [statelog.GenerationFacts.Author]'s party.
+// It takes the facts' own kind and credential, never the author's name for
+// both: the credential that ran the verb is what a revocation is about.
+// Nobody named is the node, recorded as the node's own writer records itself.
 func generationActor(f statelog.GenerationFacts) (author string, kind AuthorKind, operator string) {
 	party, named := f.Author()
 	if !named {
@@ -110,29 +70,21 @@ func (GenerationRecord) GenerationSubject(gen uint32) (statelog.Subject, bool) {
 
 // GenerationRecord encodes the reanchor's record for the NEW generation.
 //
-// CREATE-ONLY ON THE GENERATION'S OWN SUBJECT, which is first-writer-wins used
-// for the one thing it is perfectly suited to: two operators deriving the same
-// generation number race at the broker and exactly one record lands.
+// It is create-only on the generation's own subject: two operators deriving the
+// same generation number race at the broker and exactly one record lands.
 //
-// THE OPERATION ID NAMES THE WRITER ([statelog.GenerationFacts.OpID]). Two
-// nodes deriving the same number are two operations, and with one id between
-// them the broker's duplicate window
-// acknowledged the second as though its record had landed — so it carried on
-// and opened the generation over its own rows too. A re-run on one node is
-// still the same operation. Whose record landed is read back and compared by
-// the transition itself ([statelog.Reanchor]), which does not rely on this.
+// The operation id names the writer ([statelog.GenerationFacts.OpID]): two
+// nodes deriving the same number are two operations, or the broker's duplicate
+// window would acknowledge the second as landed. A re-run on one node is the
+// same operation. [statelog.Reanchor] reads back whose record landed.
 //
-// THE OPERATOR IS THE AUTHOR. The record went out through the node's own
-// writer once, which is the SYSTEM actor, so the audit row said the engine had
-// reanchored itself; who ran the verb is the one fact a later reader of
-// `tracker_log_generations` is asking. See [generationActor] for the three
-// columns it fills.
+// The operator is the author ([generationActor]), not the node's SYSTEM actor:
+// who ran the verb is what a reader of `tracker_log_generations` asks.
 func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.GenerationRecord, bool, error) {
 	subject := GenerationSubject(f.Generation)
 	scope := ScopeSet{Subject: true}
-	// THE STATE LOG'S OWN GRAMMAR ([statelog.GenerationFacts.OpID]), so
-	// the record's id carries the instant a retry is judged by, names the
-	// node that writes it, and is the same operation on every re-run there.
+	// The state log's grammar: the id carries the instant a retry is judged
+	// by and names the writing node.
 	opID := f.OpID()
 	author, kind, operator := generationActor(f)
 	body, err := json.Marshal(Generation{
@@ -148,9 +100,8 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 		return statelog.GenerationRecord{}, false, fmt.Errorf("worklet: encode "+
 			"generation %d: %w", f.Generation, err)
 	}
-	// THE GENERATION AND THE WRITER ARE STAMPED, and both are this
-	// record's own: it opens the generation it names, and the eviction
-	// gate reads the node that wrote it.
+	// Gen and Writer are the record's own: it opens the generation it names,
+	// and the eviction gate reads its writer.
 	encoded, err := MutationRecord{
 		// NEVER [RecordVersion]: see [baseRecordVersion].
 		RecordEnvelope: RecordEnvelope{

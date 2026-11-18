@@ -22,13 +22,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// THE WHOLE PATH: a write reaches the broker, the applier and the reader.
-//
-// The code domain's write path is a publisher and its read path is a set of
-// applied rows, and nothing between them is mocked here — a real embedded
-// broker, a real store, the shipped domain and the shipped applier. Every
-// property the cases built on this assert is a claim about the three of them
-// agreeing, which no unit test can reach.
+// THE WHOLE PATH: a write reaches the broker, the applier and the reader, with
+// nothing between mocked (a real embedded broker and store, the shipped domain
+// and applier), so every case asserts the three agreeing, which no unit test
+// can reach.
 
 // harnessAt is the store's clock: every authored instant the harness's writes
 // carry.
@@ -40,11 +37,9 @@ var harnessAt = time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
 // filtered by the grant it is not about.
 var asker = gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "founder-token", Seat: "founder"}
 
-// testRing is the one keyring every node these cases build signs its records
-// and opens its peers' under: one fleet, one keyring, as every state log's
-// records are signed (ADR-0031). The key is a fixture — what the cases are
-// about is what the domain writes, and the signature's own rules are
-// certified in internal/statelog.
+// testRing is the one keyring every node here signs and opens records under,
+// as one fleet's state logs are (ADR-0031). The key is a fixture: the
+// signature's own rules are certified in internal/statelog.
 var testRing = recordseal.OneKey("k1", "the code cases' fleet key material")
 
 // testSigner is the code log's signer under [testRing].
@@ -75,8 +70,7 @@ type node struct {
 	db  store.ReplicatedHandle
 	log *js.DomainLog
 	// records is the log read back as BODIES, each signed frame opened under
-	// [testRing] — what the framework's loop decodes, and what a case that
-	// reads a record off the log decodes too: the raw log answers frames.
+	// [testRing], as the framework's loop decodes it: the raw log answers frames.
 	records statelog.VerifiedLog
 	applier *gitlet.Applier
 	pub     *statelog.Publisher
@@ -87,10 +81,9 @@ type node struct {
 	// a case builds a reader of its own over it.
 	authority *statelog.Reader
 
-	// chart is the roster the reader judges a seat by — set by a case about
-	// grants before it reads, and nil otherwise: no chart, as a reader built
-	// without one has. The lifecycle store decides by it too: with none, it
-	// decides no lifecycle request, as a node with no epoch installed.
+	// chart is the roster the reader judges a seat by, set by a case about
+	// grants and nil otherwise. The lifecycle store decides by it too: with
+	// none it decides no request, as a node with no epoch installed.
 	chart gitlet.Roster
 
 	// people is the identity directory the lifecycle store asks who holds a
@@ -139,13 +132,11 @@ type node struct {
 	barriersHeld atomic.Bool
 }
 
-// holdBarrierCommits has this node reach every barrier the moment its drain
-// decodes it and commit none of them: a runner whose checkpoint transaction
-// beside its loop is held at its commit (statelog's [statelog.Runner.Reached]),
-// its checkpoint row left at the last record that wrote a row while its
-// reached position runs on over every barrier after it. A record that writes
-// a row commits the checkpoint past them, as the loop's next transaction with
-// rows carries them.
+// holdBarrierCommits has this node reach every barrier as its drain decodes it
+// and commit none, as a runner whose checkpoint transaction is held at its
+// commit ([statelog.Runner.Reached]): the checkpoint row stays at the last
+// record that wrote a row while the reached position runs on, and the next
+// record with rows commits the checkpoint past them.
 func (n *node) holdBarrierCommits() { n.barriersHeld.Store(true) }
 
 // barrier appends one barrier to the code log through a read index — what any
@@ -166,20 +157,17 @@ func (n *node) barrier() statelog.Position {
 	return at
 }
 
-// harnessRoom is what a case may write to the code log with ordinary records:
-// the 64 MiB the harness's ceiling was before a gate reserve shared it. The
-// page-budget case — twenty pushes of the longest refs — writes 7.6 MB
-// (measured), past the 7 MiB a 64 MiB ceiling leaves beside the reserve.
+// harnessRoom is what a case may write to the code log with ordinary records.
+// The page-budget case (twenty pushes of the longest refs) writes 7.6 MB
+// (measured), past the 7 MiB a 64 MiB ceiling would leave beside the reserve.
 const harnessRoom = 64 << 20
 
 // harnessLogBytes is the smallest ceiling that leaves ordinary records room
-// bytes beside the code log's GATE RESERVE (statelog.ReservationOf): the code
-// log claims identity, so the top of its ceiling — the larger of a sixteenth
-// of it and seven of its largest appends and a mebibyte, 57 MiB for a log
-// whose largest append is 8 MiB — is kept for the records that install or
-// lift a gate, and ordinary writes are refused `log_full` short of it. The
-// fixed point of ceiling = room + reserve(ceiling), decided by the reserve's
-// own arithmetic rather than a figure written here.
+// bytes beside the code log's GATE RESERVE (statelog.ReservationOf), which the
+// identity-claiming code log keeps for gate records (57 MiB for a largest
+// append of 8 MiB), refusing ordinary writes `log_full` short of it: the fixed
+// point of ceiling = room + reserve(ceiling), by the reserve's own arithmetic
+// rather than a figure written here.
 func harnessLogBytes(room uint64) uint64 {
 	r := statelog.ReservationOf(gitlet.Domain{})
 	ceiling := room
@@ -224,9 +212,8 @@ func newNode(t testing.TB) *node {
 	return nodeOn(t, openLog(t), "node-a")
 }
 
-// newTwoNodes is two nodes on ONE log, each with its own estate and applier —
-// the shape a race between two writers, or a read on a node behind another,
-// needs.
+// newTwoNodes is two nodes on ONE log, each with its own estate and applier,
+// for a race between two writers or a read on a node behind another.
 func newTwoNodes(t testing.TB) (*node, *node) {
 	t.Helper()
 	log := openLog(t)
@@ -339,10 +326,9 @@ func (n *node) release() {
 	n.drain()
 }
 
-// drain consumes every record the broker holds beyond what this node has
-// applied, exactly as the framework's own loop does — one transaction per
-// record, carrying the rows, the operation id, the anchor and the checkpoint
-// together.
+// drain applies every record past this node's position as the framework's
+// loop does: one transaction per record, carrying the rows, the operation id,
+// the anchor and the checkpoint together.
 func (n *node) drain() {
 	n.t.Helper()
 	n.mu.Lock()
@@ -462,9 +448,9 @@ func (n *node) ensure(name string, settings gitlet.RepoSettings, at time.Time) g
 	return got
 }
 
-// push publishes one (repo, push) record carrying entries, through this node's
-// publisher, and answers the result — a record built here rather than decided
-// by a committer, for the cases about the applier and the reader.
+// push publishes one (repo, push) record carrying entries through this node's
+// publisher, built here rather than decided by a committer, for the cases
+// about the applier and the reader.
 func (n *node) push(repo string, entries ...gitlet.PushEntry) statelog.Result {
 	n.t.Helper()
 	res, err := n.pushErr(repo, entries...)
@@ -555,8 +541,7 @@ func (n *node) exec(query string, args ...any) {
 
 // testWaiter is this node's applier as the publisher and the reader see it.
 //
-// It APPLIES WHILE A WRITE WAITS, because a running node's applier does: a
-// write waits for this node to apply its record, and a harness whose applier
+// It APPLIES WHILE A WRITE WAITS, as a running node's applier does: one that
 // ran only when a case drained would let every write's budget expire. A HELD
 // node ([node.hold]) answers at once what an expired budget would.
 type testWaiter struct {

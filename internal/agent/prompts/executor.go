@@ -9,37 +9,15 @@ import (
 )
 
 // ExecutorHeader is the executor's contract: decide and act in one pass, then
-// account for it.
-//
-// It states only what the model cannot learn from anything else it is sent,
-// and each rule once. Every sentence left is a production failure that has
-// already happened:
-//
-//   - "writing about an action does not perform it" — a turn that ended with
-//     a composed reply nobody was sent. It stays here, not only in
-//     `submit_work`'s description, because the executor's harness's own harness
-//     teaches the opposite: there, the final text IS the answer to whoever
-//     asked, and here it reaches nobody — the only way to a person is a tool
-//     of the seat's;
-//   - the search sentence — an actor that gave up when the tool it needed
-//     was not already in front of it. Every tool the seat holds is on the
-//     run's surface from its launch, but its harness shows a large server's
-//     tools only once its model looks for them (its tool search, Code Mode's
-//     `search()`), which is the same failure waiting to happen;
-//   - the full-arc rule — routed comment triggers produced recon only, and
-//     the turn ended with the model writing "I don't have write tools";
-//   - the originating-channel rule — a tracker-create task triggered from
-//     chat hit an unresolvable assignee and the requester got silence; and a
-//     founder's direct message was "answered" with a work item they never
-//     heard about.
-//
-// What is NOT here is everything another channel already carries. What an
-// outcome means and that `deliveries` are checked is the submission schema's
-// to say (runner/schema.go), beside the fields it describes, and the decoder
-// enforces both; how a tool is looked for is the harness's own to teach; the
-// mission, policies and roster need no sentence saying they
-// are present, because they are. A second copy of a rule is not emphasis: it
-// is two texts that drift, and the model reads whichever it saw last.
+// account for it. Each sentence answers a failure seen (package doc, "Prompt
+// text is behaviour"). "Writing about an action does not perform it": a
+// composed reply nobody was sent, since the harness teaches that its final
+// text is the answer. The search sentence: a harness shows a large server's
+// tools only once its model looks, and an actor gave up on a tool not in
+// front of it. The full arc: comment triggers ended in recon and "I don't have
+// write tools". The originating channel: a requester got silence, or a work
+// item they never heard of. What an outcome means is the submission schema's
+// (runner/schema.go).
 const ExecutorHeader = "\n## Your turn" +
 	"\nDecide what to do about the task below and do it, in this one pass. " +
 	"Use tool calls for every action — writing about an action does not " +
@@ -70,36 +48,24 @@ const KeyUntrustedText = "untrusted_text"
 // about the company's own code.
 const KeyCodeHistory = "code_history"
 
-// CodeHistoryTools are the code tools [codeHistorySection]'s claims rest on:
-// what a file says, what changed, who last changed a line, how a file's
-// history went and whether a commit reached a branch, read by the commit ids a
-// ref resolves to — and a change's diff, its findings and what changed since a
-// review, read by the change. The section renders only where the executor
-// holds EVERY one of them, so a prompt never sends a seat to a tool its
-// surface does not carry; they are registered together where a company hosts
-// code, so a seat holds all of them or none. Exported for the test in
-// internal/agent/builtin that holds them to the code tools that package
-// registers, which this package cannot import.
+// CodeHistoryTools are the code tools [codeHistorySection]'s claims rest on.
+// The section renders only where the executor holds every one, so a prompt
+// never sends a seat to a tool its surface lacks; they are registered
+// together, so a seat holds all or none. Exported for
+// internal/agent/builtin's test holding them to the tools it registers, which
+// this package cannot import.
 func CodeHistoryTools() []string {
 	return []string{toolname.CodeResolve, toolname.CodeRead, toolname.CodeDiff, toolname.CodeCompare,
 		toolname.CodeLandedIn, toolname.CodeLog, toolname.CodeBlame, toolname.CodeGetChange}
 }
 
-// codeHistorySection is the one rule about reading the company's code that no
-// tool's description can carry: that such a question is not one for a clone
-// at all. Each code tool's description says what it answers and how to call
-// it — `code_resolve`'s that a branch is resolved once and its commit id
-// passed on — so none of that is repeated here; what is left is the choice a
-// seat makes BEFORE it picks a tool, between a server-side read by commit id,
-// which costs milliseconds, and a clone in the executor's box, which costs
-// minutes and the company's Gitlet nodes their transfer lane.
-//
-// The tools by their family's name rather than one by one, so the sentence
-// stays true as later reads join the family — but for the one read a review
-// is done with, named because the choice it settles is the same one: a
-// reviewer that re-reads a change by checking it out and walking its history
-// in a box spends the box's minutes on a question the server answers by the
-// change, the revisions its rows record, and the findings placed in them.
+// codeHistorySection is the one rule no tool's description can carry: the
+// choice made before picking a tool, between a server-side read by commit id
+// (milliseconds) and a clone in the box (minutes, and the Gitlet nodes'
+// transfer lane). How each tool is called is its description's. The family is
+// named as `code_*` so the sentence stays true as reads join it; the change
+// read is named because a reviewer checking a change out faces the same
+// choice.
 const codeHistorySection = "\n## Reading the company's code" +
 	"\nWhat a file says, what changed, who last changed a line, how a file's " +
 	"history went, and whether a commit reached a branch are read on the " +
@@ -111,23 +77,15 @@ const codeHistorySection = "\n## Reading the company's code" +
 // code.
 const KeyCodeSearch = "code_searching"
 
-// CodeSearchTools are the code tools [codeSearchSection]'s claim rests on: the
-// search. The section renders only where the executor holds it — registered
-// where the engine's search is wired, beside the reads, which a seat holds
-// all of or none — so no prompt sends a seat to a search its surface does not
-// carry. Exported for internal/agent/builtin's test that holds it to the tool
-// that package registers, which this package cannot import.
+// CodeSearchTools are the code tools [codeSearchSection]'s claim rests on,
+// gated and exported as [CodeHistoryTools] are.
 func CodeSearchTools() []string { return []string{toolname.CodeSearch} }
 
-// codeSearchSection is the one rule about SEARCHING the company's code that no
-// tool's description reaches a seat early enough to make: the choice between
-// one search across the repositories it reads, which the Gitlet nodes answer from
-// an index where a repository keeps one, and walking trees file by file with
-// code_read to find where something lives, a round each and the turn's context
-// spent on files that do not hold it. How a search is written — its filters,
-// its mode, its pages, and that an unfiltered one reads only the repositories
-// that keep an index — is the tool's description, not repeated here: "every
-// repository" would be false of a `search: grep` one no repo: names.
+// codeSearchSection is the choice no tool's description reaches a seat early
+// enough to make: one search across its repositories rather than walking trees
+// with code_read, a round and context per file. How a search is written is
+// the tool's description; "every repository" would be false of a `search:
+// grep` one no repo: names.
 const codeSearchSection = "\n## Searching the company's code" +
 	"\nWhere something is defined, used or mentioned is found with `" + toolname.CodeSearch + "` " +
 	"across the repositories you can read — search before reading whole trees."
@@ -136,30 +94,18 @@ const codeSearchSection = "\n## Searching the company's code" +
 // own code.
 const KeyCodeWrites = "code_writes"
 
-// CodeWriteTools are the code tools [codeWritesSection]'s claims rest on: a
-// small change committed on the server, and a scratch repository of the
-// seat's own. The section renders only where the executor holds EVERY one of
-// them; Gitlet's writes are registered together, where a company hosts
-// code and its writes are served, and every one that moves a ref or makes a
-// repository is left off where the seat's code tier writes nothing
-// (internal/agent/builtin's CodeWritesWithheld: such a seat keeps only a
-// change's conversation writes its tier reaches), so a seat holds both of
-// these or neither — and a seat that may change no repository is told nothing
-// about changing one.
-// Exported for the test in internal/agent/builtin that holds them to the code
-// writes that package registers, which this package cannot import.
+// CodeWriteTools are the code tools [codeWritesSection]'s claims rest on,
+// gated and exported as [CodeHistoryTools] are. A seat whose code tier writes
+// nothing holds neither (internal/agent/builtin's CodeWritesWithheld), so it
+// is told nothing about changing a repository.
 func CodeWriteTools() []string {
 	return []string{toolname.CodeCommitFiles, toolname.CodeCreateRepo}
 }
 
-// codeWritesSection is the one rule about CHANGING the company's code that no
-// tool's description can carry, for [codeHistorySection]'s reason: the choice
-// a seat makes before it picks a tool — between a change Gitlet builds
-// from a call, which costs a push and no checkout, and a checkout the
-// executor builds and tests in in its box, which costs minutes. How each
-// write is called (`expected_head`, an edit's exact match, a conflict's
-// stages) is its description's, and is not repeated here; nor is the scratch
-// repository's expiry, which code_create_repo's description says.
+// codeWritesSection is [codeHistorySection]'s choice made for a write: a change
+// Gitlet builds from a call (a push, no checkout) or a checkout built and
+// tested in the box (minutes). How each write is called, and a scratch
+// repository's expiry, are the tools' descriptions'.
 const codeWritesSection = "\n## Changing the company's code" +
 	"\nA small change to a repository — a document, a configuration, a fix of a " +
 	"few lines — is committed on the server with `" + toolname.CodeCommitFiles + "`; anything to " +
@@ -169,57 +115,36 @@ const codeWritesSection = "\n## Changing the company's code" +
 // KeyCodeMerging is the outline key of the guidance on merging a change.
 const KeyCodeMerging = "code_merging"
 
-// CodeMergeTools are the code tools [codeMergingSection]'s claims rest on: the
-// merge itself. Exported for internal/agent/builtin's test that holds them to
-// the change writes it registers.
+// CodeMergeTools are the code tools [codeMergingSection]'s claims rest on,
+// gated and exported as [CodeHistoryTools] are.
 func CodeMergeTools() []string { return []string{toolname.CodeMergeChange} }
 
-// codeMergingSection is the one rule about MERGING a change that no tool's
-// description can carry early enough: what a seat does while a change waits.
-// A merge its gate does not allow yet is answered not_ready and a queued one
-// lands later, and in both the engine wakes the seat when it is time — a
-// ready_to_merge wake once the last precondition is met, a merged one once a
-// queue lands it — so a seat that polls, or keeps its turn open waiting, spends
-// rounds on what a wake already delivers. Which preconditions, who clears them
-// and the change's place in its queue are the tool's answer, not repeated here.
+// codeMergingSection is what a seat does while a change waits: nothing, since
+// the engine wakes it (`ready_to_merge` once the last precondition is met,
+// `merged` once a queue lands it), so polling or holding the turn open spends
+// rounds on what a wake delivers. Preconditions are the tool's answer.
 const codeMergingSection = "\n## Merging a change" +
 	"\nA change merges with `" + toolname.CodeMergeChange + "` once it is ready. A merge that " +
 	"is not ready, or is queued for its checks, is not waited on: end the turn, " +
 	"and a `ready_to_merge` or `merged` wake brings you back."
 
 // ExecutorInput is everything the executor prompt renders beyond the seat
-// itself.
+// itself, frozen at turn start (package doc, "Byte-stability across rounds").
+// The zero value renders the plain contract with no prefetch blocks.
 //
-// Every field is frozen at turn start and none of them varies between the
-// turn's launches: that is what makes the prompt byte-identical on its third
-// run and its first, which is what the provider's prefix cache is priced on.
-// Work that accumulates DURING the turn belongs in [BuildPhaseUserMessage].
-//
-// The zero value renders the plain contract with no prefetch blocks, which is
-// what most tests want.
-//
-// NO TOOL IS LISTED, and no server to discover: the executor holds every tool
-// it can reach from its launch, each one's definition reaching its harness
-// over the bridge under the server it comes from, with what that server is
-// for as the server's own MCP instructions (internal/api/mcpbridge,
-// servers.go). Its harness keeps them out of the requests that do not need
-// them by its own deferral.
+// No tool is listed: the executor holds every tool from launch, each reaching
+// its harness over the bridge with its server's MCP instructions
+// (internal/api/mcpbridge, servers.go).
 type ExecutorInput struct {
-	// AvailableTools is every name on the surface built for this phase,
-	// the tools the phase adds to it included (`submit_work`, `delegate`)
-	// — never the registry snapshot it was built from, which holds none of
-	// those. It gates every section that tells the model to call a tool
-	// (escalation, workers).
+	// AvailableTools is every name on the phase's surface, the tools the
+	// phase adds included (`submit_work`, `delegate`), never the registry
+	// snapshot, which lacks those. It gates every section naming a tool.
 	AvailableTools []string
 
-	// Workers is the rendered `## Your workers` block: one line per
-	// delegate template this seat may name, with what it is for and what
-	// it returns.
-	//
-	// GATED on `delegate` actually being on the surface, below: a seat
-	// told about workers it cannot reach spends a round discovering the
-	// tool does not exist, and reads the refusal as a permission decision
-	// nobody made.
+	// Workers is the rendered `## Your workers` block, one line per delegate
+	// template this seat may name. Gated on `delegate` being on the surface:
+	// otherwise a seat spends a round finding the tool missing and reads the
+	// refusal as a permission decision nobody made.
 	Workers string
 
 	// CounterpartyProfile is the observed-traits block for the turn's
@@ -234,14 +159,13 @@ type ExecutorInput struct {
 	// fenced as text somebody else wrote.
 	Systems string
 
-	// SynthesizedSkills is the block of skills this agent has learned for
-	// itself (distinct from the operator-authored tool skills, which are its
-	// harness's own and listed by it — internal/agent/runner,
+	// SynthesizedSkills is the skills this agent learned for itself, not the
+	// operator's tool skills, which its harness lists (internal/agent/runner,
 	// handedskills.go).
 	SynthesizedSkills string
 
-	// EpisodeRecall is episodic recall, frozen at turn start rather than
-	// re-queried mid-turn precisely to preserve prefix caching.
+	// EpisodeRecall is episodic recall, frozen at turn start to preserve
+	// prefix caching.
 	EpisodeRecall string
 
 	// PersonalMemory is the agent-scope diary block, already filtered for
@@ -253,42 +177,27 @@ type ExecutorInput struct {
 	// a query-time search built from the trigger, frozen at turn start.
 	RelevantKnowledge string
 
-	// ThreadContext is the chat thread this turn was woken in, read at
-	// turn start and handed over rather than left for the agent to fetch.
-	// Empty for every trigger that is not a chat thread reply.
+	// ThreadContext is the chat thread this turn was woken in, read at turn
+	// start; empty for a trigger that is not a chat thread reply.
 	ThreadContext string
 
 	// Access is the rendered "## Your access" section (internal/capability's
-	// YourAccess): what the seat reaches with its own credentials now, on
-	// every turn, so it outranks anything an earlier turn of a continued
-	// session said. Empty for a company that connects no integration.
+	// YourAccess), current on every turn, so it outranks what an earlier turn
+	// of a continued session said. Empty where no integration is connected.
 	Access string
 }
 
 // BuildExecutor renders the executor's system prompt, and its outline.
 //
-// The executor gets the whole static picture inline — identity, mission,
-// policies, unit, roster — because an employee does not look up what their
-// company does before every decision, and a knowledge round-trip per turn
-// costs more than the tokens it saves.
-//
-// It is one prompt where there were two. The planner used to get the identity
-// scaffold and the actor got a one-line identity plus a plan, which meant the
-// frame that decided WHAT to do was thrown away before anything was done: the
-// actor met an unforeseen choice with no policy, no roster and no mission to
-// make it against.
-//
-// Every block is its own section of the outline, under a key that does not
-// move between prompts. The prefetched blocks are keyed on the
-// [github.com/crewlet/crewlet/internal/events/types.PrefetchSummary] fields
-// that measured each one (`thread_context`, `personal_memory`, …), so a reader
-// can put a block beside what the prefetch recorded about it.
+// The whole static picture (identity, mission, policies, unit, roster) is
+// inline: a knowledge round-trip per turn costs more than the tokens it saves,
+// and an actor without it meets an unforeseen choice with nothing to decide
+// it against. Each block is an outline section under a stable key; prefetched
+// blocks are keyed as PrefetchSummary measures them (the Key consts below).
 func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
-	// ONE counter for BOTH renderings of this seat's direct reports — the
-	// identity line's name list and the roster's profiles. Planned once,
-	// here, because the two sections are two views of one team and a cap
-	// each would let them disagree about who is on it while the prompt paid
-	// for both budgets. See [planRoster].
+	// One plan for both views of the direct reports (identity line and
+	// roster), so they cannot disagree about who is on the team. See
+	// [planRoster].
 	reports := planRoster(seat, newRosterAllowance(rosterAllowanceTokens))
 
 	b := NewBuilder("\n")
@@ -303,8 +212,7 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 		{"behavioral_guidelines", buildGuidelinesSection(seat)},
 		{"unit", BuildUnitContextSection(seat)},
 		{"policies", BuildPoliciesSection(seat)},
-		// RIGHT AFTER THE POLICIES, which say what the seat may do; this says
-		// what it can reach. Both are current on every turn.
+		// After the policies (what it may do): what it can reach.
 		{KeyAccess, accessSection(in.Access)},
 		{"team", BuildRosterSection(seat, reports)},
 		{"human_colleagues", BuildHumanColleaguesNote(seat)},
@@ -315,47 +223,32 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 		empty = empty && len(section.lines) == 0
 	}
 	if empty {
-		// THE EMPTY BODY STILL TAKES ITS PLACE. The prompt has always been
-		// the identity body and the contract joined by a newline, so a seat
-		// that renders no identity at all opens on a blank line — kept,
-		// because the outline never changes a byte of the text.
+		// The empty body still takes its place: a seat with no identity
+		// opens on a blank line, since the outline never changes the text.
 		b.Add("")
 	}
 
 	b.Heading("your_turn", ExecutorHeader)
-	// RIGHT AFTER THE CONTRACT, because it is part of how a turn ends:
-	// the header says finish the arc, and this says the one case where
-	// finishing means stopping on a branch until somebody answers.
+	// After the contract: the one case where finishing the arc means stopping
+	// until somebody answers.
 	b.Heading("escalation", BuildEscalationSection(in.AvailableTools)...)
-	// AND HOW TO READ WHAT OTHER PEOPLE WROTE, before any of it: the thread
-	// below, every page, comment and file a tool answers, and anything an
-	// MCP tool hands back is somebody else's words, and the fences round
-	// them mean something only if the seat was told what. UNCONDITIONAL and
-	// constant ([provenance.StandingInstruction]): the turn's token lives in
-	// the fences, so this section is the same bytes on every turn of every
-	// seat and costs the prompt cache nothing.
+	// How to read fenced text, before any of it. Unconditional and constant
+	// ([provenance.StandingInstruction]): the token lives in the fences, so
+	// these bytes never vary and cost the prompt cache nothing.
 	b.Heading(KeyUntrustedText, untrustedTextHeading, provenance.StandingInstruction)
 
-	// FIRST of the prefetched blocks, because it is the trigger's own
-	// context rather than something retrieved about it, and the executor
-	// reads this prompt top-down: what the conversation is before what the
-	// seat remembers about conversations like it.
-	//
-	// "The thread so far" rather than "Thread context", which is what the
-	// chat prompt titles the section it writes into the notification BODY
-	// — and that lands in the USER message of this same conversation. Two
-	// sections under one heading saying different things is a model reading
-	// whichever it saw last.
+	// First of the prefetched blocks: the trigger's own context before what
+	// is retrieved about it. Not "Thread context", which the chat trigger's
+	// body in the user message already uses: two sections under one heading
+	// leave the model reading whichever it saw last.
 	if in.ThreadContext != "" {
 		b.Heading(KeyThreadContext, "\n## The thread so far", in.ThreadContext)
 	}
-	// RIGHT AFTER THE THREAD, because it is about the same people: what the
-	// seat already asked them, before anything it remembers or looks up.
+	// After the thread: what the seat already asked the same people.
 	if in.OpenAsks != "" {
 		b.Heading(KeyOpenAsks, "\n## Your open questions to them", in.OpenAsks)
 	}
-	// AFTER THE PEOPLE, BEFORE WHAT IT REMEMBERS: what the company runs on
-	// that the work names, which the seat checks before it probes anything.
+	// Before memory: the systems the work names, checked before probing.
 	if in.Systems != "" {
 		b.Heading(KeySystems, "\n## Systems in this work", in.Systems)
 	}
@@ -374,35 +267,23 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	if in.CounterpartyProfile != "" {
 		b.Heading(KeyCounterparty, "\n## Known counterparty", in.CounterpartyProfile)
 	}
-	// BEFORE the code sections, because choosing a worker is a decision
-	// about how to do the work rather than about which tool to call, and
-	// the executor reads this prompt top-down: what it is, what it knows,
-	// who it can hand work to. What it can call itself, and the tool
-	// skills that say how, are its harness's to list.
-	//
-	// THE LIST ALONE: what a worker is, what it may not do and that it
-	// answers inside this turn is `delegate`'s own description, which
-	// reaches the model with the tool on every round.
+	// Before the code sections: choosing a worker is how to do the work, not
+	// which tool to call. The list alone; what a worker is, is `delegate`'s
+	// description.
 	if in.Workers != "" && slices.Contains(in.AvailableTools, toolname.Delegate) {
 		b.Heading("workers", "\n## Your workers", in.Workers)
 	}
-	// AFTER THE WORKERS, because it is a choice of how to answer — on the
-	// server, not in a clone — made before the how-to of any one tool,
-	// which the tool skills its harness lists carry. Gated on every tool its
-	// claims rest on.
+	// Each code section is gated on every tool its claims rest on: reading,
+	// then finding what to read, then writing, then merging.
 	if holdsAll(in.AvailableTools, CodeHistoryTools()) {
 		b.Heading(KeyCodeHistory, codeHistorySection)
 	}
-	// AND HOW TO FIND WHAT TO READ, right after: the choice made before a
-	// read, of a search over every repository rather than a walk of one.
 	if holdsAll(in.AvailableTools, CodeSearchTools()) {
 		b.Heading(KeyCodeSearch, codeSearchSection)
 	}
-	// AND HOW TO CHANGE IT, after both: the same choice made for a write.
 	if holdsAll(in.AvailableTools, CodeWriteTools()) {
 		b.Heading(KeyCodeWrites, codeWritesSection)
 	}
-	// AND HOW A CHANGE MERGES, last of the four: what to do while it waits.
 	if holdsAll(in.AvailableTools, CodeMergeTools()) {
 		b.Heading(KeyCodeMerging, codeMergingSection)
 	}
@@ -436,15 +317,11 @@ func accessSection(access string) []string {
 // does not hold yet.
 const KeyDiscoverableTools = "discoverable_tools"
 
-// discoverableSection is the heading and the list of what a phase can still
-// discover, or nil when there is nothing — a phase that holds everything it
-// can reach has no section, rather than a heading over "(none)".
+// discoverableSection is the heading and list of what a phase can still
+// discover, or nil when there is nothing (no heading over "(none)").
 //
-// NOT "Available tools", which is what it was titled while it listed every
-// tool the phase already held. The tools a phase holds reach its harness as the
-// tools of its MCP server, and a section headed as though it listed them
-// tells the model it may call what it first has to discover — a call the
-// session refuses, since the tool is not on its surface yet.
+// Not "Available tools": that tells the model it may call what it must first
+// discover, a call the session refuses.
 func discoverableSection(list string) []string {
 	if strings.TrimSpace(list) == "" {
 		return nil
@@ -452,12 +329,10 @@ func discoverableSection(list string) []string {
 	return []string{"\n## Tools to discover", list}
 }
 
-// The keys of the executor's PREFETCHED blocks: the prefixes of the
+// The keys of the executor's prefetched blocks: the prefixes of the
 // [github.com/crewlet/crewlet/internal/events/types.PrefetchSummary] fields
-// that measure each block (`thread_context_hit`, `thread_context_bytes`, …).
-// One name for one block across the two records, so a reader joins them
-// without a table — and a test reads the summary's own tags and holds these to
-// them, rather than a second list here drifting from it.
+// measuring each (`thread_context_hit`, …), so a reader joins the two records
+// without a table. A test holds these to the summary's tags.
 const (
 	KeyThreadContext     = "thread_context"
 	KeyPersonalMemory    = "personal_memory"

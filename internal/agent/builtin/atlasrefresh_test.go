@@ -40,9 +40,8 @@ func (d *refreshDesk) AskAtlasRefresh(ctx context.Context, kind integration.Kind
 	return d.store.Ask(ctx, kind, req)
 }
 
-// stillSources is the sources of a company that connects Cloudflare, never
-// read and asked for by nobody, for a catalogue that only has to serve the
-// tool: an ask is taken and kept nowhere.
+// stillSources is a company connecting Cloudflare, never read nor asked for,
+// for a catalogue that only has to serve the tool: an ask is kept nowhere.
 type stillSources struct{}
 
 func (stillSources) AtlasSourceReport(_ context.Context, now time.Time) (collect.Report, bool, error) {

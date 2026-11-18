@@ -129,24 +129,16 @@ func TestEveryMatchingProtectionHolds(t *testing.T) {
 }
 
 // A COMMAND'S PROTECTION VERDICT ALLOCATES NOTHING, against the most rules a
-// repository may carry, each of gitref's costliest shape: the decide asks it of
-// every command of a batch, and the receiver of every command of a push, so an
-// allocation a rule would be MaxProtectionsPerRepo of them a command — garbage
-// at the rate the costliest round already spends its core on.
+// repository may carry, each of gitref's costliest shape: the decide and the
+// receiver ask it of every command, so an allocation a rule would be
+// MaxProtectionsPerRepo a command. The rules are the walk [gitlet.CommitBudget]
+// is sized by: each starts its ** at the ref's first branch component with four
+// globs before its second, so each searches the whole 255-byte ref. Both
+// commands are deletions, which every rule refuses, so none says none matched.
 //
-// THE WALK [gitlet.CommitBudget] IS SIZED BY, never rules a ref leaves at their
-// first part: the parts before a rule's first ** are compared once, at the
-// ref's start, so rules named for sixty-four teams cost a ref of one team
-// sixty-three comparisons and a single search. Every rule here starts its **
-// at the ref's first branch component and holds a run of four globs before
-// its second, so each searches the whole 255-byte ref. Both commands are
-// DELETIONS, which every one of these rules refuses, so an answer of none
-// says no rule matched.
-//
-// NOT PARALLEL, because an allocation count is the whole process's, and over
-// A HUNDRED RUNS, which testing.AllocsPerRun divides and rounds down: a stray
-// allocation of the process's own (search's fixture test names nats-server's
-// sampler) divides to zero, and one a rule allocates a run never does.
+// Not parallel, since an allocation count is the process's; over a hundred
+// runs, which AllocsPerRun rounds down, so a stray allocation of the process's
+// own divides to zero and a rule's never does.
 func TestAProtectionVerdictAllocatesNothing(t *testing.T) {
 	costliest := gitlet.CostliestRules(gitlet.MaxProtectionsPerRepo)
 	for _, rule := range costliest {
@@ -384,14 +376,12 @@ func TestAGoneRepositorysSentenceNamesItsState(t *testing.T) {
 	}
 }
 
-// EVERY SENTENCE A RECEIVER WRITES INTO A PROPOSAL FITS IT, at its longest:
-// a ref of MaxRefNameBytes refused under each protection flag of a rule whose
-// pattern is as long as a pattern may be — a seat's push under a rule that
-// takes a person's alone among them, the longest of them, which a receiver of
-// a seat's push forms — and stale at an id the repository does not hold. Each
-// names no ref — git prints the ref beside it — and a proposal carrying it
-// beside an update still standing validates, so Gitlet never has a
-// push refused whole for a sentence of its own.
+// EVERY SENTENCE A RECEIVER WRITES INTO A PROPOSAL FITS IT, at its longest: a
+// MaxRefNameBytes ref refused under each protection flag of a rule with the
+// longest pattern (a seat's push under direct_push persons the longest), and
+// stale at an id the repository does not hold. Each names no ref (git prints
+// it beside), and a proposal carrying it beside a standing update validates,
+// so Gitlet never has a push refused whole for a sentence of its own.
 //
 // Mutation: spell the persons rule's sentence with the remedy Gitlet's
 // table gives ("…; a seat's change reaches it when a person pushes it") and it

@@ -129,28 +129,16 @@ func stageRestoredBroker(t *testing.T) divergedBroker {
 }
 
 // copyStoppedBroker copies the store directory of an embedded broker whose
-// server has just stopped IN THIS PROCESS, leaving out the temporaries of the
-// server's atomic writes.
+// server has just stopped IN THIS PROCESS, leaving out every *.tmp.
 //
-// A STOPPED SERVER CAN STILL BE WRITING ITS DIRECTORY. nats-server 2.15.0
-// writes a consumer's state from a flusher goroutine that clears the state's
-// dirty flag before it writes o.dat.tmp and renames it over o.dat, outside the
-// store's lock (filestore.go, consumerFileStore.writeState), and its Stop
-// waits for that flusher only while the state is still dirty, and then for at
-// most 100 ms (Stop, waitOnFlusher). So a flush begun just before the shutdown
-// can still be running when WaitForShutdown returns, and os.CopyFS listed
-// o.dat.tmp and found it renamed away when it opened it:
-// TestANodeWhosePeerStandsPastARestoredLogRefusesItsWrites failed at this copy
-// once in six race runs of this package beside two go build/vet loops.
-// 2.15.1 waits for the flusher whether or not the state is dirty, but still
-// for at most 100 ms, so a flush the scheduler holds longer than that outlives
-// the stop there too.
-//
-// A temporary is never state: the rename is what publishes the write, and the
-// server reads o.dat. So the copy leaves every *.tmp out, and an o.dat renamed
-// over while the copy runs is copied as the one before the flush or the one
-// after it, each written whole. A process that exits ends its flusher with it,
-// so an operator's copy of a stopped node's directory never meets one.
+// A stopped server can still be writing: nats-server's consumer-state flusher
+// writes o.dat.tmp and renames it over o.dat outside the store's lock, and
+// Stop waits for it at most 100 ms (filestore.go, consumerFileStore.writeState,
+// waitOnFlusher), so a flush can outlive WaitForShutdown and os.CopyFS finds a
+// listed o.dat.tmp renamed away. A temporary is never state (the rename
+// publishes the write), and o.dat is copied whole from before or after the
+// flush. An operator's copy never meets this: an exited process ends its
+// flusher.
 func copyStoppedBroker(t *testing.T, dst, src string) {
 	t.Helper()
 	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
@@ -198,12 +186,9 @@ func copyFile(dst, src string) error {
 // restoreBroker brings an embedded broker's store back from a copy into a
 // directory of its own, and points the nodes' bootstraps at it.
 //
-// A FRESH DIRECTORY rather than the one the copy was taken from, because a
-// server that stopped in this process may still be finishing a consumer's
-// flush ([copyStoppedBroker]). Its writes name paths under the directory it
-// ran in, so a restore removed and copied back in place could have a flush
-// land in the restored store, or fail its removal on a file created while
-// the removal ran. A restore beside that directory can meet neither.
+// A fresh directory, not the original: a server stopped in this process may
+// still be finishing a flush there ([copyStoppedBroker]), which could land in
+// a store restored in place or fail its removal.
 func restoreBroker(t *testing.T, from string, nodes ...*config.Bootstrap) {
 	t.Helper()
 	dir := filepath.Join(brokertest.TempDir(t), "restored")
@@ -266,13 +251,12 @@ func (d *divergedBroker) writePast(t *testing.T) {
 // A NODE WHOSE RESTORED LOG WAS WRITTEN PAST ITS ROWS BEFORE IT BOOTED REFUSES
 // THE DOMAIN AND APPLIES NOTHING PAST ITS CHECKPOINT.
 //
-// Its checkpoint is not past the log's end — the other node wrote past it — so
-// the only refusal a restored broker used to get never fired, and the node's
-// applier resumed from its checkpoint into the other history: B's edits landed
-// on top of rows holding A's tail, a mix no node could ever reconcile. The boot
-// now verifies the record at the checkpoint, finds B's there, and the node
-// refuses reads and writes, applies nothing, donates nothing, tells the fleet,
-// and names the restored case.
+// Its checkpoint is not past the log's end (the other node wrote past it), so
+// a past-the-end check never fires, and resuming would land B's edits on rows
+// holding A's tail, a mix no node can reconcile. The boot verifies the record
+// at the checkpoint, finds B's there, and the node refuses reads and writes,
+// applies nothing, donates nothing, tells the fleet and names the restored
+// case.
 func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testing.T) {
 	t.Parallel()
 	d := stageDivergedBroker(t)
@@ -352,15 +336,13 @@ func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testin
 
 // A DIVERGED NODE KEEPS ITS VERDICT AFTER THE RECORD IT WAS FOUND BY IS GONE.
 //
-// The verdict is found by comparing the record the checkpoint names with the
-// log's record at the same sequence, and the log can lose that record — the
-// trim removes it once the node is evicted and stops being counted, and a
-// stream can be purged by hand. A node restarted after that had nothing to
-// compare: it found its log replayable from its checkpoint, applied the other
-// history on top of its rows and published that the log no longer diverged,
-// which lifted every peer's truncation fence. The verdict is recorded in the
-// node estate when it is reached, so the restarted node still refuses, applies
-// nothing and tells the fleet.
+// The verdict compares the record the checkpoint names with the log's record
+// at that sequence, which the log can lose (the trim, once the node is evicted
+// and uncounted, or a hand purge). With nothing to compare, a restarted node
+// would apply the other history on its rows and publish that the log no
+// longer diverged, lifting every peer's truncation fence; so the verdict is
+// recorded in the node estate when reached, and the restarted node still
+// refuses, applies nothing and tells the fleet.
 func TestADivergedNodeKeepsItsVerdictAfterTheRecordItWasFoundByIsGone(t *testing.T) {
 	t.Parallel()
 	d := stageDivergedBroker(t)

@@ -13,23 +13,15 @@ import (
 )
 
 // The engine's MCP wiring, against real child processes.
-//
-// Every case here failed before this wiring existed, and not by erroring:
-// `mcp_servers:` parsed, validated and appeared in the JSON Schema while
-// nothing ever spawned a child, so a seat's whole surface was the builtins.
-// A company could be configured to reach a tracker and simply could not.
 
-// mcpCompany writes a company whose MCP servers are this test binary.
+// mcpCompany writes a company whose MCP servers are this test binary. echo
+// names the environment variable each child reports in its tool's description,
+// so a test reads the credential a child actually received.
 //
-// echo names an environment variable each child reports back in its tool's
-// description, which is how a test reads what credential a child actually
-// received rather than what the engine meant to send.
-//
-// Each child runs with the race runtime's exit sleep switched off
-// ([procgrouptest.StandInRaceOptions]), set in the server's own `env:` because
-// that is the environment the engine launches a child with. A race-built
-// helper exits 0 when its stdin closes, and otherwise sleeps a second first on
-// every stop a case makes — a teardown, a restart, an apply retiring a server.
+// The race runtime's exit sleep is switched off
+// ([procgrouptest.StandInRaceOptions]) in the server's own `env:`, the
+// environment the engine launches a child with; otherwise a race-built helper
+// sleeps a second on every stop a case makes.
 func mcpCompany(shared bool, echo string) string {
 	sharedFlag := "false"
 	if shared {
@@ -73,12 +65,9 @@ roles:
 }
 
 // claimed starts the engine and waits for it to hold its seats, each with its
-// acquisition finished ([waitEstablished]).
-//
-// A per-role child belongs to a seat's LEASE, not to the epoch: this node
-// spawns one only for a seat it has claimed. So a test about per-role tools
-// has to go through the claim, which is also the ordering OnAcquire exists to
-// enforce — the children are up before the mailbox opens.
+// acquisition finished ([waitEstablished]). A per-role child belongs to a
+// seat's LEASE, not the epoch, so a test of per-role tools goes through the
+// claim (OnAcquire starts the children before the mailbox opens).
 func claimed(t *testing.T, e *engine.Engine, seats int) {
 	t.Helper()
 	if err := e.Start(t.Context()); err != nil {
@@ -88,14 +77,9 @@ func claimed(t *testing.T, e *engine.Engine, seats int) {
 }
 
 // waitEstablished waits for this node to hold seats seats, every one of them
-// ESTABLISHED.
-//
-// Established, not merely held: a seat enters the held set the moment its
-// lease is taken, BEFORE its acquisition has started its children, so a case
-// that read a seat's tools as soon as the seat was held was reading them while
-// they were still starting — and failed whenever the last claim was slower
-// than the read. [seat.Host.MayStart] admits a turn only once the acquisition
-// has returned, which is the moment the seat's surface is complete.
+// ESTABLISHED, not merely held: a seat is held from the moment its lease is
+// taken, BEFORE its acquisition has started its children, while
+// [seat.Host.MayStart] admits a turn only once the surface is complete.
 func waitEstablished(t *testing.T, e *engine.Engine, seats int) {
 	t.Helper()
 	host := e.Node().Host()
@@ -133,10 +117,8 @@ func describes(t *testing.T, e *engine.Engine, handle, tool string) string {
 	return entry.Tool.Description()
 }
 
-// A SHARED SERVER IS ONE CHILD FOR THE COMPANY, and its tools belong to
-// everyone. It carries no seat's credentials, so there is nothing to keep
-// apart — and spawning one per seat would run the same process N times for
-// one catalogue.
+// A SHARED SERVER IS ONE CHILD FOR THE COMPANY, and its tools reach every
+// seat: it carries no seat's credentials, so there is nothing to keep apart.
 func TestASharedServersToolsReachEverySeat(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, mcpCompany(true, "PATH"))})
@@ -149,13 +131,10 @@ func TestASharedServersToolsReachEverySeat(t *testing.T) {
 	}
 }
 
-// THE IDENTITY INVARIANT, and the reason a seat needs its own registry.
-//
-// A `shared: false` server is a template: each role gets its own child holding
-// that role's credentials. Two children of one template publish the SAME tool
-// name, so one flat registry would keep whichever registered last and every
-// seat would call it — acting under another seat's identity in the tracker,
-// invisibly, because the call looks identical from the engine's side.
+// THE IDENTITY INVARIANT, and why a seat needs its own registry: each role's
+// child of a `shared: false` template holds that role's credentials and
+// publishes the SAME tool name, so one flat registry would keep the last one
+// registered and every seat would act under that seat's identity, invisibly.
 func TestEachSeatCallsItsOwnChildAndNotAPeers(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, mcpCompany(false, "SEAT_TOKEN"))})
@@ -205,9 +184,8 @@ func TestASeatATemplateIsNotGrantedToGetsNoChild(t *testing.T) {
 	}
 }
 
-// EVERY SEAT KEEPS ITS BUILTINS. The per-seat surface is the company's
-// catalogue PLUS this seat's children, never a replacement for it — a seat
-// that gained a tracker and lost lookup_colleague would be a worse seat.
+// EVERY SEAT KEEPS ITS BUILTINS: the per-seat surface is the company's
+// catalogue PLUS this seat's children, never a replacement for it.
 func TestASeatsOwnSurfaceStillCarriesTheBuiltins(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, mcpCompany(false, "SEAT_TOKEN"))})
@@ -221,12 +199,9 @@ func TestASeatsOwnSurfaceStillCarriesTheBuiltins(t *testing.T) {
 	}
 }
 
-// A SERVER THAT WILL NOT START COSTS ITS OWN TOOLS AND NOTHING ELSE.
-//
-// The alternative — failing the apply — takes a working company offline
-// because one vendor's binary is missing from an image. The operator sees the
-// group absent, which is the reading that sends them to the right subsystem;
-// builtins quietly shrinking is the reading that does not.
+// A SERVER THAT WILL NOT START COSTS ITS OWN TOOLS AND NOTHING ELSE. Failing
+// the apply would take a working company offline over one missing binary, and
+// the group being absent sends the operator to the right subsystem.
 func TestAServerThatCannotStartLeavesTheSeatItsBuiltins(t *testing.T) {
 	t.Parallel()
 	doc := strings.Replace(mcpCompany(false, "SEAT_TOKEN"),
@@ -244,19 +219,11 @@ func TestAServerThatCannotStartLeavesTheSeatItsBuiltins(t *testing.T) {
 	}
 }
 
-// A SHARED SERVER SURVIVES A CONFIG APPLY, and this is the case the suite
-// above could not see because every one of them builds exactly one epoch.
-//
-// An apply builds a FRESH registry for the new epoch and equips it. The
-// bridge's children are already running, so the engine has to be told about
-// them again — and it asked the bridge to ADD them, which refuses a name it
-// already runs. The refusal was logged as a failed server and the epoch went
-// live with the builtins alone.
-//
-// It is not a rare path. `crewlet run` seeds its company config at boot and
-// the reconciler applies it immediately, so on the Nimbus example the shared
-// servers reached exactly one epoch — the one replaced a second later — and
-// no seat ever saw a shared tool.
+// A SHARED SERVER SURVIVES A CONFIG APPLY. An apply builds a FRESH registry
+// for the new epoch while the bridge's children keep running, so the registry
+// must be told about them again: asking the bridge to ADD them is refused for
+// a name it already runs, leaving the epoch with the builtins alone. Every
+// `crewlet run` takes this path, applying its seeded config at boot.
 func TestASharedServersToolsSurviveAConfigApply(t *testing.T) {
 	t.Parallel()
 	doc := mcpCompany(true, "PATH")
@@ -286,15 +253,11 @@ func TestASharedServersToolsSurviveAConfigApply(t *testing.T) {
 	}
 }
 
-// AND SO DO A HELD SEAT'S PER-ROLE TOOLS, which is the harder half.
-//
-// A per-role registry is a CLONE of the epoch's surface, and an apply
-// publishes a new epoch — so unless the apply rebuilds them, every seat this
-// node already holds falls back to the shared surface and loses its entire
-// per-role tool set. Silent, permanent until the seat is released and
-// re-claimed, and it fires on the documented credential-rotation gesture of
-// re-activating an unchanged revision. The children are still running the
-// whole time, holding the seat's credentials, with no turn able to reach one.
+// AND SO DO A HELD SEAT'S PER-ROLE TOOLS. A per-role registry is a CLONE of
+// the epoch's surface, so unless an apply rebuilds it, every held seat falls
+// back to the shared surface until re-claimed, its children still running
+// with its credentials and unreachable. Re-activating an unchanged revision,
+// the documented credential-rotation gesture, is such an apply.
 func TestAHeldSeatsPerRoleToolsSurviveAConfigApply(t *testing.T) {
 	t.Parallel()
 	doc := mcpCompany(false, "SEAT_TOKEN")
@@ -325,14 +288,10 @@ func TestAHeldSeatsPerRoleToolsSurviveAConfigApply(t *testing.T) {
 	if cto := describes(t, e, "cto", "tracker_probe"); !strings.Contains(cto, "cto-secret") {
 		t.Errorf("the peer seat's tool now resolves to %q, want its own credential", cto)
 	}
-	// AND THE BUILTINS ARE THE NEW EPOCH'S OBJECTS, not merely its names.
-	//
-	// Every apply re-registers the builtins into the new epoch's registry
-	// from that revision's own numbers, so the objects differ between
-	// epochs while the names never do. Carrying the seat's old registry
-	// across an apply would satisfy every check above and still serve the
-	// PREVIOUS revision's builtins and knobs to turns running under the
-	// new one — which is why this compares identity rather than membership.
+	// AND THE BUILTINS ARE THE NEW EPOCH'S OBJECTS, not merely its names: an
+	// apply re-registers them from that revision's numbers, so a seat's old
+	// registry carried across would pass every check above while serving
+	// the PREVIOUS revision's knobs. Hence identity, not membership.
 	for _, builtin := range []string{"lookup_colleague", "reflect_and_persist"} {
 		if !slices.Contains(names, builtin) {
 			t.Errorf("the applied epoch lost the %s builtin from the seat's "+
@@ -352,12 +311,11 @@ func TestAHeldSeatsPerRoleToolsSurviveAConfigApply(t *testing.T) {
 }
 
 // AND THE PER-ROLE CHILD IS NOT RESTARTED BY AN APPLY THAT DID NOT MOVE IT.
-//
-// Every apply reconciles a held seat's children, so that a credential it seals
-// or rotates reaches them — but a child whose resolved spec is unchanged must
-// be left alone: restarting it would re-handshake every seat's vendor
-// credentials on every config edit, and the control-plane doc states the rule.
-// The registry is rebuilt; the process never learns an apply happened.
+// Every apply reconciles a held seat's children so a sealed or rotated
+// credential reaches them, but one whose resolved spec is unchanged is left
+// alone, or every config edit would re-handshake every seat's vendor
+// credentials (the control-plane doc states the rule). Only the registry is
+// rebuilt.
 func TestAnApplyDoesNotRestartAHeldSeatsChild(t *testing.T) {
 	t.Parallel()
 	doc := mcpCompany(false, "SEAT_TOKEN")
@@ -386,19 +344,15 @@ func TestAnApplyDoesNotRestartAHeldSeatsChild(t *testing.T) {
 	}
 }
 
-// AND THE CHILD IS NOT RESTARTED FOR AN UNCHANGED SPEC.
-//
-// The tempting fix is to restart every server on every apply, which would
-// make the case above pass while tearing down every working child — on a
-// company with several seats and real vendors, seconds of every seat's tools
-// being absent for a config edit that touched none of them.
+// AND THE CHILD IS NOT RESTARTED FOR AN UNCHANGED SPEC: restarting every
+// server on every apply would leave every seat's tools absent for seconds on a
+// config edit that touched none of them.
 func TestAnUnchangedServerIsNotRestartedByAnApply(t *testing.T) {
 	t.Parallel()
 	doc := mcpCompany(true, "PATH")
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
 
-	// The tool OBJECT identifies the child behind it: a restart builds new
-	// ones, so an unchanged pointer is proof the same process is serving.
+	// An unchanged tool object proves the same child is serving.
 	first, ok := e.Company().Tools.Lookup("tracker_probe")
 	if !ok {
 		t.Fatal("the boot epoch has no shared tool to compare")
@@ -444,12 +398,10 @@ func TestAChangedServerSpecIsRestartedByAnApply(t *testing.T) {
 	}
 }
 
-// A SHARED SERVER A REVISION REMOVED IS RETIRED, not merely forgotten.
-//
-// The apply-time reconcile is driven by the specs the CURRENT config names,
-// so a deleted server is never visited: its tools leave the catalogue with
-// the new epoch's registry, but the CHILD — holding the company's
-// credentials — keeps running until the engine stops. A rename runs two.
+// A SHARED SERVER A REVISION REMOVED IS RETIRED, not merely forgotten: the
+// apply-time reconcile visits only the specs the CURRENT config names, so a
+// deleted server's child, holding the company's credentials, would run until
+// the engine stops (a rename, two).
 func TestASharedServerARevisionRemovedIsStopped(t *testing.T) {
 	t.Parallel()
 	with := mcpCompany(true, "PATH")
@@ -459,15 +411,9 @@ func TestASharedServerARevisionRemovedIsStopped(t *testing.T) {
 		t.Fatal("the boot epoch never started the shared server")
 	}
 
-	// The same document with the whole mcp_servers block gone, AND the
-	// seats' credentials for it — which is the gesture an operator makes
-	// to take a leaking integration offline, both halves of it.
-	//
-	// BOTH HALVES BECAUSE THE DOCUMENT RULES SAY SO: an `mcp_env` block
-	// keyed on a server nothing declares is never read by anything, so a
-	// document leaving one behind is refused naming the path. Removing
-	// only the servers would test this rule rather than the retirement
-	// this case is about.
+	// The whole mcp_servers block goes, AND the seats' mcp_env blocks for it:
+	// a document keeping an `mcp_env` block for an undeclared server is
+	// refused, so removing only the servers would test that rule instead.
 	without := with[:strings.Index(with, "mcp_servers:")] +
 		strings.NewReplacer(
 			"    mcp_env:\n      tracker:\n        SEAT_TOKEN: \"ceo-secret\"\n", "",
@@ -477,12 +423,11 @@ func TestASharedServerARevisionRemovedIsStopped(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 
-	// The catalogue losing the tool is the half that already worked.
+	// The catalogue drops the tool.
 	if names := e.Company().Tools.Names(); slices.Contains(names, "tracker_probe") {
 		t.Errorf("the applied epoch still advertises the removed server: %v", names)
 	}
-	// The child being GONE is the half that did not. Servers() is the
-	// bridge's own record of what it is still running.
+	// And the child is GONE, by the bridge's own record of what it runs.
 	if running := e.SharedServers(); slices.Contains(running, "tracker") {
 		t.Errorf("the removed server is still running: %v\n"+
 			"its process holds the company's credentials and would survive "+

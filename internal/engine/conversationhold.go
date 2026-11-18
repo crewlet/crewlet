@@ -13,12 +13,11 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// A conversation whose context did not fit twice in a row, the second time on
-// a fresh session, whose provider refused its request twice in a row, the
-// second time on a fresh session, or whose runs' harness the kernel killed for
-// memory twice in a row, is held: its seat starts no turn on it until a person
-// writes on it or the settings it failed on change, and its other conversations
-// go on (ADR-0117).
+// A conversation that failed the same way twice in a row (its context not
+// fitting or its provider refusing the request, the second time on a fresh
+// session, or the kernel killing its harness for memory) is held: its seat
+// starts no turn on it until a person writes on it or the settings it failed on
+// change, and its other conversations go on (ADR-0117).
 
 // The failures that hold a conversation rather than its seat.
 const (
@@ -79,9 +78,9 @@ func (h *heldConversations) forget(seat uuid.UUID) {
 	delete(h.held, seat)
 }
 
-// noteConversationRun is a publish listener: a run that ran out of context, or
-// that its provider refused, after one that did, on a fresh session, holds its
-// conversation.
+// noteConversationRun is a publish listener: a run that failed as the one
+// before it did holds its conversation, a context or refusal failure only on a
+// fresh session.
 func (e *Engine) noteConversationRun(ctx context.Context, _ string, ev *events.Event) {
 	rec, ok := events.DataAs[*types.ExecutorCollected](ev)
 	if !ok || rec == nil || rec.ConversationKey == "" {

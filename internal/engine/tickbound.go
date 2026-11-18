@@ -11,51 +11,18 @@ import (
 // went its whole budget without showing progress.
 var errTickOverran = errors.New("engine: the tick went its budget without progress")
 
-// tickBound cuts a tick off once it has gone its whole budget without showing
-// PROGRESS: a clock that restarts from nothing whenever the tick says it has
-// finished a bounded piece of its work ([tickBound.Advanced]), stops while a
-// step it EXEMPTS is running ([tickBound.Exempt]) — whose end is progress too —
-// and cancels the tick, [errTickOverran] its cause, once it has run for the
-// whole budget. It is the embedding duty's bound ([embedTickBudget]), and a
-// [search.Budget].
+// tickBound cancels a tick, cause [errTickOverran], after a whole budget
+// without PROGRESS: [tickBound.Advanced] restarts the clock, which stops while
+// an [tickBound.Exempt] step runs, whose end is progress. It is the embedding
+// duty's bound ([embedTickBudget]) and a [search.Budget].
 //
-// # Why not a deadline
-//
-// A tick is bounded to cut off one that WEDGED — a read that never returns, a
-// provider that never answers — which the renewals of the duty's lease would
-// otherwise keep holding the duty for ever. A wedge is the ABSENCE of
-// progress, and a deadline measures something else: how long the tick has
-// been alive. The two differ exactly where a node is slow rather than stuck.
-// On a node allowed one core, shared with the searches it answers, a training
-// at the largest corpus an index serves is seven and a half minutes of k-means
-// and filing, and three and a half more of reading every code and making the
-// exact pass — every stretch of it progress — and a deadline of five minutes
-// cut off every training such a node began, publishing nothing, so the next
-// tick began it again: five minutes of the node's only core spent every tick,
-// for ever, on an index that never arrived. Measured against progress, that
-// node finishes the training once, while a step that stops advancing is cut
-// off as soon as it ever was.
-//
-// # Exempt, and advancing
-//
-// The two ways a step shows progress suit two kinds of step. One that STREAMS
-// — reading rows — calls Advanced every bounded stretch of them, so a wedge
-// between two calls is noticed within the budget. One that is pure ARITHMETIC
-// over values in memory cannot wedge at all — it reads its context every
-// stride, so a lost lease or a stopping engine still ends it — and runs
-// exempt, the whole of it one step whose end is progress, rather than
-// reporting from inside functions that know nothing of a tick. What does
-// neither — the provider calls, the publishes — is held to the budget as a
-// whole, as every tick always was.
-//
-// # What it is not
-//
-// It is not a second lease. The tick's other bound is the duty's lease,
-// renewed while the tick runs and cutting it off once a renewal says another
-// node holds the duty, or none has confirmed it for as long as the lease is
-// sure to last ([dutyRenewal.keep]) — progress and exemptions touch this clock
-// and nothing else, so neither keeps a tick running on a node that no longer
-// holds the duty.
+// Not a deadline: a WEDGED tick, which the lease's renewals would hold for
+// ever, lacks progress, not youth, and a deadline cuts off a slow node's honest
+// training every tick, so the index never publishes. A STREAMING step calls
+// Advanced every bounded stretch; in-memory ARITHMETIC, checking its context
+// every stride, runs exempt; the rest is held to the budget whole. Progress
+// and exemptions never touch the duty's lease ([dutyRenewal.keep]), which
+// still ends the tick.
 type tickBound struct {
 	budget time.Duration
 	cancel context.CancelCauseFunc
@@ -73,22 +40,19 @@ type tickBound struct {
 	exempt      time.Duration
 	exemptSince time.Time
 	open        int
-	// timer fires when the quiet stretch may have run the whole budget,
-	// for the start of the clock named by turn: a timer armed for an
-	// earlier start, racing the exemption that stopped it, finds a
-	// different turn and does nothing. Progress does not re-arm it —
-	// Advanced is called every stride of a read, and must cost a lock and a
-	// clock read — so a timer that fires measures the quiet stretch itself
-	// and re-arms for whatever is left of it.
+	// timer fires when the quiet stretch may have run the budget, for the
+	// clock start numbered turn; a stale timer racing an exemption finds
+	// another turn and does nothing. Progress does not re-arm it (Advanced
+	// runs every stride of a read and must stay a lock and a clock read), so
+	// a firing timer measures the quiet stretch and re-arms for what is left.
 	timer   *time.Timer
 	turn    uint64
 	stopped bool
 }
 
-// boundTick derives the tick's context from ctx, bounded by budget, and
-// returns it with its bound and the function that ends the tick — which
-// cancels it with [context.Canceled] and stops the clock, and must be called
-// when the tick returns.
+// boundTick derives the tick's context from ctx, bounded by budget, with its
+// bound and the release the tick must call when it returns, which cancels it
+// with [context.Canceled] and stops the clock.
 func boundTick(ctx context.Context, budget time.Duration) (context.Context, *tickBound, context.CancelFunc) {
 	tick, cancel := context.WithCancelCause(ctx)
 	b := &tickBound{budget: budget, cancel: cancel}
@@ -112,8 +76,7 @@ func boundTick(ctx context.Context, budget time.Duration) (context.Context, *tic
 }
 
 // Advanced says the tick has just finished a bounded piece of its work, so the
-// clock starts again from nothing. While an exemption is open the clock is
-// stopped anyway, and this changes nothing.
+// clock starts again from nothing; under an open exemption it changes nothing.
 func (b *tickBound) Advanced() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -180,8 +143,8 @@ func (b *tickBound) start() {
 }
 
 // arm sets the timer for turn to fire after left, cancelling the tick at once
-// when nothing is left — which only a timer racing the step that stopped the
-// clock can leave. Called with mu held.
+// when nothing is left (only a timer racing the step that stopped the clock
+// can leave that). Called with mu held.
 func (b *tickBound) arm(turn uint64, left time.Duration) {
 	if left <= 0 {
 		b.cancel(errTickOverran)
@@ -191,8 +154,7 @@ func (b *tickBound) arm(turn uint64, left time.Duration) {
 }
 
 // expire is the timer for turn firing: it cancels the tick when the quiet
-// stretch has run the whole budget, and otherwise — progress having been shown
-// since the timer was armed — re-arms for what is left of it.
+// stretch has run the whole budget, and otherwise re-arms for what is left.
 func (b *tickBound) expire(turn uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

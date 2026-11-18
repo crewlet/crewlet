@@ -15,15 +15,13 @@ import (
 // A DATA NODE THAT JOINS IS ROUTED TO AT ONCE, NOT A HEARTBEAT LATER — and one
 // that leaves cleanly is gone as fast.
 //
-// The view the router asks is the one the engine builds ([newDataView]), at the
-// default lease's cadence: it lists once a presence heartbeat, fifteen seconds.
-// A view that only listed took that long to name a node that joined, so a fleet
-// booted at once — every node's first listing taken before any presence lease
-// existed — routed as though each node were alone: a data node committed every
-// push it received itself, and a node without `data` had nobody to ask and
-// refused every push, fetch and read. Here the node joins after the view's
-// first listing, and must be in the router's placement well inside one
-// heartbeat.
+// The router asks the engine's view ([newDataView]), which lists once a
+// presence heartbeat (fifteen seconds). A view that only listed named a joiner
+// that late, so a fleet booted at once (every first listing taken before any
+// presence lease) routed as though each node were alone (a data node committing
+// every push itself, a node without `data` refusing every push, fetch, read).
+// Here the node joins after the view's first listing and must be routed to
+// well inside one heartbeat.
 func TestADataNodeThatJoinsIsRoutedToAtOnce(t *testing.T) {
 	t.Parallel()
 	backend := coordmem.New()

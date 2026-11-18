@@ -37,10 +37,9 @@ func rowOf(t *testing.T, rows []coord.ModelStatus, key string) coord.ModelStatus
 }
 
 // EACH ENTRY'S ROW IS ITS SIGN-IN'S STATE ON THIS NODE: the plan prefix that
-// tells entries on one sign-in apart, the route it signs in by, the window it
-// sits out with the vendor's own words, and the seats this node holds parked
-// on a chain naming it, since when. An entry that sits nothing out says so by
-// having no window, never a zero one.
+// tells sign-ins apart, the sign-in route, the window it sits out in the
+// vendor's words, and the seats this node holds parked on a chain naming it,
+// since when. An entry sitting nothing out has no window, never a zero one.
 //
 // Mutation: publish another entry's window, drop the parked seats from a chain
 // member that is not its head, or publish the whole sign-in id, and this fails.
@@ -114,11 +113,10 @@ func statusHarness(t *testing.T, key string, code int) *harness.Provider {
 	return provider
 }
 
-// THE LOGIN WATCHER SAYS WHAT THE HARNESS SAYS OF ITS LOGIN, for an entry that
-// signs in with one, and only for such an entry: a person's check answers the
-// status command's verdict now and the status record carries it from then on; an
-// entry on a key has no login to check, and an entry the revision does not
-// have is not found.
+// THE LOGIN WATCHER SAYS WHAT THE HARNESS SAYS OF ITS LOGIN, only for an entry
+// that signs in with one: a person's check answers the status command's verdict
+// now and the status record carries it from then on; an entry on a key has no
+// login to check, and an entry the revision does not have is not found.
 //
 // Mutation: publish a login row for a key entry, or answer a check from the
 // last beat's reading rather than running the command, and this fails.

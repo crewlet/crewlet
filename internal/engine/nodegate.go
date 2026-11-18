@@ -15,138 +15,69 @@ import (
 )
 
 // THE NODE GATE: eviction and readmission as ONE fleet gesture over every
-// identity-claiming log.
+// identity-claiming log. The trim counts nodes per log, so an eviction is a
+// record on every such log and a readmission the inverse commit on each. It
+// lives in the engine, the one place holding every domain's write authority,
+// the positions register, the published floors and the presence leases.
 //
-// # Why one gesture, and why it lives here
-//
-// The trim counts nodes PER LOG, and a node stops being counted on a log only
-// once an eviction record on THAT log is older than the fence window — so
-// evicting a node is a record on every log that claims identity, each at a
-// position in its own sequence space, and a readmission is the inverse commit
-// on every one of them. For as long as the gesture was the tracker writer's
-// alone, it wrote the tracker's log and nothing else: the pages log's
-// applier, fence and table for an eviction existed and nothing in production
-// ever filled them, so an evicted node stayed counted there, the pages log's
-// applied term stayed pinned at its last position, and the log grew toward the
-// ceiling that refuses writes — behind a machine the operator had been told was
-// gone.
-//
-// The engine is the one place holding every domain's write authority, the
-// positions register, the published floors and the presence leases, which is
-// why the gesture is here rather than on any one domain's writer.
-//
-// # Judged once, then written log by log
-//
-// Whether the gesture is permitted — an eviction refuses a node that still holds
-// a live presence lease ([statelog.PermitEviction]); a readmission refuses one
-// below a trim floor it would be counted against ([statelog.PermitReadmission])
-// — is asked ONCE, before anything is appended. Judged per log, one gesture
-// could reach two answers about one node and leave it evicted on one log and
-// counted on the other. A refusal writes nothing anywhere.
-//
-// Then each identity-claiming log gets its gate record, and each answers with
-// its own three-valued outcome, reported in the register's order of domains.
-// Every data node holds the one estate and runs every log in the register, so
-// the node an operator asks writes every log itself, through its own write
-// authority on each. An eviction and a readmission both write every
-// identity-claiming log: that is the set the trim counts a data node on, and
-// where the node is evicted is a fact each log's own rows hold — a readmission
-// on a log that never evicted the node changes no row there.
-//
-// The logs are independent — a gate on one log drops that log's records and
-// lifts that log's pin, whatever another did — so they are written AT ONCE,
-// and a log that refuses or cannot answer does not stop another being written:
-// the gesture gets as far as it can, and
-// the result says exactly how far. And it gets there whatever its CALLER does
-// meanwhile: once the first record is about to be written the gesture runs
-// under its own budget ([GateLogBudget]) rather than the request's, because a
-// dropped connection is not a request to leave a node evicted on one log and
-// counted on the other.
-//
-// # And a retry finishes it, idempotently
-//
-// Each log's record is published under an operation id DERIVED from the
-// gesture's own, its sign, the log and the node ([domainOpID]), so a retry
-// under the same gesture id is the same operation on every log. Each log's
-// snapshot reads that id's ledger row before anything is decided
-// ([statelog.Snap.Held]) and judges it against the node's own row in the same
-// transaction ([statelog.GateStanding]): a log whose record is already the
-// gate in force answers applied at the position it landed without appending
-// again, a log that never got it is written now, and a log whose record has
-// been undone since — an eviction retried after a readmission — is refused
-// `superseded` rather than reported as though it had just happened. That is what makes a
-// partial result — the tracker applied, the pages log `unknown` — something an
-// operator finishes by running the same command again rather than something to
-// repair.
+// It is JUDGED ONCE, before anything is appended: judged per log, one gesture
+// could leave a node evicted on one log and counted on another. Then every log
+// is written at once ([NodeGate.write]), each answering its own outcome, under
+// an operation id derived from the gesture's ([domainOpID]) and judged against
+// the node's row ([statelog.GateStanding]): the same gesture again finishes a
+// partial result, and a record undone since answers `superseded`.
 
 // The gesture's budgets: what bounds each of its two phases, and so how long a
-// node takes to answer one gesture at most ([GateAnswerBudget]).
-//
-// ONE BUDGET PER PHASE, because each phase waits on something different and
-// one shared deadline let the slower starve the other.
+// node takes to answer one gesture at most ([GateAnswerBudget]). One budget
+// per phase, because each waits on something different and one shared
+// deadline lets the slower starve the other.
 const (
 	// GateJudgeBudget bounds the JUDGEMENT, everything before the first
-	// record: the coordination reads an eviction is judged on (the presence
-	// leases), and for a readmission the positions register, the published
-	// floors and every identity log's first surviving sequence on this
-	// node's own copy ([stateLog.Readmissible]).
+	// record: the presence leases for an eviction; for a readmission the
+	// positions register, the published floors and each identity log's
+	// first surviving sequence on this node's copy ([stateLog.Readmissible]).
 	//
-	// TWENTY SECONDS: one complete election of the coordination store's
-	// group, which may stall those reads once — jsprovision's clustered ask
-	// term, fifteen seconds, is sized to span exactly that
-	// ([jsprovision.AskTerm]) — and five for the reads themselves once it
-	// answers, which are a listing, two record reads and one stream's
-	// bounds per log. A judgement cut short has written nothing: it answers
-	// why, and the same gesture again finishes it.
+	// TWENTY SECONDS: one election of the coordination store's group, which
+	// may stall those reads once ([jsprovision.AskTerm], fifteen seconds),
+	// and five for the reads themselves. A judgement cut short has written
+	// nothing, and the same gesture again finishes it.
 	GateJudgeBudget = 20 * time.Second
 
 	// GateLogBudget bounds the LOGS, from the first record to the last log's
-	// answer. They are written at once ([NodeGate.write]), so it waits as long
-	// as the SLOWEST log — written one after another, the bound would grow
-	// with the logs a gesture writes, and it did: a literal minute sized when
-	// two logs claimed identity lost half its margin as the register grew,
-	// without anybody deciding it. Written at once, a log added to the
-	// register costs the gesture nothing.
+	// answer. They are written at once ([NodeGate.write]), so it waits on the
+	// SLOWEST log rather than the sum, and a log added to the register costs
+	// the gesture nothing.
 	//
 	// THIRTY SECONDS, from what one log waits on: an append through this
-	// node's own write authority, whose two waits are each bounded by
-	// [statelog.DefaultResolveBudget] (five seconds) — its applier reaching
-	// a peer's record the decision must see, and the resolution of its own
-	// append — behind at most one election of the log's own stream group,
-	// [jsprovision.AskTerm]'s fifteen, and five for the snapshot the
-	// decision reads and the margin around it. A log that has not answered
-	// by then answers `unknown`, and the same gesture under the same
-	// operation id finishes it from that log's own ledger.
+	// node's write authority, whose two waits (its applier reaching a peer's
+	// record the decision must see, and its own append's resolution) are each
+	// [statelog.DefaultResolveBudget], five seconds, behind at most one
+	// election of the log's stream group ([jsprovision.AskTerm], fifteen),
+	// plus five for the snapshot and margin. A log silent by then answers
+	// `unknown`, and the same gesture finishes it from that log's ledger.
 	GateLogBudget = 30 * time.Second
 
 	// GateBudget bounds one gesture from its first record to its last answer.
 	GateBudget = GateLogBudget
 
 	// GateAnswerBudget is the longest a node takes to answer one gesture
-	// request: its judgement, then the gesture — fifty seconds. A client
-	// waits [GateClientWait], a little longer, so the node's own answer —
-	// every log's outcome and the operation id — reaches the operator
-	// before the client gives up.
+	// request: its judgement, then the gesture, fifty seconds. A client waits
+	// [GateClientWait], a little longer, so the node's own answer reaches the
+	// operator before the client gives up.
 	GateAnswerBudget = GateJudgeBudget + GateBudget
 
-	// gateRoundTrip is what a client's wait adds to [GateAnswerBudget]: the
-	// request's round trip around the node's own answer — two of the
-	// five-second resolutions a gesture legitimately makes, back to back,
-	// which is the ten seconds every other verb a client sends waits.
+	// gateRoundTrip is what a client's wait adds to [GateAnswerBudget]: two
+	// five-second resolutions back to back, the ten seconds every other verb
+	// a client sends waits.
 	gateRoundTrip = 2 * statelog.DefaultResolveBudget
 )
 
-// GateClientWait is how long a client waits for a gesture's answer — one
-// minute: the node's own bound on answering ([GateAnswerBudget]) and the
-// request's round trip around it.
-//
-// ONE STATED RELATION for every client, because each used to carry its own
-// number with a comment saying how it related to the node's: `crewlet
-// retention evict` and `readmit` read this, and the dashboard's
-// GATE_REQUEST_TIMEOUT_MS is held to it exactly by a gate in internal/api.
-// Waiting past the node's own bound is what makes its answer — every log's
-// outcome and what to do about the ones it could not finish — reach the
-// operator rather than a client timeout that knows none of it.
+// GateClientWait is how long a client waits for a gesture's answer, one
+// minute: the node's own bound ([GateAnswerBudget]) plus the round trip. It is
+// the one relation every client reads (`crewlet retention evict` and
+// `readmit`; the dashboard's GATE_REQUEST_TIMEOUT_MS is held to it by a gate in
+// internal/api), so the node's answer, every log's outcome and remedy, reaches
+// the operator rather than a client timeout that knows none of it.
 func GateClientWait() time.Duration { return GateAnswerBudget + gateRoundTrip }
 
 // ErrInvalidGate is what a gate request that could not be carried out as given
@@ -165,17 +96,11 @@ type GateRequest struct {
 
 	// By is the principal who ran it, recorded on every log's record as the
 	// author, the kind of party and the credential they acted through
-	// ([iam.ActorFor]) — what `crewlet retention status` names beside an
-	// eviction.
-	//
-	// THE PRINCIPAL AND NOT ITS NAME, for two reasons. The records carry
-	// the author's kind and the credential beside the name, and a bare
-	// name recorded every gesture as an operator acting through a
-	// credential named after themselves: a person bound to a seat, or a
-	// machine token acting as its owner, read as a Tier A token of that
-	// name. And the identity estate's writer judges admin on the party's
-	// OWN grants at the record ([registration.NewGate]), which a name
-	// cannot carry.
+	// ([iam.ActorFor]), which `crewlet retention status` names beside an
+	// eviction. The principal and not its name: a bare name cannot carry the
+	// kind or the credential (it reads as a Tier A token of that name), and
+	// the identity estate's writer judges admin on the party's OWN grants at
+	// the record ([registration.NewGate]).
 	By iam.Principal
 
 	// Force evicts a node that still holds a live presence lease — see
@@ -185,19 +110,14 @@ type GateRequest struct {
 }
 
 // valid refuses a request that could not be retried as the same operation.
-//
-// THE NODE ID IS HELD TO THE RULE A NODE'S OWN ID IS, because it becomes a
-// subject token on every identity log: an id no node could run under is a
-// typo, and one carrying a wildcard is an append the broker refuses outright.
-//
-// AND THE OPERATION ID TO THE GRAMMAR A CALLER'S IS ([statelog.CheckCallerOpID]),
-// here and not only at the route: every log's operation is derived from it,
-// and the publisher reads the instant it was minted at to decide whether this
-// node's ledger can vouch for a retry. An id that carries none reads as
-// minted at the epoch, so once any ledger has been swept the gesture is
-// answered `unknown` on every log without being published — on the first
-// attempt as on every retry, a gesture that can never run and never says why.
-// The HTTP route held that and nothing else did.
+// The node id is held to a node's own rule because it becomes a subject token
+// on every identity log: anything else is a typo, or a wildcard the broker
+// refuses. The operation id is held to a caller's grammar
+// ([statelog.CheckCallerOpID]) here, not only at the route: every log's id is
+// derived from it, and the publisher reads its mint instant to decide whether
+// the ledger can vouch for a retry. One carrying none reads as minted at the
+// epoch, so once any ledger is swept the gesture answers `unknown` on every
+// log, every time, unpublished and without saying why.
 func (r GateRequest) valid() error {
 	opID := statelog.CheckCallerOpID(r.OpID)
 	invalid := func(err error, format string, args ...any) error {
@@ -265,12 +185,10 @@ func (e *GateUnjudged) Tell() string {
 }
 
 // Remedy is what the operator does about it: ask again once coordination
-// answers, or force the eviction, which does not need the leases.
-//
-// IN NO SURFACE'S VOCABULARY — see [statelog.GateAction]. This is the refusal
-// most likely to meet an operator in a browser, since a coordination fault is
-// exactly when an absent node most needs evicting, and its sentence used to
-// tell them to pass a flag the dashboard does not have.
+// answers, or force the eviction, which does not need the leases. Its detail
+// names no surface's controls ([statelog.GateAction]): a coordination fault is
+// when an absent node most needs evicting, so this often meets an operator in
+// a browser, which has no flags.
 func (e *GateUnjudged) Remedy() statelog.GateRemedy {
 	return statelog.GateRemedy{
 		Actions: []statelog.GateAction{statelog.GateRetrySameOp, statelog.GateForce},
@@ -280,15 +198,12 @@ func (e *GateUnjudged) Remedy() statelog.GateRemedy {
 }
 
 // ReadmissionUnjudged is a readmission refused because something it is judged
-// against could not be read: nothing was written anywhere.
-//
-// A READMISSION IS JUDGED ONCE, against every log the node would be counted on
-// ([stateLog.Readmissible]), so one input nobody could read refuses it whole —
-// a register nobody could list is not one without the node in it, and a floor
-// nobody could read is not a low one. Its own type, beside
-// [*statelog.ReadmissionRefusal], because the remedy differs: a refusal says
-// the node is below a floor and must catch up, this says the judgement could
-// not be made.
+// against could not be read: nothing was written anywhere. The judgement
+// covers every log at once ([stateLog.Readmissible]), so one unreadable input
+// refuses it whole: a register nobody could list is not one without the node,
+// and an unread floor is not a low one. Its own type beside
+// [*statelog.ReadmissionRefusal] because the remedy differs: that one says
+// catch up, this one says the judgement could not be made.
 type ReadmissionUnjudged struct {
 	Node string
 
@@ -367,10 +282,9 @@ type GateResult struct {
 
 // Complete reports whether every log holds the gate record durably — applied
 // on this node, or pending here and applied by every node as it reaches it.
-//
-// FALSE IS NOT A FAILURE OF THE WHOLE: the logs that did answer hold their
+// False is not a failure of the whole: the logs that answered hold their
 // record, and a retry under the same [GateResult.OpID] writes only what is
-// missing — where the log's own answer says a retry can ([DomainGate.Retry]).
+// missing, where the log's answer says a retry can ([DomainGate.Retry]).
 func (r GateResult) Complete() bool {
 	for _, d := range r.Domains {
 		if !d.done() {
@@ -392,30 +306,26 @@ type DomainGate struct {
 	OpID string
 
 	// Duplicates is the log's duplicate window: how long the broker holds an
-	// operation id on the record it first landed, collapsing the same id sent
-	// again onto it. A record of this gesture's that landed and applies nowhere
-	// — refused `evicted` naming it ([statelog.Unavailable.Landed]) — keeps
-	// the gesture's id spent on this log for that long, which the remedy says.
+	// operation id on the record it first landed, collapsing the same id
+	// onto it. A record of this gesture's that landed and applies nowhere
+	// ([statelog.Unavailable.Landed]) keeps the id spent that long, which
+	// the remedy says.
 	Duplicates time.Duration
 
-	// Outcome is the write's own three-valued answer — applied, pending or
-	// unknown — and EMPTY when Err is set: a write that answered with an
-	// error gave no outcome, which is not one of the three.
+	// Outcome is the write's own three-valued answer, and EMPTY when Err is
+	// set: a write that answered with an error gave no outcome.
 	Outcome  statelog.Outcome
 	Position statelog.Position
 
-	// Unvouched says an `unknown` Outcome was answered because this node's
-	// operation ledger cannot vouch for the operation — it was minted
-	// before the point this node's ledger may have lost rows to, so this
-	// node published nothing and cannot tell whether the record landed
-	// ([statelog.Result.Unvouched]). It decides the remedy: the same
-	// gesture here answers the same way every time.
+	// Unvouched says an `unknown` Outcome came because this node's ledger
+	// cannot vouch for the operation, minted before rows it may have lost
+	// ([statelog.Result.Unvouched]): nothing was published, and the same
+	// gesture here answers the same way every time, which decides the remedy.
 	Unvouched bool
 
 	// Err is why this log gave no outcome: a refusal naming its reason
 	// (a [*statelog.Unavailable]), or a failure before the write could
-	// answer. Whether running the gesture again can clear it is
-	// [DomainGate.Retry]'s.
+	// answer. Whether a rerun can clear it is [DomainGate.Retry]'s.
 	Err error
 }
 
@@ -426,28 +336,18 @@ func (d DomainGate) done() bool {
 }
 
 // Retry reports whether running the same gesture again, under the same
-// operation id, can finish this log — false for a log that is finished and for
-// one whose refusal no retry clears.
-//
-// # Why this is the gate's to say, once
-//
-// An operator told to run the command again reads it as the remedy. For an
-// `unknown` outcome, a lost race or a node still catching up, it is: the log's
-// own decision answers from its rows if the record landed and writes it if it
-// did not. For a node the fleet has evicted, a log rebuilt under this node, a
-// full log or an operation superseded since, the same command fails the same
-// way for ever — and advising it anyway sent operators round a loop the answer
-// already knew the end of. The route and the command both render this one
-// judgement, so they can never advise two different things.
+// operation id, can finish this log: false for a finished log and for one
+// whose refusal no retry clears (an evicted node, a log rebuilt under this
+// node, a full log, an operation superseded since), which fails the same way
+// for ever. The route and the command both render this one judgement, so they
+// never advise two different things.
 func (d DomainGate) Retry() bool { return d.Remedy().Offers(statelog.GateRetrySameOp) }
 
 // Remedy is what the operator does about a log the gesture did not finish, or
-// the zero remedy for one it did.
-//
-// THE ACTIONS ARE WHAT A SURFACE SWITCHES ON and the detail names no surface's
-// controls: the command line renders [statelog.GateNewGesture] as "without
-// -op-id" and the dashboard as starting afresh, and a sentence spelling the
-// flags was rendered word for word by a screen that has none of them.
+// the zero remedy for one it did. Surfaces switch on the actions, and the
+// detail names no surface's controls: the command line renders
+// [statelog.GateNewGesture] as "without -op-id", the dashboard as starting
+// afresh.
 func (d DomainGate) Remedy() statelog.GateRemedy {
 	if d.done() {
 		return statelog.GateRemedy{}
@@ -462,14 +362,11 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 		return statelog.GateRemedy{Actions: []statelog.GateAction{action}, Detail: detail}
 	}
 	if d.Err == nil && d.Unvouched {
-		// UNKNOWN, AND NOT FOR THIS NODE TO SETTLE. The operation was minted
-		// before the point this node's ledger may have lost rows to — its
-		// sweep, or the donor's it inherited with a snapshot adopted since — so
-		// it published nothing, and the same gesture here answers `unknown`
-		// again every time: the row the answer needs is the one the loss took.
-		// Offered `retry_same_op`, every Finish and every -op-id rerun went
-		// round that loop for ever. A node whose ledger reaches back that far
-		// can answer it under the same id.
+		// UNKNOWN, AND NOT FOR THIS NODE TO SETTLE: the operation predates
+		// rows this node's ledger may have lost (its sweep, or a donor's
+		// inherited with an adopted snapshot), so it answers `unknown` here
+		// every time. No retry_same_op: only a node whose ledger reaches
+		// back that far can answer it, under the same id.
 		return only(statelog.GateOtherNode, "this node cannot tell whether "+
 			"the record landed: its operation ledger may have lost the record "+
 			"of this operation, which was minted before the cutoff of the "+
@@ -478,8 +375,8 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 			"far, under the same operation id")
 	}
 	if d.Err == nil {
-		// UNKNOWN: the record may or may not be on the log, and nothing
-		// here can tell which — the log's own ledger can, next time.
+		// UNKNOWN: the record may or may not be on the log; the log's own
+		// ledger can tell, next time.
 		return retry("its outcome is unknown: the same gesture under the same " +
 			"operation id answers from this log's own ledger if the record landed, " +
 			"and writes it if it did not")
@@ -495,10 +392,8 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 		case statelog.ReasonEvicted:
 			// THREE SHAPES, told apart by whose record the refusal names
 			// ([statelog.Unavailable.Landed]), never by whether it names a
-			// position: a position alone was read as the gesture's own
-			// record, and a refusal held at ANOTHER operation's record told
-			// the operator "the record this gesture put on the log there
-			// applies nowhere" of a record that may be a healthy peer's.
+			// position, which may be another operation's record, perhaps a
+			// healthy peer's.
 			switch {
 			case refusal.Landed():
 				return only(statelog.GateOtherNode, "this node is evicted itself, and "+
@@ -510,10 +405,9 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 				"writes nothing to any log: run the gesture through a node the fleet "+
 				"still counts, under the same operation id")
 		case statelog.ReasonOvertaken:
-			// A RECORD A RESTORED REANCHOR OVERTOOK: this node wrote from
-			// rows the reanchor did not keep, before it learned of the move.
-			// Always one that landed, and this node refuses the log until it
-			// re-keys to the new generation.
+			// A RECORD A RESTORED REANCHOR OVERTOOK: written from rows the
+			// reanchor did not keep. Always one that landed, and this node
+			// refuses the log until it re-keys to the new generation.
 			return only(statelog.GateOtherNode, "a restored reanchor had overtaken "+
 				"this node's rows when it wrote, and "+d.landedNowhere(refusal.Position,
 				"a node on the log's current generation"))
@@ -527,10 +421,9 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 				"first, since nothing can be written to it until then, and then the "+
 				"same gesture under the same operation id finishes it", d.Stream))
 		case statelog.ReasonLogFull:
-			// PAST THE GATE RESERVE: a gate record is admitted into the
-			// room kept above the ceiling ordinary writes are refused
-			// at, so a gate record refused `log_full` found even that
-			// spent — which no retry refills.
+			// PAST THE GATE RESERVE: a gate record is admitted into room
+			// kept above the ordinary writes' ceiling, so `log_full` here
+			// means even that is spent, which no retry refills.
 			return only(statelog.GateSetCapacity, fmt.Sprintf("%s is full to its "+
 				"broker ceiling, past even the reserve kept there for gate records: "+
 				"raise its ceiling, which is the only thing that makes room for it. "+
@@ -567,19 +460,11 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 				"gesture under the same operation id finishes it once it has, here "+
 				"or through another node", statelog.GateOtherNode)
 		}
-		// EVERY OTHER REASON, in the framework's own two classes rather
-		// than one: a reason that clears on this node by itself
-		// ([statelog.Reason.Retryable]) is offered the retry — this arm
-		// told an operator no retry cleared `eviction_unknown`, which the
-		// next read of the state does — and every reason is advised in
-		// the REFUSAL'S OWN WORDS, because they are what say what clears
-		// it: the limit that refused a record too large and what moves
-		// it, the broker's words on a refusal it named. Reduced to the
-		// reason's name, both reached the operator as a word with no
-		// remedy, while the remedy written for one of them — "check the
-		// broker's max_payload", on a bare queue.ErrTooLarge — sat on a
-		// branch no refusal reached: every too-large answer the state log
-		// gives is this typed refusal.
+		// EVERY OTHER REASON, in the framework's two classes: one that
+		// clears on this node by itself ([statelog.Reason.Retryable]) is
+		// offered the retry, and each is advised in the REFUSAL'S OWN
+		// WORDS, which say what clears it (the limit a too-large record
+		// hit and what moves it, the broker's words on a refusal it named).
 		own := ""
 		if refusal.Detail != "" {
 			own = "; " + refusal.Detail
@@ -600,30 +485,16 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 		"the same operation id finishes it")
 }
 
-// anotherNodesCopy is the remedy for a record of this gesture that ANOTHER node
-// wrote, which this node's append was collapsed onto
-// ([statelog.Unavailable.CopyWriter]) and a gate dropped: an operation id
-// carried to this node inside the log's duplicate window from a node that had
-// already written under it, and has since been evicted, or wrote it in a
-// generation a reanchor abandoned or from rows one overtook.
-//
-// # Why those three gates and no others
-//
-// A copy's writer is named only under a gate that blames it
-// ([statelog.Reason.BlamesWriter]), and those are exactly these three. Never
-// `deleted`, which blames no writer and is asked only of a task or a page. The
-// fallback names the reason of a gate a later build adds to that set without a
-// sentence here, rather than describing it as one of the three.
-//
-// # Why here, and not another node
-//
-// The gate is about the copy's writer. This node passed its own fences — it is
-// counted — before it appended, so it is exactly the node that finishes the
-// gesture: once the broker has let go of the id, the same gesture under it
-// here writes afresh, and cannot apply twice because the copy in the way
-// applies nowhere. Read as this node's own `evicted`, the operator was told
-// the node they ran it on was evicted and sent to another, with the node that
-// could finish it a minute later in front of them.
+// anotherNodesCopy is the remedy for a record of this gesture that ANOTHER
+// node wrote, which this node's append was collapsed onto
+// ([statelog.Unavailable.CopyWriter]) and a gate dropped: the id reached this
+// node inside the duplicate window from a node that had written under it and
+// was since evicted, or wrote in a generation a reanchor abandoned or
+// overtook. Those three are exactly the gates that blame a writer
+// ([statelog.Reason.BlamesWriter]); the fallback names a reason a later build
+// adds. The gate is about the copy's writer: this node passed its own fences,
+// so it is the node to finish the gesture here once the broker lets go of the
+// id, and cannot apply twice since the copy in the way applies nowhere.
 func (d DomainGate) anotherNodesCopy(refusal *statelog.Unavailable) string {
 	why := fmt.Sprintf("a gate dropped it (%s)", refusal.Reason)
 	switch refusal.Reason {
@@ -653,20 +524,14 @@ func (d DomainGate) window() string {
 	return "the log's duplicate window"
 }
 
-// landedNowhere is the remedy for a record of this gesture that landed at on
-// this log and applies nowhere: the gesture is finished through another node,
-// named by who, under the SAME operation id — but only once the broker has let
-// go of that id.
-//
-// # Why neither "now" nor a fresh id
-//
-// The broker holds the operation id on the record it first landed for the
-// log's duplicate window, so the same id sent before then — by any node — is
-// collapsed onto that record and refused the same way. A fresh id would be
-// written at once, but it is a SECOND gesture: every log that already holds
-// this one's record would be written again, its gate re-dated, and the first
-// id would answer `superseded` to anyone finishing it. The record in the way
-// applies nowhere, so the same id after the window cannot apply twice.
+// landedNowhere is the remedy for a record of this gesture that landed at `at`
+// on this log and applies nowhere: finish it through another node, named by
+// who, under the SAME operation id, once the broker has let go of it. Within
+// the log's duplicate window the same id from any node is collapsed onto that
+// record and refused the same way. A fresh id would be a SECOND gesture: every
+// log already holding this one's record written again, its gate re-dated, and
+// the first id answering `superseded`. The record in the way applies nowhere,
+// so the same id after the window cannot apply twice.
 func (d DomainGate) landedNowhere(at statelog.Position, who string) string {
 	return fmt.Sprintf("the record this gesture put on %s at %s applies nowhere: "+
 		"the broker holds its operation id for %s from when it landed. Once that "+
@@ -677,21 +542,14 @@ func (d DomainGate) landedNowhere(at statelog.Position, who string) string {
 }
 
 // heldAt is the remedy for a gesture refused `evicted` at ANOTHER operation's
-// record, the newest on its subject when the gesture's answer on this log was
-// lost: this node's eviction is below that record, so the refusal is about this
-// node, and the record at `at` is no record of the gesture's — it may be a
-// healthy peer's that applied on every node.
-//
-// # Why the same operation id, at once
-//
+// record, the newest on its subject when this log's answer was lost: the
+// refusal is about this node, and the record at `at` may be a healthy peer's.
 // Whatever this node appended under the operation lies below `at` and applies
-// nowhere, if it landed at all, so the gesture is this log's to finish through
-// another node under the same id — as for an eviction found before the append.
-// If this node's record DID land, the broker collapses the same id onto it for
-// its duplicate window, and the node it is sent through answers so, naming this
-// node as the writer of the copy and saying when the id may go again
-// ([DomainGate.anotherNodesCopy]). A fresh id is never the way round it, for
-// the reason [DomainGate.landedNowhere] gives.
+// nowhere, so the gesture is finished through another node under the same id,
+// at once. If this node's record did land, that node answers naming this one
+// as the copy's writer and when the id may go again
+// ([DomainGate.anotherNodesCopy]); a fresh id is never the way round it
+// ([DomainGate.landedNowhere]).
 func (d DomainGate) heldAt(at statelog.Position) string {
 	return fmt.Sprintf("this node is evicted itself: the newest record on %s, at %s, "+
 		"is another operation's, and whatever this node appended under this one lies "+
@@ -705,9 +563,8 @@ func (d DomainGate) heldAt(at statelog.Position) string {
 // on a data node, every one in the register.
 type NodeGate struct {
 	// logs is every identity-claiming log as the gate writes it, in the
-	// register's order, each through this node's own write authority:
-	// built once, where the node's logs start, since none starts or stops
-	// while the node runs ([newNodeGate]).
+	// register's order, each through this node's own write authority; built
+	// once ([newNodeGate]).
 	logs []gateLog
 
 	// live lists the nodes holding a presence lease, which an eviction is
@@ -721,9 +578,8 @@ type NodeGate struct {
 	// no judgement could make the write allowed.
 	publishing func(gesture string) error
 
-	// budgets are the gesture's two budgets: the zero value is the
-	// package's own ([GateJudgeBudget], [GateLogBudget]),
-	// and a test sets shorter ones to spend a phase whole.
+	// budgets are the gesture's two budgets: zero is the package's own
+	// ([GateJudgeBudget], [GateLogBudget]); a test sets shorter ones.
 	budgets gateBudgets
 }
 
@@ -753,9 +609,8 @@ type gateLog struct {
 	// that landed and applies nowhere names ([DomainGate.Duplicates]).
 	duplicates time.Duration
 
-	// write publishes the log's own gate record — or, for a retried
-	// operation whose record is already the gate in force, answers where it
-	// landed without publishing, which the log's own snapshot judges
+	// write publishes the log's own gate record, or for a retried operation
+	// whose record is already the gate in force answers where it landed
 	// ([statelog.GateStanding]).
 	write gateWrite
 }
@@ -766,16 +621,12 @@ type liveLeases interface {
 	ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error)
 }
 
-// livePresences is every node holding a live presence lease.
-//
-// ONE READING FOR THE TRIM AND FOR THE GATE, because they ask the same
-// question: which nodes are still reaching the fleet. The trim counts such a
-// node whose row has not landed at position zero until it does
-// ([statelog.CountedSet]); the gate refuses to evict one.
-//
-// DATA NODES ONLY. A node without `data` applies no log and publishes no
-// position, so the trim that counted it at zero would never advance again,
-// and the gate has no copy of it to fence.
+// livePresences is every DATA node holding a live presence lease: one reading
+// for the trim and the gate, which ask the same question. The trim counts such
+// a node at position zero until its row lands ([statelog.CountedSet]); the
+// gate refuses to evict one. A node without `data` publishes no position, so
+// the trim counting it at zero would never advance, and the gate has no copy
+// of it to fence.
 func livePresences(ctx context.Context, leases liveLeases) ([]statelog.Presence, error) {
 	ids, err := dataNodes(ctx, leases)
 	if err != nil {
@@ -789,38 +640,17 @@ func livePresences(ctx context.Context, leases liveLeases) ([]statelog.Presence,
 }
 
 // domainOpID is one log's operation id for a gesture: STABLE, so a retry is the
-// same operation on that log, and DISTINCT per log, per sign and per node, so
-// each log's ledger answers for its own record — the tracker's own step-id
-// idiom for a sequence that publishes several records.
-//
-// THE SIGN IS PART OF IT, so an id an operator carried from an eviction to the
-// readmission after it is a different operation rather than one the eviction's
-// ledger entry answers.
-//
-// AND THE NODE IS, so a gesture id carried to ANOTHER node is that node's own
-// operation. Without it an eviction of node-b under node-a's gesture id was
-// answered from node-a's ledger entries — complete, at node-a's positions —
-// with nothing written for node-b at all, and inside the broker's duplicate
-// window the append itself would have collapsed onto node-a's record too.
-//
-// THE STATE LOG'S OWN GRAMMAR ([statelog.StepOpID]), so each log's id carries
-// the gesture's mint instant: the ledger's vouching reads it off the id, and
-// one spelled here in a shape that grammar did not recognise would be read as
-// minted at the zero instant — answered `unknown` on any node whose ledger's
-// sweep ever lost a row. The sign is one step, and the log and the node
-// together the last.
-//
-// INJECTIVE, which a plain join of the parts is not: a gesture id may carry a
-// tail of its own and a node id may hold dots, so written as itself gesture
-// `x` on node `y.evict.tracker.z` and gesture `x.evict.tracker.y` on node `z`
-// would spell one id. The grammar writes every step as ONE SEGMENT, with no
-// dot in it, so reading from the right recovers the last two steps and leaves
-// the gesture; the node goes into its step through [statelog.OpNamePart],
-// which writes a dotted node escaped — injectively, and alone, so the log
-// beside it stays readable; and the log holds no colon, so the colon after it
-// ends it. (A collision would still be refused rather than answered, its
-// ledger row being on another node's subject ([statelog.ReasonOpReused]); an
-// id that cannot collide is one whose refusal nobody has to read.)
+// same operation, and DISTINCT per log (each ledger answers for its own
+// record), per sign (an id carried from an eviction to a readmission is a new
+// operation) and per target node (evicting node-b under node-a's gesture id is
+// neither answered from node-a's ledger nor collapsed onto its record).
+// Spelled in the state log's grammar ([statelog.StepOpID]) so it carries the
+// gesture's mint instant the ledger vouches by: any other shape reads as
+// minted at zero and answers `unknown` once a ledger has swept. INJECTIVE,
+// which a plain join is not (dotted gesture tails and node ids): each step is
+// one dot-free segment read from the right, the node escaped by
+// [statelog.OpNamePart], and the log, holding no colon, ended by the colon
+// after it. A collision would be refused ([statelog.ReasonOpReused]) anyway.
 func domainOpID(gesture string, readmit bool, domain, node string) string {
 	verb := "evict"
 	if readmit {
@@ -830,25 +660,14 @@ func domainOpID(gesture string, readmit bool, domain, node string) string {
 }
 
 // newNodeGate builds the gesture over every identity-claiming log this node
-// runs, in the register's own order.
-//
-// A LOG THAT CLAIMS IDENTITY AND HAS NO WRITER HERE REFUSES THE BOOT — and
-// before anything is provisioned, since [checkRegister] asks every such entry
-// for its [registration.NewGate]. The trim counts nodes on it, so an eviction
-// that could not reach it would lift every pin but that one — the defect this
-// gate replaced, reintroduced by adding a domain.
-//
-// Its OWN writers, rather than the surfaces' — the tracker's may not exist
-// (a company on an external tracker still runs every log in the register) and
-// the page store's may not either, and an eviction is a decision about a
-// machine that has to reach every log whichever backends the company chose.
-//
-// BUILT ONCE, over the logs the node started: a data node runs every log in
-// the register from boot and none starts or stops while it runs, so the logs a
-// gesture writes are the same for the life of the node, and every one is
-// written here, through this node's own write authority — each built by its
-// register entry with the node's own identity and recorder, which the state
-// log carries.
+// runs, in the register's own order, each through the domain's OWN gate
+// writer from its register entry rather than a surface's: a company on other
+// backends may have no tracker or page store, and an eviction must reach
+// every log. A log that claims identity with no writer refuses the boot, and
+// before anything is provisioned ([checkRegister] asks every such entry for
+// its [registration.NewGate]): an eviction would otherwise lift every pin but
+// that one. BUILT ONCE: a data node runs every log in the register from boot,
+// and none starts or stops while it runs.
 func newNodeGate(s *stateLog, leases liveLeases) (*NodeGate, error) {
 	g := &NodeGate{
 		live: func(ctx context.Context) ([]statelog.Presence, error) {
@@ -898,21 +717,13 @@ func gateLogFor(s *stateLog, running *runningLog,
 // Evict removes a node from every identity-claiming log's counted set.
 //
 // JUDGED BEFORE ANYTHING IS WRITTEN: a node holding a live presence lease is
-// refused unless the request forces it, and a lease listing that cannot be
-// read refuses too — a judgement nobody could make is not one that came back
-// clear ([*GateUnjudged]). Past the judgement the error is nil and every log's
-// own answer is in the result.
-//
-// # And force decides the unreadable listing as well
-//
-// The listing is the judgement's ONLY input, and force is the operator saying
-// that input does not decide this node: a machine wedged in a way that still
-// renews its lease reads exactly like one whose lease this node cannot list,
-// and refusing the second with a 500 during a coordination fault — which is
-// when an absent node is most likely to need evicting — made force a flag that
-// worked only when it was least needed. A forced eviction past an unreadable
-// listing, or past a lease it held, is logged as such, because it is the one
-// gesture here nobody's evidence cleared.
+// refused unless forced, and an unreadable lease listing refuses too
+// ([*GateUnjudged]). Past the judgement the error is nil and every log's own
+// answer is in the result. Force decides the unreadable listing as well: the
+// listing is the judgement's only input, force says it does not decide this
+// node, and a coordination fault is when an absent node most needs evicting.
+// A forced eviction past an unreadable listing or a live lease is logged, as
+// the one gesture no evidence cleared.
 func (g *NodeGate) Evict(ctx context.Context, req GateRequest) (GateResult, error) {
 	if err := req.valid(); err != nil {
 		return GateResult{}, err
@@ -971,16 +782,13 @@ func (g *NodeGate) Readmit(ctx context.Context, req GateRequest) (GateResult, er
 	return g.write(judge, req, true), nil
 }
 
-// write publishes the gate record to every identity-claiming log
-// ([NodeGate.logs]), all at once.
-//
-// UNDER ITS OWN BUDGETS, NOT THE CALLER'S. The judgement ran under the
-// caller's context — judge, bounded by [GateJudgeBudget] — so a request
-// abandoned before the first record wrote nothing; from there on the gesture
-// is half-done the moment it stops, and the caller going away — a closed
-// connection, a client's own timeout — is not a request to leave a node
-// evicted on one log and counted on the other. The values travel, so each
-// write keeps the trace and the operator it was asked under.
+// write publishes the gate record to every identity-claiming log at once (a
+// log that refuses or cannot answer stops no other, since each gate is
+// independent), UNDER ITS OWN BUDGET, NOT THE CALLER'S: a request abandoned during the
+// judgement wrote nothing, but past it the gesture is half-done the moment it
+// stops, and a caller going away is no request to leave a node evicted on one
+// log and counted on another. The context's values travel, so each write keeps
+// the trace and the operator it was asked under.
 func (g *NodeGate) write(judge context.Context, req GateRequest, readmit bool) GateResult {
 	budgets := g.budgets.orDefault()
 	detached := context.WithoutCancel(judge)
@@ -989,8 +797,7 @@ func (g *NodeGate) write(judge context.Context, req GateRequest, readmit bool) G
 	out := GateResult{Node: req.Node, OpID: req.OpID, Domains: make([]DomainGate, len(g.logs))}
 	var wg sync.WaitGroup
 	for i, l := range g.logs {
-		// EACH ENTRY ITS OWN GOROUTINE'S, so the answers are in the
-		// logs' order however the writes finish.
+		// EACH ENTRY ITS OWN GOROUTINE'S, so answers keep the logs' order.
 		d := &out.Domains[i]
 		*d = DomainGate{Domain: l.domain, Stream: l.stream, Duplicates: l.duplicates,
 			OpID: domainOpID(req.OpID, readmit, l.domain, req.Node)}

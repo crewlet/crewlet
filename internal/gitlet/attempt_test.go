@@ -9,14 +9,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// A PUSH A RULE REFUSES WHOLE IS AN ATTEMPT: a push git received every command
-// of which is refused, one by a rule on who may move which ref, is an entry of
-// the record that moves nothing, whose apply writes its row and its counters
-// and no ref; one refused only as stale, and one the engine built, write
-// nothing. A seat's attempt counts against its day, and one past the day is
-// told its own refusal, never push_quota, and recorded nowhere. A decide-made
-// attempt, which its receiver stored a pack for, names no pack and no commit,
-// at the pack bound too.
+// A PUSH A RULE REFUSES WHOLE IS AN ATTEMPT: a received push with every
+// command refused, one by a who-may-move-which-ref rule, is an entry that
+// moves nothing, its apply writing its row and counters and no ref; one
+// refused only as stale, or engine-built, writes nothing. A seat's attempt
+// counts against its day; one past the day gets its own refusal, never
+// push_quota, recorded nowhere. A decide-made attempt names no pack and no
+// commit, though its receiver stored a pack, at the pack bound too.
 //
 // Mutations: record every push refused whole (the stale push is an entry,
 // red); judge the quota before the attempt (push_quota, red); keep the pack on

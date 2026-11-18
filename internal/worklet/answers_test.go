@@ -50,11 +50,9 @@ func rederiveOn(t *testing.T, db store.ReplicatedHandle, applier *worklet.Applie
 	return n
 }
 
-// THE BACKFILL EQUALS THE STAMP THE APPLY MAINTAINED, for which remark answered
-// a question as for every derived column: rows a different rule set wrote — a
-// reanchored cursor's, an adopted artefact's — re-derive to exactly what
-// applying the records reached, and rows this build maintained re-derive to
-// themselves.
+// THE BACKFILL EQUALS THE STAMP THE APPLY MAINTAINED: rows a different rule
+// set wrote re-derive to what applying the records reached, and rows this
+// build maintained re-derive to themselves.
 func TestTheAnswerBackfillEqualsTheMaintainedStamp(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -118,12 +116,9 @@ func TestTheAnswerBackfillEqualsTheMaintainedStamp(t *testing.T) {
 	}
 }
 
-// AN ANSWER POSTED BEFORE ITS QUESTION CLOSES NOTHING, in the apply and in the
-// re-derivation alike: the apply met no row to stamp, and a re-post of the
-// answer once the question exists posts nothing, so it closes nothing either.
-// A re-derivation that read only which remark names which would stamp it, and
-// the node re-deriving would hold a question answered that every node applying
-// the records holds open.
+// AN ANSWER POSTED BEFORE ITS QUESTION CLOSES NOTHING, in the apply (no row to
+// stamp, and its re-post posts nothing) and in the re-derivation alike, which
+// would stamp it if it read only which remark names which.
 func TestAnAnswerPostedBeforeItsQuestionClosesNothing(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -164,11 +159,9 @@ func TestAnAnswerPostedBeforeItsQuestionClosesNothing(t *testing.T) {
 }
 
 // THE FIRST ANSWER THE LOG CARRIES HOLDS THE QUESTION, in the re-derivation as
-// in the apply: the apply's stamp is guarded on the question being open, so a
-// second answer that reached the log — which the writer refuses, but a restore
-// or a retained record can leave — never takes it over, and a re-derivation
-// that picked any answer but the earliest would close the question on one
-// node with a remark every other node holds as a mere reply.
+// in the apply, whose stamp is guarded on the question being open: a second
+// answer (refused by the writer, but a restore or a retained record can leave
+// one) never takes it over.
 func TestTheFirstAnswerTheLogCarriesHoldsTheQuestion(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)

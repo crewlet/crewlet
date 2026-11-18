@@ -15,12 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// What a value its type's own IsZero calls zero becomes on its way to a data
-// node: the router's wire leaves a field at its zero off ([encodeInput]), and a
-// pointer at such a value is such a field — so each field the wire gate found
-// pointing at one (zeroThroughPointer) is held here to reaching the data node
-// meaning what it meant, asked from a node without data and from a data node's
-// own seat alike.
+// The router's wire leaves a field its type's IsZero calls zero off
+// ([encodeInput]), a pointer at such a value included, so each field the wire
+// gate found pointing at one (zeroThroughPointer) is held here to reaching the
+// data node meaning what it meant, from a node without data and from a data
+// node's own seat alike.
 
 // CreateTaskAsking files a task with its ask, recording the task.
 func (f *fakeNode) CreateTaskAsking(_ context.Context, opID string, task worklet.Task, _ worklet.Comment,
@@ -44,14 +43,10 @@ func (f *fakeNode) MarkInbox(_ context.Context, opID, _ string, _ statelog.Posit
 	return worklet.WriteResult{}, nil
 }
 
-// A DATE CLEARED THROUGH THE ROUTER REACHES THE DATA NODE AS A CLEAR. Spelled
-// as a pointer at the zero instant, as a patch once spelled it, a clear crossed
-// as no date named at all — the wire leaves a pointer at a value its type calls
-// zero off — and the task kept the date the tool said it had cleared, while the
-// same patch made on a data node's own seat cleared it. Spelled as its flag it
-// crosses as itself; and a patch setting a date to the zero instant is refused
-// before it is asked, naming the flag, so no data node is ever handed the
-// pointer's absence in its place.
+// A DATE CLEARED THROUGH THE ROUTER REACHES THE DATA NODE AS A CLEAR. A pointer
+// at the zero instant crosses as no date named, while the same patch on a data
+// node's own seat clears it; so a clear crosses as its flag, and a patch setting
+// a date to the zero instant is refused before it is asked, naming the flag.
 //
 // Mutation: drop refusedBeforeAsking from opUpdateTask and the patch setting the
 // due date to the zero instant reaches the data node as a patch naming no date.
@@ -87,12 +82,10 @@ func TestADateClearedThroughTheRouterReachesTheDataNodeAsAClear(t *testing.T) {
 }
 
 // A WRITE HOLDING THE ZERO INSTANT IS REFUSED BEFORE IT IS ASKED, FROM EVERY
-// NODE. A task, an ask or a patch's comment holding the zero instant as one of
-// its instants is no write any task holds, and a pointer at it would reach a
-// data node routed as no instant at all — accepted there — while the same write
-// on a data node's own seat met the writer's refusal: one write, two answers,
-// by which node asked. Refused where it is asked, it is refused alike in
-// process and routed, and no data node is asked anything.
+// NODE. A task, an ask or a patch's comment holding the zero instant is no write
+// any task holds; routed, its pointer would cross as no instant and be accepted
+// where the data node's own seat refuses it. Refused where it is asked, it gets
+// one answer whichever node asked, and no data node is asked anything.
 //
 // Mutation: drop refusedBeforeAsking from opCreateTask and the create holding a
 // zero due date is run, routed and in process.
@@ -136,11 +129,9 @@ func TestAWriteHoldingTheZeroInstantIsRefusedBeforeItIsAskedFromEveryNode(t *tes
 }
 
 // A QUERY BOUNDING THE FINISHED SET BY AN INSTANT CROSSES WITH ITS BOUND. The
-// bound was a pointer whose zero instant meant every finished task, and a
-// pointer at the zero instant crosses as nil, which bounds nothing and leaves
-// every finished task out; it is a value now, its zero unset and refused as a
-// bound by the parse (worklet's TestAClosedSinceAtTheZeroInstantIsRefused), so
-// what a read asks reaches the data node as asked.
+// bound is a value, not a pointer, since a pointer at the zero instant crosses
+// as nil, which leaves every finished task out; its zero is unset and refused
+// as a bound by the parse (worklet's TestAClosedSinceAtTheZeroInstantIsRefused).
 //
 // Mutation: tag worklet.ShowClosed.Since `json:"-"` and the read reaches the
 // data node with no bound.
@@ -162,12 +153,11 @@ func TestAQueryBoundingTheFinishedSetByAnInstantCrossesWithItsBound(t *testing.T
 }
 
 // A TOLD RECORD'S READ POSITION THAT NAMES NOTHING CROSSES AS NONE. A position
-// at generation and sequence zero is one its type calls zero whatever stream
-// it says, so the wire leaves it off and the serving node decodes the zero
-// position, which names no stream — and the access writer judges a position
-// that names nothing on no stream (accessdomain's
-// TestAToldRecordsReadPositionThatNamesNothingIsJudgedOnNoStream), so the
-// record routed is taken as the same record is in process.
+// at generation and sequence zero is zero whatever stream it says, so the wire
+// leaves it off and the serving node decodes one naming no stream; the access
+// writer judges such a position on no stream (accessdomain's
+// TestAToldRecordsReadPositionThatNamesNothingIsJudgedOnNoStream), so routed
+// and in process agree.
 //
 // Mutation: drop OmitZeroStructFields from inputEncoding and the position
 // crosses naming the tracker's log.
@@ -187,12 +177,10 @@ func TestAToldRecordsReadPositionThatNamesNothingCrossesAsNone(t *testing.T) {
 }
 
 // AN INBOX GESTURE READING THROUGH A POSITION THAT NAMES NOTHING IS DECIDED THE
-// SAME WHEREVER IT IS ASKED. Routed, the wire leaves the pointer at a position
-// its type calls zero off and the data node meets none; asked on the data
-// node's own seat, it meets the pointer. Every reader of a gesture takes a
-// position that names nothing for none (inbox's Gesture.readThrough), so the
-// two are checked and applied alike — a gesture that was refused on a data
-// node's own seat for naming another stream, and taken from every other node.
+// SAME WHEREVER IT IS ASKED. Routed, the wire leaves a pointer at a zero
+// position off; on the data node's own seat the pointer arrives. Every reader of
+// a gesture takes a position that names nothing for none (inbox's
+// Gesture.readThrough), so the two are checked and applied alike.
 //
 // Mutation: drop the IsZero from inbox's Gesture.readThrough and the gesture
 // asked on the data node's own seat is refused where the routed one is taken.

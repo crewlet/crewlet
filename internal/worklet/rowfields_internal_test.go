@@ -9,14 +9,11 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// A ROW'S COST IS ITS OWN, AND ONLY THE ROWS ASKED ABOUT ARE ANSWERED.
-//
-// `spendOf` decorates rows somebody already read, so the two ways it can be
-// wrong are both silent on a board: a cost filed under the wrong id is a card
-// showing its neighbour's tokens, and an id nobody asked about in the answer
-// is a map a caller ranges over and draws a card for a task that is not on the
-// board. An id that does not exist is simply absent — never a zero entry,
-// which would read as "this task cost nothing" about a task that is not there.
+// A ROW'S COST IS ITS OWN, AND ONLY THE ROWS ASKED ABOUT ARE ANSWERED. Both
+// failures are silent on a board: a cost under the wrong id shows a
+// neighbour's tokens, and an id nobody asked about draws a card for a task not
+// on the board. A missing id is absent, never a zero entry reading "this task
+// cost nothing".
 func TestSpendOfAnswersExactlyTheAskedIds(t *testing.T) {
 	t.Parallel()
 	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)

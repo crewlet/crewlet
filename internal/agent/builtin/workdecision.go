@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/colleague"
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/org"
@@ -18,20 +19,13 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A DECISION IS AN ARGUMENT OF TWO TOOLS, stated once.
-//
-// `comment_on_work_item` asks a question on an item that exists, and
-// `create_work_item` files an item AS a question — the "ask an agent"
-// gesture, one record rather than a create and a comment. Both take the same
-// `decision` object with the same schema, the same parse and the same checks
-// against the world, because two copies of a structure a model composes from a
-// schema are two chances to describe it differently, and the model reads
-// whichever it met last.
+// A DECISION IS AN ARGUMENT OF TWO TOOLS, stated once: `comment_on_work_item`
+// asks on an existing item and `create_work_item` files an item AS a question.
+// One schema, parse and check, so the model never meets two descriptions.
 
-// decisionSchema is the `decision` argument's JSON Schema.
-//
-// EVERY CAP IS IN A DESCRIPTION, read off the decision's own constants, so the
-// number a model is told is the number it is refused at.
+// decisionSchema is the `decision` argument's JSON Schema. Every cap is in a
+// description, read off the decision's own constants, so the number a model is
+// told is the number it is refused at.
 func decisionSchema() map[string]any {
 	properties := choiceProperties()
 	properties["question"] = map[string]any{
@@ -66,19 +60,16 @@ func decisionSchema() map[string]any {
 			"and they can still answer in their own words. The person answers " +
 			"by naming an option in `choice`, and you are woken with their choice.",
 		"properties": properties,
-		// THE RECOMMENDATION IS NOT LISTED: a person asking through these
-		// tools may have no view, and an agent's is required by its validator.
+		// Not `recommended`: a person asking may have no view, and the
+		// validator requires an agent's.
 		"required": []any{"question", "options", "role"},
 	}
 }
 
-// choiceProperties are the schema of a decision's CHOICE (its options, the one
-// recommended and why, what was looked at, and the role the person is asked
-// in), which every tool that asks a person to choose takes alike: a work
-// item's ask under `decision` ([decisionSchema]), and an executor's ask at the
-// top of its arguments ([AskAndWait]). One builder, so the shape a model learns
-// on one is the shape it meets on the other. A fresh map on every call: each
-// caller adds the properties of its own.
+// choiceProperties are the schema of a decision's CHOICE (options,
+// recommendation, rationale, evidence, role), shared by every tool that asks a
+// person to choose ([decisionSchema], [AskAndWait]) so a model learns one
+// shape. A fresh map on every call: each caller adds its own properties.
 func choiceProperties() map[string]any {
 	option := map[string]any{
 		"type": "object",
@@ -110,13 +101,14 @@ func choiceProperties() map[string]any {
 				"enum": []any{
 					string(decision.EvidenceTask), string(decision.EvidencePage),
 					string(decision.EvidenceTurn), string(decision.EvidenceRun),
-					string(decision.EvidenceURL),
+					string(decision.EvidenceArtifact), string(decision.EvidenceURL),
 				},
 			},
 			"ref": map[string]any{
 				"type": "string",
 				"description": "A work item, a page's id or CONTAINER/Title, " +
-					"a turn or run id, or an https:// URL. For a work item: " +
+					"a turn, run or artifact id, or an https:// URL (an artifact's " +
+					"`url` from a tool's answer is read as the artifact). For a work item: " +
 					itemRef,
 			},
 			"label": map[string]any{
@@ -166,15 +158,12 @@ func choiceProperties() map[string]any {
 
 // readDecision parses and checks a `decision` argument, or returns the refusal.
 //
-// STRICT ABOUT KEYS, because every one a model misspells is a part of the
-// question the person deciding never sees: `recommendation` for `recommended`
-// would store a decision with no recommendation and report it applied. So an
-// unknown key is refused by name rather than dropped.
+// An unknown key is refused, not dropped: `recommendation` for `recommended`
+// would store a decision with no recommendation and report it applied.
 //
-// THE WORLD IS CHECKED HERE, before anything is published: a task the
-// evidence names is resolved to its id and a page must exist
-// ([worklet.ValidateDecision]). A lookup that FAILS is the node's condition,
-// and is answered as one.
+// The world is checked before anything is published: a cited task resolves to
+// its id and a cited page must exist ([worklet.ValidateDecision]). A lookup
+// that FAILS is the node's condition, answered as one.
 func (d WorkDeps) readDecision(ctx context.Context, tool string, actor Actor,
 	raw any, pageReader PageReader) (*decision.Decision, *tools.Result) {
 
@@ -216,12 +205,9 @@ func (d WorkDeps) readDecision(ctx context.Context, tool string, actor Actor,
 // no `decision` (ADR-0100), or returns nil. `asked` is the handle as
 // [WorkDeps.resolveHandle] returned it.
 //
-// THE ASKER IS AN AGENT SEAT, because the rule is what a person is shown when
-// an agent asks them something: a person asking through the dashboard or an
-// assistant asks in their own words, and the decision stays theirs to add.
-// AND THE ASKED IS ANYBODY THE ROSTER DOES NOT NAME AS AN AGENT SEAT: a
-// question between two agents may be answered in words, but a person who
-// cannot be told apart from one is asked the way a person is.
+// Only an agent asker is held to it: a person may ask in their own words. The
+// asked is anybody the roster does not name as an agent seat: two agents may
+// talk in words, but anyone not known to be an agent is asked as a person.
 func (d WorkDeps) checkAskOfPerson(tool string, actor Actor, asked string, decided bool) *tools.Result {
 	if decided || asked == "" || actor.Kind != worklet.AuthorAgent || d.asksAgentSeat(asked) {
 		return nil
@@ -316,16 +302,13 @@ func informSurfaces() []any {
 }
 
 // ChannelDirectory is the chart's answer to WHERE an asker may promise to
-// report a decision — declared here, by the one caller that asks, and
-// implemented by the engine over the epoch current when the tool runs.
+// report a decision, implemented by the engine over the epoch current when
+// the tool runs.
 type ChannelDirectory interface {
-	// ChatSurfaces is the chat surfaces the seat `handle` can post on:
-	// the ones this company runs AND that seat has an identity on — a bot
-	// on a vendor surface, and on the engine's own chat
-	// ([decision.InformChat]) the seat itself, which every agent seat
-	// posts as. Both, because a promise to post where the seat has no
-	// identity is one it can never keep, and the engine would hold its
-	// turn open for a post no tool of its can make.
+	// ChatSurfaces is the chat surfaces the seat `handle` can post on: ones
+	// the company runs AND the seat has an identity on (a bot on a vendor
+	// surface; the seat itself on [decision.InformChat]). Otherwise the
+	// engine would hold its turn open for a post it can never make.
 	ChatSurfaces(handle string) []decision.InformSurface
 
 	// UnitChannels is every channel a unit of the chart declares, as the
@@ -336,23 +319,14 @@ type ChannelDirectory interface {
 // checkInform is where an asker's promise to report the outcome is checked
 // against the world, and returns the inform as it is to be stored.
 //
-// # An agent seat's alone
+// Only an agent seat may inform: the engine holds its answered turn open until
+// a tool on the named surface has run ([worklet.Owes]), and a person has no
+// turn to hold, so theirs would be a promise nothing keeps. Refused as
+// FORBIDDEN: no spelling of the argument makes it right for this caller.
 //
-// THE ENGINE ENFORCES AN INFORM: the asker's answered turn is held open until
-// a tool on the named surface has run ([worklet.Owes]). A person (a bound
-// operator at the dashboard, an assistant on their credential) has no turn
-// to hold, so an inform they asked for would put "posts it to #channel" on the
-// answering person's card as a promise nothing keeps. That is refused as
-// FORBIDDEN rather than invalid: no spelling of the argument makes it right
-// for this caller.
-//
-// # A surface the seat can post on, a channel the chart declares
-//
-// The channel is one a UNIT declares because that is the set the chart owns
-// and every seat's prompt already names — an arbitrary name would be a
-// channel nobody checked the seat's bot is in. A leading `#` is accepted and
-// the chart's own spelling is stored, so the card and the prompt render the
-// name the company uses.
+// The channel must be one a UNIT declares, the set every seat's prompt names,
+// not one nobody checked the bot is in. A leading `#` is accepted and the
+// chart's spelling stored.
 func (d WorkDeps) checkInform(tool string, actor Actor, inform decision.Inform) (decision.Inform, *tools.Result) {
 	if actor.Kind != worklet.AuthorAgent {
 		return decision.Inform{}, refusalOf(refused(tools.RefusalForbidden,
@@ -412,14 +386,34 @@ type evidenceLookup struct {
 
 var _ worklet.EvidenceLookup = evidenceLookup{}
 
+// OwnArtifact is ref's artifact where ref is exactly the address this engine
+// hands out for it, so no other host or path is read as one.
+func (l evidenceLookup) OwnArtifact(ref string) (string, bool) {
+	if l.work.ArtifactLink == nil {
+		return "", false
+	}
+	ref = strings.TrimSpace(ref)
+	i := strings.LastIndex(ref, artifactAddress)
+	if i < 0 {
+		return "", false
+	}
+	id, err := artifacts.ParseID(ref[i+len(artifactAddress):])
+	if err != nil {
+		return "", false
+	}
+	if link := l.work.ArtifactLink(id); link == "" || link != ref {
+		return "", false
+	}
+	return id.String(), true
+}
+
 // Task resolves a key or an id through the same point read every other
 // reference in these tools takes.
 func (l evidenceLookup) Task(ctx context.Context, ref string) (worklet.CitedTask, error) {
 	if l.work.Reader == nil {
-		// A COMPANY WITHOUT WORKLET CANNOT CITE A WORK ITEM by
-		// kind, for the reason [evidenceLookup.PageID] gives a page: an
-		// executor of a company on another tracker asks with the same
-		// evidence a work item's decision takes.
+		// Without Worklet a work item cannot be cited by kind, as
+		// [evidenceLookup.PageID] refuses a page; an executor on another
+		// tracker still asks with this evidence.
 		return worklet.CitedTask{}, fmt.Errorf("%w: this company does not run "+
 			"Worklet, so a `task` cannot be checked; cite it as a `url`",
 			worklet.ErrInvalid)
@@ -436,11 +430,9 @@ func (l evidenceLookup) Task(ctx context.Context, ref string) (worklet.CitedTask
 
 // PageID resolves a page by id or by address to a live page's id.
 //
-// A COMPANY WITHOUT DOCLET CANNOT CITE A PAGE by kind: there is
-// nothing to check it against, and a reference nothing checked is the dead
-// link the check exists to prevent. That is the caller's to change — cite it
-// as a url — so it is refused as invalid rather than reported as a failure.
-// A trashed page is not live: it is where nobody deciding can read it.
+// Without Doclet a page cannot be cited by kind: an unchecked reference is the
+// dead link the check prevents. The caller can cite a url instead, so it is
+// refused as invalid, not a failure. A trashed page is not live.
 func (l evidenceLookup) PageID(ctx context.Context, ref string) (string, bool, error) {
 	if l.pages == nil {
 		return "", false, fmt.Errorf("%w: this company does not run Doclet, "+

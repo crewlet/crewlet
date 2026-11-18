@@ -115,6 +115,10 @@ export interface AccessGrantEntry {
   /** What to add at the vendor first, as a person adds it there. */
   missing?: string[];
   action_url?: string;
+  /** What granting it allows beyond its name. */
+  note?: string;
+  /** Granted for one change: it lasts at most this many hours, never for good. */
+  max_hours?: number;
 }
 
 /**
@@ -134,6 +138,8 @@ export interface AccessGrant {
   reason: string;
   /** The agent's request it answered, where it answered one. */
   request?: string;
+  /** What the one change the agent asked it for changes (a bucket), copied from the request. */
+  target?: string;
 }
 
 /**
@@ -155,6 +161,8 @@ export interface AccessGrantRequest {
   hours: number;
   /** The agent's own words for why. */
   reason: string;
+  /** What the one change it is asked for changes (a bucket). */
+  target?: string;
   item: string;
   ask: string;
   asked_at: string;

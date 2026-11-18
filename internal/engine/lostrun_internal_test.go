@@ -10,17 +10,14 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A RUN LOST WITH ITS HOST CARRIES ITS ROUND ON IN A FRESH RUN, and the turn
-// goes on to its end from there. The restart that replaced the engine killed the
-// run's job mid-step; the host's waiter recorded the loss and announced it, and
-// the seat's holder — this engine — claims it, reads what the job spent off its
-// box and resumes the turn, which relaunches the same round: a new job in the
-// lost one's box, in a session of its own, told it was cut off. That job's
-// collection ends the turn as any run's does.
+// A RUN LOST WITH ITS HOST CARRIES ITS ROUND ON IN A FRESH RUN: once the host's
+// waiter announces the loss, the seat's holder claims it, reads the job's spend
+// off its box and resumes the turn, relaunching the same round as a new job in
+// the lost one's box, in a session of its own, told it was cut off. That job's
+// collection ends the turn.
 //
-// Mutation: drop the loss from the resume ([sandbox.ResumeRequest.Lost] not
-// handed to the runner), and the turn collects the truncated job as the
-// round's result and ends there — no second job is ever launched.
+// Mutation: hand the runner no [sandbox.ResumeRequest.Lost], and the turn
+// collects the truncated job as the round's result; no second job launches.
 func TestARunLostWithItsHostCarriesItsRoundOnInAFreshRun(t *testing.T) {
 	t.Parallel()
 	e, _ := spendingEngine(t)
@@ -78,17 +75,13 @@ func TestARunLostWithItsHostCarriesItsRoundOnInAFreshRun(t *testing.T) {
 }
 
 // A ROUND LOST PAST ITS LIMIT ENDS ITS TURN AT ONCE. A round whose jobs keep
-// being lost with their hosts is a run that takes its host down, so the resume
-// that would carry it on once more refuses (runner.ErrRoundLost) — and that
-// refusal is permanent: every retry of the resume carries the same losses and
-// is refused the same way. So the run is settled, its turn ended on that
-// resume, whatever its jobs' calls showed. These jobs made no call at all, which
-// is the case that used to be handed back: refused again on every announcement
-// of its completion, and given up only once its resume had failed for half an
-// hour, the seat held behind it throughout.
+// being lost is a run that takes its host down, so the resume that would carry
+// it on again refuses (runner.ErrRoundLost), permanently, since every retry
+// carries the same losses: the run is settled and its turn ended on that
+// resume, whatever its jobs' calls showed, these having made none.
 //
 // Mutation: drop turn.ErrPermanent from the refusal (internal/agent/runner's
-// lost.go), and the resume after the third loss is handed back rather than
+// lost.go), and the resume after the last loss is handed back rather than
 // settled, leaving the run on the record.
 func TestARoundLostPastItsLimitEndsItsTurnAtOnce(t *testing.T) {
 	t.Parallel()
@@ -104,7 +97,7 @@ func TestARoundLostPastItsLimitEndsItsTurnAtOnce(t *testing.T) {
 	runner := rig.runners[rig.row(t, "run-lost-limit").Harness]
 	for loss := 1; loss <= sandbox.MaxRoundLosses+1; loss++ {
 		// THE ENGINE'S RESTART TOOK THE ROUND'S NEWEST JOB, and its host's
-		// waiter said so, as it says of each one.
+		// waiter said so.
 		row := rig.row(t, "run-lost-limit")
 		runner.Lose(sandbox.Result{Text: "half way through the fix", InputTokens: 300, OutputTokens: 30})
 		if marked, err := pending.MarkLost(t.Context(), "run-lost-limit", row.LaunchID,

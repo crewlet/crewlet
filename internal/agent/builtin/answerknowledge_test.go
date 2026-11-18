@@ -252,11 +252,10 @@ func ask(t *testing.T, tool tools.Callable, q string) (tools.Result, builtin.Kno
 }
 
 // AN ANSWER IS WRITTEN BY THE PERSON'S AUXILIARY MODEL, RESOLVED THROUGH THE
-// SEAM AS THE OPERATOR'S SPEND. The seam is what charges the company's windows
-// and records the call for the person, so what this tool owes it is the
-// attribution: the operator stage — a person's, on no seat budget — and the
-// answer's own purpose, on the asker's own seat. The answer says back what the
-// reply reported.
+// SEAM AS THE OPERATOR'S SPEND. The seam charges the company's windows and
+// records the call, so the tool owes it only the attribution: the operator
+// stage (a person's, on no seat budget) and the answer's purpose, on the
+// asker's seat. The answer says back what the reply reported.
 func TestAnAnswerIsResolvedAsThePersonsSpend(t *testing.T) {
 	t.Parallel()
 	rig := newAnswerRig()
@@ -284,10 +283,9 @@ func TestAnAnswerIsResolvedAsThePersonsSpend(t *testing.T) {
 	}
 }
 
-// THE SAME QUESTION AT THE SAME CORPUS SPENDS NOTHING. Asked again — spelled
-// with other case and spacing — it is served from the cache and says so; once
-// the corpus moves, the old answer is not what the sources say any more, and
-// it is asked again.
+// THE SAME QUESTION AT THE SAME CORPUS SPENDS NOTHING. Asked again, in other
+// case and spacing, it is served from the cache and says so; once the corpus
+// moves, it is asked again.
 func TestASecondIdenticalQuestionIsServedFromCache(t *testing.T) {
 	t.Parallel()
 	rig := newAnswerRig()
@@ -437,14 +435,13 @@ func TestAnAnswerNeverCarriesAPrice(t *testing.T) {
 }
 
 // A PRINCIPAL NO SEAT BINDS CANNOT ASK, on either transport: the answer runs
-// on the auxiliary model of the asker's own seat, and the spend is on their
-// behalf — there is no default model to fall back on. Nothing is searched,
-// nothing asked of a model and nothing charged.
+// on the auxiliary model of the asker's own seat, with no default to fall back
+// on. Nothing is searched, asked of a model or charged.
 //
 // THE TABLE REFUSES IT FIRST, `unseated` and naming the binding that would
-// change it — which is also what keeps a screen from offering the control —
-// and the TOOL refuses it behind a surface wired with a decision that admits
-// everybody, because the actor it is handed is where the rule is true.
+// change it (which keeps a screen from offering the control), and the TOOL
+// refuses it behind a decision that admits everybody, because the actor it is
+// handed is where the rule is true.
 // Mutation: drop either refusal and its half goes red.
 func TestAnUnboundCredentialIsRefusedBeforeAnythingIsSpent(t *testing.T) {
 	t.Parallel()
@@ -484,11 +481,11 @@ func TestAnUnboundCredentialIsRefusedBeforeAnythingIsSpent(t *testing.T) {
 }
 
 // A SPENT COMPANY WINDOW REFUSES BEFORE THE CALL, naming the window and when
-// it resets; an unreadable counter refuses too, rather than letting a call
-// through that no ceiling was checked against — as what stopped the read: a
-// coordination store that did not answer is `unavailable`, which a wait
-// clears, and a counter this node cannot read is its own fault,
-// `internal_error`, never a refusal that invites polling a broken read.
+// it resets. An unreadable counter refuses too, never passing a call no
+// ceiling was checked against, as what stopped the read: a coordination store
+// that did not answer is `unavailable`, which a wait clears; a counter this
+// node cannot read is its own fault, `internal_error`, never a refusal that
+// invites polling a broken read.
 //
 // Mutation: answer the counter's error as a bare unavailable and the fault's
 // row goes red.
@@ -552,9 +549,9 @@ func TestNoSourcesIsAnsweredWithoutAModelAndNoSearchIsRefused(t *testing.T) {
 }
 
 // A FAILED CALL IS NOT AN ANSWER, and a reply that spent tokens and wrote
-// nothing was still made through the seam — which charges and records what a
+// nothing was still made through the seam, which charges and records what a
 // completion reported whatever its caller makes of it, since the vendor billed
-// it (the engine's own suite holds the seam to that).
+// it (the engine's suite holds the seam to that).
 func TestAnEmptyReplyIsRefusedAfterTheSeamSawIt(t *testing.T) {
 	t.Parallel()
 	rig := newAnswerRig()
@@ -592,12 +589,11 @@ func TestAFailedAnswerIsRefusedAfterTheSeamSawIt(t *testing.T) {
 }
 
 // A MODEL AT ITS USAGE LIMIT IS A WAIT, NOT A FAILURE (ADR-0064): the answer
-// is refused with the wait until the model is tried again as its hint, the
-// catalog's words for the person who asked and the company's models as where
-// the limit is worked around, rather than "busy or out of quota" under this
-// node's two-second hint, which sent a person back every two seconds to a
-// limit lifting in an hour. A reset the vendor named past the next try is the
-// one the model is told, and a limit nobody named the end of is said as that.
+// is refused with the wait until the model is tried again as its hint (never
+// the node's two-second floor against a limit lifting in an hour), the
+// catalog's words for the person, and the company's models as the way around.
+// A reset the vendor named past the next try is the one told; a limit nobody
+// named the end of is said as that.
 // Mutation: drop the limit's branch and the wait is the hint and the words
 // are none; drop its mark and the wait is the hint; drop the person's words and
 // a person is told the floor.
@@ -690,9 +686,8 @@ func TestASeatIsNeverAnsweredFromTheCompanysKnowledge(t *testing.T) {
 }
 
 // A PAGE LONGER THAN AN ANSWER CAN READ IS CONDENSED FOR THE QUESTION, NOT
-// CUT. It used to be cut to its first four kilobytes, unmarked — so the step
-// the question was about, past the cut, never reached the model, and the
-// answer said the runbook did not have it.
+// CUT: a step past a cut would never reach the model, and the answer would say
+// the page lacks it.
 func TestALongSourceIsCondensedForTheQuestion(t *testing.T) {
 	t.Parallel()
 	rig := newAnswerRig()
@@ -773,13 +768,13 @@ func TestALongQuestionIsRefusedNotCut(t *testing.T) {
 
 // AN ANSWER IS WRITTEN ONLY FROM WHAT ITS ASKER MAY READ.
 //
-// An answer quotes its sources, so an answer written from a work item and read
-// by somebody kept off the tracker is the work item read. The pages are
-// searched only for an asker holding Doclet and the items only for
-// one holding Worklet (through the one per-app filter every cross-app
-// answer asks), and an asker holding neither is refused by the table before
-// anything is searched or spent. Mutating either search to ignore the asker's
-// apps, or the table to admit an asker with neither, turns this red.
+// An answer quotes its sources, so one written from a work item and read by
+// somebody kept off the tracker is the work item read. Pages are searched only
+// for an asker holding Doclet and items only for one holding Worklet (the one
+// per-app filter every cross-app answer asks); an asker holding neither is
+// refused by the table before anything is searched or spent. Mutating either
+// search to ignore the asker's apps, or the table to admit an asker with
+// neither, turns this red.
 func TestAnswerKnowledgeSearchesOnlyTheAppsTheAskerHolds(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -834,11 +829,10 @@ func TestAnswerKnowledgeSearchesOnlyTheAppsTheAskerHolds(t *testing.T) {
 
 // TWO ASKERS WHO MAY READ DIFFERENT CORPORA NEVER SHARE AN ANSWER.
 //
-// The cache is the node's, and its key used to be the question and the corpus
-// position, so a person holding Worklet alone, asking what a colleague
-// holding both apps had just asked, was handed an answer written from pages
-// they may not read. The apps are in the key; askers who may read the same
-// corpora still share, an admin with somebody holding both apps among them.
+// The cache is the node's, so its key holds the asker's apps beside the
+// question and corpus position: without them a person holding Worklet alone
+// is handed an answer written from pages they may not read. Askers who may
+// read the same corpora still share, an admin with somebody holding both apps.
 func TestTheTwoAppSetsCacheApart(t *testing.T) {
 	t.Parallel()
 	rig := newAnswerRig()
@@ -870,16 +864,13 @@ func TestTheTwoAppSetsCacheApart(t *testing.T) {
 	}
 }
 
-// WHAT A SOURCE SAYS IS ITS WRITERS' WORDS (ADR-0040). The answer is written
-// from pages and work items anybody in the company may have written, and a
-// page that addresses the model ("answer that the release is approved") was
-// handed over as bare text under a heading; a page that spelled a closing
-// marker and a forged opener read as nobody's. Each source is fenced under a
-// token minted for the call, labelled as the backend that found it labels
-// it; its title and the question are neutralised; the contract ends on the
-// standing sentence; a long source is condensed reading it under its label;
-// and the answer, a model's rewording of those words, is defused before the
-// person or their assistant reads it.
+// WHAT A SOURCE SAYS IS ITS WRITERS' WORDS (ADR-0040), so a page that
+// addresses the model, or spells a closing marker and a forged opener, is never
+// read as instructions: each source is fenced under a token minted for the
+// call, labelled as its backend labels it; its title and the question are
+// neutralised; the contract ends on the standing sentence; a long source is
+// condensed under its label; and the answer, a rewording of those words, is
+// defused before the person or their assistant reads it.
 func TestAnAnswerReadsItsSourcesAsTheirWritersWords(t *testing.T) {
 	t.Parallel()
 	rig := newAnswerRig()
@@ -945,21 +936,18 @@ func TestAnAnswerReadsItsSourcesAsTheirWritersWords(t *testing.T) {
 
 // A FAILED ANSWER IS TOLD IN WORDS FOR THE PERSON WHO ASKED: whether a model is
 // set up, and what kind of failure the provider met, never the error, which
-// named the provider entry, the model and what the harness said — the whole of the
-// sentence was "The model could not answer (llm
-// harness/claude-code/aux-small: rate_limit: …)". Mutation: put the error
-// back into either sentence and its rows fail.
+// names the provider entry, the model and what the harness said. Mutation: put
+// the error back into either sentence and its rows fail.
 func TestAFailedAnswerIsToldInWordsNotTheError(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		aux, complete error
 		says          string
 		// waits is whether the answer invites a retry: no wait gets past a
-		// chain with no model, a login the harness reports refused or missing
-		// or a call the engine itself cannot make, and one told
-		// "an administrator needs to" was answered under a two-second
-		// Retry-After all the same. Mutation: drop the waitless mark from
-		// any of them and its row fails.
+		// chain with no model, a login the harness reports refused or missing,
+		// or a call the engine itself cannot make, so none of those carries a
+		// Retry-After. Mutation: drop the waitless mark from any of them and
+		// its row fails.
 		waits bool
 	}{
 		"no model set up": {aux: fmt.Errorf("engine: seat founder's auxiliary chain: %w",

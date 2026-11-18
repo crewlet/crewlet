@@ -6,26 +6,23 @@ import (
 	"strings"
 )
 
-// A CODING BOX'S GIT ON GITLET (ADR-0093): where it dials,
-// the credential it presents and the configuration it runs with — all of it
-// environment the engine hands the launch, never a file in the box and never
-// a setup step of the operator's.
+// A CODING BOX'S GIT ON GITLET (ADR-0093): where it dials, the credential it
+// presents and the configuration it runs with, all environment the engine
+// hands the launch, never a file in the box or an operator's setup step.
 
-// BoxGitURLVar is the base a box dials for Gitlet: a Gitlet
-// node's public listener and the /box/git prefix — https://git.example.com/box/git,
-// or a balancer over every Gitlet node's. Read by every node that launches
-// executors, through [ParseBoxURL] like the other two addresses a box dials back to
-// the engine. Unlike the tool bridge's URL, which must address the launching
-// node itself, ANY Gitlet node serves any box: the run is admitted by its row,
-// which every node reads.
+// BoxGitURLVar is the base a box dials for Gitlet: a Gitlet node's public
+// listener and the /box/git prefix (https://git.example.com/box/git), or a
+// balancer over every node's, read through [ParseBoxURL] by every node that
+// launches executors. Unlike the tool bridge's URL, which must address the
+// launching node, ANY Gitlet node serves any box: every node reads the run's
+// admitting row.
 const BoxGitURLVar = "CREWLET_BOX_GIT_URL"
 
-// The variables of an executor's environment its git reaches Gitlet
-// by: the launching node's [BoxGitURLVar], which every clone step's remote
-// expands ([CloneRecipe]), and the run's own credential, which the engine's
-// credential helper answers git with ([BoxGit]). Each is the ENGINE'S —
-// config.ReservedSandboxEnv lists both, so no operator's value is ever beside
-// them.
+// The variables an executor's git reaches Gitlet by: the launching node's
+// [BoxGitURLVar], which every clone step's remote expands ([CloneRecipe]), and
+// the run's credential, which the engine's helper answers git with ([BoxGit]).
+// Both are the ENGINE'S: config.ReservedSandboxEnv lists them, so no
+// operator's value is ever beside them.
 const (
 	GitURLVar   = "CREWLET_GIT_URL"
 	GitTokenVar = "CREWLET_GIT_TOKEN"
@@ -44,67 +41,30 @@ const (
 // repositories on Gitlet: what [BoxGit.Env] puts in the launch's
 // environment.
 type BoxGit struct {
-	// Base is Gitlet's base as a box dials it — [BoxGitURLVar], as
-	// [ParseBoxURL] read it, so with no trailing '/'.
+	// Base is Gitlet's base as a box dials it: [BoxGitURLVar] as [ParseBoxURL]
+	// read it, so with no trailing '/'.
 	Base string
-	// User is the Basic user name Gitlet takes a box's token under
-	// (Gitlet's BoxUser), and Token the run's credential for this
-	// launch.
+	// User is the Basic user name Gitlet takes a box's token under (Gitlet's
+	// BoxUser), and Token the run's credential for this launch.
 	User, Token string
-	// Name and Email are the seat's commit identity: the one identity rule a
-	// seat's commits take, whether the engine builds them or its box does —
-	// BOTH, or neither: a CHECK'S box (the user `check`) acts as nobody and
-	// commits nothing, so it is given no identity at all, and a commit its
-	// command makes fails for want of one rather than naming somebody who
-	// never wrote it. One without the other is refused.
+	// Name and Email are the seat's commit identity, the one its engine-built
+	// commits take too, BOTH or neither (one alone is refused): a CHECK'S box (user
+	// `check`) acts as nobody and gets none, so a commit its command makes fails
+	// rather than naming somebody who never wrote it.
 	Name, Email string
 }
 
-// Env is the box's git environment over run — the run environment the launch
-// has assembled from the operator's configuration — answering only what it
-// adds: the run's credential and the base ([GitTokenVar], [GitURLVar]), and
-// git's configuration through the environment with the operator's own entries
-// KEPT and the engine's appended after them.
+// Env is the box's git environment over run, the run environment assembled
+// from the operator's configuration, answering only what it adds: the run's
+// credential and base ([GitTokenVar], [GitURLVar]), and git configuration
+// through the environment (git-config(1), "ENVIRONMENT"), the operator's
+// entries kept and the engine's appended LAST, so its single-valued keys win:
+// a seat's identity is role.email's to change, never an environment
+// variable's. Through the environment, every repository the box's git
+// touches has them, one its agent clones from another host included.
 //
-// THE ENGINE'S ENTRIES, IN ORDER:
-//
-//  1. credential.<base>/.helper, empty — it RESETS the helper list for
-//     Gitlet's URL (git-config(1), credential.helper: "an empty value
-//     resets the list"), so a `credential.helper store` the operator
-//     configured is neither asked for the run's token nor told to save it;
-//  2. credential.<base>/.helper, a shell function answering git's `get` with
-//     the user and the token, read from the PROCESS environment when git asks,
-//     so the token is never written to a file — and `store` and `erase` are
-//     no-ops that succeed, so nothing keeps it and git says nothing of them;
-//  3. user.name and 4. user.email, the seat's identity, where the box has
-//     one — a check's box has none — so a commit the box
-//     writes is the seat's as an engine-built one is. A CONVENTION a
-//     cooperating box keeps, never a check: generated code sets
-//     GIT_COMMITTER_* or `-c user.*` as it likes, and the push's row, never
-//     a commit header, is the provenance;
-//  5. protocol.version 2, which Gitlet serves partial clones and
-//     fetches by id under, held against a box's own configuration;
-//  6. index.version 4 and 7. core.untrackedCache true — the two index
-//     settings of feature.manyFiles, without its index.skipHash, which writes
-//     an index older libgit2 builds refuse — MEASURED IN, by the rule a
-//     box-side setting is adopted by (BenchmarkBoxWorktree,
-//     internal/gitlet/host; docs/concepts/code-sandbox.md "What a clone
-//     costs"): at 100 000 files a box's warm `git status` took 99 ms with
-//     them against 142 ms without, a 30 % cut past the arms' spread, and its
-//     checkout 15.6 s against 15.4 s, under the 10 % it may cost. Through the
-//     environment, so every repository the box's git touches has them, one
-//     its agent clones from another host included.
-//
-// The URL key carries a trailing '/', so git's URL match (a path matched as a
-// prefix ending at a '/') scopes the helper to Gitlet's paths and
-// never to a sibling path of the same host. The engine's come LAST, so for
-// its five single-valued keys its value wins: a seat's identity is
-// role.email's to change, never an environment variable's.
-//
-// An operator's GIT_CONFIG_COUNT that is not a non-negative integer, or that
-// names an index whose key or value the run environment does not set, is
-// refused naming it: git refuses a configuration with a hole in it, and every
-// clone would fail with git's words rather than the engine's.
+// An operator's GIT_CONFIG_COUNT git would refuse is refused here, naming it
+// ([operatorGitConfig]), rather than failing every clone in git's words.
 func (g BoxGit) Env(run map[string]string) (map[string]string, error) {
 	switch {
 	case g.Base == "" || strings.HasSuffix(g.Base, "/"):
@@ -123,18 +83,31 @@ func (g BoxGit) Env(run map[string]string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The trailing '/' scopes the helper to Gitlet's paths: git matches a URL's
+	// path as a prefix ending at a '/', so never a sibling path of the same host.
 	scope := "credential." + g.Base + "/.helper"
 	entries := []struct{ key, value string }{
+		// Empty RESETS the helper list (git-config(1), credential.helper), so an
+		// operator's `credential.helper store` is neither asked for the token nor told
+		// to save it.
 		{scope, ""},
+		// Answers `get` from the PROCESS environment, so the token is never in a
+		// file; `store` and `erase` succeed doing nothing.
 		{scope, `!f() { test "$1" = get || return 0; printf 'username=` + g.User + `\npassword=%s\n' "$` +
 			GitTokenVar + `"; }; f`},
 	}
+	// The seat's identity, as an engine-built commit has it. A convention a
+	// cooperating box keeps, never a check: the push's row is the provenance.
 	if g.Name != "" {
 		entries = append(entries, struct{ key, value string }{"user.name", g.Name},
 			struct{ key, value string }{"user.email", g.Email})
 	}
 	entries = append(entries, []struct{ key, value string }{
+		// Gitlet serves partial clones and fetches by id under v2.
 		{"protocol.version", "2"},
+		// feature.manyFiles's two index settings without its index.skipHash, whose
+		// index older libgit2 refuses; measured in by BenchmarkBoxWorktree
+		// (internal/gitlet/host; docs/concepts/code-sandbox.md "What a clone costs").
 		{"index.version", "4"},
 		{"core.untrackedCache", "true"},
 	}...)

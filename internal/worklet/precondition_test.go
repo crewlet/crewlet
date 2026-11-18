@@ -13,29 +13,22 @@ import (
 
 // AN IF-MATCH IS COMPARED INSIDE THE SNAPSHOT THAT DECIDES.
 //
-// This is the write authority's own sentence applied to a caller's
-// precondition: the version the check reads and the record the decision
-// publishes come from ONE transaction, so there is no window in which the
-// version moves between the comparison and the append. A check performed
-// before the snapshot — the obvious shape, and the one a caller writes when
-// the framework does not offer this — reads a version, then publishes against
-// a state that has already moved, and reports a conditional write that was in
-// fact unconditional.
+// The version the check reads and the record the decision publishes come from
+// ONE transaction. A check before the snapshot publishes against a state that
+// may have moved, and reports a conditional write that was unconditional.
 func TestAnIfMatchIsRefusedFromTheSnapshotThatDecides(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	task := r.createTask("the contended one")
 
-	// THE VERSION IS THE PACKED POSITION, which is what a caller reads
-	// back from get_work_item and hands to the next edit.
+	// THE VERSION IS THE PACKED POSITION, as get_work_item answers it.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-match", task.ID, "ENG",
 		task.Version, worklet.TaskPatch{Title: ptr("edited")}, worklet.ChangeFields, nil); err != nil {
 		t.Fatalf("an edit at the version it read was refused: %v", err)
 	}
 	r.drain()
 
-	// AND THE SAME EXPECTATION AGAIN IS NOW STALE, because the write above
-	// moved the task — which is exactly the second writer's case.
+	// AND THE SAME EXPECTATION AGAIN IS NOW STALE: the second writer's case.
 	_, err := r.writer.UpdateTask(t.Context(), "op-stale", task.ID, "ENG",
 		task.Version, worklet.TaskPatch{Title: ptr("clobbered")}, worklet.ChangeFields, nil)
 	if !errors.Is(err, worklet.ErrStaleVersion) {
@@ -49,8 +42,7 @@ func TestAnIfMatchIsRefusedFromTheSnapshotThatDecides(t *testing.T) {
 		t.Errorf("the refused edit reached the rows anyway: %+v", answer.Rows)
 	}
 
-	// ZERO MERGES, which is the default every caller naming two fields
-	// wants: it is not a precondition of "version 0".
+	// ZERO MERGES: it means no precondition, not "version 0".
 	if _, err := r.writer.UpdateTask(t.Context(), "op-merge", task.ID, "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{Title: ptr("merged")}, worklet.ChangeFields, nil); err != nil {
 		t.Fatalf("an unconditional edit was refused: %v", err)
@@ -63,10 +55,10 @@ func TestAnIfMatchIsRefusedFromTheSnapshotThatDecides(t *testing.T) {
 
 // THE HAND-OFF BUDGET IS SPENT BY AGENTS AND FORGIVEN BY PEOPLE.
 //
-// The failure it exists to stop is a LOOP — two seats each convinced the other
-// owns an item — which is a property of the item and not of any one turn's
-// delegation depth. So the counter is on the task, it is charged only when an
-// agent moves the assignee, and any human touch returns the whole budget.
+// It stops a LOOP of two seats each convinced the other owns an item, a
+// property of the item rather than a turn's delegation depth: so the counter
+// is on the task, charged when an agent moves the assignee, and any human touch
+// returns it.
 func TestTheHandOffBudgetIsChargedToTheItem(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -93,8 +85,8 @@ func TestTheHandOffBudgetIsChargedToTheItem(t *testing.T) {
 	}
 
 	// A NO-OP ASSIGNMENT IS NOT A HAND-OFF, so a redelivered record cannot
-	// exhaust a budget nobody spent. Charged at the budget's own edge, so
-	// the case fails if the exemption is dropped.
+	// exhaust the budget; charged at the budget's edge, so the case fails
+	// if the exemption is dropped.
 	same := fmt.Sprintf("peer-%d", worklet.ReassignmentBudget-1)
 	if _, err := agent.UpdateTask(t.Context(), "op-hand-same", task.ID, "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{Assignee: &same}, worklet.ChangeAssignee, nil); err != nil {
@@ -102,9 +94,8 @@ func TestTheHandOffBudgetIsChargedToTheItem(t *testing.T) {
 	}
 	r.drain()
 
-	// A PERSON TOUCHING IT AT ALL RETURNS THE BUDGET — whatever they
-	// changed. Somebody looked, which is the condition the counter exists
-	// to detect the absence of.
+	// A PERSON TOUCHING IT AT ALL RETURNS THE BUDGET, whatever they
+	// changed: somebody looked.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-human", task.ID, "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{Title: ptr("a person looked")}, worklet.ChangeFields,
 		nil); err != nil {
@@ -137,11 +128,10 @@ func TestTheHandOffBudgetIsChargedToTheItem(t *testing.T) {
 // A WRITER CANNOT ACT AS NOBODY, and the refusal reaches the CALL rather than
 // the derivation.
 //
-// [worklet.Writer.As] is the second door into the same state [worklet.NewWriter]
-// guards, and a surface deriving an identity has nothing useful to do with an
-// error at that point — so the refusal is carried and surfaces at the write it
-// would have made. Every path publishes through one funnel, which is what
-// makes that one guard rather than one per method.
+// [worklet.Writer.As] is a second door into the state [worklet.NewWriter]
+// guards, and a surface deriving an identity can do nothing with an error
+// there, so the refusal is carried to the write; every path publishes through
+// one funnel, so that is one guard rather than one per method.
 func TestAWriterWithNoIdentityRefusesAtTheWrite(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

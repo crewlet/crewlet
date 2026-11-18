@@ -16,31 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// WHO MAY DO WHAT TO A REPOSITORY — a grant DERIVED from the chart, never
-// stored (ADR-0088). A list of who may push to a repository would be a second
-// chart, and it would drift from the first the day a seat moved units; so a
-// principal's standing on a repository is computed, every time it is asked,
-// from the repository's row and the epoch's chart, through ONE function
-// ([GrantOf]) that every judge of it calls: Gitlet's admission, the
-// push decide (its rule 2b, decide.go, the authority, from the DECIDING node's
-// chart) and the read tools — and a coding box's admission, which holds the
-// seat's grant to its run's ([Grant.Within]).
+// WHO MAY DO WHAT TO A REPOSITORY: a grant derived from the chart, never
+// stored (ADR-0088), since a stored list would be a second chart that drifts
+// the day a seat moves units. Every judge computes it through [GrantOf]:
+// Gitlet's admission, the push decide (rule 2b, decide.go, on the deciding
+// node's chart), the read tools, and a coding box's admission ([Grant.Within]).
 //
-// A PERSON — an operator credential bound to a human seat — maintains every
-// repository, and a token bound to nobody reads every one: ADR-0085's rules,
-// which need no chart, so [GrantOf] never consults the roster for an operator.
-// A SEAT holds the minimum of two levels: what its tier lets it do anywhere
-// (role.code.access, [Tier.Cap]) and what the chart relates it to this
-// repository by (its RELATION: the owning unit's effective lead maintains, the
-// owning unit's subtree writes, the lead chain above reads, and every other
-// seat reads a `visibility: company` repository and nothing of a `visibility:
-// unit` one). VISIBILITY NARROWS SEATS ONLY: it is read in the last row of a
-// seat's relation and nowhere else, so a person's standing never depends on it.
-// A full_access seat also owns a namespace of its own on every
-// repository it may read, [SeatNamespace], which is where it pushes when its
-// relation is below write — the seat's own branches replace forks. M2's
-// protection rules are judged AFTER the grant, by their own code, and a grant
-// is never a reason to skip one.
+// A person maintains every repository and a token bound to nobody reads every
+// one (ADR-0085), with no chart. A seat holds the minimum of [Tier.Cap] and its
+// chart relation; visibility narrows seats only. A full_access seat pushes
+// under its own [SeatNamespace] where its relation is below write: the seat's
+// own branches replace forks. Protection rules are judged after the grant, by
+// their own code, and a grant never skips one.
 
 // Access is how much of a repository a principal may do, ORDERED: each level
 // includes every level below it, which is why a seat's standing is the minimum
@@ -53,12 +40,12 @@ const (
 	AccessNone Access = iota
 	// AccessRead fetches, clones and reads through every read tool.
 	AccessRead
-	// AccessReview is read, and (M4) reviewing changes; it moves no ref.
+	// AccessReview is read, and reviewing changes; it moves no ref.
 	AccessReview
 	// AccessWrite creates and fast-forwards branches, and creates tags.
 	AccessWrite
 	// AccessMaintain also forces and deletes branches, deletes tags, and
-	// (M3 P5) changes a tool-managed repository's settings.
+	// changes a tool-managed repository's settings.
 	AccessMaintain
 )
 
@@ -81,10 +68,9 @@ func (a Access) String() string {
 	return accessNames[a]
 }
 
-// Tier is a seat's role.code.access, in configuration's own spelling — the
-// constants ARE configuration's, so the two cannot drift, and
-// config.TestRoleCodeAccessIsTheOneVocabulary holds the lists equal anyway,
-// because internal/github spells its own.
+// Tier is a seat's role.code.access: the constants are configuration's, and
+// config.TestRoleCodeAccessIsTheOneVocabulary holds the lists equal because
+// internal/github spells its own.
 type Tier string
 
 // The tiers, least first.
@@ -101,11 +87,9 @@ func Tiers() []Tier { return []Tier{TierReadOnly, TierReview, TierFullAccess} }
 // the absence of a setting, which [Tier.Cap] reads as read_only.
 func (t Tier) Valid() bool { return slices.Contains(Tiers(), t) }
 
-// Cap is the most the tier lets a seat do on any repository: read_only reads,
-// review reviews, full_access maintains. UNSET reads, the least this engine
-// hands out — as configuration's own default is (config.RoleCode.AccessOrDefault)
-// — and a value no build of this tree writes caps at nothing, the narrow
-// direction, rather than at the widest level a reader might guess it meant.
+// Cap is the most the tier lets a seat do on any repository. Unset reads, as
+// configuration's default does (config.RoleCode.AccessOrDefault); an unknown
+// value caps at nothing, the narrow direction, rather than a guessed level.
 func (t Tier) Cap() Access {
 	switch t {
 	case TierReadOnly, "":
@@ -127,10 +111,9 @@ func (t Tier) String() string {
 	return string(t)
 }
 
-// spelled is the tier as a refusal sentence names it: [Tier.String] for a
-// tier this build knows or an unset one, and the same words for every other
-// value — which caps at nothing ([Tier.Cap]) — so no value a document carries
-// can lengthen a sentence that travels in a proposal.
+// spelled is the tier as a refusal sentence names it: an unknown value is
+// "unknown", so no document's value can lengthen a sentence that travels in a
+// proposal.
 func (t Tier) spelled() string {
 	if t != "" && !t.Valid() {
 		return "unknown"
@@ -138,21 +121,17 @@ func (t Tier) spelled() string {
 	return t.String()
 }
 
-// Roster is the chart as the grant rules read it: the SERVING or DECIDING
-// node's current epoch, adapted by the engine over its organization. This
-// package declares it and never reads the organization itself, so a grant is a
-// pure function of a repository row and these four answers.
+// Roster is the chart as the grant rules read it: the serving or deciding
+// node's current epoch, adapted by the engine. This package never reads the
+// organization itself, so a grant is a pure function of a repository row and
+// these four answers.
 //
-// EVERY UNIT ARGUMENT IS A REFERENCE, never a key compared as a string: an
-// [Owner]'s Ref — durable, written when the repository was created or declared
-// — or a [RosterSeat]'s Unit. A roster resolves each the way the chart
-// resolves a durable unit reference (internal/org's Index.UnitByRef: folded,
-// an id before a name), because a unit that gained an id after a repository
-// named it by its name is still that unit, and a roster that looked the
-// reference up as the unit's current key would take its lead's maintain and
-// its members' write away on their own repository. A reference the chart does
-// not resolve — "" included, a root seat's unit — is a unit with no lead and no
-// members, within nothing.
+// Every unit argument is a durable REFERENCE ([Owner]'s Ref, [RosterSeat]'s
+// Unit), resolved as internal/org's Index.UnitByRef does (folded, an id before
+// a name), never compared as a current key: a unit that gained an id after a
+// repository named it is still that unit, and its lead and members keep their
+// access. A reference the chart does not resolve ("" included, a root seat's
+// unit) has no lead and no members, and is within nothing.
 type Roster interface {
 	// Seat is a seat by handle; false for none. A HUMAN seat is a person.
 	Seat(handle string) (RosterSeat, bool)
@@ -169,9 +148,8 @@ type Roster interface {
 // RosterSeat is one seat as the grant rules read it.
 type RosterSeat struct {
 	Handle string
-	// Human is a person's seat: a person acts through their own bound token
-	// (ADR-0085), never as a seat, so a grant asked for a human seat as an
-	// agent is none.
+	// Human is a person's seat: a person acts through their own token
+	// (ADR-0085), never as a seat, so a human seat asked as an agent gets none.
 	Human bool
 	// Tier is the seat's role.code.access as written, "" where the document
 	// says nothing.
@@ -186,55 +164,46 @@ type Grant struct {
 	Principal Principal
 	RepoID    string
 	RepoName  string
-	// Owner is the repository's owner, which a refusal's remedy names the
-	// kind of: who to ask for more is whoever leads it.
+	// Owner is the repository's owner: whoever leads it is who a refusal's
+	// remedy says to ask.
 	Owner Owner
-	// Visibility is the repository's — read for an agent only, the one kind
-	// it narrows, and kept so a read refusal can say why a seat reads nothing.
+	// Visibility is the repository's, read for an agent only, kept so a read
+	// refusal can say why a seat reads nothing.
 	Visibility Visibility
-	// Tier is the seat's tier — an agent's only.
+	// Tier is the seat's tier, an agent's only.
 	Tier Tier
-	// Relation is what the principal is related to the repository by: a
-	// seat's from the chart (the owning unit's effective lead or the owning
-	// seat maintains, the owning unit's subtree writes, the lead chain above
-	// it reads, any other seat reads); a bound person's is maintain, and a
-	// token bound to nobody's read.
+	// Relation is a seat's from the chart (relation); a bound person's is
+	// maintain, and a token bound to nobody's read.
 	Relation Access
 	// Access is what the principal may do OUTSIDE its own namespace: the
 	// minimum of Tier.Cap() and Relation for a seat, Relation otherwise.
 	Access Access
 
-	// none is why the principal stands nowhere at all — no seat of the chart,
-	// a human seat asked as an agent, a node with no chart, a kind this build
-	// does not grant — and "" for every principal that holds a level. It
-	// names no identifier, because [Grant.RefRule] answers it as a command's
-	// refusal ([Grant.refused] says why that bounds it).
+	// none is why the principal stands nowhere at all, "" for one holding a
+	// level. It names no identifier, because [Grant.RefRule] answers it as a
+	// command's refusal ([Grant.refused] says why that bounds it).
 	none string
 
-	// limit is the grant of the EXECUTOR whose box asks ([Grant.Within]),
-	// which the principal's own is held to, and limited whether one does: a
-	// grant no run holds is unlimited, the zero value.
+	// limit is the grant of the executor whose box asks ([Grant.Within]),
+	// and limited whether one does; the zero value is unlimited.
 	limit   Access
 	limited bool
 
-	// ceiling is the grant of the colleague seat the principal's turn works
-	// for ([Grant.Under]) — the seat whose ask woke it — which every read and
-	// every command outside the principal's own namespace is held to as
-	// well; nil for a grant no such seat bounds, the zero value.
+	// ceiling is the grant of the colleague seat whose ask woke the turn
+	// ([Grant.Under]), which every read and every command outside the
+	// principal's own namespace is held to; nil for none.
 	ceiling *Grant
 }
 
-// Within is g held to an executor's grant — what the run's checkout of it
-// was given of the repository, read or write: its box does no more than BOTH
-// the run's grant and the seat's own allow. Access no higher than run outside
-// the seat's own namespace; and, where run is below write, no command at all,
-// the seat's own namespace included, since that row needs only the seat's tier
-// and its relation, which a box given the repository to read must not borrow.
-// Within(AccessMaintain) is g.
+// Within is g held to an executor's grant, what the run's checkout was given
+// (read or write): the box does no more than both allow. Outside the seat's
+// namespace access is capped at run; where run is below write, no command at
+// all, the seat's namespace included, so a box given the repository to read
+// cannot borrow the seat's tier. Within(AccessMaintain) is g.
 //
 // The decide never reads it: a run's grant is coordination state, judged at
-// Gitlet's box admission alone, while the seat's grant is judged at the
-// host and again by the decide (rule 2b).
+// Gitlet's box admission alone; the seat's grant is judged at Gitlet's
+// admission and again by the decide (rule 2b).
 func (g Grant) Within(run Access) Grant {
 	if run >= AccessMaintain {
 		return g
@@ -243,40 +212,18 @@ func (g Grant) Within(run Access) Grant {
 	return g
 }
 
-// Under is g held to ceiling, the grant of the colleague SEAT whose ask woke
-// the turn g's holder works in — that seat's own grant on the same repository
-// ([GrantOf] of an agent principal), judged as the seat itself would be
-// judged asking: what the holder does for a colleague is decided again for
-// that colleague (the requester ceiling, M3-decisions U40 (a), as
-// [JudgeRead] decides a read made for one). So:
+// Under is g held to ceiling: the grant ([GrantOf] of an agent principal) of
+// the colleague seat whose ask woke g's holder's turn, judged as that seat
+// would be asking (the requester ceiling, M3-decisions U40 (a)). A read needs
+// both grants; a command needs both RefRules, except the holder's own work
+// ([Grant.OwnWork]), which whoever can message the seat steers, as
+// authz.DecideWithin spares a steerable verb on what an agent owns.
 //
-//   - a READ needs both: the holder's grant, and the colleague's reading the
-//     repository ([Grant.MayRead], [Grant.ReadRefusal]);
-//   - a COMMAND needs both — the holder's [Grant.RefRule], and the
-//     colleague's RefRule for the very same command — EXCEPT on the holder's
-//     OWN WORK ([Grant.OwnWork]): under its own namespace, and in a
-//     repository its seat owns. Anybody who can message a seat steers its own
-//     work, as authz.DecideWithin lets a steerable verb on what an agent owns
-//     skip the requester, so a colleague who only reads a repository may
-//     still ask a seat to change it on the seat's own branch, or to change the
-//     seat's own scratch repository, and never a branch of anybody else's the
-//     colleague could not push.
-//
-// A grant UNDER A CEILING IS NEVER WIDER than g: the ceiling only refuses.
-// A PERSON bounds nothing — a person maintains every repository (ADR-0085) —
-// so a caller holds a grant under a seat's ceiling alone, never a person's,
-// and a ceiling that stands nowhere (no seat of the chart, a human seat
-// asked as an agent, or whoever may change nothing at all —
-// [WriteCeilingNobody]) refuses every read and every command outside the
-// holder's own work, the narrow direction.
-//
-// Like [Grant.Within], it is coordination state a coding box's admission
-// judges — the run's row names the colleague (internal/sandbox's
-// PendingRun.CodeCeiling) — and the decide never reads it; the launch's
-// precheck reads it too, so a run that could never deliver is refused before a
-// box costs anything. A seat's ENGINE WRITE carries its ceiling on the write
-// itself ([EngineWrite.Ceiling]), which the Gitlet node that builds it judges
-// through this, beside the seat's own grant and from the same chart and row.
+// The ceiling only refuses; one standing nowhere ([WriteCeilingNobody]
+// included) refuses all but the holder's own work. A person bounds nothing
+// (ADR-0085), so is never a ceiling. The decide never reads it: a box's
+// admission and the launch's precheck judge it (PendingRun.CodeCeiling), and
+// the Gitlet node building an engine write judges [EngineWrite.Ceiling].
 func (g Grant) Under(ceiling Grant) Grant {
 	ceiling.ceiling = nil
 	g.ceiling = &ceiling
@@ -292,19 +239,17 @@ func (g Grant) effective() Access {
 	return g.Access
 }
 
-// RunReadDetail is the sentence every command of a coding box whose run was
-// given the repository to read is refused with — which Gitlet's box
-// admission refuses at the push's advertisement first, in words naming the
-// repository.
+// RunReadDetail refuses every command of a coding box whose run was given the
+// repository to read; Gitlet's box admission refuses it first, at the
+// advertisement, in words naming the repository.
 const RunReadDetail = "this coding box's run was given this repository to read: a push needs access: " +
 	"write in its " + toolname.CodeCheckout + " call"
 
 // GrantOf is p's standing on repo, read from r.
 //
-// It NEVER CONSULTS r FOR AN OPERATOR — a person or a token, whose rules need
-// no chart (ADR-0085) — so a nil roster answers every operator, and gives
-// every agent none. An agent naming no seat the roster holds, or a HUMAN seat,
-// stands nowhere: a person acts through their own token, never as a seat.
+// It never consults r for an operator (ADR-0085), so a nil roster answers
+// every operator and gives every agent none. An agent naming no seat of the
+// roster, or a human seat, stands nowhere.
 func GrantOf(p Principal, repo RepoRef, r Roster) Grant {
 	g := Grant{Principal: p, RepoID: repo.ID, RepoName: repo.Name, Owner: repo.Owner}
 	switch p.Kind {
@@ -340,15 +285,11 @@ func GrantOf(p Principal, repo RepoRef, r Roster) Grant {
 	return g
 }
 
-// CredentialPrincipal is a credential acting as no seat, by its login, as a
-// repository's grant judges it ([GrantOf]: it reads every repository and
-// pushes to none itself) — the grant a coding box, and its checkout's
-// precheck, are held under ([Grant.Under]) where the run's turn works for such
-// a credential, so the box changes the seat's own work alone, as the turn's
-// own code writes do for it ([WriteCeilingNobody], ADR-0110), and fetches what
-// its run was given, as the credential reads every repository itself. The ONE
-// SPELLING of that principal for both, so the precheck and the admission
-// cannot judge a credential's run by two grants.
+// CredentialPrincipal is a credential acting as no seat, by login: [GrantOf]
+// lets it read every repository and push to none. A coding box and its
+// checkout's precheck are held [Grant.Under] it where the run's turn works for
+// such a credential ([WriteCeilingNobody], ADR-0110); it is the one spelling
+// both use, so they cannot judge the run by two grants.
 func CredentialPrincipal(login string) Principal {
 	return Principal{Kind: PrincipalOperator, OperatorID: login}
 }
@@ -356,26 +297,17 @@ func CredentialPrincipal(login string) Principal {
 // AccessOf is GrantOf(p, repo, r).Access.
 func AccessOf(p Principal, repo RepoRef, r Roster) Access { return GrantOf(p, repo, r).Access }
 
-// JudgeRead is whether asker may read repo — and, where the read is made for
-// the seat its turn is acting for ([ReadQuery.CeilingSeat]; "" for none),
-// whether that seat could read it itself — answering the asker's grant, which
-// names the asker's access, and the refusal: [ErrNotPermitted] wrapping the
-// asker's [Grant.ReadRefusal] where its own grant reads nothing of the
-// repository, else [ErrAboveCeiling] wrapping the ceiling seat's where that
-// seat's reads nothing of it, else nil.
+// JudgeRead is whether asker may read repo and, where the read is made for a
+// seat ([ReadQuery.CeilingSeat]; "" for none), whether that seat could read it
+// itself. It answers the asker's grant and [ErrNotPermitted] wrapping the
+// asker's [Grant.ReadRefusal], else [ErrAboveCeiling] wrapping the ceiling
+// seat's, else nil.
 //
-// THE ONE JUDGMENT OF A READ, every reader's — the data node's listing,
-// detail, history, refs and resolve, and the Gitlet node's read by object id —
-// so the two principals are judged by one chart and one row in one place, and
-// no reader can judge the asker and forget whom it reads for. The asker
-// first: an asker that reads nothing is told so about ITSELF, which is the
-// remedy it can act on, and a read it may make is bounded after.
-//
-// THE CEILING IS A SEAT'S GRANT, judged as the seat itself would be judged
-// asking ([GrantOf] for an agent principal): its tier, its relation to the
-// repository on the chart, the repository's visibility. A HUMAN seat as the
-// ceiling stands nowhere — a person is never asked as a seat — so the caller
-// never sends one: a person maintains every repository and bounds nothing.
+// THE ONE JUDGMENT OF A READ, every reader's (the data node's listing, detail,
+// history, refs and resolve, and the Gitlet node's read by object id), so none
+// can judge the asker and forget whom it reads for. The asker comes first: its
+// own refusal is the remedy it can act on. The ceiling is the seat's [GrantOf];
+// a human seat stands nowhere there, so the caller never sends one.
 func JudgeRead(asker Principal, ceilingSeat string, repo RepoRef, r Roster) (Grant, error) {
 	g := GrantOf(asker, repo, r)
 	if !g.MayRead() {
@@ -390,8 +322,7 @@ func JudgeRead(asker Principal, ceilingSeat string, repo RepoRef, r Roster) (Gra
 	return g, nil
 }
 
-// relation is what the chart relates seat s to repo by — the FIRST row that
-// holds, top to bottom:
+// relation is what the chart relates seat s to repo by, the first row that holds:
 //
 //	owner unit U:  s is U's effective lead              maintain
 //	               s sits in U or a unit below it        write
@@ -401,16 +332,8 @@ func JudgeRead(asker Principal, ceilingSeat string, repo RepoRef, r Roster) (Gra
 //	any other seat, visibility company                   read
 //	any other seat, visibility unit                      none
 //
-// Every unit comparison is the roster's — [Roster.Within] and the lead chain —
-// never a string compared here, because the owner's Ref is a durable reference
-// that may spell the unit another way than the seat's Unit does.
-//
-// THE LAST ROW IS VISIBILITY'S, AND ONLY IT: a `unit` repository is read by the
-// rows above it and by no other seat. A visibility this build does not know
-// reads as `unit` — the narrow direction, as an unknown tier caps at nothing —
-// since the domain refuses to record one ([RepoSettings.Validate]), so a row
-// carries one only from a newer build, and widening it to every seat would be
-// guessing that build meant `company`.
+// Units compare through the roster, never as strings ([Roster]). An unknown
+// visibility reads as unit, the narrow direction: [RepoSettings.Validate] records none.
 func relation(s RosterSeat, repo RepoRef, r Roster) Access {
 	o := repo.Owner
 	switch o.Kind {
@@ -443,11 +366,10 @@ func (g Grant) MayRead() bool {
 	return g.effective() >= AccessRead && (g.ceiling == nil || g.ceiling.MayRead())
 }
 
-// MayPush reports whether any command at all could pass [Grant.RefRule]: a
-// principal at write or above, or a full_access seat that reads the repository
-// (its own namespace) — and in either case not a coding box whose run was
-// given the repository to read ([Grant.Within]). Gitlet refuses a push
-// that may not at its advertisement, before the client sends a byte of pack.
+// MayPush reports whether any command could pass [Grant.RefRule]: write or
+// above, or a full_access seat that reads the repository (its own namespace),
+// and never a box whose run was given it to read ([Grant.Within]). Gitlet
+// refuses a push that may not at its advertisement, before any pack is sent.
 func (g Grant) MayPush() bool {
 	if g.limited && g.limit < AccessWrite {
 		return false
@@ -455,11 +377,10 @@ func (g Grant) MayPush() bool {
 	return g.effective() >= AccessWrite || g.ownsNamespace()
 }
 
-// PushRefusal is the sentence a principal that may push nothing here
-// ([Grant.MayPush] false) is refused with before any command is read — at
-// its advertisement — and "" for one that may push something. A token bound
-// to nobody is told [UnboundDetail], the sentence every one of its commands
-// would be refused with, and a box whose run reads [RunReadDetail].
+// PushRefusal is the sentence refusing, at its advertisement, a principal
+// that may push nothing here ([Grant.MayPush] false), and "" otherwise. A
+// token bound to nobody is told [UnboundDetail], and a box whose run reads
+// [RunReadDetail], as each of their commands would be.
 func (g Grant) PushRefusal() string {
 	switch {
 	case g.MayPush():
@@ -481,28 +402,19 @@ func (g Grant) ownsNamespace() bool {
 		g.Relation >= AccessRead
 }
 
-// outside reports a seat OUTSIDE the repository's owners: an agent whose
-// relation to it is below write — every seat but the owning unit's subtree
-// and its effective lead, or but the owning seat — which may push nothing but
-// its own namespace there, and which the push decide holds to
-// [OutsideSeatShare] of the repository's refs and bytes. A person and a token
-// are no seat, and a seat of the owners is held to the repository's whole
-// bounds as a person is.
+// outside reports a seat outside the repository's owners (relation below
+// write), which pushes only its own namespace there and which the push decide
+// holds to [OutsideSeatShare] of the repository's refs and bytes. Persons,
+// tokens and the owners' seats are held to the repository's whole bounds.
 func (g Grant) outside() bool { return g.Principal.Kind == PrincipalAgent && g.Relation < AccessWrite }
 
 // ReadRefusal is the sentence a read below read is refused with
-// ([ErrNotPermitted]): who asked, which repository, and why the principal
-// stands nowhere on it.
-//
-// A seat the visibility shuts out is told so, and told who among the seats
-// does read the repository — the people a person would move the seat beside,
-// or ask on its behalf. It names the owner as the repository's row records
-// it: a read refusal answers whoever asked and is never carried into a
-// proposal, so nothing bounds its length the way RefRule's sentences are.
-//
-// A principal that reads the repository and is refused only by the colleague
-// its turn works for ([Grant.Under]) is told THAT: the colleague's own
-// refusal, as [JudgeRead]'s [ErrAboveCeiling] carries it to a code tool.
+// ([ErrNotPermitted]): who asked, which repository, and why. A seat the
+// visibility shuts out is told which seats do read it. It names the owner as
+// the row records it: a read refusal never rides into a proposal, so nothing
+// bounds its length as RefRule's are. A principal refused only by its
+// colleague's ceiling ([Grant.Under]) is told the colleague's own refusal, as
+// [JudgeRead]'s [ErrAboveCeiling] carries it.
 func (g Grant) ReadRefusal() string {
 	if g.effective() >= AccessRead && g.ceiling != nil && !g.ceiling.MayRead() {
 		return fmt.Sprintf("%s reads repository %q, and this work is for the seat whose ask started its "+
@@ -514,9 +426,8 @@ func (g Grant) ReadRefusal() string {
 	case g.limited && g.limit < AccessRead && g.Access >= AccessRead:
 		why = "the executor its box acts for was given no access to it"
 	case g.Principal.Kind == PrincipalAgent && g.Relation == AccessNone:
-		// THE ROW'S OWN VISIBILITY, never the word unit spelled here: one
-		// this build does not know is read as unit, and the sentence says
-		// so rather than claim the repository says what it does not.
+		// The row's own visibility: an unknown one reads as unit, and the
+		// sentence says so rather than misstate the row.
 		v := string(g.Visibility)
 		if g.Visibility != VisibilityUnit {
 			v = fmt.Sprintf("%q, which this build reads as %s", g.Visibility, VisibilityUnit)
@@ -552,10 +463,8 @@ func (g Grant) who() string {
 	return fmt.Sprintf("a principal of kind %q", g.Principal.Kind)
 }
 
-// SeatNamespaceRoot is where every seat's own branches live: a seat's
-// namespace is refs/heads/seats/<handle>/, never refs/heads/<handle>/ —
-// gitref's [gitref.SeatsRoot], whose doc says why, read here by the domain's
-// name for it.
+// SeatNamespaceRoot is where every seat's own branches live, refs/heads/seats/
+// ([gitref.SeatsRoot], whose doc says why), by the domain's name for it.
 const SeatNamespaceRoot = gitref.SeatsRoot
 
 // SeatNamespace is the refs a seat owns on every repository it can read:
@@ -582,52 +491,27 @@ func reservedSeatRef(ref string) bool {
 	return ok && gitref.ReservedSeatBranch(branch)
 }
 
-// UnboundDetail is the sentence a push by a token bound to nobody is refused
-// with — the ONE spelling, which Gitlet prints at the advertisement and
-// on every ref of a push that skipped it.
-//
-// ITS REMEDIES ARE THE TWO A DIRECTORY ADMITS: a person's own machine token,
-// which acts as the seat they hold, and a binding on a human seat NOBODY
-// holds — never a Tier A token bound to the person's own seat, which the
-// directory refuses, since a bind is a claim on the seat and a person's seat
-// is theirs alone.
+// UnboundDetail refuses a push by a token bound to nobody: the one spelling,
+// printed at the advertisement and on every ref of a push that skipped it. Its
+// remedies are the two the directory admits: a person's own machine token, or
+// a binding on a human seat nobody holds, never a Tier A token on the person's
+// own seat, which the directory refuses since that seat is theirs alone.
 const UnboundDetail = "this token is not bound to a person: a person pushes with their own machine " +
 	"token, and a pipeline with a Tier A token or service account the identity directory binds to a " +
 	"human seat nobody holds; a credential bound to no seat fetches only"
 
-// RefRule judges one command against the grant: "" and "" where the grant
-// permits it, else [RefusalNotPermitted] and one sentence naming what the
-// principal holds, what the command needs, and a remedy the rule itself would
-// admit.
+// RefRule judges one command: "" and "" where the grant permits it, else
+// [RefusalNotPermitted] and one sentence, naming no ref (git prints it, and a
+// proposal's Detail is bounded): what the principal holds, needs, and a remedy.
 //
-//	a ref StatelessRefusal reserves             nobody (the stateless rule refuses it first)
-//	under the principal's own seat namespace    a read relation and the full_access tier
-//	under another seat's namespace              maintain
-//	create or fast-forward a branch             write
-//	force or delete a branch                    maintain
-//	create a tag                                write
-//	move or delete a tag                        maintain
+//	a ref StatelessRefusal reserves                 nobody
+//	under the principal's own seat namespace        a read relation and full_access
+//	under another seat's namespace                  maintain
+//	create a branch or a tag, fast-forward          write
+//	force or delete a branch, move or delete a tag  maintain
 //
-// A bound person maintains and passes every row but the first; a token bound
-// to nobody reads and is refused every one with [UnboundDetail]. The first row
-// never reaches RefRule from a caller that asks [StatelessRefusal] first, as
-// every caller does — it answers it all the same, so a caller that skipped the
-// stateless check still lands nothing the engine reserves. M2's protection
-// rules are judged after it, by their own code. A coding box's grant
-// ([Grant.Within]) is held to its run's: every row refused where the run was
-// given the repository to read, and every row outside the seat's own
-// namespace held to what the run was given. A grant under a colleague's
-// ceiling ([Grant.Under]) passes a command outside its own namespace only
-// where the colleague's own grant passes the same command.
-//
-// THE ENGINE'S OWN ACCOUNT ([PrincipalSystem]) is granted nothing ([GrantOf])
-// but the one thing its expiry does: deleting a branch in a seat's namespace,
-// which [Proposal.Validate] already holds its every command to — so this row
-// keeps the decide's word on it should a command of any other shape ever
-// reach it.
-//
-// THE SENTENCE NAMES NO REF: git prints the ref beside the reason, and a
-// receiver carries the sentence into a proposal, whose every Detail is bounded.
+// A bound person passes all but the first row; an unbound token is refused with
+// [UnboundDetail]. A box is held to [Grant.Within], a ceiling to [Grant.Under].
 func (g Grant) RefRule(c Command) (Refusal, string) {
 	refusal, sentence := g.ownRefRule(c)
 	if refusal != "" || g.ceiling == nil {
@@ -652,15 +536,12 @@ func (g Grant) RefRule(c Command) (Refusal, string) {
 	return "", ""
 }
 
-// OwnWork reports whether c is the holder's OWN WORK, which whoever its turn
+// OwnWork reports whether c is the holder's own work, which whoever its turn
 // works for steers ([Grant.Under]): a seat's command under its own namespace,
-// or any command in a repository its seat owns — which a scratch repository
-// always is, and a project repository a seat owns is until it is handed on.
-// Judged on the row the grant was read from, so a repository handed to a
-// unit since is the unit's, and steered no more. EXPORTED for the Gitlet node's
-// merge (internal/gitlet/host's merge.go), which holds a seat's merge to its
-// ceiling itself: a merge moves its target by a merge record, never by a
-// command [Grant.RefRule] judges, and its authority is the merge gate's.
+// or any command in a repository its seat owns, judged on the grant's row (one
+// since handed to a unit is steered no more). Exported for internal/gitlet/host's
+// merge.go, which holds a seat's merge to its ceiling itself: a merge moves its
+// target by a merge record, never a command [Grant.RefRule] judges.
 func (g Grant) OwnWork(c Command) bool {
 	if g.Principal.Kind != PrincipalAgent {
 		return false
@@ -676,15 +557,13 @@ func (g Grant) OwnWork(c Command) bool {
 type WriteCeilingKind string
 
 const (
-	// WriteCeilingSeat is a colleague SEAT whose ask woke the turn: the write
+	// WriteCeilingSeat is a colleague seat whose ask woke the turn: the write
 	// is decided again as that seat would be asking it itself.
 	WriteCeilingSeat WriteCeilingKind = "seat"
 	// WriteCeilingNobody is a requester who may change nothing of the
-	// company's code: a stranger the company does not know, a person who
-	// may not act in it now (authz.DecideWithin refused them the tool's own
-	// row), or a credential acting as no seat, which holds no seat a write is
-	// judged as and reads alone ([GrantOf]). Only the seat's own work is
-	// steered for them.
+	// company's code: a stranger, a person authz.DecideWithin refused the
+	// tool's own row, or a credential acting as no seat, which reads alone
+	// ([GrantOf]). Only the seat's own work is steered for them.
 	WriteCeilingNobody WriteCeilingKind = "nobody"
 )
 
@@ -696,33 +575,18 @@ func WriteCeilingKinds() []WriteCeilingKind {
 // Valid reports a kind this build knows.
 func (k WriteCeilingKind) Valid() bool { return slices.Contains(WriteCeilingKinds(), k) }
 
-// WriteCeiling is the REQUESTER CEILING of a seat's write (M3-decisions U40
-// (a)): whom the turn that asks it is working for, whose standing on the
-// repository bounds the seat's as authz.DecideWithin bounds an artifact verb.
-// A write carries it ([EngineWrite.Ceiling], [LifecycleRequest.Ceiling],
-// [ChangeProposal.Ceiling], [ConversationWrite.Ceiling]) and the node that
-// DECIDES the write judges it, beside the seat's own grant and from the same
-// chart and row — the Gitlet node for an engine write ([Grant.Under]), the data
-// node for a lifecycle request and for a change's writes
-// ([WriteCeiling.changeRefusal]) — never the node
-// the turn runs on against a repository it resolved once, which would keep
-// writing for a colleague a later activation shut out (the reads' rule,
-// [JudgeRead]).
+// WriteCeiling is the requester ceiling of a seat's write (M3-decisions U40
+// (a)): whom the asking turn works for, whose standing bounds the seat's as
+// authz.DecideWithin bounds an artifact verb. A write carries it
+// ([EngineWrite.Ceiling], [LifecycleRequest.Ceiling], [ChangeProposal.Ceiling],
+// [ConversationWrite.Ceiling]); the node deciding the write judges it from the
+// seat's grant's chart and row, never the turn's node, which would keep writing
+// for a colleague a later activation shut out ([JudgeRead]'s rule).
 //
-// NO CEILING is a write made for its seat alone — a turn nobody woke, the
-// outcome of its own act — or for a PERSON, who bounds nothing: a person
-// maintains every repository (ADR-0085). A person's own write carries none.
-//
-// THE SEAT'S OWN WORK IS STEERED by whoever woke the turn, nobody included,
-// as DecideWithin spares a steerable verb on what an agent owns: a command
-// under its own namespace or in a repository it owns ([Grant.OwnWork]), and
-// the lifecycle requests that edit a repository it owns and hand it to
-// nobody (lifecycle.go's ceilingLifecycleRefusal), and the writes of a change
-// it owns, opens from its own namespace or holds in a repository it owns
-// ([WriteCeiling.changeRefusal]). What discloses, hands on
-// or retires a repository — its visibility, its owner, archiving, deleting,
-// restoring, renaming — is never steered, as sharing, transferring and
-// trashing an artifact are not.
+// No ceiling is a write for its seat alone or a person's. Whoever woke the turn
+// steers the seat's own work ([Grant.OwnWork], ceilingLifecycleRefusal,
+// [WriteCeiling.changeRefusal]); a repository's visibility, owner, archive,
+// delete, restore or rename never is, as sharing an artifact is not.
 type WriteCeiling struct {
 	Kind WriteCeilingKind `json:"kind"`
 	// Seat is a [WriteCeilingSeat] ceiling's colleague, by handle; "" for
@@ -751,41 +615,18 @@ func (c WriteCeiling) invalid(asker Principal) string {
 	return ""
 }
 
-// writtenForInvalid is why a request asker makes may not state f as whom it is
-// made for (ADR-0109), or nil: the rule every request a code write forms is
-// held to by its own Validate, and so by every node that holds the request —
-// the turn's before it asks, the router's, the node that decides it — each
-// wrapping it in its own refusal, which names written_for ([refusedCarrier]).
-// A request a ceiling rides on is held to that ceiling too ([writtenForUnder]).
+// writtenForInvalid is why a request asker makes may not state f as whom it
+// is made for (ADR-0109), or nil: every code-write request's Validate holds
+// it, so every node holding the request does, each wrapping it ([refusedCarrier]).
 //
-//   - KNOWN TO THIS BUILD, FIRST: a carrier naming a kind, or an app of a
-//     credential's, that this build does not know is a newer build's —
-//     no sender composes one its own build does not know — so it is answered
-//     as the request's own decoder answers it on the wire, by the one place a
-//     build decides it ([unknownToThisBuild]), never as malformed: the
-//     estate's walk asks a node that knows it, here in process as after a
-//     refusal off the wire, and a carrier a stored row holds — which another
-//     build may have written — reaches a node of that build where one serves.
-//   - STATED, BY THE KIND OF WRITER ITS ASKER IS ([Principal.WriterKind],
-//     [types.WrittenFor.For]): an agent's request states whom it is made for —
-//     whoever its turn works for, or nobody — and one that states nothing is
-//     refused ([types.ErrWrittenForUnstated]); a person's, a credential's
-//     acting as no seat and the engine's carry nobody, and one that carries
-//     somebody is refused ([types.ErrWrittenForNotAnAgents]).
-//   - WELL FORMED: a seat by its handle, or a credential acting as no seat by
-//     its login — a machine's coloned handle, the one grammar such a
-//     credential's login has (iam.ValidLoginFor) — with the apps its turn was
-//     held to for it, each an app this build knows and none twice, so at most
-//     len(iam.Apps); and nothing beside either. So a carrier is a handle or a
-//     login of at most iam.MaxLogin bytes and those apps, at most
-//     [MaxCarrierBytes] encoded, wherever it is kept. What this rule refuses
-//     as malformed is what no build composes: the zero kind and the zero app,
-//     which name none, and admin, a name this build knows as no app.
-//   - NEVER A STRANGER'S: no code write is made for somebody the company does
-//     not know, since the turn's own gate refuses a stranger every code tool
-//     (ADR-0110); and none for a credential naming no app, which every reader
-//     of a carrier takes for a stranger (internal/agent/builtin's
-//     credentialCeiling).
+//   - first, a kind or app unknown here is a newer build's, never malformed:
+//     [unknownToThisBuild] answers it as on the wire, asking a node that knows;
+//   - an agent's request states a carrier or nobody, any other carries nobody
+//     ([Principal.WriterKind], [types.WrittenFor.For]);
+//   - a carrier is a seat's handle, or a machine login (iam.ValidLoginFor) with
+//     its turn's apps, known and distinct, so at most [MaxCarrierBytes];
+//   - never a stranger's (ADR-0110), nor a credential's naming no app, which
+//     every reader takes for one (internal/agent/builtin's credentialCeiling).
 func writtenForInvalid(asker Principal, f types.WrittenFor) error {
 	if err := unknownToThisBuild(writtenForAt, f); err != nil {
 		return err
@@ -835,44 +676,18 @@ func writtenForInvalid(asker Principal, f types.WrittenFor) error {
 		"names none: a code write is made for a seat or a credential")
 }
 
-// writtenForUnder is [writtenForInvalid] of a request a ceiling rides on — a
-// change's lifecycle and its conversation, an engine write and a dequeue —
-// with its carrier held to that ceiling, c (nil for none), wherever one is
-// stated: the engine composes the two from one bound ceiling where the turn
-// made the call (internal/agent/builtin's writeCaller and writtenForTurn), so
-// they disagree only where a sender dropped one, and a write whose ceiling and
-// carrier disagreed would be decided for one requester and wake its turns for
-// another.
-//
-//   - A SEAT'S CARRIER, a colleague's, comes with that seat's ceiling, and the
-//     ceiling of a seat with no other carrier.
-//   - A CREDENTIAL'S comes with the ceiling of nobody, since a credential
-//     acting as no seat changes nothing of the company's code itself, and
-//     that ceiling with no seat's carrier.
-//   - A PERSON'S SEAT comes with no ceiling, since a person bounds nothing
-//     ([WriteCeiling]).
-//
-// A NIL CARRIER IS HELD TO NO CEILING: a seat or a Gitlet node of a build
-// before the carrier sends its ceiling alone, which a node of this build reads
-// as stated nobody ([ChangeProposal.UnmarshalJSONFrom]), so its write is
-// decided by its ceiling as before the carrier, and its records carry nobody
-// (ADR-0109's roll).
-//
-// ONLY THE DECIDING CHART TELLS A PERSON'S SEAT FROM A COLLEAGUE'S: roster is
-// that chart where the node deciding the write holds one, and there a seat's
-// carrier comes with no ceiling only where the chart holds the seat as a
-// person's — a colleague's, or one this chart does not place, is decided under
-// its ceiling — and nil where none is at hand (a request's Validate), which
-// leaves those two rules to the node that decides it. A SEAT THE CHART DOES NOT
-// PLACE is held as a colleague's, since deciding its write as the seat's own
-// work would let it escape whoever's ceiling it carries, and its refusal says
-// so, naming the seat and that this node's chart does not place it: a chart
-// lagging the company's then reads as one, never as a request that named an
-// agent seat. EACH OF THE CHART'S REFUSALS IS TYPED ([ChartRefusal]): the
-// sender held the write to the chart its own node held, so the node deciding
-// it logs a chart that moved since as the race it is, at WARN, and every
-// other refusal of this rule, which no chart makes right, as a sender's bug
-// ([invalidLevel]).
+// writtenForUnder is [writtenForInvalid] of a request a ceiling rides on (a
+// change's lifecycle and conversation, an engine write, a dequeue), its carrier
+// held to c (nil for none). The engine composes both from one bound ceiling
+// (internal/agent/builtin's writeCaller, writtenForTurn); a write whose two
+// disagreed would be decided for one requester and wake another's turns. A
+// colleague seat's carrier pairs with its ceiling, a credential's with
+// nobody's, a person's seat with none ([WriteCeiling]); a nil carrier, an older
+// build's ([ChangeProposal.UnmarshalJSONFrom]), is held to none (ADR-0109's
+// roll). Only roster, the deciding chart (nil in a Validate), tells a person's
+// seat from a colleague's; a seat it does not place is held as a colleague's,
+// lest its write escape its ceiling, and its refusal says the chart does not
+// place it. The chart's refusals are typed [ChartRefusal] ([invalidLevel]).
 func writtenForUnder(asker Principal, f types.WrittenFor, c *WriteCeiling, roster Roster) error {
 	if err := writtenForInvalid(asker, f); err != nil {
 		return err
@@ -881,8 +696,6 @@ func writtenForUnder(asker Principal, f types.WrittenFor, c *WriteCeiling, roste
 	if carrier == nil {
 		return nil
 	}
-	// WHAT THE DECIDING CHART HOLDS OF A SEAT'S CARRIER, where one is at
-	// hand: whether it places the seat, and whether as a person's.
 	var seat RosterSeat
 	placed := false
 	if roster != nil && carrier.Kind == types.WorkingForSeat {
@@ -924,26 +737,14 @@ func carried(w *types.WorkingFor) string {
 }
 
 // ChartRefusal is a refusal of whom a write is made for that the deciding
-// chart alone makes ([writtenForUnder]): a seat's carrier with no ceiling,
-// where that chart does not place the seat or holds it as an agent's, and a
-// person's seat under that seat's ceiling.
-//
-// NO SENDER GOT IT WRONG: the turn composed whom its write is made for, and
-// the ceiling beside it, from the chart its own node held, so the two
-// disagree with this chart only where the chart moved under the turn — a
-// person's seat the company no longer has, a seat it now holds as an agent's,
-// a run that outlived the apply — or where the deciding node's chart lags the
-// turn's. That is an expected race, so the node deciding the write logs it at
-// WARN ([invalidLevel]), its words naming the seat and what this node's chart
-// holds of it. Its CLASS stays the rule's own, no proposal a committer can
-// decide ([ErrInvalidProposal]): the chart that decides the write refuses it
-// as it stands, and a request that chart refuses is not one to send again
-// unchanged.
-//
-// EXPORTED, with its words, because a refusal crosses to whoever asked the
-// node that decided it, and every error type of this package crosses the
-// estate's wire whole (internal/estate's typed kinds), so an asker's
-// errors.As finds what the deciding node's does.
+// chart alone makes ([writtenForUnder]). No sender erred: the turn composed
+// carrier and ceiling from its own node's chart, so they disagree only where
+// the chart moved under the turn or the deciding node's lags, an expected race
+// logged at WARN ([invalidLevel]). Its class stays [ErrInvalidProposal]: the
+// deciding chart refuses the request as it stands, so resending it unchanged
+// is no remedy. Exported because every error type of this package crosses the
+// estate's wire whole (internal/estate's typed kinds), so an asker's errors.As
+// finds it.
 type ChartRefusal struct {
 	// Why is the refusal's sentence: the seat whom the write is made for, and
 	// what the deciding chart holds of it.
@@ -952,14 +753,10 @@ type ChartRefusal struct {
 
 func (r *ChartRefusal) Error() string { return r.Why }
 
-// invalidLevel is the level a write refused as no proposal its committer can
-// decide ([ErrInvalidProposal]) is logged at by the node that decided it:
-// WARN where the deciding chart alone refused whom it is made for
-// ([ChartRefusal]), a chart that moved under the turn, and ERROR for every
-// other refusal, which no chart makes right and only a sender's bug forms —
-// an agent's write that states nothing, a carrier of no kind or a stranger's,
-// a credential's naming no app, a person's write carrying somebody, a ceiling
-// beside a carrier it does not bound.
+// invalidLevel is the level the deciding node logs an [ErrInvalidProposal]
+// refusal at: WARN for a [ChartRefusal], a chart that moved under the turn,
+// and ERROR for every other, which no chart makes right and only a sender's
+// bug forms.
 func invalidLevel(err error) slog.Level {
 	if errors.As(err, new(*ChartRefusal)) {
 		return slog.LevelWarn
@@ -978,29 +775,17 @@ func (c WriteCeiling) Grant(repo RepoRef, r Roster) Grant {
 		none: "whoever this turn works for may change nothing of this company's code"}
 }
 
-// changeRefusal is why a seat's write of a CHANGE — its lifecycle
-// ([ChangeProposal]) or its conversation ([ConversationWrite]) — may not be
-// made for whoever its turn works for, or "" where it may: judged by the
-// committing data node once the seat itself may make the write, from the same
-// chart and snapshot, as M4-decisions D30 sets it.
-//
-//   - THE SEAT'S OWN WORK is steered by whoever woke the turn, nobody
-//     included, as authz.DecideWithin spares a steerable verb on what an
-//     agent owns: own is a change the seat owns, an open of a branch under
-//     its own namespace (the change it makes is its own), and every change of
-//     a repository the seat owns, as [Grant.OwnWork] spares every command
-//     there.
-//   - NOBODY ([WriteCeilingNobody]) steers nothing else.
-//   - A COLLEAGUE SEAT is held at need, its own grant's access on the
-//     repository: the LEAST access at which the write's decide may admit it
-//     (internal/agent/builtin's changeToolNeeds: review for a review, read for
-//     every other). The relation beyond it — who owns the change, who may
-//     push its source, who wrote it — is the seat's own to meet, and judged
-//     for the seat alone, because judging it for the colleague would refuse
-//     the very ask a ceiling exists to admit: a change's author asking a seat
-//     to review it, which its author may never do itself.
-//
-// A nil c is a write made for its seat alone, or a person's.
+// changeRefusal is why a seat's write of a change ([ChangeProposal] or
+// [ConversationWrite]) may not be made for whoever its turn works for, or "":
+// judged by the committing data node from the same chart and snapshot, once
+// the seat itself may write (M4-decisions D30). Anybody steers the seat's own
+// work (own: a change it owns or opens from its own namespace, or any change
+// in a repository it owns, as [Grant.OwnWork]); nobody steers nothing else; a
+// colleague needs only need, the least access the decide admits at
+// (internal/agent/builtin's changeToolNeeds). The rest of the relation is the
+// seat's alone to meet: judging it for the colleague would refuse the very ask
+// a ceiling exists for, an author asking a seat to review. A nil c is a write
+// for its seat alone, or a person's.
 func (c *WriteCeiling) changeRefusal(asker Principal, repo RepoRef, own bool, need Access, what string,
 	roster Roster) string {
 
@@ -1023,7 +808,9 @@ func (c *WriteCeiling) changeRefusal(asker Principal, repo RepoRef, own bool, ne
 }
 
 // ownRefRule is [Grant.RefRule] for the principal's own grant, held to its
-// run's: RefRule's table with no colleague's ceiling.
+// run's. The reserved-ref row holds even for a caller that skipped
+// [StatelessRefusal], and [PrincipalSystem] may only delete a seat's branch,
+// all [Proposal.Validate] lets the expiry's commands do.
 func (g Grant) ownRefRule(c Command) (Refusal, string) {
 	if reservedRef(c.Ref) {
 		return RefusalNotPermitted, "no principal pushes a ref the engine reserves: " +
@@ -1095,19 +882,11 @@ func (g Grant) wouldPass(need Access) bool {
 }
 
 // refused is an agent's refusal sentence: what it holds and why, what the
-// command needs, and a remedy that would admit it — its own namespace where
-// the seat owns one; the full_access tier where the tier alone stands in the
-// way; the namespace that tier would give it where its relation reads the
-// repository; else whoever leads the repository's owner, whose chart the
-// relation is, and the tier too where the seat lacks it.
-//
-// IT NAMES NOTHING THE CHART OR THE CLIENT SPELLS — no handle, no ref, no
-// repository — only this package's own words for levels and tiers, so its
-// length is the same for every seat on every repository: a receiver carries
-// the sentence into a proposal, whose every Detail is bounded
-// (maxDetailBytes), and a handle is bounded by nothing but a ref's room. The
-// seat's namespace is named by its pattern, refs/heads/seats/<its handle>/,
-// which a seat reads with its own handle; git prints the ref beside the reason.
+// command needs, and a remedy that would admit it (its own namespace, the
+// full_access tier, or whoever leads the repository's owner). It names nothing
+// the chart or client spells (no handle, ref or repository), so its length is
+// the same everywhere: a proposal's Detail is bounded (maxDetailBytes), and a
+// handle only by a ref's room. The namespace is named by its pattern.
 func (g Grant) refused(action, need string, fullAccessPasses bool) string {
 	held := fmt.Sprintf("this seat holds %s on this repository (tier %s, relation %s); %s needs %s",
 		g.Access, g.Tier.spelled(), g.Relation, action, need)

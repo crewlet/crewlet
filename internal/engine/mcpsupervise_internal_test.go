@@ -16,14 +16,14 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The supervision's seams inside the engine, against the suite's real helper
-// tool server (mcpserver_test.go) dying for real: which predicate gates a
-// seat's restarts, that a seat's runner and its bridge's supervisor never run
-// two retry loops over one child, and where a changed catalogue is refiled.
+// The supervision's seams inside the engine, with the suite's helper tool
+// server (mcpserver_test.go) really dying: which predicate gates a seat's
+// restarts, that the runner and the bridge never both retry one child, and
+// where a changed catalogue is refiled.
 
 // helperCompany is a company whose one MCP server, `tracker`, is the suite's
-// helper tool server launched with env — shared, or a template only the CEO is
-// granted — and the directory its launches are counted in.
+// helper tool server launched with env (shared, or a per-role template for the
+// CEO), and the directory its launches are counted in.
 func helperCompany(t *testing.T, shared bool, env map[string]string) (*Company, string) {
 	t.Helper()
 	launches := t.TempDir()
@@ -120,11 +120,10 @@ func callSeatTool(t *testing.T, e *Engine, name string) tools.Result {
 }
 
 // A SEAT'S CHILD THAT DIES IS RESTARTED ONLY WHILE THIS NODE CAN PROVE IT HOLDS
-// THE SEAT, by the predicate the seat's own passes ask. The child carries the
-// seat's credentials — it IS the agent at the vendor — so a node whose lease
-// lapsed before its heartbeat noticed must not start a second copy of it beside
-// the node that took the seat over. While the proof is missing, the child stays
-// down and refuses in the engine's words; once it is back, the child is.
+// THE SEAT, by the predicate the seat's own passes ask. The child IS the agent
+// at the vendor, so a node whose lease lapsed unnoticed must not start a copy
+// beside the seat's new holder. Without the proof the child stays down and
+// refuses in the engine's words; with it back, so is the child.
 func TestASeatsDeadChildIsRestartedOnlyWhileTheSeatIsProvable(t *testing.T) {
 	t.Parallel()
 	company, launches := helperCompany(t, false, map[string]string{ToolServerCrashLaunchesEnv: "1"})
@@ -163,17 +162,14 @@ func TestASeatsDeadChildIsRestartedOnlyWhileTheSeatIsProvable(t *testing.T) {
 }
 
 // A PASS LEAVES A CHILD THAT DIED TO ITS BRIDGE, AND AN APPLY'S PASS ASKS IT TO
-// TRY NOW. The seat's runner retries a child whose start failed; its bridge's
-// supervisor restarts one that died. A pass that took a dead child for one to
-// start would be a second retry loop over it — a second start racing the
-// supervisor's, and a timer of the runner's armed beside the supervisor's
-// schedule. So a pass leaves it alone, reports it down, and arms nothing; and
-// an apply's pass, the gesture an operator makes once a vendor is back, asks
-// the supervisor for an attempt now rather than at its schedule's next.
+// TRY NOW. Starting it would be a second retry loop racing the supervisor's,
+// so a pass leaves it, reports it down and arms nothing; an apply's pass (what
+// an operator does once a vendor is back) asks for an attempt now rather than
+// at the schedule's next.
 func TestAPassLeavesADeadSeatChildToItsBridgeAndAnApplyAsksItToTryNow(t *testing.T) {
 	t.Parallel()
-	// The restart at once fails, so the next attempt of the bridge's own is
-	// a base away: ten seconds, spread to no less than eight.
+	// The immediate restart fails, so the bridge's next attempt is a base
+	// away: ten seconds, spread to no less than eight.
 	company, launches := helperCompany(t, false, map[string]string{
 		ToolServerCrashLaunchesEnv: "1",
 		ToolServerFailLaunchesEnv:  "2",
@@ -219,15 +215,13 @@ func TestAPassLeavesADeadSeatChildToItsBridgeAndAnApplyAsksItToTryNow(t *testing
 	}
 }
 
-// BUT A PASS RESTARTS A DEAD CHILD WHOSE SPEC MOVED, INTO THE NEW SPEC. Its
-// bridge would bring it back from the spec it died with — a credential the
-// operator has just rotated out, a command a revision replaced — so leaving it
-// to the bridge, as the pass leaves a child that died from the spec it would
-// start, is exactly the wrong half of that rule. The new spec here is told
-// apart by the directory its launches are counted in.
+// BUT A PASS RESTARTS A DEAD CHILD WHOSE SPEC MOVED, INTO THE NEW SPEC: its
+// bridge would bring it back from the spec it died with (a rotated-out
+// credential, a replaced command). The new spec is told apart by the directory
+// its launches are counted in.
 func TestAPassRestartsADeadSeatChildWhoseSpecMovedIntoTheNewSpec(t *testing.T) {
 	t.Parallel()
-	// The restart at once fails and the bridge's next attempt is a base
+	// The immediate restart fails and the bridge's next attempt is a base
 	// away, so the child is still down from its old spec when the spec moves.
 	before, oldLaunches := helperCompany(t, false, map[string]string{
 		ToolServerCrashLaunchesEnv: "1",
@@ -264,9 +258,9 @@ func TestAPassRestartsADeadSeatChildWhoseSpecMovedIntoTheNewSpec(t *testing.T) {
 }
 
 // A SEAT'S CHILD THAT COMES BACK WITH OTHER TOOLS IS REFILED INTO THE SEAT'S
-// SURFACE. Nothing else would: no pass runs for a restart the bridge made on
-// its own, and the seat's registry is a clone filed from the bridge, so its
-// turns would go on being offered the tool the child no longer lists.
+// SURFACE. Nothing else would: no pass runs for the bridge's own restart, and
+// the seat's registry is a clone, so its turns would keep a tool the child no
+// longer lists.
 func TestASeatChildThatComesBackWithOtherToolsIsRefiledIntoTheSeat(t *testing.T) {
 	t.Parallel()
 	company, _ := helperCompany(t, false, map[string]string{
@@ -294,10 +288,9 @@ func TestASeatChildThatComesBackWithOtherToolsIsRefiledIntoTheSeat(t *testing.T)
 }
 
 // AN EPOCH IS PUBLISHED WITH THE SHARED CATALOGUE AS IT STANDS THEN, not as it
-// stood when the apply filed it. A shared server that came back with other
-// tools while the epoch was being built told a refile that could only reach
-// the epoch being replaced; the publish refiles the new one from the bridge,
-// or it would offer a tool no server lists until the next apply.
+// stood when the apply filed it: a shared server's restart while the epoch was
+// built refiled only the epoch being replaced, so the publish refiles from the
+// bridge, or it would offer a tool no server lists until the next apply.
 func TestAPublishRefilesWhatTheSharedBridgeChangedWhileTheEpochWasBuilt(t *testing.T) {
 	t.Parallel()
 	env := map[string]string{
@@ -335,13 +328,11 @@ func TestAPublishRefilesWhatTheSharedBridgeChangedWhileTheEpochWasBuilt(t *testi
 	}
 }
 
-// A CATALOGUE THE SHARED BRIDGE REFILED IS TOLD TO WHAT RENDERS IT. The
-// dashboard's tool catalogue is a push re-sent on every published company and
-// corrected by no event, so a shared server that came back from a crash with
-// other tools was listed with the tools it had when the company was published
-// until somebody reloaded. The hook runs once the current epoch holds the new
-// tools — a surface reading the registry when told reads the new catalogue —
-// and not before.
+// A CATALOGUE THE SHARED BRIDGE REFILED IS TOLD TO WHAT RENDERS IT: the
+// dashboard's catalogue is pushed only on a published company, so a restarted
+// server's new tools would wait for a reload. The hook runs only once the
+// current epoch holds the new tools, so a surface reading the registry when
+// told reads the new catalogue.
 func TestARefiledSharedCatalogueIsToldToWhatRendersIt(t *testing.T) {
 	t.Parallel()
 	current, _ := helperCompany(t, true, map[string]string{

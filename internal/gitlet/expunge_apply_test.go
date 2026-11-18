@@ -15,18 +15,15 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// AN EXPUNGE'S DECIDE AND APPLY, case by case, over one node's estate with no
-// broker between: records built here, the decide run in a snapshot of the rows
-// a case seeds.
+// Cases of an expunge's decide and apply over one node's estate, no broker:
+// records built here, the decide run in a snapshot of the rows a case seeds.
 
-// purger is the person every request here is a purge of: a credential bound
-// to their human seat.
+// purger asks every purge here: a credential bound to a human seat.
 var purger = Principal{Kind: PrincipalOperator, OperatorID: "pat:7", Seat: "founder"}
 
-// beginOver is an expunge's begin of repository id at epoch, rewriting retire
-// into packs it keeps — one per entry of kept, holding that many objects — and
-// packs it leaves dropping — one per entry of dropping — dropping layers, its
-// id minted and its outputs' keys at applyClock, as a maintainer builds one.
+// beginOver is a maintainer's expunge begin of repository id at epoch: retire
+// rewritten into one kept pack per entry of kept and one dropping pack per entry
+// of dropping, each holding that many objects, dropping layers, at applyClock.
 func beginOver(id string, epoch int64, retire []string, kept, dropping []int64, layers ...string) ExpungeBegin {
 	xid := statelog.NewOpID(applyClock, "")
 	b := ExpungeBegin{RepoID: id, ExpungeID: xid, Node: "node-a", Seen: codeAt(1), DropEpoch: epoch,
@@ -63,8 +60,7 @@ func expungeRec(t testing.TB, p ExpungeProposal) built {
 	return rec(t, RepoSubject(p.RepoID()), op, Scope{RepoPath(p.RepoID())}, payload)
 }
 
-// expungeDecidedIn runs one round of an expunge record's decide over e's rows
-// at now.
+// expungeDecidedIn runs one round of p's decide over e's rows at now.
 func expungeDecidedIn(t testing.TB, e *estate, p ExpungeProposal, now time.Time) (expungeDecision, error) {
 	t.Helper()
 	var d expungeDecision
@@ -76,8 +72,7 @@ func expungeDecidedIn(t testing.TB, e *estate, p ExpungeProposal, now time.Time)
 	return d, err
 }
 
-// expunged decides p over e's rows at the decide's clock and applies its
-// record when the decide formed one, answering the decision.
+// expunged decides p at applyClock and applies its record unless refused.
 func (e *estate) expunged(t *testing.T, p ExpungeProposal) expungeDecision {
 	t.Helper()
 	d, err := expungeDecidedIn(t, e, p, applyClock)
@@ -122,19 +117,16 @@ func (e *estate) liveRows(id string) [3]int64 {
 		e.num(`SELECT COALESCE(SUM(objects), 0) FROM code_packs WHERE repo_id = ? AND state = 'live'`, id)}
 }
 
-// A BEGIN KEEPS EVERY OBJECT OF ITS INPUTS: its inputs' rows leave code_packs
-// for code_packs_retired, stamped with its position and broker instant, and
-// its outputs join code_packs — the packs holding what a ref reached live, of
-// kind expunge, and the packs holding the rest DROPPING, of kind cruft, still
-// rows that name their objects — holding every object the inputs held; the
-// repository's drop epoch and open expunge move to the record's; and the live
-// counters count the live rows alone. A begin whose outputs hold more objects
-// than its inputs is the builder's bug, refused before any record.
+// A BEGIN KEEPS EVERY OBJECT OF ITS INPUTS: the inputs move to
+// code_packs_retired at its position and broker instant; its outputs join
+// code_packs — the reachable ones live (kind expunge), the rest dropping (kind
+// cruft) — holding exactly the inputs' objects; the drop epoch and open expunge
+// move to the record's; the live counters count live rows only. Outputs holding
+// more objects than the inputs are refused before any record.
 //
-// Mutation: write the dropping pack live, or count it among the live packs,
-// and the rows or the counters say so; delete the inputs rather than retire
-// them, and a reader mid-read loses them; drop the arithmetic, and the begin
-// that invents an object is decided.
+// Mutation: write the dropping pack live or count it live (the rows or counters
+// say so); delete the inputs rather than retire them (a mid-read reader loses them);
+// drop the arithmetic (the inventing begin is decided).
 func TestAnExpungeBeginKeepsEveryObjectOfItsInputs(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -186,17 +178,15 @@ func TestAnExpungeBeginKeepsEveryObjectOfItsInputs(t *testing.T) {
 	}
 }
 
-// A COMMIT NEEDS ONLY ITS DROPPING PACKS: a repository whose refs moved after
-// the begin — a push landed between the two — still commits, since the
-// commit's one precondition is its expunge, open at its epoch with exactly the
-// dropping packs it retires. The dropping packs leave for code_packs_retired at
-// the commit's position, its rescue joins code_packs live, the open expunge is
-// cleared, and the commit's instant and what it took out are recorded: the
-// dropping packs' objects and bytes less the rescue's.
+// A COMMIT NEEDS ONLY ITS DROPPING PACKS: its one precondition is its expunge,
+// open at its epoch with exactly the dropping packs it retires, so a push landing
+// after the begin does not refuse it. The dropping packs retire at its position,
+// its rescue joins live, the open expunge clears, and expunged_at and what it took
+// out (the dropping packs' objects and bytes less the rescue's) are recorded.
 //
-// Mutation: hold the commit to the refs or the repository's version its begin
-// left, and the push between them refuses it; retire the dropping packs by
-// deleting their rows, and a reader mid-read loses them.
+// Mutation: hold the commit to the begin's refs or version (the push between
+// refuses it); delete the dropping rows rather than retire them (a mid-read
+// reader loses them).
 func TestAnExpungeCommitNeedsOnlyItsDroppingPacks(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -240,9 +230,9 @@ func TestAnExpungeCommitNeedsOnlyItsDroppingPacks(t *testing.T) {
 	}
 }
 
-// seedLayers writes id's published chain straight into the estate — a case's
-// rows, never the applier's — one layer for each list of pack checksums, root
-// first, each layer's bytes one part, and counts the packs it covers.
+// seedLayers writes id's published chain as a case's rows, never the applier's:
+// one layer per list of pack checksums, root first, one part each; it sets the
+// published counts to the packs covered.
 func (e *estate) seedLayers(id string, layers ...[]string) []string {
 	e.t.Helper()
 	ids := make([]string, len(layers))
@@ -267,17 +257,15 @@ func (e *estate) seedLayers(id string, layers ...[]string) []string {
 	return ids
 }
 
-// A BEGIN REMOVES THE LAYERS OVER ITS INPUTS: a layer naming a pack the begin
-// retires is no layer a Gitlet node can load once it applies, and a layer above
-// it no layer whose base stands, so a begin drops the chain's top from the
-// lowest layer naming an input — exactly those, in chain order, else it is
-// stale — with their parts; the published counts are recounted from the rows
-// it leaves, and layers_position moves to it so a cache's next delta serves
-// the chain whole.
+// A BEGIN REMOVES THE LAYERS OVER ITS INPUTS: a layer naming a retired pack can
+// no longer load, nor can any layer above it, so a begin drops the chain from the
+// lowest layer naming an input to the top — exactly those, in chain order, else it
+// is stale — with their parts, recounts the published counts from the rows left,
+// and moves layers_position so a cache's next delta serves the chain whole.
 //
-// Mutation: drop only the layers naming an input, and the decide's plan of
-// the top alone is decided and a layer is left over a missing base; leave
-// layers_position where it was, and a cache keeps the dropped layers.
+// Mutation: drop only the layers naming an input (the top-alone plan is decided,
+// leaving a layer over a missing base); leave layers_position (a cache keeps the
+// dropped layers).
 func TestAnExpungeBeginRemovesTheLayersOverItsInputs(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -316,14 +304,12 @@ func TestAnExpungeBeginRemovesTheLayersOverItsInputs(t *testing.T) {
 	e.livePublished(t, "repo-a", "the begin")
 }
 
-// A PUBLICATION IS REFUSED WHILE A REPOSITORY EXPUNGES — rule 6g: between a
-// begin and its commit the live packs need not be closed, a ref a push moved
-// before the begin perhaps reaching an object only a dropping pack holds, so a
-// layer is published only once the expunge commits. A compaction carrying no
-// layer is no publication, and is decided as ever.
+// A PUBLICATION IS REFUSED WHILE A REPOSITORY EXPUNGES (rule 6g): between begin
+// and commit the live packs need not be closed — a ref moved before the begin may
+// reach an object only a dropping pack holds — so a layer waits for the commit. A
+// compaction carrying no layer is no publication and is decided as ever.
 //
-// Mutation: drop rule 6g, and the publication over the live packs mid-expunge
-// is decided.
+// Mutation: drop rule 6g, and the mid-expunge publication is decided.
 func TestAPublicationIsRefusedWhileARepositoryExpunges(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -356,15 +342,14 @@ func TestAPublicationIsRefusedWhileARepositoryExpunges(t *testing.T) {
 	}
 }
 
-// A SECOND BEGIN IS REFUSED WHILE ONE IS OPEN: a repository expunges once at a
-// time, so a begin decided while another has begun and not committed is stale,
-// naming the open one — and a record of it that reached the log anyway applies
-// as nothing, whole. A begin planned at an epoch the repository has passed is
-// stale too, and one at the next epoch, once the first committed, is decided.
+// A SECOND BEGIN IS REFUSED WHILE ONE IS OPEN: one expunge at a time, so a begin
+// while another is uncommitted is stale, naming the open one, and its record, if
+// it reached the log, applies as nothing. A begin at a passed epoch is stale too;
+// one at the next epoch, after the first commits, is decided.
 //
-// Mutation: drop the decide's open-expunge rule, and the second begin is
-// decided over the first's dropping packs; drop the apply's, and the record
-// that reached the log replaces the open expunge.
+// Mutation: drop the decide's open-expunge rule (the second begin is decided over
+// the first's dropping packs) or the apply's (the logged record replaces the open
+// expunge).
 func TestASecondBeginIsRefusedWhileOneIsOpen(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -397,14 +382,12 @@ func TestASecondBeginIsRefusedWhileOneIsOpen(t *testing.T) {
 }
 
 // A COMMIT IS HELD TO ITS EXPUNGE AND ITS DROPPING PACKS: one of an expunge
-// that committed already, or of another than the open one, or at another
-// epoch, or naming other packs than the repository's dropping ones, is stale;
-// a record of it that reached the log anyway applies as nothing; and a commit
-// retires a pack it names only where it is dropping, never a live one, which
-// a ref may reach.
+// already committed or not the open one, at another epoch, or naming other packs
+// than the dropping ones is stale, and its logged record applies as nothing; a
+// commit retires only dropping packs, never a live one a ref may reach.
 //
-// Mutation: retire every pack the commit names whatever its state, and the
-// live pack named beside the dropping one leaves code_packs.
+// Mutation: retire every named pack whatever its state, and the live pack named
+// beside the dropping one leaves code_packs.
 func TestACommitIsHeldToItsExpungeAndItsDroppingPacks(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -438,8 +421,7 @@ func TestACommitIsHeldToItsExpungeAndItsDroppingPacks(t *testing.T) {
 	if n := e.num(`SELECT COUNT(*) FROM code_packs WHERE repo_id = 'repo-a' AND state = 'dropping'`); n != 0 {
 		t.Fatalf("the dropping pack outlived its commit")
 	}
-	// AND ONCE COMMITTED, the commit again is stale and its record applies
-	// as nothing.
+	// ONCE COMMITTED, a repeat commit is stale and its record applies as nothing.
 	again := commitOver(b)
 	if d := e.expunged(t, ExpungeProposal{Commit: &again}); d.refusal != RefusalStale ||
 		!strings.Contains(d.detail, "committed already") {
@@ -452,11 +434,10 @@ func TestACommitIsHeldToItsExpungeAndItsDroppingPacks(t *testing.T) {
 	}
 }
 
-// AN EXPUNGE REPLAYED FROM ZERO WRITES THE SAME ROWS: its records' applies are
-// pure in the record, its position and its instant, so two nodes applying one
-// log hold one estate, byte for byte — and a record of the same begin or
-// commit met again at a later position, which the version guard does not
-// stop, moves nothing.
+// AN EXPUNGE REPLAYED FROM ZERO WRITES THE SAME ROWS: applies are pure in the
+// record, its position and its instant, so two nodes applying one log hold one
+// estate byte for byte; a begin or commit met again at a later position, which the
+// version guard does not stop, moves nothing.
 //
 // Mutation: stamp a retired row or expunged_at with the clock rather than the
 // record's instant, and the two estates differ.
@@ -499,26 +480,22 @@ func (e *estate) openRequest(id string) (string, int64) {
 		e.num(`SELECT expunge_request_position FROM code_repos WHERE id = ?`, id)
 }
 
-// purgeOver is a purge's begin of repository id at epoch — an expunge serving
-// request, keeping nothing a ref drop left — rewriting retire as [beginOver]
-// does, its scan at the last position e applied: past the request, as a
-// maintainer's scan reads the rows the request is in.
+// purgeOver is a purge's begin serving request, grace 0 (keeping nothing a ref
+// drop left), built as [beginOver] with its scan at e's last applied position:
+// past the request, as a maintainer's scan is.
 func (e *estate) purgeOver(id, request string, epoch int64, retire []string, kept, dropping []int64) ExpungeBegin {
 	b := beginOver(id, epoch, retire, kept, dropping)
 	b.RequestID, b.Grace, b.Seen = request, 0, codeAt(e.next-1)
 	return b
 }
 
-// A PURGE REQUEST IS SERVED ONCE NO PACK DATES FROM BEFORE IT: the repository
-// holds it open from its record until a commit leaves no pack of the
-// repository whose content dates from before it — a cycle that rewrites part
-// of what it held keeps it, the cycle that rewrites the rest serves it — and a
-// repository holding no pack is served at its own record, since no cycle could
-// rewrite anything for it.
+// A PURGE REQUEST IS SERVED ONCE NO PACK DATES FROM BEFORE IT: it stays open
+// until a commit leaves no pack whose content predates it — a cycle rewriting part
+// keeps it, the one rewriting the rest serves it — and a repository holding no
+// pack is served at the request's own record, since no cycle could serve it.
 //
-// Mutation: clear a request at any commit, and the first cycle serves it with
-// a pack it never rewrote still live; keep a request for a repository holding
-// no pack, and it is open for ever.
+// Mutation: clear a request at any commit (the first cycle serves it with an
+// unrewritten pack live), or keep one for a packless repository (open for ever).
 func TestAPurgeRequestIsServedOnceNoPackDatesFromBeforeIt(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -554,18 +531,16 @@ func TestAPurgeRequestIsServedOnceNoPackDatesFromBeforeIt(t *testing.T) {
 	}
 }
 
-// EVERY PACK DATES ITS CONTENT AS A PURGE READS IT ([PackRow.Content]): a
-// push's pack from the push's own position; a compaction's output from the
-// oldest pack it merged; an expunge keeping a grace — its kept and its
-// dropping packs — and that expunge's rescue from the oldest pack each
-// replaced; and a purge's kept and dropping packs, and its rescue, from the
-// purge's scan, never past the begin's own position. A retired row keeps the
-// date its row held, and a snapshot serves the date of every pack.
+// EVERY PACK DATES ITS CONTENT AS A PURGE READS IT ([PackRow.Content]): a push's
+// pack from the push's position; a compaction's output, and a grace-keeping
+// expunge's kept, dropping and rescue packs, from the oldest pack each replaced; a
+// purge's outputs and rescue from its scan, never past the begin's position. A
+// retired row keeps its date, and a snapshot serves every pack's.
 //
-// Mutation: date a compaction's output, or an expunge's that keeps a grace,
-// at its own record, and its date passes the content it merged; date a
-// purge's outputs from its oldest input, and nothing it judged reads judged;
-// leave the date out of the retired insert, and the retired row reads 0.
+// Mutation: date a compaction's or grace-keeping expunge's output at its own
+// record (the date passes the merged content); date a purge's outputs from its
+// oldest input (nothing it judged reads judged); omit the date from the retired
+// insert (the retired row reads 0).
 func TestEveryPackDatesItsContentAsAPurgeReadsIt(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -628,8 +603,8 @@ func TestEveryPackDatesItsContentAsAPurgeReadsIt(t *testing.T) {
 		t.Fatalf("a purge's rescue dates from %d, want the purge's scan %d", got, scan.Packed())
 	}
 
-	// A SCAN NO CORRECT LOG CARRIES — past the begin that names it — dates
-	// nothing after the begin.
+	// A SCAN PAST ITS BEGIN, which no correct log carries, dates nothing after
+	// the begin.
 	late := e.purgeOver("repo-a", statelog.NewOpID(applyClock, "code_purge_unreachable"), 3,
 		[]string{purge.Add[0].PackID}, []int64{2}, nil)
 	late.Seen = codeAt(e.next + 100)
@@ -641,19 +616,16 @@ func TestEveryPackDatesItsContentAsAPurgeReadsIt(t *testing.T) {
 	}
 }
 
-// EVERY PACK DATES WHEN ITS NEWEST CONTENT ARRIVED ([PackRow.Arrived]): a
-// push's pack at the push's own broker instant; a compaction's output at the
-// latest pack it merged, never at its own record — a rewrite moves content
-// and brings none; an expunge's kept and dropping packs, and its rescue, at
-// the latest pack each replaced. A retired row keeps the instant its row
-// held. This is what an expunge on its maintainer's schedule keeps a young
-// pack whole by (internal/gitlet/compact's weekly cases read it as a snapshot
-// serves it, through a Gitlet node's cache).
+// EVERY PACK DATES WHEN ITS NEWEST CONTENT ARRIVED ([PackRow.Arrived]): a push's
+// pack at the push's broker instant; a compaction's output, and an expunge's kept,
+// dropping and rescue packs, at the latest pack each replaced — never their own
+// record, since a rewrite brings no content. A retired row keeps its instant. A
+// scheduled expunge keeps a young pack whole by it (internal/gitlet/compact's
+// weekly cases read it through a Gitlet node's cache).
 //
-// Mutation: date a compaction's output at its own record, and the merge of a
-// month-old pack reads young for another fortnight; date it at the OLDEST
-// pack it merged, and yesterday's objects read old; leave the instant out of
-// the retired insert, and the retired row reads 0.
+// Mutation: date a compaction's output at its own record (a month-old merge reads
+// young for another fortnight) or at the OLDEST pack merged (yesterday's objects
+// read old); omit the instant from the retired insert (the retired row reads 0).
 func TestEveryPackDatesWhenItsNewestContentArrived(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -701,26 +673,23 @@ func TestEveryPackDatesWhenItsNewestContentArrived(t *testing.T) {
 	}
 }
 
-// pushed lands one push on repository id moving refs/heads/<ref> from old to
-// new, carrying a pack of its own named for the push, and answers the pack's
-// id.
+// pushed lands push on repository id moving refs/heads/<ref> from old to new,
+// with a pack of its own named for the push, and answers the pack's id.
 func (e *estate) pushed(t *testing.T, id, push, ref, old, new string) string {
 	t.Helper()
 	e.apply(pushOf(t, id, pushEntry(push, move("refs/heads/"+ref, old, new))))
 	return push
 }
 
-// A PURGE REQUEST OUTLIVES A COMPACTION OF ITS PACKS: a compaction decided
-// after the request — one already in flight when the person asked, or the
-// compactor's next pass — merges the packs the request waits on into an
-// output added after it, judging nothing; so a commit of any expunge while
-// the output is live leaves the request open — here one on the maintainer's
-// own schedule over a pack pushed since — and the purge's cycle that rewrites
-// the output serves it.
+// A PURGE REQUEST OUTLIVES A COMPACTION OF ITS PACKS: a compaction decided after
+// the request (in flight when asked, or the next pass) merges the packs it waits
+// on into an output added after it without judging them, so any expunge's commit
+// while that output is live — here a scheduled one over a pack pushed since —
+// leaves the request open; the purge cycle rewriting the output serves it.
 //
-// Mutation: judge a request by when each pack's row was added, or date a
-// compaction's output at its own record, and the commit over the pack pushed
-// since serves the request with the merged content live.
+// Mutation: judge a request by each pack row's add time, or date a compaction's
+// output at its own record, and the commit over the newer pack serves the request
+// with the merged content live.
 func TestAPurgeRequestOutlivesACompactionOfItsPacks(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -760,18 +729,17 @@ func TestAPurgeRequestOutlivesACompactionOfItsPacks(t *testing.T) {
 	}
 }
 
-// A PURGE REQUEST OUTLIVES AN EXPUNGE THAT KEEPS A GRACE: an expunge on the
-// maintainer's own schedule keeps what a ref drop left within PruneGrace — the
-// very objects a purge asks to drop — so its commit serves no request waiting
-// on what it rewrote: neither one asked before it began, whose content its
-// kept pack still holds, nor one asked while it was open, whose content only
-// its dropping packs hold — and then its rescue, cut from them with the
-// grace. The purge's cycle that rewrites what it kept serves each.
+// A PURGE REQUEST OUTLIVES AN EXPUNGE THAT KEEPS A GRACE: a scheduled expunge
+// keeps what a ref drop left within PruneGrace — the very objects a purge drops —
+// so its commit serves no request on what it rewrote: neither one asked before it
+// began (its kept pack holds the content) nor one asked while open (its dropping
+// packs, then its rescue cut with the grace, hold it). The purge cycle rewriting
+// what it kept serves each.
 //
-// Mutation: date an expunge's outputs from its scan whatever its grace, and
-// the commit of the one begun after the request serves it; judge a request by
-// when each pack's row was added, and both are served — the first at the
-// commit, the second at its own record, while what it asks about is dropping.
+// Mutation: date an expunge's outputs from its scan whatever its grace (the commit
+// of the one begun after the request serves it); judge by each pack row's add
+// time (both are served: the first at the commit, the second at its own record,
+// while its content is dropping).
 func TestAPurgeRequestOutlivesAnExpungeThatKeepsAGrace(t *testing.T) {
 	t.Parallel()
 	for _, arm := range []struct {
@@ -792,8 +760,8 @@ func TestAPurgeRequestOutlivesAnExpungeThatKeepsAGrace(t *testing.T) {
 			if arm.askedFirst {
 				e.mustExpunge(t, ExpungeProposal{Request: &asked})
 			}
-			// EVERY PACK FROM BEFORE THE REQUEST IS ITS INPUT, so what it
-			// writes is the only content from before the request left.
+			// EVERY PACK FROM BEFORE THE REQUEST IS AN INPUT, so the outputs are the
+			// only such content left.
 			b := beginOver("repo-a", 1, sorted(first, second), arm.kept, arm.dropping)
 			b.Seen = codeAt(e.next - 1)
 			e.mustExpunge(t, ExpungeProposal{Begin: &b})
@@ -828,26 +796,21 @@ func TestAPurgeRequestOutlivesAnExpungeThatKeepsAGrace(t *testing.T) {
 }
 
 // A LATER REQUEST WIDENS THE OPEN ONE: a purge asked while another is open is
-// recorded, and moves the repository's open request to its own id and
-// position, since it asks about more than the earlier one did — a pack pushed
-// between the two, the push that leaked what the later person is purging,
-// which no cycle of the earlier request takes; or what a ref dropped between
-// them left, which a cycle whose scan read the refs before the later request
-// kept as reachable. So the earlier request's cycle — its scan between the
-// two, over every pack from before the first — serves neither, and a cycle
-// whose scan is past both, over what is left from before the later one,
-// serves the repository's purge.
+// recorded and moves the open request to its own id and position, since it covers
+// more — a pack pushed between the two (the leak the later person purges), which
+// no cycle of the earlier request takes, or what a ref dropped between them left,
+// which a scan before the later request kept as reachable. So the earlier
+// request's cycle (its scan between the two) serves neither; a cycle scanning
+// past both serves the purge.
 //
-// Mutation: apply a request asked while one is open as nothing, and the
-// repository still holds the earlier one; date a purge's packs from its
-// begin rather than its scan, and the earlier request's cycle serves the
-// later person with the dropped history kept.
+// Mutation: apply a request asked while one is open as nothing (the earlier one
+// stays open); date a purge's packs from its begin rather than its scan (the
+// earlier cycle serves the later person with the dropped history kept).
 func TestALaterRequestWidensTheOpenOne(t *testing.T) {
 	t.Parallel()
 	for _, arm := range []struct {
 		name string
-		// between lands what comes between the two requests, answering the
-		// packs it adds.
+		// between lands what comes between the two requests and answers its packs.
 		between func(t *testing.T, e *estate) []string
 	}{
 		{"a pack pushed between them", func(t *testing.T, e *estate) []string {
@@ -899,14 +862,13 @@ func TestALaterRequestWidensTheOpenOne(t *testing.T) {
 	}
 }
 
-// THE EXPUNGE'S RECORDS FIT ONE RECORD AT EVERY BOUND: the widest begin the
-// committer takes — MaxExpungeInputs inputs, MaxExpungeOutputs outputs and as
-// many layers dropped as a chain holds — and the widest commit each fit their
-// record whole, in rows (within MaxRecordRows) and in bytes; and one input or
-// one output more is refused before it is queued, naming it.
+// THE EXPUNGE'S RECORDS FIT ONE RECORD AT EVERY BOUND: the widest begin
+// (MaxExpungeInputs inputs, MaxExpungeOutputs outputs, a full chain of layers
+// dropped) and the widest commit each fit one record, in rows (MaxRecordRows) and
+// bytes; one input or output more is refused before it is queued, naming it.
 //
-// Mutation: raise MaxExpungeOutputs past what expungeBeginRows leaves of the
-// row budget, and the widest begin does not fit.
+// Mutation: raise MaxExpungeOutputs past what expungeBeginRows leaves of the row
+// budget, and the widest begin does not fit.
 func TestTheExpungeRecordsFitOneRecord(t *testing.T) {
 	t.Parallel()
 	repo := "0190f3c4-0000-7000-8000-00000000e0de"

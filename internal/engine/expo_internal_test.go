@@ -45,10 +45,10 @@ roles:
 
 // THE SEAT'S EXPO TOKEN REACHES ITS BOX WITH NO LINE IN THE DOCUMENT: Crewlet
 // sets EXPO_TOKEN for every agent that is on, so a run waits on the expo
-// integration until the access sync seals the token, and carries it once it is
-// sealed, scrubbed from the run's output. A seat that is off is declared and
-// given nothing. Mutation: go back to reading the seat's sandbox env, and the
-// sealed token never reaches the run.
+// integration until the access sync seals the token, then carries it, scrubbed
+// from the run's output. A seat that is off is declared and given nothing.
+// Mutation: read the token from the seat's sandbox env, and the sealed token
+// never reaches the run.
 func TestAnExpoSeatsTokenReachesItsBoxAsExpoToken(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, expoRunDoc)

@@ -11,33 +11,17 @@ import (
 )
 
 // THE CONVERSATION'S APPLIES: every record on a change's own subject
-// ([KindChange]), each in the one transaction the framework holds a record's
-// apply to, and each PURE IN THE RECORD, ITS POSITION AND ITS INSTANT, like every
-// apply here: it reads no clock, no configuration and no chart — a reviewer's
-// kind rides the record, stamped by the writer — and decides nothing again.
-//
-// THE SUBJECT GUARD: a record on one change's subject may write only that
-// change's conversation — its payload names the subject's change — and the
-// change is the repository's its payload names, which is the one its scope
-// names, or the record is one no correct writer forms, an error rather than a
-// skip: a record about one repository's change that named another would
-// escape that repository's deletion gate, which [Applier.Gated] reads off the
-// scope.
-//
-// EVERY OTHER GUARD IS A SKIP, never a refusal that would stop the log on every
-// node: a record whose change has no row — a repository's purge removed it, and
-// only a record the ledger would have collapsed reaches a change that gone —
-// applies as nothing, whole, logged (code_conversation_not_applied); one at or
-// below its conversation's position is a redelivery; a comment or a review
-// whose id is held already, a thread whose root is gone, and an answer whose
-// every finding no longer stands apply as nothing too.
-//
-// EVERY RECORD COUNTS ONE VERSION of its change's conversation and moves its
-// position to its own (code_conversations): the version guard a redelivery
-// meets, and what an answer is read from ([ChangeWriter.applied]). One that
-// moves what the change's readiness reads counts one READINESS VERSION too
-// ([movesReadiness]): what its home's due listing finds a stored readiness
-// judged before (changesdue.go).
+// ([KindChange]), pure in the record, its position and its instant (a
+// reviewer's kind rides the record; no chart is read). A payload naming another
+// change, or a repository its scope does not name, is an error, not a skip: it
+// would escape that repository's deletion gate, which [Applier.Gated] reads off
+// the scope. Every other guard is a SKIP, never a refusal that would stop the
+// log on every node: a change without a row (purged) applies nothing, logged
+// code_conversation_not_applied; a record at or below the conversation's
+// position is a redelivery. Every record counts one version of the conversation
+// and moves its position (code_conversations), the guard a redelivery meets and
+// what [ChangeWriter.applied] reads; one that [movesReadiness] also counts a
+// readiness version, what the home's due listing compares (changesdue.go).
 
 // applyChange is every record on a change's own subject.
 func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
@@ -133,10 +117,8 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		return 0, err
 	}
 	if movesAsks(payload) {
-		// THE ASKS COUNTED AGAIN FROM THE CHANGE'S OWN, never moved by a
-		// delta: what waits and what ended are each a range of the
-		// reviewers' key a change's distinct reviewers bound, and a count
-		// read off them stays the rows' whatever this record's ups and downs.
+		// Recounted from the rows, never moved by a delta: a count read off the
+		// reviewers' key stays the rows' whatever this record's ups and downs.
 		if _, err := tx.ExecContext(ctx, countAsksSQL, changeID); err != nil {
 			return 0, fmt.Errorf("gitlet: count change %s's asks at %s: %w", changeID, at.position, err)
 		}
@@ -145,14 +127,10 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 }
 
 // movesReadiness reports a record whose apply moves what the change's
-// readiness reads ([ReadinessOf]): an ask for review — whom an approval waits
-// on — a review — its verdict and its blockers, and the ask it answers — an
-// answer to findings — its blockers — a revision's facts — the patch ids an
-// approval is carried by, and the asks it opens again — and a settling of the
-// asks with the change's lifecycle. A comment, a thread's resolution and a
-// mergeability move none of it: a mergeability that moved
-// code_conversations.readiness_version would make its own change due a
-// refresh again at every refresh, for ever.
+// readiness reads ([ReadinessOf]): an ask, a review, an answer to findings, a
+// revision's facts and a settling of the asks. A comment, a thread's resolution
+// and a mergeability move none of it; a mergeability that moved
+// readiness_version would make its change due a refresh again at every refresh.
 func movesReadiness(payload any) bool {
 	switch payload.(type) {
 	case ReviewerRequest, Review, FindingResolve, Revise, AskSettle:
@@ -161,14 +139,12 @@ func movesReadiness(payload any) bool {
 	return false
 }
 
-// spoken reports a record SOMEBODY WROTE about the change — an ask for
-// review, a comment, a thread resolved, a review, an answer to a finding —
-// which dates its conversation's last move (code_conversations.updated_at,
-// replicated 0147): what a listing says of when the change last moved, and
-// what one narrowed to a window walks. The home's facts and the engine's
-// settling of the asks date nothing: a target branch that moves re-checks
-// every live change into it, and a change listed as moved because its target
-// did would put every change of a busy branch in every day's window.
+// spoken reports a record SOMEBODY WROTE (an ask, a comment, a thread
+// resolved, a review, an answer to a finding), which dates the conversation's
+// last move (code_conversations.updated_at) that a listing narrowed to a window
+// walks. The home's facts and the asks' settling date nothing: a moving target
+// re-checks every live change into it, which would put every change of a busy
+// branch in every day's window.
 func spoken(payload any) bool {
 	switch payload.(type) {
 	case ReviewerRequest, Comment, ThreadResolve, Review, FindingResolve:
@@ -178,10 +154,9 @@ func spoken(payload any) bool {
 }
 
 // movesAsks reports a record whose apply moves an ask's state
-// (code_reviewers): an ask for review, a review — which answers its
-// reviewer's own — a revision's facts — whose path owners it asks and whose
-// reviewers on request_changes it asks to look again — and a settling of the
-// asks with the change's lifecycle.
+// (code_reviewers): an ask, a review (which answers its reviewer's own), a
+// revision's facts (asking its path owners, and again its reviewers on
+// request_changes) and a settling of the asks.
 func movesAsks(payload any) bool {
 	switch payload.(type) {
 	case ReviewerRequest, Review, Revise, AskSettle:
@@ -190,26 +165,22 @@ func movesAsks(payload any) bool {
 	return false
 }
 
-// conversationCounts is what one record moves its conversation's counters by:
-// its comments and its reviews; its OPEN findings — none of whose authors has
-// answered — and its STANDING BLOCKERS, the blockers that hold the change back
-// whatever their authors answered (S40); how many reviewers' standing verdict
-// asks for changes; what its wide text weighs; and its readiness inputs'
-// version, by one for a record that moves what the readiness reads; and the
-// broker instant (store.EncodeTime) of a record somebody wrote ([spoken]), 0
-// for one nobody did.
+// conversationCounts is what one record moves its conversation's counters by.
+// openFindings are those no author has answered; openBlockers the blockers
+// holding the change back whatever their authors answered (S40);
+// changesRequested the reviewers whose standing verdict asks for changes;
+// readiness 1 for a record that [movesReadiness]; spokenAt the broker instant
+// (store.EncodeTime) of a record somebody wrote ([spoken]), else 0.
 type conversationCounts struct {
 	comments, reviews, openFindings, openBlockers, changesRequested, textBytes, readiness, spokenAt int64
 }
 
-// touchConversation moves changeID's conversation by one record: its counters
-// by counts, its version by one and its position to the record's own — the
-// row made by the change's first conversation record — and, for a record
-// somebody wrote, its instant to the record's ([spoken]). A record nobody
-// wrote names no instant, so its write rewrites no entry of
-// code_conversations_updated_idx or code_conversations_repo_updated_idx (the
-// driver rewrites an index entry for every column a write names, whatever the
-// value).
+// touchConversation moves changeID's conversation by one record: counters by
+// counts, version by one, position to the record's (the first record makes the
+// row) and, for a record [spoken], its instant. One nobody wrote names no
+// instant, since the driver rewrites an index entry for every column a write
+// names, whatever the value (code_conversations_updated_idx,
+// code_conversations_repo_updated_idx).
 func touchConversation(ctx context.Context, tx *sql.Tx, at applyContext, repoID, changeID string,
 	counts conversationCounts) error {
 
@@ -225,14 +196,12 @@ func touchConversation(ctx context.Context, tx *sql.Tx, at applyContext, repoID,
 	return nil
 }
 
-// applyReview writes a review: its row, every finding it raises and its text,
-// its reviewer as a participant — their STANDING VERDICT on the change moved
-// to this review's where it judges (approve, request_changes), and left as it
-// was where it comments, which judges nothing — and the supersession of every
-// standing finding of its reviewer raised on an earlier revision that it does
-// not carry ([supersededBy], the decide's own rule over the same rows):
-// moving the conversation's counters by all of it, its changes_requested by
-// the reviewer's standing verdict before this one and after.
+// applyReview writes a review, its findings and their texts, its reviewer as a
+// participant whose STANDING VERDICT moves to this one's where it judges
+// (approve, request_changes; a comment judges nothing), and supersedes its
+// reviewer's standing findings from earlier revisions it does not carry
+// ([supersededBy], the decide's own rule). changes_requested moves by the
+// reviewer's standing verdict before and after.
 func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (int, conversationCounts, error) {
 	by, kind := r.By.party()
 	if by == "" {
@@ -246,7 +215,7 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 		return 0, conversationCounts{}, fmt.Errorf("gitlet: read %s's standing verdict on change %s at %s: %w", by,
 			r.ChangeID, at.position, err)
 	}
-	// THE CREDENTIAL A PERSON REVIEWED WITH, as a comment keeps its own.
+	// The credential a person reviewed with, as a comment keeps its own.
 	var operator string
 	if kind == PartyPerson {
 		operator = r.By.OperatorID
@@ -298,10 +267,9 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 		}
 		rows += len(ids)
 	}
-	// EVERY FINDING AND EVERY TEXT, A COLLECTION EACH, through as few
-	// multi-row statements as the engine's bind limit allows — one each for
-	// the widest review — never a statement a row: this runs in the code
-	// domain's one applier on every data node, which the pushes queue behind.
+	// As few multi-row statements as the bind limit allows, never one a row:
+	// this runs in the code domain's one applier on every data node, which the
+	// pushes queue behind.
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables, addFindingsSQL, findingValuesSQL,
 		`ON CONFLICT (id) DO NOTHING`, len(r.Findings), func(i int) []any {
 			f := r.Findings[i]
@@ -340,10 +308,9 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 	if err != nil {
 		return 0, conversationCounts{}, err
 	}
-	// THE REVIEW ANSWERS ITS REVIEWER'S OWN ASK, whatever its verdict: the
-	// review they were asked for is given, so the change waits on them no
-	// longer — until somebody asks again, or a later revision asks them to
-	// look again where their verdict asks for changes (applyRevise).
+	// The review answers its reviewer's own ask whatever its verdict, until
+	// somebody asks again or a later revision asks again on request_changes
+	// (applyRevise).
 	answered, err := moveAsks(ctx, tx, at, r.ChangeID, ReviewerRequested, ReviewerReviewed, []string{by})
 	if err != nil {
 		return 0, conversationCounts{}, err
@@ -351,11 +318,9 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 	return rows + 1 + mentioned + answered, counts, nil
 }
 
-// addMentioned makes everybody a record's routing names as mentioned a
-// participant of its change — a watcher, told when the change closes, reopens
-// or moves (concerns.go) — each a person or a seat as the routing says, and
-// answers the rows it wrote. A participant already there stays as it was: a
-// mention moves nobody's standing verdict.
+// addMentioned makes everybody r mentions a participant of the change (a
+// watcher, concerns.go), a person or a seat as r says, and answers the rows it
+// wrote. A participant already there stays: a mention moves no standing verdict.
 func addMentioned(ctx context.Context, tx store.Execer, at applyContext, changeID string, r *ChangeRouting) (int,
 	error) {
 
@@ -379,11 +344,10 @@ func addMentioned(ctx context.Context, tx store.Execer, at applyContext, changeI
 }
 
 // applyFindingResolve answers findings: each that still stands moves to the
-// state the record gives it, with its note, who answered, the commit named and
-// the record's position — a finding no longer standing, or in that state
-// already, applies as nothing — and the conversation's counters move with
-// them: an open finding answered leaves the open ones, and a blocker dismissed
-// the standing blockers (S40: resolved, won't fix and disputed keep it).
+// record's state with its note, answerer, commit and position (one no longer
+// standing, or already in that state, applies nothing). An open finding
+// answered leaves the open count; only a dismissed blocker leaves the standing
+// blockers (S40).
 func applyFindingResolve(ctx context.Context, tx *sql.Tx, at applyContext, fr FindingResolve) (int,
 	conversationCounts, error) {
 
@@ -392,8 +356,7 @@ func applyFindingResolve(ctx context.Context, tx *sql.Tx, at applyContext, fr Fi
 		n, err := conversationNotApplied(ctx, at, fr.RepoID, fr.ChangeID, "who answered names no seat")
 		return n, conversationCounts{}, err
 	}
-	// EVERY FINDING IT ANSWERS READ IN ONE STATEMENT, driven from their list;
-	// each answer written by its key, its values its own.
+	// Read in one statement driven from their list; each answer written by its key.
 	ids := make([]string, len(fr.Findings))
 	for i, a := range fr.Findings {
 		ids[i] = a.FindingID
@@ -429,9 +392,9 @@ func applyFindingResolve(ctx context.Context, tx *sql.Tx, at applyContext, fr Fi
 	return rows, counts, nil
 }
 
-// applyReviewers writes an ask for review: each reviewer asked — named again
-// where their ask was withdrawn — and a participant of the change, and each
-// withdrawn ask still standing marked so.
+// applyReviewers writes an ask for review: each reviewer asked (again, where
+// withdrawn) and made a participant, and each withdrawn ask still standing
+// marked so.
 func applyReviewers(ctx context.Context, tx *sql.Tx, at applyContext, p ReviewerRequest) (int, error) {
 	by, byKind := p.By.party()
 	if by == "" {
@@ -443,9 +406,8 @@ func applyReviewers(ctx context.Context, tx *sql.Tx, at applyContext, p Reviewer
 				"stamps", at.position, r.Handle, r.Kind)
 		}
 	}
-	// THE REVIEWERS ASKED AND THEIR PARTICIPANT ROWS, A COLLECTION EACH, and
-	// the withdrawals in one statement driven from their list: as few
-	// statements as the engine's bind limit allows, never one a reviewer.
+	// As few statements as the bind limit allows, never one a reviewer: the asks
+	// and participants a collection each, the withdrawals one statement.
 	if _, err := store.InsertRows(ctx, tx, at.maxVariables, askReviewersSQL, `(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		askReviewersConflictSQL, len(p.Request), func(i int) []any {
 			r := p.Request[i]
@@ -463,9 +425,8 @@ func applyReviewers(ctx context.Context, tx *sql.Tx, at applyContext, p Reviewer
 		return 0, err
 	}
 	rows += withdrawn
-	// AN ASK THAT MOVED NOTHING still moves the conversation: its decide
-	// found something to move, and a record on the change's subject is one
-	// version of it whatever its rows.
+	// An ask that moved no row is still one version of the conversation: its
+	// decide found something to move.
 	return max(rows, 1), nil
 }
 
@@ -536,15 +497,12 @@ func applyThreadResolve(ctx context.Context, tx *sql.Tx, at applyContext, t Thre
 	return 1, nil
 }
 
-// applyAsks settles a change's asks with its lifecycle ([AskSettle]): each ask
-// the record names moves to its state from the one the other direction leaves
-// — a waiting ask to ended, an ended one to requested — where the change still
-// stands, as this transaction reads its row, where the record's decide found
-// it: closed or merged for an end, live for an ask again. A change its
-// repository's records moved since — reopened before its end landed, ended
-// again before its ask again — keeps its asks as they are, and the record is
-// one version of the conversation and nothing else: the decide found
-// something to move, and the home's next pass reads the rows again.
+// applyAsks settles a change's asks with its lifecycle ([AskSettle]): each
+// named ask moves from the state the other direction leaves (waiting to ended,
+// ended to requested) only while the change, as this transaction reads it,
+// stands where the decide found it: closed or merged for an end, live for an
+// ask again. A change moved since keeps its asks and the record is one version
+// of the conversation alone; the home's next pass reads the rows again.
 func applyAsks(ctx context.Context, tx *sql.Tx, at applyContext, a AskSettle) (int, error) {
 	row, found, err := changeRowIn(ctx, tx, a.ChangeID)
 	if err != nil || !found {
@@ -618,12 +576,9 @@ func conversationNotApplied(ctx context.Context, at applyContext, repoID, change
 	return 0, nil
 }
 
-// The conversation's writes, and the reads that find the rows they write: the
-// change's repository and its conversation by their keys, a reviewer and a
-// participant by theirs, a comment by its id and a thread's root by its id and
-// change. Every one with a WHERE is registered in plan_test.go, and a conflict
-// on a key is a skip or a merge, never an abort, which would stall the log on
-// every node.
+// The conversation's writes and the reads that find their rows; every one with
+// a WHERE is registered in plan_test.go. A conflict on a key is a skip or a
+// merge, never an abort, which would stall the log on every node.
 const (
 	changeRepoSQL = `SELECT repo_id FROM code_changes WHERE id = ?`
 	// touchConversationSQL is a record's move of its conversation, and
@@ -640,12 +595,8 @@ const (
 			readiness_version = code_conversations.readiness_version + excluded.readiness_version,
 			version = code_conversations.version + 1, position = excluded.position`
 	touchSpokenConversationSQL = touchConversationSQL + `, updated_at = excluded.updated_at`
-	// A review's writes: the reviewer's standing verdict before this one, by
-	// their participant row's key; the review, its findings and their texts,
-	// each a conflict on its key a skip; the supersession of the findings the
-	// decide's rule names, driven from the list of their ids; the reviewer as
-	// a participant, their standing verdict moved by a review that judges; and
-	// a finding answered by its key.
+	// A review's statements: its reviewer's standing verdict before it; the
+	// supersession driven from the list of the ids the decide's rule names.
 	standingVerdictSQL  = `SELECT verdict FROM code_participants WHERE change_id = ? AND handle = ?`
 	judgeParticipantSQL = `INSERT INTO code_participants (change_id, handle, kind, position, verdict,
 			verdict_revision, verdict_review)
@@ -680,10 +631,9 @@ const (
 			reviewer_kind = excluded.reviewer_kind, reason = excluded.reason, state = excluded.state,
 			requested_by = excluded.requested_by, requested_by_kind = excluded.requested_by_kind,
 			note = excluded.note, position = excluded.position, owned_paths = '', owned_paths_omitted = 0`
-	// moveAsksSQL moves a change's asks named in a list from one state to
-	// another, driven from the list, one seek of the reviewers' key a handle
-	// — the key NAMED ([reviewersKey] says why) — as supersedeFindingsSQL
-	// drives a review's supersessions.
+	// moveAsksSQL moves a change's named asks from one state to another,
+	// driven from the list, one seek of the reviewers' key a handle (NAMED:
+	// [reviewersKey] says why).
 	moveAsksSQL = `UPDATE code_reviewers SET state = ?1, position = ?2
 		WHERE rowid IN (SELECT r.rowid FROM json_each(?5) AS j
 			CROSS JOIN code_reviewers AS r INDEXED BY ` + reviewersKey + `

@@ -12,31 +12,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A BACKLOG RAISES THE BUSY READING FOR ITS WINDOW, AND NOTHING ELSE DOES.
+// A BACKLOG RAISES THE BUSY READING FOR ITS WINDOW, AND NOTHING ELSE DOES: a
+// full queue's refusal stands fourteen minutes on and is gone at sixteen; a
+// proposal that queued in time and waited out its asker (or a whole budget,
+// asked with none) is the same backlog; one that arrived late, or a lost
+// compare-and-set race, is counted under its own reason but not read. Past
+// the node's whole bound the reading counts the node's and names the busiest
+// repository, logged one line a repository once its minute has closed.
 //
-// A repository's queue full behind a batch held at its publish turns the next
-// proposal away busy at once, and the committer's reading — what the engine
-// carries into code_commit_busy — counts it and names the repository, for
-// the whole CommitBusyWindow and no longer: fourteen minutes on it stands,
-// sixteen on it is gone. A proposal that queued with time to spare and lost it
-// behind a held batch — withdrawn as it waits for its asker's deadline, or
-// refused as its batch forms after a whole budget asked with none — met the
-// queue's TIME bound, the same backlog, and the reading counts it too. A
-// proposal that ARRIVED with too little of its asker's attempt left, and a
-// record that lost every compare-and-set round, are each counted by the busy
-// counter under their own reason and are no part of the reading: neither says
-// this committer turns proposals away. Past the node's whole bound, every
-// repository's proposal is a backlog the reading counts as the node's, and
-// names the repository with the most of them; and the node's log says it a
-// repository a minute, once the minute has closed — never a line a refusal.
-//
-// Mutations: count `late` (or `contended`) as a backlog, and the reading
-// counts the arrival too late (or the lost race); file a wait that outlasted
-// its asker, or one past a whole budget, as `late`, and the reading misses the
-// committer that turned it away; keep a window of one bucket, and the refusal
-// is gone fourteen minutes on; file every refusal as `queue`, and the node's
-// bound reads as none; write a line a refusal, or the closed minute's lines at
-// every reading, and the log holds more than one a repository.
+// Mutations: count late or contended as a backlog; file a waited refusal as
+// late; keep a window of one bucket; file every refusal as queue; write a
+// line a refusal, or the closed minute's lines at every reading.
 func TestABacklogRaisesTheBusyReadingForItsWindow(t *testing.T) {
 	t.Parallel()
 	t.Run("a full queue", func(t *testing.T) {
@@ -62,8 +48,8 @@ func TestABacklogRaisesTheBusyReadingForItsWindow(t *testing.T) {
 			t.Fatalf("the proposal past the queue answered %+v, want busy", busy.Answer)
 		}
 
-		// A DEADLINE IT CANNOT MEET, on the committer's clock: no more than a
-		// batch and its answer left, so it is answered busy before it queues.
+		// No more than a batch and its answer left on the committer's clock:
+		// refused busy before it queues.
 		short, cancel := context.WithDeadline(t.Context(), clock.now().Add(gitlet.CommitBudget))
 		defer cancel()
 		late, err := c.Propose(short, stale("refs/heads/late"))
@@ -105,8 +91,7 @@ func TestABacklogRaisesTheBusyReadingForItsWindow(t *testing.T) {
 		lead := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/lead", gitlet.ZeroOID, oidOf("L"))))
 		eventually(t, "the first publish reaching the gate", func() bool { return gate.calls.Load() == 1 })
 
-		// QUEUED WITH TIME TO SPARE — a batch, its answer and a second —
-		// and the second spent behind the held batch.
+		// Queued with a second to spare, spent behind the held batch.
 		ctx, cancel := context.WithTimeout(t.Context(), gitlet.CommitBudget+gitlet.ReplyMargin+time.Second)
 		defer cancel()
 		waiting := proposeAsync(ctx, c, proposal(repo, update("refs/heads/waited", gitlet.ZeroOID, oidOf("W"))))
@@ -139,8 +124,8 @@ func TestABacklogRaisesTheBusyReadingForItsWindow(t *testing.T) {
 		lead := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/lead", gitlet.ZeroOID, oidOf("L"))))
 		eventually(t, "the first publish reaching the gate", func() bool { return gate.calls.Load() == 1 })
 
-		// ASKED WITH NO DEADLINE, and still queued a whole budget later:
-		// refused as the batch it would lead forms.
+		// Asked with no deadline and queued a whole budget: refused as the
+		// batch it would lead forms.
 		waiting := proposeAsync(t.Context(), c, proposal(repo,
 			update("refs/heads/waited", gitlet.ZeroOID, oidOf("W"))))
 		eventually(t, "the push queued", func() bool { return c.Queued(repo) == 1 })
@@ -233,18 +218,15 @@ func TestABacklogRaisesTheBusyReadingForItsWindow(t *testing.T) {
 	})
 }
 
-// A BUSY REFUSAL IS FILED IN ITS OWN MINUTE, WHATEVER THE INSTANT. The epoch's
-// first minute, the minutes before it and the zero time's are minutes a clock
-// can read like any other — a node's clock reset to 1970, a case's clock never
-// set — so a refusal stamped in one is counted for the window, and its
-// minute's line is written once, naming that minute.
+// A BUSY REFUSAL IS FILED IN ITS OWN MINUTE, WHATEVER THE INSTANT: the
+// epoch's first minute, those before it and the zero time's (a clock reset to
+// 1970, a clock never set) are counted for the window, and each minute's line
+// is written once, naming it.
 //
-// Mutations: tell an empty slot by its minute being zero, and a refusal in
-// the epoch's first minute — or one moved there — panics on the slot's
-// missing map, or is never counted; start the newest minute at zero rather
-// than at the first filing, and the zero time's refusals are filed in the
-// epoch's minute; divide the seconds toward zero, and the half minute before
-// the epoch is filed in the minute after it.
+// Mutations: tell an empty slot by minute zero (the epoch's refusals panic or
+// go uncounted); start the newest minute at zero (the zero time's are filed
+// in the epoch's); divide toward zero (the half minute before the epoch is
+// filed after it).
 func TestABusyRefusalIsFiledInItsOwnMinuteAtAnyInstant(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -272,7 +254,7 @@ func TestABusyRefusalIsFiledInItsOwnMinuteAtAnyInstant(t *testing.T) {
 			})
 			clock := &fakeClock{at: tc.at[0]}
 			gitlet.SetCommitterClock(c, clock.now)
-			// A NODE THAT HOLDS NOTHING: every proposal is refused at once,
+			// A node that holds nothing: every proposal refused at once,
 			// stamped by the committer's clock.
 			gitlet.SetCommitterNodeBytes(c, 1)
 			for i, at := range tc.at {

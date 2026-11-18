@@ -10,70 +10,17 @@ import (
 )
 
 // ReviewHeader is the reviewer's contract: the rules that decide its one
-// decision.
-//
-// Every rule below is a turn-ending bug that has actually happened, and each
-// is stated once, here. What the three decisions MEAN, and what `notes` and
-// `completed_work` carry, is the submission schema's to say
-// (runner/schema.go), beside the fields — a rule about judging the work lives
-// in the prompt, a fact about a field lives on the field. The duplicate rule
-// is keyed on target and content rather than tool name because keyed on the
-// name it fired on the in-thread follow-up the prior-work header explicitly
-// asks for — every corrected turn then looped until it terminated failed.
-//
-// THE BLOCKED RULE had contradicted itself in one breath: it named a single
-// outcome, `self_iterate`, and then said the colleague "reply asynchronously
-// and that re-triggers the agent". Both halves cannot hold — if the reply is
-// what wakes the seat, then no round of THIS turn can produce it, and sending
-// the round back asks a question that has already been asked. A seat that put
-// a clarifying question to its founder in the founder's own thread was
-// returned by the reviewer, asked the same question again two minutes later,
-// and ended on the max-iterations guard.
-//
-// So the rule splits on the one fact the TOOL LOG holds — has the person
-// been told — rather than on how stuck the agent sounds. What it must never
-// become is a decision of its own: being blocked is the EXECUTOR's word for
-// what happened (see turn.OutcomeBlocked), and `done` / `self_iterate` /
-// `failed` are the REVIEWER's for whether that was good enough. A fourth
-// decision spelling "blocked, and rightly so" would copy one axis onto the
-// other, and the next kind of blocked would want a fifth.
-//
-// What the reviewer is NOT asked is whether the delivery happened. That
-// question is settled before this prompt is built: the engine checks the
-// executor's own claims against its record of the turn, refuses a bad one
-// inside the loop where the model can still fix it, and overturns a `done`
-// that delivered nothing. Asking a model to re-derive a fact the engine holds
-// is how a real delivery got read as no delivery and posted twice — and the
-// submission schema asked it anyway, in words this header had retired, until
-// the two were made one contract.
-//
-// THE RECORD IS THE TURN'S, and the note says so because the evidence log
-// below it is only this round's: a reviewer looking at a round that re-read
-// an item after an earlier one answered sees no write here, and must not take
-// that for a turn that reached nobody. Whether this round still owed a
-// further delivery — a correction the first answer needs — is a question about
-// the work's merits, which is the reviewer's.
-//
-// THE RUN'S OWN WORK IS IN NO LOG, and the header says so for every seat
-// because every executor is a harness's own run: its edits, commands,
-// tests and commits happen in its box, and the log holds only the calls it
-// made to the seat's tools over the bridge. A reviewer that read the log as
-// everything the agent did took a run that fixed a bug and pushed the branch
-// for one that narrated a fix it never made — "no git or test calls, so the
-// claim is fabricated" — and sent a delivered turn back to max_iterations.
-//
-// NOT EVERY `→ error` FAILED. A call its run's log still held in flight when
-// the round was read is in the log failed, so the delivery check never takes it
-// for a delivery, and its line says its outcome is unknown and that what it did
-// may have taken effect (internal/agent/runner's UnfinishedNote). Told that
-// every `→ error` call did not take effect, a reviewer would read such a post
-// as one that never landed and send the round back to make it again: the
-// duplicate its own rule exists to catch. So the rule excepts it in the line's
-// own terms, as every rule such a call is read by does ([PriorWorkHeader]). THE
-// FACT AND NOT THE RULE THAT FOLLOWS FROM IT: that a round sent back checks
-// whether such a call took effect before making it again is the executor's
-// rule, which its brief states ([PriorWorkHeader], [ContinuedRoundRules]), and
-// this header is every review's, paid for on every one of them.
+// decision, each a turn-ending failure that happened, stated once. What the
+// decisions mean, and what `notes` and `completed_work` carry, is the
+// submission schema's (runner/schema.go). Duplicates go by target and content:
+// by tool name the rule fired on the threaded follow-up the prior-work header
+// asks for. Delivery is the engine's to settle: a reviewer re-deriving it read
+// a real delivery as none and posted twice; "this turn's whole log" because
+// the evidence below is one round's. The run's local work is in no log, which
+// holds only its bridge calls: a reviewer took a pushed fix for a fabricated
+// one. A `→ error` call still in flight may have taken effect (runner's
+// UnfinishedNote); that a round checks before retrying is the executor's rule
+// ([PriorWorkHeader], [ContinuedRoundRules]), not paid for in every review.
 const ReviewHeader = "\n## REVIEW phase" +
 	"\nJudge the work below, then call `" + toolname.SubmitReview + "` exactly once." +
 	"\n" +
@@ -114,24 +61,23 @@ const ReviewHeader = "\n## REVIEW phase" +
 const reviewA2ARule = " An agent colleague is reached with `" + toolname.A2AAsk + "`."
 
 // reviewBlockedOutcome closes the blocked rule: the two answers past "not
-// yet", and the one obligation no handoff discharges.
+// yet", and the one obligation no handoff discharges. The rule splits on
+// whether the log shows the person told: once asked, their reply re-triggers
+// the seat, so a round sent back only asks again (and ends on max
+// iterations). Blocked stays the executor's outcome (turn.OutcomeBlocked),
+// never a fourth decision, which would copy one axis onto the other.
 const reviewBlockedOutcome = " Already asked → `done`: their reply " +
 	"re-triggers this agent, so no round of THIS turn can produce it and " +
 	"sending it back only asks twice. Nothing anyone replies would finish it " +
 	"→ `failed`. Whoever triggered this turn is still owed a reply where " +
 	"they asked, even one that only says who you are waiting on."
 
-// ReviewInput is the evidence the reviewer judges against.
-//
-// Unlike the executor's, this is not a turn-start snapshot: it is what the
-// round produced, assembled once when the Review phase starts. It is fixed
-// for every round of that phase, which is the byte-stability the prefix cache
-// needs; it legitimately differs between round 1 and round 2 of the same
-// turn, because by then the evidence genuinely differs.
+// ReviewInput is the evidence the reviewer judges against: what the round
+// produced, assembled once when the Review phase starts, so it is fixed for
+// that phase's rounds (the prefix cache) and differs between a turn's rounds.
 type ReviewInput struct {
-	// Intent is the executor's own one-line account of what it did. The
-	// first thing the reviewer reads, and deliberately labelled as the
-	// agent's claim rather than as fact.
+	// Intent is the executor's own one-line account of what it did, labelled
+	// as the agent's claim rather than as fact.
 	Intent string
 
 	// Outcome is the submitted outcome word — delivered, no_action,
@@ -143,12 +89,9 @@ type ReviewInput struct {
 	// the reviewer is told nobody committed to that word.
 	Rescued bool
 
-	// Evidence is what the executor tried and what stopped it, present on a
-	// blocked round. The schema DEMANDS it there, so dropping it here would
-	// make the engine ask for something and then throw it away — and the
-	// reviewer's job on a blocked round is precisely to judge whether being
-	// blocked is the honest end of this turn or a round that gave up early,
-	// which it cannot do from the outcome word alone.
+	// Evidence is what the executor tried and what stopped it, which the
+	// schema demands on a blocked round: the outcome word alone cannot show
+	// an honest end from a round that gave up early.
 	Evidence string
 
 	// OpenQuestions is whatever the executor flagged for the reviewer or
@@ -159,46 +102,34 @@ type ReviewInput struct {
 	Produced string
 
 	// RefusedReplies is the replies to the round's questions that the engine
-	// refused as too large to hand the agent, rendered by [RefusedReplies]:
-	// in no call of the round's, which shows a question asked again after
-	// one as the same question asked twice. Empty renders no section.
+	// refused as too large to hand the agent, rendered by [RefusedReplies].
+	// Empty renders no section.
 	RefusedReplies string
 
 	// Delivered is the branches and pull requests the executor's run
-	// reported delivering, rendered by [DeliveredRefs]. The one evidence of
-	// its local work besides its own report, since that work is in no log.
-	// Empty renders no section: a run that pushed nothing has nothing to
-	// list, and the header names the section conditionally.
+	// reported delivering, rendered by [DeliveredRefs]: the one evidence of
+	// its local work besides its report, since that work is in no log.
+	// Empty renders no section; the header names it conditionally.
 	Delivered string
 
-	// ToolLog is the round's call log, VERBATIM: every call with its
-	// success or error outcome. Always rendered, as "(none)" when empty —
-	// the header points at it as the primary evidence, so an omitted
-	// section would make those instructions point at nothing, and a
-	// missing heading reads as "log unavailable" rather than "no calls
-	// were made".
+	// ToolLog is the round's call log, VERBATIM. Always rendered, as
+	// "(none)" when empty: the header points at it, and a missing heading
+	// reads as "log unavailable" rather than "no calls were made".
 	ToolLog string
 
-	// EarlierIterations is the prior-work ledger, empty on the first
-	// round. The round's own tool log resets each round, which left the
-	// reviewer unable to see a repeat ACROSS rounds. This restores exactly
-	// that view, so the duplicate-delivery rule holds turn-wide.
-	//
-	// The one section that is dropped rather than rendered as "(none)":
-	// its absence is unambiguous (it can only mean "this is round 1"), and
-	// the header refers to it conditionally.
+	// EarlierIterations is the prior-work ledger, which lets the duplicate
+	// rule see across rounds since ToolLog is one round's. Empty on round 1,
+	// and then dropped rather than "(none)": its absence can mean only that,
+	// and the header refers to it conditionally.
 	EarlierIterations string
 
 	// OffersA2A is whether the seat holds a2a_ask, which gates the blocked
 	// rule's naming it among the ways the next round reaches a colleague.
 	OffersA2A bool
 
-	// Skills is the tool-skill registry. Review-phase skills are
-	// operator-scoped: a skill listing the review phase surfaces here,
-	// keyed on the seat's MCP servers (MCPServers), even though Review has
-	// no domain tools: guidance an operator wants the reviewer to weigh
-	// stays available. Required skills render unmarked here; see
-	// skillCatalogue.
+	// Skills is the tool-skill registry: a skill listing the review phase
+	// surfaces here, keyed on MCPServers, though Review has no domain tools,
+	// so the reviewer can weigh the work against it (see skillCatalogue).
 	Skills SkillCatalogue
 
 	// MCPServers is every MCP server the seat's registry holds a tool of,
@@ -209,19 +140,11 @@ type ReviewInput struct {
 
 // BuildReview renders the Review-phase system prompt, and its outline.
 //
-// The reviewer sees the rules that decide its decision (what each decision
-// means is `submit_review`'s schema, beside the field), what the agent said
-// it set out to do, the tool-call log, and the text it produced — so it
-// judges against evidence rather than self-narration — and what its run
-// delivered, since its local work is in no log. `a2a_ask` is named only where
-// the seat holds it. No domain tools, no catalogue, no policies /
-// roster / backstory: the reviewer's question is whether this round's work is
-// right, and everything it needs to answer that is in front of it.
-//
-// Each piece of evidence is ONE section of the outline however many headings
-// of its own it carries: the produced text is an agent's prose and routinely a
-// document with a "## Summary" in it, and the earlier rounds are a ledger of
-// "###" entries — both nest inside the section that quotes them.
+// The reviewer judges against evidence (the tool-call log, the delivered
+// refs) beside the agent's own account. No policies, roster or backstory:
+// whether this round's work is right needs none of them. Each piece of
+// evidence is ONE outline section however many headings it carries (an
+// agent's "## Summary", the ledger's "###" entries).
 func BuildReview(seat Seat, in ReviewInput) Prompt {
 	b := NewBuilder("\n")
 	b.Lead("identity", "Identity", BuildIdentityLine(seat))
@@ -229,9 +152,7 @@ func BuildReview(seat Seat, in ReviewInput) Prompt {
 	b.Heading("tool_skills", skillCatalogue(in.Skills, PhaseReview, Surface{
 		MCPServers: in.MCPServers,
 	})...)
-	// Evidence runs oldest-first so the reviewer reads the turn
-	// top-to-bottom as one timeline: earlier rounds, then this round's
-	// intent, then what it did, then what it produced.
+	// Evidence runs oldest-first, so the turn reads as one timeline.
 	if in.EarlierIterations != "" {
 		b.Heading("earlier_rounds", "\n## Earlier rounds (already delivered)", in.EarlierIterations)
 	}
@@ -261,12 +182,8 @@ func BuildReview(seat Seat, in ReviewInput) Prompt {
 }
 
 // DeliveredRefs renders the branches and pull requests a run reported for the
-// reviewer, one per line, saying how many more it reported than the list
-// carries — or "" when it reported none.
-//
-// THE ELIDED COUNT IS SAID, never dropped: the list is bounded where the run
-// is collected, and a reviewer shown three refs of a run that pushed five
-// would judge the five as three.
+// reviewer, one per line, or "" when it reported none. The count the bounded
+// list elided is said, or a reviewer shown three of five refs judges three.
 func DeliveredRefs(refs []string, elided int) string {
 	if len(refs) == 0 && elided <= 0 {
 		return ""
@@ -292,17 +209,10 @@ type RefusedReply struct {
 // the engine did and told the agent, then one line per reply, oldest first —
 // or "" when there were none.
 //
-// THE ENGINE'S OWN ACCOUNT, beside the agent's: the review's evidence is the
-// round's calls, and the reply is in none of them, so a question the agent
-// asked again reads as asked twice and its word that a reply never reached it
-// as an excuse, unless the engine says what it refused and what it told the
-// agent to do (ADR-0114). Figures only: the reply's words reached nobody.
-//
-// AND WHAT THE DUPLICATE RULE MAKES OF IT, SAID HERE rather than in
-// [ReviewHeader]: the section is rendered only for a round that had a reply
-// refused, while the header is every review's, byte for byte across a turn's
-// rounds and paid for on every one of them — the exception belongs beside the
-// one fact that makes it hold.
+// The reply is in none of the round's calls, so without the engine's account
+// a question asked again reads as asked twice (ADR-0114). Figures only: the
+// reply's words reached nobody. The duplicate-rule exception is stated here,
+// not in [ReviewHeader], which every review pays for.
 func RefusedReplies(replies []RefusedReply) string {
 	if len(replies) == 0 {
 		return ""
@@ -322,11 +232,8 @@ func RefusedReplies(replies []RefusedReply) string {
 	return strings.Join(lines, "\n")
 }
 
-// reviewHeader is [ReviewHeader] with the rule that holds only for some seats.
-//
-// A FUNCTION OF THE SEAT'S SURFACE, never of the round: the gate is frozen for
-// the turn, so the review prompt stays byte-identical across the rounds of its
-// phase.
+// reviewHeader is [ReviewHeader] with the rule that holds only for some seats:
+// a function of the seat's surface, never the round, so it stays byte-stable.
 func reviewHeader(in ReviewInput) string {
 	header := ReviewHeader
 	if in.OffersA2A {
@@ -335,12 +242,8 @@ func reviewHeader(in ReviewInput) string {
 	return header + reviewBlockedOutcome
 }
 
-// outcomeLine renders the outcome word with who wrote it.
-//
-// The attribution is the whole point of the field: a rescued outcome is a
-// word the ENGINE chose because the pass ended without reporting, and a
-// reviewer that reads it as the agent's own verdict grades a commitment
-// nobody made.
+// outcomeLine renders the outcome word with who wrote it: a reviewer reading
+// a rescued (engine-chosen) word as the agent's grades a commitment nobody made.
 func outcomeLine(outcome string, rescued bool) string {
 	if rescued {
 		return "`" + outcome + "` — written by the engine: the agent's pass ended " +

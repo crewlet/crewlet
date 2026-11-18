@@ -16,16 +16,11 @@ import (
 )
 
 // THE TRACKER APPLIER A RUNNING NODE BUILDS TELLS THE API WHOSE INBOX MOVED.
-//
-// The tracker says which inboxes a committed batch moved; the API pushes that
-// to the sockets watching each seat. Between them is exactly this package — the
-// register that builds the applier and the setter the API registers on — and a
-// nil handed to the applier there compiles, runs and passes every tracker case,
-// while every person's screen goes back to learning about their work a poll
-// interval late. So the applier here is the REGISTER's, and the record is
-// applied and committed the way the framework's loop does it — and what it
-// announces names the tracker, the source a node relays it by while its own
-// tracker copy is out of service.
+// A nil listener handed to the applier in the register compiles, runs and
+// passes every tracker case while every person's screen learns of their work a
+// poll interval late, so the applier here is the register's, applied and
+// committed as the framework's loop does, and what it announces names the
+// tracker, the source a node relays it by while its own copy is out of service.
 //
 // Mutation: drop the tracker's [registration.Inbox] mark, and its applier is
 // handed no listener.
@@ -100,16 +95,11 @@ func TestTheTrackerApplierTheRegisterBuildsFeedsTheInbox(t *testing.T) {
 	}
 }
 
-// THE RELAY JUDGES EXACTLY THE DOMAINS WHOSE APPLIERS ANNOUNCE.
-//
-// A domain's applier is handed the engine's inbox listener only where the
-// register marks it ([stateLog.inboxFor]), and the live relay judges the
-// copies of exactly the marked domains among the ones whose movements it
-// relays ([liveDomains], over [inboxSources]). Held apart, the two could
-// disagree in the two ways that cost: a domain announcing movements the relay
-// never judged keeps its sockets on an applier nobody vouches for while its
-// copy is wrong, and a judged one that announces nothing is relayed for
-// nobody. The tracker is one, because a person's work is its news.
+// THE RELAY JUDGES EXACTLY THE DOMAINS WHOSE APPLIERS ANNOUNCE: the listener
+// goes only to domains the register marks ([stateLog.inboxFor]), and the live
+// relay judges exactly the marked ones ([liveDomains], over [inboxSources]). A
+// domain announcing what the relay never judged keeps its sockets on an applier
+// nobody vouches for; a judged one announcing nothing is relayed for nobody.
 //
 // Mutation: hand the listener to every domain's applier, or list the relay's
 // sources by anything but the mark, and a domain is one and not the other.

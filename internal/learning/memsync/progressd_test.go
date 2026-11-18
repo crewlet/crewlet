@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -127,20 +128,14 @@ func TestAPullStillCrossingIsNeitherAStallNorAskedAgain(t *testing.T) {
 // A ROW REPLACED AHEAD OF A REPLAY IS DELIVERED BEFORE ITS END BARRIER, ON THE
 // BROKER THIS BUILD RUNS.
 //
-// The end barrier's proof rests on the server delivering a consumer's copy in
-// sequence order from its store, reading the store at each delivery, so a row
-// replaced after the replay's barrier was stored and before the replay
-// reached the row is delivered at its NEW sequence, past that barrier and
-// below an end barrier published after it (nats-server consumer.go,
-// getNextMsg). Held here on the embedded server, as a replay reads, one
-// message a pull: two notes and a barrier; a pull takes the first note; the
-// second, not yet delivered, is replaced, which removes its first version
-// ahead of the consumer and stores the replacement past the barrier; the next
-// pull takes the barrier, its first version skipped; the end barrier is
-// published once the barrier has arrived, as a replay publishes it; and
-// reading on delivers the replacement and then the end barrier. The first
-// version is never delivered, and the replacement is not missed. A
-// nats-server bump that changes that order turns this red.
+// The end barrier rests on the server delivering a consumer's copy in sequence
+// order, reading its store at each delivery, so a row replaced after the
+// replay's barrier but before the replay reached it arrives at its NEW
+// sequence, past that barrier and below a later end barrier (nats-server
+// consumer.go, getNextMsg). Played one message a pull on the embedded server,
+// the end barrier published once the barrier arrives, as a replay does: the
+// replaced note's first version is skipped, and its replacement arrives before
+// the end barrier. A nats-server bump that changes that order turns this red.
 func TestARowReplacedAheadOfAReplayIsDeliveredBeforeTheEndBarrierOnTheBrokerThisBuildRuns(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
@@ -164,9 +159,8 @@ func TestARowReplacedAheadOfAReplayIsDeliveredBeforeTheEndBarrierOnTheBrokerThis
 		t.Fatalf("open the consumer: %v", err)
 	}
 	t.Cleanup(func() { pulls.Stop(); s.replays().drop(t.Context(), pulls.Name()) })
-	// read asks one pull of n messages, with no byte bound, so it ends at
-	// its count's last delivery and nothing follows it, and answers the
-	// subject and stream sequence of each delivery.
+	// read asks one pull of n messages with no byte bound, so it ends at its
+	// count's last delivery, and answers each delivery's subject@sequence.
 	read := func(n int) []string {
 		t.Helper()
 		if err := pulls.Ask(n, 0, time.Minute, 0); err != nil {
@@ -273,9 +267,8 @@ func TestTheHydrationLinesSayWhatItTook(t *testing.T) {
 //
 // A pull's heartbeat at most half its expiry, which the server requires; the
 // expiry the moment the replay calls its copy behind; four heartbeats inside
-// the quiet wait; the behind bound the object store's stall; across a link
-// the window what the floor carries within the lease's heartbeat; and on
-// either topology a replay's consumer kept by the broker past the last bytes
+// the quiet wait; the behind bound the object store's stall; and on either
+// topology a replay's consumer kept by the broker past the last bytes
 // of a pull at the transport's bound and an end barrier asked to its ceiling
 // behind them, the longest a live replay goes between two pulls; across a
 // metered link, that end barrier held past its ceiling while the link moves,
@@ -323,24 +316,41 @@ func TestTheReplaysKnobsHoldTheirReasons(t *testing.T) {
 	if behindWait != objstore.Stall {
 		t.Errorf("the behind bound is %v, want the object store's stall of %v", behindWait, objstore.Stall)
 	}
-	for heartbeat, want := range map[time.Duration]int{15 * time.Second: 524288, 5 * time.Second: 174762} {
-		if got := windowFor(heartbeat); got != want {
-			t.Errorf("the window at a heartbeat of %v is %d bytes, want %d", heartbeat, got, want)
-		}
-	}
 }
 
-// A NODE ACROSS A LINK WITH NO LEASE HEARTBEAT IS REFUSED.
+// A PULL ACROSS A LINK CROSSES WITHIN A REQUEST'S TERM.
 //
-// Its replays' window is what a link at the floor carries within the node's
-// lease heartbeat, so a node across a link that names none has no window to
-// hold its pulls to: it is refused by name rather than given some default.
-func TestANodeAcrossALinkWithNoLeaseHeartbeatIsRefused(t *testing.T) {
+// Across a link the requests sent after a pull, a lease renewal's among them,
+// wait behind whatever of its reply is still crossing, and are answered within
+// their term ([jsapi.RequestTerm]) only if the pull crosses the floor
+// ([objstore.MiBPace]) in what the term leaves after the request's own round
+// trip, one [jsprovision.ReadTerm]: four seconds, 139 810 bytes, whatever
+// lease the node holds. In a member's own process there is no window.
+//
+// Mutation: size the window by the whole five-second term, leaving the
+// request no round trip of its own, and this goes red.
+func TestAPullAcrossALinkCrossesWithinARequestsTerm(t *testing.T) {
 	t.Parallel()
-	_, err := New(openStore(t), &fakeJS{}, func(string) string { return seat.AgentID },
-		Config{AcrossLink: true})
-	if !says(err, "Config.LeaseHeartbeat") {
-		t.Errorf("New across a link with no lease heartbeat answered %v, want a refusal naming "+
-			"Config.LeaseHeartbeat", err)
+	agentID := func(string) string { return seat.AgentID }
+	budget := jsapi.RequestTerm - jsprovision.ReadTerm
+	crossing := func(bytes int) time.Duration {
+		return time.Duration(bytes) * objstore.MiBPace / objstore.MiB
+	}
+	window := windowOf(newSyncerAcross(openStore(t), &fakeJS{}, agentID))
+	if c := crossing(window); c > budget {
+		t.Errorf("a pull across a link carries %d bytes, which cross the floor in %v: a request sent "+
+			"behind it is answered past the %v its %v term leaves after its own round trip", window, c,
+			budget, jsapi.RequestTerm)
+	}
+	if crossing(window+1) <= budget {
+		t.Errorf("a pull across a link carries %d bytes, and a byte more still crosses the floor "+
+			"within %v: round trips thrown away", window, budget)
+	}
+	if window != 139810 {
+		t.Errorf("a pull across a link carries %d bytes, want the 139 810 the floor carries in %v",
+			window, budget)
+	}
+	if got := windowOf(newSyncer(openStore(t), &fakeJS{}, agentID)); got != 0 {
+		t.Errorf("a pull in a member's own process is windowed at %d bytes, want no window", got)
 	}
 }

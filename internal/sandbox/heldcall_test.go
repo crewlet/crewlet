@@ -39,11 +39,10 @@ func parksOnAHeldCall(t *testing.T, rig *coordRig, turnID string) string {
 }
 
 // A CHAT REPLY NEVER ANSWERS A HELD CALL, AND AN ANSWER BY TURN ONLY BY ITS ID
-// (ADR-0077). Whoever speaks on the conversation the run was launched from is
-// not, for that, somebody who may approve a call to a tool, so a reply there is
-// the ordinary message it looks like and the run waits on. An answer by turn
-// that does not name the held call is spent unrecorded, as one naming a held
-// call for a question that is not one is; the approval naming it is recorded.
+// (ADR-0077). Speaking on the run's conversation is no grant to approve a tool
+// call, so a reply there is an ordinary message and the run waits on. An answer
+// by turn not naming the held call is spent unrecorded, as is one naming a held
+// call for a question that is not one; the approval naming it is recorded.
 //
 // Mutation: drop the held-call check from ConversationRef.Answers, and the
 // chat reply approves the call.

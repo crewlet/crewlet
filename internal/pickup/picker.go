@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -201,17 +202,23 @@ func (p *Picker) decide(ctx context.Context, seat Seat, people []worklet.PersonS
 	out := Outcome{Seat: seat}
 	cond := p.Holder.Conditions(ctx, seat)
 	cond.IdleBefore = p.settle(seat.ID, IdleNow(cond))
-	if ok, skip := Idle(cond); !ok {
+	idle, skip := Idle(cond)
+	if !idle && !UrgentMayJump(cond) {
 		out.Skip = skip
 		return out
 	}
 	now := p.Now()
 	cooled := false
-	pick, err := p.choose(ctx, seat, people, now, func(c candidate) (bool, Skip, error) {
+	// A SEAT THAT IS NOT IDLE is handed urgent work alone (ADR-0159).
+	pick, err := p.choose(ctx, seat, people, now, !idle, func(c candidate) (bool, Skip, error) {
 		return p.hold(ctx, seat.ID, c, now, &cooled)
 	})
 	out.Ready, out.Item = pick.ready, pick.item
 	switch {
+	case !idle && err == nil && pick.skip != "":
+		// Nothing urgent to hand: the seat is as busy as it was.
+		out.Skip = skip
+		return out
 	case pick.skip != "":
 		out.Skip, out.Err = pick.skip, err
 		return out
@@ -228,6 +235,10 @@ func (p *Picker) decide(ctx context.Context, seat Seat, people []worklet.PersonS
 		item.For = &types.WorkingFor{Kind: types.WorkingForStranger}
 	}
 	ev := Event(seat.ID, seat.Role, item, key, out.Ready, pick.capped, trace)
+	if item.Priority == worklet.PriorityUrgent {
+		// AHEAD OF THE SEAT'S BACKGROUND MAIL, which drains in arrival order.
+		queue.Prioritize(ev)
+	}
 	if err := p.Publisher.Publish(ctx, topics.AgentInbox(seat.ID), ev); err != nil {
 		// NOTHING WAS SPENT THAT A RETRY CANNOT TAKE AGAIN: a copy that
 		// landed after all carries the same id, which the inbox and the
@@ -269,8 +280,9 @@ type candidate struct {
 // choose walks the seat's ready work page by page and asks the ledger key by
 // key, offering each item the seat has not had until offer takes one. An item
 // offer answers neither taken nor stopped is cooling, and the walk goes on.
+// With urgentOnly the walk stops, unread, at the first item that is not urgent.
 func (p *Picker) choose(ctx context.Context, seat Seat, people []worklet.PersonSeat, now time.Time,
-	offer func(candidate) (bool, Skip, error)) (picked, error) {
+	urgentOnly bool, offer func(candidate) (bool, Skip, error)) (picked, error) {
 
 	var out picked
 	passed, cooling := false, false
@@ -302,6 +314,10 @@ func (p *Picker) choose(ctx context.Context, seat Seat, people []worklet.PersonS
 			return out, nil
 		}
 		for _, item := range ready.Items {
+			if urgentOnly && item.Priority != worklet.PriorityUrgent {
+				out.skip = SkipBusy
+				return out, nil
+			}
 			if next, ok := nextRecheck(item, now); ok {
 				soonest(next)
 			}

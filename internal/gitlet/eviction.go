@@ -9,23 +9,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE EVICTION GATE ON THIS LOG, both halves: the record that installs or
-// lifts it, and the rows the trim reads ([Domain.Evictions]) to stop counting
-// an evicted node.
-//
-// A gate is a rule about records on ONE log, keyed on positions in that log's
-// own sequence, so the code log carries its own: an eviction written to the
-// tracker's log says nothing about which code records to drop. The engine's
-// node gate writes every identity-claiming log's from one judgement, and
-// reports each log's outcome on its own.
+// THE EVICTION GATE ON THIS LOG: the record that installs or lifts it, and
+// the rows the trim reads ([Domain.Evictions]) to stop counting an evicted
+// node. A gate is keyed on ONE log's own positions, so the code log carries
+// its own; the engine's node gate writes every identity-claiming log's from
+// one judgement and reports each log's outcome separately.
 
 // EvictNode installs the gate that drops a node's records on this log, at this
-// log's own position — every node reaches the same verdict about every record
-// from the order they all already have, with no clock and no coordination
-// read.
-//
-// UNJUDGED HERE: whether the node may be evicted is a fleet question asked
-// once, before the first log is written, by the engine's node gate.
+// log's own position, so every node reaches the same verdict from the shared
+// order, with no clock and no coordination read. Whether the node may be
+// evicted is the engine's node gate's question, asked once before any log is
+// written.
 func (s *Store) EvictNode(ctx context.Context, actor Actor, opID, nodeID string) (statelog.Result, error) {
 	return s.gateNode(ctx, actor, opID, nodeID, false)
 }
@@ -37,10 +31,9 @@ func (s *Store) ReadmitNode(ctx context.Context, actor Actor, opID, nodeID strin
 }
 
 // gateNode publishes one eviction record, arbitrated on the node's own subject
-// so an eviction and the readmission that inverts it contend with each other
-// and with nothing else. A retry is answered by the framework from this
-// node's ledger; what this adds is whether the record its operation landed is
-// still in force ([statelog.GateStanding]).
+// so an eviction and its readmission contend only with each other. The
+// framework answers a retry from the ledger; this adds whether the record its
+// operation landed is still in force ([statelog.GateStanding]).
 func (s *Store) gateNode(ctx context.Context, actor Actor, opID, nodeID string,
 	readmit bool) (statelog.Result, error) {
 
@@ -93,8 +86,8 @@ func standingIn(ctx context.Context, tx *sql.Tx, nodeID string) (statelog.Evicti
 	}
 	return statelog.EvictionRow{
 		NodeID: nodeID, From: uint64(from.Int64), Readmitted: uint64(readmitted.Int64),
-		// THE COMPARISON [Fence.Evicted] MAKES, so a retry and the node's
-		// own fence never disagree about whether it is back.
+		// The comparison [Fence.Evicted] makes, so a retry and the node's
+		// own fence agree on whether it is back.
 		Back: readmitted.Valid && readmitted.Int64 > from.Int64,
 	}, true, nil
 }

@@ -16,8 +16,8 @@ import (
 )
 
 // rewritingTool is a seat-scoped tool that asks the auxiliary model for a
-// rewrite, as refresh_memory's filter and query_episodes' compaction do: what
-// the rewrite cost is added to the tally of the turn the tool is called as.
+// rewrite, as refresh_memory's filter and query_episodes' compaction do, and
+// adds its cost to the tally of the turn it is called as.
 type rewritingTool struct{ cost auxspend.Spent }
 
 func (rewritingTool) Name() string               { return "recall_notes" }
@@ -34,14 +34,11 @@ func (r rewritingTool) CallForTurn(_ context.Context, turn *turnctx.Turn, _ map[
 
 // AN EXECUTOR RUN'S BRIDGED CALLS ARE COUNTED ON THEIR OWN METER.
 //
-// The harness calls the seat's tools over the bridge long after the segment
-// that launched it has parked and charged what it spent. Counted on that
-// segment — its auxiliary tally, its worker tally — every one of those calls
-// added to a number nothing read again, and the work item the turn was on was
-// never charged for any of them. So the bridged surface is metered apart: a
-// tool's rewrite and a delegated worker both land on the request's own meter,
-// which the engine writes to the run's row with every call for the resuming
-// segment to pay, and leave the launching segment's tallies as they were.
+// The harness calls the seat's tools over the bridge after the launching
+// segment has parked and charged its spend, so anything counted on that
+// segment's tallies is never read and the work item never pays it. A tool's
+// rewrite and a delegated worker land on the request's own meter instead, which
+// the engine writes to the run's row for the resuming segment to pay.
 //
 // Mutations: build the bridged surface on the runner's own meter, bind its
 // tools to the segment's turn, or close its workers on the segment's tally, and
@@ -109,8 +106,7 @@ func TestAnAgentRunsBridgedCallsAreCountedOnTheirOwnMeter(t *testing.T) {
 		t.Errorf("the launching segment's tally counts %d workers / %d tokens it never paid for",
 			got.Workers, got.WorkerTokens())
 	}
-	// STILL THIS TURN'S CALLS: the same run, the same unit of work — only
-	// the tally they are counted on differs.
+	// STILL THIS TURN'S CALLS: only the tally they are counted on differs.
 	if turn := req.Surface.Turn(); turn == nil || turn.RunID != "t-bridge" || turn.WorkKey != "wk-bridge" {
 		t.Errorf("the bridged surface acts as %+v, want the launching turn", turn)
 	}

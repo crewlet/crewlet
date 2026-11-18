@@ -32,14 +32,10 @@ func twoKeyBootstrap(t *testing.T) config.Bootstrap {
 	return b
 }
 
-// THE BROKER IS KEYED FROM TIER A, on every topology.
-//
-// What a node's embedded broker presents and accepts on its fleet listeners is
-// derived from its own secrets.keys by the keyring's rule (ADR-0094) — every
-// key accepted, the active one presented — so the broker moves with the
-// keyring's rotation like everything else signed under it. A member, a leaf
-// and a solo member alike: which listeners a broker opens is the jetstream
-// package's to decide from the rest of the config, and a solo member's
+// THE BROKER IS KEYED FROM TIER A, on every topology: its fleet listeners'
+// credentials derive from secrets.keys by the keyring's rule (ADR-0094), every
+// key accepted and the active one presented, so the broker follows a rotation.
+// Which listeners open is the jetstream package's call; a solo member's
 // credentials simply go unpresented.
 //
 // Mutation: leave FleetAuth zero → every row, red.
@@ -77,13 +73,11 @@ func TestTheBrokerIsKeyedFromTierA(t *testing.T) {
 	}
 }
 
-// A NODE'S BROKER COUNTS WHAT IT REFUSES, from the moment it starts.
-//
-// openStream installs the counter on the broker it has just started, over the
-// node's recorder: a leaf on another keyring dialling this member's leaf
-// listener is refused, and crewlet.broker.peer.refusals rises under
-// {leaf, unknown}. The sink counts both attributes, and a node with no
-// recorder counts nothing and does not fail.
+// A NODE'S BROKER COUNTS WHAT IT REFUSES, from the moment it starts: openStream
+// installs the counter over the node's recorder, so a leaf on another keyring
+// dialling this member is refused and crewlet.broker.peer.refusals rises under
+// {leaf, unknown}. The sink counts both attributes; a node with no recorder
+// counts nothing and does not fail.
 //
 // Mutations: openStream installs nothing → the live row never rises, red; drop
 // an attribute → the sink row, red.

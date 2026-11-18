@@ -9,20 +9,11 @@ import (
 	"github.com/crewlet/crewlet/internal/kept"
 )
 
-// The submission schema's enum and the decoder's validation are ONE list, and
-// this is what says so.
-//
-// Spelled separately they were one edit apart from disagreeing in the
-// direction nothing catches. A schema that OFFERS a value the decoder REFUSES
-// bounces a model that did exactly what it was told, and the model cannot see
-// that the two lists differ — it only sees its submission rejected for naming
-// a decision the tool it was handed said was available.
-//
-// Asserted in BOTH directions, because each catches a different edit: an
-// addition that reached the schema and not the decoder, and one that reached
-// the decoder and not the schema. The second is quieter — a reviewer is simply
-// never offered a decision the engine would have honoured — which is why a
-// one-directional check would have been the half that stayed green.
+// The submission schema's enum and the decoder's validation are ONE list. A
+// schema offering a value the decoder refuses bounces a model that did as told,
+// unable to see why. Asserted in BOTH directions: an addition reaching only the
+// decoder is the quieter one (a reviewer is never offered a decision the
+// engine would honour), the half a one-way check leaves green.
 func TestTheReviewSchemaOffersExactlyWhatTheDecoderAccepts(t *testing.T) {
 	t.Parallel()
 	props, ok := reviewSchema["properties"].(map[string]any)
@@ -44,9 +35,8 @@ func TestTheReviewSchemaOffersExactlyWhatTheDecoderAccepts(t *testing.T) {
 			t.Errorf("the schema offers a non-string decision %#v", v)
 			continue
 		}
-		// Notes are supplied because self_iterate demands them; this is a
-		// question about the decision vocabulary, not about the fields a
-		// particular decision requires.
+		// Notes because self_iterate demands them: this tests the vocabulary,
+		// not a decision's required fields.
 		got, err := decodeReview(map[string]any{"decision": name, "notes": "n"})
 		if err != nil {
 			t.Errorf("the schema offers %q but the decoder refuses it: %v", name, err)
@@ -64,11 +54,8 @@ func TestTheReviewSchemaOffersExactlyWhatTheDecoderAccepts(t *testing.T) {
 	}
 }
 
-// A reviewer may not reach phase.Skipped, so the schema must not offer it.
-//
-// It is the ENGINE's own reading of a round nobody was waiting on, taken
-// before the reviewer is called at all — see turn.Check — so a reviewer
-// submitting it would mean the turn ran after deciding not to.
+// A reviewer may not reach phase.Skipped, so the schema must not offer it: it
+// is the engine's own reading, taken before any reviewer runs (turn.Check).
 func TestTheReviewSchemaNeverOffersSkipped(t *testing.T) {
 	t.Parallel()
 	if slices.Contains(phase.ReviewDecisions(), phase.Skipped) {
@@ -81,11 +68,9 @@ func TestTheReviewSchemaNeverOffersSkipped(t *testing.T) {
 
 // A REVIEW'S WORDS PAST THEIR BOUNDS ARE REFUSED WHERE THEY ARE MADE, naming
 // the field, its size and its bound, while the reviewer can still shorten
-// them. The final artifact is the turn's answer — its record's response, its
-// plan summary, the reply a colleague is handed — and never longer than a
-// run's own report may be; the notes and the account of what landed are the
-// next round's brief, held to what an executor's whole submission may weigh.
-// Words within their bounds are taken as they are.
+// them. The final artifact is the turn's answer, held to a run's own report's
+// bound; the notes and the account of what landed are the next brief, held to
+// an executor's whole submission's. Words within bounds are taken as they are.
 //
 // Mutation: take the words whatever their size, and every reader of the
 // answer holds a different cut of it, or none.

@@ -77,36 +77,18 @@ func heldAttemptOn(t *testing.T, store *sandbox.CoordStore, seal *sandbox.CallSe
 	return asked.Held
 }
 
-// A LATER ATTEMPT ANSWERS A HELD CALL FROM THE MARK ITS CLAIM READ. The first
-// attempt at a person's answer marks the call and makes it, and its relaunch
-// can be refused after — by the floor of the session it continues, say — so
-// its claim is given back and the answer attempted again. The claim that takes
-// it again reads the row as the first attempt left it, and the commit the
-// runner is handed answers from that read: the result recorded, or, where the
-// first attempt stopped before it recorded one, unknown — and, where the node
-// carrying the run on cannot open the result recorded, made all the same, with
-// whether the tool reported a failure off the call's entry recorded with it,
-// since the round's log lists the call made and the lead is its only telling;
-// and the call's arguments stay sealed, since nothing makes it again. The runner asks this
-// before it holds the call to the tools and skills it carries the run on with
-// ([runner.HeldCommit.Marked]), so a guard or a tool that changed in between
-// never tells the run a call it made was not made. The mark's own answer
-// ([runner.HeldCommit.Begin]) says the same.
+// A LATER ATTEMPT ANSWERS A HELD CALL FROM THE MARK ITS CLAIM READ: after a
+// relaunch is refused, the next claim's commit answers from the row as the
+// first attempt left it — the result; unknown where none was recorded; or,
+// where this node cannot open it, made (the round's log lists it so), with
+// whether the tool failed — its arguments kept sealed, since nothing makes it
+// again. The runner asks [runner.HeldCommit.Marked] before holding the call to
+// its current tools, so a changed guard never unsays a made call; Begin and
+// Record answer the same, each handing the sealed result on for the lead.
 //
-// AND IT IS HANDED THAT RESULT AS THE ROW SEALED IT, which the answer's lead
-// keeps for a later brief to tell again, whether or not it opens here.
-//
-// AND THE ATTEMPT THAT MAKES THE CALL IS ANSWERED THAT RESULT AS ITS RECORD
-// SEALED IT ([runner.HeldCommit.Record]), the usual case, which its lead keeps
-// too.
-//
-// Mutation: have Marked answer false for a claim that read the call marked, or
-// drop its result, and the later attempt is not answered from the mark; hand it
-// no kept result, or have Record answer none, and a lead telling the call again
-// cannot say what it returned; open the arguments of a marked call, and they
-// are opened for a call that never runs again; answer a result this node
-// cannot open as no result, or without whether the tool failed, and the run is
-// told the call may never have been made.
+// Mutation: Marked false for a marked claim, a dropped or unkept result, Record
+// answering none, a marked call's arguments opened, or an unopenable result
+// answered as none or without whether the tool failed, and a case goes red.
 func TestALaterAttemptAnswersAHeldCallFromTheMarkItsClaimRead(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

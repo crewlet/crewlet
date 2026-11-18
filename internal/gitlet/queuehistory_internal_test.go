@@ -30,17 +30,15 @@ func (e *estate) seedLandingBelow(repo string, position, at int64) {
 
 // A QUEUE'S HISTORY IS SWEPT BY ROWS AND BY BYTES, AND CUT AT A KEY: the walk
 // takes ended entries oldest first by (ended_at, entry_id) while fewer than
-// its rows and while what it took weighs under its bytes — the first whatever
-// it weighs, and at most one past — takes no landing once its entries were
-// cut by either, and the sweep removes exactly the entries up to the key it
-// cut at, a tie of instants split by the entries' ids, never by the order the
-// rows were written in.
+// its rows and under its bytes (the first whatever it weighs, at most one
+// past), takes no landing once either cut its entries, and the sweep removes
+// exactly the entries up to its cut key, a tie of instants split by id, never
+// by write order.
 //
-// Mutation: weigh nothing (drop the byte bound from endedWithin) — the byte
-// cases take every entry, red; take landings after a cut (drop `|| more` from
-// queueHistoryIn's return) — "bytes cut" takes the landing, red; remove the
-// whole instant the cut ends in (drop `AND (ended_at < ? OR entry_id <= ?)`
-// from sweepEndedSQL) — "a tie split by id" removes all four, red.
+// Mutation: drop the byte bound from endedWithin — the byte cases take every
+// entry, red; drop `|| more` from queueHistoryIn's return — "bytes cut" takes
+// the landing, red; drop `AND (ended_at < ? OR entry_id <= ?)` from
+// sweepEndedSQL — "a tie split by id" removes all four, red.
 func TestAQueuesHistoryIsSweptByRowsAndBytesAndCutAtAKey(t *testing.T) {
 	t.Parallel()
 	const cutoff = 100

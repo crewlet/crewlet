@@ -13,24 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
-// THE LOGIN WATCHER keeps, for every model entry that signs in with the harness's
-// own login on this node's disk, what the harness says of that login (M12 of the
-// Models design): signed in, signed out, or unknown, and as whom. The Models
-// page shows it per node, with the command to run there; it is never a
-// sign-in. The engine does not log a harness in; a person runs `crewlet llm login`
-// on the node.
+// THE LOGIN WATCHER keeps, for every model entry that signs in with the
+// harness's own login on this node's disk, what the harness says of it (Models
+// design, M12): signed in, signed out or unknown, and as whom. The Models page
+// shows it per node with the command to run there; it is never a sign-in — a
+// person runs `crewlet llm login` on the node.
 //
-// # When it asks
+// The status command is local but is a process, so it is not run per read: it
+// runs for an entry at boot and every apply, when the login's files change (a
+// stat each [hostLoginBeat]), otherwise every [hostLoginRecheck], and at once
+// on a person's "check now" ([Engine.CheckHostLogin]).
 //
-// The harness's status command is local and never calls the network, but it is a
-// process, so it is not run per read. It runs for an entry at boot and at
-// every apply, when the login's files change (a stat each [hostLoginBeat]),
-// and otherwise every [hostLoginRecheck]. A person's "check now" runs it at
-// once ([Engine.CheckHostLogin]).
-//
-// # Who has to agree on it
-//
-// This node alone, in memory: the login is on this node's disk.
+// Who has to agree on it: this node alone, in memory — the login is on its disk.
 
 // hostLoginBeat is how often the watcher stats each login's files: the
 // reconcile interval, the longest the node's status record goes unwritten, so
@@ -38,10 +32,9 @@ import (
 const hostLoginBeat = coord.ReconcileInterval
 
 // hostLoginRecheck is how long an answer stands with nothing changed on disk:
-// TEN MINUTES, the readiness memory's own horizon (harness's readinessMemory),
-// so the page and a call's readiness verdict go stale on the same clock. A
-// login that expires on the vendor's side without a file changing is said
-// within it.
+// the harness's readinessMemory horizon, so the page and a call's readiness
+// verdict go stale on the same clock, and a login expiring on the vendor's side
+// with no file changing is said within it.
 const hostLoginRecheck = 10 * time.Minute
 
 // ErrNoModel is a model entry the active revision does not have.
@@ -211,9 +204,9 @@ func (e *Engine) hostLoginOf(key string) *coord.HostLogin {
 }
 
 // CheckHostLogin runs an entry's status command on this node now and answers
-// what it said, which the node's status record publishes from then on. [ErrNoModel] for an
-// entry the active revision does not have, and [ErrNoHostLogin] for one that
-// does not sign in with a harness login here.
+// what it said, which the node's status record publishes from then on. It
+// fails with [ErrNoModel] for an entry the active revision does not have, and
+// [ErrNoHostLogin] for one that does not sign in with a harness login here.
 func (e *Engine) CheckHostLogin(ctx context.Context, key string) (coord.HostLogin, error) {
 	c := e.Company()
 	if c == nil || c.Config == nil || c.Models == nil {

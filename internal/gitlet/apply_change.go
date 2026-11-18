@@ -10,31 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE LIFECYCLE'S APPLIES: an open's ([Applier.applyChangeOpen]) and every
-// other write of a change's ([Applier.applyChangeWrite]), each in the one
-// transaction the framework holds a record's apply to, and each PURE IN THE
-// RECORD, ITS POSITION AND ITS INSTANT, like every apply here: it reads no
-// clock and no configuration and decides nothing again. The decide held the
-// repository active, an open's branches live and heading no live change, and
-// every other write's change in the state its rule takes; the broker's
-// arbitration on the repository's subject guarantees the record applies
-// against the rows that decide read. So every guard here is a SKIP, never a
-// refusal, which would stop the log on every node: a record that finds its
-// change not in the state its decide held — an open whose change id a change
-// already holds, a write whose change is not the repository's, or one in a
-// state its op does not take — applies as NOTHING, whole, logged
-// (code_change_not_applied): no correct log carries one but a record the
-// ledger would have collapsed, met again.
-//
-// AN OPEN NUMBERS ITS CHANGE HERE, from the repository's next_change, which
-// the same apply advances: numbers follow the log's order, and no decide —
-// which two committers may each take on their own snapshot — gives one.
-//
-// EVERY WRITE COUNTS ONE VERSION and moves the repository's own, so the
-// version guard every record on its subject meets skips it when it is met
-// again: the change's version counts the records that changed its row — 1 at
-// its open, which an edit names as its expectation — and its position is the
-// last one's.
+// The lifecycle's applies ([Applier.applyChangeOpen], [Applier.applyChangeWrite])
+// are pure in the record, its position and its instant: no clock, no config,
+// nothing decided again. Arbitration on the repository's subject means a record
+// applies against the rows its decide read, so every guard is a SKIP, never a
+// refusal that would stop the log on every node: a record finding its change
+// not in the state its decide held applies as nothing, logged
+// (code_change_not_applied); only a record the ledger would have collapsed,
+// met again, does. An open numbers its change here, from next_change advanced
+// in the same apply, in the log's order: two decides could take the same one.
+// Every write counts one version (1 at the open, which an edit names as its
+// expectation) and moves the repository's, so the version guard skips it when
+// it is met again.
 
 // applyChangeOpen opens the change o names: its row, numbered next_change and
 // advancing it; its body, where it has one; its owner as its first author; and
@@ -58,9 +45,8 @@ func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyConte
 	if o.WorkItem != nil {
 		work = *o.WorkItem
 	}
-	// THE CREDENTIAL A PERSON OPENED IT WITH, the change's own attribution
-	// as every record a write leaves names it (iam.ActorFor); a seat acts as
-	// itself with none.
+	// A person's credential attributes the change, as every record names it
+	// (iam.ActorFor); a seat acts as itself with none.
 	var operator string
 	if kind == PartyPerson {
 		operator = o.Owner.OperatorID
@@ -104,22 +90,16 @@ func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyConte
 	return rows + 3 + tallied, nil
 }
 
-// applyChangeWrite writes one write of a change beyond its open — an edit, a
-// draft's state, a retarget, a close, a reopen or a landing — into its
-// change's row: the row read by its key, moved as the record says, and written
-// back with one more version at the record's position by the [changeWrite]
-// its op makes ([lifecycleWrite]), which sets what the op moves and nothing
-// else; an edit's body where it sets one, a reopen's revision where its head
-// moved while the change was closed, and the repository's version. A close, a
-// draft, a retarget and a landing END THE CHANGE'S LIVE QUEUE ENTRY in the
-// same apply, dequeued, naming which ([endLiveEntryOf]): its queue would
-// otherwise land a change that is no longer what was enqueued. A landing
-// merges the change at the tip its home found its head in — `push`, as one
-// whose push set the target to its head is — and applies as nothing where the
-// change is not at the head the home found, which only a record the ledger
-// would have collapsed meets. A close and a landing also CLEAR THE CHANGE'S
-// STORED READINESS ([clearReadiness]): an ended change is ready for nobody
-// and waits on nobody, and none of its home's records refreshes it again.
+// applyChangeWrite applies a write of a change beyond its open (an edit, a
+// draft's state, a retarget, a close, a reopen or a landing): the row read by
+// its key, moved, and written back one version on by the [changeWrite] its op
+// makes ([lifecycleWrite]); then an edit's body, a reopen's revision where the
+// head moved while closed, and the repository's version. A close, a draft, a
+// retarget and a landing end the live queue entry ([leavesQueue],
+// [endLiveEntryOf]), or the queue would land a change no longer what was
+// enqueued. A landing merges via `push`, and applies as nothing unless the
+// change is at the head its home found. An ended change's stored readiness is
+// cleared ([clearReadiness]): none of its home's records refreshes it again.
 func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyContext, payload any) (int, error) {
 	repoID, changeID, write, err := lifecycleWrite(payload)
 	if err != nil {
@@ -146,12 +126,10 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 			next.title = *p.Title
 		}
 		if p.Body != nil {
-			// Measured through body, the declared variable, never p: a type
-			// switch's variable is a value internal/sourcetree/decltype
-			// cannot type, and the cache's writers gate
-			// (TestNothingButSyncWritesACache) refuses one handed to a call
-			// it cannot type either, len among them, since it cannot tell
-			// it from a gitproc.Cmd.
+			// Measured through body, never p: internal/sourcetree/decltype
+			// cannot type a type switch's variable, and the cache's writers
+			// gate (TestNothingButSyncWritesACache) refuses one handed to any
+			// call, len included, since it cannot tell it from a gitproc.Cmd.
 			body = p.Body
 			next.bodyBytes = int64(len(*body))
 		}
@@ -192,9 +170,8 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 			return changeNotApplied(ctx, at, repoID, changeID, "who reopened it names no seat")
 		}
 		next.state, next.closeReason, next.closedAt = ChangeStateOpen, "", sql.NullInt64{}
-		// THE SOURCE MOVED WHILE THE CHANGE WAS CLOSED: what it proposes is
-		// the branch's head now, a revision of its own, made by the record
-		// that brought it back — as a change record's first is its open's.
+		// The source moved while closed: its head now is a revision of its
+		// own, made by the reopen.
 		if p.Head != row.head {
 			next.head, next.revision, revision = p.Head, row.revision+1, &p
 		}
@@ -261,10 +238,9 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 	return rows + 1 + tallied, nil
 }
 
-// leavesQueue is how a write of a change's lifecycle ends its live queue
-// entry, if its queue holds one: a close, a draft — made one, never one made
-// ready — a retarget and a landing each dequeue it, naming which; "" for a
-// write that leaves the change what was enqueued.
+// leavesQueue is how a lifecycle write ends the change's live queue entry: a
+// close, a move to draft (never out of one), a retarget and a landing dequeue
+// it; "" for a write that leaves the change what was enqueued.
 func leavesQueue(payload any) (QueueState, QueueEndReason) {
 	switch p := payload.(type) {
 	case ChangeClose:
@@ -281,12 +257,9 @@ func leavesQueue(payload any) (QueueState, QueueEndReason) {
 	return "", ""
 }
 
-// lifecycleWrite is what a write of a change's lifecycle names — its
-// repository and its change — and the [changeWrite] it makes of the change's
-// row, which sets the columns its op moves and no other: an edit its text,
-// and its work item only where it sets or clears one; a retarget its target;
-// a draft's state, a close and a reopen the change's state with a close's
-// columns and the head a reopen moves; a landing its state with a merge's.
+// lifecycleWrite is the repository and change a lifecycle write names, and the
+// [changeWrite] it makes of the row: an edit's touches the work item only where
+// it sets or clears one.
 func lifecycleWrite(payload any) (repoID, changeID string, write changeWrite, err error) {
 	switch p := payload.(type) {
 	case ChangeEdit:
@@ -309,11 +282,10 @@ func lifecycleWrite(payload any) (repoID, changeID string, write changeWrite, er
 	return "", "", "", fmt.Errorf("it carries a %T, which is no write of a change's lifecycle", payload)
 }
 
-// pushWrite is the [changeWrite] a push record makes of a change its entries
-// reached: an insert of one it opened, whatever its later entries did to it,
-// since the row is new; and of every other what its moves set — a merge's
-// state, a close's, or else its head alone, the one move that leaves a change
-// live.
+// pushWrite is the [changeWrite] a push record makes of a change it reached:
+// an insert of one it opened, whatever later entries did, since the row is
+// new; else a merge's, a close's, or the head alone, the one move that leaves
+// a change live.
 func pushWrite(row *changeRow, opened bool) changeWrite {
 	switch {
 	case opened:
@@ -326,11 +298,9 @@ func pushWrite(row *changeRow, opened bool) changeWrite {
 	return changeHeadMoved
 }
 
-// writeChanges writes rows by w: each row's VALUES are the whole row as the
-// record read and moved it — every NOT NULL column among them, which even a
-// row an upsert finds by its key must bind — in as few statements as the
-// engine's parameters allow ([store.InsertRows]), and what lands of each is
-// what w sets.
+// writeChanges writes rows by w in as few statements as the parameters allow
+// ([store.InsertRows]). VALUES carry the whole row, since even a row an upsert
+// finds by its key must bind every NOT NULL column; what lands is what w sets.
 func writeChanges(ctx context.Context, tx store.Execer, maxVariables int, w changeWrite,
 	rows []*changeRow) error {
 
@@ -346,46 +316,18 @@ func writeChanges(ctx context.Context, tx store.Execer, maxVariables int, w chan
 	return err
 }
 
-// write writes what a push record's [changeBook] made of the changes its
-// entries reached — each change's row, inserted for a change the record
-// opened and written back over every other by what the record did to it
-// ([pushWrite]), its revisions, its new authors, the descriptions of the
-// changes it opened, the live queue entries and the stored readiness of the
-// changes it ended ([clearReadiness]) and, where it opened any, the
-// repository's next number —
-// and answers the rows it wrote, [changeBook.rowCount]: the push apply's half
-// of the book, here in the applier's own files, while the model it writes
-// from (revisions.go) is the decide's as much as the apply's. An insert's
-// conflict on a key is a skip, never an abort, which would stall the log on
-// every node: no record this build applies meets one, since the book adds
-// only what the rows it read do not hold, and a change it opens takes an id
-// derived from a push no row holds yet ([PushChangeID]). A moved change's
-// conflict is its write.
-//
-// # Every table in as few statements as the engine's parameters allow
-//
-// This is the push apply, on every data node, holding the replicated estate's
-// one write lane, and one record can move some 1 300 changes — a bulk
-// rebase's fast-forwards by their author, three rows each — so a statement a
-// change is the cost that grows with a record. The change rows go through
-// [store.InsertRows], a statement a chunk of each kind of write, as the
-// revisions and authors beside them and the refs the same apply writes do: a
-// change the record moved is written back as an upsert's conflict, found by
-// the very key it conflicts on. Written one UPDATE a change, a record of a
-// bulk rebase held the lane past statelog.ApplyTxTimeBudget (doc.go's
-// measured section).
-//
-// # A head move rewrites one index entry
-//
-// Each change is written by what the record did to it, and its write sets
-// nothing else ([changeWrite]), since the driver rewrites a row's entry in
-// every index whose key or predicate holds a column a write names, whatever
-// the value. So the changes whose heads the record moved and nothing more —
-// nearly every change a record reaches, a push to a change's source being the
-// write a change meets most — are written by [changeHeadMoved], which
-// rewrites one entry each, in code_changes_target_idx, the one index the head
-// is in; and the few it merged or closed by the write that moves their state,
-// which rewrites every index the state is in.
+// write writes what a push record's [changeBook] made of the changes it
+// reached (rows by [pushWrite], revisions, new authors, opened changes' bodies,
+// ended changes' queue entries and readiness, the next number) and answers
+// [changeBook.rowCount]. An insert's key conflict is a skip, never an abort
+// that would stall the log on every node; none occurs, since the book adds only
+// what its rows lack and an opened change's id is new ([PushChangeID]). Every
+// table goes in as few statements as the parameters allow ([store.InsertRows]),
+// a moved change as an upsert's conflict: one record can move ~1 300 changes
+// on the estate's one write lane, and an UPDATE a change held it past
+// statelog.ApplyTxTimeBudget (doc.go's measured section). Each write sets only
+// what the record moved ([changeWrite]), so a head move, nearly every change
+// reached, rewrites only code_changes_target_idx beside what every write does.
 func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables int) (int, error) {
 	w := &b.writes
 	byWrite := map[changeWrite][]*changeRow{}
@@ -439,9 +381,8 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 		}); err != nil {
 		return 0, fmt.Errorf("gitlet: write the descriptions of the changes opened: %w", err)
 	}
-	// THE MOVED CHANGES LEAVE THEIR QUEUES: a head moved ejects a live
-	// entry, a merge or a close dequeues it — each list one statement a
-	// chunk, a seek of code_queue_change_idx a change.
+	// A head move ejects a live entry, a merge or a close dequeues it: one
+	// statement a chunk, a seek of code_queue_change_idx a change.
 	ejected, merged, closed := b.queueEnds()
 	for _, end := range []struct {
 		ids    []string
@@ -458,14 +399,12 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 			return 0, err
 		}
 	}
-	// THE MERGED AND THE CLOSED CHANGES' STORED READINESS CLEARED, one
-	// statement for them all, counted by the book as a row each.
+	// One statement for every ended change; the book counts a row each.
 	if _, err := clearReadiness(ctx, tx, b.ended()); err != nil {
 		return 0, err
 	}
-	// THE REPOSITORY'S NEXT NUMBER, moved on past every change the record
-	// opened, in the repository's own row — which the record writes anyway,
-	// its counters, so this costs the record no row of its budget.
+	// The repository's row is written anyway for its counters, so the next
+	// number costs the record no row of its budget.
 	if len(byWrite[changeOpened]) > 0 {
 		if _, err := tx.ExecContext(ctx, nextChangeAfterSQL, b.next, b.repo); err != nil {
 			return 0, fmt.Errorf("gitlet: move the repository's next change on: %w", err)
@@ -484,64 +423,21 @@ func changeNotApplied(ctx context.Context, at applyContext, repoID, changeID, wh
 }
 
 // changeWrite is how a record writes a change's row: the conflict clause of
-// the statement [writeChanges] issues, whose VALUES are the whole row — the
-// insert of a change the record opens, which skips a conflict on its key, or
-// an upsert found by that key, written back over the row the record read,
-// which SETS WHAT ONE KIND OF WRITE MOVES AND NO OTHER COLUMN.
-//
-// # Why a write sets only what it moves
-//
-// The pinned driver keeps an index by the columns a write NAMES, never by the
-// values it writes: for every index of code_changes whose key or partial
-// predicate holds a column the write sets, it deletes the row's entry and
-// inserts it again — a leaf of that index more in the record's commit, on
-// every data node — where no value of the key moved as much as where one did,
-// a partial index's predicate deciding only whether the row has an entry to
-// delete and one to insert. One write that set every column a change's
-// lifecycle may move kept seven of the table's eight secondary indexes on
-// every write of a change, and the push's upsert that set every column a push
-// may move kept six on every head move, rewriting five entries of a live
-// change's: the head move is the write a change meets most — every push to
-// its source branch, up to some 1 300 changes in one record — and the head is
-// in the key of one index alone, code_changes_target_idx. So each kind of
-// write sets only the columns it moves, and two kinds share one write only
-// where they rewrite the same indexes:
-//
-//   - changeHeadMoved, a push's move of a live change's source: its head and
-//     revision — code_changes_target_idx, the one index the head is in.
-//   - changeStateMoved, a draft's state, a close, a reopen, and a push's close
-//     of a change whose source it deleted: the state with a close's columns,
-//     and the head and revision that a reopen, or the record's own earlier
-//     move of the source, moved — every index whose key or predicate holds
-//     the state (the open and target indexes, partial on the live states, and
-//     the state, owner and repository-state listings), among them the one the
-//     head is in.
-//   - changeMerged, a landing, a push's merge and a merge record's: the state
-//     with a merge's columns — who merged it through its gate, and a person's
-//     override, among them, which no index holds — and the head and revision
-//     — those, and code_changes_merge_idx.
-//   - changeEdited, an edit of the title or the description: no index of its
-//     own.
-//   - changeItemEdited, an edit that sets or clears the work item, beside the
-//     text: code_changes_work_idx.
-//   - changeRetargeted, a retarget: code_changes_target_idx.
-//
-// EVERY WRITE moves the change's version, position and updated_at, the last
-// the key of code_changes_updated_idx (replicated 0147): what a listing
-// narrowed to a window walks. So each kind rewrites that index beside the
-// ones named above — a head move two entries where it rewrote one — the cost
-// of saying when a change last moved, which no column already said.
-// A move of a live change also rewrites its two entries in the live indexes by
-// last move (replicated "A live change is listed by when it last moved"), so a
-// live change's head move rewrites five, code_changes_position_idx included.
-// TestAChangeWriteRewritesOnlyTheIndexesItMoves holds each kind to the
-// indexes its plan rewrites, and the push apply's head moves to those five: an
-// index added on a column a write sets — the head's above all — is a decision
-// that test makes somebody take, never a cost nobody saw.
+// [writeChanges]'s statement, whose VALUES are the whole row — an insert that
+// skips a conflict on its key, or an upsert that SETS WHAT ONE KIND OF WRITE
+// MOVES AND NO OTHER COLUMN. The pinned driver rewrites a row's entry in every
+// index whose key or partial predicate holds a column the write NAMES, moved
+// or not, and the head move (every push to a source, ~1 300 changes a record)
+// is in code_changes_target_idx alone; so two kinds share a write only where
+// they rewrite the same indexes. Every write also moves version, position and
+// updated_at (code_changes_updated_idx, and a live change's two last-move
+// entries: replicated 0147, 0173), so a live head move rewrites five.
+// TestAChangeWriteRewritesOnlyTheIndexesItMoves holds each kind to its
+// indexes: an index on a column a write sets is a decision it forces.
 type changeWrite string
 
 // The kinds of write of a change's row, each the conflict clause of its
-// statement ([changeWrite] says what each rewrites).
+// statement ([changeWrite]).
 const (
 	changeOpened    changeWrite = `ON CONFLICT (id) DO NOTHING`
 	changeHeadMoved changeWrite = `ON CONFLICT (id) DO UPDATE SET head_oid = excluded.head_oid,
@@ -569,11 +465,9 @@ const (
 )
 
 // The lifecycle's writes beside a change's row. A statement that reads a row
-// to find the ones it writes is registered in plan_test.go — the repository's
-// next change and its counters by its key, and a change's body by its own —
-// and the inserts locate no row, nor an upsert, whose conflict is found by
-// the key its VALUES carry: a conflict on a key is a skip or the write, never
-// an abort, which would stall the log on every node.
+// to find the ones it writes is registered in plan_test.go; an insert or an
+// upsert locates none, its conflict found by the key its VALUES carry — a skip
+// or the write, never an abort that would stall the log on every node.
 const (
 	nextChangeSQL = `SELECT next_change FROM code_repos WHERE id = ?`
 	openChangeSQL = `INSERT INTO code_changes (id, repo_id, number, title, body_bytes, state, source_ref, target_ref,
@@ -597,10 +491,8 @@ const (
 			working_for)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (change_id, n) DO NOTHING`
 
-	// insertChangesSQL and changeValuesSQL are change rows as [writeChanges]
-	// writes them, a chunk a statement: every column [changeColumns] names,
-	// in its order — whole, since a NOT NULL column without a default is one
-	// even a row an upsert finds by its key must bind.
+	// insertChangesSQL and changeValuesSQL are [writeChanges]' statement, a
+	// chunk each: every column [changeColumns] names, in its order.
 	insertChangesSQL = `INSERT INTO code_changes (` + changeColumns + `) VALUES `
 	changeValuesSQL  = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 )

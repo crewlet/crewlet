@@ -14,39 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// place_work_item: a board drag, as an operator reaches it. Never a move to
-// another project, which re-keys what it carries and is `move_work_item`
-// (workmove.go): the two differ in every property a tool is registered with —
-// this one is a person's and idempotent, that one a seat's behind a lead's
-// gate and not — so one name could not be both.
-//
-// # Why no seat holds it
-//
-// A board's manual order is furniture a person arranges — where a card sits
-// says what somebody wants looked at first, and nothing about what the work
-// is. A seat that could rearrange a shared board would be one more thing a
-// founder supervises for no delivery, which is the reason the saved-view tools
-// are the operator's too. The LANE half is not a seat's loss: a status change
+// place_work_item: a board drag, as an operator reaches it. A move to another
+// project is `move_work_item` (workmove.go): a seat's, behind a lead's gate and
+// not idempotent, where this is a person's and idempotent. No seat holds this
+// one: a board's manual order is furniture a person arranges, and a lane change
 // is `update_work_item`'s, which every seat holds.
 //
-// # Neighbours, never keys
-//
-// The call names the card it was dropped BESIDE, and the tracker mints the
-// key inside its own write — from the order the broker arbitrates, not from
-// the board the caller last rendered. A key a caller computed is the guess the
-// write authority forbids, and two people dragging in one project at once
-// would both land between two keys that no longer bound anything.
-//
-// # The lane is sent as dropped
-//
-// The drop's `status` is passed to the tracker AS SENT, never compared with
-// the card first. A retry of a drag whose lane change already landed reads the
-// card as in its new lane; a tool that dropped the status there conditioned
-// the placement on the version it read BEFORE that change and was refused as
-// stale by nobody but itself. The tracker answers the lane step of a retry
-// from its ledger, and decides a drop into the lane the card is already in to
-// write nothing on the task — so sending it is always safe, and the gate is on
-// the OPERATION rather than on the state it produced ([worklet.Place]).
+// The call names the card it was dropped BESIDE and the tracker mints the key
+// inside its own write: two concurrent drags with caller-computed keys would
+// land between keys that no longer bound anything. `status` is sent AS DROPPED,
+// never compared with the card first, or a retry whose lane change landed
+// refuses itself as stale. The tracker answers a retry from its ledger and
+// writes nothing for a drop into the card's own lane ([worklet.Place]).
 
 // WorkPlacer is the board-drag write side, declared by the consumer.
 type WorkPlacer interface {
@@ -167,8 +146,7 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return failed(fmt.Sprintf("%q is not a status. The statuses are: %s.",
 				clip(raw), words.And(worklet.Statuses))), nil
 		}
-		// AS SENT — see the file head. The tracker decides a drop into
-		// the lane the card is in to write nothing on the task.
+		// AS SENT — see the file head.
 		place.Status = &status
 	}
 	for _, side := range []struct {
@@ -205,9 +183,8 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Kind: worklet.ChangeStatus, Before: task, After: patched(task, patch),
 		}.Notify(t.deps.Leads)
 	}
-	// ONE OPERATION PER DISTINCT CALL, derived from what was sent — see
-	// [opIDFor]. A retry is the same drag and is answered step by step from
-	// the ledger; the same card dropped somewhere else is another.
+	// ONE OPERATION PER DISTINCT CALL ([opIDFor]): a retry is answered step by
+	// step from the ledger; the card dropped somewhere else is another.
 	opID := opIDFor(actor, t.Name(), "place", task.ID, args)
 	got, err := t.deps.Placer(actor).PlaceTask(ctx, opID, place, notify)
 	if err != nil {
@@ -215,9 +192,8 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if got.Lane.Outcome == statelog.OutcomeUnknown ||
 		got.Order.Outcome == statelog.OutcomeUnknown {
-		// NEVER A RECEIPT FOR A DROP NOBODY CAN SAY LANDED — see
-		// [unknownWrite]. A rank beside the word "unknown" reads as where
-		// the card now sits, and a person's board would draw it there.
+		// NEVER A RECEIPT FOR A DROP NOBODY CAN SAY LANDED ([unknownWrite]): a
+		// rank beside "unknown" reads as where the card sits, and a board draws it.
 		unvouched := (got.Lane.Outcome == statelog.OutcomeUnknown && got.Lane.Unvouched) ||
 			(got.Order.Outcome == statelog.OutcomeUnknown && got.Order.Unvouched)
 		return unknownWrite(actor, name, dropped(current, args),
@@ -230,17 +206,15 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	answer := withOperation(ReceiptOf(map[string]any{
 		"status": task.Status, "placed": got.Unplaced == nil,
-		// THE ITEM'S VERSION AFTER THE CALL, which is what the board's
-		// next if_match on this card states: the lane change moves it and
-		// the placement never does.
+		// THE VERSION AFTER THE CALL, the board's next if_match: the lane
+		// change moves it, the placement never does.
 		"version": got.Version,
 	}, current), actor)
 	if place.Status != nil {
 		answer["status"] = *place.Status
 	}
-	// THE CALL ANSWERS FOR BOTH RECORDS — see [callOutcome] — and a drop
-	// that appended nothing (the card already sat there) is `applied` with
-	// nothing to wait for.
+	// THE CALL ANSWERS FOR BOTH RECORDS ([callOutcome]); a drop that appended
+	// nothing is `applied` with nothing to wait for.
 	var call callOutcome
 	call.add(got.Lane.Result)
 	call.add(got.Order.Result)
@@ -248,11 +222,9 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if got.Rank != "" {
 		answer["rank"] = string(got.Rank)
 	}
-	// THE RESIDUE IS REPORTED, never swallowed: the lane changed and the
-	// card did not take its place, so the honest answer names both rather
-	// than failing a call whose status write landed. A CAVEAT, never a
-	// field of the receipt: the sentence saying why is a model's, and the
-	// act route answers a person a caveat's own words (ADR-0060).
+	// THE RESIDUE IS REPORTED, never failed: the status write landed. A
+	// CAVEAT, never a receipt field, since the act route answers a person in a
+	// caveat's own words (ADR-0060).
 	var caveats []caveat.Caveat
 	if got.Unplaced != nil {
 		caveats = append(caveats, caveat.LaneChangedNotPlaced(current.Named(),
@@ -263,9 +235,8 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // dropped says what a drag asked for, as the clause an unknown answer names:
-// "ENG-4 dropped before ENG-2 into in_progress" — the card named as prose names
-// a task ([worklet.TaskDetail.Named]), since a key another task claimed first
-// would name that one.
+// "ENG-4 dropped before ENG-2 into in_progress", the card named by
+// [worklet.TaskDetail.Named], since a key another task claimed would name that.
 func dropped(card worklet.TaskDetail, args map[string]any) string {
 	what := card.Named() + " dropped"
 	if ref := strings.TrimSpace(argString(args, "before")); ref != "" {

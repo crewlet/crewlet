@@ -42,15 +42,11 @@ func workedThroughKey(ts string) string {
 	return workkey.Derive([]string{"chat-message", "slack", "C1", ts})
 }
 
-// THE WORKED-THROUGH RECORD, end to end through the dispatcher.
-//
-// M1's turn fails before anything leaves the engine and is NAKed, which on the
-// only broker this engine ships returns it BEHIND the conversation's newer
-// mail. So M2 runs first, and its turn is shown M1 waiting in the thread and
-// answers the thread as it stands — which the turn reports, and the dispatch
-// records as worked through. When M1 comes round it is dropped as worked,
-// with a record saying a later turn answered it, rather than run as a turn
-// that answers it a second time, out of order.
+// THE WORKED-THROUGH RECORD, end to end through the dispatcher. M1's turn
+// fails and is NAKed, returning BEHIND the newer mail, so M2's turn is shown
+// M1 waiting and answers the thread, and the dispatch records M1 as worked
+// through. When M1 comes round it is dropped with a record saying a later
+// turn answered it, not answered again out of order.
 func TestAMessageALaterTurnAnsweredInItsThreadIsNotRunAgain(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -165,20 +161,15 @@ func chatWake(id string, op chatlet.OpKind, trigger string, whom *types.WorkingF
 }
 
 // AN EDIT'S WAKE IS DROPPED ONLY WHERE A TURN FOR ITS REQUESTER WAS SHOWN THAT
-// EDIT, end to end through the dispatcher.
+// EDIT, end to end through the dispatcher. A turn woken by bea's msg-3,
+// written for ada, was shown bea's msg-1 waiting at edit e1 and reports its
+// post's key and version e1's key for ada. msg-1's post redelivery is dropped,
+// and so is e1's wake for ada, with a reason naming the edit; e1's wake for
+// omar runs (owed a turn for omar), as do a later edit e2 (words no turn saw)
+// and an edit's wake with no trigger position (no version to match).
 //
-// A turn woken by bea's message msg-3, written for ada, was shown bea's earlier
-// msg-1 waiting at its edit e1, and reports it: its post's key, and the key of
-// version e1 for ada. A mark of the message alone used to drop every later
-// wake of it, an edit made after the read included, whose words no turn saw.
-// Now the redelivery of msg-1's post is dropped, and so is e1's wake made for
-// ada, with a reason that names the edit. But e1's wake made for omar runs,
-// owed a turn worked for omar; so does a later edit e2; and so does an edit's
-// wake that carries no trigger position, since nothing says which version it
-// is.
-//
-// Mutation: key an edit's wake by the message's key, as main did, or give the
-// edit's skip the post's reason, and a row goes red.
+// Mutation: key an edit's wake by the message's key, or give the edit's skip
+// the post's reason, and a row goes red.
 func TestAnEditsWakeIsDroppedOnlyWhereATurnForItsRequesterWasShownThatEdit(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

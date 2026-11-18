@@ -21,7 +21,7 @@ import (
 // ON A MEMBER'S OWN CLIENT (`via=member`), as a data node reaches the bucket,
 // and THROUGH A LEAF (`via=leaf`), as a node without `data` does: its broker
 // runs no JetStream and every piece crosses the leaf link — opened across a
-// link, as the engine opens a leaf's at the shipped lease, so its puts share
+// link, as the engine opens a leaf's, so its puts share
 // the window a link is given there ([natsobj.LinkWindow]).
 //
 // ONE MEMBER, never a cluster: standing a cluster up here would make this

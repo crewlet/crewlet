@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
@@ -17,20 +16,14 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
-// A NODE'S HYDRATION READS ITS LINK'S METER.
+// A NODE'S HYDRATION READS ITS LINK'S METER: hydration across a link tells a
+// replay held behind the link's other traffic from a stalled copy by the meter
+// the queue makes on the connection it dials (a leaf's data link, any external
+// cluster's). So the backends carry that meter into the memory sync: a member
+// hands it no link, a leaf and an external node their own queue's meter.
 //
-// A seat's hydration across a link tells a replay held behind the link's
-// other traffic from one whose copy stopped answering by the link's own
-// meter, which the queue makes on the connection it dials (a leaf's data
-// link, every connection to an external cluster). So the node's backends
-// carry the queue's meter, and the memory sync is configured from them: a
-// member, a leaf joined to it and a node on an external cluster, each opened
-// as a node opens its stream, hand the memory sync no link, the leaf's own
-// meter and the external dial's own meter.
-//
-// Mutant: the memory sync's configuration leaves the link out — the leaf
-// hands it none. Mutant: the backends carry no meter — the same. Mutant: the
-// external branch's backends carry no meter — the external node hands none.
+// Mutants: the memory sync's configuration leaves the link out, or the
+// backends (the external branch's included) carry no meter.
 func TestANodesHydrationReadsItsLinksMeter(t *testing.T) {
 	t.Parallel()
 	open := func(b *bootstrapOf) *Backends {
@@ -106,9 +99,9 @@ func TestANodesHydrationReadsItsLinksMeter(t *testing.T) {
 		want     memsync.Link
 		acrossIt bool
 	}{
-		{"the member", memoryConfig(&member, onMember, time.Second), nil, false},
-		{"the leaf", memoryConfig(&leaf, onLeaf, time.Second), q.LinkMeter(), true},
-		{"the external node", memoryConfig(&external, onExternal, time.Second), eq.LinkMeter(), true},
+		{"the member", memoryConfig(&member, onMember), nil, false},
+		{"the leaf", memoryConfig(&leaf, onLeaf), q.LinkMeter(), true},
+		{"the external node", memoryConfig(&external, onExternal), eq.LinkMeter(), true},
 	} {
 		if c.cfg.Link != c.want || c.cfg.AcrossLink != c.acrossIt {
 			t.Errorf("%s's memory sync reads a link %t (its queue's meter: %t), across a link %t; "+

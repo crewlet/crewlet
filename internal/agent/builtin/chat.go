@@ -23,14 +23,9 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// Chatlet's tool names, re-exported from the package that owns the
-// vocabulary.
-//
-// DECLARED IN internal/chatlet rather than here, for the reason the tracker's
-// are: that package's own notification prompt NAMES them — it tells a woken
-// seat which tool to reach for — and a constant defined here and read there
-// is an import cycle. The domain owns its vocabulary; this package implements
-// it.
+// Chatlet's tool names, re-exported from internal/chatlet, which declares them
+// because its notification prompt names them: defined here and read there
+// would be an import cycle.
 const (
 	PostMessageTool    = chatlet.PostMessageTool
 	ReplyInThreadTool  = chatlet.ReplyInThreadTool
@@ -43,25 +38,18 @@ const (
 	LeaveChannelTool   = chatlet.LeaveChannelTool
 )
 
-// ChatWrites are the three that count as a DELIVERY.
-//
-// SAYING SOMETHING IS THE ANSWER on this surface — in the thread, in the room
-// or privately — and without this the delivery gate sees only builtins,
-// concludes the turn reached nobody, and corrects it into another round for
-// having done exactly what it was woken to do. See [chatlet.WriteTools] for why
-// a reaction and a membership change are not here.
+// ChatWrites are the three that count as a DELIVERY: saying something is the
+// answer on this surface, and without them the delivery gate would correct a
+// turn into another round for doing what it was woken to do. See
+// [chatlet.WriteTools] for why a reaction and a membership change are not here.
 func ChatWrites() []string { return chatlet.WriteTools() }
 
 // ChatReader is what these tools need from chat's read side.
 //
-// THE LEVEL IS PART OF THE CALL, on [PageReader]'s reasoning: a seat reads at
-// [seatReadLevel] — `linearizable` — because it must see its own writes, and
-// that is what stops a seat that has just posted from reading the room, not
-// finding its message and posting again.
-//
-// EVERY READ IS FOR A VIEWER, the seat it is answered as: a private room's
-// contents are its membership's, and the reader answers a room the viewer may
-// not read as NOT FOUND rather than confirming it exists.
+// The level is part of the call, on [PageReader]'s reasoning: a seat reads at
+// [seatReadLevel] (`linearizable`), since one that cannot find its own post
+// posts again. Every read is for a viewer, and a room the viewer may not read
+// answers NOT FOUND rather than confirming it exists.
 type ChatReader interface {
 	Channels(ctx context.Context, viewer string, q chatlet.ChannelsQuery,
 		fresh statelog.Freshness) (chatlet.ChannelListing, error)
@@ -76,32 +64,26 @@ type ChatReader interface {
 		fresh statelog.Freshness) (chatlet.ChannelDetail, error)
 	Messages(ctx context.Context, viewer string, q chatlet.TranscriptQuery,
 		fresh statelog.Freshness) (chatlet.Transcript, error)
-	// Thread is one thread from its root — and, asked of any message as its
-	// root, that message: a reply's own thread is empty, and its root read
-	// is the message itself, which is how an edit and a delete learn whose
-	// words they would touch ([ChatDeps.remarkAuthority]).
+	// Thread is one thread from its root. Asked of a reply as root, it
+	// answers that message alone: how an edit and a delete learn whose words
+	// they touch ([ChatDeps.remarkAuthority]).
 	Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
 		fresh statelog.Freshness) (chatlet.Thread, error)
 }
 
 // ChatWriter is what these tools need from chat's write side.
 //
-// THE ACTOR IS A PARAMETER rather than the seam being resolved per actor, and
-// that is the domain's own shape rather than a choice made here: one node's
-// chat serves every seat and every person through one write path, so the
-// party a write acts as travels per call. It is the knowledge base's
-// arrangement, not the tracker's — see [PageWriter] — and so is the KEY every
-// gesture's operation is derived from: it rides on the actor
-// ([chatlet.Actor.OpKey]), set from the call ([callOpKey]).
+// The actor is a parameter because one node's chat serves every seat and
+// person through one write path ([PageWriter]'s arrangement). Every gesture's
+// operation key rides on it ([chatlet.Actor.OpKey], set by [callOpKey]).
 type ChatWriter interface {
 	Post(ctx context.Context, actor chatlet.Actor, channelID string,
 		in chatlet.NewMessage) (chatlet.Written, error)
 	Reply(ctx context.Context, actor chatlet.Actor, channelID, replyTo string,
 		in chatlet.NewMessage) (chatlet.Written, error)
-	// OpenDirect reports whether it CREATED the conversation beside the
-	// room itself, because "it was already open" is not a failure here —
-	// the id is derived from the participants, so the loser of a race is
-	// handed the room the winner made.
+	// OpenDirect also reports whether it CREATED the conversation: already
+	// open is no failure, since the id derives from the participants and a
+	// race's loser is handed the winner's room.
 	OpenDirect(ctx context.Context, actor chatlet.Actor, participants []string) (
 		chatlet.Written, bool, error)
 	React(ctx context.Context, actor chatlet.Actor, channelID, messageID,
@@ -111,9 +93,9 @@ type ChatWriter interface {
 	Join(ctx context.Context, actor chatlet.Actor, channelID string) (chatlet.Written, error)
 	Leave(ctx context.Context, actor chatlet.Actor, channelID string) (chatlet.Written, error)
 
-	// The gestures only a person makes — see chatoperator.go. They are on
-	// the one writer rather than a second seam, because they are the same
-	// store's and a seat's registry simply never offers them.
+	// The gestures only a person makes (chatoperator.go): on this writer
+	// because they are the same store's, and a seat's registry never offers
+	// them.
 	CreateChannel(ctx context.Context, actor chatlet.Actor,
 		in chatlet.NewChannel) (chatlet.Written, error)
 	PatchChannel(ctx context.Context, actor chatlet.Actor, channelID string,
@@ -135,25 +117,19 @@ type ChatCursors interface {
 		delta coord.ChatReadDelta) (coord.ChatReadState, error)
 }
 
-// ChatSearcher ranks a company's chat FOR ONE VIEWER.
+// ChatSearcher ranks a company's chat FOR ONE VIEWER: the estate router's chat
+// search. The visible set is not an argument: the seam resolves which rooms the
+// viewer may read, since it holds both the membership rows and the index, and a
+// tool that passed the set could pass the wrong one.
 //
-// Declared by the consumer and kept to the one method these tools call: the
-// estate router's chat search, which resolves the rooms the viewer may read
-// beside the index on the one data node that answers. THE VISIBLE SET IS NOT
-// AN ARGUMENT, and that is the point: resolving which rooms somebody may read
-// is the seam's job, because it is the half that holds both the membership
-// rows and the index — and a tool that passed the set would be a tool that
-// could pass the wrong one.
-//
-// Nil on a build with no chat index, and the tool is then OMITTED rather than
-// refusing at the call, on [Register]'s own rule.
+// Nil on a build with no chat index omits the tool ([Register]'s rule).
 type ChatSearcher interface {
 	Search(ctx context.Context, q estate.ChatQuery) (estate.ChatSearchAnswer, error)
 }
 
-// THE ESTATE ROUTER'S CHAT IS EACH SEAM, held at compile time: it is what
-// every surface hands these tools, on every node with or without data, and a
-// seam whose method drifted from it would fail only where a node is wired.
+// The estate router's chat is each seam, held at compile time: every surface
+// hands it to these tools, and a drifted method would fail only where a node
+// is wired.
 var (
 	_ ChatReader   = estate.Chat{}
 	_ ChatWriter   = estate.Chat{}
@@ -165,95 +141,60 @@ type ChatDeps struct {
 	Reader ChatReader
 	Writer ChatWriter
 
-	// Search ranks messages by what they say. A VALUE rather than a
-	// function of the actor, unlike the writer: a search reads, and what
-	// may be read is decided from the viewer it is handed.
+	// Search ranks messages by what they say. A value, not a function of the
+	// actor: what may be read is decided from the viewer it is handed.
 	Search ChatSearcher
 
-	// Authorize decides the checks a tool can only take after a read — a
-	// room's archive, whose remark an edit or a delete touches — in the
-	// shape and for the reason [WorkDeps.Authorize] states. Pushed down by
-	// [Register] and [OperatorTools].
+	// Authorize decides the checks a tool can only take after a read (a
+	// room's archive, a message's author), as [WorkDeps.Authorize] does.
+	// Pushed down by [Register] and [OperatorTools].
 	Authorize Authorizer
 
 	// Mentions resolves the handles a message names, so an @-mention wakes
-	// the person the author meant. Nil resolves nothing, which degrades to
-	// a message that reaches the room's own subscribers and nobody
-	// specifically.
+	// the person meant. Nil resolves none: the message reaches only the
+	// room's own subscribers.
 	Mentions MentionResolver
 
-	// ReadState is this viewer's read state: how far they have read in
-	// each room ([coord.ChatReadState.Cursors], keyed on channel id against
-	// a packed position — what [chatlet.ChannelsQuery.Cursors] counts above),
-	// which rooms they have muted, and when their do-not-disturb ends.
+	// ReadState is this viewer's whole read state: cursors per room
+	// ([coord.ChatReadState.Cursors], what [chatlet.ChannelsQuery.Cursors]
+	// counts above), muted rooms and do-not-disturb. Whole, because a
+	// person's assistant reads the dashboard's rail through `list_channels`,
+	// and a muted room handed over as unread is a backlog they silenced.
 	//
-	// THE WHOLE STATE, not the cursors alone, because `list_channels` is
-	// what a person's own assistant reads the dashboard's rail through: a
-	// room the person muted raises no badge there, and handed over as
-	// ordinary unread here it is a backlog the assistant offers to work
-	// through that the person deliberately silenced.
+	// Nil, a seat's case (a cursor is a person's attention), counts nothing,
+	// never every tail as unread for a model to catch up on; no cursors at
+	// all is a person who opened nothing, to whom every tail IS unread.
 	//
-	// NIL IS THE ORDINARY CASE AND IT IS NOT AN ABSENCE OF DATA. A read
-	// cursor is a PERSON's attention, written when somebody looks at a
-	// room; a seat is woken rather than browsing and has none. With this
-	// nil the listing carries no unread counts at all, which is the honest
-	// answer — the alternative is reporting every room's whole tail as
-	// unread, and a model told it has ninety-nine unread messages in a
-	// room it was never reading will try to catch up on them. The
-	// operator's surface sets it, because its caller is a person.
-	//
-	// THREE ANSWERS, NOT TWO: cursors (none at all is somebody who has
-	// opened nothing yet, and every room's tail IS unread to them), or an
-	// error. An error is not a cursor at zero — counted from zero, every
-	// room in the listing would read as unread to a person who has read
-	// all of it — so a listing whose read state could not be read carries
-	// no counts and says why, as the dashboard's own rail does.
+	// An error is not a cursor at zero (that reads every room as unread): the
+	// listing carries no counts and says why, as the rail does.
 	ReadState func(ctx context.Context, viewer string) (coord.ChatReadState, error)
 
-	// Cursors WRITES a person's read state — how far they read in each
-	// room, what they muted, whether they are in do-not-disturb — and is
-	// what `mark_chat_read` is served over. Nil omits that tool, which is
-	// every seat's surface: a cursor is a person's attention, and a seat
-	// has none.
+	// Cursors writes a person's read state (cursors, mutes, do-not-disturb)
+	// for `mark_chat_read`. Nil omits that tool, as on every seat's surface.
 	//
-	// ITS ERROR IS THE COORDINATION STORE'S, RETURNED AS IT IS, and it has
-	// three answers the tool tells apart by sentinel alone: a flush the
-	// merge refused ([coord.ErrInvalidReadState], the caller's to change,
-	// said to the caller in the merge's own words through
-	// [coord.ReadStateSentence]); a flush sent whose answer was lost
-	// ([coord.ErrWriteUnknown], which may have landed, answered `unknown`
-	// and safe to repeat, because the merge is idempotent); and any other
-	// error, a store that could not take it and changed nothing (this
-	// node's condition or fault). Re-worded, a sentinel is lost — a
-	// refusal that can never land reads "try again", and a flush that may
-	// have landed reads "nothing was recorded".
+	// Its error is the coordination store's, returned as it is: the tool
+	// tells three answers apart by sentinel alone. [coord.ErrInvalidReadState]
+	// is the caller's to change ([coord.ReadStateSentence]);
+	// [coord.ErrWriteUnknown] may have landed, answered `unknown` and safe to
+	// repeat (the merge is idempotent); anything else changed nothing (this
+	// node's condition or fault). Re-worded, a sentinel is lost.
 	Cursors ChatCursors
 
 	// Now stamps a read-state write ([coord.ChatReadDelta.At]). Nil is the
 	// wall clock, in UTC.
 	Now func() time.Time
 
-	// Actor decides who a write is attributed to, and — because a private
-	// room's contents are decided by its membership — who a READ is served
-	// as. Nil takes the turn's seat; the operator surface sets it. See
-	// [WorkDeps.Actor] for why this is a seam rather than a second copy of
-	// these tools.
-	//
-	// AND IT CARRIES THE CALLER'S OPERATION KEY where the caller's
-	// transport names one, exactly as [PageDeps.Actor] does: a surface that
-	// takes an `Idempotency-Key` sets it as [chatlet.Actor.OpKey] on the actor
-	// it returns, and the store derives every gesture's id from it, bound
-	// to what that gesture says. In a turn the key is the turn's
-	// ([callOpKey]), whatever the actor carries.
+	// Actor decides who a write is attributed to and who a read is served as
+	// (a private room's contents are its membership's). Nil takes the turn's
+	// seat; the operator surface sets it. See [WorkDeps.Actor] for why this
+	// is a seam. A surface whose transport takes an `Idempotency-Key` sets it
+	// as [chatlet.Actor.OpKey], as [PageDeps.Actor] does; in a turn the key
+	// is the turn's ([callOpKey]) whatever the actor carries.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (chatlet.Actor, error)
 
 	// Await is handed the position every chat write landed at, so the next
-	// read sees it. See [WorkDeps.Await]: same seam, same reason, and the
-	// same floor the wait happens behind — every surface, the operator's
-	// included, hands the position to the node's session floor, which every
-	// later read and write carries to whichever copy answers it. On this
-	// surface it is the difference between a seat seeing its own message
-	// and posting it twice.
+	// read sees it: [WorkDeps.Await]'s seam, and here what keeps a seat
+	// seeing its own message rather than posting it twice.
 	Await func(ctx context.Context, at statelog.Position) error
 }
 
@@ -266,19 +207,10 @@ func (d ChatDeps) now() time.Time {
 }
 
 // settle hands a chat write's position to [ChatDeps.Await], so the next read
-// sees it.
-//
-// APPLIED AFTER EVERY WRITE AND BEFORE NO READ. A write lands on the fleet's
-// log while a read is answered from some copy's rows, so a seat that posts and
-// then reads the room in the same turn must be made to see its own message — a
-// model that cannot find what it just said says it again. Before a read it
-// would buy nothing: there is no position to wait for that the caller did not
-// already produce.
-//
-// Best effort, and a failure — which only a surface that waits here can have
-// — is LOGGED AND IGNORED: the message landed, and telling a model its post
-// failed when it is in the room is the one answer that produces the
-// duplicate.
+// sees it: after every write and before no read, since a model that cannot
+// find what it just said says it again. A failure is LOGGED AND IGNORED: the
+// message landed, and telling a model its post failed is the one answer that
+// produces the duplicate.
 func (d ChatDeps) settle(ctx context.Context, at statelog.Position) {
 	if d.Await == nil || at.Seq == 0 {
 		return
@@ -293,17 +225,11 @@ func (d ChatDeps) settle(ctx context.Context, at statelog.Position) {
 }
 
 // chatActor builds the write's attribution from the TURN, never from
-// arguments: a model that could name its own author could speak as anybody,
-// and a room where that is possible is not a conversation.
-//
-// THE TURN ID IS THE RUN, which is provenance (ADR-0017): an audit walks from
-// a message to the execution that said it. It derives nothing. What makes a
-// re-run turn post once is the call's key ([callOpKey]), whose seed is the
-// unit of work a redelivery reproduces.
-//
-// AND WHOM THE TURN WORKS FOR, from the call's own bound ceiling
-// ([writtenForTurn]): a message that wakes a colleague carries them, so the
-// turn it wakes works for them too (ADR-0109).
+// arguments: a model that could name its own author could speak as anybody.
+// TurnID is provenance (ADR-0017) and derives nothing; a re-run turn posts
+// once by the call's key ([callOpKey]). WrittenFor, whom the turn works for,
+// comes from the call's bound ceiling ([writtenForTurn]), so the turn a
+// message wakes works for them too (ADR-0109).
 func chatActor(ctx context.Context, turn *turnctx.Turn) (chatlet.Actor, error) {
 	seat, err := turn.RequireSeat()
 	if err != nil {
@@ -319,15 +245,11 @@ func chatActor(ctx context.Context, turn *turnctx.Turn) (chatlet.Actor, error) {
 	}, nil
 }
 
-// actor resolves who this call acts as — see [ChatDeps.Actor] — keyed for a
-// write this call makes ([callOpKey]).
-//
-// A ROOM IS SPOKEN IN, AND READ, AS A SEAT, so an actor that names none is
-// refused here, whichever surface built it: the authority table refuses a
-// credential acting as itself every chat verb first (`unseated`), and this is
-// the arm a surface wired without the table would otherwise reach — a login
-// passed to the reader as a viewer reads every public room, and one passed to
-// the writer is refused by the store in its own words.
+// actor resolves who this call acts as ([ChatDeps.Actor]), keyed for a write
+// this call makes ([callOpKey]). A room is spoken in and read as a seat, so an
+// actor naming none is refused whichever surface built it: the authority
+// table refuses it first (`unseated`), and this guards a surface wired without
+// the table, where a login would read every public room.
 func (d ChatDeps) actor(ctx context.Context, turn *turnctx.Turn, tool string,
 	args map[string]any) (chatlet.Actor, *tools.Result) {
 
@@ -356,13 +278,10 @@ func (d ChatDeps) actor(ctx context.Context, turn *turnctx.Turn, tool string,
 	return actor, nil
 }
 
-// chatActorFailure is what a call with nobody to act as reports.
-//
-// [tools.RefusalForbidden]: nothing about the arguments is wrong, and this
-// caller — no seat behind it, no turn, no request a surface resolved — may
-// not speak or read as anybody here. A seat with no turn is told the ordinary
-// sentence; a request that carried nobody is told so. A seat whose turn's
-// requester could not be composed is told to try again ([unattributed]).
+// chatActorFailure is what a call with nobody to act as reports:
+// [tools.RefusalForbidden], since nothing in the arguments is wrong. No seat,
+// or a requester that could not be composed, answers [unattributed]'s
+// sentence; a request that carried nobody is told so.
 func chatActorFailure(name string, err error) tools.Result {
 	if errors.Is(err, turnctx.ErrNoSeat) || errors.Is(err, ErrUndecidable) {
 		return unattributed(name, err)
@@ -384,13 +303,9 @@ func unconfiguredChat(name string) tools.Result {
 }
 
 // chatClass is the class of a refusal the chat store decided, and false for
-// one it did not — a condition of the node, a fault, an outcome that is not a
-// refusal at all.
-//
-// THE ONE TABLE for both readers that need it: a chat tool's own failure, and
-// the person's write surface, which reads every native domain's classes
-// through [WriterClass]. Two lists would drift on exactly the sentinel a new
-// gesture adds.
+// anything else. The one table for a chat tool's failure and the person's write
+// surface ([WriterClass]): two lists would drift on the sentinel a new gesture
+// adds.
 func chatClass(err error) (tools.Refusal, bool) {
 	var invalid *chatlet.InvalidError
 	switch {
@@ -401,24 +316,18 @@ func chatClass(err error) (tools.Refusal, bool) {
 	case errors.Is(err, chatlet.ErrNameTaken), errors.Is(err, chatlet.ErrRoomExists):
 		return tools.RefusalExists, true
 	case errors.Is(err, chatlet.ErrMembersChanged):
-		// A READ OUTGROWN, NOT A RACE LOST: the members moved after the
-		// caller read them, and reading them again is the cure.
+		// A read outgrown, not a race lost: reading the members again cures it.
 		return tools.RefusalStaleVersion, true
 	case errors.Is(err, chatlet.ErrConflict), errors.Is(err, chatlet.ErrArchived),
 		errors.Is(err, chatlet.ErrReactionsFull):
-		// A LOST RACE, AND THE STATE OF THE ROOM OR THE MESSAGE THE CALL IS
-		// ABOUT, on the one rule every domain's refusals take (internal/mcp's
-		// [tools.Refusal]): an archived room and a message carrying all the
-		// emoji it may refuse the same request until somebody reopens the
-		// room or takes an emoji off, and only that makes it land — as an
-		// artifact in the trash and a project archived before a task is
-		// filed into it do. Classed `invalid`, the archive told a caller to
-		// change an argument the call has nothing wrong with.
+		// A lost race, or the room's or message's state, on the rule every
+		// domain's refusals take ([tools.Refusal]): only reopening the room or
+		// taking an emoji off makes it land. Not `invalid`, which would tell
+		// the caller to change an argument that is fine.
 		return tools.RefusalConflict, true
 	case errors.Is(err, chatlet.ErrUnknownKind):
-		// THIS NODE'S CONDITION, NOT A PERMISSION: a newer peer made the
-		// room and this build cannot say who may reach it. The same call
-		// lands once this node is upgraded.
+		// This node's condition, not a permission: a newer peer made the
+		// room, and the call lands once this node is upgraded.
 		return tools.RefusalUnavailable, true
 	case errors.Is(err, chatlet.ErrInvalid), errors.As(err, &invalid):
 		return tools.RefusalInvalid, true
@@ -426,32 +335,18 @@ func chatClass(err error) (tools.Refusal, bool) {
 	return "", false
 }
 
-// chatWriteFailure explains a write that did not land, in terms the model can
-// act on, classed for a reader that is not a model — the class stated beneath
-// the store's own error ([refusedBy]), so a surface answering in status codes
-// reads either.
+// chatWriteFailure explains a write that did not land, in words the model can
+// act on, with the class beneath the store's error ([refusedBy]) for a surface
+// answering in status codes. Each sentinel has its own sentence and its class
+// from [chatClass]. The store wraps every refusal it decides in a sentinel, so
+// the remainder is the node's, as in [pageWriteFailure]: a condition
+// ([tools.RefusalUnavailable]) or a fault ([faulted]). A write the router never
+// heard back about ([estate.ErrOutcomeUnknown]) may have landed: UNKNOWN
+// ([UnknownCause]). Invalid and forbidden carry [chatlet.Sentence] without the
+// Go prefix: the field or rule it names is what the caller changes.
 //
-// EACH SENTINEL HAS ITS OWN SENTENCE and its class from [chatClass]: a lost
-// race, a name somebody else holds, a permission, a room this node cannot
-// serve until it is upgraded each ask a different thing of the caller.
-//
-// THE UNMARKED REMAINDER IS THE NODE'S, as the knowledge base's is
-// ([pageWriteFailure]): the chat store wraps every refusal it decides on what
-// was asked in one of its own sentinels, so what reaches the end is a log that
-// refused the append — a CONDITION, [tools.RefusalUnavailable] — or a read or
-// an encode that broke, a FAULT ([faulted]), whose error is the log's.
-//
-// AND ONE ERROR IS NEITHER: a write the estate's router sent and never heard
-// back about ([estate.ErrOutcomeUnknown]), which may have landed — an UNKNOWN
-// outcome ([UnknownCause]), never "nothing was written".
-//
-// INVALID AND FORBIDDEN carry the store's own sentence ([chatlet.Sentence])
-// without the package's Go prefix: the field or the rule it names is what the
-// caller changes its call by.
-//
-// `next` is what this caller does about an UNKNOWN outcome — the sentence the
-// tool's own unknown answer gives for the same call: [unknownNext] for a tool
-// that adds, [restateNext] for one that states.
+// `next` is what the caller does about an UNKNOWN outcome: [unknownNext] for a
+// tool that adds, [restateNext] for one that states.
 func chatWriteFailure(ctx context.Context, name string, err error, next string) tools.Result {
 	if errors.Is(err, estate.ErrOutcomeUnknown) {
 		return tools.Result{Output: fmt.Sprintf("%s: %s. It may have landed and "+
@@ -466,9 +361,8 @@ func chatWriteFailure(ctx context.Context, name string, err error, next string) 
 				"land (%s): nothing was written — do not report it as done.",
 				name, why), conditionNext(err, "", stuckWrite)))
 		}
-		// NOT "NOTHING WAS WRITTEN", for [writeFailure]'s reason: a fault
-		// while the append resolved leaves a record nobody here can
-		// account for.
+		// Not "nothing was written", for [writeFailure]'s reason: a fault
+		// while the append resolved leaves a record nobody can account for.
 		return faulted(ctx, name, err, fmt.Sprintf("%s failed: %s. Do not report "+
 			"it as done, and do not make it again by other means — say it could "+
 			"not be made.", name, faultSaid))
@@ -492,49 +386,41 @@ func chatWriteFailure(ctx context.Context, name string, err error, next string) 
 		return refusedBy(class, err, fmt.Sprintf("%s could not be served on this "+
 			"node: %s. Nothing was written.", name, chatlet.Sentence(err)))
 	case errors.Is(err, chatlet.ErrNameTaken):
-		// THE DOMAIN'S SENTENCE NAMES THE ROOM AND THE TWO WAYS ON; what
-		// this adds is where a seat finds the room that holds it.
+		// The domain's sentence names the room and the ways on; this adds
+		// where a seat finds it.
 		return refusedBy(class, err, fmt.Sprintf("%s: %s. A room's name is its "+
 			"address, and "+ListChannelsTool+" names the rooms you are in.",
 			name, chatlet.Sentence(err)))
 	case class == tools.RefusalExists:
 		return refusedBy(class, err, fmt.Sprintf("%s: %s.", name, chatlet.Sentence(err)))
 	case errors.Is(err, chatlet.ErrMembersChanged):
-		// NOT A RACE LOST BUT A READ OUTGROWN: the membership was stated
-		// against members the room no longer holds, so what to read again
-		// is the room's members, and a person is told it in their words.
+		// A read outgrown: the change was stated against members the room no
+		// longer holds, and a person is told so in their words.
 		return toPerson(refusedBy(class, err, fmt.Sprintf("%s was refused: %s, so "+
 			"nothing was written. Read the room's members again and state the "+
 			"change against what it holds now.", name, chatlet.Sentence(err))),
 			caveat.MembersChanged())
 	case class == tools.RefusalConflict:
-		// A LOST RACE, in words that say which read comes before a
-		// retry. A tool of another domain tells it in [statelog.LostRace]
-		// ([WriterSentence], [chatlet.Sentence]), and a person's surface in
-		// its code's own sentence (ADR-0060).
+		// A lost race, naming the read before a retry. Another domain's tool
+		// says it via [statelog.LostRace] ([WriterSentence],
+		// [chatlet.Sentence]); a person's surface in its code's (ADR-0060).
 		return refusedBy(class, err, fmt.Sprintf("%s could not land: the room "+
 			"kept changing under this write, so nothing was written. Read it again "+
 			"before retrying.", name))
 	}
-	// A ROOM OR A MESSAGE THAT IS NOT THERE, and the advice names where each
-	// is looked up. Either address reaches any room the caller may read,
-	// joined or not ([ChatDeps.channelID]), so neither is offered as the
-	// cure for the other: a seat told a name will not do goes looking for an
-	// id it never needed.
+	// A room or message that is not there. Either address reaches any room
+	// the caller may read ([ChatDeps.channelID]), so neither is offered as
+	// the cure for the other.
 	return refusedBy(class, err, fmt.Sprintf("%s: %s\n\nCheck what you named: "+
 		ListChannelsTool+" names the rooms you are in, any room you may read answers "+
 		"to its id or to its name, and "+ReadChannelTool+" shows each message's id.",
 		name, chatlet.Sentence(err)))
 }
 
-// chatUnknown is the answer to a chat write whose outcome is unknown: it may
-// have landed and it may not, so it is reported as neither — [pageUnknown]'s
-// answer, for this surface, carrying [UnknownOutcome] as its cause.
-//
-// AN UNVOUCHED ONE SAYS SO, because it sends the caller somewhere else: this
-// node's operation ledger may have lost the record of the operation, so the
-// same operation asked here answers the same way every time. What a repeat IS
-// is `next`'s to say.
+// chatUnknown answers a chat write whose outcome is unknown as neither, as
+// [pageUnknown] does, with [UnknownOutcome] as its cause. An unvouched one says
+// so: this node's ledger may have lost the record, so the same operation
+// answers the same way here every time. `next` says what a repeat is.
 func chatUnknown(name string, result statelog.Result, next string) tools.Result {
 	return failedUnknown(result.OpID, result.Unvouched, chatUnknownText(name, result, next))
 }
@@ -551,13 +437,10 @@ func chatUnknownText(name string, result statelog.Result, next string) string {
 		"not report it as failed. %s", name, why, result.OpID, next)
 }
 
-// stated is the receipt a write that STATES something answers with — a
-// reaction on or off, this seat in a room or out of it, a room's settings —
-// or, where its outcome is unknown, the unknown answer.
-//
-// ITS REPEAT IS OFFERED RATHER THAN WARNED AGAINST ([restateNext]): stating
-// the same thing again changes nothing if the first one landed, whichever
-// operation the repeat is.
+// stated is the receipt of a write that STATES something (a reaction, a
+// membership, a room's settings), or the unknown answer. Its repeat is offered
+// ([restateNext]): stating the same thing again changes nothing if the first
+// landed.
 func stated(tool string, written chatlet.Written, look string,
 	out map[string]any) (tools.Result, error) {
 
@@ -577,27 +460,16 @@ func statedReceipt(written chatlet.Written, out map[string]any) map[string]any {
 }
 
 // directUnknown is send_dm's answer when the conversation's OPEN came back
-// `unknown` — a lost acknowledgement, an operation this node's ledger cannot
-// vouch for (whose answer names no room at all), or a data node that never
-// answered.
+// `unknown`. It stops there: the post would go to a room this call cannot name
+// (an unvouched open answers no id; a lost acknowledgement names a room this
+// node may not have applied) and be refused as a misleading "not found".
 //
-// # Why it stops there
+// Its advice is not [unknownNext]'s: nothing was said, and a direct
+// conversation is its participants' whatever opens it, so a repeat cannot say
+// anything twice.
 //
-// Because the post would go into a room this call cannot name. An unvouched
-// open answers no id, so the message would be addressed to nothing and
-// refused as "not found" — a different and misleading answer about a
-// conversation that may well exist; a lost acknowledgement names the derived
-// room, which this node may not have applied, and is refused the same way.
-//
-// # Why its advice is not [unknownNext]'s
-//
-// NOTHING WAS SAID: the message comes after the open and was never sent. So
-// the hazard every other `unknown` here warns about — a repeat that is a new
-// operation saying it twice — is not there: a direct conversation is its
-// participants' whatever opens it, and the message has not been posted once.
-//
-// `why` is what made it unknown, already said, `opID` the open's operation and
-// `unvouched` whether this node's ledger is what cannot tell.
+// `why` is what made it unknown, `opID` the open's operation and `unvouched`
+// whether this node's ledger is what cannot tell.
 func directUnknown(to []string, why, opID string, unvouched bool, again string) tools.Result {
 	next := "Call " + SendDMTool + " again"
 	if again != "" {
@@ -624,17 +496,13 @@ func unknownWhy(whose string, result statelog.Result) string {
 	return fmt.Sprintf("%s acknowledgement was lost; operation %s", whose, result.OpID)
 }
 
-// chatReadFailure explains a read that could not be served.
-//
-// IT NEVER SAYS "NOTHING FOUND", on [readFailure]'s reasoning: a node whose
-// rows are behind must not be able to tell a seat the room is empty, because
-// a seat that believes nobody answered asks again. A room the read itself
-// reports absent is [tools.RefusalNotFound], a reader with no seat behind it is
-// refused by the store, which is [tools.RefusalForbidden], and an argument the
-// reader refused — a cursor that is no position, a thread named by nothing —
-// is [tools.RefusalInvalid]: "try again" over a refused argument is a retry
-// that is refused the same way every time. Anything else is the node's — a
-// CONDITION waiting clears, or a FAULT whose error is the log's ([faulted]).
+// chatReadFailure explains a read that could not be served. It never says
+// "nothing found" ([readFailure]): a seat that believes nobody answered asks
+// again. A room reported absent is [tools.RefusalNotFound], a reader with no
+// seat [tools.RefusalForbidden], and a refused argument (a cursor that is no
+// position, a thread named by nothing) [tools.RefusalInvalid], since "try
+// again" would be refused the same way. Anything else is the node's: a
+// condition, or a fault ([faulted]).
 func chatReadFailure(ctx context.Context, name string, err error) tools.Result {
 	class, ok := chatClass(err)
 	switch {
@@ -662,40 +530,22 @@ func chatReadFailure(ctx context.Context, name string, err error) tools.Result {
 
 // ---- addressing a room ------------------------------------------------- //
 
-// channelID resolves what a model typed to a room id.
+// channelID resolves what a model typed to a room id. A name resolves because
+// a model will type one: an id is a uuid no conversation says aloud. An id
+// argument costs no lookup.
 //
-// # Why a name resolves at all
+// Any room the viewer may read resolves, not only those it is in: a name is
+// the room's company-wide address ([chatlet.Reader.ChannelNamed]), so a public
+// or unit's room resolves joined or not, and a private room only for members.
 //
-// Because a model will type one. A room's id is a uuid nothing in a
-// conversation ever says out loud, while its NAME is what the room is called
-// in every sentence anybody writes about it — so a tool that took only the id
-// would refuse the first call of every turn that had not just listed the
-// rooms. This only runs when the argument is not already an id, so the common
-// case — a room id carried in from the wake that woke this seat — costs
-// nothing.
-//
-// # And why ANY room the viewer may read, not only the ones it is in
-//
-// Because a name is the room's ADDRESS — unique across the company and claimed
-// once — and the store resolves it as one ([chatlet.Reader.ChannelNamed]): a
-// public room, or a unit's room, resolves for whoever may read it, joined or
-// not, and a private room only for its members. Resolved against the caller's
-// own rooms instead, a unit's room an asker had promised a decision's outcome
-// to was writable by id while its name meant nothing.
-//
-// # What a failure is
-//
-// A name nothing the viewer may read holds is the ARGUMENT's —
-// [tools.RefusalInvalid], never not-found, because the fix is the argument and
-// a private room answers exactly as a name nobody holds. A lookup this node
-// could not serve is the read's failure ([chatReadFailure]): the name may be
-// perfectly good, and nothing was written.
+// A name nothing readable holds is [tools.RefusalInvalid], never not-found: the
+// fix is the argument, and a private room answers as a name nobody holds. A
+// lookup this node could not serve is [chatReadFailure]'s.
 func (d ChatDeps) channelID(ctx context.Context, name, viewer, ref string) (
 	string, *tools.Result) {
 
-	// THE ROOM AS PEOPLE WRITE IT, by the one rule every surface reads a
-	// typed room by ([chatlet.RoomRef]): its id, or its name with or without
-	// the '#' before it.
+	// The room as people write it ([chatlet.RoomRef]): its id, or its name
+	// with or without '#'.
 	id, want := chatlet.RoomRef(ref)
 	if id != "" {
 		return id, nil
@@ -705,16 +555,14 @@ func (d ChatDeps) channelID(ctx context.Context, name, viewer, ref string) (
 		return "", &out
 	}
 	if d.Reader == nil {
-		// THIS SURFACE HOLDS NOTHING TO RESOLVE A NAME AGAINST, so the
-		// argument that works here is the id — which is the fix, and why
-		// it is the argument's class rather than the node's.
+		// Nothing here resolves a name, so the fix is the id: the
+		// argument's class, not the node's.
 		out := failed(fmt.Sprintf("%s cannot resolve the room name %q here — "+
 			"name the room by its id.", name, clip(want)))
 		return "", &out
 	}
-	// ARCHIVED ROOMS INCLUDED, as the address always is: a read of one is
-	// legitimate and a write to one is refused by the store naming the room,
-	// which is a better answer than "no such channel".
+	// Archived rooms included: a read of one is legitimate, and the store's
+	// refusal of a write names the room, better than "no such channel".
 	room, err := d.Reader.ChannelNamed(ctx, viewer, want, seatRead)
 	switch {
 	case errors.Is(err, chatlet.ErrNotFound):
@@ -754,21 +602,17 @@ func (d ChatDeps) mayWrite(ctx context.Context, action authz.Action,
 }
 
 // remarkAuthority decides an edit or a delete of one message, and says whether
-// it was admitted as MODERATION — on another's words — or as their author.
+// it was admitted as MODERATION (on another's words) or as their author.
 //
-// # Two decisions, because the second needs the message
+// First on the unread message ([authz.Object.Unresolved]): admin is admitted
+// there, so a moderator reaches a message in a room they are not in without
+// being shown it. Anybody else gets [authz.ErrUnresolved]: read the message as
+// this viewer (unreadable is NOT FOUND) and decide again on its author, the
+// only one then admitted.
 //
-// The first is taken on the message nobody has read yet
-// ([authz.Object.Unresolved]): admin is admitted there and then, which is
-// moderation — and a moderator never has to read a message to take it down, so
-// one in a private room or a direct conversation they are not in is reached
-// without being shown. Anybody else is told [authz.ErrUnresolved]: read the
-// message as this viewer — one they may not read is NOT FOUND — and decide
-// again on whose words they are, which admits its author and nobody else.
-//
-// MODERATE CROSSES TO THE STORE AS THE DECISION, never re-derived there
-// ([chatlet.MessageAuthority]): the serving node judges it against the author its
-// own snapshot reads, because the read here was another transaction's.
+// moderate crosses to the store as the decision ([chatlet.MessageAuthority]),
+// never re-derived: the serving node judges it against the author its own
+// snapshot reads, since this read was another transaction's.
 func (d ChatDeps) remarkAuthority(ctx context.Context, action authz.Action,
 	viewer, channelID, messageID string) (moderate bool, refusal *tools.Result) {
 
@@ -805,36 +649,25 @@ func (d ChatDeps) remarkAuthority(ctx context.Context, action authz.Action,
 	return false, nil
 }
 
-// collectiveAddress matches the way this surface addresses a whole room.
-//
-// `@channel`, AS A WHOLE WORD. The bound on the right is what stops
-// `@channels` from waking thirty-two seats, and the left-hand class is what
-// keeps an email address or a path ending in the word from doing it.
+// collectiveAddress matches `@channel` as a whole word: the right bound stops
+// `@channels` waking the room, the left class an email address or a path
+// ending in the word.
 var collectiveAddress = regexp.MustCompile(`(^|[^0-9A-Za-z_@])@channel($|[^0-9A-Za-z_-])`)
 
-// addressesRoom reports whether this message addressed the whole room.
-//
-// DERIVED FROM THE BODY, and deliberately NOT an argument. The prompt a woken
-// seat reads tells it that a room is addressed by writing `@channel`, so that
-// is the gesture a model reproduces when it wants to reach everybody — and a
-// flag beside the text would let the two disagree in both directions: a
-// message saying `@channel` that woke nobody reads to the room as though
-// everybody had seen it, and a flag set on a message that says nothing of the
-// sort wakes thirty-two seats with no visible reason why.
+// addressesRoom reports whether this message addressed the whole room. Derived
+// from the body, not an argument: a woken seat's prompt says a room is
+// addressed by writing `@channel`, and a flag beside the text could disagree
+// with it either way.
 func addressesRoom(body string) bool {
 	return collectiveAddress.MatchString(body)
 }
 
 // message builds what a post or a reply carries from the body the model wrote.
-//
-// THE ACTOR'S KEY DERIVES THE MESSAGE'S ID, which is also its operation's (see
-// the head of chatlet/ids.go): in a turn, from the unit of work and this call's
-// repeat count in the run, so a re-run posts each of the turn's messages once
-// and a turn's second remark is never its first one's retry; under a request,
-// from the key the transport carried, so a person's retry is the message they
-// already sent. An operator's assistant over MCP names neither, and each of its
-// posts is a new message — exactly as a person pressing send twice says it
-// twice, since nothing redelivers that call.
+// The actor's key derives the message's id (chatlet/ids.go): in a turn from the
+// unit of work and this call's repeat count, so a re-run posts each message
+// once and a second remark is never the first's retry; under a request from the transport's key, so a person's retry is the
+// same message. An operator's assistant over MCP names neither, so each post is
+// new, as a person pressing send twice.
 func (d ChatDeps) message(body string, links []string, asks bool) chatlet.NewMessage {
 	in := ChatMessage(d.Mentions, body, links)
 	in.Asks = asks
@@ -843,11 +676,9 @@ func (d ChatDeps) message(body string, links []string, asks bool) chatlet.NewMes
 
 // ChatMessage is what a post carries, read from the words a person or a model
 // wrote: the seats it names (through mentions, which may be nil) and whether
-// it addresses the whole room.
-//
-// EXPORTED FOR THE POST'S DRY RUN, which a composer asks before the send
-// (`chat_reach`): the words are read by this one function on both sides, so
-// whom a draft is told it reaches is whom the same words reach when posted.
+// it addresses the whole room. Exported for the post's dry run (`chat_reach`):
+// one function reads the words on both sides, so whom a draft is told it
+// reaches is whom the posted words reach.
 func ChatMessage(mentions MentionResolver, body string, links []string) chatlet.NewMessage {
 	in := chatlet.NewMessage{Body: body, Links: links, Collective: addressesRoom(body)}
 	if mentions != nil {
@@ -862,21 +693,14 @@ func ChatMessage(mentions MentionResolver, body string, links []string) chatlet.
 const linkShape = "each an absolute http://, https:// or mailto: address written " +
 	"whole, as https://example.com/page or mailto:name@example.com"
 
-// posted is the receipt every posting tool answers with — or, for a post whose
-// outcome is unknown, the unknown answer and never a receipt.
-//
-// # Why an unknown post is not a receipt
-//
-// Because the rest of a receipt is a claim. A `message_id` beside it is read
-// as the message said, and the seat reports it said — when nothing may have
-// been published at all: an operation this node's ledger cannot vouch for is
-// answered `unknown` WITHOUT publishing. [unknownWrite]'s reasoning, for the
-// same reader.
+// posted is the receipt every posting tool answers with, or for an unknown
+// outcome the unknown answer, never a receipt: a `message_id` reads as the
+// message said, when an unvouched operation is answered `unknown` without
+// publishing ([unknownWrite]).
 //
 // `again` is how this caller repeats the post as the same message
-// ([callRepeat]): a seat's same call, a person's same request, or nothing — an
-// operator's assistant over MCP, whose repeat is a second message if the first
-// one landed.
+// ([callRepeat]): a seat's same call, a person's same request, or nothing (an
+// operator's assistant over MCP, whose repeat is a second message).
 func posted(tool string, written chatlet.Written, channelID, again string) (tools.Result, error) {
 	if written.Outcome.Outcome == statelog.OutcomeUnknown {
 		return chatUnknown(tool, written.Outcome,
@@ -885,10 +709,9 @@ func posted(tool string, written chatlet.Written, channelID, again string) (tool
 	return jsonResult(postReceipt(written, channelID))
 }
 
-// postNext is what a caller does about a post whose outcome is unknown —
-// [unknownNext] for a message, in ONE place, because a post can come back
+// postNext is [unknownNext] for a message, in one place: a post comes back
 // unknown two ways (an answer that said so, a data node that never answered)
-// and both must say the same thing. `look` names the read that shows the room.
+// that must say the same. `look` names the read that shows the room.
 func postNext(unvouched bool, again, look string) string {
 	return unknownNext(unvouched, again, look, "that is a second message")
 }
@@ -917,16 +740,13 @@ func postReceipt(written chatlet.Written, channelID string) map[string]any {
 			"again with asks: true if you need an answer from the room"
 	}
 	if written.Message.Collective {
-		// SAID BACK, because the model did not pass a flag: it wrote
-		// `@channel` in prose and the engine read it as an address, so
-		// the receipt is where it learns that thirty-two colleagues are
-		// about to be woken.
+		// Said back: the model wrote `@channel` in prose, and the receipt
+		// is where it learns the whole room is about to be woken.
 		out["addressed_whole_room"] = true
 	}
 	if reach := written.Message.Reach; reach != nil {
-		// WHOM A PERSON'S POST REACHED, said back so the person who sent
-		// it through an assistant is told at once whether any agent was
-		// asked, rather than waiting on an answer nobody owes them.
+		// Whom a person's post reached, so they learn at once whether any
+		// agent was asked rather than waiting on an answer nobody owes.
 		out["reached"] = reach.Recipients
 		if len(reach.Recipients) == 0 {
 			out["reached_no_agent"] = true
@@ -1143,10 +963,7 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return unconfiguredChat(SendDMTool), nil
 	}
 	body := strings.TrimSpace(unfence(turn, argString(args, "body")))
-	// A BARE STRING IS ACCEPTED BESIDE THE ARRAY, because "send a DM to
-	// alice" is one recipient and a model writing `"to": "alice"` means
-	// exactly what the one-element array means. [argStrings] already reads
-	// both.
+	// A bare string means the one-element array; [argStrings] reads both.
 	to := argStrings(args, "to")
 	switch {
 	case body == "":
@@ -1155,9 +972,8 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(SendDMTool + " needs a `to` — the handle of the colleague you " +
 			"are writing to. Use " + LookupColleagueTool + " if you are unsure of it."), nil
 	}
-	// ONE KEY FOR BOTH APPENDS, read once: the open and the post are two
-	// gestures with two verbs, so the store derives two operations from it,
-	// and reading the count once is what keeps them this one call's.
+	// One key for both appends, read once: the store derives the open's and
+	// the post's operations from it, and one read keeps both this call's.
 	actor, refusal := t.deps.actor(ctx, turn, SendDMTool, args)
 	if refusal != nil {
 		return *refusal, nil
@@ -1168,20 +984,16 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	again := callRepeat(turn, actor.OpKey, SendDMTool)
 	said := t.deps.message(body, argStrings(args, "links"), asks)
-	// WHAT THE MESSAGE SAYS IS REFUSED BEFORE ANYTHING IS WRITTEN. A body
-	// over the cap is refused by the post however the room is found, so
-	// opening the conversation first only left a room in every
-	// participant's list, opened by a refusal. What the post decides from
-	// the room itself is still the post's — see [directPostFailure].
+	// The message is validated before anything is written, or a refused body
+	// would leave an opened room in every participant's list. What the post
+	// decides from the room stays the post's ([directPostFailure]).
 	if rejected := said.Validate(); rejected != nil {
-		// A REFUSAL OF CONTENT, never unknown: nothing was sent anywhere.
+		// A refusal of content, never unknown: nothing was sent.
 		return chatWriteFailure(ctx, SendDMTool, rejected, ""), nil
 	}
 	room, _, err := t.deps.Writer.OpenDirect(ctx, actor, to)
 	if errors.Is(err, estate.ErrOutcomeUnknown) {
-		// AN OPEN NOBODY ANSWERED is [directUnknown]'s case — no room this
-		// call can name, so nothing is posted into one — whichever way it
-		// came back unknown.
+		// An open nobody answered: no room to post into ([directUnknown]).
 		return directUnknown(to, Unanswered, "", false, again), nil
 	}
 	if err != nil {
@@ -1191,11 +1003,9 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return directUnknown(to, unknownWhy("the open's", room.Outcome),
 			room.Outcome.OpID, room.Outcome.Unvouched, again), nil
 	}
-	// AND SETTLE IT BEFORE SAYING ANYTHING IN IT. The post decides from
-	// the rows of whichever copy takes it — it reads the room to route the
-	// message — so a post decided before that copy applied the create finds
-	// no room at all and is refused for a conversation that exists. Settled,
-	// the open's position is the floor the post's own decision waits for.
+	// Settle the open before posting: the post reads the room on whichever
+	// copy takes it, and before that copy applied the create it would be
+	// refused for a conversation that exists.
 	t.deps.settle(ctx, room.Outcome.Position)
 
 	written, err := t.deps.Writer.Post(ctx, actor, room.Channel.ID, said)
@@ -1205,19 +1015,15 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	commit(turn, written.Outcome.Outcome, types.CommittedChat)
 	t.deps.settle(ctx, written.Outcome.Position)
 	if written.Outcome.Outcome == statelog.OutcomeUnknown {
-		// THE OPEN LANDED AND THE ANSWER SAYS SO, as a refused post's does:
-		// two records, and only the second one is in doubt.
+		// The open landed and the answer says so: only the post is in doubt.
 		return failedUnknown(written.Outcome.OpID, written.Outcome.Unvouched,
 			directOpen(to, room)+chatUnknownText(SendDMTool+"'s message",
 				written.Outcome, postNext(written.Outcome.Unvouched, again,
 					"Read the conversation with "+ReadChannelTool))), nil
 	}
-	// TWO RECORDS, ONE ANSWER: the call is as certain as the less certain
-	// of the open and the post, and a caller that reads after it waits
-	// for the later of the two — [statelog.LessCertain] and
-	// [statelog.Later], the rule every write that appends twice answers by.
-	// An open that found the conversation already there appended nothing,
-	// and answers no position.
+	// Two records, one answer: as certain as the less certain, positioned at
+	// the later ([statelog.LessCertain], [statelog.Later]). An open that found
+	// the conversation already there answers no position.
 	out := postReceipt(written, room.Channel.ID)
 	out["outcome"] = string(statelog.LessCertain(room.Outcome.Outcome,
 		written.Outcome.Outcome))
@@ -1234,20 +1040,14 @@ func directOpen(to []string, room chatlet.Written) string {
 }
 
 // directPostFailure is send_dm's answer when the conversation is open and the
-// message was refused — [dependencyFailure]'s shape for this call: two
-// writes, and only the second failed.
+// message was refused ([dependencyFailure]'s shape). The class is the post's,
+// whose remedy is the caller's; the sentence says the room is there, since
+// "nothing was written" is false about the open.
 //
-// THE CLASS IS THE POST'S, because the post is what did not happen and its
-// remedy is the caller's to take. THE SENTENCE SAYS THE ROOM IS THERE, because
-// "nothing was written" is false about the open, and a caller that believed it
-// would look for a conversation-opening problem it does not have.
-//
-// AN UNKNOWN POST STAYS UNKNOWN, and it is asked before anything is said in the
-// node's class, because an unknown outcome IS that class: a post sent to a data
-// node that never answered may have been said. Rewritten as "was not said", it
-// told the caller the one thing nobody can know and invited the second message
-// the router refused to risk — and dropped the cause a person's surface tells
-// "nothing happened" from "may have happened" by.
+// An unknown post stays unknown, checked before the node's class it belongs
+// to: a post to a data node that never answered may have been said, and "was
+// not said" would invite a second message and drop the cause a person's
+// surface reads.
 func directPostFailure(ctx context.Context, to []string, room chatlet.Written, err error,
 	again string) tools.Result {
 
@@ -1261,9 +1061,8 @@ func directPostFailure(ctx context.Context, to []string, room chatlet.Written, e
 	}
 	switch tools.RefusalOf(failure) {
 	case tools.RefusalUnavailable:
-		// THE CONDITION'S NEXT STEP TOO, which this sentence replaces
-		// [chatWriteFailure]'s along with the rest of it: a direct message
-		// refused on a full log was told what happened and nothing to do.
+		// Replacing [chatWriteFailure]'s sentence, keep the condition's
+		// next step.
 		failure.Output = sentence(fmt.Sprintf("the message did not land (%s) "+
 			"and was not said — do not report it as sent.", toldOf(failure, err)),
 			conditionNext(err, "", stuckWrite))
@@ -1368,15 +1167,11 @@ func (t *readChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return read.answer(ctx, ReadChannelTool, got, "Ask for fewer messages with `limit`.")
 }
 
-// fenceMessage fences what one message says, under its author, in the message
-// view at path: the transcript records the author's kind beside the handle,
-// which the fence takes at its word. A tombstone says nothing and is not
-// fenced; its row carries no body.
-//
-// A ROOM EVENT says nothing either, and carries words all the same: the topic
-// or description it records, or a template's name, which its author wrote as
-// the room's label. They are fenced under that author, read from the room as
-// a topic is.
+// fenceMessage fences what one message says at path, under its author and the
+// kind the transcript records, taken at its word. A tombstone carries no body
+// and is not fenced. A room event's
+// words (a topic, a description, a template's name) are fenced under its
+// author as a room's label.
 func fenceMessage(read *foreignRead, path fieldPath, m chatlet.Message) {
 	writers := []provenance.Author{read.writer(m.Author, iam.ActorKind(m.AuthorKind))}
 	read.fence(path.key("message").key("body"), provenance.SourceChatThread,
@@ -1445,10 +1240,9 @@ func (t *searchMessages) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"plain words."), nil
 	}
 	if knowledge.CheckQuery(text) != nil {
-		// REFUSED, NOT CUT, at the bound every ranked search shares
-		// ([knowledge.MaxQueryBytes]) — and BEFORE THE ROUTER, because the
-		// index's own refusal crosses to this node as words alone and would
-		// read as chat being unreadable; this says what to send instead.
+		// Refused, not cut ([knowledge.MaxQueryBytes]), before the router:
+		// the index's refusal arrives as words alone and reads as chat
+		// being unreadable.
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
 		return failed(fmt.Sprintf(SearchMessagesTool+"' `text` is %d bytes and takes at "+
 			"most %d — search on a few words somebody would have said, not a "+
@@ -1458,11 +1252,10 @@ func (t *searchMessages) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	// THE ROOM IS RESOLVED ONLY WHEN ONE WAS NAMED, and a name that resolves
-	// to nothing is REFUSED rather than dropped: searching every room in its
-	// place would hand back hits from rooms the caller did not mean, read as
-	// the one it did. An id is never refused here — the search intersects it
-	// with what the viewer may read ([estate.ChatQuery.Channel]).
+	// A named room that resolves to nothing is refused, not dropped: every
+	// room's hits would read as the one meant. An id is never refused here;
+	// the search intersects it with what the viewer may read
+	// ([estate.ChatQuery.Channel]).
 	room := ""
 	if named := strings.TrimSpace(argString(args, "channel")); named != "" {
 		room, refusal = t.deps.channelID(ctx, SearchMessagesTool, actor.Name(), named)
@@ -1483,9 +1276,8 @@ func (t *searchMessages) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if len(answer.Hits) == 0 {
 		if answer.Building {
-			// NOT "NOTHING MATCHED": the index this node answered from was
-			// still catching up, so the message may be there and not yet
-			// indexed — a seat told nobody said it acts on that.
+			// Not "nothing matched": the index is still catching up, and a
+			// seat told nobody said it acts on that.
 			return tools.Result{Output: "Nothing matched yet — but the chat " +
 				"index is still being built, so a message that says this may " +
 				"not be indexed yet. Read the room with " + ReadChannelTool + " if you " +
@@ -1500,8 +1292,7 @@ func (t *searchMessages) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			MessageID: hit.MessageID, ChannelID: hit.ChannelID, ThreadRoot: hit.ThreadRoot,
 			Author: hit.Author, Snippet: hit.Snippet, At: hit.CreatedAt, Score: hit.Score,
 		})
-		// WHAT THE MESSAGE SAYS, under the writer its row records — a
-		// snippet is the message itself, cut only where it is long.
+		// A snippet is the message's words, fenced under its recorded writer.
 		read.fence(fieldPath{}.key("messages").index(i).key("snippet"),
 			provenance.SourceChatThread,
 			[]provenance.Author{read.writer(hit.Author, iam.ActorKind(hit.AuthorKind))},
@@ -1509,22 +1300,17 @@ func (t *searchMessages) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	out := map[string]any{"count": len(rows), "messages": rows}
 	if answer.Building {
-		// SAID BESIDE THE HITS for the same reason: what came back is what
-		// the index had reached, not necessarily all there is.
+		// Said beside the hits too: they are what the index had reached.
 		out["building"] = true
 	}
 	return read.answer(ctx, SearchMessagesTool, out,
 		"Narrow it with `channel`, `author` or a shorter `limit`.")
 }
 
-// chatHitRow is one search hit as this tool renders it.
-//
-// A PROJECTION rather than the index's own value, which carries no JSON
-// names: handed over whole it keyed a hit `MessageID` and `ThreadRoot` beside
-// every other chat answer's `message_id` and `thread_root`, so a seat reading
-// one to reply under it met the id under a key no other tool spells. The keys
-// are the transcript's own — `read_channel` answers a message's room as
-// `channel_id` — and the instant is `at`, as the API's search answers it.
+// chatHitRow is one search hit as this tool renders it: a projection with the
+// transcript's keys (`message_id`, `channel_id`, `thread_root`) and the API
+// search's `at`, since the index's value carries no JSON names and a seat
+// would meet the id under a key no other tool spells.
 type chatHitRow struct {
 	MessageID  string    `json:"message_id"`
 	ChannelID  string    `json:"channel_id"`
@@ -1562,13 +1348,10 @@ func (t *listChannels) Parameters() map[string]any {
 	}
 }
 
-// channelRow is one room as this tool renders it.
-//
-// A PROJECTION rather than the reader's own summary, for one field: the rail
-// is built for a screen and carries an UNREAD COUNT, which is a fact about a
-// person's attention. A seat has none — see [ChatDeps.ReadState] — and
-// handing a model "99+ unread" for a room it was never reading sends it off
-// to catch up on a backlog that is not its work.
+// channelRow is one room as this tool renders it: a projection so the unread
+// count, a person's attention, appears only with a read state
+// ([ChatDeps.ReadState]); a seat told "99+ unread" chases a backlog that is
+// not its work.
 type channelRow struct {
 	ID   string       `json:"id"`
 	Name string       `json:"name,omitempty"`
@@ -1589,16 +1372,13 @@ type channelRow struct {
 	// that unit.
 	FollowAll bool `json:"follow_all,omitempty"`
 
-	// Muted says the person reading this silenced the room, as the rail
-	// marks it: it raises no badge and no push for them. It suppresses
-	// NOTICE and never delivery — the messages are there and the count is
-	// still true — so a reader may still read it, and should not present
-	// its backlog as something the person is waiting on.
+	// Muted says this reader silenced the room, as the rail marks it: no
+	// badge, no push. It suppresses notice, never delivery: the backlog is
+	// readable but not something the person is waiting on.
 	Muted bool `json:"muted,omitempty"`
 
-	// Unread is nil when the caller has no read state, which is not the
-	// same fact as zero: a POINTER, because "nothing new" and "nobody is
-	// tracking where you got to" are answers a reader acts on differently.
+	// Unread is nil without a read state: "nothing new" and "nobody tracks
+	// where you got to" are answers a reader acts on differently.
 	Unread       *int `json:"unread,omitempty"`
 	UnreadCapped bool `json:"unread_capped,omitempty"`
 
@@ -1620,10 +1400,8 @@ func (t *listChannels) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	q := chatlet.ChannelsQuery{IncludeArchived: argBool(args, "include_archived")}
-	// COUNTED ONLY AGAINST A READ STATE THAT WAS READ — see
-	// [ChatDeps.ReadState]. One that could not be is not a cursor at zero,
-	// and the rooms, their order and what was last said in them are still
-	// true without it, so it costs the counts and never the listing.
+	// Counted only against a read state that was read ([ChatDeps.ReadState]):
+	// a failed read costs the counts, never the listing.
 	var (
 		counted    bool
 		unreadable error
@@ -1655,11 +1433,9 @@ func (t *listChannels) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	rows := make([]channelRow, 0, len(listing.Channels))
 	for i, room := range listing.Channels {
 		at := fieldPath{}.key("channels").index(i)
-		// WHAT THE ROOM SAYS ABOUT ITSELF is somebody's words too — a
-		// person sets a topic and a purpose, and the room keeps no record
-		// of which person — so each is fenced as a room's label written by
-		// writers the row does not name: a colleague's, since only the
-		// company's own principals set one, and never this seat's own.
+		// A topic and a purpose are somebody's words with no recorded
+		// author: fenced as a room's label by unnamed colleagues (only the
+		// company's principals set one), never this seat's own.
 		read.fence(at.key("topic"), provenance.SourceChatRoom, nil, true, room.Channel.Topic)
 		read.fence(at.key("purpose"), provenance.SourceChatRoom, nil, true, room.Channel.Purpose)
 		if last := room.Last; last != nil {
@@ -1682,11 +1458,8 @@ func (t *listChannels) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	out := map[string]any{"count": len(rows), "channels": rows}
 	if unreadable != nil {
-		// SAID, rather than left to a reader noticing every count is
-		// missing: no counts and nothing unread are different facts. In
-		// fixed words, because the coordination store's error names its
-		// transport, and under the rail's own name for the fact — whether
-		// the read state was measured.
+		// Said, since no counts and nothing unread are different facts; in
+		// fixed words, because the store's error names its transport.
 		why := "the coordination store could not be read"
 		if words, ok := Condition(unreadable); ok {
 			why = words
@@ -1696,13 +1469,12 @@ func (t *listChannels) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"and none is marked muted", why)
 	}
 	if counted && state.DNDUntil.After(t.deps.now()) {
-		// THE PERSON IS IN DO-NOT-DISTURB, as the rail says: an instant
-		// rather than a flag, so a reader can tell when it ends. One
-		// already past is not in it, and is not reported as if it were.
+		// Do-not-disturb as an instant, so a reader can tell when it ends;
+		// one already past is not reported.
 		out["dnd_until"] = state.DNDUntil
 	}
-	// AND WHAT THE ANSWER COULD NOT ACCOUNT FOR. A model that reads a
-	// short list as the whole truth posts in the wrong room.
+	// What the answer could not account for: a model reading a short list
+	// as the whole truth posts in the wrong room.
 	if !listing.Complete {
 		out["complete"] = false
 	}

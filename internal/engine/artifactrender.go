@@ -17,8 +17,8 @@ import (
 	"github.com/crewlet/crewlet/static"
 )
 
-// render_artifact's engine wiring: the renderer over this node's own artifact
-// origin and the browser Tier A names, the run's box and the turn tally.
+// render_artifact's engine wiring: the renderer over this node's artifact
+// origin and Tier A's browser, the run's box and the turn tally.
 
 // RenderToolDeps are render_artifact's dependencies on this node, or the zero
 // value, which offers no render, where the node takes no artifact uploads.
@@ -33,8 +33,8 @@ func RenderToolDeps(e *Engine) builtin.RenderDeps {
 	return deps
 }
 
-// artifactRenderer is this node's renderer, built at its first use and for
-// the life of the process, or one that answers why this node renders nothing.
+// artifactRenderer is this node's renderer, built at first use for the life of
+// the process, or one that answers why this node renders nothing.
 func (e *Engine) artifactRenderer() builtin.ArtifactRenderer {
 	e.renderOnce.Do(func() {
 		r, err := e.buildRenderer()
@@ -79,8 +79,8 @@ func (e *Engine) buildRenderer() (*artifactrender.Renderer, error) {
 	if err != nil {
 		return nil, err
 	}
-	// FOR THE LIFE OF THE PROCESS, as the renderer is: every movement this
-	// node hears forgets the render handler's verdicts, as the origin's.
+	// FOR THE LIFE OF THE PROCESS, as the renderer is: every movement this node
+	// hears forgets the render handler's verdicts, as it does the origin's.
 	e.OnArtifactsMoved(r.ArtifactsMoved)
 	return r, nil
 }
@@ -92,9 +92,8 @@ func (u unrendered) Render(context.Context, artifactrender.Request) (artifactren
 	return artifactrender.Report{}, u.err
 }
 
-// renderBoxes writes a render's screenshots into the box of the executor
-// working in the turn: the same box, held to the same rules, a publish reads
-// from ([artifactBoxes]).
+// renderBoxes writes a render's screenshots into the turn's executor box, the
+// one a publish reads from, under the same rules ([artifactBoxes]).
 type renderBoxes struct{ engine *Engine }
 
 func (b renderBoxes) Shots(ctx context.Context, t *turnctx.Turn) (builtin.ShotBox, error) {
@@ -108,7 +107,7 @@ func (b renderBoxes) Shots(ctx context.Context, t *turnctx.Turn) (builtin.ShotBo
 // shotBox is one attached box, written under its home.
 type shotBox struct{ box sandbox.Sandbox }
 
-// shotRemoveTimeout bounds the removal of an artifact's earlier shots.
+// shotRemoveTimeout bounds the removal of an artifact's earlier shots, in seconds.
 const shotRemoveTimeout = 30
 
 func (s shotBox) Replace(ctx context.Context, dir string, files []builtin.BoxFile) ([]string, error) {

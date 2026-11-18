@@ -11,21 +11,15 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE THREE SCOPE CASES BELOW READ TWELVE NOTICES FIVE AT A TIME, and the
-// numbers are the smallest that still show what they pin.
-//
-// The defect is narrowing AFTER the read: the page was the limit+1 newest
-// rows, and the snoozed or read ones were dropped from it afterwards. That is
-// a property of the ARRANGEMENT — snoozes interleaved with the rest, or the
-// newest limit+1 all snoozed or all read — and not of the inbox's size, since
-// [readInbox] is one statement with no batch of its own for a larger inbox to
-// cross. Twelve is twice the six rows a page of five reads: half of it can be
-// the newest six, which a read-then-narrow page drops entirely, and the other
-// half still fills a page of five with one left behind for the cursor to name.
-// Five is the caller's own limit rather than [inbox.MaxRows], which
-// only clamps one. The cases ran at 120 and 50, which was 360 creates and
-// drains — each a full write and apply — to show what 36 show. At twelve,
-// [crowdedInbox]'s own read is a single page, so paging itself is
+// THE THREE SCOPE CASES BELOW READ TWELVE NOTICES FIVE AT A TIME, the smallest
+// numbers that still show what they pin. The defect is narrowing AFTER the
+// read (dropping snoozed or read rows from the limit+1 newest), a property of
+// the ARRANGEMENT, not the inbox's size: [readInbox] is one statement with no
+// batch for a larger inbox to cross. Twelve is twice the six rows a page of
+// five reads: half can be the newest six, which a read-then-narrow page drops
+// entirely, and the rest still fills a page with one left for the cursor. Five
+// is the caller's own limit, since [inbox.MaxRows] only clamps one. At twelve,
+// [crowdedInbox]'s own read is one page, so paging is
 // [TestTheInboxPagesAndRefuses]'s.
 
 // crowdedInbox files n notices at bob, oldest first, and returns their record
@@ -71,16 +65,11 @@ func snoozeAll(t *testing.T, r *roundTrip, ids []string, until time.Time) {
 	r.drain()
 }
 
-// THE SNOOZED SCOPE IS ONLY WHAT WAS PUT OFF, AND ITS PAGE IS FULL.
-//
-// Two defects in one read. The flag this scope replaced, `include_snoozed`,
-// returned EVERY notice with the snoozed ones among them — so the dashboard's
-// Snoozed tab listed the whole inbox. And the snooze narrowing ran over the
-// page AFTER it was read while the cursor was computed from the page BEFORE,
-// so any narrowing short-paged. Half of 12 notices snoozed, interleaved with
-// the rest: `only` must answer five snoozed notices and a cursor to the sixth,
-// and nothing else — where the read-then-narrow page held the three snoozed
-// among the newest six.
+// THE SNOOZED SCOPE IS ONLY WHAT WAS PUT OFF, AND ITS PAGE IS FULL: with half
+// of 12 notices snoozed, interleaved, `only` answers five snoozed notices and a
+// cursor to the sixth, and nothing else. Narrowing must not run over the page
+// after the read while the cursor comes from the page before, which
+// short-pages.
 func TestTheSnoozedScopeReturnsOnlySnoozedNoticesAndAFullPage(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -124,13 +113,10 @@ func TestTheSnoozedScopeReturnsOnlySnoozedNoticesAndAFullPage(t *testing.T) {
 	}
 }
 
-// THE DEFAULT SCOPE FILLS ITS PAGE DESPITE SNOOZES.
-//
-// The six NEWEST notices are snoozed, which is the arrangement that emptied
-// the landing page: filtered after the read, the newest six rows — the page
-// and its cursor's evidence — were all dropped and the person was shown
-// nothing, with a cursor, while six awake notices waited behind it. In the
-// scan, the page is the five newest notices NOT snoozed.
+// THE DEFAULT SCOPE FILLS ITS PAGE DESPITE SNOOZES. The six NEWEST notices
+// are snoozed: filtered after the read, the page and its cursor's evidence
+// would all drop, showing nothing with a cursor while six awake notices wait.
+// In the scan, the page is the five newest notices NOT snoozed.
 func TestTheDefaultScopeFillsItsPageDespiteSnoozes(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -152,12 +138,10 @@ func TestTheDefaultScopeFillsItsPageDespiteSnoozes(t *testing.T) {
 	}
 }
 
-// AND SO DOES `unread`, the other half of the landing page's question.
-//
-// The six newest notices are marked read out of order — a person working
-// their queue from the top. An unread page applied after the read was empty;
-// in the scan it is the five newest notices the person has not read, and the
-// rule it selects by is [markInbox]'s own: every notice returned reads unread.
+// AND SO DOES `unread`, the other half of the landing page's question. The
+// six newest notices are marked read out of order; the page is the five
+// newest unread, selected by [markInbox]'s own rule: every notice returned
+// reads unread.
 func TestTheUnreadFilterFillsItsPage(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -185,9 +169,8 @@ func TestTheUnreadFilterFillsItsPage(t *testing.T) {
 	}
 
 	// AND THE SEEN-THROUGH POSITION IS THE SAME RULE: read through the
-	// 3rd oldest, and nothing at or below it comes back — while an
-	// unread mark on one of those outranks the position, in the scan as
-	// in the marks.
+	// 3rd oldest, and nothing at or below it comes back, while an unread mark on
+	// one of those outranks the position, in the scan as in the marks.
 	through := positionOf(noticeOf(t, r, ids[9]))
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-through", "bob", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{ReadThrough: through}, worklet.PersonAuthority{}); err != nil {
@@ -209,11 +192,9 @@ func TestTheUnreadFilterFillsItsPage(t *testing.T) {
 	}
 }
 
-// A DUE SNOOZE IS NOT SNOOZED, under any scope.
-//
-// Its time has come, so it is back in the inbox without a write to promote it
-// — which means the scan's idea of a live snooze and the page's must be one
-// test: `only` must not list it, `exclude` must, and neither may mark it.
+// A DUE SNOOZE IS NOT SNOOZED, under any scope: it is back without a write to
+// promote it, so the scan's idea of a live snooze and the page's must agree:
+// `only` must not list it, `exclude` must, and neither may mark it.
 func TestADueSnoozeIsNotSnoozed(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -245,14 +226,10 @@ func TestADueSnoozeIsNotSnoozed(t *testing.T) {
 }
 
 // A NOTICE CARRIES ITS COMMENT, ITS TURN, THE PERSON WHO MADE IT, AND THE ASK
-// IT IS ABOUT.
-//
-// Without them a card could not open the thread or the trace, and could not
-// say whether the question it announces is still open. A person answering
-// through their own token is drawn as THEMSELVES: bound to a seat they write
-// AS it (iam.ActorFor), the credential riding beside the actor rather than
-// standing in for it. The ask is read NOW: the `asked` notice ana received
-// reads closed once she answered.
+// IT IS ABOUT, so a card can open the thread or the trace and say whether its
+// question is still open. A person answering through their own token is drawn
+// as THEMSELVES: bound to a seat they write AS it (iam.ActorFor). The ask is
+// read NOW: ana's `asked` notice reads closed once she answered.
 func TestANoticeCarriesItsCommentTurnAuthorAndAsk(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -287,8 +264,8 @@ func TestANoticeCarriesItsCommentTurnAuthorAndAsk(t *testing.T) {
 			"its decision", got.Ask)
 	}
 
-	// ANA ANSWERS THROUGH HER OWN TOKEN, which is bound to her seat — so
-	// she writes AS the seat, and the token is the operator id beside it.
+	// ANA ANSWERS THROUGH HER OWN TOKEN, bound to her seat: she writes AS the
+	// seat, the token the operator id beside it.
 	viaToken := r.writer.As("ana", worklet.AuthorHuman, worklet.Provenance{
 		OperatorID: "pat:ana-laptop",
 	})

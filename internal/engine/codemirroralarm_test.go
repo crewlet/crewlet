@@ -46,27 +46,18 @@ roles:
     kind: human
 `
 
-// THE MIRROR ALARM FIRES ON ITS HOME (M6-D16, ADR-0015), through the wiring a
-// running node has: a STARTED Gitlet node, alone the home of every repository,
-// whose push mirror's every dial is refused — so its home loop's mirrors
-// worker tries it at a pass and again once its retry is due, each attempt
-// failing at the dial — raises nothing while the mirror is inside its own
-// refresh promise (gitlet.MirrorInterval and mirror.AttemptDeadline) and
-// code_mirror_failing, naming the repository, once it has gone that long
-// without being brought level: its reading through codeReading, and the alarm
-// the retention loop's evaluation of it stands. The node's clock is the
-// case's, moved past the promise rather than waited through, and the home's
-// passes are the case's too (engine.PollHomeForTest): waiting for the loop's
-// own ticker sat out two of its gitlethome.Backstop minutes, two thirds of
-// the case's two minutes on CI, for a pass that is the same pass either way.
-// Each clock move waits for the attempt before it to be recorded as ended
+// THE MIRROR ALARM FIRES ON ITS HOME (M6-D16, ADR-0015): a STARTED Gitlet
+// node, home of every repository, whose push mirror's every dial is refused
+// raises nothing inside the mirror's refresh promise (gitlet.MirrorInterval and
+// mirror.AttemptDeadline), then code_mirror_failing naming the repository. The
+// clock and the home's passes are the case's (engine.PollHomeForTest), and
+// each clock move waits for the attempt before it to be recorded as ended
 // (mirror.Options.Ended), never only for its dial.
 //
-// Mutations: leave the mirrors' half out of the reading (codeReading), and
-// the alarm never fires; count a mirror as failing from its first failed
-// attempt, or at the interval alone, and it fires inside its promise; move
-// the clock at the first dial again with the worker's record of the attempt
-// held back past it, and the second attempt never dials.
+// Mutations: leave the mirrors' half out of codeReading, and the alarm never
+// fires; count a mirror failing from its first failed attempt, or at the
+// interval alone, and it fires inside its promise; move the clock at the first
+// dial with the attempt's record held back, and the second never dials.
 func TestTheMirrorAlarmFiresOnItsHome(t *testing.T) {
 	t.Parallel()
 	b := gitletNodeBootstrap(t, nil)

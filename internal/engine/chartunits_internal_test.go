@@ -8,20 +8,12 @@ import (
 )
 
 // A UNIT'S LEAD IS NAMED BY THE SEAT'S OWN HANDLE, in the document and in
-// this resolver alike — never by a second derivation of its own.
+// this resolver alike, never by a second derivation: a slug of "Ada Okonkwo"
+// (`handle: ada`) is `ada-okonkwo`, nobody in the chart, and every lookup of
+// it fails by finding nothing rather than by erroring.
 //
-// `lead:` holds the handle, so there is one identity and one lookup. It used
-// to hold a DISPLAY NAME, which agrees with the handle on exactly the seats
-// whose operator declared none and disagrees on every other: a unit led by
-// "Ada Okonkwo" with `handle: ada` was resolved by slugifying the name to
-// `ada-okonkwo`, which is nobody in the chart. Nothing downstream could tell
-// that from a lead who simply has no seat — the handle could not be looked
-// up, filtered on, asked, or opened as a person, and every one of those
-// failed by finding nothing rather than by erroring.
-//
-// THE DECLARED HANDLE AND THE SLUG OF THE NAME DIFFER in every case here,
-// which is the whole point: with them equal this test cannot fail, and the
-// old slugify path would pass it.
+// THE DECLARED HANDLE AND THE SLUG OF THE NAME DIFFER in every case here: with
+// them equal this test cannot fail, and a slugify path would pass it.
 func TestALeadWithAnExplicitHandleResolves(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
@@ -59,13 +51,9 @@ func TestALeadWithAnExplicitHandleResolves(t *testing.T) {
 }
 
 // A UNIT THAT DECLARES NO ID STILL RESOLVES ITS LEAD, because its KEY falls
-// back to its name and the key is what a stored row holds.
-//
-// This is the other half of the same confusion, and it read as working: the
-// live resolver compared the stored value against each unit's `id` FIELD,
-// which is empty on every unit that has not been given one — so a company
-// that had not adopted ids had a unit lead that answered nobody, and
-// unassigned work routed to no one while looking correctly filed.
+// back to its name and the key is what a stored row holds. Comparing against
+// the `id` FIELD, empty on such a unit, routes its unassigned work to no one
+// while it looks correctly filed.
 func TestAUnitWithNoExplicitIdResolvesItsLead(t *testing.T) {
 	t.Parallel()
 	unit := &org.Unit{
@@ -113,13 +101,9 @@ func TestAnInheritedLeadKeepsItsOwnHandleToo(t *testing.T) {
 	}
 }
 
-// THE SEAM ANSWERS ANY SPELLING AND HANDS BACK THE KEY, which is the whole of
-// what the two halves of this need: a write stores the key, and a screen
-// renders the name.
-//
-// It resolved through an EXACT, case-sensitive match, so `unit: engineering`
-// on a company with a unit named "Engineering" was refused with "This company
-// has no team".
+// THE SEAM ANSWERS ANY SPELLING AND HANDS BACK THE KEY: a write stores the
+// key and a screen renders the name, so `unit: engineering` on a unit named
+// "Engineering" resolves rather than being refused.
 func TestTheUnitSeamAnswersEitherSpellingWithTheKey(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
@@ -161,14 +145,10 @@ func TestTheUnitSeamAnswersEitherSpellingWithTheKey(t *testing.T) {
 	}
 }
 
-// THE UNIT-LEAD FALLBACK RESOLVES ON A UNIT THE CHART GAVE NO ID, whose key is
-// its name.
-//
-// `id` falls back to the name ([org.Unit.Key]), so the string a task's routing
-// unit holds is the NAME on such a unit. Matching the id alone compared it
-// against "" and found nothing: the fallback that reaches a unit's lead when a
-// change named nobody else reached NOBODY, and a wake that went to no one is
-// indistinguishable from a unit whose lead is unset.
+// THE UNIT-LEAD FALLBACK RESOLVES ON A UNIT THE CHART GAVE NO ID, whose key
+// ([org.Unit.Key]), and so a task's routing unit, is its NAME. Matching the id
+// alone compares against "" and reaches nobody, indistinguishable from a unit
+// whose lead is unset.
 func TestAUnitsLeadResolvesByItsNameWhenItHasNoID(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
@@ -213,12 +193,10 @@ func TestAUnitsLeadResolvesByEverySpellingARowMayHold(t *testing.T) {
 }
 
 // A PROJECT'S CHART-OWNED UNIT IS THE UNIT'S KEY, and its name is the
-// project's own display name beside it.
-//
-// The project row is what every task filed into it takes its filed unit from,
-// and a filed unit is never rewritten. So writing the NAME here filed the
-// company's work under a spelling that moves the day somebody corrects the
-// team's name, on the one path that writes most of it.
+// project's own display name beside it: every task filed into the project
+// takes its filed unit from this row and a filed unit is never rewritten, so
+// the NAME would file the company's work under a spelling that moves the day
+// somebody renames the team.
 func TestTheChartFilesAProjectUnderTheUnitsKey(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
@@ -227,8 +205,8 @@ func TestTheChartFilesAProjectUnderTheUnitsKey(t *testing.T) {
 		// and that home is the unit's key for the same reason.
 		Roles: []*org.Role{{Name: "Ada", DeclaredHandle: "ada", Project: "ADA"}},
 	}, {
-		// A UNIT WITH NO ID is keyed by its name, which is the same
-		// string this wrote before — the id is what makes the two differ.
+		// A UNIT WITH NO ID is keyed by its name; the id is what makes the
+		// two differ.
 		Name: "Product", Project: "PROD",
 	}}}
 	o.Normalize()

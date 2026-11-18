@@ -8,31 +8,16 @@ import (
 
 // A GIT READ IS SERVED UNTIL ITS ANSWER IS DUE, AND NOT A MOMENT LONGER.
 //
-// A Gitlet node answering a read by object id ([GitQuery]) for an asker that
-// waits until a deadline must SEND its answer while the asker still listens:
-// one that arrives after the asker's attempt has ended is heard as nothing,
-// and an asker that heard nothing for its whole attempt takes the node for
-// gone — asks it last for every operation for half a minute and tells the
-// fleet's placements it went unanswered — while the node was only busy, and
-// every repository it is home to sends its readers to a runner-up that then
-// downloads a copy of its own. So the read runs under a context that ends
-// [ReplyMargin] before the asker's deadline ([AnswerBy]), and EVERY wait it
-// makes takes that context: its copy's sync, its unit of the node's share, the
-// read lane's queue for each of its processes, and each process itself. A
-// wait that context ends is answered [ErrGitUnready], naming what the read
-// was waiting on, while the asker still listens ([AnswerDue]) — never the
-// context's own error, which the asker would take for the repository's
-// answer, and never a refusal sent too late to be heard.
-//
-// One context ends every wait, rather than each wait cut to the asker's
-// deadline less the margin, because a wait that is not told the cut cannot
-// keep it: the read lane's queue and a process's own timer are gitproc's, and
-// a process's deadline computed before it queued for its slot runs past the
-// cut by however long it queued.
-//
-// THE SAME CUT HOLDS A READ ANSWERED IN PROCESS: a Gitlet node's own seats' reads
-// are given the attempt a remote asker's are, ending the same margin before
-// it, so what a read is answered does not depend on which node asked it.
+// An answer to a [GitQuery] that arrives after the asker's attempt ended is
+// heard as nothing, and the asker takes a merely busy node for gone: demotes
+// it for half a minute and sends its readers to a runner-up that downloads its
+// own copy. So the read runs under one context ending [ReplyMargin] before the
+// deadline ([AnswerBy]), and EVERY wait takes it (the copy's sync, the node's
+// share, the read lane's queue, each process): a per-wait cut fails, as
+// gitproc's queue and a timer set before queuing run past it. A wait it ends
+// answers [ErrGitUnready] ([AnswerDue]), naming what it waited on, while the
+// asker still listens, never the context's error, which reads as the
+// repository's answer. An in-process read gets the same cut.
 
 // ErrAnswerDue is the cause the context a git read is served under ends with
 // at the instant its answer is due: its asker's deadline less [ReplyMargin]

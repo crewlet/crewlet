@@ -71,11 +71,9 @@ func placeOf(t *testing.T, h *readHarness, params map[string]any) placed {
 // A TASK'S NEIGHBOURS ARE THE ONES THE BOARD DRAWS BESIDE IT, READ COLUMN BY
 // COLUMN — AND OVER THE WHOLE BOARD, NOT THE ROWS IT HAPPENED TO LOAD.
 //
-// A task page opened from a board says "3 of 18" and steps to the next card,
-// and the next card after the last one in To do is the first one in In
-// progress. Each column here carries ONE row (`group_limit=1`), so a peek that
-// stepped only through the rows a client held would stop at the first card of
-// every column; the engine answers over every row of every column.
+// The card after the last in To do is the first in In progress. Each column
+// here carries ONE row (`group_limit=1`), so stepping only through the rows a
+// client held would stop at every column's first card.
 func TestAroundFollowsGroupThenRowOrder(t *testing.T) {
 	t.Parallel()
 	h := aroundBoard(t)
@@ -201,13 +199,9 @@ func TestAroundAbsentKeyIsNullNotAnError(t *testing.T) {
 	}
 }
 
-// A PRIORITY LIST PAGES IN ITS OWN ORDER.
-//
-// The list's order used to be restored per page — SQL read a page, minted a
-// keyset cursor on its last row, and the page was re-sorted by the list — so
-// with a page smaller than the list, the top of somebody's priorities could
-// land on page two. And the place `around=` reports is the list's order too,
-// since that is the order the rows are drawn in.
+// A PRIORITY LIST PAGES IN ITS OWN ORDER, never a SQL page re-sorted by the
+// list (which put the top of somebody's priorities on page two), and
+// `around=` places a task in that order too, since the rows are drawn in it.
 func TestAPriorityListPagesInItsOwnOrder(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -262,18 +256,13 @@ func TestAPriorityListPagesInItsOwnOrder(t *testing.T) {
 // A TASK'S PLACE IS ITS PLACE IN THE ORDER PAGING DRAWS, TIES AND THE TRASH
 // INCLUDED.
 //
-// The neighbours are read from the task outwards ([keyset]'s arms): the rows
-// tied with it on every column and nearer by id first, then those tied on all
-// but the last, and so on — the before side read with the order reversed. A
-// tie arm read out of turn, or reversed the wrong way, names a task two rows
-// away; a count that missed an arm puts the task at the wrong position; and
-// none of it shows on a fixture of distinct values, which is every fixture
-// that is not built of ties.
-//
-// So every task of [tiedCompany], in every order of [tiedOrders], must sit at
-// its place in one read of the answer, with the rows beside it there as its
-// neighbours — the trash read in its own order among them, whose previous
-// neighbour is the trash's index walked backwards.
+// The neighbours are read from the task outwards ([keyset]'s arms), the
+// before side reversed. A tie arm read out of turn or reversed wrongly names
+// a task two rows away, a missed arm misplaces the count, and neither shows
+// on a fixture of distinct values. So every task of [tiedCompany], in every
+// order of [tiedOrders], must sit at its place in one read of the answer with
+// the rows beside it as neighbours — the trash among them, whose previous
+// neighbour is its index walked backwards.
 func TestAroundMatchesThePagedOrderOnTiesAndTheTrash(t *testing.T) {
 	t.Parallel()
 	r := tiedCompany(t)

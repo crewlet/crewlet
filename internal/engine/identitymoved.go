@@ -7,42 +7,26 @@ import (
 )
 
 // SetOnIdentityMoved registers what this node does when the identity estate
-// moved somebody's credentials — which, beside the engine, is the API deciding
-// again the dashboard sockets held open on them.
+// moved somebody's credentials: the API deciding again the dashboard sockets
+// held open on them, since a socket is authenticated once, at its handshake,
+// and a revocation must reach an open tab some other way. The identity applier
+// says after every committed batch whose credentials it moved
+// ([iamdomain.Moved]). EVERY DATA NODE APPLIES EVERY identity RECORD, whatever
+// its company, and every socket server is a data node (ingress requires `data`),
+// so each closes its own sockets from its own applier; nothing is forwarded.
 //
-// # How a revocation reaches a tab that is already open
-//
-// A socket is authenticated once, at its handshake, and then held for as long
-// as the tab is: a session ended, a person suspended, a grant narrowed or a
-// machine token revoked has to reach it some other way, or a revocation this
-// engine arbitrates across a fleet in under a second would stop at the one
-// surface a browser keeps open. The identity applier says, after every
-// committed batch, whose credentials it moved ([iamdomain.Moved]), and this is
-// where the engine hands that on. EVERY DATA NODE APPLIES EVERY RECORD of the
-// identity log, whatever its company, and every node that serves sockets is a
-// data node (ingress requires `data`), so each hears every move from its own
-// applier and closes its own sockets — nothing is forwarded between nodes, and
-// a node that serves none simply has nobody registered here.
-//
-// A SETTER for [Engine.SetOnCompanyPublished]'s reason: the API half is built
-// after the engine. Safe to call while the engine is running, and safe to leave
-// unset.
-//
-// fn IS CALLED ON THE APPLY LOOP'S OWN GOROUTINE, with the next batch waiting
-// behind it, so it must not block: the socket registry it is built for only
-// signals.
+// A setter for [Engine.SetOnCompanyPublished]'s reason; safe to call while the
+// engine runs, and to leave unset. fn runs ON THE APPLY LOOP'S GOROUTINE with
+// the next batch behind it, so it must not block.
 func (e *Engine) SetOnIdentityMoved(fn func(iamdomain.Moved)) {
 	e.onIdentity.Store(&fn)
 }
 
 // identityMoved is what the identity applier calls after a committed batch,
-// with what that batch moved.
-//
-// TWO LISTENERS, each handed its half. A SEAT'S STANDING is the party
-// registry's — see [Engine.nudgeDirectory], which this signals rather than
-// runs. WHOSE CREDENTIALS is whatever [Engine.SetOnIdentityMoved] registered,
-// and a batch that moved none of them — a sign-in, the bulk of this log's
-// traffic — reaches it not at all.
+// with what it moved. A SEAT'S STANDING goes to the party registry
+// ([Engine.nudgeDirectory], signalled rather than run); WHOSE CREDENTIALS to
+// what [Engine.SetOnIdentityMoved] registered, which a batch that moved none (a
+// sign-in, the bulk of this log's traffic) never reaches.
 func (e *Engine) identityMoved(moved iamdomain.Moved) {
 	if moved.Seats {
 		e.nudgeDirectory()
@@ -60,27 +44,17 @@ func (e *Engine) identityMoved(moved iamdomain.Moved) {
 	(*fn)(moved)
 }
 
-// estateReplaced tells the replicated estate's listeners that every one of its
-// rows may have moved with no committed batch to say so — an adoption that
-// replaced the replicated file with a donor's, or an estate reopened on a file
-// a failed join installed.
-//
-// THE IDENTITY ESTATE'S, EVERYTHING, because nothing narrower is honest: the
-// rows are a peer's now, and every revocation that peer applied while this
-// node was too far behind to follow arrived without an apply. An open socket
-// still serving a session one of them ended would go on serving it until it
-// closed on its own — so the move names everyone ([iamdomain.Moved.Everyone]),
-// which closes every socket for its handshake to decide, and the party
-// registry is rebuilt at once rather than at its next periodic re-read.
-//
-// AND THE ARTIFACTS ESTATE'S LISTENERS, for the same reason: every share,
-// trash and purge the donor applied arrived here without an apply, so an
-// authorization verdict or a room decided from the old rows is told that
-// everything moved ([artifactsdomain.MoveReset]), and the datastore's for the
-// same reason ([artifactdata.Moved.Reset]).
-//
-// AND WHAT A FORWARD WALK DERIVED FROM THE ROWS, which cannot see a row it has
-// already passed being replaced ([Engine.estateReplaced]).
+// estateReplaced tells the replicated estate's listeners that every row may
+// have moved with no committed batch to say so: an adoption installed a donor's
+// file, or the estate reopened on a file a failed join installed. Every
+// revocation, share, trash and purge the donor applied arrived without an
+// apply, so nothing narrower is honest: the identity move names everyone
+// ([iamdomain.Moved.Everyone]), closing every socket for its handshake to
+// decide, and rebuilds the party registry now rather than at its next re-read;
+// the artifacts estate's and the datastore's listeners are told everything
+// moved ([artifactsdomain.MoveReset], [artifactdata.Moved.Reset]); and so is
+// what a forward walk derived from the rows, which cannot see a row it already
+// passed being replaced ([Engine.estateReplaced]).
 func (s *stateLog) estateReplaced() {
 	if s.identityMoved != nil {
 		s.identityMoved(iamdomain.Moved{Seats: true, Everyone: true})
@@ -97,22 +71,17 @@ func (s *stateLog) estateReplaced() {
 }
 
 // estateReplaced is what this node does once its replicated estate was replaced
-// under it: the chat index and the index of changes' words, both walking only
-// forward, drop what they hold and walk the rows they now have
-// ([search.ChatIndexer.RequestRebuild], [search.ChangeIndexer.RequestRebuild]):
-// a document indexed from the copy the adoption replaced would otherwise answer
-// searches for as long as the deployment lived. The knowledge base's lexical
+// under it: the chat index drops what it holds and rewalks, the index of
+// changes' words rewalks over what it keeps ([search.ChatIndexer.RequestRebuild],
+// [search.ChangeIndexer.RequestRebuild]), or a document indexed from the
+// replaced copy answers searches indefinitely. The knowledge base's lexical
 // index laps by id and repairs drift itself.
 //
-// THE NUDGE, NOT THE GUARANTEE: the request lives in this process, and the
-// adopter has already named the file it installed a new copy of the estate
-// ([statelog.EstateInstance]), which the index compares with the copy it was
-// built from on every sweep — so a process stopped before the index's next
-// sweep still has its index rebuilt. What this call adds is that a search
-// stops trusting the index from now rather than from that sweep.
-//
-// A NODE THAT HAS MET NO COMPANY, or one whose chat is not the engine's own and
-// which hosts no code, holds neither index and has nothing to rebuild.
+// THE NUDGE, NOT THE GUARANTEE: the adopter already named the new copy
+// ([statelog.EstateInstance]), which each index compares on every sweep, so a
+// process stopped first is still rebuilt; this call makes searches stop
+// trusting the index now. A node with no company, or whose chat is not the
+// engine's own and which hosts no code, holds neither index.
 func (e *Engine) estateReplaced() {
 	n := e.native.Load()
 	if n == nil {

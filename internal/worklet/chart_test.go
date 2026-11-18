@@ -15,22 +15,17 @@ import (
 
 // A PROJECT EXISTS BECAUSE THE CHART SAYS SO, and nothing else makes one.
 //
-// A create is a sequence: it takes the next number from its project's own
-// counter and only then writes the task. So a project that is not an object
-// refuses every write into it — which, before the chart apply was wired, is
-// what a company that had just booted did with the first task anybody filed.
-//
-// Creating the project inside the create instead is the shape that gives two
-// nodes two projects, two counters and two ENG-1s when they file at once, so
-// the chart is the one writer.
+// A create takes the next number from its project's own counter, so a project
+// that is not an object refuses every write into it. Creating the project
+// inside the create would give two nodes filing at once two projects, two
+// counters and two ENG-1s, so the chart is the one writer.
 func TestTheChartIsWhatMakesAProjectExist(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
 
-	// BEFORE: the project is not there and a create says so, as
-	// unavailable rather than as a failure — this node cannot tell "never
-	// created" from "not applied here yet", and only one of those is
-	// worth retrying.
+	// BEFORE: a create is refused, as unavailable rather than failed: this
+	// node cannot tell "never created" from "not applied here yet", and only
+	// the latter is worth retrying.
 	_, err := r.writer.CreateTask(t.Context(), "op-early", newTask("t-early"), nil)
 	if err == nil {
 		t.Fatal("a task was filed into a project that does not exist")
@@ -47,7 +42,7 @@ func TestTheChartIsWhatMakesAProjectExist(t *testing.T) {
 	}
 	r.drain()
 
-	// AFTER: the same create lands, which is the whole point.
+	// AFTER: the same create lands.
 	got, err := r.writer.CreateTask(t.Context(), "op-late", newTask("t-late"), nil)
 	if err != nil {
 		t.Fatalf("CreateTask after the chart apply: %v", err)
@@ -59,10 +54,8 @@ func TestTheChartIsWhatMakesAProjectExist(t *testing.T) {
 
 // A SECOND APPLY OF ONE REVISION WRITES NOTHING.
 //
-// The apply runs on every config apply and on every boot, on every node. If
-// each of those were a record, a fleet of five restarting would put five
-// identical projects on the log and the trim would carry them for its whole
-// window — for a value nobody changed.
+// The apply runs on every config apply and every boot of every node; were each
+// a record, the log would carry identical projects for a value nobody changed.
 func TestReapplyingOneChartWritesNothing(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
@@ -95,9 +88,8 @@ func TestReapplyingOneChartWritesNothing(t *testing.T) {
 	}
 	r.drain()
 
-	// AND AN OLDER REVISION ARRIVING LATE DOES NOT WALK IT BACK. Two
-	// nodes applying two revisions is ordinary during a rollout, and the
-	// node that is behind must not undo the one that is ahead.
+	// AND AN OLDER REVISION ARRIVING LATE DOES NOT WALK IT BACK, as a
+	// node behind in a rollout would.
 	if wrote, err = r.writer.ApplyChart(t.Context(), activatedAt(100), chart); err != nil {
 		t.Fatalf("stale apply: %v", err)
 	}
@@ -111,15 +103,14 @@ func TestReapplyingOneChartWritesNothing(t *testing.T) {
 	}
 }
 
-// A REAPPLY OF ONE ACTIVATION SETS RIGHT WHAT AN EQUAL ONE WALKED BACK —
-// which is why a chart apply decides from the project's rows rather than
-// letting the operation ledger answer it.
+// A REAPPLY OF ONE ACTIVATION SETS RIGHT WHAT AN EQUAL ONE WALKED BACK, which
+// is why a chart apply decides from the project's rows, not the operation
+// ledger.
 //
-// The guard lets an EQUAL stamp through, so a stale write that lands at the
-// same activation as the current one stands until the next apply puts it back.
-// An operation id derived from the activation is one the ledger already holds
-// from that activation's first write, so it answered the reapply as done and
-// the stale names stood until the configuration moved again.
+// The guard lets an EQUAL stamp through, so a stale write at the current
+// activation stands until the next apply puts it back. An operation id derived
+// from the activation is one the ledger already holds, and would answer the
+// reapply as done.
 func TestAReapplySetsRightWhatAnEqualEpochWalkedBack(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
@@ -154,22 +145,20 @@ func TestAReapplySetsRightWhatAnEqualEpochWalkedBack(t *testing.T) {
 	}
 }
 
-// A CHART APPLY IS DECIDED WHATEVER THE OPERATION LEDGER HAS LOST — which is
-// most companies' steady state: a chart nobody has changed for longer than the
-// ledger keeps its rows.
+// A CHART APPLY IS DECIDED WHATEVER THE OPERATION LEDGER HAS LOST, most
+// companies' steady state: a chart unchanged for longer than the ledger keeps
+// its rows.
 //
-// The operation is the APPLY, minted when it runs through the state log's own
-// grammar. The id it replaced, `chart:<epoch>:<key>`, was outside that
-// grammar, so the ledger read it as minted at the zero instant and could vouch
-// for it on no node whose ledger had ever lost a row: every boot of every such
-// node had every project answered `unknown` without being decided.
+// The operation is the APPLY, minted when it runs in the state log's own
+// grammar. An id outside that grammar reads as minted at the zero instant,
+// which no ledger that ever lost a row can vouch for: every project would be
+// answered `unknown` without being decided.
 func TestAChartApplyIsDecidedWhateverTheLedgerLost(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
-	// THE LEDGER HAS LOST ROWS UP TO A MINUTE AGO — a sweep, say — and the
-	// activation is older than that. A minute rather than now, so the
-	// apply's own mint, which an id resolves to the millisecond, is
-	// unambiguously after it.
+	// THE LEDGER HAS LOST ROWS UP TO A MINUTE AGO, after the activation. A
+	// minute rather than now, so the apply's own mint (resolved to the
+	// millisecond) is unambiguously after it.
 	r.markLedgerLost(time.Now().Add(-time.Minute))
 	wrote, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []worklet.ChartProject{
 		{Key: "ENG", Name: "Engineering", Unit: "Eng"},
@@ -191,8 +180,8 @@ func TestAChartApplyIsDecidedWhateverTheLedgerLost(t *testing.T) {
 // TWO NODES APPLYING ONE CHART PUT ONE RECORD ON THE LOG — the second decided
 // on rows that did not have the first's yet, lost the broker's arbitration,
 // and re-decided on the rows the winner wrote. And it REPORTS that it wrote
-// nothing: the round that lost had decided to write, and a flag that round set
-// and the next never cleared told the caller it had.
+// nothing, though the round that lost had decided to write: the answer is the
+// last round's.
 func TestTwoNodesApplyingOneChartWriteOnce(t *testing.T) {
 	t.Parallel()
 	a := newRoundTripWithoutProject(t)
@@ -263,12 +252,11 @@ func (r *roundTrip) projectName(key string) string {
 // applied late cannot walk it back.
 //
 // The stamp is compared BEFORE the fields. A row left at the older activation
-// because its three fields happened to match the newer one is open to every
-// activation between the two: one nobody applied before it was superseded,
-// arriving late from a slow node, finds a row stamped below it and writes its
-// own older names over the newer ones. Re-stamping costs one record per
-// project per activation; reapplying ONE activation still costs nothing, which
-// is what [TestReapplyingOneChartWritesNothing] holds.
+// because its fields matched is open to every activation between the two: one
+// arriving late from a slow node finds a row stamped below it and writes its
+// older names over the newer. Re-stamping costs one record per project per
+// activation; reapplying ONE activation still costs nothing
+// ([TestReapplyingOneChartWritesNothing]).
 func TestALaterActivationReStampsSoAnOlderOneCannotWalkItBack(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
@@ -301,10 +289,8 @@ func TestALaterActivationReStampsSoAnOlderOneCannotWalkItBack(t *testing.T) {
 	}
 }
 
-// AND THE STAMP ARBITRATES A REAL DISAGREEMENT.
-//
-// Two nodes applying two revisions is ordinary during a rollout, and the node
-// still on the older one must not walk back what the newer one wrote.
+// AND THE STAMP ARBITRATES A REAL DISAGREEMENT: during a rollout, a node still
+// on the older revision must not walk back what the newer one wrote.
 func TestABehindNodesReconcileDoesNotWalkBackAnAheadOnes(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
@@ -341,9 +327,8 @@ func TestAChartApplyWithNoActivationIsRefused(t *testing.T) {
 	}
 }
 
-// THE STAMP IS ON THE ROW: the reconcile compares the stored number against
-// the activation it is applying, so a column the applier never filled would
-// make every node's comparison read zero and every reconcile a write.
+// THE STAMP IS ON THE ROW: a column the applier never filled would read zero
+// in every reconcile's comparison and make each one a write.
 func TestTheChartEpochIsWrittenOntoTheProjectRow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)

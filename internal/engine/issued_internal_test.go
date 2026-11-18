@@ -444,15 +444,12 @@ func TestEachIssuersStoryIsToldInItsWords(t *testing.T) {
 }
 
 // A VENDOR'S BOX FILE IS WRITTEN AT LAUNCH, KEPT BY THE POLL, AND NEVER IN THE
-// ENVIRONMENT. The launch resolves it through the seat's own resolution, so an
-// issued variable is issued, in a step of its own ahead of every other; a
-// person's file at the same path is dropped for it, being a credential, where
-// a person's file at a setting file's path is theirs. It is in
-// neither the run's env nor its box defaults, which are all a sign-in is judged
-// on, and only its path is kept for the launch, under its variable. It is
-// scrubbed as a credential. The poll rewrites a file marked rewritten once its
-// token renews, through the refresh that keeps a person's token files, and
-// leaves the rest to the launch.
+// ENVIRONMENT. Resolved through the seat's own resolution, in a step ahead of
+// every other, it displaces a person's file at its path (it is a credential),
+// unlike a setting file. It is in neither the run's env nor its box defaults
+// (all a sign-in is judged on): only its path is kept, under its variable. It
+// is scrubbed, and the poll's token-file refresh rewrites only a file marked
+// rewritten, once its token renews.
 func TestAVendorsBoxFileIsWrittenAtLaunchAndKeptByThePoll(t *testing.T) {
 	t.Parallel()
 	e, c, fake := twoIssuers(t)
@@ -712,12 +709,11 @@ func TestATokenThePollRenewsIsRecordedBeforeItIsWritten(t *testing.T) {
 	}
 }
 
-// A RENEWAL THE STORE DID NOT TAKE IS NOT WRITTEN: none of its variable's
-// files, on this poll or any poll after, until a record lands. A token in the
-// box that its job's set does not hold is one no capture of the job's session is
-// scrubbed of. The refusal is told once while it lasts and settled by the record
-// that lands; and a job the run's record no longer holds running is written
-// nothing and told nothing, since the poll that reached it is a moment old.
+// A RENEWAL THE STORE DID NOT TAKE IS NOT WRITTEN, to none of its variable's
+// files, until a record lands: a token its job's set does not hold is one no
+// capture of the session is scrubbed of. The refusal is told once while it
+// lasts and settled by the landing record; a job its row no longer holds
+// running is written and told nothing (the poll that reached it is stale).
 // Not parallel: it adds a destination to the process-wide logger.
 //
 // Mutation: write the files whatever the record answered, tell the refusal on

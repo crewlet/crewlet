@@ -106,10 +106,8 @@ func TestARefusalNamesTheWindowThatEndsLast(t *testing.T) {
 		t.Fatalf("refusal = %+v, want the month, which ends after the day", got)
 	}
 
-	// Sunday 31 May: the day, the week and the month all end at the same
-	// midnight, and the longer period is named — in whatever order the
-	// refusing periods arrive, since the tie is broken on the period and
-	// not on the list.
+	// Sunday 31 May: day, week and month end at one midnight, and the
+	// longest is named in any order, the tie broken on the period, not the list.
 	sunday := windowsOn(2026, time.May, 31)
 	all := coord.Caps{period.Day: 100, period.Week: 100, period.Month: 100}
 	spent := coord.Tally{}.Roll(sunday).Add(100, time.Now())
@@ -145,12 +143,11 @@ func TestAReadAgainstALaterWindowIsThatWindowUnspent(t *testing.T) {
 }
 
 // A READ BEHIND A SLOT THAT LEADS IT IS THE LATER WINDOW, WITH ITS SPEND. A
-// slot never rolls back, so a charge against the earlier window is refused
-// against the later window's spend; a read answering the earlier window
-// unspent would hand every reader — the headroom a turn is given, the learning
-// gate, the budgets answer — room the gate will not admit. That lasts a few
-// seconds behind a peer's clock and up to a day after the company's zone moves
-// west.
+// slot never rolls back, so the gate refuses against the later window's spend;
+// a read answering the earlier window unspent would promise every reader (a
+// turn's headroom, the learning gate, the budgets answer) room the gate will
+// not admit, for seconds behind a peer's clock or a day after the company's
+// zone moves west.
 func TestAReadBehindALaterSlotIsThatSlot(t *testing.T) {
 	t.Parallel()
 	today, tomorrow := windowsOn(2026, time.March, 14), windowsOn(2026, time.March, 15)
@@ -164,8 +161,8 @@ func TestAReadBehindALaterSlotIsThatSlot(t *testing.T) {
 		!day.RefusedAt.Equal(stamp) {
 		t.Fatalf("a read of the 14th behind a slot on the 15th = %+v, want the 15th at 90, refusing", day)
 	}
-	// And it is what the gate decides with: the charge the read left room
-	// for is refused, naming the same window at the same spend.
+	// The gate agrees: the charge the read left room for is refused,
+	// naming the same window at the same spend.
 	rolled := tally.Roll(today)
 	refusing := rolled.Refusing(20, caps)
 	named := rolled.Refusal("org", refusing, caps, today)

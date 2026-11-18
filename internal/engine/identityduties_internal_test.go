@@ -13,16 +13,13 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
-// identityDutyRoster is every duty [Engine.identityDutiesFor] arms, with the
-// interval it runs at.
-//
-// THE DUTY GATES READ THESE DUTIES HERE rather than at the claim, because the
-// claim is made once, inside the helper every identity duty goes through, as
-// `e.workerDuty(name, identityDutyTTL(interval))` — a syntax-tree scan sees
-// the parameters, never the values. So the TTL table (dutyTTLs), the name
-// table (dutyNames) and the ceiling check below all take them from this one
-// roster, and [TestTheIdentityDutyRosterIsWhatTheEngineArms] holds the roster
-// to what the engine actually arms.
+// identityDutyRoster is every duty [Engine.identityDutiesFor] arms, with its
+// interval. The duty gates read the duties here, not at the claim: the claim is
+// made inside one helper as `e.workerDuty(name, identityDutyTTL(interval))`,
+// where a syntax-tree scan sees the parameters, never the values. The TTL table
+// (dutyTTLs), the name table (dutyNames) and the ceiling check below take them
+// from this roster, and [TestTheIdentityDutyRosterIsWhatTheEngineArms] holds it
+// to what the engine arms.
 var identityDutyRoster = map[string]time.Duration{
 	identitySweepDuty: IdentitySweepInterval,
 }
@@ -36,15 +33,12 @@ func longestIdentityDutyTTL() time.Duration {
 	return longest
 }
 
-// THE ROSTER IS WHAT THE ENGINE ARMS, in both directions.
-//
-// A duty armed and missing from the roster is one whose lease no TTL gate
-// checks and whose name no duty table is held to; a roster entry the engine
-// does not arm is a duty the pages would be made to list although nothing
-// runs it. Read off identityDutiesFor itself, on a workers node with no
-// coordination store, where every claim is nil and nothing is started.
-// Mutation: arm a second duty in identityDutiesFor, or arm the sweep at
-// another interval, and this fails.
+// THE ROSTER IS WHAT THE ENGINE ARMS, in both directions: a duty armed but not
+// in the roster has a lease no TTL gate checks and a name no duty table holds;
+// a roster entry not armed is a duty the pages list though nothing runs it.
+// Read off identityDutiesFor on a workers node with no coordination store,
+// where every claim is nil and nothing starts.
+// Mutation: arm a second duty, or the sweep at another interval, and this fails.
 func TestTheIdentityDutyRosterIsWhatTheEngineArms(t *testing.T) {
 	t.Parallel()
 	e := &Engine{profile: placement.NodeProfile{
@@ -74,12 +68,9 @@ func identityDutyNames() []string {
 	return slices.Sorted(maps.Keys(identityDutyRoster))
 }
 
-// THE IDENTITY DUTY'S LEASE FITS THE DUTY CEILING.
-//
-// A duty claims once per tick on a lease of three intervals, and every backend
-// REFUSES a lease longer than coord.MaxDutyTTL — a refused duty never runs at
-// all. So every interval a duty is armed at has to fit three times under the
-// ceiling. Mutation: arm one at a day and its lease is refused.
+// THE IDENTITY DUTY'S LEASE FITS THE DUTY CEILING: its lease is three
+// intervals, and every backend REFUSES one longer than coord.MaxDutyTTL — a
+// refused duty never runs. Mutation: arm one at a day and its lease is refused.
 func TestEveryIdentityDutysLeaseFitsTheDutyCeiling(t *testing.T) {
 	t.Parallel()
 	for name, every := range identityDutyRoster {
@@ -90,12 +81,10 @@ func TestEveryIdentityDutysLeaseFitsTheDutyCeiling(t *testing.T) {
 	}
 }
 
-// ONLY A CLAIM THIS NODE HOLDS RUNS THE PASS.
-//
-// A duty is a fleet singleton: a claim a peer won is a pass that runs over
-// there, and one the coordination store could not answer is a pass nobody can
-// say is this node's — running it on either would run it twice. Mutation: run
-// on an unanswered claim and the third row passes.
+// ONLY A CLAIM THIS NODE HOLDS RUNS THE PASS: a claim a peer won runs over
+// there, and one the coordination store could not answer may be the peer's
+// too — running either here runs the pass twice. Mutation: run on an
+// unanswered claim and the third row passes.
 func TestOnlyAHeldClaimRunsThePass(t *testing.T) {
 	t.Parallel()
 	blip := errors.New("coordination store: no responders")

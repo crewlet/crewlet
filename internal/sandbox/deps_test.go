@@ -11,27 +11,18 @@ import (
 	"testing"
 )
 
-// THE SANDBOX LINKS NOTHING OF GITLET, NO CONFIGURATION AND NO STATE LOG. It
-// carries what it never reads as bytes: a run's code floor and its push
-// record's position as a statelog position's token (PendingRun.CodeFloor,
-// PushRecord.At), its grants as the strings Gitlet resolved. Linking
-// any of the three to read them would bring the engine's configuration or
-// the state log's whole graph into everything that drives a box, and decide
-// nothing this package decides. The answer seal signs and verifies through
-// internal/recordseal, the leaf the state log seals its own records through
-// (ADR-0031), so sealing an answer is no reason to link a log either.
+// THE SANDBOX LINKS NOTHING OF GITLET, NO CONFIGURATION AND NO STATE LOG, which
+// would pull the engine's configuration or the log's whole graph into all that
+// drives a box. What it never reads it carries as bytes (PendingRun.CodeFloor and
+// PushRecord.At as a position's token, grants as the strings Gitlet resolved),
+// and it seals answers through internal/recordseal (ADR-0031), not the log.
 //
-// Two halves, each able to fail alone. The LINK is read from `go list -deps`,
-// what the package's non-test build links, so a log reached through another
-// package is refused as much as one imported here. The NAMES are read from
-// every source file of the package, its tests included: no file imports the
-// state log or anything under it, so a test that builds a statelog value to
-// hand the package — the sign of an API that speaks the log's types — is
-// refused though the non-test build never links it.
-//
-// Mutation: import internal/changefeed (which links the log) from a non-test
-// file — red on the link; name statelog.ReadSession in pushed_test.go — red
-// on the names; import internal/config for a default — red.
+// Two halves, each able to fail alone: the LINK from the non-test build's `go
+// list -deps`, so a log reached through another package is refused; the NAMES
+// from every file, tests included, since a test building a statelog value marks
+// an API that speaks it. Mutation: import internal/changefeed from a non-test
+// file (red on the link), name statelog.ReadSession in pushed_test.go (names),
+// or import internal/config for a default (red).
 func TestTheSandboxLinksNoGitletConfigurationOrStateLog(t *testing.T) {
 	t.Parallel()
 	const module = "github.com/crewlet/crewlet/internal/"

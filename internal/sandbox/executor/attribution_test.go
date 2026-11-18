@@ -18,11 +18,10 @@ const (
 )
 
 // ONLY A RUN WHOSE REQUEST ASKS FOR ATTRIBUTION HAS ITS GIT POINTED AT THE
-// HOOK, and it is pointed there by the wrapper, after the statement that
-// clears the profile's variables and before the harness starts: the hook is
-// linked under every hook name in the run's own directory, and the run's
-// GIT_CONFIG entry names that directory. A run that asks for none links no
-// hook and exports no entry, so its git is exactly the box's.
+// HOOK: the hook is linked under every hook name in the run's own directory,
+// and the wrapper exports the GIT_CONFIG entry naming it after clearing the
+// profile's variables and before the harness starts. A run that asks for none
+// links no hook and exports no entry, so its git is exactly the box's.
 //
 // Mutation: export the entry whatever the request, or after the harness, or link
 // no hook, and this goes red.
@@ -107,22 +106,14 @@ func TestARunWhoseNameIsNotOneLineIsRefusedBeforeItStarts(t *testing.T) {
 	}
 }
 
-// A RUN'S COMMITS CREDIT CREWLET, AND ONLY THE RUN'S OWN — through a whole
-// run in a real box, with a stand-in for the harness that runs git the way an
-// agent would: the hook is installed by Start, the wrapper points git at it
-// after the login profile, and git runs it.
-//
-//   - A commit of its own carries the co-author and the run, once, however
-//     often it is amended, beside the harness's own co-author line, and with
-//     --no-verify too, which skips commit-msg but not prepare-commit-msg.
-//   - The repository's hooks still run and still refuse, from its hooks
-//     directory or from its own core.hooksPath.
-//   - A person's commit the run cherry-picks or amends is not credited: its
-//     author is the person, and Crewlet did not write it.
-//   - Entries of the run's own environment hold beside the run's, and a
-//     profile that resets the count does not drop it.
-//   - A run named by nothing credits the co-author alone, and a run asking for
-//     no attribution credits nothing — the case that proves this can fail.
+// A RUN'S COMMITS CREDIT CREWLET, AND ONLY THE RUN'S OWN, through a whole run
+// in a real box whose harness stand-in runs git as an agent would. A commit of
+// its own carries the co-author and the run once, however often amended,
+// beside the harness's own co-author, and under --no-verify; the repository's
+// hooks still run and refuse, from .git/hooks or its own core.hooksPath; a
+// person's commit cherry-picked or amended is not credited; the run's own
+// GIT_CONFIG entries hold, a profile resetting the count drops nothing; a run
+// named by nothing credits the co-author alone, one asking for none nothing.
 //
 // Mutation: compare nothing before crediting and the person's commits are
 // credited; hand no hook on and the repository's refusal is lost; export the
@@ -130,8 +121,8 @@ func TestARunWhoseNameIsNotOneLineIsRefusedBeforeItStarts(t *testing.T) {
 func TestARunsCommitsCreditCrewletAndOnlyTheRunsOwn(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
-		// NOT A SKIP: every machine that runs this suite holds its checkout
-		// in git, and a skip would pass the build with the hook never run.
+		// Not a skip: every machine running this suite holds its checkout in
+		// git, and a skip would pass the build with the hook never run.
 		t.Fatalf("git is not on PATH, so the commit attribution hook would go unrun: %v", err)
 	}
 	turn7 := &sandbox.CommitAttribution{Run: "turn-7"}
@@ -236,9 +227,8 @@ git merge -q --no-ff -m "merge side" side`,
 			if err := b.WriteFile(t.Context(), b.Home()+"/scenario.sh", []byte(scenarioPrelude+tc.script+scenarioEnd)); err != nil {
 				t.Fatalf("write the scenario: %v", err)
 			}
-			// It answers `--version` as the harness does, without running the
-			// scenario: every run's script asks the release first, and a
-			// scenario run twice finds its commits already made.
+			// It answers `--version` without running the scenario: every run's
+			// script asks the release first, and a second run finds its commits made.
 			writeBoxStandIn(t, b, p.BinDir()+"/claude",
 				"#!/bin/sh\ncase \"$1\" in --version) echo '2.1.310 (Claude Code)'; exit 0;; esac\n"+
 					"sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n")
@@ -286,11 +276,10 @@ git merge -q --no-ff -m "merge side" side`,
 }
 
 // scenarioPrelude opens every scenario: a fresh repository in the box's home,
-// made under the run's environment (git fires a hook as it writes the
-// repository's first ref), committing as the seat — the identity a setup
-// recipe gives the run — and blind to the machine's own system configuration.
-// person runs a command as a person, outside the run's hooks: their commit
-// was made somewhere else. Through env, because an assignment before a shell
+// made under the run's environment (git fires a hook writing its first ref),
+// committing as the seat, the identity a setup recipe gives the run, and blind
+// to the machine's system configuration. person runs a command as a person,
+// outside the run's hooks, through env: an assignment before a shell
 // function's name is not certain to reach the commands it runs.
 const scenarioPrelude = `set -e
 export GIT_CONFIG_NOSYSTEM=1

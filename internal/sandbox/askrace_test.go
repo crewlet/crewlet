@@ -35,13 +35,12 @@ func (v *vanishing) MutateSandboxRun(ctx context.Context, turnID string,
 	})
 }
 
-// AN ASK IS RECORDED ONLY WHERE THE WRITE LANDED. A run's row removed by
-// another writer between the decision to record its question and the commit
-// (its ending, say) leaves nothing to park on, and the run must be told so,
-// never that its question was asked.
+// AN ASK IS RECORDED ONLY WHERE THE WRITE LANDED. A run's row removed (by its
+// ending, say) between the decision to record its question and the commit
+// leaves nothing to park on, and the run is told so, never that it was asked.
 //
-// Mutation: answer the outcome the last decision chose rather than whether the
-// write won, and the run is told its question is recorded on a row that is gone.
+// Mutation: answer the last decision's outcome rather than whether the write
+// won, and the run is told its question is recorded on a row that is gone.
 func TestAnAskWhoseRowWentMidWriteIsNotRecorded(t *testing.T) {
 	t.Parallel()
 	fleet := &vanishing{Fleet: memory.NewFleet()}

@@ -18,28 +18,23 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/linktest"
 	"github.com/crewlet/crewlet/internal/runtoken"
-	seathost "github.com/crewlet/crewlet/internal/seat"
 )
 
 // A HYDRATION ACROSS A LEAF'S METERED LINK.
 //
-// The cases here stand a member serving leaves and a leaf joined to it as the
-// engine stands them (internal/queue/jetstream), the leaf's data link crossing
-// a first-in, first-out link (linktest.SharedFIFO) and the leaf's own meter
-// reading it, and hydrate a seat through the leaf. The syncer's pace and
-// window are scaled to the link's rate, and its client's request term to a
-// second, so a stall is a second and a half and a download of half a MiB
-// holds the link four times that.
+// A member and a leaf as the engine stands them (internal/queue/jetstream),
+// the leaf's data link crossing a FIFO link (linktest.SharedFIFO) its own meter
+// reads. Pace and window are scaled to the link's rate and the request term to
+// a second, so a stall is a second and a half and the half-MiB download holds
+// the link four times that.
 
 const (
 	// meteredRate is the pace of the link: 128 KiB a second each way.
 	meteredRate = 128 << 10
 	// meteredInflight is what the link lets each connection queue: half a
-	// second of its rate, inside the ten seconds a member's leaf writes are
-	// given.
+	// second of its rate, inside the ten seconds a member's leaf writes get.
 	meteredInflight = 64 << 10
-	// meteredPace is what a MiB takes to cross the link: the floor the
-	// syncer plays at.
+	// meteredPace is what a MiB takes to cross the link, the syncer's floor.
 	meteredPace = time.Duration(int64(1<<20) * int64(time.Second) / meteredRate)
 	// meteredWindow is the replay's window across the link.
 	meteredWindow = 64 << 10
@@ -129,20 +124,18 @@ func (f meteredFleet) client(t *testing.T) jetstream.JetStream {
 	return c
 }
 
-// syncer is a syncer over db reaching the changelog through the leaf, across
-// its link as the engine builds one, reading the leaf's meter, at the link's
-// pace and window.
+// syncer reaches the changelog through the leaf as the engine builds one,
+// reading the leaf's meter, at the link's pace and window.
 func (f meteredFleet) syncer(t *testing.T) *Syncer {
 	t.Helper()
 	s := mustNew(openStore(t), f.client(t), func(string) string { return seat.AgentID },
-		Config{AcrossLink: true, LeaseHeartbeat: seathost.HeartbeatInterval, Clustered: true, Link: f.meter})
+		Config{AcrossLink: true, Clustered: true, Link: f.meter})
 	s.pace, s.window = meteredPace, meteredWindow
 	return s
 }
 
-// downloading subscribes the leaf's connection to what the member sends it,
-// and waits until the member's sends reach it; the download is sent by the
-// function it answers.
+// downloading subscribes the leaf to the member's sends and waits until they
+// reach it; the returned function sends the download.
 func (f meteredFleet) downloading(t *testing.T) (send func()) {
 	t.Helper()
 	if _, err := f.leaf.Subscribe("download.>", func(m *nats.Msg) {
@@ -176,8 +169,8 @@ func (f meteredFleet) downloading(t *testing.T) (send func()) {
 				t.Errorf("send a piece of the download: %v", err)
 			}
 		}
-		// SENT ON before the pull: the member has queued every piece to
-		// the leaf once its own connection's flush returns.
+		// The flush returning means every piece is queued to the leaf before
+		// the pull goes out.
 		if err := f.member.Flush(); err != nil {
 			t.Errorf("flush the download: %v", err)
 		}
@@ -196,20 +189,13 @@ func (f meteredFleet) diaryOn(t *testing.T, n int) {
 
 // A HYDRATION BEHIND A DOWNLOAD ON ITS LINK IS NOT REFUSED.
 //
-// As the diary's replay sends its first pull, the member sends the leaf half
-// a MiB — four seconds of the link — which the pull's rows queue behind on the
-// link's one queue, as a satellite's replay queues behind the node's own
-// download. The replay hears nothing from its copy for over twice its stall,
-// while the leaf's link moves at its rate: it waits, and the hydration
-// carries every note.
+// With the diary's first pull, the member sends half a MiB (four seconds of
+// the link) that the pull's rows queue behind. The replay hears nothing for
+// over twice its stall while the link moves at its rate, so it waits and
+// carries every note. The premise is decided by bytes, never a clock: the leaf
+// read at least a stall's worth of the rate between two of the replay's marks.
 //
-// Decided by bytes, never by a clock: the leaf's connection read at least the
-// stall's worth of the link's rate between the pull's send and its first
-// word, so the replay did go a stall without a word, and was not refused for
-// it.
-//
-// Red where silence is judged by words alone, as before the meter: the seat
-// is refused at the stall.
+// Red where silence is judged by words alone: the seat is refused at the stall.
 func TestAHydrationBehindADownloadOnItsLinkIsNotRefused(t *testing.T) {
 	t.Parallel()
 	f := newMeteredFleet(t)
@@ -261,11 +247,9 @@ func TestAHydrationBehindADownloadOnItsLinkIsNotRefused(t *testing.T) {
 
 // A HYDRATION ON A SILENT LINK IS REFUSED FOR ITS SILENCE.
 //
-// As the diary's replay sends its first pull, the leaf's data link is
-// blackholed: the link reads nothing more of it, and carries nothing either
-// way. The replay hears nothing and its link carries nothing, so the seat is
-// refused for the link's silence, saying what the link carried, and never
-// waits for the time cap a moving link would hold it to.
+// The leaf's data link is blackholed as the diary's first pull goes out, so
+// the seat is refused for the link's silence, saying what it carried, and
+// never waits for the time cap a moving link would hold it to.
 //
 // Mutant: silence never judged by the link — the replay waits for its time
 // cap, a minute and more, and is refused for it rather than for silence.

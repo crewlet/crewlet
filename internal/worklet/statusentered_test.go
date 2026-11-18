@@ -8,29 +8,14 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// `status_entered_at` IS STAMPED, AND IT NAMES THE NEWEST STATUS CHANGE.
+// `status_entered_at` is stamped, and it names the newest status change.
 //
-// # Why this case exists
-//
-// The column had no test at all, and it is the one thing that survived the
-// table it used to be written beside. `recomputeSpans` rebuilt
-// `tracker_status_spans` and stamped this column in the same pass; migration
-// 0014 dropped the table, and the pass shrank to the stamp alone
-// ([Applier.stampStatusEntered]).
-//
-// Deleting the function along with its table would have been the obvious move
-// and is the one this guards against. `upsertTask` binds a literal 0 for this
-// column on insert and OMITS it from the conflict update — so with no writer
-// the column would read 0 on every task in the company, `sort=status_entered`
-// would order by nothing, the `status_entered` date filter would match every
-// task or none, and NOTHING in the tree would have failed.
-//
-// # What is asserted
-//
-// THE INSTANT, not merely that something was written. A stamp that named the
-// FIRST status change rather than the newest is the shape the old code could
-// have degraded into — it walked every status row and took the last — and a
-// non-zero check passes on it happily.
+// Nothing else writes it ([Applier.stampStatusEntered]): `upsertTask` binds
+// 0 on insert and omits it from the conflict update, so without the stamp
+// every task reads 0, `sort=status_entered` orders by nothing, the
+// `status_entered` date filter matches all or none, and nothing else fails.
+// The instant is asserted, not merely a non-zero value: a stamp naming the
+// first status change rather than the newest passes a non-zero check.
 func TestTheEnteredInstantNamesTheNewestStatusChange(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -49,9 +34,8 @@ func TestTheEnteredInstantNamesTheNewestStatusChange(t *testing.T) {
 		r.drain()
 	}
 
-	// THE COLUMN AGAINST THE HISTORY IT IS DERIVED FROM, rather than
-	// against a literal: the instant is the broker's own and a case that
-	// hard-coded one would be asserting the harness's clock.
+	// Against the history it derives from, not a literal: the instant is
+	// the broker's, and a literal would assert the harness's clock.
 	want := r.strings(`SELECT CAST(h.effective_at AS TEXT)
 		FROM tracker_history h
 		WHERE h.subject_id = ?
@@ -75,20 +59,17 @@ func TestTheEnteredInstantNamesTheNewestStatusChange(t *testing.T) {
 	}
 }
 
-// AND THE SORT ACTUALLY ORDERS BY IT.
-//
-// The column check above passes on a build whose QUERY side stopped reading
-// it. This is the other end: two tasks whose statuses moved in a known order
-// come back in that order, and reversed under `-status_entered`.
+// AND THE SORT ACTUALLY ORDERS BY IT: the column check above passes on a
+// build whose query side stopped reading it, so two tasks moved in a known
+// order come back in that order, reversed under `-status_entered`.
 func TestTheEnteredInstantIsWhatStatusEnteredSortsOn(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	filedTask(t, r, "t-early")
 	filedTask(t, r, "t-late")
 
-	// MOVED IN A KNOWN ORDER, one drain apart, so the log's own positions
-	// separate them — the effective instant is the broker's and two writes
-	// inside one drain can share it.
+	// One drain apart, so the log's positions separate them: two writes in
+	// one drain can share the broker's effective instant.
 	for _, id := range []string{"t-early", "t-late"} {
 		moved := worklet.StatusInProgress
 		if _, err := r.writer.UpdateTask(t.Context(), "op-move-"+id, id, "ENG",
@@ -131,25 +112,13 @@ func TestTheEnteredInstantIsWhatStatusEnteredSortsOn(t *testing.T) {
 
 // AND THE PUBLISHED FIELD CARRIES IT, not just the column.
 //
-// # The gap this closes
-//
-// `status_entered_at` lives in two places with different producers, and only
-// one of them had one. [Applier.stampStatusEntered] writes the COLUMN, which
-// is what `sort=status_entered` and the date filter read — and those worked.
-// The published field is `Task.StatusEnteredAt`, and a task is served by
-// decoding the stored `document`: `readTaskDocument`'s own comment says the
-// columns are "a CACHE of what the document says".
-//
-// For this one column that is backwards. The applier re-marshals the task into
-// the document BEFORE the stamp runs (the stamp needs the history row, which
-// is written after the upsert), so the document is always written with a zero
-// here, `omitzero` drops it from the JSON, and every reader of the published
-// field got nothing: `GET /worklet/item`, the operator MCP's `get_work_item`, and
-// the dashboard's "In status since" row, which simply never drew.
-//
-// It is the ONE derived column that is not a cache of the document — every
-// other one is extracted from what the writer wrote — so it is joined on read
-// rather than written into a document no writer authored.
+// [Applier.stampStatusEntered] writes the column, but a task is served by
+// decoding its stored `document`, which the applier re-marshals before the
+// stamp runs (the stamp needs the history row written after the upsert). So
+// the document holds a zero, `omitzero` drops it, and `GET /worklet/item`,
+// `get_work_item` and the dashboard's "In status since" row get nothing. It
+// is the one derived column that is no cache of the document, so it is
+// joined on read rather than written into a document no writer authored.
 func TestTheEnteredInstantReachesThePublishedField(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -175,9 +144,8 @@ func TestTheEnteredInstantReachesThePublishedField(t *testing.T) {
 			"sort=status_entered orders by a column that IS maintained")
 	}
 
-	// AGAINST THE COLUMN, so the field is not merely non-zero: a field
-	// filled from the record's own clock rather than from the derivation
-	// would pass an IsZero check and disagree with the sort beside it.
+	// Against the column, not merely non-zero: a field filled from the
+	// record's own clock would pass IsZero and disagree with the sort.
 	want := r.strings(
 		`SELECT CAST(status_entered_at AS TEXT) FROM tracker_tasks WHERE id = ?`,
 		"t-1")

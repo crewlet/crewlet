@@ -36,9 +36,8 @@ func decode(t *testing.T, buf *bytes.Buffer) map[string]any {
 	return out
 }
 
-// The whole point of the bridge: what nats-server reports as WRONG must
-// reach the operator, at a severity that says so. Before it existed, the
-// embedded server had no logger at all and every one of these went nowhere.
+// What nats-server reports as WRONG must reach the operator, at a severity
+// that says so.
 func TestTheBrokersOwnFailuresReachTheOperator(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -47,8 +46,8 @@ func TestTheBrokersOwnFailuresReachTheOperator(t *testing.T) {
 	}{
 		{"error", func(l natsLogger) { l.Errorf("stream %q: %v", "INBOX", "no space") }, "ERROR"},
 		{"warn", func(l natsLogger) { l.Warnf("slow consumer on %s", "INBOX") }, "WARN"},
-		// Fatal is an Error line, because the engine owns this process —
-		// and a declaration, which the next case holds.
+		// Fatal is an Error line (the engine owns this process) and a
+		// declaration, which the next test holds.
 		{"fatal", func(l natsLogger) { l.Fatalf("listen on %d failed", 4222) }, "ERROR"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,9 +58,8 @@ func TestTheBrokersOwnFailuresReachTheOperator(t *testing.T) {
 			if line["level"] != tc.level {
 				t.Errorf("level = %v, want %v", line["level"], tc.level)
 			}
-			// The event name is a token and the broker's sentence is a
-			// value — the engine's rule, and what keeps `event=nats_server`
-			// a usable filter.
+			// The event name is a token and the broker's sentence a value,
+			// so `event=nats_server` stays a usable filter.
 			if line["msg"] != "nats_server" {
 				t.Errorf("event = %v, want nats_server", line["msg"])
 			}
@@ -78,18 +76,15 @@ func TestTheBrokersOwnFailuresReachTheOperator(t *testing.T) {
 
 // Fatalf MUST NOT exit, AND MUST NOT BE ONLY A LINE.
 //
-// Not exit: the engine owns this process, and a library ending it from inside
-// loses whatever it was in the middle of — the property Options.NoSigs exists
-// to protect. Not only a line: nats-server returns from the step that failed
-// and leaves the server half started, so a Fatalf that was merely logged left
-// a boot waiting for a server that had already given up. The bridge declares
-// the death, and its owner acts on it.
+// Not exit: the engine owns this process (what Options.NoSigs protects). Not
+// only a line: nats-server returns from the failed step and leaves the server
+// half started, so a merely logged Fatalf leaves a boot waiting on a server
+// that has given up. The bridge declares the death; its owner acts on it.
 func TestFatalfDeclaresTheBrokersDeathAndDoesNotEndTheProcess(t *testing.T) {
 	var buf bytes.Buffer
 	l := capture(&buf, slog.LevelDebug)
 	l.Fatalf("bind failed on %d", 6222)
-	// Reaching this line at all is the first assertion; the log is the
-	// corroboration.
+	// Reaching this line is the first assertion.
 	if got := decode(t, &buf)["detail"]; got != "bind failed on 6222" {
 		t.Errorf("detail = %v, want the message", got)
 	}
@@ -105,9 +100,8 @@ func TestFatalfDeclaresTheBrokersDeathAndDoesNotEndTheProcess(t *testing.T) {
 	}
 }
 
-// The broker's boot narration is a dozen lines about infrastructure the
-// operator deliberately did not deploy, so it is DEBUG — present when
-// someone is diagnosing the broker, absent otherwise.
+// The broker's boot narration is about infrastructure the operator did not
+// deploy, so it is DEBUG.
 func TestBootNarrationIsDebugAndNotInfo(t *testing.T) {
 	var buf bytes.Buffer
 	capture(&buf, slog.LevelInfo).Noticef("Server is ready")
@@ -127,10 +121,9 @@ type noisy struct{ rendered *bool }
 
 func (n noisy) String() string { *n.rendered = true; return "rendered" }
 
-// A suppressed line must not pay to format itself. nats-server calls Debugf
-// per protocol event once debug is on, and Tracef per message; without the
-// Enabled check in emit, every one of those would Sprintf its arguments and
-// throw the result away.
+// A suppressed line must not pay to format itself: nats-server calls Debugf
+// per protocol event and Tracef per message, and without emit's Enabled check
+// each would Sprintf its arguments for nothing.
 func TestASuppressedLineDoesNotFormatItsArguments(t *testing.T) {
 	var rendered bool
 	var buf bytes.Buffer
@@ -144,10 +137,9 @@ func TestASuppressedLineDoesNotFormatItsArguments(t *testing.T) {
 	}
 }
 
-// The defect this bridge fixes was not that the mapping was wrong — it was
-// that NOTHING INSTALLED A LOGGER, and nats-server's executeLogCall returns
-// silently on a nil one. Nothing but this connects the bridge to the server,
-// so a refactor that drops the call would restore the silence unnoticed.
+// nats-server's executeLogCall returns silently on a nil logger, and nothing
+// but this test connects the bridge to the server: dropping the SetLoggerV2
+// call, or moving it after Start, would silence the broker unnoticed.
 func TestTheEmbeddedServerIsGivenTheLoggerBeforeItStarts(t *testing.T) {
 	raw, err := os.ReadFile("embedded.go")
 	if err != nil {
@@ -160,8 +152,7 @@ func TestTheEmbeddedServerIsGivenTheLoggerBeforeItStarts(t *testing.T) {
 		t.Fatal("the embedded server is never given a logger; nats-server " +
 			"installs none of its own and discards every line in silence")
 	}
-	// THE CALL STATEMENT, however it is wrapped: Start runs on a goroutine
-	// startEmbedded joins, so the line is the call alone.
+	// The call statement alone: Start runs on a goroutine startEmbedded joins.
 	where := regexp.MustCompile(`(?m)^\s*ns\.Start\(\)\s*$`).FindStringIndex(src)
 	if where == nil {
 		t.Fatal("cannot find the server start; this guard has gone stale")
@@ -177,18 +168,15 @@ func TestTheEmbeddedServerIsGivenTheLoggerBeforeItStarts(t *testing.T) {
 	}
 	call := src[install : install+end+1]
 
-	// THE DEBUG FLAG IS THE OPERATOR'S OWN, not the log level's. Derived
-	// from the level, `-debug` — asked for to watch turns — also turned on
-	// nats-server's internal Debugf population, which the engine's own KV
-	// listings drive at a steady rate. Nothing but this call carries the
-	// answer, so a refactor that went back to the level would be silent.
+	// THE DEBUG FLAG IS THE OPERATOR'S OWN, not the log level's: `-debug`,
+	// asked for to watch turns, must not also turn on nats-server's Debugf,
+	// which the engine's KV listings drive at a steady rate.
 	if !strings.Contains(call, "cfg.Debug") {
 		t.Errorf("%s does not pass cfg.Debug — the broker's own debug output "+
 			"must be gated on stream.debug rather than on how loud the engine is", call)
 	}
-	// Trace is a line per protocol message and the engine publishes every
-	// event through this broker; sysTrace is the same for the system
-	// account. Both are the last two arguments and both must stay off.
+	// trace and sysTrace (the last two arguments) are a line per protocol
+	// message, on a broker every event passes through: both stay off.
 	if !strings.HasSuffix(call, ", false, false)") {
 		t.Errorf("%s enables protocol tracing — a line per message, on a "+
 			"broker every event in the company passes through", call)
@@ -197,10 +185,8 @@ func TestTheEmbeddedServerIsGivenTheLoggerBeforeItStarts(t *testing.T) {
 
 // A nats-server Logger that records what it was handed.
 //
-// NOT the engine's logger, and deliberately: logging.Configure installs a
-// PROCESS-WIDE sink, this suite runs its cases in parallel, and a test that
-// pointed the global at its own buffer would race every other one — which is
-// the exact failure logging.Configure's own doc is about.
+// Not the engine's logger: logging.Configure installs a process-wide sink, and
+// a parallel test pointing it at its own buffer would race every other one.
 type recordedLines struct {
 	mu    sync.Mutex
 	lines []string
@@ -231,10 +217,8 @@ func (r *recordedLines) Fatalf(f string, v ...any)  { r.add("fatal", f, v...) }
 func (r *recordedLines) Debugf(f string, v ...any)  { r.add("debug", f, v...) }
 func (r *recordedLines) Tracef(f string, v ...any)  { r.add("trace", f, v...) }
 
-// THE FLAG GATES Debugf AND NOTHING ELSE. This is the vendor fact
-// [Config.Debug] rests on: nats-server checks it inside its own Debugf
-// (server/log.go) and on no other severity, so declining the firehose costs
-// none of the diagnostics the bridge exists to deliver.
+// THE FLAG GATES Debugf AND NOTHING ELSE: the vendor fact [Config.Debug]
+// rests on (server/log.go), so declining the firehose costs no diagnostics.
 func TestTheBrokersDebugFlagGatesOnlyItsDebugLines(t *testing.T) {
 	t.Parallel()
 	for _, debug := range []bool{false, true} {
@@ -266,21 +250,14 @@ func TestTheBrokersDebugFlagGatesOnlyItsDebugLines(t *testing.T) {
 	}
 }
 
-// WHERE THE VOLUME ACTUALLY COMES FROM, and the measurement behind
-// [Config.Debug] existing at all.
+// Where the broker's debug volume comes from, and why [Config.Debug] exists.
 //
-// A KV key listing is not a read: the vendored client implements it as an
-// ordered ephemeral consumer created and then deleted (jetstream/kv.go), and
-// deleting a consumer closes the two internal JetStream clients it was built
-// on — each of which logs its own close at DEBUG. The engine's coordination
-// layer lists keys from two 15-second duty loops, so on the engine's own
-// debug level this was a permanent background stream of "JetStream
-// connection closed: Client Closed" for an idle node.
-//
-// Asserted here because it belongs to the CLIENT rather than to this package:
-// a bump that stopped listing keys through a consumer would make this test
-// fail with good news, and one that started doing it somewhere else would
-// make the same noise appear again with nothing to explain it.
+// A KV key listing is an ordered ephemeral consumer created then deleted
+// (jetstream/kv.go), and the deletion closes two internal JetStream clients,
+// each logging "connection closed: Client Closed" at DEBUG. The coordination
+// layer lists keys from two 15-second duty loops, so an idle node logs this
+// forever. It is the CLIENT's behaviour, asserted so a client bump that stops
+// (or moves) it is noticed.
 func TestAKeyListingCostsAConsumerAndSaysSoAtDebug(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -321,13 +298,10 @@ func TestAKeyListingCostsAConsumerAndSaysSoAtDebug(t *testing.T) {
 		for range lister.Keys() {
 		}
 	}
-	// The teardown is the server's own goroutine, so the count settles
-	// shortly after the listing returns rather than during it — milliseconds
-	// later. TEN SECONDS bound the wait, which is what this package gives a
-	// wait on the broker's own goroutines (awaitAcknowledged, settledBacklog):
-	// the bound only says how long a client that no longer logs the closes
-	// is given. Two hundred sleeps of ten milliseconds stood here, two
-	// seconds, which a loaded runner could spend on a healthy build.
+	// The teardown runs on the server's own goroutine, so the count settles
+	// after the listing returns. Ten seconds is this package's bound on a wait
+	// for the broker's goroutines (awaitAcknowledged, settledBacklog); it only
+	// bounds how long a client that no longer logs the closes is given.
 	var got int
 	deadline := time.Now().Add(10 * time.Second)
 	for {

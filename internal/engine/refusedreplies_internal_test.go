@@ -9,11 +9,10 @@ import (
 )
 
 // THE RESUMED EXECUTOR'S RECORD CARRIES ITS ROUND'S REFUSED REPLIES (ADR-0114).
-// The row keeps the replies the round's questions got that were refused as too
-// large to hand the run (sandbox.PendingRun.RoundRefusals), figures alone; the
-// collection hands them on to the round's reviewer through the run's record,
-// since none of them is in a call of the round's. A row with none hands on
-// none.
+// The row keeps the figures of replies refused as too large to hand the run
+// (sandbox.PendingRun.RoundRefusals); the collection hands them to the round's
+// reviewer through the run's record, since no call of the round's holds them.
+// A row with none hands on none.
 //
 // Mutation: leave RefusedReplies off runRecordOf, and a reviewer judging a
 // round whose question was asked again after its reply was refused reads the

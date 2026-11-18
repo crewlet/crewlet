@@ -43,10 +43,8 @@ export type DiffViewProps = Source &
   Omit<KitDiffViewProps, "sections" | "before" | "after" | "context"> & {
     /** Has no effect: every diff is tinted. Kept so a screen that passes it compiles. */
     hue?: "code" | undefined;
-    /**
-     * A gap's row, opening each hunk in place of the kit's "N unchanged lines":
-     * the first above the diff, each other one under the line above it.
-     */
+    /** A gap's row, opening each hunk in place of the kit's "N unchanged lines": the first above
+     *  the diff, each other one under the line above it. */
     expand?: ((gap: DiffGap) => ReactNode) | undefined;
     /** Unchanged lines after the last hunk, null where unknown; with `expand` only, 0 draws no row. */
     trailing?: number | null | undefined;

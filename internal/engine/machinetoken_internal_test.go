@@ -78,8 +78,8 @@ func (c *directoryCopy) For(context.Context, string) (estate.Backend, bool) {
 }
 
 // statelessWithDirectory is a node holding no data whose router asks one data
-// node, data-1, serving the directory a case hands served through the estate's
-// own server — over a broker both share, under one keyring.
+// node, data-1, serving the case's directory through the estate's own server,
+// over a shared broker and under one keyring.
 func statelessWithDirectory(t *testing.T, served *directoryCopy) *Engine {
 	t.Helper()
 	broker := memory.NewBroker()
@@ -136,18 +136,13 @@ func routedToken() credential.TokenRow {
 	}
 }
 
-// A MACHINE TOKEN RESOLVES ON A NODE WITHOUT DATA — and a node that cannot say
-// says so.
-//
-// A node without `data` holds no identity rows, so the row a presented machine
-// token is checked against is a data node's, asked through the estate's
-// router. A good token's row comes back with the stored verifier confirmed,
-// and the one table decides it valid exactly as a data node would; a wrong
-// secret's comes back with no verifier, and is refused as a data node refuses
-// it. And a directory the data node cannot read, or a data node holding none,
-// is an ERROR — the unknown arm, which the guard answers 503 — never the zero
-// row, which the table reads as "no such token". Mutation: read a router
-// error as no token (the zero row and no error) and the last two cases fail.
+// A MACHINE TOKEN RESOLVES ON A NODE WITHOUT DATA, from a data node's rows asked
+// through the estate's router, and a node that cannot say says so. A good
+// token's row comes back with the stored verifier confirmed and checks valid; a
+// wrong secret's comes back with none and is refused, as on a data node. A
+// directory the data node cannot read, or none, is an ERROR (the unknown arm,
+// a 503), never the zero row, which reads as "no such token". Mutation: read a
+// router error as the zero row and no error, and the last two cases fail.
 func TestAMachineTokenResolvesOnANodeWithoutData(t *testing.T) {
 	t.Parallel()
 	served := &directoryCopy{}
@@ -198,13 +193,12 @@ func TestAMachineTokenResolvesOnANodeWithoutData(t *testing.T) {
 	}
 }
 
-// A TIER A TOKEN'S BINDING RESOLVES ON A NODE WITHOUT DATA, by the rule its own
-// rows would be weighed by: a data node's row for the token's login, narrowed
-// to the binding, binds its seat; a bound row that node cannot vouch for is
-// refused in the widening direction, as a data node refuses its own; and a
-// directory it cannot read is unknown. Mutation: answer errNoDirectory on an
-// engine without a core, the rule before a node without `data` could ask, and
-// the first case fails; skip boundRowOf's vouch and the second does.
+// A TIER A TOKEN'S BINDING RESOLVES ON A NODE WITHOUT DATA, weighed as a data
+// node weighs its own: a data node's row for the token's login binds its seat,
+// a bound row it cannot vouch for is refused in the widening direction, and an
+// unreadable directory is unknown. Mutation: answer errNoDirectory on an engine
+// without a core and the first case fails; skip boundRowOf's vouch and the
+// second does.
 func TestATierATokensBindingResolvesOnANodeWithoutData(t *testing.T) {
 	t.Parallel()
 	served := &directoryCopy{}
@@ -230,11 +224,10 @@ func TestATierATokensBindingResolvesOnANodeWithoutData(t *testing.T) {
 	}
 }
 
-// A NODE THAT CAN READ NO DIRECTORY CANNOT SAY: a nil engine, one built with
-// neither a core nor a router, and a DATA node whose core is not up yet — which
-// holds the directory it cannot read yet, so a peer's answer must not stand in
-// for the rows it is about to apply. Each answers errNoDirectory, which the
-// guard turns into 503.
+// A NODE THAT CAN READ NO DIRECTORY CANNOT SAY: a nil engine, one with neither
+// a core nor a router, and a DATA node whose core is not up yet, for which a
+// peer's answer must not stand in for the rows it is about to apply. Each
+// answers errNoDirectory, which the guard turns into 503.
 func TestAnEngineThatCanReadNoDirectoryCannotSayWhoseTokenItIs(t *testing.T) {
 	t.Parallel()
 	served := &directoryCopy{}

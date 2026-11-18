@@ -23,14 +23,10 @@ func specManager(t *testing.T, opts ManagerOptions) *Manager {
 
 func ptr[T any](v T) *T { return &v }
 
-// THE ONLY ENGINE-SIDE BOUND ON A RUNAWAY HARNESS, so the three states
-// have to survive the overlay: a job is deliberately never stopped on a clock,
-// and the box's TTL is refreshed on every waiter tick precisely so the clock
-// cannot stop it either.
-//
-// The pointer is what carries the third state. Without it a seat could not
-// escape a company-wide cap, because its "no cap" and its "say nothing" would
-// both be zero — the same mistake pause_ttl_seconds was written to avoid.
+// THE ONLY ENGINE-SIDE BOUND ON A RUNAWAY HARNESS (a job is never stopped on a
+// clock, and its box TTL is refreshed every tick), so its three states must
+// survive the overlay: the pointer lets a seat escape a company-wide cap,
+// where "no cap" and "say nothing" would both be zero.
 func TestTheRoundCapOverlaysTheProviderDefault(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -44,8 +40,7 @@ func TestTheRoundCapOverlaysTheProviderDefault(t *testing.T) {
 		{"a seat's own cap wins", 40, ptr(120), 120},
 		{"a seat opts out of the company cap", 40, ptr(0), 0},
 		{"a seat can cap where the company did not", 0, ptr(25), 25},
-		// Refused by config validation, so this is the belt to that
-		// braces: a negative that reached here would render as
+		// Config refuses it too; a negative here would render
 		// `--max-turns -3`, which the harness reads as its own flag.
 		{"a negative is clamped, never passed on", 40, ptr(-3), 0},
 	} {
@@ -59,9 +54,8 @@ func TestTheRoundCapOverlaysTheProviderDefault(t *testing.T) {
 	}
 }
 
-// The cap has to reach the runner, which is the only place it does anything.
-// It was carried on LaunchRequest and set by nobody, so every launch went
-// out uncapped while the field looked wired.
+// The cap has to reach the runner, the only place it acts: a field carried
+// but set by nobody looks wired and caps nothing.
 func TestTheResolvedCapReachesTheHarness(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -103,12 +97,10 @@ func TestTheBoxTtlAndTheRoundCapAreSeparateKnobs(t *testing.T) {
 // A RELOAD THAT DROPS A CELL KEEPS THE BOXES ALREADY ON IT REACHABLE, AND
 // PROVISIONS NOTHING NEW THERE.
 //
-// A run's placement is on its row, and a revision only changes where the NEXT
-// run may go. Swapped wholesale, the manager answered "not configured" for the
-// cell a job was still running in: the poll settled it failed with its box
-// never reclaimed, and a paused one on it was never killed. And a nil manager —
-// the revision that removed providers.sandbox — keeps the last one, for the
-// runs it can no longer launch and still has to finish.
+// A run's placement is on its row: answered "not configured", a job still
+// running there would be settled failed with its box never reclaimed, and a
+// paused one never killed. A nil manager (providers.sandbox removed) keeps
+// the last one, for the runs it can no longer launch but must finish.
 func TestAReloadKeepsTheBoxesAlreadyOnADroppedCellReachable(t *testing.T) {
 	t.Parallel()
 	direct, container := NewFakeProvider(), NewFakeProvider()

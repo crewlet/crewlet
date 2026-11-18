@@ -24,10 +24,8 @@ type readHarness struct {
 func newReadHarness(t *testing.T) *readHarness {
 	t.Helper()
 	h := newApplyHarness(t)
-	// THROUGH THE FRAMEWORK, exactly as production does. A harness that
-	// read the rows directly would be testing a path nothing takes — and
-	// it is how `read_level` came to be a word in the answer rather than a
-	// property of it.
+	// THROUGH THE FRAMEWORK, as production reads: a harness reading the rows
+	// directly would test a path nothing takes.
 	log, err := statelogtest.LocalReader(worklet.Domain{}, h.db,
 		statelog.Position{Stream: worklet.Domain{}.Stream().Name, Generation: 1, Seq: h.seq})
 	if err != nil {
@@ -80,13 +78,9 @@ func ids(a worklet.Answer) []string {
 	return out
 }
 
-// A DEFAULT ANSWER EXCLUDES FINISHED, ARCHIVED AND REMOVED WORK.
-//
-// Three defaults, and each one is what a person means by "the board": a task
-// that is done is out of the way, a task in an archived project is out of the
-// company, and a removed task is out of existence — the last by ONE predicate
-// for its whole life, at any age, which is what makes a restore answer exactly
-// what it answered before.
+// A DEFAULT ANSWER EXCLUDES FINISHED, ARCHIVED AND REMOVED WORK — the last
+// by ONE predicate at any age, so a restore answers exactly what it did
+// before.
 func TestTheDefaultAnswerIsOpenLiveWork(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -113,12 +107,8 @@ func TestTheDefaultAnswerIsOpenLiveWork(t *testing.T) {
 }
 
 // ARCHIVING A PROJECT TAKES ITS TASKS OUT OF THE DEFAULT ANSWER, THROUGH A
-// JOIN.
-//
-// The alternative — copying the project's flag onto every one of its tasks —
-// is the one unbounded cross-object write this design removed: archiving a
-// project with ten thousand tasks would be ten thousand rows written by one
-// commit, on every node, and a scope term nobody could bound.
+// JOIN: copying the flag onto every task would be an unbounded cross-object
+// write from one commit.
 func TestArchivingAProjectHidesItsTasksWithoutRewritingThem(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -163,12 +153,9 @@ func TestArchivingAProjectHidesItsTasksWithoutRewritingThem(t *testing.T) {
 	}
 }
 
-// A CANCELLED TASK IS IN THE RECENT WINDOW EXACTLY AS A DONE ONE IS.
-//
-// Because the finish stamp is by GROUP rather than by slug, `recent:` applies
-// to the whole finished set — which is what makes a board's Cancelled column
-// non-empty without a second field, and what stops "abandoned" work
-// disappearing from every view the moment it is abandoned.
+// A CANCELLED TASK IS IN THE RECENT WINDOW EXACTLY AS A DONE ONE IS: the
+// finish stamp is by GROUP, not slug, so `recent:` covers the whole finished
+// set and abandoned work does not vanish from every view.
 func TestARecentWindowHoldsCancelledWorkToo(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -191,11 +178,9 @@ func TestARecentWindowHoldsCancelledWorkToo(t *testing.T) {
 	}
 }
 
-// A DISJUNCTION IS A FILTER, ANDed WITH THE REST OF THE QUERY.
-//
-// It is the whole reason `any` exists: "assigned to me, or unassigned in my
-// project" is one question, and expressing it as two calls means the caller
-// merges, sorts and pages two answers by hand.
+// A DISJUNCTION IS A FILTER, ANDed WITH THE REST OF THE QUERY, so "mine, or
+// unassigned in my project" is one call rather than two answers the caller
+// merges, sorts and pages.
 func TestADisjunctionNarrowsRatherThanReplaces(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -218,12 +203,9 @@ func TestADisjunctionNarrowsRatherThanReplaces(t *testing.T) {
 	}
 }
 
-// A FILTER VALUE NEVER REACHES A STATEMENT AS TEXT.
-//
-// The only things this package composes into SQL are its own column names,
-// from closed sets declared in the grammar. A filter that carried its value
-// into the statement would make a saved view a way to run a query nobody
-// wrote.
+// A FILTER VALUE NEVER REACHES A STATEMENT AS TEXT: only the grammar's own
+// column names are composed into SQL, or a saved view could run a query
+// nobody wrote.
 func TestAHostileFilterValueIsBoundRatherThanComposed(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -243,11 +225,9 @@ func TestAHostileFilterValueIsBoundRatherThanComposed(t *testing.T) {
 	}
 }
 
-// AN ANSWER CARRIES THE POSITION IT WAS READ AT.
-//
-// Two numbers, because a node applying nothing while its position advances
-// looks identical to one that is caught up — and a caller comparing a wake's
-// position against an answer's needs the one that says what this node HOLDS.
+// AN ANSWER CARRIES THE POSITION IT WAS READ AT — two numbers, because a
+// node applying nothing while its position advances looks caught up, and a
+// caller comparing a wake's position needs the one this node HOLDS.
 func TestAnAnswerCarriesBothPositions(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -262,11 +242,9 @@ func TestAnAnswerCarriesBothPositions(t *testing.T) {
 	}
 }
 
-// A PAGE MINTS THE CURSOR THAT RESUMES IT, AND NEVER REPEATS A ROW.
-//
-// Keyset rather than offset: an offset re-reads and re-sorts every row it
-// skips, so page fifty costs fifty times page one — and a row inserted between
-// two polls shifts every page after it.
+// A PAGE MINTS THE CURSOR THAT RESUMES IT, AND NEVER REPEATS A ROW. Keyset,
+// not offset: an offset re-reads every row it skips, and an insert between
+// two polls shifts every later page.
 func TestPagingResumesWithoutRepeatingOrSkipping(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -297,11 +275,8 @@ func TestPagingResumesWithoutRepeatingOrSkipping(t *testing.T) {
 	}
 }
 
-// THE TOTAL HINT STOPS AT ITS CEILING RATHER THAN COUNTING ON.
-//
-// An exact total over an unbounded set is the one query in this grammar that
-// turns a sixty-second poll into a scan, and nobody reading a board needs the
-// difference between eleven thousand and twelve.
+// THE TOTAL HINT STOPS AT ITS CEILING RATHER THAN COUNTING ON: an exact
+// total over an unbounded set turns a poll into a scan.
 func TestTheTotalHintIsBounded(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -317,11 +292,9 @@ func TestTheTotalHintIsBounded(t *testing.T) {
 	}
 }
 
-// A READ'S SCOPE IS THE CLOSURE THE COVERAGE PROBE COMPARES AGAINST.
-//
-// A query with no container is the DOMAIN — not because it touches everything,
-// but because a read that cannot say what it is about is one every deferred
-// record concerns, and the honest answer to "is this complete" is then no.
+// A READ'S SCOPE IS THE CLOSURE THE COVERAGE PROBE COMPARES AGAINST. A query
+// with no container is the DOMAIN: a read that cannot say what it is about is
+// one every deferred record concerns, so it is never complete.
 func TestAScopelessReadIsAboutTheWholeDomain(t *testing.T) {
 	t.Parallel()
 	narrow := worklet.ReadScope(worklet.Query{
@@ -340,12 +313,9 @@ func TestAScopelessReadIsAboutTheWholeDomain(t *testing.T) {
 	}
 }
 
-// THE EVERYTHING LEVEL IS ABOUT EVERY PROJECT.
-//
-// It reads the tasks of every project, so a record deferred in any one of them
-// is about it. Its closure used to be the workspace CONTAINER — where objects
-// with no project live — which covers no task at all, so a board holding an
-// undecodable record in one project reported itself complete.
+// THE EVERYTHING LEVEL IS ABOUT EVERY PROJECT: it reads every project's
+// tasks, so a record deferred in any of them concerns it; the workspace
+// container alone covers no task, and a board would report itself complete.
 func TestTheEverythingLevelIsAboutEveryProject(t *testing.T) {
 	t.Parallel()
 	everything := worklet.ReadScope(worklet.Query{
@@ -371,11 +341,9 @@ func TestTheEverythingLevelIsAboutEveryProject(t *testing.T) {
 	}
 }
 
-// A REMOVED TASK IS OUT OF EVERY ANSWER BUT THE TWO THAT ARE ABOUT REMOVALS.
-//
-// ONE predicate for a removed task's whole life, at any age — which is what
-// makes a removal an entirely local decision with no walk behind it, and a
-// restore at any age answer exactly what it answered before.
+// A REMOVED TASK IS OUT OF EVERY ANSWER BUT THE TWO THAT ARE ABOUT REMOVALS,
+// by ONE predicate at any age: a removal needs no walk, and a restore answers
+// exactly what it did before.
 func TestARemovedTaskIsOutOfEveryOrdinaryAnswer(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -402,13 +370,9 @@ func TestARemovedTaskIsOutOfEveryOrdinaryAnswer(t *testing.T) {
 }
 
 // THE THREE TAG MODES ANSWER THREE DIFFERENT QUESTIONS, AT EITHER SCOPE.
-//
-// `all:` is every membership at once — a task carrying two of three is not a
-// match, which is the one of the three that reads correctly while being wrong.
-// And each is asked of a project and of the whole company, because the two are
-// read from the tag rows differently ([worklet.Query] compiles a project's
-// filter to that project's tag rows): a task in another project carrying the
-// same tags is in the company's answer and never in the project's.
+// `all:` is every membership at once (two of three is no match). A project's
+// filter reads that project's tag rows ([worklet.Query]), so a task in
+// another project carrying the same tags is in the company's answer only.
 func TestTheTagModesAreThreeDifferentQuestions(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -455,14 +419,10 @@ func TestTheTagModesAreThreeDifferentQuestions(t *testing.T) {
 	}
 }
 
-// A LONG TAG LIST IS ANSWERED, NOT REFUSED.
-//
-// `all:` was one `t.id IN (…)` per slug ANDed together, an expression a level
-// deeper for every slug, and this engine refuses one past a hundred levels — so
-// a list of ninety-odd tags failed the read rather than answering it. A list
-// that long is longer than any task can carry ([worklet.MaxTagsPerTask]), so
-// `all:` of it answers nothing, and `any:` and `none:` of the same list answer
-// as they do for two tags, at either scope and in either subtask mode.
+// A LONG TAG LIST IS ANSWERED, NOT REFUSED: the engine refuses an expression
+// nested past a hundred levels, so `all:` must not nest a level per slug. A
+// list longer than [worklet.MaxTagsPerTask] makes `all:` answer nothing, and
+// `any:` and `none:` answer as for two tags, at either scope and subtask mode.
 func TestALongTagListIsAnsweredRatherThanRefused(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -491,20 +451,11 @@ func TestALongTagListIsAnsweredRatherThanRefused(t *testing.T) {
 	}
 }
 
-// A PAGE BOUNDARY IS THE WHOLE ORDER, NOT THE ID.
-//
-// # The failure this exists to catch
-//
-// The cursor used to carry only the last row's id and the predicate was
-// `id > ?` — while the order is `<sort column>, id`. On a board ordered by
-// rank, every task with a later rank and a smaller id SORTS AFTER the boundary
-// and FAILS the predicate, so it is never returned; every task with an earlier
-// rank and a larger id passes it on every page, so it is returned again and
-// again. Both at once, silently: a caller paging its own board would see some
-// of its tasks twice and never see others, and nothing in the answer said so.
-//
-// The fixture is the shape that catches it — ranks and ids in OPPOSITE orders
-// — because any fixture where they agree passes with either implementation.
+// A PAGE BOUNDARY IS THE WHOLE ORDER, NOT THE ID. A predicate of `id > ?`
+// under an order of `<sort column>, id` silently skips rows that sort after
+// the boundary with a smaller id and repeats those with a larger one. The
+// fixture puts ranks and ids in OPPOSITE orders, since any fixture where they
+// agree passes either way.
 func TestPagingAnOrderReturnsEveryRowExactlyOnce(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -521,10 +472,9 @@ func TestPagingAnOrderReturnsEveryRowExactlyOnce(t *testing.T) {
 		r.drain()
 	}
 
-	// BOTH DIRECTIONS. "After" in a descending order is a SMALLER value,
-	// and a keyset that compared the same way both ways would return the
-	// page BEFORE the boundary — every descending page repeating the
-	// first — which an ascending fixture cannot show.
+	// BOTH DIRECTIONS: "after" in a descending order is a SMALLER value, and a
+	// keyset comparing one way for both repeats the first page descending,
+	// which an ascending fixture cannot show.
 	for _, sort := range []string{"rank", "-rank", "-updated"} {
 		seen := map[string]int{}
 		cursor := ""
@@ -560,12 +510,9 @@ func TestPagingAnOrderReturnsEveryRowExactlyOnce(t *testing.T) {
 	}
 }
 
-// A CURSOR BELONGS TO THE ORDER THAT MINTED IT.
-//
-// Resuming a rank-ordered page inside an update-ordered query would compute a
-// boundary against a column the query does not sort by — which drops rows
-// without saying so, and is the same defect as the one above wearing a
-// caller's mistake instead of ours.
+// A CURSOR BELONGS TO THE ORDER THAT MINTED IT: resumed under another order
+// it computes a boundary against a column the query does not sort by, and
+// silently drops rows.
 func TestACursorFromAnotherOrderIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -588,10 +535,9 @@ func TestACursorFromAnotherOrderIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseQuery: %v", err)
 	}
-	// THE LEVEL IS THE SURFACE'S, and naming it here is what makes this
-	// case about the CURSOR: an unset level is refused by Tasks before the
-	// cursor is ever decoded, so a case that left it unset passed against
-	// any cursor rule at all, including none.
+	// THE LEVEL IS THE SURFACE'S, set so this case is about the CURSOR: Tasks
+	// refuses an unset level before decoding the cursor, so a case leaving it
+	// unset passes under any cursor rule.
 	q.Level = statelog.ReadStale
 	if _, err := r.reader.Tasks(t.Context(), q, wednesday); err == nil {
 		t.Fatal("a cursor minted by a two-column order was applied to a " +
@@ -601,12 +547,8 @@ func TestACursorFromAnotherOrderIsRefused(t *testing.T) {
 }
 
 // A CURSOR WHOSE ROW HAS NO ID NAMES NO ROW, and is refused rather than
-// resumed.
-//
-// Every order ends in the task's id, which is never NULL, so the cursor's last
-// key is what makes it a place at all. Without one there is no arm past it —
-// "after nothing" is the empty set of arms — and resumed, a page would answer
-// nothing with no cursor and no error, which reads as the listing's end.
+// resumed: every order ends in the never-NULL id, and "after nothing" would
+// answer an empty page with no cursor and no error, which reads as the end.
 func TestACursorThatNamesNoRowIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -619,14 +561,11 @@ func TestACursorThatNamesNoRowIsRefused(t *testing.T) {
 	}
 }
 
-// AND A CURSOR FROM ANOTHER ORDER OF THE SAME LENGTH IS REFUSED TOO.
-//
-// The arity check above passes for any two orders of equal width, and the
-// cursor's values are then bound against columns of a DIFFERENT TYPE — which
-// SQLite resolves by affinity rather than refusing. An `updated` cursor fed to
-// `sort=rank` returns rank's own first page again; a `rank` cursor fed to
-// `sort=updated` compares TEXT against INTEGER, which orders after every row,
-// so every page is the first. Both are silent.
+// AND A CURSOR FROM ANOTHER ORDER OF THE SAME LENGTH IS REFUSED TOO. The
+// arity check passes it, and SQLite binds its values to columns of another
+// type by affinity rather than refusing: an `updated` cursor under
+// `sort=rank` returns the first page again, and a `rank` cursor under
+// `sort=updated` compares TEXT against INTEGER, so every page is the first.
 func TestACursorFromAnotherOrderOfEqualLengthIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -661,13 +600,9 @@ func TestACursorFromAnotherOrderOfEqualLengthIsRefused(t *testing.T) {
 }
 
 // PAGING A NULLABLE SORT RETURNS EVERY ROW EXACTLY ONCE, in both directions.
-//
-// `due` is nullable and a `sort=f.<slug>` term is a LEFT JOIN whose column is
-// NULL for every task that set no value — that join is LEFT precisely so those
-// tasks still appear. A keyset written with bare `>`, `<` and `=` is NULL for
-// every one of them: ascending, the page that ended on a valueless row matched
-// nothing and the list simply stopped; descending, `col < ?` excluded the NULL
-// rows at every page, so they were unreachable.
+// `due` and a `sort=f.<slug>` LEFT JOIN column are NULL for a task with no
+// value, and a keyset of bare `>`, `<` and `=` is NULL against them: the
+// ascending list stops at a valueless row, and descending never reaches one.
 func TestPagingANullableOrderReturnsEveryRowExactlyOnce(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -721,21 +656,14 @@ func TestPagingANullableOrderReturnsEveryRowExactlyOnce(t *testing.T) {
 	}
 }
 
-// PAGING AN ORDER RETURNS EVERY ROW ONCE, IN THE ORDER ONE READ DRAWS.
-//
-// A later page resumes after the last row of the one before it, as the arms
-// of the order read in turn ([keyset]): the rows tied with that row on every
-// column and later by id, then those tied on all but the last, and so on out
-// to the rows past it on the first column. A tie arm that dropped its id bound
-// repeats the rows the page before already returned, one that was left out
-// skips the rest of the tie, and arms read out of turn put a page's rows out
-// of order — each only for a caller who pages, and only where a boundary falls
-// INSIDE a tie, which a fixture of distinct values never reaches.
-//
-// So the fixture is ties ([tiedCompany]), read in every order of
-// [tiedOrders] two and three rows at a time, so a boundary falls inside a tie
-// and at its end, and the pages concatenated must be one read's answer
-// exactly.
+// PAGING AN ORDER RETURNS EVERY ROW ONCE, IN THE ORDER ONE READ DRAWS. A
+// later page reads the arms of the order in turn ([keyset]): rows tied with
+// the last row on every column and later by id, then tied on all but the last
+// column, out to rows past it on the first. A tie arm without its id bound
+// repeats rows, a missing arm skips the rest of the tie, and arms out of turn
+// misorder a page — only where a boundary falls INSIDE a tie. So the fixture
+// is ties ([tiedCompany]), read in every order of [tiedOrders] two and three
+// rows at a time, and the pages concatenated must be one read's answer.
 func TestPagingAnOrderReturnsEveryRowOnceInItsOrder(t *testing.T) {
 	t.Parallel()
 	r := tiedCompany(t)
@@ -863,15 +791,10 @@ func pageThrough(t *testing.T, r *roundTrip, params map[string]any, size int) []
 	return nil
 }
 
-// A DISJUNCTION ANSWERS WHAT THE SAME PREDICATE ANSWERS WRITTEN FLAT.
-//
-// Four of the decisions the compiler makes are not predicates anybody wrote —
-// they are the shape of the answer, applied by default: a removed task is out,
-// a finished one is out, an archived project's tasks are out, and a subtask
-// mode rewrites the predicate to be about roots. Compiled again inside a
-// branch, each emitted its DEFAULT and was ANDed inside the OR, so a top-level
-// `show_closed=true` was defeated by every branch's own open-only clause and
-// the disjunction answered a strictly smaller set than the flat form.
+// A DISJUNCTION ANSWERS WHAT THE SAME PREDICATE ANSWERS WRITTEN FLAT. The
+// compiler's defaults (removed out, finished out, archived projects out, a
+// subtask mode rewriting to roots) belong to the query: applied inside each
+// branch, they would defeat a top-level `show_closed=true`.
 func TestADisjunctionDoesNotReapplyTheAnswersOwnShape(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -899,12 +822,9 @@ func TestADisjunctionDoesNotReapplyTheAnswersOwnShape(t *testing.T) {
 	}
 }
 
-// AND THE KEYS THAT DECIDE THAT SHAPE ARE REFUSED INSIDE A BRANCH.
-//
-// They are the same decision at every branch or they are incoherent, so the
-// place to say them is the query. Refusing the key is only half of it — the
-// other half is that the absent key must not resolve to its default inside the
-// branch either, which is what the case above asserts.
+// AND THE KEYS THAT DECIDE THAT SHAPE ARE REFUSED INSIDE A BRANCH: they are
+// one decision for the whole query, and an absent key must not resolve to its
+// default inside a branch either (the case above).
 func TestABranchMayNotCarryTheAnswersOwnShape(t *testing.T) {
 	t.Parallel()
 	for _, key := range []string{
@@ -934,24 +854,18 @@ func TestABranchMayNotCarryTheAnswersOwnShape(t *testing.T) {
 	if err == nil {
 		t.Fatal("an empty branch was accepted, and it selects every task")
 	}
-	// AND IT IS REFUSED BY NAME, not by SQLite choking on `()`. A syntax
-	// error names a statement the caller never wrote and cannot fix; this
-	// one names the branch.
+	// AND IT IS REFUSED BY NAME, not by SQLite choking on `()`, whose error
+	// names a statement the caller never wrote.
 	if !strings.Contains(err.Error(), "any branch 0") {
 		t.Errorf("an empty branch was refused as %q, which does not say which "+
 			"branch is empty or why", err)
 	}
 }
 
-// THE ROW'S OVERDUE FLAG IS THE FILTER'S OWN PREDICATE.
-//
-// `due=overdue` compiles to "before midnight today, in the COMPANY's zone,
-// and still open". The row's flag was compared against `time.Now()` instead —
-// two different thresholds on two different clocks — so a task due at 09:00
-// today was rendered overdue from 09:01 by every list while `?due=overdue`
-// excluded it all day, and a screen showing both contradicted itself on one
-// row. The field exists precisely so a renderer never re-derives the
-// predicate differently.
+// THE ROW'S OVERDUE FLAG IS THE FILTER'S OWN PREDICATE: `due=overdue` is
+// "before midnight today in the COMPANY's zone, and still open", and a flag
+// compared against `time.Now()` instead marks a task due at 09:00 today
+// overdue while the filter excludes it, contradicting itself on one row.
 func TestTheOverdueFlagIsTheOverdueFilter(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -990,12 +904,9 @@ func TestTheOverdueFlagIsTheOverdueFilter(t *testing.T) {
 	}
 }
 
-// A ROW CARRIES ITS TYPE, on a flat answer and in a board's column alike.
-//
-// The type was on the document and on no row, so a board could group BY a
-// value its cards could not SHOW: every card drew as the same kind of thing,
-// a column headed "bug" held rows that said nothing about being one, and the
-// only way to draw the icon was a document read per card.
+// A ROW CARRIES ITS TYPE, on a flat answer and in a board's column alike, so
+// a board grouped by type shows it on each card without a document read per
+// card.
 func TestARowCarriesItsType(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -1079,13 +990,9 @@ func TestAPersonFilterFindsTheWorkThePersonIsOn(t *testing.T) {
 	}
 }
 
-// A LINKED PAGE'S FILTER IS THE TASKS THAT LINK THAT PAGE, read off the page's
-// own edges.
-//
-// The filter is answered from the reverse edge — the tasks whose relations
-// name the page as their other end — so it must be exactly those tasks, at a
-// project and at the workspace, flat and with subtasks rolled up, and a task
-// linking another page, or another task, is not one.
+// A LINKED PAGE'S FILTER IS THE TASKS THAT LINK THAT PAGE, read off the
+// page's reverse edges: exactly those tasks, at a project and the workspace,
+// flat and rolled up, and never a task linking another page or a task.
 func TestALinkedPageFilterIsTheTasksLinkingThePage(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

@@ -15,11 +15,8 @@ import (
 )
 
 // creditedCompany is a one-seat company whose executor is the named
-// subscription harness.
-//
-// A REAL harness provider rather than a stand-in, because the whole question
-// is which credentials that provider's profile can actually put inside a box —
-// a fake would answer whatever the test wanted and prove nothing about the harness.
+// subscription harness: a real provider, since the question is which
+// credentials its profile can put inside a box, which a fake cannot answer.
 func creditedCompany(t *testing.T, agent string) (*Company, *org.Role) {
 	t.Helper()
 	return creditedCompanyAuth(t, agent, harness.Auth{})
@@ -67,13 +64,11 @@ func guardOn(t *testing.T, c *Company, seat *org.Role, placement sandbox.Placeme
 
 // A SUBSCRIPTION LOGIN CANNOT FOLLOW A RUN INTO A REMOTE BOX.
 //
-// The credential files stay on the engine host — they carry a refresh token
-// whose rotation is fleet state — so a harness that mints no headless token
-// (OpenCode, whose login is a database it keeps) has nothing inside a remote
-// box to authenticate with unless its provider's key travels. Left unchecked the run
-// provisions a box, installs the agent, applies every setup step and starts
-// the job, and the agent fails at its first model call with the vendor's own
-// "not authenticated", minutes in, naming nothing an operator could act on.
+// The credential files stay on the engine host (their refresh token's rotation
+// is fleet state), so a harness that mints no headless token (OpenCode) has
+// nothing to authenticate with in a remote box unless its provider's key
+// travels. Unrefused, the run starts and the agent fails minutes in with the
+// vendor's "not authenticated", naming nothing an operator could act on.
 func TestARemoteRunWithNoTravellingCredentialIsRefused(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompany(t, "opencode")
@@ -86,7 +81,7 @@ func TestARemoteRunWithNoTravellingCredentialIsRefused(t *testing.T) {
 		t.Fatalf("error is %T, want *SandboxCredentialError — the remedy is a "+
 			"config edit, and retrying it as a provider outage would loop", err)
 	}
-	// AND CLASSED AS ONE, which is what whoever is told the run did not
+	// And classed as one, which is what whoever is told the run did not
 	// start reads: a person's edit clears it, never a wait.
 	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
 		t.Errorf("the refusal is classed %q (%v), want %q", why, ok, sandbox.WhyConfiguration)
@@ -103,9 +98,8 @@ func TestARemoteRunWithNoTravellingCredentialIsRefused(t *testing.T) {
 }
 
 // THE OTHER CASE GETS THE OTHER REMEDY. Claude Code mints a headless token
-// that travels to any box, so the operator's fix is one command rather than a
-// placement change — and offering only the placement change would move a seat
-// onto the engine host for no reason.
+// that travels to any box, so the fix is one command, not a placement change
+// that would move a seat onto the engine host for no reason.
 func TestTheRemedyNamesTheTokenWhereTheHarnessMintsOne(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompany(t, "claude-code")
@@ -118,17 +112,14 @@ func TestTheRemedyNamesTheTokenWhereTheHarnessMintsOne(t *testing.T) {
 	}
 }
 
-// THE REMEDY FOLLOWS THE ENTRY'S AUTH MODE, not only its harness. Claude Code
-// mints a headless token, but an api-key entry never reads one — the mode
-// gives the token no fallback and removes its variable from the child — and an
-// inherit-env entry reads only the engine's own environment, never the secret
-// store `-capture-token` writes into. Told to mint one, the operator of either
-// stored a token nothing reads, and the next launch was refused with the same
-// advice. Each mode's refusal has to name what that mode reads.
+// THE REMEDY FOLLOWS THE ENTRY'S AUTH MODE, not only its harness: an api-key
+// entry never reads a headless token (the mode removes its variable from the
+// child), and an inherit-env entry reads only the engine's own environment,
+// never the secret store `-capture-token` writes into. Each mode's refusal
+// names what that mode reads.
 //
-// Not parallel: inherit-env reads the engine's process environment, which the
-// test empties of both variables so that a key exported on the machine running
-// the suite cannot sign the entry in.
+// Not parallel: inherit-env reads the process environment, emptied of both
+// variables so a key exported on the machine cannot sign the entry in.
 //
 // Mutation: choose the remedy by the profile alone, and the api-key and
 // inherit-env cases offer -capture-token and go red.
@@ -184,12 +175,10 @@ func TestTheRemedyFollowsTheEntrysAuthMode(t *testing.T) {
 	}
 }
 
-// AND WHAT EACH MODE'S REMEDY NAMES SIGNS THE RUN IN. An api-key entry whose
-// key the seat brings in role.sandbox.env passes, and so does an inherit-env
-// entry once the engine's environment holds a variable it forwards — the
-// refusal's advice has to be advice that works. Judged on the environment the
-// launch judges, the one [newExecutorRun] lays: the seat's own, with the entry's
-// sign-in underneath.
+// AND WHAT EACH MODE'S REMEDY NAMES SIGNS THE RUN IN: an api-key entry whose
+// key the seat brings in role.sandbox.env passes, as does an inherit-env entry
+// once the engine's environment holds a variable it forwards. Judged on the
+// environment [newExecutorRun] lays: the seat's own over the entry's sign-in.
 func TestEachModesRemedySignsTheRunIn(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
@@ -221,12 +210,11 @@ func TestEachModesRemedySignsTheRunIn(t *testing.T) {
 	}
 }
 
-// A MODE WHOSE PROFILE NAMES NO VARIABLE FOR IT HANDS THE HARNESS NOTHING —
-// api-key on OpenCode, which reads each provider's key from that provider's own
-// variable and so names no api_key_env. Every write of the configuration
-// refuses the pairing, but an apply only warns, so a node can run it. Its
-// refusal names the mode as the remedy, and the local cell the login it then
-// signs in with needs; never a variable to set, since none would reach the harness.
+// A MODE WHOSE PROFILE NAMES NO VARIABLE FOR IT HANDS THE HARNESS NOTHING:
+// api-key on OpenCode, which reads each provider's key from its own variable
+// and names no api_key_env. Writes refuse the pairing but an apply only warns,
+// so a node can run it. The refusal names the mode and the local cell as the
+// remedy, never a variable to set, since none would reach the harness.
 func TestARemedyNamesNoVariableTheModeDoesNotHave(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompanyAuth(t, "opencode", harness.Auth{Mode: harness.AuthAPIKey})
@@ -247,30 +235,18 @@ func TestARemedyNamesNoVariableTheModeDoesNotHave(t *testing.T) {
 	}
 }
 
-// A REMEDY OFFERS NO VARIABLE NO STORE CAN HOLD. overrides can set token_env or
-// api_key_env to a name outside the reference grammar — MY-TOKEN, MY=KEY —
-// which every write of the configuration refuses and an apply only warns
-// about, so a node can run it. The refusal told such a subscription entry to
-// "mint a token that travels with `crewlet llm login sub -capture-token`",
-// which that command refuses before it mints, and an api-key one to store or
-// export a key, or give the seat its own in role.sandbox.env, under a name no
-// store, ${VAR} or export can hold and every write refuses. Each now names the
-// overrides field, and an inherit-env entry is told only the variable a shell
-// can export. A route that runs whatever token_env says stays: OpenCode reads
-// its provider's key from its environment, so it is still told to set that
-// key, with the field beside it.
+// A REMEDY OFFERS NO VARIABLE NO STORE CAN HOLD: overrides may set token_env or
+// api_key_env outside the reference grammar (MY-TOKEN, MY=KEY), which writes
+// refuse and an apply only warns about. Such an entry is pointed at the
+// overrides field, not told to capture, store or export that name; inherit-env
+// names only a shell-exportable variable; OpenCode still sets its provider's
+// key; api-key gets no local cell, whose login would bill in place of the key.
+// Not parallel: inherit-env reads the process environment, emptied here.
 //
-// Not parallel: inherit-env reads the engine's process environment, emptied
-// here of the variable it can forward.
-//
-// An api-key entry is offered no local cell either, as no api-key refusal
-// offers an entry that keeps its key: the login seeded there would bill in
-// place of the key the mode names.
-//
-// Mutation: let MintsHeadlessToken ignore the grammar, and the subscription
-// case offers -capture-token; drop the api-key misnamed case here, and that
-// refusal falls through to inherit-env's local cell; judge the misnamed token
-// before the provider's key, and the OpenCode case loses its key.
+// Mutation: MintsHeadlessToken ignoring the grammar offers the subscription
+// case -capture-token; credentialRefusal without its api-key misnamed case
+// falls to inherit-env's local cell; judging the misnamed token first loses
+// OpenCode's key.
 func TestARemedyOffersNoVariableNoStoreCanHold(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
@@ -342,11 +318,10 @@ func TestARemedyOffersNoVariableNoStoreCanHold(t *testing.T) {
 	}
 }
 
-// A CREDENTIAL THE OPERATOR DECLARED THEMSELVES COUNTS, which is what lets
-// this be a refusal rather than a warning: the engine names no tool-specific
-// variable of its own, so it asks the profile which names authenticate and
-// looks for those in the merged run environment — where role.sandbox.env
-// already sits.
+// A CREDENTIAL THE OPERATOR DECLARED THEMSELVES COUNTS, which lets this be a
+// refusal rather than a warning: the engine asks the profile which names
+// authenticate and looks for them in the merged run environment, where
+// role.sandbox.env already sits.
 func TestASeatThatBroughtItsOwnKeyIsNotRefused(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompany(t, "claude-code")
@@ -364,10 +339,9 @@ func TestASeatThatBroughtItsOwnKeyIsNotRefused(t *testing.T) {
 }
 
 // A SEAT SIGNED IN TO CLAUDE CODE BY ITS OWN CLOUD OR BEARER TOKEN IS SIGNED
-// IN. Such a seat is handed none of the entry's sign-in — Claude Code ranks a
-// cloud toggle and a bearer token above the entry's token, so the entry's
-// would only ride along unread — and a guard that knew only the profile's own
-// two variables then refused its remote run as signed in to nothing.
+// IN. Such a seat is handed none of the entry's sign-in (Claude Code ranks a
+// cloud toggle and a bearer token above it), so a guard knowing only the
+// profile's own two variables would refuse its remote run.
 //
 // Mutation: drop the profile's sign_in_env from the guard, and every case here
 // is refused.
@@ -406,13 +380,10 @@ func TestALocalRunNeedsNoTravellingCredential(t *testing.T) {
 	}
 }
 
-// A HARNESS THAT SIGNS IN THROUGH env TAKES THAT SIGN-IN INTO ITS BOX.
-//
+// A HARNESS THAT SIGNS IN THROUGH env TAKES THAT SIGN-IN INTO ITS BOX:
 // OpenCode reads its provider's key from its own environment, so an entry's
-// whole sign-in can be one variable in env — which the doctor counts. The
-// run environment carried only the token and the api-key variable, so an
-// executor run on such an entry started its harness signed in to nothing, and a
-// remote one was refused as having no credential at all.
+// whole sign-in can be one variable in env, which the doctor counts and the
+// run environment has to carry.
 func TestAHarnessEnvSignInTravelsIntoTheRun(t *testing.T) {
 	t.Parallel()
 	company := func(env map[string]string) (*Company, *org.Role) {
@@ -444,9 +415,8 @@ func TestAHarnessEnvSignInTravelsIntoTheRun(t *testing.T) {
 	if err := guardOn(t, c, seat, sandbox.E2B, env); err != nil {
 		t.Errorf("a remote run carrying its env key was refused: %v", err)
 	}
-	// THE REST OF env TRAVELS BESIDE IT, and is no sign-in: an entry whose
-	// env holds a proxy alone reaches the box with it, and is refused a
-	// remote one as signed in to nothing.
+	// The rest of env travels beside it and is no sign-in: an entry whose env
+	// holds a proxy alone is refused a remote box as signed in to nothing.
 	if env["HTTPS_PROXY"] != "http://proxy.example.com" {
 		t.Errorf("the entry's proxy did not reach the run environment: %v", env)
 	}
@@ -455,10 +425,9 @@ func TestAHarnessEnvSignInTravelsIntoTheRun(t *testing.T) {
 		t.Error("a remote run whose entry's env holds a proxy alone was launched as signed in")
 	}
 
-	// THE KEY IN THE SEAT'S OWN SANDBOX ENV passes too: which variable this
-	// harness reads depends on the provider its model names, so the guard
-	// cannot ask the profile, and an operator legitimately declares their
-	// own key in role.sandbox.env.
+	// A key in the seat's role.sandbox.env passes too: which variable this
+	// harness reads depends on its model's provider, so the guard cannot ask
+	// the profile.
 	c, seat = company(nil)
 	if err := guardOn(t, c, seat, sandbox.E2B,
 		map[string]string{"OPENROUTER_API_KEY": "sk-or-not-real"}); err != nil {
@@ -479,8 +448,8 @@ func TestAHarnessEnvSignInTravelsIntoTheRun(t *testing.T) {
 			t.Errorf("the refusal does not name the %s route this harness takes: %v", route, err)
 		}
 	}
-	// And WHOSE key: the provider segment of the model the box is handed is
-	// the one fact that says which provider has to sign the run in.
+	// And whose key: the model's provider segment says which provider has to
+	// sign the run in.
 	if !strings.Contains(err.Error(), `"anthropic", the provider its model names`) {
 		t.Errorf("the refusal does not name the provider whose key is missing: %v", err)
 	}

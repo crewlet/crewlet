@@ -69,11 +69,8 @@ func (r *rewriter) prompts() []string {
 var whenever = time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
 
 // WHAT A PAST TURN WAS ASKED AND WHAT IT DID ARE IN THE ANSWER, beside what
-// woke it — marked as that. The label names the kind of event — every chat
-// turn's is "Message from <someone>" — so an answer of labels and outcomes told
-// a seat it had been messaged, and nothing of what it was asked or did; and
-// written after the date with no marker, while the tool promised "what you
-// were asked", the label read as the question.
+// woke it, marked as that. The label names only the kind of event (every chat
+// turn's is "Message from <someone>"), and unmarked it reads as the question.
 func TestQueryEpisodesSaysWhatEachTurnWasAskedAndDid(t *testing.T) {
 	t.Parallel()
 	tool := registered(t, builtin.Deps{Episodes: fixedEpisodes{rows: []learning.Episode{{
@@ -103,12 +100,10 @@ func TestQueryEpisodesSaysWhatEachTurnWasAskedAndDid(t *testing.T) {
 }
 
 // WHAT A PAST TURN WAS ASKED IS FENCED AS WHOEVER WROTE IT, under the turn's
-// own token (ADR-0040). A stranger's message from a month ago is not the
-// seat's own memory because the seat recalled it: answered raw, an ask that
-// spelled the turn's closer and a forged opener claiming the seat wrote what
-// follows was read as the seat's own instruction — and every other line of
-// the answer, the label, the account and the scope the seat asked for
-// included, is neutralised so none of it opens or closes a fence.
+// own token (ADR-0040): a stranger's message is not the seat's memory because
+// the seat recalled it. An ask spelling the turn's closer and a forged opener
+// stays inside its fence, and every other line (the label, the account, the
+// scope the seat asked for) is neutralised so none opens or closes a fence.
 func TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt(t *testing.T) {
 	t.Parallel()
 	turn := turnFor(t, "agent-ceo")
@@ -176,9 +171,8 @@ func TestQueryEpisodesCondensesALongAccount(t *testing.T) {
 	if asked := model.prompts(); len(asked) != 1 || !strings.Contains(asked[0], "and the fix was the cache key.") {
 		t.Fatalf("the rewrite was not shown the whole account: %d calls", len(asked))
 	}
-	// THE REWRITE IS THE TURN'S OWN SPEND, named for what it rewrote: the
-	// seat asked for its past turns mid-turn, so the condensation is part
-	// of this turn's cost — filed under its run and its unit of work.
+	// THE REWRITE IS THE TURN'S OWN SPEND, named for what it rewrote and
+	// filed under its run and unit of work: the seat asked mid-turn.
 	want := auxspend.Use{Stage: types.AuxStageTurn, Purpose: types.AuxCondense(string(compact.KindOutcome)),
 		TurnID: "run-1", WorkKey: "wk-1"}
 	if len(model.uses) != 1 || model.uses[0] != want {
@@ -186,10 +180,9 @@ func TestQueryEpisodesCondensesALongAccount(t *testing.T) {
 	}
 }
 
-// A COMPACTED ROW IS ITS PATTERN. It stands for a cluster of turns and has no
-// label or account of its own, so rendered as a turn it showed nothing but
-// its date; what it holds is the pattern, how many turns it stands for and how
-// they ended — counted from the members, never the model's word — and what
+// A COMPACTED ROW IS ITS PATTERN. It stands for a cluster of turns with no
+// label or account of its own, so it renders the pattern, how many turns and
+// how they ended (counted from the members, never the model's word), and what
 // varied.
 func TestQueryEpisodesRendersACompactedRowAsItsPattern(t *testing.T) {
 	t.Parallel()
@@ -237,11 +230,10 @@ func (r *timedRewriter) Auxiliary(*org.Role, auxspend.Use) (chain.Member, error)
 	return chain.Member{Key: "aux", Provider: r}, nil
 }
 
-// EVERY REWRITE THE TOOL MAKES IS HELD TO THE BLOCK'S DEADLINE. The turn-start
-// block bounded each account's rewrite and the tool bounded none, so a slow
-// auxiliary provider held a tool call for the compactor's own minute, and its
-// retry, per account — several minutes of a turn's wall clock for an answer
-// the size note would have given at once.
+// EVERY REWRITE THE TOOL MAKES IS HELD TO THE TURN-START BLOCK'S DEADLINE.
+// Unbounded, a slow auxiliary provider holds a tool call for the compactor's
+// own minute and its retry, per account, for an answer the size note would
+// give at once.
 func TestQueryEpisodesHoldsEveryRewriteToTheBlocksDeadline(t *testing.T) {
 	t.Parallel()
 	model := &timedRewriter{}

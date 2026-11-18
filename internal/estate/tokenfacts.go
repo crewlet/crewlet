@@ -11,52 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
-// A MACHINE TOKEN'S ROW, AS IT CROSSES TO A NODE WITHOUT THE DIRECTORY.
-//
-// # Why it crosses at all
-//
-// A node without the `data` role holds no identity rows (ADR-0025), and a node
-// that serves requests anyway — a Gitlet node answering persons' clones and
-// pushes, whose password is their machine token (`cwl_pat_…`) — still has to
-// check the token. So the row a token is checked against (the credential, its
-// owner as the directory holds them now, and how far the answering node can
-// vouch for both) is asked of a data node, floored on the identity log like a
-// login's binding ([opIdentityBinding]).
-//
-// # Why the verifier does not, and what crosses instead
-//
-// The asker decides on everything else in the row — the grants the mint
-// carried and the owner's current ones are what the token acts with, the
-// expiry, the revocation and the epochs are what end it, the applied position
-// is what makes an absent row three-valued — so the row crosses whole but for
-// its VERIFIER, the SHA-256 a presented secret is checked against. A verifier
-// on the broker is a value the asker has no use for and an observer would, for
-// the reason a binding withholds a password's ([Binding]); and the secret it is
-// checked against never leaves the asking node either, since that is the one
-// value that authenticates anything.
-//
-// What crosses in the verifier's place is a MAC over it and a nonce the asker
-// drew for this question alone, under a key both nodes derive from the fleet
-// keyring in a domain of its own ([verifierDomain]). The asker holds the
-// presented token, so it computes the verifier that token implies, MACs it
-// over the same nonce, and takes it as the row's verifier only where the two
-// MACs agree ([TokenFacts.rowFor]). So [credential.CheckToken] stays the ONE
-// table, deciding on the asker exactly what it decides on a data node: the
-// verifier it reads there is the stored one wherever the stored one is the
-// presented token's, and empty — which no secret verifies against — wherever
-// it is not. A MAC is worthless to whoever lacks the keyring, so nothing on the
-// broker can test a guess against it; and an answer MAC'd for one question
-// verifies under no other question's nonce.
-//
-// # The alternatives, and why not
-//
-// Sending the secret to the data node to check there would put the one value
-// that authenticates anything on the broker in the clear — envelopes are
-// signed, not sealed. Sending the verifier would put the value a guess is
-// tested against there instead. And a verdict formed on the data node — "valid"
-// — would be the second opinion [IdentityReader] refuses everywhere: the chart
-// a bound owner's seat is resolved against, the admin posture the grants are
-// clamped by and the stall a vouch is judged against are the asking node's.
+// A MACHINE TOKEN'S ROW, AS IT CROSSES TO A NODE WITHOUT THE DIRECTORY (a
+// Gitlet node checking a `cwl_pat_…` push password), floored on the identity
+// log like [opIdentityBinding] (package doc, "What does not cross the wire,
+// and who supplies it"): whole but for its verifier, replaced by a MAC over it
+// and a per-question nonce under a key derived from the keyring
+// ([verifierDomain]). The asker takes the verifier its presented token implies
+// only where the MACs agree ([TokenFacts.rowFor]), so [credential.CheckToken]
+// stays the ONE table. Not the alternatives: the secret would cross the broker
+// in the clear (envelopes are signed, not sealed); the verifier is what a guess
+// is tested against; and a verdict formed there would be the second opinion
+// [IdentityReader] refuses, since the chart, the admin posture and the stall a
+// vouch is judged against are the asking node's.
 
 // verifierDomain is the key domain a token verifier's MAC is derived in
 // ([runtoken.DeriveKey]): its own, so no per-run token, cookie, view ticket or
@@ -97,13 +63,11 @@ type machineTokenArgs struct {
 // verifierKeys are the keys a verifier's MAC is derived under, one per keyring
 // entry, and the entry this node asks under: its active one.
 //
-// THE ASKER NAMES THE KEY, as an envelope's frame names the key that signed it,
-// so a keyring rotation is survivable in both directions: a node asks under
-// its active key, and a node that does not hold it runs nothing and the router
-// asks one that does ([opIdentityMachineToken]). Derived from the whole
-// keyring instead, every node that had loaded a different key SET would derive
-// a different key, and refuse every token presented through a peer for the
-// length of the rollout.
+// THE ASKER NAMES THE KEY, as an envelope's frame does, so a rotation survives
+// both ways: a node that does not hold it runs nothing and the router asks one
+// that does ([opIdentityMachineToken]). A key derived from the whole keyring
+// would differ between nodes holding different key SETS, refusing every token
+// presented through a peer for the length of the rollout.
 type verifierKeys struct {
 	active string
 	keys   map[string][]byte
@@ -163,16 +127,12 @@ func factsOf(row credential.TokenRow, key []byte, nonce [nonceBytes]byte) TokenF
 // rowFor is the row presented is checked against on the asking node: the
 // facts' row, with the verifier presented implies set only where the answering
 // node's MAC over the stored verifier is the MAC over that one, under key and
-// the nonce this question drew.
+// this question's nonce.
 //
-// A VERIFIER THE WIRE CARRIED IS NEVER BELIEVED, whatever a peer sent: the one
-// this sets is the presented token's own or none, so a build that forgot to
-// narrow its answer could put a verifier on the broker but never decide a
-// token here.
-//
-// IN CONSTANT TIME ([hmac.Equal]), and computed for every answer — a row of
-// another method, or none at all — so how long a refusal takes says nothing
-// about what the id names, [credential.CheckToken]'s own rule.
+// A VERIFIER THE WIRE CARRIED IS NEVER BELIEVED, so a build that forgot to
+// narrow its answer leaks a verifier but never decides a token here. IN
+// CONSTANT TIME ([hmac.Equal]) and computed for every answer, so a refusal's
+// timing says nothing about what the id names ([credential.CheckToken]'s rule).
 func (f TokenFacts) rowFor(presented credential.Token, key []byte,
 	nonce [nonceBytes]byte) credential.TokenRow {
 

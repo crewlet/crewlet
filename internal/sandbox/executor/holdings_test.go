@@ -17,32 +17,30 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// The cases here read a Claude Code session's kept archive through its runner
-// ([executor.Runner.ReadHoldings]), as the sandbox asks it for a relaunch: what
-// a runner asks before it opens anything, and the slots it reads in. What a
-// reading makes of the archive's records is claudeholdings_internal_test.go's.
+// These cases read a Claude Code session's archive through
+// [executor.Runner.ReadHoldings], as a relaunch asks: what a runner checks
+// before it opens anything, and the slots it reads in. What a reading makes of
+// the records is claudeholdings_internal_test.go's.
 
 // rhSessionID is the session every archive here holds.
 const rhSessionID = "5e55100a-0000-4000-8000-0000000000aa"
 
-// rhSession is the session's archive as its row describes it, its writer the
+// rhSession is the session's archive as its row describes it, written by
 // release version.
 func rhSession(version string) sandbox.SessionArchive {
 	return sandbox.SessionArchive{Harness: executor.ClaudeCodeName, SessionID: rhSessionID,
 		Format: executor.ClaudeArchiveFormat, Version: version}
 }
 
-// rhBridged is a tool of the bridge's, named as Claude Code names a tool of
-// an MCP server, `mcp__<server>__<tool>`, the server the one the engine
-// serves a box its tools as.
+// rhBridged is a tool of the bridge's as Claude Code names an MCP server's
+// tool, `mcp__<server>__<tool>`, under the server the engine serves a box's
+// tools as.
 const rhBridged = "mcp__" + config.ToolServerName + "__slow"
 
-// rhArchive is the session's archive: a main thread whose brief is followed
-// by a call to id answered with output, the call's reply carrying its id and
-// each record its time, as Claude Code writes them (the resume walks from a
-// leaf of a time, and pairs a call by its reply's id), tarred and gzipped as
-// the take's scrub writes one. The call is one of a tool of the bridge's
-// ([rhBridged]).
+// rhArchive is the session's archive, tarred and gzipped as the take's scrub
+// writes one: a brief, then a call to id of [rhBridged] answered with output.
+// Each record carries its time and the reply the call's id, as Claude Code
+// writes them: the resume walks from a leaf by time and pairs a call by id.
 func rhArchive(t *testing.T, id, output string) []byte {
 	t.Helper()
 	return rhArchiveOf(t, id, rhBridged, output)
@@ -83,8 +81,8 @@ func rhArchiveOf(t *testing.T, id, tool, output string) []byte {
 	return buf.Bytes()
 }
 
-// rhResumer is the release that continues every session here: one whose
-// resume the model of Claude Code's resume was read from.
+// rhResumer continues every session here: a release the model of Claude
+// Code's resume was read from.
 const rhResumer = "2.1.322"
 
 // rhAsk asks about calls, for a session [rhResumer] continues.
@@ -92,9 +90,8 @@ func rhAsk(calls ...sandbox.LoggedCall) sandbox.HoldingsAsk {
 	return sandbox.HoldingsAsk{Calls: calls, Resumer: rhResumer}
 }
 
-// rhRead starts a reading of archive, the session's, by runner under ctx, for
-// call; opened closes as it opens the archive, and done once it has ended,
-// with what it ended with in *err.
+// rhRead starts runner's reading of archive under ctx, for call; opened closes
+// as it opens the archive, done once it has ended, its error in *err.
 func rhRead(ctx context.Context, runner *executor.Runner, archive []byte,
 	call sandbox.LoggedCall) (opened, done chan struct{}, err *error) {
 
@@ -121,13 +118,11 @@ func (b *rhBody) Close() error {
 }
 
 // A READING TAKES THE SEATS' SLOT, INSIDE THE PROCESS'S TWO, as a seat's read
-// does, and never a pool of its own. With a seat's read holding the seats'
-// slot, a reading waits for it and, its caller gone, ends with its caller's
-// error, having opened nothing; with both of the process's slots held by
-// persons' reads, a reading that holds the seats' slot waits for one of them,
-// and gives the seats' slot back as its caller leaves, having opened nothing;
-// and given one of the process's slots and the seats', it reads, and its
-// archive is closed while it still holds both.
+// does, never a pool of its own. Opening nothing, a reading waits while a
+// seat's read holds the seats' slot and, its caller gone, ends with its
+// caller's error; while persons' reads hold both process slots, one holding the
+// seats' slot waits and gives it back as its caller leaves. Given a process
+// slot and the seats', it reads and closes its archive holding both.
 //
 // Not parallel: the slots are the process's own (transcript_test.go).
 //
@@ -229,8 +224,7 @@ func TestAReadingTakesTheSeatsSlotInsideTheProcesssTwo(t *testing.T) {
 
 // A READING WHOSE CALLER LEFT AS ITS ARCHIVE OPENED ENDS WITH ITS CALLER'S
 // ERROR, whatever the store made of the open stopping under it: a relaunch
-// that gave up on its reading is told it gave up, never the store's account
-// of a connection that was cut.
+// that gave up is told so, never the store's account of a cut connection.
 //
 // Mutation: answer an open that failed by the store's error alone, and the
 // reading ends with the store's.
@@ -252,13 +246,11 @@ func TestAReadingWhoseCallerLeftAsItOpenedEndsWithItsCallersError(t *testing.T) 
 }
 
 // A READING IS ONLY OF A WRITER ITS RULES WERE MEASURED ON: Claude Code 2.1.310
-// and later. A writer below it, a release the run recorded none of, one that
-// is no release, and one of the shape of a release whose number is past what
-// an int holds, at or past the floor as its digits read, are each no reading,
-// though a person's read and the carry take an unreadable release for a
-// current one and a carried session's writer may be as old as 2.1.300; and a
-// runner whose harness has no reading, OpenCode's, reads none. None of them
-// opens the archive.
+// and later. No reading, and no archive opened, for a writer below it (even
+// 2.1.300, which the carry accepts), none recorded, one that is no release, or
+// one whose number overflows an int though its digits read as at or past the
+// floor (a person's read and the carry take such a release for a current one);
+// nor by a runner whose harness has no reading, OpenCode's.
 //
 // Mutation: hold the writer to the carry's floor, or read an unreadable
 // release as a current one, and a refused writer's session is read.
@@ -306,18 +298,16 @@ func TestAReadingIsOnlyOfAWriterItsRulesWereMeasuredOn(t *testing.T) {
 }
 
 // A READING IS ONLY FOR A RESUMER WHOSE RESUME THE LINE LAYER MODELS: a call is
-// held only where the resume hands its model the call's records, and that is
-// the code of the release that continues the session, which the layer read
-// for Claude Code 2.1.310 and 2.1.322 alone. Each of them is read. Every
-// other is no reading, and opens nothing: none read, as the relaunch box's
-// `--version` answered nothing; a release between them, before them or after
-// them, which may load, walk or drop records otherwise; and a release this
-// code cannot read, or one that reads as a modelled release only once its
-// digits are parsed.
+// held only where the continuing release's resume hands its model the call's
+// records, and the layer read that code for Claude Code 2.1.310 and 2.1.322
+// alone. Each is read; every other resumer is no reading and opens nothing:
+// none read (the box's `--version` answered nothing), a release between,
+// before or after them (which may load, walk or drop records otherwise), and
+// one unparseable or matching a modelled release only once parsed.
 //
 // Mutation: drop the check, and the unread resumer's session is read; hold the
-// resumer to the range 2.1.310 to 2.1.322, and 2.1.311 is read; to 2.1.310
-// and later, and 2.1.323 is read; compare its numbers rather than the release
+// resumer to 2.1.310 through 2.1.322, and 2.1.311 is read; to 2.1.310 and
+// later, and 2.1.323 is read; compare its numbers rather than the release
 // whole, and 02.1.310 is read.
 func TestAReadingIsOnlyForAResumerWhoseResumeTheModelWasReadFrom(t *testing.T) {
 	t.Parallel()
@@ -370,13 +360,12 @@ func TestAReadingIsOnlyForAResumerWhoseResumeTheModelWasReadFrom(t *testing.T) {
 }
 
 // A READING ANSWERS ONLY AN ASK WHOSE ASKED IDS NAME ONE CALL EACH: the session
-// files every call's records under its id, so an asked call whose id is none
-// the log keeps, two asked calls of one id, and an unasked call carrying an
-// asked call's id each leave no record whose call is known; an ask that asks
-// about nothing, holds no call or more than a round's log lists, and a
-// session whose id names no thread are no reading either. None of them opens
-// the archive; an asked call beside unasked ones, one of them with no id, is
-// read.
+// files every call's records under its id, so an asked id the log keeps none
+// of, two asked calls of one id, and an unasked call carrying an asked id each
+// leave no record whose call is known. An ask about nothing, with no call or
+// more calls than a round's log lists, and a session id naming no thread are no
+// reading either; none opens the archive. An asked call beside unasked ones,
+// one with no id, is read.
 //
 // Mutation: drop the check of the unasked calls' ids, and an ask in which
 // another call carries the asked id is read.
@@ -430,14 +419,12 @@ func TestAReadingAnswersOnlyAnAskWhoseAskedIDsNameOneCallEach(t *testing.T) {
 	}
 }
 
-// A CALL IS HELD ONLY WHERE ITS USE NAMES A TOOL OF THE BRIDGE'S, as Claude
-// Code names a tool of the server the engine serves a box its tools as
-// (config.ToolServerName): every call the log keeps is a call of the
-// bridge's, and Claude Code's request clears or withholds the results of
-// other tools by their names, its own on a context hint and its memory
-// server's (`mcp__memory__memory_*`). Held: a call of the bridge's tool. Told:
-// one of Claude Code's own Bash, one of its memory server's, and one of a
-// server whose name only begins with the bridge's.
+// A CALL IS HELD ONLY WHERE ITS USE NAMES A TOOL OF THE BRIDGE'S, under
+// config.ToolServerName as Claude Code names a server's tool: every call the
+// log keeps is the bridge's, and Claude Code's request clears or withholds
+// other tools' results by name, its own on a context hint and its memory
+// server's (`mcp__memory__memory_*`). Told, not held: its own Bash, a memory
+// server tool, and a tool of a server whose name only begins with the bridge's.
 //
 // Mutation: hold a call whatever its use names, and each told call is held;
 // or spell the bridge's server otherwise than config does, and the bridge's

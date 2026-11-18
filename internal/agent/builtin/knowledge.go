@@ -18,40 +18,25 @@ import (
 // SearchKnowledgeTool is the tool's wire name.
 const SearchKnowledgeTool = "search_knowledge"
 
-// searchHits is how many pages one call renders.
-//
-// Six, matching the turn-start prefetch block: each result is a title and a
-// snippet the agent uses to decide what to open, and a dozen crowds out the
-// task they were fetched for. Distinct from [knowledge.DefaultLimit], which
-// is what the seam asks a backend for when nobody says.
+// searchHits is how many pages one call renders: six, as the turn-start
+// prefetch block does, since a dozen titles and snippets crowd out the task.
+// Not [knowledge.DefaultLimit], the seam's own default for a backend.
 const searchHits = 6
 
-// KnowledgeSearcher is query-time search over the team knowledge base, as
-// this tool needs it.
-//
-// The two methods of [knowledge.Searcher] a search actually uses. Declared
-// here rather than taking the seam's own interface so the tool can be
-// exercised with a stub, and so this package never grows a second opinion
-// about what a knowledge backend is.
+// KnowledgeSearcher is the two methods of [knowledge.Searcher] this tool
+// uses, declared by the consumer so a stub can stand in for a backend.
 type KnowledgeSearcher interface {
 	CanSearch(seat *org.Role, o *org.Organization) bool
 	Search(ctx context.Context, q knowledge.Query) knowledge.Result
 }
 
-// searchKnowledge searches the team knowledge base on demand.
+// searchKnowledge searches the team knowledge base on demand: a trigger that
+// is a bare pointer ("PR #42 got a comment") is unsearchable at turn start,
+// and the agent that has done the recon knows what to ask for.
 //
-// It replaces the engine's mid-turn re-fetch seam, which existed for one
-// case the three-phase turn could not otherwise serve: a trigger that was a
-// bare POINTER ("PR #42 got a comment") is unsearchable at turn start, so the
-// turn-start block was skipped and the engine re-ran the search between the
-// planning and acting phases, keyed on the plan the first had written. With
-// one phase deciding and acting there is nothing between them and nothing to
-// key on, and there no longer needs to be: the agent that just did the recon
-// knows what to search for, and asks.
-//
-// BEST EFFORT, like every other read of the seam: a backend that is slow,
-// unreachable or unconfigured yields an empty result and a sentence saying
-// so, never a failed turn.
+// Best effort, like every read of the seam: a slow, unreachable or
+// unconfigured backend yields an empty result and a sentence saying so, never
+// a failed turn.
 type searchKnowledge struct {
 	search KnowledgeSearcher
 
@@ -59,18 +44,15 @@ type searchKnowledge struct {
 	// place ([Deps.GrantHeld]); nil knows nothing.
 	granted func(ctx context.Context, handle, lane string) (held, known bool)
 
-	// org answers which company is in scope when there is no turn to ask.
-	//
-	// A SEAT'S SEARCH IS ITS SEAT'S, and the turn carries both halves. An
-	// OPERATOR has no turn and no seat — they hold the company's own
-	// credential and read everything — so the org comes from the wiring
-	// and the seat is nil, which both searchers already read as "the
-	// company's own account rather than somebody's". Nil here means a
-	// caller that must bring a turn, which is every seat registry.
+	// org answers which company is in scope when there is no turn: an
+	// operator has no turn and no seat, so the seat is nil, which both
+	// searchers read as the company's own account. A seat's search takes
+	// both from its turn. Nil means every caller brings a turn (every seat
+	// registry).
 	org func() *org.Organization
 
-	// events receives the `knowledge_read` a seat's search records. Nil
-	// records nothing, which is a registry built outside an engine.
+	// events receives the `knowledge_read` a seat's search records; nil (a
+	// registry built outside an engine) records nothing.
 	events Telemetry
 }
 
@@ -134,30 +116,23 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"what you are looking for."), nil
 	}
 	if knowledge.CheckQuery(query) != nil {
-		// REFUSED, NOT CUT, at the bound every search surface shares
-		// ([knowledge.MaxQueryBytes]): a search on the first four hundred
-		// bytes of a query is a different search, and the model would read
-		// its results as the answer to the one it asked. It used to be cut
-		// to fit, unmarked — and the tool then echoed the cut query back as
-		// though it were the one the model wrote, so a search on the wrong
-		// words read as a search that found nothing.
+		// Refused, not cut, at [knowledge.MaxQueryBytes]: a search on a
+		// truncated query is a different search, and the model would read its
+		// results as the answer to the one it asked.
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
 		return failed(fmt.Sprintf(SearchKnowledgeTool+"'s `query` is %d bytes and takes at "+
 			"most %d — send 2-8 keywords or key phrases, identifiers verbatim, not the "+
 			"task or a pasted thread.", len(query), knowledge.MaxQueryBytes)), nil
 	}
-	// A MODE THIS BUILD DOES NOT KNOW IS REFUSED, naming the ones it does:
-	// falling back to the default would answer a different question from
-	// the one asked.
+	// An unknown mode is refused, not defaulted: a fallback answers a
+	// different question from the one asked.
 	mode, err := knowledge.ParseMode(argString(args, "mode"))
 	if err != nil {
 		return refusedBy(tools.RefusalInvalid, err, unknownMode(SearchKnowledgeTool,
 			argString(args, "mode"))), nil
 	}
-	// THE TURN'S ORG, or the wiring's where there is no turn — see
-	// [searchKnowledge.org]. Reading the turn unconditionally made this
-	// tool refuse every call on the operator surface, where it is
-	// registered and where there is never a turn to read.
+	// The turn's org, or the wiring's on the operator surface, which has no
+	// turn ([searchKnowledge.org]).
 	var seat *org.Role
 	var company *org.Organization
 	switch {
@@ -170,10 +145,8 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refusedBy(tools.RefusalUnavailable, waits(),
 			"No organization is in scope, so there is no knowledge base to search."), nil
 	}
-	// THE CHEAP GATE FIRST, exactly as the turn-start prefetch does it:
-	// CanSearch does no I/O, and a seat whose search could not hit anything
-	// is told so instead of waiting on a round trip that was always going
-	// to be empty.
+	// The cheap gate first, as the turn-start prefetch does: CanSearch does
+	// no I/O, so a seat that could hit nothing is told so without a round trip.
 	if !t.search.CanSearch(seat, company) {
 		return tools.Result{Output: "Your team's knowledge base is not searchable from " +
 			"this seat — either no knowledge backend is configured, or this seat has " +
@@ -183,11 +156,9 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	result := t.search.Search(ctx, knowledge.Query{
 		Text: query, Seat: seat, Org: company, Limit: searchHits, Mode: mode,
-		// AUTO-DRAFTS HIDDEN, the same exclusion the turn-start prefetch
-		// applies. Those pages are unreviewed proposals a synthesis pass
-		// wrote; an agent cannot tell one from a ratified runbook, and
-		// following an unratified one is how a draft becomes policy
-		// without anybody agreeing to it.
+		// Auto-drafts hidden, as the turn-start prefetch does: an agent
+		// cannot tell an unreviewed synthesis draft from a ratified runbook,
+		// and following one makes a draft policy nobody agreed to.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
 	if result.VendorStatus != 0 {
@@ -196,11 +167,9 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	hits := result.Hits
 	degraded := degradedNote(mode, result.Outcome)
 	if len(hits) == 0 && result.ServedMode == "" {
-		// NOTHING RAN, which is not "nothing matched": telling a seat
-		// the company has not written this down, when the knowledge
-		// base could not be read at all, is how it goes and writes a
-		// duplicate of a page that exists. A ranking the backend cannot
-		// serve at all says which, so the seat asks another way.
+		// Nothing ran, which is not "nothing matched": a seat told nothing
+		// is written down writes a duplicate of a page that exists. A ranking
+		// the backend cannot serve says which, so the seat asks another way.
 		if degraded != "" {
 			return tools.Result{Output: "Nothing was searched, so this says " +
 				"nothing about whether a page exists." + degraded}, nil
@@ -210,9 +179,8 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"shortly, or work from what you have."}, nil
 	}
 	partial := partialNote(result.Coverage) + degraded
-	// THE QUERY ECHOED BACK is the seat's own words and only neutralised, so
-	// even a query that spells the turn's token or a marker opens no fence
-	// beside the hits' own.
+	// The echoed query is the seat's own words, only neutralised, so a query
+	// spelling the turn's token or a marker opens no fence beside the hits'.
 	fence := turn.FenceBoundary()
 	if len(hits) == 0 {
 		return tools.Result{Output: fmt.Sprintf(
@@ -220,17 +188,14 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"you have — not everything is written down.%s",
 			provenance.Neutralise(fence, clip(query)), partial)}, nil
 	}
-	// EVERY HIT THE MODEL WAS SHOWN, in the order it was shown them. A
-	// search is a read of titles and snippets rather than of pages, and
-	// recorded as such (`via: search`) — which pages a company's searches
-	// surface is a different question from which ones get opened, and a
-	// knowledge base is curated against both.
+	// Every hit shown, in order, recorded `via: search`: which pages searches
+	// surface differs from which get opened, and a knowledge base is curated
+	// against both.
 	note(ctx, t.events, turn, knowledgeRead(turn, types.ReadViaSearch,
 		hits[0].Backend, query, knowledge.ReadPages(hits)))
 
-	// FENCED, under the turn's token and the label the backend stamped on
-	// its pages ([knowledge.Render], ADR-0040), exactly as the turn-start
-	// block renders them.
+	// Fenced under the turn's token and the backend's label
+	// ([knowledge.Render], ADR-0040), as the turn-start block renders them.
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d team documents match %q:\n", len(hits),
 		provenance.Neutralise(fence, clip(query)))
@@ -238,19 +203,17 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		b.WriteString(listed)
 		b.WriteString("\n")
 	}
-	// THE POINTER IS THE POINT: these are titles and snippets, not the
-	// pages. A seat that acted on a snippet would be acting on the first
-	// two hundred characters of a runbook.
+	// The pointer matters: a seat acting on a snippet acts on the first two
+	// hundred characters of a runbook.
 	b.WriteString("\nTo read any of these in full, look it up by title with your " +
 		"knowledge-base tools.")
 	b.WriteString(partial)
 	return tools.Result{Output: b.String()}, nil
 }
 
-// unknownMode is the refusal of a `mode` this build does not know, naming the
-// ones it does: composed here, because the parser's error opens with its
-// package ("knowledge: unknown search mode …"), which a model read after its
-// own tool's name.
+// unknownMode is the refusal of an unknown `mode`, naming the known ones:
+// composed here because the parser's error opens with "knowledge: ", which
+// reads oddly after the tool's own name.
 func unknownMode(tool, asked string) string {
 	names := make([]string, len(knowledge.Modes))
 	for i, m := range knowledge.Modes {
@@ -260,14 +223,11 @@ func unknownMode(tool, asked string) string {
 		tool, strings.TrimSpace(asked), words.Or(names))
 }
 
-// degradedNote is the sentence a search that ranked other than it was asked
-// to owes the seat that asked, or nothing when it served the mode asked for.
-//
-// SAID TO THE MODEL for [partialNote]'s reason: a keyword answer read as a
-// hybrid one is a seat concluding no page means what it typed, and a semantic
-// search that served nothing read as "nothing matched" is the same mistake
-// with no hits at all. internal/knowledge's mode doc is the rule — a search
-// never serves another ranking without saying so.
+// degradedNote is the sentence a search that ranked other than asked owes the
+// seat, or nothing when it served the mode asked for. Said to the model for
+// [partialNote]'s reason: a keyword answer read as a hybrid one has a seat
+// conclude no page means what it typed. The rule is internal/knowledge's mode
+// doc: a search never serves another ranking without saying so.
 func degradedNote(asked knowledge.Mode, o knowledge.Outcome) string {
 	switch o.Degraded {
 	case knowledge.NotDegraded:
@@ -293,12 +253,9 @@ func degradedNote(asked knowledge.Mode, o knowledge.Outcome) string {
 }
 
 // partialNote is the sentence a search over part of the knowledge base owes
-// the seat that asked, or nothing when it covered all of it.
-//
-// SAID TO THE MODEL rather than only logged, because the model is the one
-// deciding what the answer means: a short list over two thirds of the corpus
-// reads exactly like a short list over all of it, and "nothing about this is
-// written down" is the conclusion a seat acts on by writing it down again.
+// the seat, or nothing when it covered all of it. Said to the model, not only
+// logged: a short list over part of the corpus reads like one over all of it,
+// and a seat that concludes nothing is written down writes it again.
 func partialNote(c knowledge.Coverage) string {
 	if c.Complete || c.BucketsMissing == 0 {
 		return ""

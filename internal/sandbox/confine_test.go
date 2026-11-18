@@ -21,12 +21,10 @@ type engineHost struct {
 	data, keyring, config, home, secret, cli string
 }
 
-// newEngineHost lays the stand-in out OUTSIDE /tmp, under /var/tmp, which the
-// FHS and macOS both have: bubblewrap gives a confined job a private /tmp, so
-// a tree under the host's /tmp is hidden from the job WHOLE, whether or not a
-// single denial holds, and a write into it lands in memory whether or not the
-// host's root is bound read-only. Out here, each denial and the read-only
-// root are what keep the job out, which is what a case has to hold.
+// newEngineHost lays the stand-in out under /var/tmp (FHS and macOS), never
+// /tmp: bubblewrap's private /tmp would hide the tree WHOLE and keep a write in
+// memory, whatever the denials and the read-only root do. Out here, those are
+// what keep the job out, which is what a case has to hold.
 func newEngineHost(t *testing.T) engineHost {
 	t.Helper()
 	root, err := os.MkdirTemp("/var/tmp", "crewlet-confine-") //nolint:usetesting // t.TempDir is under the host's /tmp, which bubblewrap hides whole
@@ -55,8 +53,8 @@ func newEngineHost(t *testing.T) engineHost {
 			t.Fatal(err)
 		}
 		if f.path == h.cli {
-			// THE ONE FILE A JOB RUNS, written as every script a case of
-			// this package execs is ([writeExecutable]).
+			// The one file a job runs, written as every script this
+			// package execs is ([writeExecutable]).
 			writeExecutable(t, f.path, f.body)
 			continue
 		}
@@ -68,25 +66,16 @@ func newEngineHost(t *testing.T) engineHost {
 }
 
 // TestAConfinedHostBoxCannotReachTheEngine runs real jobs under this host's
-// strongest confinement and holds every path the engine keeps from a person's
-// deep-work run: its data directory and stream store, its keyring, its
-// config, the operator's home, another box and the box's own records. A host
-// that confines nothing must say so rather than run anything.
+// strongest confinement and holds every path kept from a person's deep-work
+// run: the data directory and stream store, keyring, config, the operator's
+// home, another box and the box's own records. A host that confines nothing
+// must say so rather than run anything.
 //
-// EACH REFUSAL IS JUDGED BY ITS EFFECT, NEVER BY AN EXIT STATUS. Landlock and
-// sandbox-exec REFUSE a denied path, but bubblewrap MASKS it: a denied
-// directory is an empty tmpfs, a denied file is /dev/null, and /tmp is a
-// private tmpfs that takes a write in memory and loses it with the job. So a
-// masked `ls` exits 0 having seen nothing, and a write into the private /tmp
-// exits 0 having written nothing the host keeps; read by exit status, both
-// were reported as reaching the engine on every host that runs bubblewrap.
-// What holds under all three mechanisms is what reaches the job's stdout and
-// what lands on the host, so a read fails when a byte or a real directory
-// entry of what it was denied reaches the job, and a write when its target
-// exists on the host. The stand-in engine host is laid out OUTSIDE /tmp
-// ([newEngineHost]): under bubblewrap every path under /tmp is the private
-// tmpfs, which would hide the whole tree from the job, its denials and a host
-// root bound writable alike.
+// EACH REFUSAL IS JUDGED BY ITS EFFECT, NEVER BY AN EXIT STATUS: bubblewrap
+// MASKS rather than refuses (an empty tmpfs, /dev/null, a private /tmp that
+// keeps no write), so a masked `ls` or write exits 0. A read fails when a byte
+// or real entry of what it was denied reaches stdout, a write when its target
+// exists on the host; the stand-in sits outside /tmp ([newEngineHost]).
 func TestAConfinedHostBoxCannotReachTheEngine(t *testing.T) {
 	host, err := ProbeConfinement()
 	if err != nil {
@@ -142,10 +131,9 @@ func TestAConfinedHostBoxCannotReachTheEngine(t *testing.T) {
 		return res
 	}
 
-	// EVERY WITNESS IS FIRST SHOWN TO BE THERE, read on the host: what a
-	// file holds and what a directory lists, so a refusal is the boundary's
-	// and never a typo's, and a case that leaked nothing had something to
-	// leak.
+	// EVERY WITNESS IS FIRST READ ON THE HOST, so a refusal is the
+	// boundary's, never a typo's, and a case that leaked nothing had
+	// something to leak.
 	holding := func(path string) []string {
 		t.Helper()
 		body, err := os.ReadFile(path)
@@ -186,10 +174,9 @@ func TestAConfinedHostBoxCannotReachTheEngine(t *testing.T) {
 		{"the operator's home", "cat " + q(h.secret), holding(h.secret)},
 		{"another box", "cat " + q(theirs), holding(theirs)},
 		{"the box's own records", "ls " + q(records), entries(records)},
-		// THIS BOX'S OWN ID IS NO LEAK: bubblewrap masks the boxes'
-		// directory and then makes this box's home's path components
-		// inside the mask to bind the home there, so a masked listing
-		// shows this box and nothing beside it.
+		// THIS BOX'S OWN ID IS NO LEAK: bubblewrap makes the home's path
+		// components inside the boxes' mask to bind it, so a masked
+		// listing shows this box alone.
 		{"the boxes' directory listing", "ls " + q(boxes), []string{otherID}},
 	}
 	if runtime.GOOS == "linux" {
@@ -234,9 +221,8 @@ func TestAConfinedHostBoxCannotReachTheEngine(t *testing.T) {
 			}
 			return string(body) != install
 		}},
-		// The host's own temporary root, where a harness left at its default
-		// would make its per-uid directory: refused, which is why every
-		// temp root is pointed inside the box rather than this let through.
+		// Where a harness at its default makes its per-uid directory:
+		// refused, which is why every temp root points inside the box.
 		{"a directory under the host's /tmp", "mkdir -p " + q(hostTmpProbe), exists(hostTmpProbe)},
 	}
 	for _, write := range writes {
@@ -343,10 +329,9 @@ func TestAConfinementWithoutAMechanismIsRefused(t *testing.T) {
 
 // TestTheRealClaudeCodeRunsAShellCommandInAConfinedBox is the opt-in smoke for
 // the real harness under this host's confinement: one headless run asked to use
-// its Bash tool. It needs a signed-in harness, so it runs only where
-// CREWLET_CONFINED_CLAUDE_SMOKE=1 and CLAUDE_CODE_OAUTH_TOKEN are set, and
-// otherwise logs what it did not check and passes. The temp roots the harness
-// resolves are held by TestAConfinedHostBoxCannotReachTheEngine on every run.
+// its Bash tool. It runs only with CREWLET_CONFINED_CLAUDE_SMOKE=1 and
+// CLAUDE_CODE_OAUTH_TOKEN set, and otherwise logs what it did not check. The
+// harness's temp roots are held by TestAConfinedHostBoxCannotReachTheEngine.
 func TestTheRealClaudeCodeRunsAShellCommandInAConfinedBox(t *testing.T) {
 	token := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
 	if os.Getenv("CREWLET_CONFINED_CLAUDE_SMOKE") != "1" || token == "" {

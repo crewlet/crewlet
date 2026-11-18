@@ -8,15 +8,11 @@ import (
 
 // A COMPANY THAT DOES NOT RUN WORKLET HAS NO WORK SEARCH, NOT AN EMPTY ONE.
 //
-// The lexical index is built under Worklet or Doclet, because it covers
-// both corpora, and the tracker's ranked search was built over it whenever the
-// index was — so a company whose tracker is a vendor's, or none, still had a
-// work search, over a tracker corpus that is empty by construction. Every
-// other work question is one such a node does not have (`unknown_query`);
-// `work_search` answered with nothing, which reads to a screen as "no item
-// matches" rather than "there is no tracker here" — the confusion the
-// accessor's untyped nil exists to prevent. The control is a company on
-// Worklet, which searches.
+// The lexical index is built under Worklet or Doclet, but a work search over a
+// vendor's tracker (or none) would search a corpus empty by construction and
+// read as "no item matches" rather than "no tracker here" (`unknown_query`),
+// the confusion the accessor's untyped nil prevents. The control is a company
+// on Worklet, which searches.
 //
 // Mutation: build the searcher whatever the tracker backend and the first
 // case holds one.

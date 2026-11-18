@@ -75,14 +75,10 @@ func limitOf(w types.BudgetWindow) int {
 	return *w.Limit
 }
 
-// A FRAME CARRIES EVERY CAPPED WINDOW'S REFUSAL, ON THE WINDOW THAT MADE IT.
-//
-// "Refusing charges" is what the dashboard's attention rows and the budget
-// badges key on, and the stamp is when the gate said no. The live projection
-// used to drop the stamp on its way to the push, which left every one of those
-// surfaces without it while the gate was turning turns away; and a frame that
-// stated one window per scope showed a seat capped by the day and the month as
-// one bar jumping between them.
+// A FRAME CARRIES EVERY CAPPED WINDOW'S REFUSAL, ON THE WINDOW THAT MADE IT:
+// the dashboard's attention rows and budget badges key on the stamp, and a
+// seat capped by the day and the month shows two bars, not one jumping
+// between them.
 func TestABudgetFrameCarriesEveryCappedWindowAndItsRefusal(t *testing.T) {
 	t.Parallel()
 	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 400, period.Month: 9000}}
@@ -174,11 +170,10 @@ func TestABudgetFrameStatesTheCompanysClock(t *testing.T) {
 }
 
 // ONE THRESHOLD, THE ENGINE'S. A window is near at nine tenths of its ceiling
-// and not a token before; it is refusing when it has no room for a single
-// token — the predicate the budget park waits on, so a parked seat's meter
-// never reads as merely near. A refusal stamp below the ceiling is a ceiling
-// raised since the refusal, and refuses nothing: the window has room again. A
-// window nothing caps is ok whatever its counter says.
+// and not a token before, and refusing with no room for a single token: the
+// predicate the budget park waits on, so a parked seat's meter never reads as
+// near. A stamp below the ceiling is a ceiling raised since, and refuses
+// nothing. A window nothing caps is ok whatever its counter says.
 func TestTheBudgetStateIsTheEnginesAndItsNearFractionIsNineTenths(t *testing.T) {
 	t.Parallel()
 	stamped := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)

@@ -8,15 +8,11 @@ import (
 )
 
 // ChatReaderViews are the reader's own views of the engine's chat: Activity,
-// the threads they follow, what they saved, what they sent, a room's shared
-// links, and one message read in place.
-//
-// EACH IS ANSWERED FOR ITS VIEWER on whichever data node serves it, as every
-// chat read is ([ChatReader]): the viewer crosses, the rooms it may read are
-// the serving reader's to decide, and the reader's own record (their cursors,
-// their thread marks, their saves) crosses as a value the asking node read
-// from coordination, because coordination is the fleet's and the rows are the
-// copy's.
+// followed threads, saves, what they sent, a room's shared links, and one
+// message read in place. Each is answered for its viewer as every chat read is
+// ([ChatReader]); the reader's own record (cursors, thread marks, saves)
+// crosses as a value the asking node read from coordination, which is the
+// fleet's, while the rows are the copy's.
 type ChatReaderViews interface {
 	Activity(ctx context.Context, viewer string, q chatlet.ActivityQuery,
 		fresh statelog.Freshness) (chatlet.Activity, error)

@@ -8,12 +8,10 @@ import (
 )
 
 // AN ACTIVATION IS PUBLISHED LATER THAN THE ONE IT REPLACES, and still later
-// once a node has stored its copy at the store's microseconds.
-//
-// Later by a few microseconds on the pointer would round to the same instant
-// wherever a coarser copy is compared, and a node comparing its stored
-// `activated_at` against the pointer's would read two activations as one — or
-// the replaced one as the newer.
+// once a node has stored its copy at the store's microseconds: a few
+// microseconds later on the pointer would round to the same instant in a
+// coarser copy, and a node comparing its stored `activated_at` with the
+// pointer's would read two activations as one, or the replaced one as newer.
 //
 // Mutation: compare in nanoseconds, or keep the request, and a case fails.
 func TestTheActivationPointersForwardRuleIsLaterWhereverItIsKept(t *testing.T) {
@@ -39,15 +37,11 @@ func TestTheActivationPointersForwardRuleIsLaterWhereverItIsKept(t *testing.T) {
 }
 
 // AN ACTIVATION IS SIZED AT ITS WIDEST, so a pointer the size passes is one
-// every store takes whatever instant it decides.
-//
-// A store publishes an activation at the request's own instant or a
-// millisecond past the one it replaces (ActivationAt), and an instant encodes
-// longer the more of its fraction is set: a request on a whole second is
-// "…:26Z", and the instant a store moves it to is "…:26.001Z". A caller
-// holding a write to what one key holds before it commits (a config write)
-// sizes the pointer with ActivationBytes, which every later instant the store
-// may decide encodes no longer than.
+// every store takes whatever instant it decides. A store publishes at the
+// request's instant or a millisecond past the one it replaces (ActivationAt),
+// and an instant encodes longer the more of its fraction is set ("…:26Z" against
+// "…:26.001Z"); a caller holding a write to one key's size (a config write)
+// sizes the pointer with ActivationBytes, which no later instant encodes past.
 //
 // Mutation: size the pointer at the request's own instant, and the instant a
 // store decides encodes longer than it was sized at.
@@ -80,12 +74,8 @@ func TestAnActivationIsSizedAtItsWidest(t *testing.T) {
 }
 
 // AN ACTIVATION'S ORIGIN IS SIZED AT ITS WIDEST TOO, so a config write's dry
-// run, which sizes the pointer its write would make, answers for that write.
-//
-// The write follows its dry run at a later instant, and the instant stamps the
-// pointer's origin as well as the pointer: an origin on a whole second is
-// "…:26Z", one a moment later "…:26.123456789Z". A pointer sized at the dry
-// run's instant is one the write's own instant cannot lengthen.
+// run answers for the write: the write follows at a later instant, which stamps
+// the origin as well as the pointer ("…:26Z" against "…:26.123456789Z").
 //
 // Mutation: size the origin at its own instant, and the write a moment after
 // its dry run makes a pointer past the size the dry run passed.

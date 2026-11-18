@@ -20,16 +20,10 @@ import (
 )
 
 // A DELIVERY THE DISPATCH FINISHES WITH TAKES ITS QUEUED LINES DOWN, AND ONE
-// THAT COMES BACK KEEPS THEM.
+// THAT COMES BACK KEEPS THEM: a delivery handed back (an executor holds the
+// seat, another node owns it) is still waiting.
 //
-// A person's queued line stands for their message waiting; it comes down when
-// a turn picks the message up or the message is settled without one. A
-// delivery handed back (a seat an executor holds, a node that does not own the
-// seat) is still waiting, and its person must go on seeing that.
-//
-// Mutation: settle on every outcome, and a person whose message was handed
-// back while an executor held the seat loses their queued line while the
-// message still waits.
+// Mutation: settle on every outcome, and the handed-back case goes red.
 func TestOnlyAFinishedDeliverySettlesItsQueuedLines(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -72,8 +66,7 @@ func TestOnlyAFinishedDeliverySettlesItsQueuedLines(t *testing.T) {
 }
 
 // A SEAT IS BUSY WHILE ONE OF ITS DELIVERIES IS BEING DISPATCHED, and only
-// then: that is what decides whether a person's message reaching it meanwhile
-// is shown as queued.
+// then, which decides whether a person's message is shown as queued.
 func TestASeatIsRunningOnlyWhileItsDeliveryIsDispatched(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
@@ -95,10 +88,8 @@ func TestASeatIsRunningOnlyWhileItsDeliveryIsDispatched(t *testing.T) {
 	}
 }
 
-// A HAND-BACK THAT DEAD-LETTERS A WAKE ENDS ITS QUEUED LINE. The backend
-// retires a message whose deliveries are spent rather than return it, so no
-// turn would ever pick it up; one that still has deliveries left comes back,
-// and its person is still waiting.
+// A HAND-BACK THAT DEAD-LETTERS A WAKE ENDS ITS QUEUED LINE, since no turn
+// will pick it up; one with deliveries left comes back and keeps it.
 func TestAWakeAHandBackDeadLettersSettlesItsQueuedLine(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -161,15 +152,13 @@ func TestTheDispatcherTellsOfADeadLetter(t *testing.T) {
 	}
 }
 
-// A DELIVERY IS GONE WHEN IT WILL NOT COME BACK, AND ONLY THEN. What a seat's
-// park recorded for a delivery whose launch was refused below its floor is read
-// by that delivery's every try, and dropped once the dispatcher says the
-// delivery is gone: acknowledged, whether a turn ran on it or not, or
-// dead-lettered by its hand-back. A delivery handed back with deliveries left
-// comes back; and one requeued behind a person's pause, or the tail of a
-// partition that would not merge, comes back as copies carrying the same ids,
-// though the original is acknowledged. Told gone, its next try lost the wait it
-// was owed.
+// A DELIVERY IS GONE WHEN IT WILL NOT COME BACK, AND ONLY THEN: what a seat's
+// park recorded for a launch refused below its floor is read by every try and
+// dropped once the delivery is gone (acknowledged, run or not, or
+// dead-lettered). One handed back with deliveries left, requeued behind a
+// pause, or the tail of a partition that would not merge comes back with the
+// same ids though the original is acknowledged, and told gone would lose the
+// wait it was owed.
 //
 // Mutation: tell every outcome, tell a requeued delivery or tail, or tell no
 // dead-lettered one, and a case goes red.
@@ -211,12 +200,9 @@ func TestOnlyADeliveryThatWillNotComeBackIsGone(t *testing.T) {
 			}
 		})
 	}
-	// ACKNOWLEDGED WITH NO TURN RUN: the completion ledger had it as worked,
-	// so the dispatch drops it from what it holds and acknowledges the
-	// rest, which is nothing. It never comes back, so it is gone; read off
-	// what the dispatch still held instead, it was never told, and what its
-	// seat's park recorded for it sat in the seat's map until the seat was
-	// released.
+	// ACKNOWLEDGED WITH NO TURN RUN, the ledger having it as worked: it is
+	// gone though the dispatch no longer holds it, or its park record would
+	// sit in the seat's map until the seat is released.
 	t.Run("acknowledged unrun, the ledger had it as worked", func(t *testing.T) {
 		t.Parallel()
 		r := &recorder{result: turn.Result{Decision: phase.Done}}

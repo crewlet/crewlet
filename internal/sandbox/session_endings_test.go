@@ -17,11 +17,10 @@ import (
 )
 
 // A RETIRED SEAT'S RUN IS FINISHED BY THE RETIREMENT, ITS TURN'S END RECORDED.
-// The retirement holds the seat's lease and a budget of its own, and the seat
-// host holds neither the seat nor a retry for it any more: a loss's ending
-// handed to the seat host's retry was dropped with the seat, the run's record
-// stayed in the store for good — on the executors board, in a person's
-// decisions — and its turn's end never reached the executor log.
+// The retirement holds the seat's lease and its own budget; the seat host holds
+// neither the seat nor a retry for it any more, so an ending handed to its retry
+// would be dropped with the seat: the record would stay for good (on the
+// executors board, in a person's decisions), the turn's end never logged.
 //
 // Mutation: finish a retirement's ending as a frame's is, handing what waits on
 // the log to the seat host's retry, and the record is left and no end recorded.
@@ -44,12 +43,11 @@ func TestARetiredSeatsRunIsFinishedWithItsTurnsEnd(t *testing.T) {
 }
 
 // A RELAUNCH ABANDONED UNDER ITS RESUMED FRAME LEAVES ITS TURN'S END TO THAT
-// FRAME, and its record waits for it. The launch that failed decided the run's
-// ending; deleted at once, the record took the turn's capture stamps with it,
-// and the frame recorded the turn's end at once — before a capture still being
-// kept had landed, and naming an older one as the turn's last. Kept, the frame
-// owes its end on it, and the run's ending records that end once the turn's
-// captures settle, naming the capture the turn did not keep.
+// FRAME, and its record waits for it. Deleted at once, the record would take
+// the turn's capture stamps with it, and the frame would record the end before
+// a capture still being kept landed, naming an older one as the turn's last.
+// Kept, the frame owes its end on it, and the ending records that end once the
+// turn's captures settle, naming the capture the turn did not keep.
 //
 // Mutation: let the abandon delete the record while the turn's frame runs, or
 // decide the turn's end in the ending while the frame does, and the frame finds
@@ -99,10 +97,9 @@ func TestARelaunchAbandonedUnderItsFrameLeavesTheTurnsEndToIt(t *testing.T) {
 }
 
 // A TURN'S END IS DECIDED ONCE, EVEN AFTER IT IS RECORDED. An attempt at the
-// ending that comes after the end was published and cleared — a crash between
-// the clear and the delete, or a delete refused — finds the end recorded on the
-// record, and neither decides it again nor closes the stopped turn, and answers
-// its colleague, a second time.
+// ending after the end was published and cleared (a crash between the clear and
+// the delete, or a refused delete) finds the end marked recorded, and neither
+// decides it again nor closes the stopped turn and answers its colleague twice.
 //
 // Mutation: clear the owed end without marking it recorded, or decide the end
 // on every attempt that finds none owed, and the stop is closed twice.
@@ -142,14 +139,11 @@ func TestATurnsEndIsDecidedOnceEvenAfterItIsRecorded(t *testing.T) {
 	})
 }
 
-// keepsOutcomeLost is a run store that loses a keep's account of its capture
-// (#1022): the first stamp of a capture past begun is held until the stamp's
-// own context ends, and answered then as the coordination store answers a
-// write it could not make in that time ([coord.ErrUnavailable]) — what a runner
-// starved through the stamp's whole budget saw, a write race lost and the
-// budget spent. Every other call passes through, and the reads of the run's
-// row while its capture stands begun under the end it owes are counted: the
-// reads of the end's wait for it.
+// keepsOutcomeLost is a run store that loses a keep's account of its capture:
+// the first stamp of a capture past begun is held until its own context ends,
+// then answered [coord.ErrUnavailable], as a stamp starved through its whole
+// budget sees. Every other call passes through, and the reads of the run's row
+// while its capture stands begun under an owed end (the end's wait) are counted.
 type keepsOutcomeLost struct {
 	PendingStore
 
@@ -189,19 +183,12 @@ func (s *keepsOutcomeLost) seen() (bool, int) {
 }
 
 // AN END WAITS OUT A KEEP WHOSE OUTCOME THE STORE NEVER TOOK, and names its
-// capture begun and never finished. The keep stamps what came of the capture
-// within one record's budget, and a store that never answers it in that time
-// leaves the capture begun on the run's row with nothing to settle it: the
-// turn's end waits on it for its whole life from the moment the end first saw
-// it ([captureLife], [Coordinator.awaitEndCaptures]), reading the row once a
-// [captureWaitTick] and once more once that has passed, and then records the
-// end naming it.
-//
-// IN THE BUBBLE, as every case of the rig runs ([inBubble]). On the machine's
-// clock a runner starved through the rig's 200 ms record budget inside that
-// stamp left an end waiting 38 minutes, past the package's timeout (#1022).
-// Here the budget is spent by the stamp's own wait alone, and the end's wait
-// runs out in virtual time, in as many reads as production's would make.
+// capture begun and never finished. A stamp the store never answers within the
+// record's budget leaves the capture begun with nothing to settle it: the end
+// waits on it for its whole life from first sight ([captureLife],
+// [Coordinator.awaitEndCaptures]), reading the row once a [captureWaitTick] and
+// once more after, then records the end naming it. In the bubble ([inBubble])
+// that wait runs out in virtual time, in as many reads as production's makes.
 //
 // Mutation: run the case off the bubble, and the rig refuses it; read the row
 // on any tick shorter than production's, and the wait reads it more often than
@@ -250,11 +237,10 @@ func TestAnEndWaitsOutAKeepWhoseOutcomeTheStoreNeverTook(t *testing.T) {
 }
 
 // TWO ATTEMPTS AT ONE ENDING ON A NODE FINISH IT ONCE. A stop decided on the
-// pause watch is finished by the ending's own retry, and the launch whose
-// attach it refused finishes the same ending at the same moment: each read the
-// record before either owed the turn's end, each closed the stopped turn, and
-// the colleague whose ask the turn took up was answered twice. The second
-// attempt leaves the ending to the first.
+// pause watch is finished by the ending's own retry while the launch whose
+// attach it refused finishes the same ending: each reading the record before
+// either owed the turn's end, each would close the stopped turn and answer its
+// colleague. The second attempt leaves the ending to the first.
 //
 // Mutation: let a second attempt on the node finish an ending the first is
 // finishing, and the stopped turn is closed twice.
@@ -378,9 +364,8 @@ func owesItsEnd(t *testing.T, rig *coordRig, then func()) {
 }
 
 // listsThen is a PendingStore whose next listing of a seat's runs, once armed,
-// runs then AFTER the store answered it: the listing's caller holds rows read
-// before whatever then does, as a goroutine whose read was answered and which is
-// not scheduled again until then has run holds them.
+// runs then AFTER the store answered it, so the caller holds rows read before
+// whatever then does, as a goroutine descheduled after its read would.
 type listsThen struct {
 	PendingStore
 	mu   sync.Mutex
@@ -414,17 +399,14 @@ func (h *holdSpy) detach(handle string) {
 }
 
 // A RECOUNT READ BEFORE AN ENDING'S DELETE NEVER OUTLIVES IT. A resumed turn's
-// frame recounts its seat as the resume returns, while the ending it decided is
-// finished at once, off the frame, by this node's retry: which records the
-// turn's end, deletes the record, recounts the seat and settles. A frame whose
-// listing was read before that delete and written after the retry's recount
-// counted the deleted run as holding again, and held the seat's inbox with
-// nothing left to recount it: the seat took no mail until it moved.
-//
-// Two moves order the frame's recount after the retry's here, the retry's delete
-// ([Coordinator.moved]) and the retry's own recount as it is written
-// ([Coordinator.syncSeat]), and either orders it alone; the two cases after this
-// one hold each to a race only it orders.
+// frame recounts its seat as the resume returns, while this node's retry
+// finishes its ending off the frame: records the end, deletes the record,
+// recounts and settles. A frame listing read before that delete and written
+// after the retry's recount would count the gone run as holding and hold the
+// seat's inbox with nothing left to recount it. Two moves order the frame's
+// recount after the retry's, the delete's ([Coordinator.moved]) and the retry's
+// recount's ([Coordinator.syncSeat]), either alone enough; the next two cases
+// hold each to a race only it orders.
 //
 // Mutation: drop both moves, and the frame's stale listing is written last, the
 // seat counted held and its inbox held for a run that is gone.
@@ -459,11 +441,10 @@ func TestARecountReadBeforeAnEndingsDeleteNeverOutlivesIt(t *testing.T) {
 }
 
 // A RECOUNT READ BEFORE A DELETE OF THIS NODE'S READS AGAIN, though nothing
-// recounts the seat after the delete: an ending this node finishes deletes the
-// run's record and moves the seat ([Coordinator.moved]), as every count it
-// applies does, so a listing that straddles the delete is read again rather
-// than written over it — which counted the run whose record is gone as holding,
-// and held the seat's inbox behind it.
+// recounts the seat after the delete: an ending this node finishes moves the
+// seat as it deletes the record ([Coordinator.moved]), so a listing straddling
+// the delete is read again rather than written over it, which would count a
+// gone run as holding and hold the seat's inbox behind it.
 //
 // Mutation: drop the move an ending's delete makes ([Coordinator.moved]), and
 // the recount writes its stale listing, the seat counted held for a run that is
@@ -496,13 +477,12 @@ func TestARecountReadBeforeADeleteOfThisNodesReadsAgain(t *testing.T) {
 	}
 }
 
-// A RECOUNT OLDER THAN ONE WRITTEN BEFORE IT READS AGAIN. The store moves under
-// a seat's recounts by other nodes' hands too, which move nothing this node
-// counts: the seat's last holder finishing an ending it decided, whose steps
-// after the decision take no lease, deletes the run's record. A recount whose
-// listing was read before that delete, and written after a newer recount that
-// read the store without the run, counted the run as holding again over the
-// newer count, and held the seat's inbox with nothing left to recount it.
+// A RECOUNT OLDER THAN ONE WRITTEN BEFORE IT READS AGAIN. Other nodes change the
+// store under a seat's recounts without moving anything this node counts: the
+// seat's last holder finishing an ending it decided deletes the record under no
+// lease. A recount whose listing predates that delete, written after a newer
+// recount that read the store without the run, would count the run as holding
+// over the newer count and hold the inbox with nothing left to recount it.
 //
 // Mutation: drop the move a recount makes as it is written
 // ([Coordinator.syncSeat]), and the older listing is written last, the seat
@@ -538,21 +518,17 @@ func TestARecountOlderThanOneWrittenBeforeItReadsAgain(t *testing.T) {
 }
 
 // A SEAT TAKEN BACK BESIDE AN ENDING STILL BEING FINISHED HOLDS ITS MAIL BEHIND
-// IT. This node's retry of a resumed turn's ending waits for the turn's capture
-// to land before it records the turn's end; meanwhile the seat's lease lapses,
-// the seat is released, and this node takes it again. Its recovery finds the
-// ending decided and another attempt here finishing it, and left it to that
-// attempt holding nothing: the seat's mail ran while its run's record still
-// owed the turn's end — the turn the conversation's next turn must never
-// overtake. The ending is kept for this node's retry as well, which holds the
-// mail behind it and finds the record gone the moment the attempt it waited
-// behind returns.
+// IT. While this node's retry of a resumed turn's ending waits for the turn's
+// capture to land, the seat's lease lapses and this node takes the seat again.
+// Recovery finds that attempt finishing the ending and must still hold the
+// mail: the conversation's next turn never overtakes a turn whose end is owed.
+// The ending is kept for this node's retry too, which holds the mail and finds
+// the record gone the moment the attempt it waited behind returns.
 //
 // Mutation: leave an ending another attempt on the node is finishing to that
 // attempt alone ([Coordinator.endRun]), and the seat taken back is not held; or
-// ask the ending kept behind the attempt again only on the hand-back's spacing
-// ([Coordinator.finishOnce]), and the seat's mail waits that long after the
-// record is gone.
+// ask it again only on the hand-back's spacing ([Coordinator.finishOnce]), and
+// the mail waits that long after the record is gone.
 func TestASeatTakenBackBesideAnEndingStillBeingFinishedHoldsItsMail(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -48,11 +49,10 @@ func decisionArg() map[string]any {
 	}
 }
 
-// A COMMENT CAN ASK WITH A DECISION, and what is stored is what every node
-// will hold for ever: the task and the page the evidence names are resolved
-// to their IDS — a key is retired by a move and a title by a rename — and a
-// decision whose keys a model misspelled is refused by name rather than
-// stored without the part it misspelled.
+// A COMMENT CAN ASK WITH A DECISION, stored as every node will hold it for
+// ever: the evidence's task and page resolve to their IDS (a move retires a
+// key, a rename a title), and a decision with a misspelled key is refused by
+// name rather than stored without that part.
 func TestACommentCanAskWithADecision(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -96,11 +96,10 @@ func TestACommentCanAskWithADecision(t *testing.T) {
 	}
 }
 
-// A DECISION WITHOUT AN ASK IS REFUSED, on both tools, before anything is
-// read or written: a decision is a question put to somebody, and one asked of
-// nobody is a set of options nobody is woken to weigh. And a page cited on a
-// company with no knowledge base of its own is refused as the caller's to
-// change — cite it as a url — rather than stored as a link nothing checked.
+// A DECISION WITHOUT AN ASK IS REFUSED, on both tools, before anything is read
+// or written: asked of nobody, it is options nobody is woken to weigh. A page
+// cited on a company with no knowledge base is refused as the caller's to
+// change (cite a url), not stored as a link nothing checked.
 func TestADecisionWithoutAnAskIsRefused(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -136,11 +135,10 @@ func TestADecisionWithoutAnAskIsRefused(t *testing.T) {
 	}
 }
 
-// A CHOICE WITH NO BODY IS AN ANSWER: the option is what the asker was
-// waiting for, and a reason is welcome but not owed. The choice rides the
-// thread read — so the reader checks it against the ask's own options before
-// anything is published — and the comment. A choice that answers nothing is
-// refused, since there is no decision for it to be an option of.
+// A CHOICE WITH NO BODY IS AN ANSWER: the option is what the asker awaited,
+// and a reason is not owed. The choice rides the comment and the thread read,
+// so the reader checks it against the ask's options before anything is
+// published. A choice answering nothing is refused: no decision to be part of.
 func TestAChoiceWithNoBodyIsAnAnswer(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -177,10 +175,10 @@ func TestAChoiceWithNoBodyIsAnAnswer(t *testing.T) {
 	}
 }
 
-// A CREATE CAN CARRY ITS ASK IN ONE RECORD. "Ask" and "Message" file an item
-// whose point is the question on it, so the question is the item's TITLE and
-// it rides the create itself — the writer's one-record verb — and the wake it
-// builds names the person asked, which is what routes them under `asked`.
+// A CREATE CAN CARRY ITS ASK IN ONE RECORD: "Ask" and "Message" file an item
+// whose TITLE is the question, so the ask rides the create itself (the
+// writer's one-record verb), and its wake names the person asked, which routes
+// them under `asked`.
 func TestACreateCanCarryItsAskInOneRecord(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -214,7 +212,7 @@ func TestACreateCanCarryItsAskInOneRecord(t *testing.T) {
 		t.Errorf("the answer is %v, want the ask's comment id and who was asked", answer)
 	}
 
-	// AND WITHOUT `ask`, the plain create it always was.
+	// AND WITHOUT `ask`, a plain create.
 	plain := newFakeTracker()
 	if got := callWork(t, decisionRegistry(t, plain, newFakeKB()), builtin.CreateWorkItemTool,
 		map[string]any{"title": "wire it", "project": "ENG"}); got.Failed {
@@ -270,13 +268,11 @@ func informedDecision(surface, channel string) map[string]any {
 	return d
 }
 
-// AN OPERATOR CANNOT ASK THE ENGINE TO INFORM.
-//
-// The engine keeps an inform by holding the ASKER'S answered turn open until a
-// tool on the surface has posted, and a person acting through a token has no
-// turn to hold — so their inform would be a line on the answering person's
-// card that nothing keeps. Refused as FORBIDDEN, on both tools, before
-// anything is written; the same decision without the inform is accepted.
+// AN OPERATOR CANNOT ASK THE ENGINE TO INFORM: an inform is kept by holding
+// the ASKER'S answered turn open until a tool on the surface has posted, and a
+// person acting through a token has no turn to hold, so nothing would keep it.
+// Refused as FORBIDDEN, on both tools, before anything is written; the same
+// decision without the inform is accepted.
 func TestAnOperatorCannotAskTheEngineToInform(t *testing.T) {
 	t.Parallel()
 	operator := func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
@@ -360,15 +356,12 @@ func TestAnInformChannelMustBeOneTheChartDeclares(t *testing.T) {
 	}
 }
 
-// THE ENGINE'S OWN CHAT IS A SURFACE AN INFORM CAN NAME, under the one
-// spelling that can be kept.
-//
-// An inform is kept by OWING its surface: the asker's answered turn is held
-// until a tool that delivers there has run, and Chatlet's posting
-// tools deliver to the chat's own feed source. So the surface a decision names
-// must BE that source — any other spelling is a promise no tool discharges,
-// and a company on Chatlet could promise nothing at all. The tool offers
-// it, the value layer accepts it, and a seat that can post there promises it.
+// THE ENGINE'S OWN CHAT IS A SURFACE AN INFORM CAN NAME, spelled as the source
+// Chatlet's posting tools deliver to: an inform is kept by OWING its surface
+// (the asker's answered turn held until a tool delivering there has run), so
+// any other spelling is a promise no tool discharges, and a company on Chatlet
+// could promise nothing. The tool offers it, the value layer accepts it, and a
+// seat that can post there promises it.
 //
 // Mutation: drop InformChat from decision.InformSurfaces and the schema offers
 // no `chat`, and the inform is refused.
@@ -421,13 +414,11 @@ func TestAnInformCanNameTheEnginesOwnChat(t *testing.T) {
 }
 
 // AN AGENT SEAT'S QUESTION TO A PERSON IS A DECISION (ADR-0100), on both
-// asking tools, refused before anything is written with a refusal that says
-// how to turn it into one: before, over a third of the questions a person was
-// asked were requests in prose ("the merge is yours") with nothing to press.
-// A question between two agent seats may still be asked in words, and so may
-// a person's own; a handle no roster can place is asked as of a person. And an
-// agent's decision without the option it recommends, or without why, is
-// refused, where a person's, who may have no view, is posted.
+// asking tools: one in prose, with nothing for the person to press, is refused
+// before anything is written, saying how to make it one. A question between
+// agent seats, or a person's own, may be in words; a handle no roster places
+// is asked as of a person. An agent's decision without its recommended option
+// or its rationale is refused; a person's, who may have no view, is posted.
 //
 // Mutation: return nil from checkAskOfPerson, and the two prose questions to
 // a person are posted; drop the roster lookup, and every agent-to-agent
@@ -525,7 +516,7 @@ func TestAnAgentsQuestionToAPersonIsADecision(t *testing.T) {
 // AN AGENT'S COMMENT THAT ASKS AND NAMES A PERSON PUTS THE QUESTION AS AN ASK
 // (ADR-0100): otherwise it reaches the person only as a mention, never among the
 // decisions waiting on them. Asking an agent, only mentioning a person, naming a
-// team, or a person's own comment are posted as before.
+// team, or a person's own comment are posted.
 //
 // Mutation: return nil from checkAsksOfNamed, and the agent's request that
 // names a person in words is posted.
@@ -591,5 +582,38 @@ func TestAnAgentsRequestThatNamesAPersonIsAnAsk(t *testing.T) {
 				t.Errorf("a refused comment was written: %d writes", len(trk.patched))
 			}
 		})
+	}
+}
+
+// A DECISION CITING THE URL A PUBLISH ANSWERED CITES THE ARTIFACT (ADR-0160), on any
+// scheme; the same id under another host stays a url, held to https.
+// Mutation: match the id's path on any host, and a foreign address becomes this engine's.
+func TestADecisionCitingAPublishedArtifactsURLCitesTheArtifact(t *testing.T) {
+	t.Parallel()
+	const id = "0f2a6c3e-6b1d-4e0a-9d6f-2b4c8a1e7f30"
+	link := func(a artifacts.ID) string { return "http://crewlet.test/dashboard#/artifacts/" + a.String() }
+	trk := newFakeTracker()
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, gated(builtin.Deps{
+		Work: builtin.WorkDeps{Reader: trk, Writer: trk.as, ArtifactLink: link},
+	})); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	ask := func(ref string) tools.Result {
+		d := decisionArg()
+		d["evidence"] = []any{map[string]any{"kind": "url", "ref": ref, "label": "version 8"}}
+		return callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{"asks": false,
+			"item": "ENG-1", "body": "Version 8 is up.", "ask": "pm", "decision": d})
+	}
+	if got := ask("http://crewlet.test/dashboard#/artifacts/" + id); got.Failed {
+		t.Fatalf("citing the published artifact's url was refused: %s", got.Output)
+	}
+	cited := trk.patched[0].Comment.Decision.Evidence[0]
+	if cited.Kind != decision.EvidenceArtifact || cited.Ref != id {
+		t.Errorf("the evidence is stored as %+v, want the artifact %s", cited, id)
+	}
+	if got := ask("http://elsewhere.test/dashboard#/artifacts/" + id); !got.Failed ||
+		!strings.Contains(got.Output, "https://") {
+		t.Errorf("another host's address answered %q, want the https refusal", got.Output)
 	}
 }

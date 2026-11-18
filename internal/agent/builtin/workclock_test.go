@@ -12,13 +12,10 @@ import (
 // THE WORK TOOLS CUT THEIR DAY ON THE COMPANY'S CLOCK, AS IT IS AT THE CALL
 // (ADR-0018).
 //
-// 23:30 on 23 September in Los Angeles is 06:30 on the 24th in UTC, so a tool
-// that cut "today" on UTC answered about the wrong date for the last seven
-// hours of every Los Angeles day. And the clock is READ AT THE CALL rather
-// than captured when the tools were registered: the operator's surface is
-// built again only when what it serves changes, never for a new clock, so a
-// captured zone answered every assistant on the clock the surface was last
-// built under — which, before that surface was given one at all, was UTC.
+// 23:30 on 23 September in Los Angeles is 06:30 on the 24th in UTC, so a day
+// cut on UTC is the wrong date for seven hours of every Los Angeles day. The
+// clock is read at the call, not captured at registration: the operator's
+// surface is not rebuilt for a new clock.
 func TestTheWorkToolsCutTheirDayOnTheCompanysClockAtTheCall(t *testing.T) {
 	t.Parallel()
 	losAngeles, err := time.LoadLocation("America/Los_Angeles")

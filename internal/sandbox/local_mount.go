@@ -14,60 +14,33 @@ import (
 	"github.com/crewlet/crewlet/internal/hostbox"
 )
 
-// The bind mount, and the two things container mode is built on.
+// A container box's home is an engine-host directory bind-mounted at
+// [DefaultHome]: in-box paths match a remote backend's and file I/O needs no
+// copy, but the engine and the box share one filesystem. Two properties must
+// hold, and both fail silently:
 //
-// A container box's home is a directory on the engine host mounted at [DefaultHome]
-// inside a container. That is what makes in-box paths identical to a remote
-// backend's and file I/O a plain host read or write with no copy round trip —
-// and it means TWO PROCESSES SHARE ONE FILESYSTEM. Both properties that has to
-// hold fail silently, and both were live:
-//
-//  1. The mount must be THIS host's filesystem. A runtime driving a remote
-//     daemon (DOCKER_HOST, a rootless socket forwarded from elsewhere) mounts
-//     the DAEMON's filesystem instead, so the box directory the engine wrote
-//     is not the one the container sees. Nothing errors; the agent simply
-//     finds no brief, no credentials and no tools.
-//
-//  2. What the container writes there, the engine must be able to manage.
-//     Under a ROOTFUL runtime a container's root is the host's root, so every
-//     directory the box creates in the mount is root-owned: the engine, which
-//     is not root, can then neither write into it (`Install` creating
-//     .crewlet/bin from inside the box and then writing a file into it from
-//     outside failed with EACCES, which is exactly how this was found) nor
-//     unlink from it, so `removeBox`'s RemoveAll leaves the checkout behind
-//     and every box directory leaks on the engine host for good.
+//  1. The mount is THIS host's filesystem. A runtime driving a remote daemon
+//     (DOCKER_HOST, a forwarded socket) mounts the daemon's instead, and the
+//     agent finds no brief, credentials or tools.
+//  2. The engine can manage what the box writes. Under a rootful runtime the
+//     box's directories are root-owned, so `Install` cannot write into them
+//     (EACCES) and `removeBox` cannot empty them: box directories leak.
 
-// containerProbeTimeout bounds the runtime queries around a box's creation:
-// the rootless probe and the in-box half of the mount proof.
-//
-// Short on purpose, and shorter than [ControlTimeout]. Both run against a
-// daemon this process is about to ask for a container anyway, so a daemon slow
-// enough to blow this is a create that is about to fail regardless — the only
-// thing a longer bound would buy is a later error. Ten seconds is well past a
-// healthy `docker info` (sub-second) and well under the minute a wedged daemon
-// would otherwise add to a doomed create.
+// containerProbeTimeout bounds the rootless probe and the in-box half of the
+// mount proof. Shorter than [ControlTimeout] on purpose: a daemon too slow for
+// it would fail the create anyway, so a longer bound only delays the error.
+// Ten seconds is far past a healthy `docker info` (sub-second).
 const containerProbeTimeout = 10 * time.Second
 
-// containerUserArgs is the `--user` the container needs, or nothing.
+// containerUserArgs is the `--user` the container needs so it writes the
+// mount as the engine's own user, or nothing.
 //
-// THE CONTAINER MUST WRITE THE MOUNT AS THE ENGINE'S OWN USER, and which flag
-// achieves that depends on the runtime rather than on anything Crewlet chooses:
-//
-//   - A ROOTLESS runtime (podman's default on Fedora and RHEL, rootless
-//     Docker) already does it. Its user namespace maps container uid 0 onto
-//     the invoking user, so the container's root IS the engine user on disk —
-//     and passing --user there would map the id into the subuid range instead,
-//     turning a working configuration into one that cannot even enter the
-//     box's own 0700 directory.
-//
-//   - A ROOTFUL runtime does not. Container uid 0 is host uid 0, so --user is
-//     what stops the box writing root-owned files into a directory the engine
-//     has to be able to reclaim.
-//
-// An unreadable probe answers ROOTFUL, which is the loud direction: --user
-// against a rootless runtime fails the mount proof at creation with a message
-// that names the cause, while the opposite mistake is silent until an
-// operator wonders why the engine host is full of undeletable box directories.
+// A rootless runtime already maps container root onto the invoking user, and
+// --user there would map into the subuid range, unable to enter the box's 0700
+// directory. A rootful runtime needs --user, or the box writes root-owned
+// files the engine cannot reclaim. An unreadable probe answers rootful, the
+// loud direction: the mount proof then fails at creation naming the cause,
+// where the opposite mistake silently leaks box directories.
 func containerUserArgs(ctx context.Context, cli containerCLI) []string {
 	if runtimeIsRootless(ctx, cli) {
 		return nil
@@ -76,17 +49,11 @@ func containerUserArgs(ctx context.Context, cli containerCLI) []string {
 }
 
 // runtimeIsRootless asks the runtime whether it maps container root onto this
-// user.
-//
-// ONE QUESTION, ASKED THE WAY EACH RUNTIME ANSWERS IT. Docker reports it among
-// its top-level SecurityOptions, Podman as a boolean at host.security.rootless,
-// and there is no format string that reads both — so the query is chosen by
-// which binary [ResolveContainerRuntime] picked, using a plain single-value
-// template rather than a whole-document dump, which is what every version of
-// both harnesses supports.
-//
-// Anything else — a daemon that is down, an answer this build does not
-// recognise — is not an answer, and the caller's default covers it.
+// user. Docker lists it in SecurityOptions, Podman in host.security.rootless,
+// and no one format string reads both, so the template follows the binary
+// [ResolveContainerRuntime] picked: a single-value template, which every
+// version of both supports, not a whole-document dump. A down daemon or an
+// unrecognised answer is no answer: false, the caller's default.
 func runtimeIsRootless(ctx context.Context, cli containerCLI) bool {
 	format := "{{.SecurityOptions}}"
 	if cli.podman() {
@@ -95,21 +62,17 @@ func runtimeIsRootless(ctx context.Context, cli containerCLI) bool {
 	result, err := runHost(ctx, cli.command(containerProbeTimeout,
 		"info", "--format", format))
 	if err != nil || result.ExitCode != 0 {
-		// THE ERROR TRAVELS, and it is not decoration: "could not start
-		// the binary" and "the daemon answered nothing" are different
-		// faults with different fixes, and dropping the first left the
-		// only evidence of one being a container that came up with
-		// --user against a rootless runtime. Stderr too, because a
-		// runtime that refuses says why there and nowhere else.
+		// The error and stderr are logged: "could not start the binary"
+		// and "the daemon answered nothing" have different fixes, and a
+		// refusing runtime says why only on stderr.
 		localLog.Debug("local_sandbox_rootless_probe_unanswered",
 			"runtime", cli.path, "exit", result.ExitCode,
 			"error", err, "stderr", strings.TrimSpace(result.Stderr))
 		return false
 	}
 	answer := strings.TrimSpace(result.Stdout)
-	// Podman answers the boolean itself; Docker answers a list in which the
-	// option is present or absent. "false" is Podman saying no, and must not
-	// be read as a Docker list that happens to mention the word.
+	// Podman answers a boolean, Docker a list holding "rootless" or not;
+	// "false" is Podman's no, never a Docker list.
 	if answer == "true" {
 		return true
 	}
@@ -121,9 +84,8 @@ type execer interface {
 	Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error)
 }
 
-// The mount probe's own exits, one per half of its command, which no exit of
-// a container runtime (125 to 127) or of a box (124 for its timeout, above
-// 128 for a signal) is.
+// The mount probe's exits, one per half of its command, distinct from a
+// runtime's (125 to 127) and a box's (124 timeout, above 128 signal).
 const (
 	// probeUnread is the probe the engine wrote not being there to read.
 	probeUnread = 3
@@ -132,29 +94,21 @@ const (
 )
 
 // probeFailed is what the mount probe's answer says, or nil for a probe that
-// ran and read the engine's own token back.
+// read the engine's own token back.
 //
-// FOUR FAILURES, EACH WITH ITS OWN CLASS AND ITS OWN WORDS, because they send
-// a reader to four different places. A probe that RAN and read something else
-// — the file not there, or other bytes in it — is a mount on another host's
-// filesystem, a configuration. A box that could not make a directory in its
-// own home is a mount it may not write, a configuration too. A probe that ran
-// out of its time is the runtime not answering, which a wait can clear. A
-// probe the runtime refused to run at all — the container gone, an exec the
-// daemon would not take — is the runtime's refusal, a configuration as every
-// one of its refusals is. And a runtime this host could not even start is no
-// class at all, but the engine host's own fault. Every one of them was told
-// as the first, so an exec that never happened sent an operator to look for a
-// remote daemon that was not there.
+// Each failure gets its own class and words, since each sends the reader
+// somewhere else: a token not read back is a mount on another host's
+// filesystem; an unmade directory is a mount the box may not write; a timeout
+// is a runtime not answering, which a wait can clear; any other exit is the
+// runtime refusing the exec; and a runtime this host cannot start is the
+// engine host's own fault, no class at all.
 func probeFailed(ctx context.Context, layout boxLayout, token string, result ExecResult, err error) error {
 	said := strings.TrimSpace(result.Stderr)
 	switch {
 	case err == nil && result.ExitCode == 0 && strings.TrimSpace(result.Stdout) == token:
 		return nil
 	case ctx.Err() != nil:
-		// THE CALLER STOPPED WAITING, which a timed-out probe would
-		// otherwise be read as: the box is torn down either way, and the
-		// launch says why.
+		// The caller stopped waiting; not to be read as a timed-out probe.
 		return fmt.Errorf("container sandbox %s: its mount probe was abandoned: %w",
 			layout.id, ctx.Err())
 	case err != nil:
@@ -180,20 +134,13 @@ func probeFailed(ctx context.Context, layout boxLayout, token string, result Exe
 		"sandbox %s's mount probe (exit %d): %s", layout.id, result.ExitCode, said)
 }
 
-// verifyMount proves the two properties above, using the operations that
-// actually break when they do not hold.
-//
-// The engine writes a token and the box reads it back: a mount that is not
-// this filesystem cannot. Then the BOX creates a directory and the ENGINE
-// writes a file inside it and removes the lot — which is `Install` and
-// `removeBox` in miniature, and is why the check is a directory rather than a
-// file. Unlinking a file needs write permission on its PARENT, not on the
-// file, so an engine that removes a root-owned file proves nothing at all; it
-// is the box-made DIRECTORY that the engine cannot write into or empty.
-//
-// EVERY FILE OF IT THROUGH THE BOX'S HOME ([boxLayout.openHome]): the container
-// is running by now, and the directory the proof writes into is one the
-// container made.
+// verifyMount proves the two properties above with the operations that break
+// when they do not hold. The engine writes a token the box must read back;
+// then the box makes a directory the engine must write into and remove,
+// `Install` and `removeBox` in miniature. A directory, not a file: unlinking
+// needs write permission on the parent, so removing a root-owned file proves
+// nothing. Every file goes through [boxLayout.openHome], since the container
+// is running and made the directory written into.
 func verifyMount(ctx context.Context, box execer, layout boxLayout) error {
 	home, err := layout.openHome()
 	if err != nil {
@@ -213,16 +160,14 @@ func verifyMount(ctx context.Context, box execer, layout boxLayout) error {
 	}
 	defer func() { _ = home.Remove(fromEngine) }()
 
-	// Unquoted, because every path here is a compile-time constant under
-	// DefaultHome — there is no operator input in this command line. Each
-	// half exits with a status of its own, so a probe that ran and read
-	// something else is told apart from one the runtime never ran.
+	// Unquoted: every path is a constant under DefaultHome, with no operator
+	// input. Each half has its own exit, telling a probe that read something
+	// else from one the runtime never ran.
 	inBox := DefaultHome + "/.crewlet"
 	result, err := box.Exec(ctx, "cat "+inBox+"/mount-probe || exit "+
 		strconv.Itoa(probeUnread)+"; mkdir -p "+inBox+"/mount-probe.d || exit "+
 		strconv.Itoa(probeUnmade), ExecOptions{
-		// Not the workspace: the proof must not depend on a working
-		// directory a setup step could still be creating.
+		// Not the workspace, which a setup step may still be creating.
 		Cwd:        DefaultHome,
 		TimeoutSec: containerProbeTimeout.Seconds(),
 	})

@@ -15,16 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// A TOOL A ROUTED REQUEST CALLS IS DECIDED AT THE INSTANT ITS ROUTE WAS.
-//
-// The work surface's tool-backed routes are [authz.Router] routes, and each
-// then dispatches into the tool gate on the request's own context — the last
-// check of a routed request, so it is judged at the instant the route stamped
-// on it ([authz.DecidedAt]) rather than at its own clock. A route that admits
-// a person whose proof lapses one nanosecond after it decided proves the two
-// clocks apart: the gate, asked a step-up verb on the routed context once the
-// proof has lapsed, still admits, and the SAME principal on a context no route
-// decided is refused for a stale proof.
+// A TOOL A ROUTED REQUEST CALLS IS DECIDED AT THE INSTANT ITS ROUTE WAS
+// ([authz.DecidedAt]), not at the gate's own clock. A person whose proof
+// lapses a nanosecond after the route decided is still admitted to a step-up
+// verb on the routed context once the proof has lapsed, and the SAME
+// principal on a context no route decided is refused for a stale proof.
 //
 // Mutation: decide [builtin.Decide] at `time.Now()` again and the routed call
 // is refused step_up.

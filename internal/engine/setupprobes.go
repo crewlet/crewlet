@@ -23,17 +23,12 @@ import (
 // SetupProbes is which vendor check answers each integration's Test button
 // on the setup surface: one read-only identity call per kind, made with a
 // credential somebody typed and has not stored.
+// It lives beside the passes: a probe is the verify route's concrete client
+// as a pass is the provision route's.
 //
-// HERE, BESIDE THE PASSES, because this package is where a seam meets the
-// concrete client that satisfies it, and a probe is that for the setup
-// surface's verify route exactly as a pass is for its provision route.
-//
-// NOTHING OF THE RUNNING ENGINE IS READ, which is why it is a function
-// rather than a method: a probe is handed every value it uses by the
-// request (and the company document the request is answered against), so
-// it holds no epoch, no resolver and no store a stale reading could come
-// from. Every client is built with its production transport, through
-// internal/httpx.
+// A function, not a method: a probe uses only what the request hands it, so
+// it holds no epoch, resolver or store a stale reading could come from.
+// Every client uses its production transport (internal/httpx).
 func SetupProbes() map[integration.Kind]setup.Probe {
 	return map[integration.Kind]setup.Probe{
 		integration.KindAtlassian:    atlassian.Probe(atlassian.ClientOptions{}),

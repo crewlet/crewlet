@@ -33,10 +33,8 @@ func savedIDs(l worklet.ViewListing) []string {
 
 // A DELETED VIEW IS GONE FROM EVERY READ OF THE VIEWS.
 //
-// A view nobody could take away stayed in everybody's strip for good: the
-// engine could only create or replace one. Deleted, it is in no strip, in no
-// inventory, runs as nothing, and is no view a save can replace or a second
-// delete can take away again.
+// Deleted, it is in no strip and no inventory, runs as nothing, and is no view
+// a save can replace or a second delete can take away again.
 func TestADeletedViewIsGoneFromEveryReadOfTheViews(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -171,9 +169,9 @@ func TestADeleteMadeAgainIsAnsweredByTheDeletedRow(t *testing.T) {
 
 // A PIN OF A DELETED VIEW GOES WHEN ITS PERSON'S PINS NEXT CHANGE.
 //
-// A delete cannot write every pinner's record, so the pin outlives the view,
-// drawn nowhere. Left there for good it would hold one of the person's
-// [worklet.MaxPinnedViews] places with nothing on screen to unpin.
+// A delete cannot write every pinner's record, so the pin outlives the view;
+// kept for good it would hold one of the person's [worklet.MaxPinnedViews]
+// places with nothing on screen to unpin.
 func TestAPinOfADeletedViewGoesWhenThePinsNextChange(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

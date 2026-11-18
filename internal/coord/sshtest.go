@@ -13,20 +13,14 @@ import (
 // AN SSH TEST is what the latest Test connection of one server found with one
 // certificate authority: each step of the server setup proven, in order.
 //
-// # Who has to agree on it
-//
-// The whole company, now. A test is pressed through one node, shown on the
-// server's row to every administrator whichever node serves them, and read
-// by a rotation's promote, which is refused unless every server's latest test
-// with the staged authority passed. So it is one record per server and
-// authority in the coordination store, the CURRENT VALUE ONLY: a later test
-// replaces it, and removing the server deletes its records.
-//
-// # Bounded
-//
-// A record names at most [maxSSHTestSteps] steps, each sentence cut to
-// [MaxSSHTestDetailBytes] by the writer ([SSHTest.Validate] refuses one it
-// did not). Nothing a server printed is kept beyond a step's sentence.
+// The whole company has to agree on it: it is pressed through one node, shown
+// to every administrator, and read by a rotation's promote, refused unless every
+// server's latest test with the staged authority passed. So it is one record per
+// server and authority in the coordination store, CURRENT VALUE ONLY: a later
+// test replaces it, and removing the server deletes its records. A record holds
+// at most [maxSSHTestSteps] steps, each sentence cut to [MaxSSHTestDetailBytes]
+// by the writer ([SSHTest.Validate] refuses one it did not); nothing else a
+// server printed is kept.
 
 // SSHTest is one server's latest test with one authority.
 type SSHTest struct {
@@ -129,8 +123,8 @@ func SSHTestEntryOf(key string) (string, bool) {
 // authority.
 //
 // Every read RAISES rather than answering empty when the store cannot be read:
-// "never tested" and "could not read" are two facts, and a promote that read
-// the first for the second would act on a test it never saw.
+// a promote that took "could not read" for "never tested" would act on a test
+// it never saw.
 type SSHTests interface {
 	// SSHTest reads one server's latest test with one authority.
 	SSHTest(ctx context.Context, host, authority string) (SSHTest, bool, error)

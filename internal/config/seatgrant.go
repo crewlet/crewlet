@@ -45,6 +45,10 @@ type SeatGrant struct {
 	// Request is the agent's request the grant answered, where it answered
 	// one.
 	Request string `yaml:"request,omitempty" json:"request,omitempty" js:"pattern=^[a-z0-9]{10}$" desc:"The agent's request the grant answered, which the engine writes; absent for one a person added."`
+
+	// Target is what the one change a grant was asked for changes, as the
+	// vendor names it (a bucket), copied from the agent's request.
+	Target string `yaml:"target,omitempty" json:"target,omitempty" js:"pattern=^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,254}$" desc:"What the change the agent asked the grant for changes, as the integration names it (a Scaleway bucket), which the engine copies from the request; absent for one a person added."`
 }
 
 // MaxSeatGrants is how many grants one seat may hold at one integration: one
@@ -63,7 +67,14 @@ func (g SeatGrant) Live(now time.Time) bool { return g.ExpiresAt.IsZero() || now
 var (
 	seatGrantID      = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^g[a-z0-9]{10}$`) })
 	seatGrantRequest = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9]{10}$`) })
+	seatGrantTarget  = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,254}$`)
+	})
 )
+
+// SeatGrantTarget reports a grant's target of the shape a vendor names one
+// resource by: no space, quote or line break, so it reads safely in a prompt.
+func SeatGrantTarget(s string) bool { return seatGrantTarget().MatchString(s) }
 
 // checkSeatGrants holds one seat block's grants to their shape: ids written
 // by the engine and unique, a permission named, a scope listed once, the
@@ -115,6 +126,10 @@ func checkSeatGrants(p *problems, path Path, grants []SeatGrant) {
 		}
 		if g.Request != "" && !seatGrantRequest().MatchString(g.Request) {
 			p.add(at(here, "request"), ErrShape, "%q is not a request id the engine writes", g.Request)
+		}
+		if g.Target != "" && !SeatGrantTarget(g.Target) {
+			p.add(at(here, "target"), ErrShape, "%q is not one resource's name; the engine copies it from "+
+				"the agent's request", g.Target)
 		}
 	}
 }

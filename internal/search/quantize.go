@@ -65,18 +65,17 @@
 //
 // # The index of changes' words
 //
-// [ChangeIndexer] indexes Gitlet changes' titles and descriptions
-// (ADR-0156). It walks forward over code_changes.position no further than
-// the code log's applied prefix, so a record this node retains is never
-// passed. Each document is numbered by this node and keeps its repository,
-// owner, state and a hash that keeps a head move from rewriting its
-// postings; its postings are one range of the postings key (the number
-// shifted 16 bits), so an edit or a purge removes them with no term list
-// kept. A purged repository is dropped by a rotation, and a replaced estate
-// is rebuilt as chat's is. [ChangeIndexer.Holding] reads the narrowest of a
-// search's scope and words first and answers the newest changes holding
-// every word, with how far the walk reached and the code log's position its
-// writes were decided from, which the reader compares with its own snapshot.
+// [ChangeIndexer] indexes Gitlet changes' titles and descriptions (ADR-0156,
+// which holds its keys, batches and rebuilds). Its first build walks newest
+// first by id over the rows at or below the code log's applied prefix where it
+// began, and a forward walk over code_changes.position, never past that
+// prefix, keeps every later move, so a record this node retains is never
+// passed. Each document is keyed by its id's mint time, so newest is the same
+// on every node, and its postings are one range of the postings key, so an
+// edit or a purge removes them with no term list kept. [ChangeIndexer.Holding]
+// reads the narrowest of a search's scope and words first and answers the
+// newest minted changes holding every word, with how far each walk reached and
+// the code log's position its writes were decided from.
 //
 // # A read of another domain's table is a named, exported statement
 //

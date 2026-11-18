@@ -14,12 +14,8 @@ import (
 )
 
 // THE ENGINE'S OWN CHAT'S WORKING INDICATOR, from the company's setting to the
-// hub a person's screen reads it from.
-//
-// The hub implemented [notify.StatusPoster] completely and nothing ever built
-// a driver over it: [Engine.Status] fanned a Chatlet turn's raise across the
-// vendor drivers alone, each refused a transport that was not its own, and
-// `chat.chatlet.typing_status` had no reader. So these cases start at the
+// hub a person's screen reads it from: a hub implementing [notify.StatusPoster]
+// shows nothing unless a driver is built over it, so these cases start at the
 // company and the engine's own entry points and end at what the hub was asked
 // to show.
 
@@ -122,8 +118,7 @@ func chatletTrigger(addressed bool) *events.Event {
 	return ev
 }
 
-// A CHATLET TURN RAISES ITS INDICATOR ON THE HUB AND CLEARS IT — the whole
-// of the defect.
+// A CHATLET TURN RAISES ITS INDICATOR ON THE HUB AND CLEARS IT.
 func TestAChatletTurnShowsItsSeatWorkingOnTheHub(t *testing.T) {
 	t.Parallel()
 	hub := newRecordingHub()
@@ -216,14 +211,11 @@ func TestANodeWithNoHubBuildsNoChatletIndicator(t *testing.T) {
 	}
 }
 
-// THE HUB ARRIVES AFTER THE BOOT COMPANY, AND ATTACHING IT BUILDS THE DRIVER.
-//
-// [New] runs [Engine.startNotifications] — the call that builds the indicator
-// for the company a node boots with — before the process can attach its hub,
-// so that call finds no hub and builds nothing. Unless the attachment builds
-// it, the boot company shows no seat working until its first apply, which on a
-// company nobody edits is never. And a hub REPLACED takes its driver with it:
-// a driver left over the old one raises indicators no socket is attached to.
+// THE HUB ARRIVES AFTER THE BOOT COMPANY, AND ATTACHING IT BUILDS THE DRIVER:
+// [New] runs [Engine.startNotifications] before the process can attach its
+// hub, so otherwise the boot company shows no seat working until its first
+// apply, which on a company nobody edits is never. And a REPLACED hub takes its
+// driver with it: one left over the old hub raises indicators no socket sees.
 //
 // Mutation: drop the applyChatStatus call from SetChatLive, and the boot
 // company has no driver; drop the attachment from the comparison that keeps a

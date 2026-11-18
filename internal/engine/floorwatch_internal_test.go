@@ -51,9 +51,6 @@ func floorReading(w *floorWatch, domain string) statelog.Reading {
 // AN UNREADABLE FLOOR IS AGED FROM ITS FIRST FAILING BEAT TO ITS LATEST, and
 // `floor_unknown` fires once that has passed four heartbeats — not on the first
 // failure, and not never.
-//
-// The form this replaced could not fire: the report stood the threshold itself
-// in for the age, and only on a branch a failed floor read never reached.
 func TestAnUnreadableFloorIsAgedFromItsFirstFailingBeat(t *testing.T) {
 	t.Parallel()
 	source := &scriptedFloors{err: errors.New("coordination unreachable")}
@@ -147,13 +144,9 @@ func TestAFloorAheadOfThisNodeIsUnknownAndOneBehindIsNot(t *testing.T) {
 }
 
 // EVERY LOG WHOSE FLOOR THIS NODE CANNOT USE IS ANSWERED ON ITS OWN, with its
-// own age and its own cause.
-//
-// Two logs re-anchored while this node was not are two refusals and two
-// re-anchors. The form this replaced reduced the watch to the domain unreadable
-// longest, so the second log was named only once the first was repaired — under
-// an alarm that had never cleared, and with an age that had been the first
-// log's all along.
+// own age and its own cause: two logs re-anchored while this node was not are
+// two refusals and two re-anchors, and the second is named before the first is
+// repaired, with an age of its own.
 func TestEveryUnreadableFloorIsAnsweredOnItsOwn(t *testing.T) {
 	t.Parallel()
 	source := &scriptedFloors{rows: []coord.TrimFloor{{Domain: "tracker", Generation: 3}}}

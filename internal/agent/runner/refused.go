@@ -6,22 +6,17 @@ import (
 )
 
 // Refused is a run whose job ended on a request its provider refused as built
-// (sandbox.Result.RequestRefused), in a session the job CONTINUED: what a
+// (sandbox.Result.RequestRefused) in a session the job CONTINUED: what a
 // resume carries the round on from ([Resume.Refused]).
 //
-// # Why the round is carried on, not collected
-//
-// A continued session sends what it holds on every request, so a session that
-// holds what the provider will not take (a tool definition under a name outside
-// its pattern, a message it no longer accepts) is refused before the model
-// reads a word. That says nothing of the round's work. So the session is
-// retired (internal/sandbox's sessionSpent) and the resumed turn relaunches its
-// executor for the same round in a session of its own.
-//
-// ONCE, and only after a continued session. The relaunched job is recorded as
-// a follow-up for this reason; a follow-up refused again, or a job refused in
-// a session it started, is collected, and its round ends the turn with the
-// provider's message ([Resume.RequestRefused]) rather than relaunching for ever.
+// A continued session resends what it holds, so one holding what the provider
+// no longer takes (a tool name outside its pattern, a message shape) is
+// refused before the model reads a word, which says nothing of the round's
+// work. So the session is retired (internal/sandbox's sessionSpent) and the
+// executor relaunched for the same round in a fresh session, ONCE: the
+// relaunch is recorded as a follow-up, and a follow-up refused again, or a job
+// refused in a session it started, is collected and ends the turn with the
+// provider's message ([Resume.RequestRefused]) rather than relaunching forever.
 type Refused struct {
 	// Said is the provider's message, redacted.
 	Said string
@@ -43,10 +38,9 @@ func (r Refused) Reseed() string {
 	return out + "Do the task as it asks."
 }
 
-// A refused round continues no session, in place or kept: the session is what
-// was refused. Its words are the engine's own, which no fence token touches,
-// and none a later brief tells again ([carried.lead]): the run they carry on
-// from did no work for a later session to lack.
+// A refused round continues no session: the session is what was refused. Its
+// words are the engine's own, so no fence token touches them, and no later
+// brief retells them ([carried.lead]): the refused run did no work to lack.
 func (r *Refused) session() string                         { return "" }
 func (r *Refused) boxKept() bool                           { return r.BoxKept }
 func (r *Refused) continuation(provenance.Boundary) string { return r.Reseed() }

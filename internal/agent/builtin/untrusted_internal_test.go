@@ -51,9 +51,7 @@ func TestDeclaredFieldsAreFoundWhereTheEncodingWritesThem(t *testing.T) {
 
 // A RECORD'S DECLARED WORDS ARE NEVER ANSWERED UNLABELLED: the plain encoder
 // refuses an answer carrying one at all, and a fenced read refuses one it
-// answers outside a fence, or as a name with no envelope saying whose it is —
-// so a tool that hands a model a record without labelling what the record
-// declares is refused rather than heard from in a transcript.
+// answers outside a fence, or as a name with no envelope saying whose it is.
 //
 // Mutation: drop either check and its case answers.
 func TestARecordsDeclaredWordsAreNeverAnsweredUnlabelled(t *testing.T) {
@@ -88,7 +86,7 @@ func TestARecordsDeclaredWordsAreNeverAnsweredUnlabelled(t *testing.T) {
 	}
 
 	// AND A RECORD DECLARING NOTHING THAT HOLDS SOMETHING is the plain
-	// encoder's, as it always was.
+	// encoder's.
 	if res, err := jsonAnswer(map[string]any{"row": declaredRecord{ID: "r1"}}, ""); err != nil || res.Failed {
 		t.Errorf("a record whose declared fields are empty was refused: %v %q", err, res.Output)
 	}

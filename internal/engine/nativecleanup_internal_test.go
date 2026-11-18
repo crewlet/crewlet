@@ -20,14 +20,12 @@ import (
 
 // A FAILED NATIVE START MUST LEAVE NOTHING RUNNING.
 //
-// [Engine.startNative] brings the state log up first and builds six things
-// after it, four of which used to unwind with a bare `cancel()`. That cancels
-// this node's own context and nothing else: the log's apply loops, its
-// position heartbeat and its snapshot donor run under a context of the LOG's,
-// and a slice answerer's registration is detached from the caller's inside the
-// queue. So the failure returned, [Engine.New]'s failure path closed the store
-// underneath appliers that were still committing into it, and a caller that
-// retried ran a second runtime beside the first.
+// [Engine.startNative] brings the state log up first and builds more after it,
+// so a later failure must stop the log too: a bare `cancel()` reaches only this
+// node's context, while the log's apply loops, position heartbeat and snapshot
+// donor run under the LOG's, and a slice answerer's registration is detached
+// inside the queue. Left running, they commit into a store [Engine.New]'s
+// failure path closes, beside whatever a retry starts.
 
 // nativeCleanupCompany is the smallest company that runs every native backend —
 // the tracker, the knowledge base and chat, none of them on a vendor — which is
@@ -45,13 +43,10 @@ roles:
     llm: zulu
 `
 
-// dialQueue is this node's REAL broker, watching the second connection the
-// state log opens for itself.
-//
-// The real one, embedded rather than faked, because the subject is what the
-// state log's own loops are doing when a failure lands — and those need a
-// broker that provisions streams, serves consumers and takes a second
-// connection.
+// dialQueue is this node's REAL embedded broker, recording the second
+// connection the state log opens for itself: the subject is what the log's own
+// loops do when a failure lands, which needs a broker that provisions streams,
+// serves consumers and takes a second connection.
 type dialQueue struct {
 	*jetstream.Queue
 
@@ -59,14 +54,11 @@ type dialQueue struct {
 	dialed []*nats.Conn
 }
 
-// deafQueue is that broker with one verb broken: it refuses to register the
-// search fan-out's answerer.
-//
-// Serve is the one verb a test can fail on demand AFTER the log is up, and it
-// is the exact failure the fan-out registration reports. ONLY ON THE SEARCH
-// SLICE: the estate server and the fleet history's answerer register before
-// the native start, and a broker refusing either too would fail the boot
-// before the state log this case watches ever started.
+// deafQueue is that broker refusing to register the search fan-out's answerer:
+// Serve is the one verb a test can fail on demand AFTER the log is up. ONLY ON
+// THE SEARCH SLICE: the estate server and the fleet history's answerer register
+// before the native start, and refusing them fails the boot before the state
+// log starts.
 type deafQueue struct{ *dialQueue }
 
 // Serve refuses the slice subject, which is where startNative's registration
@@ -80,14 +72,11 @@ func (q *deafQueue) Serve(ctx context.Context, subject string, answers int,
 	return nil, errors.New("jetstream: this broker registers no answerer")
 }
 
-// DialOwned hands out the real second connection and REMEMBERS it.
-//
-// That connection is the observation: the state log's donor opens one of its
-// own and closes it when its context ends, so a connection still open after
-// startNative has returned an error is a state log still running. Watching the
-// goroutines directly is not available from here — the runtime is never
-// installed on the engine on a failure — and a goroutine count would be a
-// number every other test in this package moves.
+// DialOwned hands out the real second connection and REMEMBERS it: the state
+// log's donor opens one and closes it when its context ends, so one still open
+// after startNative failed is a state log still running. Not the goroutines:
+// the runtime is never installed on a failure, and a goroutine count moves
+// with every other test in this package.
 func (q *dialQueue) DialOwned() (*nats.Conn, error) {
 	nc, err := q.Queue.DialOwned()
 	if err == nil {
@@ -105,12 +94,9 @@ func (q *dialQueue) conns() []*nats.Conn {
 	return append([]*nats.Conn(nil), q.dialed...)
 }
 
-// awaitDial waits for the state log to open its own connection.
-//
-// A WAIT rather than a read, because the donor dials inside its goroutine: on
-// the failing build the error is returned before that happens, and a test that
-// read once would report no leak precisely because the leak had not got going
-// yet.
+// awaitDial waits for the state log to open its own connection. A WAIT, not a
+// read: the donor dials inside its goroutine, so on a leaking build the error
+// can return first and a single read would miss the leak.
 func awaitDial(t *testing.T, q *dialQueue) []*nats.Conn {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -150,9 +136,8 @@ func TestAFailedNativeStartStopsTheStateLogItStarted(t *testing.T) {
 	}
 	deaf := &deafQueue{dialQueue: &dialQueue{Queue: real}}
 	// BORROWED backends, so the failure path leaves them open for the
-	// assertion — and so this case sees what an embedded caller sees,
-	// which is the deployment where a leaked applier outlives the failure
-	// by the life of the process rather than by milliseconds.
+	// assertion, as an embedded caller sees it: there a leaked applier
+	// outlives the failure by the life of the process.
 	borrowed := *back
 	borrowed.Queue = deaf
 
@@ -172,14 +157,11 @@ func TestAFailedNativeStartStopsTheStateLogItStarted(t *testing.T) {
 	}
 }
 
-// THE CLEANUP'S ORDER IS THE CONTRACT, not just that it runs.
-//
-// A withdrawal after the cancel is an answerer cancelled mid-scan, which a
-// coordinator counts as a silent empty slice rather than a missing one; a
-// cleanup that does not WAIT reports a node stopped while its loops are still
-// writing. Asserted on a half-built runtime — no index, no reader, nothing the
-// engine installed — because that is exactly the shape [Engine.startNative]'s
-// failure path reaches it with.
+// THE CLEANUP'S ORDER IS THE CONTRACT, not just that it runs: a withdrawal
+// after the cancel kills an answerer mid-scan, which a coordinator counts as a
+// silent empty slice, not a missing one; a cleanup that does not WAIT reports a node stopped while
+// its loops still write. On a half-built runtime, the shape
+// [Engine.startNative]'s failure path reaches it with.
 func TestTheNativeCleanupWithdrawsBeforeItCancelsAndWaits(t *testing.T) {
 	t.Parallel()
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -196,9 +178,8 @@ func TestTheNativeCleanupWithdrawsBeforeItCancelsAndWaits(t *testing.T) {
 		handedLive = ctx.Err() == nil
 		return nil
 	}
-	// A LOOP THAT TAKES A MOMENT TO UNWIND, which is every real one: the
-	// wait is only observable against a goroutine that has not finished
-	// the instant it is told to.
+	// A LOOP THAT TAKES A MOMENT TO UNWIND, as every real one does: the wait
+	// is observable only against a goroutine not finished when told to.
 	var unwound atomic.Bool
 	n.done.Add(1)
 	go func() {
@@ -208,12 +189,10 @@ func TestTheNativeCleanupWithdrawsBeforeItCancelsAndWaits(t *testing.T) {
 		unwound.Store(true)
 	}()
 
-	// AN ALREADY-CANCELLED CALLER, which is the ordinary case on both
-	// paths into this: [Engine.Stop] is reached on a signal context and
-	// [Engine.New]'s failure path unwinds a boot whose own cancellation is
-	// frequently the failure. The withdrawal is a call to the broker, so
-	// the caller's context travelling here for its values must not bring
-	// its cancellation with it.
+	// AN ALREADY-CANCELLED CALLER, the ordinary case on both paths here
+	// ([Engine.Stop] on a signal context, [Engine.New]'s failure path
+	// unwinding a cancelled boot): the withdrawal calls the broker, so it
+	// takes the caller's values without its cancellation.
 	dead, kill := context.WithCancel(context.Background())
 	kill()
 	n.shutdown(dead)

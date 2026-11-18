@@ -16,12 +16,10 @@ import (
 
 // EVERY LOG THAT WRITES ANCHORS HAS A TRIMMED RECORD, AND ONLY THOSE — ADR-0080.
 //
-// The trim removes a log's anchors below what it no longer holds by appending
-// the domain's own trimmed record, which [trimmedEncoder] is the switch for. A
-// domain registered with anchors and no case there keeps an anchor for every
-// subject it ever wrote, on every data node, for the life of the deployment;
-// one with a case and no anchors appends a record each tick that removes
-// nothing. And the encoder each case names is the one the framework can use.
+// The trim removes anchors by appending the domain's trimmed record
+// ([trimmedEncoder]). A domain with anchors and no case there keeps every
+// anchor forever on every data node; one with a case and no anchors appends a
+// record each tick that removes nothing. Each case's encoder must be usable.
 func TestEveryLogThatWritesAnchorsHasATrimmedRecord(t *testing.T) {
 	t.Parallel()
 	for _, d := range registeredDomains() {
@@ -42,15 +40,12 @@ func TestEveryLogThatWritesAnchorsHasATrimmedRecord(t *testing.T) {
 
 // A TICK'S ANCHOR SWEEPS SHARE ONE ALARM INTERVAL — ADR-0080.
 //
-// The sweeps run on the trim's own goroutine ([retention.run]), and each is
-// paced on this node's applier, so an applier slow but still moving would
-// otherwise hold that goroutine — and hand every slower data node a backlog —
-// for the cap times every wait, log after log. So the logs that have anything
-// to sweep share one [statelog.AlarmInterval] ([anchorSweepDeadline],
-// [runSweeps]): each is handed an equal share of what is left among the
-// sweeps still to run, and together they hold the goroutine for at most one
-// interval, however many logs write anchors. Every log that writes anchors is
-// handed a sweep, and a log that writes none is handed none.
+// The sweeps run on the trim's goroutine ([retention.run]), each paced on this
+// node's applier, so a slow applier would hold it for the cap times every wait,
+// log after log. So the logs with anything to sweep share one
+// [statelog.AlarmInterval] ([anchorSweepDeadline], [runSweeps]): each gets an
+// equal share of what is left, together at most one interval. Every log that
+// writes anchors is handed a sweep, and one that writes none is handed none.
 func TestATicksAnchorSweepsShareOneAlarmInterval(t *testing.T) {
 	t.Parallel()
 	r := &retention{state: everyRegisteredLog(), nodeID: "node-a",
@@ -97,8 +92,8 @@ func TestATicksAnchorSweepsShareOneAlarmInterval(t *testing.T) {
 			total, clock.at.Sub(time.Unix(0, 0)), statelog.AlarmInterval)
 	}
 
-	// A SWEEP THAT FINISHES EARLY LEAVES WHAT IT DID NOT SPEND to the sweeps
-	// after it, and the deadline still holds every one.
+	// A SWEEP THAT FINISHES EARLY LEAVES WHAT IT DID NOT SPEND to the later
+	// sweeps, and the deadline still holds every one.
 	clock = &sweepClock{at: time.Unix(0, 0)}
 	quick := &fakeSweep{records: 1, clock: clock, spends: time.Second}
 	slow := &fakeSweep{records: 9, clock: clock, spends: time.Hour}
@@ -123,10 +118,7 @@ func TestATicksAnchorSweepsShareOneAlarmInterval(t *testing.T) {
 
 // AN IDLE LOG LEAVES ITS SHARE TO THE OTHERS — ADR-0080. A log with nothing
 // below its floor this tick is counted and never handed a share, wherever it
-// sits in the order: an equal share for every log that writes anchors spent a
-// share on each idle one, so registering the code log cut the tracker's sweep
-// from five seconds a tick to three and a third on every node, a company with
-// no repositories at all included.
+// sits in the order, or each idle log would shrink every busy log's budget.
 func TestAnIdleLogLeavesItsShareToTheOthers(t *testing.T) {
 	t.Parallel()
 	for name, order := range map[string][]int{
@@ -167,9 +159,8 @@ type sweepClock struct{ at time.Time }
 
 func (c *sweepClock) now() time.Time { return c.at }
 
-// fakeSweep is a counted sweep of records records that takes spends of the
-// budget it is handed, or all of it where spends is more, and remembers the
-// budget.
+// fakeSweep is a counted sweep of records records that spends min(spends,
+// budget) of the budget it is handed, and remembers the budget.
 type fakeSweep struct {
 	records int
 	spends  time.Duration
@@ -234,15 +225,11 @@ func sweepingRetention(e *Engine, fleet coord.Fleet) *retention {
 }
 
 // A TICK REMOVES THE ANCHORS BELOW WHAT IT PURGED, on a real stream, through
-// the tick's own per-log step ([retention.domain]): every term permits the
-// purge to the log's newest record, so the tick publishes, purges, and then
-// appends the trimmed record its own copy's count calls for BELOW WHAT IT JUST
-// PURGED TO — and every anchor below the log's first surviving record goes
-// once the node applies it.
-//
-// The anchors are of records the log held when the tick began, so a tick that
-// handed the sweep the log's first record from BEFORE its purge would find
-// nothing below it, append nothing, and leave them for the next tick.
+// the tick's per-log step ([retention.domain]): every term permits the purge to
+// the newest record, so the tick purges and then appends the trimmed record
+// BELOW WHAT IT JUST PURGED TO, and every anchor below the first surviving
+// record goes once applied. A sweep handed the first record from BEFORE the
+// purge would find nothing below it and leave the anchors to the next tick.
 func TestATickRemovesTheAnchorsBelowWhatItPurged(t *testing.T) {
 	t.Parallel()
 	e, back, running := trimmedTracker(t)
@@ -347,12 +334,12 @@ func TestATickRemovesTheAnchorsBelowWhatItPurged(t *testing.T) {
 }
 
 // A TICK THAT PURGES NOTHING STILL SWEEPS BELOW THE LOG'S OWN FIRST RECORD, so
-// a backlog an earlier tick's cap left — or anchors whose sweep failed after
-// their purge — go on the next tick without waiting for another purge.
+// a backlog an earlier tick's cap left, or anchors whose sweep failed after
+// their purge, go without waiting for another purge.
 //
-// THROUGH THE TICK'S OWN PER-LOG STEP ([retention.domain]), whose terms block
-// the purge here — every record is younger than the minimum age — while the
-// log, purged by an earlier tick, no longer holds the projects' records.
+// Through [retention.domain], whose terms block the purge here (every record is
+// younger than the minimum age) while an earlier tick already purged the
+// projects' records.
 func TestATickThatPurgesNothingSweepsBelowTheLogsFirstRecord(t *testing.T) {
 	t.Parallel()
 	e, back, running := trimmedTracker(t)
@@ -403,15 +390,12 @@ func TestATickThatPurgesNothingSweepsBelowTheLogsFirstRecord(t *testing.T) {
 
 // THE TRIM'S OWN DEPS SIGN WHAT THE SWEEP APPENDS — ADR-0031 beside ADR-0080.
 //
-// Every applier opens a record's frame before it reads one, so a trimmed
-// record that is not a frame this fleet's keyring opens is refused on every
-// node, and the anchors it was appended to remove stay for good.
-// [statelog.SweepDeps] makes its signer REQUIRED for that reason, so a
-// [retention.sweepDeps] that handed it none swept no anchor on any log: the
-// count refused (`ErrUnsigned`) and every tick logged a failed sweep. This is
-// the sweep the tick runs, through the deps the tick builds, and the record it
-// appends is read back off the log and opened by the running log's own
-// verifier — the one its applier opens it with.
+// Every applier opens a record's frame before reading it, so a trimmed record
+// this fleet's keyring cannot open is refused on every node and its anchors
+// stay for good; [statelog.SweepDeps] requires a signer (`ErrUnsigned`). This
+// runs the tick's sweep through the deps [retention.sweepDeps] builds, and
+// opens the appended record with the running log's own verifier, the one its
+// applier uses.
 func TestTheTrimsOwnDepsSignTheTrimmedRecord(t *testing.T) {
 	t.Parallel()
 	e, back, running := trimmedTracker(t)

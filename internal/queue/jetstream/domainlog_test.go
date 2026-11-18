@@ -24,17 +24,12 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// A LOG CANNOT REMOVE AN INTERIOR SEQUENCE, and this is what keeps that a
-// TESTED INVARIANT rather than a comment.
-//
-// The strict replay protocol treats contiguity as an invariant and a hole as a
-// fault — which is only sound because six settings on the stream make an
-// interior removal impossible. Each of them fails silently if it drifts: an
-// age bound or a per-subject limit turns the log into a keyed table and the
-// strict loop stalls on the first ordinary write; a delete or a rollup erases
-// a committed record from under every data node's applier; a discard-old policy
-// drops the oldest record to accept a new one, which is the company's own
-// history going quietly missing under load.
+// A LOG CANNOT REMOVE AN INTERIOR SEQUENCE. The strict replay protocol treats
+// a hole as a fault, which is sound only while these stream settings make an
+// interior removal impossible, and each fails silently if it drifts: an age
+// bound or a per-subject limit stalls the strict loop on an ordinary write; a
+// delete or a rollup erases a committed record from under every applier; a
+// discard-old policy drops the company's history under load.
 func TestMutationStreamCannotRemoveInteriorSequences(t *testing.T) {
 	t.Parallel()
 	q := domainQueue(t, DomainStream{
@@ -47,9 +42,8 @@ func TestMutationStreamCannotRemoveInteriorSequences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the stream: %v", err)
 	}
-	// THE LIVE CONFIGURATION, not the spec that was sent: what matters is
-	// what the broker is running, and a field the server ignored or
-	// defaulted differently is exactly the drift this case is for.
+	// THE LIVE CONFIGURATION, not the spec sent: a field the server ignored
+	// or defaulted differently is the drift this case is for.
 	info, err := s.Info(t.Context())
 	if err != nil {
 		t.Fatalf("read the stream info: %v", err)
@@ -97,16 +91,10 @@ func TestMutationStreamCannotRemoveInteriorSequences(t *testing.T) {
 	}
 }
 
-// AND NOTHING TRIMS PER SUBJECT.
-//
-// A keep-newest purge would remove the trimmed-anchor hazard outright, and it
-// is rejected on cost: the option is mutually exclusive with a
-// purge-by-sequence, so a keep-one trim must be issued PER SUBJECT — a hundred
-// thousand API calls per trim tick against one stream-wide call — and it would
-// destroy the contiguity invariant the strict protocol rests on.
-//
-// A static walk rather than a comment, because the option is exactly what
-// somebody reaches for on meeting the hazard for the first time.
+// AND NOTHING TRIMS PER SUBJECT. A keep-newest purge excludes purging by
+// sequence, so it costs one API call per subject per trim, and it removes the
+// interior sequences the strict protocol rests on. A static walk, because it
+// is what somebody reaches for on first meeting the trimmed-anchor hazard.
 func TestNothingPurgesPerSubject(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -135,14 +123,8 @@ func TestNothingPurgesPerSubject(t *testing.T) {
 	}
 }
 
-// parseEveryGoFile parses every .go file in dir, keyed by the path a reader
-// would type.
-//
-// Not parser.ParseDir, which Go 1.25 deprecated because it associates files
-// with packages without consulting build tags. A static walk wants EVERY file
-// regardless of tags — a purge hidden behind a //go:build line is still a
-// purge — so the listing is explicit rather than inherited from a helper whose
-// behaviour here was a happy accident.
+// parseEveryGoFile parses every .go file in dir, keyed by path, whatever its
+// build tags: a purge behind a //go:build line is still a purge.
 func parseEveryGoFile(t *testing.T, fset *token.FileSet, dir string) map[string]*ast.File {
 	t.Helper()
 	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
@@ -172,13 +154,10 @@ func relative(root, path string) string {
 	return path
 }
 
-// A DOMAIN LOG ANSWERS AN EMPTY SUBJECT AS A FACT, NOT AS A FAILURE.
-//
-// It is what tells a trimmed anchor from a lost race, and the two have
-// opposite remedies: one publishes at an expectation of zero and the other
-// must never. A caller that had to re-derive that distinction from an error
-// would take the trimmed-anchor branch on a broker that was merely
-// unreachable.
+// A DOMAIN LOG ANSWERS AN EMPTY SUBJECT AS A FACT, NOT AS A FAILURE: it tells
+// a trimmed anchor (publish at an expectation of zero) from a lost race (never
+// do), and a caller reading that from an error would take the trimmed-anchor
+// branch on a broker that was merely unreachable.
 func TestAnEmptySubjectIsAFactRatherThanAnError(t *testing.T) {
 	t.Parallel()
 	q := domainQueue(t, probeDomain())
@@ -212,11 +191,8 @@ func TestAnEmptySubjectIsAFactRatherThanAnError(t *testing.T) {
 }
 
 // A CONDITIONAL APPEND IS ARBITRATED BY THE BROKER, and a nil expectation is
-// no expectation at all.
-//
-// The pointer is what makes those two states distinguishable: zero is a real
-// expectation meaning "this subject holds nothing", and it is the one branch
-// where being wrong costs a silent lost update rather than a refused write.
+// none at all: zero is a real one, "this subject holds nothing", and taking
+// one for the other costs a silent lost update rather than a refused write.
 func TestAnExpectationIsArbitratedAndNilIsNoExpectation(t *testing.T) {
 	t.Parallel()
 	q := domainQueue(t, probeDomain())
@@ -237,7 +213,6 @@ func TestAnExpectationIsArbitratedAndNilIsNoExpectation(t *testing.T) {
 			"the broker is the only party that sees every writer, and this is " +
 			"the whole concurrency control")
 	}
-	// The current one is accepted.
 	if _, _, err := log.Append(t.Context(), subject, "op-3", &first, []byte("three")); err != nil {
 		t.Fatalf("the current expectation was refused: %v", err)
 	}
@@ -253,10 +228,10 @@ func TestAnExpectationIsArbitratedAndNilIsNoExpectation(t *testing.T) {
 // log's objects, so another kind's records are outside it.
 const watchFilter = "crewlet.probe.log.repo.>"
 
-// watchAwait bounds every wait for what a watch tells its handler. It only
-// decides how long a broker that never delivers is given before a case says
-// so — a delivery takes milliseconds — and it covers a consumer replaced only
-// once its member's silence has outlasted two heartbeats.
+// watchAwait bounds every wait on a watch's handler: only how long a broker
+// that never delivers gets before a case says so (a delivery takes
+// milliseconds). It covers a consumer replaced once its member's silence
+// outlasts two heartbeats.
 const watchAwait = 30 * time.Second
 
 // heardCall is one call a watch made to its handler: a subject and its
@@ -357,10 +332,9 @@ func appendHeard(t *testing.T, log *DomainLog, subject string) heardCall {
 	return heardCall{subject: subject, seq: seq}
 }
 
-// appendUnheard appends one record of another kind of object, outside
-// watchFilter, and answers its sequence: the log's end, now past the last
-// record a watch was told — which is what tells a Gap reaching the end from
-// one reaching only the watch's last delivery.
+// appendUnheard appends a record outside watchFilter and answers its
+// sequence: the log's end, now past the watch's last delivery, which tells a
+// Gap reaching the end from one reaching only that delivery.
 func appendUnheard(t *testing.T, log *DomainLog) uint64 {
 	t.Helper()
 	return appendHeard(t, log, "crewlet.probe.log.name.a").seq
@@ -379,19 +353,15 @@ func watchLog(t *testing.T, log *DomainLog) (*DomainWatch, *watchHeard) {
 	return w, heard
 }
 
-// awaitReplaced waits until w has SETTLED after losing its consumer lost, so
-// that what it tells next is what the case appends next:
-//   - it serves through a consumer other than lost, with the Gap its loss owed
-//     already told;
-//   - the broker as it now runs holds that consumer. A replacement made on a
-//     member as the member went down serves the watch only until the watch
-//     learns the restart took it, and a record appended meanwhile lies before
-//     where the next replacement begins, so the watch tells it as a Gap
-//     (#998);
-//   - it has read the queue's connection's reconnect count as it stands, with
-//     no Gap still owed for one. A consumer made across the reconnect leaves
-//     it to the next recheck, whose Gap reaches the log's end when it is read,
-//     past a record appended before it.
+// awaitReplaced waits until w has SETTLED after losing consumer lost, so what
+// it tells next is what the case appends next:
+//   - it serves through a consumer other than lost, its loss's Gap told;
+//   - the broker as it now runs holds that consumer: one made as its member
+//     went down serves only until the watch learns the restart took it, and
+//     a record appended meanwhile would be told as a Gap;
+//   - it has read the connection's reconnect count as it stands, no Gap owed:
+//     a consumer made across a reconnect leaves it to the next recheck, whose
+//     Gap would reach past a record appended before it.
 func awaitReplaced(t *testing.T, w *DomainWatch, lost string) string {
 	t.Helper()
 	deadline := time.Now().Add(watchAwait)
@@ -444,19 +414,13 @@ func externalLog(t *testing.T) (*externaltest.Server, *Queue, *DomainLog) {
 	return srv, q, log
 }
 
-// A WATCH IS TOLD SUBJECTS AND NEVER CARRIES THE RECORDS.
-//
-// A watcher wants to know WHICH object moved, which it reads from the rows its
-// own copy derives — and a domain's records are its own, the code log's as
-// large as 8 MiB, so carrying each to every watcher as well would cost each of
-// them the log's whole volume again. So the watch hears each record under its
-// filter, in log order, with the sequence its append was given and nothing
-// outside the filter, while the watcher's connection — a node of its own,
-// carrying nothing but what its watch receives — takes in less than ONE of
-// the records' bodies for all of them together. And the broker holds the
-// consumer as the watch describes it: headers only, from the log's end,
-// acknowledging nothing, one replica in memory, reaped a minute after nobody
-// pulls.
+// A WATCH IS TOLD SUBJECTS AND NEVER CARRIES THE RECORDS (package doc, "A
+// watch is told which records moved, and never carries them"). It hears each
+// record under its filter, in log order, with its append's sequence, while
+// the watcher's connection (a node of its own) takes in less than ONE record's
+// body for all of them. The broker holds the consumer as the watch describes
+// it: headers only, from the log's end, acknowledging nothing, one replica in
+// memory, reaped a minute after nobody pulls.
 //
 // Mutation: drop HeadersOnly and the bodies cross the connection; widen the
 // filter and the other kind's subject is heard; change any setting and the
@@ -501,9 +465,8 @@ func TestAWatchDeliversSubjectsNotPayloads(t *testing.T) {
 			want = append(want, heardCall{subject: subject, seq: seq})
 		}
 	}
-	// IN LOG ORDER, and the record outside the filter was appended before
-	// the last one heard, so a filter that let it through would have put
-	// it in this list.
+	// IN LOG ORDER; the record outside the filter came before the last one
+	// heard, so a filter letting it through would put it in this list.
 	if got := heard.await("heard the records under its filter", atLeast(len(want))); !slices.Equal(got, want) {
 		t.Fatalf("the watch told its handler %v, want %v — every record under "+
 			"its filter, in log order, with the sequence its append was given, "+
@@ -541,14 +504,10 @@ func TestAWatchDeliversSubjectsNotPayloads(t *testing.T) {
 	}
 }
 
-// A WATCH BEGINS AT THE LOG'S END.
-//
-// What the log held before the watch began is what the watcher's rows already
-// say, read by the pass it makes once the watch has begun; delivering it again
-// would be every record since the log began, to every watcher, each time one
-// starts. So the records appended before Watch returned are never heard and
-// the ones after are, from the first of them. Deliveries are in log order, so
-// an earlier record that was delivered would be heard first.
+// A WATCH BEGINS AT THE LOG'S END: what came before is in the watcher's rows,
+// read by its pass once the watch has begun, and redelivering it would send
+// every record ever to every watcher at each start. Deliveries are in log
+// order, so an earlier record delivered would be heard first.
 //
 // Mutation: deliver all, and the first heard is the first the log ever held.
 func TestAWatchBeginsAtTheLogsEnd(t *testing.T) {
@@ -572,26 +531,17 @@ func TestAWatchBeginsAtTheLogsEnd(t *testing.T) {
 	}
 }
 
-// A WATCH SAYS WHEN IT LOST ITS CONSUMER, AND GOES ON.
+// A WATCH SAYS WHEN IT LOST ITS CONSUMER, AND GOES ON. Its consumer is one
+// replica in memory, gone when its member stops, the broker reaps it or
+// somebody deletes it, and a deaf watch would leave its caller behind with
+// nothing saying why. So a lost consumer is replaced at the log's end, and Gap
+// is told BEFORE anything the new one delivers, reaching the log's end when it
+// was made. Both losses are staged: deleted, the broker answers the standing
+// pull; on a restarted member, nothing serves the pull at all.
 //
-// A watch's consumer is one replica in memory, so it goes whenever the member
-// holding it stops, the broker reaps it while this node was away, or somebody
-// deletes it — and a watch that went deaf with it would leave its caller a
-// whole cadence behind every record after, with nothing saying why. So a lost
-// consumer is replaced by one of the watch's own at the log's end, and the
-// handler is told Gap BEFORE anything the new one delivers, reaching the log's
-// end when the broker made it: the caller reads its rows for what the gap
-// held once its copy is there. Two ways a consumer goes, because the broker
-// says so for one and nothing does for the other: deleted, it answers the
-// standing pull that the consumer is gone; held in memory by a member that
-// restarted, nothing serves the pull at all. Another kind's record after the
-// last one heard puts the log's end past the watch's last delivery.
-//
-// Mutation: owe no Gap for a replacement, and the handler never hears one; no
-// replacement, and the record after the loss is never heard; take only the
-// broker's word for a loss, and the restarted member's is never noticed; reach
-// the last delivery rather than where the replacement began, and the Gap stops
-// short of the end.
+// Mutation: owe no Gap and none is heard; no replacement and the record after
+// the loss is never heard; take only the broker's word and the restart is
+// never noticed; reach the last delivery and the Gap stops short of the end.
 func TestAWatchSaysWhenItLostItsConsumer(t *testing.T) {
 	t.Parallel()
 
@@ -624,10 +574,9 @@ func TestAWatchSaysWhenItLostItsConsumer(t *testing.T) {
 	t.Run("its member restarted", func(t *testing.T) {
 		t.Parallel()
 		srv, q, log := externalLog(t)
-		// ASKED AGAIN IN MILLISECONDS rather than seconds: the member says it
-		// is shutting down, so the first create goes with it and the ones
-		// asked while it is down go unanswered, and the case is about the
-		// replacement rather than its spacing.
+		// ASKED AGAIN IN MILLISECONDS: the shutting-down member takes the first
+		// create and leaves those asked while it is down unanswered, and the
+		// case is about the replacement, not its spacing.
 		timing := log.watching()
 		timing.attempt = 500 * time.Millisecond
 		timing.retry, timing.retryCeiling = 20*time.Millisecond, 200*time.Millisecond
@@ -644,11 +593,10 @@ func TestAWatchSaysWhenItLostItsConsumer(t *testing.T) {
 		got := heard.await("heard the record after its replacement",
 			func(heard []heardCall) bool { return len(heard) > 0 && heard[len(heard)-1] == second })
 		// ONE GAP AT LEAST, AND NOTHING ELSE between the two: the restart is
-		// also a reconnect, which may have said so before the loss was known,
-		// and a replacement made as the member went down is lost again. Every
-		// one of them reaches the end: each replacement began after it, a
-		// reconnect's reads it, and nothing was appended until the watch
-		// settled on a consumer the restarted member holds (awaitReplaced).
+		// also a reconnect, which may say so before the loss is known, and a
+		// replacement made as the member went down is lost again. Each reaches
+		// the end, as nothing was appended until the watch settled
+		// (awaitReplaced).
 		if len(got) < 3 || got[0] != first {
 			t.Fatalf("the watch told its handler %v, want %s, then a Gap through %d, "+
 				"then %s", got, first, end, second)
@@ -663,20 +611,13 @@ func TestAWatchSaysWhenItLostItsConsumer(t *testing.T) {
 	})
 }
 
-// A GAP REACHES EVERY RECORD THE WATCH MISSED.
-//
-// A caller reads its rows for what a Gap held, and its rows say only what its
-// copy has applied — and what costs a watch its records, a member restarting
-// or a connection lost, can hold that copy back as well. Rows read at a copy
-// behind the gap's records find nothing to do, and the caller would hear of
-// them only at its next pass over its rows. So a Gap reaches a position at or
-// past every record the watch never told, and the caller waits for its copy
-// to get there. Staged as the case it exists for: records appended while no
-// consumer serves the watch, which its replacement — beginning at the log's
-// end — never delivers. The replacement is held off by a consumer of another
-// description under the name its create asks for, which the broker refuses to
-// make twice, so those records are appended before it can begin whatever the
-// timing.
+// A GAP REACHES EVERY RECORD THE WATCH MISSED. What cost the watch its records
+// can hold the caller's copy back too, and rows read short of them find
+// nothing to do; so a Gap reaches at or past every record never told, and the
+// caller waits for its copy to get there. Staged with records appended while
+// no consumer serves the watch: a consumer of another description holds the
+// name the replacement's create asks for, which the broker will not make
+// twice, so they land before the replacement can begin, whatever the timing.
 //
 // Mutation: reach the watch's last delivery rather than where its
 // replacement began, and the records appended while it was deaf lie past the
@@ -688,9 +629,8 @@ func TestAGapReachesEveryRecordTheWatchMissed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	// ASKED AGAIN IN MILLISECONDS rather than seconds, so the replacement
-	// begins as soon as nothing stands in its way: the case is about the
-	// position its Gap reaches, not the spacing of its attempts.
+	// ASKED AGAIN IN MILLISECONDS, so the replacement begins once nothing
+	// stands in its way: the case is about where its Gap reaches.
 	timing := log.watching()
 	timing.retry, timing.retryCeiling = 20*time.Millisecond, 200*time.Millisecond
 	log.watchTiming = timing
@@ -726,26 +666,18 @@ func TestAGapReachesEveryRecordTheWatchMissed(t *testing.T) {
 	}
 }
 
-// A REPLACEMENT ASKED AGAIN IS THE SAME CONSUMER.
+// A REPLACEMENT ASKED AGAIN IS THE SAME CONSUMER. A create whose reply was
+// lost may still have made its consumer, and a fresh name would orphan it
+// beside a second; so every attempt of a generation asks for one name, and
+// the broker answers a create it already made with that consumer. Staged by
+// making it before the loss, as an earlier attempt would have. A record
+// appended between shows where it begins: the log's end when made, which its
+// create's reply carries, so the Gap reaches that end and that record is told
+// again.
 //
-// A create whose reply was lost — the member it reached went down, the
-// metadata group answered after the attempt's bound — may still have made its
-// consumer, and asking again under a fresh name would leave that one behind
-// for nobody, beside a second. So every attempt for one generation asks for
-// the same name, and the broker answers a create it has already made with the
-// consumer it made. Staged by making the replacement's consumer before the
-// loss, exactly as an earlier attempt of the watch's would have, then losing
-// the watch's consumer: the watch serves through that one, and hears through
-// it. A record appended between the two shows WHERE that consumer begins:
-// where it was made, the log's end then, which its create's reply carries —
-// so the Gap reaches that end and the record after it is told again, by the
-// consumer that begins before it.
-//
-// Mutation: name each attempt afresh, and the watch replaces its consumer with
-// another; should the broker ever refuse a create it already made, the
-// replacement never begins; reach the log's end when the Gap is told rather
-// than where the replacement began, and the Gap reaches past a record the
-// replacement has yet to tell.
+// Mutation: name attempts afresh and the replacement is another; a broker
+// refusing a create it made never begins it; reach the end when the Gap is
+// told and it passes a record the replacement has yet to tell.
 func TestAReplacementAskedAgainIsTheSameConsumer(t *testing.T) {
 	t.Parallel()
 	q := domainQueue(t, probeDomain())
@@ -780,27 +712,18 @@ func TestAReplacementAskedAgainIsTheSameConsumer(t *testing.T) {
 	}
 }
 
-// A DELIVERY THAT NEVER ARRIVED IS A GAP, AND THE CONSUMER IS KEPT.
+// A DELIVERY THAT NEVER ARRIVED IS A GAP, AND THE CONSUMER IS KEPT. A watch
+// acks nothing, so a delivery to an inbox nobody held is never remade. Each
+// carries the consumer's count, rising by one; a rise of more is told as a
+// Gap before the revealing subject, through its position, since delivery is
+// in log order (driven through the delivery path: no broker misdelivers on
+// request). A delivery whose position cannot be read vouches for nothing and
+// is a Gap in its place, through the log's end read after it came: no record
+// a consumer delivered lies past that end.
 //
-// A watch acknowledges nothing, so a delivery the broker made to an inbox
-// nobody held — this node's subscription moving between servers, a leaf's
-// link coming back — is never made again, while the consumer that made it
-// goes on serving. Every delivery carries the consumer's own count of its
-// deliveries, which rises by one each time; one that rose by more says a
-// delivery went missing, and the handler is told Gap before the subject that
-// revealed it, reaching that subject's own position: the consumer delivers in
-// log order, so what went missing came before it. Driven through the delivery
-// path itself, since no broker misdelivers on request.
-//
-// A delivery whose position cannot be read vouches for nothing — neither
-// whether one went missing before it nor how far the record it carried lies —
-// and is a Gap in place of its subject, reaching the log's end, read once the
-// delivery has come: no record a consumer delivered is past the end read
-// after it. Driven on a real watch, whose supervisor reads that end.
-//
-// Mutation: drop the count's check, and the missing delivery is never told;
-// reach the consumer's count rather than the log's position, or where the
-// watch's consumer began rather than the end, and each Gap stops short.
+// Mutation: drop the count's check and the missing delivery is never told;
+// reach the count rather than the position, or the consumer's start rather
+// than the end, and each Gap stops short.
 func TestAWatchSaysWhenADeliveryNeverReachedIt(t *testing.T) {
 	t.Parallel()
 
@@ -851,24 +774,19 @@ func TestAWatchSaysWhenADeliveryNeverReachedIt(t *testing.T) {
 	})
 }
 
-// A RECONNECT IS A GAP, AND THE CONSUMER IS KEPT.
-//
-// A delivery the broker made while this node's connection was away went to an
-// inbox nobody held, and when it was the last for a while nothing would ever
-// reveal it — the consumer's count shows a missing delivery only on the next
-// one. So the watch reads its connection's reconnect count every heartbeat
-// and tells its handler Gap when it moved, reaching the log's end read once
-// it was noticed, and keeps the consumer, which a blip does not end
-// ([ephemeralInactive]). Another kind's record after the last one heard puts
-// the end past the watch's last delivery.
+// A RECONNECT IS A GAP, AND THE CONSUMER IS KEPT. A delivery made while the
+// connection was away went to an inbox nobody held, and if it was the last
+// for a while the consumer's count never reveals it. So the watch reads its
+// reconnect count every heartbeat and tells Gap when it moved, through the
+// log's end read once noticed, keeping the consumer, which a blip does not
+// end ([ephemeralInactive]).
 //
 // Mutation: drop the recheck, and no Gap is told; reach the watch's last
 // delivery rather than the end, and the Gap stops short of it.
 func TestAWatchSaysWhenItsConnectionWasAway(t *testing.T) {
 	t.Parallel()
 	_, q, log := externalLog(t)
-	// READ EVERY FEW MILLISECONDS rather than every heartbeat: the case is
-	// about the Gap, not the cadence.
+	// READ EVERY FEW MILLISECONDS: the case is about the Gap, not the cadence.
 	timing := log.watching()
 	timing.recheck = 20 * time.Millisecond
 	log.watchTiming = timing
@@ -902,15 +820,11 @@ func TestAWatchSaysWhenItsConnectionWasAway(t *testing.T) {
 	}
 }
 
-// A WATCH THAT CANNOT BEGIN IS REFUSED.
-//
-// Nothing is left running for a caller that was told no: the first consumer
-// is made before Watch returns, and a refusal returns no watch. Each refusal
-// names what to change. ONE OF THEM IS THE WATCH'S OWN, because the broker no
-// longer makes it: a filter that meets none of the log's subjects is a
-// consumer the broker creates without a word and that delivers nothing, for
-// ever. A filter wider than the log watches every record it holds, which a
-// caller can mean, and begins.
+// A WATCH THAT CANNOT BEGIN IS REFUSED: the first consumer is made before
+// Watch returns, so a refusal leaves nothing running, and each names what to
+// change. ONE CHECK IS THE WATCH'S OWN: the broker silently creates a consumer
+// whose filter meets none of the log's subjects, delivering nothing for ever.
+// A filter wider than the log watches all it holds, and begins.
 //
 // Mutation: drop the watch's own check, and the filter outside the log begins
 // a watch that hears nothing; check containment rather than overlap, and the

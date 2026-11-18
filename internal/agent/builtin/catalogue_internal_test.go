@@ -13,9 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// rowShape is what an authority row asks, as far as a gate names it: the
-// role grant that decides an agent seat in place of the class included, so a
-// row that gains or loses one is a row of another shape.
+// rowShape is what an authority row asks, as far as a gate names it,
+// including the role grant that decides an agent seat in place of the class:
+// gaining or losing one changes the shape.
 type rowShape struct {
 	class     authz.Class
 	app       iam.Grant
@@ -23,9 +23,8 @@ type rowShape struct {
 	seatGrant authz.SeatGrant
 }
 
-// gateRows is the row shape each gate stands for: the meaning [Gate]'s
-// constants state in words, written once more as data so the walk below can
-// hold a declared gate to the row it names.
+// gateRows is the row shape each gate stands for: [Gate]'s constants' words
+// as data, so the walk below can hold a declared gate to its row.
 var gateRows = map[Gate]rowShape{
 	GateEverybody:         {class: authz.ClassEverybody},
 	GateSelf:              {class: authz.ClassSelf},
@@ -50,11 +49,10 @@ var gateRows = map[Gate]rowShape{
 // shapeOf is a tool's authority row as a gate would name it, and false for a
 // tool no row decides.
 //
-// A PERSONAL VERB THAT TAKES NO NAME IS AN APP VERB TO ITS CALLER: its object
-// is always the caller's own record ([subject.objectFor]), so the owner arm
-// of its class always holds and the row's app is all that is left to ask.
-// That is `my_work`, filed under [GateWorklet], and the reading is checked by
-// deciding it in [TestAnAppGateAdmitsAnAgentHoldingTheAppAndNoOther].
+// A personal verb that takes no name (`my_work`) is an app verb to its
+// caller: its object is always the caller's own record ([subject.objectFor]),
+// so only the row's app is left to ask.
+// [TestAnAppGateAdmitsAnAgentHoldingTheAppAndNoOther] checks this reading.
 func shapeOf(tool string) (rowShape, bool) {
 	action := authz.Action(tool)
 	class, ok := authz.ClassOf(action)
@@ -80,19 +78,11 @@ func aboutTheCaller(s subject) bool {
 		s.container == "" && !s.inTool
 }
 
-// EVERY BUILT-IN'S GATE IS WHAT ITS AUTHORITY ROW ASKS.
-//
-// The catalogue DECLARES who may call each tool, and internal/authz DECIDES
-// it; a declaration nothing compared with the decision is one a reader trusts
-// and nobody keeps. So each filed tool's row (its class, its app and its
-// least artifact role) must be exactly the row its gate names. Changing a row
-// in internal/authz, or the gate a tool is filed with, turns this red until
-// the two say the same thing.
-//
-// A TOOL NO ROW DECIDES may only be the discovery pair, which the runner
-// hands to every phase that discovers, and which nothing gates: filed under
-// anything but [GateEverybody], the catalogue would claim a check nobody
-// makes.
+// EVERY BUILT-IN'S GATE IS WHAT ITS AUTHORITY ROW ASKS: the catalogue
+// declares who may call each tool and internal/authz decides it, so each
+// filed tool's row (class, app, least artifact role) must be exactly its
+// gate's. A tool no row decides may only be the discovery pair, under
+// [GateEverybody]: any other gate would claim a check nobody makes.
 func TestEveryBuiltinsGateIsWhatItsAuthorityRowAsks(t *testing.T) {
 	t.Parallel()
 	if len(filed) == 0 {
@@ -126,11 +116,9 @@ func TestEveryBuiltinsGateIsWhatItsAuthorityRowAsks(t *testing.T) {
 	}
 }
 
-// AND EVERY GATE NAMES ONE ROW SHAPE AND IS NAMED BY A TOOL.
-//
-// Both directions of the vocabulary: a gate with no shape here is one the
-// walk above cannot hold anybody to, and a gate no tool is filed under is a
-// word the dashboard carries for a row no built-in has.
+// AND EVERY GATE NAMES ONE ROW SHAPE AND IS NAMED BY A TOOL: a gate with no
+// shape cannot be walked, and one no tool is filed under is a word the
+// dashboard carries for nothing.
 func TestEveryGateNamesARowAToolHas(t *testing.T) {
 	t.Parallel()
 	for _, g := range Gates {
@@ -163,13 +151,10 @@ func TestEveryGateNamesARowAToolHas(t *testing.T) {
 	}
 }
 
-// AN APP GATE ADMITS AN AGENT HOLDING THE APP, AND NO OTHER.
-//
-// What the gate's words promise a reader ("agents with Worklet access"),
-// asked of internal/authz itself on the object the call forms: for the
-// personal verb filed under an app gate the object is the caller's own
-// record, so this is what makes [shapeOf]'s reading of it a fact rather than
-// an argument. The control is the same agent holding every OTHER app.
+// AN APP GATE ADMITS AN AGENT HOLDING THE APP, AND NO OTHER, asked of
+// internal/authz on the object the call forms, which is what proves
+// [shapeOf]'s reading of a personal verb. The control is the same agent
+// holding every other app.
 func TestAnAppGateAdmitsAnAgentHoldingTheAppAndNoOther(t *testing.T) {
 	t.Parallel()
 	apps := map[Gate]iam.Grant{
@@ -229,14 +214,10 @@ func (c grantChart) SeatGranted(_ context.Context, actor string, grant authz.Sea
 	return grant == authz.SeatGrantHealth && c.granted[actor], nil
 }
 
-// A HEALTH GATE ADMITS A SEAT WHOSE ROLE CARRIES THE GRANT, AND NO OTHER.
-//
-// What [GateHealthTools] promises a reader ("agents whose role carries
-// health_tools"), asked of internal/authz itself: the grant decides an agent
-// seat in place of the row's class, so a seat holding every app and no grant
-// is refused, and the same seat once its role carries the grant is admitted.
-// The walk above holds the declared shape to the row; this holds the shape's
-// words to the decision.
+// A HEALTH GATE ADMITS A SEAT WHOSE ROLE CARRIES THE GRANT, AND NO OTHER,
+// asked of internal/authz: a seat holding every app and no grant is refused,
+// and the same seat once its role carries the grant is admitted. This holds
+// [GateHealthTools]'s words to the decision, as the walk holds its shape.
 func TestAHealthGateAdmitsASeatWhoseRoleCarriesTheGrantAndNoOther(t *testing.T) {
 	t.Parallel()
 	agent := iam.Principal{Kind: iam.KindSeat, Login: "ana", Seat: "ana",

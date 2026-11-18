@@ -12,27 +12,16 @@ import (
 )
 
 // A REANCHOR'S AUTHOR READS ALIKE ON EVERY LOG: the name bare, its kind in a
-// column of its own, and the credential they acted through beside it — the
-// party [statelog.GenerationFacts.Author] names, the one rule every log's
-// generation record reads the facts by.
+// column of its own, and the credential they acted through beside it, as
+// [statelog.GenerationFacts.Author] names the party. The audit feed reads
+// every log's generation records side by side, so the name and credential must
+// match the knowledge base's and the tracker's; only the kind is this domain's
+// word (a person is an operator here).
 //
-// The code log recorded `"operator:" + name` with the NAME in the credential
-// column, ignoring the kind and the credential the facts carry — so the audit
-// feed, which reads every log's generation records side by side, showed one
-// person as two (`jane.doe` on the knowledge base's and the tracker's,
-// `operator:jane.doe` here), read their reanchor as a token named after them,
-// and lost the credential that ran it. It then kept a reading of the facts of
-// its own, an eighth copy of the rule, which still took a principal's word (a
-// seat, a person, a machine, the engine) as a kind. Held against the rule and
-// against the knowledge base's and the tracker's own records for the same
-// facts: the name and the credential are theirs; the kind is this domain's
-// word for the rule's (a person is an operator here, as the code log's
-// eviction gate names one).
-//
-// Mutations: record `"operator:" + By` again, or drop the facts' credential;
-// read a principal's word as a kind again, and its case is an agent or the
-// system rather than an operator; lend a person's handle to the credential
-// column, and the person with no credential stated names one — each red.
+// Mutations: record `"operator:" + By`, or drop the facts' credential; read a
+// principal's word as a kind, and its case is an agent or the system rather
+// than an operator; lend a person's handle to the credential column, and the
+// person with no credential stated names one — each red.
 func TestAGenerationRecordNamesItsAuthorAsEveryLogDoes(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
@@ -95,8 +84,8 @@ func TestAGenerationRecordNamesItsAuthorAsEveryLogDoes(t *testing.T) {
 			facts: statelog.GenerationFacts{By: "engine", ByKind: iam.ActorKind(iam.KindEngine)},
 			actor: "engine", kind: gitlet.ActorOperator, operator: "engine",
 		},
-		// NOBODY NAMED IS THE NODE, as this domain records the node's own
-		// work — never an empty author column — and so is a name of spaces.
+		// NOBODY NAMED IS THE NODE, never an empty author column; so is a
+		// name of spaces.
 		"nobody named": {
 			facts: statelog.GenerationFacts{},
 			actor: "node-a", kind: gitlet.ActorSystem,
@@ -122,8 +111,8 @@ func TestAGenerationRecordNamesItsAuthorAsEveryLogDoes(t *testing.T) {
 				t.Errorf("the record is authored (%q, %s, %q), want (%q, %s, %q)",
 					decoded.Actor, decoded.ActorKind, decoded.OperatorID, tc.actor, tc.kind, tc.operator)
 			}
-			// AS THE ONE RULE NAMES THEM: the name and the credential are the
-			// rule's own, whatever this domain calls the kind.
+			// The name and the credential are the rule's own, whatever this
+			// domain calls the kind.
 			if party, named := facts.Author(); named &&
 				(decoded.Actor != party.Name || decoded.OperatorID != party.OperatorID) {
 				t.Errorf("the record names (%q, %q), the rule (%q, %q)",

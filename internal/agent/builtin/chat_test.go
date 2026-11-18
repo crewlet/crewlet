@@ -27,9 +27,8 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The room every case here addresses. An ID that is a uuid, because that is
-// what the tools take without a lookup, and a NAME beside it so the
-// name-resolution path is exercised by the tests that want it.
+// The room every case here addresses: a uuid, which the tools take without a
+// lookup, and a name for the cases that exercise name resolution.
 const (
 	chatRoomID   = "6f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f"
 	chatRoomName = "eng"
@@ -58,8 +57,8 @@ type fakeChat struct {
 	keys []string
 
 	// awaited is every position [builtin.ChatDeps.Await] was handed, in
-	// order, so a write that waited for the wrong position — or a read
-	// that waited at all — is visible rather than merely plausible.
+	// order, so a write that waited for the wrong position, or a read that
+	// waited at all, is visible.
 	awaited []uint64
 
 	// levels is every read level these tools asked for, so a tool that
@@ -73,13 +72,12 @@ type fakeChat struct {
 	writeErr error
 	readErr  error
 
-	// postErr, where set, refuses a post or a reply alone — the half of a
-	// direct message that comes after its conversation opened.
+	// postErr, where set, refuses only a post or a reply: the half of a
+	// direct message after its conversation opened.
 	postErr error
 
 	// opened, where set, is the outcome a direct conversation's open
-	// answers — and an unvouched one answers no room at all, as the store's
-	// does.
+	// answers; an unvouched one answers no room, as the store's does.
 	opened *statelog.Result
 
 	// outcome, where set, is the outcome every other write answers, with
@@ -95,9 +93,9 @@ type fakeChat struct {
 	// unread counts were taken against.
 	listed []chatlet.ChannelsQuery
 
-	// room is the stored row [fakeChat.Channel] answers — who made it and
-	// the unit that holds it, which a room's archive is decided on — and
-	// author whose words the message a Thread read is asked of are.
+	// room is the stored row [fakeChat.Channel] answers (its creator and
+	// unit decide a room's archive); author wrote the message a Thread read
+	// asks about.
 	room   chatlet.Channel
 	author string
 
@@ -105,9 +103,8 @@ type fakeChat struct {
 	// to learn whose words they are is visible.
 	threads []chatlet.ThreadQuery
 
-	// What a read answers beyond the bare room: the transcript a room read
-	// is handed, the root's words and the replies a thread read is, and the
-	// last thing said in the room a listing shows.
+	// What a read answers beyond the bare room: a room read's transcript, a
+	// thread read's root and replies, and a listing's last message.
 	transcript []chatlet.MessageView
 	rootBody   string
 	rootKind   chatlet.AuthorKind
@@ -150,10 +147,9 @@ func (f *fakeChat) Channels(_ context.Context, viewer string, q chatlet.Channels
 	if err := f.read(viewer, fresh); err != nil {
 		return chatlet.ChannelListing{}, err
 	}
-	// COUNTED ABOVE THE CURSOR IT WAS HANDED, as the store counts: the room
-	// holds seven messages at positions one to seven, so a reader who has
-	// read through four has three new and one who has opened nothing has
-	// seven. A count that ignored the cursor would hold no case here to it.
+	// Counted above the cursor handed, as the store counts: seven messages
+	// at positions 1-7, so a reader through four has three unread and one
+	// who opened nothing seven. Ignoring the cursor would hold no case to it.
 	return chatlet.ChannelListing{
 		Served: chatlet.Served{Complete: true},
 		Channels: []chatlet.ChannelSummary{{
@@ -413,8 +409,7 @@ func (f *fakeChat) wrote(seq uint64) chatlet.Written {
 		}
 	}
 	return chatlet.Written{
-		// THE ROOM'S SETTINGS AS THEY STAND, which a settings write answers
-		// with whole.
+		// The room's settings as they stand: a settings write answers them whole.
 		Channel: chatlet.Channel{ID: chatRoomID, Name: chatRoomName,
 			Topic: f.room.Topic, Purpose: f.room.Purpose},
 		Revision: seq,
@@ -445,9 +440,9 @@ func chatRegistry(t *testing.T, deps builtin.ChatDeps) *tools.Registry {
 	return reg
 }
 
-// callChat runs one chat tool for a turn the caller pins, because every
-// interesting case here is about WHICH turn made the call — as a seat holding
-// every app, which is what the turn's own principal is.
+// callChat runs one chat tool for a turn the caller pins, since the cases turn
+// on WHICH turn called, acting as the turn's principal: a seat holding every
+// app.
 func callChat(t *testing.T, reg *tools.Registry, name string, turn *turnctx.Turn,
 	args map[string]any) tools.Result {
 
@@ -480,12 +475,11 @@ func chatSurface(t *testing.T, f *fakeChat, runID string) *tools.Surface {
 
 // ---- the cases -------------------------------------------------------- //
 
-// SAYING SOMETHING IS THE ANSWER, AND ONLY SAYING SOMETHING IS. A turn woken
-// because somebody spoke to it answers in the thread, in the room or in a DM —
-// and the gate has to know that, or the turn is corrected for having done what
-// it was woken to do. The other half is what this protects: if a REACTION
-// counted, every addressed turn could discharge its obligation with a thumb,
-// and joining a room would close out a question nobody had answered.
+// ONLY SAYING SOMETHING IS THE ANSWER. A turn woken because somebody spoke to
+// it answers with a post in the thread, the room or a DM, and the gate must
+// count that or correct the turn for doing what it was woken to do. Were a
+// reaction or a join to count, a thumb would discharge a question nobody
+// answered.
 //
 // Mutation: drop the chat arm of Register's delivery switch and the three go
 // red; put the reaction in it and the reaction does.
@@ -495,10 +489,9 @@ func TestOnlyTheThreePostingToolsCountAsChatDeliveries(t *testing.T) {
 	deliveries := reg.Deliveries()
 
 	for _, name := range builtin.ChatWrites() {
-		// AND ON CHAT'S OWN SOURCE, not just "somewhere". The gate
-		// compares a delivery's surface against the source the inbound
-		// wake carried, so a second spelling here makes every Chatlet
-		// obligation unreachable and the check silently falls back
+		// On chat's own source: the gate compares a delivery's surface with
+		// the inbound wake's source, so a second spelling makes every
+		// Chatlet obligation unreachable and the check silently falls back
 		// to "any delivery counts".
 		if deliveries[name] != chatlet.Source {
 			t.Errorf("%s delivers to %q, want %q", name, deliveries[name], chatlet.Source)
@@ -515,16 +508,12 @@ func TestOnlyTheThreePostingToolsCountAsChatDeliveries(t *testing.T) {
 	}
 }
 
-// A TURN MAY LEGITIMATELY SAY TWO THINGS, and a re-run of that turn must say
-// each of them once.
+// A TURN MAY SAY TWO THINGS, and a re-run of it must say each once.
 //
-// The whole of Chatlet's idempotency rests on the key every post hands
-// the store: it is derived from the turn's unit of work rather than its run,
-// so a redelivered trigger — which is ordinary — derives the same messages
-// instead of a second copy of the conversation; and from the run's own call
-// log's repeat count, kept by the surface every call goes through, so a turn's
-// second remark is never its first one's retry. These calls go through a real
-// surface for that reason.
+// Chatlet's idempotency rests on each post's key: derived from the turn's unit
+// of work, not its run, so a redelivered trigger derives the same messages; and
+// from the call log's repeat count, kept by the surface, so a second remark is
+// never the first one's retry. Hence the real surface here.
 //
 // Mutation: drop the repeat count from callOpKey's identity and the third
 // post's key equals the first's.
@@ -541,8 +530,7 @@ func TestATurnThatPostsTwiceWritesTwoMessagesAndARerunWritesOne(t *testing.T) {
 		}},
 		// THE SAME WORDS AGAIN, AFTER A DIFFERENT POST: a third message.
 		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "asks": false, "body": "on it"}},
-		// AND AGAIN WITH NOTHING DIFFERENT BETWEEN: the same call, asked
-		// twice — one message.
+		// AND AGAIN WITH NOTHING BETWEEN: the same call twice, one message.
 		{builtin.PostMessageTool, map[string]any{"channel": chatRoomID, "asks": false, "body": "on it"}},
 	}
 	run := func(runID string) []string {
@@ -591,11 +579,10 @@ func TestATurnThatPostsTwiceWritesTwoMessagesAndARerunWritesOne(t *testing.T) {
 //
 // join_channel and leave_channel write one membership, so a turn counts them
 // as one family (chatlet.CallFamily): the leave between two joins raises the
-// second one's count, where a count kept per tool saw nothing different and
-// handed the second join the first one's key — and with it the first one's
-// success, while the seat stayed outside the room. A call outside the family
-// counts for nothing, and the same join asked again with nothing between is
-// the same operation.
+// second one's count. Counted per tool, the second join would carry the first
+// one's key and get its success while the seat stayed outside. A call outside
+// the family counts for nothing; the same join with nothing between is the
+// same operation.
 //
 // Mutation: pass a nil family from ChatDeps.actor and the join after the leave
 // carries the first join's key.
@@ -618,8 +605,7 @@ func TestAJoinAfterALeaveIsANewOperation(t *testing.T) {
 	for _, c := range calls {
 		executeWork(t, surface, c.tool, c.args)
 	}
-	// The membership writes, in order: join, the same join again, leave,
-	// join, leave.
+	// The membership writes: join, the same join, leave, join, leave.
 	if len(f.keys) != 5 {
 		t.Fatalf("%d membership writes reached the store, want 5", len(f.keys))
 	}
@@ -639,13 +625,12 @@ func TestAJoinAfterALeaveIsANewOperation(t *testing.T) {
 // A CHAT WRITE CARRIES THE INSTANT ITS TURN'S WORK BEGAN, and a rebased turn's
 // instead — never the call's.
 //
-// The key's instant is what every id the store derives from it carries, and
-// the state log reads it to decide whether this node's ledger can vouch for a
-// retry: a re-run comes after any loss it is judged against, so a key stamped
-// with the call's clock is one a re-run after the ledger's sweep publishes a
-// second time. And a turn whose work began longer ago than the ledger
-// remembers is rebased (turnctx.Turn.RebasedTo), which has to reach these ids
-// too, or every message such a turn says is answered `unknown` and lost.
+// Every id the store derives from the key carries its instant, and the state
+// log reads it to decide whether this node's ledger can vouch for a retry: a
+// key stamped with the call's clock is published again by a re-run after the
+// ledger's sweep. A turn whose work began before the ledger remembers is
+// rebased (turnctx.Turn.RebasedTo), and that must reach these ids too, or its
+// every message is answered `unknown` and lost.
 func TestAChatWriteCarriesTheInstantItsWorkBegan(t *testing.T) {
 	t.Parallel()
 	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
@@ -669,8 +654,7 @@ func TestAChatWriteCarriesTheInstantItsWorkBegan(t *testing.T) {
 			for _, p := range f.posts {
 				keys = append(keys, p.actor.OpKey)
 			}
-			// A post, a reply, a direct message's open and its post, a
-			// reaction, a join and a leave.
+			// A post, a reply, a DM's open and post, a reaction, a join, a leave.
 			if len(keys) != 7 {
 				t.Fatalf("the writes reached the store with %d keys, want 7", len(keys))
 			}
@@ -685,11 +669,10 @@ func TestAChatWriteCarriesTheInstantItsWorkBegan(t *testing.T) {
 }
 
 // A PERSON'S RETRIED REQUEST IS ONE MESSAGE: outside a turn the key is the one
-// the caller's transport carried on the actor, as it was sent — the act
-// transport's request key — so the retry is the message the first attempt
-// posted. And a caller that names none — an operator's assistant over MCP —
-// writes under a fresh operation every time, because nothing redelivers that
-// call and a stable key would collapse every later post into the first.
+// the transport carried on the actor (the act transport's request key). A
+// caller that names none (an operator's assistant over MCP) writes under a
+// fresh operation each time: nothing redelivers its call, and a stable key
+// would collapse every later post into the first.
 //
 // Mutation: have callOpKey answer "" outside a turn and the retry is a second
 // message.
@@ -722,14 +705,11 @@ func TestAPersonsChatRequestIsKeyedOnTheKeyItCarried(t *testing.T) {
 // A DIRECT MESSAGE WHOSE CONVERSATION'S OPEN CAME BACK UNKNOWN SAYS NOTHING,
 // and says so.
 //
-// An open can answer `unknown` — a lost acknowledgement, or a node whose
-// ledger cannot vouch for an operation, whose answer names no room at all.
-// Posting on regardless sent the message into the room id "" — refused as
-// "not found" for a conversation that may well exist — or into a room this
-// node has not applied, refused the same way. Either is a different and
-// misleading answer, so the tool stops: nothing reaches the writer's post, the
-// answer is the unknown one, says the message was not sent, and tells a seat
-// to make the same call again.
+// An open can answer `unknown`: a lost acknowledgement, or a node whose ledger
+// cannot vouch for it, naming no room. Posting on would hit room "" or a room
+// this node has not applied, refused as "not found" for a conversation that
+// may exist. So the tool stops: no post, the unknown answer, saying the
+// message was not sent and to make the same call again.
 func TestADirectMessageWhoseOpenIsUnknownSaysNothing(t *testing.T) {
 	t.Parallel()
 	const op = "01a11a61-ff0c-77c1-8cb1-7b9e5497550e"
@@ -769,14 +749,12 @@ func TestADirectMessageWhoseOpenIsUnknownSaysNothing(t *testing.T) {
 // A CHAT WRITE WHOSE OUTCOME IS UNKNOWN IS NEITHER DONE NOR FAILED, and says
 // how to finish it.
 //
-// A receipt built whatever the write answered would come back with a
-// `message_id` for an `unknown` post, and a seat would report a message it may
-// never have said — while an operation this node's ledger cannot vouch for is
-// answered `unknown` WITHOUT being published, and its answer names no room, so
-// a join would report `joined` into a room called nothing. Each write answers
-// the unknown result: a post with how to repeat it as the same message and
-// what a reworded one costs, a statement — a reaction, a join, a leave — with
-// its repeat offered, because stating the same thing again changes nothing.
+// A receipt regardless would hand an `unknown` post a `message_id` a seat then
+// reports as said; and an operation the ledger cannot vouch for is answered
+// `unknown` unpublished and names no room, so a join would report `joined`
+// into nothing. Each write answers the unknown result: a post with how to
+// repeat it as the same message and what a reworded one costs; a statement (a
+// reaction, a join, a leave) offers its repeat as harmless.
 func TestAChatWriteWhoseOutcomeIsUnknownIsNeitherDoneNorFailed(t *testing.T) {
 	t.Parallel()
 	const op = "01a11a61-ff0c-77c1-8cb1-7b9e5497550e"
@@ -824,10 +802,9 @@ func TestAChatWriteWhoseOutcomeIsUnknownIsNeitherDoneNorFailed(t *testing.T) {
 // seatChatWrites are a seat's chat writes, each with the sentence its unknown
 // answer offers a turn as the repeat.
 //
-// A POST'S REPEAT is the same call, made before its tool is called with
-// anything else — and names no other tool, because no posting tool is counted
-// among a family (TestNoPostingToolIsCountedAmongAFamily). A STATEMENT'S is
-// offered as harmless, because stating the same thing again changes nothing.
+// A post's repeat is the same call, before its tool is called with anything
+// else, naming no other tool since no posting tool is in a family
+// (TestNoPostingToolIsCountedAmongAFamily). A statement's is harmless.
 func seatChatWrites() []struct {
 	tool string
 	args map[string]any
@@ -859,13 +836,12 @@ func seatChatWrites() []struct {
 
 // A WRITE NOBODY ANSWERED SAYS HOW THIS CALLER REPEATS IT.
 //
-// The router answers [estate.ErrOutcomeUnknown] for a write some data node
-// never answered. A KEYED one — a turn's call, a person's request — is asked
-// of every other data node first and reported only when none of them answered,
-// and the same call IS its safe retry; one carrying no key of its caller's —
-// an operator's assistant over MCP — is reported at the first data node that
-// stayed silent, and its repeat is a second write. On a node without data every
-// chat write is remote, so this is the common path, not an edge.
+// The router answers [estate.ErrOutcomeUnknown] for a write no data node
+// answered. A keyed one (a turn's call, a person's request) is asked of every
+// data node first, and the same call is its safe retry; an unkeyed one (an
+// operator's assistant over MCP) is reported at the first silent node, and its
+// repeat is a second write. On a node without data every chat write is remote,
+// so this is the common path.
 func TestAWriteNobodyAnsweredSaysHowThisCallerRepeatsIt(t *testing.T) {
 	t.Parallel()
 	silent := fmt.Errorf("%w (chat.post, asked of data-1, data-2)", estate.ErrOutcomeUnknown)
@@ -917,11 +893,10 @@ func TestAWriteNobodyAnsweredSaysHowThisCallerRepeatsIt(t *testing.T) {
 // NO POSTING TOOL IS COUNTED AMONG A FAMILY, which is what lets a post's
 // "make the same call again" name its own tool and no other.
 //
-// A turn's repeat count for a tool in a family (chatlet.CallFamily) is raised by
-// EVERY call to another tool of that family, whatever its arguments, so the
-// sentence a post's unknown answer gives — "before calling it with any
-// others" — would be wrong for one: it would let the other tool be called
-// between, and that call makes the repeat a new operation.
+// A family's repeat count (chatlet.CallFamily) is raised by every call to
+// another tool of it, whatever its arguments, so were a post in one, its
+// "before calling it with any others" would let that tool be called between,
+// making the repeat a new operation.
 func TestNoPostingToolIsCountedAmongAFamily(t *testing.T) {
 	t.Parallel()
 	// AND A ROOM'S CREATE, which answers an unknown with the same sentence.
@@ -937,10 +912,10 @@ func TestNoPostingToolIsCountedAmongAFamily(t *testing.T) {
 
 // A VALUE REFUSAL NAMES THE FIELD AND DOES NOT READ AS A TRANSIENT FAILURE.
 //
-// The two arms say opposite things to a model: "refused that" is something it
-// can fix and call again, while the fall-through says the write may or may not
-// have landed and must not be reported as done. The refusal is the store's
-// own, so its sentence is the store's without the Go package's prefix.
+// The arms say opposite things to a model: "refused that" it can fix and call
+// again; the fall-through says the write may have landed and must not be
+// reported done. The sentence is the store's own, without the Go package's
+// prefix.
 func TestABodyOverTheCapIsRefusedNamingTheField(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -962,9 +937,8 @@ func TestABodyOverTheCapIsRefusedNamingTheField(t *testing.T) {
 }
 
 // EVERY POSTING TOOL TELLS A MODEL HOW MANY LINKS A MESSAGE TAKES. The store
-// refuses a message carrying more than [chatlet.MaxLinks], and the parameter's
-// description is the one place a model learns that before it writes: a posting
-// tool whose `links` said nothing left a seat to meet the cap as a refusal.
+// refuses more than [chatlet.MaxLinks], and the parameter's description is the
+// one place a model learns that before meeting it as a refusal.
 //
 // Mutation: drop send_dm's `links` description, and its row goes red.
 func TestEveryPostingToolTellsAModelItsLinkCap(t *testing.T) {
@@ -985,12 +959,10 @@ func TestEveryPostingToolTellsAModelItsLinkCap(t *testing.T) {
 	}
 }
 
-// EVERY CHAT TOOL THAT TAKES LINKS TELLS A MODEL WHAT A LINK IS. The store
-// refuses a link that is not an absolute address in one of
-// [chatlet.LinkSchemes], and the parameter's description is the one place a
-// model learns that before it writes. Every chat tool a person's surface
-// serves is walked, the seat's three posting tools and edit_message among
-// them, so a tool that takes links later is held to it as well.
+// EVERY CHAT TOOL THAT TAKES LINKS TELLS A MODEL WHAT A LINK IS: an absolute
+// address in one of [chatlet.LinkSchemes], which the store refuses otherwise.
+// Every tool a person's surface serves is walked, so a tool that takes links
+// later is held to it too.
 //
 // Mutation: drop the rule from edit_message's `links`, or mailto from
 // linkShape, and the tools it is missing from go red.
@@ -1026,11 +998,9 @@ func TestEveryChatToolTellsAModelWhatALinkIs(t *testing.T) {
 	}
 }
 
-// THE AUTHOR IS THE TURN'S SEAT AND NEVER AN ARGUMENT. A model that could name
-// its own author could speak as anybody, and a room where that is possible is
-// not a conversation — the name beside the words is the whole of what a reader
-// has. An argument that tries is refused before anything is said, because no
-// chat tool declares one.
+// THE AUTHOR IS THE TURN'S SEAT AND NEVER AN ARGUMENT: a model naming its own
+// author could speak as anybody, and the name beside the words is all a reader
+// has. An argument that tries is refused, since no chat tool declares one.
 func TestAPostIsAttributedToTheTurnsSeatAndNotToAnArgument(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -1056,9 +1026,8 @@ func TestAPostIsAttributedToTheTurnsSeatAndNotToAnArgument(t *testing.T) {
 		t.Errorf("the message was written as %q (%s): an argument moved the author",
 			actor.Handle, actor.Kind)
 	}
-	// AND THE TURN ID IS THE RUN, which is provenance — while the KEY is
-	// the work's: the run id is minted fresh on every attempt, so an id
-	// derived from it makes every redelivery a second copy.
+	// THE TURN ID IS THE RUN (provenance); the KEY is the work's, since a
+	// run id is fresh per attempt and would make a redelivery a second copy.
 	if actor.TurnID != "run-1" {
 		t.Errorf("the message names run %q, want the run that said it", actor.TurnID)
 	}
@@ -1069,14 +1038,11 @@ func TestAPostIsAttributedToTheTurnsSeatAndNotToAnArgument(t *testing.T) {
 
 // EVERY WRITE WAITS FOR ITS OWN POSITION, AND NO READ WAITS AT ALL.
 //
-// A write lands on the fleet's log and a read is answered from whichever
-// copy's rows serve it, so a seat that posts and then reads the room in the
-// same turn must be made to see its own message — a model that cannot find
-// what it just said says it again. The position is handed to the seam
-// ([builtin.ChatDeps.Await]) and it must be THIS write's, or the next read can
-// miss it. Waiting before a READ would buy nothing: there is no position to
-// wait for that the caller did not already produce — and that holds for the
-// reads a gesture makes to decide itself, too.
+// A read is answered from whichever copy serves it, so a seat that posts then
+// reads the room must see its own message, or it says it again. The position
+// handed to [builtin.ChatDeps.Await] must be THIS write's, or the next read can
+// miss it. A read, a gesture's deciding reads included, has no position of its
+// own to wait for.
 func TestEveryChatWriteAwaitsItsOwnPositionAndNoReadDoes(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -1111,10 +1077,9 @@ func TestEveryChatWriteAwaitsItsOwnPositionAndNoReadDoes(t *testing.T) {
 		}
 	}
 
-	// A DIRECT MESSAGE WAITS TWICE, and the first wait is load-bearing:
-	// the post decides from the rows of whichever copy takes it, so one
-	// issued before the conversation's own create has been applied there
-	// finds no room at all.
+	// A DIRECT MESSAGE WAITS TWICE: the post decides on whichever copy takes
+	// it, so one sent before the conversation's create applied there finds
+	// no room.
 	before := len(f.awaited)
 	if got := callChat(t, reg, builtin.SendDMTool, turn, map[string]any{
 		"to": []any{"agent-ceo"}, "asks": false, "body": "between us",
@@ -1126,8 +1091,7 @@ func TestEveryChatWriteAwaitsItsOwnPositionAndNoReadDoes(t *testing.T) {
 			"then its own message", waits)
 	}
 
-	// AND A PERSON'S GESTURES, through the catalogue that serves them —
-	// the archive and the remark decided after a read included.
+	// AND A PERSON'S GESTURES, those decided after a read included.
 	person := operatorChat(t, f, nil, nil)
 	for name, want := range map[string]uint64{
 		chatlet.CreateChannelTool: 41, chatlet.OpenDMTool: 11, chatlet.UpdateChannelTool: 42,
@@ -1167,9 +1131,8 @@ func TestEveryChatWriteAwaitsItsOwnPositionAndNoReadDoes(t *testing.T) {
 	}
 }
 
-// EVERY READ ASKS FOR THE SEAT'S OWN LEVEL. A seat has no screen on which to
-// notice a stale answer and its reads DECIDE things: one that reads a room
-// without its own last message posts it again.
+// EVERY READ ASKS FOR THE SEAT'S OWN LEVEL: a seat cannot notice a stale
+// answer, and one reading a room without its own last message posts it again.
 func TestEveryChatReadAsksForTheSeatLevel(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -1196,11 +1159,10 @@ func TestEveryChatReadAsksForTheSeatLevel(t *testing.T) {
 // A WORKER IS DENIED EVERY CHAT WRITE THAT REACHES SOMEBODY, and holds the two
 // that only move its own subscription.
 //
-// The sub-agent guard asks [mcp.WritesToSharedSurface], and the question that
-// flag asks is whether a second party is written FOR — not whether a row
-// changes. A worker acting under its parent's name that could post would be a
-// colleague answering in somebody else's voice, with nothing in the room to
-// say so; one that joins a room changes only where its parent listens.
+// The sub-agent guard asks [mcp.WritesToSharedSurface]: is a second party
+// written FOR, not does a row change. A worker posting under its parent's name
+// would answer in somebody else's voice unseen; a join changes only where its
+// parent listens.
 func TestAWorkerIsDeniedEveryChatWriteItsParentHolds(t *testing.T) {
 	t.Parallel()
 	reg := chatRegistry(t, chatDeps(newFakeChat()))
@@ -1234,12 +1196,10 @@ func TestAWorkerIsDeniedEveryChatWriteItsParentHolds(t *testing.T) {
 
 // EVERY CHAT TOOL IS CLASSIFIED BY NAME, never by the default arm.
 //
-// That arm is fail-closed — an unclassified builtin is treated as a public
-// write — so a tool that fell through it would still be SAFE and would be
-// wrong in two invisible ways: a read would be counted as a possible delivery
-// by the gate, and a private-state write would be withheld from a worker its
-// parent granted it. The table is the assertion; a dropped arm changes these
-// values.
+// That arm fails closed (a public write), so a tool falling through is safe
+// but wrong unseen: the gate counts a read as a possible delivery, and a
+// private-state write is withheld from a worker its parent granted it. The
+// table is the assertion; a dropped arm changes its values.
 func TestEveryChatToolCarriesItsOwnAnnotations(t *testing.T) {
 	t.Parallel()
 	read := tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
@@ -1264,9 +1224,9 @@ func TestEveryChatToolCarriesItsOwnAnnotations(t *testing.T) {
 		builtin.JoinChannelTool:    own,
 		builtin.LeaveChannelTool:   own,
 
-		// THE PERSON'S OWN GESTURES, classified by the same switch: the
-		// dashboard's act transport refuses a proven read, and an assistant
-		// is told which of these destroys what somebody else wrote.
+		// THE PERSON'S GESTURES, by the same switch: the act transport
+		// refuses a proven read, and an assistant is told which destroys
+		// what somebody else wrote.
 		chatlet.CreateChannelTool:     shared,
 		chatlet.OpenDMTool:            stated,
 		chatlet.UpdateChannelTool:     restated,
@@ -1289,10 +1249,8 @@ func TestEveryChatToolCarriesItsOwnAnnotations(t *testing.T) {
 }
 
 // A ROOM'S NAME IS ITS ADDRESS, and it resolves for any room this seat may
-// read, joined or not. A model types a room's name and never its uuid, so a
-// tool that took only the id would refuse the first call of every turn that
-// had not just listed the rooms. This fake resolves its one public room for
-// every viewer, as the store does.
+// read, joined or not: a model types a room's name, never its uuid, so an
+// id-only tool would refuse every turn that had not just listed the rooms.
 func TestAChannelNameResolvesAsTheRoomsAddress(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -1310,18 +1268,16 @@ func TestAChannelNameResolvesAsTheRoomsAddress(t *testing.T) {
 			t.Errorf("%q resolved to %q, want %q", ref, f.posts[before].channelID, chatRoomID)
 		}
 	}
-	// AS THE SEAT, because a private room's address resolves only for its
-	// members: a lookup made as anybody else names rooms the seat cannot
-	// read.
+	// AS THE SEAT: a private room's name resolves only for its members, so a
+	// lookup as anybody else names rooms the seat cannot read.
 	for _, viewer := range f.viewers {
 		if viewer != "agent-cto" {
 			t.Errorf("a name was resolved for %q, want the seat it is said as", viewer)
 		}
 	}
 
-	// AND AN ID COSTS NO LOOKUP. The common case is a room id carried in
-	// from the wake that woke this seat, and resolving it through the
-	// reader would put a read on the hot path of every answer.
+	// AND AN ID COSTS NO LOOKUP: the common case is the wake's room id, and
+	// resolving it would put a read on the hot path of every answer.
 	f.reads = 0
 	callChat(t, reg, builtin.PostMessageTool, turn, map[string]any{
 		"channel": chatRoomID, "asks": false, "body": "hello",
@@ -1330,9 +1286,8 @@ func TestAChannelNameResolvesAsTheRoomsAddress(t *testing.T) {
 		t.Errorf("a post addressed by id reached the reader %d times", f.reads)
 	}
 
-	// AND A ROOM THE STORE DOES NOT HOLD NAMES BOTH ADDRESSES, so the seat
-	// reading it is never sent after an id it did not need: a name reaches
-	// every room it may read as surely as an id does.
+	// AND A ROOM THE STORE DOES NOT HOLD NAMES BOTH ADDRESSES, so the seat is
+	// never sent after an id it did not need.
 	f.writeErr = fmt.Errorf("%w: room %s", chatlet.ErrNotFound, chatRoomID)
 	got := callChat(t, reg, builtin.PostMessageTool, turn, map[string]any{
 		"channel": chatRoomID, "asks": false, "body": "hello",
@@ -1349,11 +1304,9 @@ func TestAChannelNameResolvesAsTheRoomsAddress(t *testing.T) {
 // A ROOM NAMED BY A WORD NOTHING MATCHES IS THE ARGUMENT'S TO FIX, and a
 // lookup this node could not serve is the node's.
 //
-// The first is fixed by naming a room the caller may read — a name resolves
-// for every one of those, joined or not, and a private room the caller is not
-// in answers exactly as a name nobody holds, so "not found" would claim more
-// than the lookup knows. The second says nothing about the name at all, and
-// told "invalid" a person would retype a name that was right.
+// A private room the caller is not in answers exactly as a name nobody holds,
+// so "not found" would claim more than the lookup knows. A failed lookup says
+// nothing about the name, and told "invalid" a person would retype a right one.
 func TestARoomNameThatResolvesToNothingIsTheArgumentsToFix(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -1376,8 +1329,8 @@ func TestARoomNameThatResolvesToNothingIsTheArgumentsToFix(t *testing.T) {
 		t.Errorf("a post whose room could not be resolved reached the store: %v", f.posts)
 	}
 
-	// AND A SURFACE WITH NO READER CANNOT RESOLVE A NAME AT ALL: the id is
-	// the argument that works there, which is the argument's class again.
+	// AND A SURFACE WITH NO READER RESOLVES NO NAME: only an id works there,
+	// so it is the argument's class again.
 	f = newFakeChat()
 	got = callChat(t, chatRegistry(t, builtin.ChatDeps{Writer: f}), builtin.PostMessageTool,
 		turnFor(t, "agent-cto"), map[string]any{"channel": "eng", "asks": false, "body": "hi"})
@@ -1387,10 +1340,9 @@ func TestARoomNameThatResolvesToNothingIsTheArgumentsToFix(t *testing.T) {
 	}
 }
 
-// ADDRESSING THE WHOLE ROOM IS DERIVED FROM THE WORDS, and it has to be: the
-// prompt a woken seat reads tells it that `@channel` is how a room is
-// addressed, so that is what a model writes — and a message saying `@channel`
-// that woke nobody reads to the room as though everybody had seen it.
+// ADDRESSING THE WHOLE ROOM IS DERIVED FROM THE WORDS: a woken seat's prompt
+// says `@channel` addresses a room, so a model writes that, and one that woke
+// nobody reads to the room as though everybody had seen it.
 func TestAtChannelInTheBodyAddressesTheWholeRoom(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -1416,9 +1368,8 @@ func TestAtChannelInTheBodyAddressesTheWholeRoom(t *testing.T) {
 	}
 }
 
-// AN UNREAD COUNT IS A PERSON'S, and a seat has none. Reported anyway it is
-// the room's whole tail, and a model told it has seven unread messages in a
-// room it was never reading goes off to catch up on somebody else's backlog.
+// AN UNREAD COUNT IS A PERSON'S, and a seat has none: reported anyway it is the
+// room's whole tail, and a model goes off to catch up on somebody's backlog.
 func TestAListingCarriesNoUnreadCountWithoutReadState(t *testing.T) {
 	t.Parallel()
 	got := callChat(t, chatRegistry(t, chatDeps(newFakeChat())), builtin.ListChannelsTool,
@@ -1476,12 +1427,9 @@ func listing(t *testing.T, got tools.Result) (top map[string]any, rows []map[str
 	return top, rows
 }
 
-// A PERSON'S COUNTS ARE TAKEN AGAINST THEIR OWN CURSORS. The listing counts
-// above where the person read, so the cursor has to reach the read — a count
-// taken from zero calls every room wholly unread to somebody who has read most
-// of it — and it has to be THE PERSON's: the handle the read state is asked
-// for is the seat the call acts as, which is the one `mark_chat_read` wrote it
-// under.
+// A PERSON'S COUNTS ARE TAKEN AGAINST THEIR OWN CURSORS: from zero, every room
+// reads wholly unread to somebody who read most of it. The read state is asked
+// for the seat the call acts as, the one `mark_chat_read` wrote it under.
 func TestAPersonsUnreadCountsAreTakenAgainstTheirOwnCursors(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -1501,8 +1449,7 @@ func TestAPersonsUnreadCountsAreTakenAgainstTheirOwnCursors(t *testing.T) {
 			"as (jane)", *asked)
 	}
 
-	// NONE AT ALL IS SOMEBODY WHO HAS OPENED NOTHING, and to them every
-	// room's tail is new.
+	// NO CURSORS IS SOMEBODY WHO OPENED NOTHING: every room's tail is new.
 	tool, _ = readStateChat(t, newFakeChat(), coord.ChatReadState{}, nil)
 	_, rows = listing(t, callOperator(t, tool, nil))
 	if unread, _ := rows[0]["unread"].(float64); unread != chatRoomMessages {
@@ -1512,9 +1459,8 @@ func TestAPersonsUnreadCountsAreTakenAgainstTheirOwnCursors(t *testing.T) {
 }
 
 // A ROOM THE PERSON MUTED, AND A DO-NOT-DISTURB THEY ARE IN, ARE SAID AS THE
-// RAIL SAYS THEM. A person's assistant reads their rooms through this tool, and
-// a muted room handed over as ordinary unread is a backlog it offers to work
-// through that the person deliberately silenced.
+// RAIL SAYS THEM: a person's assistant reads rooms through this tool, and would
+// offer to work through a muted room's backlog the person silenced.
 func TestAPersonsMutesAndDoNotDisturbAreListedAsTheRailShowsThem(t *testing.T) {
 	t.Parallel()
 	until := time.Date(2026, 10, 8, 17, 0, 0, 0, time.UTC)
@@ -1534,8 +1480,7 @@ func TestAPersonsMutesAndDoNotDisturbAreListedAsTheRailShowsThem(t *testing.T) {
 			until.Format(time.RFC3339), top["dnd_until"])
 	}
 
-	// AND A ROOM NOT MUTED, BY SOMEBODY WHOSE DO-NOT-DISTURB IS OVER, SAYS
-	// NEITHER.
+	// AND AN UNMUTED ROOM, AFTER DO-NOT-DISTURB ENDED, SAYS NEITHER.
 	tool, _ = readStateChat(t, newFakeChat(), coord.ChatReadState{
 		DNDUntil: until.Add(-24 * time.Hour),
 	}, nil)
@@ -1548,12 +1493,10 @@ func TestAPersonsMutesAndDoNotDisturbAreListedAsTheRailShowsThem(t *testing.T) {
 	}
 }
 
-// A READ STATE THAT COULD NOT BE READ IS NOT A CURSOR AT ZERO. Counted from
-// zero, every room would read as wholly unread to a person who has read all of
-// it — so the listing is still served, with no count on ANY row, and says why
-// under the rail's own name for the fact rather than under `unread`, which
-// every row uses for a number — in fixed words, never the store's error, which
-// names its transport.
+// A READ STATE THAT COULD NOT BE READ IS NOT A CURSOR AT ZERO, which would
+// call every room wholly unread. The listing is served with no count on any
+// row, and says why under `read_state` (not `unread`, every row's number), in
+// fixed words, never the store's error, which names its transport.
 func TestAnUnreadableReadStateCostsTheCountsAndNotTheListing(t *testing.T) {
 	t.Parallel()
 	tool, _ := readStateChat(t, newFakeChat(), coord.ChatReadState{},
@@ -1584,9 +1527,8 @@ func TestAnUnreadableReadStateCostsTheCountsAndNotTheListing(t *testing.T) {
 }
 
 // A TOOL WHOSE HALF IS ABSENT IS OMITTED, never registered and broken: a model
-// shown a tool that always fails learns to distrust the whole catalogue. The
-// gestures decided after a read — whose words a message is, who made a room —
-// need the reader too.
+// shown a tool that always fails distrusts the whole catalogue. A gesture
+// decided after a read (whose message, who made a room) needs the reader too.
 func TestChatToolsAreOmittedWithoutTheHalfTheyNeed(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -1632,16 +1574,15 @@ func TestChatToolsAreOmittedWithoutTheHalfTheyNeed(t *testing.T) {
 	}
 }
 
-// A CALLER THE ENGINE CANNOT RESOLVE TO A SEAT GETS NOTHING, READS INCLUDED —
+// A CALLER THE ENGINE CANNOT RESOLVE TO A SEAT GETS NOTHING, READS INCLUDED,
 // and the refusal carries the remedy.
 //
-// A private room's contents are decided by its membership, so a caller with no
-// seat has no membership: serving it "everything public" would invent a viewer
-// the company never declared. Two shapes reach here behind a table that
-// admitted them: the actor seam answering nobody, and a credential acting as
-// itself — which the table refuses first (`unseated`), so this is the arm a
-// surface wired without the table would otherwise reach. FORBIDDEN, the class
-// whose sentence a tool tells as written, which is what carries the remedy.
+// A caller with no seat has no membership, and serving it "everything public"
+// would invent a viewer the company never declared. Two shapes: the actor seam
+// answering nobody, and a credential acting as itself (the table refuses it
+// first, `unseated`; this arm holds a surface wired without the table). The
+// class is forbidden, whose sentence a tool tells as written, carrying the
+// remedy.
 func TestACallerWithNoSeatIsRefusedEveryChatToolWithTheRemedy(t *testing.T) {
 	t.Parallel()
 	args := map[string]map[string]any{
@@ -1694,9 +1635,8 @@ func TestACallerWithNoSeatIsRefusedEveryChatToolWithTheRemedy(t *testing.T) {
 	}
 }
 
-// A READ THAT COULD NOT BE SERVED IS NEVER AN EMPTY ROOM. A node whose rows
-// are behind — or one that failed — must not be able to tell a seat that
-// nobody answered, because a seat that believes nobody answered asks again.
+// A READ THAT COULD NOT BE SERVED IS NEVER AN EMPTY ROOM: a seat told nobody
+// answered asks again.
 func TestAFailedChatReadIsNotReportedAsSilence(t *testing.T) {
 	t.Parallel()
 	for name, err := range map[string]error{
@@ -1719,13 +1659,11 @@ func TestAFailedChatReadIsNotReportedAsSilence(t *testing.T) {
 // EVERY CHAT TOOL ANSWERS A REFUSAL WITH ITS CLASS, never with the argument
 // class a bare failure carries.
 //
-// The class is what a person's surface acts on — which status the act
-// transport answers, which code's sentence it is told in, whether a retry could
-// ever help — so a node that could not read its rows, a lost race and a name
-// somebody else holds must each tell a person something different. Each
-// refusal here is shaped the way the store builds it and reaches the tool
-// through its writer or its reader, so a call site that bypasses the
-// classifier is caught at the call site.
+// A person's surface acts on the class (the act transport's status, the
+// sentence, whether a retry helps), so an unreadable node, a lost race and a
+// taken name must each say something different. Each refusal is shaped as the
+// store builds it and reaches the tool through its writer or reader, so a call
+// site that bypasses the classifier is caught.
 //
 // Mutation: drop any arm of chatClass and its rows go red.
 func TestEveryChatToolAnswersARefusalWithItsClass(t *testing.T) {
@@ -1746,9 +1684,8 @@ func TestEveryChatToolAnswersARefusalWithItsClass(t *testing.T) {
 		}
 	}
 
-	// AND THE GESTURES ONLY A PERSON MAKES, through the operator catalogue
-	// that serves them to the dashboard: the same store, the same sentinels,
-	// and a person's screen acting on the class exactly as a model does.
+	// AND THE GESTURES ONLY A PERSON MAKES, through the operator catalogue:
+	// the same sentinels, and a screen acting on the class as a model does.
 	for name, args := range operatorChatWrites {
 		for _, c := range chatWriteRefusals {
 			t.Run("operator/"+name+"/"+c.name, func(t *testing.T) {
@@ -1771,18 +1708,15 @@ func TestEveryChatToolAnswersARefusalWithItsClass(t *testing.T) {
 	}
 	for name, args := range reads {
 		for want, err := range map[tools.Refusal]error{
-			// A READ THIS NODE COULD NOT SERVE IS NEVER NOT-FOUND: a
-			// surface told so would render the room as gone.
+			// AN UNSERVED READ IS NEVER NOT-FOUND, or the room renders gone.
 			tools.RefusalUnavailable: &statelog.Unavailable{Reason: statelog.ReasonDeferred},
 			tools.RefusalInternalError: errors.New("open /var/lib/crewlet/replicated.db: " +
 				"disk I/O error"),
 			tools.RefusalNotFound: fmt.Errorf("%w: room room-1", chatlet.ErrNotFound),
-			// AN ARGUMENT THE READER REFUSED — a cursor that is no
-			// position — is the caller's to fix: "try again" is a retry
-			// refused the same way every time.
+			// AN ARGUMENT THE READER REFUSED (a cursor that is no position)
+			// is the caller's to fix: a retry is refused every time.
 			tools.RefusalInvalid: chatlet.ChannelPatch{}.Validate(),
-			// A READER WITH NO SEAT BEHIND IT is refused by the store
-			// naming the binding it lacks, which is no retry either.
+			// A READER WITH NO SEAT is refused naming the binding it lacks.
 			tools.RefusalForbidden: fmt.Errorf("%w: viewer: this chat read "+
 				"resolved to no seat", chatlet.ErrForbidden),
 		} {
@@ -1801,9 +1735,9 @@ func TestEveryChatToolAnswersARefusalWithItsClass(t *testing.T) {
 	}
 }
 
-// operatorChatWrites are the gestures only a person makes that append to the
-// log, each with arguments that reach its writer — every one the operator
-// catalogue serves but mark_chat_read, which writes the coordination store.
+// operatorChatWrites are the person-only gestures that append to the log, with
+// arguments that reach the writer: all but mark_chat_read, which writes the
+// coordination store.
 var operatorChatWrites = map[string]map[string]any{
 	chatlet.CreateChannelTool: {"channel": "launch"},
 	chatlet.OpenDMTool:        {"to": []any{"bob"}},
@@ -1849,13 +1783,11 @@ var chatWriteRefusals = []struct {
 
 // A DIRECT MESSAGE IS TWO RECORDS AND ANSWERS FOR BOTH.
 //
-// Its conversation's open and its post are appended one after the other, so
-// the call is as certain as the LESS certain of the two and a caller reading
-// after it waits for the LATER position — the rule every write that appends
-// twice answers by. And where the post is refused after the open landed, the
-// answer says the conversation is there: "nothing was written" would be false
-// about the open, and the class is the post's, since the post is what did not
-// happen.
+// The open and the post are appended in turn, so the call is as certain as
+// the LESS certain and a reader waits for the LATER position, as every
+// two-append write answers. A post refused after the open landed says the
+// conversation is there ("nothing was written" would be false), with the
+// post's class.
 func TestADirectMessageAnswersForBothItsRecords(t *testing.T) {
 	t.Parallel()
 	dm := func(f *fakeChat, body string) tools.Result {
@@ -1878,8 +1810,7 @@ func TestADirectMessageAnswersForBothItsRecords(t *testing.T) {
 			"the later of its two: %s", got.Output)
 	}
 
-	// THE STORE'S OWN FIELD REFUSAL, so the sentence the caller is told is
-	// the store's without its Go prefix.
+	// THE STORE'S OWN FIELD REFUSAL, told without its Go prefix.
 	f = newFakeChat()
 	f.postErr = chatlet.ChannelPatch{}.Validate()
 	got = dm(f, "a word")
@@ -1892,10 +1823,8 @@ func TestADirectMessageAnswersForBothItsRecords(t *testing.T) {
 		}
 	}
 
-	// A POST THE NODE COULD NOT MAKE AFTER THE OPEN is the node's class —
-	// and the answer still says the conversation is open, never that
-	// nothing was written: the open is a record, and that sentence is the
-	// one this answer exists to correct.
+	// A POST THE NODE COULD NOT MAKE AFTER THE OPEN is the node's class, and
+	// still says the conversation is open, never that nothing was written.
 	for name, c := range map[string]struct {
 		err  error
 		want tools.Refusal
@@ -1926,8 +1855,7 @@ func TestADirectMessageAnswersForBothItsRecords(t *testing.T) {
 	}
 
 	// A POST NOBODY ANSWERED AFTER THE OPEN is unknown, never "NOT sent":
-	// the router does not repeat a post carrying no key of its caller's, so
-	// one a data node never answered may have been said.
+	// the router does not repeat an unkeyed post, so it may have been said.
 	f = newFakeChat()
 	f.postErr = fmt.Errorf("%w (chat.post, asked of data-1)", estate.ErrOutcomeUnknown)
 	got = dm(f, "a word")
@@ -1940,8 +1868,8 @@ func TestADirectMessageAnswersForBothItsRecords(t *testing.T) {
 			"or says the message was not sent: %s", got.Output)
 	}
 
-	// A POST WHOSE OUTCOME IS UNKNOWN AFTER THE OPEN says the open landed,
-	// as a refused one does: two records, and only the second is in doubt.
+	// A POST OF UNKNOWN OUTCOME AFTER THE OPEN says the open landed: only
+	// the second record is in doubt.
 	f = newFakeChat()
 	f.outcome = &statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: "op-post"}
 	got = dm(f, "a word")
@@ -1954,10 +1882,8 @@ func TestADirectMessageAnswersForBothItsRecords(t *testing.T) {
 		}
 	}
 
-	// AND WHAT THE MESSAGE SAYS IS REFUSED BEFORE ANYTHING IS OPENED: a body
-	// over the cap is refused by the post however the room is found, so
-	// opening the conversation first only left a room in every
-	// participant's list, opened by a refusal.
+	// AND WHAT THE MESSAGE SAYS IS REFUSED BEFORE ANYTHING IS OPENED, or a
+	// refused body leaves a room in every participant's list.
 	f = newFakeChat()
 	got = dm(f, strings.Repeat("x", chatlet.MaxBody+1))
 	if tools.RefusalOf(got) != tools.RefusalInvalid {
@@ -1973,9 +1899,8 @@ func TestADirectMessageAnswersForBothItsRecords(t *testing.T) {
 }
 
 // A SEARCH TEXT PAST THE BOUND EVERY RANKED SEARCH SHARES IS REFUSED NAMING IT,
-// and never reaches the index — where it would come back as a failure the model
-// reads as chat being unreadable, rather than as what to send instead. At the
-// bound it is a search.
+// never reaching the index, whose failure a model reads as chat unreadable. At
+// the bound it is a search.
 func TestALongChatSearchIsRefusedNotCut(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -2002,11 +1927,9 @@ func TestALongChatSearchIsRefusedNotCut(t *testing.T) {
 // A SEARCH IS ASKED AS THE SEAT, NARROWED AS NAMED, AND A ROOM'S NAME THAT
 // NAMES NOTHING IS REFUSED rather than dropped.
 //
-// The viewer is what decides which rooms are searched — a private room's
-// contents are its membership's — so it is the seat the call is made as and
-// never an argument. A `channel` is resolved like every other tool's; a name
-// nothing readable holds, searched in its absence, would hand back hits from
-// rooms the caller did not mean, read as the one it did.
+// The viewer decides which rooms are searched, so it is the calling seat,
+// never an argument. A `channel` resolves as every tool's; dropping one that
+// names nothing would return hits from rooms the caller did not mean.
 func TestAChatSearchIsAskedAsTheSeatAndNarrowedAsNamed(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -2035,12 +1958,11 @@ func TestAChatSearchIsAskedAsTheSeatAndNarrowedAsNamed(t *testing.T) {
 	}
 }
 
-// A CHAT SEARCH'S HITS ARE KEYED AS EVERY OTHER CHAT ANSWER IS. The index's own
-// value has no JSON names, and handed over whole it keyed a hit `MessageID`
-// beside the `message_id` the transcript, the receipts and reply_in_thread's
-// own description use, so the id a seat replies under was spelled two ways.
+// A CHAT SEARCH'S HITS ARE KEYED AS EVERY OTHER CHAT ANSWER IS: the index's
+// value has no JSON names, and whole it would key `MessageID` beside the
+// `message_id` the transcript, receipts and reply_in_thread use.
 //
-// Mutation: answer `answer.Hits` as it was and every key here goes missing.
+// Mutation: answer `answer.Hits` whole and every key here goes missing.
 func TestAChatSearchHitIsKeyedAsEveryChatAnswerIs(t *testing.T) {
 	t.Parallel()
 	f := newFakeChat()
@@ -2075,10 +1997,9 @@ func TestAChatSearchHitIsKeyedAsEveryChatAnswerIs(t *testing.T) {
 	}
 }
 
-// A SEARCH OF AN INDEX STILL BEING BUILT IS NEVER "NOTHING MATCHED". The index
-// a node answers from may not have reached a message yet, and a seat told
-// nobody said it acts on that — so an empty answer says the index is catching
-// up, and hits beside it say they may not be all there is.
+// A SEARCH OF AN INDEX STILL BEING BUILT IS NEVER "NOTHING MATCHED": a seat
+// told nobody said it acts on that. An empty answer says the index is catching
+// up, and hits say they may not be all.
 //
 // Mutation: drop the Building arm from search_messages and the empty case
 // reads as nothing matched.
@@ -2110,32 +2031,18 @@ func TestASearchOfAnIndexStillBeingBuiltSaysSo(t *testing.T) {
 	}
 }
 
-// A FULL PAGE OF CHAT HITS IS ONE TOOL ANSWER — OF PROSE.
+// A FULL PAGE OF CHAT HITS IS ONE TOOL ANSWER, of prose or of markup.
 //
-// The index answers at most [search.MaxChatSearchLimit] hits of at most
-// [search.ChatSnippetBytes] each, and a tool answer is at most
-// [builtin.ToolAnswerBytes]: a page past it is REFUSED rather than delivered,
-// so a ceiling the answer could not carry would be a search that answers its
-// own largest page of ordinary words with "ask for fewer". Held at a heavy one
-// — every snippet cut at its bound, both marks on it, fenced, a different
-// author of the longest handle on every hit (so the fence's label and the
-// envelope each name the longest handle once a hit), and quotes throughout,
-// each of which the answer's JSON writes as two bytes.
+// [search.MaxChatSearchLimit] hits of [search.ChatSnippetBytes] must fit in
+// [builtin.ToolAnswerBytes], or the search refuses its own largest page. Held
+// at a heavy page: snippets cut at the bound with both marks, fenced, each by
+// a different longest handle, full of quotes JSON doubles. Markup travels as
+// its bytes, not an HTML-safe encoder's six-byte escapes. A page JSON still
+// widens (control characters, six bytes each) is refused naming `limit`, never
+// cut, holding the limit's doc true both ways.
 //
-// A PAGE OF MARKUP IS ONE ANSWER TOO, AND READS AS WRITTEN: a tool answer
-// carries `<`, `>` and `&` as the bytes they are, not as the six-byte escapes
-// an HTML-safe encoder writes, which made fifty snippets of them four times
-// the page above and refused a room of pasted code as "ask for fewer".
-//
-// AND A PAGE THE ANSWER'S JSON STILL WIDENS IS REFUSED NAMING `limit`, never
-// cut: a control character — a terminal's escape, pasted with its colours —
-// is written as six bytes, so fifty snippets of them are the case the ceiling
-// is for. Held so the limit's doc stays true in both directions — a limit
-// small enough to carry that page turns this half red and the doc is re-read.
-//
-// Mutation: raise MaxChatSearchLimit to 45 and the first half goes red; put
-// the HTML escaping back and the markup half does; drop the narrowing advice
-// from the search's answer and the last one does.
+// Mutation: raise MaxChatSearchLimit to 45, restore HTML escaping, or drop the
+// narrowing advice, and the matching half goes red.
 func TestAFullChatSearchPageIsOneToolAnswer(t *testing.T) {
 	t.Parallel()
 	page := func(body string) tools.Result {
@@ -2174,12 +2081,11 @@ func TestAFullChatSearchPageIsOneToolAnswer(t *testing.T) {
 
 // AN EDIT AND A DELETE ARE DECIDED ON WHOSE WORDS THE MESSAGE IS.
 //
-// The tools name a message by its id, so the table cannot form the object
-// from the arguments: an admin is admitted on the UNREAD message — moderation,
-// which reaches a message in a room the moderator cannot read without showing
-// it to them — and anybody else is told to read it and is decided again on
-// its author. What came back is carried to the store as the decision
-// ([chatlet.MessageAuthority.Moderate]), never re-derived there.
+// The tools name a message by id, so the table cannot form the object from
+// the arguments: an admin is admitted on the UNREAD message (moderation,
+// without showing it), anybody else reads it and is decided again on its
+// author. The decision reaches the store as [chatlet.MessageAuthority.Moderate],
+// never re-derived there.
 //
 // Mutation: ask the second decision with no Author and the author is refused
 // their own message; pass Moderate true from both arms and a colleague's
@@ -2238,12 +2144,10 @@ func TestARemarkIsDecidedOnWhoseWordsItIs(t *testing.T) {
 
 // A ROOM'S ARCHIVE IS DECIDED ON THE STORED ROOM, and only an archive is.
 //
-// Who may close a room to everybody in it is its creator, the lead of the unit
-// a unit's room is recorded under, or admin — and both halves of that are on
-// the row, never in the arguments, so the tool reads the room and asks the
-// table's archive verb about it, and the store is handed the decision with the
-// unit it was taken on as a precondition. A topic or a purpose is any member's
-// and reads nothing.
+// A room's creator, its unit's lead, or admin may archive it; both are on the
+// row, not the arguments, so the tool reads the room, asks the table's archive
+// verb, and hands the store the decision with its unit as a precondition. A
+// topic or a purpose is any member's and reads nothing.
 //
 // Mutation: drop the archive ask from update_channel and the colleague's
 // archive reaches the store; pass an empty ArchiveUnit and the unit's lead's
@@ -2302,9 +2206,9 @@ func TestARoomsArchiveIsDecidedOnTheStoredRoom(t *testing.T) {
 	}
 }
 
-// AN AGENT STATES WHETHER ITS MESSAGE ASKS (ADR-0113): a post that leaves
-// `asks` out is refused before anything is written, and the statement it makes
-// reaches the message, so a request routes as one and a note as news.
+// AN AGENT STATES WHETHER ITS MESSAGE ASKS (ADR-0113): a post without `asks` is
+// refused unwritten, and the statement reaches the message, so a request
+// routes as one and a note as news.
 //
 // Mutation: default a missing `asks` to false, and a delegation written
 // without it reaches its colleague as something that asks nothing.

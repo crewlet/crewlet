@@ -15,18 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// WHAT THIS FILE EXISTS FOR.
-//
-// `internal/schedule` shipped complete and certified — cron grammar,
-// at-most-once ledger, catchup, fleet duty, its own contract suite over two
-// ledger implementations — and nothing ever CONSTRUCTED one. Every unit test
-// in that package passed against a scheduler the engine never built, so a
-// founder's schedules were parsed, validated, shown in the dashboard, and
-// silently never fired.
-//
-// A suite that certifies a component cannot notice that nobody uses it. These
-// cases sit on the other side of the seam: they assert the ENGINE arms the
-// loop, so the subsystem cannot go unreachable again without going red.
+// These cases assert the ENGINE arms `internal/schedule`'s loop: that
+// package's own suite cannot notice that nothing constructs one.
 
 // scheduledCompany is the ordinary test company plus one seat schedule.
 func scheduledCompany(t *testing.T) *config.Company {
@@ -52,8 +42,7 @@ func scheduledEngine(t *testing.T, c *config.Company) *engine.Engine {
 	})
 }
 
-// A COMPANY THAT DECLARES A SCHEDULE GETS A RUNNING TICK LOOP. The one case
-// whose absence made the whole subsystem dead code.
+// A COMPANY THAT DECLARES A SCHEDULE GETS A RUNNING TICK LOOP.
 func TestACompanyWithASchedulePlansToFireIt(t *testing.T) {
 	t.Parallel()
 	e := scheduledEngine(t, scheduledCompany(t))
@@ -63,9 +52,8 @@ func TestACompanyWithASchedulePlansToFireIt(t *testing.T) {
 	}
 }
 
-// AND A COMPANY WITH NONE DOES NOT, which is the other half of the config
-// block's promise: an idle tick would claim a fleet duty every ten seconds
-// on behalf of work that does not exist.
+// AND A COMPANY WITH NONE DOES NOT: an idle tick would claim a fleet duty
+// every ten seconds for work that does not exist.
 func TestACompanyWithNoSchedulesArmsNothing(t *testing.T) {
 	t.Parallel()
 	e := scheduledEngine(t, parsedCompany(t, companyDoc))
@@ -74,9 +62,8 @@ func TestACompanyWithNoSchedulesArmsNothing(t *testing.T) {
 	}
 }
 
-// THE OPERATOR'S OFF SWITCH IS HONOURED even when schedules exist — otherwise
-// `scheduling.enabled: false` would be a field that validates and does
-// nothing, which is the shape of every bug this audit found.
+// THE OPERATOR'S OFF SWITCH IS HONOURED even when schedules exist, or
+// `scheduling.enabled: false` would validate and do nothing.
 func TestTheSchedulerRespectsItsOffSwitch(t *testing.T) {
 	t.Parallel()
 	c := scheduledCompany(t)
@@ -87,9 +74,7 @@ func TestTheSchedulerRespectsItsOffSwitch(t *testing.T) {
 }
 
 // THE FIRST SCHEDULE ADDED TO A LIVE COMPANY STARTS THE LOOP, and the last
-// one removed stops it. Without this an operator's first schedule does
-// nothing until the next restart — and the config plane exists precisely so
-// that a company can be edited without one.
+// one removed stops it, with no restart.
 func TestAddingTheFirstScheduleLiveArmsTheLoop(t *testing.T) {
 	t.Parallel()
 	e := scheduledEngine(t, parsedCompany(t, companyDoc))
@@ -116,11 +101,10 @@ func TestAddingTheFirstScheduleLiveArmsTheLoop(t *testing.T) {
 	}
 }
 
-// A COMPANY WITH NO MODEL ARMS NO LOOP, AND ITS FIRST PROVIDER ARMS ONE. Every
-// fire is work on a seat's inbox, and that company's inboxes hold their work
-// until a provider exists. A loop ticking through the wait would stack every
-// missed standup behind the hold and run the whole backlog the moment the
-// provider arrived, which is the replay the catchup window exists to refuse.
+// A COMPANY WITH NO MODEL ARMS NO LOOP, AND ITS FIRST PROVIDER ARMS ONE. Its
+// inboxes hold their work until a provider exists, so a loop ticking through
+// the wait would replay the whole backlog when one arrived, the replay the
+// catchup window refuses.
 func TestSchedulesWaitForTheCompanysFirstModel(t *testing.T) {
 	t.Parallel()
 	const noModels = `
@@ -157,9 +141,9 @@ roles:
 	}
 }
 
-// STOPPING THE ENGINE STOPS THE LOOP. A tick that outlived its engine would
-// publish into a queue that is closing, and its ledger row would mean no peer
-// ever fires that run.
+// STOPPING THE ENGINE STOPS THE LOOP. A tick outliving its engine would
+// publish into a closing queue, and its ledger row would stop any peer firing
+// that run.
 func TestStoppingTheEngineStopsTheScheduler(t *testing.T) {
 	t.Parallel()
 	e := scheduledEngine(t, scheduledCompany(t))
@@ -176,21 +160,16 @@ func TestStoppingTheEngineStopsTheScheduler(t *testing.T) {
 
 // A SCHEDULED TURN'S DEFAULT CAP OUTLASTS WHAT THE TURN SPENDS BEFORE ITS RUN.
 //
-// A schedule that sets no timeout_seconds takes [org.DefaultScheduleTimeout],
-// measured from the moment the fire's turn begins, and the executor's run is
-// inside it. Before that run can do anything the turn has prefetched its
-// context, started its box and applied the seat's setup, each held to a bound
-// of its own: an auxiliary call's, a container's start with a cold image pull
-// inside it, and one setup command's default allowance. A cap at or under
-// their sum can end a ritual's run before it has done anything — which is
-// what the three minutes it replaced did, running out inside a single setup
-// command's allowance once every executor became a run in a box.
+// [org.DefaultScheduleTimeout] runs from the turn's start, and before the
+// executor's run can act the turn prefetches (an auxiliary call's bound),
+// starts its box (a container start, cold image pull included) and applies
+// setup (one command's default allowance). A cap at or under their sum ends a
+// ritual's run before it does anything.
 //
-// THREE CONSTANTS IN THREE PACKAGES that know nothing of schedules, so only
-// the ORDER is asserted, as TestAnIdleAskOutlastsTheSilenceOfOneStillOwed
-// does: what the run itself needs is no constant anything could be compared
-// against, and a demanded multiple would fail a sound change and be edited to
-// say so. The rest of the derivation is at the definition.
+// Three constants in three packages, so only the ORDER is asserted, as
+// TestAnIdleAskOutlastsTheSilenceOfOneStillOwed does: the run's own need is no
+// constant, and a demanded multiple would fail a sound change. The rest of the
+// derivation is at the definition.
 func TestADefaultScheduleCapOutlastsTheTurnBeforeItsRun(t *testing.T) {
 	t.Parallel()
 	setup := time.Duration(org.DefaultSetupTimeoutSeconds * float64(time.Second))

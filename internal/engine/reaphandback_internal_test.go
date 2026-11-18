@@ -14,12 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
-// A LAUNCH THE ENGINE MAKES IS STAMPED WITH THE LEASE IT HOLDS THE SEAT UNDER,
-// through the coordinator it builds — the wiring between the seat host that
-// knows the lease and the coordinator that stamps the row, which a coordinator
-// test with a fixed lease cannot see. It is what lets the seat's next holder
-// fence this node off the run: a row left at the zero epoch is fenced by
-// nothing.
+// A LAUNCH THE ENGINE MAKES IS STAMPED WITH ITS SEAT LEASE, through the
+// coordinator it builds (wiring a fixed-lease coordinator test cannot see), so
+// the seat's next holder can fence this node off the run: a zero-epoch row is
+// fenced by nothing.
 func TestTheEngineStampsALaunchWithItsSeatLease(t *testing.T) {
 	t.Parallel()
 	e := sandboxNode(t, nil)
@@ -52,13 +50,9 @@ func TestTheEngineStampsALaunchWithItsSeatLease(t *testing.T) {
 }
 
 // A SEAT THIS NODE DOES NOT HOLD IS ANSWERED AS NOT HELD, never as the zero
-// fence. The zero fence is an UNFENCED write — what a node with no seat host
-// answers, having no next holder to be fenced out by — and it constrains
-// nothing: answered for a seat the host does not hold, a node that had noticed
-// it lost the seat recorded, claimed and took a person's answer past the fence
-// its successor had put on the run. So the engine answers it as not held, and
-// the coordinator it builds refuses a launch on it; a node with no seat host at
-// all still answers the zero fence, held.
+// fence: that is an unfenced write, so a node that had lost the seat could take
+// a person's answer past its successor's fence. The coordinator refuses the
+// launch; a node with no seat host at all still answers the zero fence, held.
 func TestTheEngineAnswersASeatItDoesNotHoldAsNotHeld(t *testing.T) {
 	t.Parallel()
 	e := sandboxNode(t, nil)
@@ -89,11 +83,9 @@ func TestTheEngineAnswersASeatItDoesNotHoldAsNotHeld(t *testing.T) {
 }
 
 // A CLAIM THAT DIED BEFORE ITS TURN TOOK THE REPLY IS REVIVED BY THE ENGINE'S
-// RECOVERY, under the lease the engine holds the seat under, and the run is
-// resumed with the reply once. The seat host is what hands the recovery its
-// owner and epoch, which a coordinator test with a fixed lease cannot see: a
-// revival stamped with anything else is one the claim's stalled node could
-// still take the answer under.
+// RECOVERY under the seat's lease, and resumed with the reply once. The seat
+// host supplies that owner and epoch (unseen by a fixed-lease coordinator
+// test); a revival stamped otherwise could still be taken by the stalled node.
 func TestTheEngineRevivesAClaimThatDiedBeforeItsTurn(t *testing.T) {
 	t.Parallel()
 	e := sandboxNode(t, nil)
@@ -147,13 +139,12 @@ func TestTheEngineRevivesAClaimThatDiedBeforeItsTurn(t *testing.T) {
 }
 
 // A REPLY THE ENGINE'S REAP HANDS BACK IS SPENT IN ITS COMPLETION LEDGER FIRST.
-// A run whose claim died before its turn took the person's reply, and whose
-// answer has already lost every claim it may ([sandbox.MaxAnswerRevivals]), is
-// reaped by the seat's next holder — this node, as it takes the seat — and the
-// reply goes back to the inbox as a copy. Its original delivery is recorded as
-// worked in the fleet's completion ledger, through the dispatcher the engine
-// builds, so a node that recorded the answer and stopped before acknowledging
-// it cannot have the original come round afterwards as a second message.
+// A claim that died before its turn took the reply, its answer past
+// [sandbox.MaxAnswerRevivals], is reaped by the seat's next holder (this node)
+// and the reply goes back to the inbox as a copy. The original delivery is
+// recorded as worked in the completion ledger, through the engine's dispatcher,
+// so a node that recorded the answer and stopped before acknowledging it cannot
+// see the original come round as a second message.
 func TestTheEngineSpendsTheReplyItsReapHandsBack(t *testing.T) {
 	t.Parallel()
 	e := sandboxNode(t, nil)
@@ -177,13 +168,10 @@ func TestTheEngineSpendsTheReplyItsReapHandsBack(t *testing.T) {
 }
 
 // A REPLY A TURN TOOK IS SPENT BY THE ENGINE'S REAP, for a node that stopped
-// between its take and the spend that goes with it. The turn took the person's
-// reply — it may already have answered them — and its node stopped mid-turn,
-// with the reply's delivery unacknowledged if it was taken inline. The seat's
-// next holder reaps the claim and hands nothing back: the reply is used. What
-// it does write is the delivery's completion record, through the dispatcher the
-// engine builds, so the original coming round to it is dropped by the ledger
-// rather than run as a second turn — nothing on the reaped run recognises it.
+// between the take and its spend. The reply is used (the turn may have
+// answered), so the next holder hands nothing back but writes the delivery's
+// completion record through the engine's dispatcher: nothing on the reaped run
+// recognises the original, so only the ledger keeps it from a second turn.
 func TestTheEngineSpendsAReplyATurnTookBeforeItsNodeStopped(t *testing.T) {
 	t.Parallel()
 	e := sandboxNode(t, nil)
@@ -214,12 +202,10 @@ func TestTheEngineSpendsAReplyATurnTookBeforeItsNodeStopped(t *testing.T) {
 	})
 }
 
-// pastRevivals marks a seeded claim's answer as having lost every claim it may
-// ([sandbox.MaxAnswerRevivals]): the seat's next holder reaps the claim and
-// hands its reply back rather than reviving it. Written as that many revivals
-// would have — each claim given back to the answer and the next one dying —
-// under no lease, so that whatever epoch this node takes the seat at outranks
-// them, as the next holder's always does.
+// pastRevivals marks a seeded claim's answer as past
+// [sandbox.MaxAnswerRevivals], so the seat's next holder reaps it and hands the
+// reply back. The revivals are written under no lease, so any epoch this node
+// takes the seat at outranks them.
 func pastRevivals(t *testing.T, e *Engine, turnID string) {
 	t.Helper()
 	store := sandbox.NewCoordStore(e.backends.Fleet)

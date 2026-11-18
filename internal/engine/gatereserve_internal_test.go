@@ -20,21 +20,15 @@ import (
 
 // fullForOrdinaryWrites fills each identity log, with records every build
 // decodes and no gate drops, until it holds at least minBytes, and then sets
-// its ceiling to ceiling(its reservation, bytes held) — answering the ceiling
+// its ceiling to ceiling(its reservation, bytes held), answering the ceiling
 // each got, by log.
 //
-// THE CEILING IS SET ON THE STREAM ITSELF, past the capacity window, because
-// what is under test is what a log at its ceiling takes, not how it came to be
-// there; the reserve reads the ceiling from the broker on every admission, as
-// it would after any resize.
-//
-// A FEW PADDED BARRIERS AND A SMALL TOP-UP, because what a reserve admits is a
-// function of bytes alone ([statelog.Reservation.Ordinary],
-// [statelog.Reservation.Bytes]): filling with barriers of a few hundred bytes
-// each was a thousand appends, each one applied, for the same bytes four
-// padded ones hold. Each padded barrier leaves fillTopUp of the target, so the
-// last bytes are still small barriers and the log ends as close past minBytes
-// as it always did.
+// The ceiling is set on the stream itself, past the capacity window: under test
+// is what a log at its ceiling takes, and the reserve reads the ceiling from
+// the broker on every admission. It fills with a few padded barriers, since a
+// reserve admits by bytes alone ([statelog.Reservation.Ordinary],
+// [statelog.Reservation.Bytes]), then small ones for the last fillTopUp, so the
+// log ends just past minBytes.
 func fullForOrdinaryWrites(t *testing.T, identity []*runningLog, minBytes uint64,
 	ceiling func(reservation statelog.Reservation, held uint64) uint64) map[string]uint64 {
 
@@ -165,14 +159,12 @@ func requireOrdinaryRefused(t *testing.T, running *runningLog) {
 	}
 }
 
-// AN EVICTION LANDS ON A LOG FULL FOR ORDINARY WRITES, AND COMPLETES.
-//
-// The commonest way a log fills is a node that is gone and still counted,
-// pinning the trim — and the one gesture that unpins it is an eviction, a
-// record on that log. Refused like any other append, it left an operator
-// running it again for ever. Here every identity log is at its ordinary
-// ceiling, so a linearizable read's barrier is refused, and the eviction still
-// lands on every log, past that ceiling, and is applied.
+// AN EVICTION LANDS ON A LOG FULL FOR ORDINARY WRITES, AND COMPLETES. A gone
+// node still counted pins the trim and fills its log, and the one gesture that
+// unpins it is an eviction, a record on that log: refused like any other
+// append, it would leave an operator rerunning it for ever. Every identity log
+// here is at its ordinary ceiling, so a linearizable read's barrier is refused,
+// and the eviction still lands on every log past that ceiling and is applied.
 func TestAnEvictionLandsOnALogFullForOrdinaryWrites(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)

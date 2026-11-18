@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -44,6 +45,10 @@ type GrantRequest struct {
 
 	// Reason is the agent's own words for why, kept as the grant's reason.
 	Reason string `json:"reason" untrusted:"fence"`
+
+	// Target is what the one change asked for changes (a bucket), which a
+	// permission granted for one change needs ([GrantEntry.OneChange]).
+	Target string `json:"target,omitempty" untrusted:"name"`
 
 	// Item is the work item the request was asked on, Ask the person it was
 	// asked of, AskedAt when.
@@ -97,6 +102,8 @@ func (r GrantRequest) Validate() error {
 	case r.Hours < MinGrantHours || r.Hours > MaxGrantHours:
 		return fmt.Errorf("seataccess: request %s lasts %d hours, outside %d to %d", r.ID, r.Hours,
 			MinGrantHours, MaxGrantHours)
+	case r.Target != "" && !config.SeatGrantTarget(r.Target):
+		return fmt.Errorf("seataccess: request %s names a target that is not one resource's name", r.ID)
 	}
 	return nil
 }
@@ -104,7 +111,7 @@ func (r GrantRequest) Validate() error {
 // Grant is the grant a person's choice of option makes from the request at
 // now: for its hours, or for good.
 func (r GrantRequest) Grant(permanent bool, now time.Time) Grant {
-	g := Grant{Permission: r.Permission, Scope: normalSet(r.Scope), Reason: r.Reason, Request: r.ID}
+	g := Grant{Permission: r.Permission, Scope: normalSet(r.Scope), Reason: r.Reason, Request: r.ID, Target: r.Target}
 	if !permanent {
 		g.ExpiresAt = now.UTC().Add(time.Duration(r.Hours) * time.Hour)
 	}

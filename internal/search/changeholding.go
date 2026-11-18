@@ -16,14 +16,17 @@ type ChangeQuery struct {
 	Limit                int      // the most ids answered
 }
 
-// ChangeHeld is the index's answer, read in one snapshot of this node's own file.
+// ChangeHeld is the index's answer, read in one snapshot of this node's own file. Its zero BackPos and
+// BackFloor are an index built whole.
 type ChangeHeld struct {
-	IDs        []string // newest first in the order the index took them in, at most Limit
+	IDs        []string // newest minted first, by each document's key, at most Limit
 	Truncated  bool     // the read stopped at the scan of what it drove on, or more than Limit matched
-	Through    int64    // the packed position the walk has indexed every change through
+	Through    int64    // the forward walk's watermark: a change moved past BackPos and no further is indexed
+	BackPos    int64    // where the first build began: a change at or below it is indexed where its id is at or above BackFloor
+	BackFloor  string   // the least change id the first build has reached back to; "" once it reached the oldest
 	Seen       int64    // the code log's settled position in the newest estate snapshot an index write read
 	BuiltFrom  string   // the estate instance it was built from
-	Rebuilding bool     // a rebuild asked for or under way
+	Rebuilding bool     // a rebuild asked for, or the first build not begun: the index answers nothing
 }
 
 // changeScopes are the scope keys a document keeps, each with its index, in the order a tie between
@@ -41,7 +44,7 @@ var changeScopeIndex = map[string]string{
 const (
 	changeTermCountStatement = `SELECT COUNT(*) FROM (SELECT 1 FROM change_postings
 		INDEXED BY change_postings_term_idx WHERE term = ? LIMIT ?)`
-	// changeTermFloorStatement is the number of the n-th newest document holding a word.
+	// changeTermFloorStatement is the key of the n-th newest document holding a word.
 	changeTermFloorStatement = `SELECT slot >> 16 FROM change_postings INDEXED BY change_postings_term_idx
 		WHERE term = ? ORDER BY slot DESC LIMIT 1 OFFSET ?`
 )
@@ -52,17 +55,17 @@ func changeScopeCountStatement(key string) string {
 		` WHERE ` + key + ` = ? LIMIT ?)`
 }
 
-// changeScopeFloorStatement is the number of the n-th newest document of one value of a scope key.
+// changeScopeFloorStatement is the key of the n-th newest document of one value of a scope key.
 func changeScopeFloorStatement(key string) string {
-	return `SELECT seq FROM change_docs INDEXED BY ` + changeScopeIndex[key] + ` WHERE ` + key +
-		` = ? ORDER BY seq DESC LIMIT 1 OFFSET ?`
+	return `SELECT doc FROM change_docs INDEXED BY ` + changeScopeIndex[key] + ` WHERE ` + key +
+		` = ? ORDER BY doc DESC LIMIT 1 OFFSET ?`
 }
 
 // changeHoldsTerm is a test that document d holds one more word: one seek of the term key over d's
 // slot range.
 func changeHoldsTerm(alias string) string {
 	return ` AND EXISTS (SELECT 1 FROM change_postings AS ` + alias + ` INDEXED BY change_postings_term_idx WHERE ` +
-		alias + `.term = ? AND ` + alias + `.slot >= (d.seq << 16) AND ` + alias + `.slot < ((d.seq + 1) << 16))`
+		alias + `.term = ? AND ` + alias + `.slot >= (d.doc << 16) AND ` + alias + `.slot < ((d.doc + 1) << 16))`
 }
 
 // changeScopeResiduals is the scope tests a statement makes on a document d beside what it drives on.
@@ -80,7 +83,7 @@ func changeScopeResiduals(repo, state, owner bool) string {
 }
 
 // changeHeldByTermStatement is the documents holding a search's words, driven on one word's postings
-// newest first: each reaches its document by number, which answers the id and the named scopes, and
+// newest first: each reaches its document by its key, which answers the id and the named scopes, and
 // others more words are each one seek of the term key.
 func changeHeldByTermStatement(others int, repo, state, owner, floored bool) string {
 	var b strings.Builder
@@ -89,7 +92,7 @@ func changeHeldByTermStatement(others int, repo, state, owner, floored bool) str
 	if floored {
 		b.WriteString(` AND p.slot >= ?`)
 	}
-	b.WriteString(` AND d.seq = (p.slot >> 16)` + changeScopeResiduals(repo, state, owner))
+	b.WriteString(` AND d.doc = (p.slot >> 16)` + changeScopeResiduals(repo, state, owner))
 	for i := range others {
 		b.WriteString(changeHoldsTerm("o" + strconv.Itoa(i+1)))
 	}
@@ -105,14 +108,14 @@ func changeHeldByScopeStatement(key string, words int, repo, state, owner, floor
 	b.WriteString(`SELECT d.id FROM change_docs AS d INDEXED BY ` + changeScopeIndex[key] +
 		` WHERE d.` + key + ` = ?`)
 	if floored {
-		b.WriteString(` AND d.seq >= ?`)
+		b.WriteString(` AND d.doc >= ?`)
 	}
 	b.WriteString(changeScopeResiduals(repo && key != "repo_id", state && key != "state",
 		owner && key != "owner"))
 	for i := range words {
 		b.WriteString(changeHoldsTerm("t" + strconv.Itoa(i+1)))
 	}
-	b.WriteString(` ORDER BY d.seq DESC LIMIT ?`)
+	b.WriteString(` ORDER BY d.doc DESC LIMIT ?`)
 	return b.String()
 }
 
@@ -124,9 +127,9 @@ type changeDriver struct {
 	count int
 }
 
-// Holding answers the newest changes this index holds every word of q for, in q's scope, with how far
-// the walk reached and what its writes were decided from, which the reader compares with its own
-// snapshot (ADR-0156). It reads the narrowest of the scope and the words first and cuts within it.
+// Holding answers the newest minted changes this index holds every word of q for, in q's scope, with
+// how far each walk reached and what its writes were decided from, which the reader compares with its
+// own snapshot (ADR-0156). It reads the narrowest of the scope and the words first and cuts within it.
 func (x *ChangeIndexer) Holding(ctx context.Context, q ChangeQuery) (ChangeHeld, error) {
 	if len(q.Terms) == 0 || q.Limit <= 0 {
 		return ChangeHeld{}, errors.New("search: a search of changes names its words and a limit")
@@ -139,7 +142,8 @@ func (x *ChangeIndexer) Holding(ctx context.Context, q ChangeQuery) (ChangeHeld,
 			return err
 		}
 		held.Through, held.Seen, held.BuiltFrom = state.through, state.seen, state.builtFrom
-		held.Rebuilding = x.rebuild.Load() || state.rebuilding
+		held.BackPos, held.BackFloor = state.backPos, state.backFloor
+		held.Rebuilding = x.rebuild.Load() || !state.began()
 		if held.Rebuilding {
 			return nil
 		}
@@ -188,18 +192,18 @@ func (x *ChangeIndexer) holding(ctx context.Context, tx *sql.Tx, q ChangeQuery) 
 		if driver.key != "" {
 			statement = changeScopeFloorStatement(driver.key)
 		}
-		var seq int64
-		if err := tx.QueryRowContext(ctx, statement, driver.value, x.scan-1).Scan(&seq); err != nil {
+		var doc int64
+		if err := tx.QueryRowContext(ctx, statement, driver.value, x.scan-1).Scan(&doc); err != nil {
 			return nil, false, err
 		}
-		floor, truncated = &seq, true
+		floor, truncated = &doc, true
 	}
 
 	var (
 		statement string
 		args      = []any{driver.value}
 	)
-	// A word's postings are bounded by the floor document's first slot, a scope's documents by its number.
+	// A word's postings are bounded by the floor document's first slot, a scope's documents by its key.
 	switch {
 	case floor != nil && driver.key == "":
 		args = append(args, *floor<<changeSlotBits)

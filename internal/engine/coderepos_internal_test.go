@@ -22,9 +22,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// codeReposDoc is a company hosting code over a chart with a unit to own
-// repositories, declaring repos — code.repos' entries, or none where repos is
-// empty — and the chart's extra units.
+// codeReposDoc is a company hosting code, with an Engineering unit to own
+// repositories, declaring repos as code.repos (none when empty) and units as
+// the chart's extra units.
 func codeReposDoc(repos, units string) string {
 	doc := nativeCleanupCompany + `units:
   - name: Engineering
@@ -79,9 +79,8 @@ func mustRepo(t *testing.T, e *Engine, name string) *gitlet.RepoDetail {
 	return repo
 }
 
-// reconciled waits for e's reconciles of code.repos to finish: an apply asks
-// for one and returns ([Engine.applyCodeRepos]), so what it decides lands
-// after.
+// reconciled waits for e's reconciles of code.repos to finish: an apply only
+// asks for one ([Engine.applyCodeRepos]), so what it decides lands after.
 func reconciled(t *testing.T, e *Engine) {
 	t.Helper()
 	waitUntil(t, 30*time.Second, "the reconcile of code.repos to finish", e.codeRepos.idle)
@@ -104,9 +103,9 @@ func codeLogEnd(t *testing.T, e *Engine) uint64 {
 	return end
 }
 
-// codeLogWrites is every record on e's code log after the sequence after, by
-// subject — less the read index's barriers and the trim's records, which
-// readers and the trim append whatever a reconcile does.
+// codeLogWrites is every record's subject on e's code log after the sequence
+// after, less barriers and trim records, which readers and the trim append
+// whatever a reconcile does.
 func codeLogWrites(t *testing.T, e *Engine, after uint64) []gitlet.Subject {
 	t.Helper()
 	running := e.core.Load().log.Domain(gitlet.Domain{}.Name())
@@ -131,14 +130,12 @@ func codeLogWrites(t *testing.T, e *Engine, after uint64) []gitlet.Subject {
 // THE REPOSITORIES code.repos DECLARES ARE RECONCILED AT EVERY ACTIVATION, AND
 // ONE THAT CHANGES NOTHING WRITES ONE RECORD.
 //
-// The boot creates what the document declares — the owner resolved to its
-// unit's key, the default branch defaulted, and the rules spelled as their
-// namespaced patterns in the one canonical order (declared out of order here:
-// the domain refuses any other, so a reconcile that did not sort them would
-// create nothing). An activation that changes a description settles it. And an
-// activation that changes nothing writes exactly its activation fence — never
-// a settings record a repository: the fence is what keeps an older activation
-// from walking a newer one back, so an unchanged repository needs no re-stamp.
+// The boot creates what the document declares: the owner as its unit's key,
+// the default branch defaulted, the rules as namespaced patterns in canonical
+// order (declared out of order here; the domain refuses any other, so an
+// unsorted reconcile creates nothing). A changed description settles. An
+// unchanged activation writes only its fence, which already keeps an older
+// activation from walking a newer one back, so no repository is re-stamped.
 func TestDeclaredRepositoriesAreReconciledAtActivation(t *testing.T) {
 	t.Parallel()
 	e := newSandboxNode(t, parseCompany(t, codeReposDoc(webRepo(""), "")))
@@ -149,8 +146,8 @@ func TestDeclaredRepositoriesAreReconciledAtActivation(t *testing.T) {
 		t.Errorf("web is %s, managed by %s; want active, managed by the configuration",
 			web.Status, web.ManagedBy)
 	}
-	// THE KEY the document mints for a unit that states none, from its name:
-	// what every durable row names a unit by.
+	// A unit stating no key is named, in every durable row, by the one
+	// minted from its name.
 	if want := (gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: config.MintUnitID("Engineering")}); web.Owner != want {
 		t.Errorf("web's owner is %+v, want the unit's key %+v", web.Owner, want)
 	}
@@ -216,14 +213,12 @@ func TestARemovedRepositoryIsDeletedAndRestorable(t *testing.T) {
 // A PUSH TO A REMOVED REPOSITORY IS TOLD WHEN ITS PURGE MAY BEGIN UNDER THE
 // EPOCH'S OWN RETENTION.
 //
-// The committer names the instant from its CommitterOptions.Retention, and
-// what the node hands it there is the seam this case holds: the epoch's
-// code.deleted_retention_days ([Engine.codeDeletedRetention]), the reading
-// the code-retention duty purges by. A company that keeps a deleted
-// repository thirty days and is told the default week's instant would be told
-// to restore it by a date three weeks before its purge may begin — so the
-// retention here is anything but the default, and the push goes through the
-// node's own router to the committer the runtime built.
+// The seam held: the committer's CommitterOptions.Retention is the epoch's
+// code.deleted_retention_days ([Engine.codeDeletedRetention]), which the
+// code-retention duty purges by, so the retention here is anything but the
+// default (told the default week's instant, a company keeping thirty days
+// would restore weeks before its purge may begin), and the push goes
+// through the node's router to the runtime's committer.
 //
 // Mutation: wire the committer's Retention to gitlet.DefaultDeletedRetention and
 // the push is told the week's instant, and fails.
@@ -274,11 +269,9 @@ func TestAPushToARemovedRepositoryIsToldTheEpochsRetention(t *testing.T) {
 }
 
 // ONLY A REPOSITORY THE CONFIGURATION MANAGES IS DELETED FOR BEING UNDECLARED,
-// and only a live one. A repository some other manager made — the value a newer
-// build writes for one a person or a lead created — is no declaration's to
-// retire, and this build is that build's older peer in a rolling upgrade: it
-// must never throw such a repository away for being absent from code.repos.
-// One already deleted is not deleted again.
+// and only a live one. A repository another manager made (as a newer build may
+// write) is no declaration's to retire: this build is its older peer in a
+// rolling upgrade. One already deleted is not deleted again.
 func TestOnlyAConfigManagedRepositoryIsDeletedForBeingUndeclared(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -304,11 +297,10 @@ func TestOnlyAConfigManagedRepositoryIsDeletedForBeingUndeclared(t *testing.T) {
 
 // A PURGE THAT FREES A NAME THE CURRENT EPOCH DECLARES AGAIN CREATES IT AT ONCE.
 //
-// A person who removes a repository and declares it again once its retention
-// has passed meets a purge: the reconcile can only wait it out
-// (code_repo_awaits_purge), and nothing schedules another activation. So the
-// retention pass hands every purged name to the engine, which creates it again
-// where the current epoch declares it — and leaves it free where it does not.
+// A re-declaration that meets a purge can only wait it out
+// (code_repo_awaits_purge), and nothing schedules another activation, so the
+// retention pass hands every purged name to the engine, which creates it where
+// the current epoch declares it and leaves it free where it does not.
 func TestAPurgedRepositoryIsDeclaredAgainByTheDuty(t *testing.T) {
 	t.Parallel()
 	e := newSandboxNode(t, parseCompany(t, codeReposDoc(webRepo(""), "")))
@@ -320,9 +312,8 @@ func TestAPurgedRepositoryIsDeclaredAgainByTheDuty(t *testing.T) {
 		t.Fatalf("the premise: an activation that no longer declares web leaves it %s", got.Status)
 	}
 
-	// THE DUTY'S PASS, built as the node builds it but with a retention no
-	// company can express — the subject here is what a purge hands on, not
-	// the clock.
+	// THE DUTY'S PASS as the node builds it, with a nanosecond retention: the
+	// subject is what a purge hands on, not the clock.
 	d := e.newCodeRetentionDuty(e.writeSide().code, e.native.Load().codeReader, e.core.Load().nodeID)
 	d.pass.Retention = func() time.Duration { return time.Nanosecond }
 	report, err := d.pass.Pass(t.Context())
@@ -334,10 +325,9 @@ func TestAPurgedRepositoryIsDeclaredAgainByTheDuty(t *testing.T) {
 		t.Fatalf("a purged name the epoch does not declare reads %v, want it free", err)
 	}
 
-	// A RE-DECLARATION THAT RACED THE PURGE: the epoch declaring web again is
-	// current, and its reconcile met the purge and could only wait it out —
-	// a purge of a few rows is one record, so the race cannot be staged
-	// through the store cheaply. The purge's hand-on is what creates it.
+	// A RE-DECLARATION THAT RACED THE PURGE, installed directly: a purge of a
+	// few rows is one record, so the race cannot be staged through the store.
+	// The purge's hand-on is what creates it.
 	again, err := NewCompany(parseCompany(t, codeReposDoc(webRepo(""), "")))
 	if err != nil {
 		t.Fatalf("build the epoch: %v", err)
@@ -355,11 +345,10 @@ func TestAPurgedRepositoryIsDeclaredAgainByTheDuty(t *testing.T) {
 }
 
 // THE CODE-RETENTION DUTY RUNS WHERE A PURGE MAY BE WRITTEN, AND ONLY THERE: on
-// a data node whose runtime hosts code and that publishes — never on a company
-// that hosts none, nor on a node in a maintenance mode, whose lifecycle store
-// is withheld. And a turn that holds the duty, on a node serving the revision
-// the fleet is on, runs the pass: the claim, the renewal that keeps it while
-// the pass runs, and the purge.
+// a publishing data node hosting code — never a company hosting none, nor a
+// node in a maintenance mode, whose lifecycle store is withheld. A turn
+// holding the duty on a node at the fleet's revision runs the claim, its
+// renewal and the purge.
 func TestTheCodeRetentionDutyRunsWhereAPurgeMayBeWritten(t *testing.T) {
 	t.Parallel()
 	t.Run("hosting code", func(t *testing.T) {
@@ -369,9 +358,7 @@ func TestTheCodeRetentionDutyRunsWhereAPurgeMayBeWritten(t *testing.T) {
 			t.Fatal("a data node hosting code armed no code-retention duty: a removed " +
 				"repository would be deleted and never purged")
 		}
-		// The duty below is the test's: the armed loop, whose first turn
-		// met a node with no reconciler and asks again a reconcile interval
-		// later, is not left to race it.
+		// The armed loop is stopped so it cannot race the test's own duty.
 		e.stopCodeRetention()
 		servesCodeReads(t, e)
 		reconciled(t, e)
@@ -401,20 +388,17 @@ func TestTheCodeRetentionDutyRunsWhereAPurgeMayBeWritten(t *testing.T) {
 
 // THE RUNTIME'S APPLIES DO NOT WAIT FOR THE INBOUND EDGE.
 //
-// The chart's projects, the knowledge containers and the repositories are
-// written through the runtime's own writers, and they were once applied only
-// after the inbound edge's return — so on a node whose edge was not running,
-// every activation's projects and repositories went unapplied with nothing
-// saying so. The edge is only the parsers' ([Engine.reconcileNative]); the
-// three are clauses of [Engine.followCompany], run here in its order on a node
-// whose edge is withheld.
+// The chart's projects, the knowledge containers and the repositories go
+// through the runtime's own writers, so a node whose edge is not running still
+// applies them. The edge is only the parsers' ([Engine.reconcileNative]); the
+// three are clauses of [Engine.followCompany], run here in its order with the
+// edge withheld.
 func TestTheReconcileDoesNotDependOnTheInboundEdge(t *testing.T) {
 	t.Parallel()
 	e := newSandboxNode(t, parseCompany(t, codeReposDoc(webRepo(""), "")))
 	servesCodeReads(t, e)
 	reconciled(t, e)
-	// A NODE WITH NO INBOUND EDGE, for the length of one reconcile: the
-	// service is put back for the engine's own stop.
+	// No inbound edge for one reconcile; restored for the engine's stop.
 	e.notify.mu.Lock()
 	svc := e.notify.service
 	e.notify.service = nil
@@ -450,10 +434,9 @@ func TestTheReconcileDoesNotDependOnTheInboundEdge(t *testing.T) {
 }
 
 // EVERY direct_push A DOCUMENT CAN DECLARE IS ONE THE DOMAIN RECORDS, AND THE
-// OTHER WAY ROUND. The configuration and the code domain each keep the closed
-// set — config cannot import the domain that imports it — so a value added to
-// one and not the other would pass `crewlet validate` and be refused by every
-// node's reconcile, or be recorded and never declarable.
+// OTHER WAY ROUND. config cannot import the domain that imports it, so each
+// keeps the closed set; a value in one only would pass `crewlet validate` and
+// fail every reconcile, or be recorded and never declarable.
 func TestEveryDeclaredDirectPushIsOneTheDomainRecords(t *testing.T) {
 	t.Parallel()
 	for _, v := range config.CodeDirectPushes {
@@ -472,12 +455,10 @@ func TestEveryDeclaredDirectPushIsOneTheDomainRecords(t *testing.T) {
 }
 
 // EVERY VISIBILITY A DOCUMENT MAY DECLARE IS ONE THE CODE DOMAIN RECORDS, and
-// the other way round: config cannot import the domain that imports it, so the
-// two closed sets are spelled twice and held to each other here. One the
-// domain refused would fail every reconcile of the repository; one it records
-// that no document may declare would be a repository nobody can narrow or
-// widen back by configuration. Unset resolves to one the domain records — the
-// domain itself takes no unset value.
+// the other way round (the closed sets are spelled twice, as for direct_push).
+// One the domain refused fails every reconcile; one no document may declare
+// could never be narrowed or widened back by configuration. Unset resolves to
+// one the domain records, since the domain takes no unset value.
 func TestEveryDeclaredVisibilityIsOneTheDomainRecords(t *testing.T) {
 	t.Parallel()
 	for _, v := range config.CodeVisibilities {
@@ -500,12 +481,10 @@ func TestEveryDeclaredVisibilityIsOneTheDomainRecords(t *testing.T) {
 }
 
 // EVERY SEARCH MODE A DOCUMENT MAY DECLARE IS ONE THE CODE DOMAIN RECORDS, and
-// the other way round, in order: config cannot import the domain that imports
-// it, so the two closed sets are spelled twice and held to each other here. One
-// the domain refused would fail every reconcile of the repository; one it
-// records that no document may declare is a mode a declared repository could
-// never be put in. Unset resolves to one the domain records — the domain itself
-// takes no unset value.
+// the other way round, in order (the closed sets are spelled twice, as for
+// direct_push). One the domain refused fails every reconcile; one no document
+// may declare is a mode no declared repository could be put in. Unset resolves
+// to one the domain records, since the domain takes no unset value.
 func TestEveryDeclaredSearchModeIsOneTheDomainRecords(t *testing.T) {
 	t.Parallel()
 	sameClosedSet(t, "search", config.CodeSearchModes, gitlet.SearchModes())
@@ -519,13 +498,11 @@ func TestEveryDeclaredSearchModeIsOneTheDomainRecords(t *testing.T) {
 	}
 }
 
-// A DECLARED REPOSITORY IS INDEXED BY DEFAULT: a code.repos entry that says
-// nothing of search is recorded `indexed` — a project the company named is the
-// code a search across its repositories reads — and one saying `grep` is
-// recorded so, each from config's one default through the reconcile into the
-// row. A revision that changes a declared mode settles it in one settings
-// record beside its fence, one that changes nothing writes its fence alone,
-// and dropping the field puts the repository back at the default.
+// A DECLARED REPOSITORY IS INDEXED BY DEFAULT: an entry saying nothing of
+// search is recorded `indexed` (a named project is code a search reads), one
+// saying `grep` so. A changed mode settles in one settings record beside the
+// fence, an unchanged revision writes the fence alone, and dropping the field
+// restores the default.
 //
 // Mutations: resolve an unset search to grep (config.CodeSearchMode.Resolved)
 // — web reads grep, red; compare settings without their mode
@@ -580,9 +557,8 @@ func TestADeclaredRepositoryIsIndexedByDefault(t *testing.T) {
 	}
 }
 
-// sameClosedSet holds one of code.repos' closed sets — a merge gate's, or the
-// search modes — as config declares it to the code domain's: the same values,
-// in the same order.
+// sameClosedSet holds one of code.repos' closed sets as config declares it to
+// the code domain's: the same values, in the same order.
 func sameClosedSet[C, D ~string](t *testing.T, field string, declared []C, recorded []D) {
 	t.Helper()
 	d := make([]string, len(declared))
@@ -599,13 +575,10 @@ func sameClosedSet[C, D ~string](t *testing.T, field string, declared []C, recor
 }
 
 // EVERY VALUE A MERGE GATE MAY DECLARE IS ONE THE CODE DOMAIN RECORDS, AND THE
-// OTHER WAY ROUND — merge_by, and with it approvals, delete_source and the
-// change classes, the path classes an unless list takes
-// among them. config cannot import the domain that imports it, so each set is
-// spelled twice and held to the other here, in order: a value only config had
-// would pass `crewlet validate` and be refused by every node's reconcile, and
-// one only the domain had could be recorded and never declared. And each unset
-// value resolves to one the domain records, since the domain takes none.
+// OTHER WAY ROUND, in order — merge_by, approvals, delete_source, the change
+// classes and the path classes an unless list takes (spelled twice, as for
+// direct_push). Each unset value resolves to one the domain records, since the
+// domain takes none.
 func TestEveryDeclaredMergeByIsOneTheDomainRecords(t *testing.T) {
 	t.Parallel()
 	sameClosedSet(t, "merge_by", config.CodeMergeBys, gitlet.MergeBys())
@@ -624,14 +597,12 @@ func TestEveryDeclaredMergeByIsOneTheDomainRecords(t *testing.T) {
 	}
 }
 
-// A DECLARED GATE WEIGHS WHAT THE DOMAIN RECORDS: config refuses a gate past
-// CodeMaxGateBytes by the length of its own resolved gate's JSON
-// (config.CodeGate.EncodedBytes), and the code domain refuses one past
-// MaxGateBytes by the length of the record's — so the two lengths must be one,
-// or `crewlet validate` passes a gate every node's reconcile refuses, or
-// refuses one the domain would record. Held over a gate of one field, and over
-// one of every field with its lists out of order and its globs spelled long,
-// whose canonical order changes no length; and both sides judge the same bound.
+// A DECLARED GATE WEIGHS WHAT THE DOMAIN RECORDS: config bounds a gate at
+// CodeMaxGateBytes by its resolved JSON (config.CodeGate.EncodedBytes), the
+// domain at MaxGateBytes by the record's, so lengths and bounds must agree or
+// `crewlet validate` and the reconcile disagree. Held over a one-field gate and
+// an every-field one with lists out of order (sorting changes no length) and
+// globs spelled long.
 func TestADeclaredGateWeighsWhatTheDomainRecords(t *testing.T) {
 	t.Parallel()
 	c, err := NewCompany(parseCompany(t, codeReposDoc(webRepo(""), "")))
@@ -678,15 +649,11 @@ func TestADeclaredGateWeighsWhatTheDomainRecords(t *testing.T) {
 	}
 }
 
-// DECLARED PATH OWNERS WEIGH WHAT THE DOMAIN RECORDS: config refuses path
-// owners past CodeMaxPathOwnersBytes by the length of their recorded form's
-// JSON (config.CodeRepo.PathOwnersBytes), and the code domain refuses them past
-// MaxPathOwnersBytes by the length of the record's — so the two lengths must be
-// one, or `crewlet validate` passes path owners every node's reconcile refuses,
-// or refuses ones the domain would record. Held over a unit named by its name,
-// whose shorter key the record carries instead, a seat, and globs spelled long
-// and out of their canonical order, which changes no length; and both sides
-// judge the same bound.
+// DECLARED PATH OWNERS WEIGH WHAT THE DOMAIN RECORDS: config bounds them at
+// CodeMaxPathOwnersBytes by their recorded form's JSON
+// (config.CodeRepo.PathOwnersBytes), the domain at MaxPathOwnersBytes by the
+// record's, so lengths and bounds must agree. Held over a unit named by its
+// name (the record carries its shorter key), a seat, and long, unsorted globs.
 //
 // Mutation: weigh a unit by the name the document gave it (config's
 // recordedOwner) — the two lengths part, red.
@@ -725,9 +692,9 @@ func TestDeclaredPathOwnersWeighWhatTheDomainRecords(t *testing.T) {
 	}
 }
 
-// A DECLARATION IS RECORDED IN ONE CANONICAL FORM, whichever order its rules
-// were written in — every node deciding it forms one record — and an owner the
-// chart does not resolve is named rather than recorded empty.
+// A DECLARATION IS RECORDED IN ONE CANONICAL FORM, whatever its rules' order,
+// so every node forms one record; an owner the chart does not resolve is named
+// rather than recorded empty.
 func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 	t.Parallel()
 	c, err := NewCompany(parseCompany(t, codeReposDoc(webRepo("")+apiRepo, "")))
@@ -753,9 +720,8 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 	if err != nil || api.Settings.Owner != (gitlet.Owner{Kind: gitlet.OwnerSeat, Ref: "swe"}) {
 		t.Errorf("api's owner is %+v (%v), want the seat swe", api.Settings.Owner, err)
 	}
-	// AN UNSET VISIBILITY IS RECORDED AS company, and a declared one as
-	// itself: the domain takes no unset value, so the default is applied
-	// here, by config's own Resolved.
+	// AN UNSET VISIBILITY IS RECORDED AS company (config's Resolved; the
+	// domain takes no unset value), a declared one as itself.
 	if web.Settings.Visibility != gitlet.VisibilityCompany {
 		t.Errorf("web, declaring no visibility, is recorded at %q, want company", web.Settings.Visibility)
 	}
@@ -771,9 +737,8 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 		t.Errorf("an owner the chart does not resolve was declared (%v), want it named", err)
 	}
 
-	// PATH OWNERS, in their one form whatever order the document wrote them
-	// in: by kind, then reference, each one's globs sorted — and a unit named
-	// by its name recorded by the key the chart resolves for it.
+	// PATH OWNERS, by kind then reference with globs sorted, a unit recorded
+	// by the key the chart resolves for its name.
 	pathed := c.Config.Code.Repos[0]
 	pathed.PathOwners = []config.CodePathOwner{
 		{Paths: []string{"web/**", "docs/**"}, Unit: "Engineering"},
@@ -797,10 +762,8 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 		t.Errorf("a path owner the chart does not resolve was declared (%v), want it named at its field", err)
 	}
 
-	// A MERGE GATE, every field the document left unset resolved — writers,
-	// none, a queue at 4 and 4, seats — and its lists in their one order
-	// whatever order the document wrote them in; a rule with no gate field
-	// records none.
+	// A MERGE GATE with every unset field resolved and its lists in canonical
+	// order; a rule with no gate field records none.
 	gated := c.Config.Code.Repos[0]
 	gated.Protect = []config.CodeProtection{{Branch: "release/*"}, {Branch: "main", Checks: []string{"unit", "lint"},
 		HumanPaths: []config.CodeHumanPath{{Glob: "deploy/**", Unless: []config.CodeChangeClass{
@@ -826,13 +789,10 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 	}
 }
 
-// PATH OWNERS RECONCILE FROM THE DOCUMENT: code.repos' path_owners reach the
-// repository it declares in their one form — each unit by the key the chart
-// resolves for it, whichever spelling the document used, the owners by kind
-// then reference and each one's globs sorted — an activation that changes one
-// glob settles it in one settings record, one that changes nothing writes its
-// activation fence alone, and one that drops them leaves the repository with
-// none.
+// PATH OWNERS RECONCILE FROM THE DOCUMENT in their canonical form, each unit
+// by its resolved key whatever its spelling. A changed glob settles in one
+// settings record beside the fence, an unchanged activation writes the fence
+// alone, and dropping them leaves none.
 //
 // Mutations: compare settings without their path owners
 // (gitlet.RepoSettings.equal) — the changed glob never reaches the log, red;
@@ -895,13 +855,10 @@ func TestPathOwnersReconcileFromTheDocument(t *testing.T) {
 	}
 }
 
-// AN UNCHANGED GATE WRITES NOTHING, AND A CHANGED ONE LANDS. code.repos' merge
-// gate reaches the repository it declares resolved and in its one form; an
-// activation whose gate is the same — its lists written in another order — is
-// its fence alone, though every read of the gate from the rows is a new
-// pointer the declaration's is compared with by value; one that changes one
-// field of it settles that in one settings record; and one that drops the gate
-// leaves the rule with none.
+// AN UNCHANGED GATE WRITES NOTHING, AND A CHANGED ONE LANDS. A gate the same
+// but for its lists' order is the fence alone (the gate read from the rows is a
+// new pointer, so it is compared by value); one changed field settles in one
+// settings record; a dropped gate leaves the rule with none.
 //
 // Mutations: compare two rules without their gates (gitlet.Protection.Equal) —
 // the changed field never reaches the log, red; compare the rules with
@@ -975,12 +932,11 @@ func TestAnUnchangedGateWritesNothing(t *testing.T) {
 	}
 }
 
-// losingPublisher is a node's code-log write authority whose answer to a
-// name's claim is LOST where lose says so once the record is in: the record
-// is appended on a context that cannot end, and the publish answers
+// losingPublisher is a code-log write authority that, where lose says so,
+// appends a name's claim on a context that cannot end and then answers
 // OutcomeUnknown with no error — what statelog answers for an append whose
-// context ended mid-flight, since the probe that would classify it runs on
-// that same dead context.
+// context ended mid-flight, since its classifying probe runs on that dead
+// context.
 type losingPublisher struct {
 	gitlet.Publisher
 	lose func(ctx context.Context) bool
@@ -997,19 +953,11 @@ func (p losingPublisher) Publish(ctx context.Context, req statelog.Request) (sta
 	return statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: req.OpID}, nil
 }
 
-// A RECONCILE A NEWER ACTIVATION ENDS SAYS SO ONCE AND SAYS NOTHING ELSE, on
-// this node's own lifecycle store, whose decisions in flight are mid-append
-// when it ends.
-//
-// A newer activation's request ends a reconcile still running, and the
-// decisions it then has in flight each have an append under way: statelog
-// answers each such append unknown with no error, and every one of them used
-// to come back as its own repository's unknown outcome — a
-// code_repo_not_applied ERROR apiece, and, where none was left to begin, no
-// code_repos_superseded line at all. Here a reconcile of eight new
-// repositories, every one in flight at once, is ended with a newer
-// activation's cause once all eight records have landed and before any answer
-// is in.
+// A RECONCILE A NEWER ACTIVATION ENDS SAYS SO ONCE AND SAYS NOTHING ELSE: one
+// code_repos_superseded line and no code_repo_not_applied, though statelog
+// answers each append in flight unknown with no error. Here eight new
+// repositories, all in flight, are ended with ErrSuperseded once all eight
+// records have landed and before any answer is in.
 //
 // Mutation: keep the answer of a decision that failed once its run had
 // ended, and have an unknown outcome on an ended context not say so, and each

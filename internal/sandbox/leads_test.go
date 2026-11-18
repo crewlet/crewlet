@@ -22,13 +22,11 @@ import (
 
 // WHAT A RUN KEEPS OF WHAT CARRIED ITS SESSIONS ON (leads.go, leadseal.go):
 // each lead sealed once by the job whose brief first told it, taken into the
-// run's leads part beside its row once, numbered as taken and kept as sealed
-// through every relaunch, marked by the record of each job whose brief told
-// it, and held to the part's share.
+// run's leads part once, numbered as taken, kept as sealed through every
+// relaunch, marked by each job whose brief told it, and held to the part's share.
 
-// rigLeads is the seal a rig's coordinator seals the leads its launches' briefs
-// open with under ([CoordinatorOptions.Leads]): the rigs' one fleet keyring, as
-// a fleet shares one.
+// rigLeads is the seal a rig's coordinator seals its briefs' leads under
+// ([CoordinatorOptions.Leads]): the rigs' one keyring, as a fleet shares one.
 var rigLeads = sync.OnceValue(func() *LeadSeal {
 	seal, err := NewLeadSeal(rigAnswerRing)
 	if err != nil {
@@ -54,12 +52,10 @@ func sealedFor(t *testing.T, seal *LeadSeal, lead Lead, job string, seq int64) K
 	return kept
 }
 
-// A LEAD'S SEAL OPENS ONLY ON THE TURN AND PLACE IT WAS SEALED FOR. A lead is an
-// instruction a later brief hands a run as a person's words, so the row may not
-// move it: carried onto another turn's record, or onto another job's place in
-// this one's history, or named as another kind or round of the work, it does not
-// open, and nor does one another fleet sealed. What the record names it by is
-// compared, and everything a reader is handed comes out of the seal.
+// A LEAD'S SEAL OPENS ONLY ON THE TURN AND PLACE IT WAS SEALED FOR. A lead is a
+// person's instruction, so the row may not move it: onto another turn, another
+// job's place, another kind or round, it does not open, nor does one another
+// fleet sealed. Everything a reader is handed comes out of the seal.
 //
 // Mutation: leave the turn, the job, its place, the kind or the round
 // uncompared, and a case goes red.
@@ -112,14 +108,11 @@ func TestALeadSealOpensOnlyOnTheTurnAndPlaceItWasSealedFor(t *testing.T) {
 	}
 }
 
-// A LEAD UNDER A KEY THIS NODE LACKS IS KEPT FOR A NODE THAT HOLDS IT. A fleet
-// rotating its keyring has nodes that hold a newer key beside ones that do not:
-// a lead a newer node sealed is, on an older one, a message that cannot be read
-// here (a fact about the node, never the row), so it is told as such, and the
-// run keeps it as it was, byte for byte, through every relaunch and every take
-// of a later job's own leads beside it, whose attach marks it told again, never
-// re-sealed or dropped: a later relaunch on a node that holds the key opens it
-// and tells it.
+// A LEAD UNDER A KEY THIS NODE LACKS IS KEPT FOR A NODE THAT HOLDS IT. Mid key
+// rotation, a lead a newer node sealed is unreadable on an older one (a fact
+// about the node, never the row), and told as such: the run keeps it byte for
+// byte through every relaunch and every later take, marked told again, never
+// resealed or dropped, so a relaunch on a node holding the key opens it.
 //
 // Mutation: drop the part's leads at a take, or let a reset name the run anew,
 // and the newer node has nothing to open.
@@ -148,8 +141,8 @@ func TestALeadUnderAKeyThisNodeLacksIsKeptForANodeThatHoldsIt(t *testing.T) {
 	}
 	kept := sealedFor(t, newerSeal, answerLead("use main"), first.LaunchID, first.LaunchSeq)
 	attach(first, []KeptLead{kept}, nil)
-	// TWO RELAUNCHES, each taking its own lead in beside it, under the key this
-	// node does hold, and telling the newer node's again.
+	// TWO RELAUNCHES, each taking its own lead under a key this node holds and
+	// telling the newer node's again.
 	for range 2 {
 		next, err := store.BeginLaunch(ctx, PendingRun{TurnID: "t1", AgentHandle: "swe", Continues: true}, Fence{})
 		if err != nil {
@@ -181,27 +174,22 @@ func TestALeadUnderAKeyThisNodeLacksIsKeptForANodeThatHoldsIt(t *testing.T) {
 	}
 }
 
-// A LAUNCH MARKS THE LEADS THE BRIEF IT HANDED TOLD. Which brief a launch hands
-// its run is the launch's to decide, once it has its box, so its request
-// carries what each brief opened with (its own leads, and the earlier ones it
-// told again), and the attach keeps the picked brief's: its own leads, sealed
-// for the job and taken into the run's leads part, and on the job's record the
-// numbers of those and of the earlier ones it told again. The copy in the
-// asking job's box, a session of its own where that box was reclaimed, the
-// turn's kept capture in a box that replaced its own, and a send-back's
-// continuation of it each record theirs; a copy whose resume could not read
-// the run's leads marks the earlier one by the number its brief handed on; and
-// a turn's first launch, whose fresh brief opens with nothing a session lacks,
-// takes and marks none.
+// A LAUNCH MARKS THE LEADS THE BRIEF IT HANDED TOLD. The launch picks its brief
+// once it has its box, so its request carries each brief's leads and the attach
+// keeps the picked one's: its own leads taken into the run's leads part, and
+// on the job's record their numbers and the earlier ones' it told again. The
+// asking job's box, a fresh session where it was reclaimed, the turn's kept
+// capture and a send-back's continuation each record theirs; a resume that
+// could not read the leads marks the earlier one by number; a first launch's
+// fresh brief takes and marks none.
 //
-// Mutation: hand every launch the fresh brief's leads, take no lead of the
-// brief's own, mark none the brief told again, or drop the numbers it handed
-// on, and a case goes red.
+// Mutation: hand every launch the fresh brief's leads, take none of the brief's
+// own, mark none it told again, or drop the numbers, and a case goes red.
 func TestALaunchMarksTheLeadsTheBriefItHandedTold(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	// seed takes into t1's leads part an earlier lead, as an earlier job's
-	// attach took it in: what the relaunch finds beside its row.
+	// seed takes an earlier job's lead into t1's leads part, for the relaunch
+	// to find.
 	seed := func(t *testing.T, store *CoordStore) KeptLead {
 		t.Helper()
 		row, _, err := store.Get(ctx, "t1")
@@ -215,9 +203,8 @@ func TestALaunchMarksTheLeadsTheBriefItHandedTold(t *testing.T) {
 		}
 		return earlier
 	}
-	// check reads t1's leads beside its row and the job's marks of them: the
-	// earlier lead marked told again or not, and the job's own, the one whose
-	// words are want, marked.
+	// check reads t1's leads and the job's marks: the earlier lead marked when
+	// toldAgain, and the job's own, whose words are want, marked.
 	check := func(t *testing.T, store *CoordStore, earlier KeptLead, toldAgain bool, want string) {
 		t.Helper()
 		got, _, err := store.Get(ctx, "t1")
@@ -254,7 +241,7 @@ func TestALaunchMarksTheLeadsTheBriefItHandedTold(t *testing.T) {
 		"the asking job's own copy, in its box":   {toldAgain: true, want: "carried on in place"},
 		"a session of its own, the box reclaimed": {reap: true, want: "carried on afresh"},
 		// ITS RESUME COULD NOT READ THE RUN'S LEADS: the brief hands the
-		// earlier lead on by its number, the part's first, not by name.
+		// earlier lead on by its number (the part's first), not by name.
 		"the asking job's own copy, the leads unread": {unread: true, toldAgain: true,
 			want: "carried on in place"},
 	} {
@@ -314,14 +301,11 @@ func TestALaunchMarksTheLeadsTheBriefItHandedTold(t *testing.T) {
 	})
 }
 
-// A TAKE KEEPS EACH LEAD ONCE, NUMBERED AS IT WAS TAKEN. The attach that names a
-// job's command takes the leads its brief opened with of its own into the run's
-// leads part, each by its identity: a new one is numbered one past every lead
-// the part has taken, so a number names one lead for the run's whole life,
-// whatever the bound drops; one the part keeps already is left as it is, so an
-// attach written again takes nothing twice. And the job is marked with the
-// numbers of every lead its brief told that the part keeps then, its own and
-// the earlier ones it told again, never one the bound has just dropped.
+// A TAKE KEEPS EACH LEAD ONCE, NUMBERED AS IT WAS TAKEN, by its identity: a new
+// one is numbered one past every lead the part has taken, so a number names one
+// lead for the run's life whatever the bound drops; one already kept is left, so a
+// rewritten attach takes nothing twice. The job is marked with every lead its
+// brief told that the part still keeps, never one the bound just dropped.
 //
 // Mutation: take a lead whatever the part keeps, number one by the part's
 // length, mark the leads before the bound drops any, or leave the brief's own
@@ -353,8 +337,8 @@ func TestATakeKeepsEachLeadOnceNumberedAsItWasTaken(t *testing.T) {
 		t.Errorf("the same lead taken again keeps %v numbered %v (%d taken, grew %v) and marks %v; want nothing "+
 			"taken, its number kept and marked", jobs, numbers, again.Appends, grew, marks)
 	}
-	// PAST THE BOUND: a third of the share each, as the part holds them, so a
-	// third drops the oldest, and the next is numbered past every one taken.
+	// PAST THE BOUND: a third of the share each, so a third drops the oldest,
+	// and the next is numbered past every one taken.
 	big := func(job string, n int) KeptLead {
 		lead := small(job, n)
 		lead.Sealed = bytes.Repeat([]byte("s"), MaxKeptLeadBytes/3)
@@ -377,14 +361,11 @@ func TestATakeKeepsEachLeadOnceNumberedAsItWasTaken(t *testing.T) {
 }
 
 // A LEAD A BRIEF COULD NOT READ IS MARKED BY ITS NUMBER. A resume whose read of
-// the run's leads failed knows the leads its job's brief told by their numbers
-// alone, off the job's record: the brief it builds says them as not kept and
-// hands them on by number, beside the ones it told again by name. The take
-// marks each one the part keeps, as a lead told again is marked, so the job the
-// relaunch opens names it for a continuation of its session to tell once a
-// read answers; a number the part does not keep, dropped by the bound or never
-// taken, is not marked; and numbers alone take nothing in, so the part is not
-// written for them.
+// the run's leads failed knows its job's told leads by number alone, and hands
+// them on so. The take marks each one the part keeps, as a lead told again is,
+// for a later continuation to tell once a read answers; a number the part does
+// not keep (dropped or never taken) is not marked; numbers alone take nothing
+// in, so the part is not written for them.
 //
 // Mutation: ignore the numbers, mark them whether the part keeps them or not,
 // or count them as taken, and a check goes red.
@@ -393,7 +374,7 @@ func TestALeadABriefCouldNotReadIsMarkedByItsNumber(t *testing.T) {
 	small := func(job string, n int) KeptLead {
 		return KeptLead{Kind: LeadKindAnswer, Job: job, Seq: 1, Round: 1, Appended: n, Sealed: []byte("sealed")}
 	}
-	// THE PART AS A TAKE PAST ITS BOUND LEFT IT: the first lead dropped.
+	// THE PART PAST ITS BOUND: the first lead dropped.
 	part := leadsPart{Run: "run-1", Leads: []KeptLead{small("job-2", 2), small("job-3", 3)}, Appends: 3}
 	next, marks, grew := part.took([]KeptLead{small("job-4", 0)}, nil, []int{1, 3, 9})
 	if !slices.Equal(marks, []int{3, 4}) || !grew || next.Appends != 4 || len(next.Leads) != 3 {
@@ -408,13 +389,10 @@ func TestALeadABriefCouldNotReadIsMarkedByItsNumber(t *testing.T) {
 	}
 }
 
-// THE LEADS THE RUN KEEPS ARE HELD TO THEIR SHARE, WITH THE CUT SAID. A long
-// turn carried on by many answers keeps every one of them only while they fit
-// the part's share for them ([MaxKeptLeadBytes]) and its count of them
-// ([MaxKeptLeads]): past either the OLDEST go first, since the newest are the
-// ones a session cut off most likely lacks, and each one dropped is still
-// counted, the part's count of every lead it took running on, so a brief that
-// tells the rest again says how many it no longer can.
+// THE LEADS THE RUN KEEPS ARE HELD TO THEIR SHARE, WITH THE CUT SAID. Past the
+// part's bytes ([MaxKeptLeadBytes]) or count ([MaxKeptLeads]) the OLDEST go
+// first, since a session cut off most likely lacks the newest; each dropped one
+// stays counted, so a brief telling the rest again says how many it cannot.
 //
 // Mutation: drop the newest rather than the oldest, lower the count on a drop,
 // or keep leads past their count, and a check goes red.
@@ -438,7 +416,7 @@ func TestTheLeadsTheRunKeepsAreHeldToTheirShareWithTheCutSaid(t *testing.T) {
 	if raw, _ := json.Marshal(got.Leads); len(raw) > MaxKeptLeadBytes {
 		t.Errorf("the part's leads weigh %d, past their share %d", len(raw), MaxKeptLeadBytes)
 	}
-	// PAST ITS COUNT, as a build that seals smaller leads would fill it.
+	// PAST ITS COUNT, as a build sealing smaller leads would fill it.
 	many := leadsPart{Run: "run-1", Appends: MaxKeptLeads}
 	for i := range MaxKeptLeads {
 		many.Leads = append(many.Leads, KeptLead{Kind: LeadKindAnswer, Job: fmt.Sprintf("job-%d", i), Seq: 1,
@@ -454,13 +432,11 @@ func TestTheLeadsTheRunKeepsAreHeldToTheirShareWithTheCutSaid(t *testing.T) {
 	}
 }
 
-// A RECORD WHOSE BOX STARTED ITS OWN SESSION TELLS NO LEAD AGAIN. A session of
-// the run's own holds the brief it opened with wherever it can be continued, so
-// the leads that brief told are in it: a job whose launch handed a fresh brief,
-// or whose box started a session of its own in a continued one's place, its
-// restore having failed, names none to tell again. A job that continued its
-// session, or whose box never said or said it in a word this build does not
-// know, names the ones its brief told: told again rather than never.
+// A RECORD WHOSE BOX STARTED ITS OWN SESSION TELLS NO LEAD AGAIN: that session
+// already holds its brief's leads, whether the brief was fresh or its restore
+// failed. A job that continued its session, or whose box never said or said so
+// in a word this build does not know, names its brief's: told again rather
+// than never.
 //
 // Mutation: read the told leads off the record whatever its box started, and a
 // case goes red.
@@ -484,11 +460,10 @@ func TestARecordWhoseBoxStartedItsOwnSessionTellsNoLead(t *testing.T) {
 	}
 }
 
-// A HELD RESULT KEPT FOR A LEAD OPENS WITH ITS CALL'S SEAL. What a held call
-// returned is sealed on its run's row under the fleet keyring's AEAD, bound to
-// the run, the job, the call and the server's name for it; the lead that told it
-// keeps it as sealed, with those fields ([HeldKept]), and a later node opens it
-// under the very binding it was sealed with, for that call alone.
+// A HELD RESULT KEPT FOR A LEAD OPENS WITH ITS CALL'S SEAL. A held call's result
+// is sealed under the fleet AEAD, bound to the run, the job, the call and the
+// server's name for it; the lead keeps it sealed with those fields
+// ([HeldKept]), so a later node opens it under that binding, for that call alone.
 //
 // Mutation: open a kept result under fields other than the ones it keeps, and
 // it does not open.
@@ -523,13 +498,11 @@ func TestAHeldResultKeptForALeadOpensWithItsCallsSeal(t *testing.T) {
 	}
 }
 
-// AN OLDER BUILD'S WRITE CARRIES A JOB'S LEAD MARKS. A fleet mid-upgrade
-// rewrites the job's record on a build that does not know the marks (a status,
-// a lease, a bridged call, the park the answer waits on), and the relaunch may
-// run on this build: so the marks ride the job's record under their own key,
-// which a build that does not declare it keeps verbatim and writes back
-// (wirekeys.go); and the run the leads are kept for and how many the part has
-// taken ride the top of the row the same way.
+// AN OLDER BUILD'S WRITE CARRIES A JOB'S LEAD MARKS. Mid-upgrade, a build that
+// does not know the marks rewrites the job's record (a status, a lease, the
+// park) before this build relaunches: the marks ride under their own key, which
+// such a build keeps verbatim and writes back (wirekeys.go), as do the row's
+// leads run and count.
 //
 // Mutation: leave the marks off the wire, or drop the carried keys from the
 // record's encode, and a check goes red.
@@ -564,7 +537,7 @@ func TestAnOlderBuildsWriteCarriesAJobsLeadMarks(t *testing.T) {
 		t.Errorf("after the older build's write the job's record reads marks %v and model %q, want [2 5] and "+
 			"m2: %s", back.LeadMarks, back.Model, written)
 	}
-	// AND THE ROW'S OWN: the run its leads are kept for and their count.
+	// AND THE ROW'S OWN: the leads run and their count.
 	row, err := encodeRun(PendingRun{TurnID: "t1", Status: StatusLaunching, LeadsRun: "job-1", LeadsAppended: 7})
 	if err != nil {
 		t.Fatal(err)
@@ -596,11 +569,10 @@ func TestAnOlderBuildsWriteCarriesAJobsLeadMarks(t *testing.T) {
 	}
 }
 
-// A LATER BUILD'S KEYS IN THE LEADS PART SURVIVE A TAKE. Every take of a job's
-// leads rewrites the run's leads part whole, on whichever build runs the
-// attach: so a key a later build added at the part's top, or to a lead it
-// keeps, is carried by this build's decode and written back by its encode, and
-// a kept lead's sealed bytes go back as they came (wirekeys.go).
+// A LATER BUILD'S KEYS IN THE LEADS PART SURVIVE A TAKE. A take rewrites the
+// part whole on whichever build attaches, so a later build's key at its top or
+// in a lead is carried through decode and encode, and sealed bytes go back as
+// they came (wirekeys.go).
 //
 // Mutation: drop the carried keys from the part's encode, or from a lead's, and
 // a check goes red.
@@ -633,15 +605,11 @@ func TestALaterBuildsKeysInTheLeadsPartSurviveATake(t *testing.T) {
 	}
 }
 
-// THE COUNT OF KEPT LEADS NEVER DROPS A LEAD THEIR BYTES WOULD KEEP. A run's
-// leads part keeps at most [MaxKeptLeads] leads beside their bytes, so the
-// numbers a job's record marks them by are bounded by construction; the count
-// is set so that it never drops a lead of this build's that the bytes would
-// keep: the least any lead this build seals weighs as the part holds it (a
-// review, which carries no source, of a one-byte turn under a one-byte key, its
-// job a launch id, at the first place and the first number), times the count,
-// is at least the bytes' bound, and that least is at least the 256 bytes the
-// count is reckoned at (leads.go).
+// THE COUNT OF KEPT LEADS NEVER DROPS A LEAD THEIR BYTES WOULD KEEP. The
+// [MaxKeptLeads] count bounds a record's marks by construction; the least lead
+// this build seals as the part holds it (a sourceless review, one-byte turn and
+// key, a launch id, first place and number) times the count reaches the bytes'
+// bound, and weighs at least the 256 bytes the count is reckoned at (leads.go).
 //
 // Mutation: halve the count, or set it to a round thousand, and the count
 // drops leads the bytes would keep.
@@ -671,8 +639,7 @@ func TestTheCountOfKeptLeadsNeverDropsALeadTheirBytesWouldKeep(t *testing.T) {
 }
 
 // EVERY LEAD KIND AND OUTCOME IS VALID, and a word this build does not know is
-// not: a record a newer build wrote names a kind or an outcome as the value it
-// is, which a reader tells as one it cannot read, never as one of its own.
+// not: a newer build's kind or outcome is told as unreadable, never as ours.
 //
 // Mutation: leave a known kind or outcome off its list, and a check goes red.
 func TestEveryLeadKindAndOutcomeIsValid(t *testing.T) {
@@ -693,14 +660,11 @@ func TestEveryLeadKindAndOutcomeIsValid(t *testing.T) {
 	}
 }
 
-// ONLY A LEAD OF A NAMED JOB, IN ITS KIND'S SHAPE, IS SEALED OR OPENED. A lead is
-// sealed for the job whose brief told it, so one naming no job, or no place
-// among the turn's launches, is refused at the seal, as one whose source does
-// not suit its kind is: an answer carries its answer alone, a task its own
-// facts alone, a review nothing, its words being its round's. And the open
-// holds what opened to the same shape: a body some writer signed past the
-// seal, a review carrying an answer's words, opens as no lead, and nothing of
-// it is told.
+// ONLY A LEAD OF A NAMED JOB, IN ITS KIND'S SHAPE, IS SEALED OR OPENED. The seal
+// refuses a lead naming no job or place, or whose source does not suit its kind
+// (shapeRefusal); the open holds a body signed past the seal to the same shape,
+// so a review carrying an answer's words opens as no lead and none of it is
+// told.
 //
 // Mutation: seal a lead that names no job or place, or one whose source does
 // not suit its kind, or open one whose source does not, and a case goes red.
@@ -730,13 +694,10 @@ func TestOnlyALeadOfANamedJobInItsKindsShapeIsSealedOrOpened(t *testing.T) {
 	}
 }
 
-// A LEAD OF A KIND THIS BUILD DOES NOT KNOW IS UNREAD HERE, NOT UNOPENED. A newer
-// build may keep a lead of a kind this one cannot render: a fact about THIS
-// BUILD, the disposition a key this node lacks gets, so it is told as a message
-// that cannot be read here and kept for a build that reads it, logged at
-// warning; never refused as a seal that does not open, the record's fact,
-// logged at error (internal/engine's resumeLeads tells the two apart by the
-// error).
+// A LEAD OF A KIND THIS BUILD DOES NOT KNOW IS UNREAD HERE, NOT UNOPENED: a fact
+// about THIS BUILD, told as unreadable, kept and logged at warning, never
+// refused as the record's fact at error (internal/engine's resumeLeads tells the
+// two apart by the error).
 //
 // Mutation: open a lead whatever its kind, and the newer build's lead is
 // refused as the record's fault.
@@ -753,12 +714,10 @@ func TestALeadOfAKindThisBuildDoesNotKnowIsUnreadHereNotUnopened(t *testing.T) {
 	}
 }
 
-// A LEAD THE PART CANNOT WRITE IS DROPPED AND COUNTED. A lead carrying a key
-// the part's encoder cannot write would refuse every write of the part it rode,
-// so the take that holds the part's leads to their share drops it wherever it
-// stands; it stays counted among every lead the part took, so a brief that
-// tells the rest again says one more is missing, never that they are every
-// one; it is never marked; and the part writes.
+// A LEAD THE PART CANNOT WRITE IS DROPPED AND COUNTED. A key the encoder cannot
+// write would refuse every write of the part, so the take drops the lead
+// wherever it stands; it stays counted, so a brief says one more is missing,
+// is never marked, and the part writes.
 //
 // Mutation: keep such a lead, and the part no longer writes.
 func TestALeadThePartCannotWriteIsDroppedAndCounted(t *testing.T) {

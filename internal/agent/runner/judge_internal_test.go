@@ -32,11 +32,11 @@ func (j *askedJudge) Decide(context.Context, extension.Request) (extension.Decis
 	return extension.Decision{Extend: true, Reason: "still going", Asked: true, InputTokens: 30}, nil
 }
 
-// A JUDGE IS NOT CALLED ON A REFUSAL ALREADY CERTAIN. A phase ends out of
-// rounds and the window is full by then — a worker it delegated to, or a peer
-// on the seat's own counter, spent the last of it — so the judgement would be
-// billed and then refused, and its only possible verdict is the rescue. The
-// guard asks the meter before the judge, and the answer names why.
+// A JUDGE IS NOT CALLED ON A REFUSAL ALREADY CERTAIN. When a phase runs out of
+// rounds with the window already full (a delegated worker or a peer on the
+// seat's counter spent it), the judgement would be billed then refused, and the
+// only verdict is the rescue. So the meter is asked first, and the answer says
+// why.
 //
 // Mutation: drop the Refusal check in [Runner.consider] and the judge is asked.
 func TestTheJudgeIsNotCalledOnARefusalAlreadyCertain(t *testing.T) {

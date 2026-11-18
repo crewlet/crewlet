@@ -20,14 +20,12 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A LATE CALL REACHES ITS ROUND'S LOG THROUGH ITS SESSION'S LEDGER. A session's
-// ledger is bound to its job and to the round that job works in, as the row
-// names them, and names both on every append. So a call its session's tool
-// answers only after a relaunch carried the round on — the log opened to the
-// next job meanwhile — is listed in the round's log, marked late, rather than
-// dropped as a call of a job that is over; the next job's resume hands the
-// runner the call with its mark; and the next job's record is not charged what
-// the old session's calls cost.
+// A LATE CALL REACHES ITS ROUND'S LOG THROUGH ITS SESSION'S LEDGER, which is
+// bound to its job and the round that job works in and names both on every
+// append. So a call answered only after a relaunch carried the round on (the
+// log opened to the next job meanwhile) is listed in the round's log, marked
+// late, rather than dropped; the next job's resume hands the runner the call
+// with its mark; and the next job's record is not charged for it.
 //
 // Mutation: append under the job alone, or bind the ledger to the job without
 // its round, and the call is dropped; carry no mark to the runner, and the
@@ -81,12 +79,11 @@ func TestALateCallReachesItsRoundsLogThroughItsSessionsLedger(t *testing.T) {
 }
 
 // A RESUME HANDS THE RUNNER HOW MANY LATE CALLS ITS LOG DROPPED. Past
-// [sandbox.MaxBridgeCalls] the round's log drops calls from its middle, and a
-// dropped call keeps its identity alone, so not the mark that tells every
-// continuation of the round a late call; the log counts each late one it drops
-// instead (sandbox.BridgeLog.LateElided). A resume read off that log hands the
-// runner the count (runner.Resume.LateElided), which a relaunch continuing a
-// kept session is told past whatever its save point.
+// [sandbox.MaxBridgeCalls] the log drops calls from its middle, keeping only
+// their identity and not the late mark, so it counts each late one it drops
+// (sandbox.BridgeLog.LateElided) and a resume hands the runner the count
+// (runner.Resume.LateElided), told to a relaunch continuing a kept session
+// whatever its save point.
 //
 // Mutation: hand the runner none of the count, and a dropped late call is told
 // to no continuation whose save point is past its number.
@@ -129,11 +126,10 @@ func TestAResumeHandsTheRunnerHowManyLateCallsItsLogDropped(t *testing.T) {
 }
 
 // A LAUNCHED SESSION'S CALL THAT OUTLIVES ITS JOB IS LISTED IN ITS ROUND. The
-// launch binds the session it opens to its job and the round that job works in,
-// as the store opened them, before the job's box exists — so a call still
-// running when a relaunch carries the round on (a delegated worker, here) is
-// listed in the round's log once it returns, marked late, and the job the row
-// now holds is charged none of it.
+// launch binds its session to the job and its round, as the store opened them,
+// before the job's box exists, so a call still running when a relaunch carries
+// the round on (a delegated worker, here) is listed in the round's log, marked
+// late, and the job the row now holds is charged none of it.
 //
 // Mutation: bind the session to its job without its round, and the call is
 // dropped.
@@ -173,12 +169,10 @@ func TestALaunchedSessionsCallOutlivingItsJobIsListedInItsRound(t *testing.T) {
 	}
 }
 
-// A REOPENED SESSION'S CALL IS LISTED IN ITS ROUND. A node that takes a run's
-// seat over serves the run's box again under the job its row names and the
-// round that job works in, both off the one row ([sandbox.PendingRun.NamedJob])
-// — so a call the box makes once a relaunch has carried the round on is listed
-// in the round's log, marked late, rather than dropped as one of a job that is
-// over.
+// A REOPENED SESSION'S CALL IS LISTED IN ITS ROUND. A node taking a run's seat
+// over serves the box again under the job and round off the one row
+// ([sandbox.PendingRun.NamedJob]), so a call the box makes after a relaunch
+// carried the round on is listed in the round's log, marked late, not dropped.
 //
 // Mutation: open the reopened session under its job alone, and the call is
 // dropped.
@@ -237,12 +231,11 @@ func (s *replacedStore) AppendBridgeCall(context.Context, string, sandbox.Bridge
 	return true, sandbox.ErrJobReplaced
 }
 
-// A LATE CALL'S UPDATE IS ASKED ONCE AND ANSWERS NO ERROR. The store answers an
-// update of a job replaced in its round recorded beside its word that the job
-// was replaced: the call is in the round's log, and what it cost can reach no
-// record, by design. Asking again would write nothing more, so it is asked
-// once; and nothing failed, so the ledger answers no error — neither one its
-// bridge says nor one it asks for again.
+// A LATE CALL'S UPDATE IS ASKED ONCE AND ANSWERS NO ERROR. The store records
+// an update of a job replaced in its round and says the job was replaced: the
+// call is in the round's log and its cost reaches no record, by design. Asking
+// again writes nothing more, and nothing failed, so the ledger neither asks
+// again nor answers an error.
 //
 // Mutation: read the store's word that the job was replaced as a write that
 // failed, and the call is asked again and answers an error.

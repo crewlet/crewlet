@@ -9,24 +9,19 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// productionSeatTTL is the seat lease TTL a fleet's coordination store is
-// opened at unless coordination.lease_ttl_seconds says otherwise
-// (seat.SeatLeaseTTL, restated rather than imported: what matters here is the
-// number the store is held to, not the package that chose it).
+// productionSeatTTL is the seat lease TTL a fleet's coordination store opens
+// at unless coordination.lease_ttl_seconds says otherwise: seat.SeatLeaseTTL,
+// restated because the number the store is held to is what matters here.
 const productionSeatTTL = 45 * time.Second
 
 // THE WALKS RUN ON THE FLEET'S OWN COORDINATION STORE, at the seat lease TTL a
-// fleet really opens it with.
-//
-// Every other case takes its claims from the in-memory twin, which keeps any
-// deadline it is asked for. The embedded KV store a fleet runs held every
-// lease outside the duties to its seat lease bucket's age, so at the shipped
-// 45 seconds the walks' 60-second claim was refused: every cross-project move
-// and every merge on every `embedded-kv` fleet failed before its first append
-// with an error naming a TTL. Nothing single-node could see it.
-//
-// The store is the engine's own construction — the coordination KV over the
-// broker's own JetStream client — so a claim lands where a fleet's does.
+// fleet really opens it with. Every other case uses the in-memory twin, which
+// keeps any deadline; the embedded KV store bounds a lease by its bucket's
+// age, and once held the walks' 60-second claim to the 45-second seat bucket,
+// failing every cross-project move and merge on an `embedded-kv` fleet, which
+// nothing single-node sees. The store is the engine's own construction (the
+// coordination KV over the broker's JetStream client), so a claim lands where
+// a fleet's does.
 func TestCrossProjectMoveAndMergeRunOnEmbeddedKVCoordination(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid")

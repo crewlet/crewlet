@@ -11,12 +11,11 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// THE ARTIFACTS' WRITE FAILURES FALL BACK TO THE DOMAINS' ONE TABLE, as the
-// tracker's and the knowledge base's do: a refusal a domain decided that no
-// arm of publishFailure or dataFailure names is that domain's class, never the
-// node's fault — a write the log refused because the artifact's purge had
-// begun, an undo of a write that cannot be undone — and the unmarked
-// remainder is still this node's.
+// THE ARTIFACTS' WRITE FAILURES FALL BACK TO THE DOMAINS' ONE TABLE: a
+// refusal a domain decided that no arm of publishFailure or dataFailure names
+// (a write refused because the purge had begun, an undo of a write that
+// cannot be undone) is that domain's class, never the node's fault; the
+// unmarked rest is still this node's.
 //
 // Mutation: drop the WriterClass arm from publishFailure or dataFailure and
 // its domain rows go red, as internal_error.

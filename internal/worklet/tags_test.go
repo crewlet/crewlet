@@ -131,9 +131,8 @@ func TestTagArchiveIsOneWayForNewWork(t *testing.T) {
 	}
 }
 
-// TestUndeclaredTagIsRefused is the rule that did not exist: any string a
-// model invented became a tag row, which is how `Bug`, `bugfix` and `BUG` came
-// to sit beside `bug` in the TYPE catalogue before its own check existed.
+// TestUndeclaredTagIsRefused: a string a model invents never becomes a tag
+// row, or `Bug`, `bugfix` and `BUG` sit beside `bug`.
 func TestUndeclaredTagIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -250,8 +249,8 @@ func TestDeclaredTagIsFiled(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesAnUndeclaredTag covers the other write path, which had the
-// same hole: a patch's tags replace the set whole.
+// TestUpdateRefusesAnUndeclaredTag covers the other write path: a patch's
+// tags replace the set whole.
 func TestUpdateRefusesAnUndeclaredTag(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -298,10 +297,9 @@ func TestEnsureTagsDeclaresOnlyWhatIsMissing(t *testing.T) {
 	}
 }
 
-// TestDeclaredIsWhatTheWriteActuallyCreATED — the list a caller is told it
-// created comes from inside the snapshot that decided it. A list computed from
-// a read before the write names tags somebody else declared a moment earlier,
-// which is the ordinary case here rather than a race nobody hits.
+// TestDeclaredIsWhatTheWriteActuallyCreated: the list a caller is told it
+// created comes from inside the snapshot that decided it. One read before the
+// write names tags somebody else declared a moment earlier, an ordinary case.
 func TestDeclaredIsWhatTheWriteActuallyCreated(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -321,12 +319,10 @@ func TestDeclaredIsWhatTheWriteActuallyCreated(t *testing.T) {
 }
 
 // TestTagLabelCollisionIsRefused is D43's rule: two tags a person cannot tell
-// apart split the work between them at random. It covers BOTH spellings,
-// because a label may collide with another tag's label or with its slug, and
-// BOTH gestures, because a rename can give a tag another's label as surely as
-// an add can — and every one is a COLLISION ([worklet.ErrTaken]) naming the tag
-// that holds the label, never a malformed label ([worklet.ErrInvalid]). The
-// rename's was a bare content refusal naming nothing a caller could unwrap.
+// apart split the work between them at random. It covers BOTH spellings (a
+// label may collide with another tag's label or its slug) and BOTH gestures
+// (add and rename), each a COLLISION ([worklet.ErrTaken]) naming the tag that
+// holds the label, never a malformed label ([worklet.ErrInvalid]).
 //
 // Mutation: refuse the rename's clash with invalid() again, or unwrap
 // TagClash to ErrInvalid, and a case goes red.
@@ -586,16 +582,12 @@ func (r *roundTrip) tagSlugs(project string) []string {
 // A TYPED TAG REFUSAL IS A REFUSAL LIKE ANY OTHER.
 //
 // [worklet.TagClash] and [worklet.TagsFull] are types so a caller several
-// steps away — a cross-project move declaring its subtree's tags — can name
-// the tags involved. They must still be what every refusal here is: marked
-// under errors.Is — a clash [worklet.ErrTaken], the collision it is, which
-// another label avoids, and a full set [worklet.ErrState], the project's
-// state, which the same add meets until a tag is archived; neither is
-// [worklet.ErrInvalid], since nothing about the label is malformed — and
-// worded by [worklet.Sentence] without the
-// package prefix, or a surface that does not look for the type classes a
-// person's refusal as the engine's own failure and shows them "worklet:" in
-// front of it.
+// steps away (a cross-project move declaring its subtree's tags) can name the
+// tags. They must still be marked under errors.Is: a clash [worklet.ErrTaken]
+// (another label avoids it), a full set [worklet.ErrState] (met until a tag is
+// archived), neither [worklet.ErrInvalid] since the label is not malformed. And [worklet.Sentence] words them without the package
+// prefix, or a surface that does not look for the type shows a person
+// "worklet:" as if the engine had failed.
 func TestATypedTagRefusalIsClassedAndWordedAsARefusal(t *testing.T) {
 	t.Parallel()
 	marks := []error{worklet.ErrInvalid, worklet.ErrState, worklet.ErrTaken}

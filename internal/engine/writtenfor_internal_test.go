@@ -33,11 +33,10 @@ import (
 )
 
 // WHAT A SEAT WRITES CARRIES WHOM IT WROTE FOR (ADR-0109), end to end over the
-// engine's own surfaces: cto, an agent, writes in a turn somebody woke; the
-// record its store keeps carries them; the change feed relays it; the
-// notification service wakes swe, another agent, with cto as the writer and
-// them beside it; and the turn swe is handed works for them, decided at the
-// gate a seat's registry decides every builtin by.
+// engine's own surfaces: cto writes in a turn somebody woke; its store's record
+// carries them; the change feed relays it; the notification service wakes swe
+// with cto as writer and them beside it; and swe's turn works for them, decided
+// at the gate a seat's registry decides every builtin by.
 
 // writtenChart is the company these cases run in: three agents (cto writes,
 // swe is woken, qa is woken in turn by swe) and ada, a person.
@@ -53,17 +52,15 @@ func writtenChart(t *testing.T) *org.Organization {
 	return o
 }
 
-// writeFamily is how one engine surface carries an agent's write to the seat
-// it wakes: the family's own write tool, decided at the gate for whoever the
-// writing turn works for, whose writer answers whom the write was made for;
-// the record its store keeps of that write, relayed as its change feed relays
-// it; the app the write uses; and a probe of an app it does not, which the
-// woken turn is held to.
+// writeFamily is one engine surface carrying an agent's write to the seat it
+// wakes: the family's write tool, gated for whoever the writing turn works for;
+// its store's record of the write, relayed as its change feed relays it; the app
+// the write uses; and a probe of an app it does not, which the woken turn is held to.
 type writeFamily struct {
 	name string
 	app  iam.Grant
-	// write is the seat's write in turn naming woken, through the family's
-	// own tool, answering whom its writer was handed it was made for.
+	// write is turn's write naming woken through the family's own tool,
+	// returning whom its writer was handed it was made for.
 	write func(t *testing.T, o *org.Organization, people personSeats, turn *turnctx.Turn,
 		woken string) *types.WorkingFor
 	wake func(t *testing.T, author, woken string, carrier *types.WorkingFor) *events.Event
@@ -89,9 +86,8 @@ func writeFamilies() []writeFamily {
 	}
 }
 
-// seatTool is one builtin of a seat's registry over deps, decided at the gate
-// a seat's registry decides every builtin by, for whoever the turn works for,
-// composed from people.
+// seatTool is one builtin of a seat's registry over deps, decided at the
+// registry's own gate for whoever the turn works for, composed from people.
 func seatTool(t *testing.T, o *org.Organization, people personSeats, deps builtin.Deps,
 	name string) tools.SeatCallable {
 
@@ -241,16 +237,16 @@ func postInRoom(t *testing.T, o *org.Organization, people personSeats, turn *tur
 		builtin.PostMessageTool), turn, map[string]any{"channel": launchRoom, "asks": false, "body": "on it"})
 }
 
-// launchChange is the change a seat's comment in these cases is said on,
-// launch!1, and its repository.
+// launchRepoID and launchChangeID are launch!1's repository and change, which
+// a seat's comment in these cases is said on.
 const (
 	launchRepoID   = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d31"
 	launchChangeID = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d32"
 )
 
 // changeComments is Gitlet holding launch!1 as the comment tool reads it,
-// recording every write of its conversation it is asked: the code writes no
-// case here makes are codeWriteHost's.
+// recording every conversation write; codeWriteHost serves the code writes no
+// case here makes.
 type changeComments struct {
 	*codeWriteHost
 
@@ -395,10 +391,9 @@ func roomMessageWake(t *testing.T, author, woken string, carrier *types.WorkingF
 }
 
 // changeCommentWake is author's comment on launch!1 naming woken, written for
-// carrier: the record the change writer makes of [commentOnChange]'s call,
-// whose routing names author and, where it wakes a seat, whom author wrote
-// for, as gitlet's routingFor stamps them — relayed as the code feed relays
-// it.
+// carrier: the change writer's record of [commentOnChange]'s call, its routing
+// naming author and carrier as gitlet's routingFor stamps them, relayed as the
+// code feed relays it.
 func changeCommentWake(t *testing.T, author, woken string, carrier *types.WorkingFor) *events.Event {
 	t.Helper()
 	comment := gitlet.Comment{RepoID: launchRepoID, ChangeID: launchChangeID,
@@ -431,9 +426,8 @@ func changeCommentWake(t *testing.T, author, woken string, carrier *types.Workin
 	return rawDelivery(t, gitlet.Source, delivery.Body)
 }
 
-// wokenTurn is the turn handle is handed for the one wake delivery puts on its
-// inbox: the delivery through the notification service with every first-party
-// parser, and the turn's identity as the runner is handed it.
+// wokenTurn is the turn identity the runner hands handle for delivery's wake,
+// put through the notification service with every first-party parser.
 func wokenTurn(t *testing.T, o *org.Organization, reg *notify.Registry, handle string,
 	delivery *events.Event) *turnctx.Turn {
 
@@ -469,18 +463,14 @@ func heldToTheCeiling(r tools.Result) bool {
 }
 
 // THE TURN A WRITE WAKES IS HELD TO WHOEVER THE WRITE WAS MADE FOR (ADR-0109),
-// on every family's write alike, through the family's own write tool. Ada uses
-// the family's app alone; she wakes cto, and cto assigns swe an item, names swe
-// on a page, or asks swe in a room, as she may; swe's turn, worked for ada, is
-// refused the app she does not use, as she would be. A credential's carried
-// apps hold swe as tightly: a write that carried the family's app alone leaves
-// swe refused the other, and one that carried both admits it. A write a turn
-// nobody woke made carries nobody, and the turn it wakes works for cto, which
-// uses every app.
+// through every family's own write tool. Ada uses the family's app alone; she
+// wakes cto, cto writes to swe, and swe's turn, worked for ada, is refused the
+// app she does not use. A credential's carried apps hold swe as tightly: the
+// family's app alone refuses the other, both admit it. A write from a turn nobody
+// woke carries nobody, and wakes a turn working for cto, which uses every app.
 //
-// Mutation: drop the carrier from one family's actor (that family's tool hands
-// its writer an actor written for nobody), and that family's turn is admitted
-// for ada.
+// Mutation: drop the carrier from one family's actor, and that family's turn is
+// admitted for ada.
 func TestATurnAWriteWakesIsHeldToWhoeverTheWriteWasMadeFor(t *testing.T) {
 	t.Parallel()
 	o := writtenChart(t)
@@ -535,10 +525,9 @@ func TestATurnAWriteWakesIsHeldToWhoeverTheWriteWasMadeFor(t *testing.T) {
 }
 
 // A REQUESTER RIDES EVERY HOP OF WHAT SEATS WRITE (ADR-0109): ada wakes cto,
-// cto writes for her and wakes swe, swe writes in the turn that wakes and wakes
-// qa, each write through its family's own tool, so qa's turn works for ada. A
-// chain of writes never widens: ada uses every app the writes need, and qa is
-// still held to her.
+// cto writes for her and wakes swe, swe writes and wakes qa, each through its
+// family's own tool, so qa's turn works for ada. The chain never widens: ada uses
+// every app the writes need, and qa is still held to her.
 //
 // Mutation: compose a write as a turn nobody woke, and qa's turn works for swe,
 // every app.
@@ -566,11 +555,10 @@ func TestARequesterRidesEveryHopOfWhatSeatsWrite(t *testing.T) {
 }
 
 // ONE SEAT'S WRITES FOR TWO REQUESTERS WAKE ITS COLLEAGUE TWICE (ADR-0109): cto
-// writes for ada and for omar, and swe's inbox, partitioned as the broker
-// partitions it (notify.KeyOf), is two turns, each worked for its own; cto's
-// two writes for ada are one. Through the real parser and notification
-// service, so the carrier is on the event the broker keys, not only on the
-// record.
+// writes for ada, omar and ada again, and swe's inbox, partitioned as the broker
+// does (notify.KeyOf), is two turns, each worked for its own. Through the real
+// parser and notification service, so the carrier is on the event the broker
+// keys, not only on the record.
 //
 // Mutation: leave the carrier out of the partition, and ada's and omar's
 // writes are one turn, worked for ada.
@@ -605,10 +593,9 @@ func TestOneSeatsWritesForTwoRequestersWakeItsColleagueTwice(t *testing.T) {
 }
 
 // A WRITE WAKES A TURN WORKING FOR WHOEVER IT WAS WRITTEN FOR (ADR-0109): the
-// woken turn reads an agent's carrier off the notification's first
-// constituent, which the partition makes every constituent's, and nothing off
-// a writer that is no agent's, nor off a vendor's notification, which names no
-// writer at all.
+// turn reads an agent's carrier off the notification's first constituent (the
+// partition makes it every constituent's), and nothing off a writer that is no
+// agent, nor off a vendor's notification, which names no writer.
 //
 // Mutation: drop the ExternalNotification arm from workingForIn, and the turn
 // cto's write for ada wakes works for cto.
@@ -647,11 +634,10 @@ func TestAWriteWakesATurnWorkingForWhoeverItWasWrittenFor(t *testing.T) {
 	}
 }
 
-// A TURN A WRITE WOKE IS STILL ITS REQUESTER'S WHEN IT RESUMES (ADR-0109), on
-// every family's write: whom cto's write was made for reaches swe's dispatched
-// turn, the launch that records the run's row, and the turn a resumed segment
-// rebuilds from that row, so every call swe's turn makes after its executor
-// parks is held to ada, never to cto.
+// A TURN A WRITE WOKE IS STILL ITS REQUESTER'S WHEN IT RESUMES (ADR-0109), for
+// every family: whom cto's write was made for reaches swe's dispatched turn, the
+// run's row the launch records, and the turn a resumed segment rebuilds from it,
+// so every call after the executor parks is held to ada, never cto.
 //
 // Mutation: leave WorkingFor off the run's row (sandboxTurnRef), and the
 // resumed turn works for cto.
@@ -698,10 +684,9 @@ func TestATurnAWriteWokeIsStillItsRequestersWhenItResumes(t *testing.T) {
 }
 
 // ejectionWake is the merge queue's ejection of enqueuer's entry for launch!1,
-// whose author told is, carrying carrier as whom the entry's enqueue was made
-// for — the record the repository's committer makes of a home's eject, its
-// routing naming no actor and stamped by gitlet's routingFor — relayed as the
-// code feed relays it.
+// whose author is told, carrying carrier as whom the enqueue was made for: the
+// committer's record of a home's eject, its routing naming no actor and stamped
+// by gitlet's routingFor, relayed as the code feed relays it.
 func ejectionWake(t *testing.T, enqueuer, told string, carrier *types.WorkingFor) *events.Event {
 	t.Helper()
 	eject := gitlet.Eject{RepoID: launchRepoID, Entries: []gitlet.Ejection{{
@@ -739,20 +724,17 @@ func ejectionWake(t *testing.T, enqueuer, told string, carrier *types.WorkingFor
 }
 
 // AN ENGINE RECORD ABOUT AN AGENT'S ACT IS WORKED FOR WHOM THE ACT WAS MADE FOR
-// (ADR-0109's amendment), through the real parser and notification service:
-// the merge queue's ejection of cto's entry names no actor and tells the
-// change's author swe that it left the queue, carrying whom cto's enqueue was
-// made for, so swe's turn works for them, held to what they may use — ada,
-// who uses Gitlet alone, so swe is refused the Chatlet she does not use, its
-// ceiling hers. Carrying nobody, it wakes swe for itself, bounded by nothing,
-// as every engine record did. And the engine's ejections for two requesters
-// are two turns, each worked for its own, as one seat's writes for two
-// requesters are; two for one requester are one.
+// (ADR-0109's amendment), through the real parser and notification service. The
+// merge queue's ejection of cto's entry names no actor and tells the author swe,
+// carrying whom cto's enqueue was made for: for ada, who uses Gitlet alone, swe's
+// turn takes her ceiling and is refused Chatlet; carrying nobody, it wakes swe
+// for itself, unbounded. The engine's ejections for two requesters are two
+// turns, as one seat's writes are; two for one requester are one.
 //
-// Mutations: read no carrier off the engine as writer (writtenForIn) — swe's
-// turn works for itself with every app, red; key the engine's wakes as one
-// (notify's writerOf with no carrier for the engine) — ada's and omar's
-// ejections are one turn, worked for ada, red.
+// Mutations: read no carrier off the engine as writer (writtenForIn), and swe's
+// turn works for itself with every app; key the engine's wakes as one (notify's
+// writerOf with no carrier for the engine), and ada's and omar's ejections are
+// one turn, worked for ada.
 func TestAnEngineRecordAboutAnAgentsActIsWorkedForWhomTheActWasMadeFor(t *testing.T) {
 	t.Parallel()
 	o := writtenChart(t)

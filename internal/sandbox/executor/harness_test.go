@@ -169,6 +169,23 @@ func TestARunThatHitItsCapIsNotASuccess(t *testing.T) {
 	if res.Error != "error_max_turns" {
 		t.Fatalf("the failure says %q; want how the run ended", res.Error)
 	}
+	if !res.RoundCapped {
+		t.Fatal("a run that exhausted its turns is not marked as ended on its round cap")
+	}
+}
+
+// ONLY THE CAP'S OWN SUBTYPE marks a run round-capped: another failure, and a
+// success, are not.
+func TestOnlyTheCapsSubtypeMarksARunRoundCapped(t *testing.T) {
+	t.Parallel()
+	for _, line := range []string{
+		`{"type":"result","subtype":"error_during_execution","is_error":true}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"done","num_turns":30}`,
+	} {
+		if res := claude().Parse(line); res.RoundCapped {
+			t.Errorf("%s read as ended on its round cap", line)
+		}
+	}
 }
 
 // A run whose model call failed is a SUCCESS subtype carrying is_error, and

@@ -2,13 +2,12 @@ package sandbox
 
 import "testing"
 
-// THE WINDOW IS THE MODEL'S OWN, read through the decorations a platform writes
-// around its id, and the fallback for a model this build does not know. Never a
-// pin below a current model's window: the harness clamps a pin to the model's
-// own window, so overstating costs nothing and understating starves the run.
-// Beside the pin, the least window Claude Code holds a run of the model to on
-// Anthropic's own API ([ExecutorWindow.Standard]): no model, the account's
-// default, may be one it holds to 200,000.
+// THE WINDOW IS THE MODEL'S OWN, read through a platform's decorations on its
+// id, with the fallback for a model this build does not know. Never a pin below
+// a current model's window: the harness clamps a pin to the model's own, so
+// overstating costs nothing and understating starves the run.
+// [ExecutorWindow.Standard] is the least window Claude Code holds the model to
+// on Anthropic's API: no model (the account's default) may be held to 200,000.
 //
 // Mutation: return a fixed window, drop a decoration, mark a fallback known, or
 // take the pin for the standard window, and a row goes red.
@@ -35,8 +34,8 @@ func TestTheWindowIsTheModelsOwn(t *testing.T) {
 	}
 }
 
-// A WINDOW CARRIES A SESSION WHOSE FIRST REQUEST FITS BENEATH ITS REPLY RESERVE:
-// the session's context and the brief that continues it, together.
+// A WINDOW CARRIES A SESSION WHOSE FIRST REQUEST (its context plus the brief
+// continuing it) FITS BENEATH ITS REPLY RESERVE.
 //
 // Mutation: compare the context alone, or against the whole window, and a row
 // goes red.

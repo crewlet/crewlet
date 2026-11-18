@@ -30,26 +30,16 @@ import (
 
 // ONE ROUND NUMBER PER PHASE, ON EVERY EVENT THE PHASE PUBLISHES.
 //
-// A round's narration and the calls that round asked for are joined on the
-// number they share — that shared number is the whole contract a consumer
-// interleaves them on, and the dashboard's ledger keys one block per number.
-// The tool loop, though, counts from 1 each time it is ENTERED, and an
-// extended phase enters it again. Every publisher therefore has to fold the
-// invocation onto the rounds behind it, and the three that do it used to
-// disagree:
+// A round's narration and its calls are joined on the number they share, and
+// the dashboard's ledger keys one block per number. The tool loop counts from 1
+// each time it is ENTERED and an extended phase enters it again, so the live
+// frame, the round in flight and the completed record each fold the invocation
+// onto the rounds behind it. Otherwise an extension's first frame collapses the
+// ledger, streaming text lands in an earlier round's block, and earlier rounds
+// drop out of the record's tokens.
 //
-//   - the live frame carried the invocation alone, so an extension's first
-//     frame collapsed a twenty-round ledger to a single round;
-//   - the round in flight was never renumbered at all, so its streaming text
-//     was written into the block of a committed round twenty rounds earlier —
-//     that round's prose replaced, its tool calls still underneath;
-//   - the completed record took the invocation's token counters, so every
-//     round before the extension was billed and dropped from the report.
-//
-// The assertions below are over the PUBLISHED events rather than the runner's
-// return value, because the wire is where every one of those defects lived and
-// no suite looked at it. Driven through onboarding: the one phase the engine
-// drives whose ceiling sits above its budget, so the one an extension reaches.
+// Asserted on the PUBLISHED events, where those defects lived, via onboarding:
+// the one engine-driven phase whose ceiling sits above its budget.
 func TestEveryRoundAPhasePublishesIsOnThePhasesOwnScale(t *testing.T) {
 	t.Parallel()
 	// Three rounds of work against a two-round cap, so the phase exhausts
@@ -96,10 +86,8 @@ func TestEveryRoundAPhasePublishesIsOnThePhasesOwnScale(t *testing.T) {
 			t.Errorf("%v ran in round %d, which no narration entry names", ex["name"], round)
 		}
 	}
-	// The tokens are the PHASE's. The loop counts from zero each time it is
-	// entered, so a record built from the last invocation reports only the
-	// rounds after the extension — understating exactly the long phases an
-	// operator opens the page to investigate.
+	// The tokens are the PHASE's: a record built from the last invocation
+	// reports only the rounds after the extension.
 	if done.TotalTokens != 3*(60+40) {
 		t.Errorf("total_tokens = %d, want every round the provider served (300)",
 			done.TotalTokens)
@@ -109,9 +97,8 @@ func TestEveryRoundAPhasePublishesIsOnThePhasesOwnScale(t *testing.T) {
 // A LIVE FRAME DESCRIBES THE PHASE, NOT THE INVOCATION.
 //
 // The live view rebuilds a call from each frame rather than merging, so a
-// frame carrying only the extension's own rounds erases everything above it —
-// and "nothing above an insertion point moves" is the one property the round
-// ledger exists to guarantee.
+// frame carrying only the extension's rounds erases everything above it, which
+// the round ledger exists to keep still.
 func TestALiveFrameNeverDropsTheRoundsBehindIt(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{onboarding: []llmtest.Response{
@@ -158,13 +145,10 @@ func TestALiveFrameNeverDropsTheRoundsBehindIt(t *testing.T) {
 }
 
 // A CALL IN AN EXTENSION IS TOLD THE PHASE'S ROUND, the one its record states.
-// The loop numbers each invocation from 1, and the phase's records are
-// renumbered onto the phase's scale once it returns (offsetRounds); a tool
-// that asks its round mid-call is answered before that, so the phase declares
-// the rounds behind each invocation on the context it runs the loop with.
-// Without it the call in the extension's first round heard round 1 of a phase
-// whose record puts it in round 3 — a round the reading tool would hold its
-// answer to, and the round a call made twenty rounds earlier was really in.
+// The loop numbers each invocation from 1 and the records are renumbered onto
+// the phase's scale only once it returns (offsetRounds), so for a tool asking
+// mid-call the phase declares the rounds behind each invocation on the context
+// it runs the loop with.
 //
 // Mutation: run the loop on the phase's own context, without
 // toolloop.WithRoundOffset, and the extension's call is told round 1.
@@ -288,10 +272,9 @@ type loopCaps struct {
 // extendableRunner is a seat whose onboarding pass exhausts a two-round cap
 // and can be granted more.
 //
-// Takes the PROVIDER INTERFACE rather than the scripted fixture: a phase's own
-// wall clock is only observable against a provider that takes time, and a
-// second copy of this constructor for that one case is how the two come to
-// disagree about the caps that make a phase extendable at all.
+// Takes the PROVIDER INTERFACE rather than the scripted fixture: a phase's wall
+// clock shows only against a provider that takes time, and a second copy of
+// this constructor for that case would drift on the caps.
 func extendableRunner(
 	t *testing.T, prov llm.Provider, pub queue.Publisher, judge extension.Judge,
 	meter ...toolloop.BudgetMeter,
@@ -408,14 +391,11 @@ func progressFrames(t *testing.T, c *capture, ph string) []*types.AgentTurnProgr
 	return out
 }
 
-// THE JUDGE IS A MODEL CALL, AND A MODEL CALL LEAVES A RECORD.
-//
-// It was the only one in the engine that left none: no phase event, so no card
-// under the round that fired it and no row in the token breakdown; and no
-// charge, because it runs outside the tool loop where every other call is
-// metered. `types.PhaseJudge` was declared, read by the dashboard's grouping,
-// and produced by nobody — so a company whose judge rescues every phase looked
-// exactly like one whose phases deserved no extension.
+// THE JUDGE IS A MODEL CALL, AND A MODEL CALL LEAVES A RECORD: a
+// `types.PhaseJudge` event (its card and its row in the token breakdown) and a
+// charge, since it runs outside the tool loop that meters every other call.
+// Without them a company whose judge rescues every phase looks like one whose
+// phases needed no extension.
 func TestTheExtensionJudgeIsPublishedAsAPhaseAndCharged(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{onboarding: []llmtest.Response{
@@ -450,9 +430,7 @@ func TestTheExtensionJudgeIsPublishedAsAPhaseAndCharged(t *testing.T) {
 		t.Errorf("the judge's own spend is unreported: %d tokens on %q under entry %q",
 			got.TotalTokens, got.Model, got.ProviderKey)
 	}
-	// AND CHARGED. The judge runs outside the tool loop, so nothing else
-	// meters it: a seat's reported cost was below what it actually cost by
-	// one model call per exhausted phase.
+	// AND CHARGED: outside the tool loop, nothing else meters it.
 	if !meter.sawAtLeast(30) {
 		t.Errorf("the judge's tokens never reached the shared meter: charges = %v",
 			meter.charges())
@@ -499,11 +477,10 @@ func (spendingJudge) Decide(context.Context, extension.Request) (extension.Decis
 // A JUDGEMENT THE BUDGET REFUSES ENDS THE EXTENSION, AND IS CHARGED ALL THE
 // SAME.
 //
-// The judge runs once a phase is out of rounds and has answered by the time it
-// is charged. A refusal there declines the extension — the outcome of the judge
-// saying no, because a seat at its cap should stop extending rather than die —
-// and the meter has still been handed the judgement, which the fleet's counter
-// records like any round it refuses.
+// The judge has answered by the time it is charged. A refusal then declines the
+// extension, as the judge saying no would, because a seat at its cap should stop
+// extending rather than die; the meter is still handed the judgement, which the
+// fleet's counter records like any round it refuses.
 func TestARefusedJudgementDeclinesTheExtensionAndIsStillCharged(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{onboarding: []llmtest.Response{
@@ -537,12 +514,10 @@ func TestARefusedJudgementDeclinesTheExtensionAndIsStillCharged(t *testing.T) {
 
 // THE PHASE AFTER A REFUSED JUDGEMENT MAKES NO CALL.
 //
-// The judgement's refusal declines the extension and the phase ends unmarked,
-// but the refused judgement is counted, so the window reads past its ceiling
-// and every later charge of the turn is refused. The phase that follows used
-// to send its whole first round — the evidence log, the prompt, its tools —
-// which the vendor billed and the meter then refused. The meter holds the
-// refusal now, and the next phase is refused before it calls.
+// The refused judgement is still counted, so the window reads past its ceiling
+// and every later charge of the turn is refused. The meter holds that refusal
+// (ceilingMeter.Refused), so the next phase is refused before it sends a first round the
+// vendor would bill.
 func TestTheReviewAfterARefusedJudgementMakesNoCall(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{
@@ -572,14 +547,10 @@ func TestTheReviewAfterARefusedJudgementMakesNoCall(t *testing.T) {
 	}
 }
 
-// NOTHING MORE IS BOUGHT ON A REFUSAL ALREADY CERTAIN — not a judgement, and
-// not another of the harness's requests. The judge is a model call like any other
-// — billed, then charged — and once nothing more fits a window every charge
-// after is refused. Here the phase's two rounds fill the ceiling exactly: both
-// are admitted, nothing refused them, and the phase runs out of rounds with the
-// window full. So the extension is decided by the budget, not the judge: no
-// judgement is bought, and the harness asks its model nothing past the two
-// requests the window held. (The judge's own guard is held in
+// NOTHING MORE IS BOUGHT ON A REFUSAL ALREADY CERTAIN — not a judgement, nor
+// another harness request. The two rounds fill the ceiling exactly: both are
+// admitted and the phase runs out of rounds with the window full, so the budget,
+// not the judge, declines the extension. (The judge's own guard is held in
 // judge_internal_test.go.)
 func TestNothingMoreIsBoughtOnARefusalAlreadyCertain(t *testing.T) {
 	t.Parallel()
@@ -688,15 +659,10 @@ func phasesOfKind(t *testing.T, c *capture, ph string) []*types.AgentPhaseComple
 	return out
 }
 
-// A REVIEWER THAT ANSWERS IN PROSE AND STOPS IS ASKED AGAIN, not rescued.
-//
-// The tool loop's corrective re-prompt was once gated on the caller requiring
-// a tool call, and no caller did — so it was unreachable and the package doc's
-// claim that a forced tool call is ENFORCED held for no phase the engine ran. A
-// reviewer that answered with prose fell straight through to the rescue, which
-// sends the whole turn back for another executor run: a whole extra run spent
-// on the one failure a model reliably fixes when it is simply asked again. The reviewer's loop finishes by `submit_review`, so the corrective it
-// gets now is the FINISHING one, naming that tool.
+// A REVIEWER THAT ANSWERS IN PROSE AND STOPS IS ASKED AGAIN, not rescued: its
+// loop finishes by `submit_review`, so the tool loop's FINISHING corrective,
+// naming that tool, re-prompts it. A rescue would send the turn back for a
+// whole executor run over a failure a model reliably fixes when asked again.
 func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{review: []llmtest.Response{
@@ -727,8 +693,8 @@ func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T
 	if done.RoundsUsed != 2 {
 		t.Errorf("rounds_used = %d, want the prose round plus the corrected one", done.RoundsUsed)
 	}
-	// And the model was told what to do, by name. A bare "no" sends it round
-	// the same loop. The corrective opens the run after the prose one.
+	// And told which tool, by name: a bare "no" sends it round the same loop.
+	// The corrective opens the run after the prose one.
 	var corrective string
 	for _, msg := range prov.requestsFor("review")[1].Messages {
 		if strings.Contains(msg.Content, runner.SubmitReviewTool) && msg.Role == llm.RoleUser {
@@ -743,11 +709,10 @@ func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T
 // A LIVE FRAME IS BOUNDED; THE DURABLE RECORD IS VERBATIM.
 //
 // The whole frame is republished five times a second for the length of the
-// phase, and only the round in flight was bounded. The system prompt rode
-// every one of them unchanged, and so did every tool result — routinely the
-// largest thing on the frame, and already final. Past the queue's ceiling the
-// publish is refused, this publisher logs and moves on, and the live row stops
-// for the rest of the phase with nothing on screen to say why.
+// phase, so it carries neither the system prompt (the opening frame's alone)
+// nor whole tool results, routinely its largest part and already final. Past
+// the queue's ceiling the publish is refused and the live row stops for the
+// rest of the phase with nothing on screen saying why.
 func TestALiveFrameCarriesNeitherThePromptNorWholeToolResults(t *testing.T) {
 	t.Parallel()
 	huge := strings.Repeat("x", 20_000)
@@ -763,8 +728,7 @@ func TestALiveFrameCarriesNeitherThePromptNorWholeToolResults(t *testing.T) {
 	onboard(t, r)
 
 	for _, frame := range progressFrames(t, pub, "onboarding") {
-		// The prompt is sent ONCE, on the opening frame, and carried by the
-		// projection from there.
+		// The prompt is sent ONCE, on the opening frame; the projection carries it.
 		if frame.Prompt != "" || len(frame.PromptMessages) != 0 {
 			t.Errorf("round %d re-sent the prompt", frame.RoundNum)
 		}
@@ -775,13 +739,11 @@ func TestALiveFrameCarriesNeitherThePromptNorWholeToolResults(t *testing.T) {
 			}
 		}
 	}
-	// The opening frame still carries it — that is its whole job.
 	opening := openingFrame(t, pub, "onboarding")
 	if opening.Prompt == "" || len(opening.PromptMessages) == 0 {
 		t.Error("the opening frame carries no prompt, so the live row never gets one")
 	}
-	// AND THE DURABLE RECORD KEEPS THE RESULT WHOLE. A reader opens the
-	// finished card to read what a tool actually returned.
+	// AND THE DURABLE RECORD KEEPS THE RESULT WHOLE, for the finished card.
 	done := completedPhase(t, pub, "onboarding")
 	var stored string
 	for _, ex := range done.ToolExecutions {
@@ -851,11 +813,10 @@ func openingFrame(t *testing.T, c *capture, ph string) *types.AgentTurnProgress 
 // A RESUMED RUN COUNTS THE CALLS THE TURN MADE BEFORE IT PARKED.
 //
 // A resume is the same turn in a fresh process with a fresh call log, and a
-// write it makes derives its operation id's repeat count from that log. Left
-// empty, a call made again after a different one counted nothing and took its
-// first copy's id — answered as that copy's retry, with the different write's
-// value in place. So the resume seeds the log with the rounds that closed and
-// what the run called over the bridge.
+// write derives its operation id's repeat count from that log. Unseeded, a call
+// made again after a different one would take its first copy's id and be
+// answered as that copy's retry, so the resume seeds the log with the closed
+// rounds and the run's bridged calls.
 func TestAResumedRunCountsTheCallsItMadeBeforeItParked(t *testing.T) {
 	t.Parallel()
 	first := map[string]any{"summary": "first"}
@@ -887,10 +848,10 @@ func TestAResumedRunCountsTheCallsItMadeBeforeItParked(t *testing.T) {
 
 // A COLLECTED RUN MAY CITE A DELIVERY A CLOSED ROUND MADE.
 //
-// The citation check reads the TURN's record ([turn.Record]): the rounds that
-// closed before the park, then the run's own calls. A collection that read
-// only the run refused the one citation that was true, because the prior-work
-// ledger had told the run not to make that delivery again.
+// The citation check reads the TURN's record ([turn.Record]): the rounds closed
+// before the park, then the run's own calls. Reading only the run would refuse
+// this true citation, since the prior-work ledger told the run not to make that
+// delivery again.
 func TestAResumedRunMayCiteADeliveryAClosedRoundMade(t *testing.T) {
 	t.Parallel()
 	tracker := func(t *testing.T, reg *tools.Registry) {

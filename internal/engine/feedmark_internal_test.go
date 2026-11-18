@@ -69,12 +69,9 @@ func handle(t *testing.T, at feedPosition, g *jetstream.DomainGroup, n int) uint
 	}
 }
 
-// A WAKE FEED'S GROUP CREATED AGAIN STARTS AFTER THE FLOOR THE FLEET RECORDED.
-// The group was consumed to a floor, its consumer went (the broker lost it, an
-// operator deleted it) and the log stayed. Created again with nothing to go
-// on, it started at the log's first retained record, and on a company's chat
-// log that was a week of messages woken again. The open that consumed it
-// recorded its floor, and the open that creates it again starts after it.
+// A WAKE FEED'S GROUP CREATED AGAIN STARTS AFTER THE FLOOR THE FLEET RECORDED,
+// not at the log's first retained record, when its consumer went (the broker
+// lost it, an operator deleted it) and the log stayed.
 //
 // Mutation: start a created group at zero whatever the mark says, and the
 // first delivery after the recreation is the log's first record again.
@@ -122,10 +119,10 @@ func TestAWakeFeedGroupCreatedAgainStartsAfterTheRecordedFloor(t *testing.T) {
 	}
 }
 
-// A MARK THIS LOG CANNOT USE STARTS A CREATED GROUP AT ITS FIRST RECORD, as
-// before: one from another generation names another number space, and one
-// past the log's last record is from a longer log than this one. Started from
-// either, the group would skip records nobody was woken for.
+// A MARK THIS LOG CANNOT USE STARTS A CREATED GROUP AT ITS FIRST RECORD: one
+// from another generation names another number space, and one past the log's
+// last record is from a longer log. Started from either, the group would skip
+// records nobody was woken for.
 func TestAMarkFromAnotherLogStartsAtTheFirstRecord(t *testing.T) {
 	t.Parallel()
 	_, at := markedLog(t, "CREWLET_FEEDMARK_OTHER", "crewlet.feedmarkother", 4)

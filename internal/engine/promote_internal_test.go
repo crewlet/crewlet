@@ -9,12 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 )
 
-// THE PROMOTION WIRING.
-//
-// `skill_promotion.enabled`, `min_sibling_count` and `jaccard_threshold`
-// validated, shipped in the example company, and had no reader outside
-// internal/config — the pass they configure did not exist.
-// These cases are the seam between the pass and the company.
+// THE PROMOTION WIRING: the seam between the pass and the company.
 
 // promotionCompany builds an epoch with units and a knowledge container.
 func promotionCompany(t *testing.T, units string) *Company {
@@ -85,9 +80,8 @@ func TestAUnitWithNoContainerCarriesItsRemediation(t *testing.T) {
 	}
 }
 
-// A PARENT UNIT DOES NOT POOL ITS CHILDREN'S SEATS. It would find the same
-// convergence the child already promoted and draft it a second time one level
-// up, naming a team that never converged on anything.
+// A PARENT UNIT DOES NOT POOL ITS CHILDREN'S SEATS, or it would draft its
+// child's convergence again one level up.
 func TestAParentUnitDoesNotPoolItsChildrensSeats(t *testing.T) {
 	t.Parallel()
 	e := engineOver(t)
@@ -107,8 +101,8 @@ func TestAParentUnitDoesNotPoolItsChildrensSeats(t *testing.T) {
             llm: gateway
 `))
 	wireConfluence(e)
-	// BY THE UNIT'S KEY, which is what PromotionUnit.ID carries: matched on
-	// the display name, the loop skipped every unit and asserted nothing.
+	// By the unit's key, which PromotionUnit.ID carries: matched on the
+	// display name the loop would assert nothing.
 	var found bool
 	for _, unit := range e.promotionUnits() {
 		if unit.ID != "engineering" {
@@ -125,10 +119,8 @@ func TestAParentUnitDoesNotPoolItsChildrensSeats(t *testing.T) {
 	}
 }
 
-// THE CONTAINER IS THE UNIT'S WIKI SPACE, never its tracker project. A unit
-// carries both identities and they are different places: a draft filed under
-// the tracker's key would create a page in whatever space happens to be
-// named "TRACKER", or fail against nothing at all.
+// THE CONTAINER IS THE UNIT'S WIKI SPACE, never its tracker project: filed
+// under the tracker's key a draft lands in whatever space is named "TRACKER".
 func TestTheContainerIsTheWikiSpaceNotTheTrackerProject(t *testing.T) {
 	t.Parallel()
 	e := engineOver(t)
@@ -154,8 +146,7 @@ func TestTheContainerIsTheWikiSpaceNotTheTrackerProject(t *testing.T) {
 }
 
 // A UNIT WITH NO WIKI SPACE IS SKIPPED, and the hint names the field that
-// would fix it rather than the tracker project it does carry, which is not
-// where a draft could go.
+// would fix it, not the tracker project it does carry.
 func TestTheHintNamesTheWikiSpaceField(t *testing.T) {
 	t.Parallel()
 	e := engineOver(t)
@@ -180,9 +171,8 @@ func TestTheHintNamesTheWikiSpaceField(t *testing.T) {
 	}
 }
 
-// A COMPANY WITH A KNOWLEDGE BASE BUILDS THE PASS — and its toggle is still
-// what decides. Without a writer wired, both answers are nil for the wrong
-// reason.
+// A COMPANY WITH A KNOWLEDGE BASE BUILDS THE PASS, and its toggle still
+// decides; the writer is wired so a nil answer is never for the wrong reason.
 func TestPromotionIsBuiltWhenThereIsSomewhereToDraft(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -213,13 +203,9 @@ func TestPromotionIsBuiltWhenThereIsSomewhereToDraft(t *testing.T) {
 	}
 }
 
-// THE WRITER IS READ AT PASS TIME, NOT WHEN THE PASS IS ARMED.
-//
-// The background passes are armed BEFORE startNotifications builds the
-// third-party app clients, so a promoter that resolved its writer at arm time held a
-// nil for every company that ever ran — and the only symptom was one boot
-// line saying no knowledge base was configured while one was. A pass that
-// runs after the wiring catches up must find it.
+// THE WRITER IS READ AT PASS TIME, NOT WHEN THE PASS IS ARMED: the passes are
+// armed BEFORE startNotifications builds the app clients, so a writer resolved
+// at arm time is nil for every company.
 func TestAPromoterArmedBeforeTheKnowledgeBaseStillFindsIt(t *testing.T) {
 	t.Parallel()
 	e := engineOver(t)
@@ -233,7 +219,7 @@ func TestAPromoterArmedBeforeTheKnowledgeBaseStillFindsIt(t *testing.T) {
 `)
 	setEpoch(e, c)
 
-	// Armed with nothing wired — the boot order this reproduces.
+	// Armed with nothing wired: the boot order.
 	promoter := e.buildPromoter(c)
 	if promoter == nil {
 		t.Fatal("no promoter was armed, so a company whose knowledge base " +
@@ -243,19 +229,17 @@ func TestAPromoterArmedBeforeTheKnowledgeBaseStillFindsIt(t *testing.T) {
 		t.Fatal("a writer resolved before the knowledge base was wired")
 	}
 
-	// The inbound service catches up, as it does two lines later at boot.
+	// The inbound service catches up, as at boot.
 	wireConfluence(e)
 	if e.promotionWriter() == nil {
 		t.Fatal("the writer stayed nil after the knowledge base was wired")
 	}
-	// And the armed pass runs against it rather than the nil it was armed
-	// with: a captured writer would panic here, and a pass that re-checked
-	// nothing would report idle for ever.
+	// The armed pass runs against it: a captured nil writer would panic here.
 	promoter.Pass(t.Context())
 }
 
-// THE TOGGLE IS WHAT DECIDES, not the wiring. A company with promotion on
-// and no knowledge base yet is armed; the pass itself reports the idleness.
+// THE TOGGLE DECIDES, not the wiring: promotion on with no knowledge base yet
+// is armed, and the pass itself reports the idleness.
 func TestPromotionIsArmedBeforeTheKnowledgeBaseIsWired(t *testing.T) {
 	t.Parallel()
 	e := engineOver(t)
@@ -303,8 +287,8 @@ units:
 	}
 }
 
-// wireConfluence gives the engine a knowledge base, which is what the
-// promotion writer is built from.
+// wireConfluence gives the engine the knowledge base the promotion writer is
+// built from.
 func wireConfluence(e *Engine) {
 	client, err := confluence.NewClient(confluence.ClientOptions{
 		URL: "https://wiki.example.com", Token: "t",
@@ -317,21 +301,17 @@ func wireConfluence(e *Engine) {
 	e.notify.confluence.pages = client
 }
 
-// setEpoch publishes an epoch, which is what the fresh-read rosters resolve
-// against — see Engine.promotionUnits.
+// setEpoch publishes the epoch the fresh-read rosters resolve against
+// (Engine.promotionUnits).
 func setEpoch(e *Engine, c *Company) { e.epoch.current.Store(c) }
 
 // Compile-time proof the pass's seam is what the engine hands it.
 var _ = func() learning.PromotionUnit { return learning.PromotionUnit{} }
 
-// A PROMOTION NAMES ITS UNIT BY KEY, NOT BY DISPLAY NAME.
-//
-// The key is the unit's stable identity — what a `manages:` entry and a seat's
-// `unit:` resolve, and what every stored row naming a unit holds — and it
-// lands on the `unit_id` of every skill_promoted event. Written as the display
-// name it was a different value the moment a unit declared an id, so the
-// events named something nothing could be filtered or joined on, and a rename
-// orphaned every promotion that came before it.
+// A PROMOTION NAMES ITS UNIT BY KEY, NOT BY DISPLAY NAME: the key is what
+// `manages:`, a seat's `unit:` and every stored row resolve, so a
+// skill_promoted event's `unit_id` can be filtered and joined on and survives
+// a rename.
 func TestAPromotionNamesItsUnitByKey(t *testing.T) {
 	t.Parallel()
 	e := engineOver(t)

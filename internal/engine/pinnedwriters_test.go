@@ -6,30 +6,18 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
-// THE SWEEP WRITES WHILE EVERY DECLARED PIN IS HELD.
+// THE SWEEP WRITES WHILE EVERY DECLARED PIN IS HELD. A pinned connection is
+// declared, so the pool grows to hold it, and a shortfall is a refusal that
+// never clears rather than contention: each apply loop takes its pin at boot
+// and keeps it for life, so every declared pin is held before the first sweep.
+// So housekeeping takes no pin (one sized from its job list would rest on the
+// unenforced rule that a tick runs jobs in series): its jobs take a pooled
+// write transaction, which reaches the same write lock, and `openStore`
+// declares one pin per state-log domain and nothing else.
 //
-// A pinned connection is DECLARED, which is what makes the pool grow to hold
-// it rather than the pin taking a reader's place — and the consequence is
-// that a shortfall is not contention that clears under load, it is a refusal
-// that never clears at all. Each apply loop takes its pin at boot and keeps
-// it for the life of the loop, so every declared pin is gone before the first
-// sweep runs: `tracker_notifications` failed on every tick from the first one
-// with "declared 3 pinned writer(s) and 3 are held" while a company's inbox
-// rows grew for the life of the deployment.
-//
-// THE ANSWER IS THAT HOUSEKEEPING TAKES NO PIN, which is what this now holds.
-// It was one more declared pin, sized from the two jobs that took one — the
-// pool in this package sized against a job list in another, on the unenforced
-// invariant that a tick runs its jobs in series. Both jobs take a pooled
-// write transaction now, which reaches the same write lock through the same
-// queue, so `openStore` declares one pin per state-log domain and nothing
-// else.
-//
-// Through a REAL TICK rather than against the constant, which is what keeps
-// it falsifiable in the direction that matters: give either housekeeping job
-// a pinned writer again and every declared pin is already held by an applier,
-// so the tick comes back with that job's refusal. A tick reports every job's
-// failure joined together, so it is an error here whichever job it was.
+// Through a REAL TICK rather than against the constant: give either
+// housekeeping job a pinned writer again and the tick comes back with that
+// job's refusal (a tick joins every job's failure, so it errors either way).
 func TestTheSweepGetsAWriterWhileEveryDomainIsApplying(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})

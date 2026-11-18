@@ -12,13 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// THE REFINEMENT KNOBS WERE CONFIG-ONLY.
-//
-// `learning.skill_refinement.enabled`, `auto_refine_on_success` and
-// `auto_refine_on_failure` all validated, schema'd, shipped in the example
-// company — and had no reader outside internal/config. Setting one produced a
-// revision and changed nothing an operator could observe. These cases are the
-// wiring that makes each of them do what its name says.
+// Each case holds a `learning` knob to the worker or tool it must change: a
+// knob that validates but has no reader changes nothing an operator observes.
 
 // learningCompany builds an epoch whose learning block is the given YAML.
 func learningCompany(t *testing.T, block string) *Company {
@@ -39,9 +34,7 @@ roles:
 `)
 }
 
-// THE CLUSTERING PASS IS WIRED ONLY WHEN scheduler_enabled SAYS SO, and it
-// was wired never: `cluster_min_size`, `cluster_jaccard_threshold` and
-// `episode_fetch_limit` validated and were read by nobody.
+// THE CLUSTERING PASS IS WIRED ONLY WHEN scheduler_enabled SAYS SO.
 func TestTheClusteringPassFollowsSchedulerEnabled(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -65,7 +58,7 @@ func TestTheClusteringPassFollowsSchedulerEnabled(t *testing.T) {
 }
 
 // THE COMPANY'S OWN CLUSTERING NUMBERS REACH THE WORKER, not the package
-// defaults. All three validated and were read by nobody.
+// defaults.
 func TestTheClusteringPassTakesTheCompanysNumbers(t *testing.T) {
 	t.Parallel()
 	c := learningCompany(t, "  skill_synthesis:\n    scheduler_enabled: true\n"+
@@ -87,7 +80,7 @@ func TestTheClusteringPassTakesTheCompanysNumbers(t *testing.T) {
 		t.Errorf("ClusterWindow = %v, want the company's cluster_window_hours: 48",
 			opts.ClusterWindow)
 	}
-	// THE SHARED GATES TOO: the inline worker and the clustering pass read
+	// The shared gates too: the inline worker and the clustering pass read
 	// one mapping, so a raised cap cannot apply to only one of them.
 	if opts.MaxSkillsPerAgent != 9 {
 		t.Errorf("MaxSkillsPerAgent = %d, want the company's 9", opts.MaxSkillsPerAgent)
@@ -132,8 +125,7 @@ func has(names []string, want string) bool {
 	return slices.Contains(names, want)
 }
 
-// THE AUTO REFINER IS WIRED BY DEFAULT — the worker whose absence made both
-// auto_refine knobs inert.
+// THE AUTO REFINER IS WIRED BY DEFAULT: both auto_refine knobs act through it.
 func TestTheAutoRefinerIsWiredWhenRefinementIsOn(t *testing.T) {
 	t.Parallel()
 	e := engineOver(t)
@@ -151,16 +143,14 @@ func TestRefinementOffLeavesNoRefiner(t *testing.T) {
 	if has(names, learning.RefinerSource) {
 		t.Fatalf("workers = %v, want no refiner when refinement is off", names)
 	}
-	// The rest of the learning write side is untouched: the knob is about
-	// skills, not about whether the company learns at all.
+	// The knob is about skills, not whether the company learns at all.
 	if !has(names, learning.EpisodistSource) {
 		t.Fatalf("workers = %v — turning refinement off must not disable the others", names)
 	}
 }
 
-// BOTH OUTCOME TOGGLES OFF IS REFINEMENT OFF, SPELLED THE LONG WAY. Building
-// the worker anyway would cost a Skip on every turn in the company and report
-// a reason that reads like a bug.
+// BOTH OUTCOME TOGGLES OFF IS REFINEMENT OFF: a worker built anyway would Skip
+// every turn in the company with a reason that reads like a bug.
 func TestBothOutcomeTogglesOffLeavesNoRefiner(t *testing.T) {
 	t.Parallel()
 	e := engineOver(t)
@@ -185,10 +175,7 @@ func TestOneOutcomeOffStillWiresTheRefiner(t *testing.T) {
 	}
 }
 
-// THE COMPANY'S OWN NUMBERS REACH THE WORKER, not the package defaults. Each
-// of these validated and did nothing before the worker existed, so a cap of
-// 20 000 that ignored a company's 500 is the same failure returning one field
-// at a time.
+// THE COMPANY'S OWN CAPS REACH THE WORKER, not the package defaults.
 func TestTheRefinerTakesTheCompanysCaps(t *testing.T) {
 	t.Parallel()
 	c := refinementCompany(t, "    max_body_chars: 40\n    max_versions_kept: 3\n")
@@ -201,10 +188,9 @@ func TestTheRefinerTakesTheCompanysCaps(t *testing.T) {
 	}
 }
 
-// THE UNSET TOGGLE RESOLVES TO THE DOCUMENTED DEFAULT, and reaches the worker
-// as a set pointer. Passing the Toggle's zero value straight through would
-// leave the worker applying its own default rather than the company's answer
-// — which is invisible while the two agree and wrong the moment they do not.
+// THE UNSET TOGGLE RESOLVES TO THE DOCUMENTED DEFAULT and reaches the worker
+// as a set pointer: passed through unset, the worker would apply its own
+// default rather than the company's, wrong the moment the two differ.
 func TestTheOutcomeTogglesReachTheWorkerResolved(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -232,10 +218,9 @@ func TestTheOutcomeTogglesReachTheWorkerResolved(t *testing.T) {
 	}
 }
 
-// REFINEMENT OFF ALSO WITHDRAWS THE TOOL. The two halves write the same rows
-// through the same version archive, so a company that turned refinement off
-// and still had refine_skill would watch its skills change under a knob it
-// had set to false.
+// REFINEMENT OFF ALSO WITHDRAWS THE TOOL: refine_skill writes the same rows
+// through the same version archive as the worker, so leaving it would change
+// skills under a knob set to false.
 func TestRefinementOffWithdrawsTheTool(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -256,8 +241,7 @@ func TestRefinementOffWithdrawsTheTool(t *testing.T) {
 				strings.TrimSpace(tc.refinement), found, tc.want)
 		}
 		// use_skill is not under this knob: reading a skill is not
-		// changing one, and a company that stopped refining still wants
-		// its agents loading what they already learned.
+		// changing one.
 		if _, ok := c.Tools.Lookup(builtin.UseSkillTool); !ok {
 			t.Fatalf("%s: use_skill went with it", strings.TrimSpace(tc.refinement))
 		}

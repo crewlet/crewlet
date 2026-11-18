@@ -12,13 +12,12 @@ import (
 
 // A TASK FILED AS A QUESTION IS ONE RECORD.
 //
-// "Ask" and "Message" on a person's screen file an item whose whole point is
-// the question on it. Written as a create and then a comment, a crash between
-// the two leaves an item nobody is asked on: it wakes its assignee as work,
-// `asked_of_me` never lists it, and the answer has no ask to close. So the ask
-// rides the create — the log grows by the create's own two appends (the key
-// counter and the task) and not by a third — and every node writes the comment
-// row, the decision on it and the asked person's watch from that one record.
+// Written as a create and then a comment, a crash between the two leaves an
+// item nobody is asked on: it wakes its assignee as work, `asked_of_me` never
+// lists it, and the answer has no ask to close. So the ask rides the create —
+// the log grows by the create's two appends (the key counter and the task),
+// not a third — and every node writes the comment row, its decision and the
+// asked person's watch from that one record.
 func TestACreateCanCarryItsAskInOneRecord(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -125,12 +124,11 @@ func TestACreatesAskIsAQuestionAndNothingElse(t *testing.T) {
 	}
 }
 
-// THE PERSON A QUESTION ASKS STARTS FOLLOWING THE ITEM — the promise the tool
-// and the guide both made and nothing kept — unless they MUTED it, which is
-// the one gesture that says they chose not to follow it; the question still
-// reaches them under `asked`. And only when the question is written: an edit
-// re-sends `ask` with the rest of the comment, and must not re-watch somebody
-// who has left since.
+// THE PERSON A QUESTION ASKS STARTS FOLLOWING THE ITEM, unless they MUTED it,
+// the one gesture that says they chose not to; the question still reaches
+// them under `asked`. And only when the question is written: an edit re-sends
+// `ask` with the rest of the comment, and must not re-watch somebody who has
+// left since.
 func TestAnAskMakesTheAskedPersonFollowUnlessTheyMutedIt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

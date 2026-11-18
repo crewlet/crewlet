@@ -8,40 +8,29 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// SeatView answers [session.Chart] — which seat a signed-in person acts as —
-// against the organisation this node runs: the org chart of the configuration
-// epoch it applied.
-//
-// THE RUNNING COMPANY, read per call, and nothing beside it. The org changes
-// only when a revision is activated, and every node applies the activation
-// pointer within seconds of it moving, so the seat a request is resolved
-// against is the seat every surface on this node routes, attributes and
-// authorizes by — never a second copy of the org that could disagree with it.
+// SeatView answers [session.Chart] (which seat a signed-in person acts as)
+// against the org chart of the epoch this node applied, read per call: the
+// seat a request resolves to is the one every surface on this node routes and
+// authorizes by, never a second copy of the org that could disagree.
 type SeatView struct{ engine *Engine }
 
 var _ session.Chart = SeatView{}
 
-// SeatViewOf is the seam over one engine, or the zero value over none.
-//
-// THE ZERO VALUE IS NOT NIL, and the difference is what such a view answers. A
-// nil [session.Chart] would make every bound person seatless — the one arm
-// [session.Binding.Handle] is documented never to be reached by a
-// fall-through — so a view with no engine answers UNKNOWN to every seat
-// question instead, which is 503 and says come back to a node that can tell.
+// SeatViewOf is the seam over one engine, or the zero value over none. Not a
+// nil [session.Chart], which would make every bound person seatless (the arm
+// [session.Binding.Handle] must never reach by fall-through): a view with no
+// engine answers unknown, a 503.
 func SeatViewOf(e *Engine) SeatView { return SeatView{engine: e} }
 
-// errNoOrg is what a view answers on a node that runs no company yet: the
-// seam's own [session.ErrNoCompany], so the identity directory's writer can
-// tell "create a company first" from a lookup that failed, while the request
-// path still reads both as the unknown arm.
+// errNoOrg is a view's answer on a node with no company yet: wrapping
+// [session.ErrNoCompany], so the identity writer can say "create a company
+// first" while the request path reads it as the unknown arm.
 var errNoOrg = fmt.Errorf("engine: %w, so it cannot say which seat anybody "+
 	"holds", session.ErrNoCompany)
 
-// Seat finds a seat in the running organisation by its handle.
-//
-// A SEAT THE ORGANISATION DOES NOT HOLD is not found, with no error: a removed
-// seat is simply absent, and that is conclusive, because the organisation is
-// the company this node serves rather than a log it may be behind on.
+// Seat finds a seat in the running organisation by its handle. One it does
+// not hold is conclusively not found, with no error: the organisation is the
+// company this node serves, not a log it may be behind on.
 func (v SeatView) Seat(_ context.Context, handle string) (session.Seat, bool, error) {
 	company := v.company()
 	if company == nil {

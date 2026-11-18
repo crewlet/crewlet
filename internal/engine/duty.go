@@ -12,37 +12,21 @@ import (
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
-// THE FLEET SINGLETONS, and the one gate they all pass through.
-//
-// A duty here is company-wide work exactly one node does at a time — the
-// scheduler tick, the maintenance sweep, the state logs' trim and every other
-// caller of [Engine.workerDuty], all of which architecture.md's and
-// seat-ownership.md's duty tables name (dutydocs_internal_test.go holds them
-// to the callers). The `worker:{duty}` lease is what makes it one node.
-//
-// The lease alone is not the whole answer, because it decides WHICH node
-// among the ones asking — and `node.roles` is how an operator says which
-// nodes may ask. Both halves are needed: without the lease two willing
-// nodes both run; without the role check a node explicitly told to run
-// nothing but seats still competes for every duty, and wins some of them.
-//
-// The second half was the missing one. placement.RoleWorkers was declared,
-// validated, written into the node's lease meta and rendered by the fleet
-// view, and NOTHING consulted it — so `roles: [seats]` claimed the sweep,
-// the waiter and the curator anyway, and the package's own promise that "a
-// fleet with none of these does none of them" was not kept.
+// THE FLEET SINGLETONS: company-wide work exactly one node does at a time,
+// every caller of [Engine.workerDuty], named in architecture.md's and
+// seat-ownership.md's duty tables (dutydocs_internal_test.go holds them to the
+// callers). The `worker:{duty}` lease decides WHICH node among those asking;
+// `node.roles` decides which nodes may ask. Both are needed: without the lease
+// two willing nodes both run, and without the role check a `roles: [seats]`
+// node competes for every duty.
 
-// workerDuty gates a fleet singleton on this node's declared roles.
+// workerDuty gates a fleet singleton on this node's declared roles:
 //
-// Three-way, and the difference between the last two matters:
-//
-//   - NOT A WORKER — refuse, always. Returning nil here would mean "no
-//     fleet", which every caller reads as "always mine", i.e. the exact
-//     opposite of what the operator wrote.
-//   - A WORKER WITH NO COORDINATION STORE — nil, the single-node case:
-//     there is nobody to be a singleton among, and a wrapper that always
-//     said yes would make a lone node report itself as a fleet member.
-//   - A WORKER IN A FLEET — the real lease claim.
+//   - NOT A WORKER: refuse. A nil would mean "no fleet", which every caller
+//     reads as "always mine", the opposite of what the operator wrote.
+//   - A WORKER WITH NO COORDINATION STORE: nil, the single-node case; a
+//     wrapper that always said yes would report a lone node as a fleet member.
+//   - A WORKER IN A FLEET: the real lease claim.
 func (e *Engine) workerDuty(name string, ttl time.Duration) schedule.DutyFunc {
 	if !e.profile.RunsWorkers() {
 		return refuseDuty
@@ -55,49 +39,20 @@ func (e *Engine) workerDuty(name string, ttl time.Duration) schedule.DutyFunc {
 		e.node.Owner(), e.node.ID(), ttl)
 }
 
-// workerHold is [Engine.workerDuty] for a lease that is GIVEN BACK.
+// workerHold is [Engine.workerDuty] for a lease that is GIVEN BACK, gated on
+// the coordination store alone, never on `node.roles`.
 //
-// # A hold is NOT a duty, and the difference is the roles gate
+// A hold guards work THIS NODE WAS ALREADY ASKED TO DO (a Connect pressed at
+// whichever node serves the API): refusing it makes the work impossible while
+// looking like a peer doing it, forever on an `-roles ingress` dashboard node.
+// It is released when its work ends ([schedule.HoldNamedDuty]).
 //
-// A duty is company-wide work exactly one node does at a time, so refusing it
-// on `node.roles` is the operator getting what they asked for: they said this
-// node runs no workers, and a node that ran them anyway would be ignoring the
-// config.
-//
-// A hold is mutual exclusion around work THIS NODE HAS ALREADY BEEN ASKED TO
-// DO — provisioning an integration somebody pressed Connect on, or a disconnect
-// they pressed Disconnect on, at whichever node happens to be serving the API.
-// Refusing it does not decline the work; it makes the work impossible while
-// looking exactly like a peer already doing it.
-//
-// It DID refuse, because this shared the gate above, and `-roles ingress` is
-// the documented split that puts the dashboard on a node with no worker role.
-// There, `refuseHold` was handed to [setup.Runner] as a Duty that answers
-// not-held for ever — non-nil, so the "no coordination store" branch never
-// caught it — and every Connect answered 409 "another pass for this integration
-// is running; wait for it rather than minting twice" over a surface where
-// nothing was running, every Recheck the same, and every Disconnect 503 "being
-// provisioned right now; try again in a moment". Permanently, on the only node
-// serving the screen that offers those buttons.
-//
-// So this gates on the coordination store alone. What differs from a duty is
-// also the shape of the lease underneath: a singleton is re-claimed every tick
-// and the holder stays the holder, so its TTL is meant to outlive one tick,
-// while a hold wraps one piece of work and is released when that work ends —
-// keeping it afterwards is indistinguishable from an outage to every other
-// caller. See [schedule.HoldNamedDuty].
-//
-// UNDER THIS PROCESS'S INCARNATION rather than the node's lease owner, because
-// a hold may be taken before the node exists: the identity estate runs from
-// boot, company or none, and mints the company's blind-index key on its first
-// use there, and a hold that needed the node answered nil — the single-node
-// answer — on every member of a fleet booting at once, which is precisely when
-// two of them mint.
+// UNDER THIS PROCESS'S INCARNATION, not the node's lease owner: a hold may be
+// taken before the node exists (the identity estate mints the blind-index key
+// from boot), and a fleet booting at once is exactly when two members mint.
 func (e *Engine) workerHold(name string, ttl time.Duration) schedule.HoldFunc {
-	// No lease store is [schedule.HoldNamedDuty]'s own nil branch, asked
-	// here because the store it is handed below is never nil. The node is
-	// not asked for: a hold taken before it exists is the case above, and
-	// [Engine.stepOnceTornDown] needs nothing the node would have built.
+	// The store handed below is never nil, so HoldNamedDuty's nil branch is
+	// asked here. The node is not: a hold may precede it.
 	if e.backends == nil || e.backends.Coord == nil {
 		return nil
 	}
@@ -105,41 +60,17 @@ func (e *Engine) workerHold(name string, ttl time.Duration) schedule.HoldFunc {
 		e.incarnation, e.id, ttl)
 }
 
-// holdLeases is the lease store this node's holds are taken through, and the
-// sandbox coordinator's taker lease ([Engine.coordinatorOptions]): its own,
-// with every give-back drawn from the stop's one allowance for as long as it
-// runs once the TEARDOWN has begun ([Engine.stepOnceTornDown]).
+// holdLeases is the lease store this node's holds and the sandbox
+// coordinator's taker lease ([Engine.coordinatorOptions]) are taken through,
+// each give-back drawn from the stop's one allowance once the TEARDOWN has
+// begun ([Engine.stepOnceTornDown]); the teardown stops the coordinator
+// ([Engine.stopSandbox]) and waits for any pass in flight.
 //
-// THE TAKER LEASE FOR THE SAME REASON, a step of its own: the coordinator
-// claims it as it is built and gives it back as its stop ends, once its last
-// keep has, on the lifetime it claimed it on — and the teardown is what stops
-// it ([Engine.stopSandbox]), so its give-back is charged from its start, and a
-// node whose store has gone spends the one allowance rather than the
-// release's own renewal interval beside it.
-//
-// A HOLD IS GIVEN BACK BY WHOEVER ENDS THE WORK IT GUARDS — the setup runner,
-// at the end of a pass the integration loop or an operator ran — on the context
-// the hold was TAKEN on with its cancellation removed ([schedule.HoldNamedDuty]),
-// so nothing of a stop reaches it. The teardown cancels the integration loop
-// and waits for the pass in flight, and that pass gave its lease back on a
-// context with no deadline at all: against a store that has gone away, one
-// client request timeout the stop sat out beside its allowance — measured at
-// five seconds past it — on a give-back whose fallback is the lapse on the TTL
-// every other step of the stop falls back to. Bounded HERE because this is the
-// one frame that holds both the store a hold is taken through and the stop that
-// can end it; the hold's own context was made before the stop existed.
-//
-// ONLY WHILE THE TEARDOWN IS UNDER WAY, which is where the loops that hold are
-// ended and where the stop waits for them. A pass ending on its own is not a
-// step of anybody's stop, and that includes one ending while the DRAIN waits
-// for running turns: the wait has no bound, the integration loop runs through
-// it, and every surface that comes due in a drain of minutes gives its hold
-// back. Charged from the drain's start, a store that blinked under one of
-// those give-backs spent the time the seats are owed when the wait ends, and
-// every seat then lapsed on its TTL rather than being handed on. But a
-// give-back still in flight when the teardown begins is one the teardown waits
-// for, so it is a step from that moment on rather than left to its own client
-// timeout beside the allowance.
+// BOUNDED HERE because a hold is given back on its taking context with the
+// cancellation removed ([schedule.HoldNamedDuty]), made before the stop
+// existed: unbounded, a gone store cost a client timeout past the allowance.
+// ONLY DURING THE TEARDOWN: a give-back during the unbounded DRAIN is nobody's
+// stop step, and charging it would spend the time the seats' hand-off is owed.
 type holdLeases struct {
 	coord.Backend
 	engine *Engine
@@ -153,17 +84,13 @@ func (l holdLeases) Release(ctx context.Context, resource, owner string, epoch i
 	return l.Backend.Release(ctx, resource, owner, epoch)
 }
 
-// refuseDuty is the answer for a node whose roles exclude worker duties.
-//
-// A plain false rather than an error: the node is doing exactly what it was
-// configured to do, so every tick logging a failure would be noise on a
-// healthy node — and the pass's own "skipped this tick" path is already the
-// right behaviour.
+// refuseDuty is the answer for a node whose roles exclude worker duties: a
+// plain false rather than an error, since the node is doing what it was
+// configured to, and a failure logged every tick would be noise.
 func refuseDuty(context.Context) (bool, error) { return false, nil }
 
-// claimedDuties is the set of duty names an engine claims through
-// [Engine.workerDuty], recorded there so the list [Engine.releaseDuties] walks
-// cannot drift from the duties that actually run.
+// claimedDuties is the duty names claimed through [Engine.workerDuty],
+// recorded there so [Engine.releaseDuties] cannot drift from what runs.
 type claimedDuties struct {
 	mu    sync.Mutex
 	names []string
@@ -183,36 +110,18 @@ func (d *claimedDuties) list() []string {
 	return slices.Clone(d.names)
 }
 
-// releaseDuties gives back every fleet duty this incarnation still holds.
+// releaseDuties gives back every fleet duty this incarnation still holds: a
+// duty's lease outlives several ticks (three hours for the skill curator), and
+// a restarted node's new incarnation cannot re-claim it, so every deploy would
+// leave the duty dark for its whole TTL.
 //
-// # Why a duty is released on a graceful stop
+// ONLY WHAT [Engine.workerDuty] CLAIMED: releasing a hold ([Engine.workerHold])
+// would let a second writer into a pass the API, outliving the engine, runs.
 //
-// A duty is claimed per tick and never released by its loop, so a node that
-// stops holds it until the lease lapses, and the lease is sized to outlive
-// several ticks: 45 minutes for the retention sweep, three hours for the skill
-// curator. A restart takes a new incarnation, which cannot re-claim what the
-// old one held, so every deploy that restarted the holder left the duty dark
-// for its whole TTL, and a fleet deployed more often than every three hours
-// could starve the curator altogether. A seat is given back on a drain for the
-// same reason; a duty is cheaper still to give back, because nothing is
-// attached to it.
-//
-// ONLY WHAT [Engine.workerDuty] CLAIMED. A hold ([Engine.workerHold]) wraps one
-// piece of work that is released when the work ends, and may belong to a pass
-// the API is still running on the merged topology, where the API outlives the
-// engine: releasing it here would let a second writer at a third-party app in
-// mid-pass, which is the collision the hold exists to prevent.
-//
-// Called after every duty loop has stopped, and each loop's Stop waits for a
-// tick in flight, so no tick of this node runs once a peer can take the duty.
-// Released at the epoch the store reports for this owner, so a lease a peer
-// has since taken is never touched.
-//
-// ONE STEP OF THE STOP'S ALLOWANCE ([seat.StopStep]), which the teardown
-// always carries: giving a lease back is a handful of coordination writes,
-// past the allowance a duty lapses on its TTL, which is the outcome of not
-// trying — and a bound of its own here was one more bound a member without
-// quorum spent in full, after every step before it had spent theirs.
+// Called after every duty loop's Stop has waited for its tick in flight, so no
+// tick runs once a peer can take the duty. ONE STEP OF THE STOP'S ALLOWANCE
+// ([seat.StopStep]), not a bound of its own: past it a duty lapses on its TTL,
+// and a bound of its own was one more a member without quorum spent in full.
 func (e *Engine) releaseDuties(ctx context.Context) {
 	if e.backends == nil || e.backends.Coord == nil || e.node == nil {
 		return
@@ -232,11 +141,8 @@ func (e *Engine) releaseDuties(ctx context.Context) {
 }
 
 // releaseDuty gives back the fleet duty name if this incarnation holds it, and
-// reports whether it did.
-//
-// Released at the epoch the store reports for this owner, so a lease a peer
-// has since taken is never touched — and so it needs no memory of the tenure
-// a claim was granted: the store's record is the one that counts.
+// reports whether it did. Released at the epoch the store reports for this
+// owner, so a lease a peer has since taken is never touched.
 func (e *Engine) releaseDuty(ctx context.Context, name string) (bool, error) {
 	owner := e.node.Owner()
 	resource := coord.WorkerResource(name)
@@ -255,21 +161,11 @@ func (e *Engine) releaseDuty(ctx context.Context, name string) (bool, error) {
 }
 
 // workerGiveBack is the give-back of the fleet duty [Engine.workerDuty] claims
-// under name, for a holder that stops running it while it is still up — a
-// duty DECLINED because a copy it decides from is out of service, or because
-// this node does not serve the revision the fleet's activation pointer names
-// ([dutyDecline]). It reports whether this node held the duty and gave it
-// back.
-//
-// GIVEN BACK RATHER THAN LEFT TO LAPSE, because a duty's lease is sized to
-// outlive several of its ticks: a holder that merely stopped claiming kept the
-// trim from every node for its 45-minute lease plus a 15-minute tick — the
-// duty that bounds every log's disk — and the collector and the embedding duty
-// for their own TTLs. Given back, the next node that does not decline it
-// takes it at its next tick.
-//
-// Nil wherever workerDuty claims no lease — a node that runs no workers, or
-// one with no coordination store — since there is nothing to give back.
+// under name, for a holder that DECLINES it while still up ([dutyDecline]),
+// reporting whether this node held it and gave it back. Given back rather
+// than left to lapse, since a lease outlives several ticks (the trim's 45
+// minutes plus a tick), so the next node that does not decline takes it at its
+// next tick. Nil wherever workerDuty claims no lease.
 func (e *Engine) workerGiveBack(name string) func(context.Context) (bool, error) {
 	if !e.profile.RunsWorkers() || e.backends == nil || e.backends.Coord == nil || e.node == nil {
 		return nil

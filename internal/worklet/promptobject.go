@@ -6,58 +6,32 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// What a change to something that is NOT a task asks of the seat it reached.
-//
-// # Why this is a separate frame rather than a branch in the task prompt
-//
-// Because almost none of the task prompt applies. Its openers all begin "A
-// task…", its header is labelled **Task:**, its context block sends the reader
-// to `get_work_item`, and its handling block is four steps about owning a work
-// item — assignee, status, one substantive comment. A priority list has no
-// assignee at all, so a branch inside the task frame would be branches through
-// one paragraph, and every later edit to the task wording would have to be
-// read twice.
-//
-// # Why it exists at all
-//
-// One of the two routable object kinds is not a task, and for a long time the
-// parser simply dropped it — which is why [Writer.WritePriorities] came to
-// argue, in its own doc comment, that a notification "attached to a person
-// record renders no card and reaches nobody". That was TRUE of the code and
-// false of the design: the routing rule already existed in recipients.go, the
-// reason was already in the enum and already split Primary from Other, and the
-// snapshot already carried Person. Only the two ends were missing — nobody
-// published, and nothing could render it if they had.
-//
-// # It does not send the reader to `get_work_item` for the object itself
-//
-// A pointer at a task is exactly what this wake does not have, and inventing
-// one costs the seat a round and a failed tool call to discover. It names the
-// tool that actually answers its own question instead.
+// buildObjectPrompt frames a change to something that is NOT a task for the
+// seat it reached. Its own frame, not a branch of the task prompt: none of
+// that applies (openers saying "A task…", a **Task:** header, handling steps
+// that own a work item's assignee and status), and a priority list has no
+// assignee. Nor does it send the reader to `get_work_item` for the object:
+// there is no task to point at, and inventing one costs the seat a round and
+// a failed tool call. It names the tool that answers its own question.
 func buildObjectPrompt(kind ObjectKind, n notify.Inbound, parties notify.Parties) string {
 	var b strings.Builder
 	switch kind {
 	case KindPerson:
 		promptPriorities(&b, n, parties)
 	default:
-		// UNREACHABLE BY CONSTRUCTION — [ObjectKind.Routable] is the
-		// closed set the parser gates on, and this is its other half. A
-		// kind added to one and not the other lands here, and an empty
-		// prompt is the honest outcome: a wake with nothing to say is
-		// better than a wake that says the wrong noun.
+		// Unreachable by construction: [ObjectKind.Routable] is the closed set
+		// the parser gates on. A kind added there and not here gets an empty
+		// prompt — a wake with nothing to say beats one naming the wrong noun.
 		return ""
 	}
 	return b.String()
 }
 
-// promptPriorities: somebody else wrote this seat's own priority list.
-//
-// AN ADDRESSED WAKE, and the only non-task kind the plan marks "a seat starts
-// it, or says why not". Being told what to do next by somebody above you is an
-// instruction, and a seat that absorbed it silently would leave the person who
-// wrote the list unable to tell whether it was seen. That it may not end in
-// silence is the delivery check's to enforce; what this says is how each
-// answer is given, which only the tracker knows.
+// promptPriorities: somebody else wrote this seat's own priority list. An
+// addressed wake, the one non-task kind a seat must start or say why not: an
+// instruction absorbed silently leaves its writer unable to tell it was seen.
+// The delivery check enforces that it does not end in silence; this says how
+// each answer is given, which only the tracker knows.
 func promptPriorities(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	meta := n.Metadata
 	who := promptSender(n, parties)

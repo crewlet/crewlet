@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 	"github.com/crewlet/crewlet/internal/artifactupload/vendor"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // stageProduced stores every file the run produced (an edit's result, a linted
@@ -584,6 +585,9 @@ func vendorPath(ref lint.Ref) (string, error) {
 		local += ".js"
 	case want == mediatype.ClassStyle:
 		local += ".css"
+	case want != "":
+		return "", fmt.Errorf("%s names no file type an artifact serves as a %s, which is %s",
+			ref.URL.Redacted(), want, words.Or(mediatype.ExtensionsOf(want)))
 	default:
 		return "", fmt.Errorf("%s names no file type an artifact serves", ref.URL.Redacted())
 	}

@@ -10,14 +10,12 @@ import (
 )
 
 // A BRIDGED ENTRY TELLS EITHER HARNESS HOW LONG TO WAIT FOR A CALL. The bridge
-// keeps a running call's answer going, which answers every silence check a
-// harness keeps on a call, so the engine hands each server it bridges the
-// bridge's own bound for a call (sandbox.MCPServer.CallTimeout), and each
-// harness's MCP settings carry it under that harness's own key, in
-// milliseconds: Claude Code's per-server `timeout`, OpenCode's
+// keeps a running call's answer going, which satisfies every silence check a
+// harness keeps, so the engine hands each bridged server the bridge's own call
+// bound (sandbox.MCPServer.CallTimeout), carried in milliseconds under each
+// harness's key: Claude Code's per-server `timeout`, OpenCode's
 // `timeout.execution`. A server with no wait carries no key and keeps the
-// harness's own, and a wait past what a JavaScript timer holds is written as
-// the most it holds.
+// harness's own; a wait past a JavaScript timer's ceiling is written as it.
 //
 // Mutation: skip either harness's key, or write the wait unclamped, and an
 // entry here reads wrong.

@@ -29,15 +29,10 @@ func machine(id string, grants ...iam.Grant) iam.Principal {
 
 // A PERSON'S OWN WRITE DOES NOT WAKE THEM.
 //
-// The tracker's router drops the actor from every wake a change produces —
-// nobody is paged about what they just did — and it recognises the actor by
-// the NAME the record carries. The operator surface recorded a person under
-// their TOKEN's id, which is never a seat handle, so the drop never matched:
-// the assignee who edited their own task through the dashboard or their
-// assistant was woken about their own edit, every time.
-//
-// The control is that attribution, rebuilt: the same change, authored under
-// the token id, reaches the person who made it.
+// The tracker's router drops the actor from every wake a change produces, and
+// recognises the actor by the NAME the record carries, so a person must be
+// recorded under their seat handle. The control: the same change, authored
+// under a token id, which is never a seat handle, wakes the person who made it.
 func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 	t.Parallel()
 	ana := boundPerson("ana.silva", "ana")
@@ -65,7 +60,7 @@ func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 	if woken(actor.Handle) {
 		t.Error("ana was woken about the status she moved herself")
 	}
-	// THE CONTROL: the attribution this replaced, under the token's id.
+	// THE CONTROL: the same change attributed under the token's id.
 	if !woken("ana-laptop") {
 		t.Fatal("the control woke nobody, so this test cannot tell the two " +
 			"attributions apart")
@@ -82,15 +77,11 @@ func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 
 // A MACHINE'S NAME CAN NEVER SATISFY A CHECK THAT COMPARES NAMES TO A SEAT.
 //
-// An own-record class admits a caller whose name EQUALS the record's owner,
-// and a record's owner is a seat handle. A token's login is `token:<id>`: the
-// colon is not in the seat-handle grammar, and a person's login needs a dot,
-// which is not in it either — so no seat can be named what a credential is
-// named, and a token called `ops` cannot mark the inbox of the seat `ops`.
-//
-// The control is the bare id the operator surface used to record: `ops` IS a
-// valid seat handle, and a principal carrying it walks straight into that
-// seat's record.
+// An own-record class admits a caller whose name EQUALS the record's owner, a
+// seat handle. A token's login is `token:<id>`, and neither its colon nor the
+// dot a person's login needs is in the seat-handle grammar, so a token called
+// `ops` cannot mark the inbox of the seat `ops`. The control: the bare id `ops`
+// IS a valid seat handle, and a principal carrying it walks into that record.
 func TestAMachineActorCannotSatisfyAnOwnRecordCheck(t *testing.T) {
 	t.Parallel()
 	for _, id := range []string{"ops", "ci", "release-bot"} {
@@ -155,13 +146,11 @@ func TestAnUnboundCredentialWritesAsItsLogin(t *testing.T) {
 // A WRITE MADE THROUGH A MACHINE TOKEN NAMES THE TOKEN.
 //
 // The guard composes a machine token as its OWNER, and the owner is the
-// author — it is their authority being exercised, and the tracker's "do not
-// wake the author" rule has to recognise them. What tells the write apart
-// from one the owner made themselves is the operator column: `pat:<id>` on the
-// work record and on the page record alike, for a person bound to a seat and
-// for a service account. It used to be the owner's login, so an item a
-// person's assistant filed and one they filed themselves were the same row.
-// Mutation: record the login again and the operator is the owner's.
+// author, so the tracker's "do not wake the author" rule recognises them. The
+// operator column, `pat:<id>` on the work and page records alike, for a bound
+// person and a service account, is what tells the write apart from one the
+// owner made themselves. Mutation: record the login there and the operator is
+// the owner's.
 func TestAWriteThroughAMachineTokenNamesTheToken(t *testing.T) {
 	t.Parallel()
 	const token = "0192f00d-0000-7000-8000-00000000000a"
@@ -227,13 +216,11 @@ func TestAWriteWithNobodyBehindItIsRefused(t *testing.T) {
 
 // A CHAT WRITE IS ATTRIBUTED AS EVERY OTHER DOMAIN'S, AND NEVER AS THE ENGINE.
 //
-// One person under two names across the histories an audit reads side by side
-// is two people, so a chat write carries the name and the credential a work
-// record and a page record carry: a bound person their seat, as a person; a
-// service account's token its login, as an operator, through the token. And
-// the engine's own principal is REFUSED although chat has a word for it: that
-// kind is the engine narrating a room from its own records, and a tool call
-// made as it would put a narration where a speaker belongs.
+// A chat write carries the name and credential a work record carries (a bound
+// person their seat, as a person; a service account's token its login, as an
+// operator, through the token), or an audit sees one person as two. The
+// engine's own principal is REFUSED although chat has a kind for it
+// ([builtin.ChatActorOf] says why).
 //
 // Mutation: admit [chatlet.AuthorSystem] in ChatActorOf and the engine's call is
 // attributed; record the login rather than the seat and the person's is.

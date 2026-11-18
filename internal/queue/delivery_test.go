@@ -9,24 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// TWO NUMBERS, TWO QUESTIONS, and a handler must be able to ask either.
-//
-// The partition's is its NEAREST message's, because one outcome covers all of
-// them: a hand-back spends a delivery of every message in the partition, so
-// the one closest to its budget is the one that dead-letters first. A fold
-// that took the largest — or the first — would report headroom a caller does
-// not have, on exactly the delivery that has least.
-//
-// Each message's own is what a caller deciding about ONE event has to read,
-// and the two differ the moment a partition's messages sit at different
-// counts. Reading the partition's where this one is meant is a defect with a
-// name: the sandbox answer route refused a reply with a whole budget in hand
-// because a co-partitioned message was near its own — see
-// internal/sandbox.MayOfferAnswer.
-//
-// Folded in the CONTRACT rather than in each backend, and asserted here for
-// the same reason: two backends reading their own counters must not become
-// two rules.
+// TWO NUMBERS, TWO QUESTIONS, and a handler must be able to ask either. The
+// partition's is its NEAREST message's, since a hand-back spends a delivery of
+// every message: a fold taking the largest or the first reports headroom the
+// caller lacks. Each message's own is what a caller deciding about ONE event
+// reads (internal/sandbox.MayOfferAnswer), and differs whenever counts do.
+// Folded in the contract, so two backends cannot become two rules.
 func TestAPartitionReportsItsNearestMessagesHeadroom(t *testing.T) {
 	t.Parallel()
 	a, b, c := uuid.New(), uuid.New(), uuid.New()
@@ -44,9 +32,8 @@ func TestAPartitionReportsItsNearestMessagesHeadroom(t *testing.T) {
 		"the smallest of many": {
 			perMessage: []queue.Headroom{{ID: a, Left: 9}, {ID: b, Left: 2}, {ID: c, Left: 24}},
 			want:       2, wantKnown: true,
-			// AND EACH KEEPS ITS OWN. The whole point of stating both:
-			// the fresh message in this partition has 24 deliveries in
-			// hand and must not be read as having 2.
+			// AND EACH KEEPS ITS OWN: the fresh message has 24 in hand,
+			// not the partition's 2.
 			wantEach: map[uuid.UUID]int{a: 9, b: 2, c: 24},
 		},
 		"smallest arriving last": {
@@ -54,24 +41,17 @@ func TestAPartitionReportsItsNearestMessagesHeadroom(t *testing.T) {
 			want:       0, wantKnown: true,
 			wantEach: map[uuid.UUID]int{a: 24, b: 9, c: 0},
 		},
-		// NOT A COUNT ANYONE CAN READ: a partition nothing readable came
-		// back for reports the absence rather than a zero, because a
-		// caller told "no deliveries left" stops offering work it could
-		// still have done, while one told nothing keeps the bounds it had
-		// before the value existed.
+		// NOTHING READABLE reports the absence, not a zero: a caller told
+		// "no deliveries left" stops offering work it could still do.
 		"nothing readable": {perMessage: nil, want: 0, wantKnown: false},
-		// A COUNT PAST THE BUDGET IS SPENT, NOT NEGATIVE. A message
-		// delivered more times than its budget — an operator who shrank
-		// MaxDeliver under a backlog — has no headroom, and a negative
-		// number would compare as less than every reserve and read as
-		// "plenty".
+		// A COUNT PAST THE BUDGET IS SPENT, NOT NEGATIVE: a negative
+		// would compare below every reserve and read as "plenty".
 		"past the budget": {
 			perMessage: []queue.Headroom{{ID: a, Left: -3}},
 			want:       0, wantKnown: true,
 			wantEach: map[uuid.UUID]int{a: 0},
 		},
-		// A REPEATED ID KEEPS ITS SMALLEST, so the answer cannot depend
-		// on the order a backend happened to walk its messages in.
+		// A REPEATED ID KEEPS ITS SMALLEST, so walk order cannot matter.
 		"one id stated twice": {
 			perMessage: []queue.Headroom{{ID: a, Left: 11}, {ID: a, Left: 4}, {ID: b, Left: 20}},
 			want:       4, wantKnown: true,
@@ -97,13 +77,10 @@ func TestAPartitionReportsItsNearestMessagesHeadroom(t *testing.T) {
 	}
 }
 
-// AND AN UNSTATED COUNT IS UNSTATED, never a zero — on both readers.
-//
-// A handler reached outside a queue — a test, a direct call, a backend whose
-// metadata would not parse — must be able to tell "this message has no
-// deliveries left" from "nobody said". Collapsing the two is what a plain int
-// with a zero value would do, and the caller this exists for stops offering
-// work at a low count.
+// AND AN UNSTATED COUNT IS UNSTATED, never a zero, on both readers: a handler
+// outside a queue, or one whose metadata would not parse, must tell "no
+// deliveries left" from "nobody said", since its caller stops offering work at
+// a low count.
 func TestAnUnstatedDeliveryCountIsNotAZero(t *testing.T) {
 	t.Parallel()
 	id := uuid.New()
@@ -124,15 +101,14 @@ func TestAnUnstatedDeliveryCountIsNotAZero(t *testing.T) {
 			"want (0, true)", left, known)
 	}
 
-	// AN ID THAT WAS NOT PART OF THIS DELIVERY is unstated too, and must
-	// not inherit the partition's number: a caller asking about a message
-	// this handler was never handed is asking about nothing.
+	// AN ID THAT WAS NOT PART OF THIS DELIVERY is unstated too, never the
+	// partition's number.
 	if left, known := queue.DeliveriesLeftFor(ctx, uuid.New()); known {
 		t.Errorf("an id outside the delivery reported %d deliveries left", left)
 	}
 
-	// A message a backend could NOT read is left out of the list, so it has
-	// no answer of its own while its siblings keep theirs.
+	// A message a backend could NOT read is absent from the list: no answer
+	// of its own, while its siblings keep theirs.
 	unreadable := uuid.New()
 	ctx = queue.WithHeadroom(context.Background(), []queue.Headroom{{ID: id, Left: 6}})
 	if left, known := queue.DeliveriesLeftFor(ctx, unreadable); known {

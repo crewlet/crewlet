@@ -8,19 +8,16 @@ import (
 )
 
 // openAskSQL is "this comment is a question still waiting for its answer", over
-// a `tracker_comments` row aliased `m`.
-//
-// ONE SPELLING for the `has_open_asks=` filter and the `open_asks` row count,
-// so a card cannot say "1 open question" on a task the filter beside it says
-// has none — the two were about to be written twice, one per reader.
+// a `tracker_comments` row aliased `m`: the one spelling the `has_open_asks=`
+// filter and the `open_asks` row count share, so a card's count cannot
+// disagree with the filter beside it.
 const openAskSQL = "m.ask <> '' AND m.resolved = 0 AND m.answered_by IS NULL " +
 	"AND m.removed = 0 AND m.overtaken = ''"
 
-// rowFieldBatch bounds how many ids one row-fact statement binds. A grouped
+// rowFieldBatch bounds how many ids one row-fact statement binds: a grouped
 // answer carries up to [MaxGroupsWithSubgroups] × [MaxSubgroups] ×
-// [GroupRowsMax] rows, far past what one `IN (…)` should bind, and the page
-// ceiling is the natural size of one batch: it is already the most rows one
-// flat answer reads at once.
+// [GroupRowsMax] rows, too many for one `IN (…)`, and the page ceiling is
+// already the most rows one flat answer reads at once.
 const rowFieldBatch = PageMax
 
 // answerRows is every row an answer carries — the flat page, or every
@@ -54,11 +51,10 @@ func dependentsCountStatement(n int) string {
 		GROUP BY d.blocker_id`
 }
 
-// fillRowFields answers the row facts a query asked for, over the rows in
-// hand, in the read's own transaction — see [RowField].
-//
-// A TASK ON SEVERAL COLUMNS of a label board is one id and several rows, so
-// the facts are read per distinct id and laid onto every row carrying it.
+// fillRowFields answers the row facts ([RowField]) a query asked for, over the
+// rows in hand, in the read's own transaction. A task on several columns of a
+// label board is one id and several rows, so facts are read per distinct id
+// and laid onto every row carrying it.
 func fillRowFields(ctx context.Context, tx *sql.Tx, q Query,
 	rows []*TaskRow) error {
 
@@ -111,8 +107,8 @@ func fillRowFields(ctx context.Context, tx *sql.Tx, q Query,
 	}
 	for _, row := range rows {
 		if q.Wants(RowFieldTags) {
-			// NON-NIL WHEN ASKED, so "asked, and it has none" reaches
-			// the wire as `[]` — see [TaskRow.Tags].
+			// Non-nil when asked, so "asked, and it has none" reaches
+			// the wire as `[]` ([TaskRow.Tags]).
 			row.Tags = append([]string{}, tags[row.ID]...)
 		}
 		if q.Wants(RowFieldDependentsCount) {
@@ -191,14 +187,11 @@ func rowSpendStatement(n int) string {
 		FROM tracker_tasks WHERE id IN (` + placeholders(n) + `)`
 }
 
-// spendOf is what each of these tasks has cost, keyed by id — exactly the ids
-// asked for that exist, and nothing else.
-//
-// INSIDE THE CALLER'S TRANSACTION, never a read of its own: it decorates rows
-// somebody already read, and a cost from a later snapshot beside a title from
-// an earlier one is a card describing two different tasks. The totals are the
-// applier's own running columns ([Spend]), which are a function of the turn
-// records it applied, so nothing here re-adds a turn.
+// spendOf is what each of these tasks has cost, keyed by id: exactly the ids
+// asked for that exist. It reads in the caller's transaction, never its own: a
+// cost from a later snapshot beside a title from an earlier one describes two
+// different tasks. The totals are the applier's running columns ([Spend]), so
+// nothing here re-adds a turn.
 func spendOf(ctx context.Context, tx *sql.Tx, ids []string) (map[string]RowSpend, error) {
 	out := make(map[string]RowSpend, len(ids))
 	if len(ids) == 0 {
@@ -225,11 +218,10 @@ func spendOf(ctx context.Context, tx *sql.Tx, ids []string) (map[string]RowSpend
 }
 
 // listOrdered reports whether a priority list decides this answer's order.
-//
-// Then SQL cannot page it: the order is the sequence of ids on another
-// object, and [orderByList] restores it after the rows are read. So the whole
-// set is read at once — the `t.id IN (…)` the list compiles to bounds it at
-// [MaxPriorities] — and [pageListed] pages it in the list's own order.
+// SQL cannot page that order (it is the id sequence on another object, which
+// [orderByList] restores after the read), so the whole set is read at once,
+// bounded at [MaxPriorities] by the `t.id IN (…)` the list compiles to, and
+// [pageListed] pages it in the list's order.
 func listOrdered(q Query) bool {
 	return q.PriorityListOf != "" && len(q.PriorityList) > 0
 }
@@ -240,22 +232,11 @@ func listOrdered(q Query) bool {
 // own order check rather than resumed against the wrong sequence.
 const listCursorOrder = "priority-list"
 
-// pageListed cuts one page out of the whole list-ordered set.
-//
-// # The bug this replaced
-//
-// The list's order used to be restored per PAGE: SQL read a page in its own
-// order, minted a keyset cursor on that page's last row, and then the page was
-// re-sorted by the list. With a page smaller than the list — `limit=5` over a
-// ten-item list — the first page was whichever five SQL read first, in list
-// order among themselves, and the second page resumed in SQL order: the top
-// of somebody's priorities could land on page two. The dashboard never saw it
-// (its page is fifty, above the list's cap); a seat asking for five did.
-//
-// The cursor is the list OFFSET the next page starts at. That shifts when the
-// list is re-ordered between two pages, exactly as a rank cursor does when a
-// card is dragged between them — the set is re-read whole on every page, so
-// nothing is lost to it but the position.
+// pageListed cuts one page out of the whole list-ordered set; re-sorting each
+// SQL-read page instead would put the top of a list longer than the page on
+// page two. The cursor is the list OFFSET the next page starts at: a re-order
+// between pages shifts it, as dragging a card shifts a rank cursor, but the
+// set is re-read whole each page, so only the position is lost.
 func pageListed(rows []TaskRow, cursor string, limit int) ([]TaskRow, string, error) {
 	from := 0
 	if cursor != "" {

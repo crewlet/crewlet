@@ -15,23 +15,17 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// BenchmarkTheHomesQueueWork times ONE PAGE of a due-queue read — what a
-// repository's home reads every turn of its queue worker, and a turn runs on
-// every record of the repository's subject and its checks subject, so on
-// every queued, claimed and finished check of a train — over a target holding
-// [gitlet.MaxCandidateEntries] live entries, each change's description at
-// [gitlet.MaxChangeBodyBytes], under the default gate (depth 4, batch 2) and the
-// widest ([gitlet.MaxQueueDepth] × [gitlet.MaxQueueBatch]):
-//
-//   - build: no train stands, so the page names depth × batch entries WITH
-//     their descriptions, which the build writes its commit messages from;
-//   - test: a train of depth × batch entries stands on the tip, so the page
-//     names them and their changes and no description — the turn every
-//     check record of the train nudges.
-//
-// It reports the page's encoded answer as `answer-bytes` beside its time.
-// Bounded: -benchtime 20x -count 1 on the runner's two E-cores; internal/gitlet's
-// package doc records the figures, and those of the read it replaced.
+// BenchmarkTheHomesQueueWork times ONE PAGE of a due-queue read, which a home
+// makes on every turn of its queue worker, so on every queued, claimed and
+// finished check of a train, over a target holding
+// [gitlet.MaxCandidateEntries] live entries, each description at
+// [gitlet.MaxChangeBodyBytes], under the default gate (depth 4, batch 2) and
+// the widest ([gitlet.MaxQueueDepth] × [gitlet.MaxQueueBatch]). In "build" no
+// train stands, so the page names depth × batch entries WITH descriptions; in
+// "test" such a train stands on the tip, so the page names no description.
+// It reports the encoded answer as `answer-bytes` beside its time. Bounded:
+// -benchtime 20x -count 1 on the runner's two E-cores; the package doc's
+// "Measured" records the figures.
 func BenchmarkTheHomesQueueWork(b *testing.B) {
 	for _, gate := range []struct{ depth, batch int }{{4, 2}, {gitlet.MaxQueueDepth, gitlet.MaxQueueBatch}} {
 		for _, shape := range []string{"build", "test"} {
@@ -153,17 +147,14 @@ func seedQueueWork(b *testing.B, n *node, depth, batch int, standing bool) strin
 	return repo
 }
 
-// BenchmarkQueueDuePage times ONE PAGE of the home's queue work — the
-// due-queue read a queue turn makes for every target, on every nudge of its
-// repository — that counts its target's enqueues within gitlet.MergeRateWindow,
-// on a repository whose queues have each landed a full hour at the queue's
-// bound: four targets, main among them, each with 3 840 entries enqueued and
-// landed within the window (depth 8 and batch 8 at one-minute rounds, the
-// figure gitlet.MergeRateScan is sized to), and main holding one live entry
-// besides. The count is main's 3 841, so the page pays for main's own hour and
-// never for the other three targets' endings, whatever the repository's other
-// queues land. Bounded: -benchtime 3x -count 1 on the runner's two E-cores;
-// the figure is at enqueuedSince in queuework.go.
+// BenchmarkQueueDuePage times ONE PAGE of the home's queue work that counts
+// its target's enqueues within gitlet.MergeRateWindow, on a repository whose
+// four targets have each landed a full hour at the queue's bound (3 840
+// entries: depth 8 × batch 8 at one-minute rounds, what gitlet.MergeRateScan
+// is sized to), main holding one live entry besides. The count is main's
+// 3 841, so the page pays for main's hour and never the other targets'
+// endings. Bounded: -benchtime 3x -count 1 on the runner's two E-cores; the
+// figure is at enqueuedSince in queuework.go.
 func BenchmarkQueueDuePage(b *testing.B) {
 	const landedPerTarget = 3840
 	n := newNode(b)

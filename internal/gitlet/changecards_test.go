@@ -11,8 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A LISTED CHANGE'S CARD, read beside its readiness where a listing asks for it, from the
-// rows the shipped committer's and change writer's records wrote on a real embedded broker.
+// A LISTED CHANGE'S CARD, read beside its readiness where a listing asks for it, from rows
+// the shipped committer and change writer wrote on a real embedded broker.
 
 // listedCards is every change q lists, read limit rows a page with Cards as asked, in the
 // order its pages served them, and how many pages that took.
@@ -133,11 +133,10 @@ func TestACardIsAnsweredOnlyWhereItIsAsked(t *testing.T) {
 	}
 }
 
-// A CARD COUNTS WHAT ITS CONVERSATION COUNTS, and shows its reviewers: its comments, reviews
-// and changes requested equal the change's own conversation counters, and an undiscussed
-// change's are zero. Its faces are each reviewer once, changes requested first, then a
-// waiting ask, then an approval: a reviewer who asked for changes or approved and was
-// asked again is one face carrying both, ranked by the stronger, and a withdrawn ask or a
+// A CARD COUNTS WHAT ITS CONVERSATION COUNTS, and shows its reviewers: its counters equal
+// the conversation's, zero for an undiscussed change. Its faces are each reviewer once,
+// changes requested first, then a waiting ask, then an approval: a reviewer with a verdict
+// asked again is one face carrying both, ranked by the stronger; a withdrawn ask or a
 // comment alone is no face.
 //
 // Mutation: count reviews as comments, keep a withdrawn ask, list a reviewer twice, or
@@ -238,8 +237,8 @@ func TestACardsFacesAreBoundedWithACountOfTheRest(t *testing.T) {
 }
 
 // A CARD'S CHECKS ARE WHERE THE CHANGE'S LATEST CHECKS STAND: each check's latest attempt of
-// its head for its target, as `checks` with latest reads them, a rerun counted at its rerun
-// and another target's attempts not at all; a change whose head holds no attempt has none.
+// its head for its target, as `checks` with latest reads them (a rerun counted at its rerun,
+// another target's attempts not at all); a head holding no attempt has none.
 //
 // Mutation: count every attempt, or read every target of the head.
 func TestACardsChecksAreWhereTheChangesLatestChecksStand(t *testing.T) {
@@ -336,8 +335,7 @@ func TestACardsChecksAreBoundedAtAChecksFile(t *testing.T) {
 
 // A CARD SAYS A LIVE CHANGE WAS TAKEN OUT OF ITS QUEUE WITHIN A DAY: why, when and the
 // checks that failed, while its newest entry is the ejection, it is live and the ejection
-// is under QueueEjectionsShown old; never once the day has passed, once it is closed, or
-// once it is queued again.
+// is under QueueEjectionsShown old; never once closed or queued again.
 //
 // Mutation: take the newest ENDED entry, skip the horizon, or answer a closed change.
 func TestACardSaysALiveChangeWasTakenOutOfItsQueueWithinADay(t *testing.T) {
@@ -475,10 +473,9 @@ func TestAPageOfCardsIsCutByWhatItsCardsWeigh(t *testing.T) {
 	}
 }
 
-// A CARD'S FACE NAMES THE GLOBS ITS OWNER WAS ASKED FOR: a path owner's waiting
-// ask draws an asked face with the globs; once its owner approves, the face
-// holds the verdict and keeps them; a reviewer asked by name, and a path owner
-// asked again by name, carry none.
+// A CARD'S FACE NAMES THE GLOBS ITS OWNER WAS ASKED FOR: a path owner's waiting ask
+// draws them, and its approval keeps them; a reviewer asked by name, a path owner
+// asked again by name included, carries none.
 //
 // Mutation: read only waiting asks (the approving face loses its globs, red).
 func TestACardsFaceNamesTheGlobsItsOwnerWasAskedFor(t *testing.T) {
@@ -510,9 +507,9 @@ func TestACardsFaceNamesTheGlobsItsOwnerWasAskedFor(t *testing.T) {
 	}
 }
 
-// AN ENDED PATH OWNER'S FACE KEEPS ITS GLOBS: a path owner who asked for
-// changes is asked again by the next revision's facts, and once the change
-// closes and its asks end, the face its verdict draws still names the globs.
+// AN ENDED PATH OWNER'S FACE KEEPS ITS GLOBS: a path owner who asked for changes,
+// asked again by the next revision, still names them once the change closes and
+// its asks end.
 //
 // Mutation: read answered asks only, not ended ones (the face loses its globs, red).
 func TestAnEndedPathOwnersFaceKeepsItsGlobs(t *testing.T) {

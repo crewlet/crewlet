@@ -6,12 +6,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 )
 
-// An extended phase runs the tool loop MORE THAN ONCE, and the loop numbers
-// its rounds per invocation from 1. Without a shift, the second invocation
-// restarts at 1 and the phase reads as running backwards: the live
+// An extended phase runs the tool loop MORE THAN ONCE, each invocation
+// numbering rounds from 1. Unshifted, the phase runs backwards: the live
 // projection's stale-round guard (`roundNum < cur.RoundNum`) drops every
-// extension round, so the dashboard freezes for the rest of the phase, and
-// the ledger merges extension round 1 into original round 1.
+// extension round, freezing the dashboard, and the ledger merges extension
+// round 1 into original round 1.
 func TestAnExtensionContinuesTheRoundCountInsteadOfRestartingIt(t *testing.T) {
 	t.Parallel()
 	second := toolloop.Result{
@@ -40,14 +39,10 @@ func TestAnExtensionContinuesTheRoundCountInsteadOfRestartingIt(t *testing.T) {
 	}
 }
 
-// THE ROUND IN FLIGHT IS ON THE SAME SCALE AS THE ROUNDS BEHIND IT.
-//
-// A consumer keys the ledger on the round number and the partial overwrites
-// the block it lands on, so an unshifted partial from extension round 1 is
-// written into the phase's committed round 1: that round's prose replaced by
-// text the model is writing twenty rounds later, sitting directly
-// above round 1's own tool calls, and no block at all for the round actually
-// running. The abandoned attempts carry the same number and travel with it.
+// THE ROUND IN FLIGHT IS ON THE SAME SCALE AS THE ROUNDS BEHIND IT. The ledger
+// is keyed on the round number and the partial overwrites the block it lands
+// on, so an unshifted partial would replace committed round 1's prose and
+// leave the running round no block. Its abandoned attempts travel with it.
 func TestTheRoundInFlightIsShiftedWithTheRoundsBehindIt(t *testing.T) {
 	t.Parallel()
 	live := toolloop.Result{
@@ -68,20 +63,18 @@ func TestTheRoundInFlightIsShiftedWithTheRoundsBehindIt(t *testing.T) {
 	if got.Partial.Abandoned[0].Round != 22 {
 		t.Errorf("abandoned round = %d, want 22", got.Partial.Abandoned[0].Round)
 	}
-	// The round being written cannot BE a round already committed, or the
-	// ledger has one block claiming to be both.
+	// The round being written must not be a committed one, or one ledger block
+	// claims to be both.
 	if got.Partial.Round <= got.Narration[len(got.Narration)-1].Round {
 		t.Errorf("the in-flight round %d collides with committed round %d",
 			got.Partial.Round, got.Narration[len(got.Narration)-1].Round)
 	}
 }
 
-// AN EXTENSION'S HARNESS RUNS NAME THE PHASE'S ROUNDS. A run states the first and
-// last round it made, and the loop numbers them per invocation like every
-// other round, so an unshifted extension's first run claimed round 1 of a
-// phase twenty rounds in — a run a timeline draws over the phase's opening,
-// beside calls that are not its own. A run that made no request names none,
-// and stays naming none.
+// AN EXTENSION'S HARNESS RUNS NAME THE PHASE'S ROUNDS. A run states its first
+// and last round, numbered per invocation, so unshifted an extension's run
+// would claim round 1 and a timeline would draw it over the phase's opening.
+// A run that made no request names none, and stays naming none.
 //
 // Mutation: leave the runs out of the shift, or shift a run that made no
 // request, and this goes red.
@@ -112,9 +105,9 @@ func TestAnExtensionsRunsNameThePhasesRounds(t *testing.T) {
 	}
 }
 
-// COPIES. The Result handed to OnProgress is the loop's live snapshot,
-// published from another goroutine while the loop is still appending to those
-// same slices; renumbering in place would corrupt them under the writer.
+// COPIES. OnProgress's Result is the loop's live snapshot, whose slices the
+// loop is still appending to on another goroutine; renumbering in place would
+// corrupt them under the writer.
 func TestTheShiftDoesNotMutateTheLoopsOwnSnapshot(t *testing.T) {
 	t.Parallel()
 	execs := []toolloop.Execution{{Round: 1, Name: "search"}}
@@ -136,13 +129,10 @@ func TestTheShiftDoesNotMutateTheLoopsOwnSnapshot(t *testing.T) {
 	}
 }
 
-// An extended phase's record is the PHASE's, not the last invocation's. Three
-// publishers used to build it separately and disagreed: the live frame carried
-// the invocation alone, so an extension's first frame collapsed a twenty-round
-// ledger to one; the completed record took the invocation's token counters, so
-// every round before the extension was billed and then dropped from the
-// report; and the failure record published the invocation raw, so a phase that
-// died on extension round 2 reported two rounds numbered 1 and 2.
+// An extended phase's record is the PHASE's, not the last invocation's: the
+// live frame, the completed record and the failure record all fold the
+// invocation onto the rounds behind it, so none drops the earlier rounds,
+// their tokens, runs or model, nor numbers the invocation's rounds from 1.
 func TestAnInvocationIsFoldedOntoTheRoundsBehindIt(t *testing.T) {
 	t.Parallel()
 	done := phaseResult{
@@ -178,8 +168,7 @@ func TestAnInvocationIsFoldedOntoTheRoundsBehindIt(t *testing.T) {
 		t.Errorf("the folded round is numbered %d/%d, want 3",
 			got.Executions[1].Round, got.Narration[1].Round)
 	}
-	// Every harness run of the phase, the extension's after the original's and
-	// on the phase's scale.
+	// Every run of the phase, the extension's after, on the phase's scale.
 	if len(got.Invocations) != 2 || got.Invocations[1].FirstRound != 3 {
 		t.Errorf("runs = %+v, want the original's and the extension's, the second at round 3",
 			got.Invocations)
@@ -195,9 +184,8 @@ func TestAnInvocationIsFoldedOntoTheRoundsBehindIt(t *testing.T) {
 	}
 }
 
-// The first invocation must pass through untouched — there is nothing before
-// it to continue from, and a needless copy of every round on the common path
-// is waste.
+// The first invocation passes through untouched: nothing precedes it, and
+// copying every round on the common path is waste.
 func TestTheFirstInvocationIsNotShifted(t *testing.T) {
 	t.Parallel()
 	in := toolloop.Result{RoundsUsed: 2, Executions: []toolloop.Execution{{Round: 1}}}

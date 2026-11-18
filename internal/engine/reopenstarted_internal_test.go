@@ -24,8 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// stubLoader is a tool named as the skill loader: what arms a run's guard on
-// its surface, its calls read by the guard by name.
+// stubLoader is named as the skill loader, whose calls the guard reads by name.
 type stubLoader struct{}
 
 func (stubLoader) Name() string               { return toolname.LoadToolSkill }
@@ -35,13 +34,11 @@ func (stubLoader) Call(context.Context, map[string]any) (tools.Result, error) {
 	return tools.Result{Output: "loaded"}, nil
 }
 
-// continuingRun is a relaunch of swe's turn that continued the turn's kept
-// session in a new box — its box handed the seat's tools under both of the
-// job's bridge tokens, and its parked state armed with the required skill
-// that guards the probe — over a bridge served at a test server's address,
-// which restart puts a fresh process's bridge behind, holding no session.
-// continued and fresh are the probe's server beneath each of the job's two
-// endpoints, where the box reaches the probe.
+// continuingRun is a relaunch of swe's turn continuing its kept session in a
+// new box, handed the seat's tools under both of the job's bridge tokens, its
+// parked state armed with the skill that guards the probe. continued and fresh
+// are the probe's server under each token; restart puts a fresh process's
+// bridge, holding no session, behind the test server's address.
 type continuingRun struct {
 	e                *Engine
 	tool             *probeTool
@@ -51,16 +48,14 @@ type continuingRun struct {
 }
 
 // launchContinuingRun launches swe's turn, keeps its job's session, relaunches
-// the turn continuing it in a new box, and parks the turn on the relaunch as
-// the engine persists a suspension.
+// the turn continuing it in a new box, and parks the turn on the relaunch.
 func launchContinuingRun(t *testing.T) continuingRun {
 	t.Helper()
 	ctx := t.Context()
 	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)
 	material := runtoken.OneKey("k", "test-key")
-	// THE ROUTES A NODE MOUNTS for the bridge (internal/api, mcp.go): the
-	// job's endpoint and each of its MCP servers beneath it.
+	// The routes a node mounts for the bridge (internal/api, mcp.go).
 	serve := func(b *mcpbridge.Bridge) {
 		mux := http.NewServeMux()
 		mux.Handle(mcpbridge.PathPrefix+"{token}", b.Handler())
@@ -74,11 +69,9 @@ func launchContinuingRun(t *testing.T) continuingRun {
 		runIn: config.PlacementE2B})
 	tool := &probeTool{}
 	c.Tools = tools.NewRegistry()
-	// THE PROBE IS AN MCP SERVER'S TOOL, never a builtin: every builtin is
-	// decided by the authority table, and the surface a seat's recovery
-	// rebuilds leaves off one the table refuses before any object is named
-	// ([Company.withheldFrom]) — which a builtin with no row, as the probe
-	// would be, always is. The loader has its row.
+	// THE PROBE IS AN MCP SERVER'S TOOL, never a builtin: the surface the
+	// recovery rebuilds leaves off a builtin with no authority row
+	// ([Company.withheldFrom]). The loader has its row.
 	if err := c.Tools.Register(tool, tools.Origin("probe")); err != nil {
 		t.Fatalf("Register(probe): %v", err)
 	}
@@ -88,8 +81,7 @@ func launchContinuingRun(t *testing.T) continuingRun {
 	sessions := &keptLog{rows: map[string]executordomain.Session{}, archives: map[string][]byte{}}
 	e, runners := launchRigRestoring(t, c, launched, sessions)
 	e = withSessions(t, e)
-	// THE REQUIRED SKILL THAT GUARDS THE PROBE, as the company's tool skills
-	// arm every guard the seat's runner builds.
+	// The required skill guarding the probe, armed on every guard the runner builds.
 	registry := skills.NewRegistry()
 	if _, err := registry.PutPage(skills.Skill{Key: "probe-rules", Title: "Probe rules",
 		Summary: "how to probe", Body: "Probe with care.", Trigger: skills.Trigger{Tool: "probe"},
@@ -115,7 +107,7 @@ func launchContinuingRun(t *testing.T) continuingRun {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	// ITS JOB'S SESSION, KEPT, as a collection's capture records it.
+	// Its job's session, kept, as a collection's capture records it.
 	key := objstore.KeyAt(time.Now())
 	kept := sandbox.SessionCapture{LaunchSeq: first.LaunchSeq, CaptureSeq: 1, Launch: first.LaunchID,
 		State: sandbox.CaptureLanded, Final: true, Through: new(0), Harness: "claude-code",
@@ -132,7 +124,7 @@ func launchContinuingRun(t *testing.T) continuingRun {
 		Home: kept.Home}
 	sessions.archives[key.String()] = []byte("the transcript")
 	sessions.mu.Unlock()
-	// THE RELAUNCH, continuing that session in a new box.
+	// The relaunch, continuing that session in a new box.
 	if _, err := launcher.LaunchExecutor(ctx, runner.AgentRunRequest{Brief: "the fresh brief", Round: 1,
 		Fence: e.seatFence(seat.Handle()), Surface: surface(),
 		Session: &runner.SessionContinuation{Basis: launcher.ProbeSession(ctx),
@@ -150,8 +142,7 @@ func launchContinuingRun(t *testing.T) continuingRun {
 		t.Fatalf("the relaunch handed the box no endpoint for the probe's server under one of its "+
 			"tokens: %+v, fresh %+v", last.MCPServers, last.FreshWiring.MCPServers)
 	}
-	// THE SUSPENSION THE RELAUNCHING TURN WRITES: the skill armed for the
-	// session its launch continued.
+	// The relaunching turn's suspension: the skill armed for the continued session.
 	blob, err := execstate.Encode(execstate.State{Version: execstate.Version, Round: 1,
 		ActiveTools: []string{"probe", toolname.LoadToolSkill}, LoadedSkills: []string{"probe-rules"},
 		Task: "fix the failing test"})
@@ -170,10 +161,9 @@ func launchContinuingRun(t *testing.T) continuingRun {
 		}}
 }
 
-// guardedCallRefused calls the probe tool, which the required skill guards,
-// through session, answering whether the run's guard refused it. Named apart
-// from the package's `probe` type (retention_internal_test.go), which shares
-// the package's one namespace with every test file.
+// guardedCallRefused calls the guarded probe tool through session, answering
+// whether the guard refused it. Not named `probe`: retention_internal_test.go
+// holds that name in the package.
 func guardedCallRefused(t *testing.T, session *mcp.ClientSession) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -186,17 +176,13 @@ func guardedCallRefused(t *testing.T, session *mcp.ClientSession) bool {
 	return res.IsError
 }
 
-// A RUN TAKEN OVER IS HELD TO THE SESSION ITS BOX SAYS IT STARTED, as its record
-// names the brief its launch handed it. A node that takes a run over before its
-// box first reached the bridge rebuilds the run's surface from its record, which
-// says the launch continued a session and nothing of what the box made of it;
-// the box then says it on its first request to the reopened bridge, by the
-// token its harness dials. Dialled on the token of a session of its own, the
-// run's guard holds no skill — its model read none — and a call the required
-// skill guards is refused until it loads it, the job's record saying its box
-// started its own; dialled on the continued session's token, the guard holds
-// the skill the launch armed, the call is made, and the record says the box
-// took the session up.
+// A RUN TAKEN OVER IS HELD TO THE SESSION ITS BOX SAYS IT STARTED. Taken over
+// before the box first reached the bridge, the record says only that the launch
+// continued a session; the box says which by the token its first request
+// dials. On a fresh session's token the guard holds no skill (its model read
+// none), the guarded call is refused and the record says fresh; on the
+// continued session's token the guard holds the launch's skill, the call is
+// made and the record says continued.
 //
 // Mutation: arm the reopened run as continued whatever its box says, leave the
 // box's word out of the reopened session, or read the record's brief the other
@@ -223,7 +209,7 @@ func TestARunTakenOverIsHeldToTheSessionItsBoxSaysAsItsRecordNamesTheBrief(t *te
 					"word from the box yet", row.Launch.Brief, row.Launch.SessionStart)
 			}
 
-			// THE SEAT'S RECOVERY, with the run's row as it reads it.
+			// The seat's recovery, with the run's row as it reads it.
 			run.e.reopenAgentRun(t.Context(), row)
 
 			endpoint := run.continued

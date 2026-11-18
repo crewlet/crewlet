@@ -15,12 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE READS OF CHANGES: a listing of them and one in detail, read through the
-// shipped reader from the rows the shipped committer's records wrote, on a
-// real embedded broker.
+// THE READS OF CHANGES: a listing and one in detail, through the shipped reader from the rows the
+// shipped committer's records wrote, on a real embedded broker.
 
-// readChange is change number of repo as who reads it, at limit revisions a
-// page, after cursor.
+// readChange is change number of repo as who reads it, at limit revisions a page, after cursor.
 func readChange(t *testing.T, n *node, who gitlet.Principal, ceiling, repo string, number int64, limit int,
 	cursor string) (gitlet.ReadAnswer, error) {
 
@@ -29,8 +27,8 @@ func readChange(t *testing.T, n *node, who gitlet.Principal, ceiling, repo strin
 		Repo: repo, Change: number, Limit: limit, Cursor: cursor, Fresh: stale})
 }
 
-// listChanges is every change q lists, by reference (web!1) in the order its
-// pages served them, read limit rows a page, and how many pages that took.
+// listChanges is every change q lists, by reference (web!1) in the order its pages served them,
+// read limit rows a page, and how many pages that took.
 func listChanges(t *testing.T, n *node, q gitlet.ReadQuery, limit int) ([]string, int) {
 	t.Helper()
 	q.Kind, q.Limit, q.Fresh = gitlet.ReadChanges, limit, stale
@@ -52,17 +50,14 @@ func listChanges(t *testing.T, n *node, q gitlet.ReadQuery, limit int) ([]string
 	return nil, 0
 }
 
-// A CHANGE IS FOUND BY ITS NUMBER ON ITS REPOSITORY: web!1 is the first change
-// opened on web, whatever another repository numbers its own — its row, its
-// description, its work item and its authors on a first page beside its
-// revisions newest first, a page at a time, and a later page its revisions
-// alone. A number the repository does not hold is not found, naming the
-// change; a repository nobody declared is not found as a repository.
+// A CHANGE IS FOUND BY ITS NUMBER ON ITS REPOSITORY: web!1 is web's first change, whatever another
+// repository numbers its own; a first page carries its row, description, work item and authors
+// beside its revisions newest first, and a later page its revisions alone. A number the repository
+// does not hold is not found, naming the change; an undeclared repository is not found as one.
 //
-// Mutations: read the change by its number without its repository → app!1
-// answers for web!1; serve the revisions oldest first → the first page opens
-// at revision 1; carry the detail on a later page too → the second page holds
-// it.
+// Mutations: read by number without the repository → app!1 answers for web!1; serve revisions
+// oldest first → the first page opens at revision 1; carry the detail on a later page → the second
+// page holds it.
 func TestAChangeIsFoundByItsNumber(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -163,16 +158,12 @@ func TestAChangeIsFoundByItsNumber(t *testing.T) {
 	}
 }
 
-// A CHANGE'S DETAIL IS READ ALONE WHEN IT IS ASKED ALONE (ReadQuery.
-// DetailOnly): a change pushed three times, read for its detail alone, answers
-// the very detail its first page of revisions carries — its row, its
-// description, its authors and its readiness, which the chart judges — and
-// not one revision beside it, nor a cursor to them: a merge's and a rebase's
-// build read the change again and again and neither reads a revision, each
+// A CHANGE'S DETAIL IS READ ALONE WHEN IT IS ASKED ALONE (ReadQuery.DetailOnly): a change pushed
+// three times answers the very detail its first page carries, readiness included, and no revision
+// or cursor: a merge's and a rebase's build read the change repeatedly and need no revision, each
 // of which carries its facts' touched paths.
 //
-// Mutation: read the revisions whatever the read asks → the detail comes
-// with three revisions, red.
+// Mutation: read the revisions whatever the read asks → three revisions beside the detail, red.
 func TestAChangesDetailIsReadAloneWhenAskedAlone(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -204,19 +195,14 @@ func TestAChangesDetailIsReadAloneWhenAskedAlone(t *testing.T) {
 	}
 }
 
-// A CHANGE READ IN BRIEF ANSWERS ITS ROW ALONE (ReadQuery.Brief): web!1's
-// first page in brief carries the very row, repository and access its
-// detail's summary carries, and its revisions as the full first page pages
-// them — and nothing the detail reads besides: no detail at all, so no
-// description, authors, conversation or mergeability, and no readiness, which
-// a person's read judges against a chart. So a reader that holds no chart,
-// which refuses a person's full first page about itself, answers that
-// person's brief one. Asked in brief AND alone (DetailOnly), it answers the
-// row and reads no revision.
+// A CHANGE READ IN BRIEF ANSWERS ITS ROW ALONE (ReadQuery.Brief): web!1's brief first page carries
+// the row, repository and access its detail's summary carries and the full page's revisions, and
+// no detail: no description, authors, conversation, mergeability or readiness, which a person's
+// read judges against a chart. So a chartless reader, which refuses a person's full first page
+// about itself, answers the brief one. Brief AND alone (DetailOnly) answers the row, no revision.
 //
-// Mutations: answer the detail in brief as well → Change is set beside the
-// brief row; judge the readiness in brief → the chartless reader refuses the
-// brief read; put a readiness on the brief row → it carries one; read the
+// Mutations: answer the detail in brief too → Change is set beside the brief row; judge readiness
+// in brief → the chartless reader refuses; put a readiness on the brief row → it carries one; read
 // revisions of a row asked alone → three revisions beside it, red.
 func TestAChangeReadInBriefAnswersItsRowAlone(t *testing.T) {
 	t.Parallel()
@@ -264,9 +250,8 @@ func TestAChangeReadInBriefAnswersItsRowAlone(t *testing.T) {
 				name, got.Revisions, got.Next, full.Revisions, full.Next)
 		}
 
-		// IN BRIEF AND ALONE (ReadQuery.DetailOnly beside Brief): the very
-		// row, and no revision read with it — what an executor's launch on a
-		// change reads.
+		// IN BRIEF AND ALONE (DetailOnly beside Brief): the row and no revision, what an executor's
+		// launch on a change reads.
 		alone, err := r.Read(ctx, gitlet.ReadQuery{Asker: ada, Kind: gitlet.ReadChange, Repo: "web", Change: 1,
 			Brief: true, DetailOnly: true, Fresh: stale})
 		switch {
@@ -281,17 +266,14 @@ func TestAChangeReadInBriefAnswersItsRowAlone(t *testing.T) {
 	}
 }
 
-// A READ THAT RESOLVES ITS REPOSITORY ANSWERS ITS ROW (ReadQuery.Resolve): a
-// change read, a listing of a repository's changes and a listing of its checks,
-// each asked to resolve the name it reads by, answer beside their pages the
-// very row a `repo` read resolves the name to — and none where they are not
-// asked; a resolving read is held to the grant as the read it rides on is, so
-// a seat that may not read the repository is refused it, never handed its
-// row.
+// A READ THAT RESOLVES ITS REPOSITORY ANSWERS ITS ROW (ReadQuery.Resolve): a change read and a
+// listing of a repository's changes or checks, asked to resolve their name, answer beside their
+// pages the very row a `repo` read resolves it to, and none unasked; the resolution is held to the
+// grant as its read is, so a seat that may not read the repository is refused, never handed its row.
 //
-// Mutations: answer no resolution → Resolved is nil; answer the grant's
-// partial row (readableIn's) → it differs from the repo read's; resolve
-// without judging the grant → vp-sales is answered plat-private's row.
+// Mutations: answer no resolution → Resolved is nil; answer the grant's partial row (readableIn's)
+// → it differs from the repo read's; resolve without judging the grant → vp-sales gets
+// plat-private's row.
 func TestAReadThatResolvesItsRepositoryAnswersItsRow(t *testing.T) {
 	t.Parallel()
 	n, _ := grantedChanges(t)
@@ -333,12 +315,10 @@ func TestAReadThatResolvesItsRepositoryAnswersItsRow(t *testing.T) {
 	}
 }
 
-// grantedChanges is a node judging seats by [testChart], with one change open
-// on each of three repositories — sales-private (`visibility: unit`, Sales'),
-// plat-private (`visibility: unit`, Platform's) and platform (`visibility:
-// company`, Platform's), opened in that order by a person, so newest first
-// they are platform!1, plat-private!1, sales-private!1 — and the three
-// repositories' ids by name.
+// grantedChanges is a node judging seats by [testChart] with one change open on each of
+// sales-private (`visibility: unit`, Sales'), plat-private (`visibility: unit`, Platform's) and
+// platform (`visibility: company`, Platform's), opened in that order by a person (newest first:
+// platform!1, plat-private!1, sales-private!1), and the three repositories' ids by name.
 func grantedChanges(t *testing.T) (*node, map[string]string) {
 	t.Helper()
 	n := newNode(t)
@@ -365,23 +345,18 @@ func grantedChanges(t *testing.T) (*node, map[string]string) {
 	return n, ids
 }
 
-// A CHANGE READ IS HELD TO THE GRANT on the change's repository: a seat lists
-// the changes of exactly the repositories its grant reads, each at its access,
-// and a listing or a read naming a `visibility: unit` repository it may not
-// read is refused not_permitted, naming the visibility — a number in it
-// included, which is never answered "not found"; a seat reading for a
-// colleague is held to both grants, refused about the colleague
-// (ErrAboveCeiling) where only the colleague's shuts it out and about itself
-// first; a person and a token read every repository's changes. A page is the
-// rows it READ: one a seat may not read is left out and the listing goes on
-// past it, an empty page with a cursor.
+// A CHANGE READ IS HELD TO THE GRANT on the change's repository: a seat lists the changes of
+// exactly the repositories its grant reads, each at its access; a listing or read naming a
+// `visibility: unit` repository it may not read is refused not_permitted naming the visibility, a
+// number in it included (never "not found"); a seat reading for a colleague is held to both grants,
+// refused about itself first, and about the colleague (ErrAboveCeiling) where only the colleague's
+// shuts it out; a person and a token read every repository's changes. A page is the rows it READ:
+// one the seat may not read is left out and the listing goes on past it, an empty page with a cursor.
 //
-// Mutations: list across repositories without judging each row's repository
-// → vp-sales lists plat-private!1; judge the asker alone → dev, reading for
-// vp-sales, lists plat-private!1; take the cursor from the kept rows → the
-// one-row listing ends at its second page, before sales-private!1; read a
-// change before judging its repository → vp-sales is told plat-private!9 is
-// not found.
+// Mutations: list without judging each row's repository → vp-sales lists plat-private!1; judge the
+// asker alone → dev, reading for vp-sales, lists plat-private!1; take the cursor from the kept rows
+// → the one-row listing ends at its second page, before sales-private!1; read a change before
+// judging its repository → vp-sales is told plat-private!9 is not found.
 func TestAChangeReadIsHeldToTheGrant(t *testing.T) {
 	t.Parallel()
 	n, _ := grantedChanges(t)
@@ -407,8 +382,7 @@ func TestAChangeReadIsHeldToTheGrant(t *testing.T) {
 		}
 	}
 
-	// ONE ROW A PAGE: vp-sales's second page reads plat-private!1 and keeps
-	// nothing, and the listing goes on past it.
+	// ONE ROW A PAGE: vp-sales's second page reads plat-private!1, keeps nothing and goes on past it.
 	q := open
 	q.Asker = agent("vp-sales")
 	q.Kind, q.Limit, q.Fresh = gitlet.ReadChanges, 1, stale
@@ -442,8 +416,8 @@ func TestAChangeReadIsHeldToTheGrant(t *testing.T) {
 		t.Errorf("dev lists its changes at %v, want write on both of Platform's", access)
 	}
 
-	// A READ NAMING THE REPOSITORY — its listing, one change, a number it
-	// does not hold — is refused whole, about the asker first.
+	// A READ NAMING THE REPOSITORY (its listing, one change, a number it lacks) is refused whole,
+	// about the asker first.
 	reads := func(who gitlet.Principal, ceiling string) map[string]func() error {
 		return map[string]func() error{
 			"listing": func() error {
@@ -501,13 +475,11 @@ func TestAChangeReadIsHeldToTheGrant(t *testing.T) {
 	}
 }
 
-// A LISTING ACROSS REPOSITORIES LEAVES A DELETED ONE'S CHANGES OUT, as a
-// listing of repositories leaves the repository out — its changes are no work
-// anybody can do until it is restored — while a listing naming the repository
-// and a read of one of its changes are served: it was named.
+// A LISTING ACROSS REPOSITORIES LEAVES A DELETED ONE'S CHANGES OUT, as a listing of repositories
+// leaves it out (nobody can work on them until it is restored), while a listing naming the
+// repository and a read of one of its changes are served: it was named.
 //
-// Mutation: list a deleted repository's changes across repositories →
-// platform!1 is listed after platform's deletion.
+// Mutation: list a deleted repository's changes across repositories → platform!1 is listed.
 func TestAListingAcrossRepositoriesLeavesADeletedOnesChangesOut(t *testing.T) {
 	t.Parallel()
 	n, ids := grantedChanges(t)
@@ -528,23 +500,18 @@ func TestAListingAcrossRepositoriesLeavesADeletedOnesChangesOut(t *testing.T) {
 	}
 }
 
-// A LISTING IS THE CHANGES ITS FILTERS NAME, newest first, whichever index it
-// walks: every combination of a repository, a state, an owner and a work item
-// a listing may name, read a row a page and fifty at once, lists exactly the
-// changes that match all of them — the filters its index seeks and the ones it
-// tests on the rows it read alike — in the order the records that opened them
-// landed, newest first; and one naming no repository, work item or state is
-// refused.
+// A LISTING IS THE CHANGES ITS FILTERS NAME, newest first, whichever index it walks: every
+// combination of repository, state, owner and work item, read a row a page and fifty at once, lists
+// exactly the changes matching all of them (filters the index seeks and ones tested on the rows
+// alike), newest opening record first; one naming no repository, work item or state is refused.
 //
-// Mutations: drop the owner test from a repository's walk → web's listing for
-// dev lists web!2; drop the state test from a work item's walk → task-1's
-// drafts list its open changes; order a repository's walk oldest first →
-// web's listing opens at web!1.
+// Mutations: drop the owner test from a repository's walk → web's listing for dev lists web!2; drop
+// the state test from a work item's walk → task-1's drafts list its open changes; order a
+// repository's walk oldest first → web's listing opens at web!1.
 func TestAListingIsTheChangesItsFiltersName(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
-	// THE CHART every listing judges its changes' readiness by, whoever
-	// asks.
+	// THE CHART every listing judges its changes' readiness by, whoever asks.
 	n.chart = testChart()
 	c, _ := committerOn(t, n, n.pub)
 	ctx := t.Context()
@@ -599,8 +566,7 @@ func TestAListingIsTheChangesItsFiltersName(t *testing.T) {
 	setState("app!2", gitlet.ChangeStateMerged)
 	open(app, "app", topicRef, ada, task("task-2"), false)
 
-	// NEWEST FIRST: every change is its own record, so the order the records
-	// that opened them landed is the order they were opened in.
+	// NEWEST FIRST: each change opens in its own record, so record order is opening order.
 	newestFirst := slices.Clone(every)
 	slices.Reverse(newestFirst)
 	matching := func(repo, owner, work string, state gitlet.ChangeState) []string {
@@ -645,19 +611,16 @@ func TestAListingIsTheChangesItsFiltersName(t *testing.T) {
 	}
 }
 
-// A LISTING OF CHANGES AND A CHANGE READ TAKE THEIR OWN FIELDS AND NO OTHER
-// KIND'S, each refused naming it rather than ignored — a filter ignored is a
-// listing of more than its caller asked for, which nothing in the answer says.
-// A page of either is bounded as every page is, and a cursor of another order
-// is no cursor of this one.
+// A LISTING OF CHANGES AND A CHANGE READ TAKE THEIR OWN FIELDS AND NO OTHER KIND'S, each refused
+// by name rather than ignored: an ignored filter lists more than asked, and nothing says so. A page
+// of either is bounded as every page is, and another order's cursor is no cursor of this one.
 //
-// Mutation: drop the refusal of a state outside a listing of changes → a
-// repository listing narrowed to a change's state is served whole.
+// Mutation: drop the refusal of a state outside a listing of changes → a repository listing
+// narrowed to a change's state is served whole.
 func TestOnlyAReadOfChangesTakesItsFields(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
-	// THE CHART a read of changes judges their readiness by, whoever asks:
-	// a cursor is judged once it is.
+	// THE CHART a read of changes judges readiness by, whoever asks; a cursor is judged once it is.
 	n.chart = testChart()
 	changeRepo(t, n, "web")
 	for name, tc := range map[string]struct {
@@ -751,8 +714,8 @@ func TestOnlyAReadOfChangesTakesItsFields(t *testing.T) {
 		Fresh: statelog.Freshness{Level: statelog.ReadSession}}); !errors.Is(err, gitlet.ErrBadLevel) {
 		t.Errorf("a listing of changes at a bare session = %v, want ErrBadLevel", err)
 	}
-	// A NEED IS SOMEBODY'S: the asker's own where it names no reviewer, so a
-	// credential bound to no seat names nobody it could be.
+	// A NEED IS SOMEBODY'S: the asker's own where it names no reviewer, so a seatless credential
+	// names nobody.
 	if _, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Asker: unbound, Kind: gitlet.ReadChanges,
 		Needs: gitlet.NeedReview, Fresh: stale}); !errors.Is(err, gitlet.ErrInvalid) ||
 		!strings.Contains(err.Error(), "needs:") {

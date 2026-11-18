@@ -64,7 +64,7 @@ func changeRepo(t testing.TB, n *node, name string) string {
 	return repo
 }
 
-// opening is an open of source into target on repo, asked by asker under an
+// opening is an open of source into target on repo by asker, under an
 // operation id of its own, made for nobody but the asker.
 func opening(repo, source, target string, asker gitlet.Principal) gitlet.ChangeProposal {
 	opID := statelog.NewOpID(time.Now(), "code_open_change")
@@ -206,10 +206,10 @@ func TestOneOpenChangePerHead(t *testing.T) {
 
 // A CHANGE'S NUMBER IS THE LOG'S ORDER: changes opened at once, each from a
 // branch of its own, take the repository's numbers from 1 in the order their
-// records land — the apply gives a number, from next_change, which it
-// advances, and no decide does — so none repeats and none is skipped; and an
-// open asked again under its own operation id is the same change, its record
-// collapsed by the ledger, appending nothing and taking no number.
+// records land — numbered by the apply from next_change, never by a decide —
+// so none repeats or is skipped; an open asked again under its operation id is
+// the same change, collapsed by the ledger, appending nothing and taking no
+// number.
 //
 // Mutation: number a change in the decide, from the row its snapshot read,
 // and two opens decided from one snapshot share a number.
@@ -793,9 +793,9 @@ func TestEveryChangeAnswerIsCounted(t *testing.T) {
 	}
 }
 
-// The applier's purity is the framework's claim; held here for the change's
-// rows: the same records, replayed by a node that applies them from zero,
-// leave every change table byte-identical.
+// The applier's purity, held for the change's rows: the same records, replayed
+// by a node that applies them from zero, leave every change table
+// byte-identical.
 func TestAChangesRowsReplayIdentically(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)

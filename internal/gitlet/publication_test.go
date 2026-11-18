@@ -16,8 +16,7 @@ import (
 )
 
 // A PUBLICATION'S DECIDE AND APPLY, case by case, over one node's estate with
-// no broker between: records built here, the decide run in a snapshot of the
-// rows a case seeds.
+// no broker: the decide runs in a snapshot of the rows a case seeds.
 
 // sumOf is the git checksum of the n-th pack [estate.seed] wrote for id.
 func sumOf(id string, n int) string {
@@ -196,15 +195,9 @@ func TestALayerRowIsChecked(t *testing.T) {
 	}
 }
 
-// A PUBLICATION IS DECIDED OVER THE CHAIN IT BUILDS ON, by every rule of the
-// layer's own: the layers it replaces must be the chain's top and its base the
-// one below (6a, else stale); the chain it leaves no longer than
-// MaxPublishedLayers (6b, else an error); every pack it names live (6c, else
-// stale); every pack live as of its plan that its base does not name named by
-// it (6d, else stale) — but a pack added after its plan, which no builder saw,
-// is no reason to refuse it; no pack of its base, and not its base's id (6e,
-// else an error); and each part's key minted in time (6f, else
-// upload_expired).
+// A PUBLICATION IS DECIDED OVER THE CHAIN IT BUILDS ON, by each of the layer's
+// rules 6a–6f ([decideLayer]), each case refused as its rule says — and a pack
+// added after its plan, which no builder saw, is no reason for 6d to refuse it.
 //
 // Mutation: drop 6d's exemption of a pack added after the plan, and the
 // publication planned before the late push is refused stale.
@@ -299,10 +292,9 @@ func TestAPublicationIsDecidedOverTheChainItBuildsOn(t *testing.T) {
 	}
 }
 
-// A COMPACTION NEVER RETIRES A PUBLISHED PACK: a tail compaction of packs a
-// layer names is refused stale, naming the layer — every Gitlet node's chain is
-// loadable only over every pack it names — while a publication that replaces
-// that layer may repack them.
+// A COMPACTION NEVER RETIRES A PUBLISHED PACK (rule 2): a tail compaction of
+// packs a layer names is refused stale, naming the layer, while a publication
+// that replaces that layer may repack them.
 //
 // Mutation: skip the chain's read in the inputs' rule, and the tail
 // compaction is decided.

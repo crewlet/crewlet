@@ -16,41 +16,17 @@ import (
 )
 
 // TestOnlyOnePlaceWritesARunningStreamsConfiguration fails the build when a
-// second site updates a live stream's configuration.
+// second site updates a live stream's configuration. A JetStream update
+// REPLACES the whole configuration of a stream every node shares, so a second
+// writer is last-boot-wins over a ceiling set deliberately, or one a capacity
+// operation is changing, and the update succeeds silently. The writers
+// [allowedStreamWriter] admits are safe only behind exclusions a third lacks.
 //
-// # Why an absence needs a test
-//
-// A JetStream update REPLACES the whole configuration, and a stream is shared
-// by every node of a fleet. So two writers are not two writes — they are last
-// boot wins, over a value an operator may have set deliberately and over one a
-// capacity operation may be in the middle of changing. That failure is silent
-// in every direction: the update succeeds, the stream is well-formed, and the
-// only symptom is a ceiling that quietly went back to what some other node's
-// Tier A file said.
-//
-// The engine had exactly this shape once — every node applying its own spec to
-// a shared stream at every boot — and the fix was to remove the writer rather
-// than to guard it. [DomainLog.SetMaxBytes] is what remains, and it is safe
-// only because the capacity procedure stops every publisher on every node
-// first. The object bucket's seal (natsobj's Backend.Seal) is the one other
-// writer, and it sits behind the same exclusion: `crewlet objects migrate
-// -final` seals only on a node in maintenance mode, with no node holding an
-// admission, and nothing else ever writes the objects stream's configuration.
-// A third call site would inherit none of that and nothing would say so,
-// which is what this test is for.
-//
-// # What it walks, and what it cannot see
-//
-// Every non-test .go file under internal/ and cmd/, parsed with go/parser,
-// looking for a CALL whose selector is UpdateStream or CreateOrUpdateStream.
-// It matches on the NAME rather than on a resolved type, so it would also flag
-// a same-named method on something unrelated — which is the safe direction: a
-// false positive is one allowance entry with a reason, and a false negative is
-// the silent failure above.
-//
-// It does not see a call made through a variable of interface type whose
-// method it cannot name, nor one assembled by reflection. Neither exists here,
-// and both would be a stranger thing to write than the call itself.
+// It flags a CALL by its selector's NAME (UpdateStream, CreateOrUpdateStream)
+// in every non-test file under internal/ and cmd/, never a resolved type: a
+// false positive costs an allowance entry, a false negative the silent
+// failure above. A call through an interface method it cannot name, or by
+// reflection, it cannot see; neither exists here.
 func TestOnlyOnePlaceWritesARunningStreamsConfiguration(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -141,12 +117,10 @@ type streamWriterScan struct {
 }
 
 // streamWriters walks root for calls that write a stream's configuration.
-//
-// ONLY A FILE THAT SPELLS A WRITER IS PARSED. A selector names its method in
-// the source, and an identifier has no escapes, so a file whose bytes do not
-// hold one of streamConfigWriters holds no call of it (sourcetree.Identifiers)
-// — and of the tree's thousand-odd files, one does. Parsing all of them to
-// find it was six seconds under the race detector.
+// ONLY A FILE THAT SPELLS A WRITER IS PARSED: an identifier has no escapes, so
+// a file whose bytes hold none of streamConfigWriters holds no call of one
+// (sourcetree.Identifiers), and parsing the whole tree costs seconds under
+// the race detector.
 func streamWriters(t *testing.T, root string) streamWriterScan {
 	t.Helper()
 	names := sourcetree.MustIdentifiers(streamConfigWriters...)
@@ -245,17 +219,14 @@ func streamConfigWrite(name string) bool {
 }
 
 // allowedStreamWriter reports whether site is one of the excluded writers,
-// named by file and call rather than by line so an edit above one does not
-// have to be reflected here.
+// named by file and call rather than by line:
 //
 //   - internal/queue/jetstream/domainlog.go: [DomainLog.SetMaxBytes], run only
 //     by the capacity procedure once every publisher on every node is stopped.
-//   - internal/objstore/natsobj/natsobj.go UpdateStream: the bucket's seal,
-//     run only by the final pass of `crewlet objects migrate`, which refuses
-//     unless this node is in maintenance mode and no node holds an admission.
-//     The file's CreateOrUpdateStream (were one added) is not allowed: the
-//     bucket is created with CreateStream and its reservation is never
-//     rewritten.
+//   - internal/objstore/natsobj/natsobj.go UpdateStream alone: the bucket's
+//     seal, run only by `crewlet objects migrate -final`, which refuses unless
+//     this node is in maintenance mode and no node holds an admission. The
+//     bucket is made with CreateStream, so no CreateOrUpdateStream is allowed.
 func allowedStreamWriter(site string) bool {
 	if strings.HasPrefix(site, "internal/queue/jetstream/domainlog.go:") {
 		return true

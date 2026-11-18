@@ -6,31 +6,18 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// What the tracker's reads hand a model that somebody else wrote, and whose
-// words each piece is (ADR-0040).
-//
-// Three shapes recur across the tracker's answers, and each is labelled ONE
-// way wherever it appears, so a change reads the same in the activity feed,
-// in a task's history and in a person's inbox:
-//
-//   - A CHANGE'S EXCERPT — a feed row's, a history entry's, an inbox notice's —
-//     is the text of the change its row records: the comment, the description
-//     a task was filed with, the note a hand-off or a purge carried. The row
-//     names who made the change, and that is who wrote it, so it is fenced
-//     under them, as the surface the change's kind says ([worklet.ExcerptSource])
-//     — except a line summing up an answer that chose, which quotes the
-//     asker's option before the answerer's words and so names the answerer as
-//     one writer of several ([worklet.ExcerptQuotesAChoice]).
-//   - A NAME — a task's title, a project's name and purpose, a view's name, a
-//     file's path, a checklist line, the values a change moved — is somebody's
-//     words too, short ones, and the row that carries it records no writer of
-//     it: a title may have been edited by anybody since it was filed. It is
-//     neutralised in place, as every string a fenced answer holds is, and the
-//     answer's envelope says the company's writers it does not name had a hand
-//     in it ([namesBy]), which reads as a colleague's and never as the reader's
-//     own.
-//   - AN ASK'S DECISION is the asker's options, read beside a change that may
-//     be somebody else's; the row names the asker nowhere, so it is a name.
+// Whose words each piece of a tracker read is (ADR-0040), labelled ONE way
+// wherever it appears (the activity feed, a task's history, an inbox):
+//   - A CHANGE'S EXCERPT (a comment, a filed description, a hand-off's or a
+//     purge's note) is fenced under the change's maker, as the surface its kind
+//     says ([worklet.ExcerptSource]); a line summing up a choosing answer quotes
+//     the asker's option, so names the answerer one writer of several
+//     ([worklet.ExcerptQuotesAChoice]).
+//   - A NAME (a title, a project's name and purpose, a file path, a checklist
+//     line, the values a change moved) records no writer, since anybody may
+//     have edited it: neutralised in place, its envelope crediting unnamed
+//     colleagues and never the reader ([namesBy]).
+//   - AN ASK'S DECISION is the asker's options, whom the row never names: a name.
 
 // namesBy records on read's envelope that the answer carries names somebody
 // wrote — writers where the row says who had a hand in them, nobody where it

@@ -46,9 +46,9 @@ func boxedEngine(t *testing.T) (*Engine, *coordmem.Fleet) {
 }
 
 // A SEAT IS TOLD ITS BOX AS A RUN LAST FOUND IT, AND ONLY WHILE THE DOCUMENT
-// STILL MAKES THE BOX THAT WAY. Before any run, the turn is told the cell and
-// the memory run_args hold it to; after a fresh box's read, what its image
-// has; after the image changes, the old reading is not told of the new box.
+// STILL MAKES THE BOX THAT WAY: before any run, the cell and the memory
+// run_args hold it to; after a read, what its image has; after the image
+// changes, not the old reading.
 //
 // Mutation: tell a reading whatever its basis, keep none at a launch, read a
 // box whose reading is kept, or drop the document's memory, and this goes red.
@@ -127,10 +127,9 @@ func TestARemovedSeatLeavesNoBoxReading(t *testing.T) {
 	}
 }
 
-// A BOX CHANGE IS TOLD AND ASKS NO REVIEW OF OPEN WORK. A seat whose box grew
-// is told so on its next turn, but nothing it asked a person was raised under
-// a box, so neither that turn nor an apply asks it to review its open work;
-// a change of its access beside the box still does.
+// A BOX CHANGE IS TOLD AND ASKS NO REVIEW OF OPEN WORK: nothing a seat asked
+// a person was raised under a box, so a grown box is told on its next turn
+// without a review; a change of its access beside the box still asks one.
 //
 // Mutation: let a box change owe a review, or keep a box change from being
 // told, and this goes red.

@@ -8,31 +8,15 @@ import (
 // The checklist GESTURES: one change to a task's checklists, stated as what
 // somebody did rather than as the collection they want to end with.
 //
-// # Why a gesture and never the collection
-//
-// [TaskPatch.Checklists] is carried WHOLE — every list, every item, every tick
-// — and a caller can only form it from a read it made in another transaction.
-// Two people working one checklist are the ordinary case rather than a race
-// somebody has to be unlucky to hit: one ticks "migrate the users" while the
-// other adds "announce the cut-over", and whichever whole collection lands
-// second discards the other's change without a word. It is [WatchIntent]'s
-// reason and [RelationIntent]'s, and the answer is theirs: the caller states
-// the gesture, and [settleChecklist] resolves it against the task as the
-// decide snapshot holds it — the one place this engine guarantees a single
-// consistent read of the set the record will carry.
-//
-// NEVER ON THE WIRE. The record an applier sees carries the resolved
-// collection, so a replay writes rows rather than re-deriving a set from
-// whatever it had applied by then, and a node that has never heard of a
-// gesture applies it exactly as it applies every other checklist write —
-// which is why no record version moves for it.
-//
-// # Why the ids are the caller's
-//
-// A gesture that ADDS something names the id it adds. It is minted by the
-// caller from the operation — never here — because the decide runs again on
-// every round and on a retried request, and a list minted a fresh id inside it
-// would be a second list the second time.
+// [TaskPatch.Checklists] is carried whole, formed from a read in another
+// transaction, so of two people editing one checklist (the ordinary case) the
+// second whole collection silently discards the first's change. As with
+// [WatchIntent] and [RelationIntent], the caller states the gesture and
+// [settleChecklist] resolves it inside the decide snapshot. NEVER ON THE WIRE:
+// the record carries the resolved collection, so a replay writes rows and an
+// older node applies it as any checklist write: no record version moves. A gesture that adds names the id it adds,
+// minted by the caller from the operation, never here: the decide reruns on
+// every round and retry, and an id minted inside it would be a second list.
 
 // ChecklistOp is what one checklist gesture does.
 type ChecklistOp string
@@ -86,9 +70,8 @@ type ChecklistIntent struct {
 	// Name is the new list's or item's name, on the gestures that set one.
 	Name string
 
-	// Items are `add_list`'s first items, each with the id its caller
-	// minted — a list is usually written down whole, and a gesture per
-	// line would be a commit per line.
+	// Items are `add_list`'s first items, each with its caller-minted id:
+	// a gesture per line would be a commit per line.
 	Items []ChecklistItem
 
 	// Done is `set_done`'s value.
@@ -99,23 +82,19 @@ type ChecklistIntent struct {
 	Assignee string
 }
 
-// grows reports whether the gesture can make the collection larger, which is
-// the only case the caps are checked against: a gesture that only shrinks or
-// edits in place is never refused for a size the collection already had, or a
-// task that somehow grew past a cap would be one nobody could bring back
-// under it — [settleWatch]'s rule for an unwatch.
+// grows reports whether the gesture can make the collection larger, the only
+// case the caps are checked: a shrink or an in-place edit is never refused,
+// or a task past a cap could never be brought back under it ([settleWatch]'s
+// rule for an unwatch).
 func (c ChecklistIntent) grows() bool {
 	return c.Op == ChecklistAddList || c.Op == ChecklistAddItem
 }
 
 // ApplyChecklist is the checklists a gesture leaves, or the refusal.
 //
-// PURE OVER VALUES, so the writer's decide and a caller building the wake's
-// snapshot run the same function — the snapshot is only the tool's best answer
-// about who the change reaches, and the decide is the authority, but they
-// cannot disagree about what one gesture does to one collection.
-//
-// The input is never written through: the result shares no slice with it.
+// PURE OVER VALUES, so the writer's decide (the authority) and a caller
+// building the wake's snapshot cannot disagree about what one gesture does.
+// The result shares no slice with the input.
 func ApplyChecklist(lists []Checklist, c ChecklistIntent) ([]Checklist, error) {
 	if !c.Op.Valid() {
 		return nil, invalid("%q is not a checklist gesture — the "+
@@ -153,9 +132,9 @@ func ApplyChecklist(lists []Checklist, c ChecklistIntent) ([]Checklist, error) {
 		case c.List == "":
 			return nil, invalid("an add_list gesture mints no list id")
 		case slices.ContainsFunc(out, func(l Checklist) bool { return l.ID == c.List }):
-			// AN ID MINTED FROM THE GESTURE'S OWN OPERATION (the tools'
-			// checklistIntent), so one the task holds is this gesture made
-			// again: said without the id, which nobody reading it chose.
+			// The id is minted from the gesture's operation (the tools'
+			// checklistIntent), so a held one is this gesture again: said
+			// without the id, which nobody reading it chose.
 			return nil, collision("this task already has that checklist. Look at " +
 				"the task rather than adding it again")
 		}
@@ -163,8 +142,7 @@ func ApplyChecklist(lists []Checklist, c ChecklistIntent) ([]Checklist, error) {
 			return nil, err
 		}
 		if len(c.Items) > MaxChecklistItems {
-			// THE GESTURE PAST THE CAP ON ITS OWN is the request's: no
-			// state of the task lets a list that long land. A list it
+			// Past the cap on its own is the request's fault; a list it
 			// only pushes past a cap is the task's state, below.
 			return nil, invalid("this add_list gesture carries %d lines and a "+
 				"list holds at most %d — split it, or file some of them as "+
@@ -215,9 +193,8 @@ func ApplyChecklist(lists []Checklist, c ChecklistIntent) ([]Checklist, error) {
 		if err != nil {
 			return nil, err
 		}
-		// AND EVERYTHING NESTED UNDER IT. An item's children name it as
-		// their parent, and left behind they would point at a line that no
-		// longer exists — rows a renderer can place nowhere.
+		// AND EVERYTHING NESTED UNDER IT: a child left behind names a
+		// parent that no longer exists, a row a renderer can place nowhere.
 		gone := map[string]bool{out[l].Items[i].ID: true}
 		for grew := true; grew; {
 			grew = false
@@ -308,21 +285,14 @@ func checkChecklistName(name string, limit int, field string) error {
 }
 
 // checkChecklistCaps holds a task's checklists to [MaxChecklists],
-// [MaxChecklistItems] per list and [MaxChecklistItemsTotal] across them.
+// [MaxChecklistItems] per list and [MaxChecklistItemsTotal] across them: the
+// caps [MaxCommitBytes] sizes one record from.
 //
-// The caps are what the design maximum of one record is sized from
-// ([MaxCommitBytes] counts the whole tree at every cap), so a collection past
-// them is a record the arithmetic never allowed for.
-//
-// EVERY ONE IS THE TASK'S STATE ([ErrState]): a gesture adds one list or one
-// line, or a list [ApplyChecklist] has already held to the per-list cap on its
-// own, so what takes the result past a cap is what the task already carries —
-// and the same gesture lands once something is removed.
-//
-// THE TOTAL IS SAID AS WHAT THE GESTURE WOULD LEAVE, not as what the task
-// holds: one new list of up to [MaxChecklistItems] lines can cross it from
-// well below, where "already holds 256" would be false about a task holding
-// 200.
+// Every refusal is the task's state ([ErrState]): a gesture adds one list or
+// line, or a list [ApplyChecklist] already held to the per-list cap, so what
+// crosses a cap is what the task carries, and the gesture lands once something
+// is removed. The total is said as what the gesture would leave: one new list
+// can cross it from well below, where "already holds 256" would be false.
 func checkChecklistCaps(lists []Checklist) error {
 	if len(lists) > MaxChecklists {
 		return refusedByState("this task already has %d checklists, the most "+
@@ -369,17 +339,16 @@ func checklistOpList() string {
 // settleChecklist resolves a checklist gesture into the whole collection the
 // record carries.
 //
-// INSIDE THE DECIDE SNAPSHOT, for [settleWatch]'s reason, and returning a COPY
-// for the same one: Decide runs again on a retry, and a resolution folded into
-// the captured patch would apply the gesture to its own result.
+// INSIDE THE DECIDE SNAPSHOT, as [settleWatch] is, and returning a COPY:
+// Decide reruns on a retry, and a resolution folded into the captured patch
+// would apply the gesture to its own result.
 func settleChecklist(current Task, patch TaskPatch) (TaskPatch, error) {
 	if patch.Checklist == nil {
 		return patch, nil
 	}
 	if patch.Checklists != nil {
-		// BOTH SPELLINGS AT ONCE IS A PROGRAMMING ERROR, refused rather
-		// than resolved in some order, exactly as a watch gesture beside
-		// a whole watcher set is.
+		// BOTH AT ONCE IS A PROGRAMMING ERROR, refused rather than
+		// resolved in some order, as a watch gesture beside a watcher set is.
 		return patch, invalid("this patch carries both a %s "+
 			"checklist gesture and a whole checklist collection — a caller "+
 			"states one or the other", patch.Checklist.Op)

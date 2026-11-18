@@ -10,19 +10,13 @@ import (
 )
 
 // A DUTY'S LOOP IS STOPPED BEFORE THE DUTY IS GIVEN BACK, so a node that stops
-// never exits holding it.
+// never exits holding it: the loop claims afresh every turn, so a turn in
+// flight across a release takes the duty straight back for the lease's TTL.
 //
-// The loop claims the duty afresh on every turn, and a claim of a released
-// lease simply succeeds. Stopped after the release, a turn in flight across it
-// took the duty straight back under this incarnation, and the node exited
-// holding the duty for the lease's whole TTL with nobody doing its work.
-//
-// DETERMINISTIC IN BOTH ORDERS. The loop here makes the duty's own claim from
-// a turn that stays in flight: it polls the lease, claims it the moment it
-// reads it given back, and looks for its stop only AFTER each read. A teardown
-// that releases first is therefore always seen, however short the gap before
-// the stop, and one that stops first always ends the turn with the duty still
-// held, for the release to give back.
+// DETERMINISTIC IN BOTH ORDERS: the loop polls the lease, claims it the moment
+// it reads it given back, and looks for its stop only AFTER each read. A
+// teardown that releases first is always seen; one that stops first ends the
+// turn with the duty still held, for the release to give back.
 func TestADutyIsNotTakenBackAsTheNodeStops(t *testing.T) {
 	t.Parallel()
 	for duty, swap := range map[string]func(e *Engine, start func() *loop){
@@ -103,13 +97,10 @@ func held(t *testing.T, leases coord.Backend, resource string) *coord.Lease {
 	return lease
 }
 
-// A DECLINED DUTY'S LEASE IS GIVEN BACK, and only this incarnation's.
-//
-// A duty's lease is sized to outlive several of its ticks, so a holder that
-// declined it and merely stopped claiming kept it from every node for the whole
-// TTL. The give-back releases the lease this incarnation holds, so another
-// node's claim takes the duty at once; and it releases nothing it does not
-// hold, so a peer that has since taken the duty keeps it.
+// A DECLINED DUTY'S LEASE IS GIVEN BACK, and only this incarnation's: the
+// lease outlives several ticks, so merely ceasing to claim keeps it from every
+// node for the TTL. A peer can then take it at once, and a peer that already
+// has keeps it.
 func TestADeclinedDutysLeaseIsGivenBack(t *testing.T) {
 	t.Parallel()
 	e := newSandboxNode(t, parseCompany(t, companyWithoutSandboxDoc))

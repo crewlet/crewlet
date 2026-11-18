@@ -1,7 +1,5 @@
-/**
- * A patch's hidden unchanged lines put back in place: the lines a reader
- * revealed in each gap, read from the newer blob and numbered on both sides.
- */
+/** A patch's hidden unchanged lines put back in place: the lines a reader revealed in each gap,
+ *  read from the newer blob and numbered on both sides. */
 import type { DiffHunk, DiffLine } from "~/components/DiffView.tsx";
 import { HUNK_HEADER } from "~/lib/patch.ts";
 
@@ -56,10 +54,8 @@ function sameLines(
   return out;
 }
 
-/**
- * A hunk's header redrawn for the lines it now holds. Git's section words name
- * the hunk's own start, so lines revealed above it drop them.
- */
+/** A hunk's header redrawn for the lines it now holds. Git's section words name the hunk's own
+ *  start, so lines revealed above it drop them. */
 function headerFor(lines: readonly DiffLine[], was: string | undefined, grown: boolean): string {
   const olds = lines.filter((l) => l.before !== null);
   const news = lines.filter((l) => l.after !== null);
@@ -69,11 +65,9 @@ function headerFor(lines: readonly DiffLine[], was: string | undefined, grown: b
   return `@@ ${side("-", olds, "before")} ${side("+", news, "after")} @@${section}`;
 }
 
-/**
- * The hunks with the revealed lines of `newer` (1-based lines of the newer
- * blob, `newerLines` long where known) in place; a gap revealed whole joins its
- * hunk to the one above, and `gaps[k]` is the original gap above output hunk k.
- */
+/** The hunks with the revealed lines of `newer` (1-based lines of the newer blob, `newerLines` long
+ *  where known) in place; a gap revealed whole joins its hunk to the one above, and `gaps[k]` is
+ *  the original gap above output hunk k. */
 export function expandHunks(
   hunks: readonly DiffHunk[],
   revealed: Revealed,

@@ -10,16 +10,14 @@ import (
 
 // A SUBTREE READ ENDS AT ITS OWN ROOT, WHATEVER SHAPE THE ROWS ARE IN.
 //
-// The applier applies a parent cycle rather than stall the log over it (two
-// re-parents on two subjects form one no single write sees), so the rows the
-// subtree walk follows can loop — and a walk down the parent pointers that
-// can step back onto its root never ends. Measured: [readSubtree] on a member
-// of a two-task cycle did not return, past its context's deadline, and the
-// move, removal or restore that asked for it held its transaction with it.
+// The applier applies a parent cycle rather than stall the log (two re-parents
+// on two subjects form one no single write sees), so the parent pointers can
+// loop, and a walk that steps back onto its root never ends, holding the
+// transaction of the move, removal or restore that asked for it.
 //
 // The rows are written directly in the shapes the applier leaves: a two-task
 // cycle with a tree hanging from it, a task that is its own parent, and an
-// ordinary tree beside them, which must read exactly as it always has.
+// ordinary tree beside them, which must read as it always has.
 func TestASubtreeReadEndsAtItsOwnRoot(t *testing.T) {
 	t.Parallel()
 	parents := map[string]string{
@@ -64,8 +62,8 @@ func TestASubtreeReadEndsAtItsOwnRoot(t *testing.T) {
 				got []string
 				err error
 			}
-			// IN A GOROUTINE OF ITS OWN, because the failure this guards
-			// against does not return at all and ignores its context.
+			// IN A GOROUTINE OF ITS OWN: the failure guarded against never
+			// returns and ignores its context.
 			done := make(chan answer, 1)
 			go func() {
 				var a answer

@@ -9,26 +9,18 @@ import (
 	"testing"
 )
 
-// NO CODE READ ESCAPES ITS TRANSACTION.
+// NO CODE READ ESCAPES ITS TRANSACTION: every read is served inside the ONE
+// transaction the framework's read hands its callback, checkpoint included, so
+// rows, checkpoint and level are one state of the estate; a statement on
+// anything else escapes the level, the refusal ladder and the coverage probe,
+// and pairs rows of two instants.
 //
-// Every read here is served inside the ONE transaction the framework's read
-// hands its callback — the checkpoint the answer names included — so the rows,
-// the checkpoint and the level are one state of the estate. A statement on
-// anything else would be outside the level, the refusal ladder and the
-// coverage probe, and would pair rows of two instants; the knowledge base's
-// reader shipped exactly that, five statements at five instants.
+// Structural, because a behavioural test would have to win a race against a
+// concurrent write. It holds that every statement in each file declaring a
+// Reader method (readerFiles) is issued on a parameter declared *sql.Tx, and
+// that the Reader holds no handle reaching the estate otherwise.
 //
-// A STRUCTURAL TEST, because the defect is structural — a behavioural one
-// would have to catch two statements disagreeing across a concurrent write,
-// a race a test can only lose reliably. It holds two things: every statement
-// in every file that serves a Reader's reads — reader.go, and each file
-// declaring a method of the Reader beside it, as changeread.go's reads of
-// changes and retire.go's listing do — is issued on a parameter declared
-// *sql.Tx, and the Reader holds no handle a statement could reach the estate
-// through instead.
-//
-// Mutation: issue changeread.go's listing on a transaction of its own, and
-// this names the statement.
+// Mutation: issue changeread.go's listing on its own transaction → named.
 func TestNoCodeReadEscapesItsTransaction(t *testing.T) {
 	t.Parallel()
 

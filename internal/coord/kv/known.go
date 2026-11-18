@@ -6,72 +6,24 @@ import (
 	"time"
 )
 
-// knownRecords is the last record this store wrote of each resource whose
-// record is live for as long as it can be read, and the revision it wrote it
-// at: what lets a renewal of a lease this store holds be ONE ROUND TRIP, its
-// conditional write at that revision, where reading the record first made it
-// two (see the package doc's "A renewal of a record this store last wrote").
-//
-// # Why a write at the known revision is the whole decision
-//
-// A renewal reads the record to learn three things: that it is still there,
-// that it still names this owner at this epoch, and the revision to write at.
-// Every revision of a key is a stream sequence, which the broker never hands
-// out twice. So an update conditioned on the revision this store's own last
-// write was given LANDS ONLY IF THE RECORD IS STILL EXACTLY THAT WRITE: no
-// peer's claim, no release, no reap and no sibling's renewal has touched it
-// since. That answers the first two questions by construction, and it is the
-// revision. A write that is refused on the comparison learns nothing else, and
-// the renewal reads the record and decides as it always did.
-//
-// # Only a record that cannot lapse while it can be read
-//
-// "Still there" means "still held" only for a record whose disappearance IS
-// its expiry: on the seat lease bucket, one taken at the bucket's whole age,
-// which every seat and presence lease is in production ([lane.reapsAtMax];
-// [Store.held] consults no clock for one). A record judged by a deadline
-// against the store's clock — every record in the duty bucket, and a seat
-// lease asked for less than its bucket's age — can lapse and still be there,
-// and a lapsed lease is deliberately NOT renewable: re-acquiring mints the
-// epoch that fences the gap. A write at its revision would renew it. So such a
-// record is never known here ([liveWhilePresent]), and its renewal always
-// reads the store's clock first.
-//
-// # Forgotten when it can no longer be right, and never trusted past its age
-//
-// An entry goes on a release of the tenure it names, on a renewal answered
-// false, and on a write at its revision that is refused or that nobody
-// answered — each a moment the record may no longer be the one known. It is
-// also not used once it is older, on this node's clock, than the bucket's age:
-// by then the broker has reaped the record unless something renewed it, and a
-// write at its revision could only be refused. That clock decides nothing
-// about ownership — the compare-and-set does — it only spares a write that
-// cannot land. An entry is stamped when its write is answered, after the
-// broker stamped the record, so the age read here never overcounts the
-// broker's: an entry is never set aside while its record can still be there.
-// It may read younger than the record, and then the write is sent and refused
-// — at worst, one round trip.
-//
-// Bounded by the resources the seat lease bucket holds — this node's seats and
-// its own presence — so an entry left by a lease this node stopped renewing
-// without a release (a seat dropped as unrenewable) is one per seat and is
-// replaced or forgotten the next time the seat is held here.
-//
-// # The bytes, never the value handed out
-//
-// Each entry keeps the record as it was encoded and decodes a fresh copy on
-// every lookup, because the value a claim answers carries its Meta map to the
-// caller as the lease's own: kept by reference, a caller that changed the map
-// it was handed would change what the next renewal writes.
-//
-// The zero value is ready: the map is made on the first write, and the clock
-// is the machine's.
+// knownRecords is, per resource, the record this store last wrote and the
+// revision the broker gave it: a renewal of a lease it holds is then one
+// conditional write at that revision (package doc, "A renewal of a record this
+// store last wrote is one round trip"). Only a record live while it can be
+// read is kept ([liveWhilePresent]), so entries are bounded by the seat lease
+// bucket's resources on this node. An entry goes on a release or false renewal
+// of its tenure and on a refused or unanswered write at its revision, and is
+// unused once older than the bucket's age on this node's clock, which only
+// spares a write that cannot land; stamped after the broker's, it never
+// overcounts. Entries hold encoded bytes, decoded per lookup: a claim hands its
+// Meta map to the caller, who could otherwise change the next renewal's write.
+// The zero value is ready.
 type knownRecords struct {
 	mu   sync.Mutex
 	last map[string]knownRecord
 
-	// now is this node's clock, which only an entry's age is read on. Nil
-	// means time.Now; a test sets one it moves.
+	// now is this node's clock, read only for an entry's age; nil means
+	// time.Now.
 	now func() time.Time
 }
 
@@ -99,10 +51,9 @@ func (k *knownRecords) clock() time.Time {
 }
 
 // remember records that resource's record on l is value, at revision, as this
-// store just wrote or read it. A record that can lapse while it is still there
-// is not known, and forgets what was known of the resource before it; a write
-// older than the one already known changes nothing, since two of this store's
-// own calls on one resource may answer out of order.
+// store just wrote or read it. A record that can lapse while still there is
+// not kept, and forgets what was known before; an older revision changes
+// nothing, since this store's own calls on a resource may answer out of order.
 func (k *knownRecords) remember(l *lane, resource string, revision uint64, value leaseValue) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -115,9 +66,8 @@ func (k *knownRecords) remember(l *lane, resource string, revision uint64, value
 	}
 	data, err := encodeValue(value)
 	if err != nil {
-		// The value was just written from these same fields, so this is
-		// unreachable; unknown is the safe answer either way, since the
-		// renewal then reads the record.
+		// Unreachable (just written from these fields); unknown is safe,
+		// since the renewal then reads the record.
 		delete(k.last, resource)
 		return
 	}
@@ -145,9 +95,9 @@ func (k *knownRecords) lookup(l *lane, resource, owner string) (entry, bool) {
 	if err := json.Unmarshal(have.data, &value); err != nil || value.Owner != owner {
 		return entry{}, false
 	}
-	// No store timestamp: a renewal's answer carries only the revision. It
-	// is never read for a known record, which [Store.held] judges without a
-	// clock, and nothing hands a known record out as a lease.
+	// No store timestamp (a renewal's answer carries only the revision):
+	// [Store.held] judges a known record without a clock, and nothing hands
+	// one out as a lease.
 	return entry{resource: resource, lane: l, revision: have.revision, value: value}, true
 }
 

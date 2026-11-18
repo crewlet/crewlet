@@ -237,9 +237,8 @@ func (e *Engine) wakeDelegates(ctx context.Context, run sandbox.PendingRun) {
 	}
 	d := held.Delegation
 	if word, said := ownRequest(run); word != "" {
-		// A DELEGATE'S OWN REQUEST is put to people now, not at its deadline:
-		// its delegate never decides it, and a panel's other half never
-		// allows alone.
+		// A DELEGATE'S OWN REQUEST goes to people now, not at its deadline
+		// (ownRequest).
 		if e.backends != nil && e.backends.Fleet != nil {
 			escalateHeld(ctx, sandbox.NewCoordStore(e.backends.Fleet), sshServers{engine: e},
 				delegatedDesk{engine: e}.Arguments, run, word, said, time.Now())
@@ -534,8 +533,7 @@ type delegatedRecorder interface {
 
 // sweepDelegated puts to people every active held call that waited on its
 // delegates past deadline, or whose delegation the live rules no longer
-// hold, recording each escalation once it is written, naming what it decided
-// from the call's arguments as open opens them.
+// hold, each through escalateHeld.
 func sweepDelegated(ctx context.Context, store sandbox.PendingStore, rules builtin.DelegatedRules,
 	deadline time.Duration, audit delegatedRecorder, open func(sandbox.PendingRun) (map[string]any, error),
 	now time.Time) {

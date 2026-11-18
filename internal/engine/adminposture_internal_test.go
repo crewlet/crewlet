@@ -12,15 +12,14 @@ import (
 
 // A NODE PUBLISHES ITS ADMIN POSTURE ONLY WHEN IT SERVES THE API.
 //
-// The posture is applied per node per request, so a fleet mid-rollout legally
-// disagrees about it and the node's own status row is the one place that says
-// which node serves admin (`/query/fleet` reads it). A node serving no API
-// grants nothing to anybody, and its posture there is "not saying" rather
-// than "refuses" — but config accepts a valid `api.auth.admin` on such a node,
-// so what keeps a worker from advertising `serve` is [New]'s wiring alone.
-// THROUGH [New] rather than over an engine literal, because that wiring is the
-// thing under test. Mutations: drop the ServesAPI guard in [New] and the first
-// half goes red; drop the posture from [Engine.nodeStatus] and the second does.
+// The posture is applied per node per request, so a fleet mid-rollout may
+// disagree on it and only a node's own status row says which serves admin
+// (`/query/fleet` reads it). A node serving no API grants nothing, so its
+// posture is "not saying", not "refuses"; config accepts `api.auth.admin` on
+// such a node, so only [New]'s wiring keeps a worker from advertising `serve`,
+// which is why this goes THROUGH [New] rather than an engine literal.
+// Mutations: drop the ServesAPI guard in [New] and the first half goes red;
+// drop the posture from [Engine.nodeStatus] and the second does.
 func TestANodeServingNoAPIPublishesNoAdminPosture(t *testing.T) {
 	t.Parallel()
 

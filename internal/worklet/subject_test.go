@@ -9,13 +9,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY KIND IS ENUMERATED, AND THE ENUMERATION IS THE ONE SOURCE.
-//
-// Four readers that cannot see each other compare against this list: the
-// publisher builds the subject, the wake filter includes or excludes the kind,
-// the applier's dispatch switches on it, and the domain's Tables declaration
-// must classify every one. A kind added to three of the four publishes fine,
-// is delivered fine, wakes nobody and writes nothing.
+// EVERY KIND IS ENUMERATED, AND THE ENUMERATION IS THE ONE SOURCE: the
+// publisher, the wake filter, the applier's dispatch and the domain's Tables
+// declaration all compare against it, and a kind added to three of the four
+// publishes and is delivered, but wakes nobody and writes nothing.
 func TestTheKindsAreAClosedEnumeratedSet(t *testing.T) {
 	t.Parallel()
 	if len(worklet.ObjectKinds) != 16 {
@@ -39,13 +36,11 @@ func TestTheKindsAreAClosedEnumeratedSet(t *testing.T) {
 
 // THREE KINDS ARE NOT ARBITRATED, AND THEY ARE THE THREE THAT MUST NOT BE.
 //
-// A turn is additive — it records spend that happened and races nobody. A
-// barrier shares ONE subject across the whole company, so an expectation there
-// would serialise every linearizable read behind every other and write an
-// anchor row per read into the transaction holding this store's only writer.
-// And the trim's trimmed record removes anchors: identical ones are each meant
-// to land, and an anchor of its own is the row it exists not to leave
-// (ADR-0080).
+// A turn is additive spend and races nobody. The barrier is ONE company-wide
+// subject, so an expectation would serialise every linearizable read and write
+// an anchor row per read under this store's only writer. The trimmed record
+// removes anchors, identical ones each meant to land, and an anchor of its own
+// is the row it exists not to leave (ADR-0080).
 func TestOnlyTheTurnTheBarrierAndTheTrimmedRecordAreUnarbitrated(t *testing.T) {
 	t.Parallel()
 	var unarbitrated []worklet.ObjectKind
@@ -65,10 +60,9 @@ func TestOnlyTheTurnTheBarrierAndTheTrimmedRecordAreUnarbitrated(t *testing.T) {
 
 // EXACTLY ONE KIND INSTALLS A GATE, AND IT IS ANSWERED FROM THE KIND ALONE.
 //
-// It has to be answerable by a node that cannot decode the payload, because it
-// is what turns an unknown version into a STOP rather than a deferral — and a
-// deferred gate licenses every later record on this node with no inverse that
-// repairs it.
+// A node that cannot decode the payload must still answer it: it turns an
+// unknown version into a STOP rather than a deferral, and a deferred gate
+// licenses every later record on this node with no inverse that repairs it.
 func TestTheGateIsAnsweredFromTheKindAlone(t *testing.T) {
 	t.Parallel()
 	var gates []worklet.ObjectKind
@@ -81,10 +75,9 @@ func TestTheGateIsAnsweredFromTheKindAlone(t *testing.T) {
 		t.Fatalf("the gate-installing kinds are %v, want the eviction alone", gates)
 	}
 
-	// AND THE RECORD-LEVEL ANSWER IS TWO CONDITIONS, NOT ONE. A purge is
-	// a gate by its OP on an ordinary task subject, so a reader that
-	// consulted only the kind would DEFER a purge it cannot decode — and
-	// that node then goes on serving rows every other node has removed.
+	// THE RECORD-LEVEL ANSWER IS TWO CONDITIONS: a purge is a gate by its
+	// OP on a task subject, so a reader consulting only the kind would
+	// DEFER an undecodable purge and serve rows every other node removed.
 	purge := worklet.RecordEnvelope{
 		Subject: worklet.TaskSubject("t-1"), Op: worklet.OpPurge,
 	}
@@ -144,9 +137,8 @@ func TestEverySubjectRoundTripsThroughTheWire(t *testing.T) {
 
 // A KIND THIS BUILD DOES NOT KNOW IS RETAINED VERBATIM, NOT REPLACED.
 //
-// The deferral this node files a newer peer's record under forms a family term
-// out of the literal kind, so replacing it with a sentinel would make the
-// writer's own deferral probe miss the record it exists to see.
+// The deferral filing a newer peer's record forms a family term from the
+// literal kind, so a sentinel would make the writer's deferral probe miss it.
 func TestAnUnknownKindKeepsItsLiteral(t *testing.T) {
 	t.Parallel()
 	wire := topics.TrackerLogSubject("shard", "7")
@@ -161,8 +153,8 @@ func TestAnUnknownKindKeepsItsLiteral(t *testing.T) {
 	if s.Kind.Valid() {
 		t.Error("an unknown kind reports itself valid")
 	}
-	// AND IT STILL VALIDATES AS A SUBJECT, because validation refuses a
-	// subject that cannot ADDRESS an object, and this one can.
+	// It still validates: validation refuses only a subject that cannot
+	// ADDRESS an object.
 	if err := s.Validate(); err != nil {
 		t.Fatalf("a newer peer's subject was refused: %v", err)
 	}
@@ -188,8 +180,8 @@ func TestOnlyTheBarrierIsAKindWithOneObject(t *testing.T) {
 
 // A SUBJECT CARRYING A WILDCARD IS REFUSED.
 //
-// The broker would read it as a pattern, so a publish would either fail or —
-// worse — a consumer's filter would cover subjects nobody meant.
+// The broker would read it as a pattern: a publish would fail or, worse, a
+// consumer's filter would cover subjects nobody meant.
 func TestASubjectCarryingAWildcardIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, s := range []worklet.Subject{
@@ -213,12 +205,11 @@ func contains(kinds []worklet.ObjectKind, want worklet.ObjectKind) bool {
 	return false
 }
 
-// A TASK ID IS THE CANONICAL UUID, WHICH NO KEY SPELLS: the code tools list a
-// work item's changes by a name IsTaskID takes as the item's identity with no
-// read of the tracker, so a key it took, in either case, would be listed as an
-// id no change carries and answer nothing, and so would a spelling no task's
-// row holds (the comparison is byte for byte), where a resolution refuses it
-// and says why.
+// A TASK ID IS THE CANONICAL UUID, WHICH NO KEY SPELLS: the code tools take
+// what IsTaskID accepts as the item's identity without reading the tracker and
+// compare byte for byte, so a key (in either case) or another spelling would
+// list changes by an id none carries and answer nothing, where a resolution
+// refuses it and says why.
 //
 // Mutation: IsTaskID accepting whatever uuid.Parse accepts → the uppercase,
 // braced, urn and undashed spellings, red.

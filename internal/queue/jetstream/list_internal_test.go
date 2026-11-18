@@ -13,8 +13,8 @@ import (
 )
 
 // unpairedConsumer creates a durable consumer with a subscription's name and
-// filter and no pair in its metadata — one something other than this backend
-// made.
+// filter and no pair in its metadata, as something other than this backend
+// would.
 func unpairedConsumer(ctx context.Context, t *testing.T, q *Queue, topic, group string) {
 	t.Helper()
 	stream, err := q.streamFor(ctx, topic)
@@ -53,12 +53,11 @@ func TestAnUnpairedConsumerIsLeftOutAndTheRestAreListed(t *testing.T) {
 
 // A PAIR IS LISTED ONLY WHEN IT ADDRESSES THE CONSUMER IT WAS READ FROM.
 //
-// A sweep acts on the pair, never on the consumer: it deletes
-// consumerName(topic, group). Metadata naming some other pair would send it to
-// delete a subscription it never looked at while the consumer it did find kept
-// its mail. And an ephemeral consumer is not a subscription at all, which is a
-// different answer from an unprovable one: the second is logged, and every
-// dashboard socket holds a consumer of the first kind.
+// A sweep deletes consumerName(topic, group), never the consumer it found, so
+// metadata naming another pair would delete a subscription it never looked at
+// while the found one kept its mail. An ephemeral consumer is not a
+// subscription, a different answer from unprovable: only unprovable is logged,
+// and every dashboard socket holds an ephemeral one.
 func TestPairOfListsOnlyAPairThatAddressesTheConsumer(t *testing.T) {
 	t.Parallel()
 	consumer := func(durable, filter string, meta map[string]string) *jetstream.ConsumerInfo {
@@ -156,10 +155,9 @@ func TestAStreamThisBackendDidNotProvisionIsNotListed(t *testing.T) {
 	}
 }
 
-// A NAME SHORTENED TO FIT IS STILL TEXT. Every derived consumer name cuts its
-// readable half to a length and keeps a digest of the exact pair after it; the
-// cut was a byte slice, so a long group or node id with a multi-byte character
-// at the cut became a name that is not valid UTF-8.
+// A NAME SHORTENED TO FIT IS STILL TEXT: every derived consumer name cuts its
+// readable half to a length before a digest of the exact pair, and a cut through
+// a multi-byte character would leave a name that is not valid UTF-8.
 func TestAShortenedConsumerNameIsCutOnACharacter(t *testing.T) {
 	t.Parallel()
 	wide := strings.Repeat("é", consumerNameMax)
