@@ -508,25 +508,36 @@ the dependency surface before choosing a host for it:
   ([#1040](https://github.com/crewlet/crewlet/issues/1040); see
   [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
 - **A fair queue at the link's bottleneck, each way.** The satellite holds
-  its uploads, downloads and memory replays to one window across its link,
-  both ways together, four seconds at the floor, so a small request sent
-  behind them is answered inside its five-second term even at thirty
-  seconds a mebibyte. Whatever else a first-in-first-out queue at a
-  bottleneck holds is added to that wait: another flow's bulk, such as a
-  harness's own upload or download, keeps the queue full for as long as it
-  takes to drain, and a request on the leaf link waits as long — a 256 KiB
-  buffer is 7.5 seconds at the floor, a cellular modem's buffer of
-  megabytes minutes — and behind a full window, a queue of more than a
-  fraction of a second of the link's rate puts the request past its term
-  ([#1035](https://github.com/crewlet/crewlet/issues/1035)). So the queue at
-  each direction's bottleneck must be fair (`fq_codel` or CAKE), which sends
-  a sparse flow's packets ahead of a bulk flow's, and the node's broker
-  traffic must get at least the floor beside the other flows. The host's own
-  queue discipline counts only where the host is the bottleneck: a host
-  whose interface is faster than its link queues at the modem or the router
-  instead, and keeps the queue its own only by shaping its egress just below
-  the uplink's rate and its ingress just below the downlink's (CAKE in
-  `ingress` mode on an IFB device). Neither reorders the bytes of one flow, and a
+  its uploads, downloads, walks and memory replays to one window across its
+  link, both ways together, four seconds at the floor, so a small request
+  sent behind them is answered inside its five-second term even at thirty
+  seconds a mebibyte. The floor is the rate the link gives the node's broker
+  traffic beside its own background reads: a link at exactly thirty seconds
+  a mebibyte whose presence reads take two fifths of it carries a full window
+  in 6.7 seconds. Whatever else a first-in-first-out queue at a bottleneck
+  holds is added to that wait: another flow's bulk, such as a harness's own
+  upload or download, keeps the queue full for as long as it takes to drain,
+  and a request on the leaf link waits as long — a 256 KiB buffer is 7.5
+  seconds at the floor, a cellular modem's buffer of megabytes minutes
+  ([#1035](https://github.com/crewlet/crewlet/issues/1035)). So:
+  - The queue at each direction's bottleneck is fair (`fq_codel` or CAKE),
+    which sends a sparse flow's packets ahead of a bulk flow's. The host's
+    own queue discipline counts only where the host is the bottleneck: a
+    host whose interface is faster than its link queues at the modem or the
+    router instead, and keeps the queue its own only by shaping its egress
+    just below the uplink's rate and its ingress just below the downlink's
+    (CAKE in `ingress` mode on an IFB device).
+  - A first-in-first-out queue protects only the lease link, and only where
+    the two directions' queues together hold no more than four seconds of
+    the link's rate, 140 KB at the floor: a renewal then waits at the
+    bottleneck and never in the data link's sockets. The data link's own
+    requests are held to their term only behind fair queues, since at a
+    first-in-first-out queue the other flows' bytes add to the node's window.
+  - The node's broker traffic gets at least the floor beside its background
+    reads.
+
+  Whatever the queues do, no hold, hydration or transfer is refused while the
+  link is moving. Neither queue discipline reorders the bytes of one flow, and a
   satellite's broker traffic is one flow, its leaf link, so what it sends
   whole — an event or a dead letter of up to 8 MiB, a fleet record of up to
   6 MiB — still holds every request sent after it on that link for the whole
