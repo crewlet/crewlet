@@ -133,9 +133,9 @@
 // trail it by, which it caps at the claims' lag: once the text has run that
 // far past a window, about 5.3 MiB, it decides the window whatever its claims
 // say. With every rule run twice, and the readers of the claims, that is at
-// most about 21 MiB of text, and at most about as much again of the edits,
-// values and claims the stages keep beside it, where a text is markers end
-// to end (a JSON Web Token every fifteen bytes). A test holds both, over a
+// most about 21 MiB of text, and at most about 23 MiB of the edits, values
+// and claims the stages keep beside it, where a text is markers end to end
+// (a JSON Web Token every fifteen bytes). A test holds both, over a
 // shape of each kind of hold a stream was found to have, at a hold small
 // enough that each costs a MiB, and over an armour beside a run past the
 // stream's own hold.
@@ -163,6 +163,29 @@
 // between an armour and a run longer than the lag; or armours among long
 // tokens each with a password's key after it. None is a credential's format. A window decided early that read no claim otherwise decided what
 // the whole text does.
+//
+// # A key's block beside a password
+//
+// The keys' blocks are read beside what the rules claim in the text as
+// written ([claims]), and the rules then read the text the blocks leave, so a
+// password's value is read twice: by the claims, as written, and by the rule,
+// past the keys' markers, and the two readings must name one value.
+//
+// A PASSWORD IS CLAIMED AS ITS KEY AND ITS VALUE, never the stretch between
+// them. A value read on a line below its key ([readValue]) has between the two
+// the wrapping's suffix on the key's line, its blank lines and the gutter of
+// the value's line, which the wrapping writes alike on every line and the rule
+// never replaces. Claimed as one stretch from the key to the value's end, a
+// key's piece in it was none on the key's line where the same piece on the
+// value's line, past the stretch, was one: under a key whose quote, a piece
+// and an END end its line, over a word and the same quote, piece and END, the
+// blocks ended the two lines unalike, the rule found the key line's suffix on
+// no line below, took the quote for the value and published the word, and a
+// second pass read the piece beside the key as a key's and redacted it. A
+// stream's reader claims each value so too, decided or read open
+// ([claimSource.valued]); a window decided early still checks a claim as the
+// one stretch from its key to its value's end ([keyStage.handed]), so it
+// refuses the texts it refused when a claim was that stretch.
 //
 // # What a password's rule still publishes
 //
@@ -2808,12 +2831,12 @@ const maxKeyLine = 76 + 1
 // ([marked]), and one written on it is read back from its END no further
 // than the marker ([lineBack]); no key's block is read across a line
 // holding a marker, which can stand for more text than its own ([marked]);
-// a key's block ends short of what a rule names ([claims.shortOfNames]);
+// a key's block ends short of what a rule names ([claims.shortOfNames]) and
+// takes alike every line between a password's key and its value ([claims]);
 // and what a rule leaves of a run of base64 it replaced some of, written
 // straight onto its marker, is read as the run it claimed ([claims.glued]).
-// The one exception is the last the package doc lists as still published: a
-// key's piece on the line of a value read below a password's key that a key's
-// END line goes on to, which a second pass can redact.
+// The one exception is the last the package doc lists as still published,
+// which a second pass can redact.
 //
 // THE TEXT IS READ WHOLE, the keys' blocks and then each rule over what the
 // one before it wrote, however long it is: its caller holds it whole already,
@@ -4409,11 +4432,11 @@ func fragment(run string) bool {
 
 // claims is what the rules REPLACE in a text a key is read in, and what NAMES
 // what they replace: every token a rule matches, and a password's key and the
-// separator after it with the value after them — as ranges of the text in
-// order, those that overlap made one — read the first time a run asks, since a
-// text holding a key's armour seldom holds either. A line of a key's body
-// holds nothing that names ([wrapping.bodyLine]), and a piece of a key nothing
-// they replace ([claims.piece]).
+// separator after it, and apart from them the value they name — as ranges of
+// the text in order, those that overlap made one — read the first time a run
+// asks, since a text holding a key's armour seldom holds either. A line of a
+// key's body holds nothing that names ([wrapping.bodyLine]), and a piece of a
+// key nothing they replace ([claims.piece]).
 //
 // A RUN ANOTHER RULE CLAIMS IS NO PIECE OF A KEY. Where a cut leaves a key's
 // line a piece reads like one ([fragment]), so does a run of a token or a
@@ -4437,15 +4460,16 @@ func fragment(run string) bool {
 type claims struct {
 	text string
 	// whole is what each rule replaces: a token, a password's key and
-	// separator with its value. named is what names it, which is all a
-	// token is and a password's key and separator alone ([claims.names]).
+	// separator, and its value apart from them. named is what names it,
+	// which is all a token is and a password's key and separator alone
+	// ([claims.names]).
 	whole, named [][2]int
 	// tokens are the tokens' ranges, an AWS secret's value among them, and
-	// passwords where each password's key begins, its separator ends and its
-	// value ends, and where each AWS secret's key begins and its separator
-	// ends ([claimed]).
+	// passwords where each password's key begins, its separator ends, and
+	// its value begins and ends, and where each AWS secret's key begins and
+	// its separator ends ([claimed]).
 	tokens    [][2]int
-	passwords [][3]int
+	passwords [][4]int
 	// taken are the blocks read forward from a BEGIN ([claims.take]).
 	taken [][2]int
 	read  bool
@@ -4561,24 +4585,28 @@ func (c *claims) take(blocks [][2]int) {
 	}
 }
 
-// build makes whole and named from the tokens and the passwords, the value of a
-// password whose key a block took left out where it runs past the block.
+// build makes whole and named from the tokens and the passwords: each
+// password's key and separator, and its value apart from them, left out where
+// the key is in a block the value runs past ([claims.take]).
 func (c *claims) build() {
 	whole := slices.Clone(c.tokens)
 	named := slices.Clone(c.tokens)
 	for _, p := range c.passwords {
 		named = append(named, [2]int{p[0], p[1]})
-		end := p[2]
+		whole = append(whole, [2]int{p[0], p[1]})
+		if p[3] <= p[2] {
+			continue
+		}
 		i, _ := slices.BinarySearchFunc(c.taken, p[0], func(b [2]int, at int) int {
 			if b[1] <= at {
 				return -1
 			}
 			return 1
 		})
-		if i < len(c.taken) && c.taken[i][0] <= p[0] && end > c.taken[i][1] {
-			end = p[1]
+		if i < len(c.taken) && c.taken[i][0] <= p[0] && p[3] > c.taken[i][1] {
+			continue
 		}
-		whole = append(whole, [2]int{p[0], end})
+		whole = append(whole, [2]int{p[2], p[3]})
 	}
 	c.whole, c.named = mergeSpans(whole), mergeSpans(named)
 }
@@ -4758,9 +4786,9 @@ func promptAt(line string) int {
 }
 
 // claimed is every token the rules replace, in order, those that overlap made
-// one, and every password: where its key begins, where its separator ends and
-// where the value it names ends, the separator's end where it names none
-// ([claims]).
+// one, and every password: where its key begins, where its separator ends, and
+// where the value it names begins and ends, the separator's end for both where
+// it names none ([claims]).
 //
 // IN THE RULES' ORDER, and as they take them, which is what they replace and
 // not what each would on its own: the passwords are read in the text as the
@@ -4788,7 +4816,7 @@ func promptAt(line string) int {
 // token's base64 — is one run with the value as written and another beside
 // the value's marker, which a second pass would read as a key's text where
 // the first read a claimed run.
-func claimed(text string) (tokens [][2]int, passwords [][3]int) {
+func claimed(text string) (tokens [][2]int, passwords [][4]int) {
 	w := passwordInput(text, nil)
 	for _, e := range w.edits {
 		tokens = append(tokens, [2]int{e[2], e[3]})
@@ -4806,7 +4834,7 @@ func claimed(text string) (tokens [][2]int, passwords [][3]int) {
 			if !ok {
 				break
 			}
-			passwords, from = append(passwords, [3]int{w.at(start), w.at(end), w.at(end)}), end
+			passwords, from = append(passwords, [4]int{w.at(start), w.at(end), w.at(end), w.at(end)}), end
 		}
 	}
 	password := rules()[len(rules())-1]
@@ -4817,11 +4845,11 @@ func claimed(text string) (tokens [][2]int, passwords [][3]int) {
 			break
 		}
 		if value[1] > value[0] {
-			passwords = append(passwords, [3]int{w.at(key[0]), w.at(key[1]), w.at(value[1])})
+			passwords = append(passwords, [4]int{w.at(key[0]), w.at(key[1]), w.at(value[0]), w.at(value[1])})
 			prior, from = append(prior, value), value[1]
 			continue
 		}
-		passwords, from = append(passwords, [3]int{w.at(key[0]), w.at(key[1]), w.at(key[1])}), beyond(w.text, key[0])
+		passwords, from = append(passwords, [4]int{w.at(key[0]), w.at(key[1]), w.at(key[1]), w.at(key[1])}), beyond(w.text, key[0])
 	}
 	return tokens, passwords
 }

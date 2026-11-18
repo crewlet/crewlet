@@ -551,7 +551,9 @@ type claimSource struct {
 	// end is too, or lies at it or past it where it is -1.
 	frontier int
 	tokens   [][2]int
-	words    [][3]int
+	// words are each password's or AWS secret's key, its separator's end,
+	// and its value's start and end, -1 while to come ([claims]).
+	words [][4]int
 	// keys is the keys' stage that reads the claims: a claim that ends at
 	// or before where its next window begins ([keyStage.floor]) is asked
 	// of no window, and is not kept.
@@ -567,14 +569,29 @@ func (c *claimSource) token(t [2]int) {
 }
 
 // word claims w, a key, its separator's end and its value's end, the last -1
-// while to come.
+// while to come: a key and separator with no value, or an AWS secret's, whose
+// value is claimed as a token is.
 func (c *claimSource) word(w [3]int) {
-	end := max(w[1], w[2])
-	if w[1] < 0 || w[2] < 0 {
+	c.valued(w, w[1])
+}
+
+// valued claims k as [claimSource.word] does, its value beginning at start, -1
+// while to come, and claimed apart from its key ([claims]): the keys' stage
+// reads every line between the two as the whole text's keys read it.
+//
+// THE CHECK OF A WINDOW DECIDED EARLY READS IT AS ONE STRETCH, from its key to
+// its value's end ([keyStage.handed]), which holds every part of it an answer
+// can read: a claim that comes late over a window's footprint is a miss
+// whichever part the answers read, and a stream refuses the texts it refused
+// when a claim was that stretch.
+func (c *claimSource) valued(k [3]int, start int) {
+	w := [4]int{k[0], k[1], start, k[2]}
+	end := max(w[1], w[3])
+	if w[1] < 0 || w[3] < 0 {
 		end = -1
 	}
-	c.keys.handed(c, w[0], end, true, w[2])
-	if w[2] < 0 || w[2] > c.keys.floor {
+	c.keys.handed(c, w[0], end, true, w[3])
+	if w[3] < 0 || w[3] > c.keys.floor {
 		c.words = append(c.words, w)
 	}
 }
@@ -587,20 +604,24 @@ func (c *claimSource) endToken(end int) {
 }
 
 // endWord sets the ends of the word claimed last, claimed while open: its
-// separator's, where sep is not -1, and its value's.
+// separator's, where sep is not -1, and its value's, which begins there too
+// where no start was claimed with it.
 func (c *claimSource) endWord(sep, end int) {
 	w := &c.words[len(c.words)-1]
 	if sep >= 0 {
 		w[1] = sep
 	}
-	w[2] = end
+	if w[2] < 0 {
+		w[2] = end
+	}
+	w[3] = end
 	c.keys.ended(c, end)
 }
 
 // prune lets go of the claims that end at or before lo.
 func (c *claimSource) prune(lo int) {
 	c.tokens = slices.DeleteFunc(c.tokens, func(t [2]int) bool { return t[1] >= 0 && t[1] <= lo })
-	c.words = slices.DeleteFunc(c.words, func(w [3]int) bool { return w[2] >= 0 && w[2] <= lo })
+	c.words = slices.DeleteFunc(c.words, func(w [4]int) bool { return w[3] >= 0 && w[3] <= lo })
 }
 
 // stageMode is what a rule's stage does with what it decides.
@@ -1031,7 +1052,7 @@ func (s *ruleStage) apply(text string, lo, done int, ev event, prior *[][2]int) 
 		return ev.key[1], ev.key[1]
 	case reads:
 		if ev.v[1] > ev.v[0] {
-			s.src.word([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), s.raw.at(lo + ev.v[1])})
+			s.src.valued([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), s.raw.at(lo + ev.v[1])}, s.raw.at(lo+ev.v[0]))
 			*prior = priorWith(*prior, ev.v)
 			return ev.v[1], ev.v[1]
 		}
@@ -1154,7 +1175,7 @@ func (s *ruleStage) open(text string, lo, at int, ev event, limit int) (int, boo
 	s.run = openRun{on: true, start: lo + start, key: [2]int{lo + ev.key[0], lo + ev.key[1]}, held: held, w: valueWriter{with: s.r.with}}
 	switch s.mode {
 	case reads:
-		s.src.word([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), -1})
+		s.src.valued([3]int{s.raw.at(lo + ev.key[0]), s.raw.at(lo + ev.key[1]), -1}, s.raw.at(lo+start))
 	default:
 		s.pass(text, lo, at, start)
 		if s.r.value != nil {
@@ -1612,8 +1633,8 @@ func (k *keyStage) handed(c *claimSource, a, end int, word bool, value int) {
 //     the stretch it covers: a block read forward from a BEGIN that holds its
 //     key takes a value that runs past the block, keeping the key and
 //     separator alone, so a value read open is cut to them, and one ending at
-//     e inside the block is kept whole. The two differ from the separator's
-//     end to e, before e. But the window that read that block forward asked
+//     e inside the block is kept whole. The two differ from where the value
+//     begins to e, before e. But the window that read that block forward asked
 //     of the claims at the block's end ([claims.shortOfNames]), at or past e,
 //     so its own footprint meets [e, hi+1): it was decided early, since the
 //     value's end was not known; it waits still, since the reader's frontier
@@ -1832,8 +1853,8 @@ func (k *keyStage) claimsIn(text string, lo int) *claims {
 			}
 		}
 		for _, w := range s.words {
-			if (w[2] < 0 || w[2] > lo) && w[0] <= hi {
-				c.passwords = append(c.passwords, [3]int{w[0] - lo, clip(w[1]), clip(w[2])})
+			if (w[3] < 0 || w[3] > lo) && w[0] <= hi {
+				c.passwords = append(c.passwords, [4]int{w[0] - lo, clip(w[1]), clip(w[2]), clip(w[3])})
 			}
 		}
 	}
