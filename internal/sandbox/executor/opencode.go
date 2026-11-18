@@ -278,10 +278,10 @@ func (OpenCode) PackSave(paths Paths, rec sessionRecord, staged, dest string) (s
 
 // openCodePackNow is ONE PACK ON DEMAND, [OpenCode.Pack]'s and
 // [OpenCode.PackSave]'s: the pins every standalone call takes
-// ([openCodeStandalonePins]), the probe, the room where room (a save's alone,
-// [openCodeSaveRoom]), and [openCodePack]'s bounded export through a private
-// server, beside a server that may still be writing (the package doc's "An
-// OpenCode session saved beside its running server").
+// ([openCodeStandalonePins]), the room where room (a save's alone,
+// [openCodeSaveRoom]), the probe, and [openCodePack]'s bounded export through
+// a private server, beside a server that may still be writing (the package
+// doc's "An OpenCode session saved beside its running server").
 //
 // It ends [packNothing] ONLY ON OPENCODE'S OWN ANSWER that it holds no such
 // session ([openCodeNotHeld]), [packNoRoom] where a save's box lacks the room,
@@ -294,6 +294,16 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 	answer := q(staged + "/answer")
 	var b strings.Builder
 	b.WriteString("sid=" + q(session) + " packed=\n" + openCodeStandalonePins)
+	if room {
+		// THE ROOM BEFORE ANY OPENCODE PROCESS, the probe's included: the
+		// probe is a standalone OpenCode too. No database yet is no session
+		// yet, which the probe says; one it holds all the same is in a
+		// database the room never read, which the export is not run on.
+		b.WriteString(sandbox.MemoryDomainScript + "\n" + openCodeSaveRoom + "\n")
+		fmt.Fprintf(&b, `db="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db" bounded=`+"\n"+
+			`if [ -f "$db" ]; then crewlet_memory 2> /dev/null | crewlet_save_fits "$(crewlet_size "$db")" "$(crewlet_size "$db-wal")" || exit %d; bounded=1; fi`+"\n",
+			packNoRoom)
+	}
 	fmt.Fprintf(&b, `rm -rf %[1]s; mkdir -p %[1]s || { echo 'crewlet: the pack could not make its staging directory' >&2; exit %[3]d; }`+"\n"+
 		`if opencode api --standalone session.get --param sessionID="$sid" < /dev/null > %[2]s 2>&1; then probe=$(cat %[2]s); held=$probe; else probe=$(cat %[2]s 2> /dev/null); held=; fi; rm -rf %[1]s`+"\n",
 		q(staged), answer, packFailed)
@@ -301,11 +311,8 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 		`printf '%%s\n' "${probe:-OpenCode answered nothing about the session}" >&2; exit %d;; esac`+"\n",
 		sandbox.ShellQuote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed)
 	if room {
-		b.WriteString(sandbox.MemoryDomainScript + "\n" + openCodeSaveRoom + "\n")
-		fmt.Fprintf(&b, `db="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db"`+"\n"+
-			`[ -f "$db" ] || { echo "crewlet: OpenCode's database is not at $db, so the memory its export takes cannot be bounded" >&2; exit %d; }`+"\n"+
-			`crewlet_memory 2> /dev/null | crewlet_save_fits "$(crewlet_size "$db")" "$(crewlet_size "$db-wal")" || exit %d`+"\n",
-			packFailed, packNoRoom)
+		fmt.Fprintf(&b, `[ -n "$bounded" ] || { echo "crewlet: OpenCode's database is not at $db, so the memory its export takes cannot be bounded" >&2; exit %d; }`+"\n",
+			packFailed)
 	}
 	b.WriteString(openCodePack(paths, staged, dest, "--standalone", "", true))
 	fmt.Fprintf(&b, "[ -n \"$packed\" ] || exit %d\n", packFailed)

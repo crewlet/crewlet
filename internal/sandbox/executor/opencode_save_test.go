@@ -361,28 +361,43 @@ func TestATakeOfAnOpenCodeSaveCountsItAndNamesItsNewestCompaction(t *testing.T) 
 
 // AN OPENCODE SAVE WAITS FOR THE ROOM ITS EXPORT TAKES: where its box's room is
 // read, a save whose need, twelve times OpenCode's database and its WAL plus
-// 128 MiB, exceeds it fails wrapping [sandbox.ErrSaveNoRoom] before any export,
-// leaving nothing; a small database's is saved; and a take's pack on demand is
-// never held to the room. Where the box reads no room (no /proc), nothing is
-// refused for it.
+// 128 MiB, exceeds it fails wrapping [sandbox.ErrSaveNoRoom] before any OpenCode
+// process, its probe's included, leaving nothing; a small database's is saved;
+// a session held where no database is fails, saying so, unexported; and a
+// take's pack on demand is never held to the room. Where the box reads no room
+// (no /proc), nothing is refused for it.
 //
-// Mutation: drop the check, leave the WAL out of the need, or apply it to the
-// take's pack, and a case goes red.
+// Mutation: drop the check, leave the WAL out of the need, probe first, export
+// without a database, or apply it to the take's pack, and a case goes red.
 func TestAnOpenCodeSaveWaitsForTheRoomItsExportTakes(t *testing.T) {
 	t.Parallel()
 	const huge = int64(1) << 40
 	for name, tc := range map[string]struct {
-		database, wal int64
-		take          bool
+		database, wal    int64
+		take, noDatabase bool
 	}{
 		"a database past the room":         {database: huge},
 		"a WAL past the room":              {wal: huge},
 		"a small database":                 {},
+		"no database where the session is": {noDatabase: true},
 		"a take's pack of a huge database": {database: huge, take: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			runner, b, dir := openCodeSaving(t, "2.0.32", "")
+			if tc.noDatabase {
+				if err := os.Remove(openCodeDatabase(b)); err != nil {
+					t.Fatal(err)
+				}
+				_, err := runner.PackSave(t.Context(), b, takerA)
+				if err == nil || errors.Is(err, sandbox.ErrSaveNoRoom) || !strings.Contains(err.Error(), "database is not at") {
+					t.Errorf("the save = %v; want it failed for the database it could not find", err)
+				}
+				if exported(t, dir) {
+					t.Error("a save whose database was not found exported anyway")
+				}
+				return
+			}
 			if tc.database > 0 {
 				sparse(t, openCodeDatabase(b), tc.database)
 			}
@@ -414,8 +429,8 @@ func TestAnOpenCodeSaveWaitsForTheRoomItsExportTakes(t *testing.T) {
 			if !errors.Is(err, sandbox.ErrSaveNoRoom) || !strings.Contains(err.Error(), "needs about") {
 				t.Errorf("the save = %v; want it refused for the room its export needs", err)
 			}
-			if exported(t, dir) {
-				t.Error("a save its box has no room for exported anyway")
+			if calls, err := os.ReadFile(filepath.Join(dir, "calls")); err == nil && len(calls) > 0 {
+				t.Errorf("a save its box has no room for started OpenCode anyway: %q", calls)
 			}
 			if left := savesLeft(t, b, takerA); len(left) > 0 {
 				t.Errorf("the refused save left %s", strings.Join(left, ", "))
