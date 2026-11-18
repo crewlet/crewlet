@@ -222,10 +222,9 @@ export const INBOX_ITEM_KINDS = [
 export type InboxItemKind = (typeof INBOX_ITEM_KINDS)[number];
 
 /**
- * An Inbox item's own address, from its row key (`<kind>:<id>`): `#/inbox/<kind>/<id>`, with
- * a `/` in an id kept as a segment break. An executor's open question is `run/<turn>`, whichever
- * it asks now, and an answered one `run/<turn>/<launch>`. Here for the reason [artifactPath] is:
- * Home links to an item.
+ * An Inbox item's address from its row key (`<kind>:<id>`): `#/inbox/<kind>/<id>`, a `/` in an id
+ * a segment break. An executor's open question is `run/<turn>` whichever it asks now, an answered
+ * one `run/<turn>/<launch>`. Here for the reason [artifactPath] is: Home links to an item.
  */
 export function inboxItemPath(key: string): string[] {
   const cut = key.indexOf(":");
