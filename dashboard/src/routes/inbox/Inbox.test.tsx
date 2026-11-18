@@ -4604,6 +4604,46 @@ describe("every item has its own address", () => {
     );
   });
 
+  // A LINK COPIED WHILE AN EXECUTOR'S QUESTION WAS OPEN still opens it once answered: `run/<turn>`
+  // is the turn's newest answered question when none is open, and missing only when neither is.
+  test("an executor's open-question address opens its newest answer once it is answered", async () => {
+    const answeredRun = (launch: string, minutes: number) => ({
+      at: new Date(Date.now() - minutes * 60_000).toISOString(),
+      run: {
+        turn_id: "turn-7",
+        launch_id: launch,
+        agent_handle: "cto",
+        question: `Question ${launch}?`,
+        question_context: "",
+        asked_at: new Date(Date.now() - (minutes + 5) * 60_000).toISOString(),
+        work_item: { backend: "native", id: "t-12", key: "LEAD-12", project: "LEAD" },
+      },
+      answer: {
+        by: "jane",
+        by_kind: "human",
+        at: new Date(Date.now() - minutes * 60_000).toISOString(),
+        body: `Answer to ${launch}`,
+      },
+    });
+    location.hash = "#/inbox/run/turn-7";
+    mount({
+      answers: {
+        answered_decisions: {
+          handle: "jane",
+          items: [answeredRun("q2", 10), answeredRun("q1", 60)],
+        },
+      },
+    });
+    await settle();
+    expect(location.hash).toBe("#/inbox/run/turn-7");
+    expect(current()).toBe("#/inbox/run/turn-7/q2");
+    expect(screen.getByRole("button", { name: "Answered, 2" }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("heading", { name: "Question q2?" })).toBeTruthy();
+    expect(screen.queryByText(MISSING)).toBeNull();
+  });
+
   test("a `?row=` address is replaced by the item's own, leaving no entry behind", async () => {
     location.hash = "#/inbox?row=r-1";
     const depth = history.length;

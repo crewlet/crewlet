@@ -377,12 +377,7 @@ export function Inbox() {
   // lands in the closed group's count rather than opening the group. Where
   // nothing is left to open, the move opens the group itself ([settle]).
   useEffect(() => {
-    if (
-      open &&
-      !answeredOpen &&
-      !settled.get(open)?.moved &&
-      answered.some((r) => r.key === open)
-    ) {
+    if (open && !answeredOpen && !settled.get(open)?.moved && rowNamed(answered, open)) {
       setAnsweredOpen(true);
     }
   }, [open, answeredOpen, answered, settled]);
