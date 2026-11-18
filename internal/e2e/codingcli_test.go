@@ -29,51 +29,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE EXECUTOR'S HARNESS: this test binary again, standing in for Claude
-// Code inside a real box.
+// THE EXECUTOR'S HARNESS: this test binary again, standing in for Claude Code
+// inside a real box.
 //
-// Every agent seat's executor is its harness's own run: the engine picks a
-// claude-code or opencode member of the seat's executor chain, opens a session
-// on its tool bridge, provisions a box, and the runner starts `claude` there
-// detached, with the brief, the seat's standing instructions and an MCP config
-// naming the bridge. The golden company's executor member is a REAL claude-code
-// entry, its box a REAL `direct` one and its runner the REAL Claude Code runner
-// — the argv, the wrapper, the done marker, the stream and the result file are
-// all the engine's. What stands in is the one thing a test cannot ship: the
-// `claude` on the box's PATH, which a setup step copies there ([codingShim]).
-//
-// It does what Claude Code does with that argv, and nothing a test could get
-// right while the engine was wrong: it answers `--version` with a release
-// ([codingRelease]), reads its brief on stdin, as `-p`
-// with no prompt does, its system prompt off `--append-system-prompt-file`, its
-// tool surface off `--mcp-config` and its hooks off `--settings`, dials the seat's
-// bridge over a REAL MCP session, and loops —
-// each round asked of the scripted model exactly as the scripted harness on the
-// engine host asks one ([modelRequest]: the brief, the tools the bridge
-// listed by the server's own names, the system prompt on the append channel
-// and the run so far), and each call the model answers made over the bridge
-// under a Claude Code tool-use id, so every call lands on the run's row as a
-// box's does. It ends when the model submits its work or answers in prose, or
-// at `--max-turns`, and prints stream-json as Claude Code does: one object a
-// line, the result message last, its usage the sum of every round's.
-//
-// IT FILES ITS SESSION AS CLAUDE CODE FILES IT ([codingSessionThread]): a
-// rooted chain of records, each stamped with the release it answered at its
-// start, the brief its root — what a reading of a kept session reads, so a
-// relaunch that asks one reads what the stand-in wrote ([codingModeCutAsk]).
-//
-// ITS HOOKS ARE PLAYED AT ITS BOUNDARIES, as Claude Code plays them
-// ([codingHooks]): after each batch of calls has its results (PostToolBatch)
-// and as it is about to finish (Stop), each hook a call of its tool over the
-// run's own bridge session with the event and the agent id filled in. What a
-// hook hands back is what the harness does with it: its transcript line printed as
-// the harness's informational line, and its additional context — a person's note —
-// put before the model's next request, or, at Stop, the turn continued with it.
-//
-// SO THE SCRIPTED MODEL IS ONE MODEL FOR BOTH HALVES. The executor's rounds
-// reach the same [scriptedModel.serve] the phases on the host do, keyed on the same
-// offered tools, so a case scripting what the executor calls
-// ([scriptedModel.callOnExecute]) scripts what the run calls.
+// The golden company's executor is a REAL claude-code entry in a REAL `direct`
+// box under the REAL runner: argv, wrapper, done marker, stream and result file
+// are the engine's. Only the `claude` on the box's PATH stands in ([codingShim]).
+// It does what Claude Code does with that argv and nothing a test could get
+// right while the engine was wrong: answers `--version` ([codingRelease]),
+// dials the seat's bridge over a REAL MCP session and loops, each round asked
+// of the scripted model as the host's harness asks ([modelRequest]), so one
+// model serves both halves ([scriptedModel.callOnExecute]). It files its
+// session ([codingSessionThread]) and plays hooks ([codingHooks]).
 
 // harnessEnv makes a re-execution of this binary the stand-in harness
 // rather than the suite, and its value is the address of the model that

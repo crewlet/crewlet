@@ -10,13 +10,11 @@ import (
 // A STATEMENT SPELLED ACROSS LITERALS IS ONE FRAGMENT, AND A CALL INSIDE A
 // CONCATENATION IS READ TOO.
 //
-// [StatementLiterals] holds a gate's registered statements complete by finding
-// every fragment of the source that reads a table, and the fragment is the
-// unit it matches whole. So a statement written across adjacent literals must
-// fold into the one string it spells — matched literal by literal, `"… FROM "`
-// and `"pages_heads p"` each name nothing — while a non-literal operand ends
-// the run, and a statement passed to a call inside a concatenation is a
-// fragment of its own.
+// [StatementLiterals] matches each fragment of the source that reads a table
+// whole. So a statement across adjacent literals must fold into the one string
+// it spells (`"… FROM "` and `"pages_heads p"` each name nothing), a
+// non-literal operand ends the run, and a statement passed to a call inside a
+// concatenation is a fragment of its own.
 //
 // Mutation: end a run at every literal rather than at a non-literal operand,
 // and the folded statement comes back in pieces; stop visiting the operands of

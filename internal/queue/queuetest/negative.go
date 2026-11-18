@@ -13,63 +13,17 @@ import (
 )
 
 // runNegativePaths certifies that an operation which declines to act also
-// declines to WRITE.
+// declines to WRITE. Each case answered correctly and mutated anyway:
+// EnsureSubscription wiping an existing subscription's retained mail (every
+// unowned seat's, on every restart), DeleteSubscription keyed by topic
+// destroying a neighbouring group's, Quiesce reporting "no attachment" yet
+// setting the flag, a deferral never spending the dead-letter budget.
 //
-// A "no" has two halves, and this suite used to assert only the first. Every
-// case here was found by asking what a plausible wrong backend gets away with,
-// then confirming it got away with it: each of the four mutations below
-// answered correctly and mutated anyway, and every one passed the whole suite
-// before these cases existed.
-//
-//   - EnsureSubscription on an existing subscription wiped its retained mail.
-//     The boot path declares every seat's inbox, so this drops the mail of
-//     every unowned seat on every restart — the property seat ownership rests
-//     on — while reporting a clean boot.
-//   - DeleteSubscription keyed by topic instead of by the (topic, group) pair
-//     destroyed a neighbouring group's subscription on the same subject.
-//     Decommissioning one role silently decommissions its neighbours; the same
-//     keyed-by-topic mistake that the pause holds already had to be fixed for.
-//   - A deferral did not spend the message's dead-letter budget. The case
-//     here once required exactly that and had it backwards: every backend's
-//     deferral returns the message with a Nak, which spends one, and what
-//     keeps a healthy event alive across handoffs is a budget sized for them
-//     rather than a handoff that costs nothing. What a wrong backend gets
-//     away with is the opposite mistake — handing a message back for ever on
-//     a counter that never moves.
-//   - Quiesce that reports "no attachment" set the quiesce flag anyway,
-//     leaving a (topic, group) nothing can be delivered on.
-//
-// The snapshot helper compares everything the suite can observe about a
-// subscription, so a new observable is covered here by default rather than
-// needing a new case.
-//
-// BEFORE ADDING A "MUST NOT" CASE HERE, ESTABLISH THAT THE CONTRACT FORBIDS
-// THE OPERATION — not merely that no backend here does it. A documented
-// degradation is a permitted exception, and a case that forbids one makes a
-// correct backend look broken; the author who investigates pays far more than
-// the check costs. This suite has made that mistake twice: it required a free
-// deferral, which JetStream trades away (a deferred message costs a
-// redelivery there, measured), and it required head-replay on nak, which only
-// the twin did.
-//
-// Both repairs ended the same way, and the second took two attempts to get
-// there. Head-replay was first made a [Capabilities] flag, on the reading that
-// the contract stated no order for a redelivered message and the engine
-// depended on neither answer. Both halves of that were wrong: the engine's
-// answer route and its turn retry did lean on the twin's order, and a flag
-// exempting the twin left every engine and node suite certifying a broker
-// nobody runs. The repair was the deferral's: state the order in the contract
-// (queue.OutcomeNak, queue.OutcomeDefer) and make the twin match the broker.
-// A flag is for a property the contract genuinely leaves open AND nothing
-// above the queue is tested against — never for one backend's disagreement
-// with the broker the engine ships on.
-//
-// The four cases below were checked that way rather than by waiting for a
-// failure. The contract defines all four attachment verbs and permits none of
-// these writes; the only nearby exception is Unquiesce not needing to reclaim
-// a prefetch on a pull backend, which nothing here asserts either way.
-// Delete-and-recreate resets the cursor and so is unusable as a reattach,
-// which is the same conclusion case A reaches from the other direction.
+// BEFORE ADDING A "MUST NOT" CASE, ESTABLISH THAT THE CONTRACT FORBIDS THE
+// OPERATION: a documented degradation is permitted (a free deferral, which
+// JetStream trades away; head-replay on nak, see queue.OutcomeNak). A
+// [Capabilities] flag is only for what the contract leaves open AND nothing
+// above the queue is tested against.
 func (s *suite) runNegativePaths(t *testing.T) {
 	ctx := t.Context()
 
@@ -187,23 +141,18 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		}
 		s.assertUntouched(t, q, topic, group, before, "re-declaring an existing subscription")
 
-		// AND IT MUST NOT HAVE ASKED. The two halves are one case because
-		// they are one decision: a backend gets both by looking the
-		// consumer up and returning, and gets neither by sending the
-		// create and letting the broker sort it out. Split in two, the
-		// cheap half reads as an optimisation somebody may undo for
-		// safety, when undoing it is how a node comes to spend a
-		// replicated write per seat on every boot and every config
-		// apply — and how a wrong repair comes to wipe the mail.
+		// AND IT MUST NOT HAVE ASKED. One case, one decision: a backend gets
+		// both halves by looking the consumer up and returning, neither by
+		// sending the create and letting the broker sort it out. Split, the
+		// cheap half reads as an optimisation to undo for safety, which
+		// costs a replicated write per seat on every boot and config apply.
 		//
-		// A POSITIVE lookup only. A backend that could not tell whether
-		// the consumer was there must still propose the create: a
-		// mailbox is a seat's mail, and skipping it on an unanswered
-		// probe drops that mail with nothing to say so. That arm is not
-		// reachable from here — nothing in this suite can make a healthy
-		// broker decline to answer — so it is stated rather than
-		// certified, and it is why this case asserts the count only for
-		// a subscription the previous call proved exists.
+		// A POSITIVE lookup only. A backend that could not tell whether the
+		// consumer was there must still propose the create, since skipping
+		// it on an unanswered probe silently drops a seat's mail. That arm
+		// is stated, not certified (nothing here makes a healthy broker
+		// decline to answer), so the count is asserted only for a
+		// subscription the previous call proved exists.
 		if proposals != nil {
 			if spent := proposals(q) - proposedBefore; spent != 0 {
 				t.Errorf("re-declaring an existing subscription asked the broker for %d "+
@@ -283,32 +232,18 @@ func (s *suite) runNegativePaths(t *testing.T) {
 
 	t.Run("a_deferral_spends_one_delivery_like_every_other_hand_back", func(t *testing.T) {
 		t.Parallel()
-		// A DEFERRAL COSTS WHAT A NAK COSTS, on every backend.
+		// A DEFERRAL COSTS WHAT A NAK COSTS, on every backend. No broker here
+		// has a "give this back without counting it": a prompt return is a
+		// Nak, which spends a delivery. So the budget is
+		// sized for handoffs as well as failures (25, not the 10 a
+		// free-handoff broker would need), keeping a healthy event alive
+		// across seat movements. A capability only the twin declared would
+		// run the case against the twin ALONE and split one contract in two
+		// (queue.DeliveriesLeft says every return spends one).
 		//
-		// No broker here has a "give this back without counting it":
-		// returning a message promptly means a Nak, and a Nak spends one
-		// of its deliveries. So the budget is sized to cover handoffs as
-		// well as failures — 25 rather than the 10 a free-handoff broker
-		// would need — and that, not a free handoff, is what keeps a
-		// healthy event alive across the seat movements a busy company
-		// makes.
-		//
-		// THIS CASE USED TO REQUIRE THE OPPOSITE, gated behind a
-		// FreeDeferral capability that only the in-memory twin declared.
-		// Two things were wrong with that and both are why it is written
-		// this way now. A capability the twin declares and the shipped
-		// broker does not runs its case against the twin ALONE, which is
-		// the one shape a shared conformance suite exists to prevent. And
-		// it made one contract into two documents that disagreed:
-		// queue.DeliveriesLeft said every return that puts a message back
-		// spends one, while the flag said a deferral spends nothing. The
-		// twin spends one now.
-		//
-		// OBSERVED ON THE CONTRACT'S OWN NUMBER rather than on a count of
-		// deliveries, because the number is what a caller acts on: a
-		// three-attempt queue must count 2, 1, 0 across a deferral and
-		// two failures exactly as it would across three failures. A
-		// deferral that cost nothing would report 2 twice.
+		// OBSERVED ON THE CONTRACT'S OWN NUMBER, the one a caller acts on: a
+		// three-attempt queue must count 2, 1, 0 across a deferral and two
+		// failures as across three failures. A free deferral reports 2 twice.
 		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)
 		q := s.startQueue(ctx, t, newQueueWithAttempts(t, 3))
@@ -331,22 +266,13 @@ func (s *suite) runNegativePaths(t *testing.T) {
 			})
 
 		publish(ctx, t, q, "topic.budget", newEvent("e0"))
-		// Wait for the QUIESCE, not for the backlog.
-		//
-		// The backlog is 1 from the moment the publish is acked — before the
-		// broker has dispatched anything and so before the handler has run,
-		// let alone deferred. On an asynchronous backend this wait returns at
-		// once, the Unquiesce below finds nothing quiesced and does nothing,
-		// the deferral lands a millisecond later, and the attachment is
-		// quiesced with nothing left to resume it. Measured on a broker-backed
-		// backend at 3 of 12 full-suite runs, and 16 of 20 run alone.
-		//
-		// It could not fail on the backend it was written against: the twin
-		// declares InlineDispatch, so Publish drains before returning and the
-		// window does not exist. Exactly the trap this suite's own doc warns
-		// about, committed in the group whose header claims its cases were
-		// checked against a plausible wrong backend — they were checked
-		// against a wrong backend, never against an asynchronous one.
+		// Wait for the QUIESCE, not for the backlog. The backlog is 1 from the
+		// moment the publish is acked, before the handler has run, let alone
+		// deferred. On an asynchronous backend that wait returns at once, the
+		// Unquiesce below finds nothing quiesced, the deferral lands a
+		// millisecond later, and the attachment is quiesced with nothing left
+		// to resume it. The twin cannot show this: InlineDispatch drains
+		// Publish before returning, so the window does not exist there.
 		quiescing := s.needQuiescing(t)
 		awaitState(t, "the deferral to quiesce the attachment", func() bool {
 			return quiescing(q, "topic.budget", "grp")
@@ -395,18 +321,13 @@ func (s *suite) runNegativePaths(t *testing.T) {
 // subscriptionState is everything the suite can observe about one
 // (topic, group). A negative path must leave all of it exactly as it found it.
 //
-// Deliberately a snapshot of every observable rather than a list of fields each
-// case names: an operation that declines to act declines to touch ANY of it, so
-// the next observable a backend learns to report is covered here without a new
-// assertion being written for it.
-//
-// Its honesty has one condition, and it has already failed once: this covers
-// every observable only as long as a new Capabilities field that reports
-// subscription state is also added HERE. Quiescing was missing at first — an
-// observable the backend already exported — and the case meant to catch a stale
-// quiesce passed against a backend setting one. A helper that silently stops
-// generalising is exactly the failure it exists to prevent, so treat this
-// struct as part of the Capabilities definition, not as a local convenience.
+// A snapshot of every observable rather than a list of fields each case
+// names: a declined operation touches ANY of it, so a new observable is
+// covered without a new assertion. That holds only while a new Capabilities
+// field reporting subscription state is also added HERE (quiescing was once
+// missing, and the case meant to catch a stale quiesce passed against a
+// backend setting one): treat this struct as part of the Capabilities
+// definition.
 type subscriptionState struct {
 	backlog     []string
 	deadLetters []string

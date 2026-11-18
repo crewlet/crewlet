@@ -11,20 +11,12 @@ import (
 
 // THE DECORRELATION CHECK SEES THE DRIVER'S UNNEST, AND ONLY IT.
 //
-// Every gate that refuses a per-row aggregate read as a grouped scan of its
-// whole child table asks [storetest.Decorrelated], so the predicate is held to
-// the driver here, on statements whose plan is the point: a `MIN` correlated
-// to an unfiltered outer table, which the planner rewrites; the same subquery
-// over an outer read bound to one key, which it keeps correlated; the same
-// minimum spelled `ORDER BY … LIMIT 1`, which it never rewrites; and a
-// subquery written in a FROM clause and joined, which is materialised behind
-// an ephemeral index of the same family without anything having been
-// decorrelated. If a driver bump renames the rewrite or stops making it, the
-// first case fails here instead of every gate going quietly blind; if it starts
-// rewriting the limit, the third does.
-//
-// NEVER ANALYZEd, because no node is: a plan taken over statistics is a plan
-// no deployment runs.
+// Every gate refusing a per-row aggregate read as a grouped scan asks
+// [storetest.Decorrelated], so it is held to the driver here: a `MIN` over an
+// unfiltered outer (rewritten), the same over an outer bound to one key (stays
+// correlated), `ORDER BY … LIMIT 1` (never rewritten), and a FROM-clause
+// subquery behind a same-family ephemeral index with nothing decorrelated.
+// NEVER ANALYZEd, as no node is.
 //
 // Mutation: change the operand the predicate matches (`scalar_sub_query_`)
 // and the first case goes red; match the ephemeral index instead

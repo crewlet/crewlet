@@ -27,54 +27,16 @@ import (
 
 // A PERSON'S SESSION IS THE FLEET'S, NOT THE NODE'S THAT MINTED IT.
 //
-// # Why this is a fleet case and nothing else can be
-//
-// A browser behind a load balancer reaches whichever member it is sent to, so
-// the cookie a sign-in minted on one node is presented to every other. What
-// makes that work is two things no single node exercises: every member signs
-// and verifies under ONE keyring, and every member resolves the cookie against
-// its OWN copy of the identity estate, which reaches it only through the
-// identity log. Each half has unit tests against stubs — the session table's
-// behind-node arm, the guard's origin rule, the socket's cookie handshake —
-// and none of them could see a fleet where a cookie minted on one node was
-// refused on the next, or a sign-out one node never heard: every fixture here
-// presented a Tier A bearer to a node serving no sign-in surface at all, so a
-// total regression of browser identity across a fleet left this suite green.
-//
-// # What it asserts, in the order a person meets it
-//
-//   - A Tier A token invites a person to the company's human seat; they redeem
-//     the link and sign in with a password on one member.
-//   - THE SAME COOKIE reads on the OTHER member, which learns the session only
-//     from the log — waiting or answering 503 while it catches up, and never
-//     401, which a browser reads as "signed out" and throws the cookie away.
-//   - A cookie-authenticated WRITE on the other member lands AUTHORED BY THE
-//     PERSON: as their seat, of the human kind, through their session.
-//   - The live socket opens on the other member with the cookie and the
-//     deployment's Origin, and delivers its snapshot; the same handshake from
-//     a foreign Origin is refused by the cross-site rule.
-//   - Signing out everywhere on the other member reaches back: the old cookie
-//     is refused 401 on the member that minted it, once that member applies
-//     the revocation, inside the bound a record takes to cross the fleet.
-//
-// # One cluster, three phases
-//
-// A fleet start is the costly part of every case here, and each phase is the
-// state the next one starts from — the session the write is authored through,
-// the socket opened on it, the revocation that ends it — so they share one
-// start and stop at the first phase that fails, since every later one would
-// only report the same failure again.
-//
-// TWO MEMBERS, which is [fleetSize] and enough: the session crosses from the
-// member that minted it to the other, and the revocation crosses back the
-// opposite way, so each member learns one of the two facts only from the log.
-//
-// Mutations, each run: record a bound person's writes as an operator's and the
-// write phase names the kind it landed as; drop the handshake's origin check
-// and the foreign dial opens; stop a person's revocation epoch ending their
-// sessions and the copied cookie is served for ever on the member that minted
-// it; stop the engine handing the identity applier's moves to the API and the
-// tab left open on that member never closes.
+// Only a fleet exercises what makes this work: every member signs and verifies
+// under ONE keyring and resolves the cookie against its OWN identity estate,
+// reached only through the identity log. In order: a Tier A token invites a
+// person, who signs in on one member; THE SAME COOKIE reads on the other, which
+// waits or answers 503 while catching up, never 401 (a browser throws the cookie
+// away on it); a cookie WRITE there is AUTHORED BY THE PERSON; the socket opens
+// with the deployment's Origin and a foreign one is refused; signing out
+// everywhere reaches back to the minting member within the fleet's record
+// bound. One start serves all phases, stopping at the first failure; TWO
+// MEMBERS ([fleetSize]), so each learns one of the two facts only from the log.
 func TestASessionCrossesTheFleet(t *testing.T) {
 	noParallel(t)
 	c := startCluster(t, fleetSize)
@@ -384,19 +346,13 @@ func socketOpens(t *testing.T, n *node, b *browser) {
 // it ended to be refused on the member that minted it.
 //
 // THE COOKIE IS A COPY taken before the sign-out, as a browser left open on
-// another machine holds it: the sign-out clears the cookie in the browser that
-// asked, and what a revocation is FOR is every other copy. It is refused
-// through the person's revocation epoch, which the minting member learns only
-// from the log — so until it applies the record it goes on serving the copy,
-// which is the horizon, and the bound is the one every record in this suite is
-// given to cross the fleet.
+// another machine holds it: a revocation is FOR every other copy. The minting
+// member learns the revocation epoch only from the log, so until it applies
+// the record it serves the copy; the bound is the one every record here has.
 //
 // AND THE TAB LEFT OPEN THERE CLOSES. A socket is authenticated at its
-// handshake and then held, so what ends it is the record that ended its
-// session, heard from the minting member's own identity applier — the engine
-// hands that applier's word to the API, which decides the socket again and
-// closes it `4401`. Left to its handshake, the tab would go on receiving the
-// company's state for as long as it stayed open.
+// handshake, so only the record that ended its session ends it, heard from the
+// member's identity applier; the API then closes the socket `4401`.
 func revokedEverywhere(t *testing.T, minted, other *node, b *browser) {
 	t.Helper()
 	elsewhere := b.copy()

@@ -594,16 +594,15 @@ func TestEveryAllowanceIsWellFormed(t *testing.T) {
 // THE TIMINGS TIME WHAT PASSED, AND NOTHING ELSE.
 //
 // internal/solo/partition reads this file to decide which packages start
-// first, so a FAILED package's elapsed time, which stops wherever the failure
-// stopped it, would teach the next run that a package is short because it
-// broke, and start it late; its tests go with it, the ones that passed
-// included. A package cut off mid-run has no result to time at all. And a
-// package with no test files is in the half like any other, so it is timed
-// (as a zero) rather than left out, where it would weigh the half's median.
+// first, so a FAILED package's elapsed time would teach the next run that it
+// is short because it broke, and start it late; its passed tests go with it.
+// A package cut off mid-run has no result to time. A package with no test
+// files is timed (as a zero) rather than left out, where it would weigh the
+// half's median.
 //
-// Under each package that passed, its TOP-LEVEL tests that passed or skipped,
-// in name order: a subtest is inside its parent's seconds, so a line of its
-// own would count it twice.
+// Under each passed package, its TOP-LEVEL tests that passed or skipped, in
+// name order: a subtest is inside its parent's seconds, so its own line would
+// count it twice.
 func TestTheTimingsTimeWhatPassed(t *testing.T) {
 	t.Parallel()
 
@@ -870,33 +869,11 @@ func devNull(t *testing.T) *os.File {
 
 // A PACKAGE THAT DIED UNDER A TEST SAYS WHAT THAT TEST WAS SAYING.
 //
-// # What was wrong
-//
-// Per-test output is buffered and flushed on that test's own pass, fail or
-// skip — which is what keeps this gate's log the length plain `go test` would
-// have produced. A test that never reports one leaves its buffer to be
-// dropped: a panic under it, the race detector aborting the process, a
-// TestMain that exits. The package then fails with a bare `FAIL pkg 103s` and
-// NOT ONE WORD about why.
-//
-// Measured, and this is why it is a test rather than a nicety: internal/engine
-// failed exactly that way twice on one pull request. The whole of what a full
-// CI log said about it was
-//
-//	FAIL	github.com/crewlet/crewlet/internal/engine	103.366s
-//	skipgate: 0 test(s) failed in 1 package(s)
-//
-// — a gate whose entire subject is that nothing fails invisibly, being the
-// thing that hid the failure. The module doc already states the rule for the
-// other half ("a gate that swallowed those would hide the one failure nobody
-// can debug without them", about build errors passing through as non-JSON);
-// this is the same sentence for a crash.
-//
-// # What is asserted
-//
-// The OUTPUT, not the count — the count is what was there before and it is
-// what nobody could act on. And the header, because a name is how a reader
-// scanning a hundred-package log finds the one that stopped.
+// A test that never reports a result (a panic, the race detector, a TestMain
+// that exits) leaves its buffered output dropped, and the package fails with a
+// bare `FAIL pkg 103s` and NOT ONE WORD about why. Asserted: the OUTPUT, not
+// the count nobody could act on, and the header, because a name is how a
+// reader scanning a hundred-package log finds the one that stopped.
 func TestAPackageThatDiedUnderATestPrintsWhatItWasSaying(t *testing.T) {
 	t.Parallel()
 

@@ -130,21 +130,17 @@ func (r *stagedRuns) MutateSandboxRunPart(ctx context.Context, turnID string, pa
 }
 
 // A CARRIED-ON ROUND KEEPS ITS CALLS PAST AN OPENING THAT FAILED. A relaunch
-// writes the row, naming its job, and then opens the log to it; where that
-// second write fails — or its node stops before it — the row names a job the
-// log was never opened to, and the log still holds the round's calls under the
-// job before. The launch is an error and is retried, continuing the same
-// round: the retry keeps those calls, and takes the cut the person's answer
-// owed them, because what the opening keeps is decided by the round the row
-// names ([sandbox.PendingRun.Round]), never by the job the row held just
-// before it. And the row the failed launch left reads no calls of the job
-// before it ([sandbox.PendingStore.BridgeLog]).
+// writes the row, naming its job, then opens the log to it; where that second
+// write fails the row names a job the log was never opened to, and the log
+// still holds the round's calls under the job before. The launch is retried,
+// continuing the same round: it keeps those calls and takes the cut the
+// person's answer owed them, because what the opening keeps is decided by the
+// round the row names ([sandbox.PendingRun.Round]), never by the job the row
+// held before. The failed launch's row reads no calls of the job before it
+// ([sandbox.PendingStore.BridgeLog]).
 //
-// Mutation: judge what the opening keeps by the job the row held before the
-// reset (carry the round as the replaced job), and the retry starts the round
-// afresh, losing the submission made before the question; clear the answer a
-// relaunch carries on, and the retry takes no cut; drop BridgeLog's job
-// filter, and the failed launch's row reads the asking job's calls as its own.
+// Mutation: judge by the job the row held before the reset, clear the answer a
+// relaunch carries on, or drop BridgeLog's job filter.
 func testACarriedOnRoundKeepsItsCallsPastAnOpeningThatFailed(t *testing.T, runs *stagedRuns,
 	s sandbox.PendingStore,
 ) {
@@ -245,19 +241,16 @@ func testALaunchWhoseOwnRowEndsUnderItsOpeningIsRefused(t *testing.T, runs *stag
 
 // AN APPROVED CALL REACHES ITS ROUND'S LOG PAST AN APPEND THAT FAILED. The
 // result of a call a person approved is recorded on the row, and the call
-// appended to the log after it: two keys, written in no one step. Where the
-// append fails — or its node stops before it — the call is still the round's:
-// an ending reads it off the row ([sandbox.PendingStore.TurnLog]), the reset
-// that opens the next job carries it to the opening ([sandbox.OwedCall]), and
-// where that opening fails too the retried launch still appends it, once.
-// Read nowhere, the reply a person approved reads as never sent, which every
-// reader of whether the turn replied would report.
+// appended to the log after it: two keys, in no one step. Where the append
+// fails the call is still the round's: an ending reads it off the row
+// ([sandbox.PendingStore.TurnLog]), the reset opening the next job carries it
+// ([sandbox.OwedCall]), and the retried launch appends it, once. Read nowhere,
+// the approved reply reads as never sent.
 //
-// Mutation: drop the owed call from resetLaunch's opening, and the job that
-// carries the work on keeps no approved call; drop it from the row once the
-// reset has carried it, and the retried launch past a failed opening keeps
-// none; read the row's held call nowhere in TurnLog, and the ending before the
-// relaunch reads no reply.
+// Mutation: drop the owed call from resetLaunch's opening, and the job carrying
+// the work on keeps none; drop it from the row once the reset has carried it,
+// and the retried launch keeps none; read the row's held call nowhere in
+// TurnLog, and the ending before the relaunch reads no reply.
 func testAnApprovedCallReachesItsRoundsLogPastAnAppendThatFailed(t *testing.T, runs *stagedRuns,
 	s sandbox.PendingStore,
 ) {
@@ -335,14 +328,13 @@ func testAnApprovedCallReachesItsRoundsLogPastAnAppendThatFailed(t *testing.T, r
 
 // AN ENDING READS THE TURN'S CALLS PAST AN OPENING THAT FAILED. A relaunch
 // writes the row, naming its job, and opens the log to it in a second write;
-// where that second write fails, or its node stops first, the row names a job
-// the log was never opened to, and such a row is reaped as lost or stopped by
-// a person as it stands. Its ending reads the turn's calls as that opening
-// would have left them ([sandbox.PendingStore.TurnLog]): a new round's earlier
-// rounds folded in, and a carried-on round's calls kept. Read as no calls, a
-// turn whose first round posted its reply is recorded as one that never did,
-// while a resume's read of the same row stays empty
-// ([sandbox.PendingStore.BridgeLog]), never replaying another job's calls.
+// where that fails the row names a job the log was never opened to, and such a
+// row is reaped as lost or stopped by a person as it stands. Its ending reads
+// the turn's calls as that opening would have left them
+// ([sandbox.PendingStore.TurnLog]): a new round's earlier rounds folded in, a
+// carried-on round's calls kept. Read as no calls, a turn whose first round
+// posted its reply is recorded as one that never did, while a resume's read of
+// the row stays empty ([sandbox.PendingStore.BridgeLog]).
 //
 // Mutation: answer TurnLog as BridgeLog does for a log on another job, and
 // both endings read no reply.
