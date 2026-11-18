@@ -23,7 +23,7 @@ const (
 	maxPktPayload = 65516
 
 	// flushPkt ends a section; delimPkt separates a v2 request's capabilities
-	// from its arguments; responseEndPkt ends a v2 stateless response.
+	// from its arguments.
 	flushPkt = "0000"
 	delimPkt = "0001"
 )
@@ -32,14 +32,12 @@ const (
 // digits, one under four that is no special packet, or one past git's largest.
 var errMalformed = errors.New("host: not a pkt-line")
 
-// wireOID is an object id AS GIT READS ONE FROM A CLIENT — parse_oid_hex:
-// gitref.OIDHexLen hex digits of EITHER case — in the one spelling the engine
-// holds an id in, lowercase (gitref.ValidOID); ok is false for anything else.
-// Every reader of what a client sends holds an id to this, never to ValidOID
-// alone, because git takes an id written in capitals: held to ValidOID, a
-// push's command in capitals was a line the receiver skipped and receive-pack
-// acted on — one step 2 never measured — and a fetch's want in capitals was
-// one the node never checked it held.
+// wireOID is an object id as git reads one from a client (parse_oid_hex:
+// gitref.OIDHexLen hex digits of EITHER case), in the engine's one spelling,
+// lowercase (gitref.ValidOID); ok is false for anything else. Every reader of
+// what a client sends holds an id to this, never to ValidOID alone: git takes
+// an id in capitals, so ValidOID would skip a push command receive-pack acts
+// on, or a fetch's want the node never checked it holds.
 func wireOID[S ~string | ~[]byte](id S) (string, bool) {
 	if len(id) != gitref.OIDHexLen {
 		return "", false
@@ -118,9 +116,9 @@ func readPkt(r *bufio.Reader) (pkt, error) {
 }
 
 // pktLength reads a pkt-line's length: four LOWERCASE hex digits, the only
-// spelling git writes (`%04x`). An upper-case digit is refused rather than read,
-// so that every packet this package accepts re-encodes to the bytes it was read
-// from — which is what lets the receive path hand git exactly what it was sent.
+// spelling git writes (`%04x`). An upper-case digit is refused so every packet
+// accepted re-encodes to the bytes it was read from, which lets the receive
+// path hand git exactly what it was sent.
 func pktLength(head [4]byte) (int, bool) {
 	n := 0
 	for _, c := range head {
@@ -150,11 +148,10 @@ func encodePkt(p pkt) []byte {
 	return pktLine(p.payload)
 }
 
-// The side-band channels a refusal report travels in when the client asked
-// for side-band-64k: the report itself, and progress (git prints it as
-// `remote: …`). The third, a fatal error, is git's own to send — the engine's
-// refusals are reports — and is read only in an upload-pack answer, where
-// pack-objects' last words arrive (answerScan).
+// The side-band channels a refusal report travels in under side-band-64k: the
+// report, and progress (git prints it as `remote: …`). The third, a fatal
+// error, only git sends (the engine's refusals are reports); it is read only
+// in an upload-pack answer, carrying pack-objects' last words (answerScan).
 const (
 	bandData     byte = 1
 	bandProgress byte = 2
@@ -200,15 +197,13 @@ func errAdvert(w http.ResponseWriter, svc, words string) {
 }
 
 // writeRefusalReport answers a push the engine refused before receive-pack
-// ran, as receive-pack itself would: in band 2 `crewlet: <note>` (omitted
-// under quiet and without side-band), then — in band 1 when the client asked
-// for side-band-64k, bare otherwise — the REPORT, `unpack ok`, `ng <ref>
-// <sentence>` for every command and a flush, written only to a client that
-// asked for one (report-status or report-status-v2: receive-pack writes no
-// report otherwise, and git's own client always asks); then, under side-band,
-// the outer flush. THE CALLER HAS READ THE BODY TO ITS END: a response written
-// while git is still uploading is lost to a broken pipe, and git prints `RPC
-// failed` instead of the reason (measured).
+// ran, as receive-pack would: `crewlet: <note>` in band 2 (not under quiet or
+// without side-band), then the report (`unpack ok`, `ng <ref> <sentence>` per
+// command and a flush, only to a client asking report-status or
+// report-status-v2, as receive-pack does) in band 1 under side-band-64k, bare
+// otherwise; then, under side-band, the outer flush. THE CALLER HAS READ THE
+// BODY TO ITS END: a response written while git still uploads is lost to a
+// broken pipe, and git prints `RPC failed` instead of the reason.
 func writeRefusalReport(w http.ResponseWriter, caps capabilities, refused []answered, note string) {
 	h := w.Header()
 	h.Set("Content-Type", "application/x-git-receive-pack-result")

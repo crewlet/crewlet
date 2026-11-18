@@ -15,14 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// O14: WHAT THE RELAY AND THE WIRE READ IS BYTES A PUSHER CONTROLS, so each
-// reader is fuzzed — never a panic, and what it accepts it re-encodes byte for
-// byte — and `make check` runs each seed corpus as an ordinary test.
-//
-// The seeds are git's own bytes where a test can capture them (an
-// upload-pack's advertisement and answers, read from real git through
-// gittest), and git's documented protocol where it cannot: proc-receive's
-// input reaches only the hook, which the engine itself is.
+// O14: what the relay and the wire read are bytes a pusher controls, so each
+// reader is fuzzed: never a panic, and what it accepts re-encodes byte for
+// byte.
+// Seeds are real git's bytes where gittest can capture them, else git's
+// documented protocol (proc-receive's input reaches only the hook).
 
 // oidA and oidB are two object ids, for seeds.
 var (
@@ -30,8 +27,7 @@ var (
 	oidB = strings.Repeat("b", 40)
 )
 
-// FuzzRelayFrames: the hook's handshake and the relay's frames, in both
-// directions — readHandshake and readFrame never panic, an accepted frame
+// FuzzRelayFrames: readHandshake and readFrame never panic, an accepted frame
 // re-encodes to the bytes it was read from, and an accepted handshake names a
 // token of the one shape the relay issues.
 func FuzzRelayFrames(f *testing.F) {
@@ -69,12 +65,11 @@ func FuzzRelayFrames(f *testing.F) {
 	})
 }
 
-// FuzzProcReceive: git's proc-receive input as the engine reads it — the
-// version block, the commands and, where the version block offered them, the
-// push's options. Never a panic; an accepted command list holds only commands
-// of two object ids and a ref, at most a push's; the answer to the version
-// block offers push-options exactly where git did; and every accepted option
-// is one line of what was sent.
+// FuzzProcReceive: git's proc-receive input (version block, commands, push
+// options where offered) never panics; accepted commands, at most a push's,
+// hold two object ids and a ref; the version answer offers push-options
+// exactly where git did; and every accepted option is one line of what was
+// sent.
 func FuzzProcReceive(f *testing.F) {
 	version := string(pktString("version=1\x00atomic push-options\n")) + flushPkt
 	f.Add([]byte(version + string(pktString(oidA+" "+oidB+" refs/heads/main\n")) + flushPkt +
@@ -121,13 +116,11 @@ func FuzzProcReceive(f *testing.F) {
 	})
 }
 
-// FuzzCommandSection: a push's command section as the receiver reads it,
-// before anything checks it. Never a panic; what was read is a prefix of what
-// was sent and reads again to the same section — the bytes receive-pack is
-// handed are the bytes the commands were read from — and every command holds
-// two ids in their one spelling and a ref with no NUL, whatever case the
-// client wrote them in. The seeds are git's own shapes (its first command's
-// capabilities, a shallow line) and the ones receive-pack reads beyond them.
+// FuzzCommandSection: a push's command section, read before any check, never
+// panics; what was read is a prefix of what was sent and reads again to the
+// same section, since receive-pack is handed the bytes the commands were read
+// from; and every command holds two ids in their one spelling, whatever the
+// client's case, and a ref with no NUL.
 func FuzzCommandSection(f *testing.F) {
 	upper := strings.ToUpper(oidB)
 	f.Add([]byte(string(pktString(gitref.ZeroOID+" "+oidB+" refs/heads/main\x00report-status-v2 side-band-64k "+
@@ -165,10 +158,9 @@ func FuzzCommandSection(f *testing.F) {
 	})
 }
 
-// FuzzPktLines: pkt-lines and side-band. readPkt never panics and every packet
-// it accepts re-encodes (encodePkt) to the bytes it was read from — what lets
-// the receive path hand git exactly what the client sent — and the side-band
-// encoder's packets decode back to its channel and its data.
+// FuzzPktLines: readPkt never panics and every packet it accepts re-encodes
+// (encodePkt) to its bytes, so the receive path hands git exactly what the
+// client sent; side-band packets decode back to their channel and data.
 func FuzzPktLines(f *testing.F) {
 	for _, seed := range gitTranscripts(f) {
 		f.Add(seed, bandData)
@@ -209,10 +201,9 @@ func FuzzPktLines(f *testing.F) {
 	})
 }
 
-// FuzzAnswerScan: an upload-pack answer is read alike however its writes cut
-// it — the pool hands a fetch's sink whatever pieces git's pipe gave it — and
-// the reading never panics nor holds more than reportLead of a side band's
-// line. Seeded with git's own answers and a damaged clone's.
+// FuzzAnswerScan: an upload-pack answer reads alike however git's pipe cut
+// it, and the reading never panics nor holds more than reportLead of a side
+// band's line.
 func FuzzAnswerScan(f *testing.F) {
 	for _, seed := range gitTranscripts(f) {
 		f.Add(seed, []byte{3, 7, 250})
@@ -247,9 +238,8 @@ func FuzzAnswerScan(f *testing.F) {
 	})
 }
 
-// gitTranscripts is what real git writes on the wire for a small repository:
-// upload-pack's v0 advertisement, its v2 capability advertisement, and its
-// answers to an ls-refs and a fetch — the seeds of FuzzPktLines.
+// gitTranscripts is real upload-pack's wire output for a small repository: v0
+// and v2 advertisements and answers to an ls-refs and a fetch.
 func gitTranscripts(f *testing.F) [][]byte {
 	f.Helper()
 	c := gittest.NewClient(f)
@@ -277,9 +267,9 @@ func gitTranscripts(f *testing.F) [][]byte {
 	return out
 }
 
-// FuzzServiceFor: the advertisement's reading of its service never runs a
-// process the one classifier did not allow — a request auth.GitAccess calls a
-// fetch never runs receive-pack, whatever its query holds.
+// FuzzServiceFor: serviceFor never runs a process auth.GitAccess did not
+// allow; a request it calls a fetch never runs receive-pack, whatever its
+// query holds.
 func FuzzServiceFor(f *testing.F) {
 	for _, q := range []string{"service=git-upload-pack", "service=git-receive-pack", "",
 		"service=git-receive-pack&service=git-upload-pack", "service=git-upload-pack;service=git-receive-pack",
@@ -305,9 +295,8 @@ func FuzzServiceFor(f *testing.F) {
 	})
 }
 
-// FuzzNegotiation: the two readings of a fetch request — the level it is
-// answered at (parseNegotiation) and the wants this node checks for
-// (wantsOf) — never panic and agree on whether it names an object.
+// FuzzNegotiation: parseNegotiation and wantsOf never panic and agree on
+// whether a fetch request names an object.
 func FuzzNegotiation(f *testing.F) {
 	v2 := string(pktString("command=fetch\n")) + string(pktString("agent=git/2.43.0\n")) + delimPkt
 	f.Add([]byte(v2+string(pktString("want "+oidA+"\n"))+string(pktString("done\n"))+flushPkt), true)

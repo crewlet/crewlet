@@ -10,16 +10,13 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 )
 
-// AN ANCHOR ON A CHANGED LINE IS OUTDATED. Ranges read in one revision's files
-// are placed in another's by the diff between the blob each was read in and
-// the file at its path now: moved by the two lines inserted above them,
-// unmoved by what changed below; OUTDATED where a line of theirs was replaced
-// — alone, or among others — and where the file is binary on either side, so
-// nothing says where its lines went; GONE where the revision holds no file at
-// the path; where they were, in a file that is the blob they were read in. A
-// range on the old side of the change's diff is placed in the revision's base,
-// never its head. One diff-pairs process diffs every pair, handed numbers for
-// paths: no anchor's path reaches it.
+// AN ANCHOR ON A CHANGED LINE IS OUTDATED. Each range is placed by the diff
+// between the blob it was read in and the file at its path now: moved by two
+// lines inserted above, unmoved by changes below; OUTDATED where a line of its
+// own was replaced, alone or among others, or the file is binary on either
+// side; GONE where no file is at the path; unmoved where the file is its blob.
+// An old-side range is placed in the base, never the head. One diff-pairs
+// diffs every pair, handed numbers for paths, never an anchor's.
 //
 // Mutation: place an anchor whose own line changed as moved (Reanchor's
 // overlap read as above it) — the changed and spanning rows red.

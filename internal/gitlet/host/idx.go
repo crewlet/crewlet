@@ -10,17 +10,14 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A PACK INDEX, READ FOR ITS OBJECTS: the ids of the push's own pack, which the
-// blob scan asks git about — so the scratch's alternate, the whole repository,
+// A pack index, read for its objects: the ids of the push's own pack, which the
+// blob scan asks git about, so the scratch's alternate (the whole repository)
 // is never listed.
 
-// idxOIDs streams the object ids of a version-2 pack index — the only version
-// git writes by default since 1.5.2, and the one the receive configuration
-// pins — as `<hex>\n` lines, and reports the object count, read from the
-// fan-out table's last entry. The header is gitlet.OpenIdx's to read, the one
-// reading of an index's header, which refuses a version-1 index, a bad magic
-// or a count above 1<<31 naming the file; the ids follow it. Nothing is held
-// whole: the ids are read through a 64 KiB buffer as the caller reads them.
+// idxOIDs streams the object ids of a version-2 pack index (git's default, and
+// what the receive configuration pins) as `<hex>\n` lines, and reports the
+// object count from the fan-out table's last entry. gitlet.OpenIdx reads and
+// checks the header. Nothing is held whole: ids stream through a 64 KiB buffer.
 func idxOIDs(path string) (count int64, ids io.ReadCloser, err error) {
 	count, f, err := gitlet.OpenIdx(path)
 	if err != nil {

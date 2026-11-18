@@ -20,20 +20,19 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// hang is the hang detector every blocking case waits under: thirty seconds,
-// never a performance claim. These cases run in make test's shared half under
-// -race beside every other package, so a duration that IS a subject is
-// asserted by comparing two events of one case, or allowed ten times its
-// configured value — never as a tight wall-clock bound.
+// hang is the hang detector every blocking case waits under, never a
+// performance claim: under -race beside every other package, a duration that
+// is a case's subject is asserted by comparing two events of the case, or
+// allowed ten times its configured value.
 const hang = 30 * time.Second
 
-// suiteShare is whose every transfer a case runs is: a machine's — a
-// credential acting as nobody, as a CI runner's is (gitproc.Cmd.Share is
-// required of a transfer). A case whose subject is the share names its own.
+// suiteShare is the share of every transfer a case runs (gitproc.Cmd.Share is
+// required of one): a machine's, as a CI runner's is. A case whose subject is
+// the share names its own.
 var suiteShare = gitproc.Share{Class: gitproc.ShareMachine, Principal: "suite"}
 
-// fakeVersion is the version every stand-in git answers with: the node floor
-// exactly, the oldest git a pool is built over.
+// fakeVersion is the version every stand-in git answers with: the node floor,
+// the oldest git a pool is built over.
 var fakeVersion = "git version " + gitproc.NodeMinVersion.String()
 
 // newPool is a pool over o with a HOME of its own.
@@ -56,10 +55,9 @@ func fakePool(t testing.TB, body string, o gitproc.Options) *gitproc.Pool {
 	return newPool(t, o)
 }
 
-// realPool is a pool over the real git, held to the node floor before the
-// pool refuses it ([gittest.RequireNode]): the node pin under every make
-// target that runs it. A test whose SUBJECT is what git does in a pool runs
-// on both of the node's gits instead ([onNodeGits]).
+// realPool is a pool over the PATH's git, the node pin under the make targets,
+// held to the node floor ([gittest.RequireNode]). A test whose SUBJECT is what
+// git does in a pool runs on both of the node's gits instead ([onNodeGits]).
 func realPool(t testing.TB, o gitproc.Options) *gitproc.Pool {
 	t.Helper()
 	return poolOn(t, gittest.RequireNode(t), o)
@@ -72,21 +70,14 @@ func poolOn(t testing.TB, git string, o gitproc.Options) *gitproc.Pool {
 	return newPool(t, o)
 }
 
-// onNodeGits runs body once on each of the two gits that bound what a pool
-// may run, each a parallel subtest of its own: the NODE PIN — the PATH's git,
-// which every make target that runs this package makes the newest release
-// (gittest.RequireNode), what the image builds — and the NODE FLOOR's own
-// build, the newest patch of gitproc.NodeMinVersion's series
-// (gittest.NodeFloor), the oldest git gitproc.New admits. Every claim about
-// what a real git says or does in a pool — the format table, what a request
-// can reach, what the pool's environment keeps from git — is a claim about
-// every git a Gitlet node may run, and measured on the pin alone it was a
-// claim about one of them: the floor's own expectations were wrong in three
-// arms of the format table, and nothing ran them (ADR-0087, "each floor is a
-// measured claim"). Under every make target that runs this package the
-// floor's build is required, as every prerequisite of the suite is
-// (CREWLET_REQUIRE_PREREQUISITES=1, internal/prereqtest's one rule); a bare
-// `go test` without it skips the floor's arm alone.
+// onNodeGits runs body once on each git that bounds what a pool may run, each
+// a parallel subtest: the NODE PIN, the PATH's git the image builds
+// (gittest.RequireNode), and the NODE FLOOR's build, the newest patch of
+// gitproc.NodeMinVersion's series (gittest.NodeFloor). A claim about what a
+// real git does in a pool is a claim about every git a Gitlet node may run,
+// and the pin alone does not prove it for the floor (ADR-0087, "each floor is
+// a measured claim"). The make targets require the floor's build
+// (internal/prereqtest); a bare `go test` skips its arm alone.
 func onNodeGits(t *testing.T, body func(t *testing.T, git string)) {
 	t.Helper()
 	for _, g := range []struct {
@@ -175,8 +166,8 @@ func (f pidFile) read(t testing.TB) int {
 }
 
 // written is the pid in the file when a whole one is there, without waiting:
-// for a run that has RETURNED, whose group the sweep has ended, a file absent
-// or cut short now never fills.
+// for a run that has RETURNED, whose group the sweep ended, a file absent or
+// cut short never fills.
 func (f pidFile) written(t testing.TB) (int, bool) {
 	t.Helper()
 	body, err := os.ReadFile(f.path)
@@ -194,17 +185,12 @@ func (f pidFile) written(t testing.TB) (int, bool) {
 }
 
 // pastItsDeadline runs the stand-in under deadlines doubling from first until
-// a run's tree was up — its pid written — before the deadline fired, and
-// returns that run's outcome and the pid.
-//
-// A deadline that fires before the shell has started its tree ends a run
-// that never did what the case is about, and on a loaded -race runner a
-// shell's start-up is a matter of scheduling: so a run whose pid never
-// appeared is run again with more room rather than failed, and the case
-// asserts only about a run whose tree existed when the deadline ended it.
-// Each try is bounded; the sum stays inside the hang detector. It times
-// nothing: a case holds the wait the pool armed (gitproc.SeeGrace) rather than
-// how long Run took, which a loaded runner lengthens.
+// a run's tree was up (its pid written) before the deadline fired, and returns
+// that run's outcome and the pid. A deadline that beats a loaded runner's shell
+// start-up ends a run that never did what the case is about, so it is retried
+// rather than failed; the tries sum within the hang detector. It times
+// nothing: a case holds the wait the pool armed (gitproc.SeeGrace), not how
+// long Run took.
 func pastItsDeadline(t *testing.T, p *gitproc.Pool, pids pidFile, first time.Duration) (o outcome, pid int) {
 	t.Helper()
 	deadline := first
@@ -222,15 +208,10 @@ func pastItsDeadline(t *testing.T, p *gitproc.Pool, pids pidFile, first time.Dur
 }
 
 // awaitGauge waits, up to the hang detector, until name's series for class
-// ("" for an instrument recorded without one) reads want.
-//
-// A gauge is Set by the goroutine that made the change it reports, AFTER the
-// change, so a case that saw the change some other way may read the gauge a
-// moment before its Set: a run is counted only once its process has started
-// and been identified, which may land after the process has begun to do what
-// a case waits for, and a loan repaid when Cmd.Indexed closes is Set by the
-// run's watcher after the lane has the cores back. Polled, the reading a case
-// asserts is one the pool has published rather than one in flight.
+// ("" for an instrument recorded without one) reads want. Polled, because a
+// gauge is Set AFTER the change it reports (a run once its process is
+// identified, a loan once the lane has its cores back), so a case that saw the
+// change another way may otherwise read it before the Set.
 func awaitGauge(t *testing.T, rec *metrics.Recorder, name, class string, want float64) {
 	t.Helper()
 	series := name
@@ -254,14 +235,10 @@ func awaitGauge(t *testing.T, rec *metrics.Recorder, name, class string, want fl
 }
 
 // awaitWaiting waits, up to the hang detector, until want runs wait in p's
-// lane of class c (gitproc.Waiting): queued for a slot and granted none yet.
-//
-// A case that lets a slot go to a queued run, or ends a queued run's caller,
-// waits here first rather than for a fixed time. A run a loaded runner has
-// left on its way to the lane takes the slot free when it gets there, or
-// meets its caller's end before it ever queued, and the case passes without
-// the path it names; one that arrives behind a later arrival queues behind
-// it, and the case fails a healthy build.
+// lane of class c (gitproc.Waiting). A case that lets a slot go to a queued
+// run, or ends a queued run's caller, waits here first: a run still on its way
+// to the lane would take a free slot or meet its end unqueued, and the case
+// would pass without the path it names, or queue out of order and fail.
 func awaitWaiting(t *testing.T, p *gitproc.Pool, c gitproc.Class, want int64) {
 	t.Helper()
 	deadline := time.Now().Add(hang)

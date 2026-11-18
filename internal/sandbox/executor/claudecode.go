@@ -1677,7 +1677,7 @@ var claudeCompactionOff = []string{"DISABLE_AUTO_COMPACT", "DISABLE_COMPACT", "C
 var claudeResumeSwitches = []string{"CLAUDE_CODE_RESUME_INTERRUPTED_TURN", "CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP"}
 
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
-func (ClaudeCode) Events() Decoder { return &claudeEvents{tools: map[string]string{}} }
+func (ClaudeCode) Events() Decoder { return &claudeEvents{} }
 
 // Parse maps the harness's result — the stream's last line — onto a result.
 //

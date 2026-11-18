@@ -53,6 +53,11 @@ const (
 	// that a call is in flight at the server rather than still on its way.
 	helperCallSeenEnv = "CREWLET_MCP_TEST_CALL_SEEN"
 
+	// helperCallGateEnv is a path a tools/call waits to exist before it
+	// answers, off the read loop: a call held in flight, which the helper
+	// abandons when its stdin closes, as a stdio server exits then.
+	helperCallGateEnv = "CREWLET_MCP_TEST_CALL_GATE"
+
 	// helperStderrEnv is a \n-separated script written to stderr at startup.
 	helperStderrEnv = "CREWLET_MCP_TEST_STDERR"
 
@@ -380,6 +385,10 @@ func handleRPC(out *os.File, line string, page *int) bool {
 		}
 		writeResult(out, req.ID, result)
 	case "tools/call":
+		if os.Getenv(helperCallGateEnv) != "" {
+			go callResult(out, req.ID, req.Params)
+			return true
+		}
 		callResult(out, req.ID, req.Params)
 		if os.Getenv(helperNotifyEnv) != "" {
 			fmt.Fprintln(out, `{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}`)
@@ -484,6 +493,16 @@ func callResult(out *os.File, id json.RawMessage, params json.RawMessage) {
 	if seen := os.Getenv(helperCallSeenEnv); seen != "" {
 		if err := os.WriteFile(seen, nil, 0o600); err != nil {
 			fmt.Fprintln(os.Stderr, "call seen:", err)
+		}
+	}
+
+	if gate := os.Getenv(helperCallGateEnv); gate != "" {
+		//fixedwait:measure a poll's own deadline, which only ends a gate nobody opens
+		for deadline := time.Now().Add(time.Minute); time.Now().Before(deadline); {
+			if _, err := os.Stat(gate); err == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 		}
 	}
 

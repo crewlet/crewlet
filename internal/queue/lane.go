@@ -11,10 +11,11 @@ import (
 // background work, which a FIFO inbox drained from its head cannot promise. A
 // laned topic ([HasLane]) is two mailboxes under ONE subscription: a
 // [Prioritize]d event is written to the lane ([SubjectFor]), every drain takes
-// the lane first, and [OrderForDispatch] dispatches its partition first. Every
-// call naming the topic (EnsureSubscription, Quiesce, PauseTopic, Detach, ...)
-// acts on both, so a paused, parked or handed-off seat holds its lane too. The
-// mark rides the event, never the call, so a requeue returns to its lane.
+// the lane first and again before each partition ([JoinLane]), and
+// [OrderForDispatch] dispatches its partition first. Every call naming the
+// topic (EnsureSubscription, Quiesce, PauseTopic, Detach, ...) acts on both, so
+// a paused, parked or handed-off seat holds its lane too. The mark rides the
+// event, never the call, so a requeue returns to its lane.
 
 // A drain fills from the topic's head up to [BatchOptions.EffectiveMaxBatch]
 // after the lane: a same-partition topic event in that window joins the

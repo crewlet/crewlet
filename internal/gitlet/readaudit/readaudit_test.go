@@ -12,8 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/readaudit"
 )
 
-// recorder is a publisher that keeps what it was handed, refusing while told
-// to — the broker's two answers.
+// recorder is a publisher that keeps what it is handed, or refuses while told
+// to: the broker's two answers.
 type recorder struct {
 	mu     sync.Mutex
 	got    []*events.Event
@@ -69,10 +69,10 @@ func fetch(at time.Duration, bytes int64) readaudit.Read {
 
 // ONE READER'S READS OF A FLUSH ARE ONE RECORD: a CI token fetching every few
 // seconds is a record a flush, not a record a fetch. It counts the reads and
-// sums their bytes, names the repository as its NEWEST read did — whatever
-// order the reads were filed in — carries its first read's trace, and is
-// stamped with its newest read's instant, the one the readers' answer reports
-// as last read. A flush empties the ledger: the next publishes nothing again.
+// sums their bytes, names the repository as its NEWEST read did (whatever
+// order the reads were filed in), carries its first read's trace, and is
+// stamped with its newest read's instant. A flush empties the ledger: the next
+// publishes nothing.
 //
 // Mutation: count a record's reads as one, and the three reads are a record
 // of one.
@@ -149,9 +149,9 @@ func TestEveryReaderWayKindAndDayIsARecordOfItsOwn(t *testing.T) {
 	}
 }
 
-// A DOWNLOAD IS A RECORD OF ITS OWN BESIDE A FETCH: one reader's raw file,
-// ZIP and fetch of one repository in a flush are three records, each its own
-// kind, since all three are filed via git.
+// A DOWNLOAD IS A RECORD OF ITS OWN BESIDE A FETCH: all three are filed via
+// git, so only the kind keeps one reader's raw file, ZIP and fetch of a
+// repository three records.
 //
 // Mutation: drop the kind from the key, and the three are one record.
 func TestADownloadIsARecordOfItsOwnBesideAFetch(t *testing.T) {
@@ -174,7 +174,7 @@ func TestADownloadIsARecordOfItsOwnBesideAFetch(t *testing.T) {
 	}
 }
 
-// A SEAT'S READS ARE SOURCED TO THE SEAT, as every event of a seat's is, and a
+// A SEAT'S READS ARE SOURCED TO THE SEAT, as all its events are, and a
 // credential's to nobody: its reader is the record's own principal.
 func TestASeatsReadsAreSourcedToTheSeat(t *testing.T) {
 	t.Parallel()
@@ -212,8 +212,8 @@ func TestAReadCountsWhatItSays(t *testing.T) {
 }
 
 // A REFUSED RECORD IS PUBLISHED BY THE NEXT FLUSH, whole, and a read filed in
-// between is a record of its own rather than added to one already sealed: the
-// broker's outage costs who read a repository nothing it comes back from.
+// between is a record of its own rather than added to one already sealed: a
+// broker outage it comes back from loses no read.
 func TestARefusedRecordIsPublishedByTheNextFlush(t *testing.T) {
 	t.Parallel()
 	pub := &recorder{refuse: true}

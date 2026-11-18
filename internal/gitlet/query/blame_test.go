@@ -34,18 +34,15 @@ func (x *fixture) gitBlame(rev, path string) map[int]string {
 	return out
 }
 
-// A BLAME NAMES EVERY LINE'S COMMIT AND PUSH: each line of the file, in order,
-// with the commit git's own blame names for it and the line it had there —
-// its old path where the file was renamed since — each commit once a page
-// with its author, its committer and the engine's mark (false: the person
-// committed it), its date and its subject, and named with the push that
-// introduced it. Read a few lines a page, the pages hold the range whole,
-// each naming exactly the commits its lines do, each `l:` cursor resuming at
-// the line the page before it ended before — and the range is blamed by ONE
-// git process, every page past the first answered from the memo. A range
-// names its lines alone; one past the file's end is refused naming how many
-// lines the file has; a directory is no file; and an empty file has no
-// lines.
+// A BLAME NAMES EVERY LINE'S COMMIT AND PUSH: each line, in order, with the
+// commit git's own blame names and the line (and, across a rename, the path)
+// it had there; each commit once a page with its people, the engine's mark,
+// date, subject and the push that introduced it. Pages of a few lines hold
+// the range whole, each naming exactly its lines' commits and each `l:`
+// cursor resuming where the page before ended, from ONE git process, every
+// later page from the memo. A range names its lines alone; one past the
+// file's end is refused naming its line count; a directory is no file; an
+// empty file has no lines.
 //
 // Mutations: the page's commits left out of its cost (a page past its bound)
 // → red; the pages after the asked one not memoized → a blame each page, red.
@@ -171,11 +168,11 @@ func TestABlameNamesEveryLinesCommitAndPush(t *testing.T) {
 	}
 }
 
-// A LONG SUBJECT AND LINE ARE DESCRIBED BY THEIR SIZE, never cut: a subject of
-// 5 000 bytes — and one of a thousand control bytes, a thousand bytes that
-// encode to six thousand — an author's name, a committer's name and address
-// past a kibibyte and a line of 9 000 bytes are each answered absent beside
-// their size, by a log and by a blame alike, and the page still fits its bound.
+// A LONG SUBJECT AND LINE ARE DESCRIBED BY THEIR SIZE, never cut: a subject
+// of 5 000 bytes (or of a thousand control bytes, encoding to six thousand),
+// names and a committer's address past a kibibyte and a 9 000-byte line are
+// each answered absent beside their size, by a log and a blame alike, and the
+// page still fits its bound.
 //
 // Mutation: a field past its bound answered whole → the page past the bytes
 // it was cut against, and the absent field present, red.

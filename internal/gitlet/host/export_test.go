@@ -18,9 +18,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE SEAMS THE TABLE TESTS AND THE SPOOL TESTS READ. Every duration a case
-// scales is Options.Timing; what is here is sizes, so a case need not build
-// megabytes of fixture to cross them.
+// Seams the table and spool tests read: mostly sizes, so a case need not
+// build megabytes of fixture to cross them; durations scale via Options.Timing.
 
 // Section is a push's command section as readCommands read it.
 type Section struct {
@@ -57,11 +56,10 @@ var (
 )
 
 // ChangeAnswerLines is every line a push's change is told in, as the concept
-// page's table prints it: a change named and its page addressed by
-// placeholders (<repo>!<n>, on <api.external_url>), and a refusal by its code
-// with its sentence left out, the sentences being the decide's and the
-// receiver's to word. The bare forms are a host told no base, which no engine
-// node serving a push is, and the page does not print them.
+// page's table prints it: names and pages as placeholders, a refusal by its
+// code alone (its sentence is the decide's and the receiver's to word). The
+// page omits the bare forms, for a host told no base, which no engine node
+// serving a push is.
 func ChangeAnswerLines() []string {
 	const name, page = "<repo>!<n>", "<api.external_url>/dashboard#/gitlet/repos/<repo>/changes/<n>"
 	lines := []string{fmt.Sprintf(changeOpenedLine, name, page), fmt.Sprintf(changeUpdatedLine, name, page),
@@ -88,9 +86,9 @@ func SetRequestMemory(s *Server, n int) { s.requestMemory = n }
 
 // SpoolSizes are a spool allowance's bounds, as SetSpools takes them.
 type SpoolSizes struct {
-	// Limit and Share are the bytes every spool, and each credential's, may
+	// Limit and Share are the bytes all spools, and each credential's, may
 	// hold at once; Request is the most one request spools, and what a body
-	// whose client declared no length claims.
+	// of undeclared length claims.
 	Limit, Share, Request int64
 	// Grain is the most room a body asks for at a time; zero is the
 	// production's mebibyte.
@@ -120,8 +118,7 @@ func (z SpoolSizes) sizes() spoolSizes {
 }
 
 // SetSpools replaces s's spool allowance with one of sizes z. Set before the
-// requests a case sends: the server reads the field on every request's
-// goroutine.
+// first request: every request's goroutine reads the field.
 func SetSpools(s *Server, z SpoolSizes) { s.spools = newSpools(z.sizes()) }
 
 // SpoolsInUse is the bytes s's spool allowance holds right now, and the spools
@@ -139,9 +136,9 @@ func SpoolWaiting(s *Server) int { return s.spools.waiters() }
 func SpoolPlaces(s *Server) int { return s.spools.placesHeld() }
 
 // RecordSpoolWaits has s's spool allowance note the bound of every wait a
-// request begins from now on, and answers a reader of the bounds noted, in
-// order. Set after SetSpools, which replaces the allowance, and before the
-// requests a case sends: the allowance reads it on every request's goroutine.
+// request begins from now on, and answers a reader of them in order. Set after
+// SetSpools, which replaces the allowance, and before the first request: every
+// request's goroutine reads it.
 func RecordSpoolWaits(s *Server) func() []time.Duration {
 	var (
 		mu    sync.Mutex
@@ -170,8 +167,8 @@ func SetRequestMemoryAllowance(s *Server, limit int64) { s.heads = newAllowance(
 func RequestMemoryInUse(s *Server) int64 { return s.heads.inUse() }
 
 // ProtectAfterForce is protectAfterForce over rules for a push by a principal
-// of kind by, every command in judged as the receive handler judged it: how
-// many commands it asked.
+// of kind by, with judged already judged by the receive handler: how many
+// commands it asked.
 func ProtectAfterForce(cmds []gitlet.Command, rules []gitlet.PushRule, by gitlet.PrincipalKind,
 	judged []gitlet.Command) (int, error) {
 	parsed, err := gitlet.ParseProtections(rules)
@@ -269,9 +266,9 @@ func HookWalks(cmds [][3]string, objects int64) time.Duration {
 	return hookWalks(parsed, objects)
 }
 
-// SetProposalCheck replaces s's own check of a proposal before its bundle is
-// stored (gitlet.Proposal.ValidateUnstored) — how a case stands in the
-// receiver's bug no push reaches. Set before s's first push.
+// SetProposalCheck replaces s's check of a proposal before its bundle is
+// stored (gitlet.Proposal.ValidateUnstored), standing in for a receiver bug no
+// push reaches. Set before s's first push.
 func SetProposalCheck(s *Server, check func(gitlet.Proposal) error) { s.checkProposal = check }
 
 // WriteJoiners is how many writes have joined the write of pushID running on
@@ -285,9 +282,8 @@ func WriteJoiners(s *Server, pushID string) int {
 	return 0
 }
 
-// WritesInFlight is how many writes s is building or landing now: each push
-// id once, however many asks joined it — what a benchmark reads the write
-// lane's slots held by.
+// WritesInFlight is how many writes s is building or landing now, each push
+// id once however many asks joined it: the write lane's slots held.
 func WritesInFlight(s *Server) int {
 	s.writesMu.Lock()
 	defer s.writesMu.Unlock()
@@ -318,9 +314,9 @@ type GitInput struct {
 	Stdin          []byte
 }
 
-// RecordGitInputs has s record every process it hands the pool from now on —
-// its standard input read whole and handed on — and answers a reader of what
-// it has recorded, in order. Set before s's first request.
+// RecordGitInputs has s record every process it hands the pool from now on,
+// its standard input read whole and passed on, and answers a reader of them in
+// order. Set before s's first request.
 func RecordGitInputs(s *Server) func() []GitInput {
 	var (
 		mu  sync.Mutex
@@ -350,9 +346,8 @@ func RecordGitInputs(s *Server) func() []GitInput {
 }
 
 // HoldGit holds every process s hands the pool from now on whose arguments
-// start with args — a subcommand, and as many of its own arguments as tell
-// one of its processes from another — until release: reached is closed when
-// the first is held. Set before s's first request.
+// start with args until release; reached is closed when the first is held.
+// Set before s's first request.
 func HoldGit(s *Server, args ...string) (reached <-chan struct{}, release func()) {
 	at, held := make(chan struct{}), make(chan struct{})
 	var once, closing sync.Once
@@ -372,10 +367,8 @@ func HoldGit(s *Server, args ...string) (reached <-chan struct{}, release func()
 }
 
 // SlowGit has s report every process it hands the pool from now on whose
-// arguments start with args — a subcommand, and as many of its own arguments
-// as tell one of its processes from another — as having run took, whatever it
-// really ran: what a write's build is charged for it against its budget of
-// git. Set before s's first write.
+// arguments start with args as having run took, which a write's build is
+// charged against its git budget. Set before s's first write.
 func SlowGit(s *Server, took time.Duration, args ...string) {
 	run := s.runGit
 	s.runGit = func(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
@@ -388,8 +381,8 @@ func SlowGit(s *Server, took time.Duration, args ...string) {
 }
 
 // RecordGit has s record every gitproc.Cmd it hands the pool from now on, and
-// answers a reader of what it has recorded, in order. Set before s's first
-// request: the server reads the field on every request's goroutine.
+// answers a reader of them in order. Set before s's first request: every
+// request's goroutine reads the field.
 func RecordGit(s *Server) func() []gitproc.Cmd {
 	var (
 		mu   sync.Mutex
@@ -435,16 +428,15 @@ func GitTook(s *Server, args ...string) func() (time.Duration, int) {
 	}
 }
 
-// SetClock has s read its clock from now in place of its Options.Now: what a
-// verification's start, end and deadline are stamped by, among the rest. Set
-// before s's first request: the server reads it on every request's goroutine.
+// SetClock has s read its clock from now in place of its Options.Now (a
+// verification's start, end and deadline among the rest). Set before s's first
+// request: every request's goroutine reads it.
 func SetClock(s *Server, now func() time.Time) { s.now = now }
 
 // SetKeepaliveTicks has every push session of s take its keepalive's ticks
-// from ticks, in place of a ticker of its Timing.Keepalive: one line on the
-// push's stderr a tick, each written before the session takes the next. Set
-// before s's first push: the server reads the field on every session's
-// goroutine.
+// from ticks in place of a Timing.Keepalive ticker: one stderr line a tick,
+// written before the session takes the next. Set before s's first push: every
+// session's goroutine reads the field.
 func SetKeepaliveTicks(s *Server, ticks <-chan time.Time) {
 	s.keepaliveTicks = func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} }
 }
@@ -458,13 +450,12 @@ func SetChainMerges(s *Server, d time.Duration) { s.chainMerges = d }
 func SetChainObjects(s *Server, n int64) { s.chainObjects = n }
 
 // SetChainPack scales what a chain's pack is given (gitlet.ChainPackDeadline;
-// chain.go): BenchmarkBuildChain's past-bound arm lifts it to measure a pack
-// no chain may make.
+// chain.go); BenchmarkBuildChain lifts it to measure a pack past the bound.
 func SetChainPack(s *Server, d time.Duration) { s.chainPack = d }
 
-// RefuseObjectOnce has s answer its next `index-pack --strict` as the relay's
-// check refusing object id — the trace and the words a real refusal carries —
-// without running it, and run every later one. Set before s's first request.
+// RefuseObjectOnce has s answer its next `index-pack --strict`, unrun, as the
+// relay's check refusing object id, with a real refusal's trace and words; every
+// later one runs. Set before s's first request.
 func RefuseObjectOnce(s *Server, id string) {
 	var once sync.Once
 	run := s.runGit
@@ -547,9 +538,9 @@ func FailGitOnce(s *Server, err error, args ...string) {
 }
 
 // AnswerGitOnce has s's next process whose arguments start with args write
-// out to its Stdout in place of running, then end with failed (nil for a run
-// that exited well), or as the pool ends a run whose Stdout refused a write;
-// every later one runs.
+// out to its Stdout instead of running, then end with failed (nil for a clean
+// exit), or as the pool ends a run whose Stdout refused a write; every later
+// one runs.
 func AnswerGitOnce(s *Server, out []byte, failed error, args ...string) {
 	var once sync.Once
 	run := s.runGit

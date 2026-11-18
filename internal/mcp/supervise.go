@@ -192,12 +192,18 @@ type Health struct {
 // server is one server a bridge supervises: the spec it runs from, the tools
 // it contributes, and the session serving it now.
 type server struct {
-	b    *Bridge
-	spec Spec
+	b *Bridge
+	// current is the spec it runs from ([server.spec]). Its process fields
+	// never move, since moving one replaces the server; a refile swaps in
+	// new filing fields under the bridge's mu ([Bridge.Refile]).
+	current atomic.Pointer[Spec]
 
 	// tools is what this server contributes to the catalogue. Guarded by the
 	// BRIDGE's mu, because the catalogue is derived from it there.
 	tools []*Tool
+	// listing is the session's latest tools/list, which tools was filed
+	// from: a refile files it again. Guarded by the BRIDGE's mu, like tools.
+	listing []toolDef
 	// unlisted are the AnnotationOverrides keys the listing tools was built
 	// from names no tool for ([Bridge.UnlistedOverrides]): set with tools,
 	// from the same listing, so a restart that lists a different set moves
@@ -245,6 +251,10 @@ type server struct {
 	// neither logged nor recorded as the server's failure, and the restart
 	// waits nothing.
 	requested string
+	// inFlight counts the calls admitted to the session ([server.enter]), and
+	// retiring is set once a replacement takes the server's calls over.
+	inFlight int
+	retiring *handoff
 
 	// cancel ends the supervision, whose context it was made with; Stop
 	// calls it and waits on done.
@@ -301,14 +311,18 @@ func supervision(ctx context.Context) (context.Context, context.CancelFunc) {
 
 // newServer builds the record for a server whose supervision cancel ends.
 func (b *Bridge) newServer(spec Spec, cancel context.CancelFunc) *server {
-	return &server{
+	s := &server{
 		b:      b,
-		spec:   spec,
 		cancel: cancel,
 		nudged: make(chan struct{}, 1),
 		done:   make(chan struct{}),
 	}
+	s.current.Store(&spec)
+	return s
 }
+
+// spec is the spec the server runs from now.
+func (s *server) spec() *Spec { return s.current.Load() }
 
 // live is the session serving the server now, or nil.
 func (s *server) live() *client {
@@ -476,13 +490,13 @@ func (s *server) died(ctx context.Context, c *client) {
 	}
 	s.mu.Unlock()
 	if requested != "" {
-		s.b.log.Info("server_restart_requested", "server", s.spec.Name, "cause", cause,
+		s.b.log.Info("server_restart_requested", "server", s.spec().Name, "cause", cause,
 			"up_seconds", lived.Seconds(),
 			"detail", "its session was ended on request and a fresh one starts now; its "+
 				"tools stay in the catalogue and refuse until it is back")
 		return
 	}
-	s.b.log.Error("server_exited", "server", s.spec.Name, "cause", cause,
+	s.b.log.Error("server_exited", "server", s.spec().Name, "cause", cause,
 		"up_seconds", lived.Seconds(), "stable_after_seconds", s.b.sup.ceiling().Seconds(),
 		"stderr_tail", c.stderrTail(),
 		"detail", "its tools stay in the catalogue and refuse until it is back; the "+
@@ -514,7 +528,7 @@ func (s *server) revive(ctx context.Context) bool {
 			s.mu.Lock()
 			s.down.heldBack = true
 			s.mu.Unlock()
-			s.b.log.Warn("server_restart_held_back", "server", s.spec.Name,
+			s.b.log.Warn("server_restart_held_back", "server", s.spec().Name,
 				"retry_in_seconds", delay.Seconds(),
 				"detail", "its owner may not start it on this node now — a per-role "+
 					"child whose node cannot prove it still holds the seat; asked "+
@@ -528,7 +542,7 @@ func (s *server) revive(ctx context.Context) bool {
 		s.down.next, s.down.heldBack = time.Time{}, false
 		s.mu.Unlock()
 
-		c, defs, err := s.b.launch(ctx, s.spec)
+		c, defs, err := s.b.launch(ctx, *s.spec())
 		if err != nil {
 			if ctx.Err() != nil {
 				return false
@@ -538,7 +552,7 @@ func (s *server) revive(ctx context.Context) bool {
 			s.down.failed, s.down.class = err.Error(), ClassOf(err)
 			s.failure = &Failure{Class: s.down.class, Said: err.Error(), At: time.Now()}
 			s.mu.Unlock()
-			s.b.log.Error("server_restart_failed", "server", s.spec.Name, "attempt", attempt,
+			s.b.log.Error("server_restart_failed", "server", s.spec().Name, "attempt", attempt,
 				"error", err.Error(), "retry_in_seconds", delay.Seconds())
 			continue
 		}
@@ -552,10 +566,10 @@ func (s *server) revive(ctx context.Context) bool {
 			_, _ = c.close(context.WithoutCancel(ctx))
 			return false
 		}
-		s.b.log.Info("server_restarted", "server", s.spec.Name, "attempt", attempt,
+		s.b.log.Info("server_restarted", "server", s.spec().Name, "attempt", attempt,
 			"down_seconds", downFor.Seconds(), "was", was, "tool_count", len(defs))
 		if len(change.Added) > 0 || len(change.Removed) > 0 {
-			s.b.log.Info("server_catalogue_changed", "server", s.spec.Name,
+			s.b.log.Info("server_catalogue_changed", "server", s.spec().Name,
 				"added", toolNames(change.Added), "removed", change.Removed)
 			if changed := s.b.sup.CatalogueChanged; changed != nil {
 				changed(ctx)
@@ -673,7 +687,7 @@ func (s *server) refusal(t *Tool, dead *client, duringCall bool) Result {
 	}
 	s.mu.RUnlock()
 
-	name := fmt.Sprintf("%s/%s", s.spec.Name, t.raw)
+	name := fmt.Sprintf("%s/%s", s.spec().Name, t.raw)
 	server := t.Server()
 	const gone = "a configuration change replaced or removed it, or the seat it ran for was let go"
 	if reason == "" && dead != nil {

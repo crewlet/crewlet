@@ -3,28 +3,13 @@ package assistant
 import (
 	"path"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/activityline"
 )
 
-// WHAT A PERSON IS SHOWN OF A DEEP RUN AT WORK.
-//
-// A run's live reading is its harness's own transcript
-// (internal/sandbox/executor): every tool call as "[tool] <name>:
-// <subject>", where the subject is a command or a file path on the engine's
-// host ("Write: /private/tmp/.../assistant-boxes/.../outbox/report.md"), and
-// every paragraph the model writes. Drawn as it is, the deep-work card showed a
-// person the engine's box paths, its MCP tool names ("mcp__crewlet__api_request")
-// and its harness's internals ("ToolSearch: select:..."). So each line is put in
-// the person's words here, once, before it is kept:
-//
-//   - a call to Crewlet is left out, because the run's step already lists it,
-//     nested and in its own plain sentence ([turn.stepStart]);
-//   - any other tool call is a plain verb: "Ran a command", "Wrote report.md",
-//     "Searched the web", with a file named by its name alone;
-//   - a paragraph keeps its words with every absolute path cut to the file's
-//     name ([withoutPaths]).
-//
-// The run's report is cut the same way before the model reads it, so an
-// answer cannot repeat a host path either.
+// A deep run's transcript ([activityline]) in a person's words: no host path, no
+// tool's own name, no call to Crewlet (the run's step lists those), a failure
+// named by its call. The run's report has its paths cut the same way.
 
 // crewletToolPrefix opens the name the harness gives a tool of the engine's own
 // MCP server.
@@ -54,43 +39,70 @@ var toolVerbs = map[string]struct {
 	"toolsearch":   {"Looked up a tool", false},
 }
 
-// personLine is one transcript line as a person reads it, and false for a line
-// a person is not shown.
-func personLine(line string) (string, bool) {
-	line = strings.TrimSpace(line)
-	switch {
-	case line == "":
-		return "", false
-	case strings.HasPrefix(line, "[error]"):
+// personLines puts one run's transcript in a person's words a line at a time,
+// keeping each call in flight so its failure names it.
+type personLines struct {
+	// calls is each call in flight by its number: what it was shown as, ""
+	// for one a person is not shown.
+	calls map[int]string
+}
+
+// maxCallsInFlight bounds the calls remembered: more than a harness runs at
+// once. A failure of one not remembered is said without its verb.
+const maxCallsInFlight = 64
+
+// line is one transcript line as a person reads it, and false for a line a
+// person is not shown.
+func (p *personLines) line(raw string) (string, bool) {
+	l := activityline.Parse(strings.TrimSpace(raw))
+	switch l.Tag {
+	case activityline.Say, activityline.TagNote:
+		return withoutPaths(l.Text), strings.TrimSpace(l.Text) != ""
+	case activityline.TagSteer:
+		return "Read a note: " + withoutPaths(l.Text), true
+	case activityline.TagError:
 		return "The run hit an error.", true
-	case !strings.HasPrefix(line, "[tool]"):
-		return withoutPaths(line), true
-	}
-	call := strings.TrimSpace(strings.TrimPrefix(line, "[tool]"))
-	failed := false
-	if head, _, cut := strings.Cut(call, " → error"); cut {
-		call, failed = head, true
-	}
-	name, subject, _ := strings.Cut(call, ":")
-	name, subject = strings.TrimSpace(name), strings.TrimSpace(subject)
-	if strings.HasPrefix(name, crewletToolPrefix) {
-		return "", false
-	}
-	said := "Used a tool"
-	if v, known := toolVerbs[strings.ToLower(name)]; known {
-		said = v.verb
-		if v.namesOne {
-			if file := baseOf(subject); file != "" {
-				said += " " + file
-			} else {
-				said += " a file"
-			}
+	case activityline.TagCall:
+		said := callWords(l.Tool, l.Text)
+		if p.calls == nil {
+			p.calls = map[int]string{}
 		}
+		if len(p.calls) < maxCallsInFlight {
+			p.calls[l.Seq] = said
+		}
+		return said, said != ""
+	case activityline.TagFailed:
+		said, known := p.calls[l.Seq]
+		delete(p.calls, l.Seq)
+		switch {
+		case !known:
+			return "A step failed.", true
+		case said == "":
+			return "", false
+		}
+		return said + ", which failed", true
+	case activityline.TagOK:
+		delete(p.calls, l.Seq)
 	}
-	if failed {
-		said += ", which failed"
+	return "", false
+}
+
+// callWords is a call in a person's words, "" for a call to Crewlet.
+func callWords(name, subject string) string {
+	if strings.HasPrefix(name, crewletToolPrefix) {
+		return ""
 	}
-	return said, true
+	v, known := toolVerbs[strings.ToLower(name)]
+	if !known {
+		return "Used a tool"
+	}
+	if !v.namesOne {
+		return v.verb
+	}
+	if file := baseOf(subject); file != "" {
+		return v.verb + " " + file
+	}
+	return v.verb + " a file"
 }
 
 // baseOf is the name of the file a path names, or "" for no path.

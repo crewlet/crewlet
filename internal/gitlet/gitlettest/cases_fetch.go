@@ -72,11 +72,11 @@ func rebuilds(n Node) uint64 {
 	return total
 }
 
-// damageNewestIndex truncates the index of the newest pack RepoName's rows name,
-// in node i's copy, to 100 bytes: `index file … is too small`, which git
-// classifies corrupt. NEWEST BY THE RECORD THAT ADDED IT, the code log's own
-// order, never by the files' modification times: the filesystem stamps those
-// from a clock that steps and stamps two writes alike.
+// damageNewestIndex truncates the index of the newest pack RepoName's rows
+// name, in node i's copy, to 100 bytes, which git reads as corrupt (`index
+// file … is too small`). NEWEST BY THE RECORD THAT ADDED IT, never by
+// modification time, which a stepping clock stamps and can stamp two writes
+// alike.
 func damageNewestIndex(t *testing.T, c *Case, i int) {
 	t.Helper()
 	rows := c.Rows()
@@ -206,9 +206,9 @@ func aDeletedRepositoryIsRestoredByDeclaringItAgain(t *testing.T, newFleet NewFl
 }
 
 // F22: a blobless clone is served under protocol v2, and so is the ONE lazy
-// fetch its checkout makes for every blob it lacks — through the other Gitlet
-// node, as a balancer may send it, whose cache has never read the repository —
-// and the files checked out are the files pushed.
+// fetch its checkout makes for every blob it lacks, through the other Gitlet
+// node (as a balancer may send it), whose cache has never read the repository;
+// the files checked out are the files pushed.
 func aBloblessCloneChecksOut(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	bloblessCloneChecksOut(t, c.Fleet, c.URL(0), c.URL(1))
@@ -261,10 +261,9 @@ func bloblessCloneChecksOut(t *testing.T, f Fleet, url, lazyURL string) {
 	}
 }
 
-// F24: a SHALLOW clone is served under protocol v2, git's default — the
-// clone a CI system makes — and so is a shallow, blobless, sparse one, the
-// clone a box makes of one sha: each holds the tip alone, shallow, and the
-// files its checkout asked for.
+// F24: a SHALLOW clone (a CI system's) is served under protocol v2, git's
+// default, and so is a shallow, blobless, sparse one (a box's, of one sha):
+// each holds the tip alone, shallow, and the files its checkout asked for.
 func aShallowCloneChecksOut(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
@@ -314,9 +313,9 @@ func aShallowCloneChecksOut(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// missingObjects is every object dir's history names that dir does not hold —
-// read without fetching any, which a promisor repository does by itself for
-// any other read of an object it lacks.
+// missingObjects is every object dir's history names that dir does not hold,
+// read without the fetch a promisor repository makes by itself on any other
+// read of an object it lacks.
 func missingObjects(t *testing.T, p *Person, dir string) []string {
 	t.Helper()
 	var missing []string
@@ -329,10 +328,9 @@ func missingObjects(t *testing.T, p *Person, dir string) []string {
 }
 
 // F23: a partial clone is served ONLY the filters pack-objects answers from
-// the bitmap — blob:none, blob:limit, tree at depth 0, object:type and a
-// combine of them — and every other is refused in git's own words, which git
-// prints: sparse:oid and tree at any depth past 0 walk every object the clone
-// reaches instead.
+// the bitmap (blob:none, blob:limit, tree:0, object:type and a combine of
+// them); every other is refused in git's own words, since sparse:oid and tree
+// at any depth past 0 walk every object the clone reaches instead.
 func aFilterABitmapCannotAnswerIsRefused(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{}, Settings())
 	filtersABitmapCannotAnswerAreRefused(t, c.Fleet, c.URL(0))
@@ -341,12 +339,11 @@ func aFilterABitmapCannotAnswerIsRefused(t *testing.T, newFleet NewFleet) {
 
 // filtersABitmapCannotAnswerAreRefused is F23 over the repository at url.
 //
-// WHAT GIT PRINTS FOR A REFUSAL is read from git itself: the same serve
-// configuration over git's own transport, from a copy of the repository — so
-// the case holds the host to passing git's line through verbatim on whichever
-// git runs it, never to one release's wording. The table, not that oracle,
-// says which filters are refused, and a refused filter git's own upload-pack
-// serves under the configuration fails the case.
+// WHAT GIT PRINTS FOR A REFUSAL is read from git itself (the same serve
+// configuration over git's own transport, on a copy of the repository), so the
+// host is held to passing git's line through verbatim, never to one release's
+// wording. The table, not that oracle, says which filters are refused; a
+// refused filter git's own upload-pack serves fails the case.
 func filtersABitmapCannotAnswerAreRefused(t *testing.T, f Fleet, url string) {
 	t.Helper()
 	p := NewPerson(t, f, "ceo")

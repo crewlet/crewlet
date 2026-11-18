@@ -19,25 +19,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// POST /git/{repo}/git-upload-pack — A FETCH'S RPC: a v2 `ls-refs` or
-// `fetch`, or a v0 negotiation.
-//
-// AN OBJECT ID HAS NO LEVEL: a fetch names ids that mean the same bytes on
-// every node, so it takes whatever the cache holds — unless the cache lacks a
-// want, which means the client's refs came from a node further ahead, and
-// then ONE linearizable sync runs before it is served — a coding box's too,
-// a rare barrier the box's floor cannot spare, paid from its run's re-syncs
-// and answered at its floor once they are spent (boxlimit.go). A CHECK'S
-// BOX knows its want from no ref: it fetches the commit its attempt measures,
-// whose push precedes the position the attempt was queued at, so its wants
-// are looked for at that check's session (admission.objects) and a cache
-// behind the push pays no barrier for them; a want even the session lacks is
-// the check's re-syncs' to pay, as a coding box's is. An `ls-refs` names refs and is
-// read at the request's refs level, as every answer naming a ref is
-// (admission.refs): linearizable for a person, the run's session for a box,
-// whose floor it raises before its first byte (raiseFloor) — and a check's
-// box's is answered empty, the box shown no ref (noRefs); a fetch names none,
-// since the host offers no want-ref (cache.ServeConfig).
+// POST /git/{repo}/git-upload-pack: a v2 `ls-refs` or `fetch`, or a v0
+// negotiation. A fetch takes whatever the cache holds unless it lacks a want;
+// then ONE linearizable sync runs first, a coding box's paid from its run's
+// re-syncs and answered at its floor once they are spent (boxlimit.go). A
+// check's box's wants are looked for at its check's session
+// (admission.objects), a want even that lacks paid as a coding box's is. An
+// `ls-refs` is read at the request's refs level (admission.refs), a box's
+// raising its floor before its first byte (raiseFloor), a check's box's
+// answered empty (noRefs). (package doc, "Every answer that names a ref is
+// read at its request's level; an object id has no level")
 func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitter) {
 	start := s.now()
 	if r.Header.Get("Content-Type") != UploadPackRequestType {
@@ -93,13 +84,12 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitt
 		s.syncFailed(w, r, adm.name, err)
 		return
 	}
-	// Whatever synced holds when the handler returns: it is replaced below,
-	// and only ever by a Synced a sync or a rebuild handed out.
+	// Released at return, whatever it then holds: it is replaced below, only
+	// by a Synced a sync or a rebuild handed out.
 	defer func() { synced.Release() }()
 	if !n.namesRefs() && n.wants && (!v2 || n.command == commandFetch) {
-		// cat-file IN THE INCARNATION, so a damaged one is rebuilt here
-		// (repairing) and asked again — the wants are read from the request
-		// afresh.
+		// cat-file in the incarnation, so damage is repaired and the check
+		// asked again (repairing), each try reading the wants afresh.
 		var missing string
 		merr := s.repairing(ctx, r, adm.name, &synced, inIncarnation, notStarted, func(in cache.Synced) error {
 			var cerr error
@@ -111,16 +101,16 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitt
 			return
 		}
 		if missing != "" {
-			// A BOX'S RE-SYNC IS ITS RUN'S TO PAY (boxlimit.go): spent, the
+			// A box's re-sync is its run's to pay (boxlimit.go): spent, the
 			// want is answered at the run's floor, which lacks it.
 			if spent := s.boxResync(adm); spent != nil {
 				s.wantNotAtFloor(w, r, adm, missing, spent, n.recorded(), start)
 				return
 			}
-			// ONCE: upload-pack answers `not our ref` for whatever is
-			// still absent past one sync at the log's head. Into a
-			// variable of its own: a failed sync answers the zero Synced,
-			// and the directory already pinned is the defer's to release.
+			// Once: upload-pack answers `not our ref` for whatever one sync
+			// at the log's head still lacks. Into its own variable: a failed
+			// sync answers the zero Synced, and the pinned directory is the
+			// defer's to release.
 			head, herr := s.o.Cache.Sync(ctx, adm.repo.ID, statelog.Freshness{Level: statelog.ReadLinearizable})
 			if herr != nil {
 				s.syncFailed(w, r, adm.name, herr)
@@ -128,11 +118,10 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitt
 			}
 			synced.Release()
 			synced = head
-			// A BARRIER A BOX TOOK RAISES ITS RUN'S FLOOR to it, so its next
-			// request, on any node, syncs past what it is served here and
-			// pays no barrier for the same objects again. Best effort: a
-			// fetch by id is served whatever the floor says, so a raise the
-			// run store refuses is logged and the fetch goes on.
+			// A box's barrier raises its run's floor, so its next request on
+			// any node pays no barrier for the same objects. Best effort: a
+			// fetch by id is served whatever the floor says, so a refused
+			// raise is only logged.
 			if rerr := s.raiseFloor(ctx, adm, head.Position); rerr != nil {
 				s.log.Warn("code_box_floor_unraised", "repo", adm.name, "path", r.URL.Path, "error", rerr)
 			}
@@ -140,39 +129,33 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitt
 	}
 
 	out := newSink(w, "application/x-git-upload-pack-result", s.now)
-	// THE BODY IS GIVEN BACK at the answer's first byte once upload-pack has
-	// read it (requestBody.feed): no retry reads it past that byte.
+	// The body is given back at the answer's first byte (requestBody.feed):
+	// no retry reads it past that byte.
 	out.onStart = body.started
 	if n.recorded() == commandFetch {
-		// A FETCH'S ANSWER IS HELD UNTIL ITS PACK BEGINS (band.go): its
-		// pack-objects meets a damaged cache only after upload-pack's first
-		// line, and a run whose answer started can no longer be run again.
+		// Held until its pack begins (band.go): pack-objects meets a damaged
+		// cache only after upload-pack's first line, and a run whose answer
+		// started cannot be run again.
 		out.holdPack()
 	}
 	defer out.End()
-	// ITS USE OF THE REPOSITORY, counted however the answer ends: its bytes,
-	// and a clone where it was one, served to its end (Server.served). The
-	// fetch itself was counted at its advertisement.
+	// Its use, counted however the answer ends: its bytes, and a clone served
+	// to its end (Server.served). The fetch was counted at its advertisement.
 	var use cache.Use
 	defer func() { s.served(adm, out, use) }()
-	// A DAMAGED CACHE IS REBUILT AND THE FETCH RETRIED, over the same request
-	// (repairing) — never for `not our ref`, which a want the repository never
-	// served prints exactly as a lost pack does. Upload-pack is read like
-	// every other process over the incarnation (inIncarnation): its tree's
-	// trace2 format strings, which carry none of the request's text — never
-	// its stderr or its answer's side band, which copy the client's request
-	// ("unexpected line: '<arg>'") and so would let a crafted fetch force a
-	// rebuild.
+	// A damaged cache is repaired and the fetch retried over the same request
+	// (repairing), never for `not our ref`, which a never-served want prints
+	// exactly as a lost pack does. Damage is read from trace2 format strings
+	// (inIncarnation), never stderr or the side band, which echo the client's
+	// request and would let a crafted fetch force a rebuild.
 	//
-	// THROUGH THE DROPPING VIEW (Synced.Dropping): an object an expunge has
-	// begun dropping is served by id until its commit removes it — a fetch
-	// that already holds its id loses nothing before then — while no push
-	// may build on it (cache's doc, "The dropping view").
+	// Through the dropping view (Synced.Dropping): an object an expunge is
+	// dropping is served by id until its commit removes it, though no push may
+	// build on it (cache's doc, "The dropping view").
 	err = s.repairing(ctx, r, adm.name, &synced, inIncarnation, out.Started, func(in cache.Synced) error {
-		// A BOX IS SHOWN NOTHING ITS RUN'S FLOOR DOES NOT HOLD: an `ls-refs`
-		// raises the floor to the copy it is served from before its first
-		// byte (raiseFloor), so the box never reads a branch older on another
-		// node than it read here.
+		// A box is shown nothing its run's floor lacks: an `ls-refs` raises
+		// the floor to its copy before its first byte (raiseFloor), so no
+		// other node shows the box an older branch.
 		if n.namesRefs() {
 			if rerr := s.raiseFloor(ctx, adm, in.Position); rerr != nil {
 				return rerr
@@ -189,11 +172,10 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitt
 		return gerr
 	})
 	if gitsAnswer(err) {
-		// The run's answer stands — what it held reaches the client as git
-		// wrote it, its own failure included. Anything else (the node
-		// ending git, a repair that did not end the damage, the repair's
-		// own failure) is answered with a status, which nothing held has
-		// yet preceded.
+		// Git's answer stands, its own failure included: what it held
+		// reaches the client. Anything else (the node ending git, damage a
+		// repair did not end, the repair failing) is answered with a
+		// status, which nothing held has yet preceded.
 		if rerr := out.release(); err == nil {
 			err = rerr
 		}
@@ -209,21 +191,14 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitt
 
 // fetched records a fetch of a `visibility: unit` repository that sent its
 // contents (Options.Fetched): its request ended well and its answer carried a
-// pack — read by the sink's own reading of the answer (sink.PackSent), the
-// reading the hold releases the answer by. As the principal its admission
-// resolved (admission.principal), one read, and the bytes the client was
-// written — before the response ends, which is why the engine's Fetched only
-// files it in the node's reads ledger and never waits on the broker.
-//
-// FETCHES THAT SENT CONTENTS, NOT REQUESTS: over a stateless transport a fetch
-// negotiates in rounds, each a request of its own whose answer is
-// acknowledgments and no object, so a clone or a fetch is one record however
-// many rounds it took. An `ls-refs`, an advertisement and a fetch the node
-// ended before its answer was whole are none — they did not send the
-// repository, or not all of it — and neither is any read of a `visibility:
-// company` repository, which every seat reads by declaration. NOR A CHECK'S
-// BOX'S FETCH, which acts as nobody (admission.principal): the engine running
-// its repository's own checks file, whose attempt's row is its record.
+// pack (sink.PackSent). It runs before the response ends, so the engine's
+// Fetched only files it in the reads ledger, never waiting on the broker.
+// A fetch is one record however many negotiation rounds it took; an
+// `ls-refs`, an advertisement, a fetch the node ended, a `visibility:
+// company` repository and a check's box, which acts as nobody
+// (admission.principal; its attempt's row is its record), record nothing
+// (package doc, "Who read a unit's repository is recorded where its pack was
+// sent").
 func (s *Server) fetched(ctx context.Context, adm admission, out *sink) {
 	p := adm.principal()
 	if adm.repo.Visibility != gitlet.VisibilityUnit || !out.PackSent() || p == (gitlet.Principal{}) {
@@ -277,11 +252,9 @@ func decodedBody(w http.ResponseWriter, r *http.Request, s *Server) (io.Reader, 
 }
 
 // boundOf is a fetch request's bound for adm's repository: RequestBound of its
-// row as admitted, and — asked fresher — of its row read through the barrier,
-// so a request past a bound read from a stale row is judged against the
-// current one before it is refused. A BOX'S read through the barrier is a
-// re-sync its run pays for (boxlimit.go): spent, the admitted row's bound is
-// the one it is held to.
+// row as admitted, or, asked fresher, of its row read through the barrier, so
+// a stale row's bound refuses nothing. A box's barrier read is a re-sync its
+// run pays for (boxlimit.go): spent, it is held to the admitted row's bound.
 func (s *Server) boundOf(adm admission) func(context.Context, bool) (int64, error) {
 	return func(ctx context.Context, fresher bool) (int64, error) {
 		if !fresher || adm.linearizable || s.boxResync(adm) != nil {
@@ -327,12 +300,11 @@ func (s *Server) requestRefused(w http.ResponseWriter, r *http.Request, adm admi
 }
 
 // spoolRefused answers a fetch whose turn at the spool allowance ended
-// unserved — its wait expired, or it was refused a place to wait — 503 with
-// BusyRetryAfter, saying what held it back, and logged with the credential
-// that sent it and the spool credential it waited as: git does not retry a
-// lazy fetch, so this is a checkout that failed, and the line is how an
-// operator finds the token behind it — or, keyed `runs` with no operator id,
-// that coding boxes held their share.
+// unserved (its wait expired, or it got no place to wait) 503 with
+// BusyRetryAfter. It logs the credential and spool credential: git does not
+// retry a lazy fetch, so this is a failed checkout, and the line is how an
+// operator finds the token behind it (or, keyed `runs` with no operator id,
+// sees coding boxes held their share).
 func (s *Server) spoolRefused(w http.ResponseWriter, r *http.Request, adm admission, e *spoolUnserved) {
 	s.log.Warn("code_fetch_spool_unserved", "repo", adm.name, "path", r.URL.Path, "operator_id", adm.operatorID,
 		"spool", adm.spool, "reason", e.reason, "error", e)

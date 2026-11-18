@@ -24,26 +24,23 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE HOME'S LOOP OVER STAND-INS: the rows a code log would hold, as the due
-// listing answers them (estate), who is home to each repository (placement)
-// and the code log's watch (nudges) — so each case says exactly which
-// repository a node worked, at which floor, and what it asked of the
-// repository's writers.
+// The home's loop over stand-ins for the code log's rows (estate), each
+// repository's home (placement) and the code log's watch (nudges), so a case
+// says which repository a node worked, at which floor, and what it asked of
+// the repository's writers.
 
-// The repositories the cases work, and the change each holds.
+// The repositories the cases work.
 const (
 	repoA = "01920000-0000-7000-8000-00000000000a"
 	repoB = "01920000-0000-7000-8000-00000000000b"
 )
 
 // estate is the code log and the git reads as a home's loop reaches them: each
-// repository's due changes and its rechecks — the changes a moved target asks
-// merged again, oldest first, as many as a read asks — answered at the floor a
-// read names, and the facts of each head. A revise takes its change's facts
-// off the list, a mergeability its merge, and a landing the whole change, as
-// the rows' own would; a change owing nothing more leaves the list. And each
-// repository's changes whose asks are due a settling, which a settling takes
-// off, as its counts would.
+// repository's due changes, its rechecks (changes a moved target asks merged
+// again, oldest first, as many as a read asks), its changes whose asks are due
+// a settling, and each head's facts. Each write takes off what its rows would:
+// a revise the facts, a mergeability the merge, a landing the whole change, a
+// settling the asks; a change owing nothing more leaves the list.
 type estate struct {
 	mu       sync.Mutex
 	due      map[string][]gitlet.ChangeDue
@@ -53,11 +50,11 @@ type estate struct {
 	owners   map[string][]gitlet.PathOwner
 	gates    map[string][]gitlet.RuleGate
 	facts    map[string]gitlet.RevisionFactsAnswer
-	// factsRead is how many times the facts of each head were read.
+	// factsRead counts the reads of each head's facts.
 	factsRead map[string]int
 	at        statelog.Position
-	// revisedAt is where a revise's record lands, e.at where it is zero;
-	// checkFloors is every floor one repository's check work was read at.
+	// revisedAt is where a revise's record lands (e.at when zero);
+	// checkFloors is every floor a repository's check work was read at.
 	revisedAt   statelog.Position
 	checkFloors []statelog.Freshness
 	floors      []statelog.Freshness
@@ -65,16 +62,15 @@ type estate struct {
 	revises     []gitlet.Revise
 	merges      []gitlet.Mergeability
 	landings    []gitlet.ChangeLanded
-	// landRefusal and landErr are what every landing is answered while
-	// either is set — a refusal that decided nothing, or a call that failed —
-	// the change left on the list as its rows would leave it.
+	// landRefusal or landErr, while set, answers every landing (a refusal
+	// that decided nothing, or a failed call), leaving the change listed.
 	landRefusal gitlet.ChangeRefusal
 	landErr     error
-	// recording, where set, runs as each mergeability is recorded: a case's
-	// slow change writer.
+	// recording, if set, runs as each mergeability is recorded: a slow
+	// change writer.
 	recording func()
-	// pushes is the repositories' pushes in log order, as a landing's walk
-	// reads them back newest first (an `introduced` read below a position).
+	// pushes is the repositories' pushes in log order; introduced serves
+	// them to a landing's walk newest first.
 	pushes  []gitlet.IntroducedRow
 	changed chan struct{}
 }
@@ -86,10 +82,9 @@ func newEstate() *estate {
 		changed: make(chan struct{}, 1), at: statelog.Position{Stream: topics.CodeLogStream, Seq: 40}}
 }
 
-// hold puts change n of repo on repo's due list, owing its facts alone, its
-// head head and its target main at tip, the facts its home reads of it f —
-// with the trees a Gitlet node reads beside them, where f names none and its
-// head is no merged one's.
+// hold puts change n of repo on its due list owing its facts alone, head head
+// into main at tip, and makes f the facts read of head, adding the base and
+// head trees a Gitlet node reads where f names none and head is not merged.
 func (e *estate) hold(repo string, n int64, head, tip string, f gitlet.RevisionFactsAnswer) gitlet.ChangeDue {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -126,15 +121,15 @@ func (e *estate) settled() []gitlet.AskSettle {
 	return slices.Clone(e.settles)
 }
 
-// recheck puts due among repo's rechecks, after every recheck already there:
-// the order the rows name them in, the oldest merge first.
+// recheck appends due to repo's rechecks: the rows name them oldest merge
+// first.
 func (e *estate) recheck(repo string, due gitlet.ChangeDue) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.rechecks[repo] = append(e.rechecks[repo], due)
 }
 
-// QueueDue answers the queue's due work: these cases hold no queue owing any.
+// QueueDue answers no due queue work: no queue in these cases owes any.
 func (e *estate) QueueDue(context.Context, gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -146,7 +141,7 @@ func (e *estate) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer,
 	defer e.mu.Unlock()
 	switch {
 	case q.Kind == gitlet.ReadChecksDue:
-		// THE CHECK WORK'S LISTING: these cases hold no change owing any.
+		// Check work: no change here owes any; only the floor is kept.
 		if q.ChecksDue != nil && q.ChecksDue.RepoID != "" {
 			e.checkFloors = append(e.checkFloors, q.Fresh)
 		}
@@ -188,9 +183,9 @@ func (e *estate) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer,
 }
 
 // introduced answers a landing walk's read as the reader's descending
-// `introduced` read does: the pushes of q's repository below its bound,
-// newest first — the position, then the push id — at most its limit a page,
-// keyset after the last served. Under mu.
+// `introduced` read does: q's repository's pushes below its bound, newest
+// first by position then push id, at most its limit a page, keyed after the
+// last served. Under mu.
 func (e *estate) introduced(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	in := q.Introduced
 	if in == nil || in.RepoID == "" || !in.Descending || in.Before.IsZero() || q.Limit < 1 {
@@ -249,8 +244,8 @@ func (e *estate) Converse(_ context.Context, w gitlet.ConversationWrite) (gitlet
 			return gitlet.ConversationResult{Outcome: statelog.OutcomeApplied, Position: e.revisedAt}, nil
 		}
 	case w.Mergeability != nil:
-		// A MERGE RECORDS THE READINESS beside it, and a refresh records it
-		// alone: either leaves the change owing no refresh.
+		// A merge records the readiness beside it, a refresh alone: either
+		// leaves the change owing no refresh.
 		e.merges = append(e.merges, *w.Mergeability)
 		if e.recording != nil {
 			e.recording()
@@ -298,9 +293,9 @@ func (e *estate) Change(_ context.Context, p gitlet.ChangeProposal) (gitlet.Chan
 	return gitlet.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.Landed.ChangeID, Position: e.at}, nil
 }
 
-// done takes what a record settled off change on repo's due list — the change
-// leaving it where it owes nothing more, and its rechecks for whatever record
-// settled it — as its record's rows would, and says so. Under mu.
+// done applies settle to change on repo's due list, drops it from the list
+// once it owes nothing and from repo's rechecks whatever settled it, as the
+// rows would, and signals changed. Under mu.
 func (e *estate) done(repo, change string, settle func(*gitlet.ChangeDue)) {
 	for i := range e.due[repo] {
 		if e.due[repo][i].ID == change {
@@ -317,8 +312,8 @@ func (e *estate) done(repo, change string, settle func(*gitlet.ChangeDue)) {
 	}
 }
 
-// waitReads waits until the loop has read its listing at least n times —
-// its first pass's among them — or fails t.
+// waitReads waits until the loop has read its listing at least n times (its
+// first pass counts), or fails t.
 func (e *estate) waitReads(t *testing.T, n int) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -343,8 +338,7 @@ func (e *estate) wrote() ([]gitlet.Revise, []gitlet.ChangeLanded) {
 	return slices.Clone(e.revises), slices.Clone(e.landings)
 }
 
-// listings is every listing of the change work asked so far, in the order it
-// was asked.
+// listings is every change-work listing asked so far, in order.
 func (e *estate) listings() []gitlet.ChangesDueQuery {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -362,8 +356,7 @@ func (e *estate) merged() []gitlet.Mergeability {
 	return slices.Clone(e.merges)
 }
 
-// waitDone waits until repo's due list and its rechecks are empty, or fails t
-// at the deadline.
+// waitDone waits until repo's due list and rechecks are empty, or fails t.
 func (e *estate) waitDone(t *testing.T, repo string, within time.Duration) {
 	t.Helper()
 	deadline := time.After(within) //fixedwait:liveness
@@ -382,8 +375,7 @@ func (e *estate) waitDone(t *testing.T, repo string, within time.Duration) {
 	}
 }
 
-// waitMerged waits until n mergeabilities have been asked, or fails t at the
-// deadline.
+// waitMerged waits until n mergeabilities have been asked, or fails t.
 func (e *estate) waitMerged(t *testing.T, n int, within time.Duration) []gitlet.Mergeability {
 	t.Helper()
 	deadline := time.After(within) //fixedwait:liveness
@@ -428,8 +420,7 @@ func (p *placement) HomeOfFor(node string, repos []string) (map[string]bool, err
 	return out, nil
 }
 
-// asNode is p as node reads it: HomeOf answers the repositories node is home
-// to.
+// asNode is placement as node reads it: HomeOf answers node's repositories.
 type asNode struct {
 	*placement
 	node string
@@ -439,9 +430,8 @@ func (a asNode) HomeOf(repos []string) (map[string]bool, error) {
 	return a.placement.HomeOfFor(a.node, repos)
 }
 
-// nudges is the code log's watches, the repositories' subjects' handler kept
-// for the case to call, and the checks subjects' — or watches that do not
-// begin, while failing is set.
+// nudges is the code log's watches: it keeps the repositories' and the
+// checks' handlers for the case to call, and begins none while failing.
 type nudges struct {
 	mu      sync.Mutex
 	h       *home.Nudged
@@ -504,16 +494,14 @@ type stopped struct{}
 
 func (stopped) Stop() {}
 
-// units is a seat git-work share of so many units, as a loop sizes its own
-// reads by it.
+// units is a seat's git-work share, by which a loop sizes its reads.
 type units int
 
 func (u units) Units() int { return int(u) }
 
-// loopOn is node's loop over e, p and n, its backstop backstop, started, with
-// a recorder of its own; stopped when the case ends. Its cache and pool are
-// stand-ins no merge reaches ([unmerged]): every change its cases hold owes
-// its facts alone.
+// loopOn starts node's loop over e, p and n with backstop and its own
+// recorder, stopped when the case ends. Its cache and pool are [unmerged]: its
+// cases' changes owe their facts alone.
 func loopOn(t *testing.T, node string, e *estate, p *placement, n *nudges,
 	backstop time.Duration) (*home.Loop, *metrics.Recorder) {
 
@@ -524,8 +512,8 @@ func loopOn(t *testing.T, node string, e *estate, p *placement, n *nudges,
 		backstop)
 }
 
-// loopOver is a loop over o, with a recorder of its own, its backstop
-// backstop, started; stopped when the case ends.
+// loopOver starts a loop over o with backstop and its own recorder, stopped
+// when the case ends.
 func loopOver(t *testing.T, o home.Options, backstop time.Duration) (*home.Loop, *metrics.Recorder) {
 	t.Helper()
 	rec, err := metrics.New()
@@ -543,9 +531,8 @@ func loopOver(t *testing.T, o home.Options, backstop time.Duration) (*home.Loop,
 	return l, rec
 }
 
-// unmerged is the cache and the pool of a loop whose cases hold no change that
-// owes a merge: whatever reaches either is the case's failure, since nothing
-// the case holds asks one.
+// unmerged is the cache and pool of a loop whose cases owe no merge: any use
+// of either fails the case.
 type unmerged struct{ t testing.TB }
 
 func (u unmerged) Holds(string) bool {
@@ -573,8 +560,8 @@ func changeID(repo string, n int64) string {
 	return repo[:len(repo)-2] + repo[len(repo)-1:] + string(rune('0'+n))
 }
 
-// unqueued is a home's merge queue seams where its cases queue nothing: a
-// chain built or a work item closed is a failure of the case.
+// unqueued is the merge queue's seams for cases that queue nothing: building
+// a chain or closing a work item fails the case.
 type unqueued struct{ t testing.TB }
 
 func (u unqueued) BuildChain(context.Context, gitlet.ChainBuild) (gitlet.ChainResult, error) {
@@ -590,8 +577,8 @@ func (u unqueued) CloseWorkItem(context.Context, home.TaskClose) error {
 // oid is a whole object id made of c.
 func oid(c string) string { return strings.Repeat(c, 40)[:40] }
 
-// observed is how many observations rec holds of the histogram name under
-// attrs, and their sum.
+// observed is the count and sum of rec's observations of histogram name
+// under attrs.
 func observed(rec *metrics.Recorder, name string, attrs metrics.Attrs) (uint64, float64) {
 	var (
 		n   uint64
@@ -634,13 +621,12 @@ func counted(rec *metrics.Recorder, name string, attrs metrics.Attrs) uint64 {
 	return n
 }
 
-// ONLY THE HOME WORKS A REPOSITORY: two Gitlet nodes' loops over one code log,
-// each home to one of two repositories with a change due, each work their own
-// and nothing of the other's — a pass lists both, and schedules only what its
-// placement says it is home to; a nudge for the other node's repository
-// schedules nothing — and each record names the node that asked it.
+// ONLY THE HOME WORKS A REPOSITORY: two nodes' loops over one code log, each
+// home to one of two repositories with a change due, work only their own: a
+// pass lists both but schedules only what its placement gives it, a nudge for
+// the other's repository schedules nothing, and each record names its node.
 //
-// Mutation: schedule every listed repository whatever its home, and node-b
+// Mutation: schedule every listed repository whatever its home → node-b
 // records repoA's facts too.
 func TestOnlyTheHomeWorksARepository(t *testing.T) {
 	t.Parallel()
@@ -671,10 +657,9 @@ func TestOnlyTheHomeWorksARepository(t *testing.T) {
 		counted(recB, metrics.CodeHomeNudges, metrics.Attrs{"outcome": "elsewhere"}); got != 2 {
 		t.Errorf("the nudges for each other's repository counted %d elsewhere, want 2", got)
 	}
-	// A TURN IS COUNTED AS IT ENDS, which is after its due list empties: the
-	// revise takes the change off the list, and the readiness refresh its
-	// recorded facts ask (changes.change) is written after it, so node-a's
-	// count is read once its turn has ended, never once its list is empty.
+	// A turn is counted as it ends, after its list empties: the revise empties
+	// it, then the refresh the facts ask (changes.change) is written. So read
+	// the count once the turn ends, never once the list is empty.
 	waitTurns(t, recA, 1)
 	if got := counted(recA, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges,
 		"outcome": "worked"}); got != 1 {
@@ -682,21 +667,20 @@ func TestOnlyTheHomeWorksARepository(t *testing.T) {
 	}
 }
 
-// A NUDGE ONLY SHORTENS THE WAIT: a change due on a repository whose home's
-// backstop is an hour away is worked the moment a record on the repository is
-// told — its listing read at that record's position, so the rows it reads
-// hold the record — and a pass of the backstop finds the same work from the
-// rows alone, with no nudge at all: the nudge decides nothing the rows do not.
+// A NUDGE ONLY SHORTENS THE WAIT: with the backstop an hour away, a nudge for a
+// record on a repository gets its due change worked at once, the listing read
+// at the record's position so the rows hold it; and a backstop pass finds the
+// same work from the rows with no nudge: the nudge decides nothing they don't.
 //
-// Mutation: read the nudged repository's due changes stale rather than at the
-// record's position, and its listing names no floor.
+// Mutation: read the nudged repository stale, not at the record's position →
+// its listing names no floor.
 func TestANudgeOnlyShortensTheWait(t *testing.T) {
 	t.Parallel()
 	e := newEstate()
 	p := &placement{homes: map[string]string{repoA: "node-a"}}
 	n := newNudges()
 	l, _ := loopOn(t, "node-a", e, p, n, time.Hour)
-	// THE FIRST PASS, run at Start, has found nothing due.
+	// The first pass, run at Start, found nothing due.
 	e.waitReads(t, 1)
 	e.hold(repoA, 1, oid("a"), oid("1"), gitlet.RevisionFactsAnswer{MergeBase: oid("1"), PatchID: oid("e"),
 		Touched: []string{"a.go"}})
@@ -724,16 +708,15 @@ func TestANudgeOnlyShortensTheWait(t *testing.T) {
 	}
 }
 
-// A REVISION'S FACTS SCHEDULE ITS CHECKS' DISPATCH: the change work's record
-// of a head revision's facts lands on the change's subject, which no watch
-// sees, and a head's checks are dispatched only once its facts are recorded —
-// so the home schedules the repository's check work at the facts' own
-// position the moment they are recorded, its listing read there, with the
-// backstop an hour away and no record on the repository told after them.
+// A REVISION'S FACTS SCHEDULE ITS CHECKS' DISPATCH: a head's facts land on the
+// change's subject, which no watch sees, and its checks dispatch only once the
+// facts are recorded, so the home schedules the repository's check work at the
+// facts' position as they are recorded, with the backstop an hour away and no
+// later nudge.
 //
-// Mutation: drop the change work's word that it recorded facts — the check
-// work is read at the nudge's position alone, and the head waits for the
-// backstop, red.
+// Mutation: drop the change work's word that it recorded facts → the check
+// work is read at the nudge's position alone and the head waits for the
+// backstop.
 func TestARevisionsFactsScheduleItsChecksDispatch(t *testing.T) {
 	t.Parallel()
 	e := newEstate()
@@ -765,12 +748,12 @@ func TestARevisionsFactsScheduleItsChecksDispatch(t *testing.T) {
 	}
 }
 
-// A LOST NUDGE IS CAUGHT BY THE BACKSTOP: with no watch running at all — its
-// consumer cannot be made — a change due on a repository is found and worked
-// by the backstop's next pass; and a watch's GAP — it may have missed records
-// up to a position — asks a pass at once, its listing read at that position.
+// A LOST NUDGE IS CAUGHT BY THE BACKSTOP: with no watch running (its consumer
+// cannot be made), a due change is worked by the backstop's next pass; and a
+// watch's gap (records possibly missed up to a position) asks a pass at once,
+// its listing read at that position.
 //
-// Mutation: run no pass but the first, and the change waits for a nudge that
+// Mutation: run no pass but the first → the change waits for a nudge that
 // never comes.
 func TestALostNudgeIsCaughtByTheBackstop(t *testing.T) {
 	t.Parallel()
@@ -779,8 +762,8 @@ func TestALostNudgeIsCaughtByTheBackstop(t *testing.T) {
 	deaf := newNudges()
 	deaf.failing = true
 	_, rec := loopOn(t, "node-a", e, p, deaf, 20*time.Millisecond)
-	// THE FIRST PASS, at the start, has listed nothing due: the change made
-	// due after it is found by a later pass or by nobody.
+	// The first pass found nothing due: only a later pass can find the
+	// change.
 	e.waitReads(t, 1)
 	e.hold(repoA, 1, oid("a"), oid("1"), gitlet.RevisionFactsAnswer{MergeBase: oid("1"), PatchID: oid("e"),
 		Touched: []string{"a.go"}})
@@ -801,10 +784,9 @@ func TestALostNudgeIsCaughtByTheBackstop(t *testing.T) {
 	if !slices.ContainsFunc(floors, func(f statelog.Freshness) bool { return slices.Contains(f.Floors, through) }) {
 		t.Fatalf("the pass a gap asked read at %+v, none at the gap's position %s", floors, through)
 	}
-	// COUNTED AS THE TURN ENDS, after the write that emptied the deaf home's
-	// list (TestOnlyTheHomeWorksARepository says why), and WORKED HOWEVER LONG
-	// IT RAN: its work returned, which its twenty-millisecond bound on a
-	// loaded runner does not change (TestATurnWhoseWorkFinishesPastItsBoundDidIt).
+	// Counted as the turn ends (TestOnlyTheHomeWorksARepository), and worked
+	// however long it ran past its 20 ms bound on a loaded runner
+	// (TestATurnWhoseWorkFinishesPastItsBoundDidIt).
 	waitTurns(t, rec, 1)
 	if got := counted(rec, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges,
 		"outcome": "worked"}); got == 0 {
@@ -812,14 +794,13 @@ func TestALostNudgeIsCaughtByTheBackstop(t *testing.T) {
 	}
 }
 
-// A WATCH THAT BEGINS AS THE LOOP STOPS IS STOPPED: a watch of the code log
-// that returns from its beginning once the loop's Stop has taken the watches
-// — before Stop has ended the loop's life, the window the case holds open
-// (home.BeginStop) — is stopped by the loop at once, before the pass that
-// follows reads its listing, never stored where nothing would stop it; and no
-// further watch is begun.
+// A WATCH THAT BEGINS AS THE LOOP STOPS IS STOPPED: a watch that returns after
+// Stop has taken the watches but before the loop's life ends (the window
+// home.BeginStop holds open) is stopped at once, before the next pass reads
+// its listing, never stored where nothing would stop it; no further watch
+// begins.
 //
-// Mutation: decide by the life's end rather than by stopped, and the watch is
+// Mutation: decide by the life's end rather than by stopped → the watch is
 // stored, still running when the pass reads.
 func TestAWatchThatBeginsAsTheLoopStopsIsStopped(t *testing.T) {
 	t.Parallel()
@@ -844,9 +825,8 @@ func TestAWatchThatBeginsAsTheLoopStopsIsStopped(t *testing.T) {
 	}
 }
 
-// slowWatch is a code log whose first watch returns only once the case
-// releases it, saying when it is entered; every watch it hands out records
-// whether it was stopped.
+// slowWatch is a code log whose first watch signals entered and returns only
+// once released; each watch records whether it was stopped.
 type slowWatch struct {
 	mu      sync.Mutex
 	begun   []*stopWatch
@@ -912,17 +892,15 @@ func (l *lines) String() string {
 }
 
 // A HOME REFRESHES A READINESS WITHOUT A MERGE: a change owing only a refresh
-// of its stored readiness — a review, an ask, an answer to its findings moved
-// what it reads — is answered by a mergeability that MERGES NOTHING: its
-// revision, head and target named, marked a refresh, and nothing of a merge,
-// which its writer stamps from the change's row — with no copy synced, no
-// scratch made and no git run, the loop's cache and pool being stand-ins any
-// use of which fails the case. And a change whose facts the same turn
-// records, owing no merge, is refreshed in that turn: its facts moved what its
-// stored readiness read, and no listing named the refresh before they did.
+// of its stored readiness (a review, an ask or a findings answer moved what it
+// reads) gets a mergeability that merges nothing: revision, head and target
+// named, marked a refresh, no merge fields (its writer stamps them from the
+// change's row), and no sync, scratch or git run. A change whose facts the
+// same turn records, owing no merge, is refreshed in that turn too: no listing
+// named the refresh before its facts moved its readiness.
 //
 // Mutations: merge a change owing a refresh → the stand-ins fail the case;
-// refresh nothing after a revise → web's second change is never refreshed.
+// refresh nothing after a revise → the second change is never refreshed.
 func TestAHomeRefreshesReadinessWithoutAMerge(t *testing.T) {
 	t.Parallel()
 	e := newEstate()
@@ -960,13 +938,12 @@ func TestAHomeRefreshesReadinessWithoutAMerge(t *testing.T) {
 	}
 }
 
-// A HOME NAMES THE CHART IT HOLDS in every listing of its change work, the
-// repositories' and its repository's due changes alike: the activation of
-// its node's chart, so a change whose stored readiness an earlier chart
-// judged is listed due a refresh (gitlet.ChangesDueQuery.ChartEpoch).
+// A HOME NAMES THE CHART IT HOLDS, its node's chart activation, in every
+// change-work listing, the repositories' and a repository's alike, so a change
+// whose readiness an earlier chart judged is listed due a refresh
+// (gitlet.ChangesDueQuery.ChartEpoch).
 //
-// Mutation: leave the chart off the repository's listing → it names none,
-// red.
+// Mutation: leave the chart off the repository's listing → it names none.
 func TestAHomeNamesTheChartItHoldsInEveryListing(t *testing.T) {
 	t.Parallel()
 	const chart = int64(1_762_000_060_000)
@@ -991,12 +968,11 @@ func TestAHomeNamesTheChartItHoldsInEveryListing(t *testing.T) {
 	}
 }
 
-// THE HOME RECORDS THE CLASSES ITS GIT READ: what a revision's facts read
-// answered of its code — the trees of its base and its head, and its touched
-// paths' classes — rides the revise the home asks the change writer for, as
-// the Gitlet node read it: the home lexes nothing and judges nothing of it.
+// THE HOME RECORDS THE CLASSES ITS GIT READ: the base and head trees and the
+// touched paths' classes a revision's facts read answered ride the revise as
+// the Gitlet node read them; the home lexes and judges none of it.
 //
-// Mutation: leave the classes out of the revise — the facts record none, red.
+// Mutation: leave the classes out of the revise → the facts record none.
 func TestTheHomeRecordsTheClassesItsGitRead(t *testing.T) {
 	t.Parallel()
 	e := newEstate()
@@ -1017,14 +993,14 @@ func TestTheHomeRecordsTheClassesItsGitRead(t *testing.T) {
 }
 
 // THE HOME MATCHES THE HUMAN PATHS ITS TARGET IS HELD TO: beside the path
-// owners, the home matches the touched paths against the human paths the
-// listing's gates hold the change's target to — classed as its git read
-// classed them — and its revise carries which of them hold the revision and
-// which their unless waived, by place, with the digest of the gates' human
-// paths it matched against: the match no judgment makes again.
+// owners, it matches the touched paths, classed as its git read classed them,
+// against the human paths the listing's gates hold the target to; the revise
+// carries which hold the revision and which their unless waived, by place,
+// with the digest of the gates' human paths matched, so no judgment matches
+// again.
 //
-// Mutation: leave the match out of the revise — it records no human path
-// holding the revision, red.
+// Mutation: leave the match out of the revise → no human path holds the
+// revision.
 func TestTheHomeMatchesTheHumanPathsItsTargetIsHeldTo(t *testing.T) {
 	t.Parallel()
 	e := newEstate()
@@ -1051,15 +1027,14 @@ func TestTheHomeMatchesTheHumanPathsItsTargetIsHeldTo(t *testing.T) {
 }
 
 // A HOME SETTLES THE ASKS ITS LISTING NAMES: a repository whose only due work
-// is a change's asks for review that no longer match its lifecycle — an ended
-// change's still waiting, a reopened change's its end left — is listed, and
-// its home asks the change's writer to settle each, naming the change and the
-// state its asks move to and no asker (the home's own write), nothing more:
-// the writer stamps the asks it moves from its own snapshot.
+// is review asks out of step with a change's lifecycle (an ended change's
+// still waiting, a reopened change's left ended) is listed, and its home asks
+// the change writer to settle each, naming only the change and the state its
+// asks move to, no asker (the home's own write): the writer stamps the asks
+// it moves from its own snapshot.
 //
-// Mutations: drop the settling from Work → no settling is asked, the
-// repository staying due; send the listing's state the other way → the
-// settlings name the wrong states.
+// Mutations: drop the settling from Work → none is asked and the repository
+// stays due; flip the listing's state → the settlings name the wrong states.
 func TestAHomeSettlesTheAsksItsListingNames(t *testing.T) {
 	t.Parallel()
 	e := newEstate()
@@ -1086,18 +1061,17 @@ func TestAHomeSettlesTheAsksItsListingNames(t *testing.T) {
 	}
 }
 
-// FACTS SHORT FOR TIME ARE RECORDED BY NOBODY. A Gitlet node that ran its read's
-// budget of git out before a revision's patch id, or before its classes, says
-// so apart from a bound's omission: the commits did not decide it, the node's
-// moment did, so the home records no such facts — a revise takes a revision's
-// facts against a tip once, and an id omitted for a slow node would carry no
-// approval across the revision for good — and asks again on its next pass,
-// recording them once they are whole. An id omitted past its bound is final,
-// recorded as omitted on the first pass.
+// FACTS SHORT FOR TIME ARE RECORDED BY NOBODY: a Gitlet node that ran out of
+// its read's git budget before a revision's patch id or classes says so apart
+// from a bound's omission. The node's moment decided that, not the commits,
+// and a revise takes a revision's facts against a tip once (an id omitted for
+// a slow node would carry no approval across the revision for good), so the
+// home records nothing and asks again next pass. An id omitted past its bound
+// is final, recorded as omitted on the first pass.
 //
-// Mutations: record facts that are not final — changes 1's and 2's are
-// recorded on the first pass, red; record the bound's omission as none —
-// change 3's id is not omitted, red.
+// Mutations: record non-final facts → changes 1 and 2 are recorded on the
+// first pass; record the bound's omission as none → change 3's id is not
+// omitted.
 func TestFactsShortForTimeAreRecordedByNobody(t *testing.T) {
 	t.Parallel()
 	e := newEstate()
@@ -1129,7 +1103,7 @@ func TestFactsShortForTimeAreRecordedByNobody(t *testing.T) {
 		t.Fatalf("the home recorded %+v, want change 3's facts alone, its id omitted past its bound", revises)
 	}
 
-	// WHOLE AT LAST: the next pass records them, as they are.
+	// Whole at last: the next pass records them as they are.
 	e.mu.Lock()
 	for _, head := range []string{oid("a"), oid("b")} {
 		f := e.facts[head]
@@ -1151,13 +1125,10 @@ func TestFactsShortForTimeAreRecordedByNobody(t *testing.T) {
 }
 
 // THE HOME IMPORTS NO QUERY, COMPACT, HOST, CHECK RUNNER OR MIRRORS, and none
-// of them imports another or the home: internal/gitlet/query,
-// internal/gitlet/compact, internal/gitlet/host, internal/gitlet/home,
-// internal/gitlet/checkrun and internal/gitlet/mirror each reach the others' work
-// through the estate's router — the check runner's sweep and the mirrors the
-// home's loop through the loop's own Worker interface — so a step is the same
-// whichever node answers it, and no one of them can call another's in process
-// past the router's walk.
+// of the six imports another: each reaches the others' work through the
+// estate's router (the check runner's sweep and the mirrors reach the home's
+// loop through its Worker interface), so a step is the same whichever node
+// answers it and none calls another's in process past the router.
 func TestTheHomeImportsNoQueryCompactHostCheckRunnerOrMirrors(t *testing.T) {
 	t.Parallel()
 	const module = "github.com/crewlet/crewlet/"

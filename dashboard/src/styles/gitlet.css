@@ -354,54 +354,197 @@
   padding: var(--spacing-4);
 }
 
-/* THE MERGE BOX: the standing across its head, the conditions, the controls. */
+/* THE MERGE BOX: a section per condition, each on its disc, then the controls. */
 .code-merge-box {
   overflow: hidden;
 }
 
-.code-merge-box__head {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-3);
+.code-merge-box__section {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--spacing-3);
+  row-gap: var(--spacing-2);
   padding: var(--spacing-3) var(--spacing-4);
 }
 
-.code-merge-box__glyph {
-  flex: none;
-  display: inline-flex;
-  color: var(--color-text-tertiary);
+.code-merge-box__section + .code-merge-box__section {
+  border-block-start: 1px solid var(--color-border-default);
 }
 
-/* COLOUR IS STATE: a change every condition of which is met is ready, done
-   with every question its gate asks. */
-.code-merge-box__glyph--done {
-  color: var(--color-feedback-success-ink);
-}
-
-.code-merge-box__title {
+.code-merge-box__words {
+  grid-column: 2;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
   min-width: 0;
 }
 
-.code-merge-box__said {
-  color: var(--color-text-secondary);
+.code-merge-box__title {
   font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
 }
 
-.code-merge-box__checks {
-  padding: var(--spacing-2) var(--spacing-4);
+.code-merge-box__said {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.code-merge-box__end {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+}
+
+.code-merge-box__faces {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.code-merge-box__more {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* A SECTION'S ROWS: the check rows and a conflict's paths, under its words. */
+.code-merge-checks,
+.code-merge-paths,
+.code-merge-checks__pane {
+  grid-column: 2 / -1;
+  margin: 0;
+}
+
+.code-merge-checks {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.code-merge-checks[hidden] {
+  display: none;
+}
+
+.code-merge-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  font-size: var(--font-size-xs);
+}
+
+.code-merge-check + .code-merge-check {
   border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-merge-check__said {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.code-merge-check__said > strong {
+  color: var(--color-text-primary);
+}
+
+.code-merge-check__end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-merge-check__details {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.code-merge-paths {
+  padding-inline-start: var(--spacing-4);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
 }
 
 .code-merge-box__controls {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-2);
+  gap: var(--spacing-3);
   padding: var(--spacing-3) var(--spacing-4);
   border-block-start: 1px solid var(--color-border-default);
   background: var(--color-surface-subtle);
+}
+
+.code-merge-box__how,
+.code-merge-box__act {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+.code-merge-box__ticks {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2) var(--spacing-4);
+  margin-inline-start: auto;
+}
+
+.code-merge-box__sum {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.code-merge-box__sum > :first-child {
+  flex: 0 0 72px;
+}
+
+/* WHAT THE PRESS WILL DO, beside Gitlet's mark at the row's end, whatever its length. */
+.code-merge-box__note {
+  display: inline-flex;
+  flex: 1 1 16rem;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  min-width: 0;
+  margin: 0 0 0 auto;
+  text-align: end;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: normal;
+}
+
+@container page (width < 640px) {
+  .code-merge-box__section {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+  .code-merge-box__end {
+    grid-column: 2 / -1;
+    justify-content: flex-start;
+  }
+  .code-merge-box__ticks {
+    flex-direction: column;
+    margin-inline-start: 0;
+  }
+  .code-merge-box__note {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    margin-inline-start: 0;
+    text-align: start;
+  }
 }
 
 /* A LIVE CHANGE'S CONDITIONS TO MERGE: a glyph, the condition, and what it
@@ -476,9 +619,23 @@
   border-block-start: 2px solid var(--color-border-default);
 }
 
+/* AFTER THE BREAK: a spine from the merge box's disc down to the composer's face, no further. */
+.code-timeline--tail::before {
+  content: none;
+}
+
+.code-timeline--tail > .code-timeline__item:first-child::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: calc(-1 * (var(--tl-col) + var(--tl-gap)) + var(--tl-col) / 2 - 1px);
+  block-size: calc(100% + var(--spacing-4));
+  border-inline-start: 2px solid var(--color-border-default);
+}
+
 /* THE RAIL: a line down the face column's centre, every record hung on it in
    log order. A card stands to the right of its writer's face; a row's disc
-   sits on the rail itself. Only a review's disc takes a hue (rule C7). */
+   sits on the rail itself. A review's disc and the merge box's discs take a hue (rule C7). */
 .code-timeline {
   --tl-col: 32px;
   --tl-gap: var(--spacing-3);
@@ -592,7 +749,8 @@
   margin-inline-end: var(--spacing-1);
 }
 
-/* THE DISC: a glyph on a round ground; neutral, or a review's verdict (C7). */
+/* THE DISC: a glyph on a round ground; neutral, a review's verdict or a merge condition's
+   standing (C7). Each tint lies on an opaque ground, so the spine never shows through. */
 .code-disc {
   display: inline-grid;
   place-items: center;
@@ -612,14 +770,40 @@
 
 .code-disc[data-tone="success"] {
   border-color: var(--color-feedback-success-line);
-  background: var(--color-feedback-success-soft);
+  background:
+    linear-gradient(var(--color-feedback-success-soft), var(--color-feedback-success-soft)),
+    var(--color-surface-subtle);
   color: var(--color-feedback-success-ink);
 }
 
 .code-disc[data-tone="danger"] {
   border-color: var(--color-feedback-danger-line);
-  background: var(--color-feedback-danger-soft);
+  background:
+    linear-gradient(var(--color-feedback-danger-soft), var(--color-feedback-danger-soft)),
+    var(--color-surface-subtle);
   color: var(--color-feedback-danger-ink);
+}
+
+.code-disc[data-tone="info"] {
+  border-color: var(--color-feedback-info-line);
+  background:
+    linear-gradient(var(--color-feedback-info-soft), var(--color-feedback-info-soft)),
+    var(--color-surface-subtle);
+  color: var(--color-feedback-info-ink);
+}
+
+.code-disc[data-tone="warning"] {
+  border-color: var(--color-feedback-warning-line);
+  background:
+    linear-gradient(var(--color-feedback-warning-soft), var(--color-feedback-warning-soft)),
+    var(--color-surface-subtle);
+  color: var(--color-feedback-warning-ink);
+}
+
+/* THE MERGE BOX'S DISC on the spine, 40 px. */
+.code-disc[data-size="large"] {
+  inline-size: 40px;
+  block-size: 40px;
 }
 
 .code-tl-strong {
@@ -698,6 +882,10 @@
   .code-disc[data-size="small"] {
     inline-size: 20px;
     block-size: 20px;
+  }
+  .code-disc[data-size="large"] {
+    inline-size: 24px;
+    block-size: 24px;
   }
   .code-tl-event__end {
     flex-basis: 100%;
@@ -785,18 +973,8 @@
   min-width: 0;
 }
 
-/* A COMMENT OF THE READER'S OWN, at the foot: their face, then the box. */
+/* A COMMENT OF THE READER'S OWN, at the foot, its face on the spine. */
 .code-compose {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-3);
-}
-
-.code-compose__box {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: var(--spacing-2);
   min-width: 0;
 }
 
@@ -806,6 +984,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-2);
+  inline-size: 100%;
 }
 
 .code-carries {
@@ -886,27 +1065,106 @@
   margin: 0;
 }
 
-.code-rail__stack {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
+/* A ROW LED BY A GLYPH: the sentence wraps beside it, never under it. */
+.code-rail__row--lead {
+  flex-wrap: nowrap;
+  align-items: flex-start;
 }
 
-.code-rail__paths {
-  margin: 0;
-  padding-inline-start: var(--spacing-4);
-  font-size: var(--font-size-xs);
-  overflow-wrap: anywhere;
+.code-rail__row--lead > .code-rail__note {
+  min-width: 0;
 }
 
 .code-rail__branches {
   display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+/* A SECTION'S HEAD: its title, and what acts on it at the end. */
+.code-rail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  min-block-size: 24px;
+}
+
+.code-rail__head > a {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--spacing-1);
+  white-space: nowrap;
+}
+
+.code-rail__line {
+  display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-1);
+}
+
+.code-rail__end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin-inline-start: auto;
+}
+
+/* A REVIEWER'S VERDICT MARK in its verdict's tone, the verdict said beside it (C7). */
+.code-rail__mark {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+}
+
+.code-rail__mark[data-tone="success"] {
+  color: var(--color-feedback-success-ink);
+}
+
+.code-rail__mark[data-tone="danger"] {
+  color: var(--color-feedback-danger-ink);
+}
+
+/* AN ASK THAT WAITS: a dot in the waiting party's tone, its words in its title. */
+.code-rail__dot {
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-text-tertiary);
+}
+
+.code-rail__dot[data-tone="warning"] {
+  background: var(--color-feedback-warning-ink);
+}
+
+.code-rail__dot[data-tone="info"] {
+  background: var(--color-feedback-info-ink);
+}
+
+.code-rail__checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
   margin: 0;
+  padding: 0;
+  list-style: none;
   font-size: var(--font-size-sm);
-  overflow-wrap: anywhere;
+}
+
+.code-rail__checks > li {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-rail__faces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+  margin: 0;
 }
 
 /* PROVENANCE: the change's record, a card of its properties, at a reading
@@ -940,12 +1198,6 @@
   .code-files__pane .code-tree__scroll {
     max-block-size: calc(100cqb / 2);
   }
-}
-
-.code-files__totals {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
 }
 
 /* THE FILE TREE: the kit's tree rows (`.code-tree__item`), each file's
@@ -1003,32 +1255,6 @@
   flex-direction: column;
   gap: var(--spacing-3);
   min-width: 0;
-}
-
-.code-diff-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1) var(--spacing-3);
-  padding: var(--spacing-2) var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
-}
-
-.code-diff-head__path {
-  min-width: 0;
-  font-weight: var(--font-weight-semibold);
-  overflow-wrap: anywhere;
-}
-
-.code-diff-head__facts {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.code-diff-head__view {
-  margin-inline-start: auto;
 }
 
 /* A FINDING, as a card under its review or its line: its weight, subject,
@@ -3224,22 +3450,90 @@
   color: var(--color-text-secondary);
 }
 
-/* HOW IT ARRIVED AND ITS CHANGES, side by side where there is room. */
-.code-commit-cards {
+/* A COMMIT'S PROVENANCE: a row a fact, its glyph in a quiet disc, its time at the row's end
+   (under its second line where the card is narrow). */
+.code-prov-card {
+  container: code-prov / inline-size;
+}
+
+.code-prov {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-prov__row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--spacing-4);
+  grid-template-columns: var(--size-control-sm) minmax(0, 1fr) auto;
+  gap: var(--spacing-1) var(--spacing-3);
   align-items: start;
+  padding: var(--spacing-3) var(--spacing-4);
 }
 
-@container page (width < 720px) {
-  .code-commit-cards {
-    grid-template-columns: minmax(0, 1fr);
+.code-prov__row + .code-prov__row {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-prov__disc {
+  display: inline-flex;
+  grid-row: span 2;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--size-control-sm);
+  block-size: var(--size-control-sm);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-inset);
+  color: var(--color-text-tertiary);
+}
+
+.code-prov__sentence {
+  grid-column: 2;
+  margin: 0;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.code-prov__more {
+  grid-column: 2;
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.code-prov__time {
+  grid-column: 3;
+  grid-row: 1;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+/* A NAME AND ITS FACE stay together when a sentence wraps. */
+.code-prov__who {
+  white-space: nowrap;
+}
+
+.code-prov__ref {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-prov__bound {
+  margin: 0;
+  padding: 0 var(--spacing-4) var(--spacing-3);
+}
+
+@container code-prov (width < 640px) {
+  .code-prov__row {
+    grid-template-columns: var(--size-control-sm) minmax(0, 1fr);
   }
-}
 
-.code-commit-card {
-  min-width: 0;
+  .code-prov__time {
+    grid-column: 2;
+    grid-row: auto;
+  }
 }
 
 /* ---- The workspace's listings ---------------------------------------------- */
@@ -3561,6 +3855,15 @@
 .code-files-bar__words {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
+}
+
+/* A DIFF'S TOTALS, its figures in the diffstat's inks. */
+.code-files-bar__totals {
+  margin: 0;
+}
+
+.code-files-bar__totals > strong {
+  font-weight: var(--font-weight-semibold);
 }
 
 .code-files-bar .code-files-bar__find {
@@ -3893,4 +4196,41 @@
 .code-finding__aside {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
+}
+
+/* A HEAD'S CONTROL REFUSED (Viewed): said under the head, which never reflows. */
+.code-file__refusal {
+  padding: var(--spacing-2);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+/* ON A PHONE A HEAD'S END (counts, Viewed, menu) takes its own line under the path. */
+@container page (width < 640px) {
+  .code-file__head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .code-file__end {
+    justify-self: end;
+  }
+}
+
+/* HOW MANY FILES ARE VIEWED, in the files' toolbar: the words, then a short meter. */
+.code-files-bar__viewed {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.code-files-bar__viewed .code-files-bar__meter {
+  inline-size: 4rem;
+}
+
+@container page (width < 640px) {
+  .code-files-bar__viewed .code-files-bar__meter {
+    display: none;
+  }
 }

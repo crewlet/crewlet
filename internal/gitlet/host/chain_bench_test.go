@@ -17,33 +17,18 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 )
 
-// BenchmarkBuildChain measures what a chain's bounds are read against
-// (chain.go's head; gitlet.MaxChainObjectBytes, gitlet.ChainPackDeadline): one
-// chain of gitlet.MaxChainEntries entries, each a merge commit onto the tip the
-// entry before it made, built by the Gitlet node's own BuildChain — its merges,
-// its one pack and that pack's `index-pack --strict`, and its bundle stored
-// in the in-memory store — in three arms:
-//
-//   - merges=small: each entry adds a file of its own, onto a main that moved
-//     by one commit, over a history of chainHistory commits and a tree of
-//     1 000 files — the queue's common chain, every merge a commit and the
-//     trees above one path;
-//   - pack=at-bound: each entry changes the last line of a file of its own of
-//     random base64, every one of which main changed the first line of, so
-//     each merge writes a new blob no other entry's deltas against, sized so
-//     the chain's objects hold just under gitlet.MaxChainObjectBytes — the
-//     largest pack a chain makes, of the most objects;
-//   - pack=past-bound (CREWLET_BENCH_LARGE=1, gittest.LargeEnv): the same
-//     with each file chainPastLines lines, 4.9 MiB, its loose objects just
-//     under gitlet.MaxWritePackBytes and the chain's 314 MiB, the chain's
-//     merges, objects and pack bounds lifted to build what no chain may — the
-//     rate a pack is made at, which gitlet.MaxChainObjectBytes is set from.
-//
-// ms/chain is the whole BuildChain, ms/pack its final pack-objects and
-// index-pack together, the figure gitlet.ChainPackDeadline bounds, each of the
-// two on its own beside it, and MiB/pack the pack's size.
-//
-// MEASURED: doc.go's WHAT A CHAIN COSTS.
+// BenchmarkBuildChain measures what a chain's bounds are set against
+// (gitlet.MaxChainObjectBytes, gitlet.ChainPackDeadline): BuildChain of
+// gitlet.MaxChainEntries merges, its one pack, `index-pack --strict` and its
+// stored bundle. merges=small: each entry adds a file onto a main that moved a
+// commit, over chainHistory commits and 1 000 files, the common chain.
+// pack=at-bound: each entry writes a new blob of random base64 no other
+// entry's deltas against, the chain's objects just under
+// gitlet.MaxChainObjectBytes, the largest pack a chain makes. pack=past-bound
+// (CREWLET_BENCH_LARGE=1): 4.9 MiB files and every chain bound lifted, the rate
+// a pack is made at, which gitlet.MaxChainObjectBytes is set from. ms/pack is
+// pack-objects plus index-pack, what gitlet.ChainPackDeadline bounds. Measured:
+// package doc, "Measured" (WHAT A CHAIN COSTS).
 func BenchmarkBuildChain(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, arm := range []struct {
@@ -120,15 +105,12 @@ const (
 	// chainLineBytes is a big file's line: 76 characters of base64 and a
 	// newline.
 	chainLineBytes = 77
-	// chainAtBoundLines is how many lines each of the at-bound arm's files
-	// holds: gitlet.MaxChainObjectBytes shared by gitlet.MaxChainEntries merges,
-	// less half a mebibyte for their commits and trees (a commit of some
-	// 300 bytes, the root tree and big/'s tree of 64 entries, 2.6 KB, each
-	// merge), so the chain's objects hold just under the bound.
+	// chainAtBoundLines is each at-bound file's lines: gitlet.MaxChainObjectBytes
+	// shared by the merges, less half a MiB for their commits and trees (some
+	// 3 KB a merge), so the chain's objects hold just under the bound.
 	chainAtBoundLines = (gitlet.MaxChainObjectBytes - 512<<10) / gitlet.MaxChainEntries / chainLineBytes
-	// chainPastLines is how many lines each of the past-bound arm's files
-	// holds: 4.9 MiB a file, whose random base64 deflates to some 3.8 MiB —
-	// one merge's objects just under gitlet.MaxWritePackBytes.
+	// chainPastLines is each past-bound file's lines: 4.9 MiB, deflating to
+	// some 3.8 MiB, one merge's objects just under gitlet.MaxWritePackBytes.
 	chainPastLines = 66_700
 )
 
@@ -143,9 +125,8 @@ type chainRig struct {
 }
 
 // newChainRig builds the fixture with ONE fast-import and one push: main's
-// root commit, then its history (the small arm, lines 0) or its big files of
-// lines lines (the others), then each entry's branch off it, then main's
-// move.
+// root, its history (lines 0) or its big files of lines lines, each entry's
+// branch off it, then main's move.
 func newChainRig(b *testing.B, lines int) *chainRig {
 	b.Helper()
 	r := &chainRig{f: writeFleet(b, memobj.New(), newWriteFigures())}
@@ -251,10 +232,9 @@ func (r *chainRig) chain() gitlet.ChainBuild {
 	return c
 }
 
-// bigFile writes file k of a big arm as one fast-import file line: lines
-// lines of base64 of random bytes seeded by k — the same lines in every
-// version — but for line changed (none where it is -1), which reads
-// "changed".
+// bigFile writes file k of a big arm as one fast-import file: lines lines of
+// random base64 seeded by k, the same in every version, but for line changed
+// (none at -1), which reads "changed".
 func bigFile(w *bufio.Writer, k, lines, changed int) error {
 	rnd := rand.New(rand.NewPCG(uint64(k), 0x636861696e))
 	var body bytes.Buffer

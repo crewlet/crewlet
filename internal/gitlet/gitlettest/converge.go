@@ -15,8 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// Rows is a repository's whole state as the code domain's rows hold it: its
-// row, every live ref and every pack bundle — what every cache must hold once
+// Rows is a repository's whole state as the code domain's rows hold it (its
+// row, every live ref, every pack bundle): what every cache must hold once
 // synced at Position.
 type Rows struct {
 	Repo     gitlet.RepoRef
@@ -33,10 +33,9 @@ var Linearizable = statelog.Freshness{Level: statelog.ReadLinearizable}
 // Stale is the freshness of a read that must not wait for the applier.
 var Stale = statelog.Freshness{Level: statelog.ReadStale}
 
-// Reader is who a check reads the rows as: a person, an operator credential
-// bound to a human seat, whom no chart and no visibility narrows (ADR-0088) —
-// so what a case judges the caches by is never filtered by a grant it is not
-// about.
+// Reader is who a check reads the rows as: an operator credential bound to a
+// human seat, which no chart or visibility narrows (ADR-0088), so no grant a
+// case is not about filters what it judges the caches by.
 var Reader = gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "gitlettest-reader", Seat: "reader"}
 
 // snapshotRows reads a whole snapshot — every page — through state.

@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"reflect"
-	"slices"
 	"time"
 )
 
@@ -167,10 +165,10 @@ func (s Spec) requestTimeout() time.Duration {
 	return s.RequestTimeout
 }
 
-// equal reports whether two specs describe the same running server.
+// equal reports whether two specs describe the same server filed alike.
 //
 // DEEP, and every field: an apply that changed only Env — a rotated token —
-// must restart the child, because the environment is handed to it once at
+// must restart the child ([Spec.sameProcess] is built on this), because the environment is handed to it once at
 // exec and there is no other way in. Compared with reflect.DeepEqual rather
 // than field by field precisely so a field ADDED to Spec is covered the day
 // it is added; a hand-written comparison would silently keep answering "same"
@@ -211,47 +209,14 @@ func (s Spec) validate() error {
 // suffix stripped.
 func (s Spec) Server() string { return ServerName(s.Name) }
 
-// SameProcess reports whether two specs would bring up the same connection —
-// the same child with the same environment, or the same endpoint with the same
-// headers.
-//
-// It covers BOTH transports' identity in one place. A check that compares only
-// the stdio fields matches an edit to a shared HTTP server's url or headers
-// (rotating a remote token, say) as "unchanged", and the stale connection goes
-// on serving with the credential the operator has just revoked.
-//
-// It is NOT the whole question a live config diff asks — see SameCatalogue —
-// and it is not the question CREDENTIAL ROTATION asks at all. On that path the
-// config payload is byte-identical by construction and only the resolved
-// ${VAR} values moved, so this returns true for two specs whose children hold
-// different credentials. Rotation restarts unconditionally; that is why
-// Restart does not consult this.
-func (s Spec) SameProcess(other Spec) bool {
-	return s.kind() == other.kind() &&
-		s.Command == other.Command &&
-		slices.Equal(s.Args, other.Args) &&
-		maps.Equal(s.Env, other.Env) &&
-		s.URL == other.URL &&
-		maps.Equal(s.Headers, other.Headers) &&
-		s.Bearer == other.Bearer &&
-		s.StartupTimeout == other.StartupTimeout &&
-		s.RequestTimeout == other.RequestTimeout
-}
-
-// SameCatalogue reports whether two specs would put the same tools, under the
-// same names and the same behavioural hints, in front of the agents.
-//
-// This is what a live config diff should branch on, not SameProcess. Three of
-// these fields change nothing about the child and everything about the
-// catalogue: the prefix renames every tool, the levels block some, and the
-// annotation overrides decide whether a sub-agent may call one. A diff
-// that compares only the process fields gives an operator who adds
-// tool_annotations to a running server no effect at all and no way to tell
-// why: the edit activates, the revision advances, and the guard goes on
-// reading what the server advertised.
-func (s Spec) SameCatalogue(other Spec) bool {
-	return s.SameProcess(other) &&
-		s.ToolPrefix == other.ToolPrefix &&
-		s.Levels.same(other.Levels) &&
-		maps.Equal(s.AnnotationOverrides, other.AnnotationOverrides)
+// sameProcess reports whether two specs run the same process: equal in every
+// field but the filing ones (ToolPrefix, Levels, AnnotationOverrides), which
+// decide what its listing files and nothing it is started with, so moving them
+// refiles a running server rather than restarting it ([Bridge.Refile]). Built
+// on equal, so a field added to Spec is the process's until it is named here.
+func (s Spec) sameProcess(other Spec) bool {
+	s.ToolPrefix, other.ToolPrefix = "", ""
+	s.Levels, other.Levels = Levels{}, Levels{}
+	s.AnnotationOverrides, other.AnnotationOverrides = nil, nil
+	return s.equal(other)
 }

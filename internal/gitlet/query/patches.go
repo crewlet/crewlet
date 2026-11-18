@@ -11,17 +11,14 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// EVERY FILE'S PATCH is the stat's walk for the files and totals, then one diff-pairs fed the
-// admitted records from the page's file on, each followed by a lone NUL that makes git end the
-// file's patch with one: a file's patch is the bytes between two NULs, whatever headers it holds.
-
 // maxPatchesRunPages is how many pages past the asked one a run cuts and memoizes: about
 // 0.9 MiB, what a person reading a stacked diff scrolls through next; a later page is a run
 // of its own from its cursor, which feeds git only the files from it on.
 const maxPatchesRunPages = 16
 
 // patchFeed is what a patches run hands diff-pairs: each admitted record from the from-th on,
-// each followed by the lone NUL that makes git end its patch with one, and each one's place.
+// each followed by a lone NUL that makes git end its patch with one, so a file's patch is the
+// bytes between two NULs whatever headers it holds; and each one's place.
 type patchFeed struct {
 	from  int
 	in    bytes.Buffer
@@ -40,9 +37,8 @@ func (f *patchFeed) take(m int, e rawEntry) {
 }
 
 // patchesRead answers a page of every file's patch: the stat's walk for the files and totals,
-// then ONE diff-pairs fed the admitted records from the cursor's file on, each flushed so git
-// ends its patch with a NUL, the pages cut at lines as they stream and the run stopped once
-// maxPatchesRunPages past the asked one are cut.
+// then ONE diff-pairs fed from the cursor's file on (patchFeed), its pages cut at lines as
+// they stream and the run stopped once maxPatchesRunPages past the asked one are cut.
 func (r *read) patchesRead(ctx context.Context, d diffAsk, at cursor, m *memoRun) (gitlet.GitAnswer, error) {
 	from, fromByte := 0, 0
 	if at.letter != 0 {

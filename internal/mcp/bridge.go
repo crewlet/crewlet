@@ -149,8 +149,8 @@ func (b *Bridge) Add(ctx context.Context, spec Spec) (Change, error) {
 	s := b.newServer(spec, stop)
 	b.mu.Lock()
 	before := maps.Clone(b.tools)
-	tools, blocked, refused := s.toolsFor(defs)
-	s.tools, s.blocked, s.refused = tools, blocked, refused
+	s.fileLocked(defs)
+	tools, blocked, refused, unlisted := s.tools, s.blocked, s.refused, s.unlisted
 	// RECORDED, NOT JUDGED. An override keyed on a name this instance does
 	// not list changes nothing here, and this is the one place that holds
 	// both the keys and the listing — but one instance's listing is not the
@@ -161,8 +161,6 @@ func (b *Bridge) Add(ctx context.Context, spec Spec) (Change, error) {
 	// such start of a correct configuration. What is wrong is a key NO instance
 	// lists, and only the status record's per-server row (coord.MCPServerStatus)
 	// and the fleet's status answer built from it see every instance.
-	unlisted := unlistedOverrides(spec, defs)
-	s.unlisted = unlisted
 	s.up(c)
 	b.servers[spec.Name] = s
 	change := b.reindexLocked(before)
@@ -236,12 +234,11 @@ func (b *Bridge) retain(ctx context.Context, spec Spec, cause error) {
 func (b *Bridge) revived(s *server, c *client, defs []toolDef) (Change, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.servers[s.spec.Name] != s {
+	if b.servers[s.spec().Name] != s {
 		return Change{}, false
 	}
 	before := maps.Clone(b.tools)
-	s.tools, s.blocked, s.refused = s.toolsFor(defs)
-	s.unlisted = unlistedOverrides(s.spec, defs)
+	s.fileLocked(defs)
 	s.up(c)
 	return b.reindexLocked(before), true
 }
@@ -253,12 +250,11 @@ func (b *Bridge) revived(s *server, c *client, defs []toolDef) (Change, bool) {
 func (b *Bridge) relisted(s *server, c *client, defs []toolDef) (Change, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.servers[s.spec.Name] != s || s.live() != c {
+	if b.servers[s.spec().Name] != s || s.live() != c {
 		return Change{}, false
 	}
 	before := maps.Clone(b.tools)
-	s.tools, s.blocked, s.refused = s.toolsFor(defs)
-	s.unlisted = unlistedOverrides(s.spec, defs)
+	s.fileLocked(defs)
 	return b.reindexLocked(before), true
 }
 
@@ -317,7 +313,7 @@ func (b *Bridge) StopAll(ctx context.Context) (Change, error) {
 	for i, s := range entries {
 		wg.Go(func() {
 			if err := s.shutdown(ctx); err != nil {
-				b.log.Error("server_stop_failed", "server", s.spec.Name, "error", err.Error())
+				b.log.Error("server_stop_failed", "server", s.spec().Name, "error", err.Error())
 				errs[i] = err
 			}
 		})
@@ -328,9 +324,9 @@ func (b *Bridge) StopAll(ctx context.Context) (Change, error) {
 	return change, errors.Join(errs...)
 }
 
-// Restart stops a server and brings it back from spec, UNCONDITIONALLY.
+// Restart stops a server and brings it back from spec, UNCONDITIONALLY, handing on its calls (replace.go).
 //
-// It does not consult Spec.SameProcess, because the caller that needs this
+// It does not consult [Spec.sameProcess], because the caller that needs this
 // most is credential rotation, where the config payload is byte-identical by
 // construction and only the resolved ${VAR} values moved. A restart that
 // compared the payload would do nothing there, and the children would go on
@@ -344,6 +340,37 @@ func (b *Bridge) Restart(ctx context.Context, spec Spec) (Change, error) {
 	if err := spec.validate(); err != nil {
 		return Change{}, err
 	}
+	b.mu.RLock()
+	old := b.servers[spec.Name]
+	b.mu.RUnlock()
+	if old == nil {
+		return b.replace(ctx, spec)
+	}
+	h, owner := old.retire(ctx)
+	change, err := b.replace(ctx, spec)
+	if owner {
+		h.conclude(b.successor(spec.Name, err))
+	}
+	return change, err
+}
+
+// successor is the server serving name after a replacement that ended in err,
+// or why none is.
+func (b *Bridge) successor(name string, err error) (*server, string) {
+	if err != nil {
+		return nil, "its replacement would not start: " + err.Error()
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if s, ok := b.servers[name]; ok && s.health(0).Serving {
+		return s, ""
+	}
+	return nil, "it was stopped while it was replaced"
+}
+
+// replace stops the server spec names, if the bridge runs one, and starts it
+// from spec.
+func (b *Bridge) replace(ctx context.Context, spec Spec) (Change, error) {
 	stopChange, stopErr := b.Stop(ctx, spec.Name)
 	if stopErr != nil && !errors.Is(stopErr, ErrNoSuchServer) {
 		// Logged by Stop. Carry on: a server that would not shut down
@@ -378,9 +405,9 @@ func (b *Bridge) Restart(ctx context.Context, spec Spec) (Change, error) {
 //
 // Three cases, one call:
 //
-//   - not supervised        -> Add
-//   - supervised, same spec -> the tools it contributes, no restart
-//   - supervised, new spec  -> Restart, so a config edit actually takes effect
+//   - not supervised           -> Add
+//   - supervised, same process -> refiled ([Bridge.Refile]), no restart
+//   - supervised, new process  -> Restart, so a config edit actually takes effect
 //
 // The third is the other half of the same bug: without it an operator could
 // change a shared server's command, args or environment and the apply would
@@ -406,7 +433,7 @@ func (b *Bridge) Reconcile(ctx context.Context, spec Spec) (Change, error) {
 	s, supervised := b.servers[spec.Name]
 	var same bool
 	if supervised {
-		same = s.spec.equal(spec)
+		same = s.spec().sameProcess(spec)
 	}
 	b.mu.RUnlock()
 
@@ -414,6 +441,7 @@ func (b *Bridge) Reconcile(ctx context.Context, spec Spec) (Change, error) {
 	case !supervised:
 		return b.Add(ctx, spec)
 	case same:
+		b.Refile(spec)
 		// Added, not Removed: this is a fresh registry being told what
 		// already exists, not the catalogue changing. Anything this
 		// server contributes that another server currently shadows is
@@ -430,8 +458,8 @@ func (b *Bridge) Reconcile(ctx context.Context, spec Spec) (Change, error) {
 	}
 }
 
-// Runs reports whether the bridge runs a server from exactly this spec:
-// supervises one under its name, from a spec equal to it in every field.
+// Runs reports whether the bridge runs this spec's process: supervises a server
+// under its name, from a spec equal to it in all but its filing ([Bridge.Refile]).
 //
 // The question a caller asks BEFORE Reconcile, when what it needs to know is
 // whether reconciling would touch a process at all — to leave a healthy
@@ -453,7 +481,26 @@ func (b *Bridge) Runs(spec Spec) bool {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	s, ok := b.servers[spec.Name]
-	return ok && s.spec.equal(spec)
+	return ok && s.spec().sameProcess(spec)
+}
+
+// Refile files the server spec names under spec's tool prefix, levels and hints,
+// from its latest listing, its process running on, and reports whether they
+// moved; false where the bridge does not run spec's process ([Bridge.Runs]).
+func (b *Bridge) Refile(spec Spec) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s, ok := b.servers[spec.Name]
+	if !ok || !s.spec().sameProcess(spec) || s.spec().equal(spec) {
+		return false
+	}
+	before := maps.Clone(b.tools)
+	s.current.Store(&spec)
+	s.fileLocked(s.listing)
+	b.reindexLocked(before)
+	b.log.Info("server_refiled", "server", spec.Name, "tool_count", len(s.tools),
+		"detail", "its tool prefix, levels or hints moved; the process runs on")
+	return true
 }
 
 // RetryNow asks the supervisor of a server that is down for an attempt now,

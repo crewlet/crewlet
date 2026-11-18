@@ -21,38 +21,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// BenchmarkLandedIn is a landed-in read (landed.go) through a Gitlet node's query
-// server — its resolution of the commit and the tip, the ancestry check
-// against the tip, and the segmented search of the branch's moves in the
-// node's index of pushes — over a branch of many moves:
-//
-//   - moves=2000 is gittest.History's 32 MB composition (about 14 000
-//     commits) with a branch moved through it two thousand times;
-//     moves=360000, the large model's busiest branch — about 2 000 pushes a
-//     day for 181 days — through its gigabyte (455 680 commits), runs only
-//     under gittest.LargeEnv. The commit asked about landed half the moves
-//     ago, as the large model's commit ten thousand pushes old is a few
-//     percent of its moves.
-//   - forced=F is F forced moves of the branch since the commit landed — each
-//     one a segment the search must look past, two checks a segment — 0, 3,
-//     and MaxLandedProbes/2 + 2, which takes the search past its bound: that
-//     read runs every one of MaxLandedProbes's checks, answers no push and
-//     says so, and its ns/op is what the bound costs a read whole — which must
-//     fit the read's budget of git (gitproc.ReadDeadline), or the budget, not
-//     the bound, ends the search and the arm fails saying so.
-//   - graph=with reads the copy of a Gitlet node that read the repository
-//     whole, which writes its commit-graph at once (gitlet.md, "The
-//     commit-graph first"), and has read the repository's history back into
-//     its index; graph=without is one of the search's ancestry checks — the
-//     commit against the branch's tip, the longest walk — run by git over
-//     the same history holding no commit-graph: what each check would cost
-//     the search on a copy whose graph is not written yet.
-//
-// ns/op is the read whole; probes the checks its search ran beside the tip's
-// own, probe-ns what each cost on average, and check-p99-ns and check-max-ns
-// the 99th percentile and the slowest of one check's git — the tip's
-// included, its run alone, which is what the read's budget is charged — the
-// figure MaxLandedProbes is derived from (landed.go).
+// BenchmarkLandedIn times a landed-in read (landed.go) through a Gitlet
+// node's query server over a branch of many moves. moves=2000 moves a branch
+// 2 000 times through gittest.History's 32 MB composition; moves=360000, the
+// large model's busiest branch (2 000 pushes a day for 181 days) through its
+// gigabyte, runs only under gittest.LargeEnv. The commit landed half the moves
+// ago. forced=F is F forced moves since, two checks each; at
+// MaxLandedProbes/2 + 2 the search runs its whole bound, whose ns/op must fit
+// gitproc.ReadDeadline or the arm fails. graph=with reads a node holding its
+// commit-graph (gitlet.md, "The commit-graph first") and indexed history;
+// graph=without runs the longest check, commit against tip, with none. probes
+// counts the search's checks, probe-ns is every check's mean; check-p99-ns and
+// check-max-ns are one check's git run (the tip's too), MaxLandedProbes's basis.
 func BenchmarkLandedIn(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, shape := range []struct {
@@ -79,14 +59,12 @@ var landedForced = []int{0, 3, query.MaxLandedProbes/2 + 2}
 
 // landedPast reports whether a branch forced that many times since the
 // commit landed takes the search past MaxLandedProbes: each forced move costs
-// it two checks, one reaching the segment the move began and one asking the
-// move's old value.
+// two checks, one reaching its segment and one asking its old value.
 func landedPast(forced int) bool { return 2*forced >= query.MaxLandedProbes }
 
-// landedRig is BenchmarkLandedIn's fixture: a fleet of two Gitlet nodes, a
-// history pushed, one branch a forced arm moved through it, the commit asked
-// about, and a query server over the second node, whose ancestry checks it
-// times.
+// landedRig is BenchmarkLandedIn's fixture: two Gitlet nodes, a history
+// pushed, a branch per forced arm moved through it, the commit asked about,
+// and a query server over the second node, whose ancestry checks it times.
 type landedRig struct {
 	f      *gitlettest.SoloFleet
 	src    string
@@ -123,10 +101,9 @@ func newLandedRig(b *testing.B, size int64, moves int) *landedRig {
 	}
 	r := &landedRig{f: f, src: src, git: p.Git(), repo: rows.Repo.ID, landing: map[int]string{},
 		tips: map[int]string{}}
-	// Each branch moves through the history a step of commits at a time —
-	// move k to the k-th step's last commit — and then by force back a step
-	// and forward again, forced times: every move a push of its own, no pack,
-	// since every commit is the repository's already.
+	// Each branch moves through the history a step at a time, then by force
+	// back a step and forward again, forced times: every move a push of its
+	// own with no pack, every commit being the repository's already.
 	step := len(commits) / moves
 	at := func(k int) string { return commits[(k+1)*step-1] }
 	r.commit = at(moves/2 - 1)
@@ -136,8 +113,8 @@ func newLandedRig(b *testing.B, size int64, moves int) *landedRig {
 	for i, forced := range landedForced {
 		eg.Go(func() error {
 			ref, old := landedBranch(forced), gitlet.ZeroOID
-			// move is one push moving the branch to next, answering its id —
-			// the proposal's, which the row it applies as keeps.
+			// move is one push moving the branch to next, answering its id,
+			// which the applied row keeps.
 			move := func(next string, force bool) (string, error) {
 				id := uuid.Must(uuid.NewV7()).String()
 				res, err := f.Data().Served().Propose(ctx, gitlet.Proposal{
@@ -191,9 +168,9 @@ func newLandedRig(b *testing.B, size int64, moves int) *landedRig {
 	return r
 }
 
-// coldIndexed is a query server over the second Gitlet node once it has read the
-// repository whole, written its commit-graph, and read the repository's
-// history back into its index: a node a seat's walk asks first about it.
+// coldIndexed is a query server over the second Gitlet node once it holds its
+// commit-graph and has read the repository's history into its index, as the
+// node a seat's walk asks first would.
 func (r *landedRig) coldIndexed(b *testing.B) *query.Server {
 	b.Helper()
 	n := r.f.Nodes()[1]
@@ -259,11 +236,9 @@ func (r *landedRig) read(b *testing.B, forced int) {
 	b.ReportMetric(float64(r.checks.at(1).Nanoseconds()), "check-max-ns")
 }
 
-// checkTimes is the rig's query.Pool: every process runs on the Gitlet node's
-// own pool, and the run of each ancestry check is kept — what the read's
-// budget of git is charged for it (gitproc.Result.Took), never its wait for a
-// read-lane slot — for the percentile of one check MaxLandedProbes is derived
-// from.
+// checkTimes is the rig's query.Pool over the node's own pool, keeping each
+// ancestry check's run time (gitproc.Result.Took, what the budget charges,
+// never its wait for a slot), whose percentile MaxLandedProbes is derived from.
 type checkTimes struct {
 	query.Pool
 	mu   sync.Mutex
@@ -287,9 +262,8 @@ func (c *checkTimes) reset() {
 	c.took = c.took[:0]
 }
 
-// at is the q-th quantile of the checks kept since the last reset — the run q
-// of the way up them in order, as report takes one, the slowest at 1 — and
-// zero where none was kept.
+// at is the q-th quantile of the checks kept since the last reset (the
+// slowest at 1), zero where none was kept.
 func (c *checkTimes) at(q float64) time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -300,9 +274,8 @@ func (c *checkTimes) at(q float64) time.Duration {
 	return sorted[min(len(sorted)-1, int(q*float64(len(sorted))))]
 }
 
-// withoutGraph times the longest of the search's ancestry checks — the commit
-// against the branch's tip — run by git over the history it was pushed from,
-// which holds no commit-graph.
+// withoutGraph times the search's longest ancestry check, the commit against
+// the branch's tip, over the source history, which holds no commit-graph.
 func (r *landedRig) withoutGraph(b *testing.B) {
 	if _, err := os.Stat(filepath.Join(r.src, "objects", "info", "commit-graph")); err == nil {
 		b.Fatal("the history's repository holds a commit-graph")

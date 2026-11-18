@@ -33,10 +33,9 @@ import (
 )
 
 // THE COMPACTION CASES (C1–C8): a repository's packs merged by its maintainer
-// and decided by its committer (ADR-0090), the merged packs retired for
-// a day and swept, and every Gitlet node's cache following by a swap — through
-// the production compactor every Gitlet node of a topology is built with
-// (Node.Compactor), never started, so each case drives its passes itself.
+// and decided by its committer (ADR-0090), the merged packs retired for a day
+// and swept, every cache following by a swap — through each node's production
+// compactor (Node.Compactor), never started, so each case drives its passes.
 
 // pushEach makes n pushes to main through the first Gitlet node, each one commit
 // adding a file of size random bytes, and answers the last commit.
@@ -68,10 +67,9 @@ func candidateOf(c *Case, n Node) gitlet.CompactionCandidate {
 	return gitlet.CompactionCandidate{}
 }
 
-// compactOn is node n's compaction of RepoName — as its compactor makes one
-// for a repository it maintains — asked again while it answers busy: the
-// node's maintainer keeps the one slot a compaction may take for a moment at
-// a time, and a case judging something else waits that out, a minute at most.
+// compactOn is node n's compaction of RepoName, asked again while it answers
+// busy, a minute at most: the node's maintainer briefly holds the one slot a
+// compaction may take, and a case judging something else waits that out.
 func compactOn(c *Case, n Node) compact.Outcome {
 	c.T.Helper()
 	out, err := tryCompactOn(c.Ctx, c, n)
@@ -95,10 +93,9 @@ func tryCompactOn(ctx context.Context, c *Case, n Node) (compact.Outcome, error)
 	}
 }
 
-// compactAtMaintainer is a pass of every Gitlet node's compactor, in turn, until
-// the repository's maintainer has compacted it — a node that is not its
-// maintainer skips it — asked again while a pass finds it busy; it answers the
-// maintainer.
+// compactAtMaintainer passes every Gitlet node's compactor in turn (a
+// non-maintainer skips the repository), again while a pass finds it busy,
+// until the maintainer has compacted it, and answers the maintainer.
 func compactAtMaintainer(c *Case) Node {
 	c.T.Helper()
 	deadline := time.Now().Add(time.Minute)
@@ -121,11 +118,10 @@ func compactAtMaintainer(c *Case) Node {
 	}
 }
 
-// retiredSince is every retirement repoID's rows serve above since, every
-// page — of a delta from since, or of the full answer that stands in for it,
-// asked for the retirements above since as a cache asks for those above its
-// own position ([gitlet.StateQuery.RetiredSince]); either way served above since
-// itself, or the case cannot say which retirements the rows hold.
+// retiredSince is every retirement repoID's rows serve above since, over every
+// page, asked as a cache asks ([gitlet.StateQuery.RetiredSince]). It fails the
+// case unless they were served from since itself, or the case cannot say which
+// retirements the rows hold.
 func retiredSince(c *Case, repoID string, since statelog.Position) []gitlet.RetiredRow {
 	c.T.Helper()
 	out, served := retiredOf(c, repoID, since)
@@ -184,14 +180,13 @@ func graphOf(c *Case, n Node, repoID string) (string, bool) {
 	return path, err == nil
 }
 
-// awaitGraph waits for node n's copy of repoID to hold its commit-graph — the
-// file its background indexing writes first, at its next pass, over a copy it
-// has read whole — and answers its path.
+// awaitGraph waits for node n's copy of repoID to hold its commit-graph, which
+// its background indexing writes first at its next pass over a copy it has
+// read whole, and answers its path.
 //
-// A MINUTE AT MOST, which is six times what it should ever take. The next tick
-// is at most cache.MidxDebounce away; a tick that lands in one of the rounds this
-// wait's own syncs make is owed a wake as that round lets go; and the write is a
-// walk of a few commits. What is left of the minute is a starved runner's.
+// A MINUTE AT MOST, six times what it should take: the next tick is at most
+// cache.MidxDebounce away, a tick landing in one of this wait's own sync rounds
+// is owed a wake as the round lets go, and the write walks a few commits.
 func awaitGraph(c *Case, n Node, repoID string) string {
 	c.T.Helper()
 	var path string
@@ -470,13 +465,12 @@ func aCompactionDuringAFetch(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// ARetiredPackOutlivesItsLongestRead is C4 as a check a topology that lies can
-// be run through, nil when the topology behaves: a compaction's inputs keep
-// their objects from the collector for gitlet.RetireGrace — a first collection
-// past collect.PendingGrace of every input, where only the retired rows shield
-// them, deletes none — and once the code-retention duty's sweep has removed
-// the rows past the grace, the next collection deletes them all, the outputs
-// untouched throughout.
+// ARetiredPackOutlivesItsLongestRead is C4 as a check a lying topology can be
+// run through, nil when it behaves: a compaction's inputs keep their objects
+// from the collector for gitlet.RetireGrace — a collection past
+// collect.PendingGrace of every input, only the retired rows shielding them,
+// deletes none — and once the code-retention sweep has removed the rows past
+// the grace, the next collection deletes them all, the outputs untouched.
 func ARetiredPackOutlivesItsLongestRead(t *testing.T, newFleet NewFleet) error {
 	t.Helper()
 	c := newCase(t, newFleet, Shape{}, Settings())
@@ -559,10 +553,10 @@ func blobID(body string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// bulkPacks proposes n pushes through the data nodes, each creating a ref of
-// its own at tip and carrying a pack of one blob of its own: n live packs, no
-// person's git paying for any — packed eight at a time out of one source
-// repository, each stored as one bundle, as a receiving node stores a push.
+// bulkPacks proposes n pushes through the data nodes, each creating its own
+// ref at tip with a pack of one blob of its own: n live packs without a
+// person's git paying for each, packed eight at a time from one source
+// repository and each stored as one bundle, as a receiving node stores a push.
 func bulkPacks(c *Case, p *Person, repoID, tip string, n int) {
 	c.T.Helper()
 	src := gittest.Empty(c.T)
@@ -629,18 +623,13 @@ func bulkPacks(c *Case, p *Person, repoID, tip string, n int) {
 // as a git node's host tells git: the commands of the row the push landed, or
 // the decision's where it laid no record.
 //
-// A PENDING ANSWER IS RESOLVED, NOT FAILED. statelog answers pending a record
-// durable at its position whose outcome is unresolved where it was proposed,
-// which is what a loaded runner's applier lagging the committer's own wait
-// gives any proposal, and documents it as never a failure: a setup that read
-// it as one went red on a schedule rather than on a defect (#799). So it is
-// read at that position, as the host reads a push it was answered pending
-// ((*host.Server).awaitPending). Found, the row's commands are the answer,
-// never the decision's that came with the pending one. Not found there, a gate
-// dropped the record and the push applied nowhere. A node that has not reached
-// the position within the read's own budget refuses `behind` and is asked
-// again, bounded by ctx as every wait on an applier here is: proposing again
-// would be another push, not what became of this one.
+// A PENDING ANSWER IS RESOLVED, NOT FAILED (#799): statelog documents pending
+// (durable at its position, unresolved where proposed, as a lagging applier
+// leaves it) as never a failure. So it is read at that position, as the host
+// reads one ((*host.Server).awaitPending): found, the row's commands are the
+// answer, not the decision's; not found, a gate dropped it and the push applied
+// nowhere. A node behind the position refuses `behind` and is asked again,
+// bounded by ctx: proposing again would be another push, not this one's fate.
 func proposeLanded(ctx context.Context, f Fleet, p gitlet.Proposal) ([]gitlet.Command, error) {
 	res, err := f.Propose(ctx, p)
 	switch {
@@ -837,14 +826,13 @@ func compactCrashAt(t *testing.T, newFleet NewFleet, crash compactCrash) {
 }
 
 // C7: a sync that crashed at the swap's one irreversible step leaves the old
-// directory serving, the highest in repos/, with its state, and the scratch it
-// staged the next one in emptied at boot; the first round after the restart
-// reads the merged packs as the retirements they are (the state's
-// LeavingSince), so it sheds them in place — a boot's first round is an
-// incarnation nobody holds yet (cache's doc, "A swap") — keeps the
-// commit-graph, the same file, and converges. Every maintainer is held from
-// before the restart, and the graph read once the run the round's end owes the
-// maintainer is held at its step (holdMaintainers, heldRun).
+// directory serving, the highest in repos/, with its state, and its staging
+// scratch emptied at boot; the first round after the restart reads the merged
+// packs as the retirements they are (the state's LeavingSince), so it sheds
+// them in place — a boot's first round is an incarnation nobody holds yet
+// (cache's doc, "A swap") — keeps the commit-graph, the same file, and
+// converges. The maintainers are held from before the restart, and the graph
+// read once a run is held (holdMaintainers, heldRun).
 func aCrashMidSwapLeavesTheOldIncarnation(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
@@ -917,13 +905,12 @@ func aCrashMidSwapLeavesTheOldIncarnation(t *testing.T, newFleet NewFleet) {
 }
 
 // holdMaintainers holds every Gitlet node's maintainer at its next step, and
-// at each after it, until resume (gitletfault.MaintainBeforeStep), and closes
-// reached when the first run is held there: what a case that judges a round
-// by the identity of a file the maintainer also writes does across that round.
-// The round's end owes the maintainer a run, and the index that run writes
-// takes the commit-graph with it (cache.Cache's plan: the graph rides every
-// index), so a case that read the graph once the round let go read whichever
-// came first, the round's file or the run's (#945).
+// each after it, until resume (gitletfault.MaintainBeforeStep), and closes
+// reached when the first run is held there. A case judging a round by the
+// identity of a file the maintainer also writes needs it: the round's end owes
+// the maintainer a run whose index rewrites the commit-graph (cache.Cache's
+// plan: the graph rides every index), so unheld, a graph read after the round
+// could be either's file (#945).
 func holdMaintainers(c *Case) (reached <-chan struct{}, resume func()) {
 	held, at := make(chan struct{}), make(chan struct{})
 	c.Fleet.Faults().Arm(gitletfault.MaintainBeforeStep, gitletfault.Action{Block: held, Reached: at})
@@ -933,11 +920,10 @@ func holdMaintainers(c *Case) (reached <-chan struct{}, resume func()) {
 	})
 }
 
-// heldRun waits until a maintenance run is held at its step (holdMaintainers'
-// reached), a minute at the most: the run the round's end owes the maintainer,
-// stopped before it writes, so what the case reads of the copy next is what
-// the round left. A run that never arrives is a hold that holds nothing,
-// which fails the case rather than leave it to race the maintainer.
+// heldRun waits, a minute at most, until a maintenance run is held at its step
+// (holdMaintainers' reached): the run the round's end owes the maintainer,
+// stopped before it writes, so the case next reads what the round left. A run
+// that never arrives fails the case rather than leave it racing the maintainer.
 func heldRun(t *testing.T, reached <-chan struct{}) {
 	t.Helper()
 	select {
@@ -947,14 +933,13 @@ func heldRun(t *testing.T, reached <-chan struct{}) {
 	}
 }
 
-// diskAsTheCrashLeftIt puts in dir's place a copy of what it holds now, while
-// a crash holds a step of the cache over it: the disk as a process that died
-// at that step leaves it. A process that dies gives its claim on the
-// directory back with it, and a killed node in this process cannot — its
-// held step is work of the cache's still running, which keeps the claim
-// (cache.Cache.Stop) — so the restart boots over the copy, whose claim file
-// is a new one, and the old directory, held, is moved aside; the held step,
-// released at the case's end, finds nothing of its own to finish.
+// diskAsTheCrashLeftIt puts in dir's place a copy of what it holds while a
+// crash holds a cache step over it: the disk a process that died at that step
+// leaves. A dead process gives back its claim on the directory; a killed node
+// in this process cannot, as its held step is cache work still running, which
+// keeps the claim (cache.Cache.Stop). So the restart boots over the copy, with
+// a new claim file, the held original moved aside, and the held step, released
+// at the case's end, finds nothing of its own to finish.
 func diskAsTheCrashLeftIt(t *testing.T, dir string) {
 	t.Helper()
 	copied := dir + ".copy"
@@ -1006,9 +991,9 @@ func diskAsTheCrashLeftIt(t *testing.T, dir string) {
 // repository whole at its first round — and the retirements above its own
 // position with it — so it sheds the merged packs keeping the commit-graph it
 // had, the same file; without those retirements (the control) it cannot tell
-// the merged packs from strays, and drops it. Every maintainer is held from
-// before the node starts again, and the graph read once a run is held at its
-// step (holdMaintainers, heldRun).
+// the merged packs from strays, and drops it. The maintainers are held from
+// before the restart, and the graph read once a run is held (holdMaintainers,
+// heldRun).
 func aRestartedNodeKeepsTheCommitGraphOfACompactedRepository(t *testing.T, newFleet NewFleet) {
 	for _, control := range []bool{false, true} {
 		name := "the retirements served"

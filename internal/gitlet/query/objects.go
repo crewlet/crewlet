@@ -12,35 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// WHAT A READ NAMES IS FOUND BEFORE ANYTHING IS READ, with at most two short
-// processes in the read lane and no unit of the share: they wait in the lane's
-// own queue like any short read, and what the share bounds is the long work
-// after them. Each runs to its own bound, gitproc.ReadDeadline, outside the
-// read's budget of git run time (server.go), which is its kind's alone; the
-// read's answer falling due ends one sooner.
+// WHAT A READ NAMES IS FOUND FIRST, by at most two short processes holding no
+// unit of the share, each to gitproc.ReadDeadline outside the read's git budget.
 //
-// AN ABBREVIATION IS EXPANDED FROM THE OBJECTS ALONE — ONE `git rev-parse
-// --disambiguate=<a> [--disambiguate=<b>]`, whose every printed id is
-// attributed to the abbreviations it begins with: exactly one is the whole id,
-// none is an id the copy lacks (one look at the log's head, then
-// gitlet.ErrObjectNotFound), more than one is gitlet.ErrInvalid asking for more of
-// its digits. NEVER cat-file's own reading of a short name, which tries it as
-// a REF first (git's get_oid_basic: refs/<p>, refs/tags/<p>, refs/heads/<p>…
-// before the objects): measured, a tag named `a6d9bc1` pointing at commit
-// 7e26dcd answers cat-file's `a6d9bc1` with 7e26dcd while a6d9bc1… is a
-// commit of its own — so a branch or tag named like an abbreviation would
-// answer a seat's read with another commit's content. A whole id is an object
-// before any ref, so everything after the expansion names whole ids.
+// AN ABBREVIATION IS EXPANDED FROM THE OBJECTS ALONE (expand), never by
+// cat-file, which tries refs first (git's get_oid_basic): measured, a tag
+// `a6d9bc1` at commit 7e26dcd answers cat-file's `a6d9bc1` with 7e26dcd, so a
+// ref named like an abbreviation would answer a read with another commit. A
+// whole id is an object before any ref, so all after expansion names whole ids.
 //
-// THEN ONE `git cat-file --batch-check -Z` finds every id and path at once,
-// fed on its standard input, where no option can hide (`--output=x` is a path
-// there like any other): each id itself and peeled (`<id>^{}`, what a tag
-// names), and the tree or file the read's path names (`<id>:<path>`, or
-// `<id>^{tree}` for a root) — a blame's file among them, which its blame then
-// names as the one argument after `--` (blame.go) — and for a re-anchoring,
-// the object at each anchor's path in the commit its side names, which may be
-// none. Records end in NUL both ways (-Z), so a path holding a newline is one
-// record.
+// THEN ONE `cat-file --batch-check -Z` (check) finds every id, peeled id and
+// path at once, fed on its standard input, where no option can hide, and
+// NUL-ended both ways, so a path holding a newline is one record.
 
 // object is one object as a check found it.
 type object struct {
@@ -58,15 +41,13 @@ type found struct {
 	// revs is each revision the query names, as the query spells it, whole
 	// or abbreviated.
 	revs map[string]object
-	// path is the path a tree, a file or a blame read names, decoded, and
-	// target the object it names: the tree a listing lists, the file a read
-	// reads or a blame blames — absent (an empty id) where the path names
-	// nothing.
+	// path is the decoded path the read names (pathOf), and target its
+	// object: an empty id where the path names nothing.
 	path   string
 	target object
 	// placed is, for a re-anchoring, the object at each anchor's path in the
-	// commit its side names, in the query's order — absent where the path
-	// names nothing there, which places the anchor nowhere (gone) rather than
+	// commit its side names, in the query's order; absent where the path names
+	// nothing there, which places the anchor nowhere (gone) rather than
 	// refusing the read. For an excerpts read it is each anchor's other side
 	// (excerptOthersAt), absent where there is none.
 	placed []object
@@ -168,10 +149,10 @@ func excerptOthersAt(q *gitlet.ExcerptsQuery, whole map[string]string) (lines []
 	return lines, of
 }
 
-// pathOf is the path a tree, a file, a blame or a directory's last commits'
-// read names, decoded (validated already, by gitlet.GitQuery.Validate): the
-// object the batch looks up at the read's revision. A log's path is no such object: a history names the
-// commits that changed a path, which its revision need not hold.
+// pathOf is the decoded path the batch looks up at the read's revision
+// (validated already, by gitlet.GitQuery.Validate). A log's path is not one: a
+// history names the commits that changed a path, which its revision need not
+// hold.
 func pathOf(q gitlet.GitQuery) string {
 	var p string
 	switch q.Kind {
@@ -191,12 +172,9 @@ func pathOf(q gitlet.GitQuery) string {
 	return p
 }
 
-// lookedUp reports whether a read of q's kind looks its path up in the batch:
-// a tree's, a file's, a blame's, a directory's last commits' (the tree they
-// list) and a checks file's, the one deploy or dependency file a code files
-// read names (its listing names none), and a find's root tree, which its path,
-// none, names (`<id>^{tree}`): the tree whose listing it reads by that tree's
-// own id.
+// lookedUp reports whether a read of q's kind looks its path up in the batch;
+// a code files read only where it names one file, and a find always, for the
+// root tree (`<id>^{tree}`) whose listing it reads by that tree's id.
 func lookedUp(q gitlet.GitQuery) bool {
 	return q.Kind == gitlet.GitTree || q.Kind == gitlet.GitBlob || q.Kind == gitlet.GitBlame ||
 		q.Kind == gitlet.GitTreeCommits || q.Kind == gitlet.GitChecksFile ||
@@ -343,9 +321,9 @@ func (r *read) expand(ctx context.Context, abbrevs []string) (map[string]string,
 
 // check is what ONE cat-file batch says of each line of in, in order: the
 // object it names, or the zero object where it names nothing. Before the
-// read's own git begins it runs to its own bound, as every short check does;
-// inside it — a revision's facts looking up their trees and blobs — to what
-// is left of the read's budget, which it is charged to.
+// read's own git begins it runs to its own bound; inside it (a revision's
+// facts looking up their trees and blobs), to what is left of the read's
+// budget, which it is charged to.
 func (r *read) check(ctx context.Context, in []string) ([]object, error) {
 	deadline := gitproc.ReadDeadline
 	if r.metered {

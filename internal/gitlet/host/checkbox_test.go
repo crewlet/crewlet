@@ -272,21 +272,18 @@ func endCheck(t *testing.T, f *gitlettest.SoloFleet, key gitlet.CheckKey) {
 	}
 }
 
-// A CHECK'S TOKEN ADMITS ONE REPOSITORY TO READ: a check's box, presenting its
-// check's token as `check`, fetches the commit its attempt measures BY ID over
-// protocol v2 — shown no ref, its `ls-refs` empty — charged as a run keyed by
-// its repository, and its fetch of a `visibility: unit` repository is no
-// principal's read. Its push is refused, as is a request in protocol v0, a
-// repository other than the one it was given — before anything of the code
-// log is read — an attempt the rows do not hold, read through the barrier
-// before it is refused, and its attempt once ended, refused on the stale
-// read that shows it, no barrier paid: the attempt's ROW is the authority,
-// read on every request, and the token its backstop.
+// A CHECK'S TOKEN ADMITS ONE REPOSITORY TO READ: a check's box presenting its
+// token as `check` fetches its attempt's commit BY ID over protocol v2, shown
+// no ref (`ls-refs` empty), charged as a run keyed by its repository, and no
+// principal's read of a `visibility: unit` repository. Refused: its push,
+// protocol v0, another repository (before any code-log read), an attempt the
+// rows lack (after the barrier), and its ended attempt (on the stale read, no
+// barrier): the ROW is the authority on every request, the token a backstop.
 //
-// Mutations: admit on the token alone (skip the row's read) — the ended and
-// the unknown attempts are admitted, red; refuse an ended attempt only after
-// a linearizable read — the ended row's barrier, red; match the name after
-// the row's read — the other repository's request reads an attempt, red.
+// Mutations: admit on the token alone — the ended and unknown attempts are
+// admitted, red; refuse an ended attempt only after a linearizable read — its
+// barrier, red; match the name after the row's read — the other repository's
+// request reads an attempt, red.
 func TestACheckTokenAdmitsOneRepositoryToRead(t *testing.T) {
 	t.Parallel()
 	var lines logs
@@ -302,11 +299,9 @@ func TestACheckTokenAdmitsOneRepositoryToRead(t *testing.T) {
 	from, fetched := len(ran()), len(f.Fetched())
 	stale := len(rec.seen("read:" + string(gitlet.ReadCheckBox)))
 
-	// THE FETCH, by id, of a commit the box is shown no ref of — the
-	// single-commit recipe a check's box runs (sandbox.CloneSingleSHA):
-	// Gitlet its remote, the commit fetched at depth one, blobless, and
-	// checked out, its files fetched from the promisor as the checkout needs
-	// them.
+	// THE FETCH by id of a commit the box is shown no ref of, as a check's box
+	// runs it (sandbox.CloneSingleSHA): depth one, blobless, checked out with
+	// its files fetched from the promisor.
 	work := box.Init()
 	box.Git().Run(t, work, "remote", "add", "origin", c.BoxURL(0))
 	if _, stderr, err := box.Git().Try(t, work, nil, "fetch", "--quiet", "--depth=1", "--filter=blob:none",

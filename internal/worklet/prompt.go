@@ -65,6 +65,19 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 	return Reason(n.Metadata[MetaVia]).Addressed()
 }
 
+var _ notify.LaneRule = Prompt{}
+
+// PersonWaits implements [notify.LaneRule]: a person's comment waits on a
+// reply; a task they filed, assigned or moved is the seat's work, which the
+// work pickup hands in its order (ADR-0159).
+func (Prompt) PersonWaits(n notify.Inbound) bool {
+	switch ChangeKind(n.EventType) {
+	case ChangeComment, ChangeCommentEdited:
+		return strings.TrimSpace(n.Body) != ""
+	}
+	return false
+}
+
 // Owes is the chat surface a wake OBLIGES its seat to post on, or "".
 //
 // Only the answer to a decision whose asker promised to report the outcome

@@ -18,16 +18,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE COMPANY'S REMOTE CELLS HOLD THE CONCURRENCY CAP: with
-// code.checks.remote.max_running unset — sixteen — and seventeen e2b checks
-// queued, two Gitlet nodes each FIRST in its own order, so both claim every
-// attempt at once, run sixteen boxes between them and leave the seventeenth
-// queued, claimed by nobody; one box ending frees its slot, and the
-// seventeenth runs. The seventeenth is read as queued once each node has
-// held it back at the cap on a walk begun after the sixteenth box (heldBack).
+// THE COMPANY'S REMOTE CELLS HOLD THE CONCURRENCY CAP: under the default
+// max_running (sixteen), two Gitlet nodes each first in its own order, so
+// both claim every attempt at once, run sixteen of seventeen queued e2b
+// checks between them and leave the seventeenth queued, claimed by nobody,
+// until a box ending frees its slot. It is read as queued once each node has
+// held it back after the sixteenth box (heldBack).
 //
-// Mutation: grant every slot whatever the live leases (Take ignores
-// max_running) — seventeen boxes, and no walk holds one back, red.
+// Mutation: Take ignores max_running — seventeen boxes, red.
 func TestRemoteCellsHoldTheConcurrencyCap(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -73,20 +71,17 @@ func TestRemoteCellsHoldTheConcurrencyCap(t *testing.T) {
 	eventually(t, "every slot given back", func() bool { return f.slots() == 0 })
 }
 
-// THE DAILY BOX-TIME CAP HOLDS NEW CHECKS: under box_hours_per_day 1 — sixty
-// box-minutes a UTC day — a remote box held for sixty minutes spends the day,
-// each minute charged as it begins; a check queued then waits queued, claimed
-// by nobody, while that box runs on to its own end and after it; and once the
-// next UTC midnight comes it runs. The second check is read as queued once
-// the node has held it back on the spent day on a walk begun after it was
-// queued, and again after the first box ended (heldBack).
+// THE DAILY BOX-TIME CAP HOLDS NEW CHECKS: under box_hours_per_day 1 (sixty
+// box-minutes a UTC day), a box held sixty minutes spends the day, each
+// minute charged as it begins; a check queued then waits queued while that
+// box runs on and after it ends, and runs at the next UTC midnight. heldBack
+// reads it queued before and after the first box ends.
 //
 // Mutation: charge no minute after a box's first — the sixty-first is never
 // refused, red; neither remember a refused minute nor heed one at a box's
-// first — the second check runs at once, and no walk holds it back, red.
-// (Either alone is held by
-// TestANodeThatHasNotSeenTheDaySpentStartsNoRemoteBox: here the node's own
-// memory of the refusal holds the second check before its first minute.)
+// first — the second check runs at once, red. (Either alone is held by
+// TestANodeThatHasNotSeenTheDaySpentStartsNoRemoteBox: here the node's memory
+// of the refusal holds the check before its first minute.)
 func TestTheDailyBoxTimeCapHoldsNewChecks(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -175,14 +170,12 @@ func TestARemoteBoxIsChargedEveryMinuteItWasHeld(t *testing.T) {
 
 // AN UNREACHABLE STORE STARTS NO REMOTE BOX: while the coordination store
 // cannot list or lease the slots, or cannot count a minute, a queued e2b check
-// waits queued, claimed by nobody — a cap nobody can ask about cannot hold —
-// and no slot is left leased behind the minute it could not count; once the
-// store answers, the check runs. It is read as queued once the node has held
-// it back on the store's silence on a walk begun after it was queued
-// (heldBack).
+// waits queued, claimed by nobody, and no slot is left leased behind the
+// uncounted minute; once the store answers, the check runs. heldBack reads it
+// queued.
 //
-// Mutation: read a store's error as room (Take answers a slot on one) — a
-// box made while the store is away, and no walk holds the check back, red.
+// Mutation: Take answers a slot on a store's error — a box made while the
+// store is away, red.
 func TestAnUnreachableStoreStartsNoRemoteBox(t *testing.T) {
 	t.Parallel()
 	for name, down := range map[string]func(f *fleet, o *checkrun.Options, away *atomic.Bool){
@@ -220,19 +213,16 @@ func TestAnUnreachableStoreStartsNoRemoteBox(t *testing.T) {
 }
 
 // A NODE THAT HAS NOT SEEN THE DAY SPENT STARTS NO REMOTE BOX: a Gitlet node
-// that never had a charge refused — a second Gitlet node, or a runner restarted
-// mid-day — finds the UTC day's box-hours spent by another at its first box's
-// first minute: the slot it took for that box is given back, no box is made
-// and the check waits queued; and the refusal is remembered, so the node's
-// later walks take no slot and ask the counter nothing more. What it asked is
-// read once it has held the check back on the spent day on two walks begun
-// after it was queued (heldBack): the one that found it, and one that
-// remembered.
+// with no refused charge of its own (a second node, or a runner restarted
+// mid-day) finds the day spent by another at its first box's first minute:
+// it gives the slot back, makes no box and leaves the check queued, and
+// remembers the refusal, so its later walks take no slot and ask the counter
+// nothing. Read after heldBack's two walks: the one that found it, and one
+// that remembered.
 //
 // Mutation: start a box whatever the first minute's charge answers — a box
-// made on a spent day, and no walk holds the check back, red; forget a
-// refused day between walks (daySpent answers false) — a slot taken and a
-// minute refused every walk, red.
+// on a spent day, red; daySpent answers false — a slot taken and a minute
+// refused every walk, red.
 func TestANodeThatHasNotSeenTheDaySpentStartsNoRemoteBox(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -269,21 +259,16 @@ func TestANodeThatHasNotSeenTheDaySpentStartsNoRemoteBox(t *testing.T) {
 	}
 }
 
-// A REMOTE BOX WHOSE SLOT LAPSED IS COUNTED AGAIN: a Gitlet node whose renewals
-// did not reach the store for longer than a slot's TTL — a host asleep, a
-// store away — has its running box's slot lapse, and another node fills the
-// cap meanwhile. Once its node reaches the store again the box takes a slot
-// again, past the cap, so the company counts it: no further box starts while
-// it runs, even after the box that filled the cap ends, and the queued check
-// runs only once the box over the cap has ended too. The third check is read
-// as queued once each node has held it back at the cap on a walk begun after
-// it was queued, and again after the box that filled the cap ended
-// (heldBack).
+// A REMOTE BOX WHOSE SLOT LAPSED IS COUNTED AGAIN: a node whose renewals miss
+// the store past a slot's TTL has its running box's slot lapse while another
+// node fills the cap. Once it reaches the store again the box takes a slot
+// past the cap, so no further box starts while it runs, even after the box
+// that filled the cap ends; the queued check runs only once the box over the
+// cap has ended too. heldBack reads it queued at each step.
 //
-// Mutation: leave a lost renewal as it is (no slot taken again) — the box is
-// never counted again, red; take a slot again only under the cap — the cap
-// is full, so it is never counted, red; grant every slot whatever the live
-// leases — the third check runs at once, and no walk holds it back, red.
+// Mutation: take no slot again after a lost renewal, or only under the cap —
+// the box is never counted again, red; grant every slot whatever the live
+// leases — the third check runs at once, red.
 func TestARemoteBoxWhoseSlotLapsedIsCountedAgain(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -296,7 +281,7 @@ func TestARemoteBoxWhoseSlotLapsedIsCountedAgain(t *testing.T) {
 	boxA := f.e2b.box(t)
 	f.await(first, "named its box", func(r gitlet.CheckRow) bool { return r.Box == boxA.ID() })
 
-	// GIT-A'S SLOT LAPSES, and its node can neither list nor claim: its
+	// GIT-A'S SLOT LAPSES, and its node can neither list nor claim; its
 	// renewals still reach the store, which answers that the tenure is gone.
 	away.Store(true)
 	f.leases.Advance(checkrun.RemoteSlotTTL + time.Second)
@@ -336,11 +321,10 @@ func TestARemoteBoxWhoseSlotLapsedIsCountedAgain(t *testing.T) {
 	eventually(t, "every slot given back", func() bool { return f.slots() == 0 })
 }
 
-// A CAPPED RUNNER LISTS THE SLOTS ONCE A FREED SLOT: a walk that starts
-// several remote boxes lists the live slots once and takes each box's slot
-// from what that listing left free; a runner that found max_running full asks
-// the store nothing on the walks after it — every nudge of the queue — until
-// a slot is seen to free, and the one its own box gives back is seen at once.
+// A CAPPED RUNNER LISTS THE SLOTS ONCE A FREED SLOT: a walk starting several
+// remote boxes lists the live slots once; a runner that found max_running
+// full asks the store nothing on later nudged walks until a slot is seen to
+// free, and the one its own box gives back is seen at once.
 //
 // Mutation: list the slots for every remote check a walk takes — three
 // listings on the first walk, red; forget a full cap between walks — a
@@ -358,8 +342,8 @@ func TestACappedRunnerListsTheSlotsOnceAFreedSlot(t *testing.T) {
 	queue := &countedEstate{Estate: estate{f.d}}
 	o := f.options("git-a", 0, &order{nodes: []string{"git-a"}})
 	o.Leases, o.Estate = leases, queue
-	// NO BACKSTOP WITHIN THE CASE: a walk at the start, at each nudge and at
-	// each check's ending, and nothing else.
+	// NO BACKSTOP WITHIN THE CASE: walks only at the start, each nudge and
+	// each check's ending.
 	o.Timing.Backstop = time.Hour
 	r := f.runner(o)
 	boxes := []*sandbox.FakeSandbox{f.e2b.box(t), f.e2b.box(t)}
@@ -398,8 +382,8 @@ func TestACappedRunnerListsTheSlotsOnceAFreedSlot(t *testing.T) {
 	eventually(t, "every slot given back", func() bool { return f.slots() == 0 })
 }
 
-// countedLeases is the company's leases, counting the listings and the
-// claims a runner made of them.
+// countedLeases is the company's leases, counting a runner's listings and
+// claims.
 type countedLeases struct {
 	checkrun.Leases
 	lists, acquires atomic.Int64
@@ -448,8 +432,8 @@ func (f *fleet) slots() int {
 	return len(live)
 }
 
-// recording is o with a recorder of its own, which the runner built from it
-// counts on — among the rest, the remote checks its walks hold back
+// recording is o with its own recorder, on which the runner counts, among
+// the rest, the remote checks its walks hold back
 // (metrics.CodeChecksRemoteCapped).
 func recording(t *testing.T, o checkrun.Options) (checkrun.Options, *metrics.Recorder) {
 	t.Helper()
@@ -461,8 +445,8 @@ func recording(t *testing.T, o checkrun.Options) (checkrun.Options, *metrics.Rec
 	return o, rec
 }
 
-// capped is how many remote checks a runner's walks have held back for hold:
-// the runner's own count, made in the walk as it leaves the check queued.
+// capped is how many remote checks a runner's walks have held back for hold,
+// counted in the walk as it leaves the check queued.
 func capped(rec *metrics.Recorder, hold checkrun.RemoteHold) uint64 {
 	var n uint64
 	for _, s := range rec.Read() {
@@ -473,13 +457,11 @@ func capped(rec *metrics.Recorder, hold checkrun.RemoteHold) uint64 {
 	return n
 }
 
-// heldBack waits until a walk the runner recording to rec began after the
-// call has held a remote check back for hold, starting none of what was
-// queued: until two more are counted than at the call. A walk holds back one
-// check at the most — the first a cap leaves queued, the walk trying no
-// remote check after it — and a runner walks one walk at a time, so the walk
-// that counted the second began once the walk that counted the first, after
-// the call, had ended.
+// heldBack waits until a walk begun after the call has held a remote check
+// back for hold: until two more are counted than at the call. A walk holds
+// back one check at most (it tries no remote check after the first a cap
+// leaves queued) and a runner walks one at a time, so the walk that counted
+// the second began after the call.
 func heldBack(t *testing.T, rec *metrics.Recorder, hold checkrun.RemoteHold) {
 	t.Helper()
 	from := capped(rec, hold)
@@ -488,14 +470,12 @@ func heldBack(t *testing.T, rec *metrics.Recorder, hold checkrun.RemoteHold) {
 	})
 }
 
-// eventually waits for ok, failing t past ten seconds: a HANG DETECTOR, whose
+// eventually waits for ok, failing t past ten seconds: a HANG DETECTOR whose
 // bound decides nothing, since every caller waits for what a broken build
-// never brings about at all — a slot given back on leases whose clock the
-// case holds (fleet.leases), a minute charged or refused on the runner's clock
-// the case moved, a run's slot freed under a clock that keeps its timeout out
-// of reach, a walk a nudge begins with no backstop within the case, or the
-// runner's own count of the checks its walks held back — and a build that
-// brings it about late is held by its caller's own check.
+// never brings about (a slot given back on leases whose clock the case holds,
+// a minute charged on the runner's clock the case moved, a nudged walk with
+// no backstop within the case, the runner's own held-back count), and a build
+// that brings it about late is held by its caller's own check.
 func eventually(t *testing.T, what string, ok func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

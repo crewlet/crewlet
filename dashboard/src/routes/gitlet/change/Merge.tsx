@@ -1,9 +1,7 @@
 /**
- * A live change's merge controls, above its tabs: where its gate stands, and
- * Merge — or Add to queue, where its target's gate requires a check — with
- * how it merges, whether its branch goes and whether its work item closes;
- * Override, a person's merge past the gate; Re-run checks; Rebase; and Take
- * out of the queue (`ChangeWrites.tsx`), each confirmed in the page.
+ * A change's merge box: a section per question its gate asks, each on a disc in where it
+ * stands, with what acts on it; then the method, Merge or Add to queue, Override, and what
+ * the press will do.
  *
  * # The engine decides, and the page says what it decided
  *
@@ -33,23 +31,82 @@
  * one way the engine lands one.
  */
 
-import { useState } from "react";
-import { Button, Callout, Card, SegmentedControl, Textarea } from "@crewlethq/ui";
-import { CircleCheckGlyph, CircleDashedGlyph, CircleStopGlyph } from "@crewlethq/icons/glyphs";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  Button,
+  Callout,
+  Card,
+  Checkbox,
+  SegmentedControl,
+  SegmentedMeter,
+  Spinner,
+  Tag,
+  Textarea,
+} from "@crewlethq/ui";
+import {
+  ArrowRightGlyph,
+  ChevronDownGlyph,
+  ChevronUpGlyph,
+  CircleCheckGlyph,
+  CircleDashedGlyph,
+  CircleStopGlyph,
+  CircleXGlyph,
+  GitCommitVerticalGlyph,
+  GitMergeGlyph,
+  GitPullRequestClosedGlyph,
+  ListChecksGlyph,
+  ListOrderedGlyph,
+  PencilGlyph,
+  RotateCwGlyph,
+  ScrollTextGlyph,
+  ShieldCheckGlyph,
+  ShieldUserGlyph,
+  UsersGlyph,
+} from "@crewlethq/icons/glyphs";
 import { Modal } from "~/components/Modal.tsx";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { MERGE_CONFLICT, MERGE_METHODS, MERGE_REFUSALS } from "~/contract/merge.ts";
-import { changeLive, refName } from "~/lib/code.ts";
+import { ago } from "~/lib/ago.ts";
+import { checkStateTone, checkStateWord } from "~/lib/checks.ts";
+import { changeLive, preconditionWord, refName, shortOID } from "~/lib/code.ts";
+import { useNow } from "~/lib/clock.ts";
+import { elapsedMs, fmtDateTime, fmtDuration, fmtElapsed, plural } from "~/lib/format.ts";
 import { useAct, type Act } from "~/lib/useAct.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { ActionTool } from "~/protocol/act.ts";
-import type { CodeChangeDetail, CodePrecondition } from "~/protocol/index.ts";
-import { preconditionSentence, readinessCount, readinessNext } from "../readinessWords.ts";
-import { useNow } from "~/lib/clock.ts";
-import { Readiness } from "../ChangePeek.tsx";
-import { Byline } from "../ui.tsx";
+import type {
+  CodeChangeDetail,
+  CodeCheckRow,
+  CodePrecondition,
+  CodeRevisionRow,
+} from "~/protocol/index.ts";
+import { ORDINALS, preconditionTone } from "../ChangeRow.tsx";
+import { CheckPane, attemptKey } from "../checks/CheckList.tsx";
+import { namesSaid } from "../owners.ts";
+import { commitHref } from "../paths.ts";
+import {
+  checkWaits,
+  checksWords,
+  findingsWords,
+  metSentence,
+  preconditionSentence,
+  readinessNext,
+  readinessWaits,
+  reviewsWords,
+} from "../readinessWords.ts";
+import { Byline, Face, GITLET, useWhoName } from "../ui.tsx";
 import { DequeueButton, RebaseButton, RevertChangePanel } from "./ChangeWrites.tsx";
+import {
+  boxTone,
+  checksKept,
+  mergeSections,
+  sectionTone,
+  type MergeSection,
+  type Standing,
+} from "./mergeSections.ts";
+import type { LatestChecks } from "./reads.ts";
+import { Disc } from "./Timeline.tsx";
 
 type MergeMethod = (typeof MERGE_METHODS)[number];
 type MergeRefusal = (typeof MERGE_REFUSALS)[number];
@@ -165,35 +222,99 @@ export function mergeStanding(
 /** Why a draft is not merged: marking it ready, in the page bar, is the step. */
 const DRAFT_HELD = "A draft merges nowhere. Mark it ready for review first.";
 
-export function MergePanel({ change }: { change: CodeChangeDetail }) {
+/** Each method's glyph on the method control. */
+const METHOD_GLYPHS: Readonly<Record<MergeMethod, ReactNode>> = {
+  merge: <GitMergeGlyph size="sm" />,
+  squash: <GitCommitVerticalGlyph size="sm" />,
+  fast_forward: <ArrowRightGlyph size="sm" />,
+};
+
+/** What a press will do, in words: the method, then the branch, then the work item. */
+export function mergeDetails(
+  change: CodeChangeDetail,
+  method: MergeMethod,
+  deleteBranch: boolean | null,
+  closeTask: boolean,
+  viaQueue: boolean,
+): string {
+  const target = refName(change.target_ref).name;
+  const writes =
+    method === "merge"
+      ? `Gitlet writes one merge commit on ${target}.`
+      : method === "squash"
+        ? `Gitlet writes its changes as one commit on ${target}.`
+        : `${target} moves to its head, ${shortOID(change.head)}, and no commit is written.`;
+  const said = viaQueue ? `The queue tests it merged onto ${target}, then ${writes}` : writes;
+  const branch =
+    deleteBranch === true
+      ? "Its branch is deleted."
+      : deleteBranch === null && change.owner_kind === "agent"
+        ? `Its branch is deleted unless ${target}'s rule keeps it.`
+        : "Its branch is kept.";
+  const work = change.work_item;
+  const closes = closeTask && work ? ` ${work.key || work.id} closes once it merges.` : "";
+  return `${said} ${branch}${closes}`;
+}
+
+/**
+ * The box's foot: how it merges, whether its branch goes and its work item
+ * closes, the count and what it waits on, then Merge (or Add to queue) and
+ * Override, and what the press will do.
+ */
+export function MergePanel({
+  change,
+  checks,
+}: {
+  change: CodeChangeDetail;
+  checks: readonly CodeCheckRow[] | null;
+}) {
   const merge = useAct("code_merge_change");
-  const rerun = useAct("code_rerun_checks");
   const viewer = useViewer();
   const [method, setMethod] = useState<MergeMethod>(MERGE_METHODS[0]);
-  // UNSAID UNTIL CHOSEN: the engine's own default — a seat's branch deleted
-  // unless its rule keeps it, any other kept — stands until the person
-  // ticks it either way, because a box drawn ticked or unticked on a guess
-  // would send a choice nobody made.
+  // UNSAID UNTIL CHOSEN: the engine's own default stands until the person ticks it
+  // either way; the details line says which way it goes.
   const [deleteBranch, setDeleteBranch] = useState<boolean | null>(null);
   const [closeTask, setCloseTask] = useState(false);
   const [overriding, setOverriding] = useState(false);
   const seatBadge = useSeatBadgeOf();
   if (!changeLive(change.state)) return null;
   const nameOf = (h: string) => seatBadge(h).name;
-  const { viaQueue, queued, held } = mergeStanding(change, nameOf);
-  // A DRAFT IS NOT OFFERED A MERGE: its method, branch and merge controls
-  // wait until it is marked ready, which is the page bar's primary action.
+  const readiness = change.readiness;
+  const sum = readiness && (
+    <div className="code-merge-box__sum">
+      <SegmentedMeter
+        size="compact"
+        decorative
+        total={readiness.total}
+        segments={readiness.preconditions.map((p, i) => ({
+          id: `${i}-${p.kind}`,
+          value: 1,
+          tone: preconditionTone(p),
+          label: p.state,
+        }))}
+      />
+      <span>
+        <strong>
+          {readiness.met} of {plural(readiness.total, "condition")} met.
+        </strong>{" "}
+        {readinessWaits(readiness, { change, nameOf, me: viewer.handle }, checks)}
+      </span>
+    </div>
+  );
+  // A DRAFT IS NOT OFFERED A MERGE: marking it ready is the page bar's step.
   if (change.state === "draft") {
     return (
       <div className="code-merge-box__controls">
-        <div className="row gap-2 wrap">
-          <RebaseButton change={change} />
-        </div>
+        {sum}
+        <p className="code-merge-box__note">
+          <Face who={GITLET} size="xs" />
+          <span>A draft merges nowhere: mark it ready for review in the page bar.</span>
+        </p>
       </div>
     );
   }
+  const { viaQueue, held } = mergeStanding(change, nameOf);
   const work = change.work_item;
-  const verb = viaQueue ? "Add to queue" : "Merge";
   const person = viewer.kind === "human";
   const overrideHeld = !person
     ? "Only a person overrides a merge gate."
@@ -214,7 +335,7 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
   };
   return (
     <div className="code-merge-box__controls">
-      <div className="row gap-2 wrap">
+      <div className="code-merge-box__how">
         <SegmentedControl<MergeMethod>
           semantics="radio"
           activate="manual"
@@ -222,74 +343,57 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
           label="How it merges"
           value={method}
           onValueChange={setMethod}
-          options={MERGE_METHODS.map((value) => ({ value, ...METHOD_LABELS[value] }))}
+          options={MERGE_METHODS.map((value) => ({
+            value,
+            icon: METHOD_GLYPHS[value],
+            ...METHOD_LABELS[value],
+          }))}
         />
-        <label className="row gap-1">
-          <input
-            type="checkbox"
+        <span className="code-merge-box__ticks">
+          <Checkbox
+            size="sm"
+            label="Delete its branch"
             checked={deleteBranch === true}
-            onChange={(event) => setDeleteBranch(event.target.checked)}
+            onCheckedChange={setDeleteBranch}
           />
-          Delete its branch
-          <span className="muted t-caption">
-            {deleteBranch === null
-              ? "(left as it is, a seat's branch is deleted unless its rule keeps it, and any other is kept)"
-              : deleteBranch
-                ? "(deleted as it merges)"
-                : "(kept)"}
-          </span>
-        </label>
-        {work && (
-          <label className="row gap-1">
-            <input
-              type="checkbox"
+          {work && (
+            <Checkbox
+              size="sm"
+              label={`Close ${work.key || work.id} once it merges`}
               checked={closeTask}
-              onChange={(event) => setCloseTask(event.target.checked)}
+              onCheckedChange={setCloseTask}
             />
-            Close {work.key || work.id} once it merges
-          </label>
-        )}
+          )}
+        </span>
       </div>
-      <div className="row gap-2 wrap">
+      {sum}
+      <div className="code-merge-box__act">
         <WriteButton
           write={merge}
           size="small"
           variant="primary"
+          leadingIcon={viaQueue ? <ListOrderedGlyph size="sm" /> : <GitMergeGlyph size="sm" />}
           blocked={held}
           showRefusal={false}
           onPress={() => void submit()}
         >
-          {verb}
+          {viaQueue ? "Add to queue" : "Merge"}
         </WriteButton>
         <WriteButton
           write={merge}
           size="small"
-          variant="secondary"
+          variant="ghost"
+          leadingIcon={<ShieldUserGlyph size="sm" />}
           blocked={overrideHeld}
           showRefusal={false}
           onPress={() => setOverriding(true)}
         >
           Override
         </WriteButton>
-        <WriteButton
-          write={rerun}
-          size="small"
-          variant="ghost"
-          onPress={() =>
-            void rerun.run(
-              { change: change.ref, all_failed: true },
-              { done: `Ran ${change.ref}'s failed checks again` },
-            )
-          }
-        >
-          Re-run checks
-        </WriteButton>
-        <RebaseButton change={change} />
-        <DequeueButton
-          changeRef={change.ref}
-          target={refName(change.target_ref).name}
-          queued={queued !== undefined}
-        />
+        <p className="code-merge-box__note">
+          <Face who={GITLET} size="xs" />
+          <span>{mergeDetails(change, method, deleteBranch, closeTask, viaQueue)}</span>
+        </p>
       </div>
       {!overriding && <MergeRefusalNote write={merge} />}
       {overriding && (
@@ -321,28 +425,73 @@ function mergedVia(change: CodeChangeDetail): string {
   return change.override_reason ? "merged it past its gate" : "merged it through its gate";
 }
 
-/**
- * Whether the change may merge, as a code host's merge box says it, in the
- * conversation under the description: its standing across the head — a check
- * when every condition is met, a dashed ring while one is not — then each
- * condition (`ChangePeek.tsx`'s `Readiness`), then the controls. A merged
- * change says into what, by whom and how, and offers its revert; a closed one
- * says why it closed.
- */
-export function MergeBox({ change }: { change: CodeChangeDetail }) {
-  const now = useNow();
+/** What the merge box reads beside the change: its checks, reviewers' standing and findings. */
+export interface MergeFacts {
+  revisions: readonly CodeRevisionRow[];
+  checks: LatestChecks;
+  standings: readonly Standing[];
+  /** Whom a re-request asks: every standing verdict not an approval of the head, not asked now. */
+  again: readonly string[];
+  /** The open findings counted by weight, null where not every open one is loaded. */
+  severities: ReadonlyMap<string, number> | null;
+}
+
+/** The box's disc on the timeline's spine: where the change stands, named. */
+export function MergeDisc({
+  change,
+  checks,
+}: {
+  change: CodeChangeDetail;
+  checks: readonly CodeCheckRow[] | null;
+}) {
   const seatBadge = useSeatBadgeOf();
-  const nameOf = (h: string) => seatBadge(h).name;
+  const viewer = useViewer();
+  if (change.state === "merged") {
+    return <Disc glyph={<GitMergeGlyph size="md" />} tone="success" size="large" label="Merged" />;
+  }
+  if (change.state === "closed") {
+    return (
+      <Disc
+        glyph={<GitPullRequestClosedGlyph size="md" />}
+        tone="neutral"
+        size="large"
+        label="Closed"
+      />
+    );
+  }
+  const readiness = change.readiness;
+  const label = readiness
+    ? readinessWaits(
+        readiness,
+        { change, nameOf: (h) => seatBadge(h).name, me: viewer.handle },
+        checks,
+        "Waits on",
+      )
+    : "Not judged yet";
+  return (
+    <Disc
+      glyph={<GitMergeGlyph size="md" />}
+      tone={boxTone(readiness)}
+      size="large"
+      label={label}
+    />
+  );
+}
+
+/**
+ * Whether the change may merge: a section per question its gate asks, each on its disc, then the
+ * controls. A merged change says into what, by whom and how; a closed one says why it closed.
+ */
+export function MergeBox({ change, facts }: { change: CodeChangeDetail; facts: MergeFacts }) {
+  const now = useNow();
   const target = refName(change.target_ref).name;
   if (change.state === "merged") {
     return (
       <Card as="section" padding="none" className="code-merge-box" aria-label="Merge">
-        <div className="code-merge-box__head">
-          <span className="code-merge-box__glyph code-merge-box__glyph--done">
-            <CircleCheckGlyph size="md" />
-          </span>
-          <span className="code-merge-box__title">
-            <strong>Merged into {target}</strong>
+        <article className="code-merge-box__section" aria-label={`Merged into ${target}`}>
+          <Disc glyph={<GitMergeGlyph size="sm" />} tone="success" />
+          <span className="code-merge-box__words">
+            <strong className="code-merge-box__title">Merged into {target}</strong>
             <span className="code-merge-box__said">
               {change.merged_by && (
                 <Byline
@@ -353,9 +502,18 @@ export function MergeBox({ change }: { change: CodeChangeDetail }) {
                 />
               )}
               {!change.merged_by && <span>{mergedSentence(change)}</span>}
+              {change.merge_oid && (
+                <>
+                  {" "}
+                  as{" "}
+                  <a className="prose-link mono" href={commitHref(change.repo, change.merge_oid)}>
+                    {shortOID(change.merge_oid)}
+                  </a>
+                </>
+              )}
             </span>
           </span>
-        </div>
+        </article>
         <RevertChangePanel change={change} />
       </Card>
     );
@@ -363,51 +521,660 @@ export function MergeBox({ change }: { change: CodeChangeDetail }) {
   if (change.state === "closed") {
     return (
       <Card as="section" padding="none" className="code-merge-box" aria-label="Merge">
-        <div className="code-merge-box__head">
-          <span className="code-merge-box__glyph">
-            <CircleStopGlyph size="md" />
-          </span>
-          <span className="code-merge-box__title">
-            <strong>Closed without being merged</strong>
+        <article className="code-merge-box__section" aria-label="Closed without being merged">
+          <Disc glyph={<GitPullRequestClosedGlyph size="sm" />} tone="neutral" />
+          <span className="code-merge-box__words">
+            <strong className="code-merge-box__title">Closed without being merged</strong>
             <span className="code-merge-box__said">
               {change.close_reason ?? "Nobody said why."} Reopen it from the page bar.
             </span>
           </span>
-        </div>
+        </article>
       </Card>
     );
   }
-  const readiness = change.readiness;
-  const ready = readiness !== undefined && readiness.met === readiness.total;
-  const { held } = mergeStanding(change, nameOf);
-  const title =
-    change.state === "draft"
-      ? "A draft merges nowhere"
-      : ready
-        ? "Ready to merge"
-        : readiness
-          ? readinessCount(readiness)
-          : "Not judged yet";
   return (
     <Card as="section" padding="none" className="code-merge-box" aria-label="Merge">
-      <div className="code-merge-box__head">
-        {/* COLOUR IS STATE: a change every condition of which is met is
-            ready, and only that is drawn as done. */}
-        <span className={`code-merge-box__glyph${ready ? " code-merge-box__glyph--done" : ""}`}>
-          {ready ? <CircleCheckGlyph size="md" /> : <CircleDashedGlyph size="md" />}
-        </span>
-        <span className="code-merge-box__title">
-          <strong>{title}</strong>
-          <span className="code-merge-box__said">{held ?? "Every condition to merge is met."}</span>
-        </span>
-      </div>
-      {readiness && (
-        <div className="code-merge-box__checks">
-          <Readiness change={change} readiness={readiness} lead={false} />
-        </div>
+      {!change.readiness && (
+        <article className="code-merge-box__section" aria-label="Not judged yet">
+          <Disc glyph={<CircleDashedGlyph size="sm" />} />
+          <span className="code-merge-box__words">
+            <strong className="code-merge-box__title">Not judged yet</strong>
+            <span className="code-merge-box__said">
+              Its gate has not been judged on this read yet.
+            </span>
+          </span>
+        </article>
       )}
-      <MergePanel change={change} />
+      {change.readiness &&
+        mergeSections(change.readiness).map((section, i) => (
+          <SectionRow
+            key={`${section.key}-${i}`}
+            change={change}
+            section={section}
+            facts={facts}
+            now={now}
+          />
+        ))}
+      <MergePanel change={change} checks={facts.checks.rows} />
     </Card>
+  );
+}
+
+/** One section of the box: its disc, its title and sentence, what it offers, and what hangs under it. */
+function Section({
+  section,
+  glyph,
+  title,
+  said,
+  saidTitle,
+  end,
+  children,
+}: {
+  section: Pick<MergeSection, "preconditions">;
+  glyph: ReactNode;
+  title: string;
+  said: ReactNode;
+  saidTitle?: string | undefined;
+  end?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <article className="code-merge-box__section" aria-label={title}>
+      <Disc glyph={glyph} tone={sectionTone(section)} />
+      <span className="code-merge-box__words">
+        <strong className="code-merge-box__title">{title}</strong>
+        <span className="code-merge-box__said" title={saidTitle}>
+          {said}
+        </span>
+      </span>
+      {end && <span className="code-merge-box__end">{end}</span>}
+      {children}
+    </article>
+  );
+}
+
+/** A section by its key, with what it reads. */
+function SectionRow({
+  change,
+  section,
+  facts,
+  now,
+}: {
+  change: CodeChangeDetail;
+  section: MergeSection;
+  facts: MergeFacts;
+  now: number;
+}) {
+  const seatBadge = useSeatBadgeOf();
+  const viewer = useViewer();
+  const subject = { change, nameOf: (h: string) => seatBadge(h).name, me: viewer.handle };
+  const target = refName(change.target_ref).name;
+  switch (section.key) {
+    case "reviews": {
+      const words = reviewsWords(
+        section.preconditions,
+        subject,
+        facts.standings,
+        change.authors.map((a) => a.author),
+      );
+      return (
+        <Section
+          section={section}
+          glyph={<UsersGlyph size="sm" />}
+          title={words.title}
+          said={words.sentence}
+          end={
+            <>
+              <Faces change={change} standings={facts.standings} />
+              <ReRequest change={change} handles={facts.again} />
+            </>
+          }
+        />
+      );
+    }
+    case "checks":
+      return (
+        <ChecksSection
+          change={change}
+          section={section}
+          checks={facts.checks}
+          kept={checksKept(change, facts.revisions, now)}
+        />
+      );
+    case "findings": {
+      const words = findingsWords(
+        section.preconditions,
+        subject,
+        change.conversation?.open_findings ?? 0,
+        facts.severities,
+      );
+      return (
+        <Section
+          section={section}
+          glyph={<ShieldCheckGlyph size="sm" />}
+          title={words.title}
+          said={words.sentence}
+        />
+      );
+    }
+    case "facts": {
+      const head = facts.revisions.find((r) => r.n === change.revision)?.facts;
+      const measuring = section.state === "computing" || section.state === "unmet";
+      if (measuring || (!head && section.state !== "met")) {
+        return (
+          <Section
+            section={section}
+            glyph={<ScrollTextGlyph size="sm" />}
+            title="Its facts are being measured"
+            said={`Revision ${change.revision} is still being measured against ${target}.`}
+          />
+        );
+      }
+      if (!head) {
+        return (
+          <Section
+            section={section}
+            glyph={<ScrollTextGlyph size="sm" />}
+            title="Its facts are recorded"
+            said={`Revision ${change.revision}'s facts are recorded.`}
+          />
+        );
+      }
+      const touches = head.touches_all
+        ? "touches more files than its facts list"
+        : `touches ${plural(head.touched.length, "file")}`;
+      return (
+        <Section
+          section={section}
+          glyph={<ScrollTextGlyph size="sm" />}
+          title="Its facts are recorded"
+          saidTitle={head.measured_at ? undefined : NOT_KEPT_MEASURED}
+          said={
+            head.measured_at ? (
+              <>
+                Revision {change.revision} {touches}, measured{" "}
+                <time dateTime={head.measured_at} title={fmtDateTime(head.measured_at)}>
+                  {ago(head.measured_at, now, { clock: true })}
+                </time>
+                .
+              </>
+            ) : (
+              `Revision ${change.revision} ${touches}.`
+            )
+          }
+        />
+      );
+    }
+    case "mergeable":
+      return <MergesSection change={change} section={section} now={now} />;
+    case "other":
+      return <OtherSection change={change} section={section} />;
+  }
+}
+
+/** Why a revision's facts carry no time: they were recorded before the engine kept it. */
+export const NOT_KEPT_MEASURED =
+  "When they were measured is not kept for facts recorded before it was.";
+
+/** Up to five reviewers' faces, the reader's ringed, and how many more. */
+function Faces({
+  change,
+  standings,
+}: {
+  change: CodeChangeDetail;
+  standings: readonly Standing[];
+}) {
+  const viewer = useViewer();
+  const whoName = useWhoName();
+  const waiting = (change.readiness?.preconditions ?? [])
+    .filter((p) => APPROVALS.has(p.kind))
+    .flatMap((p) => (p.waits_on ?? []).map((w) => w.handle));
+  const handles = [...new Set([...standings.map((s) => s.handle), ...waiting])];
+  if (handles.length === 0) return null;
+  const shown = handles.slice(0, 5);
+  const names = namesSaid(handles.map((h) => whoName(h)));
+  return (
+    <span className="code-merge-box__faces" role="img" aria-label={`Reviewers: ${names}`}>
+      {shown.map((h) => (
+        <Face key={h} who={h} ring={h === viewer.handle ? "brand" : undefined} />
+      ))}
+      {handles.length > 5 && <span className="code-merge-box__more">+{handles.length - 5}</span>}
+    </span>
+  );
+}
+
+const APPROVALS = new Set(["approval", "human_approval", "owners_approval"]);
+
+/** Re-request: one ask of everyone whose standing verdict is not an approval of the head. */
+export function ReRequest({
+  change,
+  handles,
+  icon = false,
+}: {
+  change: CodeChangeDetail;
+  handles: readonly string[];
+  /** The rail's one-reviewer form: a ghost icon button. */
+  icon?: boolean;
+}) {
+  const ask = useAct("code_request_review");
+  const whoName = useWhoName();
+  if (handles.length === 0 || !changeLive(change.state)) return null;
+  const names = namesSaid(handles.map((h) => whoName(h)));
+  const press = () =>
+    void ask.run(
+      { change: change.ref, reviewers: [...handles] },
+      { done: `Asked ${names} to review ${change.ref} again` },
+    );
+  return icon ? (
+    <WriteButton
+      write={ask}
+      size="small"
+      variant="ghost"
+      aria-label={`Ask ${names} to review again`}
+      onPress={press}
+    >
+      <RotateCwGlyph size="sm" />
+    </WriteButton>
+  ) : (
+    <WriteButton
+      write={ask}
+      size="small"
+      variant="secondary"
+      leadingIcon={<RotateCwGlyph size="sm" />}
+      title={`Ask ${names} to review again`}
+      onPress={press}
+    >
+      Re-request
+    </WriteButton>
+  );
+}
+
+/** The Checks section: each check's latest attempt, Re-run where one failed, and Hide or Show. */
+function ChecksSection({
+  change,
+  section,
+  checks,
+  kept,
+}: {
+  change: CodeChangeDetail;
+  section: MergeSection;
+  checks: LatestChecks;
+  /** Whether its head's checks are still kept (`checksKept`). */
+  kept: boolean;
+}) {
+  const rerun = useAct("code_rerun_checks");
+  const rows = checks.rows ?? [];
+  const allPassed = rows.every((r) => !checkWaits(r));
+  // SHOWN WHILE ONE HAS NOT PASSED; the reader's press holds for the visit.
+  const [shown, setShown] = useState<boolean | null>(null);
+  const open = shown ?? !allPassed;
+  const [pane, setPane] = useState<CodeCheckRow | null>(null);
+  const details = useRef(new Map<string, HTMLButtonElement>());
+  const listId = useId();
+  const target = refName(change.target_ref).name;
+  const sectioned = { preconditions: section.preconditions };
+  if (checks.refused !== null) {
+    return (
+      <Section
+        section={{ preconditions: [] }}
+        glyph={<ListChecksGlyph size="sm" />}
+        title="Its checks are unavailable"
+        said={
+          checks.refused
+            ? `${checks.refused.charAt(0).toUpperCase()}${checks.refused.slice(1).replace(/\.?$/, ".")}`
+            : "Its read was refused."
+        }
+      />
+    );
+  }
+  if (checks.rows === null) {
+    return (
+      <Section
+        section={sectioned}
+        glyph={<ListChecksGlyph size="sm" />}
+        title="Reading its checks"
+        said="Its latest checks are being read."
+      />
+    );
+  }
+  const words = checksWords(rows, target, kept);
+  const failed = rows.some((r) => ["failed", "errored", "cancelled"].includes(r.state));
+  const close = () => {
+    const key = pane ? attemptKey(pane) : "";
+    setPane(null);
+    queueMicrotask(() => details.current.get(key)?.focus());
+  };
+  return (
+    <Section
+      section={sectioned}
+      glyph={<ListChecksGlyph size="sm" />}
+      title={words.title}
+      said={words.sentence}
+      end={
+        <>
+          {failed && changeLive(change.state) && (
+            <WriteButton
+              write={rerun}
+              size="small"
+              variant="ghost"
+              leadingIcon={<RotateCwGlyph size="sm" />}
+              onPress={() =>
+                void rerun.run(
+                  { change: change.ref, all_failed: true },
+                  { done: `Ran ${change.ref}'s failed checks again` },
+                )
+              }
+            >
+              Re-run failed checks
+            </WriteButton>
+          )}
+          {rows.length > 0 && (
+            <Button
+              size="small"
+              variant="ghost"
+              aria-expanded={open}
+              aria-controls={listId}
+              trailingIcon={open ? <ChevronUpGlyph size="sm" /> : <ChevronDownGlyph size="sm" />}
+              onClick={() => setShown(!open)}
+            >
+              {open ? "Hide" : "Show"}
+            </Button>
+          )}
+        </>
+      }
+    >
+      <ul
+        id={listId}
+        className="code-merge-checks"
+        aria-label={`Checks of ${shortOID(change.head)}`}
+        hidden={!open || rows.length === 0}
+      >
+        {rows.map((r) => (
+          <li key={attemptKey(r)} className="code-merge-check">
+            <CheckMark state={r.state} />
+            <span className="code-merge-check__said">
+              <strong>{r.name}</strong> · <CheckPhrase row={r} />
+            </span>
+            <span className="code-merge-check__end">
+              {r.required && (
+                <Tag size="xs" appearance="outline">
+                  Required
+                </Tag>
+              )}
+              <button
+                type="button"
+                className="t-link code-merge-check__details"
+                ref={(b) => {
+                  if (b) details.current.set(attemptKey(r), b);
+                }}
+                aria-label={`Details of ${r.name}`}
+                onClick={() => setPane(pane && attemptKey(pane) === attemptKey(r) ? null : r)}
+              >
+                Details
+              </button>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {pane && pane.repo && (
+        <PaneAt key={attemptKey(pane)} onEscape={close}>
+          <CheckPane row={pane} repo={pane.repo} onClose={close} />
+        </PaneAt>
+      )}
+    </Section>
+  );
+}
+
+/** A check's pane, focused as it opens; Escape closes it. */
+function PaneAt({ onEscape, children }: { onEscape: () => void; children: ReactNode }) {
+  const at = useRef<HTMLDivElement>(null);
+  useEffect(() => at.current?.focus(), []);
+  return (
+    <div
+      ref={at}
+      tabIndex={-1}
+      className="code-merge-checks__pane"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          onEscape();
+        }
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** A check's state as a mark: its glyph in its state's ink, a ring while it runs. */
+export function CheckMark({ state }: { state: string }) {
+  const glyph =
+    state === "passed" ? (
+      <CircleCheckGlyph size="sm" />
+    ) : state === "failed" || state === "errored" ? (
+      <CircleXGlyph size="sm" />
+    ) : state === "running" ? (
+      <Spinner size="sm" />
+    ) : state === "queued" ? (
+      <CircleDashedGlyph size="sm" />
+    ) : (
+      <CircleStopGlyph size="sm" />
+    );
+  return (
+    <span className="code-check-mark" data-tone={checkStateTone(state)} aria-hidden="true">
+      {glyph}
+    </span>
+  );
+}
+
+/** "passed in 1m 35s", "running for 2m 10s", "queued 2 minutes ago". */
+function CheckPhrase({ row }: { row: CodeCheckRow }) {
+  const took = row.duration_ms ?? elapsedMs(row.started_at, row.finished_at);
+  // NO DURATION KNOWN (it never started, or its CI sent none): when it ended, never a guess.
+  if (
+    took === null &&
+    (row.state === "passed" || row.state === "failed" || row.state === "errored")
+  )
+    return row.finished_at ? (
+      <EndedAgo word={checkStateWord(row.state)} at={row.finished_at} />
+    ) : (
+      <span>{checkStateWord(row.state)}</span>
+    );
+  switch (row.state) {
+    case "passed":
+      return <span title={fmtDateTime(row.finished_at)}>passed in {fmtDuration(took)}</span>;
+    case "failed":
+    case "errored":
+      return (
+        <span title={fmtDateTime(row.finished_at)}>
+          {row.state} after {fmtDuration(took)}
+        </span>
+      );
+    case "running":
+      return row.started_at ? <RunningFor since={row.started_at} /> : <span>running</span>;
+    case "queued":
+      return row.queued_at ? <QueuedAgo at={row.queued_at} /> : <span>queued</span>;
+  }
+  return <span>{checkStateWord(row.state)}</span>;
+}
+
+/** A running check's clock, ticking each second only while it runs. */
+function RunningFor({ since }: { since: string }) {
+  const now = useNow();
+  return <span title={fmtDateTime(since)}>running for {fmtElapsed(now - Date.parse(since))}</span>;
+}
+
+function QueuedAgo({ at }: { at: string }) {
+  return <EndedAgo word="queued" at={at} />;
+}
+
+/** A state word and how long ago it came to be: "errored 2 minutes ago". */
+function EndedAgo({ word, at }: { word: string; at: string }) {
+  const now = useNow();
+  return (
+    <span>
+      {word}{" "}
+      <time dateTime={at} title={fmtDateTime(at)}>
+        {ago(at, now, { clock: true })}
+      </time>
+    </span>
+  );
+}
+
+/** The Merges section: whether its revision merges into its target, measured when, and Rebase. */
+function MergesSection({
+  change,
+  section,
+  now,
+}: {
+  change: CodeChangeDetail;
+  section: MergeSection;
+  now: number;
+}) {
+  const m = change.mergeability;
+  const target = refName(change.target_ref).name;
+  // A DRAFT REBASES TOO: the engine rebases any live change.
+  const rebase = changeLive(change.state) ? <RebaseButton change={change} /> : undefined;
+  const glyph = <GitMergeGlyph size="sm" />;
+  if (!m || m.target_ref !== change.target_ref) {
+    // AFTER A RETARGET the measurement on hand is the old target's: named as its own.
+    const old = m && refName(m.target_ref).name;
+    return (
+      <Section
+        section={section}
+        glyph={glyph}
+        title={`Not measured against ${target} yet`}
+        said={
+          old
+            ? `Revision ${m.revision} was measured against ${old}, its earlier target; ${target} is still being measured by its home.`
+            : `Revision ${change.revision} is still being merged onto ${target} by its home.`
+        }
+        end={rebase}
+      />
+    );
+  }
+  const which = m.revision === change.revision ? "measured" : `revision ${m.revision} measured`;
+  // A SENTENCE'S START, or a clause after the conflict's paths.
+  const measured = (start: boolean) => (
+    <>
+      {start ? `${which.charAt(0).toUpperCase()}${which.slice(1)}` : which} against {target} at{" "}
+      <a className="prose-link mono" href={commitHref(change.repo, m.target_oid)}>
+        {shortOID(m.target_oid)}
+      </a>
+      ,{" "}
+      <time dateTime={m.at} title={fmtDateTime(m.at)}>
+        {ago(m.at, now, { clock: true })}
+      </time>
+      .
+    </>
+  );
+  if (m.state === "clean") {
+    return (
+      <Section
+        section={section}
+        glyph={glyph}
+        title={`Merges cleanly into ${target}`}
+        said={measured(true)}
+        end={rebase}
+      />
+    );
+  }
+  if (m.state === "conflict") {
+    const paths = m.conflicts ?? [];
+    const count = paths.length + (m.conflicts_omitted ?? 0);
+    return (
+      <Section
+        section={section}
+        glyph={glyph}
+        title={`Conflicts with ${target}`}
+        said={
+          <>
+            In {plural(count, "path")}, {measured(false)}
+          </>
+        }
+        end={rebase}
+      >
+        {paths.length > 0 && (
+          <ul className="code-merge-paths" aria-label="Paths in conflict">
+            {paths.map((path) => (
+              <li key={path} className="mono">
+                {path}
+              </li>
+            ))}
+            {(m.conflicts_omitted ?? 0) > 0 && <li>and {m.conflicts_omitted} more</li>}
+          </ul>
+        )}
+      </Section>
+    );
+  }
+  return (
+    <Section
+      section={section}
+      glyph={glyph}
+      title={`Not decided against ${target}`}
+      said={`Its home could not decide whether revision ${m.revision} merges into ${target} in a read’s time.`}
+      end={rebase}
+    />
+  );
+}
+
+/** A condition none of the five holds: a draft, merge authority, the queue, or a newer kind. */
+function OtherSection({ change, section }: { change: CodeChangeDetail; section: MergeSection }) {
+  const seatBadge = useSeatBadgeOf();
+  const viewer = useViewer();
+  const p = section.preconditions[0]!;
+  const subject = { change, nameOf: (h: string) => seatBadge(h).name, me: viewer.handle };
+  const target = refName(change.target_ref).name;
+  const said = preconditionSentence(p, subject) ?? metSentence(p, subject);
+  switch (p.kind) {
+    case "draft":
+      return (
+        <Section
+          section={section}
+          glyph={<PencilGlyph size="sm" />}
+          title={p.state === "met" ? "It is ready for review" : "It is a draft"}
+          said={said.replace(/^It is a draft\. /, "")}
+        />
+      );
+    case "merge_authority":
+      return (
+        <Section
+          section={section}
+          glyph={<ShieldUserGlyph size="sm" />}
+          title={
+            p.state === "met" ? `You may merge into ${target}` : `You may not merge into ${target}`
+          }
+          said={said}
+        />
+      );
+    case "queue": {
+      const q = p.queue;
+      const place = q ? (ORDINALS[q.place - 1] ?? `#${q.place}`) : "";
+      return (
+        <Section
+          section={section}
+          glyph={<ListOrderedGlyph size="sm" />}
+          title={
+            q?.state === "testing"
+              ? "Testing on a train"
+              : q
+                ? `${place} in ${target}'s queue`
+                : `In ${target}'s queue`
+          }
+          said={said}
+          end={<DequeueButton changeRef={change.ref} target={target} queued />}
+        />
+      );
+    }
+  }
+  return (
+    <Section
+      section={section}
+      glyph={<CircleDashedGlyph size="sm" />}
+      title={preconditionWord(p.kind)}
+      said={said}
+    />
   );
 }
 

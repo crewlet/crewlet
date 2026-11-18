@@ -9,51 +9,29 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// ClientMinVersion is the oldest git a CLIENT of Gitlet may run: a
-// person's and a CI runner's, the operator CLI's (`crewlet gitlet import`,
-// `export`, and every git its credential helper answers), and gittest's
-// client in every suite. merge-tree --write-tree --merge-base (2.40) is the
-// newest feature a client-side recipe uses; GIT_CONFIG_COUNT (2.31), protocol
-// v2 by default (2.26) and partial clone (2.19) are older. A client's git is
-// a person's laptop or a CI image the operator does not choose, so it is held
-// to what the distributions people run still ship (ADR-0087).
+// ClientMinVersion is the oldest git a CLIENT of Gitlet may run: a person's,
+// a CI runner's, the operator CLI's (`crewlet gitlet import`, `export`, and
+// every git its credential helper answers) and gittest's client. Its newest
+// need is merge-tree --write-tree --merge-base (2.40). The operator does not
+// choose a client's git, so this stays at what the distributions people run
+// still ship (package doc, "Two floors, one pin (ADR-0087)").
 var ClientMinVersion = Version{2, 40, 0}
 
-// NodeMinVersion is the oldest git a GITLET NODE runs — every pool [New] builds:
-// an incremental multi-pack-index layer with its bitmap (2.50) written over a
-// NAMED base with no chain file (`multi-pack-index write --incremental
-// --base=<checksum> --no-write-chain-file`, 2.55: `write` offers neither
-// option in v2.54.0's documentation and both in v2.55.0's), which is how a
-// repository's maintainer publishes the layers every Gitlet node installs.
-// Every git at the floor also sends a cache's overlapping packs whole under
-// either pack.allowPackReuse value
-// (TestEveryPackReuseModeSendsOverlappingPacksWhole, on the node pin and on
-// the floor's own build), so nothing chooses the value per binary: a cache
-// serves `single` (cache.ServeConfig says why). `multi` was fixed in 2.48.0
-// (tb/multi-pack-reuse-dupfix, "Object reuse code based on multi-pack-index
-// sent an unwanted copy of object"): 2.43 refuses it outright ("bad boolean
-// config value 'multi'"), and 2.44 to 2.47 accept it and, reusing from
-// several packs that hold one object — which a cache's are, since
-// receive-pack completes each thin push with the bases it borrowed from the
-// packs before it — sent that object twice or a delta without its base, so
-// the client's index-pack refused the whole pack ("REF_DELTA … already
-// resolved", "pack has N unresolved deltas") and every full clone of a
-// repository the maintainer had written a bitmap for failed on 2.47.3,
-// Debian trixie's git. Everything else a Gitlet node runs is older:
-// proc-receive (2.29), index-pack --rev-index (2.31), object-type filters
-// (2.32), multi-pack-index bitmaps (2.34) and merge-tree --write-tree
-// --merge-base (2.40).
+// NodeMinVersion is the oldest git a GITLET NODE runs (every pool [New]
+// builds). Its newest need is `multi-pack-index write --incremental
+// --base=<checksum> --no-write-chain-file` (2.55): a bitmapped layer over a
+// NAMED base, how a maintainer publishes the layers every node installs. From
+// 2.48 either pack.allowPackReuse value sends overlapping packs whole (2.44 to
+// 2.47's `multi` did not), so nothing picks it per binary (cache.ServeConfig).
 //
-// THE FLOOR FOLLOWS THE COMMANDS, never the reverse:
-// TestTheNodeFloorWritesALayerOverANamedBase runs the layer on the floor's
-// own build, and a later part that needs more of git raises this rather than
-// bend its commands to fit it. EACH FLOOR IS CHOSEN ONCE, so that no later
-// capability raises it under a node an operator has already deployed: both
-// moved before any tag shipped Go code. A git release newer than the floor is
-// what the engine image builds (scripts/git-pin.env), never what the floor is.
+// THE FLOOR FOLLOWS THE COMMANDS, never the reverse (both held on the floor's
+// own build by TestTheNodeFloorWritesALayerOverANamedBase and
+// TestEveryPackReuseModeSendsOverlappingPacksWhole). It is chosen once, before
+// a tag ships, so no later need raises it under a deployed node; the engine
+// image's newer git (scripts/git-pin.env) is not it.
 var NodeMinVersion = Version{2, 55, 0}
 
-// Floor is which of the two floors a git is held to — a closed set, so a
+// Floor is which of the two floors a git is held to: a closed set, so a
 // value nothing set is refused rather than read as either.
 type Floor string
 
@@ -99,9 +77,8 @@ func (v Version) String() string {
 }
 
 // versionLine is the line `git version` prints. Only the first three numbers
-// are read: what follows them is a vendor's (" (Apple Git-145)",
-// ".windows.1") or a build's (".rc1", ".GIT"), and says nothing about which
-// features the binary has.
+// are read: a vendor's or a build's suffix (" (Apple Git-145)", ".rc1",
+// ".GIT") says nothing about the binary's features.
 var versionLine = regexp.MustCompile(`(?m)^git version ([0-9]+)\.([0-9]+)(?:\.([0-9]+))?`)
 
 // ParseVersion reads `git version` output: the FIRST line beginning
@@ -126,15 +103,14 @@ func ParseVersion(out string) (Version, error) {
 	return v, nil
 }
 
-// ParseRelease reads a release as [Version.String] writes it — "2.56.0", its
-// exact inverse — where [ParseVersion] reads what `git version` prints: three
-// decimal numbers joined by dots, each with no sign and no leading zero, nine
-// digits at most. It is how a Gitlet node reads the release a published layer's
-// row names (gitlet.LayerRef.Git, which the domain holds to the same spelling
-// without importing this package), so a node knows a layer written by a newer
-// git before it fetches a byte of it. Anything else — "2.56", "v2.56.0", a
-// vendor's suffix, a version line — is refused: a row spells exactly what
-// String wrote, and a spelling it did not write is not a release this reads.
+// ParseRelease is the exact inverse of [Version.String] ("2.56.0"): three
+// decimal numbers joined by dots, no sign, no leading zero, nine digits at
+// most. A node reads a published layer's release with it
+// (gitlet.LayerRef.Git, held to the same spelling without importing this
+// package), so it knows a layer
+// written by a newer git before fetching it. Any other spelling ("2.56",
+// "v2.56.0", a vendor's suffix, a version line) is refused: String never
+// wrote it.
 func ParseRelease(s string) (Version, error) {
 	parts := strings.Split(s, ".")
 	if len(parts) != 3 {
@@ -144,8 +120,8 @@ func ParseRelease(s string) (Version, error) {
 	var v Version
 	for i, field := range []*int{&v.Major, &v.Minor, &v.Patch} {
 		n := parts[i]
-		// NINE DIGITS AT MOST, so every number fits an int on every platform
-		// the engine builds for — the bound gitlet.LayerRef.Check holds too.
+		// NINE DIGITS AT MOST: fits an int on every platform the engine
+		// builds for; gitlet.LayerRef.Check holds the same bound.
 		if n == "" || len(n) > 9 || (len(n) > 1 && n[0] == '0') {
 			return Version{}, fmt.Errorf("gitproc: %q is not a release as Version.String spells one (2.56.0)",
 				textcut.Ellipsis(s, 120))
@@ -160,14 +136,10 @@ func ParseRelease(s string) (Version, error) {
 	return v, nil
 }
 
-// ErrTooOld is the refusal of a git below its floor. Its message names the
-// binary, what it is, the floor and its version and what to install, because
-// the person reading it cannot go on until they do — and never the engine
-// image's own git, whose version moves with the pin: a sentence naming it
-// would be a second copy of scripts/git-pin.env.
-//
-// The version wanted is the floor's ([ErrTooOld.Want]) rather than a field
-// beside it, which could disagree with it.
+// ErrTooOld is the refusal of a git below its floor. Its message never names
+// the engine image's git version, which would be a second copy of
+// scripts/git-pin.env. The version wanted is derived ([ErrTooOld.Want]), not
+// a field that could disagree with Floor.
 type ErrTooOld struct {
 	Path  string
 	Found Version
@@ -179,8 +151,8 @@ type ErrTooOld struct {
 func (e *ErrTooOld) Want() Version { return e.Floor.Min() }
 
 // Error names the binary, the version found, the floor and what to install.
-// An ErrTooOld held to no floor is a call site's bug, never an operator's, and
-// says so rather than guess which floor was meant.
+// An ErrTooOld held to no floor is a call site's bug and says so rather than
+// guess the floor.
 func (e *ErrTooOld) Error() string {
 	switch e.Floor {
 	case FloorNode:
