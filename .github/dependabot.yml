@@ -10,15 +10,18 @@
 # omission: a manifest with no entry never produces a pull request, which
 # looks exactly like a manifest with nothing to update.
 #
-# Two surfaces have no entry because no ecosystem reads them:
-# scripts/git-pin.env, the gits the engine image builds and the suite runs,
-# each a source tarball named by version and SHA-256, and
-# scripts/chromium-pin.env, the Chromiums the suite drives, each a Chrome for
-# Testing build named by version and a SHA-256 per platform.
-# .github/workflows/pins.yml watches both instead, every week, and keeps one
-# issue per pin file rather than opening a pull request when a pin is behind
-# (CONTRIBUTING.md, "The git pin is checked every week" and "The Chromium pin
-# is checked every week").
+# Three surfaces have no entry: scripts/git-pin.env, the gits the engine image
+# builds and the suite runs, each a source tarball named by version and
+# SHA-256, and scripts/chromium-pin.env, the Chromiums the suite drives, each a
+# Chrome for Testing build named by version and a SHA-256 per platform, which no
+# ecosystem reads; and scripts/playwright-mcp-pin.env, the npm tarballs of the
+# Playwright tree the box helper embeds, which no entry may move, since that
+# tree is code for a seat's box and a bump is read and run before it
+# lands. .github/workflows/pins.yml watches all three instead, every week, and
+# keeps one issue per pin file rather than opening a pull request when a pin is
+# behind (CONTRIBUTING.md, "The git pin is checked every week", "The Chromium
+# pin is checked every week" and "The Playwright MCP pin is checked every
+# week").
 #
 # Security updates are separate — they come from published advisories, are
 # switched on in the repository settings rather than here, and are not held

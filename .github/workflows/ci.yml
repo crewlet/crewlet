@@ -252,6 +252,14 @@ jobs:
       # all on the runner image, and takes about ten seconds.
       - name: the Chromium recipe's and the pin check's own suite
         run: scripts/chromium-pin_test.sh
+      # The own suite of the Playwright MCP recipe (scripts/playwright-mcp.sh)
+      # and of its weekly pin check (scripts/playwright-mcp-pin-check.sh) —
+      # `make playwright-mcp-test` — for the git suite's reasons, against a
+      # stand-in npm registry under file:// with a signing key of its own, so
+      # it fetches no tarball and reads no network. It needs curl, gzip, tar,
+      # openssl and sha256sum, all on the runner image.
+      - name: the Playwright MCP recipe's and the pin check's own suite
+        run: scripts/playwright-mcp-pin_test.sh
       # Only what this job created or used, by the epoch above. Without the
       # prune, every save would carry forward everything the restored cache
       # held, and the go command only trims entries five days unused — so each

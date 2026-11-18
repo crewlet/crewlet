@@ -257,8 +257,8 @@ COMPANY ?=
 
 .PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer ssh-held-words objects-answer broker-answer assistant-fixtures retention-alarms \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
-        check fmt-check tidy-check signoff-check signoff-test git-test chromium-test vet lint test test-norace test-cross test-solo \
-        require-npm bench git test-gitproc test-capture chromium \
+        check fmt-check tidy-check signoff-check signoff-test git-test chromium-test playwright-mcp-test vet lint test test-norace test-cross test-solo \
+        require-npm bench git test-gitproc test-capture chromium playwright-mcp \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -522,6 +522,20 @@ CHROMIUM_ENV = chromium_newest="$$(scripts/chromium.sh newest)" || exit 1; \
 	chromium_floor="$$(scripts/chromium.sh floor)" || exit 1; \
 	export CREWLET_TEST_CHROMIUM="$$chromium_newest" CREWLET_TEST_CHROMIUM_FLOOR="$$chromium_floor";
 
+##@ The pinned Playwright MCP
+
+# THE PLAYWRIGHT TREE FOR A SEAT'S OWN BROWSER, @playwright/mcp and the
+# playwright-core release it names, each the npm tarball
+# scripts/playwright-mcp-pin.env pins by version and SHA-256, which
+# internal/browser/boxhelper embeds from its pw/ directory. The tarballs are
+# COMMITTED, so neither a build nor the suite fetches them, and no target
+# depends on this one: it is the one recipe for a bump
+# (scripts/playwright-mcp.sh), which downloads both from the npm registry,
+# refuses a tarball that is not the pin's, and writes them into pw/ in place
+# of the release that was there. Every gate reads the committed tree.
+playwright-mcp: ## fetch the pinned playwright mcp tree into the helper's package (scripts/playwright-mcp-pin.env; a bump only)
+	@scripts/playwright-mcp.sh
+
 ##@ Gates — `make check` is all of them
 
 # REQUIRED makes every prerequisite of the suite a requirement: a case whose
@@ -588,7 +602,7 @@ SUITE_ENV = $(REQUIRED) $(GIT_ENV) $(CHROMIUM_ENV)
 # environment and a sub-make inherits the parent's command line, so a value
 # exported in the shell or given to `make check` would run one shard of each
 # half and print that every gate passed.
-check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test playwright-mcp-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@status=0; \
 	$(MAKE) test TEST_SHARD= || status=1; \
 	$(MAKE) test-solo TEST_SHARD= || status=1; \
@@ -678,6 +692,20 @@ git-test: ## run the git recipe's and the pin check's own suite (ci: build + vet
 # second run. It needs curl, zip, unzip and sha256sum (or shasum).
 chromium-test: ## run the Chromium recipe's and the pin check's own suite (ci: build + vet)
 	@scripts/chromium-pin_test.sh
+
+# The OWN SUITE of the Playwright MCP recipe (scripts/playwright-mcp.sh) and of
+# the weekly pin check (scripts/playwright-mcp-pin-check.sh), for git-test's
+# reasons: shell no Go test reaches, each failing silently where it matters —
+# a recipe that writes a tarball it never checked into the tree the helper
+# embeds; a check that calls the pin current because it read nothing, proposes
+# a tarball whose signature it never asked about, or carries the registry's
+# words into the issue it reports to. It runs the real scripts against a
+# stand-in npm registry under file://, with tarballs and a registry signing
+# key of its own, so it fetches nothing and reads no network, then runs
+# itself once more, by a relative path, under a developer's most hostile
+# environment. It needs curl, gzip, tar, openssl and sha256sum (or shasum).
+playwright-mcp-test: ## run the playwright mcp recipe's and the pin check's own suite (ci: build + vet)
+	@scripts/playwright-mcp-pin_test.sh
 
 vet: ## run go vet (ci: build + vet)
 	$(GO) vet ./...

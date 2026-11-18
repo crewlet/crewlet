@@ -23,7 +23,7 @@ paths:
 - `gofmt -l` over `go run ./internal/sourcetree/gofiles`, and `golangci-lint run`'s stricter `gofmt` (with `simplify`) and `goimports`: a redundant composite-literal type passes the first and fails the second (`CLAUDE.md` says how to repair both)
 - `go mod tidy -diff` (`make tidy` applies it)
 - `scripts/check-signoff.sh` and its suite `scripts/check-signoff_test.sh`
-- `scripts/git-pin_test.sh` (`make git-test`) and `scripts/chromium-pin_test.sh` (`make chromium-test`): the suites of the git and Chromium recipes and their weekly pin checks, offline and building or fetching nothing; the first needs GnuPG, the second `zip` and `unzip`
+- `scripts/git-pin_test.sh` (`make git-test`), `scripts/chromium-pin_test.sh` (`make chromium-test`) and `scripts/playwright-mcp-pin_test.sh` (`make playwright-mcp-test`): the suites of the git, Chromium and Playwright MCP recipes and their weekly pin checks, offline and building or fetching nothing; the first needs GnuPG, the second `zip` and `unzip`, the third `openssl`
 - `go vet ./...`, the only vet (both test targets run `go test -vet=off`)
 - `golangci-lint run`, a prebuilt release: one built with a Go whose language version is older than `go.mod`'s refuses the module
 - `go build ./...`, and a cross-compile of every release target

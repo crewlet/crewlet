@@ -1,7 +1,9 @@
 // Package browser holds what the engine decides about Chromium that more than
 // one package reads: the oldest major the engine accepts and the suite
-// certifies ([MinChromiumMajor]), and that no Go but the artifact render's
-// client speaks DevTools (ADR-0162).
+// certifies ([MinChromiumMajor]), the pinned Playwright release for a seat's
+// own browser and the Chromium build it expects ([PlaywrightMCPRelease],
+// [ExpectedChromiumVersion]), and that no Go but the artifact render's client
+// speaks DevTools (ADR-0162).
 //
 // # The floor
 //
@@ -24,6 +26,18 @@
 // Raising it is argued here with what was measured, and moves the floor pin
 // to the newest patch of the new major in the same change:
 // TestThePinsMeetTheFloor fails while the two disagree.
+//
+// # The Playwright pin
+//
+// The Playwright tree internal/browser/boxhelper embeds for a seat's own
+// browser is @playwright/mcp and the playwright-core release it names, each at
+// the release scripts/playwright-mcp-pin.env pins.
+// Their releases, and the Chromium build that playwright-core expects (its
+// browsers.json's revision and version), are constants here rather than in
+// boxhelper, because a package that only reads them must not link the
+// tarballs boxhelper embeds. boxhelper's TestTheEmbeddedTreeIsThePinnedRelease
+// holds the four to the pin file and to the tarballs, so a bump that moves
+// the pin and not these fails there.
 //
 // # DevTools only through the artifact render's client
 //

@@ -119,6 +119,10 @@ slack-apps.json
 # config in a checkout — so the patterns are blanket rather than per-recipe.
 *.key
 *.pem
+# The one PEM the tree holds on purpose, by its exact path: npm's registry
+# signing key, a PUBLIC key scripts/playwright-mcp-pin-check.sh verifies the
+# registry's signatures with and holds to its pinned key id.
+!scripts/npm-registry-key.pem
 
 # Locally-pointed copies of the example company config that the integration
 # guides' local-testing recipes create (and that operators then personalize

@@ -12,21 +12,29 @@ name: pins
 #     (internal/browser.MinChromiumMajor), each by version and the SHA-256 of
 #     its zip on every released platform. No release carries them, so a bump
 #     is the suite's alone.
-# No Dependabot ecosystem watches a source tarball or a Chrome for Testing
-# build, so without this each pin would be watched by nothing, which looks
-# exactly like a pin with nothing to update.
+#   - Playwright MCP: scripts/playwright-mcp-pin.env names the Playwright tree
+#     internal/browser/boxhelper embeds, @playwright/mcp and the
+#     playwright-core release it names, each an npm tarball by version and
+#     SHA-256. Dependabot reads npm, but no entry of it may move a tree that
+#     is code for a seat's box, so none reads this file.
+# No Dependabot entry watches any of these files, so without this each pin
+# would be watched by nothing, which looks exactly like a pin with nothing to
+# update.
 #
 # Each leg's script does the work and its own suite holds it
-# (scripts/git-pin_test.sh and scripts/chromium-pin_test.sh, in ci.yml's `build
-# + vet`); this file decides only what a person sees. Exit 1, a pin behind: ONE
-# issue per leg, titled `git pin behind upstream` or `chromium pin behind
-# upstream` — found by that exact title among the open issues, opened with the
-# `dependencies` label Dependabot's pull requests carry, and rewritten in place
-# (with a comment, so its watchers hear it) only when what it says changes —
-# whose body is the script's report: each stale pin's new lines, every SHA-256
-# that of a tarball whose signature verified against the git maintainer's pinned
-# key or of a zip the check downloaded and hashed itself, and the pull request
-# that bumps it. Then the leg fails, every week, until the pin moves. Exit 2,
+# (scripts/git-pin_test.sh, scripts/chromium-pin_test.sh and
+# scripts/playwright-mcp-pin_test.sh, in ci.yml's `build + vet`); this file
+# decides only what a person sees. Exit 1, a pin behind: ONE issue per leg,
+# titled `git pin behind upstream`, `chromium pin behind upstream` or
+# `playwright mcp pin behind upstream` — found by that exact title among the
+# open issues, opened with the `dependencies` label Dependabot's pull requests
+# carry, and rewritten in place (with a comment, so its watchers hear it) only
+# when what it says changes — whose body is the script's report: each stale
+# pin's new lines, every SHA-256 that of a tarball whose signature verified
+# against the git maintainer's pinned key, of an npm tarball whose integrity
+# npm's pinned registry key signed, or of a zip the check downloaded and hashed
+# itself, and the pull request that bumps it. Then the leg fails, every week,
+# until the pin moves. Exit 2,
 # the check could not tell (a listing or download refused, a signature that
 # does not verify, a listing answering something that is no version): the leg
 # fails and its issue is left as it was, since nothing new is known. Exit 0: an
@@ -52,7 +60,10 @@ name: pins
 # and once they do the check above fails on every run. `git-pin-check.sh key`
 # fails that leg from 60 days before that, eight weekly runs to refresh
 # scripts/git-signing-key.asc. A Chrome for Testing build is signed by nothing,
-# so its leg has no key to hold.
+# so its leg has no key to hold, and npm's registry key carries no expiry (the
+# registry's key list says `"expires": null` for it), so neither has the
+# Playwright MCP leg: npm rotating it shows as that leg's check refusing a
+# signature under another key id, naming both.
 
 on:
   schedule:
@@ -77,8 +88,8 @@ jobs:
     name: the pinned ${{ matrix.what }} against upstream
     # A fixed LTS image, never `ubuntu-latest`: ci.yml's `build` job says why.
     runs-on: ubuntu-24.04
-    # Each leg runs whatever the other's outcome: a stale git pin is no reason
-    # to stop asking about Chromium, nor the reverse.
+    # Each leg runs whatever the others' outcomes: a stale pin of one is no
+    # reason to stop asking about another.
     strategy:
       fail-fast: false
       matrix:
@@ -93,13 +104,21 @@ jobs:
             pins: scripts/chromium-pin.env
             title: chromium pin behind upstream
             current: Every pin in scripts/chromium-pin.env is the release its rule names again
+          - what: Playwright MCP
+            check: scripts/playwright-mcp-pin-check.sh
+            pins: scripts/playwright-mcp-pin.env
+            title: playwright mcp pin behind upstream
+            current: Every pin in scripts/playwright-mcp-pin.env is the newest release again
     # The git leg reads kernel.org's listing and, for each pin that is behind,
     # one tarball of about 8 MB and its signature: measured from a development
     # machine, 0.6 s with every pin current and 2.8 s with one release to
     # download and verify. The Chromium leg reads two files of Chrome for
     # Testing's listing and, for each pin that is behind, a zip of about 200 MB
     # for each of four platforms: at most eight, measured on a development
-    # machine's link at 18 to 24 s each, 159 s for all eight. Each download
+    # machine's link at 18 to 24 s each, 159 s for all eight. The Playwright
+    # MCP leg reads @playwright/mcp's dist-tags and, when it is behind, two
+    # version documents and two tarballs of 3.3 MB in all: measured from a
+    # development machine, 0.3 s current and 1.4 s behind. Each download
     # gives up once it has received nothing for a minute or connected nowhere
     # in 30 seconds, and is asked again three times (each script's fetch), so
     # an upstream that stops answering fails the leg rather than holding a
@@ -260,7 +279,7 @@ jobs:
       # Whether or not a pin is behind, and whether or not the check could
       # tell: a key about to expire is the one thing that would stop every
       # later run from telling at all. The git leg's alone: no key signs a
-      # Chrome for Testing build.
+      # Chrome for Testing build, and npm's registry key carries no expiry.
       - name: the release signing key stays valid for more than 60 days
         if: always() && matrix.what == 'gits'
         run: scripts/git-pin-check.sh key

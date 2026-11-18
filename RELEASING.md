@@ -526,18 +526,21 @@ doing the thing, or starts doing more — so read the file when you touch it:
   it can land. Weakening any of these makes the workflow reach *more*, never fail.
 - **`.github/workflows/pins.yml` runs, on its schedule, with `contents: read`
   and `issues: write` and no secret.** It is the only watcher of
-  `scripts/git-pin.env` and `scripts/chromium-pin.env`, one leg of its matrix
-  each; `scripts/git-pin_test.sh` and `scripts/chromium-pin_test.sh` hold the
-  scripts it runs, and nothing holds the workflow. Each leg finds its issue by
-  an exact title, `git pin behind upstream` or `chromium pin behind upstream`,
-  so renaming a title in one place opens a second issue beside the first; and
-  each reports a pin behind by that issue and a failed run, and the git leg a
-  key near its expiry by a failed run alone, whose notification GitHub sends to
-  whoever last edited the schedule. GitHub also DISABLES a public repository's
-  scheduled workflows after 60 days without activity in it, and says so only
-  by e-mail — after which a pin falls behind with nothing red anywhere. Before
-  a tag, `scripts/git-pin-check.sh` (step 3 above) asks the git leg's question
-  by hand; the Chromium pin ships in no release, so no tag waits on it.
+  `scripts/git-pin.env`, `scripts/chromium-pin.env` and
+  `scripts/playwright-mcp-pin.env`, one leg of its matrix each;
+  `scripts/git-pin_test.sh`, `scripts/chromium-pin_test.sh` and
+  `scripts/playwright-mcp-pin_test.sh` hold the scripts it runs, and nothing
+  holds the workflow. Each leg finds its issue by an exact title, `git pin
+  behind upstream`, `chromium pin behind upstream` or `playwright mcp pin behind
+  upstream`, so renaming a title in one place opens a second issue beside the
+  first; and each reports a pin behind by that issue and a failed run, and the
+  git leg a key near its expiry by a failed run alone, whose notification
+  GitHub sends to whoever last edited the schedule. GitHub also DISABLES a
+  public repository's scheduled workflows after 60 days without activity in
+  it, and says so only by e-mail — after which a pin falls behind with nothing
+  red anywhere. Before a tag, `scripts/git-pin-check.sh` (step 3 above) asks
+  the git leg's question by hand; the Chromium and Playwright MCP pins ship in
+  no release, so no tag waits on them.
 
 ---
 

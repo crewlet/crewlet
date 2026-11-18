@@ -133,6 +133,18 @@ Chromium Playwright installs for the dashboard's layout suites (below): that
 one is pinned to the Playwright release that drives it, checksummed by
 nothing, and fetched by npm, which the engine's suite does not need.
 
+**The pinned Playwright MCP.** The Playwright tree for a seat's own browser,
+`@playwright/mcp` and the `playwright-core` release it names, each the npm
+tarball [`scripts/playwright-mcp-pin.env`](scripts/playwright-mcp-pin.env)
+pins by version and SHA-256, is committed under
+`internal/browser/boxhelper/pw/` and embedded, so neither a build nor the
+suite fetches it: `make playwright-mcp`
+([`scripts/playwright-mcp.sh`](scripts/playwright-mcp.sh)) writes it there for
+a bump (see [The Playwright MCP pin is checked every
+week](#the-playwright-mcp-pin-is-checked-every-week)). `make check`'s
+`playwright-mcp-test`, the recipe's and the weekly check's own suite, needs
+`openssl`, `gzip` and `tar` beside `curl` and the SHA-256 tool.
+
 **A current Node** (npm ships with it) for the dashboard — its build output is
 committed, so building and running the ENGINE needs neither, but changing the
 dashboard, running `internal/e2e`'s client replay or the probes of OpenCode's
@@ -199,6 +211,7 @@ scripts/check-signoff.sh # every commit the branch adds is signed off
 scripts/check-signoff_test.sh  # ... and that gate's own suite
 scripts/git-pin_test.sh        # the git recipe's and the pin check's own suite (git-test)
 scripts/chromium-pin_test.sh   # the Chromium recipe's and the pin check's own suite (chromium-test)
+scripts/playwright-mcp-pin_test.sh  # the Playwright MCP recipe's and the pin check's own suite (playwright-mcp-test)
 go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
@@ -1191,9 +1204,10 @@ that a value in it changes what the engine *does*, not merely that it parses.
 ## Dependency updates
 
 Dependabot watches every dependency manifest this repository has, and opens a
-pull request when any of them has a newer release. The git pin and the Chromium
-pin are no manifests — a source tarball and a Chrome for Testing build, which
-no Dependabot ecosystem reads — so a workflow of this repository's own watches
+pull request when any of them has a newer release. The git, Chromium and
+Playwright MCP pins are no manifests Dependabot reads — a source tarball, a
+Chrome for Testing build, and npm tarballs the engine embeds, which no
+Dependabot entry may move — so a workflow of this repository's own watches
 them instead (and the tool servers the docs and the examples launch are not in
 a manifest either: a test holds them — see below):
 
@@ -1206,6 +1220,7 @@ a manifest either: a test holds them — see below):
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
 | `scripts/git-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the gits the engine image builds and the suite runs |
 | `scripts/chromium-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the Chromiums the suite drives |
+| `scripts/playwright-mcp-pin.env` | [`.github/workflows/pins.yml`](.github/workflows/pins.yml) (not Dependabot) | the Playwright tree the box helper embeds |
 
 Dependabot keeps a version moving once it is in the tree; **choosing one in
 the first place goes the same direction — take the newest release, and pin it
@@ -1301,15 +1316,18 @@ worth knowing:
   with the pin: they hold the registry and the signing identity (and the
   release workflow the Releases), and a version tag is a ref its owner can move
   under them.
-- **The git and Chromium pins are watched by a workflow rather than
-  Dependabot**, and a bump of either arrives as an issue rather than a pull
-  request: every Monday [`pins.yml`](.github/workflows/pins.yml) asks kernel.org
-  whether each git pin is still the newest release of its series, and Chrome
-  for Testing whether each Chromium pin is the release its rule names, and
-  keeps ONE issue per pin file, `git pin behind upstream` or `chromium pin
-  behind upstream`, naming what moved — see [The git pin is checked every
-  week](#the-git-pin-is-checked-every-week) and [The Chromium pin is checked
-  every week](#the-chromium-pin-is-checked-every-week).
+- **The git, Chromium and Playwright MCP pins are watched by a workflow
+  rather than Dependabot**, and a bump of any arrives as an issue rather than
+  a pull request: every Monday [`pins.yml`](.github/workflows/pins.yml) asks
+  kernel.org whether each git pin is still the newest release of its series,
+  Chrome for Testing whether each Chromium pin is the release its rule names,
+  and the npm registry whether the Playwright MCP pin is `@playwright/mcp`'s
+  latest release, and keeps ONE issue per pin file, `git pin behind upstream`,
+  `chromium pin behind upstream` or `playwright mcp pin behind upstream`,
+  naming what moved — see [The git pin is checked every
+  week](#the-git-pin-is-checked-every-week), [The Chromium pin is checked
+  every week](#the-chromium-pin-is-checked-every-week) and [The Playwright MCP
+  pin is checked every week](#the-playwright-mcp-pin-is-checked-every-week).
 - **goreleaser itself floats within its major.** Every goreleaser step in
   `.github/workflows/release.yml` asks for `version: "~> v2"`, the newest v2
   on each run, because Dependabot bumps the action's ref but never a `with:`
@@ -1618,9 +1636,10 @@ waiting for a click (as under [A dashboard bump brings its own
 bundle](#a-dashboard-bump-brings-its-own-bundle)), and one whose checks run by
 themselves needs a token beside the two the Dependabot workflows hold — a new
 credential, which the workflow does not take. It holds `contents: read` and
-`issues: write` and no secret, and the git pin is one leg of its matrix: the
-Chromium pin is the other, under its own issue (see [The Chromium pin is
-checked every week](#the-chromium-pin-is-checked-every-week)).
+`issues: write` and no secret, and the git pin is one leg of its matrix, each
+other pin another, under its own issue (see [The Chromium pin is checked every
+week](#the-chromium-pin-is-checked-every-week) and [The Playwright MCP pin is
+checked every week](#the-playwright-mcp-pin-is-checked-every-week)).
 
 **Making the bump** is a pull request of its own:
 
@@ -1777,8 +1796,75 @@ Chromium, and every case it holds a mutation to — compare the newest pin by it
 patch, skip a platform whose zip is missing, take a listing's answer unchecked
 — fails it. Like the git suite it runs itself a second time, by a relative
 path under a `CDPATH` naming another `scripts/`, in a hostile environment.
-Nothing holds the workflow file itself: read its `permissions:`, both issue
-titles and the git leg's key step on any diff that touches it.
+Nothing holds the workflow file itself: read its `permissions:`, each leg's
+issue title and the git leg's key step on any diff that touches it.
+
+### The Playwright MCP pin is checked every week
+
+[`scripts/playwright-mcp-pin.env`](scripts/playwright-mcp-pin.env) pins the
+Playwright tree for a seat's own browser, which `internal/browser/boxhelper`
+embeds: `@playwright/mcp` and the `playwright-core` release it names as an
+exact dependency, each the npm tarball the registry serves, by version and
+SHA-256. The tarballs are committed under `internal/browser/boxhelper/pw/`, so
+`go build` needs no network and every gate reads the committed tree
+(`TestTheEmbeddedTreeIsThePinnedRelease` holds it to the pin); the release
+binary links no package that embeds them, so a bump changes no release.
+Dependabot reads npm, but no entry of it reads this file, and none may move
+it: the tree is code for a seat's box, so a bump is read and run before it
+lands. The `Playwright MCP` leg of
+[`pins.yml`](.github/workflows/pins.yml) runs
+[`scripts/playwright-mcp-pin-check.sh`](scripts/playwright-mcp-pin-check.sh)
+beside the other legs every Monday:
+
+- **The pin follows `@playwright/mcp`'s `latest` release**, and its
+  `playwright-core` follows the release `@playwright/mcp` names, never
+  `playwright-core`'s own tags: the server runs on the core it was released
+  against.
+- **Every tarball it proposes is one the registry signed.** It downloads the
+  newer release's tarball and the core its own `package.json` names, requires
+  each one's SHA-512 to be the registry's `dist.integrity` for it, and verifies
+  every registry signature over that integrity with npm's registry key,
+  [`scripts/npm-registry-key.pem`](scripts/npm-registry-key.pem), which it
+  refuses unless it is a P-256 key of the id the script pins. A signature under
+  another key id is refused naming both: npm rotating its key is a refresh a
+  person makes, reading the new key from the registry's [key
+  list](https://registry.npmjs.org/-/npm/v1/keys). The key carries no expiry,
+  so this leg has no key step.
+- **A registry's answer is used only as what it must be.** A release, an
+  integrity, a key id and a signature are each refused unless they have their
+  shape before they reach a URL, a file name or the report, and a refusal says
+  how long the answer was, never what it said.
+
+Exit 1 opens or updates ONE issue, `playwright mcp pin behind upstream`
+(labelled `dependencies`, found by that exact title), with that report as its
+body, and fails the leg; exit 0 closes it; exit 2 — a document or a download
+refused, an answer of the wrong shape, a tarball that is not its integrity, a
+signature missing, under another key or not verifying, a key file that is not
+the pinned key, a pin ahead of the registry — fails the leg and leaves the
+issue as it was.
+
+**Making the bump** is a pull request of its own: replace the four lines in
+`scripts/playwright-mcp-pin.env` with the ones the issue names
+(`scripts/playwright-mcp-pin-check.sh` prints them again by hand), run `make
+playwright-mcp` — it writes both tarballs into
+`internal/browser/boxhelper/pw/` in place of the old release, and refuses any
+that is not its digest — move `internal/browser`'s `PlaywrightMCPRelease` and
+`PlaywrightCoreRelease` to the new releases and `ExpectedChromiumRevision` and
+`ExpectedChromiumVersion` to the new `playwright-core`'s `browsers.json`, then
+run `make check` (`TestTheEmbeddedTreeIsThePinnedRelease` fails until all of
+it agrees), and title the pull request as the report does: `build(deps): bump
+playwright mcp from <a> to <b>`. A bump adds about 3.3 MB to the repository's
+history, since gzip deltas nothing against the release before it.
+
+[`scripts/playwright-mcp-pin_test.sh`](scripts/playwright-mcp-pin_test.sh)
+(`make playwright-mcp-test`, in `make check` and ci.yml's `build + vet`) is
+the own suite of the check and of the recipe: it runs both against a stand-in
+registry under `file://`, with tarballs and P-256 registry keys it makes with
+`openssl`, so it reads no network, and every case it holds a mutation to —
+skip a signature's verification, accept another key id, take a dist-tag
+unchecked — fails it. Like the git suite it runs itself a second time, by a
+relative path under a `CDPATH` naming another `scripts/`, in a hostile
+environment.
 
 ## Releasing
 

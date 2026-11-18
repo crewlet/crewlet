@@ -178,14 +178,15 @@ func (r *recorder) stop(field *string, message string) {
 }
 
 // ReadPins is the NAME=value lines of the pin file at path (scripts/git-pin.env,
-// scripts/chromium-pin.env), its comments and blank lines skipped. A file it
-// cannot read, a line that is neither, a name set twice, or an assignment with
-// space or a carriage return around it fails t. The recipes that read the same
-// file (scripts/git.sh, scripts/chromium.sh) take a value from a line that
-// begins NAME= and runs to its newline, and refuse a name set twice: an
-// indented assignment is no assignment to them, and a trailing blank or a
-// carriage return is part of the value they read, which their checks then
-// refuse. So a case never reads a value they would not.
+// scripts/chromium-pin.env, scripts/playwright-mcp-pin.env), its comments and
+// blank lines skipped. A file it cannot read, a line that is neither, a name
+// set twice, or an assignment with space or a carriage return around it fails
+// t. The recipes that read the same file (scripts/git.sh, scripts/chromium.sh,
+// scripts/playwright-mcp.sh) take a value from a line that begins NAME= and
+// runs to its newline, and refuse a name set twice: an indented assignment is
+// no assignment to them, and a trailing blank or a carriage return is part of
+// the value they read, which their checks then refuse. So a case never reads a
+// value they would not.
 func ReadPins(t testing.TB, path string) map[string]string {
 	t.Helper()
 	body, err := os.ReadFile(path)
