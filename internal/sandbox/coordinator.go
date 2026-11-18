@@ -759,6 +759,15 @@ type CoordinatorOptions struct {
 	// without an engine (a test's).
 	SteersEnded func(ctx context.Context, run PendingRun) error
 
+	// SteersConfirmed publishes, as delivered, every note a person sent the
+	// run's turn that a hook's serve to run's job is recorded as having handed
+	// over ([readByServeOf]): what the job's session showed it took. Called on
+	// every Claude Code box read, asked or not ([Coordinator.settleHookReceipts]),
+	// so a verdict whose answer was lost is published by the read made again.
+	// The engine publishes under ids derived from the turn and each note, so a
+	// repeat is the same records, off the read's path; nil publishes nothing.
+	SteersConfirmed func(ctx context.Context, run PendingRun, notes []RunNote)
+
 	// Hold holds a seat's inbox while one of its runs holds the seat or an
 	// answer it owes is waiting on its resume — see [SeatHold]. Nil holds
 	// nothing, which a coordinator built without an inbox (a test's) is
@@ -1081,8 +1090,10 @@ type Coordinator struct {
 	closeStopped func(ctx context.Context, run PendingRun, calls RunCalls) (executorkeep.Ending, error)
 	// turnLost is [CoordinatorOptions.TurnLost].
 	turnLost func(ctx context.Context, run PendingRun, calls RunCalls) executorkeep.Ending
-	// steersEnded is [CoordinatorOptions.SteersEnded].
-	steersEnded func(ctx context.Context, run PendingRun) error
+	// steersEnded is [CoordinatorOptions.SteersEnded], and steersConfirmed
+	// [CoordinatorOptions.SteersConfirmed].
+	steersEnded     func(ctx context.Context, run PendingRun) error
+	steersConfirmed func(ctx context.Context, run PendingRun, notes []RunNote)
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
 	node  string
 	boxes BoxReader
@@ -1123,8 +1134,12 @@ type Coordinator struct {
 	now     func() time.Time
 
 	// mainThreadWait bounds the read of a job's main thread at its collection
-	// ([MainThreadReadWait], [Coordinator.readMainThread]), a test's its own.
+	// ([MainThreadReadWait], [Coordinator.readMainThread]), a test's its own;
+	// verdictWait and verdictRetry are a hook verdict's reason and spacing
+	// ([hookVerdictWait], [hookVerdictRetry]).
 	mainThreadWait time.Duration
+	verdictWait    time.Duration
+	verdictRetry   time.Duration
 
 	// keepLife is the lifetime every keep runs under, off the read that took
 	// its capture ([Coordinator.keepLater]), and keeping counts them:
@@ -1377,6 +1392,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		closeStopped:       opts.CloseStopped,
 		turnLost:           opts.TurnLost,
 		steersEnded:        opts.SteersEnded,
+		steersConfirmed:    opts.SteersConfirmed,
 		node:               opts.Node,
 		boxes:              opts.Boxes,
 		nudge:              opts.Nudge,
@@ -1391,6 +1407,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 
 		// THE ONE WAIT every reading of a job's main thread shares.
 		mainThreadWait: MainThreadReadWait,
+		verdictWait:    hookVerdictWait,
+		verdictRetry:   hookVerdictRetry,
 
 		spoolDir:     opts.SpoolDir,
 		sessionRetry: sessionRetryBase,
@@ -2290,7 +2308,7 @@ func (c *Coordinator) rereadSpend(ctx context.Context, run PendingRun) PendingRu
 //
 // A STEP THE COORDINATION STORE DID NOT ANSWER ([ErrStoreSilent]) is handed
 // back WITHOUT being counted as well: the host's read of the run's row, the
-// drain's watch of its log and the record of the sessions its job ran out of
+// drain's watch of its log, the verdict on its job's served notes and the record of the sessions its job ran out of
 // context in or whose request its provider refused are the store's, and the box answered every read, so counted, a
 // store silent for the window settled a run whose box still held its result as
 // one whose result was lost. Its completion is NAK'd for the queue's backoff,
@@ -2346,6 +2364,13 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause error,
 	verdict collectVerdict,
 ) error {
+	var answered *boxAnsweredError
+	if errors.As(cause, &answered) {
+		// THE BOX ANSWERED before a later step failed ([boxAnsweredError]): it
+		// ends the run of failed collections, and the hand-back's own write
+		// records how the job's harness ended ([Release.HarnessEnd]).
+		run.BoxAnswered, run.BoxHarnessEnd = true, answered.end
+	}
 	if errors.Is(ctx.Err(), context.Canceled) {
 		log.InfoContext(ctx, "sandbox_collect_interrupted", "turn_id", run.TurnID,
 			"error", cause.Error(),
@@ -2785,12 +2810,16 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	at.exhausted = ranOutOfContext(asCollected(run, result, ended))
 	at.refused = requestRefused(asCollected(run, result, ended))
 	// THE JOB'S MAIN THREAD, read once on the box's host before the take, by
-	// every reading the collection asks of it (mainthread.go): what Claude Code
-	// counts the session at before its next request, for a Claude Code job.
-	// Kept on the result, with the least window its run reported, and written
-	// with how the harness ended, after the take, in the one write that records
-	// the job's end.
-	result.ResumedCount = c.readMainThread(ctx, run, box, runner, read, at, result).Count
+	// every reading the read asks of it (mainthread.go): what Claude Code
+	// counts the session at, written with how the harness ended after the
+	// take, and the receipts of its hooks' serves, settled here BEFORE the
+	// take: a verdict the store does not answer hands the read back with the
+	// box answered and how its harness ended ([boxAnsweredError]).
+	reading := c.readMainThread(ctx, run, box, runner, read, at, result)
+	result.ResumedCount = reading.Count
+	if err := c.settleHookReceipts(ctx, run, reading.Receipts, read); err != nil {
+		return Result{}, false, &boxAnsweredError{err: err, end: at.harnessEnd()}
+	}
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
 	c.keepLater(ctx, spooled)
@@ -2825,6 +2854,116 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 				"expired from its park instead, and one that resumes settles its own box")
 	}
 	return result, ended, nil
+}
+
+// hookVerdictWait is the reason one verdict on a job's hooks' serves is given
+// ([Coordinator.settleHookReceipts]): a store's slow moment, ten seconds, as
+// every reason a row's write is given; [Coordinator.rowContext] adds the row's
+// crossing, so a row at its bound across the slowest link lands its verdict.
+// [BoxReadBudget] counts it with that crossing for a read that asks receipts.
+const hookVerdictWait = 10 * time.Second
+
+// hookVerdictRetry spaces the attempts at a verdict within its room: one
+// second, a tenth of the room's reason, so a store's brief refusal is asked
+// again several times before the read is handed back.
+const hookVerdictRetry = time.Second
+
+// settleHookReceipts settles run's job's hooks' serves by what the job's
+// session showed of them ([PendingStore.SettleHook]), where it showed any, and
+// publishes every note a serve of the job handed over
+// ([CoordinatorOptions.SteersConfirmed]) on every Claude Code read, asked or
+// not. A verdict the store does not answer within its room is [ErrStoreSilent],
+// returned before the read's take; the package doc's "A HOOK'S NOTE" says why.
+func (c *Coordinator) settleHookReceipts(ctx context.Context, run PendingRun, receipts HookReceipts,
+	read BoxRead) error {
+	if run.Harness != ClaudeCodeHarness {
+		return nil
+	}
+	notes, asked := run.Steer.Notes, askedTakes(run)
+	switch {
+	case len(asked) == 0:
+	case !receipts.decided():
+		log.InfoContext(ctx, "steer_receipt_unread", "turn_id", run.TurnID, "launch_id", run.LaunchID,
+			"point", string(read), "takes", len(asked), "detail", receipts.Why,
+			"outcome", "the job's session decided none of its hooks' serves, which stay unconfirmed")
+	default:
+		answered, err := c.settleVerdict(ctx, run, receipts)
+		if err != nil {
+			log.WarnContext(ctx, "steer_receipt_unsettled", "turn_id", run.TurnID, "launch_id", run.LaunchID,
+				"point", string(read), "error", err.Error(),
+				"detail", "the coordination store did not answer the verdict on the job's served notes "+
+					"within its room; the read is handed back before its take, and the read made again "+
+					"finds the verdict wherever it landed")
+			return storeSilent(ctx, fmt.Errorf("sandbox: settling run %s's hooks' serves by its job's "+
+				"session: %w", run.TurnID, err))
+		}
+		notes = withAnswered(notes, answered)
+		warnCancelUnheard(ctx, run, receipts.Absent)
+	}
+	if c.steersConfirmed == nil {
+		return nil
+	}
+	var confirmed []RunNote
+	for _, n := range notes {
+		if n.For == "" && readByServeOf(n, run.LaunchID) {
+			confirmed = append(confirmed, n)
+		}
+	}
+	c.steersConfirmed(ctx, run, confirmed)
+	return nil
+}
+
+// settleVerdict asks the store for the verdict on run's job's serves, again
+// [Coordinator.verdictRetry] after each error, until its room is spent: the
+// verdict's reason and the row's crossing ([Coordinator.rowContext]). Each
+// attempt decides on the record as it stands, so one that finds an earlier
+// attempt's write landed changes nothing and answers all the same.
+func (c *Coordinator) settleVerdict(ctx context.Context, run PendingRun, receipts HookReceipts) ([]RunNote,
+	error) {
+	row, cancel := c.rowContext(ctx, c.verdictWait)
+	defer cancel()
+	settle := HookSettle{Launch: run.LaunchID, Held: receipts.Held, Restarted: receipts.Restarted,
+		Absent: receipts.Absent}
+	for {
+		answered, err := c.pending.SettleHook(row, run.TurnID, settle)
+		if err == nil {
+			return answered, nil
+		}
+		retry := time.NewTimer(c.verdictRetry)
+		select {
+		case <-row.Done():
+			retry.Stop()
+			return nil, err
+		case <-retry.C:
+		}
+	}
+}
+
+// withAnswered is notes with each note a verdict answered in its place, by id.
+func withAnswered(notes, answered []RunNote) []RunNote {
+	out := slices.Clone(notes)
+	for _, a := range answered {
+		if i := slices.IndexFunc(out, func(n RunNote) bool { return n.ID == a.ID }); i >= 0 {
+			out[i] = a
+		}
+	}
+	return out
+}
+
+// warnCancelUnheard says, as steer_cancel_unheard, each serve to run's job no
+// cancel lost that its session proved absent: the harness gave an answer up
+// and the bridge heard no cancel of it.
+func warnCancelUnheard(ctx context.Context, run PendingRun, absent []string) {
+	for _, n := range run.Steer.Notes {
+		for _, h := range n.Serves {
+			if h.Launch == run.LaunchID && h.Lost == "" && slices.Contains(absent, h.Take) {
+				log.WarnContext(ctx, "steer_cancel_unheard", "turn_id", run.TurnID, "launch_id", run.LaunchID,
+					"take", h.Take, "note_id", n.ID,
+					"detail", "the job's session never took the note its hook was served, and the bridge "+
+						"heard no cancel of the call: a release that stops sending cancels shows so")
+			}
+		}
+	}
 }
 
 // markBoxPaused records on run's row that its box is paused
@@ -5786,9 +5925,9 @@ var errAskAway = errors.New("sandbox: the ending's next step is made off this fr
 //     [Coordinator.readBox], [Coordinator.endJob]) — before the box goes,
 //     since nothing can read it after;
 //  4. for a LOSS whose box may still be read, the run's tool-bridge session is
-//     closed, and the job is ended and its session taken before the box goes
-//     ([Coordinator.keepLostSession]), here or on the host the box is on; and
-//     the box is reclaimed, where the ending reclaims it after its decision;
+//     closed, the job ended, its served notes settled by its session and its
+//     session taken ([Coordinator.keepLostSession]), and the row read again;
+//     and the box is reclaimed, where the ending reclaims it after its decision;
 //  5. the announcement is published, under the ending's own identity;
 //  6. for a loss, the run is handed to the engine, which answers the
 //     colleague whose ask its turn took up and says how the turn ended
@@ -5798,7 +5937,7 @@ var errAskAway = errors.New("sandbox: the ending's next step is made off this fr
 //     parked on the run, its colleague answered and its end owed the same
 //     way ([CoordinatorOptions.CloseStopped]);
 //  8. every note a person sent the turn that no step reported reading is
-//     published as the record knows it: delivered, told again by the brief of
+//     published as the record read after the box knows it: delivered, told again by the brief of
 //     a later job that started; unconfirmed, handed to a job's harness that
 //     never confirmed it; missed, read by a take whose answer was lost and told
 //     by no later launch whose job started; expired, still waiting or read
@@ -5929,7 +6068,25 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk, 
 			if !mayAsk {
 				return errAskAway
 			}
-			c.keepLostSession(ctx, run)
+			if err := c.keepLostSession(ctx, run, rowRead); err != nil {
+				return fmt.Errorf("sandbox: ending run %s, whose lost job's box was read with its served "+
+					"notes' verdict unanswered: %w", run.TurnID, err)
+			}
+			if run.asksReceipts() {
+				// THE ROW AGAIN, holding the verdict the read wrote, which
+				// step 8 reports from, as a stop's reports the row it wrote.
+				readCtx, readDone := c.endingCall(ctx)
+				current, found, err := c.pending.Get(readCtx, run.TurnID)
+				readDone()
+				switch {
+				case err != nil:
+					return fmt.Errorf("sandbox: ending run %s, whose row could not be read again after its "+
+						"lost job's box: %w", run.TurnID, err)
+				case !found || current.Ending == nil || current.Ending.ID != run.Ending.ID:
+					return nil
+				}
+				run, rowRead = current, true
+			}
 		}
 		if run.Ending.Reclaim && !reclaimed {
 			// THE BOX THE ROW NAMES, under a context of its own: a teardown

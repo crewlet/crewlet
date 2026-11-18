@@ -175,7 +175,7 @@ func releaseFor(run PendingRun, failed failure, hold *Refusal) Release {
 		Launch: run.LaunchID, To: claimedFrom(run), Charged: run.Charged, CompanyCharged: run.CompanyCharged,
 		Published: run.Launch.Published, CollectFailedAt: failed.collectFailed, ResumeFailedAt: failed.resumeFailed,
 		Collected: run.Collected, CollectedAt: run.Launch.CollectedAt, BoxAnswered: run.BoxAnswered,
-		Fence: fenceOf(run), Hold: hold,
+		HarnessEnd: run.BoxHarnessEnd, Fence: fenceOf(run), Hold: hold,
 	}
 }
 

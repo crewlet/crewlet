@@ -422,7 +422,7 @@ func (c *Coordinator) sayStopUnread(ctx context.Context, run PendingRun, unread 
 //
 // NOT YET, TOO, where the coordination store did not answer a step the read
 // cannot go on without ([ErrStoreSilent]): the host's read of the run's row,
-// which licenses the read. The box and its host are up, so the ending is kept
+// which licenses the read, or the verdict on its served notes. The box and its host are up, so the ending is kept
 // and asked again on the same spacing: ended uncharged at once for it, the stop
 // wrote off a spend the box still held. For how long turns on whose silence it
 // is, which rowRead says: whether this attempt's own read of the row, off this
@@ -465,7 +465,8 @@ func (c *Coordinator) readStopped(ctx context.Context, run PendingRun, rowRead b
 		log.InfoContext(ctx, "sandbox_stop_read_waits", "turn_id", run.TurnID,
 			"sandbox_id", run.SandboxID, "node", run.LaunchNode, "waits_for", "store", "shared", true,
 			"error", err.Error(), "detail", "the coordination store did not answer the host's read of "+
-				"the stopped run's row, nor this node's own; the stop is kept, with its session closed, "+
+				"the stopped run's row, or the verdict on its served notes, nor this node's own read; "+
+				"the stop is kept, with its session closed, "+
 				"and its box asked again until the store answers, whatever the box timeout says")
 		return Result{}, false, stopUnread{}, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
 			run.TurnID, err)
@@ -479,7 +480,8 @@ func (c *Coordinator) readStopped(ctx context.Context, run PendingRun, rowRead b
 				"old by this node's clock"
 			if unsettled {
 				waitsFor, detail = "store", "the coordination store did not answer the host's read of the "+
-					"stopped run's row, which licenses its read; the stop is kept, with its session "+
+					"stopped run's row, which licenses its read, or the verdict on its served notes; "+
+					"the stop is kept, with its session "+
 					"closed, and its box asked again until the store answers the host, the host has gone "+
 					"without it for the box timeout by this node's own clock since this node first asked "+
 					"it, or the stop is the box timeout and two hours old by this node's clock"

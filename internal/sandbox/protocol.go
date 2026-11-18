@@ -182,6 +182,38 @@
 // takes the archive streamed rather than whole ([Sandbox.WriteStream]). See
 // carry.go.
 //
+// AND A HOOK'S NOTE IS READ ONLY ONCE ITS JOB'S SESSION SHOWS IT. A Claude Code
+// hook that hands a note to its harness only SERVES it ([PendingStore.ServeHook]):
+// the harness may give the answer up, or a restart may drop it. So every read
+// of a Claude Code job's box at its end, a collection's, a stop's and a loss's,
+// asks the job's main thread, in its one walk (mainthread.go), which of the
+// serves its copy holds ([askedTakes]) the session took, and settles them by
+// that verdict ([Coordinator.settleHookReceipts], [PendingStore.SettleHook])
+// BEFORE the take, so the capture's cursor counts what it confirmed. A stop's
+// and a loss's thread is one its harness did not end, so it confirms and
+// proves nothing absent. Every such read hands the engine the notes a serve of
+// the job handed over ([CoordinatorOptions.SteersConfirmed]), asked or not: a
+// verdict that landed with its answer lost is published by the read made
+// again, under the same ids.
+//
+// THE VERDICT IS A WHOLE-ROW WRITE, so it is given [hookVerdictWait] and the
+// row's crossing, retried within that room ([Coordinator.rowContext]), and
+// [BoxReadBudget] counts both, with the thread's read, for a read whose copy
+// holds a serve ([PendingRun.asksReceipts]). A verdict the store does not
+// answer in that room is the store's silence ([ErrStoreSilent]), returned
+// before the take: going on would resume, or end, on a copy that lacks the
+// verdict. A collection is handed back uncounted with its box marked answered
+// ([boxAnsweredError], [BoxReadReply.Answered]), which ends its run of failed
+// collections, and the hand-back's own write, the one that returns the row to
+// running, records how the job's harness ended ([Release.HarnessEnd]), so no
+// row reads running for a job whose harness is over with nothing saying so. A
+// stop's and a loss's ending is kept and asked again (stop.go,
+// [Coordinator.keepLostSession]); where only the host's store is silent, it is
+// given up as a silent host is, and the loss ends with its notes unconfirmed.
+// A loss's box is read for this whatever the company keeps
+// ([Coordinator.capturesLoss]), and its ending reads the row again before it
+// reports its notes.
+//
 // See docs/concepts/code-sandbox.md.
 package sandbox
 

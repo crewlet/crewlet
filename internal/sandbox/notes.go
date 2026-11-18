@@ -227,6 +227,13 @@ func (n RunNote) LiveServe() (HookServed, bool) {
 	return HookServed{}, false
 }
 
+// asksReceipts reports whether r's copy holds a hook's serve to its job that
+// only the job's session settles ([askedTakes]): an unread note or item for the
+// job, served to it by a hook no loss struck or whose call its harness
+// cancelled. A stop's and a loss's read ask the job's main thread for these
+// ([asksMainThread]), and [BoxReadBudget] holds the verdict's share for them.
+func (r PendingRun) asksReceipts() bool { return len(askedTakes(r)) > 0 }
+
 // HookServed is one hook's serve of a note to a job, as the record keeps it
 // ([PendingStore.ServeHook]): the take that served it, the job and the step of
 // its harness's loop the hook answered, when, the call it answered, and why

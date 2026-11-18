@@ -1071,6 +1071,9 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			run.Launch.CollectFailures = 0
 			run.Launch.CollectFailingSince = time.Time{}
 		}
+		// AND HOW ITS HARNESS ENDED, where that read found it: in this
+		// write, which is the one that returns the row to running.
+		run.Launch.HarnessEnd = run.Launch.HarnessEnd.after(release.HarnessEnd)
 		// AND WHAT THE CLAIM'S COLLECTION LEARNED OF THE STORE OF THE HOST OF
 		// THE JOB'S BOX, where it learned anything ([LaunchRecord.HostStoreSilentSince]):
 		// the latest clock's start, since a waiter's announcement made

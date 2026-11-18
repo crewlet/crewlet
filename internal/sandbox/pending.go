@@ -265,6 +265,14 @@ type Release struct {
 	// would start a run of its own each time and never be given up.
 	BoxAnswered bool
 
+	// HarnessEnd, where set, is how the job's harness ended as the claim's read
+	// of its box found it, where a step after that read handed the claim back
+	// ([PendingRun.BoxHarnessEnd]): recorded on the job's record by the rule
+	// [PendingStore.MarkHarnessEnd] follows ([HarnessEnd.after]), IN THE
+	// RELEASE'S OWN WRITE, so the row that reads running again says the job's
+	// harness ended; a release that lands not at all leaves the row claimed.
+	HarnessEnd HarnessEnd
+
 	// HostStoreSilentSince, where set, is when this node's clock on the store
 	// of the host of the job's box started, which the claim's collection left
 	// running ([Coordinator.hostClocked]): that host last answered that its
@@ -1952,6 +1960,11 @@ type PendingRun struct {
 	// ends the job's run of failed collections ([Release.BoxAnswered]).
 	// Never persisted, for the reason Collected is not.
 	BoxAnswered bool `json:"-"`
+
+	// BoxHarnessEnd is TRANSIENT as well: how the job's harness ended as THIS
+	// claim's read of its box found it, where a step after the read handed the
+	// claim back before the read's own record of it ([Release.HarnessEnd]).
+	BoxHarnessEnd HarnessEnd `json:"-"`
 
 	// Deadline is when the turn that launched this run stops being worked
 	// on: its wall-clock cap — a scheduled fire's — measured from when the

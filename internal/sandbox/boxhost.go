@@ -174,6 +174,20 @@ func storeSilent(ctx context.Context, err error) error {
 	return fmt.Errorf("%w: %w", ErrStoreSilent, err)
 }
 
+// boxAnsweredError is a read's failure at a step made once its box answered:
+// the verdict on its job's served notes the store did not answer
+// ([Coordinator.settleHookReceipts]). It carries how the job's harness ended,
+// so the hand-back that follows ends the run of failed collections and records
+// that end in its own write ([Coordinator.collectFailedAt]).
+type boxAnsweredError struct {
+	err error
+	end HarnessEnd
+}
+
+func (e *boxAnsweredError) Error() string { return e.err.Error() }
+
+func (e *boxAnsweredError) Unwrap() error { return e.err }
+
 // ErrBoxNotAsked is a box read this node could not put to the box's host at all
 // — its broker unreachable, or no time left to ask: no evidence about the box,
 // and none about its host.
@@ -254,21 +268,20 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // collection of a turn with none never ends its job, and waits for the take
 // alone.
 //
-// AND A CLAUDE CODE COLLECTION HOLDS THE READ OF ITS JOB'S MAIN THREAD, made once
-// on the host before the take within [MainThreadReadWait] (mainthread.go),
-// counted at the host's share as the take is: fifteen seconds more for the host,
-// twenty for its asker. Another harness's collection, a stop's and a loss's ask
-// the thread nothing, and wait as they did.
+// AND A READ THAT ASKS ITS JOB'S MAIN THREAD ([asksMainThread]) HOLDS THAT READ,
+// [MainThreadReadWait], at the host's share: a Claude Code collection, and a
+// stop's or loss's whose copy holds a hook's serve ([PendingRun.asksReceipts]),
+// which holds too the verdict on it, [hookVerdictWait] and one more change of
+// the row at the slowest crossing. Every other read waits as it did.
 //
 // What that costs is the wait for a host that has truly stopped (about
-// seventy-eight minutes for a collection of a turn with no cap before the
-// asker hands the claim back, where it was one, about eighty-one and a half
-// for a stop's or a loss's read, and about ninety-nine and a half for a
-// collection of a turn with a cap), which a host that is only slow, ending a
-// job at its bound, packing a session at its bound or changing a run's row at
-// its bound across a link at the slowest pace allowed, must not be taken for.
-// Ordinary reads answer in seconds, a job ending in a few and a session of a
-// day's work being a mebibyte or two. A read that has not finished in that is
+// seventy-eight minutes for a collection of a turn with no cap, ninety-six
+// with a served note; eighty-one and a half for a stop's or a loss's read,
+// ninety-nine and a half with one; ninety-nine and a half for a collection of
+// a turn with a cap, a hundred and seventeen with one), which a host that is
+// only slow, ending a job, packing a session or changing a run's row at its
+// bound across a link at the slowest pace allowed, must not be taken for.
+// Ordinary reads answer in seconds. A read that has not finished in that is
 // a host that is not answering, and is answered as one ([ErrBoxHostSilent]);
 // the host's own waiter announces the completion again on its schedule once
 // the host is back (reannounce.go). Only a node that asks ANOTHER node's host
@@ -284,6 +297,9 @@ func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
 	if asksMainThread(run, read) {
 		held += MainThreadReadWait
 	}
+	if asksMainThread(run, read) && run.asksReceipts() {
+		held += hookVerdictWait + coord.MaxValueCrossing
+	}
 	return pollBound + time.Duration(float64(held)/BoxReadAnswerShare)
 }
 
@@ -293,7 +309,9 @@ func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
 // stamp of what came of the take and how its job's harness ended
 // ([Coordinator.takeRecordsRoom]) — and the pause's record
 // ([Coordinator.pauseRoom]). A read that makes fewer is given the room all the
-// same, since the host's rooms are the read's whatever it asks.
+// same, since the host's rooms are the read's whatever it asks. A fifth, the
+// cap's record ([BoxRead.recordsTheCap]), and the verdict on a hook's serves
+// ([PendingRun.asksReceipts]) are counted where a read may make them.
 const boxReadChanges = 4
 
 // recordsTheCap reports whether a host's read of run's box may make, beside
@@ -511,6 +529,12 @@ type BoxReadReply struct {
 	// that could not tell the store's silence from the box's failure would
 	// count it against a box that is up. Part of [BoxReadWireVersion] 2.
 	Unsettled bool `json:"unsettled,omitempty"`
+	// Answered, beside Unsettled, says the box answered before the silent
+	// step ([boxAnsweredError]), and HarnessEnd how its job's harness ended.
+	// Additive: an asker that ignores them leaves the run of failed
+	// collections open and records no end, as before them.
+	Answered   bool       `json:"answered,omitempty"`
+	HarnessEnd HarnessEnd `json:"harness_end,omitempty"`
 	// Withdrawn is a read the host's own lifetime cut short, Error saying
 	// where: the host withdrew as an answerer of box reads (internal/queue's
 	// AnswerFunc runs under the answerer's context, which its withdrawal
@@ -545,9 +569,14 @@ func (r BoxReadReply) Err() error {
 	case r.Withdrawn:
 		return hostSaid("sandbox: node "+r.Node+" stopped as it read the box", r.Error, ErrBoxHostSilent)
 	case r.Unsettled:
-		// THE HOST'S STORE, NEVER THE BOX: the row that licenses the read
-		// was not read, so no read of the box was made to fail.
-		return hostSaid("sandbox: node "+r.Node+"'s coordination store did not answer", r.Error, ErrStoreSilent)
+		// THE HOST'S STORE, NEVER THE BOX: it did not answer a step the read
+		// cannot go on without, the row's read or, where Answered, the
+		// verdict on its job's served notes after the box answered.
+		err := hostSaid("sandbox: node "+r.Node+"'s coordination store did not answer", r.Error, ErrStoreSilent)
+		if r.Answered {
+			return &boxAnsweredError{err: err, end: r.HarnessEnd}
+		}
+		return err
 	case r.Error != "":
 		return fmt.Errorf("sandbox: node %s could not read the box: %s", r.Node, r.Error)
 	case r.Busy:
@@ -613,6 +642,9 @@ func AnswerBoxRead(ctx context.Context, host *Coordinator, req BoxReadRequest) B
 		reply.Withdrawn, reply.Error = true, err.Error()
 	case errors.Is(err, ErrStoreSilent):
 		reply.Unsettled, reply.Error = true, err.Error()
+		if answered := (*boxAnsweredError)(nil); errors.As(err, &answered) {
+			reply.Answered, reply.HarnessEnd = true, answered.end
+		}
 	case err != nil:
 		reply.Error = err.Error()
 	default:
@@ -887,10 +919,13 @@ func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandb
 			ErrBoxNotHosted, turnID)
 	case read == BoxReadLoss:
 		// THE LAST READ OF THE BOX ANYTHING MAKES, licensed by the loss its
-		// ending decided: the job ended and its session taken here, and kept
-		// off the read.
-		spooled, kept := c.readLost(ctx, run)
+		// ending decided: the job ended, its served notes settled and its
+		// session taken here, and kept off the read.
+		spooled, kept, err := c.readLost(ctx, run)
 		c.keepLater(ctx, spooled)
+		if err != nil {
+			return Result{}, false, err
+		}
 		return Result{Kept: kept}, false, nil
 	}
 	return c.readBox(ctx, run, read)
