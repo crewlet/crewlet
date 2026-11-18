@@ -258,6 +258,12 @@
 // reads on across the marker and redacts the value below: what the claims
 // take is punctuation, so nothing a claim names is shown, and a second pass,
 // the marker in both readings, reads the row as the first pass's rule did.
+// Only where the markup alone ends the key's line: before an escaped break,
+// an opening sends the read to a string's next piece with no suffix, which
+// takes a blank row's closing for the value where the claims, stopped inside
+// a key's text, read the row's closing as the suffix and the value below it,
+// so there the rule reads no opening across a marker ([pastMarkup]), as with
+// no key.
 //
 // A BLOCK NO END CLOSES TAKES A PASSWORD'S KEY ONLY WITH ITS VALUE
 // ([claims.shortOfValues]). Ended by the lines it reads, a block read forward
@@ -1411,7 +1417,22 @@ func pastMarkup(text string, start, sep, end int, prior [][2]int) (int, [2]int) 
 	if len(prior) > 0 {
 		floor = max(floor, prior[len(prior)-1][1])
 	}
-	j := labelStart(text, floor, start)
+	j := labelStart(text, floor, start, false)
+	from, opening := closeMarkup(text, start, sep, end, floor, j)
+	if k := labelStart(text, floor, start, true); from == end && k < j {
+		// Read across a key's marker, the opening counts only where the
+		// markup alone ends the key's line ([readValue]): before an
+		// escaped break it would send the rule to the read the claims
+		// make of a string's next piece, which is no better than none.
+		if f, o := closeMarkup(text, start, sep, end, floor, k); f > end && !strings.HasPrefix(text[f:], `\n`) {
+			return f, o
+		}
+	}
+	return from, opening
+}
+
+// closeMarkup is [pastMarkup] from j, where the key's label begins.
+func closeMarkup(text string, start, sep, end, floor, j int) (int, [2]int) {
 	closed := strings.TrimRight(text[start:sep], " \t\r\n")
 	k := len(closed)
 	for k > 0 && strings.IndexByte("\"'`*_", closed[k-1]) >= 0 {
@@ -1461,14 +1482,14 @@ func pastMarkup(text string, start, sep, end int, prior [][2]int) (int, [2]int) 
 // `_` inside a word — to floor at most. `**Root password:**` is one label, and
 // `db_password` one word, whose `_` opens nothing.
 //
-// A KEY'S MARKER IS READ BACK ACROSS as the words it replaced are (the
-// package doc's "A key's block beside a password"). Every key reads back no
-// further than the punctuation before its label, and a key's separator is
-// punctuation, so a line of many keys is read back once.
-func labelStart(text string, floor, start int) int {
+// Where across is set, A KEY'S MARKER is read back across as the words it
+// replaced (the package doc's "A key's block beside a password"). Every key
+// reads back no further than the punctuation before its label, and a key's
+// separator is punctuation, so a line of many keys is read back once.
+func labelStart(text string, floor, start int, across bool) int {
 	j := start
 	for j > floor {
-		if text[j-1] == ']' && strings.HasSuffix(text[floor:j], keyMarker) {
+		if across && text[j-1] == ']' && strings.HasSuffix(text[floor:j], keyMarker) {
 			j -= len(keyMarker)
 			continue
 		}
@@ -4980,11 +5001,12 @@ func (c *claims) openingApart(s [2]int, p [7]int, out [][2]int) ([2]int, [][2]in
 }
 
 // endingApart is s, a span, written apart from the ending of the line it
-// begins on where a password's value was read on that line ([aValue]): what
-// the line ends in as the key's did, from where it begins, and the line break
-// after it, are left out of the span, which is cut in two around them, the
-// piece before them appended to out. A span on one line holds no ending, and
-// asks nothing.
+// begins on where a password's value was read on that line before it
+// ([aValue]): what the line ends in as the key's did, from where it begins,
+// and the line break after it, are left out of the span, which is cut in two
+// around them, the piece before them appended to out. A span that holds the
+// value leaves the rule no value to read there, and is not cut; one on one
+// line holds no ending, and asks nothing.
 func (c *claims) endingApart(s [2]int, out [][2]int) ([2]int, [][2]int) {
 	if end, _ := lineAt(c.text, s[0]); s[1] <= end {
 		return s, out
@@ -4998,7 +5020,7 @@ func (c *claims) endingApart(s [2]int, out [][2]int) ([2]int, [][2]int) {
 			break
 		}
 		lineEnd, next := lineAt(c.text, p[5])
-		if _, after := lineAt(c.text, lineRest(c.text, lineEnd, next)); after >= 0 && s[1] > after {
+		if _, after := lineAt(c.text, lineRest(c.text, lineEnd, next)); after >= 0 && s[0] >= p[3] && s[1] > after {
 			if s[0] < p[5] {
 				out = append(out, [2]int{s[0], p[5]})
 			}

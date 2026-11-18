@@ -475,12 +475,17 @@ func seamShapes() []gutterShape {
 		add("a body between, "+w.name, wrap(w.g, w.s, "Password:", gutterValue+" "+pc, testKeyLine, testEnd+"|passwd:", "hunter2x9"))
 		add("a BEGIN on the value's line, "+w.name, wrap(w.g, w.s, "Password:", gutterValue+" "+testBegin, testKeyLine, testEnd+"|passwd:", "hunter2x9"))
 	}
+	// A block that takes a value's line whole, the value a key above it
+	// reads, is not cut at that line's ending: the rule reads no value
+	// there, and reads on to the one below.
+	add("a block holding the value's line, echo", wrap(`echo "`, `" >> k`, "fAt0gun+", "passwd:", testEnd+"|passwd:", testKeyLine, pc+" "+testEnd, gutterValue))
 	plus := testKeyLine[:20] + "+" + testKeyLine[21:]
-	add("a row, a key's END before its key", "| "+testKeyLine+" "+testEnd+" pwd= |\n     7→"+gutterValue+"\n")
-	add("a row, a key's text holding a +", "| "+plus+" "+testEnd+" pwd= |\n     7→"+gutterValue+"\n")
+	add("a row, a key's END before its key", "| "+testKeyLine+" "+testEnd+" pwd= |\n     7\u2192"+gutterValue+"\n")
+	add("a row, a key's text holding a +", "| "+plus+" "+testEnd+" pwd= |\n     7\u2192"+gutterValue+"\n")
 	add("a row, a key's piece below it", "| "+testKeyLine+" "+testEnd+"\tpwd= |\n    \n    "+pc+" "+testEnd+"\n    Retype password: "+gutterValue+"\n")
-	add("a row opening a BEGIN's body", testBegin+"\n| "+testKeyLine+" pwd= |\n     7→"+gutterValue+"\n")
-	add("a row opening after a BEGIN's body", testBegin+"\n"+testKeyLine+" | "+testKeyLine[8:]+testKeyLine[:8]+" pwd= |\n     7→"+gutterValue+"\n")
+	add("a row opening a BEGIN's body", testBegin+"\n| "+testKeyLine+" pwd= |\n     7\u2192"+gutterValue+"\n")
+	add("rows ending in escaped breaks, a key's text holding =", "| u1SU1Lf="+testEnd+"\tPassword: |\\n\n|  |\\n\n| \""+gutterValue+"\" |\\n\n")
+	add("a row opening after a BEGIN's body", testBegin+"\n"+testKeyLine+" | "+testKeyLine[8:]+testKeyLine[:8]+" pwd= |\n     7\u2192"+gutterValue+"\n")
 	return shapes
 }
 
@@ -490,10 +495,11 @@ func seamShapes() []gutterShape {
 // once that the rule reads in it as written ([gutterValues]), nor, on a row,
 // the middle of a key's line, and Secrets of its answer is its answer.
 //
-// Mutation: write a block whole across a value's line's ending
-// ([claims.endingApart]), stop a label at a key's marker ([labelStart]), or
-// write a block whole across a row's opening ([claims.openingApart]), and a
-// shape publishes its value.
+// Mutation: write a block whole across a value's line's ending, or cut one
+// that holds the value's line ([claims.endingApart]), stop a label at a key's
+// marker ([labelStart]) or read across one before an escaped break
+// ([pastMarkup]), or write a block whole across a row's opening
+// ([claims.openingApart]), and a shape publishes its value.
 func TestNoValueIsPublishedWhereABlockRunsOnFromItsLineOrStandsInItsKeysRow(t *testing.T) {
 	t.Parallel()
 	for _, c := range seamShapes() {
@@ -551,7 +557,7 @@ func TestAStreamWritesABlockApartFromAValuesLineAsTheWholeTextDoes(t *testing.T)
 func TestABlockWrittenApartFromARowsOpeningLeavesTheKeysLineALineOfItsOwn(t *testing.T) {
 	t.Parallel()
 	for _, open := range []string{"| ", "  | ", "|"} {
-		text := testBegin + "\n" + open + testKeyLine + " pwd= |\n     7→" + gutterValue + "\n"
+		text := testBegin + "\n" + open + testKeyLine + " pwd= |\n     7\u2192" + gutterValue + "\n"
 		once := Secrets(text)
 		if !strings.Contains(once, "\n"+open[:len(open)-len(strings.TrimLeft(open, " "))]+"|"+keyMarker) {
 			t.Errorf("the row opening %q: the key's line is not a line of its own:\n text %q\n once %q", open, text, once)
