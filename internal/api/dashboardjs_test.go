@@ -2719,8 +2719,6 @@ const (
 	// and sort: 6780.7 KiB (6,943,394 bytes), 18,661 over main: 6781 KiB.
 	// A change's conversation as a timeline with finding excerpts: 6801.9 KiB (6,965,137 bytes),
 	// 21,743 over main: 6802 KiB.
-	// Tags created and deleted from the Tags view and a commit's page: 6997.2 KiB (7,165,162 bytes),
-	// 4,654 over main: 6998 KiB.
 	treeBudget = 5<<20 + 1878<<10
 )
 
