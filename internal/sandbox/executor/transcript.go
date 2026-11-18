@@ -1346,7 +1346,7 @@ const (
 // openCodeMessage is one message of an OpenCode export: OpenCode 2's
 // `SessionMessage.Info`, a flat object whose `type` is its kind
 // ([openCodeKind]) and whose other fields are that kind's own. Decoded
-// loosely ([transcriptBuilder.openCodeNext]): a retyped field reads as zero.
+// loosely ([openCodeNext]): a retyped field reads as zero.
 //
 // ONE TYPE FOR EVERY READER OF AN EXPORT, a session's transcript
 // ([transcriptBuilder.openCodeMessage]) and the context a session carries
@@ -1476,7 +1476,7 @@ func (w openCodeItemWire) item() openCodeContent {
 // eachOpenCodeItem hands each item of a step's content to each, in order, and
 // returns each's first error, reading no item after it. Content that is no
 // list has no items; one that stops decoding part way has none past the fault
-// ([transcriptBuilder.openCodeNext] decoded the message whole).
+// ([openCodeNext] decoded the message whole).
 //
 // AN ITEM AT A TIME ([eachElement]), by keys exactly as written
 // ([threadDecoding]) and loosely by type ([openCodeItemWire.item]), never the
@@ -1514,7 +1514,7 @@ func eachOpenCodeItem(content json.RawMessage, each func(openCodeContent) error)
 func (b *transcriptBuilder) openCodeExport(ctx context.Context, archive io.Reader) error {
 	held := &heldValue{r: archive, max: b.bounds.LineBytes}
 	dec := json.NewDecoder(held)
-	err := b.pastHeld(held, b.openCodeDocument(ctx, dec, held))
+	err := b.pastHeld(held, walkOpenCodeExport(ctx, dec, held, openCodePerson{b}))
 	var syntax *json.SyntaxError
 	switch {
 	case !errors.As(err, &syntax):
@@ -1541,9 +1541,26 @@ func onlySeparators(r io.Reader) bool {
 	}
 }
 
-// openCodeDocument walks the document, its messages handed to
-// [transcriptBuilder.openCodeNext] one at a time.
-func (b *transcriptBuilder) openCodeDocument(ctx context.Context, dec *json.Decoder, held *heldValue) error {
+// openCodeVisitor is what the export walk ([walkOpenCodeExport]) hands what it
+// reads to, as it reads it: a person's transcript ([openCodePerson]), or any
+// other reader of an export. Each is handed one value at a time, and an error
+// it answers ends the walk.
+type openCodeVisitor interface {
+	// topKey is a top-level key but `messages`, its value held to the bound.
+	topKey(name string, value json.RawMessage) error
+	// messageList is a `messages` key, before its list is walked.
+	messageList() error
+	// message is one message of a list, decoded once ([openCodeNext]).
+	message(ctx context.Context, w openCodeMessageWire) error
+	// notMessage is an element of a list that is no object.
+	notMessage() error
+}
+
+// walkOpenCodeExport walks the document dec reads through held, handing each
+// key, list and message to v as it reads it ([openCodeVisitor]): held is reset
+// before every key and message, and every `messages` list met is walked. It
+// returns at the document's `}`, reading nothing after it.
+func walkOpenCodeExport(ctx context.Context, dec *json.Decoder, held *heldValue, v openCodeVisitor) error {
 	if err := expectDelim(dec, '{'); err != nil {
 		return err
 	}
@@ -1553,18 +1570,24 @@ func (b *transcriptBuilder) openCodeDocument(ctx context.Context, dec *json.Deco
 			return keyErr
 		}
 		held.reset()
-		if key != "messages" {
-			var passed json.RawMessage
-			if passErr := dec.Decode(&passed); passErr != nil {
+		if name, _ := key.(string); name != "messages" {
+			var value json.RawMessage
+			if passErr := dec.Decode(&value); passErr != nil {
 				return passErr
 			}
+			if keyErr = v.topKey(name, value); keyErr != nil {
+				return keyErr
+			}
 			continue
+		}
+		if listErr := v.messageList(); listErr != nil {
+			return listErr
 		}
 		if openErr := expectDelim(dec, '['); openErr != nil {
 			return openErr
 		}
 		for held.reset(); dec.More(); held.reset() {
-			if messageErr := b.openCodeNext(ctx, dec); messageErr != nil {
+			if messageErr := openCodeNext(ctx, dec, v); messageErr != nil {
 				return messageErr
 			}
 		}
@@ -1575,12 +1598,12 @@ func (b *transcriptBuilder) openCodeDocument(ctx context.Context, dec *json.Deco
 	return expectDelim(dec, '}')
 }
 
-// openCodeNext decodes the next message of the list and reads it. A message
-// that is no object is said; within one, a field whose type a release changed
-// is skipped rather than losing the message, as the stream's events are
-// ([decodeOpenCodeEvent]), and every key is read exactly as written
+// openCodeNext decodes the next message of the list and hands it to v. A
+// message that is no object is handed as none; within one, a field whose type
+// a release changed is skipped rather than losing the message, as the stream's
+// events are ([decodeOpenCodeEvent]), and every key is read exactly as written
 // ([openCodeMessageWire]), as its step's items are ([eachOpenCodeItem]).
-func (b *transcriptBuilder) openCodeNext(ctx context.Context, dec *json.Decoder) error {
+func openCodeNext(ctx context.Context, dec *json.Decoder, v openCodeVisitor) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1589,13 +1612,30 @@ func (b *transcriptBuilder) openCodeNext(ctx context.Context, dec *json.Decoder)
 		return err
 	}
 	if !jsonObject(raw) {
-		return b.unread("a message of the export is not a message, and was not read")
+		return v.notMessage()
 	}
 	var w openCodeMessageWire
 	if err := wireDecode(raw, &w); err != nil {
 		return err
 	}
-	return b.openCodeMessage(ctx, w.message())
+	return v.message(ctx, w)
+}
+
+// openCodePerson is a person's transcript as the export walk's visitor: it
+// reads each message by its kind, says an element that is no message, and
+// passes every other key, as the import does.
+type openCodePerson struct{ b *transcriptBuilder }
+
+func (openCodePerson) topKey(string, json.RawMessage) error { return nil }
+
+func (openCodePerson) messageList() error { return nil }
+
+func (p openCodePerson) message(ctx context.Context, w openCodeMessageWire) error {
+	return p.b.openCodeMessage(ctx, w.message())
+}
+
+func (p openCodePerson) notMessage() error {
+	return p.b.unread("a message of the export is not a message, and was not read")
 }
 
 // openCodeMessageWire is one message of an export as its decode leaves it

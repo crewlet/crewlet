@@ -65,7 +65,7 @@ func readClaudeRecord(t *testing.T, line string) string {
 func readOpenCodeMessage(t *testing.T, message string) string {
 	t.Helper()
 	b := listBuilder()
-	err := b.openCodeNext(t.Context(), json.NewDecoder(strings.NewReader(message)))
+	err := openCodeNext(t.Context(), json.NewDecoder(strings.NewReader(message)), openCodePerson{b})
 	return fmt.Sprintf("transcript: %s; %v", recordsEntries(b), err)
 }
 
