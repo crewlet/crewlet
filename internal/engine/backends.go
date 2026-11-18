@@ -120,8 +120,17 @@ type Backends struct {
 	// crosses ([jetstream.Queue.LinkMeter]): a leaf's data link to the
 	// members, or every connection dialled to an external cluster. Nil on a
 	// member, whose connection crosses none, and on backends a caller lent
-	// without one. The memory sync's hydrations read it (memsync.Config.Link).
+	// without one. The memory sync's hydrations read it (memsync.Config.Link),
+	// and so do the object store's transfers (natsobj.Config.Link).
 	link memsync.Link
+
+	// window is the ONE window of that link ([jetstream.Queue.LinkWindow]),
+	// which every bulk transfer across it takes from, both ways: the object
+	// store's puts, downloads and walks (natsobj.Config.Window) and the
+	// memory sync's replay pulls (memsync.Config.Window), so a request a
+	// node sends behind them all is answered inside its term. Nil on a
+	// member, whose connection crosses no link.
+	window *jsapi.Window
 }
 
 // meterOf is q's link meter as the memory sync reads it, and NIL where q has
@@ -661,15 +670,21 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 		defer cancel()
 		// ACROSS A LINK on every node whose connection is not to its own
 		// member — a leaf's, an external cluster's client — where every
-		// request sent after a put waits behind the window it has out, so
-		// the window is the one a request's term allows at the floor
-		// (natsobj's linkWindow), whatever lease the node holds.
+		// request sent behind the node's transfers waits for them, so they
+		// take the link's ONE window, the queue's, beside the memory sync's
+		// replays, and are judged by the link's meter.
 		reservation, explicit := objectsReservation(ctx, b, out.Queue, volumeFree)
-		backend, err := natsobj.Open(openCtx, js, natsobj.Config{
+		cfg := natsobj.Config{
 			Replicas: b.Stream.Replicas, Clustered: clusteredStream(b),
 			MaxBytes: reservation, Explicit: explicit,
-			AcrossLink: acrossLink(b),
-		})
+		}
+		if acrossLink(b) {
+			cfg.AcrossLink, cfg.Window = true, out.window
+			if out.link != nil {
+				cfg.Link = out.link
+			}
+		}
+		backend, err := natsobj.Open(openCtx, js, cfg)
 		if err != nil {
 			return fmt.Errorf("engine: the object store (store.objects.backend: nats): %w", err)
 		}
@@ -857,7 +872,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 		// and must never take it down. And no `conn` either — the QUEUE
 		// owns this connection, so Close must not close it a second time
 		// underneath the client that is still shutting down.
-		return &Backends{Queue: q, link: meterOf(q)}, q.Conn(), nil
+		return &Backends{Queue: q, link: meterOf(q), window: q.LinkWindow()}, q.Conn(), nil
 	}
 
 	server, err := jetstream.StartServer(ctx, cfg)
@@ -871,7 +886,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 		return nil, nil, fmt.Errorf("engine: stream client: %w", err)
 	}
 	out := &Backends{Queue: q, stopServer: server.Shutdown, broker: server,
-		death: server.Death(), link: meterOf(q)}
+		death: server.Death(), link: meterOf(q), window: q.LinkWindow()}
 	// WATCHED, through the queue: this connection holds every lease the
 	// node renews, so NATS closing it for good is the node's loss exactly
 	// as the queue's own connection closing is, and the queue reports both
@@ -1076,7 +1091,7 @@ func coordinationStoresOf(b *config.Bootstrap) coordinationStores {
 // JetStream across a LINK — a leaf's link to the members, or a dial to an
 // external cluster — rather than its own member in its own process: the one
 // reading of it the engine hands every store on that connection, the object
-// store's puts' window ([openObjects]), the coordination store's writes
+// store's transfers ([openObjects]), the coordination store's writes
 // ([coordinationReach]) and the memory sync's hydrations (memsync.Config,
 // whose replays ride the coordination connection) alike. The queue reads the
 // same fact off how its own connection was made.
@@ -1094,6 +1109,7 @@ func memoryConfig(b *config.Bootstrap, backends *Backends) memsync.Config {
 		AcrossLink: acrossLink(b),
 		Clustered:  clusteredStream(b),
 		Link:       backends.link,
+		Window:     backends.window,
 	}
 }
 

@@ -66,7 +66,8 @@
 // bringing back. So a link has ONE window ([Window], [LinkWindow]), owned by
 // its queue's connection and shared first come first served by the object
 // store's puts, its downloads' and walks' pulls, and a memory replay's pulls;
-// one window each way held such a request 7.75 seconds at the floor.
+// one window each way held such a request 7.75 seconds at the floor
+// (ADR-0160).
 package jsapi
 
 import (

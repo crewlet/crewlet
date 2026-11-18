@@ -33,8 +33,11 @@ import (
 const suiteStall = 2 * time.Second
 
 // acrossLink is how the engine opens the bucket on a node whose connection
-// crosses a link to the stream — a leaf, an external cluster's client.
-var acrossLink = natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true}
+// crosses a link to the stream — a leaf, an external cluster's client — with
+// a link window of its own for each backend a case opens, unmetered.
+func acrossLink() natsobj.Config {
+	return natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true, Window: jsapi.NewLinkWindow()}
+}
 
 // stallingMember is the suite's stalling backend on a member reached over TCP:
 // a client dialing the member through a [link], which the freeze stops in both
@@ -47,7 +50,7 @@ var acrossLink = natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: 
 func stallingMember(t *testing.T) (objstore.Backend, time.Duration, time.Duration, func() func()) {
 	ns := tcpMember(t)
 	l := relay(t, ns.Addr().String())
-	b := openWith(t, dialThrough(t, l), acrossLink)
+	b := openWith(t, dialThrough(t, l), acrossLink())
 	natsobj.SetStall(b, suiteStall)
 	return b, suiteStall, 2 * natsobj.PurgeWait, func() func() { l.freeze(); return l.thaw }
 }
@@ -65,7 +68,7 @@ func stallingLeaf(t *testing.T) (objstore.Backend, time.Duration, time.Duration,
 	l := relay(t, fmt.Sprintf("127.0.0.1:%d", member.LeafPort()))
 	c := client(t, startLeaf(t, l.port()))
 	awaitLink(t, c)
-	b := openWith(t, c, acrossLink)
+	b := openWith(t, c, acrossLink())
 	natsobj.SetStall(b, suiteStall)
 	return b, suiteStall, 2 * natsobj.PurgeWait, func() func() { l.freeze(); return l.thaw }
 }
@@ -391,13 +394,16 @@ func TestAPutLeavesNoSubscriptionBehind(t *testing.T) {
 }
 
 // PUTS ON ONE CONNECTION SHARE ONE WINDOW: with the broker's answers stopped,
-// three puts at once publish the connection's window of pieces BETWEEN them —
-// counted where the broker takes them — and no more before they stall. What
-// the window protects is the connection the bucket is opened on, which the
-// node's coordination store and every lease renewal of the node ride, so a
-// link that freezes holds one window of the node's uploads however many are
-// under way, never one a put. Across a link it is [natsobj.LinkWindow]; on a
-// member's own client, [natsobj.MemberWindow].
+// three puts at once publish the connection's window of pieces BETWEEN them,
+// and no more until the first of them has stalled and given its places back,
+// counted where the broker takes them, up to the first purge. The window
+// protects the link the bucket is opened across, which every lease renewal of
+// the node rides, so a frozen link holds one window of the node's uploads
+// however many are under way. Across a link it is the link's window, one
+// piece; on a member's own client, [natsobj.MemberWindow] pieces.
+//
+// Mutation: give each put a window of its own, and three windows of pieces
+// are out before the first purge.
 func TestPutsOnOneConnectionShareOneWindow(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -406,16 +412,17 @@ func TestPutsOnOneConnectionShareOneWindow(t *testing.T) {
 		want int
 	}{
 		{"on a member's own client", natsobj.Config{MaxBytes: testCeiling, Replicas: 1}, natsobj.MemberWindow},
-		{"across a link", acrossLink, natsobj.LinkWindow},
+		{"across a link", acrossLink(), 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			ns := tcpMember(t)
-			pieces := watchPieces(t, directClient(t, ns))
+			seen := watchInOrder(t, directClient(t, ns), "$O."+natsobj.Bucket+".C.>",
+				"$JS.API.STREAM.PURGE.>", "$JS.*.API.STREAM.PURGE.>")
 			l := relay(t, ns.Addr().String())
 			b := openWith(t, dialThrough(t, l), c.cfg)
-			if got := b.Window(); got != c.want {
-				t.Fatalf("a backend opened with %+v has a window of %d, want %d", c.cfg, got, c.want)
+			if got := b.Window().Size() / natsobj.PieceTake(natsobj.MessageBytes); got != c.want {
+				t.Fatalf("a backend opened with %+v has a window of %d pieces, want %d", c.cfg, got, c.want)
 			}
 			natsobj.SetStall(b, time.Second)
 			l.freezeDown()
@@ -437,22 +444,33 @@ func TestPutsOnOneConnectionShareOneWindow(t *testing.T) {
 						i, puts, err)
 				}
 			}
-			if got := len(pieces.all()); got != c.want {
-				t.Fatalf("%d puts at once with no acknowledgement published %d pieces between them, "+
-					"want the connection's window of %d", puts, got, c.want)
+			// ONE WINDOW OUT BETWEEN THEM until the first put stalled and
+			// cleaned up, in the order the broker took them.
+			out := 0
+			for _, m := range seen.all() {
+				if strings.Contains(m.Subject, "PURGE") {
+					break
+				}
+				out++
+			}
+			if out != c.want {
+				t.Fatalf("%d puts with no acknowledgement published %d pieces between them before the "+
+					"first of them stalled, want the connection's window of %d", puts, out, c.want)
 			}
 			l.thaw()
 		})
 	}
 }
 
-// A PUT WAITING FOR A PLACE ENDS WHEN THE CONNECTION TAKES NOTHING: behind a
-// window another put filled, and with the broker's answers stopped, it is
-// ended as stalled a stall after the connection's last acknowledgement — not
-// after the puts ahead of it have stalled, cleaned up and given their places
-// back, which is a stall and two purges later, and then its own stall again.
-// It publishes nothing: it never had a place.
-func TestAPutWaitingForAPlaceEndsWhenTheConnectionTakesNothing(t *testing.T) {
+// A PUT WAITING FOR A PLACE TAKES NO STALL OF ITS OWN: behind a window another
+// put filled, with the broker's answers stopped, it waits while the put ahead
+// of it holds the window — which that put's own stall bounds — and is ended
+// by its OWN stall once it has pieces out, saying how many, never for having
+// waited. So it ends after the put ahead of it.
+//
+// Mutation: stall a waiter on the window's own acknowledgements, and it ends
+// first, out of turn, having published nothing.
+func TestAPutWaitingForAPlaceTakesNoStallOfItsOwn(t *testing.T) {
 	t.Parallel()
 	ns := tcpMember(t)
 	pieces := watchPieces(t, directClient(t, ns))
@@ -468,25 +486,29 @@ func TestAPutWaitingForAPlaceEndsWhenTheConnectionTakesNothing(t *testing.T) {
 		first <- b.Put(ctx, "first", bytes.NewReader(patterned(4<<20)), objstore.PutMeta{})
 	}()
 	pieces.await(t, natsobj.MemberWindow)
-	began := time.Now()
-	err := b.Put(ctx, "behind", bytes.NewReader(patterned(1<<20)), objstore.PutMeta{})
-	took := time.Since(began)
-	if !errors.Is(err, objstore.ErrStalled) {
-		t.Fatalf("a put waiting behind a window the broker never answered = %v after %v; want objstore.ErrStalled",
-			err, took)
+	behind := make(chan error, 1)
+	go func() {
+		behind <- b.Put(ctx, "behind", bytes.NewReader(patterned(1<<20)), objstore.PutMeta{})
+	}()
+	// ORDER, NEVER THE CLOCK: the put ahead ends first, and only then has
+	// the one behind it pieces out to stall on.
+	var firstErr error
+	select {
+	case firstErr = <-first:
+	case err := <-behind:
+		t.Fatalf("a put waiting behind a window ended before the put holding it: %v", err)
 	}
-	if !strings.Contains(err.Error(), "waiting for a place") {
-		t.Fatalf("the stall = %q; want it to say the put was waiting for a place", err)
+	if !errors.Is(firstErr, objstore.ErrStalled) {
+		t.Fatalf("the put that filled the window = %v; want objstore.ErrStalled", firstErr)
 	}
-	if most := stall + time.Second; took > most {
-		t.Fatalf("a put waiting for a place on a connection that took nothing ended after %v, past %v", took, most)
+	err := <-behind
+	if !errors.Is(err, objstore.ErrStalled) || !strings.Contains(err.Error(), "of its messages out") {
+		t.Fatalf("a put waiting behind a window the broker never answered = %v; want its own stall, "+
+			"with its messages out", err)
 	}
-	if err := <-first; !errors.Is(err, objstore.ErrStalled) {
-		t.Fatalf("the put that filled the window = %v; want objstore.ErrStalled", err)
-	}
-	if got := len(pieces.all()); got != natsobj.MemberWindow {
-		t.Fatalf("the broker took %d pieces, want the first put's window of %d and none of the put "+
-			"that waited", got, natsobj.MemberWindow)
+	if got := len(pieces.all()); got != natsobj.MemberWindow+1<<20/natsobj.MessageBytes {
+		t.Fatalf("the broker took %d pieces, want the first put's window of %d and then the %d of the "+
+			"put that waited its turn", got, natsobj.MemberWindow, 1<<20/natsobj.MessageBytes)
 	}
 	l.thaw()
 }
@@ -502,7 +524,11 @@ func TestAPutWaitingForAPlaceIsNoStallWhileTheConnectionMoves(t *testing.T) {
 	ns := tcpMember(t)
 	l := relay(t, ns.Addr().String())
 	b := open(t, dialThrough(t, l))
-	natsobj.SetWindow(b, 1)
+	one, err := jsapi.NewWindow(natsobj.PieceTake(natsobj.MessageBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	natsobj.SetWindow(b, one)
 	natsobj.SetStall(b, 2*time.Second)
 	l.slow(natsobj.MessageBytes)
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)

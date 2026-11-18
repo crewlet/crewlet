@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"sync"
 	"time"
 
@@ -18,22 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
-
-// messageCrossing is how long one message of a put takes to cross a link at
-// the floor every leg is promised: [MessageBytes] at [objstore.MiBPace],
-// 3.75 seconds.
-const messageCrossing = objstore.MiBPace * MessageBytes / objstore.MiB
-
-// linkWindow is the window across a link: the most whole messages a link at
-// the floor every leg is promised ([objstore.MiBPace]) carries within
-// [jsapi.WindowCrossing], at least one — ONE message, 128 KiB, crossing the
-// floor in 3.75 seconds, whatever lease the node holds — so a request sent
-// behind a full window of puts alone is still answered inside its term. Neither
-// a lease's heartbeat nor a measured rate sizes it, and one message costs a
-// fast link half its throughput: the package doc's "The window across a link"
-// says why, and what a request also behind the inbound traffic waits. A test
-// holds the arithmetic against the terms' own constants.
-const linkWindow = max(int(jsapi.WindowCrossing/messageCrossing), 1)
 
 // memberWindow is the window on a MEMBER's own client — a data node, whose
 // connection reaches its own embedded member in its own process, so no link
@@ -52,163 +35,24 @@ const linkWindow = max(int(jsapi.WindowCrossing/messageCrossing), 1)
 // lone put at 48–69 against 59–68 with sixteen.
 const memberWindow = 16
 
-// window is the places every put on one node's connection shares for the
-// messages it holds OUT — published and not yet acknowledged by the stream —
-// before a put waits for an acknowledgement to publish another: [linkWindow]
-// of them where that connection crosses a LINK to the stream (a leaf's link to
-// its members, or a dial to an external cluster), [memberWindow] where it does
-// not, handed out in the order they were asked for.
-//
-// THE CONNECTION'S, NEVER A PUT'S, because what it protects is shared: every
-// put a node makes — a person's upload, a push's bundle, a seat's file — goes
-// out on the one connection the bucket was opened on ([Backend.Put]), which
-// the engine opens on the connection its coordination store rides, beside
-// every lease renewal the node makes (on an external broker, the queue's own,
-// which its events ride as well); across a link every request sent after it
-// on that link waits behind what it has out, and a window counted per put let
-// K puts at once hold K windows on it.
-//
-// FIRST COME, FIRST SERVED, A PLACE AT A TIME, so puts sharing the window
-// interleave rather than one taking it whole: a put asks for a place for each
-// message, and a place given back goes to the oldest request, whichever put
-// made it.
-//
-// A put waiting for a place has nothing out, so it owes the broker nothing of
-// its own; it is ended as stalled only when the WINDOW has had nothing
-// acknowledged for [objstore.Stall] while it held messages out — the node's
-// connection taking nothing at all — and never because the puts ahead of it
-// are slow.
-type window struct {
-	size int
-
-	mu sync.Mutex
-	// out is how many messages hold a place: every put's on the connection.
-	out int
-	// last is when the broker last acknowledged one of them, or when one
-	// went out into an empty window — the instant a waiter's stall is
-	// measured from.
-	last time.Time
-	// queue is the requests for a place not yet given one, oldest first.
-	queue []*placeRequest
+// newMemberWindow is the window a member's own client is given: [memberWindow]
+// whole messages, in the bytes a put takes for each ([pieceTake]), shared by
+// every put on the connection first come first served, since K puts at once
+// share it rather than hold K of it in the member's memory and its stream's
+// pipeline.
+func newMemberWindow() *jsapi.Window {
+	w, err := jsapi.NewWindow(memberWindow * pieceTake(MessageBytes))
+	if err != nil {
+		panic(err) // a constant above zero
+	}
+	return w
 }
 
-// placeRequest is one request for a place in a [window]; given is closed when
-// it has one.
-type placeRequest struct{ given chan struct{} }
-
-func newWindow(size int) *window { return &window{size: size} }
-
-// take holds a place in w for one message, waiting its turn behind every
-// request made before it. It answers with ctx's cause if ctx ends first, and
-// with [objstore.ErrStalled] if w has had nothing acknowledged for stall
-// while it held messages out.
-func (w *window) take(ctx context.Context, stall time.Duration) error {
-	w.mu.Lock()
-	if len(w.queue) == 0 && w.out < w.size {
-		w.enterLocked()
-		w.mu.Unlock()
-		return nil
-	}
-	req := &placeRequest{given: make(chan struct{})}
-	w.queue = append(w.queue, req)
-	wait := w.quietLeftLocked(stall)
-	w.mu.Unlock()
-
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	for {
-		select {
-		case <-req.given:
-			return nil
-		case <-ctx.Done():
-			w.withdraw(req)
-			return context.Cause(ctx)
-		case <-timer.C:
-			w.mu.Lock()
-			if w.givenLocked(req) {
-				w.mu.Unlock()
-				return nil
-			}
-			if wait = w.quietLeftLocked(stall); wait > 0 {
-				w.mu.Unlock()
-				timer.Reset(wait)
-				continue
-			}
-			out := w.out
-			w.dropLocked(req)
-			w.mu.Unlock()
-			return fmt.Errorf("%w: the broker acknowledged nothing on this node's connection for %v, "+
-				"with %d messages of its puts out and this one waiting for a place among them",
-				objstore.ErrStalled, stall, out)
-		}
-	}
-}
-
-// give returns a place: its message was acknowledged — acked — or will never
-// be, the stream having refused it, its publish having failed, or its put
-// having given up on it ([jetstream.JetStream.CleanupPublisher]). Only an
-// acknowledgement is the broker taking something, and only it moves w's last.
-func (w *window) give(acked bool) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.out = max(w.out-1, 0)
-	if acked {
-		w.last = time.Now()
-	}
-	for len(w.queue) > 0 && w.out < w.size {
-		req := w.queue[0]
-		w.queue = w.queue[1:]
-		w.enterLocked()
-		close(req.given)
-	}
-}
-
-// enterLocked counts one more message out, starting the window's clock where
-// it was empty: nothing was out, so the broker owed nothing until now.
-func (w *window) enterLocked() {
-	if w.out == 0 {
-		w.last = time.Now()
-	}
-	w.out++
-}
-
-// quietLeftLocked is how long w may yet go with nothing acknowledged before a
-// waiter is stalled: the whole bound while nothing is out.
-func (w *window) quietLeftLocked(stall time.Duration) time.Duration {
-	if w.out == 0 {
-		return stall
-	}
-	return stall - time.Since(w.last)
-}
-
-// givenLocked reports whether req has been given its place.
-func (w *window) givenLocked(req *placeRequest) bool {
-	select {
-	case <-req.given:
-		return true
-	default:
-		return false
-	}
-}
-
-// withdraw takes req back: out of the queue if it is still waiting, and its
-// place given back if it was given one as its context ended.
-func (w *window) withdraw(req *placeRequest) {
-	w.mu.Lock()
-	given := w.givenLocked(req)
-	if !given {
-		w.dropLocked(req)
-	}
-	w.mu.Unlock()
-	if given {
-		w.give(false)
-	}
-}
-
-// dropLocked takes req out of the queue.
-func (w *window) dropLocked(req *placeRequest) {
-	w.queue = slices.DeleteFunc(w.queue, func(r *placeRequest) bool { return r == req })
-}
+// pieceTake is what a put's message of dataBytes takes of its window: the
+// bytes its request puts on the link ([jsapi.RequestBytes]), so a small
+// object or an object's last piece takes what it carries, never a whole
+// [MessageBytes], and small transfers interleave.
+func pieceTake(dataBytes int) int { return jsapi.RequestBytes(dataBytes) }
 
 // purgeWait bounds each step of a failed put's clean-up: the wait for the
 // acknowledgements still out, and each purge after it.
@@ -241,8 +85,10 @@ const purgeWait = 5 * time.Second
 // Pieces of [MessageBytes] are published IN ORDER from ONE buffer, refilled as
 // soon as each publish returns — nats.go copies a payload into its write
 // buffer at the publish, and only a RE-publish reads the message again — each
-// waiting for a place in the connection's [window], which every put on it
-// shares; and with NO PUBLISH RETRY, because the library's
+// taking its bytes ([pieceTake]) from the [Backend]'s window first: across a
+// link the link's ONE window, which its downloads, walks and memory replays
+// share both ways, and on a member's own client [memberWindow] messages the
+// connection's puts share; and with NO PUBLISH RETRY, because the library's
 // retry of a piece answered "no responders" re-sends from its one reused
 // message over its one reused buffer, which by then holds a later piece: a
 // piece the stream did not take fails the put instead, which its caller asks
@@ -251,12 +97,16 @@ const purgeWait = 5 * time.Second
 // A PUT ENDS ONLY WHEN THE BROKER HAS ACKNOWLEDGED NOTHING FOR [objstore.Stall]
 // WHILE PIECES ARE OUT ([objstore.ErrStalled]), so a put moving at any pace the
 // broker acknowledges is never ended, and one waiting on its caller's slow body
-// — nothing out — is not waiting on the broker; nor is one waiting for a place
-// in the window, which ends only when the connection has had nothing
-// acknowledged for the minute ([window]). No message waits behind more than
-// the window, so across a link at the floor each one's bytes have crossed
-// within four seconds of its publish ([linkWindow]), and its acknowledgement
-// follows a round trip later, behind whatever the link carries back — a
+// — nothing out — is not waiting on the broker; nor is one waiting its turn
+// in the window, which takes no stall of its own, since every take ahead of
+// it is bounded by its own. Across a metered link the stall runs only while
+// the link carries nothing at the floor ([Backend.held]): a put whose pieces
+// wait behind the link's other traffic is not stalled while it moves. No
+// message waits behind more than the window, so across a link at the floor
+// each one's bytes have crossed within four seconds of its publish
+// ([jsapi.LinkWindow]) behind the window's other takes, and its
+// acknowledgement follows a round trip later, behind whatever the link
+// carries back — a
 // leaf's compressed link, which delivers what it flushed as one block,
 // included: sixteen messages out through a leaf at the floor, two mebibytes,
 // the window a member's own client is given, were acknowledged in blocks up
@@ -282,11 +132,11 @@ func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.
 	defer cancel(nil)
 	p.cancel = cancel
 	pub, err := jetstream.New(b.js.Conn(),
-		jetstream.WithPublishAsyncAckHandler(func(jetstream.JetStream, *nats.Msg, *jetstream.PubAck) {
-			p.answered(nil)
+		jetstream.WithPublishAsyncAckHandler(func(_ jetstream.JetStream, msg *nats.Msg, _ *jetstream.PubAck) {
+			p.answered(msg, nil)
 		}),
-		jetstream.WithPublishAsyncErrHandler(func(_ jetstream.JetStream, _ *nats.Msg, err error) {
-			p.answered(err)
+		jetstream.WithPublishAsyncErrHandler(func(_ jetstream.JetStream, msg *nats.Msg, err error) {
+			p.answered(msg, err)
 		}))
 	if err != nil {
 		return fmt.Errorf("natsobj: put %s: a publisher: %w", name, err)
@@ -412,23 +262,15 @@ func (p *put) run(ctx context.Context, r io.Reader, m objstore.PutMeta) error {
 	return nil
 }
 
-// publish sends msg — the put's metadata where meta — once it has a place in
-// the connection's [window], counting it out first: an acknowledgement can
-// arrive before the publish call returns.
+// publish sends msg — the put's metadata where meta — once its bytes are
+// taken from the [Backend]'s window ([pieceTake]), counting it out first: an
+// acknowledgement can arrive before the publish call returns. Its turn is
+// waited for under ctx alone: a put with pieces of its own out is ended by its
+// own stall ([put.check]), which cancels ctx.
 //
 // NO RETRY ([jetstream.WithRetryAttempts] 0): see [Backend.Put].
 func (p *put) publish(ctx context.Context, msg *nats.Msg, meta bool) error {
-	if err := p.b.window.take(ctx, p.b.stall); err != nil {
-		// A PUT WITH MESSAGES OF ITS OWN OUT is told its own stall: the
-		// window's last acknowledgement is never older than the put's, so
-		// a window quiet for the bound is a put quiet for it too, and what
-		// the put had out is what its caller wants to read.
-		p.mu.Lock()
-		out := p.out
-		p.mu.Unlock()
-		if out > 0 && errors.Is(err, objstore.ErrStalled) {
-			return p.stalled(out)
-		}
+	if err := p.b.window.Take(ctx, pieceTake(len(msg.Data))); err != nil {
 		return err
 	}
 	p.mu.Lock()
@@ -450,8 +292,8 @@ func (p *put) publish(ctx context.Context, msg *nats.Msg, meta bool) error {
 	p.out++
 	p.mu.Unlock()
 	if _, err := p.pub.PublishMsgAsync(msg, jetstream.WithRetryAttempts(0)); err != nil {
-		// NOT SENT: no answer will come, so its place comes back here.
-		p.settle(false)
+		// NOT SENT: no answer will come, so its take comes back here.
+		p.settle(msg)
 		return fmt.Errorf("publish %s: %w", msg.Subject, err)
 	}
 	return nil
@@ -460,25 +302,26 @@ func (p *put) publish(ctx context.Context, msg *nats.Msg, meta bool) error {
 // answered is the broker's answer to one message: its acknowledgement, or err
 // — the stream refused it, the connection lost it, or the put gave up on it
 // ([jetstream.JetStream.CleanupPublisher]) — which fails the put at once.
-// Called once a message the publish sent, so its place in the window comes
-// back exactly once.
-func (p *put) answered(err error) {
-	p.settle(err == nil)
+// Called once for each message the publish sent, msg, so its take of the
+// window comes back exactly once.
+func (p *put) answered(msg *nats.Msg, err error) {
+	p.settle(msg)
 	if err != nil {
 		p.cancel(err)
 	}
 }
 
-// settle counts one message of the put's no longer out — acknowledged where
-// acked — and gives its place in the window back.
-func (p *put) settle(acked bool) {
+// settle counts msg, one message of the put's, no longer out, and gives its
+// take of the window back: what [put.publish] took for it, read off the
+// message's own length, which the buffer refilled behind it does not move.
+func (p *put) settle(msg *nats.Msg) {
 	p.mu.Lock()
 	p.out = max(p.out-1, 0)
 	p.last = time.Now()
 	close(p.changed)
 	p.changed = make(chan struct{})
 	p.mu.Unlock()
-	p.b.window.give(acked)
+	p.b.window.Give(pieceTake(len(msg.Data)))
 }
 
 // check is the stall timer: a put whose messages are out and that has had no
@@ -488,15 +331,22 @@ func (p *put) settle(acked bool) {
 // acknowledgement is recorded under, so one recorded before it resets the
 // minute and the timer is a sample, never a deadline fixed when the put began;
 // and nothing out is nothing owed — a put waiting on its caller's body is not
-// waiting on the broker.
+// waiting on the broker. Across a metered link a put quiet for the bound
+// while the link moves is held, judged again a [quietWait] later
+// ([Backend.held]).
 func (p *put) check() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.out == 0 {
 		return
 	}
-	if quiet := time.Since(p.last); quiet < p.b.stall {
+	quiet := time.Since(p.last)
+	switch {
+	case quiet < p.b.stall:
 		p.timer.Reset(p.b.stall - quiet)
+		return
+	case p.b.held(quiet):
+		p.timer.Reset(quietWait)
 		return
 	}
 	p.cancel(p.stalled(p.out))
