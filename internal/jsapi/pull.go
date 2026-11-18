@@ -141,8 +141,9 @@ const (
 	// Heartbeat is an idle heartbeat (`100`): the consumer holds the pull,
 	// asked with a heartbeat, and has nothing to deliver to it now.
 	Heartbeat EventKind = "heartbeat"
-	// Expired is the pull's expiry (`408`), or the end of a no-wait pull
-	// that found nothing (`404`), which [Pulls.Ask] never asks.
+	// Expired is the pull's expiry (`408`), or the end of a pull asked to
+	// end at its consumer's ([Pulls.AskToEnd]) once it has delivered what
+	// the consumer holds (`404`).
 	Expired EventKind = "expired"
 	// PastMaxBytes is the pull ended in place of a message larger than what
 	// is left of its byte bound (`409 Message Size Exceeds MaxBytes`).
@@ -265,6 +266,22 @@ func (p *Pulls) Stop() { _ = p.sub.Unsubscribe() }
 // heartbeat is more than half its expiry the server refuses (nats-server
 // v2.15.2, consumer.go's nextReqFromMsg), so both are refused here, by name.
 func (p *Pulls) Ask(n, maxBytes int, expires, heartbeat time.Duration) error {
+	return p.ask(n, maxBytes, expires, heartbeat, false)
+}
+
+// AskToEnd is [Pulls.Ask] for a pull the server ends at the consumer's end
+// once it has delivered something there (no_wait, ended with `404`, an
+// [Expired]), rather than holding it for its expiry: a walk that reads what
+// its consumer holds is answered as it gets there, and frees what it took to
+// ask. A pull asked of a consumer holding nothing still waits for its expiry
+// (nats-server v2.15, consumer.go's processWaiting).
+func (p *Pulls) AskToEnd(n, maxBytes int, expires, heartbeat time.Duration) error {
+	return p.ask(n, maxBytes, expires, heartbeat, true)
+}
+
+// ask sends a pull as [Pulls.Ask] does, ended at the consumer's end where
+// toEnd says so ([Pulls.AskToEnd]).
+func (p *Pulls) ask(n, maxBytes int, expires, heartbeat time.Duration, toEnd bool) error {
 	switch {
 	case n < 1:
 		return fmt.Errorf("jsapi: a pull asks for at least one delivery, not %d", n)
@@ -277,7 +294,7 @@ func (p *Pulls) Ask(n, maxBytes int, expires, heartbeat time.Duration) error {
 			"expiry of %v", heartbeat, expires)
 	}
 	body, err := json.Marshal(server.JSApiConsumerGetNextRequest{
-		Batch: n, MaxBytes: maxBytes, Expires: expires, Heartbeat: heartbeat})
+		Batch: n, MaxBytes: maxBytes, Expires: expires, Heartbeat: heartbeat, NoWait: toEnd})
 	if err != nil {
 		return fmt.Errorf("encode a pull: %w", err)
 	}

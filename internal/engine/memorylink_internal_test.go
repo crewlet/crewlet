@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -16,14 +17,16 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
-// A NODE'S HYDRATION READS ITS LINK'S METER: hydration across a link tells a
-// replay held behind the link's other traffic from a stalled copy by the meter
-// the queue makes on the connection it dials (a leaf's data link, any external
-// cluster's). So the backends carry that meter into the memory sync: a member
-// hands it no link, a leaf and an external node their own queue's meter.
+// A NODE'S HYDRATION READS ITS LINK'S METER AND TAKES ITS LINK'S WINDOW:
+// hydration across a link tells a replay held behind the link's other traffic
+// from a stalled copy by the meter the queue makes on the connection it dials
+// (a leaf's data link, any external cluster's), and pulls inside the ONE
+// window that queue owns. So the backends carry both into the memory sync: a
+// member hands it neither, a leaf and an external node their own queue's.
 //
-// Mutants: the memory sync's configuration leaves the link out, or the
-// backends (the external branch's included) carry no meter.
+// Mutants: the memory sync's configuration leaves the link or the window out,
+// or the backends (the leaf's and the external branch's) carry no meter, no
+// window, or a window other than the queue's.
 func TestANodesHydrationReadsItsLinksMeter(t *testing.T) {
 	t.Parallel()
 	open := func(b *bootstrapOf) *Backends {
@@ -93,20 +96,29 @@ func TestANodesHydrationReadsItsLinksMeter(t *testing.T) {
 		t.Fatalf("the premise: the external node's queue is %T with no meter of its link", onExternal.Queue)
 	}
 
+	if q.LinkWindow() == nil || eq.LinkWindow() == nil {
+		t.Fatalf("the premise: the leaf's queue owns a link window %t, the external node's %t",
+			q.LinkWindow() != nil, eq.LinkWindow() != nil)
+	}
 	for _, c := range []struct {
 		name     string
 		cfg      memsync.Config
 		want     memsync.Link
+		window   *jsapi.Window
 		acrossIt bool
 	}{
-		{"the member", memoryConfig(&member, onMember), nil, false},
-		{"the leaf", memoryConfig(&leaf, onLeaf), q.LinkMeter(), true},
-		{"the external node", memoryConfig(&external, onExternal), eq.LinkMeter(), true},
+		{"the member", memoryConfig(&member, onMember), nil, nil, false},
+		{"the leaf", memoryConfig(&leaf, onLeaf), q.LinkMeter(), q.LinkWindow(), true},
+		{"the external node", memoryConfig(&external, onExternal), eq.LinkMeter(), eq.LinkWindow(), true},
 	} {
 		if c.cfg.Link != c.want || c.cfg.AcrossLink != c.acrossIt {
 			t.Errorf("%s's memory sync reads a link %t (its queue's meter: %t), across a link %t; "+
 				"want a link %t, the queue's meter, across a link %t", c.name, c.cfg.Link != nil,
 				c.want != nil && c.cfg.Link == c.want, c.cfg.AcrossLink, c.want != nil, c.acrossIt)
+		}
+		if c.cfg.Window != c.window {
+			t.Errorf("%s's memory sync pulls inside the window %p, want its queue's link window %p",
+				c.name, c.cfg.Window, c.window)
 		}
 	}
 }
