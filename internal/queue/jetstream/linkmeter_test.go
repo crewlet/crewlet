@@ -31,7 +31,7 @@ const meterRate = 128 << 10
 // leaf writes are given ([linktest.SharedFIFO]).
 const meterInflight = 64 << 10
 
-// meterSpan is the span the meter's cases ask whether the link moves over.
+// meterSpan is the span the blackholed case asks whether the link stands still over.
 const meterSpan = 2 * time.Second
 
 // meterFleet is a member serving leaves, a link in front of its leaf
@@ -143,14 +143,14 @@ func incompressibleMiB(t *testing.T) []byte {
 	return incompressible(t, 1<<20)
 }
 
-// A LINK'S METER COUNTS WHAT CROSSES IT EACH WAY, at the leaf's own socket
-// and never ahead of the link: a mebibyte up from the leaf, then one down to
-// it, across a FIFO link with a pinned relay receive buffer. At every piece
-// the link carries (its count, not a clock): acknowledged ≤ the link's read
-// plus that buffer (all a kernel takes before the relay reads); read ≤ what
-// the link wrote to the leaf; and past a span's warm-up the link reads moving
-// at a floor of half its rate — up by acknowledged bytes alone, down by read
-// ones alone. Each transfer is then counted whole.
+// A LINK'S METER COUNTS WHAT CROSSES IT EACH WAY, at the leaf's socket and
+// never ahead of the link: a mebibyte up, then one down, across a FIFO link
+// with a pinned receive buffer. At every piece the link carries: acknowledged
+// <= its read plus that buffer; read <= what it wrote to the leaf; and past a
+// span's warm-up the meter's counts, read on the link's clock (its carried
+// bytes at its rate, which a loaded relay falls behind), clear the meter's
+// line at a floor of half the rate: up by acknowledged bytes alone, down by
+// read ones, once the leaf has read what it was handed. Each is counted whole.
 //
 // Mutant: no acknowledgement half — the upload never moves nor is counted.
 // Mutant: acknowledged = written — past what the link read and its buffer.
@@ -159,22 +159,27 @@ func TestALinksMeterCountsWhatCrossesItEachWay(t *testing.T) {
 	f := newMeterFleet(t, func(t testing.TB, target string) *linktest.Link {
 		return linktest.SharedFIFO(t, target, meterRate, meterInflight)
 	})
-	f.meter.setFloor(meterRate / 2)
+	const floor = meterRate / 2
 	rcv := uint64(f.link.Buffers().Receive)
 	if rcv == 0 {
 		t.Fatal("the link reports no receive buffer granted")
 	}
 	payload := incompressibleMiB(t)
-	// warm is how far into a transfer the link must be before a span of it
-	// can be asked about: the span, two of the meter's readings, and the
-	// connection's queue on the link.
-	warm := int64(meterRate*(meterSpan+2*meterPeriod)/time.Second) + meterInflight
+	// ahead is how far the counts can stand from the link's: acknowledged up
+	// to rcv past its read, read up to its inflight past what it carried, and
+	// a window read but not yet acknowledged. span keeps the line clear of it
+	// with a second to spare; warm also lets the connection's queue fill.
+	ahead := 2*float64(rcv) + meterInflight
+	span := time.Duration(ahead/(meterRate*(1-movingShare*floor/meterRate))*float64(time.Second)) + time.Second
+	warm := int64(meterRate*span/time.Second) + meterInflight
 
 	var (
-		mu    sync.Mutex
-		phase linktest.Way
-		start int64
-		moved int
+		mu       sync.Mutex
+		phase    linktest.Way
+		start    int64
+		base     uint64
+		readings []reading
+		moved    int
 	)
 	f.link.Watch(func(c linktest.Crossing) {
 		if c.Account != server.DEFAULT_GLOBAL_ACCOUNT {
@@ -196,19 +201,30 @@ func TestALinksMeterCountsWhatCrossesItEachWay(t *testing.T) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if c.Way != phase || c.Count.Carried-start < warm {
+		if c.Way != phase {
+			return
+		}
+		into := c.Count.Carried - start
+		if c.Way == linktest.ToNode && !leafRead(t.Context(), f.meter, base+uint64(into)) {
+			return
+		}
+		acked, read := f.meter.Carried()
+		readings = append(readings, reading{at: time.Unix(0, 0).Add(time.Duration(into) * time.Second / meterRate),
+			acked: acked, read: read})
+		if into < warm {
 			return
 		}
 		moved++
-		if !f.meter.Moving(meterSpan) {
-			t.Errorf("%s, %d bytes into a transfer at the link's rate, the link reads still over %v",
-				c.Way, c.Count.Carried-start, meterSpan)
+		if !movingOver(readings, span, floor) {
+			t.Errorf("%s, %d bytes into a transfer at the link's rate, the link reads still over %v of it",
+				c.Way, into, span)
 		}
 	})
 	transfer := func(way linktest.Way, send func(), arrived <-chan []byte) {
 		t.Helper()
 		mu.Lock()
-		phase, start, moved = way, f.link.Count(server.DEFAULT_GLOBAL_ACCOUNT, way).Carried, 0
+		_, base = f.meter.Carried()
+		phase, start, readings, moved = way, f.link.Count(server.DEFAULT_GLOBAL_ACCOUNT, way).Carried, nil, 0
 		mu.Unlock()
 		send()
 		bound := time.NewTimer(2 * time.Minute) //fixedwait:liveness
@@ -275,6 +291,26 @@ func TestALinksMeterCountsWhatCrossesItEachWay(t *testing.T) {
 	}
 	// No piece the teardown carries is asked about.
 	f.link.Watch(nil)
+}
+
+// leafRead reports whether the meter has read want bytes off the leaf's link,
+// asking until it has or ctx ends.
+func leafRead(ctx context.Context, m *LinkMeter, want uint64) bool {
+	if _, read := m.Carried(); read >= want {
+		return true
+	}
+	poll := time.NewTicker(5 * time.Millisecond) //fixedwait:liveness
+	defer poll.Stop()
+	for {
+		select {
+		case <-poll.C:
+		case <-ctx.Done():
+			return false
+		}
+		if _, read := m.Carried(); read >= want {
+			return true
+		}
+	}
 }
 
 // A LINK'S METER STANDS STILL ON A BLACKHOLED LINK: a mebibyte the leaf
