@@ -683,18 +683,17 @@ func (c *Coordinator) hostStoreSeen(ctx context.Context, run PendingRun, failed 
 // and the box the asker named, on a run whose box this node launched, in the
 // state the read is made in: a collection's on a run whose completion is
 // claimed ([StatusResumed]), a stop's on a run whose stop is decided and not
-// yet read, and a loss's on a run whose loss is decided and whose box is still
-// to be read ([Coordinator.capturesLoss]): its job's session not settled by a
-// take that ended it, or a note a hook served the job still to confirm; beside
-// a session still being kept, the loss's read stands by for it. So a request —
-// even a replayed or a forged one past the channel's own checks — can make no
-// read the run's own protocol is not making: a running job's box is never
-// paused under it, and no job is ended under it that is not already decided
-// stopped or lost, or claimed past its turn's cap — as this node's clock reads
-// the row's, or as the job's record says an earlier collection of it found it
-// ([LaunchRecord.EndedAtDeadline]) — a stop's and a loss's read end the job
-// first, and a collection's a job still working past its cap
-// ([Coordinator.endJob]), here on its host, the only node that can.
+// yet read, and a loss's on a run whose loss is decided and whose box is unread
+// ([Coordinator.capturesLoss]): its job's session not settled by a take that
+// ended it, or a hook's served note unconfirmed; beside a session still being
+// kept, the loss's read stands by for it. So a request — even a replayed or a
+// forged one past the channel's own checks — can make no read the run's own
+// protocol is not making: no running job's box is paused under it, and no job
+// ended that is not already decided stopped or lost, or claimed past its turn's
+// cap — as this node's clock reads the row's, or as the job's record says an
+// earlier collection of it found it ([LaunchRecord.EndedAtDeadline]) — a stop's
+// and a loss's read end the job first, and a collection's a job still working
+// past its cap ([Coordinator.endJob]), on its host, the one node that can.
 func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandboxID string,
 	read BoxRead) (Result, bool, error) {
 
