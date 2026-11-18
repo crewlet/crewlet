@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -90,6 +91,53 @@ func (s *suite) runLane(t *testing.T) {
 		batches.await(t, "the person's message dispatched first", func(got [][]string) bool {
 			return len(got) > 0 && equalStrings(got[0], []string{"person"})
 		})
+	})
+
+	t.Run("a_priority_event_published_mid_drain_is_the_next_partition", func(t *testing.T) {
+		t.Parallel()
+		// A priority event that lands while a drain's first partition runs
+		// is the next partition, ahead of the rest of the drain, which still
+		// runs once each.
+		q := s.start(ctx, t)
+		topic := inbox()
+		queueBacklog(ctx, t, q, topic, "g", backlog(5)...)
+		batches := newBatchJournal()
+		var once sync.Once
+		handler := func(ctx context.Context, evs []*events.Event) queue.Result {
+			first := false
+			once.Do(func() { first = true })
+			if first {
+				if err := q.Publish(ctx, topic, person()); err != nil {
+					t.Errorf("publish the person's message mid-drain: %v", err)
+				}
+				// SEEN BY THE BROKER before this turn ends, as a message
+				// published a turn's length earlier is. Off the test's
+				// goroutine, so a stall is an Errorf, never a Fatalf.
+				deadline := time.Now().Add(stallFor)
+				for {
+					if w, err := q.Waiting(ctx, topic, "g"); err == nil && w.Priority == 1 {
+						break
+					}
+					if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
+						t.Errorf("the person's message never reached the lane")
+						break
+					}
+					time.Sleep(2 * time.Millisecond) //fixedwait:liveness
+				}
+			}
+			batches.record(evs)
+			return queue.Ack()
+		}
+		subscribeBatch(ctx, t, q, topic, "g", handler, queue.NewBatchOptions(0, 10))
+		batches.await(t, "every event settled exactly once", func(got [][]string) bool {
+			return equalStrings(settled(got), slices.DeleteFunc(everyLabel(5),
+				func(l string) bool { return l == "followup" }))
+		})
+		got := batches.all()
+		if !equalStrings(got[0], []string{"background-0"}) || !equalStrings(got[1], []string{"person"}) {
+			t.Fatalf("deliveries %v, want background-0 and then the person's message, ahead "+
+				"of the four partitions the drain still held", got)
+		}
 	})
 
 	t.Run("a_partition_wake_deeper_than_the_drain_runs_once_in_its_own_turn", func(t *testing.T) {

@@ -7,62 +7,35 @@ import (
 	"time"
 )
 
-// WHAT A GIT PROCESS SAYS WENT WRONG IS READ FROM ITS TRACE2 FORMAT STRINGS.
+// The sink classifies a run by each error event's FORMAT, never its message
+// nor stderr, which carry the client's request text (package doc, "What went
+// wrong is classified from git's own format strings").
 //
-// Every process the pool runs writes git's trace2 EVENT stream to a pipe the
-// pool gives it as fd 3 (GIT_TRACE2_EVENT=3; brief, nesting 1 — gitproc.go's
-// base environment), and so does every process it starts — upload-pack's
-// pack-objects, receive-pack's index-pack and rev-list, an alternate's
-// for-each-ref — since git passes the environment and the descriptor on. Each
-// of git's reports (die, error, warning, BUG) is one `error` event carrying
-// the report's FORMAT (`fmt`) — the constant git passed, the one its source
-// fixes — beside the formatted message (`msg`). The classification reads the
-// format and NEVER the message, nor stderr: upload-pack copies the CLIENT's
-// request text into the messages it dies with ("unexpected line: '<arg>'", a
-// filter spec, an unparsed want, newlines and all), so a reading of the words
-// let any token that may fetch force a full re-download of a healthy cache.
-// The request's text lands in an event's arguments only; every format a
-// request was measured to reach (74 forms on four gits) is a constant of
-// git's that names no damage.
-//
-// The stream is untrusted VOLUME and is read to its end, always: a pipe the
-// sink stopped reading would block git's next write until the run's deadline.
-// A line longer than MaxLine is skipped whole, unparsed, and counted
-// (Trace.Unread) — no damage event comes near it (the longest measured is
-// 559 bytes, bounded by its format, object ids and the cache's own paths),
-// while a request can make upload-pack echo one pkt-line as a single event of
-// 390 KB. Only lines beginning with the two prefixes below are decoded, each
-// as ONE JSON value with nothing after it; trace2 escapes every quote and
-// control byte inside a string, so a fragment of request text can never
-// begin such a line, and a line one escaped write interleaved with another
-// fails the whole-line decode.
-//
-// A DAMAGE GIT NAMES ONLY THROUGH A BARE "%s" is a HINT, never a kind: git
-// 2.56 reports a corrupt packed object by formatting the sentence into a
-// buffer and dying with die("%s", buf), and sometimes (a header whose size is
-// off) with no other report beside it. The sink recognises exactly one
-// sentence in such an event, anchored at both ends and to the run's own pack
-// directory, and records the pack it nominates (Trace.Hints); what decides
-// is that pack's bytes against its row (cache.Cache.ConfirmHint), never the
-// message.
+// The stream is untrusted volume, read to its end always: a pipe the sink
+// stopped reading would block git's next write until the run's deadline. A
+// line past MaxLine is skipped unparsed and counted (Trace.Unread): no damage
+// event nears it (the longest measured is 559 bytes), but upload-pack can echo a
+// request as one 390 KB event. Only lines beginning with a prefix below are
+// decoded, each as ONE JSON value: trace2 escapes quotes and control bytes in
+// strings, so request text never begins such a line, and two interleaved
+// writes fail the whole-line decode. A bare-"%s" damage is a Hint (hintOf).
 
-// The two event lines the sink decodes: a constant check of a line's first
-// bytes, so every other line costs a newline scan.
+// The two event lines the sink decodes, told by their first bytes, so every
+// other line costs only a newline scan.
 var (
 	errorPrefix   = []byte(`{"event":"error",`)
 	versionPrefix = []byte(`{"event":"version",`)
 )
 
 // maxHints is the most hints one run records: a damaged pack names many
-// objects, and a repair confirms them in turn only until one's pack is not
-// its row's — each pack hashed once until something writes into the copy,
-// however many hints name it (cache.Cache.ConfirmHint) — so a run's hints
-// past the first few name packs already decided.
+// objects, but a repair confirms hints only until one's pack is not its row's,
+// hashing each pack once (cache.Cache.ConfirmHint), so hints past the first
+// few name packs already decided.
 const maxHints = 16
 
-// maxFormats is the most distinct formats one run records (Trace.Formats):
-// git's formats are constants of its own, a few each run, so the bound is
-// never met by a real run and holds the record to a few kilobytes if one is.
+// maxFormats is the most distinct formats one run records (Trace.Formats): a
+// real run reports a few, so the bound only holds an abnormal record to a few
+// kilobytes.
 const maxFormats = 64
 
 // Trace is what a run's trace2 event stream said, read whole.
@@ -74,35 +47,31 @@ type Trace struct {
 	// version event and not decoding as one. A request can cause it (an
 	// echoed pkt-line); it is never a damage event.
 	Unread int
-	// Version is the git version the leader's version event names (its
-	// `exe`), and EventVersion that event's `evt` — the format of the stream
-	// (4 on every git a pool runs, measured on 2.55.0 and 2.56.0), logged so
-	// a later git's new format is seen; Version is empty for a git that wrote
-	// no stream.
+	// Version is the git version the leader's version event names (`exe`),
+	// empty for a git that wrote no stream; EventVersion is that event's
+	// `evt`, the stream's format (4 on 2.55 and 2.56), logged so a later
+	// git's new format is seen.
 	Version, EventVersion string
 	// Kinds is every kind an event's format classifies as.
 	Kinds KindSet
 	// Formats is the canonical format of every error event, each once, in
-	// the order first met, at most maxFormats: what a run reported, for
-	// logs and the suite.
+	// the order first met, at most maxFormats, for logs and the suite.
 	Formats []string
 	// Hints is the packs a bare-"%s" event nominated as holding a corrupt
-	// object (trace.go), each once, at most maxHints.
+	// object (hintOf), each once, at most maxHints.
 	Hints []Hint
 	// Crashes is the error events reporting a process of the run's tree
-	// dying of a signal (crashFormats): upload-pack's report of its
-	// pack-objects, run-command's of any child it waited for. Never a row
-	// and never a kind — a crash says something read the repository and
-	// died, not what it could not read — but Result.Crashed reads it.
+	// dying of a signal (crashFormats). Never a kind: a crash says something
+	// died reading the repository, not what it could not read; Result.Crashed
+	// reads it.
 	Crashes int
 }
 
-// Reported reports whether an error event of the run printed any of formats —
-// each a printf format as git's source spells it, read in the canonical form
-// every event's format is recorded in. For a caller that answers one of git's
-// own refusals of its request in its own words (a blame's range past the
-// file's end): by the FORMAT, never the message, which carries whatever the
-// request named — a path among it.
+// Reported reports whether an error event of the run printed any of formats,
+// each as git's source spells it (compared canonically). It lets a caller
+// answer one of git's refusals in its own words (a blame's range past the
+// file's end) by the format, never the message, which carries what the
+// request named.
 func (t Trace) Reported(formats ...string) bool {
 	for _, f := range formats {
 		c := canonicalFormat(f)
@@ -116,12 +85,10 @@ func (t Trace) Reported(formats ...string) bool {
 }
 
 // crashFormats are git's reports of a process of the run's tree dying of a
-// signal, by canonical format: run-command's wait_or_whine for any child a
-// git process waited for (every git), and 2.56's own for the pack-objects
-// upload-pack runs. Both leave SIGPIPE out — a consumer that hung up — and
-// run-command SIGINT and SIGQUIT too. Recognised by their formats and never
-// their messages: the first's "%s" is the child's argv[0], never a request's
-// text, but nothing here needs to trust that.
+// signal: run-command's wait_or_whine for any child (every git), and 2.56's
+// for upload-pack's pack-objects. Both leave out SIGPIPE, a consumer that hung
+// up, and run-command SIGINT and SIGQUIT too. Matched by format, never message, though the first's "%s" is only the
+// child's argv[0].
 var crashFormats = map[string]bool{
 	canonicalFormat(`%s died of signal %d`):           true,
 	canonicalFormat(`pack-objects died of signal %d`): true,
@@ -150,9 +117,8 @@ type traceSink struct {
 	// dir is the run's Cmd.Dir: the one directory a hint's pack may lie in.
 	dir string
 	// line is the line in progress, held only while it may be an event the
-	// sink decodes, and never past MaxLine; skip is set once it is not —
-	// the rest of it is passed over to its newline — and long once it ran
-	// past MaxLine, which is counted as unread.
+	// sink decodes and never past MaxLine; skip passes the rest over to its
+	// newline once it is not, and long marks one past MaxLine (unread).
 	line       []byte
 	skip, long bool
 
@@ -210,12 +176,11 @@ func appendBounded(dst, b []byte) []byte {
 	return append(dst, b...)
 }
 
-// mayBeRead reports whether line, the start of a line, begins — or may yet
-// begin — an event the sink decodes: an error event, and a version event
-// while version (none has been read yet). Only the FIRST version event is
-// the run's — the leader writes it before it can start a child — so every
-// child's is passed over like any other line rather than decoded: a clone's
-// stream then costs one decode, not one a process.
+// mayBeRead reports whether line, the start of a line, begins or may yet
+// begin an event the sink decodes: an error event, or a version event while
+// version (none read yet). Only the FIRST version event is the leader's,
+// written before it can start a child, so children's are passed over: one
+// decode a run, not one a process.
 func mayBeRead(line []byte, version bool) bool {
 	return begins(line, errorPrefix) || version && begins(line, versionPrefix)
 }
@@ -241,9 +206,8 @@ func (s *traceSink) end() {
 	s.line, s.skip, s.long = s.line[:0], false, false
 }
 
-// finish reads a last line the stream did not end with a newline — a process
-// killed part way through a write — as a line. Called once, after the copier
-// has ended.
+// finish reads an unterminated last line (a process killed mid-write) as a
+// line. Called once, after the copier has ended.
 func (s *traceSink) finish() {
 	if len(s.line) > 0 || s.skip {
 		s.end()
@@ -270,9 +234,8 @@ func (s *traceSink) decode(line []byte) {
 	}
 }
 
-// classify reads one error event: by its format against the table — the row
-// naming a corrupt packed object read for its hint as well — and, a bare
-// "%s", for the one sentence a hint is.
+// classify reads one error event by its format against the table, and reads
+// a hint from a bare "%s" or the corrupt-packed-object row (packedObjectRow).
 func (s *traceSink) classify(format, message string) {
 	c := canonicalFormat(format)
 	if !s.seen[c] && len(s.t.Formats) < maxFormats {
@@ -291,10 +254,8 @@ func (s *traceSink) classify(format, message string) {
 		}
 		s.rank = max(s.rank, rank)
 		if c == packedObjectRow {
-			// The same sentence 2.56 reports through "%s" is a ROW on
-			// 2.55, and its message names the same pack: read as a hint
-			// too, under the same anchoring, so the repair can name the pack
-			// it would otherwise have to find (the cache's ConfirmHint).
+			// 2.55's row for 2.56's "%s" sentence names the same pack:
+			// a hint too, so the repair need not look for the pack.
 			if h, ok := hintOf(message, s.dir); ok {
 				s.hint(h)
 			}
@@ -312,9 +273,8 @@ func (s *traceSink) classify(format, message string) {
 	}
 }
 
-// packedObjectRow is the canonical format of git's sentence for a corrupt
-// packed object, a row of the table on 2.55 (classify.go), whose
-// message is the sentence a hint is read from (hintOf).
+// packedObjectRow is the canonical format of git's corrupt-packed-object
+// sentence, a row of the table on 2.55 (classify.go) whose message hintOf reads.
 var packedObjectRow = canonicalFormat(`packed object %s (stored in %s) is corrupt`)
 
 // hint records h, once, up to maxHints.
@@ -329,15 +289,12 @@ func (s *traceSink) hint(h Hint) {
 	}
 }
 
-// hintOf is the hint message names when it is EXACTLY git's sentence for a
-// corrupt packed object — "packed object <id> (stored in <pack>) is corrupt",
-// nothing before it and nothing after, reported through a bare "%s" (2.56) or
-// as the row whose format it is (2.55) — with <pack> a pack file of
-// dir's own pack directory, as rev-list spells it
-// (dir/objects/pack/pack-<checksum>.pack) or as upload-pack does, from inside
-// the repository (./objects/pack/pack-<checksum>.pack). Anything else names no
-// pack, and a run with no directory has no pack directory for a hint to be
-// anchored to.
+// hintOf is the hint message names when it is EXACTLY "packed object <id>
+// (stored in <pack>) is corrupt", nothing before or after, with <pack> a file
+// of dir's own pack directory as rev-list spells it
+// (dir/objects/pack/pack-<checksum>.pack) or upload-pack does
+// (./objects/pack/pack-<checksum>.pack). Anything else names no pack, nor does
+// a run with no dir to anchor to: the message may carry request text.
 func hintOf(message, dir string) (Hint, bool) {
 	if dir == "" {
 		return Hint{}, false

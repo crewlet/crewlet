@@ -13,37 +13,32 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 )
 
-// A PUSH'S CHANGE, AS ITS RECEIVER HANDLES IT: the options git handed the hook
-// read once (askChange), the change made ready for the push's proposal — its
-// source judged again, its room in the push's record measured (readyChange),
-// its title filled in beside the push's upload (titleChange) — and what
-// became of it told the pusher in one line
-// on the hook's stderr (changeLine). None of it ever refuses the push, which
-// lands or not by its commands alone (internal/gitlet's pushchange.go). A push
-// the handler refused whole before receive-pack ran never reaches the relay
-// that reads its options, and is told its refusal alone: nothing of it landed.
+// A PUSH'S CHANGE: read from the hook's options (askChange), made ready for the
+// push's proposal (readyChange), titled beside its upload (titleChange), and
+// told the pusher in one stderr line (changeLine). None of it refuses the push,
+// which lands by its commands alone (internal/gitlet's pushchange.go). A push
+// refused whole before receive-pack ran never reaches the relay that reads its
+// options, so it is told its refusal alone.
 
 // changeAsk is what a push's options asked of a change, and what became of it.
 type changeAsk struct {
-	// asked: the options asked for a change (`-o change`), whatever then
-	// became of it.
+	// asked: the options asked for a change (`-o change`), whatever became of it.
 	asked bool
 	// option is the change asked for, and source the index of the push's one
-	// branch command it is opened from — nil and -1 where the options asked
-	// for none, or its receiver answered it already.
+	// branch command it opens from: nil and -1 where none was asked or the
+	// receiver already answered it.
 	option *gitlet.ChangeOption
 	source int
-	// answer is what became of it: the receiver's own refusal, made before
-	// anything was proposed, and otherwise its committer's answer once the
-	// push is decided (gitlet.PushAnswer.Change) — nil where neither said.
+	// answer is the receiver's own refusal, made before anything was proposed,
+	// else the committer's once the push is decided (gitlet.PushAnswer.Change);
+	// nil where neither said.
 	answer *gitlet.ChangeAnswer
 }
 
 // askChange reads the change a push's options ask for, against the commands
-// git handed the hook: nothing asked where they ask for none; the receiver's
-// own refusal where they are no change's (bad_option) or the push sets no
-// branch or several (gitlet.ChangeSource); and otherwise the change, which the
-// landing proposes once the push is to be proposed (readyChange).
+// git handed the hook: nothing where they ask for none; the receiver's own
+// refusal where they are no change's (bad_option) or the push sets no branch
+// or several (gitlet.ChangeSource); otherwise the change (readyChange).
 func askChange(options []string, cmds []gitlet.Command) changeAsk {
 	opt, err := gitlet.ParseChangeOptions(options)
 	switch {
@@ -60,11 +55,10 @@ func askChange(options []string, cmds []gitlet.Command) changeAsk {
 	return changeAsk{asked: true, option: opt, source: i}
 }
 
-// askedChange is the change a landing opens: the one its builder formed
-// (landing.Change, a revert_change's), or else what its push's options ask
-// for (askChange) — one ask either way, made ready and answered by the same
-// steps, so an engine write's change is opened in its push's record exactly
-// as a person's `-o change` is.
+// askedChange is the change a landing opens: its builder's (landing.Change, a
+// revert_change's), else what its push's options ask for (askChange). Either
+// is one ask, readied and answered by the same steps, so an engine write's
+// change opens exactly as a person's `-o change` does.
 func (l *landing) askedChange() changeAsk {
 	if l.Change == nil {
 		return askChange(l.PushOptions, l.Commands)
@@ -77,21 +71,18 @@ func (l *landing) askedChange() changeAsk {
 	return changeAsk{asked: true, option: &opt, source: i}
 }
 
-// readyChange makes the change a push asks for ready for its proposal, once
-// the push is to be proposed — cmds its commands as the landing has decided
-// them so far, proposed the same as its proposal carries them — and answers
-// it here, leaving it out, where:
+// readyChange makes the change a push asks for ready for its proposal — cmds
+// the commands as the landing has decided them so far, proposed as the
+// proposal carries them — and instead answers it here, returning nil, where:
 //
-//   - its source command was refused by now — stale, a protection, a blob:
-//     no_source, since the push moves no branch for it to propose;
-//   - the change is too wide for the push's record beside its commands at
-//     their largest (gitlet.Proposal.ValidateCommands): bad_option, since a
-//     push of the change's branch alone always has room for it.
+//   - its source command was refused: no_source, as the push moves no
+//     branch for it;
+//   - it is too wide for the push's record beside its commands at their
+//     largest (gitlet.Proposal.ValidateCommands): bad_option, since a push of
+//     the change's branch alone always has room for it.
 //
-// A change whose options named no title is answered with none, and measured
-// with one at its longest: the landing fills it in beside the push's upload
-// (titleChange), so no push waits on a git process before its bytes start
-// for the object store.
+// An untitled change is measured with a title at its longest and titled later
+// (titleChange), so no push waits on a git process before its upload starts.
 func (s *Server) readyChange(l *landing, ask *changeAsk, cmds, proposed []gitlet.Command) *gitlet.ChangeOption {
 	if ask.option == nil || ask.answer != nil {
 		return nil
@@ -103,8 +94,8 @@ func (s *Server) readyChange(l *landing, ask *changeAsk, cmds, proposed []gitlet
 			source.Reason)}
 		return nil
 	}
-	// MEASURED AS IT WILL BE PROPOSED (land's proposal): its principal and
-	// whom it is made for, which its committer stamps on a seat's entry.
+	// Measured as land's proposal carries it: Principal and WrittenFor
+	// included, which its committer stamps on a seat's entry.
 	opt := *ask.option
 	err := gitlet.Proposal{Principal: l.Principal, WrittenFor: l.WrittenFor, Via: l.Via, Node: s.o.NodeID,
 		Commands: proposed, Change: &opt}.ValidateCommands()
@@ -123,15 +114,11 @@ func (s *Server) readyChange(l *landing, ask *changeAsk, cmds, proposed []gitlet
 	return &opt
 }
 
-// titleChange is the work that fills in the title of change, the change a
-// push proposes (readyChange), where its options named none — defaultTitle of
-// source, the command it is opened from, written into change — and nil where
-// there is nothing to fill in. The landing runs it beside the push's upload
-// and waits for it before the proposal is checked (introduceAndStore), so
-// the title is read while the bundle's bytes are already on their way: the
-// read refuses nothing — it falls back to the branch's name and the
-// commit's id — so nothing need wait for it before the upload. source is
-// copied here, so the work reads nothing of the landing's commands.
+// titleChange is the work that titles change from source (defaultTitle) where
+// its options named none, nil where nothing needs filling. The landing runs
+// it beside the push's upload and waits for it before the proposal is checked
+// (introduceAndStore): the read refuses nothing, so the upload need not wait.
+// source is a copy, so the work reads none of the landing's commands.
 func (s *Server) titleChange(l *landing, change *gitlet.ChangeOption, source gitlet.Command) func(context.Context) {
 	if change == nil || change.Title != "" {
 		return nil
@@ -139,21 +126,18 @@ func (s *Server) titleChange(l *landing, change *gitlet.ChangeOption, source git
 	return func(ctx context.Context) { change.Title = s.defaultTitle(ctx, l, source) }
 }
 
-// commitHeadBytes is the most of a commit object the title of a change is
-// read from: 64 KiB — its headers (a tree, its parents at 48 bytes each, two
-// identities, a signature of a few kibibytes) and the start of its message,
-// which no commit a person or a harness writes takes past it before its
-// subject ends. A commit whose subject it cuts is titled by what was read.
+// commitHeadBytes is the most of a commit object a change's title is read
+// from: 64 KiB holds its headers (a tree, 48-byte parents, two identities, a
+// signature of a few KiB) and any subject a person or a harness writes. A
+// subject it cuts is titled by what was read.
 const commitHeadBytes = 64 << 10
 
-// defaultTitle is the title of a change a push's options open without naming
-// one: the subject of the commit the push sets its source to — what that
-// commit says it does, which is what a change is first read by — read in the
-// push's own scratch, whose pack or alternate holds every commit a push sets
-// a ref to; and, where it cannot be read or is no title, the branch's name
-// and then the commit's id, each made a title (gitlet.DeliveredTitle) — never
-// the name raw, which may hold what a title may not: a title always, since a
-// push's change is never refused for its title.
+// defaultTitle titles a change whose options named none: the subject of the
+// commit its source is set to, read in the push's scratch (whose pack or
+// alternate holds every commit a push sets a ref to); else the branch's name,
+// then the commit's id. Each is made a title (gitlet.DeliveredTitle), never
+// used raw, since a branch name may hold what a title may not and a push's
+// change is never refused for its title.
 func (s *Server) defaultTitle(ctx context.Context, l *landing, source gitlet.Command) string {
 	branch := strings.TrimPrefix(source.Ref, "refs/heads/")
 	head := &headBytes{max: commitHeadBytes}
@@ -161,9 +145,9 @@ func (s *Server) defaultTitle(ctx context.Context, l *landing, source gitlet.Com
 		Dir: l.Scratch.Dir, Alternate: l.Scratch.Alternate, Args: []string{"cat-file", "commit", source.New},
 		Stdout: head, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
 	}); err != nil {
-		// A READ ENDED WITH ITS LANDING — the upload or the listing beside
-		// it failed (introduceAndStore) — says nothing of the title: the
-		// push fails for what ended it, and is logged for that.
+		// A read ended with its landing (introduceAndStore's upload or
+		// listing failed) says nothing of the title: the push fails, and
+		// is logged, for what ended it.
 		if ctx.Err() == nil {
 			s.log.Warn("code_change_title_unread", "repo", l.Synced.Repo.Name, "push_id", l.PushID,
 				"commit", source.New, "error", err)
@@ -173,24 +157,15 @@ func (s *Server) defaultTitle(ctx context.Context, l *landing, source gitlet.Com
 	return gitlet.DeliveredTitle(logSubject(head.buf), branch, source.New)
 }
 
-// logSubject is the subject of raw, a commit object as `git cat-file commit`
-// prints it, whole or its head, as `git log --format=%s` shows it: its
-// message's first paragraph from where the message's subject starts — past
-// lines of nothing but git's white space, and with nothing from a NUL on
-// (commitSubject) — each line without its trailing white space and the lines
-// joined by a space (pretty.c's format_subject), or "" where raw holds no
-// message. Its headers end at the first blank line: a header's continuation
-// lines (a signature's) each start with a space. Its bytes are the commit's,
-// never re-encoded: a subject in another encoding is no title
-// (gitlet.DeliveredTitle).
-//
-// NOT commitSubject's subject (message.go), which is a message's first LINE —
-// the subject a revert quotes, as the sequencer finds it — since a change is
-// first read by what `git log` shows of its commit: a subject wrapped over two
-// lines titles it whole. It STARTS where that one does, as git's two do, so a
-// message opened with blank lines (`git commit --cleanup=verbatim`, a commit
-// another tool wrote) is titled by its first paragraph, as `git log` shows it,
-// rather than by its branch's name, and a NUL ends it where it ends git's
+// logSubject is the subject `git log --format=%s` shows of raw, a commit
+// object (whole or its head) as `git cat-file commit` prints it: the message's
+// first paragraph from where commitSubject starts it (past white-space lines,
+// nothing from a NUL on), each line right-trimmed and joined by a space
+// (pretty.c's format_subject); "" for no message. Headers end at the first
+// blank line, as a continuation line starts with a space. Bytes are never
+// re-encoded: a subject in another encoding is no title (gitlet.DeliveredTitle).
+// Not commitSubject's first LINE, which a revert quotes: a change is first read
+// by what `git log` shows, so a wrapped subject titles it whole
 // (TestAChangesDefaultTitleIsGitLogsSubject).
 func logSubject(raw []byte) string {
 	_, msg, ok := bytes.Cut(raw, []byte("\n\n"))
@@ -227,11 +202,10 @@ func (h *headBytes) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// resolvedChange is what the change of a push answered pending came to, once
-// its row was found: the change it opened, which its outcome read beside the
-// row (gitlet.PushOutcome.Opened); otherwise the decision's (tentative) — why
-// it opened none, or the live change it named where the decision knew its
-// number; and nil where nothing says, or the push asked for no change.
+// resolvedChange is what the change of a push answered pending came to once
+// its row was found: the change it opened (gitlet.PushOutcome.Opened); else
+// the decision's tentative answer, why it opened none or the live change it
+// named; nil where nothing says or no change was asked for.
 func resolvedChange(asked bool, tentative *gitlet.ChangeAnswer, out gitlet.PushOutcome,
 	pushID string) *gitlet.ChangeAnswer {
 
@@ -247,54 +221,44 @@ func resolvedChange(asked bool, tentative *gitlet.ChangeAnswer, out gitlet.PushO
 	return &resolved
 }
 
-// The lines a push's change is told in, each after `crewlet: ` on the hook's
-// stderr — what git prints as `remote: crewlet: …` — which the concept page's
-// table holds whole (TestWhatGitPrintsNamesEveryChangeAnswer).
+// The lines a push's change is told in, after `crewlet: ` on the hook's stderr
+// (git prints `remote: crewlet: …`); the concept page's table holds them all
+// (TestWhatGitPrintsNamesEveryChangeAnswer).
 const (
-	// changeOpenedLine and changeUpdatedLine name the change a push opened,
-	// and the live one its source already headed, by its name on its
-	// repository (gitlet.ChangeRef) and the address of its page (changeLink):
-	// a person who pushed with `-o change` opens the change from the line
-	// git printed, where its reviewers, its findings and its merge are.
+	// changeOpenedLine and changeUpdatedLine name the change a push opened, or
+	// the live one its source headed (gitlet.ChangeRef), and link its page
+	// (changeLink), so the pusher opens it from what git printed.
 	changeOpenedLine  = "change %s opened: %s"
 	changeUpdatedLine = "change %s updated: %s"
-	// changeOpenedBare and changeUpdatedBare are the same two lines from a
-	// host told no address of the deployment (Options.ExternalBase): the
-	// change's name, and no link that could not be opened. No engine node
-	// that serves a push is one — every push reaches it through the API
-	// listener, which `api.external_url` is required beside.
+	// changeOpenedBare and changeUpdatedBare are those lines from a host told
+	// no base (Options.ExternalBase): no link that could not be opened. No
+	// engine node serving a push is one, as pushes arrive through the API
+	// listener, which requires `api.external_url`.
 	changeOpenedBare  = "change %s opened"
 	changeUpdatedBare = "change %s updated"
 	// changeRefusedLine is why a push opened none, its code and sentence.
 	changeRefusedLine = "change not opened: %s: %s"
 	// changeUnlanded is a push that did not land, and so opened nothing.
 	changeUnlanded = "change not opened: nothing of this push landed"
-	// changePending is a push whose outcome is not known here — pending, or
-	// unknown — with which its change lands or not.
+	// changePending is a push whose outcome is not known here (pending or
+	// unknown); its change lands with it or not.
 	changePending = "change not known yet: this push has not applied here, and the change it asked for " +
 		"lands with it or not at all"
-	// changeUnknown is a push that landed, whose answer does not say what
-	// became of its change: one that had landed in an earlier record, whose
-	// own answer was lost.
+	// changeUnknown is a push that landed in an earlier record and lost its
+	// own answer, so nothing says what became of its change.
 	changeUnknown = "change not known: this push landed, and the answer it was given does not say what " +
 		"became of its change"
 )
 
-// changeLine is the one line a push that asked for a change is told of it, ""
-// for one that asked for none:
+// changeLine is the one line a push that asked for a change is told of it (""
+// for none), base (Options.ExternalBase) where its page is linked:
 //
-//   - why it opened none, the receiver's or the decide's word, which holds
-//     whatever becomes of the push (changeRefusedLine);
-//   - for a push that landed, the change it opened or the one it named
-//     (changeOpenedLine, changeUpdatedLine);
-//   - for one whose outcome is not known here, that its change is decided
-//     with it (changePending);
-//   - for one that did not land, that nothing of it did (changeUnlanded);
-//   - and for one that landed with no word of its change, that it is not
-//     known (changeUnknown).
-//
-// base is the address a person reaches the deployment at
-// (Options.ExternalBase), on which the change's page is linked.
+//   - a refusal, the receiver's or the decide's, whatever becomes of the push
+//     (changeRefusedLine);
+//   - landed: the change opened or named (changeOpenedLine, changeUpdatedLine);
+//   - outcome not known here: decided with the push (changePending);
+//   - not landed: nothing of it did (changeUnlanded);
+//   - landed with no word of its change: not known (changeUnknown).
 func changeLine(c changeAsk, r pushResult, repo, base string) string {
 	if !c.asked {
 		return ""
@@ -322,13 +286,11 @@ func changeLine(c changeAsk, r pushResult, repo, base string) string {
 	return fmt.Sprintf(changeUpdatedLine, name, link)
 }
 
-// changeLink is the address of change number on repo's page on the
-// deployment's base — `<api.external_url>/dashboard#/gitlet/repos/web/changes/42`
-// — and "" on a host told no base. The ONE place the link git prints is
-// composed: the dashboard's shell (auth.PathDashboard, which every link a
-// person follows points at, as an invitation's and an artifact's do) and the
-// change's route in it (gitlet.ChangeAddress, which the dashboard's links suite
-// holds to its router).
+// changeLink is the address of change number of repo on base
+// (`<api.external_url>/dashboard#/gitlet/repos/web/changes/42`), "" for no
+// base: the ONE place the link git prints is composed, from the dashboard's
+// shell (auth.PathDashboard) and the change's route (gitlet.ChangeAddress,
+// which the dashboard's links suite holds to its router).
 func changeLink(base, repo string, number int64) string {
 	if base == "" {
 		return ""

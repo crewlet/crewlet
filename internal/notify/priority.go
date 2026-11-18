@@ -31,6 +31,25 @@ import (
 // schedule's fire) is background, and the order among background work is
 // what it always was. [Service] applies the rule as it publishes each wake.
 
+// LaneRule is a [Prompt] that narrows the lane to the wakes whose words a
+// person waits on a reply to: a task a person assigns or moves owes the seat's
+// work, which the pickup orders (ADR-0159). A prompt without it rides them all.
+type LaneRule interface {
+	PersonWaits(n Inbound) bool
+}
+
+// RidesLane reports whether the wake n makes through prompt rides its seat's
+// priority lane: addressed, written by a person, and words the person waits on.
+func RidesLane(prompt Prompt, reg Parties, n Inbound) bool {
+	if prompt == nil || !prompt.Addressed(n) || !WrittenByPerson(reg, n) {
+		return false
+	}
+	if rule, ok := prompt.(LaneRule); ok {
+		return rule.PersonWaits(n)
+	}
+	return true
+}
+
 // WrittenByPerson reports whether the text a notification carries was written
 // by a person rather than by an agent or by the engine itself.
 //

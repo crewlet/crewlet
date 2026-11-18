@@ -19,139 +19,17 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// A BOX'S ADMISSION: admit for a request under /box/git/ — the same answers to
-// the same requests, its credential a box's own. Two boxes reach Gitlet
-// there, told apart by the Basic user name their credential presents: a seat's
-// CODING BOX (BoxUser), admitted by its run's row with its grant the run's on
-// top of the seat's — admitRun, the steps below — and a CHECK'S BOX
-// (gitlet.CheckUser), admitted by its attempt's row to fetch one commit
-// (checkadmit.go).
-//
-// # In order, each refusal its own answer
-//
-//  1. NAME — as admit's: the URL's segment, one `.git` stripped, held to the
-//     grammar.
-//  2. CREDENTIAL — git's Basic, user name [BoxUser] with the run's token as the
-//     password ([BoxTokens.Verify]), or [gitlet.CheckUser] with the check's
-//     ([CheckTokens.Verify]), each verified under [BoxKeyDomain] — and each
-//     user name's own token alone: a run's token presented as a check's, or a
-//     check's as a run's, verifies as neither ([boxCredential]). A box's token
-//     and NOTHING ELSE admits a box: the guard's resolution of the request
-//     (iam.From) is never read here, so neither an operator's bearer — which
-//     the guard marks anonymous on this unguarded route — nor a signed-in
-//     person's cookie, which it resolves there, admits anything, and an
-//     operator token presented as the password fails the verify like any
-//     other value. Each refusal is git's 401 challenge in the box's own words
-//     (auth.GitChallengeSaying), never the person's, which names an API token
-//     — the one credential a box must never hold. The step is [ChallengeBox],
-//     which the API's box routes on a node not serving Gitlet run too. A
-//     check's token goes on to admitCheck; a run's to admitRun, whose steps
-//     follow.
-//     2a. IN FLIGHT — at most MaxRunRequests of the run's requests at once
-//     on this node, the token's launch counted before anything is read for
-//     it; past them 503, reason run_busy (boxlimit.go).
-//  3. RUN — the row its token names ([Runs.Run]), THREE-VALUED: a store that
-//     cannot be read is 503 and never 401 (the credential was good, and
-//     nothing about it is known to be wrong); an unknown run, a launch the row
-//     has replaced and a run whose job has left its box are 403.
-//  4. GRANT, BY THE NAME THE RUN WAS GIVEN — before any read of the code log.
-//     A box is untrusted traffic, and step 6's refusing branch appends a
-//     barrier to the code log: resolved first, a box probing names it was
-//     never given — `git ls-remote` in a loop over guessed names — appended
-//     one barrier a guess, outside the census the log's barrier budget was
-//     sized by, until the log reached its ceiling and refused every push of
-//     the company (log_full). Granted first, step 6 is reached only for the at
-//     most a run's repositories the row names. A push of a repository the run
-//     was given to read is refused here too.
-//  5. STOP — a push only: a seat whose pause asked its running work to stop
-//     ([Runs.Stopped]) pushes nothing from a box. A person's pause with
-//     stop_running is the engine's emergency stop, and a detached executor
-//     is deliberately not fenced by it — it outlives its turn — so without
-//     this a box kept pushing to the company's repositories as the seat after
-//     a person stopped it. A pause without stop_running stops new work only,
-//     and a running job is work in flight, so its pushes land; and a fetch is
-//     never refused for a pause: a read changes nothing, and a box winding
-//     down may need one. Unknown — a node that has not read the pauses yet — is
-//     503, never "not stopped".
-//  6. REPOSITORY — resolved at the run's session (step 8), and again
-//     LINEARIZABLE where that answer would refuse — not found, a status that
-//     refuses op, or ANOTHER repository under the name: admit's rule that a
-//     refusal is never decided on a stale read, reached now only for a name
-//     the run was GIVEN — and only while the run's re-syncs last
-//     (boxlimit.go): spent, the session's answer stands — a name not found
-//     there, or naming another repository, refused saying it was not judged
-//     again. A name a rename left redirecting is answered for the
-//     repository it redirects to, under its current name, A PUSH INCLUDED,
-//     where admit refuses a person's push to tell them the new name: the
-//     grant is the repository's id, and the box's remote is the name its
-//     launch gave it, which nothing in the box changes. A name that now names
-//     another repository is refused as not given.
-//  7. THE SEAT'S GRANT — from the serving node's CURRENT chart (Options.Roster),
-//     held to the run's (gitlet.Grant.Within): a box does at most what both its
-//     row and its seat's own grant allow. And in a run whose turn a colleague
-//     seat woke (BoxRun.Ceiling), held to that colleague's own grant from the
-//     same chart (gitlet.Grant.Under) — what a seat does for a colleague is
-//     decided for the colleague too, as its code tools' reads and writes are
-//     (M3-decisions U40 (a)): a fetch the colleague could not make, and a
-//     command outside the seat's own work the colleague could not make, are
-//     refused, and its own work — the branches under its own namespace, and
-//     every branch of a repository it owns — stays its own. In a run whose
-//     turn a credential acting as no seat woke (BoxRun.WorkingFor), held to
-//     that credential's own grant the same way, which reads every repository
-//     and pushes none: the box fetches what its run was given and pushes its
-//     seat's own work alone, as the turn's own code writes for the credential
-//     do (ADR-0110). Whom the row names is held first to the rule every
-//     carrier is held to (gitlet.KindUnknownToThisBuild,
-//     gitlet.RunCarrierInvalid): a run whose row names a stranger, or names
-//     whom its turn works for as no checkout writes it — the zero kind, a
-//     handle or a login out of its grammar, a credential naming no app — is
-//     refused every request, the closed end; and one naming it by a kind
-//     this build does not know, a newer build's, is answered 503
-//     carrier_unknown, judged by no bound this node could only guess at
-//     (runCeiling): a node of a newer build judges it, and the harness's
-//     push or fetch again reaches one. A node with
-//     no chart, or one confirmed behind the company's configuration
-//     (Options.Current), judges no box's grant and answers 503: the
-//     configuration it failed to apply may be the one that revoked the seat,
-//     and the box's retry reaches another node, since /ready already drains
-//     this one at the balancer. A fetch the seat — or the colleague — may not
-//     read, a `visibility: unit` repository outside its unit, is 403. A push's
-//     commands are judged per ref on the same grant, at its advertisement and
-//     its receive, as a person's are.
-//  8. FRESHNESS — every read of the request's refs is at the run's SESSION:
-//     its floor, which every ref answer the box is shown and every push it
-//     lands raises (raiseFloor). A ZERO floor reads LINEARIZABLE, a re-sync
-//     the run's bucket pays for, and as this node's copy stands once it is
-//     spent.
-//
-// # Logged by who could have caused it
-//
-// A refusal reached WITHOUT a credential this fleet signed — step 2 — is
-// unauthenticated traffic on a public route that anyone who can reach the
-// listener produces at will, so it is DEBUG (code_box_challenged) and never a
-// line an attacker can print at INFO, as the tool bridge's resolve decided for
-// the same reason; every refusal from step 3 on takes a token the fleet
-// signed, and is INFO (code_box_refused), and a 503 WARN (code_box_unavailable),
-// each naming its reason, the run's turn and launch and the seat — or the
-// check's attempt — and the repository where known, and never the token.
-//
-// # A box's pushes are audited by nothing but their rows
-//
-// operator_acted is a PERSON'S record (pushAudit). A box's push is recorded by
-// its push row, which names its run (gitlet.RunProvenance.RunID), and a box's
-// refusal by its log line. Its fetch of a `visibility: unit` repository is a
-// read like any other, recorded under its seat (fetched).
-//
-// # A box's push holds what it pushes
-//
-// Every seat's branch a box's push names, as judged, is held on its run's row
-// before anything of the push is received, stored or proposed
-// (admission.holdRefs): what the box pushed is what its parked run depends on.
-// A row at its bound is 403 holds_full, and a run store that cannot be written
-// 503 holds_unwritten — never the push sent unheld. A box's FETCH holds
-// nothing: under protocol v2 its wants are object ids and `ls-refs` lists by
-// prefix, so no request names a ref the box depends on; its checkout is its
-// launch's grant, held at the launch.
+// A BOX'S ADMISSION: admit for a request under /box/git/, its credential a
+// box's own (package doc, "A coding box is admitted by its run"). The Basic
+// user name tells the two boxes apart: [BoxUser], a seat's coding box,
+// admitted by its run's row (admitRun), and [gitlet.CheckUser], a check's box,
+// by its attempt's row (checkadmit.go). The steps run in order, each refusal
+// its own answer: 1 NAME, as admit's; 2 CREDENTIAL; 2a IN FLIGHT; 3 RUN;
+// 4 GRANT BY NAME; 5 STOP; 6 REPOSITORY, at 8 FRESHNESS; 7 THE SEAT'S GRANT,
+// each explained where admitRun takes it. A box's push is no operator_acted
+// (pushAudit): its push row names its run (gitlet.RunProvenance.RunID), and its
+// fetch of a `visibility: unit` repository is recorded under its seat
+// (fetched).
 
 // The box's challenges, each a sentence of the box's own credential: what to
 // present, never an API token.
@@ -178,7 +56,11 @@ func (s *Server) admitBox(ctx context.Context, w http.ResponseWriter, r *http.Re
 		return admission{}, false
 	}
 
-	// 2 THE CREDENTIAL.
+	// 2 THE CREDENTIAL: a box's token and nothing else admits a box. The
+	// guard's resolution (iam.From) is never read here, so neither an
+	// operator's bearer nor a person's cookie admits anything, and a run's
+	// token presented as a check's, or a check's as a run's, verifies as
+	// neither (boxCredential). Refusals are ChallengeBox's.
 	var (
 		run   BoxRunRef
 		check CheckRunRef
@@ -204,13 +86,15 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 
 	b := boxRefusal{s: s, w: w, r: r, ref: ref, name: name}
 
-	// 2a ITS PLACE IN FLIGHT, before anything is read for it (boxlimit.go).
+	// 2a ITS PLACE IN FLIGHT: at most MaxRunRequests of the run's requests at
+	// once on this node, counted before anything is read for it (boxlimit.go).
 	if !s.holdRun(ctx, ref.LaunchID) {
 		b.unavailable("run_busy", busySentence("this run"))
 		return admission{}, false
 	}
 
-	// 3 THE RUN.
+	// 3 THE RUN, three-valued: a store that cannot be read is 503, never 401,
+	// since the credential was good.
 	run, found, err := s.o.Boxes.Runs.Run(ctx, ref.TurnID)
 	switch {
 	case err != nil:
@@ -231,7 +115,10 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 	}
 	b.seat = run.Seat
 
-	// 4 THE RUN'S GRANT, by the name it was given — before the code log.
+	// 4 THE RUN'S GRANT, by the name it was given, BEFORE the code log: step
+	// 6's refusing branch appends a barrier to the log, so a box looping
+	// `git ls-remote` over guessed names would spend the barrier budget until
+	// the log refused every push of the company (log_full).
 	g, given := run.grantNamed(name)
 	switch {
 	case !given:
@@ -244,7 +131,12 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 		return admission{}, false
 	}
 
-	// 5 THE STOP, for a push.
+	// 5 THE STOP, a push only. A pause with stop_running is the engine's
+	// emergency stop, which does not fence a detached executor, so without
+	// this its box kept pushing as the seat. A pause without it stops new work
+	// only, and no fetch is refused for a pause: a read changes nothing, and a
+	// box winding down may need one. Unknown pauses are 503, never "not
+	// stopped".
 	if op == auth.GitPush {
 		by, serr := s.o.Boxes.Runs.Stopped(ctx, run.Seat)
 		switch {
@@ -258,11 +150,10 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	// 8 THE FRESHNESS, which step 6 reads at.
-	// A RUN WHOSE ROW NAMES NO FLOOR reads its refs at the log's head, a
-	// re-sync its bucket pays for like any other (boxlimit.go): spent, it
-	// reads them as this node's copy holds them — the floor it has, which is
-	// none.
+	// 8 THE FRESHNESS, which step 6 reads at: the run's SESSION, whose floor
+	// every ref answer and landed push raises (raiseFloor). A row naming no
+	// floor reads at the log's head, a re-sync its bucket pays for
+	// (boxlimit.go); spent, it reads this node's copy as it stands.
 	adm := admission{name: name, box: &run, spool: boxSpool, fresh: runSession(run.Floor)}
 	var spent *costlimit.Refusal
 	if adm.fresh.Level == statelog.ReadLinearizable {
@@ -272,8 +163,11 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 	}
 	adm.linearizable = adm.fresh.Level == statelog.ReadLinearizable
 
-	// 6 THE REPOSITORY, given — judged again at the log's head where the
-	// session's answer would refuse, while the run's re-syncs last.
+	// 6 THE REPOSITORY, given: judged again at the log's head where the
+	// session's answer would refuse (admit's rule that no refusal rests on a
+	// stale read), while the run's re-syncs last; spent, the session's answer
+	// stands. A name that now names another repository is refused as not
+	// given.
 	repo, err := s.o.Estate.Resolve(ctx, gitlet.ResolveQuery{Name: name, Fresh: adm.fresh})
 	if !adm.linearizable && spent == nil && (errors.Is(err, gitlet.ErrRepoNotFound) ||
 		(err == nil && (refuses(repo, op) || repo.ID != g.RepoID))) {
@@ -301,12 +195,18 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 			strconv.Quote(name), floorNote))
 		return admission{}, false
 	}
-	// ANSWERED UNDER ITS CURRENT NAME, as admit answers a fetch it lets
-	// through a redirect: what the request logs, heats and records names
-	// the repository as every other read does.
+	// A REDIRECTED NAME is answered for the repository it redirects to, A
+	// PUSH INCLUDED, where admit refuses a person's push to tell them the new
+	// name: the grant is the repository's id, and nothing in the box changes
+	// the remote its launch gave it. Under its current name, so what the
+	// request logs, heats and records names it as every other read does.
 	adm.name, adm.repo = repo.Name, repo
 
-	// 7 THE SEAT'S GRANT, from this node's current chart.
+	// 7 THE SEAT'S GRANT, from this node's CURRENT chart. A node with none, or
+	// confirmed behind the company's configuration, judges no box and answers
+	// 503: the configuration it failed to apply may be the one that revoked
+	// the seat, and /ready already drains it, so the retry reaches another
+	// node.
 	roster := s.o.Roster()
 	switch {
 	case roster == nil:
@@ -318,17 +218,15 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 			"seat's grant")
 		return admission{}, false
 	}
-	// WHOEVER THE RUN'S TURN WORKS FOR, which this node judges the box for too
-	// (runCeiling), held first to the one rule every carrier is held to, never
-	// to a reading of this package's own: a kind this build knows
-	// (gitlet.KindUnknownToThisBuild), and somebody a checkout writes on a row
-	// (gitlet.RunCarrierInvalid) — the rule the committer holds every push of
-	// the box to, which states the same carrier.
+	// WHOEVER THE RUN'S TURN WORKS FOR (runCeiling) is held first to the rule
+	// every carrier is held to, the committer's for the box's pushes included,
+	// never a reading of this package's own: a kind this build knows
+	// (gitlet.KindUnknownToThisBuild), naming somebody a checkout writes
+	// (gitlet.RunCarrierInvalid).
 	switch carrier, invalid := run.WorkingFor, gitlet.RunCarrierInvalid(run.Seat, run.WorkingFor); {
 	case gitlet.KindUnknownToThisBuild(carrier):
-		// A NEWER BUILD'S RUN, in the words this package gives every value
-		// only a newer build reads (write.go's protection): retryable, since
-		// the harness's next request may reach a node of that build.
+		// A NEWER BUILD'S RUN, in write.go's words for a value only a newer
+		// build reads: retryable, since the next request may reach that build.
 		asked := "fetch"
 		if op == auth.GitPush {
 			asked = "push"
@@ -339,18 +237,17 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 		return admission{}, false
 	case invalid != nil && !gitlet.IsUnknownToThisBuild(invalid):
 		// WHAT NO CHECKOUT WRITES is the closed end, never a newer build's
-		// run to wait for: a stranger, for whom no checkout is made and
-		// nothing is read or pushed (ADR-0110), and what no build composes
-		// — the zero kind, a handle or a login out of its grammar, a
-		// credential naming no app, which every reader of a carrier takes
-		// for a stranger. An app this build does not know is a newer
-		// build's, and passes: the box's bound is the credential's own
-		// grant, which no app moves, and its push's committer answers the
-		// app as a node of another build.
+		// run to wait for: a stranger (ADR-0110), the zero kind, a handle or
+		// login out of its grammar, a credential naming no app. An app this
+		// build does not know passes: the bound is the credential's own
+		// grant, which no app moves, and the push's committer answers the app
+		// as a node of another build.
 		b.refuse("not_permitted", fmt.Sprintf("run %s's row names whom its turn works for as no checkout writes "+
 			"it, so its box reads and pushes nothing: %s", run.Ref.TurnID, sentence(invalid.Error())))
 		return admission{}, false
 	}
+	// At most what the row, the seat and whoever the turn works for allow; a
+	// push's commands are judged per ref on this grant, as a person's are.
 	adm.grant = gitlet.GrantOf(adm.principal(), repo, roster).Within(g.Access)
 	if ceiling := runCeiling(run, repo, roster); ceiling != nil {
 		adm.grant = adm.grant.Under(*ceiling)
@@ -363,35 +260,17 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 }
 
 // runCeiling is the grant a run's box is held under beside its seat's own
-// (gitlet.Grant.Under) — WHOEVER ITS TURN WORKS FOR, as the run's row names
-// them — and nil for a run its seat alone bounds:
+// (gitlet.Grant.Under), WHOEVER ITS TURN WORKS FOR, or nil for a run its seat
+// alone bounds:
+//   - a COLLEAGUE SEAT whose ask woke the turn (BoxRun.Ceiling): its own grant
+//     from this chart (M3-decisions U40 (a)), the seat's own work aside;
+//   - a CREDENTIAL acting as no seat (BoxRun.WorkingFor): its own grant
+//     (gitlet.CredentialPrincipal), which reads every repository and pushes
+//     none, so the box pushes the seat's own work alone (ADR-0110);
+//   - a person's seat, or nobody: none.
 //
-//   - A COLLEAGUE SEAT whose ask woke the turn (BoxRun.Ceiling): that seat's
-//     own grant, from this node's chart, so the box fetches nothing the
-//     colleague could not read and pushes nothing outside the seat's own work
-//     the colleague could not push.
-//   - A CREDENTIAL acting as no seat (BoxRun.WorkingFor): the credential's own
-//     grant (gitlet.CredentialPrincipal), which reads every repository and
-//     pushes to none, so the box fetches every repository its run was given,
-//     as the credential itself reads, and pushes the seat's own work alone —
-//     its own namespace and the repositories it owns — as the turn's own code
-//     writes for that credential do (ADR-0110). Bounded by its seat alone, the
-//     box pushed every branch the seat may, for a token that pushes to no
-//     repository itself.
-//   - A PERSON'S SEAT, and NOBODY — a turn nobody woke, the seat's own, and a
-//     row a build before the carrier wrote: none, a person bounding nothing.
-//
-// The rows the admission answers before asking it (admitRun's step 7), by the
-// rule every carrier is held to: a row naming whom its turn works for by a
-// kind this build does not know, which only a newer build writes and whose
-// bound is that build's to judge (503 carrier_unknown, saying a node of a
-// newer build judges the request and the harness's next push or fetch reaches
-// one — never held to a bound this build guessed, nor refused as a run no
-// build launched); and a row naming a stranger, for whom no checkout is made
-// and no repository is read or written, the seat's own work included
-// (ADR-0110), or naming whom its turn works for as no checkout writes it —
-// the zero kind among them, which this function would read as nobody's — whose
-// box is refused every request.
+// admitRun's step 7 first answers the rows this must not bound: a kind this
+// build does not know, and one no checkout writes, read here as nobody's.
 func runCeiling(run BoxRun, repo gitlet.RepoRef, roster gitlet.Roster) *gitlet.Grant {
 	var g gitlet.Grant
 	switch w := run.WorkingFor; {
@@ -428,26 +307,17 @@ func grantedNames(run BoxRun) string {
 	return strings.Join(names, ", ")
 }
 
-// ChallengeBox is a box's admission's CREDENTIAL step (step 2) on its own: it
-// answers a request that presents no credential this fleet signed — no Basic
-// credential at all, a user name other than [BoxUser] and [gitlet.CheckUser], or a
-// password signed refuses for the user name that presented it — with git's
-// 401 challenge in the box's own words, logs it on log at DEBUG
-// (code_box_challenged) with why (`none`, `user` or `token`) and never the
-// value presented, and reports true; a request presenting a token signed
-// accepts is left unanswered, and false.
-//
-// EXPORTED FOR THE ONE OTHER PLACE a box's credential is decided before an
-// admission can run: the API's box routes on a node that does not serve Gitlet
-// now, which tell a box WHY only once it presents a token this fleet signed
-// (internal/api; M3-decisions U8) — the box routes are public, and that
-// reason is the deployment's state. ONE STEP FOR BOTH, so a box is challenged
-// in the same words, at the same level, by a node serving Gitlet and
-// by one that does not, and nothing reads a box's credential by a grammar
-// of its own (TestNothingAfterAdmissionAsksWhichAdmitterRan holds every other
-// reader of git's Basic out of this package). signed is the caller's verify,
-// of the token the user name presented ([VerifyBox]): the admission's keeps
-// the run or the check its token names.
+// ChallengeBox is a box's admission's CREDENTIAL step on its own: a request
+// presenting no credential this fleet signed (no Basic credential, a user name
+// other than [BoxUser] and [gitlet.CheckUser], or a token signed refuses for
+// that user name) gets git's 401 challenge in the box's own words, never the
+// person's, which name an API token a box must never hold; it is logged at
+// DEBUG (code_box_challenged) with why and never the value, and reported true;
+// a signed token is left unanswered, and false. Exported for the API's box routes on a node not serving Gitlet, which tell a
+// box why only once it presents a signed token (M3-decisions U8): one step, so
+// both challenge alike and nothing else reads a box's credential
+// (TestNothingAfterAdmissionAsksWhichAdmitterRan). signed is the caller's
+// verify ([VerifyBox]).
 func ChallengeBox(w http.ResponseWriter, r *http.Request, signed func(user, token string) bool,
 	log *slog.Logger) bool {
 
@@ -470,8 +340,11 @@ func ChallengeBox(w http.ResponseWriter, r *http.Request, signed func(user, toke
 	return true
 }
 
-// boxRefusal answers one admitted token's refusal: what its run and its seat —
-// or its check's attempt — and its repository are, for the line it logs.
+// boxRefusal answers one admitted token's refusal. Past the credential step a
+// refusal takes a token this fleet signed, so it logs INFO (code_box_refused)
+// or, for a 503, WARN (code_box_unavailable); before it, the traffic is
+// anyone's on a public route, so ChallengeBox logs it at DEBUG, never a line an
+// attacker can print at INFO. Neither logs the token.
 type boxRefusal struct {
 	s   *Server
 	w   http.ResponseWriter
@@ -499,9 +372,8 @@ func (b boxRefusal) unavailable(reason, words string) {
 	auth.GitText(b.w, http.StatusServiceUnavailable, words+"; retry in "+seconds(UnavailableRetryAfter))
 }
 
-// attrs is a refusal's log line: its reason, the run's turn and launch and
-// the seat — or the check's attempt: its repository's id, its commit, the
-// check and the attempt's number — and the repository.
+// attrs is a refusal's log line: the run's turn, launch and seat, or the
+// check's attempt, and the repository.
 func (b boxRefusal) attrs(reason string) []any {
 	if c := b.check; c != nil {
 		return []any{"reason", reason, "repo_id", c.Attempt.RepoID, "oid", c.Attempt.OID,
@@ -512,12 +384,13 @@ func (b boxRefusal) attrs(reason string) []any {
 }
 
 // boxHoldFailed answers a coding box's push whose run's hold on the seat
-// branches it names could not be written (admission.holdRefs), with nothing
-// received, stored or proposed: 403 holds_full where the run's row holds the
-// most keys one run may — the push would land a branch its parked run
-// depends on unheld — and otherwise 503 holds_unwritten, the run store
-// unreachable and the hold UNKNOWN, never "held": the box's retry may reach a
-// node that can write it.
+// branches it names (admission.holdRefs) could not be written, with nothing
+// received, stored or proposed, since its parked run depends on what it
+// pushed: 403 holds_full at the row's bound, else 503 holds_unwritten, the
+// hold UNKNOWN and never "held", for a retry that may reach a node that can
+// write it. A box's fetch holds nothing: its v2 wants are object ids and
+// `ls-refs` lists by prefix, so no request names a ref it depends on; its
+// checkout is held at its launch.
 func (s *Server) boxHoldFailed(w http.ResponseWriter, r *http.Request, adm admission, err error) {
 	ref, _, _ := adm.boxFloor()
 	b := boxRefusal{s: s, w: w, r: r, ref: ref, seat: adm.principal().Seat, name: adm.name}
@@ -529,37 +402,18 @@ func (s *Server) boxHoldFailed(w http.ResponseWriter, r *http.Request, adm admis
 	b.unavailable("holds_unwritten", "the run store could not be written here: "+sentence(err.Error()))
 }
 
-// raiseFloor raises the run a box's request was admitted for to pos — the
-// copy a ref answer it is about to be served is read from, or an applied
-// push's row — on the run's row (Runs.RaiseFloor), and answers a failure as a
-// *floorUnraised. Nothing for a person's request, whose reads of refs are
-// linearizable, and nothing where pos is at or below the floor the admission
-// read: one compare-and-set on the row, taken only when the box is shown
-// something newer than its floor already holds.
-//
-// WHAT IT MOVES is the run's whole row and never its job's bridged tool log,
-// which is kept beside it (sandbox.BridgeLog), so a raise reads and writes back
-// the row's facts alone — 1.29 ms at the median on three members with the log
-// full, a row of 37 931 bytes (BenchmarkABoxRequestOnItsRun,
-// internal/coord/kv), against 11.1 ms on 516 173 bytes when the row carried
-// the log — as the read of the run every request of the box begins with moves
-// it once (Runs.Run: 0.43 ms, against 5.8).
-//
-// UNDER context.WithoutCancel, bounded by statelog.ReadBudget: a box that
-// hangs up once it has been shown refs still holds what it was shown, and the
-// raise is one write to the coordination store.
-//
-// WHY EVERY REF ANSWER, and before its first byte (M3-decisions M3-O56): git
-// builds a push's thin pack against the refs that push's OWN advertisement
-// named, and a push is two HTTP requests a balancer may send to two nodes. An
-// advertisement served by a node ahead of the box's floor and a receive-pack
-// by a node held at it leaves the second without the pack's bases ("missing
-// necessary objects"); raised at the advertisement, the floor makes the
-// receive-pack's session sync reach them. The raises at an `ls-refs` and a
-// v0 advertisement keep the box's reads MONOTONIC: it never sees a branch go
-// back between two nodes. A v2 clone takes at most one raise, a push at most
-// two. A per-node cache of floors written behind would reopen the split-push
-// hazard, which is why the row is written before the answer.
+// raiseFloor raises the run's floor on its row (Runs.RaiseFloor) to pos, the
+// copy a ref answer is about to be served from or an applied push's row, and
+// answers a failure as a *floorUnraised; nothing for a person's request, or
+// where pos is not past the admission's floor. Every ref answer raises it
+// before its first byte (M3-decisions M3-O56): git builds a push's thin pack
+// against its own advertisement's refs, and a balancer may send the
+// receive-pack to another node, which must sync to them; it also keeps the
+// box's reads MONOTONIC. A floor cache written behind would reopen that. Under
+// context.WithoutCancel, bounded by statelog.ReadBudget: a box that hangs up
+// still holds what it was shown. The row keeps the bridged tool log beside it
+// (sandbox.BridgeLog), so a raise moves its facts alone
+// (BenchmarkABoxRequestOnItsRun).
 func (s *Server) raiseFloor(ctx context.Context, adm admission, pos statelog.Position) error {
 	ref, floor, box := adm.boxFloor()
 	if !box || pos.IsZero() {

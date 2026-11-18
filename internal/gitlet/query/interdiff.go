@@ -12,46 +12,33 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// AN INTERDIFF is what a change changed between two of its revisions — the
-// diff of their two heads — KEPT TO THE FILES EITHER REVISION'S CHANGE
-// TOUCHES, as each revision's facts list them (gitlet.GitRevisionFacts): a
-// rebase between the two moved the later head onto a newer target, and the
-// files the target changed meanwhile, which neither revision touches, differ
-// between the heads without being anything the change did. It is a diff read
-// in every other respect — its stat a page at a time, one file's patch, its
-// pages memoized as a diff's — and answers Kind interdiff, its Diff part.
-//
-// THE WORK IS THE CHANGE'S, NEVER THE TARGET'S: where the filter keeps to the
-// touched paths, the heads are never walked. Each touched path — the two
-// lists' union, at most 2 × gitlet.MaxTouchedPaths — is LOOKED UP at both heads
-// by ONE `git cat-file --batch-check -Z` fed `<head>:<path>` on its standard
-// input, its mode, id and type answered (touchedRecords), and the raw record
-// diff-tree would write for each path whose two entries differ is made here
-// from them, in git's order, and handed on as a diff read's walk hands its
-// records on: to diff-pairs, for the stat's counts and for one file's patch.
-// So an interdiff costs git two lookups a touched path and the diffs of the
-// files that changed, however much the target moved between the two bases: a
-// walk of the heads' trees, which a three-file change rebased over a busy
-// monorepo's target made read every entry the target moved — until it ran out
-// the read's budget and was refused with a narrowing ("diff commits closer
-// together") its asker cannot follow, the revisions being fixed — is gone.
-//
-// THE PATHS ARE DATA, never handed to git's command line: each is a line of
-// the lookup's standard input, as a read's every path is (gitlet.GitPath), and
-// matched by git as a WHOLE path in a tree, so a path is a file's whole name
-// — `a*` is the file `a*` and never `ab`, as a pathspec without its
-// `:(literal)` magic would read it — and nothing reaches the command line,
-// which a pathspec's paths would (git's diffs take none from a file or an
-// input: no --pathspec-from-file), at up to two thousand arguments and a
-// hundred kilobytes a read. The records made pass the same set filter
-// (pathFilter's exact half) a walk's would.
+// AN INTERDIFF is what a change changed between two of its revisions: the diff
+// of their heads KEPT TO THE FILES EITHER REVISION TOUCHES, as each one's facts
+// list them (gitlet.GitRevisionFacts), since a rebase between them brings in
+// the target's edits, which differ between the heads without being the
+// change's. Otherwise it is a diff read (stat pages, one file's patch, the
+// memo), answering Kind interdiff, its Diff part.
+
+// THE WORK IS THE CHANGE'S, NEVER THE TARGET'S: with a filter the heads' trees
+// are never walked. Each touched path (at most 2 × gitlet.MaxTouchedPaths) is
+// looked up at both heads by ONE `git cat-file --batch-check -Z`
+// (touchedRecords); diff-tree's raw record for each that differs is made here,
+// in git's order, and handed to diff-pairs as a walk's records are. So an
+// interdiff costs two lookups a touched path and the changed files' diffs,
+// however far the target moved: a walk of the heads over a busy target runs
+// out the read's budget, refused with a narrowing its asker cannot follow, the
+// revisions being fixed.
+
+// THE PATHS ARE DATA: lines of the lookup's standard input (gitlet.GitPath),
+// matched as WHOLE paths, so `a*` is the file `a*` and never `ab`. As a
+// pathspec they would reach the command line (git's diffs read none from
+// input), up to two thousand arguments. The records pass the same exact filter
+// (pathFilter) a walk's would.
 //
 // NO FILTER WHERE NONE COULD KEEP ANYTHING OUT: where either revision touches
-// all — its list was past its bound, so every file is its own — and where the
-// two were measured from ONE BASE, since a file neither touches holds the
-// base's content in both heads, so the heads differ only in files one of them
-// touches. The read is then the heads' plain diff, one diff-tree writing its
-// raw records and its counts, as a stat naming no paths is.
+// all (its list past its bound), or both were measured from ONE BASE, since a
+// file neither touches then holds the base's content in both heads. The read
+// is then the heads' plain diff: one diff-tree, as a stat naming no paths is.
 
 // interdiffRead answers an interdiff: a page of its stat, or of one file's
 // patch — and, where m takes them, every page of either after it.
@@ -178,11 +165,10 @@ func fileType(mode string) string {
 }
 
 // lookup is what base and head each hold at every path of paths, two entries
-// a path, base's first: ONE cat-file over `<commit>:<path>` lines on its
-// standard input, NUL-ended both ways, run to what is left of the read's
-// budget of git and charged to it. A head holding no file there answers
-// missing, and a submodule whose commit the copy does not hold answers its id
-// and "submodule" (git's own record for it, whatever the format asked).
+// a path, base's first: ONE cat-file over NUL-ended `<commit>:<path>` lines,
+// run to what is left of the read's budget of git and charged to it. A head
+// holding no file there answers missing; a submodule whose commit the copy
+// lacks answers "<id> submodule", git's own record whatever the format asked.
 func (r *read) lookup(ctx context.Context, base, head string, paths []string) ([]treeEntry, error) {
 	var stdin bytes.Buffer
 	in := make([]string, 0, 2*len(paths))

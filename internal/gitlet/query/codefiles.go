@@ -9,14 +9,13 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 )
 
-// A COMMIT'S DEPLOY AND DEPENDENCY FILES are the files of its tree the closed
-// list admits (internal/deployfiles), read for the atlas by the engine alone.
-// A LISTING is one `ls-tree -r -z -l` of the commit, judged record by record
-// HERE: only a regular file the list admits is kept, so a symbolic link, a
-// submodule and every file off the list never leave this node, whatever the
-// tree holds. ONE FILE is read as a checks file is, from the batch's lookup of
-// its path, and only a path the list admits as a file that is read: the
-// query's own validation refuses any other before git runs.
+// A COMMIT'S DEPLOY AND DEPENDENCY FILES are those of its tree the closed list
+// admits (internal/deployfiles), read for the atlas by the engine alone. A
+// LISTING is one `ls-tree -r -z -l`, judged record by record HERE: only a
+// regular file the list admits is kept, so a symbolic link, a submodule and
+// every file off the list never leave this node. ONE FILE is read as a checks
+// file is, and only a path the list admits; the query's validation refuses any
+// other before git runs.
 
 // codeFilesRead answers a code files read: the commit's listing, or the one
 // file the query names.
@@ -40,9 +39,8 @@ func (r *read) codeFilesRead(ctx context.Context, objs found) (gitlet.GitAnswer,
 	}
 	ans.File = &gitlet.CodeFile{Path: q.File}
 	target := objs.target
-	// A LINK IS REFUSED BY THE LISTING, which reads modes; the lookup here
-	// reads none, and a link read by its path answers the path it points
-	// at, never the file there.
+	// A LINK IS REFUSED BY THE LISTING, which reads modes; this lookup reads
+	// none, so a link read by its path answers its target's path, not the file.
 	if target.kind != "blob" {
 		return a, nil
 	}

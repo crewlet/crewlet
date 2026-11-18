@@ -89,23 +89,18 @@ func (x *fixture) mustOwe() gitlet.ExpungeCandidate {
 	return cand
 }
 
-// expungeWhileBusy is c's expunge of cand, asked again while it answers busy:
-// the node's maintainer keeps the one slot of the maintenance lane an
-// expunge's build may take for a moment at a time, as compactWhileBusy waits
-// it out, for a minute at the most.
+// expungeWhileBusy is c's expunge of cand, asked again while it answers busy
+// (the maintainer holds the maintenance lane's one expunge slot a moment at a
+// time), for a minute at most, as compactWhileBusy is.
 //
-// ASKED AGAIN AS THE NEXT PASS ASKS IT, of what the listing names then
-// (compact.Listed), never of cand again: a cycle is two records, and its busy
-// answer may come after its BEGIN has applied — its rescue's admission
-// refused while the maintainer holds the lane, its copy still holding the
-// begin's inputs — so the listing names that expunge open from then on. A
-// cycle asked of cand again, which names none, plans over a copy whose every
-// live pack the begin dated at its scan: a purge's finds its request in hand
-// and answers not_due (#840). A compaction's and a publication's busy answers
-// come before their one record, which is why compactWhileBusy and
-// publishWhileBusy ask the same candidate again. A listing that no longer
-// names the repository after a busy answer is answered as the error, with
-// that busy answer.
+// Each retry asks what the listing names THEN (compact.Listed), never cand: a
+// cycle is two records and its busy answer may come after its begin applied
+// (its rescue's admission refused), so the listing names it open; a retry of
+// cand plans over a copy whose every live pack the begin dated at its scan,
+// and a purge's answers not_due. Compactions and publications answer busy
+// before their one record, so compactWhileBusy and publishWhileBusy retry the
+// same candidate. A listing that drops the repository after a busy answer is
+// answered as the error, with that busy answer.
 func expungeWhileBusy(t testing.TB, c *compact.Compactor, cand gitlet.ExpungeCandidate) (compact.Outcome, error) {
 	t.Helper()
 	deadline := time.Now().Add(time.Minute)
@@ -216,16 +211,14 @@ func (x *fixture) command(cmd gitlet.Command, epoch int64) {
 }
 
 // AN EXPUNGE KEEPS EVERY OBJECT A REFERENCE REACHES, and nothing else of what
-// it rewrote: a person's purge of a repository holding a commit no ref reaches
-// is served in one cycle — begun, rescued, committed — after which no live
-// pack holds the commit, a cache rebuilt from the rows alone holds every
-// object every ref reaches (git fsck) and not the commit, and every ref is
-// where it was.
+// it rewrote: a purge of a repository holding a commit no ref reaches is served
+// in one cycle (begun, rescued, committed), after which no live pack holds the
+// commit, a cache rebuilt from the rows alone holds every object every ref
+// reaches (git fsck) and not the commit, and every ref is where it was.
 //
-// Mutation: keep the dropping packs live at the commit (retire nothing) and
-// the commit is still held; plan the kept build without `--local` against
-// the rest and the build packs objects the rest holds, which the begin's
-// arithmetic refuses.
+// Mutation: retire no dropping pack at the commit, and the commit is still
+// held; plan the kept build without `--local`, and it packs objects the rest
+// holds, which the begin's arithmetic refuses.
 func TestAnExpungeKeepsEveryObjectAReferenceReaches(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
@@ -265,17 +258,15 @@ func TestAnExpungeKeepsEveryObjectAReferenceReaches(t *testing.T) {
 	}
 }
 
-// THE MAINTAINER DOWNLOADS NOTHING ITS EXPUNGE BUILT: once the begin has
-// applied, the node that built it adopts every output from the build's
-// scratch — the kept packs live, the dropping packs into its copy's dropping
-// view — and the rescue too once the commit has: so across a whole cycle,
-// the rescue's sync and every round to the commit among it, that node GETs
-// none of the objects the cycle stored. The dropping packs are the cruft, up
-// to compact.ExpungeInputByteCap a cycle, which the commit retires minutes
-// later.
+// THE MAINTAINER DOWNLOADS NOTHING ITS EXPUNGE BUILT: the building node adopts
+// every output from the build's scratch once the begin applies (kept packs
+// live, dropping packs into its copy's dropping view) and the rescue once the
+// commit does, so across the cycle, the rescue's sync and commit rounds
+// included, it GETs none of the objects the cycle stored: dropping packs of up
+// to compact.ExpungeInputByteCap, retired minutes later.
 //
-// Mutation: skip the dropping packs' adoption in the cycle, and the rescue's
-// sync downloads every dropping pack.
+// Mutation: skip the dropping packs' adoption, and the rescue's sync downloads
+// every dropping pack.
 func TestTheMaintainerDownloadsNothingItsExpungeBuilt(t *testing.T) {
 	t.Parallel()
 	gets := &gotten{}
@@ -336,27 +327,18 @@ func (g gettingFrom) Get(ctx context.Context, name string, off, n int64) (io.Rea
 	return g.Backend.Get(ctx, name, off, n)
 }
 
-// A COMPACTION MERGES BESIDE AN EXPUNGE, NEVER ITS INPUTS: an expunge's walk,
-// its build over up to compact.ExpungeInputByteCap of inputs, its upload and
-// its rescue run for minutes on a large repository, and a busy repository
-// gains packs at up to three hundred a minute, so a repository whose merges
-// waited for its own expunge would pass gitlet.MaxPacksPerRepo and have its
-// pushes refused compaction_behind while it is purged. A compaction asked
-// while an expunge of its repository is in flight on the same node — held
-// here once its build is done, nothing stored — merges the roll pushed since
-// the expunge's plan, and never one of its inputs; and both records apply,
-// the begin's inputs all still live. Once an expunge's rescue has synced past
-// its begin — one resumed from the rows here, which has planned nothing — a
-// compaction merges beside it as though none ran, and the commit applies.
-// Only while an expunge syncs and plans does a compaction answer busy, having
-// synced nothing, since it could merge packs the plan is about to choose.
+// A COMPACTION MERGES BESIDE AN EXPUNGE, NEVER ITS INPUTS: an expunge runs for
+// minutes on a large repository while pushes add up to three hundred packs a
+// minute, so merges waiting on it would pass gitlet.MaxPacksPerRepo and refuse
+// pushes compaction_behind. Beside an expunge held after its build, a
+// compaction merges the roll pushed since its plan, none of its inputs, and
+// both records apply; beside a resumed expunge's rescue, synced past its
+// begin, it merges as though none ran and the commit applies. Only while an expunge syncs and plans
+// is it busy, syncing nothing, since it could merge packs that plan may choose.
 //
-// Mutations: refuse a compaction while an expunge of its repository runs at
-// all, and the merge beside the build answers busy; plan it over the
-// expunge's inputs as well, and it merges them, so the begin is refused
-// stale; never mark the expunge begun, and the merge beside the resumed
-// rescue answers busy; let a compaction claim the repository while the
-// expunge has no reservation, and it syncs.
+// Mutations: refuse it beside any expunge (busy beside the build); plan over
+// the expunge's inputs (its begin refused stale); never mark the expunge begun
+// (busy beside the rescue); claim with no expunge reservation (it syncs).
 func TestACompactionMergesBesideAnExpungeNeverItsInputs(t *testing.T) {
 	t.Parallel()
 	t.Run("beside its build", func(t *testing.T) {
@@ -490,19 +472,15 @@ func TestACompactionMergesBesideAnExpungeNeverItsInputs(t *testing.T) {
 }
 
 // AN EXPUNGE IS NEVER PLANNED BESIDE ANOTHER BUILD OF ITS REPOSITORY, AND NO
-// PUBLICATION BUILDS BESIDE ONE, on its node: a publication asked while an
-// expunge of its repository runs answers busy having synced nothing — the
-// begin drops every layer published over its inputs and the decide refuses a
-// layer while an expunge is open, so either would be refused stale after its
-// whole build — and an expunge asked while a compaction or a publication of
-// its repository runs answers busy having synced nothing, since its plan
-// would choose among packs that build's record retires or covers. Each lands
-// once the other is done.
+// PUBLICATION BUILDS BESIDE ONE, on its node: each answers busy having synced
+// nothing, and lands once the other is done. A publication would be refused
+// stale after its whole build (the begin drops every layer over its inputs and
+// the decide refuses a layer while an expunge is open); an expunge's plan
+// would choose among packs the other build's record retires or covers.
 //
-// Mutations: drop the expunge from claimPublication's refusal, and the
-// publication asked while the expunge is held syncs the repository; drop the
-// compaction or the publication from claimExpunge's, and the expunge asked
-// while one is held does.
+// Mutations: drop the expunge from claimPublication's refusal, or the
+// compaction or the publication from claimExpunge's, and the build asked while
+// the other is held syncs the repository.
 func TestAnExpungeIsNeverPlannedBesideAnotherBuild(t *testing.T) {
 	t.Parallel()
 	t.Run("a publication while the expunge runs", func(t *testing.T) {
@@ -541,16 +519,12 @@ func TestAnExpungeIsNeverPlannedBesideAnotherBuild(t *testing.T) {
 			t.Fatalf("the expunge once let go: %s, want applied", out)
 		}
 	})
-	// Each other build is asked of its listing on the test's goroutine, and
-	// run on its own until its point holds it. Once it has landed, the
-	// expunge that follows is made again while it is busy, with no wait for
-	// what the node does in the background: a publication's layer, which the
-	// installer places by swapping the copy, may swap the one the expunge's
-	// sync pinned, and a plan from that copy is refused busy
-	// (cache.ErrSuperseded), never read as a repository holding no pack. A
-	// busy answer may come after the expunge's begin, too — its rescue's
-	// admission refused while the node's maintainer holds the lane — which is
-	// why it is asked again of what the listing names then (expungeWhileBusy).
+	// Each other build's candidate is read here and the build run on its own
+	// until its point holds it. Once it lands, the expunge is asked again while
+	// busy, with no wait for the node's background work: the installer's swap
+	// for a publication's layer may replace the copy the expunge's sync pinned,
+	// and a plan over it is refused busy (cache.ErrSuperseded). A busy answer
+	// may also come past the begin, hence expungeWhileBusy.
 	for _, other := range []struct {
 		name  string
 		point gitletfault.Point
@@ -613,15 +587,15 @@ func TestAnExpungeIsNeverPlannedBesideAnotherBuild(t *testing.T) {
 }
 
 // A PASS OVER A COPY A SWAP REPLACED PLANS NOTHING: a swap between a pass's
-// sync and its read of the live packs leaves the copy it pinned none, which
-// the cache refuses (cache.ErrSuperseded) rather than answer as a repository
-// holding no pack. A purge's expunge, a compaction and a publication are each
-// busy for it — planned over nothing, the expunge would have found the purge
-// served, and a weekly scan the repository clean for a week — and the next
-// pass, syncing past the swap, plans over what the copy serving holds.
+// sync and its read of the live packs leaves the pinned copy none, which the
+// cache refuses (cache.ErrSuperseded) rather than answer as no pack. An
+// expunge, a compaction and a publication are each busy for it (over nothing,
+// the expunge would find the purge served and a weekly scan the repository
+// clean), and the next pass, past the swap, plans over what the serving copy
+// holds.
 //
-// Mutation: read the refusal as no pack (the expunge's Packs error dropped) →
-// the purge's expunge answers not due, red.
+// Mutation: read the refusal as no pack (drop the expunge's Packs error), and
+// the purge's expunge answers not due.
 func TestAPassOverACopyASwapReplacedPlansNothing(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
@@ -654,19 +628,17 @@ func TestAPassOverACopyASwapReplacedPlansNothing(t *testing.T) {
 	}
 }
 
-// AN EXPUNGE BUSY PAST ITS BEGIN IS FINISHED BY THE NEXT ASK OF THE LISTING
-// (#840): a cycle's busy answer may come after its begin has applied — its
-// rescue's admission refused while the node's maintainer holds the one slot
-// of the maintenance lane an expunge's build may take, as it may at any of its
-// ticks — leaving the expunge open, which the listing names from then on. The
-// next ask, of what the listing names, as a pass asks (expungeWhileBusy),
-// finishes it from its rows: the one begin committed, the purge served, the
-// leaked commit in no live pack.
+// AN EXPUNGE BUSY PAST ITS BEGIN IS FINISHED BY THE NEXT ASK OF THE LISTING: a
+// cycle may answer busy after its begin applied (its rescue's admission
+// refused while the maintainer holds the lane's one expunge slot, as at any of
+// its ticks), leaving the expunge open, which the listing names from then on.
+// The next ask of what the listing names (expungeWhileBusy) finishes it from
+// its rows: the one begin committed, the purge served, the leak in no live
+// pack.
 //
-// Mutation: ask expungeWhileBusy's next cycle of the candidate it was first
-// given, which names no expunge open, and that cycle plans over a copy whose
-// every live pack the begin dated at its scan: the purge's expunge answers
-// not_due.
+// Mutation: retry the first candidate, which names no expunge open, and that
+// cycle plans over a copy whose every live pack the begin dated at its scan:
+// the purge's expunge answers not_due.
 func TestAnExpungeBusyPastItsBeginIsFinishedByTheNextAsk(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
@@ -674,9 +646,8 @@ func TestAnExpungeBusyPastItsBeginIsFinishedByTheNextAsk(t *testing.T) {
 	leaked := x.leak("feature")
 	x.purge()
 	// THE MAINTAINER'S RUN AT THE RESCUE: the first admission over a copy past
-	// the begin — at the drop epoch the begin moved it to — is refused as the
-	// cache refuses one while the maintainer's run holds the lane; every other
-	// is the cache's own.
+	// the begin (at the drop epoch it moved to) is refused as the cache refuses
+	// one while the maintainer holds the lane; the rest are the cache's own.
 	var refused atomic.Bool
 	cc := countedOver(x.node().Cache())
 	cc.answerExpunges(func(s cache.Synced, objects int64, limits gitlet.Limits) (*cache.Admission, error) {
@@ -710,16 +681,15 @@ func TestAnExpungeBusyPastItsBeginIsFinishedByTheNextAsk(t *testing.T) {
 	}
 }
 
-// A RESCUE HOLDS WHAT A PUSH REVIVED BEFORE THE BEGIN: a push that lands
-// between the expunge's scan and its begin, checked at the epoch before it,
-// creating a ref at the commit the scan found unreachable — an engine write
-// creating a branch at an old commit — leaves that commit in a dropping pack
-// once the begin applies; the rescue, reading the refs at its own sync, keeps
-// it live, so after the commit the ref's whole closure is held (git fsck of a
-// cache rebuilt from the rows) and the purge is served.
+// A RESCUE HOLDS WHAT A PUSH REVIVED BEFORE THE BEGIN: a push landing between
+// the scan and the begin, at the epoch before it, that creates a ref at the
+// commit the scan found unreachable (an engine write branching at an old
+// commit) leaves that commit in a dropping pack; the rescue, reading the refs
+// at its own sync, keeps it live, so after the commit the ref's closure is
+// held (git fsck of a cache rebuilt from the rows) and the purge is served.
 //
-// Mutation: skip the rescue — commit retiring the dropping packs with no
-// rescue — and the revived ref names a commit no pack holds: fsck fails.
+// Mutation: commit with no rescue, and the revived ref names a commit no pack
+// holds: fsck fails.
 func TestARescueHoldsWhatAPushRevivedBeforeTheBegin(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
@@ -757,16 +727,15 @@ func TestARescueHoldsWhatAPushRevivedBeforeTheBegin(t *testing.T) {
 	}
 }
 
-// A RESCUE KEEPS A DROP MADE BETWEEN SCAN AND BEGIN, for as long as its
+// A RESCUE KEEPS A DROP MADE BETWEEN SCAN AND BEGIN for as long as its
 // expunge's grace keeps a drop: a ref created at a commit the scan found
-// unreachable and deleted again, both between the scan and the begin, leaves
-// that commit dropping with no ref reaching it — and a rescue that keeps a
-// ref drop's object for gitlet.PruneGrace, as an expunge on its maintainer's own
-// schedule does, keeps it live. A purge's own rescue keeps no drop: the same
-// commit leaves the repository at its commit.
+// unreachable and deleted again, both before the begin, leaves that commit
+// dropping with no ref reaching it; a rescue keeping drops for
+// gitlet.PruneGrace (an expunge on the maintainer's schedule) keeps it live,
+// and a purge's, which keeps no drop, lets it go at the commit.
 //
-// Mutation: leave the drops out of the rescue's tips, and the grace's
-// expunge drops the commit.
+// Mutation: leave the drops out of the rescue's tips, and the grace's expunge
+// drops the commit.
 func TestARescueKeepsADropMadeBetweenScanAndBegin(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -827,16 +796,13 @@ func TestARescueKeepsADropMadeBetweenScanAndBegin(t *testing.T) {
 }
 
 // AN EXPUNGE RESUMES FROM ITS ROWS AFTER A CRASH at each of its points: a
-// cycle that stops at its build, at its begin, at its rescue's upload or at
-// its commit leaves what the rows say — nothing, an expunge open, an expunge
-// open with a rescue stored that no row names, an expunge committed — and a
-// compactor started afresh over the same cache, knowing nothing of the cycle,
-// serves the purge from the rows: the leaked commit gone from every live pack,
-// a cache rebuilt from the rows whole.
+// cycle stopped at its build, begin, rescue's upload or commit leaves the rows
+// saying nothing, an expunge open, one open with a rescue stored no row names,
+// or one committed; a compactor started afresh over the same cache serves the
+// purge from the rows alone: the leak in no live pack, a rebuilt cache whole.
 //
-// Mutation: let a pass begin a fresh cycle where the listing names an
-// expunge open, and its begin is refused stale at every pass — the purge is
-// never served.
+// Mutation: begin a fresh cycle where the listing names an expunge open, and
+// its begin is refused stale at every pass: the purge is never served.
 func TestAnExpungeResumesFromItsRowsAfterACrash(t *testing.T) {
 	t.Parallel()
 	for _, p := range gitletfault.ExpungePath() {
@@ -872,12 +838,11 @@ func TestAnExpungeResumesFromItsRowsAfterACrash(t *testing.T) {
 }
 
 // A PURGE REWRITES ONLY PACKS DATED BEFORE ITS REQUEST: a cycle serving a
-// request takes the live packs whose content dates from before it
-// (gitlet.PackRow.Content) and none pushed after it, whose row it leaves live
-// under its own id — and the request is served by that one cycle.
+// request takes the live packs whose content predates it
+// (gitlet.PackRow.Content), leaves one pushed after it live under its own id,
+// and serves the request in that one cycle.
 //
-// Mutation: take every live pack as an input, and the pack pushed after the
-// request is rewritten.
+// Mutation: take every live pack as an input, and the later pack is rewritten.
 func TestAPurgeRewritesOnlyPacksDatedBeforeItsRequest(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
@@ -920,11 +885,10 @@ func TestAPurgeRewritesOnlyPacksDatedBeforeItsRequest(t *testing.T) {
 	}
 }
 
-// AN EXPUNGE'S TIPS LEAVE OUT WHAT A PURGE TOOK: a drop whose object an
-// earlier purge took out of the repository is no tip of a later expunge that
-// keeps a grace — its scan finds the object in no pack and walks from the
-// rest — so the later expunge commits rather than refuse its build at every
-// pass.
+// AN EXPUNGE'S TIPS LEAVE OUT WHAT A PURGE TOOK: a drop whose object an earlier
+// purge removed is no tip of a later expunge keeping a grace (its scan finds
+// the object in no pack and walks from the rest), so that expunge commits
+// rather than refuse its build at every pass.
 //
 // Mutation: hand the build every drop of the grace unchecked, and the walk
 // from the purged commit refuses the build.
@@ -957,18 +921,15 @@ func TestAnExpungesTipsLeaveOutWhatAPurgeTook(t *testing.T) {
 	x.fresh()
 }
 
-// AN OPEN CHANGE'S OLD REVISION SURVIVES A PURGE (M6-D2): a change opened at
-// one commit and force-pushed to another holds two revisions, and its
-// reviewers compare them — an interdiff of revision 1 and 2 reads both trees —
-// though no ref reaches the first any more and a purge keeps no drop. The
-// purge's scan walks from what rows hold in flight too, so its expunge keeps
-// the first revision's commit while it drops a leaked commit nothing names: a
-// cache rebuilt from the rows alone passes git fsck, holds both revisions, and
-// diffs one against the other.
+// AN OPEN CHANGE'S OLD REVISION SURVIVES A PURGE (M6-D2): a change force-pushed
+// from one commit to another holds two revisions its reviewers interdiff,
+// though no ref reaches the first and a purge keeps no drop. The purge's scan
+// walks from what rows hold in flight too, so it keeps the first revision
+// while dropping a leaked commit nothing names: a cache rebuilt from the rows
+// passes git fsck, holds both revisions and diffs one against the other.
 //
 // Mutation: drop the revisions' phase from the `expunge_tips` read, and the
-// purge drops the first revision's commit: the rebuilt cache lacks it and the
-// interdiff fails.
+// rebuilt cache lacks the first revision: the interdiff fails.
 func TestAnOpenChangesOldRevisionSurvivesAPurge(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
@@ -1008,18 +969,16 @@ func TestAnOpenChangesOldRevisionSurvivesAPurge(t *testing.T) {
 	}
 }
 
-// A MERGE BUILT AFTER AN EXPUNGE CARRIES ITS EPOCH AND LANDS (M6-D4): once a
-// purge has run, its repository's drop epoch counts the expunge, and the
-// committer refuses `expunging` a merge whose builder's copy held another
-// epoch. The builder proposes the epoch of the copy its landing pinned, so a
-// change merged after the expunge lands on its first build, with no rebuild —
-// on the whole path: a person's merge through Gitlet on the Gitlet node, built
-// in the cache the expunge left, its record decided by the data node's
-// committer.
+// A MERGE BUILT AFTER AN EXPUNGE CARRIES ITS EPOCH AND LANDS (M6-D4): a purge
+// counts in its repository's drop epoch, and the committer refuses `expunging`
+// a merge whose builder's copy held another. The builder proposes the epoch of
+// the copy its landing pinned, so a merge after the expunge lands on its first
+// build, on the whole path: a person's merge on the Gitlet node, built in the
+// cache the expunge left, decided by the data node's committer.
 //
 // Mutation: propose the merge at drop epoch 0, as a builder that dropped its
-// copy's epoch would, and every build is refused expunging until the merge is
-// answered expunging.
+// copy's epoch would, and every build is refused until the merge answers
+// expunging.
 func TestAMergeBuiltAfterAnExpungeCarriesItsEpoch(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)

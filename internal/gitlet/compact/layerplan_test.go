@@ -40,23 +40,18 @@ var (
 	planCap = compact.InputByteCap(gitlet.CompactPackBytes)
 )
 
-// THE PLAN IS GEOMETRIC, AND IT IS GIT'S OWN: over a history of seeded
-// publications — each a tail of new packs, planned and applied as its record
-// would apply it, its repack's inputs replaced by one output — every chain the
-// plans leave keeps every layer at least half the objects of all the layers
-// above it, so the chain stays logarithmic in the history, and never holds more
-// than gitlet.MaxPublishedLayers; and on chains made by hand the plan replaces
-// every layer from the first one this node refused (and nothing below it the
-// split factor would keep), waits for a layer neither installed nor refused,
-// absorbs a too-long chain's top regardless, repacks exactly when more than
-// compact.LayerRepackPacks of its packs are not full, and is a pure function
-// of what it reads.
+// THE PLAN IS GEOMETRIC, AND IT IS GIT'S OWN: over seeded histories of
+// publications, each applied as its record would be, every layer keeps at
+// least half the objects of all the layers above it (so the chain stays
+// logarithmic) and the chain never passes gitlet.MaxPublishedLayers; on chains
+// made by hand the plan replaces every layer from the first this node refused
+// (and none below that the split keeps), waits for one neither installed nor
+// refused, absorbs a too-long chain's top regardless, repacks exactly when more
+// than compact.LayerRepackPacks packs are not full, and is pure.
 //
-// Mutations: compare the gathered objects against the layer's own times the
-// factor (the factor inverted), and the seeded histories' chains break the half
-// rule; drop the refused layers' replacement, and the refused row plans over
-// the layer it may not; treat a pending layer as refused, and the waiting row
-// plans a replacement.
+// Mutations: invert the factor, and the seeded chains break the half rule; drop
+// the refused layers' replacement, and the refused row plans over one it may
+// not; treat a pending layer as refused, and the waiting row plans a replacement.
 func TestThePlanIsGeometric(t *testing.T) {
 	t.Parallel()
 	t.Run("seeded publications keep the chain geometric", func(t *testing.T) {
@@ -170,9 +165,8 @@ func TestThePlanIsGeometric(t *testing.T) {
 		var live []gitlet.PackRow
 		objects := int64(1000)
 		for i := range gitlet.MaxPublishedLayers {
-			// Each layer three times the one above it, which the split
-			// keeps over a new layer of one object: the chain is already as
-			// long as one may be.
+			// Each layer three times the one above it, which the split keeps
+			// over a new one-object layer: the chain is already at its longest.
 			id := fmt.Sprintf("deep%02d", i)
 			chain = append([]gitlet.LayerRow{layerRow(gitlet.MaxPublishedLayers-i, id, objects, id)}, chain...)
 			live = append(live, smallPack(id, 1))

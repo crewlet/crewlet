@@ -32,11 +32,10 @@ func storeOver(t *testing.T, backend objstore.Backend) *objstore.Store {
 	return s
 }
 
-// A FAILED RUN'S LOG IS KEPT AND A PASSED ONE'S IS NOT: a run that failed
-// stores the last of its output as one object its attempt's row names, its
-// bytes the output's; a run that passed keeps its summary alone — no tail, no
-// failures, no log; and a failed run on a store with no room ends without its
-// log, its summary saying why.
+// A FAILED RUN'S LOG IS KEPT AND A PASSED ONE'S IS NOT: a failed run stores
+// the last of its output as one object its attempt's row names; a passed
+// run keeps its summary alone (no tail, failures or log); and a failed run on
+// a store with no room ends without its log, its summary saying why.
 //
 // Mutation: keep every run's log — the passed run's row names one, red; fail
 // the ending on a full store — the attempt never ends, red.
@@ -92,10 +91,10 @@ func TestAFailedRunsLogIsKeptAndAPassedOneIsNot(t *testing.T) {
 	}
 }
 
-// A RUN'S REPORTS AND ITS SUMMARY REACH ITS ENDING: the failures its JUnit
-// report names ride its failed ending, the summary its command wrote to
-// $CREWLET_CHECK_SUMMARY is its summary over everything the runner could say,
-// and with no summary written a report's counts are — and the wrapper copies
+// A RUN'S REPORTS AND ITS SUMMARY REACH ITS ENDING: its JUnit report's
+// failures ride its failed ending; the summary its command wrote to
+// $CREWLET_CHECK_SUMMARY wins over anything the runner could say, and with
+// none written the report's counts are the summary; and the wrapper copies
 // each report the definition names out of the checkout once the command ends.
 //
 // Mutation: summarise every run by its exit alone — the command's own summary
@@ -112,8 +111,7 @@ func TestARunsReportsAndSummaryReachItsEnding(t *testing.T) {
 	f.container.end(box, 1, "")
 	row := f.ended(key)
 	// Read once the attempt has ENDED, never once its row names the box: the
-	// runner names the box before it starts the command, so a read between
-	// the two sees no command at all.
+	// runner names the box before starting the command.
 	if bg := box.Background(); len(bg) != 1 || !strings.Contains(bg[0], "cp -f -- 'out/junit.xml'") {
 		t.Fatalf("the box's command %q copies no report", bg)
 	}

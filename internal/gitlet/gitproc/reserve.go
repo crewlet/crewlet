@@ -8,50 +8,28 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// Reserved is one slot of the MAINTENANCE lane held across the work that
-// decides what a process will check, rather than taken only as the process
-// starts: [Pool.Reserve] takes it — a free slot or [ErrBusy], never a wait,
-// the lane's own rule — before that work, so a node with no slot free refuses
-// the caller before it has read anything, and every process the work then
-// runs ([Reserved.Run]) runs in the slot it holds rather than asking the lane
-// again, until [Reserved.Release].
-//
-// IT EXISTS FOR THREE CALLERS whose work around their processes must not be
-// done for, or cut off by, a process the lane then refuses. An operator's
-// verify of a repository (internal/gitlet/cache) reads and hashes every byte of
-// every pack before its connectivity check: admitted only at the check, a
-// busy node answered "run it again" after reading up to the largest
-// repository the defaults admit — twenty gibibytes — and the retry read them
-// all again for as long as a bitmap held the lane; and nothing bounded how
-// many such reads ran at once. Held from the start, a refusal costs nothing,
-// and the lane bounds them. A compaction's build (internal/gitlet/compact,
-// admitted by the cache's AdmitCompaction) runs one pack-objects and, where
-// an output passes the bundle rule, ONE more at a smaller cut: both in the
-// slot it was admitted to, so the rebuild is never refused a lane its own
-// first build was holding, and the node's memory charge it was admitted at
-// covers both. And the cache's write of a node's tip commit-graph rewrites
-// the copy's commit-graph-chain without the old tip before git writes the new
-// one over it: admitted only at the write, a busy lane would leave a copy
-// whose old tip is off its chain and no new one written.
-//
-// THE MAINTENANCE LANE ALONE, because it is the one lane that never waits: a
-// reservation of a lane that queues would be a slot a waiting request queues
-// behind while its holder reads files no git process is reading. (A READ slot
-// is held only by work that IS a read's — [Pool.HoldRead] — and only while
-// that work runs.)
+// Reserved is one MAINTENANCE-lane slot held across the work that decides what
+// a process will check: [Pool.Reserve] takes it (a free slot or [ErrBusy],
+// never a wait) before that work, every process the work runs ([Reserved.Run])
+// runs in it, and [Reserved.Release] frees it. Admitted only at the process,
+// the work would be wasted or cut off: a verify (internal/gitlet/cache) would
+// hash every pack, up to the defaults' 20 GiB repository, before a refusal,
+// unbounded in number; a compaction's rebuild at a smaller cut
+// (internal/gitlet/compact, admitted by the cache's AdmitCompaction) could lose
+// the slot and memory charge its first build held; the tip commit-graph write
+// could drop the old tip from the chain and write no new one. Maintenance alone, the lane that never waits: a held
+// slot of a queueing lane is one requests queue behind while no git runs.
 type Reserved struct {
 	p       *Pool
 	release func()
 
-	// mu holds one process at a time in the slot — the slot is one
-	// process's — and guards released.
+	// mu holds one process at a time in the slot and guards released.
 	mu       sync.Mutex
 	released bool
 }
 
-// Reserve takes a free slot of the maintenance lane and holds it until the
-// answer's Release, or refuses [ErrBusy] at once when none is free — with the
-// same sentence a maintenance [Pool.Run] the lane refuses is told.
+// Reserve holds a free maintenance-lane slot until the answer's Release, or
+// refuses [ErrBusy] at once, in the words a refused maintenance [Pool.Run] gets.
 func (p *Pool) Reserve() (*Reserved, error) {
 	release, err := p.tryMaintenance()
 	if err != nil {
@@ -71,14 +49,11 @@ func (p *Pool) tryMaintenance() (func(), error) {
 	return func() { p.maint.release(nil, 0) }, nil
 }
 
-// Run runs one maintenance process in the reserved slot, exactly as
-// [Pool.Run] would once admitted — its checks, its group, its deadline and
-// its end — and is the reservation's only way to a process: c's class must be
-// [ClassMaintenance], and a released reservation runs nothing. One process at
-// a time: a second Run waits for the first, since the slot is one process's.
-//
-// Its wait for a slot is none — the reservation's — and is recorded so, one
-// observation a process like every run of the lane.
+// Run runs one maintenance process in the reserved slot exactly as an admitted
+// [Pool.Run] would, and is the reservation's only way to a process: c's class
+// must be [ClassMaintenance], and a released reservation runs nothing. A second
+// Run waits for the first, since the slot is one process's. Its slot wait is
+// recorded as zero, one observation per process like every run of the lane.
 func (r *Reserved) Run(ctx context.Context, c Cmd) (Result, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -104,14 +79,14 @@ func (r *Reserved) Run(ctx context.Context, c Cmd) (Result, error) {
 	return res, err
 }
 
-// Version is the git every process run in the slot is: the pool's
-// ([Pool.Version]). What a publication's layer names as the release that wrote
-// it (internal/gitlet/compact), so the git a Gitlet node holds the layer to is the
-// one that ran its build, never a second reading of the binary beside it.
+// Version is the git the slot runs, the pool's ([Pool.Version]): a
+// publication's layer names it as the release that wrote it
+// (internal/gitlet/compact), so the layer is held to the git that ran its
+// build, never a second reading of the binary.
 func (r *Reserved) Version() Version { return r.p.version }
 
-// Release gives the slot back, once — a later call does nothing — after
-// waiting for a process running in it to end.
+// Release gives the slot back once, after a process running in it ends; a
+// later call does nothing.
 func (r *Reserved) Release() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -122,22 +97,17 @@ func (r *Reserved) Release() {
 	r.release()
 }
 
-// HoldRead takes one slot of the READ lane for in-process work that is a
-// read's — the cache's hash of a pack a hint names (internal/gitlet/cache) —
-// exactly as a read's run is admitted: in arrival order, waiting at most
-// [SlotWait] and [ErrBusy] past it, or its caller's own end; counted in the
-// lane's running gauge while it is held. release gives it back, once however
-// often it is called. It runs nothing.
+// HoldRead takes one READ-lane slot for in-process work that is a read's (the
+// cache's hash of a pack a hint names, internal/gitlet/cache), admitted as a
+// read's run is: in arrival order, [ErrBusy] past [SlotWait], or the caller's
+// end; counted in the lane's running gauge while held. release frees it, once
+// however often called. It runs nothing.
 //
-// A SLOT OF THE READ LANE, because that lane counts a core a slot for the
-// work requests wait on, and hashing is a core's work a request waits on —
-// never a semaphore of its own beside the lanes, which would count the same
-// cores twice and let N hashes and N reads run on N cores at once. HELD ONLY
-// WHILE THE WORK RUNS, a piece at a time by its caller, and never across a
-// wait for anything else: the lanes' rule (admit) is that nothing waits for a
-// slot of a lane it holds, and a holder that waited would be a slot every
-// queued read waits behind while nothing runs — Reserve's reason for
-// reserving only the maintenance lane.
+// The read lane, never a semaphore of its own: the lane counts a core a slot
+// for work requests wait on, as hashing is, and a second count would let N hashes and N reads share N cores. The caller
+// holds it only while the work runs, never across another wait: nothing waits
+// for a slot of a lane it holds (admit), or queued reads wait behind a slot
+// running nothing, as with [Reserved].
 func (p *Pool) HoldRead(ctx context.Context) (release func(), err error) {
 	free, _, err := p.admit(ctx, ClassRead, Share{})
 	if err != nil {

@@ -572,6 +572,7 @@ type deepRun struct {
 
 	mu       sync.Mutex
 	progress wire.DeepProgress
+	lines    personLines
 	// spent is the task's tokens before this run, plus what this run has
 	// reported so far once it reports.
 	spent int
@@ -591,9 +592,9 @@ func (r *deepRun) observe(p DeepProgress) {
 	}
 	r.progress.State = wire.DeepRunning
 	for _, line := range p.Lines {
-		// IN THE PERSON'S WORDS ([personLine]): no host path, no tool's
+		// IN THE PERSON'S WORDS ([personLines]): no host path, no tool's
 		// own name, and no call to Crewlet the nested steps already list.
-		if shown, ok := personLine(redact.Secrets(line)); ok {
+		if shown, ok := r.lines.line(redact.Secrets(line)); ok {
 			r.progress.Activity = append(r.progress.Activity, textcut.Within(shown, lineMaxBytes))
 		}
 	}

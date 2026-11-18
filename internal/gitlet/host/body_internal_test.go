@@ -9,12 +9,9 @@ import (
 	"time"
 )
 
-// A SMALL REQUEST COSTS ITS OWN SIZE: a clone's negotiation is a few hundred
-// bytes, and a mebibyte allocated for each — and held while it waits for its
-// sync and its transfer slot — is what a burst of fetches held for nothing.
-// Whether the client declares its length or not, a 200-byte request allocates
-// a few kilobytes, and gives back what it charged to the node's request
-// memory.
+// A SMALL REQUEST COSTS ITS OWN SIZE, not a mebibyte held while it waits for
+// its sync and transfer slot: declared or not, a 200-byte request allocates a
+// few kilobytes and gives back what it charged to the node's request memory.
 func TestASmallRequestAllocatesItsOwnSize(t *testing.T) {
 	s := &Server{requestMemory: RequestMemoryBytes, heads: newAllowance(RequestMemoryAllowance(64))}
 	body := bytes.Repeat([]byte("x"), 200)
@@ -46,12 +43,10 @@ func TestASmallRequestAllocatesItsOwnSize(t *testing.T) {
 	}
 }
 
-// A DECLARED LENGTH IS THE CLIENT'S WORD, read like any other however large:
-// net/http hands a handler a `Content-Length` up to math.MaxInt64, one past
-// which is past every int64 — a first buffer sized declared+1 wrapped
-// negative, took nothing, and was filled with nothing for ever, holding a core
-// and the host's in-flight count. Every such length reads a short body
-// promptly, held as large as it is.
+// A DECLARED LENGTH IS THE CLIENT'S WORD, read however large: net/http admits
+// a `Content-Length` up to math.MaxInt64, and a first buffer sized declared+1
+// wraps negative and spins for ever, holding a core and the host's in-flight
+// count. Every such length reads a short body promptly, held as large as it is.
 func TestADeclaredLengthIsReadWhateverItsSize(t *testing.T) {
 	body := []byte("0000")
 	for _, declared := range []int64{math.MaxInt64, math.MaxInt64 - 1, RequestMemoryBytes, RequestMemoryBytes - 1,

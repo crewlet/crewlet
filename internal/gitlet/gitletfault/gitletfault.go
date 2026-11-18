@@ -11,10 +11,19 @@
 // repository's maintainer running one, and an engine write's ([WritePath])
 // the Gitlet node building it, a check's run's ([CheckPath]) the Gitlet node
 // running it, and an import's ([ImportPath]) and a pull mirror's sync's
-// ([MirrorPath]) the repository's home: a step with no point is a step nobody ever crashed at. So a new step of the receive pipeline, of a compaction, of a
-// publication, of an engine write or of an expunge, that can leave state
-// behind gets a point here, in order, or the matrix does not cover it. The order is written ONCE, in this package, and a call site
-// adds a hit and never edits the list.
+// ([MirrorPath]) the repository's home: a step with no point is a step
+// nobody ever crashed at. So a new step of any of those paths that can leave
+// state behind gets a point here, in order, or the matrix does not cover it.
+// The order is written ONCE, in this package, and a call site adds a hit and
+// never edits the list.
+//
+// Each point is hit at exactly ONE site (TestEveryPointHasOneHitSite, which
+// walks every directory that hits one, so a package that starts hitting
+// points joins its list): a point hit at two sites fires at whichever runs
+// first, and one hit at none is a fault no case can make. A step two paths
+// share is one point on both, never a second name: an engine write and a
+// merge land through the push's landing, so [WritePath] and [MergePath] end
+// in its points.
 //
 // A crash is a hit HELD PAST THE NODE'S DEATH ([Action.Crash]). The case
 // kills the node while the hit is held, restarts it over the same files and
@@ -86,9 +95,8 @@ import (
 // reads that list.
 type Point string
 
-// The push path's points, in the order a push reaches them, then the sync's,
-// then the compaction's, then the engine write's own. Each comment says what
-// is true when the point is hit.
+// The points, grouped by path, each group in its path's order. Each comment
+// says what is true when the point is hit.
 const (
 	// HostAfterCommands: the push's commands are read and nothing has started.
 	HostAfterCommands Point = "host.after_commands"
@@ -102,25 +110,19 @@ const (
 	// its hook has reached the engine and spent its token.
 	HostHookAdmitted Point = "host.hook_admitted"
 	// HostUpload: inside the bundle's upload, before each read the object
-	// store makes of the bundle, at the offset of the bundle bytes handed to
-	// the store so far — one of the three points that read an offset
-	// ([Action.At]), with [CompactUpload] and [PublishUpload].
-	// It is NOT a count of bytes stored: s3obj fills a whole part
-	// (PartBytes, 8 MiB — all of a smaller bundle) before it sends any and
-	// reads the next part while up to four are in flight unanswered, and
-	// natsobj holds a whole message (MessageBytes, 128 KiB) before the
-	// library sends it. A case that needs bytes landed at the bucket waits
-	// for them there rather than reading an offset as a stored count.
+	// store makes of it, at the offset of the bytes handed to the store so
+	// far ([Action.At]). NOT a count of bytes stored: s3obj fills a whole part
+	// (PartBytes, 8 MiB) before sending, with up to four in flight, and
+	// natsobj a whole message (MessageBytes, 128 KiB), so a case that needs
+	// bytes landed waits for them at the bucket.
 	HostUpload Point = "host.upload"
 	// HostAfterUpload: the bundle is stored and no row names it.
 	HostAfterUpload Point = "host.after_upload"
 	// CommitterAfterAppend: the record is appended to the code log and its
-	// result not yet returned to the receiver — the durable record the
-	// receiver never heard about. Hit on the committer's batch goroutine,
-	// never in a request, so a crash here holds the batch, and the dead
-	// node's Committer.Stop that waits for it, until the release. The change
-	// writer beside the committer hits it too, after a record of a change's
-	// conversation, on the goroutine its publish runs on.
+	// result not yet returned to the receiver. Hit on the committer's batch
+	// goroutine, never in a request, so a crash here holds the batch, and the
+	// dead node's Committer.Stop, until the release. The change writer hits
+	// it too, after a change's conversation record, on its publish goroutine.
 	CommitterAfterAppend Point = "committer.after_append"
 	// HostAfterPropose: the committer has answered.
 	HostAfterPropose Point = "host.after_propose"
@@ -141,30 +143,25 @@ const (
 	// in.
 	SyncState Point = "sync.state"
 	// SyncSwapBeforeRename: packs left an incarnation a reader may hold, the
-	// round has applied to its end there (its state renamed in), and the next
-	// incarnation is staged whole under scratch/ — every live pack, HEAD,
-	// config, the packed-refs and the derived files a retirement keeps linked
-	// in, its directories synced and its own state written — and not yet
-	// renamed into repos/: the swap's one irreversible step is next
-	// (internal/gitlet/cache's swap.go).
+	// round has applied to its end there, and the next incarnation is staged
+	// whole under scratch/ (live packs, HEAD, config, packed-refs, the kept
+	// derived files, its state; directories synced) and not yet renamed into
+	// repos/: the swap's one irreversible step is next (internal/gitlet/cache's
+	// swap.go).
 	SyncSwapBeforeRename Point = "sync.swap_before_rename"
-	// InstallAfterFetch: a published layer's every part is fetched into
-	// tmp/, its files made durable and held to its row (gitlet.CheckLayer),
-	// and nothing of it is placed: no incarnation holds a file of it, and
-	// no chain file names it (internal/gitlet/cache's layers.go) — hit by a
-	// full round's install and by the installer alike.
+	// InstallAfterFetch: a published layer's every part is fetched into tmp/,
+	// durable and held to its row (gitlet.CheckLayer), and nothing of it is
+	// placed in an incarnation or named by a chain file (internal/gitlet/cache's
+	// layers.go). Hit by a full round's install and by the installer.
 	InstallAfterFetch Point = "sync.install_after_fetch"
 
 	// CompactAfterBuild: a compaction's one pack-objects has written its
 	// outputs into the compaction's scratch, and nothing of them is laid out
 	// or stored (internal/gitlet/compact).
 	CompactAfterBuild Point = "compact.after_build"
-	// CompactUpload: inside an output's upload, before each read the object
-	// store makes of the output's bundle, at the offset of the bundle bytes
-	// handed to the store so far — the compaction's [HostUpload], an offset
-	// rather than a count of bytes stored, for its reasons. Every output is
-	// uploaded at once, so each hit is one output's, at that output's own
-	// offset.
+	// CompactUpload: the compaction's [HostUpload], inside an output's
+	// upload. Every output uploads at once, so each hit is one output's, at
+	// that output's own offset.
 	CompactUpload Point = "compact.upload"
 	// CompactAfterUpload: every output is stored, and no row names any of
 	// them: no proposal has been made.
@@ -174,18 +171,15 @@ const (
 	// building node's cache.
 	CompactAfterPropose Point = "compact.after_propose"
 
-	// PublishAfterBuild: a publication's layer — its multi-pack-index layer,
-	// its bitmap and its commit-graph layer — and its repack's outputs, if it
-	// repacks, are written in the publication's scratch, and nothing of them
-	// is laid out or stored (internal/gitlet/compact).
+	// PublishAfterBuild: a publication's layer (multi-pack-index layer,
+	// bitmap, commit-graph layer) and any repack's outputs are written in its
+	// scratch, and nothing of them is laid out or stored
+	// (internal/gitlet/compact).
 	PublishAfterBuild Point = "publish.after_build"
-	// PublishUpload: inside the upload of one of the layer's parts or one of
-	// the repack's outputs, before each read the object store makes of it, at
-	// the offset of the bytes handed to the store so far — the layer's offset
-	// for a part, the bundle's for an output: the publication's
-	// [CompactUpload], an offset rather than a count of bytes stored, for
-	// [HostUpload]'s reasons. Every part and output is uploaded at once, so
-	// each hit is one upload's, at its own offset.
+	// PublishUpload: the publication's [HostUpload], inside a layer part's
+	// upload (at the layer's offset) or a repack output's (at its bundle's).
+	// Every part and output uploads at once, so each hit is one upload's, at
+	// its own offset.
 	PublishUpload Point = "publish.upload"
 	// PublishAfterUpload: every part and every output is stored, and no row
 	// names any of them: no proposal has been made.
@@ -196,42 +190,37 @@ const (
 	PublishAfterPropose Point = "publish.after_propose"
 
 	// WriteAfterBuild: an engine write's build has made its commit and its one
-	// pack, indexed in the write's scratch, and nothing of it is stored or
-	// proposed (internal/gitlet/host's Server.Write): the landing every push
-	// takes is next, its own points the write's from here on ([WritePath]).
+	// pack, indexed in its scratch, and nothing is stored or proposed
+	// (internal/gitlet/host's Server.Write): the landing is next ([WritePath]).
 	WriteAfterBuild Point = "write.after_build"
 
-	// MergeAfterBuild: a merge_change's build has made its commit and its one
-	// pack, indexed in the merge's scratch, onto the target's tip it read,
-	// and nothing of it is stored or proposed (internal/gitlet/host's
-	// merge.go): the landing is next, its own points the merge's from here on
-	// ([MergePath]). Hit again by every rebuild onto a target that moved.
+	// MergeAfterBuild: a merge_change's build has made its commit onto the
+	// target tip it read and its one pack, indexed in its scratch, and nothing
+	// is stored or proposed (internal/gitlet/host's merge.go): the landing is
+	// next ([MergePath]). Hit again by every rebuild onto a moved target.
 	MergeAfterBuild Point = "merge.after_build"
 
-	// ChainAfterBuild: a chain's build has merged each of its entries onto the
-	// commit the one before made — or skipped it — and made its one pack,
-	// indexed in the chain's scratch, and nothing of it is stored
-	// (internal/gitlet/host's chain.go): its bundle's upload is next, and then
-	// the record its caller proposes, which no point of the chain's own
-	// reaches. A chain killed here leaves only its scratch, which the node's
-	// next boot empties.
+	// ChainAfterBuild: a chain's build has merged (or skipped) each entry onto
+	// the commit the one before made and made its one pack, indexed in its
+	// scratch, and nothing is stored (internal/gitlet/host's chain.go): its
+	// bundle's upload is next, then its caller's record, which no chain point
+	// reaches. A chain killed here leaves only its scratch, emptied at boot.
 	ChainAfterBuild Point = "chain.after_build"
 
-	// CheckAfterClaim: a Gitlet node's runner holds a queued check — its claim
-	// applied, the row naming it the attempt's runner — and has made no box
+	// CheckAfterClaim: a Gitlet node's runner has claimed a queued check (the
+	// row names it the attempt's runner) and made no box
 	// (internal/gitlet/checkrun): a runner that dies here leaves a running row
-	// nothing will end but the repository's home, which sweeps a runner gone
-	// from its git order.
+	// only the repository's home ends, sweeping a runner gone from its git
+	// order.
 	CheckAfterClaim Point = "check.after_claim"
 
 	// ExpungeAfterBuild: an expunge's build has written its kept and its
 	// dropping packs into the expunge's scratch, and nothing of them is
 	// stored or proposed (internal/gitlet/compact).
 	ExpungeAfterBuild Point = "expunge.after_build"
-	// ExpungeAfterBegin: the expunge's begin has applied — its inputs
-	// retired, its kept packs live and its dropping packs dropping, the
-	// repository's drop epoch moved — and its rescue has not started: the
-	// expunge is open, and only its rows say what is left to do.
+	// ExpungeAfterBegin: the expunge's begin has applied (inputs retired, kept
+	// packs live, dropping packs dropping, the drop epoch moved) and its
+	// rescue has not started: only its rows say what is left to do.
 	ExpungeAfterBegin Point = "expunge.after_begin"
 	// ExpungeAfterRescueUpload: every rescue pack is stored, and no row names
 	// any of them: the commit is not proposed.
@@ -262,38 +251,33 @@ const (
 	// and its packs are not yet adopted.
 	MirrorAfterPropose Point = "mirror.after_propose"
 
-	// CommitterBeforeAdmit: a committer's batch has decided its record and
-	// its admission is reading the code log's usage, and nothing is
-	// appended. An Err is the broker's answer to that reading, which refuses
-	// the batch `usage_unknown`. Hit by the suites' wrapper, as
-	// [CommitterAfterAppend] is, on a reading a wrapped writer's admission
-	// starts and never on a barrier's. ON NO CRASH PATH: the step leaves
-	// nothing behind to recover, so a case faults it for the refusal.
+	// CommitterBeforeAdmit: a committer's batch has decided its record and its
+	// admission is reading the code log's usage; nothing is appended. An Err
+	// is the broker's answer to that reading, refusing the batch
+	// `usage_unknown`. Hit by the suites' wrapper, as [CommitterAfterAppend]
+	// is, on a wrapped writer's admission reading, never a barrier's. ON NO
+	// CRASH PATH: it leaves nothing to recover; a case faults it for the refusal.
 	CommitterBeforeAdmit Point = "committer.before_admit"
-	// HostBeforeOffered: an attempt's count of the commits it offered is about to run, in its
-	// scratch. ON NO CRASH PATH: only a push a rule refuses whole meets it, so a case faults it
-	// for the attempt recorded uncounted.
+	// HostBeforeOffered: an attempt's count of the commits it offered is about
+	// to run, in its scratch. ON NO CRASH PATH: only a push a rule refuses
+	// whole meets it, so a case faults it for the attempt recorded uncounted.
 	HostBeforeOffered Point = "host.before_offered"
 
 	// MaintainBeforeStep: a maintenance run of a copy is about to take its
-	// next step — an index, with or without its bitmap, the commit-graph, or
-	// the node's tip over a published chain (internal/gitlet/cache's
-	// maintain.go) — and nothing of the step is written. Hit before every
-	// step of every run. ON NO CRASH PATH: what a run leaves behind is the
-	// derived files' own to recover, by their declarations. A case HOLDS it
-	// (a Block) to read a copy as a round left it: a round's end owes the
-	// maintainer a run, and the index that run writes takes the commit-graph
-	// with it, so a case reading the graph once the round let go read
-	// whichever came first.
+	// next step (an index with or without its bitmap, the commit-graph, or the
+	// node's tip over a published chain; internal/gitlet/cache's maintain.go),
+	// nothing of it written. Hit before every step of every run. ON NO CRASH
+	// PATH: derived files recover by their declarations. A case HOLDS it (a
+	// Block) to read a copy as a round left it, since the run a round's end
+	// owes the maintainer rewrites the commit-graph along with the index.
 	MaintainBeforeStep Point = "maintain.before_step"
 
-	// WriteJoined: an engine write asked while another ask of its push id is
-	// building and landing it on this node has JOINED that one, and waits for
-	// its answer having built, stored and proposed nothing (internal/gitlet/host's
-	// Server.Write). Hit by the joining ask alone, each time it joins. ON NO
-	// CRASH PATH: a joiner holds nothing a crash could leave behind. A case
-	// REACHES it to let the write it joined go only once the second ask waits
-	// on it, so the join, and never the push's row, is what answers that ask.
+	// WriteJoined: an engine write has JOINED another ask of its push id
+	// building and landing on this node, and waits for its answer having done
+	// nothing itself (internal/gitlet/host's Server.Write). Hit by the joining
+	// ask, each time it joins. ON NO CRASH PATH: a joiner holds nothing. A
+	// case REACHES it to let the joined write go only once the second ask
+	// waits, so the join, never the push's row, answers that ask.
 	WriteJoined Point = "write.joined"
 )
 
@@ -303,131 +287,105 @@ var pushPath = []Point{
 	HostAfterUpload, CommitterAfterAppend, HostAfterPropose, HostBeforeAdopt, HostHookClose,
 }
 
-// syncPath is the cache sync's points in the order a sync reaches them: a
-// round's download, its refs and its state, then — since the round has
-// applied to its end on the incarnation it leaves before the swap begins —
-// the swap's rename, and LAST a published layer fetched and not yet placed,
-// which a full round meets before its refs and the installer after every
-// round, so no order of the round's own puts it elsewhere.
+// syncPath is the cache sync's points: a round's download, refs and state,
+// then the swap's rename (the round applies before the swap begins), and
+// LAST a layer fetched and not yet placed, which a full round meets before
+// its refs and the installer after every round, so no one order places it.
 var syncPath = []Point{SyncDownload, SyncRefs, SyncState, SyncSwapBeforeRename, InstallAfterFetch}
 
-// compactPath is a compaction's points in the order its maintainer reaches
-// them: its build, each output's upload, the uploads ended, the committer's
-// answer.
+// compactPath is a compaction's points in its maintainer's order.
 var compactPath = []Point{CompactAfterBuild, CompactUpload, CompactAfterUpload, CompactAfterPropose}
 
-// publishPath is a publication's points in the order its maintainer reaches
-// them: its build, each part's and each output's upload, the uploads ended,
-// the committer's answer.
+// publishPath is a publication's points in its maintainer's order.
 var publishPath = []Point{PublishAfterBuild, PublishUpload, PublishAfterUpload, PublishAfterPropose}
 
-// writePath is an engine write's OWN points: its build ended, before the
-// landing. What it meets after them is the landing's ([WritePath]).
+// writePath is an engine write's OWN points, before the landing's
+// ([WritePath]).
 var writePath = []Point{WriteAfterBuild}
 
-// mergePath is a merge_change's OWN points: its build ended, before the
-// landing. What it meets after them is the landing's ([MergePath]).
+// mergePath is a merge_change's OWN points, before the landing's
+// ([MergePath]).
 var mergePath = []Point{MergeAfterBuild}
 
-// chainPath is a chain's points in the order its build reaches them: its
-// entries merged and its pack made, before its bundle is stored.
+// chainPath is a chain's points: its pack made, before its bundle is stored.
 var chainPath = []Point{ChainAfterBuild}
 
-// checkPath is a check's run's points in the order its runner reaches them:
-// its claim applied, before any box.
+// checkPath is a check's run's points: its claim applied, before any box.
 var checkPath = []Point{CheckAfterClaim}
 
-// expungePath is an expunge's points in the order its maintainer reaches them:
-// its build, its begin applied, its rescue stored, its commit answered.
+// expungePath is an expunge's points in its maintainer's order.
 var expungePath = []Point{ExpungeAfterBuild, ExpungeAfterBegin, ExpungeAfterRescueUpload, ExpungeAfterCommit}
 
-// importPath is an import's points in the order its home reaches them: its
-// build, a chunk stored, the committer's answer to it.
+// importPath is an import's points in its home's order.
 var importPath = []Point{ImportAfterBuild, ImportAfterUpload, ImportAfterPropose}
 
-// mirrorPath is a pull mirror's sync's points in the order its home reaches
-// them: its build, its packs stored, the committer's answer.
+// mirrorPath is a pull mirror's sync's points in its home's order.
 var mirrorPath = []Point{MirrorAfterBuild, MirrorAfterUpload, MirrorAfterPropose}
 
-// refusalPoints are the steps no crash matrix walks, each faulted for the
-// refusal a case asserts on: a committer's admission reading the log's usage,
-// and an attempt's count of what it offered.
+// refusalPoints are steps no crash matrix walks, each faulted for the refusal
+// a case asserts on.
 var refusalPoints = []Point{CommitterBeforeAdmit, HostBeforeOffered}
 
-// holdPoints are the steps no crash matrix walks, each held or reached so a
-// case orders what it does next behind the step: a maintenance run's step,
-// held to read what precedes it before it runs, and an engine write's join,
-// reached to let the write joined go only once a second ask waits on it.
+// holdPoints are steps no crash matrix walks, each held or reached so a case
+// orders what it does next behind the step.
 var holdPoints = []Point{MaintainBeforeStep, WriteJoined}
 
 // landingPath is the push path's points the LANDING hits (internal/gitlet/host's
-// land), in its order: an engine write lands as a relayed push does, so a write
-// crashes at every point of its landing the push path names, and at no point
-// of the relay's own — its commands, its sync, its scratch, its hook — which
-// a write never meets.
+// land), in order: an engine write lands as a relayed push does, so it
+// crashes at these and never at the relay's own (commands, sync, scratch,
+// hook), which a write never meets.
 var landingPath = []Point{HostUpload, HostAfterUpload, HostAfterPropose, HostBeforeAdopt}
 
 // PushPath is the receive pipeline's points in the order a push reaches them:
-// the nine the host hits and the committer's. A fresh copy at every call,
-// because the crash matrix walks it and nothing it does to its copy may
-// reorder the next walk.
+// the nine the host hits and the committer's. A fresh copy at every call, so
+// nothing a crash matrix does to its copy reorders the next walk.
 func PushPath() []Point { return slices.Clone(pushPath) }
 
-// CompactPath is a compaction's points in the order its maintainer reaches
-// them, every one hit by internal/gitlet/compact. A fresh copy at every call,
-// for [PushPath]'s reason: the compaction's crash matrix walks it.
+// CompactPath is a compaction's points in its maintainer's order, each hit by
+// internal/gitlet/compact. A fresh copy at every call, for [PushPath]'s reason.
 func CompactPath() []Point { return slices.Clone(compactPath) }
 
-// PublishPath is a publication's points in the order its maintainer reaches
-// them, every one hit by internal/gitlet/compact. A fresh copy at every call,
-// for [PushPath]'s reason: the publication's crash matrix walks it.
+// PublishPath is a publication's points in its maintainer's order, each hit
+// by internal/gitlet/compact. A fresh copy at every call, for [PushPath]'s
+// reason.
 func PublishPath() []Point { return slices.Clone(publishPath) }
 
-// WritePath is an engine write's points in the order it reaches them: its own
-// ([WriteAfterBuild]), then the landing's of the push path, in their order —
-// every point an engine write's crash matrix kills the Gitlet node at. A fresh
-// copy at every call, for [PushPath]'s reason. The landing's points are the
-// push path's own, hit once each by the one landing (land.go), so the write
-// adds a point to the closed set for its build alone.
+// WritePath is an engine write's points in order: its own
+// ([WriteAfterBuild]), then the push path's landing points, hit once each by
+// the one landing (land.go), so a write adds only its build's point to the
+// closed set. A fresh copy at every call, for [PushPath]'s reason.
 func WritePath() []Point { return slices.Concat(writePath, landingPath) }
 
-// MergePath is a merge_change's points in the order it reaches them: its own
-// ([MergeAfterBuild]), then the landing's of the push path — the one landing
-// a merge takes as every push does, its proposal a merge record's rather
-// than a push's. A fresh copy at every call, for [PushPath]'s reason.
+// MergePath is a merge_change's points in order: its own ([MergeAfterBuild]),
+// then the push path's landing points, its proposal a merge record. A fresh
+// copy at every call, for [PushPath]'s reason.
 func MergePath() []Point { return slices.Concat(mergePath, landingPath) }
 
-// ChainPath is a chain's points in the order its build reaches them, every
-// one hit by internal/gitlet/host. A fresh copy at every call, for [PushPath]'s
-// reason.
+// ChainPath is a chain's points in order, each hit by internal/gitlet/host. A
+// fresh copy at every call, for [PushPath]'s reason.
 func ChainPath() []Point { return slices.Clone(chainPath) }
 
-// CheckPath is a check's run's points in the order its runner reaches them,
-// every one hit by internal/gitlet/checkrun. A fresh copy at every call, for
-// [PushPath]'s reason.
+// CheckPath is a check's run's points in order, each hit by
+// internal/gitlet/checkrun. A fresh copy at every call, for [PushPath]'s
+// reason.
 func CheckPath() []Point { return slices.Clone(checkPath) }
 
-// ExpungePath is an expunge's points in the order its maintainer reaches them,
-// every one hit by internal/gitlet/compact. A fresh copy at every call, for
-// [PushPath]'s reason: the expunge's crash matrix walks it.
+// ExpungePath is an expunge's points in its maintainer's order, each hit by
+// internal/gitlet/compact. A fresh copy at every call, for [PushPath]'s
+// reason.
 func ExpungePath() []Point { return slices.Clone(expungePath) }
 
-// ImportPath is an import's points in the order its home reaches them, every
-// one hit by internal/gitlet/mirror. A fresh copy at every call, for
-// [PushPath]'s reason.
+// ImportPath is an import's points in its home's order, each hit by
+// internal/gitlet/mirror. A fresh copy at every call, for [PushPath]'s reason.
 func ImportPath() []Point { return slices.Clone(importPath) }
 
-// MirrorPath is a pull mirror's sync's points in the order its home reaches
-// them, every one hit by internal/gitlet/mirror. A fresh copy at every call, for
-// [PushPath]'s reason.
+// MirrorPath is a pull mirror's sync's points in its home's order, each hit
+// by internal/gitlet/mirror. A fresh copy at every call, for [PushPath]'s
+// reason.
 func MirrorPath() []Point { return slices.Clone(mirrorPath) }
 
-// Points is the closed set: every point, the push path first in pipeline
-// order, then the sync's, the compaction's and the publication's, then the
-// engine write's own, the merge's and the chain's, then a check's run's, then
-// the expunge's, an import's and a pull mirror's sync's — the milestone
-// spec's order (M6 §0), held whatever order the paths landed in, so the set
-// reads as the domain grew, and last the points no crash matrix walks. A
+// Points is the closed set: every path's points in the milestone spec's order
+// (M6 §0), the push path first, then the points no crash matrix walks. A
 // fresh copy at every call, so no importer can rewrite what [Point.Valid]
 // accepts.
 func Points() []Point {
@@ -444,16 +402,11 @@ func (p Point) Valid() bool {
 		slices.Contains(holdPoints, p)
 }
 
-// readsOffset reports whether p is hit at an offset ([Action.At]): an upload's
-// point, [HostUpload], [CompactUpload] or [PublishUpload], hit before each
-// read the object store makes of the bytes it uploads. Every other point is
-// hit at zero.
-//
-// ONE PREDICATE, read at all three places the rule is applied — an arming's
-// refusal (Arm), a firing's offset gate (fire) and a call site's refusal
-// (checkHit): spelled once a place, a point added at one and not another
-// either armed an offset no hit could reach or fired at its first hit, offset
-// 0, whatever its arming said.
+// readsOffset reports whether p is hit at an offset ([Action.At]): the
+// uploads' points, [HostUpload], [CompactUpload] and [PublishUpload]. Every
+// other point is hit at zero. Arm, fire and checkHit all read this ONE
+// predicate: a point added at one and not another would arm an offset no hit
+// reaches, or fire at offset 0 whatever its arming said.
 func readsOffset(p Point) bool { return p == HostUpload || p == CompactUpload || p == PublishUpload }
 
 // offsetPoints names the points that read an offset, for a refusal's
@@ -464,10 +417,9 @@ const offsetPoints = "host.upload, compact.upload and publish.upload"
 // of [Points].
 var ErrNotAPoint = errors.New("gitletfault: not a fault point")
 
-// ErrOffset is a hit handing an offset to a point that reads none — every
-// point but the uploads', [HostUpload], [CompactUpload] and [PublishUpload],
-// is hit at zero — or a negative offset to an upload's, which counts bytes
-// from zero. Each wrap says which of the two it was.
+// ErrOffset is a hit handing an offset to a point that reads none (every
+// point but the uploads'), or a negative offset to an upload's. Each wrap
+// says which.
 var ErrOffset = errors.New("gitletfault: an offset the point does not read")
 
 // ErrCrashed is what a hit held at a crash ([Action.Crash]) answers once
@@ -486,28 +438,24 @@ type Action struct {
 	// step would.
 	Err error
 	// Block, when non-nil, holds the hit until it is closed or the hit's
-	// context ends, and the hit then answers Err (or the context's cause):
-	// a hold in a process that LIVES. It is never a crash's — a node killed
-	// in-process cancels the hit's context, and the call site's error path
-	// would run before the restart; that is [Action.Crash].
+	// context ends, then answers Err (or the context's cause): a hold in a
+	// process that LIVES. Never a crash's: a node killed in-process cancels
+	// the context, running the call site's error path before the restart;
+	// that is [Action.Crash].
 	Block <-chan struct{}
-	// Crash holds the hit past the node's death: whatever its context does,
-	// until [Script.ReleaseCrashes], and the hit then answers [ErrCrashed].
-	// Whatever waits for the work it holds — a request's handler, the
-	// committer's batch, a sync — waits for the release too, which is what
-	// the package doc asks of a kill and a teardown. It takes neither Err
-	// nor Block, which it would never reach. A crash the restarted node must
-	// not meet again is armed Once, or disarmed before the restart.
+	// Crash holds the hit past the node's death, whatever its context does,
+	// until [Script.ReleaseCrashes], then answers [ErrCrashed]; whatever
+	// waits for the held work waits for the release too (package doc). It
+	// takes neither Err nor Block, which it would never reach. A crash the
+	// restarted node must not meet again is armed Once, or disarmed first.
 	Crash bool
-	// Reached, when non-nil, is closed when the point first fires — how a
-	// case knows the step was reached and it may kill the node. It is
-	// closed at most once, however many hits fire, and must be open when
-	// armed.
+	// Reached, when non-nil, is closed when the point first fires: how a case
+	// knows it may kill the node. Closed at most once, however many hits
+	// fire; it must be open when armed.
 	Reached chan struct{}
-	// At is the uploads' alone, [HostUpload]'s, [CompactUpload]'s and
-	// [PublishUpload]'s: the action fires on hits whose offset — bundle bytes
-	// the object store has read, never bytes it has stored — is at or past it
-	// (with Once, the first such hit). Zero is the first byte.
+	// At is the uploads' points' alone: the action fires on hits whose offset
+	// (bytes the object store has read, never stored) is at or past it (with
+	// Once, the first such hit). Zero is the first byte.
 	At int64
 }
 
@@ -515,15 +463,13 @@ type Action struct {
 // call site's nil check is the whole cost of this package.
 type Injector interface {
 	// Hit reports that the step p was reached, at the offset at (zero for
-	// every point but the uploads', [HostUpload], [CompactUpload] and
-	// [PublishUpload]); a non-nil error fails the step.
+	// every point but the uploads'); a non-nil error fails the step.
 	Hit(ctx context.Context, p Point, at int64) error
 }
 
 // Script is the [Injector] the suites arm. The zero Script is ready, with
 // nothing armed. Safe for concurrent use; a nil *Script hits nothing, so a
-// typed nil reaching an Injector field — which passes the call site's nil
-// check — is harmless.
+// typed nil that passes a call site's nil check is harmless.
 type Script struct {
 	mu    sync.Mutex
 	armed map[Point]Action
@@ -593,15 +539,11 @@ func (s *Script) Hits(p Point) int {
 }
 
 // ReleaseCrashes ends every crash: each hit held at one ([Action.Crash]), and
-// every crash hit after it, answers [ErrCrashed]. The fleet's teardown calls
-// it FIRST — after the case has judged the restarted node, and before it
-// stops or waits for any node, killed or not — because whatever waits for
-// work a crash holds waits until then: httptest's Server.Close for a dead
-// node's held handlers, that node's Committer.Stop for its held batch
-// whatever its context, and the ordinary teardown of a node no case killed
-// that a crash fired on all the same. It releases no [Action.Block], may be
-// called more than once, and on a nil *Script, which holds nothing, does
-// nothing.
+// every crash hit after, answers [ErrCrashed]. The fleet's teardown calls it
+// FIRST, after the case has judged the restart and before it stops or waits
+// for any node, killed or not, since whatever waits for held work waits until
+// then (package doc). It releases no [Action.Block], may be called more than
+// once, and does nothing on a nil *Script.
 func (s *Script) ReleaseCrashes() {
 	if s == nil {
 		return
@@ -622,18 +564,17 @@ func (s *Script) deadLocked() chan struct{} {
 	return s.dead
 }
 
-// Hit counts the hit and, if p is armed and the action fires — p reads no
-// offset or at is at or past [Action.At], and a Once action has not
-// already fired — closes Reached (once) and then: holds a crash, whatever ctx
-// does, until [Script.ReleaseCrashes] and answers [ErrCrashed]; or holds on
+// Hit counts the hit and, if p's armed action fires (at is at or past
+// [Action.At] where p reads one), closes Reached (once) and then holds a
+// crash until [Script.ReleaseCrashes] and answers [ErrCrashed], or holds on
 // Block (answering context.Cause(ctx) if ctx ends first) and returns Err. A
-// Once action that fired is disarmed under the same lock that decided it
-// fired, so of hits racing on one point exactly one fires.
+// Once action is disarmed under the lock that decided it fired, so of hits
+// racing on one point exactly one fires.
 //
-// A point that is not one of [Points] answers [ErrNotAPoint], and an offset a
-// point does not read [ErrOffset] — whether or not anything is armed, and on
-// a nil *Script too — so a call site naming either fails at once rather than
-// silently never firing. A refused hit is not counted.
+// An unknown point answers [ErrNotAPoint] and an offset the point does not
+// read [ErrOffset], armed or not and on a nil *Script too, so such a call
+// site fails at once rather than silently never firing. A refused hit is not
+// counted.
 func (s *Script) Hit(ctx context.Context, p Point, at int64) error {
 	if err := checkHit(p, at); err != nil {
 		return err
@@ -646,9 +587,9 @@ func (s *Script) Hit(ctx context.Context, p Point, at int64) error {
 		return nil
 	}
 	if a.Crash {
-		// NOT ctx: a node killed in-process ends every context it was
-		// serving, and a crash runs nothing of its call site before the
-		// case has judged the restart.
+		// NOT ctx: a node killed in-process ends every context it served,
+		// and a crash runs nothing of its call site before the case judges
+		// the restart.
 		<-dead
 		return fmt.Errorf("%w (%s), held past the node's death until ReleaseCrashes", ErrCrashed, p)
 	}
@@ -663,8 +604,8 @@ func (s *Script) Hit(ctx context.Context, p Point, at int64) error {
 }
 
 // fire counts a hit of p and decides, under one lock, whether its action
-// fires: disarming a Once action and closing Reached there, so neither can
-// happen twice. It hands back the channel a crash waits on.
+// fires, disarming a Once action and closing Reached there so neither
+// happens twice. It returns the channel a crash waits on.
 func (s *Script) fire(p Point, at int64) (Action, <-chan struct{}, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -679,9 +620,8 @@ func (s *Script) fire(p Point, at int64) (Action, <-chan struct{}, bool) {
 	if a.Once {
 		delete(s.armed, p)
 	}
-	// Closed under the lock that every firing takes, so a channel two
-	// points share — or an action without Once firing on every hit — is
-	// closed by the first firing and only checked by the rest.
+	// Under the lock every firing takes, so a channel two points share, or
+	// an action without Once, is closed by the first firing only.
 	if a.Reached != nil && !closed(a.Reached) {
 		close(a.Reached)
 	}

@@ -9,72 +9,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE TRANSFER LANE'S FAIR SHARE: whose transfer goes next when every slot is
-// held.
-//
-// # Why the transfer lane is not first come, first served
-//
-// A transfer slot is held by whoever asked first, and one credential can ask
-// for every slot: a CI system checking out a monorepo behind one token, a
-// mirror catching up, a box's blame lazily fetching a blob at a time. In
-// arrival order a person's clone queued behind sixty-four of them waits for
-// sixty-four of them, and a lane of SlotWait answers it busy. So the lane
-// grants a released slot to the CLASS of principal furthest below its weighted
-// share of what the lane's runs have spent lately, and within the class to
-// the PRINCIPAL that spent least — so the credential that made a storm waits
-// behind every credential of its class that asked less, and a person waits
-// behind it only while people have spent more than twice what the machines
-// have lately: the machines' third of a contended lane.
-//
-// # Charged by what a transfer spends, and only while it matters
-//
-// A run costs the GREATER of the CPU its process tree spent ([Result.CPU]) and
-// its OCCUPANCY, the slot-time it held at the share of a core one slot stands
-// for on the lane's own shape (occupancyRate: a quarter of a core at the
-// default four a core, a whole core on a lane narrower than the cores): CPU
-// alone would charge nothing to a slow client holding a slot for an hour,
-// occupancy alone would charge a lazy-fetch storm of short, CPU-heavy
-// upload-packs a fraction of what it burns. Occupancy ACCRUES while the run
-// holds its slot, so a principal holding every slot with hour-long clones
-// never reads as idle; what CPU spends past the occupancy is charged when the
-// run ends, the only moment it is known. Every charge DECAYS over
-// [ShareWindow], so a burst counts against its credential while it lasts and
-// is forgotten minutes after.
-//
-// # What it keeps of a FIFO lane, and what it does not
-//
-// It never leaves a slot free while anybody who MAY take it waits
-// (WORK-CONSERVING for persons and machines: an arrival of either class that
-// finds a free slot takes it whatever waits, so one class alone runs the lane
-// at its full width), and it keeps a FIFO lane's BOUND: no waiter waits longer
-// than SlotWait, whichever order it is granted in, so the share decides only
-// who is answered first inside it. It does not keep a FIFO lane's ORDER, and
-// so not every wait is as short as arrival order would make it: a person's
-// clone waits behind a machine's while people have spent more than twice what
-// the machines have lately, and the principal that spent most in its class
-// goes last — while others who spent less keep arriving it can be passed over
-// at every release, wait out SlotWait and be answered busy where arrival order
-// would have handed it the next slot. That is the share doing what it is for:
-// holding back the credential whose burst it is.
-//
-// # The one class that is not work-conserving: a coding box's
-//
-// A coding box's git ([ShareRun]) HOLDS at most half the lane
-// ([ShareClass.Cap]), even with the other half free. The share orders only who
-// is granted NEXT, so a class that holds every slot with client-paced
-// transfers keeps it for as long as its clients read: a burst of executor
-// launches is a clone a repository each, minutes apiece on a large one, and a
-// box reading slowly holds its slot at objstore.MiBPace's floor — thirty
-// seconds a mebibyte, a gigabyte in eight and a half hours — so with every
-// slot a box's, a person's push or clone (receive-pack and both
-// advertisements run in this lane too) waits out SlotWait and is answered
-// busy. A box is generated code, so the lane cannot count on its manners: half
-// is the bound the engine already holds seat git work to on the read lane
-// (gitlet.ShareOf), and the other half is what every person and machine shares.
-// Persons and machines keep the whole lane when no box is waiting: the cap
-// binds the run class alone. So the lane's INVARIANT is that no slot is free
-// while a waiter that may take it waits — a box waiter at its class's cap may
-// not, and is granted at the first release that leaves its class under it.
+// The transfer lane's fair share: whose transfer goes next when every slot is
+// held (package doc, "Slots: three lanes, each sized by what it spends";
+// docs/concepts/gitlet.md, "Fair share"). A run costs the GREATER of its CPU
+// ([Result.CPU]) and its OCCUPANCY, the slot-time it held (occupancyRate): CPU
+// alone charges nothing to a slow client holding a slot for an hour, occupancy
+// alone undercharges a storm of short, CPU-heavy upload-packs. Occupancy
+// ACCRUES while the slot is held, so a principal holding every slot with
+// hour-long clones never reads as idle; CPU past it is charged when the run
+// ends, the only moment it is known. The share orders only who goes next:
+// SlotWait still bounds every wait, and every class but [ShareRun] is
+// work-conserving.
 
 // ShareClass is whose turn a TRANSFER waits for when the transfer lane is
 // full: a named string with a closed set, so a value a newer build passes is
@@ -113,37 +58,13 @@ func (c ShareClass) Valid() bool { return c.Weight() > 0 }
 // its runs spend: a person 4, a machine 2, a coding box 1; 0 for a class that
 // is none.
 //
-// A JUDGMENT CALL, and a product one rather than a measurement — a person
-// waits at a terminal, a machine credential stands for a pipeline nobody
-// watches second by second, and a box is a seat's detached run that nobody
-// watches at all: with every class waiting, persons take four sevenths of what
-// the lane spends, machines two and boxes one
-// (TestAContendedTransferLaneSharesByClass), and while people have spent less
-// lately than twice what the machines have — as when one person clones
-// beside sixty-four of one CI token's clones — a person's clone is granted
-// the first slot released rather than the sixty-fifth: BenchmarkTransferShare
-// measures its wait for a slot at 60 ms at the p99 there, one release's turn,
-// against 1.46 s in arrival order (one count of twenty clones). THE RUN'S 1
-// IS A JUDGMENT TOO, NOT YET A MEASUREMENT: the search its weight is to be
-// decided by — the CI token's sixty-four and sixty-four boxes, half of them
-// reading at the slowest pace a transfer is waited on, and a person's clone
-// held to twice its idle p99 (BenchmarkTransferShare's runs arms) — has run
-// only on a lane of two slots, where the boxes' half is one slot and a
-// person waits behind at most one CI clone as long as their own, so twice
-// idle is that lane's floor under any weights: one count of five hundred
-// clones read 4:2:1 at 83.0 ms against 42.2 alone (1.97 times) and 8:4:1 at
-// 85.8 (2.03), an earlier count 4:2:1 at 2.04 and 8:4:1 at 1.96 — which
-// weight passes flips from count to count, inside the machine's noise. The
-// weight is pinned from a run of that search on a production-wide lane
-// (docs/concepts/gitlet.md, "Fair share"). A RATIO, never
-// a cap, for persons and machines: the share is work-conserving for them, so a
-// machine alone takes the whole lane (its machine-alone arm runs as many
-// clones a second as arrival order's) — a flat per-credential cap would
-// throttle the CI system that checks out through one token on an idle node.
-// The box class's cap is a bound of its own ([ShareClass.Cap]), never a
-// weight. A constant of the class rather than an option, because two Gitlet
-// nodes weighing the classes differently would make which node a balancer
-// picked decide who waits.
+// A product judgment: a person waits at a terminal, a machine for a pipeline,
+// a box for nobody (TestAContendedTransferLaneSharesByClass). The run's 1 is
+// unmeasured: BenchmarkTransferShare's runs arms cannot tell weights apart on
+// a two-slot lane, so it is to be pinned from a run on a production-wide one
+// (docs/concepts/gitlet.md, "Fair share"). A ratio, never a cap, so a lone CI
+// token keeps the whole lane; a constant, not an option, so which node a
+// balancer picked never decides who waits.
 func (c ShareClass) Weight() int {
 	switch c {
 	case SharePerson:
@@ -158,11 +79,13 @@ func (c ShareClass) Weight() int {
 
 // Cap is the most of a lane of slots slots the class's runs may HOLD at once:
 // the whole lane for a person and a machine, and half of it, at least one, for
-// a coding box — gitlet.ShareOf's arithmetic, the half the engine holds seat git
-// work to on the read lane, spelled again here because neither package
-// imports the other (internal/gitlet/host's TestTheRunCapIsTheSeatShare holds
-// the two equal). Why the box class alone is capped is the package doc's "The
-// one class that is not work-conserving".
+// a coding box. Uncapped, boxes' client-paced clones (as slow as
+// objstore.MiBPace's floor) would hold every slot while their clients read,
+// and a person's push or clone would wait out SlotWait; a box is generated
+// code, so the lane cannot count on its manners. Half is gitlet.ShareOf's
+// bound on seat git work on the read lane, spelled again because neither
+// package imports the other (internal/gitlet/host's TestTheRunCapIsTheSeatShare
+// holds the two equal).
 func (c ShareClass) Cap(slots int) int {
 	if c == ShareRun {
 		return max(1, slots/2)
@@ -182,25 +105,20 @@ type Share struct {
 	Principal string
 }
 
-// maxSharePrincipal is the longest principal [Share.Valid] admits, in bytes.
-//
-// 255: just under four times the longest name an identity is given today — a
-// seat handle and a Tier A token's login both stop at internal/iam's MaxLogin
-// (64), a machine token's name is `pat:` and a uuid, and an executor's launch
-// id a uuid — so the bound refuses nothing a configuration or the identity
-// directory admits, and leaves a grammar room to widen without this package
-// following it.
+// maxSharePrincipal is the longest principal [Share.Valid] admits, in bytes:
+// about four times the longest name an identity is given (internal/iam's
+// MaxLogin, 64; `pat:` and a uuid; a launch uuid), so it refuses nothing a
+// configuration or the identity directory admits and leaves a grammar room to
+// widen.
 const maxSharePrincipal = 255
 
 // Valid reports a known class and a principal of 1..[maxSharePrincipal]
 // bytes with no NUL.
 //
-// The principal keys the lane's book, and an empty one would schedule a run
-// as nobody's. One past the bound, or holding a NUL, is no name any identity
-// is given — it is a caller passing the wrong string, a body or a value read
-// from the wrong field — so it is refused where the Cmd is prepared, failing
-// the run that carried it loudly, rather than opened as an account the book
-// then charges for a principal nobody is.
+// The principal keys the lane's book: an empty one would schedule a run as
+// nobody's, and one too long or holding a NUL is a caller passing the wrong
+// string, so it fails its run where the Cmd is prepared rather than open an
+// account for a principal nobody is.
 func (s Share) Valid() bool {
 	return s.Class.Valid() && s.Principal != "" && len(s.Principal) <= maxSharePrincipal &&
 		!strings.ContainsRune(s.Principal, 0)
@@ -209,15 +127,11 @@ func (s Share) Valid() bool {
 // ShareWindow is how long a principal's spending counts against it: the time
 // constant of the exponential decay every charge is read through.
 //
-// ONE MINUTE: past a CI checkout's burst of lazy fetches — seconds to tens of
-// seconds — so the burst is charged to the credential that made it while it
-// lasts, and gone within a few minutes (e^-3, 5 %, of a charge is left after
-// three), so a person's clone this morning does not slow their fetch now.
-// BenchmarkTransferShare's decay arms measure it (one count of twenty clones
-// an arm, on its lane as wide as the cores, where a held slot is charged a
-// core a second): a person whose own burst of sixty-four clones is a minute
-// old waits 187 ms at the p99 behind a CI token's sixty-four, and three
-// minutes old 67 ms, about as one who spent nothing does (60 ms).
+// ONE MINUTE: past a CI checkout's burst of lazy fetches (seconds to tens of
+// seconds), so a burst is charged while it lasts, and e^-3 (5 %) of it is
+// left three minutes on, so a clone this morning does not slow a fetch now.
+// BenchmarkTransferShare's decay arms measure it: a person whose own burst is
+// three minutes old waits about as one who spent nothing does.
 const ShareWindow = time.Minute
 
 // shareForget is the decayed charge, in core-seconds, below which an account
@@ -228,42 +142,17 @@ const ShareWindow = time.Minute
 const shareForget = 0.001
 
 // occupancyRate is what a held transfer slot is charged a second, in
-// core-seconds, on a pool of cores READ slots — the node's cores, as the pool
-// counts them — and slots TRANSFER slots: the share of a core one slot stands
-// for, cores over slots, and never more than one. New derives it where it
-// sizes the lane; the book holds it for the lane's life.
-//
-// # A charge is a principal's dominant share, in core-seconds
-//
-// A run holds two things the lane runs short of: a SLOT, which is memory
-// (TransferShare backs each), and the CPU its git spends. The charge is the
-// greater of the two, each counted against what the lane has of it — so a
-// slot-second is worth what one slot is of the cores the lane's transfers run
-// on. Those are the node's cores, every slot sharing them: a quarter of a core
-// a slot at the default four a core (TransfersPerProcess), where a lane of
-// fast clients runs out of cores before slots, so a CPU-heavy storm pays up to
-// four times what a client its link paces pays for the same slot-time. But
-// never more than one core a slot, because a transfer's git runs on one
-// thread (pack.threads=1 in the base; a receive-pack's lent threads are the
-// READ lane's cores, and charged as the CPU they spend): a lane narrower than
-// the cores can use no more cores than it has slots. On such a lane — 32 cores
-// whose 8 GiB back 16 slots, or a gitlet.max_transfers below the cores — a held
-// slot is charged a whole core a second, which the CPU a transfer spends on
-// its one thread does not pass, so two principals holding the same slots as
-// long are charged alike however fast their clients read: slots are what that
-// node runs out of. A lane an operator widened past four a core charges each
-// slot less — a sixteenth at sixteen a core — since its slots are cheaper
-// than its cores.
-//
-// NEVER A CONSTANT. A quarter of a core on every shape — the slot's share at
-// the default — charges the 32-core node's slow credential, four slots held a
-// minute by clients its links pace, 38 core-seconds (decayed) where a fast
-// one holding the same four slots as long pays 218
-// (TestSlotsHeldAlikeAreChargedAlikeWhereSlotsRunOut), so the slow one is
-// granted ahead at every contended release though both held the same share
-// of what that node is short of — the skew the occupancy charge exists to
-// prevent; and on a lane widened to sixteen a core it reads slot-time at four
-// times what a slot there stands for.
+// core-seconds, on a pool of cores READ slots (the node's cores) and slots
+// TRANSFER slots: cores over slots, the share of a core one slot stands for,
+// so a charge is a principal's dominant share of slots (memory) and cores.
+// Never over one core: a transfer's git runs one thread (pack.threads=1; a
+// receive-pack's lent threads are charged as CPU), so on a lane narrower than
+// the cores slots are what runs out, and slots held alike are charged alike.
+// Never a constant: a quarter everywhere would charge a slow credential on a
+// 32-core, 16-slot node far less than a fast one holding the same slots
+// (TestSlotsHeldAlikeAreChargedAlikeWhereSlotsRunOut), and overcharge a lane
+// widened past four a core. New derives it where it sizes the lane; the book
+// holds it for the lane's life.
 func occupancyRate(cores, slots int64) float64 {
 	return min(float64(cores)/float64(slots), 1)
 }
@@ -274,12 +163,10 @@ var windowSeconds = ShareWindow.Seconds()
 // standing is a decayed charge in core-seconds, as of at, and the runs
 // accruing occupancy into it, each at the book's occupancy rate.
 //
-// EXACT AT EVERY INSTANT, whatever the decisions in between: a run accrues
-// rate core-seconds a second continuously, so its contribution over dt is the
-// decayed integral rate·W·(1−e^(−dt/W)) rather than rate·dt added at the next
-// decision — added that way, a principal's reading would depend on how often
-// others happened to arrive, and one holding every slot for ten quiet minutes
-// would read ten minutes undecayed at once.
+// EXACT AT EVERY INSTANT: a run's accrual over dt is the decayed integral
+// rate·W·(1−e^(−dt/W)), not rate·dt added at the next decision, which would
+// make a principal's reading depend on how often others arrived, and read ten
+// quiet minutes of holding every slot undecayed at once.
 type standing struct {
 	charged float64
 	at      time.Time
@@ -333,10 +220,8 @@ type run struct {
 // arrival order.
 type shareBook struct {
 	now func() time.Time
-	// weight is each class's share of a contended lane: ShareClass.Weight,
-	// which a benchmark's search replaces (BenchmarkTransferShare's runs
-	// arms) and nothing else does, since two nodes weighing the classes
-	// differently would let a balancer decide who waits.
+	// weight is ShareClass.Weight, replaced only by BenchmarkTransferShare's
+	// runs arms (ShareClass.Weight says why it is no option).
 	weight    func(ShareClass) int
 	occupancy float64 // what a held slot is charged a second (occupancyRate)
 	slots     int     // the lane's width, which each class's cap is of (ShareClass.Cap)
@@ -435,19 +320,13 @@ func (b *shareBook) mayStart(c ShareClass) bool {
 }
 
 // grant hands a released slot to WHO GOES NEXT at t (next) and starts its run
-// on that waiter's account — or answers nil, granting nothing, where every
-// waiter is of a class at its cap: the slot is then the lane's, free, and the
-// waiters keep waiting for a release that leaves their class under it.
+// on that waiter's account, or answers nil, leaving the slot free, where every
+// waiter's class is at its cap: they wait for a release that leaves it under.
 //
-// THE WAITER IS NEVER LEFT IDLE IN BETWEEN: its account holds no run and no
-// other waiter at the instant it is taken out of its queue, and an account
-// forgotten then — one that had spent nothing, every fresh principal — would
-// start its run on an account the book no longer holds, so the principal's
-// next arrival would open a fresh one at zero and every charge its runs made
-// would go where no grant reads it: persons reading as having spent nothing
-// for ever, and their class's standing reset to nearly nothing at every sweep
-// (measured: persons took four grants to the machine's one where their weights
-// give two).
+// Nothing may forget the account between unqueue and start: it is idle then,
+// and once forgotten (as a fresh principal's would be) its runs charge an
+// account no grant reads, so it, and at every sweep its class, read as having
+// spent nothing.
 func (b *shareBook) grant(t time.Time) *waiter {
 	w := b.next(t)
 	if w == nil {

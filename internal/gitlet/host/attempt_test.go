@@ -67,13 +67,11 @@ func attemptRow(t *testing.T, c *gitlettest.Case, rowsBefore int, want map[strin
 
 // A PUSH A RULE REFUSES WHOLE IS RECORDED WITH WHAT IT OFFERED: a direct push
 // of one commit to a branch no one pushes to, a force-push of protected main
-// rewriting two commits, a deletion of main, and an --atomic push of the
-// locked branch beside an unprotected one, a commit each, are each answered as
-// before and recorded once, moving nothing, with no pack and nothing
-// introduced, and with the commits they offered that the repository lacks (1,
-// 2, none and 2): nothing is stored and no cache holds what they sent. A push
-// refused for its blob, which no rule on who may move which ref refuses, is
-// not recorded.
+// rewriting two, a deletion of main, and an --atomic push of the locked branch
+// beside an unprotected one, a commit each, are each recorded once, moving
+// nothing, with no pack, nothing introduced and the commits offered that the
+// repository lacks (1, 2, none and 2); nothing is stored or cached. A push
+// refused for its blob, no ref rule, is not recorded.
 //
 // Mutations: keep refusedEvery's early answer for an attempt (the direct push
 // is not recorded, red); count the first command's commits alone (the atomic
@@ -138,9 +136,9 @@ func TestAPushARuleRefusesWholeIsRecordedWithWhatItOffered(t *testing.T) {
 	}
 }
 
-// AN ATTEMPT IS ANSWERED ITS REFUSAL WHATEVER ITS RECORD COMES TO: no
-// committer takes its proposal, and git still prints the rule that refused it,
-// the push is audited refused under it, and the lost record is a logged line.
+// AN ATTEMPT IS ANSWERED ITS REFUSAL WHATEVER ITS RECORD COMES TO: with no
+// committer taking its proposal, git still prints the rule, the push is
+// audited refused under it, and the lost record is a logged line.
 //
 // Mutation: answer the attempt through decided (the push is audited
 // unavailable, red).

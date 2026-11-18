@@ -5,16 +5,13 @@ import (
 	"testing"
 )
 
-// A CLONE IS A FETCH THAT OFFERS NOTHING, read from the request as git writes
-// it under either protocol: protocol v2's arguments before the flush, and
-// protocol v0's haves after its wants' flush, where a round's haves follow and
-// a clone's `done` comes at once. A fetch from a repository the client holds
-// offers its tips and is no clone, whether its haves fit one round or span
-// several; an ls-refs, or a fetch that wants nothing, is no fetch of history
-// at all.
+// A CLONE IS A FETCH THAT OFFERS NOTHING, under either protocol: v2's haves are
+// arguments before the flush; v0's follow its wants' flush, where a clone's
+// `done` comes at once. A fetch offering its tips is no clone, in one round or
+// several; an ls-refs, or a fetch wanting nothing, fetches no history at all.
 //
-// Mutation: stop a v0 request at its first flush, as the parse did before it
-// read haves, and a v0 fetch offering its tips reads as a clone.
+// Mutation: stop a v0 request at its first flush, and a v0 fetch offering its
+// tips reads as a clone.
 func TestACloneIsAFetchThatOffersNothing(t *testing.T) {
 	t.Parallel()
 	pkt := func(line string) string { return string(pktString(line + "\n")) }

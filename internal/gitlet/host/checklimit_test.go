@@ -15,17 +15,16 @@ import (
 )
 
 // A CHECK'S BOX PAST ITS RE-SYNCS IS ANSWERED AT ITS SESSION, as an executor's
-// box is: a check's box asking for an object nobody pushed takes one barrier a
-// request until its attempt's sixteen are spent, and the seventeenth appends
-// none, answered in upload-pack's own form naming the object and when the
-// check's re-syncs come back. Another attempt of the repository's checks finds
-// its repository's checks' bucket spent; and an attempt the rows do not hold is
-// refused on the stale read alone, saying it was not judged again — a box whose
-// attempt was swept asking in a loop paid one barrier a request before.
+// box is: a fetch of an object nobody pushed takes one barrier a request until
+// the attempt's ResyncBurst are spent, and the next takes none, answered in
+// upload-pack's form naming the object and when the re-syncs come back.
+// Another attempt finds the repository's checks' bucket spent, and an attempt
+// the rows do not hold is refused on the stale read, saying it was not judged
+// again.
 //
-// Mutations: no bucket for a check (boxResync answering nil for one) — the
-// seventeenth fetch appends a barrier — red; the attempt's second read taken
-// without the bucket — the unknown attempt is read through the barrier — red.
+// Mutations: boxResync answering nil for a check — the seventeenth fetch
+// appends a barrier — red; the attempt's second read taken without the
+// bucket — the unknown attempt is read through the barrier — red.
 func TestACheckBoxPastItsResyncsIsAnsweredAtItsSession(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
@@ -86,17 +85,15 @@ func TestACheckBoxPastItsResyncsIsAnsweredAtItsSession(t *testing.T) {
 	}
 }
 
-// A CHECK HAS ONE BURST ON A NODE, ITS TRANSFERS' AND ITS /box/gitlet/ READS'
-// TOGETHER: a check whose box spent its attempt's re-syncs on a node fetching
-// the commit it checks, which nobody pushed, has its read of that commit at
-// /box/gitlet/, answered by the same node, answered at its session — no
-// barrier, saying the check's re-syncs are spent — and that read counted with
-// the box's re-syncs (crewlet.code.box.resyncs{outcome=spent}), because
-// Gitlet and the query server draw on the node's ONE set of buckets.
+// A CHECK HAS ONE BURST ON A NODE, its transfers' and its /box/gitlet/ reads'
+// together: once its box has spent the attempt's re-syncs fetching an unpushed
+// commit, its /box/gitlet/ read of that commit on the same node is answered at
+// its session with no barrier, saying the re-syncs are spent, and counted in
+// crewlet.code.box.resyncs{outcome=spent}, because Gitlet and the query server
+// draw on the node's one set of buckets.
 //
-// Mutations: Gitlet keeping its boxes' buckets apart from the query
-// server's — the read takes a barrier at the head — red; the query server's
-// check draws uncounted — red.
+// Mutations: Gitlet's box buckets kept apart from the query server's — the
+// read takes a barrier — red; the query server's check draws uncounted — red.
 func TestACheckHasOneBurstOnANode(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}

@@ -256,9 +256,8 @@ func sameLayout(got, want *plan) string {
 	return ""
 }
 
-// walkedPlan is the plan as it judged before each directory was judged once:
-// every rule walking every ancestor of the path it asks of. The oracle of the
-// plan's rules, never its cost.
+// walkedPlan is planFiles with every rule walking every ancestor of the path
+// it asks of: the oracle of the plan's rules, never its cost.
 func walkedPlan(files []gitlet.FileOp, parent string, paths map[string]object) (*plan, gitlet.WriteRefusal, string) {
 	at := func(p string) object { return paths[p] }
 	where := "in a commit with no parent"

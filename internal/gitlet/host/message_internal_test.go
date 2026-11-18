@@ -9,10 +9,10 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// defaultMessageRows are messages a commit may carry as git stores them — what
-// commit-tree, a client's editor or another tool wrote — each a case of the
-// rules a revert's and a cherry-pick's default message follow, and a pushed
-// change's default title (TestAChangesDefaultTitleIsGitLogsSubject).
+// defaultMessageRows are commit messages as git stores them, whatever tool
+// wrote them, each a case of the rules a revert's and a cherry-pick's default
+// message follow, and a pushed change's default title
+// (TestAChangesDefaultTitleIsGitLogsSubject).
 var defaultMessageRows = []string{
 	"subject only",
 	"subject\n\nbody\n\nSigned-off-by: x <x@example.com>\n",
@@ -41,16 +41,15 @@ var defaultMessageRows = []string{
 }
 
 // A REVERT'S AND A CHERRY-PICK'S DEFAULT MESSAGE ARE GIT'S OWN: for a commit
-// carrying each message as git stores it — written with no rewrite of its
-// bytes, a Latin-1 one and one holding a NUL among them — what `git revert
-// --no-edit` and `git cherry-pick -x` commit is, byte for byte, what
-// revertMessage and pickMessage write, as git then writes them into a commit
-// (gitref.WrittenCommitText).
+// carrying each message's bytes unrewritten (a Latin-1 one and one holding a
+// NUL among them), what `git revert --no-edit` and `git cherry-pick -x` commit
+// is, byte for byte, what revertMessage and pickMessage write, as git writes
+// them into a commit (gitref.WrittenCommitText).
 //
-// Mutations: clean a revert's message up as a pick's is — the trailing spaces
-// of "Revert \"foo   " are taken off, red; read the trailer block's lines
-// without git's prefixes — the cherry-picked footer row gains a blank line,
-// red; ignore the scissors — the row below them reads as a block, red.
+// Mutations, each red: clean a revert's message as a pick's is (the trailing
+// spaces of "Revert \"foo   " go); read trailer lines without git's prefixes
+// (the cherry-picked footer row gains a blank line); ignore the scissors (the
+// row below them reads as a block).
 func TestTheDefaultMessagesAreGitsOwn(t *testing.T) {
 	t.Parallel()
 	c := gittest.NewClient(t)

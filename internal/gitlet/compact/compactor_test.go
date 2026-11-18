@@ -20,9 +20,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A COMPACTOR IS BUILT WHOLE OR NOT AT ALL: every seam it cannot run without
-// missing is refused by name, all of them in one error, before anything
-// starts.
+// A COMPACTOR IS BUILT WHOLE OR NOT AT ALL: New refuses every missing seam by
+// name, all in one error, before anything starts.
 func TestACompactorMissingASeamIsRefusedByName(t *testing.T) {
 	t.Parallel()
 	_, err := compact.New(compact.Options{Limits: gitlet.DefaultLimits})
@@ -39,10 +38,10 @@ func TestACompactorMissingASeamIsRefusedByName(t *testing.T) {
 	}
 }
 
-// A PLAN NOT DUE IS NOT PLANNED AGAIN UNTIL THE REPOSITORY MOVES: a repository
-// the listing names but whose plan finds nothing worth merging is remembered
-// at its row's version, so the next pass skips it with no sync and no plan —
-// and a push, which moves the version, has it planned again.
+// A PLAN NOT DUE IS NOT PLANNED AGAIN UNTIL THE REPOSITORY MOVES: a listed
+// repository whose plan finds nothing worth merging is remembered at its row's
+// version, so the next pass skips it with no sync and no plan, and a push,
+// which moves the version, has it planned again.
 //
 // Mutation: drop the memory, and the second pass syncs and plans again.
 func TestAPlanNotDueIsNotPlannedAgainUntilTheRepositoryMoves(t *testing.T) {
@@ -76,11 +75,9 @@ func TestAPlanNotDueIsNotPlannedAgainUntilTheRepositoryMoves(t *testing.T) {
 }
 
 // A COMPACTOR THAT CANNOT READ THE PLACEMENT COMPACTS NOTHING: a node that
-// cannot tell whether it is a repository's maintainer does none of a
-// maintainer's work — no sync, no build — for any repository of the pass, and
-// says so once. It asks by the charge a publication of the repository is
-// placed by, so the repository's compactions and its publications fall to one
-// node.
+// cannot tell whether it maintains a repository syncs and builds none of the
+// pass's, and logs it once. It asks by the publication's charge, so a
+// repository's compactions and publications fall to one node.
 //
 // Mutation: treat the error as the maintainer, and the pass syncs; or ask by
 // the compaction's own charge, and the charge asked is not the publication's.
@@ -122,9 +119,8 @@ func TestACompactorThatCannotReadThePlacementCompactsNothing(t *testing.T) {
 	}
 }
 
-// listedGate is a compactor's placement that lists this node among the Gitlet
-// nodes once a case says so, counting the times it was asked — and has this
-// node maintain every repository.
+// listedGate is a placement that has this node maintain every repository and
+// list it among the Gitlet nodes once a case calls list, counting the asks.
 type listedGate struct {
 	mu     sync.Mutex
 	listed bool
@@ -182,20 +178,13 @@ func (k *kindsRead) read(kind gitlet.ReadKind) int {
 	return k.kinds[kind]
 }
 
-// THE LOOPS PASS ONCE THIS NODE IS LISTED, AND NOT BEFORE: a node no listing of
-// the Gitlet nodes carries maintains nothing (internal/estate's
-// Router.Maintainer), so Start's loops ask whether it is listed, every
-// compact.ListedRecheck, and read no listing until it is — a booting node is
-// listed only once its host beats, and a pass before that would find every
+// THE LOOPS PASS ONCE THIS NODE IS LISTED, AND NOT BEFORE: an unlisted node
+// maintains nothing (internal/estate's Router.Maintainer), and a booting node
+// is listed only once its host beats, so an earlier pass would find every
 // repository placed elsewhere or nowhere, and log a placement it could read.
-// Listed, every loop passes at once.
-//
-// In a bubble, over a Gitlet whose listings are empty and a cache and a store
-// nothing of the passes reaches: the loops run on the bubble's clock, which
-// moves only while every one of them waits, so each loop's first question and
-// its first recheck are read a recheck apart, and once listed each loop's
-// pass is read at the very recheck that found it listed — not at its first
-// tick, a minute on.
+// Start's loops ask every compact.ListedRecheck, reading no listing until
+// listed, and then pass at the recheck that found it listed, not at their
+// first tick a minute on.
 //
 // Mutation: pass at Start without asking, and the loops list while this node
 // is unlisted; wait a tick before the first pass, and no loop has listed at
@@ -241,8 +230,8 @@ func TestTheLoopsPassOnceThisNodeIsListed(t *testing.T) {
 	})
 }
 
-// idleCache is a node's cache nothing of a pass over empty listings reaches,
-// but the repositories it holds a refused layer of: none.
+// idleCache is a cache no pass over empty listings reaches, holding no refused
+// layer.
 type idleCache struct{ compact.Cache }
 
 func (idleCache) Damaged() []gitlet.RepoRef { return nil }
@@ -252,11 +241,10 @@ func (idleCache) Damaged() []gitlet.RepoRef { return nil }
 type idleObjects struct{ compact.Uploader }
 
 // A PASS JUDGES ITS MAINTAINERS AGAINST ONE LISTING: a pass asks who maintains
-// what ONCE, for every listed repository it must judge — on a node that
-// maintains none of them, every one, which no plan of it is ever made on to
-// remember — and plans none it does not maintain; and once its maintainer has
-// found a plan of each not due at its version, a pass asks nothing at all: a
-// repository it remembers costs the pass a lookup.
+// what ONCE, for every listed repository it must judge (on a node maintaining
+// none, every one, since no plan is made to remember), and plans none it does
+// not maintain; once the maintainer has found each plan not due at its
+// version, a pass asks nothing: a remembered repository costs a lookup.
 //
 // Mutation: ask who maintains a repository once a repository, and the first
 // pass reads the listing twice.
@@ -309,10 +297,9 @@ func TestAPassJudgesItsMaintainersAgainstOneListing(t *testing.T) {
 }
 
 // A COMPACTION THE NODE CANNOT HOLD IS ADMITTED WHEN THE NODE GROWS: a build
-// whose charge the node's memory refuses is counted and never remembered —
-// the node's budget is read again at every pass, a container resized in place
-// among the reasons it moves — so the next pass, with no push between, plans
-// it again and, once the memory holds it, applies it.
+// the node's memory refuses is counted, never remembered, since the budget is
+// read at every pass (a container resized in place moves it); the next pass,
+// with no push between, plans it again and, once memory holds it, applies it.
 //
 // Mutation: remember the refusal as a plan not due, and the second pass skips
 // the repository.
@@ -345,13 +332,12 @@ func TestACompactionTheNodeCannotHoldIsAdmittedWhenTheNodeGrows(t *testing.T) {
 }
 
 // THE COMPACTION-BEHIND ALARM HOLDS WHILE ITS COMPACTION IS REFUSED: every pass
-// names in the alarm reading every listed repository at gitlet.MaxPacksPerRepo
-// it maintains — before its memory of plans not due, and whatever its
-// compaction then decides — because at the bound every push carrying a pack
-// is refused and records nothing, so the repository's version stands still.
-// One whose build the node's memory refuses at every pass is named after every
-// pass; and so is one whose plan was found not due at its version, which the
-// passes after skip.
+// names in the alarm reading every listed repository it maintains at
+// gitlet.MaxPacksPerRepo, before its memory of plans not due and whatever its
+// compaction decides, because at the bound every push carrying a pack is
+// refused and records nothing, so the version stands still. So one whose
+// build the node's memory refuses is named after every pass, as is one whose
+// plan not due the later passes skip.
 //
 // Mutation: name only the repositories a pass reached a compaction of, and the
 // second arm's reading is empty from its second pass.
@@ -409,10 +395,9 @@ func TestTheCompactionBehindAlarmHoldsWhileItsCompactionIsRefused(t *testing.T) 
 }
 
 // THE ADMISSION IS RELEASED BEFORE THE UPLOADS: once a build's last git process
-// has ended, its maintenance slot and its memory charge are given back, so an
-// upload the store paces — hours, for the largest — never idles the node's
-// maintenance for every other repository. While a compaction's upload is held,
-// another admission to the lane is granted.
+// ends, its maintenance slot and memory charge are given back, so an upload
+// the store paces (hours, for the largest) never idles the node's maintenance
+// of other repositories: while one is held, another admission is granted.
 //
 // Mutation: release the admission when the compaction is answered, and the
 // second admission is refused busy for as long as the upload is held.
@@ -471,26 +456,23 @@ func TestTheAdmissionIsReleasedBeforeTheUploads(t *testing.T) {
 }
 
 // A REPOSITORY'S STORED OUTPUTS ANSWER ITS OWN HOLD, on a store that holds a
-// reservation as on any: a repository the listing goes on naming once its
-// compaction landed — one keeping gitlet.CompactMinMerge full packs, or one a
-// capped roll leaves listed — whose first roll a full store refused is planned
-// again at its next, smaller roll as soon as the room holds THAT roll, though
-// the room is below what the first would have stored. The refusal it was held
-// back for is answered by its own outputs, stored; a refusal of a later roll
-// would set an estimate of its own.
+// reservation as on any: a repository still listed after its compaction
+// landed (keeping gitlet.CompactMinMerge full packs, or left listed by a
+// capped roll), whose first roll a full store refused, is planned again at its
+// next, smaller roll once the room holds THAT roll, though not the first. Its
+// stored outputs answer the refusal it was held for; a later roll's refusal
+// would set its own estimate.
 //
-// Mutation: keep a repository's own hold, on a store that holds a
-// reservation, once its outputs are stored (Compactor.stored), and the second
-// roll is skipped at every pass — held to the first roll's estimate, which the
-// room no longer reaches.
+// Mutation: keep the repository's own hold once its outputs are stored
+// (Compactor.stored), and the second roll is skipped at every pass, held to
+// the first roll's estimate, which the room no longer reaches.
 func TestAStoredCompactionReleasesItsOwnHold(t *testing.T) {
 	t.Parallel()
 	full := &objstore.Full{Remedy: "the operator raises the bucket's reservation", Err: errors.New("no room")}
 	x := newFixture(t)
-	// THE FIRST ROLL: gitlet.CompactMinMerge pushes of ten files each, thirteen
-	// objects a push, so its output outweighs the next roll's pushes of one
-	// file — four objects each — more than twice over, and git's split leaves
-	// it out of that roll.
+	// THE FIRST ROLL: gitlet.CompactMinMerge pushes of ten files (thirteen
+	// objects) each, so its output outweighs the next roll's one-file pushes
+	// (four objects) more than twice over, and git's split leaves it out.
 	heavy := make([]int, 10)
 	for i := range heavy {
 		heavy[i] = 4 << 10

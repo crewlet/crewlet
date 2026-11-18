@@ -97,10 +97,10 @@ func exitLine(depth, code int) string {
 		fmt.Sprint(code) + "}\n"
 }
 
-// controlBytes is n control bytes, in turn every one git escapes six bytes
-// to one (\u00XX): all below 0x20 but NUL, which ends a C string, and the
-// five append_quoted_string names (\b \t \n \f \r), which it escapes in two.
-// What a request can put in one pkt-line, and what makes the 390 KB event.
+// controlBytes is n control bytes, cycling through every one git escapes six
+// bytes to one (\u00XX): all below 0x20 but NUL, which ends a C string, and
+// the five append_quoted_string names (\b \t \n \f \r), escaped in two. A
+// pkt-line of them makes the 390 KB event.
 func controlBytes(n int) string {
 	var cycle []byte
 	for c := byte(1); c < 0x20; c++ {
@@ -115,10 +115,9 @@ func controlBytes(n int) string {
 	return string(b)
 }
 
-// requestMark begins every request payload: what a dying upload-pack copied
-// into its report is proven by finding it in its stderr. At the START,
-// because git formats a report into a buffer of 4 KiB (vreportf) and cuts
-// the rest — the trace's msg is the whole of it, stderr its first 4 KiB.
+// requestMark begins every request payload, so finding it in a dying
+// upload-pack's stderr proves the report copied the payload. At the START,
+// because vreportf cuts stderr's report at 4 KiB; the trace's msg is whole.
 const requestMark = "crewlet-request-payload"
 
 // conversion is one printf conversion, as instantiate fills it.
@@ -143,9 +142,9 @@ func instantiate(format string) string {
 }
 
 // requestPayloads is the three texts a request carries in each form that
-// takes an argument: every row's format, joined by newlines; every row's
-// message as git would print it, joined the same way; and 65 000 control
-// bytes. Each begins with requestMark.
+// takes an argument: every row's format, every row's message as git would
+// print it (each joined by newlines), and 65 000 control bytes. Each begins
+// with requestMark.
 func requestPayloads() map[string]string {
 	formats := slices.Sorted(func(yield func(string) bool) {
 		for f := range gitproc.FormatTable() {
@@ -209,9 +208,8 @@ func v0(first string, rest ...string) string {
 }
 
 // requestForms is every request form a client can send upload-pack that
-// carries text of its choosing, and the controls beside them: the planning
-// pass's forms (§2.5 of the unit's specification), against the fixture's
-// healthy copy. tip, c3, tree and blob are the fixture's.
+// carries text of its choosing, and the controls beside them, against the
+// fixture's healthy copy. tip, c3, tree and blob are the fixture's.
 func requestForms(tip, c3, tree, blob string) []requestForm {
 	absent := strings.Repeat("0123456789", 4)
 	wantTip := "want " + tip
@@ -333,30 +331,18 @@ func requestForms(tip, c3, tree, blob string) []requestForm {
 	}
 }
 
-// A REQUEST CANNOT NAME THE DAMAGE. Every form a client can send upload-pack
-// that carries text of its own — the arguments, capabilities and commands of
-// protocol v2 and the lines of v0, each holding every row's format, every
-// row's message and 65 000 control bytes in turn — and the forms beside them
-// that carry none, against a HEALTHY copy under the cache's serve
-// configuration, on the node pin and on the node floor's own build
-// (onNodeGits): no Damage, no hint, and the kind each form is (nil for a
-// form that is served, ErrNotOurRef for a want of something the copy does
-// not hold, ErrFailed for every other refusal). The formats every run met are
-// EXACTLY the request formats this git prints (requestFormats, and the one
-// row a request may reach, "not our ref"), so a form git starts answering
-// with a new format is noticed and judged. And each form that dies copying
-// the request's text into its report is proven to have copied it — its
-// stderr carries the payload's end — so the case cannot pass on a form git
-// stopped reading.
+// A REQUEST CANNOT NAME THE DAMAGE. Every form carrying a client's text (v2
+// arguments, capabilities and commands, v0 lines, each with every payload)
+// and the forms carrying none, against a HEALTHY copy under the cache's serve
+// configuration on both node gits (onNodeGits): no Damage, no hint, and each
+// form's kind (nil served, ErrNotOurRef, else ErrFailed). The formats met are
+// EXACTLY requestFormats plus "not our ref", so a new format is noticed; a
+// form dying with the request's text proves it copied it (stderr holds the
+// payload), so the case cannot pass on a form git stopped reading.
 //
-// Mutations, each red: classify any event's message by the rows' formats as
-// substrings; classify stderr; take "%s" as a row; find the hint's sentence
-// anywhere in a message, BOTH anchors dropped (the "packed object …" payload
-// inside a filter form's "%s" message, "invalid filter-spec '…'", then
-// hints). Dropping the END anchor alone is not this test's to see: a hint is
-// read only from a bare-"%s" event, and no form's "%s" message begins with
-// the sentence, so the start anchor keeps it clean —
-// TestAHintIsOnlyTheOneAnchoredMessage holds each anchor on its own.
+// Mutations, each red: classify messages by the rows' formats as substrings;
+// classify stderr; take "%s" as a row; drop BOTH hint anchors (the END alone
+// is TestAHintIsOnlyTheOneAnchoredMessage's).
 func TestARequestCannotNameTheDamage(t *testing.T) {
 	t.Parallel()
 	onNodeGits(t, requestCannotNameTheDamageOn)
@@ -368,8 +354,8 @@ func requestCannotNameTheDamageOn(t *testing.T, git string) {
 	f := newFixture(t)
 	p := poolOn(t, git, gitproc.Options{})
 	dir, _ := f.bare(t)
-	// A branch and a tag of one name beside the copy's main, so a deepen-not
-	// can name a ref ambiguously: a healthy copy may hold both.
+	// A branch and a tag of one name, so a deepen-not can name a ref
+	// ambiguously: a healthy copy may hold both.
 	gittest.SetRefs(t, dir, map[string]string{"refs/heads/main": f.tip(), "refs/heads/twice": f.Commits[2],
 		"refs/tags/twice": f.Commits[2]})
 	tree := strings.TrimSpace(f.Client.Run(t, f.Work, "rev-parse", f.tip()+"^{tree}"))
@@ -500,10 +486,9 @@ func TestAHintIsOnlyTheOneAnchoredMessage(t *testing.T) {
 			}
 		})
 	}
-	// THE SAME SENTENCE AS THE ROW (2.55) names the same pack: a hint
-	// beside the row's damage, under the same anchoring — so the repair can
-	// name the pack the row says is damaged. Mutation: read hints only from
-	// "%s" events.
+	// THE SAME SENTENCE AS THE ROW names the same pack: a hint beside the
+	// row's damage, under the same anchoring, so the repair can name the
+	// pack. Mutation: read hints only from "%s" events.
 	const row = `packed object %s (stored in %s) is corrupt`
 	for _, tc := range []struct {
 		name    string
@@ -566,12 +551,11 @@ func namesARow(stream []byte, rows map[string]bool) bool {
 }
 
 // FUZZ: A DAMAGE IS READ ONLY FROM A WHOLE LINE THAT IS AN EVENT NAMING A ROW.
-// Streams of git-shaped event lines — request text escaped as git escapes it
-// under formats that are no row, lines cut at any offset and interleaved with
-// whole lines of another process, two values on one line, a line past
-// MaxLine — and arbitrary bytes, read in pieces of any size: the sink never
-// names damage unless the stream holds, as one complete line, an error event
-// whose format is a row, and never holds more than MaxLine of a line.
+// Over git-shaped event lines (escaped request text under non-row formats,
+// lines cut anywhere and interleaved with another process's, two values on a
+// line, a line past MaxLine) and arbitrary bytes, read in pieces of any size,
+// the sink names damage only from one complete error-event line whose format
+// is a row, and never holds more than MaxLine of a line.
 //
 // Mutations, each red: decode a line with a streaming json.Decoder (a line
 // holding a whole damage event and more then decodes); decode a fragment
@@ -603,12 +587,11 @@ func FuzzTraceSink(f *testing.F) {
 	})
 }
 
-// A LINE LONGER THAN A LINE GIT WRITES IS SKIPPED WHOLE. The 390 KB event a
-// request makes upload-pack write — one pkt-line of control bytes, escaped
-// six bytes to one — is skipped and counted, and the damage event after it is
-// read; a damage event padded past MaxLine is skipped too, though its first
-// MaxLine bytes decode, while one padded to exactly MaxLine is read. Through
-// all of it the sink never holds more than MaxLine of a line.
+// A LINE LONGER THAN A LINE GIT WRITES IS SKIPPED WHOLE. The 390 KB event of
+// a pkt-line of control bytes is skipped and counted and the damage event
+// after it read; a damage event padded past MaxLine is skipped though its
+// first MaxLine bytes decode, one padded to exactly MaxLine is read; the sink
+// never holds more than MaxLine of a line.
 //
 // Mutations, each red: classify the first MaxLine bytes of a long line (the
 // padded event then names damage); buffer the whole line (the holding

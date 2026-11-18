@@ -32,12 +32,10 @@ func newCase(t *testing.T, o gitlettest.SoloOptions, settings gitlet.RepoSetting
 	return &gitlettest.Case{T: t, Fleet: f, Ctx: t.Context()}
 }
 
-// reachedFirst waits for reached — a fault point's hit — and fails the case
-// if ended, the result of the step that was to reach it, comes back first:
-// that step never reached the point (its client failed, a precondition
-// broke), and a wait on reached alone held the whole package until its
-// timeout with nothing to say why. Once the point is reached the step is
-// held there, so ended cannot race it.
+// reachedFirst waits for reached, a fault point's hit, and fails the case if
+// ended, the step's result, comes first: the step never reached the point,
+// and a wait on reached alone would hang the package to its timeout with no
+// reason given. A reached point holds the step, so ended cannot race it.
 func reachedFirst[T any](t *testing.T, reached <-chan struct{}, ended <-chan T) {
 	t.Helper()
 	select {
@@ -47,11 +45,9 @@ func reachedFirst[T any](t *testing.T, reached <-chan struct{}, ended <-chan T) 
 	}
 }
 
-// fast is a Timing a case can wait out: the production's shape, at a scale of
-// tens of milliseconds — but for the stall, which ends a real git process
-// that is merely busy (its keepalives are five seconds apart), so a case that
-// means to stall one scales it alone, and the spool wait, which a case that
-// means a wait to expire scales alone too.
+// fast is production's Timing scaled to tens of milliseconds, except Stall,
+// which would end a merely busy real git (keepalives five seconds apart), and
+// SpoolWait; a case that means to hit either scales it alone.
 var fast = host.Timing{PendingGrace: 500 * time.Millisecond, PendingFirst: 40 * time.Millisecond,
 	PendingMax: 80 * time.Millisecond, Keepalive: 200 * time.Millisecond, Handshake: 5 * time.Second,
 	Stall: host.Production.Stall, SpoolWait: host.Production.SpoolWait}
@@ -63,8 +59,8 @@ type call struct {
 	at    time.Time
 }
 
-// recording is a host's estate that records every call — and answers any a
-// case overrides in its own way.
+// recording is a host's estate that records every call and answers any a
+// case overrides its own way.
 type recording struct {
 	host.Estate
 	propose func(ctx context.Context, inner host.Estate, p gitlet.Proposal) (gitlet.ProposeResult, error)
@@ -241,8 +237,7 @@ func get(t *testing.T, c *gitlettest.Case, i int, who, service, protocol string)
 }
 
 // post is a hand-built POST of a git service's RPC to node i, as who, under
-// the Git-Protocol protocol ("" for none) — a request a case needs that git
-// never sends alone.
+// Git-Protocol protocol ("" for none): a request git never sends alone.
 func post(t *testing.T, c *gitlettest.Case, i int, who, service, protocol, body string) (*http.Response, string) {
 	t.Helper()
 	n := c.Fleet.Nodes()[i]
@@ -268,11 +263,9 @@ func post(t *testing.T, c *gitlettest.Case, i int, who, service, protocol, body 
 	return resp, string(raw)
 }
 
-// raw is a POST of a git service's RPC to node 0, as who, under the
-// Git-Protocol protocol ("" for none), SENT RAW: a Content-Length of declared
-// over body as given — a request Go's client refuses to send, a length its
-// body lacks — and the body ended by the client's half-close. A request that is
-// not answered within ten seconds fails the case.
+// raw is post to node 0 SENT RAW: a Content-Length of declared over body as
+// given, which Go's client refuses to send when they differ, with the body
+// ended by a half-close. No answer within ten seconds fails the case.
 func raw(t *testing.T, c *gitlettest.Case, who, service, protocol string, declared int64,
 	body string) (*http.Response, string) {
 
@@ -315,8 +308,8 @@ func raw(t *testing.T, c *gitlettest.Case, who, service, protocol string, declar
 // pkt is s as one pkt-line.
 func pkt(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
 
-// emptyPack is a pack of no objects as git writes one, in dir: what a push
-// whose objects the repository already holds sends after its commands.
+// emptyPack is git's pack of no objects, written in dir: what a push of
+// objects the repository already holds sends after its commands.
 func emptyPack(t *testing.T, c *gittest.Client, dir string) string {
 	t.Helper()
 	pack, stderr, err := c.Try(t, dir, strings.NewReader(""), "pack-objects", "--stdout", "-q")
@@ -326,9 +319,8 @@ func emptyPack(t *testing.T, c *gittest.Client, dir string) string {
 	return pack
 }
 
-// receivePacks is how many receive-pack processes a recording git has run so
-// far, advertisements included — counted rather than sliced, because the
-// recording lists its calls in no order.
+// receivePacks is how many receive-pack processes a recording git has run,
+// advertisements included; counted, since the recording keeps no order.
 func receivePacks(calls func() []gittest.Call) int {
 	n := 0
 	for _, call := range calls() {
@@ -339,8 +331,7 @@ func receivePacks(calls func() []gittest.Call) int {
 	return n
 }
 
-// pushReceives is how many receive-pack processes a recording git has run so
-// far to RECEIVE a push — its advertisements left out.
+// pushReceives is receivePacks without the advertisements.
 func pushReceives(calls func() []gittest.Call) int {
 	n := 0
 	for _, call := range calls() {
@@ -351,14 +342,13 @@ func pushReceives(calls func() []gittest.Call) int {
 	return n
 }
 
-// largePacketDataMax is the most payload one pkt-line carries: git's
-// LARGE_PACKET_DATA_MAX, 65520 bytes on the wire less the four of its length.
-// Written here rather than read from the package, so the readers below hold
-// the package's packets to git's bound, not to its own.
+// largePacketDataMax is git's LARGE_PACKET_DATA_MAX, 65520 bytes less the
+// four of the length. Written here, not read from the package, so the readers
+// below hold its packets to git's bound rather than its own.
 const largePacketDataMax = 65520 - 4
 
-// pktLines reads s as git's packet reader does — pkt-lines to a flush, a
-// length past git's largest refused — and is each payload.
+// pktLines reads s as git's packet reader does, pkt-lines to a flush,
+// refusing a length past git's largest, and returns each payload.
 func pktLines(s string) ([]string, error) {
 	var out []string
 	for {
