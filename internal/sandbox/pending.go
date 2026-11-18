@@ -2091,6 +2091,10 @@ type PendingRun struct {
 	// HeldUntil, up to the hour a vendor's window is benched for.
 	HeldFor   Condition `json:"held_for,omitempty"`
 	HeldUntil time.Time `json:"held_until,omitzero"`
+	// Holds counts the holds releases have put on the run, the current one
+	// last: a lift names the hold it read, so one read before a newer hold
+	// was written clears nothing ([PendingStore.LiftHold]).
+	Holds uint64 `json:"holds,omitempty"`
 
 	// Continues is TRANSIENT, an instruction to [PendingStore.BeginLaunch]:
 	// the job it opens CONTINUES the one before it, which parked on a
@@ -2881,11 +2885,13 @@ type PendingStore interface {
 	ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error)
 
 	// LiftHold clears the hold a release put on a run's resume
-	// ([PendingRun.HeldFor]) where it is held for cond, reporting whether
-	// it was: the condition was signalled, and the waiter announces the
-	// job's completion again on its schedule. FALSE IS NOT AN ERROR: the run
-	// is held for something else, is not held, or is gone.
-	LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error)
+	// ([PendingRun.HeldFor]) where it is held for cond and the hold is
+	// still number hold, the one the caller read ([PendingRun.Holds]),
+	// reporting whether it was: the condition was signalled, and the waiter
+	// announces the job's completion again on its schedule. FALSE IS NOT AN
+	// ERROR: the run is held for something else, by a newer hold, not at all,
+	// or is gone.
+	LiftHold(ctx context.Context, turnID string, cond Condition, hold uint64) (bool, error)
 
 	// OweRefusal records on job launch's record that the seat's holder
 	// acknowledged a refused delivery of its completion and owes its re-fire

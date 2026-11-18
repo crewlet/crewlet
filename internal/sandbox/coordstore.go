@@ -1132,6 +1132,7 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		run.HeldFor, run.HeldUntil = "", time.Time{}
 		if hold := release.Hold; hold != nil {
 			run.HeldFor, run.HeldUntil = hold.Condition, hold.Until.UTC()
+			run.Holds++
 			// AND THE COMPLETION OWED, in the same write, where the record
 			// owes none yet ([LaunchRecord.RefusalOwed]): the hold spent its
 			// delivery, and a lift clears the hold, so this is what tells a
@@ -1155,9 +1156,9 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 }
 
 // LiftHold clears a run's hold for cond — see [PendingStore.LiftHold].
-func (s *CoordStore) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+func (s *CoordStore) LiftHold(ctx context.Context, turnID string, cond Condition, hold uint64) (bool, error) {
 	_, lifted, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		if run.HeldFor == "" || run.HeldFor != cond {
+		if run.HeldFor == "" || run.HeldFor != cond || run.Holds != hold {
 			return false
 		}
 		run.HeldFor, run.HeldUntil = "", time.Time{}
