@@ -137,13 +137,13 @@ func keepsPastBase(readings []threadReading) bool {
 }
 
 // collectionBaseLineCharge is what a line's facts may charge ([lineMeter])
-// before its pass takes the large slot, its length taking nothing: 128 KiB.
-// The base tier counts a pass at 5.1 MiB: the chain at [collectionBaseRecords]
-// holds 2.7 MiB, the reader within a line 1.7 MiB and the strings a charge
-// covers, decoded before it, 576 KiB, leaving the facts 164 KiB, and a charged
-// byte holds 1.25 bytes at most, so the base's facts hold 160 KiB. The facts of
-// the census's lines hold 753 bytes at most. The package doc's "A collection's
-// read of a thread" has the derivation and the measurement.
+// before its pass takes the large slot, its length taking nothing: 128 KiB,
+// held as 160 KiB at most, a charged byte holding 1.25 bytes (a string just
+// past 32 KiB takes whole 8 KiB pages): what [baseTierReadBytes] leaves beside
+// the chain at [collectionBaseRecords], the reader within a line and the
+// strings a charge covers. The facts of the census's lines hold 753 bytes at
+// most. The package doc's "A collection's read of a thread" has the
+// derivation and the measurement.
 const collectionBaseLineCharge = 1 << 17
 
 // collectionBaseRecords is the most a pass's readings keep before it takes the
@@ -151,6 +151,24 @@ const collectionBaseLineCharge = 1 << 17
 // them: 2^13, at most 2.7 MiB at End's peak, a thread of at least 4,096
 // records, some 8 MiB of ordinary lines (the package doc, as above).
 const collectionBaseRecords = 1 << 13
+
+// The bases' coefficients in bytes, each at its worst (the package doc's THE
+// COEFFICIENTS): one of the chain's items at End's peak
+// (BenchmarkAThreadChainAtItsBounds); a line's reader within the line; and the
+// strings one charge covers, the last with the buffer json v2 unquotes it
+// through. TestTheBaseCoefficientsHold measures the last two. baseTierReadBytes
+// is what the base tier counts each read in flight at, about 5.3 MiB.
+const (
+	chainItemBytes     = 344
+	readerLineBytes    = 1730 << 10
+	chargeStringsBytes = 808 << 10
+	baseTierReadBytes  = 5450 << 10
+)
+
+// A pass at both bases holds no more than the base tier counts it at, its
+// facts at 1.25 bytes a charged byte: a negative constant does not compile.
+const _ = uint(baseTierReadBytes - collectionBaseRecords*chainItemBytes - readerLineBytes - chargeStringsBytes -
+	collectionBaseLineCharge*5/4)
 
 // CollectionLargeReadsAtOnce is how many passes past their base this process
 // reads at once: ONE, a pool apart from [TranscriptReadsAtOnce], so a person

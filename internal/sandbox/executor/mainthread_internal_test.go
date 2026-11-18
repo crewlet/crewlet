@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -196,11 +197,24 @@ func grownScratch(parent string) (head, block, result string) {
 	return head, block, result
 }
 
-// scratchGrown fails tb where line, read whole, leaves a scratch buffer of its
-// reader short of what [grownScratch] grows it to.
-func scratchGrown(tb testing.TB, line string) {
+// scratchGrown is what line's reader holds within it, read whole: its buffers
+// as made (the fewest bytes of three makings), the scanner's capture at the
+// bound it grows to and no further ([jsonscan.Scanner.Capture]), and each
+// scratch buffer and the type's text as the line grew them. It fails tb where
+// one is short of what [grownScratch] grows it to, or where the whole passes
+// [readerLineBytes].
+func scratchGrown(tb testing.TB, line string) int {
 	tb.Helper()
-	r := newThreadReader(strings.NewReader(line+"\n"), threadPlainMax)
+	src := strings.NewReader(line + "\n")
+	var r *threadReader
+	made := ^uint64(0)
+	for range 3 {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		r = newThreadReader(src, threadPlainMax)
+		runtime.ReadMemStats(&after)
+		made = min(made, after.TotalAlloc-before.TotalAlloc)
+	}
 	if _, err := r.Next(context.Background()); err != nil {
 		tb.Fatalf("the line reads %v", err)
 	}
@@ -209,13 +223,50 @@ func scratchGrown(tb testing.TB, line string) {
 	for _, h := range d.head {
 		bufs = append(bufs, h.raw)
 	}
+	held := int(made) + threadValueMax + cap(d.typeText)
 	for i, buf := range bufs {
 		if cap(buf) < threadValueMax {
 			tb.Fatalf("scratch buffer %d holds %d bytes, want at least %d", i, cap(buf), threadValueMax)
 		}
+		held += cap(buf)
 	}
 	if cap(d.typeText) < 3*(threadValueMax-2) {
 		tb.Fatalf("the type's text holds %d bytes, want at least %d", cap(d.typeText), 3*(threadValueMax-2))
+	}
+	if held > readerLineBytes {
+		tb.Fatalf("the reader holds %d bytes within the line (%d as made, %d buffers grown), past the %d it is "+
+			"counted at", held, made, len(bufs), readerLineBytes)
+	}
+	return held
+}
+
+// THE BASE COEFFICIENTS HOLD that a test can measure ([readerLineBytes],
+// [chargeStringsBytes]): a line growing every scratch buffer ([grownScratch])
+// leaves its reader within its figure; and a head of three strings each of
+// [threadValueMax] bytes as written, each decoding to three, holds them, the
+// last beside the buffer json v2 unquotes it through (AppendUnquote(nil), grown
+// by append, live while the string is copied out of it), within its figure.
+//
+// Mutation: a scratch buffer grown to twice its value, or the strings counted
+// without that buffer, and the case fails.
+func TestTheBaseCoefficientsHold(t *testing.T) {
+	line := slotUserGrown(t, collectionBaseRecords, collectionBaseLineCharge)
+	t.Logf("the reader holds %d bytes within a line at its most", scratchGrown(t, line))
+	raw := []byte(`"` + benchInvalid(threadValueMax-2) + `"`)
+	h, err := headOf(headKeys{typ: headKeyOf(raw), subtype: headKeyOf(raw), agentID: headKeyOf(raw)})
+	if err != nil {
+		t.Fatalf("the head reads %v", err)
+	}
+	// Each invalid byte unquotes as U+FFFD; json v2 drops the error it answers.
+	unquoted, _ := jsontext.AppendUnquote(nil, raw)
+	held := cap(unquoted)
+	for _, s := range []string{h.Type, h.Subtype, h.AgentID} {
+		// A string past 32 KiB takes whole 8 KiB pages.
+		held += (len(s) + 8<<10 - 1) &^ (8<<10 - 1)
+	}
+	if held > chargeStringsBytes {
+		t.Errorf("a head's three strings hold %d bytes with the last one's decode, past the %d they are counted at",
+			held, chargeStringsBytes)
 	}
 }
 

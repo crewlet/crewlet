@@ -211,38 +211,46 @@
 // to U+FFFD), 240 KiB grown so. The strings one charge covers ([lineMeter]),
 // decoded just before it and held while it waits for the slot: three at most
 // at once (a head's type, subtype and agentId; a block's type, id and name),
-// 192 KiB each so decoded, 576 KiB. And its facts, at most 1.25 bytes a byte
-// they charge: nothing is refunded, so the charge counts every allocation they
-// keep, and a charged byte holds the most as a string just past 32 KiB, which
-// takes whole 8 KiB pages.
+// 192 KiB each so decoded, the last beside the buffer json v2 unquotes it
+// through, made by AppendUnquote(nil), grown by append from 64 KiB to 232 KiB
+// and live while the string is copied out of it: 808 KiB. And its facts, at
+// most 1.25 bytes a byte they charge: nothing is refunded, so the charge counts
+// every allocation they keep, and a charged byte holds the most as a string
+// just past 32 KiB, which takes whole 8 KiB pages. [readerLineBytes] and
+// [chargeStringsBytes] are the two a test measures.
 //
-// THE BASE: a pass at its base holds about 5.1 MiB at its worst, by no token:
-// the chain at 2^13 of its items (its records, retraction prefixes, kept uuids
-// and call ids), 2.7 MiB; a line's reader, 1.7 MiB, and the strings a charge
-// covers, 576 KiB, both at their worst; the facts of a line charging the base,
-// 128 KiB, holding 160 KiB, over 170 times the 753 bytes the facts of any probe
-// line hold; and the count's carry, a uuid and a digest. 2^13 items are a
-// thread of at least 4,096 records, about 8 MiB at the 2,053 bytes a line
-// probe P6 measured, four times a day's session, since a thread of ordinary
-// calls files one id a record at most; counted by its records alone, a few
-// records would file the bound's calls with no slot. So a typical collection
-// never waits, nor one over the census's longest lines (67,871 lines in 9,434
-// real threads, the longest 2,002,134 bytes; each of the 28 threads holding a
-// line past 256 KiB had a large file read or written into it, which its facts
-// do not keep). MEASURED on a dedicated two-core slot
-// (BenchmarkACollectionPassAtItsBase, read off the GC trace as
-// BenchmarkAThreadChainAtItsBounds says): a main thread whose chain files 2^13
-// items, one a user's line growing every scratch buffer to its most beside
-// results under ids of 32,769 bytes whose facts charge the base exactly, read
-// by the chain and the count in one walk, in 0.12 to 0.17 s, holding 4 MiB at
-// most at GOGC=10 and its heap peaking at 5 MiB at the default, within the
+// THE BASE: a pass at its base holds about 5.3 MiB at its worst, by no token
+// ([baseTierReadBytes]; a pass at both bases past it does not build): the chain
+// at 2^13 of its items (its records, retraction prefixes, kept uuids and call
+// ids), 2.7 MiB; a line's reader, 1.7 MiB, and the strings a charge covers with
+// their decode, 808 KiB, both at their worst; the facts of a line charging the
+// base, 128 KiB, holding 160 KiB, over 170 times the 753 bytes the facts of any
+// probe line hold; and the count's carry, a uuid and a digest, within the
+// reader's figure, rounded up. The record trigger is judged once a line is
+// filed, so a walk waits for the slot holding one line's items past 2^13, as
+// many as the line's base lets its facts hold (about 4,096 kept uuids, 6,500
+// prefixes or 256 calls), filed at tens of bytes each: less than the decode's
+// buffer, gone by then. 2^13 items are a thread of at least 4,096 records,
+// about 8 MiB at the 2,053 bytes a line probe P6 measured, four times a day's
+// session, since a thread of ordinary calls files one id a record at most;
+// counted by its records alone, a few records would file the bound's calls with
+// no slot. So a typical collection never waits, nor one over the census's
+// longest lines (67,871 lines in 9,434 real threads, the longest 2,002,134
+// bytes; each of the 28 threads holding a line past 256 KiB had a large file
+// read or written into it, which its facts do not keep). MEASURED on a
+// dedicated two-core slot (BenchmarkACollectionPassAtItsBase, read off the GC
+// trace as BenchmarkAThreadChainAtItsBounds says): a main thread whose chain
+// files 2^13 items, one a user's line growing every scratch buffer to its most
+// beside results under ids of 32,769 bytes whose facts charge the base exactly,
+// read by the chain and the count in one walk, in 0.12 to 0.17 s, holding 4 MiB
+// at most at GOGC=10 and its heap peaking at 5 MiB at the default, within the
 // arithmetic, and taking no slot.
 //
 // THE BASE TIER'S COUNT: no token holds it, so it is every read in flight at
-// once, each about 5.1 MiB at its worst: one per seat collecting on this node,
+// once, each about 5.3 MiB at its worst: one per seat collecting on this node,
 // one per take (its scrub's piece within [scrubPieceBaseBytes] and its meter's
 // line within the base), and up to the box host's boxReadsHeld (64) reads for
-// its peers, 326 MiB.
+// its peers, 341 MiB.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
 // holds 43 MiB at most, the chain at both bounds; a take's piece at the
