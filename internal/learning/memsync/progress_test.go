@@ -277,8 +277,8 @@ func TestAWriterThatNeverStopsCannotHoldAHydrationOpen(t *testing.T) {
 // A thousand ordinary notes take one pull in this node's own process, where
 // they took four at 256 rows a pull; fetchBatch and 44 more take two; notes of
 // 10 KiB fill a pull's bytes before its count; and across a link no pull asks
-// for or carries more than the window that crosses within one lease heartbeat
-// at the floor.
+// for or carries more than the window that crosses the floor within what a
+// request's term leaves after its own round trip.
 //
 // Mutation: put fetchBatch back at 256, or drop the window across a link, and
 // this goes red.

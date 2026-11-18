@@ -660,21 +660,15 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 			jsprovision.Clustered(clusteredStream(b)).SequenceBudget())
 		defer cancel()
 		// ACROSS A LINK on every node whose connection is not to its own
-		// member — a leaf's, an external cluster's client — where the
-		// puts' window is sized by the lease renewals queued behind it,
-		// at the heartbeat the node's seat host renews them on: the TTL
-		// IN FORCE — the lease bucket's, which a fleet's first node set
-		// and which `coordination.lease_ttl_seconds` set here may not be
-		// ([effectiveLeaseTTL]) — over seat.HeartbeatRatio, as the host
-		// derives it. Sized against the shipped heartbeat instead, a
-		// 15-second lease (renewed every five) waited 20 s behind the
-		// window at the floor and lapsed.
+		// member — a leaf's, an external cluster's client — where every
+		// request sent after a put waits behind the window it has out, so
+		// the window is the one a request's term allows at the floor
+		// (natsobj's linkWindow), whatever lease the node holds.
 		reservation, explicit := objectsReservation(ctx, b, out.Queue, volumeFree)
 		backend, err := natsobj.Open(openCtx, js, natsobj.Config{
 			Replicas: b.Stream.Replicas, Clustered: clusteredStream(b),
 			MaxBytes: reservation, Explicit: explicit,
-			AcrossLink:     acrossLink(b),
-			LeaseHeartbeat: effectiveLeaseTTL(b, out.Coord) / seat.HeartbeatRatio,
+			AcrossLink: acrossLink(b),
 		})
 		if err != nil {
 			return fmt.Errorf("engine: the object store (store.objects.backend: nats): %w", err)
@@ -1088,20 +1082,18 @@ func coordinationStoresOf(b *config.Bootstrap) coordinationStores {
 // same fact off how its own connection was made.
 func acrossLink(b *config.Bootstrap) bool { return b.BrokerKind() != placement.BrokerMember }
 
-// memoryConfig is how a node configured as b, whose host renews its leases
-// every heartbeat, reaches the memory changelog over backends' coordination
-// connection (memsync.Config): across a link or not ([acrossLink]), at that
-// heartbeat, on the stream's topology ([clusteredStream]), and reading the
-// meter of its link where it crosses one (Backends.link) — what each of a
-// hydration's requests is given, the window its pulls share with this node's
-// lease renewals across a link, and what tells a hydration held behind the
-// link's other traffic from one whose copy stopped answering.
-func memoryConfig(b *config.Bootstrap, backends *Backends, heartbeat time.Duration) memsync.Config {
+// memoryConfig is how a node configured as b reaches the memory changelog
+// over backends' coordination connection (memsync.Config): across a link or
+// not ([acrossLink]), on the stream's topology ([clusteredStream]), and
+// reading the meter of its link where it crosses one (Backends.link) — what
+// each of a hydration's requests is given, whether its pulls are windowed
+// (memsync's package doc, "A window across a link"), and what tells a hydration held behind the link's other traffic from one
+// whose copy stopped answering.
+func memoryConfig(b *config.Bootstrap, backends *Backends) memsync.Config {
 	return memsync.Config{
-		AcrossLink:     acrossLink(b),
-		LeaseHeartbeat: heartbeat,
-		Clustered:      clusteredStream(b),
-		Link:           backends.link,
+		AcrossLink: acrossLink(b),
+		Clustered:  clusteredStream(b),
+		Link:       backends.link,
 	}
 }
 

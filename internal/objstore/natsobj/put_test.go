@@ -19,13 +19,11 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
-	"github.com/crewlet/crewlet/internal/seat"
 )
 
 // suiteStall is the stall bound the suite's stalling backends are given: two
@@ -35,9 +33,8 @@ import (
 const suiteStall = 2 * time.Second
 
 // acrossLink is how the engine opens the bucket on a node whose connection
-// crosses a link to the stream — a leaf, an external cluster's client — at
-// the shipped lease, renewed every [seat.HeartbeatInterval].
-var acrossLink = natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true, LeaseHeartbeat: seat.HeartbeatInterval}
+// crosses a link to the stream — a leaf, an external cluster's client.
+var acrossLink = natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true}
 
 // stallingMember is the suite's stalling backend on a member reached over TCP:
 // a client dialing the member through a [link], which the freeze stops in both
@@ -396,23 +393,20 @@ func TestAPutLeavesNoSubscriptionBehind(t *testing.T) {
 // PUTS ON ONE CONNECTION SHARE ONE WINDOW: with the broker's answers stopped,
 // three puts at once publish the connection's window of pieces BETWEEN them —
 // counted where the broker takes them — and no more before they stall. What
-// the window protects is the connection the node's leases and events ride, so a
+// the window protects is the connection the bucket is opened on, which the
+// node's coordination store and every lease renewal of the node ride, so a
 // link that freezes holds one window of the node's uploads however many are
-// under way, never one a put. Across a link it is [natsobj.LinkWindow] at the
-// node's lease heartbeat — the shipped one, and one of a 15-second lease; on a
+// under way, never one a put. Across a link it is [natsobj.LinkWindow]; on a
 // member's own client, [natsobj.MemberWindow].
 func TestPutsOnOneConnectionShareOneWindow(t *testing.T) {
 	t.Parallel()
-	shortLease := acrossLink
-	shortLease.LeaseHeartbeat = 15 * time.Second / seat.HeartbeatRatio
 	for _, c := range []struct {
 		name string
 		cfg  natsobj.Config
 		want int
 	}{
 		{"on a member's own client", natsobj.Config{MaxBytes: testCeiling, Replicas: 1}, natsobj.MemberWindow},
-		{"across a link", acrossLink, natsobj.LinkWindow(acrossLink.LeaseHeartbeat)},
-		{"across a link on a short lease", shortLease, natsobj.LinkWindow(shortLease.LeaseHeartbeat)},
+		{"across a link", acrossLink, natsobj.LinkWindow},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -449,100 +443,6 @@ func TestPutsOnOneConnectionShareOneWindow(t *testing.T) {
 			}
 			l.thaw()
 		})
-	}
-}
-
-// THE LINK'S WINDOW CROSSES THE FLOOR WITHIN THE NODE'S OWN HEARTBEAT. A lease
-// renewal queued behind a full window on a link at the floor every leg is
-// promised ([objstore.MiBPace]) crosses within one heartbeat interval of the
-// lease the node holds — the TTL over [seat.HeartbeatRatio], whatever
-// `coordination.lease_ttl_seconds` made it — so a renewal sent an interval
-// after the last still lands with a whole interval of the lease to spare, the
-// margin the lease keeps for a missed beat. And the window is the WIDEST that
-// does, up to the member's own: narrower is throughput thrown away on a lease
-// that did not need it. Held over the shipped TTL and others, against the
-// lease's and the store's own constants, so a window sized for one lease — the
-// shipped one, as it was — fails the rows of every other.
-//
-// A lease whose heartbeat is shorter than one message's crossing keeps that
-// margin behind no window at all; the window is one there, and the TTL is
-// under [config.LinkLeaseFloor], which config's lease floor refuses.
-func TestTheLinkWindowCrossesTheFloorWithinAHeartbeat(t *testing.T) {
-	t.Parallel()
-	crossing := func(messages int) time.Duration {
-		return time.Duration(int64(messages)*natsobj.MessageBytes) * objstore.MiBPace / objstore.MiB
-	}
-	if natsobj.MessageCrossing != crossing(1) {
-		t.Fatalf("one message crosses a link at the floor in %v by natsobj's figure and %v by the "+
-			"floor's own", natsobj.MessageCrossing, crossing(1))
-	}
-	for _, ttl := range []time.Duration{
-		seat.SeatLeaseTTL, 15 * time.Second, 22500 * time.Millisecond, 30 * time.Second,
-		90 * time.Second, 180 * time.Second, 10 * time.Minute,
-		config.LinkLeaseFloor, 8 * time.Second, time.Second,
-	} {
-		t.Run(ttl.String(), func(t *testing.T) {
-			t.Parallel()
-			heartbeat := ttl / seat.HeartbeatRatio
-			window := natsobj.LinkWindow(heartbeat)
-			if window < 1 || window > natsobj.MemberWindow {
-				t.Fatalf("a %v lease's link window is %d messages, outside 1..%d", ttl, window,
-					natsobj.MemberWindow)
-			}
-			if heartbeat < natsobj.MessageCrossing {
-				if window != 1 {
-					t.Errorf("a %v lease, renewed every %v, under one message's %v crossing, has a "+
-						"window of %d; want the one a put needs to move at all", ttl, heartbeat,
-						natsobj.MessageCrossing, window)
-				}
-				if ttl >= config.LinkLeaseFloor {
-					t.Errorf("a %v lease cannot keep its margin behind one message, and is not under "+
-						"the %v floor an upload across a link needs", ttl, config.LinkLeaseFloor)
-				}
-				return
-			}
-			if c := crossing(window); c > heartbeat {
-				t.Errorf("a %v lease's window of %d messages crosses a link at the floor in %v, past its "+
-					"heartbeat of %v: a renewal queued behind it misses its beat", ttl, window, c, heartbeat)
-			}
-			if spare := ttl - heartbeat - crossing(window); spare < heartbeat {
-				t.Errorf("on a %v lease a renewal sent a heartbeat after the last and queued behind a full "+
-					"window lands with %v of the lease to spare, under its heartbeat of %v", ttl, spare,
-					heartbeat)
-			}
-			if window < natsobj.MemberWindow && crossing(window+1) <= heartbeat {
-				t.Errorf("a %v lease's link window is %d messages, and %d still cross within its %v "+
-					"heartbeat: throughput thrown away", ttl, window, window+1, heartbeat)
-			}
-			if c := crossing(window); c > objstore.Stall {
-				t.Errorf("a message waits up to %v behind a full window at the floor, past the %v stall",
-					c, objstore.Stall)
-			}
-		})
-	}
-}
-
-// THE FLOOR AN UPLOAD ACROSS A LINK NEEDS IS THE WINDOW'S OWN ARITHMETIC: three heartbeats
-// of one message crossing a link at the floor. config states it as a figure,
-// importing none of the packages that make it, so this holds the two together.
-func TestTheLinkLeaseFloorIsOneMessageAHeartbeat(t *testing.T) {
-	t.Parallel()
-	if want := seat.HeartbeatRatio * natsobj.MessageCrossing; config.LinkLeaseFloor != want {
-		t.Fatalf("config.LinkLeaseFloor is %v; one message's crossing at the floor (%v) a heartbeat "+
-			"is a lease of %v", config.LinkLeaseFloor, natsobj.MessageCrossing, want)
-	}
-}
-
-// A BUCKET REACHED ACROSS A LINK NEEDS THE NODE'S HEARTBEAT, which sizes the
-// window its uploads share: a zero is refused rather than read as some lease,
-// since a window sized for a lease the node does not hold is the one that
-// loses its seats.
-func TestABucketAcrossALinkNeedsTheNodesHeartbeat(t *testing.T) {
-	t.Parallel()
-	_, err := natsobj.Open(t.Context(), memberClient(t), natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true})
-	if err == nil || !strings.Contains(err.Error(), "LeaseHeartbeat") {
-		t.Fatalf("a bucket opened across a link with no lease heartbeat = %v; want a refusal naming "+
-			"Config.LeaseHeartbeat", err)
 	}
 }
 
