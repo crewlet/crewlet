@@ -42,7 +42,6 @@ var lateCases = []struct {
 	{"ANewRoundCarriesTheCallsItsCollectionDidNotRead", testANewRoundCarriesTheCallsItsCollectionDidNotRead},
 	{"ANewRoundCarriesTheAbsorbedCallsItsCollectionDidNotRead",
 		testANewRoundCarriesTheAbsorbedCallsItsCollectionDidNotRead},
-	{"AReadIsAppliedOnlyToTheLogOfItsRound", testAReadIsAppliedOnlyToTheLogOfItsRound},
 	{"ANewRoundStartsWithTheTallyOfTheRoundBefore", testANewRoundStartsWithTheTallyOfTheRoundBefore},
 	{"ACarriedCallAskedAgainIsListedOnce", testACarriedCallAskedAgainIsListedOnce},
 }
@@ -55,6 +54,7 @@ var lateStagedCases = []struct {
 	fn   func(*testing.T, *stagedRuns, sandbox.PendingStore)
 }{
 	{"ALateCallWritesNoJobsSpend", testALateCallWritesNoJobsSpend},
+	{"AReadIsAppliedOnlyToTheLogOfTheJobItRead", testAReadIsAppliedOnlyToTheLogOfTheJobItRead},
 }
 
 // carryRoundOn relaunches turnID's run carrying its round on — as a loss's
@@ -947,17 +947,23 @@ func testANewRoundCarriesTheAbsorbedCallsItsCollectionDidNotRead(t *testing.T, s
 	}
 }
 
-// A READ IS APPLIED ONLY TO THE LOG OF ITS ROUND. The store answers a log on
-// another job as empty under the row's round, so a relaunch after an opening
-// that never landed holds a read of nothing, of a round the log does not hold;
-// applied, it would carry, or mark, a whole round its briefs told. An opening,
-// a new round's or one carrying the round on, applies no read of another round:
-// nothing carried, nothing marked, no absorbed calls carried.
+// A READ IS APPLIED ONLY TO THE LOG OF THE JOB IT READ. A relaunch carrying
+// the round on whose opening failed leaves the row on its job and the log on
+// the job before, in the same round; the store answers that row's log as empty
+// under the row's job, and a relaunch after it holds that read of nothing.
+// Applied to the log, a read through no call would carry every call of the
+// round, which an earlier read told, into a new round as late, or mark each
+// late where the round is carried on. An opening applies a read only while the
+// log is still open to the job it read: nothing carried, nothing marked, no
+// absorbed calls carried.
 //
-// Mutation: apply a read whatever round it names, and this goes red.
-func testAReadIsAppliedOnlyToTheLogOfItsRound(t *testing.T, s sandbox.PendingStore) {
-	other := &sandbox.LogRead{Round: "another-round"}
-	seed := func(t *testing.T, turn string) (string, string) {
+// Mutation: apply a read of the log's round whatever job it read, and this
+// goes red.
+func testAReadIsAppliedOnlyToTheLogOfTheJobItRead(t *testing.T, runs *stagedRuns, s sandbox.PendingStore) {
+	// unopened leaves turn's row on a job carrying the round on whose log was
+	// never opened, the log on the job before with its one call, and answers
+	// the read the store gives of that row's log.
+	unopened := func(t *testing.T, turn string) sandbox.LogRead {
 		t.Helper()
 		job := mustLaunched(t, s, run(turn))
 		round := mustGet(t, s, turn).Round
@@ -965,22 +971,35 @@ func testAReadIsAppliedOnlyToTheLogOfItsRound(t *testing.T, s sandbox.PendingSto
 			Absorbed: []sandbox.ElidedCall{{Name: "read_file", Digest: "d1", Calls: 1}}}) {
 			t.Fatal("the job's own call was not recorded")
 		}
-		return job, round
+		carried := run(turn)
+		carried.Continues = true
+		down := errors.New("the coordination store is unreachable")
+		runs.stage(nil, down)
+		if _, err := s.BeginLaunch(t.Context(), carried, sandbox.Fence{}); !errors.Is(err, down) {
+			t.Fatalf("a launch whose log could not be opened = %v, want the store's error", err)
+		}
+		logged := mustLogged(t, s, turn)
+		read := logged.Log.Read()
+		if logged.LaunchID == job || logged.Round != round || read.Launch != logged.LaunchID || read.Took != 0 {
+			t.Fatalf("the premise: the row is on %q of round %q and its log reads %+v, want a job after %q in "+
+				"round %q, its log read as empty under that job", logged.LaunchID, logged.Round, read, job, round)
+		}
+		return read
 	}
 	t.Run("a new round", func(t *testing.T) {
-		const turn = "t-read-other-new"
-		seed(t, turn)
-		sendBackFrom(t, s, turn, other)
+		const turn = "t-read-unopened-new"
+		read := unopened(t, turn)
+		sendBackFrom(t, s, turn, &read)
 		if got := mustLogged(t, s, turn).Log; len(got.Calls) != 0 || len(got.Absorbed()) != 0 {
-			t.Errorf("the new round carried calls %+v and absorbed %+v from a read of another round, want none",
-				got.Calls, got.Absorbed())
+			t.Errorf("the new round carried calls %+v and absorbed %+v from a read of another job's log, "+
+				"want none", got.Calls, got.Absorbed())
 		}
 	})
 	t.Run("a round carried on", func(t *testing.T) {
-		const turn = "t-read-other-carried"
-		seed(t, turn)
+		const turn = "t-read-unopened-carried"
+		read := unopened(t, turn)
 		next := run(turn)
-		next.Continues, next.BriefRead = true, other
+		next.Continues, next.BriefRead = true, &read
 		mustLaunched(t, s, next)
 		listsExactly(t, mustLogged(t, s, turn).Log.Calls, []wantCall{{"delegate", 1, 1, false}})
 	})

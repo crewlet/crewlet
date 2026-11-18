@@ -2106,15 +2106,15 @@ type PendingRun struct {
 	// BriefRead is TRANSIENT as well, an instruction to
 	// [PendingStore.BeginLaunch]: the read of the round's log the relaunch's
 	// briefs were built from ([LaunchRequest.BriefRead]), nil for none known,
-	// applied by the opening to a log of the read's round alone. To a job
-	// carrying the round on it marks LATE ([BridgeCall.Late]) every call the
-	// log took after the read, counting late any of them dropped from its
-	// middle since ([BridgeLog.LateElided]); into a new round it carries
-	// them, late and with no place ([BridgeLog.carried]); a person's approved
-	// call apart, which the relaunch's lead tells. The same mark a call the
-	// log takes after the opening gets, so no save point holds either. Never
-	// persisted: a read is the relaunch's, and an opening that never landed
-	// is the next relaunch's to make, after its own read.
+	// applied by the opening only to a log still open to the read's job. To a
+	// job carrying the round on it marks LATE ([BridgeCall.Late]) every call
+	// the log took after the read, counting late any of them dropped from its
+	// middle since ([BridgeLog.LateElided]); into a new round it carries them,
+	// late and with no place ([BridgeLog.carried]); a person's approved call
+	// apart, which the relaunch's lead tells. The same mark a call the log
+	// takes after the opening gets, so no save point holds either. Never
+	// persisted: a read is the relaunch's, and an opening that never landed is
+	// the next relaunch's to make, after its own read.
 	BriefRead *LogRead `json:"-"`
 
 	// Steer is the notes a person sent the run's turn from the run's launch
@@ -2539,21 +2539,22 @@ func (l BridgeLog) LastSeq() int {
 func (l BridgeLog) Appends() int { return len(l.Calls) + l.Elided }
 
 // LogRead is one read of a round's log, made by the collection that closes the
-// round's job ([ResumeRequest.BridgedRead]): the round it was of, how many calls
-// the log had taken ([BridgeLog.Appends]) and what it had absorbed
-// ([BridgeLog.Absorbed]). Every brief of a launch built from it can tell the
-// calls through Took, and the collection seeded Absorbed; so the launch's
-// opening marks late, or carries into a new round, only what the log took
-// after it ([PendingRun.BriefRead]). In memory only.
+// round's job ([ResumeRequest.BridgedRead]): the job the log was open to
+// ([BridgeLog.Launch]), how many calls it had taken ([BridgeLog.Appends]) and
+// what it had absorbed ([BridgeLog.Absorbed]). Every brief of a launch built
+// from it can tell the calls through Took, and the collection seeded Absorbed;
+// so the launch's opening marks late, or carries into a new round, only what
+// the log took after it, while the log is still open to that job
+// ([PendingRun.BriefRead]). In memory only.
 type LogRead struct {
-	Round    string
+	Launch   string
 	Took     int
 	Absorbed []ElidedCall
 }
 
 // Read is what a read of l as it stands saw ([LogRead]).
 func (l BridgeLog) Read() LogRead {
-	return LogRead{Round: l.Round, Took: l.Appends(), Absorbed: l.Absorbed()}
+	return LogRead{Launch: l.Launch, Took: l.Appends(), Absorbed: l.Absorbed()}
 }
 
 // Changes is every kind of change the round's calls committed, each once,

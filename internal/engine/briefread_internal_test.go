@@ -44,14 +44,14 @@ func TestAnOpeningMarksLateWhatTheLogTookAfterItsBriefsRead(t *testing.T) {
 	}
 }
 
-// A RESUME HANDS THE RUNNER THE READ ITS COLLECTION MADE: the round it was of,
-// the calls the round's log had taken at it, before the coordinator adds the
+// A RESUME HANDS THE RUNNER THE READ ITS COLLECTION MADE: the job the log was
+// open to, the calls the round's log had taken at it, before the coordinator adds the
 // call a person approved that the row alone holds, and what the log had
 // absorbed (sandbox.ResumeRequest.BridgedRead) — never how many calls the
 // resume lists, since a relaunch's opening marks late, or carries into a new
-// round, every call after that read, of that round alone.
+// round, every call after that read, while the log is open to that job.
 //
-// Mutation: hand the runner the read with no round, and a send-back's opening
+// Mutation: hand the runner the read with no job, and a send-back's opening
 // carries nothing.
 func TestAResumeHandsTheRunnerTheCountItsReadSaw(t *testing.T) {
 	t.Parallel()
@@ -62,10 +62,10 @@ func TestAResumeHandsTheRunnerTheCountItsReadSaw(t *testing.T) {
 		{Name: "post_message", Seq: 2, Appended: 2},
 		{Name: "add_issue_comment", Seq: 3, Appended: 3, Approved: true},
 	}}
-	read := sandbox.LogRead{Round: "round-1", Took: 2,
+	read := sandbox.LogRead{Launch: "job-1", Took: 2,
 		Absorbed: []sandbox.ElidedCall{{Name: "read_file", Digest: "d1", Calls: 2}}}
 	got := runnerResume(resumeInput{Bridged: logged, BridgedRead: read}, nil, nil, nil).BridgedRead
-	if got.Round != read.Round || got.Took != read.Took || len(got.Absorbed) != 1 ||
+	if got.Launch != read.Launch || got.Took != read.Took || len(got.Absorbed) != 1 ||
 		got.Absorbed[0].Calls != 2 {
 		t.Errorf("the runner is handed the read %+v, want the collection's %+v, never the 3 calls the resume "+
 			"lists", got, read)

@@ -5,15 +5,15 @@ import (
 	"testing"
 )
 
-// THE COLLECTION'S READ NAMES ITS ROUND AND WHAT THE LOG HAD ABSORBED, beside
+// THE COLLECTION'S READ NAMES ITS JOB AND WHAT THE LOG HAD ABSORBED, beside
 // how many calls it had taken ([ResumeRequest.BridgedRead]): the opening of a
-// send-back's new round carries only what the log took after that read, of
-// that round alone, and starts its absorbed tally with only what the log
-// absorbed after it, the read's part being what this collection seeds.
+// send-back's new round carries only what the log took after that read, while
+// the log is open to that job, and starts its absorbed tally with only what the
+// log absorbed after it, the read's part being what this collection seeds.
 //
-// Mutation: build the read with no round, or with no absorbed calls, and this
+// Mutation: build the read with no job, or with no absorbed calls, and this
 // goes red.
-func TestTheCollectionsReadNamesItsRoundAndWhatItHadAbsorbed(t *testing.T) {
+func TestTheCollectionsReadNamesItsJobAndWhatItHadAbsorbed(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
@@ -41,9 +41,9 @@ func TestTheCollectionsReadNamesItsRoundAndWhatItHadAbsorbed(t *testing.T) {
 		t.Fatalf("%d resumes reached the turn, want the collection's", len(requests))
 	}
 	read := requests[0].BridgedRead
-	if read.Round != launched.Round || read.Took != 2 {
-		t.Errorf("the collection's read is of round %q through %d calls, want round %q through the 2 its "+
-			"log took", read.Round, read.Took, launched.Round)
+	if read.Launch != launched.LaunchID || read.Took != 2 {
+		t.Errorf("the collection's read is of job %q through %d calls, want job %q through the 2 its "+
+			"log took", read.Launch, read.Took, launched.LaunchID)
 	}
 	if !slices.EqualFunc(read.Absorbed, worker, func(a, b ElidedCall) bool {
 		return a.Name == b.Name && a.Digest == b.Digest && a.Calls == b.Calls

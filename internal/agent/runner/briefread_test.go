@@ -24,10 +24,10 @@ import (
 // round on, and this goes red.
 func TestARelaunchHandsItsLaunchTheReadItsBriefsWereBuiltFrom(t *testing.T) {
 	t.Parallel()
-	read := sandbox.LogRead{Round: "round-1", Took: 7,
+	read := sandbox.LogRead{Launch: "job-1", Took: 7,
 		Absorbed: []sandbox.ElidedCall{{Name: "read_file", Digest: "d1", Calls: 2}}}
 	same := func(got *sandbox.LogRead) bool {
-		return got != nil && got.Round == read.Round && got.Took == read.Took && len(got.Absorbed) == 1 &&
+		return got != nil && got.Launch == read.Launch && got.Took == read.Took && len(got.Absorbed) == 1 &&
 			got.Absorbed[0].Digest == "d1" && got.Absorbed[0].Calls == 2
 	}
 	t.Run("carrying the round on", func(t *testing.T) {

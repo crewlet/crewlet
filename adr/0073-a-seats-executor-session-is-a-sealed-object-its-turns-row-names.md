@@ -4664,8 +4664,8 @@ on a call the log took after its job's relaunch.
 collection's read and the next round's opening the log is still the old round's,
 and takes the record as a call of that round past the read. So the read rides
 every relaunch's launch, a send-back's as much as one carrying the round on
-(`sandbox.LogRead`: its round, how many calls the log had taken and what it had
-absorbed; `runner.AgentRunRequest.BriefRead`, `sandbox.LaunchRequest.BriefRead`,
+(`sandbox.LogRead`: the job the log was open to, how many calls it had taken and
+what it had absorbed; `runner.AgentRunRequest.BriefRead`, `sandbox.LaunchRequest.BriefRead`,
 built by the coordinator at the read), and a new round's opening carries every
 call the log took past it but the call a person approved, which the collection
 read with the round: late, with no place, its nobody-waited mark kept, each
@@ -4673,10 +4673,10 @@ handed to the job the opening opens (`sandbox.BridgeLog.carried`). The new
 round's absorbed tally starts with only what the old one absorbed past the
 read, since the collection seeded the rest into the turn's call log; and every
 new round starts with the old round's committed kinds whole, a set the next
-collection folds into the turn's outcome. A read is applied only to the log of
-its own round: the store answers a log on another job as empty under the row's
-round, and applied to the old round such a read would carry a round its briefs
-told.
+collection folds into the turn's outcome. A read is applied only while the log
+is open to the job it read, so while no opening has moved it since: the store
+answers a log on another job as empty under the row's job, and applied, such a
+read would carry, or mark, a round an earlier read told.
 
 So what a late call, or one nobody waited for, committed counts in the turn's
 outcome where the log takes it before the TURN'S last collection reads the log,

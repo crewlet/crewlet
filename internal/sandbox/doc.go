@@ -5103,29 +5103,31 @@
 //
 // AND ONE THAT LANDS BEFORE THE NEXT OPENING IS CARRIED INTO IT. Between the
 // collection's read and the next round's opening the log is still the old
-// round's, and takes such a record as a call of that round, past the read. So the read rides every relaunch's launch, a send-back's included
-// ([LaunchRequest.BriefRead]), naming its round, how many calls the log had
-// taken and what it had absorbed ([LogRead]); and a new round's opening of a
-// log of that round CARRIES ([BridgeLog.carried]) every call the log took past
-// the read, listed late with no place, its [BridgeCall.Abandoned] kept, and
-// hands each to the job it opens. Never the call a person approved, appended
-// to the old round by the opening itself, which the collection read with the
-// round ([BridgeLog.withHeld]). The new round's absorbed tally starts with only
-// what the old one absorbed past the read: the collection seeded the read's
-// part into the turn's call log, and carrying it again would count it twice.
-// An identity the bound folded after the read keeps its whole count, an
-// over-count, the safe direction.
+// round's, and takes such a record as a call of that round, past the read. So
+// the read rides every relaunch's launch, a send-back's included
+// ([LaunchRequest.BriefRead]), naming the job the log was open to, how many
+// calls it had taken and what it had absorbed ([LogRead]); and a new round's
+// opening of the log still open to that job CARRIES ([BridgeLog.carried]) every
+// call the log took past the read, listed late with no place, its
+// [BridgeCall.Abandoned] kept, and hands each to the job it opens. Never the
+// call a person approved, appended to the old round by the opening itself,
+// which the collection read with the round ([BridgeLog.withHeld]). The new
+// round's absorbed tally starts with only what the old one absorbed past the
+// read: the collection seeded the read's part into the turn's call log, and
+// carrying it again would count it twice. An identity the bound folded after
+// the read keeps its whole count, an over-count, the safe direction.
 //
-// EVERY NEW ROUND STARTS WITH THE REPLACED ROUND'S [BridgeLog.Committed]
-// WHOLE, read or not: the next collection's fold of it into the turn's outcome
-// is a union, so the read's part costs nothing, and the whole also covers a
-// call the log dropped from its middle past the read and an opening that knows
-// no read. A READ OF ANOTHER ROUND IS NEVER APPLIED ([logOpening.reads]): the
-// store answers a log on another job as empty under the row's round, so a
-// relaunch after an opening that never landed would hold a read of nothing,
-// and carry a whole, already-told round as late. No engine path makes that
-// relaunch (the row is launching, which no claim takes); the guard is the
-// store's own.
+// EVERY NEW ROUND STARTS WITH THE REPLACED ROUND'S [BridgeLog.Committed] WHOLE,
+// read or not: the next collection's fold of it into the turn's outcome is a
+// union, so the read's part costs nothing, and the whole also covers a call the
+// log dropped from its middle past the read and an opening that knows no read.
+// A READ IS APPLIED ONLY WHILE THE LOG IS OPEN TO THE JOB IT READ
+// ([logOpening.reads]): while no opening has moved it since. The store answers
+// a log on another job as empty under the row's job, so a relaunch after an
+// opening that never landed, a send-back's or one carrying the round on, would
+// hold a read of nothing, and carry, or mark, a whole round an earlier read
+// told as late. No engine path makes that relaunch (the launch ends the run);
+// the guard is the store's own.
 //
 // WHAT IT DOES NOT REACH. A call that outlives the turn's LAST collection is
 // in no outcome and told to nobody: its round's log goes with the run. One the

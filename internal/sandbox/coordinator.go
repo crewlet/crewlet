@@ -199,7 +199,7 @@ type ResumeRequest struct {
 	// at its own append or the opening, numbered after any call that landed
 	// in between — so a count that included it would leave the first of those
 	// unmarked. For a log on another job the read is the empty one the store
-	// answers under the row's round ([PendingStore.BridgeLog]).
+	// answers under the row's job ([PendingStore.BridgeLog]), never applied.
 	BridgedRead LogRead
 
 	// Leads is the turn's leads kept beside the run's row

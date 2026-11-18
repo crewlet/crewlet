@@ -536,18 +536,21 @@ type logOpening struct {
 	owed *OwedCall
 
 	// told is the read of the round's log the relaunch's briefs were built
-	// from ([PendingRun.BriefRead]), nil for none known: applied to a log of
-	// its own round alone ([logOpening.reads]). A caller of the store that
-	// relaunched after a reset whose opening never landed holds a read of an
-	// empty answer under the row's round: the replaced round's unread calls
-	// are then folded by name alone, their absorbed calls carried nowhere.
+	// from ([PendingRun.BriefRead]), nil for none known: applied only to a log
+	// still open to the job it read ([logOpening.reads]). A caller of the store
+	// that relaunched after a reset whose opening never landed holds the empty
+	// answer for a log on another job, which no opening applies: the replaced
+	// round's unread calls are then folded by name alone, their absorbed calls
+	// carried nowhere, or, the round carried on, kept unmarked.
 	told *LogRead
 }
 
 // reads reports whether the opening o applies the briefs' read to l: one
-// known, of l's own round. A read of another round would carry, or mark, a
-// whole round no brief left untold.
-func (o logOpening) reads(l BridgeLog) bool { return o.told != nil && o.told.Round == l.Round }
+// known, of the job l is open to, so no opening has moved the log since: each
+// moves it to its own job, and a job is of one round. One has where the read
+// is the store's empty answer for a log on another job, which applied would
+// carry, or mark, a whole round an earlier read told.
+func (o logOpening) reads(l BridgeLog) bool { return o.told != nil && o.told.Launch == l.Launch }
 
 // opened is l as the opening o of job launch leaves it — see
 // [CoordStore.openLog], whose one write it decides — and the calls o walked

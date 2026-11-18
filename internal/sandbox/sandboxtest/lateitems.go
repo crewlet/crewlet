@@ -151,7 +151,7 @@ func testEveryCallTheOpeningWalksIsHandedToTheJobItOpens(t *testing.T, s sandbox
 	}
 	// THE BRIEFS' READ BEFORE ANY OF THE THREE: the opening walks them all.
 	carried := run(turn)
-	carried.Continues, carried.BriefRead = true, &sandbox.LogRead{Round: round}
+	carried.Continues, carried.BriefRead = true, &sandbox.LogRead{Launch: second}
 	third := mustLaunched(t, s, carried)
 	want := []string{third + "/delegate#1", third + "/read_page#2", third + "/post_message#3"}
 	got := lateItems(t, s, turn)
