@@ -1,18 +1,13 @@
 /**
- * Gitlet › Checks, and the pane every checks listing opens an attempt in.
+ * Gitlet › Checks, and the pane every checks listing opens a run in.
  *
- * The invariants: the section asks the engine's window by the window's own
- * start and end, narrowed by state and by a check's name as the ENGINE
- * narrows them;
- * it charts and counts the attempts it holds, and says so; an attempt opens
- * in a pane that reads it whole — each failure a link into the diff it was
- * checked on, the tail of its output, and its log a page at a time by its
- * object, never asked until the reader asks; and a repository's tab lists its
- * own attempts with no window.
+ * The invariants: the section asks where each check stands on the engine, counted and narrowed
+ * there; a run opens beside the list and in the address; and the pane reads a run whole, its
+ * failures linked into their diff, its output numbered and its log read only on demand.
  */
 
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
 
 import {
   CODE_POSITION,
@@ -21,13 +16,20 @@ import {
   stubCodeEngine,
   onTheRight,
 } from "~/test/codeScreens.tsx";
-import { Checks, checkBars } from "./Checks.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
+import { Checks } from "./Checks.tsx";
 import { failureHref } from "./checks/CheckList.tsx";
 import { RepoChecks } from "./checks/RepoChecks.tsx";
 import { commitHref } from "./paths.ts";
 
+beforeAll(() => {
+  // jsdom implements no scrolling, and opening a run scrolls its heading into view.
+  Element.prototype.scrollIntoView = () => {};
+});
+
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "";
 });
@@ -35,6 +37,9 @@ afterEach(() => {
 const OID = "d".repeat(40);
 const BASE = "e".repeat(40);
 const page = { position: CODE_POSITION, level: "stale" };
+const HOUR = 3_600_000;
+const sha = (short: string) => short.padEnd(40, "0");
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 
 function attempt(name: string, state: string, extra: Record<string, unknown> = {}) {
   return {
@@ -56,155 +61,394 @@ function attempt(name: string, state: string, extra: Record<string, unknown> = {
 const LISTED = () =>
   jsonAnswer({ checks: [attempt("unit", "failed"), attempt("lint", "passed")], ...page });
 
-const WHOLE = () =>
-  jsonAnswer({
-    check: {
-      ...attempt("unit", "failed"),
-      summary: "1 test failed",
-      exit_code: 1,
-      tail: "--- FAIL: TestRetry",
-      failures: [
-        { path: "app/retry.go", line: 12, test_id: "TestRetry", message: "never stopped" },
-      ],
-      log: { object: "objects/log-1", hash: "h", size: 2048 },
-    },
-    ...page,
-  });
+// ---- where every check stands -----------------------------------------------------------------
 
-// A CUSTOM INTERVAL IS THE ENGINE'S TO BOUND, at both ends: the screen asks
-// `since` and `until` as the interval names them, so the engine's first page
-// is the interval's own newest attempts, and draws every row it is sent.
-// Mutation: ask with no `until` (and trim on the client) → red.
-test("a custom interval asks the engine for its start and its end", async () => {
-  const from = "2026-10-10T00:00:00.000Z";
-  const to = "2026-10-11T00:00:00.000Z";
+interface Judged {
+  purpose: "head" | "candidate" | "tip";
+  head: string;
+  oid?: string;
+  change?: string;
+  source?: string;
+  attempt?: number;
+  required?: boolean;
+}
+
+/** One standing row: `minutes` since it ended (or started, or was queued), `ms` its duration. */
+function stands(
+  repo: string,
+  name: string,
+  state: string,
+  minutes: number,
+  ms: number,
+  how: Judged,
+) {
+  const ended = state !== "running" && state !== "queued";
+  return {
+    repo_id: `id-${repo}`,
+    repo,
+    oid: sha(how.oid ?? how.head),
+    target: "refs/heads/main",
+    name,
+    attempt: how.attempt ?? 1,
+    state,
+    purpose: how.purpose,
+    required: how.required ?? false,
+    ...(how.change
+      ? {
+          change: { repo, ref: how.change, title: `${how.change}'s title`, state: "open" },
+          source_ref: `refs/heads/${how.source ?? "topic"}`,
+          change_head: sha(how.head),
+        }
+      : {}),
+    ...(how.purpose === "candidate" ? { base: sha("5c3e8b1") } : {}),
+    queued_at: minutesAgo(minutes + 1),
+    ...(state === "queued" ? {} : { started_at: minutesAgo(ended ? minutes + 2 : minutes) }),
+    ...(ended ? { finished_at: minutesAgo(minutes), duration_ms: ms } : {}),
+  };
+}
+
+const API17: Judged = {
+  purpose: "candidate",
+  head: "9b2e4d7",
+  oid: "c17a9e2",
+  change: "api!17",
+  source: "backend/orders-keyset",
+  required: true,
+};
+const WEB43: Judged = { purpose: "head", head: "d2a8f4b", change: "web!43", source: "fix/token" };
+const WEB44: Judged = {
+  purpose: "candidate",
+  head: "a03b5c7",
+  oid: "c44b0d1",
+  change: "web!44",
+  source: "sre/drain",
+  required: true,
+};
+const WEB42: Judged = { purpose: "head", head: "f18e2a0", change: "web!42", source: "ui/rail" };
+const TIP: Judged = { purpose: "tip", head: "c71d0e9" };
+
+/** The board's twelve: two failed, two running, eight passed, three of them tips of main. */
+function board() {
+  return [
+    stands("api", "e2e", "failed", 20, 112_000, API17),
+    stands("web", "lint", "failed", 180, 21_000, WEB43),
+    stands("web", "e2e", "running", 4, 0, WEB44),
+    stands("web", "e2e", "running", 2, 0, WEB42),
+    stands("web", "unit", "passed", 3, 41_000, WEB44),
+    stands("api", "unit", "passed", 21, 64_000, API17),
+    stands("web", "unit", "passed", 23, 95_000, { ...WEB42, attempt: 2 }),
+    stands("web", "e2e", "passed", 180, 141_000, WEB43),
+    stands("web", "unit", "passed", 180, 44_000, WEB43),
+    stands("web", "e2e", "passed", 300, 128_000, TIP),
+    stands("web", "unit", "passed", 300, 47_000, TIP),
+    stands("infra", "unit", "passed", 300, 29_000, { purpose: "tip", head: "3f9a1c2" }),
+  ];
+}
+
+const API_E2E_KEY = `api:e2e:1:${sha("c17a9e2")}:refs/heads/main`;
+
+/** `code_checks` as the engine answers a standing listing: narrowed, counted but for the state. */
+function standing(url: URL, extra: Record<string, unknown> = {}) {
+  const p = url.searchParams;
+  const counted = board().filter(
+    (r) =>
+      (!p.get("name") || r.name === p.get("name")) && (!p.get("repo") || r.repo === p.get("repo")),
+  );
+  const counts: Record<string, number> = {};
+  for (const r of counted) counts[r.state] = (counts[r.state] ?? 0) + 1;
+  const checks = counted.filter((r) => !p.get("state") || r.state === p.get("state"));
+  return jsonAnswer({ checks, standing_counts: { counts }, ...page, ...extra });
+}
+
+const listed = (asked: URL[]) =>
+  asked.filter((u) => u.pathname === "/query/code_checks" && !u.searchParams.has("cursor"));
+
+async function mountBoard(
+  hash = "#/gitlet/checks",
+  answers: Record<string, (url: URL) => Response> = {},
+) {
   const asked = stubCodeEngine({
-    "/query/code_checks": () =>
+    "/query/code_checks": (url) => standing(url),
+    "/query/code_check": () => jsonAnswer({ check: apiE2EWhole(), ...page }),
+    ...answers,
+  });
+  mountCode(hash, <Checks />);
+  const list = await screen.findByRole("list", { name: "Where checks stand" });
+  return { asked, list };
+}
+
+const rowOf = (list: HTMLElement, key: string) =>
+  list.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`)!;
+const linkOf = (list: HTMLElement, key: string) =>
+  rowOf(list, key).querySelector<HTMLAnchorElement>("a[data-list-link]")!;
+const tabs = () =>
+  within(screen.getByRole("radiogroup", { name: "State" }))
+    .getAllByRole("radio")
+    .map((r) => r.textContent);
+
+// Mutation: send `until`, or ask the window's ended attempts with no `standing`.
+test("the section asks where each check stands since the window's start, failing first, with no end", async () => {
+  const { asked } = await mountBoard();
+  const first = listed(asked)[0]!;
+  expect(first.searchParams.get("standing")).toBe("failing");
+  expect(first.searchParams.has("until")).toBe(false);
+  const since = Date.parse(first.searchParams.get("since") ?? "");
+  expect(since % HOUR).toBe(0);
+  expect(Date.now() - since).toBeGreaterThanOrEqual(24 * HOUR);
+  expect(Date.now() - since).toBeLessThan(25 * HOUR);
+  cleanup();
+  const week = await mountBoard("#/gitlet/checks?window=7d");
+  const weekSince = Date.parse(listed(week.asked)[0]!.searchParams.get("since") ?? "");
+  expect(Date.now() - weekSince).toBeGreaterThan(6 * 24 * HOUR);
+  expect(Date.now() - weekSince).toBeLessThanOrEqual(7 * 24 * HOUR);
+  cleanup();
+  const recent = await mountBoard("#/gitlet/checks?sort=recent");
+  expect(listed(recent.asked)[0]!.searchParams.get("standing")).toBe("recent");
+});
+
+// Mutation: count the rows loaded, or narrow the counts by the state chosen.
+test("the state tabs carry the engine's counts and narrow on the engine, their counts unmoved", async () => {
+  const { asked } = await mountBoard();
+  expect(tabs()).toEqual(["All12", "Failed2", "Running2", "Passed8"]);
+  fireEvent.click(
+    within(screen.getByRole("radiogroup", { name: "State" })).getByRole("radio", {
+      name: /Failed/,
+    }),
+  );
+  await screen.findByText(/failed of the 12 latest runs/);
+  expect(listed(asked).at(-1)!.searchParams.get("state")).toBe("failed");
+  expect(tabs()).toEqual(["All12", "Failed2", "Running2", "Passed8"]);
+  cleanup();
+  await mountBoard("#/gitlet/checks", {
+    "/query/code_checks": (url) =>
       jsonAnswer({
-        checks: [attempt("unit", "failed", { finished_at: "2026-10-10T12:00:00Z" })],
+        checks: board(),
+        standing_counts: { counts: { passed: 128, failed: 2, errored: 1 }, at_least: ["passed"] },
         ...page,
       }),
   });
-  mountCode(`#/gitlet/checks?window=${from}/${to}`, <Checks />);
-  const grid = await screen.findByRole("table", { name: "Attempts of checks" });
-  expect(within(grid).getByText("unit")).toBeTruthy();
-  const first = asked.find((u) => u.pathname === "/query/code_checks")!;
-  expect(first.searchParams.get("since")).toBe(from);
-  expect(first.searchParams.get("until")).toBe(to);
+  expect(tabs()).toEqual(["All131+", "Failed2", "Running0", "Passed128+", "Errored1"]);
 });
 
-// THE WINDOW IS THE ENGINE'S `since`, and a narrowing is the engine's: a
-// state chip asks `state=`. The rows are named by repository and commit.
-// Mutation: narrow on the client, or ask with no `since`, and this fails.
-test("the section asks the window from its start and narrows by state as the engine does", async () => {
-  const asked = stubCodeEngine({ "/query/code_checks": LISTED });
-  mountCode("#/gitlet/checks", <Checks />);
-  const grid = await screen.findByRole("table", { name: "Attempts of checks" });
-  expect(within(grid).getByText("unit")).toBeTruthy();
-  expect(within(grid).getAllByText("web").length).toBeGreaterThan(0);
-  const first = asked.find((u) => u.pathname === "/query/code_checks")!;
-  expect(Date.parse(first.searchParams.get("since") ?? "")).toBeGreaterThan(
-    Date.now() - 2 * 86_400_000,
+// Mutation: draw the candidate as a head, or drop the tip's branch.
+test("each row says what it judges", async () => {
+  const { list } = await mountBoard();
+  const meta = (key: string) => rowOf(list, key).querySelector(".code-list__meta")!.textContent;
+  expect(meta(API_E2E_KEY)).toBe("apibackend/orders-keyset9b2e4d7for api!17 in the queue");
+  expect(meta(`web:lint:1:${sha("d2a8f4b")}:refs/heads/main`)).toBe(
+    "webfix/tokend2a8f4bfor web!43",
   );
-  expect(first.searchParams.has("repo")).toBe(false);
-  // BOTH RAILS say their counts are the loaded rows', never the window's.
-  expect(screen.getAllByText(/counts over the rows loaded/)).toHaveLength(2);
-
-  fireEvent.click(
-    within(screen.getByRole("group", { name: "State" })).getByRole("button", { name: /failed/ }),
-  );
-  await waitFor(() =>
-    expect(
-      asked.some(
-        (u) => u.pathname === "/query/code_checks" && u.searchParams.get("state") === "failed",
-      ),
-    ).toBe(true),
-  );
-});
-
-// THE WINDOW'S STATE CHIPS ARE THE ENDINGS ALONE: the window lists the
-// attempts that ended, and the engine refuses it narrowed to `queued` or
-// `running`, so no chip asks it either.
-// Mutation: offer every state (`CHECK_STATES`) → red.
-test("the window offers a chip for each ending and none for a state that never ends in it", async () => {
-  stubCodeEngine({ "/query/code_checks": LISTED });
-  mountCode("#/gitlet/checks", <Checks />);
-  await screen.findByRole("table", { name: "Attempts of checks" });
-  const chips = within(screen.getByRole("group", { name: "State" }));
-  for (const ended of ["passed", "failed", "errored", "cancelled", "skipped"]) {
-    expect(chips.getByRole("button", { name: new RegExp(ended) })).toBeTruthy();
-  }
-  for (const live of ["queued", "running"]) {
-    expect(chips.queryByRole("button", { name: new RegExp(live) })).toBeNull();
-  }
-});
-
-// THE BARS ARE THE ATTEMPTS THAT ENDED, by when, the failed ones their foot.
-test("the chart buckets ended attempts by when they ended, failures apart", () => {
-  const since = "2026-11-01T00:00:00Z";
-  const until = "2026-11-01T03:00:00Z";
-  const bars = checkBars(
-    [
-      attempt("unit", "failed", { finished_at: "2026-11-01T00:10:00Z" }),
-      attempt("lint", "passed", { finished_at: "2026-11-01T00:20:00Z" }),
-      attempt("vet", "passed", { finished_at: "2026-11-01T02:20:00Z" }),
-      attempt("e2e", "running", { finished_at: undefined }),
-    ] as never,
-    since,
-    until,
-    "hour",
-  );
-  expect(bars.map((b) => [b.count, b.failed])).toEqual([
-    [2, 1],
-    [0, 0],
-    [1, 0],
-  ]);
-});
-
-// ONE ATTEMPT, WHOLE: what it said, each failure a link into the diff it was
-// checked on — the comparison of its base and its commit, on the file at its
-// line — and the tail; its log is asked only when the reader asks, by its
-// object. Mutation: link a failure to the commit alone, drop its line from
-// the link, or read the log on open, and this fails.
-test("an attempt opens whole, its failures linked into its diff and its log read on demand", async () => {
-  const asked = stubCodeEngine({
-    "/query/code_checks": LISTED,
-    "/query/code_check": WHOLE,
-    "/query/code_check_log": () =>
-      jsonAnswer({ object: "objects/log-1", size: 2048, offset: 0, text: "=== RUN TestRetry\n" }),
-  });
-  mountCode("#/gitlet/checks", <Checks />);
-  const grid = await screen.findByRole("table", { name: "Attempts of checks" });
-  // A ROW OPENS by its own control, which the grid lays over the row.
-  const row = within(grid).getByText("unit").closest<HTMLElement>('[role="row"]')!;
-  fireEvent.click(within(row).getByRole("button"));
-  const pane = await screen.findByLabelText("Check unit, attempt 1");
-  const failure = await within(pane).findByRole("link", { name: "app/retry.go:12" });
-  const target = new URL(failure.getAttribute("href")!, "http://x");
-  expect(target.hash).toContain("/gitlet/repos/web/compare");
-  expect(target.hash).toContain(`base=${BASE}`);
-  expect(target.hash).toContain(`head=${OID}`);
-  expect(target.hash).toContain("file=app%2Fretry.go");
-  expect(target.hash).toContain("line=12");
-  expect(within(pane).getByText("--- FAIL: TestRetry")).toBeTruthy();
-  expect(asked.some((u) => u.pathname === "/query/code_check_log")).toBe(false);
-  // THE BRANCH CHECKED IS ITS CHIP, in the row ("for main", a space kept) and
-  // in the pane's For. Mutation: drop the space after "for", and this fails.
-  const chip = row.querySelector(".code-branch-chip");
-  expect(chip?.textContent).toBe("main");
-  expect(chip?.parentElement?.textContent).toContain("for main");
+  expect(meta(`web:e2e:1:${sha("c71d0e9")}:refs/heads/main`)).toBe("webmainc71d0e9main's tip");
+  expect(within(rowOf(list, API_E2E_KEY)).getByText("Required")).toBeTruthy();
   expect(
-    within(pane)
-      .getAllByText("main")
-      .some((el) => el.closest(".code-branch-chip")),
-  ).toBe(true);
+    within(rowOf(list, `web:unit:2:${sha("f18e2a0")}:refs/heads/main`)).getByText("attempt 2"),
+  ).toBeTruthy();
+});
 
-  fireEvent.click(within(pane).getByRole("button", { name: /Read its log/ }));
-  expect(await within(pane).findByText(/=== RUN TestRetry/)).toBeTruthy();
+// Mutation: say "0s" for an unended run, or read the clock in the screen.
+test("a row's time is said after its state word and its duration in short", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  const { list } = await mountBoard();
+  await afterMicrotasks();
+  const facts = (key: string) => rowOf(list, key).querySelector(".code-list__facts")!.textContent;
+  expect(facts(API_E2E_KEY)).toBe("1m 52sended 20 minutes ago");
+  const running = `web:e2e:1:${sha("c44b0d1")}:refs/heads/main`;
+  const seconds = () => {
+    const m = /^(\d+)m (\d+)sstarted 4 minutes ago$/.exec(facts(running) ?? "");
+    expect(m, facts(running) ?? "").not.toBeNull();
+    return Number(m![1]) * 60 + Number(m![2]);
+  };
+  // ONE TICK FIRST, so the shared clock reads the faked one.
+  await act(async () => void vi.advanceTimersByTime(1_000));
+  const before = seconds();
+  await act(async () => void vi.advanceTimersByTime(2_000));
+  expect(seconds()).toBe(before + 2);
+  const unended = rowOf(list, `web:e2e:1:${sha("f18e2a0")}:refs/heads/main`);
+  expect(unended.querySelector(".code-list__facts")!.textContent).not.toMatch(/\b0s\b/);
+});
+
+// Mutation: filter the rows loaded, or offer only the names of the narrowed page.
+test("Every repository and Check narrow on the engine", async () => {
+  const { asked } = await mountBoard("#/gitlet/checks?repo=api&name=e2e");
+  const first = listed(asked)[0]!;
+  expect(first.searchParams.get("repo")).toBe("api");
+  expect(first.searchParams.get("name")).toBe("e2e");
+  expect(
+    screen.getByText(/latest run of e2e on live changes and protected branches in api,/),
+  ).toBeTruthy();
+  fireEvent.click(document.querySelector<HTMLElement>('[aria-label="Check"]')!);
+  const options = screen.getAllByRole("option").map((o) => o.textContent);
+  expect(options).toEqual(["Every check", "e2e"]);
+});
+
+test("the head says what the list is, and the foot where earlier runs are", async () => {
+  const { list } = await mountBoard();
+  const card = list.closest(".code-list")!;
+  expect(card.querySelector(".code-checks-head__words")?.textContent).toBe(
+    "12 latest runs on live changes and protected branches, last 24 hours",
+  );
+  expect(card.querySelector(".code-list__note")?.textContent).toBe(
+    "The latest run of each check. Earlier runs are on each change's and repository's Checks tab, kept 30 days.",
+  );
+  cleanup();
+  const failed = await mountBoard("#/gitlet/checks?state=failed&repo=web");
+  expect(
+    failed.list.closest(".code-list")!.querySelector(".code-checks-head__words")?.textContent,
+  ).toBe(
+    "1 failed of the 9 latest runs on live changes and protected branches in web, last 24 hours",
+  );
+  cleanup();
+  const e2e = await mountBoard("#/gitlet/checks?name=e2e");
+  expect(
+    e2e.list.closest(".code-list")!.querySelector(".code-checks-head__words")?.textContent,
+  ).toBe("5 latest runs of e2e on live changes and protected branches, last 24 hours");
+});
+
+// Mutation: push a history entry per press, or leave focus on the list.
+test("pressing a run opens it beside the list and writes it to the address; Escape closes it", async () => {
+  const { list } = await mountBoard();
+  const before = history.length;
+  fireEvent.click(linkOf(list, API_E2E_KEY));
+  const heading = await screen.findByRole("heading", { name: "e2e failed for api!17" });
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("run")).toBe(API_E2E_KEY);
+  expect(history.length).toBe(before);
+  expect(document.activeElement).toBe(heading);
+  expect(rowOf(list, API_E2E_KEY).hasAttribute("data-current")).toBe(true);
+  fireEvent.keyDown(heading, { key: "Escape" });
+  expect(location.hash).not.toContain("run=");
+  expect(screen.queryByRole("heading", { name: "e2e failed for api!17" })).toBeNull();
+  expect(document.activeElement).toBe(linkOf(list, API_E2E_KEY));
+  fireEvent.click(linkOf(list, API_E2E_KEY));
+  await screen.findByRole("heading", { name: "e2e failed for api!17" });
+  fireEvent.click(linkOf(list, API_E2E_KEY));
+  expect(location.hash).not.toContain("run=");
+  expect(history.length).toBe(before);
+});
+
+// Mutation: follow the link on Enter.
+test("Enter on the row under j opens the same pane", async () => {
+  const { list } = await mountBoard();
+  await afterMicrotasks();
+  fireEvent.keyDown(window, { key: "j" });
+  expect(document.activeElement).toBe(linkOf(list, API_E2E_KEY));
+  // ENTER ON THE LINK is the browser's; away from it, the cursor row's.
+  act(() => linkOf(list, API_E2E_KEY).blur());
+  fireEvent.keyDown(window, { key: "Enter" });
+  expect(await screen.findByRole("heading", { name: "e2e failed for api!17" })).toBeTruthy();
+  expect(location.hash).toContain(`run=${encodeURIComponent(API_E2E_KEY)}`);
+});
+
+// Mutation: draw a pane only for a row the list holds, or drop the change its commit's row judges.
+test("a run named by the address that no loaded row holds is read alone and drawn", async () => {
+  const key = `api:e2e:3:${sha("c17a9e2")}:refs/heads/main`;
+  const { asked } = await mountBoard(`#/gitlet/checks?run=${encodeURIComponent(key)}`, {
+    "/query/code_check": () => jsonAnswer({ check: apiE2EWhole({ attempt: 3 }), ...page }),
+  });
+  expect(await screen.findByRole("heading", { name: "e2e failed for api!17" })).toBeTruthy();
+  const read = asked.find((u) => u.pathname === "/query/code_check")!;
+  expect(read.searchParams.get("attempt")).toBe("3");
+  expect(read.searchParams.get("target")).toBe("refs/heads/main");
+});
+
+// Mutation: fall back to the ended window when `standing` is refused, or keep the head's sentence.
+test("a fleet that refuses standing says so, with no listing in its place", async () => {
+  const refused = () =>
+    jsonAnswer({ error: "bad_params", detail: "standing is not a key this node reads" }, 400);
+  const asked = stubCodeEngine({ "/query/code_checks": refused });
+  mountCode("#/gitlet/checks", <Checks />);
+  expect(
+    await screen.findByText("Where checks stand is unavailable on this fleet yet"),
+  ).toBeTruthy();
+  expect(screen.getByText("The engine says: standing is not a key this node reads.")).toBeTruthy();
+  expect(document.querySelector(".code-checks-head__words")?.textContent).toBe("");
+  await afterMicrotasks();
+  const checks = asked.filter((u) => u.pathname === "/query/code_checks");
+  expect(checks.length).toBeGreaterThan(0);
+  expect(checks.every((u) => u.searchParams.get("standing") === "failing")).toBe(true);
+  expect(screen.getByRole("radiogroup", { name: "State" })).toBeTruthy();
+  cleanup();
+  // A FILTER SENT may be what was refused: the engine's refusal as it said it.
+  stubCodeEngine({ "/query/code_checks": refused });
+  mountCode("#/gitlet/checks?state=failed", <Checks />);
+  expect(
+    await screen.findByText(/The engine refused this request: standing is not a key/),
+  ).toBeTruthy();
+  expect(screen.queryByText("Where checks stand is unavailable on this fleet yet")).toBeNull();
+});
+
+// Mutation: read the open run once, or keep reading it once it has ended.
+test("an open run that has not ended is read again until it ends", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const key = `web:e2e:1:${sha("c44b0d1")}:refs/heads/main`;
+  let reads = 0;
+  const { asked } = await mountBoard(`#/gitlet/checks?run=${encodeURIComponent(key)}`, {
+    "/query/code_check": () => {
+      reads++;
+      const run: Record<string, unknown> = { ...board()[2] };
+      delete run.change;
+      delete run.source_ref;
+      delete run.change_head;
+      return jsonAnswer({
+        check:
+          reads === 1
+            ? run
+            : {
+                ...run,
+                state: "failed",
+                finished_at: minutesAgo(0),
+                duration_ms: 240_000,
+                tests: { total: 30, failed: 2 },
+                exit_code: 1,
+              },
+        ...page,
+      });
+    },
+  });
+  const pane = await screen.findByRole("region", { name: "Check e2e, attempt 1" });
+  await within(pane).findByRole("heading", { name: "e2e running for web!44" });
+  expect(pane.querySelector(".code-check-pane__tests")).toBeNull();
+  await act(async () => void vi.advanceTimersByTime(30_000));
+  await afterMicrotasks();
+  expect(within(pane).getByRole("heading", { name: "e2e failed for web!44" })).toBeTruthy();
+  expect(pane.querySelector(".code-check-pane__tests")?.textContent).toBe(
+    "2 of 30 tests failed · exit code 1",
+  );
+  const ended = asked.filter((u) => u.pathname === "/query/code_check").length;
+  await act(async () => void vi.advanceTimersByTime(60_000));
+  await afterMicrotasks();
+  expect(asked.filter((u) => u.pathname === "/query/code_check").length).toBe(ended);
+});
+
+// A RUN, WHOLE: each failure a link into the diff it was checked on (its base and its commit, on
+// the file at its line), and its log asked only when the reader asks, by its object.
+// Mutation: link a failure to the commit alone, drop its line, or read the log on open.
+test("a run opens whole, its failures linked into its diff and its log read on demand", async () => {
+  const { asked, list } = await mountBoard("#/gitlet/checks", {
+    "/query/code_check_log": () =>
+      jsonAnswer({
+        object: "objects/log-api",
+        size: 88_064,
+        offset: 0,
+        text: "=== RUN TestFromTheLog\n",
+      }),
+  });
+  fireEvent.click(linkOf(list, API_E2E_KEY));
+  const pane = await screen.findByRole("region", { name: "Check e2e, attempt 1" });
+  const failure = await within(pane).findByRole("link", {
+    name: "internal/http/orders_test.go:88",
+  });
+  const target = new URL(failure.getAttribute("href")!, "http://x");
+  expect(target.hash).toContain("/gitlet/repos/api/compare");
+  expect(target.hash).toContain(`base=${sha("5c3e8b1")}`);
+  expect(target.hash).toContain(`head=${sha("c17a9e2")}`);
+  expect(target.hash).toContain("file=internal%2Fhttp%2Forders_test.go");
+  expect(target.hash).toContain("line=88");
+  expect(asked.some((u) => u.pathname === "/query/code_check_log")).toBe(false);
+  fireEvent.click(within(pane).getByRole("button", { name: "Read its log, 86 KiB" }));
+  expect(await within(pane).findByText(/=== RUN TestFromTheLog/)).toBeTruthy();
   const log = asked.find((u) => u.pathname === "/query/code_check_log")!;
-  expect(log.searchParams.get("object")).toBe("objects/log-1");
+  expect(log.searchParams.get("object")).toBe("objects/log-api");
   expect(log.searchParams.get("offset")).toBe("0");
-  expect(within(pane).getByText("That is the whole log.")).toBeTruthy();
 });
 
 // AN ATTEMPT WITH NO BASE has no diff to point into: a failure naming a line

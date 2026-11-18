@@ -181,25 +181,17 @@ function EndedAt({ at }: { at: string | undefined }) {
   return <TableDateCell value={at} now={now} />;
 }
 
-/**
- * One listing of attempts, paged, with the pane of the one opened beneath
- * it: the question `params` asks of `code_checks`, every row of which is
- * drawn — a narrowing, the Checks section's window's end among them, is the
- * engine's.
- */
+/** A repository's or a change's runs, paged, with the pane of the one opened beneath them. */
 export function CheckListing({
   params,
   label,
   showRepo,
   empty,
-  header,
 }: {
   params: CodeParams;
   label: string;
   showRepo: boolean;
   empty: { title: string; hint: string };
-  /** Drawn above the grid with every row the pager holds: a section's chart and facets. */
-  header?: (rows: readonly CodeCheckRow[], more: boolean) => ReactNode;
 }) {
   const first = useCodeQuery("code_checks", params, { pollMs: CHECKS_POLL_MS });
   const paged = usePaged(
@@ -217,7 +209,6 @@ export function CheckListing({
 
   return (
     <>
-      {header?.(rows, more)}
       {first.loading && rows.length === 0 && (
         <Skeleton variant="text" rows={5} label={`Loading ${label}`} />
       )}
@@ -282,15 +273,17 @@ export function CheckPane({
   later?: number | null;
   onOpenLater?: (attempt: number) => void;
 }) {
-  const read = useCodeQuery("code_check", {
-    name: repo,
-    oid: row.oid,
-    check: row.name,
-    attempt: row.attempt,
-    target: row.target,
-  });
+  // READ AGAIN UNTIL IT HAS ENDED, so an open run's pane moves on as its row does.
+  const [ended, setEnded] = useState(false);
+  const read = useCodeQuery(
+    "code_check",
+    { name: repo, oid: row.oid, check: row.name, attempt: row.attempt, target: row.target },
+    { pollMs: ended ? undefined : CHECKS_POLL_MS },
+  );
   const d = withChange(read.data?.check, row);
   const shown = d ?? row;
+  const hasEnded = d !== undefined && d.state !== "queued" && d.state !== "running";
+  if (hasEnded !== ended) setEnded(hasEnded);
   return (
     <section className="code-check-pane" aria-label={`Check ${row.name}, attempt ${row.attempt}`}>
       <div className="code-check-pane__head">

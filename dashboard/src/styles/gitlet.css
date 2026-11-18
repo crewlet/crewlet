@@ -221,6 +221,115 @@
   font-weight: var(--font-weight-medium);
 }
 
+/* WHERE CHECKS STAND: the list, and the open run's pane beside it while one is open. */
+.code-checks-bar__pickers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+.code-checks {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacing-4);
+  align-items: start;
+}
+
+.code-checks[data-open] {
+  grid-template-columns: minmax(0, 1fr) minmax(22rem, 28rem);
+}
+
+.code-checks__list {
+  min-width: 0;
+}
+
+.code-checks__pane {
+  position: sticky;
+  top: calc(var(--sticky-top) + var(--spacing-4));
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-block-size: calc(100cqb - var(--sticky-top) - 2 * var(--spacing-4));
+}
+
+.code-checks__pane > .code-check-pane {
+  flex: 1 1 auto;
+}
+
+.code-checks-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  inline-size: 100%;
+}
+
+.code-checks-head__words {
+  flex: 1 1 auto;
+  margin: 0;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.code-checks-head__words strong {
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.code-checks-row__name {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-checks-row__oid {
+  color: var(--color-text-secondary);
+}
+
+.code-checks-row__facts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.code-checks-row__took {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.code-checks-row__took[data-tone="info"] {
+  color: var(--color-feedback-info-ink);
+}
+
+/* A PHONE'S ROW: the duration and the time on one line under the words. */
+@container code-list (width < 640px) {
+  .code-checks-row__facts {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--spacing-1) var(--spacing-3);
+  }
+}
+
+/* A NARROW PAGE: the pane above the list, in the page's flow, the page scrolling it. */
+@container page (width < 720px) {
+  .code-checks[data-open] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .code-checks__pane {
+    position: static;
+    order: -1;
+    max-block-size: none;
+  }
+}
+
 /* A RUN OF A CHECK, read whole in its pane. */
 .code-check-pane {
   display: flex;

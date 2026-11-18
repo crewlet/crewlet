@@ -1,8 +1,54 @@
-/** A run of a check in words: what it checked, its tests, and its output's lines and failing lines. */
+/** Where a Gitlet check stands, in words: a run's key in the address, what it judged, its tests and its output's failing lines. */
 
-import { shortOID } from "~/lib/code.ts";
+import { checkPurposeWord } from "~/lib/checks.ts";
+import { isRepoName, refName, shortOID } from "~/lib/code.ts";
 import { fmtCount } from "~/lib/format.ts";
 import type { CodeCheckDetail, CodeCheckFailure, CodeCheckRow } from "~/protocol/index.ts";
+
+/** One run of one check, as `run=` names it. */
+export interface RunKey {
+  repo: string;
+  name: string;
+  attempt: number;
+  oid: string;
+  target: string;
+}
+
+/** A run's key: `{repo}:{name}:{attempt}:{oid}:{target}` (a check's name and a ref hold no colon). */
+export function runKey(
+  r: Pick<CodeCheckRow, "repo" | "name" | "attempt" | "oid" | "target">,
+): string {
+  return `${r.repo ?? ""}:${r.name}:${r.attempt}:${r.oid}:${r.target}`;
+}
+
+const RUN_KEY =
+  /^([^:]+):([a-z0-9._-]+):([1-9][0-9]*):([0-9a-f]{40}|[0-9a-f]{64}):(refs\/[^:\s]+)$/;
+
+/** A run's key read back, or null for anything that is not one. */
+export function parseRunKey(key: string): RunKey | null {
+  const m = RUN_KEY.exec(key);
+  if (!m || !isRepoName(m[1]!)) return null;
+  return { repo: m[1]!, name: m[2]!, attempt: Number(m[3]), oid: m[4]!, target: m[5]! };
+}
+
+/** Words around a strong reference: "for **api!17** in the queue". */
+export interface Said {
+  before: string;
+  strong?: string;
+  after?: string;
+}
+
+/** What a standing row judged, said after its commit. */
+export function standingWords(row: CodeCheckRow): Said {
+  const target = refName(row.target).name;
+  if (row.change && row.purpose === "head") return { before: "for ", strong: row.change.ref };
+  if (row.change && row.purpose === "candidate") {
+    return { before: "for ", strong: row.change.ref, after: " in the queue" };
+  }
+  if (row.purpose === "tip") return { before: `${target}'s tip` };
+  if (row.purpose === "bisect") return { before: `a landing on ${target}, bisected` };
+  return { before: checkPurposeWord(row.purpose) };
+}
 
 /** The pane's Checked fact, the target's chip between `before` and `after`; null for a purpose not known. */
 export function checkedWords(d: CodeCheckRow): { before: string; after: string } | null {

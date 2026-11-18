@@ -1,9 +1,18 @@
-/** The words a check's pane says of a run, held as pure functions. */
+/** A run's key in the address and the words a standing row and its pane say, held as pure functions. */
 
 import { describe, expect, test } from "vitest";
 
 import type { CodeCheckRow } from "~/protocol/index.ts";
-import { checkedWords, failingLines, tailLines, tailRangeWords, testsWords } from "./standing.ts";
+import {
+  checkedWords,
+  failingLines,
+  parseRunKey,
+  runKey,
+  standingWords,
+  tailLines,
+  tailRangeWords,
+  testsWords,
+} from "./standing.ts";
 
 const OID = "9b2e4d7".padEnd(40, "0");
 
@@ -42,7 +51,51 @@ const BOARD_TAIL = [
   "exit status 1",
 ];
 
-describe("what a run checked", () => {
+describe("a run's key", () => {
+  // Mutation: split the key on every colon, or let a short id or a bare branch through.
+  test("reads back what it wrote, a branch with slashes whole, and refuses anything else", () => {
+    const at = row({ target: "refs/heads/release/2026-11" });
+    expect(parseRunKey(runKey(at))).toEqual({
+      repo: "api",
+      name: "e2e",
+      attempt: 1,
+      oid: OID,
+      target: "refs/heads/release/2026-11",
+    });
+    for (const bad of [
+      "",
+      "api:e2e:1",
+      `api:e2e:0:${OID}:refs/heads/main`,
+      `api:e2e:1:9b2e4d7:refs/heads/main`,
+      `api:e2e:1:${OID}:main`,
+      `api:E2E:1:${OID}:refs/heads/main`,
+      `:e2e:1:${OID}:refs/heads/main`,
+    ]) {
+      expect(parseRunKey(bad), bad).toBeNull();
+    }
+  });
+});
+
+describe("what a standing row judged", () => {
+  // Mutation: draw a candidate as a head, or a tip with no target.
+  test("names its change, says the queue for a candidate, and the branch for a tip", () => {
+    const change = { repo: "api", ref: "api!17", title: "page by keyset", state: "open" };
+    expect(standingWords(row({ purpose: "head", change }))).toEqual({
+      before: "for ",
+      strong: "api!17",
+    });
+    expect(standingWords(row({ purpose: "candidate", change }))).toEqual({
+      before: "for ",
+      strong: "api!17",
+      after: " in the queue",
+    });
+    expect(standingWords(row({ purpose: "tip" }))).toEqual({ before: "main's tip" });
+    expect(standingWords(row({ purpose: "bisect" }))).toEqual({
+      before: "a landing on main, bisected",
+    });
+    expect(standingWords(row({ purpose: "head" }))).toEqual({ before: "a change's head" });
+  });
+
   // Mutation: drop the base, or say "in the queue" of a head.
   test("the pane's Checked says onto what and at which base", () => {
     expect(checkedWords(row({ purpose: "candidate", base: "5c3e8b1".padEnd(40, "0") }))).toEqual({
