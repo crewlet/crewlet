@@ -89,6 +89,7 @@ func gutterShapes() []gutterShape {
 	add("a block written a step before, its END on the line", two+strings.Repeat("ok\n", 60<<10), strings.LastIndex(two, testBegin)+3+keyReach)
 	three := testBegin + "\n" + testKeyLine + "\n" + testEnd + "\n" + two
 	add("two blocks written a step before, the last's END on the line", three+strings.Repeat("ok\n", 60<<10), strings.LastIndex(three, testBegin)+3+keyReach)
+	add("an armour in the gutter, its colons on the value's line", wrap(pc+" ", "", testBegin, testKeyLine, testEnd+" passwd:", colons+" "+gutterValue)+"done\n")
 	add("concatenation, begun mid-line", "\t\"v1 "+pc+"\\n\" +\n\t\""+testEnd+"|passwd:\\n\" +\n\t\""+gutterValue+"\\n\" +\n")
 	add("no gutter under a stamped block", "2026-10-06T09:00:00.123Z hunter2x9 u1SU1Lf9x+\n"+testEnd+"|passwd:\n"+gutterValue+"\n")
 	add("an AWS secret's key after", "u1SU1Lf=\necho \""+testEnd+"|passwd:\" >> k\necho \""+gutterValue+"\" >> k\naws_secret_access_key = z6jmCqAkeYL1pRDxqWFVRmPZf+tiEOTNLBkMi2Yu\n")
@@ -108,12 +109,12 @@ func gutterShapes() []gutterShape {
 // reads in it as written ([gutterValues]), and Secrets of its answer is its
 // answer.
 //
-// Mutation: write a key's block whole ([claims.apart]), and the wrapping's
-// word is read as the value under every wrapping but the stamped one; cut it
-// at a key's line that has no gutter ([valueRead.gutterOf]) or whose value
-// the claims do not read, ignore what the line a block begins on opens with
-// ([claims.opensAlike]), or let a block no END closes take a key without its
-// value ([claims.shortOfValues]), and a shape here publishes the value.
+// Mutation: write a key's block whole ([claims.apart]), or cut it at a key's
+// line with no gutter ([valueRead.gutterOf]) or whose value the claims do not
+// read ([claims.readsAValue]), ignore what the line a block begins on opens
+// with ([claims.opensAlike]), or let a block no END closes take a key without
+// its value ([claims.shortOfValues]), and a shape here publishes the value;
+// read no value where a pass wrote its marker, and a second pass changes one.
 func TestNoValueUnderAKeyLineWhoseOpeningABlockHoldsIsPublished(t *testing.T) {
 	t.Parallel()
 	for _, c := range gutterShapes() {

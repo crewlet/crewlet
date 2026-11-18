@@ -218,7 +218,10 @@
 // line in the text the blocks leave, the armour and the gutter before it one
 // marker, and redacts the word after it as the value, as it does with the
 // block whole; cut, the key's line would open otherwise than that marker, and
-// the word would be shown.
+// the word would be shown. The password's marker on the line the read stops
+// at is the value a pass redacted there ([claims.readsAValue]), so a second
+// pass cuts the block as the first did, the gutter it left in clear, an
+// armour among it, still clear.
 //
 // A BLOCK NO END CLOSES TAKES A PASSWORD'S KEY ONLY WITH ITS VALUE
 // ([claims.shortOfValues]). Ended by the lines it reads, a block read forward
@@ -4832,7 +4835,7 @@ func (c *claims) apartIn(spans, known [][2]int) [][2]int {
 		i, _ := slices.BinarySearchFunc(c.passwords, s[1], func(p [5]int, at int) int { return cmp.Compare(p[0], at) })
 		for ; i < len(c.passwords) && c.passwords[i][0] <= limit; i++ {
 			p := c.passwords[i]
-			if p[3] <= p[2] || p[4] <= 0 || p[4] > len(c.text) || inSpan(known, p[0]) {
+			if p[4] <= 0 || p[4] > len(c.text) || inSpan(known, p[0]) || !c.readsAValue(p) {
 				continue
 			}
 			seg := segmentStart(c.text, p[4])
@@ -4856,6 +4859,20 @@ func (c *claims) apartIn(spans, known [][2]int) [][2]int {
 		}
 	}
 	return out
+}
+
+// readsAValue reports whether the claims read a value under the key of p, a
+// password's claim, or its read stopped on a line holding the password's
+// marker: a second pass reads there the value the first redacted, and cuts
+// the block the first cut ([claims.apart]).
+func (c *claims) readsAValue(p [5]int) bool {
+	if p[3] > p[2] {
+		return true
+	}
+	at := max(p[2], 0)
+	end, _ := lineAt(c.text, at)
+	c.asked(at, end)
+	return strings.Contains(c.text[at:end], passwordMarker)
 }
 
 // opensAlike reports whether what the line holding start has before start,
